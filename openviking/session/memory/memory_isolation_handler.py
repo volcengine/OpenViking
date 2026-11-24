@@ -211,6 +211,10 @@ class MemoryIsolationHandler:
         ]
         return list(dict.fromkeys(targets))
 
+    def has_writable_message_target(self) -> bool:
+        """Whether any message in the current window resolves to a writable owner."""
+        return bool(self._target_ids_in_messages())
+
     def _range_is_fully_in_bounds(self, ranges: Any) -> bool:
         parts = str(ranges).split(",")
         if not parts or any(not part.strip() for part in parts):
@@ -271,7 +275,7 @@ class MemoryIsolationHandler:
         try:
             msg_range = self._extract_context.read_message_ranges(str(ranges))
         except Exception:
-            logger.warning("Failed to parse memory ranges for peer memory: %s", ranges)
+            logger.info("memory ranges invalid; skipping range_type=%s", type(ranges).__name__)
             return _TargetResolution(skip_code=MemoryOperationSkipCode.INVALID_RANGES)
 
         target_ids = []

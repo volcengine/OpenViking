@@ -36,6 +36,9 @@ class MockLocalAGFS:
     def mkdir(self, path, ctx=None, parents=True, exist_ok=True):
         self._resolve(path).mkdir(parents=parents, exist_ok=exist_ok)
 
+    def ensure_parent_dirs(self, path, ctx=None):
+        self._resolve(path).parent.mkdir(parents=True, exist_ok=True)
+
     def ls(self, path, ctx=None, **kwargs):
         """List test entries with the same sorting and pagination contract as RagFS."""
         p = self._resolve(path)
@@ -181,14 +184,18 @@ class MockLocalAGFS:
         owner_lease_ref=None,
     ):
         del ctx, owner_lease_ref
-        (request,) = requests
-        path = request["path"]
-        with self._pathlocks_guard:
-            lock = self._pathlocks.setdefault(path, threading.Lock())
-
-        acquired = await asyncio.to_thread(lock.acquire, timeout=timeout_secs)
-        if not acquired:
-            raise TimeoutError(f"timed out acquiring test path lock: {path}")
+        acquired = []
+        try:
+            for path in sorted({request["path"] for request in requests}):
+                with self._pathlocks_guard:
+                    lock = self._pathlocks.setdefault(path, threading.Lock())
+                if not await asyncio.to_thread(lock.acquire, timeout=timeout_secs):
+                    raise TimeoutError(f"timed out acquiring test path lock: {path}")
+                acquired.append(lock)
+        except BaseException:
+            for lock in reversed(acquired):
+                lock.release()
+            raise
 
         lease_ref = str(uuid.uuid4())
         lease = {
@@ -198,12 +205,13 @@ class MockLocalAGFS:
             "owned": True,
         }
         with self._pathlocks_guard:
-            self._pathlock_leases[lease_ref] = lock
+            self._pathlock_leases[lease_ref] = acquired
         return lease
 
     def pathlock_release(self, ctx, owned_lease_ref):
         del ctx
         lease_ref = owned_lease_ref["lease_ref"]
         with self._pathlocks_guard:
-            lock = self._pathlock_leases.pop(lease_ref)
-        lock.release()
+            locks = self._pathlock_leases.pop(lease_ref)
+        for lock in reversed(locks):
+            lock.release()

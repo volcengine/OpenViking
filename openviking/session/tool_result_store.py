@@ -192,9 +192,11 @@ class ToolResultStore:
             "offset_unit": "unicode_code_point",
         }
         await self._viking_fs.write_file(output_uri, content, ctx=self._ctx)
+        # Output is already sanitized; bytes bypass VikingFS PrivacySanitizer
+        # to preserve JSON keys and identity fields.
         await self._viking_fs.write_file(
             metadata_uri,
-            json.dumps(metadata, ensure_ascii=False, indent=2),
+            json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"),
             ctx=self._ctx,
         )
         return StoredToolResult(

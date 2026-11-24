@@ -142,7 +142,7 @@ Unfinished tasks
 
 After a session is committed, OpenViking uses the conversation and active memory policy to extract information that can improve future interactions. It stores the result in the current user's memory space. When a conversation involves a stable Peer, relevant memories can also be stored in that Peer's space.
 
-OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, and `experiences`, and supports custom types for application-specific needs. See [Context Types](./02-context-types.md) for the complete purpose and path mapping.
+OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `cases`, `trajectories`, and `experiences`, and supports custom types for application-specific needs. See [Context Types](./02-context-types.md) for the complete purpose and path mapping.
 
 Within `memory_policy.memory_types`, `experiences` enables the complete Agent Evolution pipeline and automatically activates `cases` and `trajectories`. If `experiences` is absent, explicitly supplied `cases` and `trajectories` entries are ignored without an error.
 
@@ -169,8 +169,8 @@ Background processing writes `memory_diff.json` to the archive directory, record
   "operations": {
     "adds": [
       {
-        "uri": "viking://user/alice/memories/identity.md",
-        "memory_type": "identity",
+        "uri": "viking://user/alice/memories/profile.md",
+        "memory_type": "profile",
         "after": "Newly created file content"
       }
     ],
@@ -239,7 +239,6 @@ viking://user/{user_id}/sessions/{session_id}/
 
 viking://~/memories/
 ├── profile.md
-├── identity.md
 ├── soul.md
 ├── preferences/
 ├── entities/
@@ -253,8 +252,7 @@ viking://~/memories/
 `viking://user/{user_id}/sessions/{session_id}` for the authenticated caller.
 The uid-less spelling `viking://user/sessions/{session_id}` is no longer accepted
 and returns an error pointing at the `viking://~/...` form. The old
-`viking://session/{session_id}` form is still accepted as a backward-compatible
-alias for the same session path and is not a separate storage root.
+`viking://session/{session_id}` form is also rejected.
 
 ## Related Documents
 

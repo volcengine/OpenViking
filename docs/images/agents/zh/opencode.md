@@ -19,6 +19,16 @@
 2. 输入 `/mcps` 命令，确认列表中显示 `openviking connected`。
 3. 在对话中明确要求调用 `openviking_search` 和 `openviking_read`，验证工具可用。自动召回由 hook 完成，不需要模型调用这些工具；可另开会话，询问已保存的信息来检查。
 
+## 步骤3：开始使用
+
+在 OpenCode 中新开一个会话，发送：
+
+```text
+按 https://docs.openviking.net/agents/zh/onboarding.md 带我完成 OpenViking 首次使用。
+```
+
+Agent 会检查连接，并带你完成首次使用。
+
 ## 故障排查
 
 | 问题 | 处理 |

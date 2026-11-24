@@ -139,6 +139,29 @@ test("shell commands carrying a viking URI run and get a notice", async () => {
   assert.match(context.content[0].text, /mcp__openviking__read/);
 });
 
+test("a Windows pwsh command carrying a viking URI runs and gets the same notice", async () => {
+  // tool-pwsh takes `{ description, command, workdir? }`, like tool-bash.
+  const exec = {
+    name: "pwsh",
+    arguments: {
+      description: "Read the profile",
+      command: "Get-Content viking://user/default/memories/profile.md",
+    },
+  };
+  let delegated = false;
+  await guardVikingUri(exec, async () => {
+    delegated = true;
+    return { kind: "allow" };
+  });
+  assert.equal(delegated, true);
+
+  const decision = await noticeVikingUri(exec, okResult(), async () => ({ kind: "accept" }));
+  assert.equal(decision.kind, "accept");
+  assert.equal(decision.additionalContexts.length, 1);
+  assert.match(decision.additionalContexts[0].content[0].text, /ignore this notice/);
+  assert.match(decision.additionalContexts[0].content[0].text, /mcp__openviking__read/);
+});
+
 test("the notice summary stays within dsh's context summary bound", async () => {
   const uri = `viking://resources/${"deep/".repeat(60)}file.md`;
   const decision = await noticeVikingUri(

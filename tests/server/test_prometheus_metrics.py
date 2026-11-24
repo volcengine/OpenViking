@@ -4,6 +4,7 @@
 """Tests for the Prometheus metrics endpoint and exposition output."""
 
 import json
+import re
 from types import SimpleNamespace
 
 import httpx
@@ -33,39 +34,45 @@ class TestPrometheusExposition:
     def test_counter_histogram_and_labels(self):
         registry = MetricRegistry()
         labels = {"context_type": "memory"}
-        registry.counter(
-            "openviking_retrieval_requests_total",
-            label_names=("context_type",),
-        ).inc(labels=labels)
-        registry.counter(
-            "openviking_retrieval_requests_total",
-            label_names=("context_type",),
-        ).inc(labels=labels)
-        registry.histogram(
+        registry.inc_counter(
+            "openviking_retrieval_requests_total", label_names=("context_type",), labels=labels
+        )
+        registry.inc_counter(
+            "openviking_retrieval_requests_total", label_names=("context_type",), labels=labels
+        )
+        registry.observe_histogram(
             "openviking_retrieval_latency_seconds",
+            0.02,
             label_names=("context_type",),
-        ).observe(0.02, labels=labels)
+            labels=labels,
+        )
 
-        registry.counter("openviking_cache_hits_total", label_names=("level",)).inc(
-            labels={"level": "L0"}
+        registry.inc_counter(
+            "openviking_cache_hits_total", label_names=("level",), labels={"level": "L0"}
         )
-        registry.counter("openviking_cache_hits_total", label_names=("level",)).inc(
-            labels={"level": "L0"}
+        registry.inc_counter(
+            "openviking_cache_hits_total", label_names=("level",), labels={"level": "L0"}
         )
-        registry.counter("openviking_cache_misses_total", label_names=("level",)).inc(
-            labels={"level": "L1"}
+        registry.inc_counter(
+            "openviking_cache_misses_total", label_names=("level",), labels={"level": "L1"}
         )
 
         exporter = PrometheusExporter(registry=registry)
         text = exporter.render()
+        schema = re.search(r'bucket_schema="([0-9a-f]{16})"', text).group(1)
 
         assert 'openviking_retrieval_requests_total{context_type="memory"} 2' in text
-        assert 'openviking_retrieval_latency_seconds_count{context_type="memory"} 1' in text
         assert (
-            'openviking_retrieval_latency_seconds_bucket{context_type="memory",le="0.05"} 1' in text
+            f'openviking_retrieval_latency_seconds_count{{bucket_schema="{schema}",context_type="memory"}} 1'
+            in text
         )
         assert (
-            'openviking_retrieval_latency_seconds_bucket{context_type="memory",le="+Inf"} 1' in text
+            f'openviking_retrieval_latency_seconds_bucket{{bucket_schema="{schema}",context_type="memory",le="0.05"}} 1'
+            in text
+        )
+        assert (
+            f'openviking_retrieval_latency_seconds_bucket{{bucket_schema="{schema}",context_type="memory",le="+Inf"}} 1'
+            in text
         )
         assert 'openviking_cache_hits_total{level="L0"} 2' in text
         assert 'openviking_cache_misses_total{level="L1"} 1' in text
@@ -109,9 +116,10 @@ class TestRetrievalStatsMetricsIntegration:
                 'openviking_retrieval_results_total{account_id="__unknown__",context_type="memory"} 3'
                 in text
             )
-            assert (
-                'openviking_retrieval_latency_seconds_count{account_id="__unknown__",context_type="memory"} 1'
-                in text
+            assert re.search(
+                r'openviking_retrieval_latency_seconds_count\{account_id="__unknown__",'
+                r'bucket_schema="[0-9a-f]{16}",context_type="memory"\} 1',
+                text,
             )
         finally:
             shutdown_metrics(app=None)
@@ -172,10 +180,11 @@ class TestMetricsEndpoint:
         transport = httpx.ASGITransport(app=app)
         try:
             registry = get_metrics_registry()
-            registry.counter(
+            registry.inc_counter(
                 "openviking_retrieval_requests_total",
                 label_names=("context_type",),
-            ).inc(labels={"context_type": "memory"})
+                labels={"context_type": "memory"},
+            )
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get("/metrics")
                 assert resp.status_code == 200

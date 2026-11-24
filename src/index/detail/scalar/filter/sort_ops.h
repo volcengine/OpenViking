@@ -188,6 +188,10 @@ class CounterOp : public SorterOpBase {
     return "count";
   }
 
+  bool is_total_count() const {
+    return fields_.empty();
+  }
+
   virtual void set_field(const std::string& field, int greater_than = -1) {
     fields_.clear();
     fields_.push_back(field);

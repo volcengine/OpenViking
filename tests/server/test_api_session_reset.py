@@ -48,7 +48,7 @@ async def test_reset_empty_archive_survives_late_summary_and_next_commit(
     jobs = []
     summary_inputs = []
 
-    async def enqueue(queue_name, data):
+    async def enqueue(queue_name, data, *, group_key):
         jobs.append(SessionCommitMsg(**data))
         return data["task_id"]
 

@@ -15,10 +15,11 @@ from fastapi import Request
 from openviking.core.identifiers import (
     validate_account_id,
     validate_identifier_length,
+    validate_identifier_part,
     validate_user_id,
 )
+from openviking.server.account_stores.file import validate_file_account_id
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.api_keys.legacy import validate_file_account_id
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager
@@ -26,6 +27,7 @@ from openviking_cli.exceptions import InvalidArgumentError, UnauthenticatedError
 from openviking_cli.utils import get_logger
 
 _TRUSTED_ROLE_HEADER = "X-OpenViking-Role"
+_TRUSTED_GROUPS_HEADER = "X-OpenViking-Groups"
 _TRUSTED_ASSERTABLE_ROLES = {
     Role.USER: Role.USER,
     Role.ADMIN: Role.ADMIN,
@@ -84,6 +86,24 @@ def _asserted_role_from_header(request: Request, *, allow_assertion: bool) -> Op
     if role not in _TRUSTED_ASSERTABLE_ROLES:
         raise InvalidArgumentError(f"{_TRUSTED_ROLE_HEADER} must be one of: user, admin.")
     return _TRUSTED_ASSERTABLE_ROLES[role]
+
+
+def _group_ids_from_header(request: Request) -> tuple[str, ...]:
+    raw_groups = request.headers.get(_TRUSTED_GROUPS_HEADER)
+    if raw_groups is None:
+        return ()
+    group_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_group_id in raw_groups.split(","):
+        group_id = raw_group_id.strip()
+        if not group_id:
+            continue
+        if error := validate_identifier_part(group_id, "group_id"):
+            raise InvalidArgumentError(error)
+        if group_id not in seen:
+            group_ids.append(group_id)
+            seen.add(group_id)
+    return tuple(group_ids)
 
 
 class TrustedAuthPlugin(AuthPlugin):
@@ -150,7 +170,15 @@ class TrustedAuthPlugin(AuthPlugin):
         # parameters such as ``account_id`` identify the managed resource, so
         # they must not be mistaken for a partial caller identity.
         is_admin_path = _is_trusted_admin_path(request.url.path)
-        if is_admin_path:
+        # A key-only health probe reports control-plane identity. Probes with
+        # tenant identity keep reporting the asserted/resolved data-plane role.
+        is_control_probe = (
+            request.url.path == "/health"
+            and not effective_account_id
+            and not effective_user_id
+            and asserted_role is None
+        )
+        if is_admin_path or is_control_probe:
             return ResolvedIdentity(
                 role=Role.ROOT,
                 account_id=effective_account_id or "trusted",
@@ -183,6 +211,7 @@ class TrustedAuthPlugin(AuthPlugin):
             role=trusted_role,
             account_id=effective_account_id,
             user_id=effective_user_id,
+            group_ids=_group_ids_from_header(request),
         )
         if (
             self.should_auto_register_trusted_identity(request)
@@ -196,10 +225,12 @@ class TrustedAuthPlugin(AuthPlugin):
     def validate_config(self, config) -> None:
         if config.root_api_key and config.root_api_key.strip():
             return
-        logger.error(
+        print(
             "Cannot start OpenViking: trusted mode requires a non-empty server.root_api_key, "
             "including on localhost. Set server.root_api_key in the server's ov.conf and "
-            "restart. Configure clients and Web Studio to use the same key."
+            "restart. Configure clients and Web Studio to use the same key.",
+            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 
@@ -250,10 +281,9 @@ class TrustedAuthPlugin(AuthPlugin):
             if manager is None or await manager.get_account(account_id) is None:
                 raise
         if self._pending_count + self._in_flight_count >= self._pending_max_size:
-            logger.warning(
-                "Trusted identity registration queue is full; dropping %s/%s",
-                account_id,
-                user_id,
+            logger.info(
+                "Trusted identity registration queue is full; skipping identity",
+                extra={"queue_depth": self._pending_count + self._in_flight_count},
             )
             return
         self._pending.setdefault(account_id, set()).add(user_id)
@@ -281,7 +311,10 @@ class TrustedAuthPlugin(AuthPlugin):
             self._pending_count += self._in_flight_count
             if not isinstance(exc, Exception):
                 raise
-            logger.warning("Trusted identity batch registration failed; will retry", exc_info=True)
+            logger.info(
+                "Trusted identity batch registration failed; will retry",
+                extra={"error_type": type(exc).__name__, "total": self._in_flight_count},
+            )
         finally:
             self._in_flight = {}
             self._in_flight_count = 0

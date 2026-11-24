@@ -1,9 +1,8 @@
-from types import SimpleNamespace
-
 import pytest
 
 from openviking.retrieve import intent_analyzer as intent_module
 from openviking.retrieve.intent_analyzer import IntentAnalyzer
+from openviking_cli.retrieve.types import ContextType
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 
@@ -57,49 +56,6 @@ def test_openviking_config_uses_vlm_when_query_planner_is_absent_or_empty():
 
     empty_config = OpenVikingConfig.from_dict({"query_planner": {}})
     assert empty_config.get_query_planner() is empty_config.vlm
-
-
-def test_query_planner_prompt_mapping_defaults_for_unknown_models():
-    assert (
-        intent_module.resolve_intent_analysis_prompt_id(
-            SimpleNamespace(model="ollama/guoxuter/ov_intent_analysis_sft:v7_q8")
-        )
-        == "retrieval.ov_intent_analysis_sft_v7"
-    )
-    assert (
-        intent_module.resolve_intent_analysis_prompt_id(
-            SimpleNamespace(model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8")
-        )
-        == "retrieval.ov_intent_analysis_sft_v4"
-    )
-    assert (
-        intent_module.resolve_intent_analysis_prompt_id(SimpleNamespace(model="ollama/qwen3.5:4b"))
-        == intent_module.DEFAULT_INTENT_ANALYSIS_PROMPT
-    )
-
-
-def test_query_planner_prompt_mapping_targets_are_bundled():
-    from openviking.prompts.manager import PromptManager
-
-    manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
-    for prompt_id in intent_module.QUERY_PLANNER_PROMPT_BY_MODEL.values():
-        assert manager.load_template(prompt_id).metadata.id == prompt_id
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_uses_query_planner_when_configured(monkeypatch):
-    planner = RecordingModel(_query_plan_response("planned query"))
-
-    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
-
-    result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="where is my preference?",
-    )
-
-    assert result.queries[0].query == "planned query"
-    assert len(planner.prompts) == 1
 
 
 @pytest.mark.asyncio
@@ -176,69 +132,45 @@ async def test_intent_analyzer_handles_compact_object_response(monkeypatch):
 
     assert len(result.queries) == 1
     assert result.queries[0].query == "compact query"
-    assert result.queries[0].context_type.value == "resource"
+    assert result.queries[0].context_type == ContextType.RESOURCE
     assert result.queries[0].intent == ""
     assert result.queries[0].priority == 2
     assert result.reasoning == ""
 
 
 @pytest.mark.asyncio
-async def test_intent_analyzer_uses_model_specific_prompt(monkeypatch):
-    planner = RecordingModel(
-        _query_plan_response("planned query"),
-        model="ollama/guoxuter/ov_intent_analysis_sft:v4_q8",
-    )
-    rendered: list[str] = []
+@pytest.mark.parametrize(
+    ("model", "prompt_id"),
+    [
+        ("ollama/guoxuter/ov_intent_analysis_sft:v4_q8", "retrieval.ov_intent_analysis_sft_v4"),
+        ("ollama/guoxuter/ov_intent_analysis_sft:v7_q8", "retrieval.ov_intent_analysis_sft_v7"),
+        ("ollama/qwen3.5:4b", "retrieval.intent_analysis"),
+    ],
+)
+async def test_intent_analyzer_uses_the_bundled_prompt_for_the_resolved_model(
+    monkeypatch, model, prompt_id
+):
+    planner = RecordingModel(_query_plan_response("planned query"), model=model)
+    rendered = []
+    render_prompt = intent_module.render_prompt
 
-    def fake_render_prompt(prompt_id, variables):
-        rendered.append(prompt_id)
-        return "rendered prompt"
+    def record_prompt(template_id, variables):
+        rendered.append(template_id)
+        return render_prompt(template_id, variables)
 
-    monkeypatch.setattr(intent_module, "render_prompt", fake_render_prompt)
-
+    monkeypatch.setattr(intent_module, "render_prompt", record_prompt)
     result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="",
+        compression_summary="The user prefers explicit rollback procedures.",
         messages=[],
         current_message="where is my preference?",
     )
 
-    assert result.queries[0].query == "planned query"
-    assert rendered == ["retrieval.ov_intent_analysis_sft_v4"]
-    assert planner.prompts == ["rendered prompt"]
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_keeps_default_prompt_for_unmapped_model(monkeypatch):
-    planner = RecordingModel(_query_plan_response("planned query"), model="ollama/qwen3.5:4b")
-    rendered: list[str] = []
-
-    def fake_render_prompt(prompt_id, variables):
-        rendered.append(prompt_id)
-        return "rendered prompt"
-
-    monkeypatch.setattr(intent_module, "render_prompt", fake_render_prompt)
-
-    result = await IntentAnalyzer(query_planner=planner).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="where is my preference?",
-    )
-
-    assert result.queries[0].query == "planned query"
-    assert rendered == [intent_module.DEFAULT_INTENT_ANALYSIS_PROMPT]
-
-
-@pytest.mark.asyncio
-async def test_intent_analyzer_accepts_resolved_vlm_as_query_planner(monkeypatch):
-    vlm = RecordingModel(_query_plan_response("vlm query"))
-
-    monkeypatch.setattr(intent_module, "render_prompt", lambda prompt_id, variables: "prompt")
-
-    result = await IntentAnalyzer(query_planner=vlm).analyze(
-        compression_summary="",
-        messages=[],
-        current_message="where is my preference?",
-    )
-
-    assert result.queries[0].query == "vlm query"
-    assert len(vlm.prompts) == 1
+    assert rendered == [prompt_id]
+    [prompt] = planner.prompts
+    assert "where is my preference?" in prompt
+    [query] = result.queries
+    assert query.query == "planned query"
+    assert query.context_type == ContextType.MEMORY
+    assert query.intent == "test intent"
+    assert query.priority == 1
+    assert result.reasoning == "test"

@@ -44,8 +44,20 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
 
     def render_contract(self, context: ExtractionOutputContext) -> str:
         schema = json.dumps(context.operations_model.model_json_schema(), ensure_ascii=False)
+        unavailable = [
+            schema.memory_type
+            for schema in context.schemas
+            if context.consolidation and schema.requires_messages()
+        ]
+        creation_rule = (
+            "Original messages are unavailable: do not create memories of types "
+            + ", ".join(unavailable)
+            + ". Existing add_only records may only be deleted, not updated.\n"
+            if unavailable
+            else ""
+        )
         return (
-            "## Output Format\n"
+            creation_rule + "## Output Format\n"
             "The final output of the model must strictly follow the JSON Schema format shown below:\n"
             f"```json\n{schema}\n```"
         )
@@ -68,6 +80,7 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
             content=content,
             model_class=context.operations_model,
             expected_fields=list(context.operations_model.model_fields),
+            validate_data=context.validate_creates,
         )
 
     def render_final_instruction(self, context: ExtractionOutputContext) -> str:

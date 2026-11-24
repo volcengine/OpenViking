@@ -15,6 +15,7 @@ from openviking.storage.context_update_plan import (
     SemanticTreeSnapshot,
 )
 from openviking.storage.index_action import FieldPatch
+from openviking.telemetry import get_ingestion_source_type
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -49,12 +50,12 @@ class _RecordingVikingDB:
 
 
 @pytest.mark.asyncio
-async def test_resource_processor_upload_understanding_file_delegates():
+async def test_resource_processor_upload_understanding_file_delegates(ctx):
     processor = ResourceProcessor(_FakeVikingDB())
     media_processor = SimpleNamespace(upload_understanding_file=AsyncMock(return_value="file-1"))
     processor._media_processor = media_processor
 
-    result = await processor.upload_understanding_file("/tmp/upload.pdf")
+    result = await processor.upload_understanding_file("/tmp/upload.pdf", ctx=ctx)
 
     assert result == "file-1"
     media_processor.upload_understanding_file.assert_awaited_once_with("/tmp/upload.pdf")
@@ -792,11 +793,13 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         ),
     )
     vectorized = {}
+    source_types = []
     both_entered = asyncio.Event()
     release = asyncio.Event()
 
     async def vectorize_file(**kwargs):
         vectorized[kwargs["file_path"]] = kwargs
+        source_types.append(get_ingestion_source_type())
         if len(vectorized) == 2:
             both_entered.set()
         await release.wait()
@@ -807,14 +810,6 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
         "openviking.utils.resource_processor.rewrite_image_uris", rewrite_image_uris
     )
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
-    monkeypatch.setattr(
-        "openviking.utils.resource_processor.get_openviking_config",
-        lambda: SimpleNamespace(
-            queue_workers=SimpleNamespace(
-                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
-            )
-        ),
-    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._get_summarizer = Mock(side_effect=AssertionError("summarizer should not run"))
     processor._delete_resource_semantic_markers = AsyncMock()
@@ -829,6 +824,7 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
                 "temp_uri": "viking://temp/demo",
                 "temp_dir_path": "tmp/demo",
                 "source_committed": False,
+                "is_code_repo": True,
             },
             ctx=ctx,
             resource_lock=lock,
@@ -845,6 +841,8 @@ async def test_vectors_only_persists_tree_and_vectorizes_files_only(monkeypatch,
     result = task.result()
 
     assert result == {"status": "success", "root_uri": "viking://resources/demo"}
+    assert source_types == ["repository", "repository"]
+    assert get_ingestion_source_type() is None
     viking_fs.persist_temp_tree.assert_awaited_once_with(
         "viking://temp/demo",
         "viking://resources/demo",
@@ -892,14 +890,6 @@ async def test_local_vectors_only_uses_artifact_snapshot_when_target_tree_is_emp
     vectorize_file = AsyncMock(return_value=True)
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
-    monkeypatch.setattr(
-        "openviking.utils.resource_processor.get_openviking_config",
-        lambda: SimpleNamespace(
-            queue_workers=SimpleNamespace(
-                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
-            )
-        ),
-    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._build_parse_output_store = Mock(return_value=store)
 
@@ -974,14 +964,6 @@ async def test_vectors_only_syncs_preexisting_target_instead_of_merging(monkeypa
     )
     monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", AsyncMock())
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", AsyncMock())
-    monkeypatch.setattr(
-        "openviking.utils.resource_processor.get_openviking_config",
-        lambda: SimpleNamespace(
-            queue_workers=SimpleNamespace(
-                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
-            )
-        ),
-    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
     lock = {"lease_ref": "lock-1"}
@@ -1050,14 +1032,6 @@ async def test_vectors_only_cancels_siblings_before_releasing_lock(monkeypatch, 
 
     monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: viking_fs)
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", vectorize_file)
-    monkeypatch.setattr(
-        "openviking.utils.resource_processor.get_openviking_config",
-        lambda: SimpleNamespace(
-            queue_workers=SimpleNamespace(
-                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
-            )
-        ),
-    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
 
@@ -1098,14 +1072,6 @@ async def test_vectors_only_deletes_sync_removed_detail_vectors(monkeypatch, ctx
     )
     monkeypatch.setattr("openviking.utils.resource_processor.rewrite_image_uris", AsyncMock())
     monkeypatch.setattr("openviking.utils.resource_processor.vectorize_file", AsyncMock())
-    monkeypatch.setattr(
-        "openviking.utils.resource_processor.get_openviking_config",
-        lambda: SimpleNamespace(
-            queue_workers=SimpleNamespace(
-                add_resource=SimpleNamespace(file_vectorization_concurrency=8)
-            )
-        ),
-    )
     processor = ResourceProcessor(_FakeVikingDB())
     processor._delete_resource_semantic_vectors = AsyncMock()
     processor._delete_removed_resource_vectors = AsyncMock()

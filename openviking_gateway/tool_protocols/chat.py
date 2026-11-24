@@ -13,6 +13,7 @@ from .common import (
     ToolRound,
     append_text,
     merge_delta,
+    merge_usage,
     sse,
 )
 
@@ -105,10 +106,13 @@ class ChatProtocol(ToolProtocol):
     def encode(self, value):
         return super().encode(value) if value is None else sse(value)
 
+    def upstream_error(self, event):
+        return [event, None]
+
     def accumulate(self, value):
         self.envelope.update({k: v for k, v in value.items() if k not in {"choices", "usage"}})
         if value.get("usage"):
-            self.usage.update(value["usage"])
+            merge_usage(self.usage, value["usage"])
         # Only the first completion is the reply; the tool loop refuses any other.
         choice = next((c for c in value.get("choices") or [] if c.get("index", 0) == 0), None)
         if choice is None:
@@ -176,7 +180,9 @@ class ChatProtocol(ToolProtocol):
         if self.choices != 1:
             raise ToolLoopError("Tool mode requires one completion")
         if not self.finish:
-            raise ToolLoopError("Model response ended before finish_reason")
+            raise ToolLoopError(
+                "Model response ended before finish_reason", code="tool_upstream_incomplete"
+            )
         if self.fragments:
             self.message["tool_calls"] = [self.fragments[i] for i in sorted(self.fragments)]
         self.message.setdefault("content", None)
@@ -236,5 +242,5 @@ class ChatProtocol(ToolProtocol):
             events.append({**self.chunk({}), "choices": [], "usage": final["usage"]})
         return [*events, None]
 
-    def error(self, message):
-        return [{"error": {"type": "gateway_tool_error", "message": message}}, None]
+    def error(self, message, kind="gateway_tool_error"):
+        return [{"error": {"type": kind, "message": message}}, None]

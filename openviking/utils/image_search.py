@@ -9,10 +9,11 @@ import io
 import mimetypes
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from PIL import Image, UnidentifiedImageError
 
+from openviking.utils.image_input import encode_image_jpeg
 from openviking.utils.media_limits import is_large_image_by_size
 from openviking_cli.utils.config.parser_config import ImageConfig
 
@@ -47,17 +48,7 @@ def _prepare_image_bytes_for_model(
             ):
                 return content, False
 
-            preview = img.convert("RGB")
-
-            max_dimension = image_config.preview_max_dimension
-            if width > max_dimension or height > max_dimension:
-                ratio = min(max_dimension / width, max_dimension / height)
-                new_size = (max(1, int(width * ratio)), max(1, int(height * ratio)))
-                preview = preview.resize(new_size, Image.Resampling.LANCZOS)
-
-            buf = io.BytesIO()
-            preview.save(buf, format="JPEG", quality=85, optimize=True)
-            return buf.getvalue(), True
+            return encode_image_jpeg(img.convert("RGB"), image_config.preview_max_dimension), True
     except (UnidentifiedImageError, OSError, ValueError):
         return content, False
 
@@ -94,19 +85,22 @@ def is_viking_uri(value: str) -> bool:
 
 def build_multimodal_embedding_input(
     text: str = "",
-    image_url: Optional[str] = None,
+    image_url: str | list[str] | None = None,
 ) -> List[Dict[str, Any]]:
     parts: List[Dict[str, Any]] = []
     if text.strip():
         parts.append({"type": "text", "text": text})
-    if image_url:
-        parts.append({"type": "image_url", "image_url": {"url": image_url}})
+    for url in image_url if isinstance(image_url, list) else [image_url]:
+        if url:
+            parts.append({"type": "image_url", "image_url": {"url": url}})
     return parts
 
 
-def normalize_client_image_input(image: Any) -> Optional[str]:
+def normalize_client_image_input(image: Any) -> str | list[str] | None:
     if image is None:
         return None
+    if isinstance(image, list):
+        return [normalize_client_image_input(item) for item in image]
     if isinstance(image, (bytes, bytearray, memoryview)):
         return image_bytes_to_data_uri(image)
 

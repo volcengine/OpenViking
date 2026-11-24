@@ -4,12 +4,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from openviking.config.vlm import VLMResolver
 from openviking.core.context import Context
 from openviking.message import Message, TextPart
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.session.memory.agent_trajectory_context_provider import (
@@ -26,7 +29,11 @@ from openviking.session.memory.experience_lineage import (
     trajectory_outcome_tag,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
-from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
+from openviking.session.memory.memory_updater import (
+    ExtractContext,
+    MemoryUpdateError,
+    MemoryUpdateResult,
+)
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.skill.session_skill_context_provider import (
     SESSION_SKILL_MEMORY_TYPE,
@@ -60,6 +67,7 @@ class TrajectoryAnalyzerContext:
     inject_evaluation_feedback: bool = True
     include_session_skills: bool = False
     source_archive_uri: str = ""
+    case_candidates: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -87,10 +95,11 @@ class TrajectoryRolloutAnalyzer:
             raise ValueError("TrajectoryAnalyzerContext.request_context is required")
 
         evaluation = await self._evaluate_rollout(rollout, context)
+        feedback_injected = evaluation is not None and context.inject_evaluation_feedback
         extraction_messages = _messages_with_evaluation_feedback(
             rollout.messages,
             evaluation=evaluation,
-            enabled=evaluation is not None and context.inject_evaluation_feedback,
+            enabled=feedback_injected,
         )
         result = await self.extract_trajectory_memories(
             messages=extraction_messages,
@@ -100,6 +109,10 @@ class TrajectoryRolloutAnalyzer:
             include_session_skills=context.include_session_skills,
             case_name=getattr(rollout.case, "name", ""),
             source_archive_uri=context.source_archive_uri,
+            case_candidates=context.case_candidates,
+            # Only feedback present in the extraction input changes trajectory identity.
+            extraction_scope=extraction_messages[-1].content if feedback_injected else "",
+            evaluation_passed=evaluation.passed if evaluation is not None else None,
         )
         contexts = list((result or {}).get("contexts", []))
         skill_gradients = list((result or {}).get("skill_gradients", []))
@@ -149,6 +162,9 @@ class TrajectoryRolloutAnalyzer:
         include_session_skills: bool = False,
         case_name: str = "",
         source_archive_uri: str = "",
+        case_candidates: list[dict[str, Any]] | None = None,
+        extraction_scope: str = "",
+        evaluation_passed: bool | None = None,
     ) -> dict[str, list[Any]]:
         """Extract trajectory and/or reusable skill operations from rollout messages.
 
@@ -163,6 +179,9 @@ class TrajectoryRolloutAnalyzer:
         empty_result: dict[str, list[Any]] = {"contexts": [], "skill_gradients": []}
         if not messages or ctx is None:
             return empty_result
+
+        if evaluation_passed is None:
+            evaluation_passed = _commit_evaluation_passed(messages)
 
         vlm_config = None
         if self.vlm is None:
@@ -179,6 +198,8 @@ class TrajectoryRolloutAnalyzer:
             include_session_skills=include_session_skills,
             vlm_config=vlm_config,
             source_archive_uri=source_archive_uri,
+            case_candidates=case_candidates,
+            extraction_scope=extraction_scope,
         )
         consumed_experience_uris = collect_read_experience_uris(messages, ctx=ctx)
         phase_result = await self._run_trajectory_extract_phase(
@@ -191,6 +212,7 @@ class TrajectoryRolloutAnalyzer:
             case_name=case_name,
             source_archive_uri=source_archive_uri,
             consumed_experience_uris=consumed_experience_uris,
+            evaluation_passed=evaluation_passed,
         )
         if phase_result is None:
             return empty_result
@@ -210,6 +232,7 @@ class TrajectoryRolloutAnalyzer:
         case_name: str = "",
         source_archive_uri: str = "",
         consumed_experience_uris: list[str] | None = None,
+        evaluation_passed: bool | None = None,
     ) -> tuple[list[str], list[str], list[Context], list[PatchSemanticGradient]] | None:
         if self.vlm is None:
             vlm_config = provider._vlm_config
@@ -245,7 +268,6 @@ class TrajectoryRolloutAnalyzer:
             ctx=ctx,
             context_provider=provider,
             isolation_handler=isolation_handler,
-            thinking=True,
         )
 
         try:
@@ -270,8 +292,33 @@ class TrajectoryRolloutAnalyzer:
                 ctx=ctx,
             )
 
-            _ensure_trajectory_case_name(traj_ops, case_name=case_name)
+            _bind_trajectory_cases(
+                traj_ops,
+                case_name=case_name,
+                case_candidates=provider.case_candidates,
+            )
             _apply_trajectory_source_archive_uri(traj_ops, source_archive_uri)
+            traj_ops.resolved_links.extend(
+                StoredLink(
+                    from_uri=case_uri,
+                    to_uri=uri,
+                    weight=1.0,
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+                for op in traj_ops.upsert_operations
+                for uri in op.uris
+                for case_uri in op.memory_fields.get("case_uris", [])
+            )
+
+            # A session-wide grade must not label unrelated tasks.
+            if (
+                evaluation_passed is not None
+                and len(traj_ops.upsert_operations) == 1
+                and len(provider.case_candidates) <= 1
+            ):
+                fields = traj_ops.upsert_operations[0].memory_fields
+                if fields.get("case_uris") != []:
+                    fields["outcome"] = "success" if evaluation_passed else "failure"
 
             memory_result = MemoryUpdateResult()
             if include_trajectories:
@@ -290,6 +337,8 @@ class TrajectoryRolloutAnalyzer:
                 f"deleted={len(memory_result.deleted_uris)}, "
                 f"errors={len(memory_result.errors)}"
             )
+            if memory_result.errors:
+                raise MemoryUpdateError(memory_result)
             contexts = _contexts_from_memory_result(memory_result)
             return (
                 list(memory_result.written_uris),
@@ -298,8 +347,12 @@ class TrajectoryRolloutAnalyzer:
                 skill_gradients,
             )
         except Exception as exc:
-            logger.error("[trajectory] Failed to extract: %s", exc, exc_info=True)
-            if strict_extract_errors:
+            logger.debug(
+                "trajectory extraction failed error_type=%s",
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
+            )
+            if strict_extract_errors or isinstance(exc, MemoryUpdateError):
                 raise
             return None
 
@@ -319,16 +372,34 @@ class TrajectoryRolloutAnalyzer:
             transaction_handle=None,
         )
         updater._viking_fs = self.viking_fs or get_viking_fs()
-        return await updater.apply_operations(
-            operations,
-            ctx,
-            extract_context=extract_context,
-            isolation_handler=isolation_handler,
-            search_tags_by_uri=_trajectory_search_tags_by_uri(
+        viking_fs = updater._viking_fs
+        lease = None
+        if operations.resolved_links:
+            uris = {
+                uri for link in operations.resolved_links for uri in (link.from_uri, link.to_uri)
+            }
+            for op in operations.upsert_operations:
+                for uri in op.uris:
+                    uris.update((uri, uri.rpartition("/")[0] + "/.overview.md"))
+            lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+                sorted(viking_fs._uri_to_path(uri, ctx=ctx) for uri in uris),
+                timeout_secs=300.0,
+            )
+            updater._transaction_handle = lease
+        try:
+            return await updater.apply_operations(
                 operations,
-                consumed_experience_uris,
-            ),
-        )
+                ctx,
+                extract_context=extract_context,
+                isolation_handler=isolation_handler,
+                search_tags_by_uri=_trajectory_search_tags_by_uri(
+                    operations,
+                    consumed_experience_uris,
+                ),
+            )
+        finally:
+            if lease is not None:
+                await viking_fs._async_agfs.pathlock_release(lease)
 
     @tracer(
         "train.rollout_analyzer.trajectory.read_trajectories", ignore_result=True, ignore_args=True
@@ -349,7 +420,12 @@ class TrajectoryRolloutAnalyzer:
                 raw = await viking_fs.read_file(uri, ctx=ctx) or ""
                 mf = MemoryFileUtils.read(raw, uri=uri)
             except Exception as exc:
-                logger.warning("Failed to read trajectory %s: %s", uri, exc)
+                logger.debug(
+                    "trajectory read failed uri=%s error_type=%s",
+                    safe_uri_for_log(uri),
+                    type(exc).__name__,
+                    extra={"error_type": type(exc).__name__},
+                )
                 continue
             fields = dict(mf.extra_fields or {})
             name = str(
@@ -412,16 +488,41 @@ def _evaluation_from_trajectories(trajectories: list[Trajectory]) -> RubricEvalu
     )
 
 
-def _ensure_trajectory_case_name(operations: ResolvedOperations, *, case_name: str) -> None:
-    case_name = str(case_name or "").strip()
-    if not case_name:
-        return
+def _bind_trajectory_cases(
+    operations: ResolvedOperations,
+    *,
+    case_name: str,
+    case_candidates: list[dict[str, Any]],
+) -> None:
+    cases_by_id = {case["id"]: case for case in case_candidates}
     for op in getattr(operations, "upsert_operations", []) or []:
         if getattr(op, "memory_type", None) != _TRAJECTORY_MEMORY_TYPE:
             continue
-        fields = getattr(op, "memory_fields", None)
-        if isinstance(fields, dict):
-            fields["case_name"] = case_name
+        fields = op.memory_fields
+        related_ids = fields.pop("related_case_ids", None) or []
+        if not case_candidates:
+            if case_name:
+                fields["case_name"] = case_name
+            continue
+        if len(case_candidates) == 1:
+            related_ids = list(cases_by_id)
+            fields["case_name"] = case_candidates[0]["name"]
+        else:
+            fields.pop("case_name", None)
+        unknown_ids = set(related_ids) - cases_by_id.keys()
+        if unknown_ids:
+            logger.info(
+                "unknown trajectory case references ignored skipped=%d",
+                len(unknown_ids),
+                extra={"degraded": True},
+            )
+        fields["case_uris"] = list(
+            dict.fromkeys(
+                cases_by_id[case_id]["uri"]
+                for case_id in related_ids
+                if case_id in cases_by_id and cases_by_id[case_id]["uri"]
+            )
+        )
 
 
 def _apply_trajectory_source_archive_uri(
@@ -456,6 +557,23 @@ def _trajectory_search_tags_by_uri(
             if uri:
                 result[uri] = list(tags)
     return result
+
+
+def _commit_evaluation_passed(messages: list[Message]) -> bool | None:
+    for message in reversed(messages):
+        if message.role != "user" or not message.content.startswith(
+            "# OpenViking OutcomeEvaluation\n"
+        ):
+            continue
+        try:
+            payload = json.loads(message.content.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+        except (IndexError, ValueError):
+            logger.warning("Cannot read commit OutcomeEvaluation JSON")
+            return None
+        evaluation = payload.get("evaluation") if isinstance(payload, dict) else None
+        passed = evaluation.get("passed") if isinstance(evaluation, dict) else None
+        return passed if isinstance(passed, bool) else None
+    return None
 
 
 def _messages_with_evaluation_feedback(

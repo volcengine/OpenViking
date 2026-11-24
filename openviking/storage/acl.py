@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Iterable, Literal, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterable, Literal, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.core.identifiers import validate_identifier_part, validate_user_id
 from openviking.core.namespace import uri_parts
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.expr import FilterExpr, Or, PathScope
+from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking_cli.exceptions import InvalidArgumentError
 
 if TYPE_CHECKING:
@@ -22,10 +22,20 @@ class AccountConfigReader(Protocol):
     async def get_account(self, account_id: str, field: str) -> Any: ...
 
 
+class AclPrincipalDirectory(Protocol):
+    async def get_user_membership(self, account_id: str, user_id: str) -> Any: ...
+
+    async def get_groups(self, account_id: str) -> list[Any]: ...
+
+
 class AclLevel(str, Enum):
     READ = "read"
     WRITE = "write"
     MANAGE = "manage"
+
+    def allows(self, action: AclAction) -> bool:
+        required = _LEVEL_MASK[AclLevel(action.value)]
+        return _LEVEL_MASK[self] & required == required
 
 
 class AclAction(str, Enum):
@@ -46,6 +56,8 @@ _LEVEL_MASK = {
     AclLevel.MANAGE: 7,
 }
 _MASK_LEVEL = {mask: level for level, mask in _LEVEL_MASK.items()}
+# A non-grant token keeps empty permissions explicit in scalar list storage.
+EMPTY_ACL_GRANT = "none"
 ACL_GRANT_FIELDS = ("acl_direct_grants", "acl_inherited_grants")
 ACL_MODE_FIELD = "acl_mode"
 ACL_CONTEXT_FIELDS = frozenset((ACL_MODE_FIELD, *ACL_GRANT_FIELDS))
@@ -101,24 +113,19 @@ class DirectAcl:
         return DirectAcl.from_entries((*self.entries, *other.entries))
 
     def principals_for(self, action: AclAction) -> frozenset[str]:
-        required_mask = _LEVEL_MASK[AclLevel(action.value)]
-        return frozenset(
-            entry.principal
-            for entry in self.entries
-            if _LEVEL_MASK[entry.level] & required_mask == required_mask
-        )
+        return frozenset(entry.principal for entry in self.entries if entry.level.allows(action))
 
     def context_fields(self, prefix: str) -> dict[str, Any]:
-        return {f"{prefix}_grants": [_encode_grant(entry) for entry in self.entries]}
+        grants = [_encode_grant(entry) for entry in self.entries]
+        return {f"{prefix}_grants": grants or [EMPTY_ACL_GRANT]}
 
     @classmethod
     def from_context_fields(cls, record: Mapping[str, Any], prefix: str) -> "DirectAcl":
         raw_grants = record.get(f"{prefix}_grants") or []
         if not isinstance(raw_grants, (list, tuple)):
             raise RuntimeError(f"Invalid ACL grants for {prefix}: expected a list")
-        # ponytail: 兼容离线索引将空 ACL list 还原为空字符串元素；只忽略精确空串，
-        # 其他非法 token 仍由 _decode_grant 拒绝。底层稳定保留 [] 后应删除。
-        raw_grants = [grant for grant in raw_grants if grant != ""]
+        if len(raw_grants) == 1 and raw_grants[0] == EMPTY_ACL_GRANT:
+            return cls()
         return cls.from_entries(_decode_grant(grant) for grant in raw_grants)
 
 
@@ -240,6 +247,31 @@ def acl_grant_tokens(principals: Iterable[str], action: AclAction) -> list[str]:
     ]
 
 
+def acl_filter(ctx: RequestContext, action: AclAction, *, denied: bool = False) -> FilterExpr:
+    """Filter shared-resource ACL records; callers handle role and namespace bypasses."""
+    grants = acl_grant_tokens(acl_principals(ctx), action)
+    controlled_modes = [AclMode.INHERIT.value, AclMode.RESTRICTED.value]
+    grant_op = "must_not" if denied else "must"
+    direct = RawDSL({"op": grant_op, "field": "acl_direct_grants", "conds": grants})
+    inherited = RawDSL({"op": grant_op, "field": "acl_inherited_grants", "conds": grants})
+    if denied:
+        return And(
+            [
+                In(ACL_MODE_FIELD, controlled_modes),
+                direct,
+                Or([Eq(ACL_MODE_FIELD, AclMode.RESTRICTED.value), inherited]),
+            ]
+        )
+    # Uncontrolled records retain the shared root's default user:* manage grant.
+    return Or(
+        [
+            RawDSL({"op": "must_not", "field": ACL_MODE_FIELD, "conds": controlled_modes}),
+            direct,
+            And([Eq(ACL_MODE_FIELD, AclMode.INHERIT.value), inherited]),
+        ]
+    )
+
+
 def _normalize_entries(entries: Iterable[AclEntry | Mapping[str, Any]]) -> list[AclEntry]:
     highest: dict[str, AclLevel] = {}
     for raw in entries:
@@ -272,9 +304,19 @@ def has_implicit_manage(ctx: RequestContext, uri: str) -> bool:
     return is_acl_uri(uri) and ctx.role == Role.ADMIN
 
 
+def acl_permission(acl: EffectiveAcl, ctx: RequestContext) -> AclLevel | None:
+    """Resolve the caller's highest grant across its user and group principals."""
+    principals = acl_principals(ctx)
+    return max(
+        (entry.level for entry in acl.permissions.entries if entry.principal in principals),
+        key=_LEVEL_MASK.__getitem__,
+        default=None,
+    )
+
+
 def acl_allows(acl: EffectiveAcl, ctx: RequestContext, action: AclAction) -> bool:
-    principals = acl.permissions.principals_for(action)
-    return not principals.isdisjoint(acl_principals(ctx))
+    permission = acl_permission(acl, ctx)
+    return permission is not None and permission.allows(action)
 
 
 class AclManager:
@@ -287,6 +329,34 @@ class AclManager:
     ) -> None:
         self._context_store = context_store
         self._runtime_config = runtime_config
+        self._principal_directory: AclPrincipalDirectory | None = None
+
+    def set_principal_directory(self, directory: AclPrincipalDirectory) -> None:
+        """Bind the registered identities used by API key authentication."""
+        self._principal_directory = directory
+
+    async def validate_principals(self, principals: Iterable[str], ctx: RequestContext) -> None:
+        """Reject grants that cannot apply within the resource's account."""
+        if self._principal_directory is None:
+            return
+        for principal in sorted(set(principals)):
+            kind, _, identifier = normalize_acl_principal(principal).partition(":")
+            if kind == "user":
+                if identifier == "*":
+                    continue
+                exists = await self._principal_directory.get_user_membership(
+                    ctx.account_id, identifier
+                )
+            else:
+                exists = any(
+                    group["group_id"] == identifier
+                    for group in await self._principal_directory.get_groups(ctx.account_id)
+                )
+            if not exists:
+                raise InvalidArgumentError(
+                    "ACL principal must exist in the resource's account; "
+                    "cross-account ACL sharing is not supported"
+                )
 
     def set_runtime_config_manager(self, runtime_config: AccountConfigReader) -> None:
         """Bind the authoritative account configuration reader."""
@@ -342,9 +412,7 @@ class AclManager:
         records: list[dict[str, Any]] = []
         for offset in range(0, len(unique), 100):
             conditions = [PathScope("uri", uri, depth=0) for uri in unique[offset : offset + 100]]
-            records.extend(
-                await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx)
-            )
+            records.extend(await self._scroll_all(Or(conditions), _ACL_OUTPUT_FIELDS, ctx))
         return records
 
     async def _scroll_all(
@@ -362,11 +430,43 @@ class AclManager:
                 cursor=cursor,
                 output_fields=output_fields,
                 # ACL resolution must see records the caller's own grants hide.
-                ctx=replace(ctx, bypass_acl=True),
+                ctx=replace(ctx, bypass_acl=True, data_access=None),
             )
             records.extend(page)
             if cursor is None:
                 return records
+
+    async def iter_denied_uris(
+        self, uri: str, ctx: RequestContext, *, action: AclAction
+    ) -> AsyncIterator[str]:
+        """Find denied records in a subtree, validating each URI's current ACL snapshot."""
+        scope = And(
+            [
+                Eq("account_id", ctx.account_id),
+                PathScope("uri", uri, depth=-1),
+                acl_filter(ctx, action, denied=True),
+            ]
+        )
+        cursor: str | None = None
+        checked: set[str] = set()
+        while True:
+            records, cursor = await self._context_store.scroll(
+                filter=scope,
+                limit=1,
+                cursor=cursor,
+                output_fields=["uri"],
+                ctx=replace(ctx, bypass_acl=True, data_access=None),
+            )
+            for record in records:
+                candidate = record["uri"]
+                if candidate in checked:
+                    continue
+                checked.add(candidate)
+                # Index levels can carry older snapshots for the same path.
+                if not acl_allows(await self.resolve(candidate, ctx), ctx, action):
+                    yield candidate
+            if cursor is None:
+                return
 
     async def _subtree_records(self, uri: str, ctx: RequestContext) -> list[dict[str, Any]]:
         refs = await self._scroll_all(PathScope("uri", uri, depth=-1), ["id"], ctx)
@@ -462,30 +562,6 @@ class AclManager:
             for record in records
         ]
 
-    async def materialize_moved_record(
-        self, record: Mapping[str, Any], new_uri: str, ctx: RequestContext
-    ) -> dict[str, Any]:
-        if not is_acl_uri(new_uri):
-            return EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl()).context_fields()
-        ancestors = acl_ancestors(new_uri)
-        parent = ancestors[-2] if len(ancestors) > 1 else None
-        parent_acl = (
-            await self.resolve(parent, ctx)
-            if parent
-            else EffectiveAcl(AclMode.NONE, DirectAcl(), DirectAcl())
-        )
-        inherited = parent_acl.permissions
-        source_uri = str(record.get("uri") or "")
-        direct = (
-            DirectAcl.from_context_fields(record, "acl_direct")
-            if is_acl_uri(source_uri)
-            else DirectAcl()
-        )
-        mode = self._effective_from_record(record).mode if is_acl_uri(source_uri) else AclMode.NONE
-        return EffectiveAcl.from_permissions(
-            direct, inherited, mode=mode, parent_mode=parent_acl.mode
-        ).context_fields()
-
     async def _apply_subtree(
         self,
         root_uri: str,
@@ -563,6 +639,8 @@ class AclManager:
         if entries is None and acl_mode is None:
             raise InvalidArgumentError("entries or acl_mode must be provided")
         proposed_direct = DirectAcl.from_entries(entries) if entries is not None else None
+        if proposed_direct is not None:
+            await self.validate_principals((e.principal for e in proposed_direct.entries), ctx)
         old_records = await self._subtree_records(uri, ctx)
         try:
             effective = await self._apply_subtree(

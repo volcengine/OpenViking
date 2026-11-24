@@ -1,0 +1,105 @@
+export const workflows = {
+  file_browser_directory_load: {
+    ready: 'file_browser_directory_load_ready',
+    fail: 'file_browser_directory_load_fail',
+    region: 'directory',
+    owner: 'FileBrowser',
+  },
+  file_browser_preview_load: {
+    ready: 'file_browser_preview_load_ready',
+    fail: 'file_browser_preview_load_fail',
+    region: 'preview',
+    owner: 'FileBrowser',
+  },
+  file_browser_search_find: {
+    ready: 'file_browser_search_find_ready',
+    fail: 'file_browser_search_find_fail',
+    region: 'search',
+    owner: 'FileBrowser',
+  },
+  file_browser_search_query: {
+    ready: 'file_browser_search_query_ready',
+    fail: 'file_browser_search_query_fail',
+    region: 'search',
+    owner: 'FileBrowser',
+  },
+  file_browser_search_grep: {
+    ready: 'file_browser_search_grep_ready',
+    fail: 'file_browser_search_grep_fail',
+    region: 'search',
+    owner: 'FileBrowser',
+  },
+  file_browser_search_glob: {
+    ready: 'file_browser_search_glob_ready',
+    fail: 'file_browser_search_glob_fail',
+    region: 'search',
+    owner: 'FileBrowser',
+  },
+  file_browser_wiki_dashboard_load: {
+    ready: 'file_browser_wiki_dashboard_load_ready',
+    fail: 'file_browser_wiki_dashboard_load_fail',
+    region: 'wiki-dashboard',
+    owner: 'FileBrowser',
+  },
+  file_browser_experience_dashboard_load: {
+    ready: 'file_browser_experience_dashboard_load_ready',
+    fail: 'file_browser_experience_dashboard_load_fail',
+    region: 'experience-dashboard',
+    owner: 'FileBrowser',
+  },
+  file_browser_experience_trajectory_load: {
+    ready: 'file_browser_experience_trajectory_load_ready',
+    fail: 'file_browser_experience_trajectory_load_fail',
+    region: 'trajectory',
+    owner: 'FileBrowser',
+  },
+  console_session_list_load: {
+    ready: 'console_session_list_load_ready',
+    fail: 'console_session_list_load_fail',
+    region: 'sessions',
+    owner: 'Console',
+  },
+  console_session_create: {
+    ready: 'console_session_create_success',
+    fail: 'console_session_create_fail',
+    region: 'sessions',
+    owner: 'Console',
+  },
+  console_session_history_load: {
+    ready: 'console_session_history_load_ready',
+    fail: 'console_session_history_load_fail',
+    region: 'sessions',
+    owner: 'Console',
+  },
+  console_session_delete: {
+    ready: 'console_session_delete_success',
+    fail: 'console_session_delete_fail',
+    region: 'sessions',
+    owner: 'Console',
+  },
+  scope_cascade_libraries_load: {
+    ready: 'scope_cascade_libraries_load_ready',
+    fail: 'scope_cascade_libraries_load_fail',
+    region: 'libraries',
+    owner: 'ScopeCascade',
+  },
+  scope_cascade_spaces_load: {
+    ready: 'scope_cascade_spaces_load_ready',
+    fail: 'scope_cascade_spaces_load_fail',
+    region: 'spaces',
+    owner: 'ScopeCascade',
+  },
+  scope_cascade_users_load: {
+    ready: 'scope_cascade_users_load_ready',
+    fail: 'scope_cascade_users_load_fail',
+    region: 'users',
+    owner: 'ScopeCascade',
+  },
+  file_preview_content_prepare: {
+    ready: 'file_preview_content_prepare_ready',
+    fail: 'file_preview_content_prepare_fail',
+    region: 'content',
+    owner: 'FilePreview',
+  },
+} as const;
+export type WorkflowTarget = keyof typeof workflows;

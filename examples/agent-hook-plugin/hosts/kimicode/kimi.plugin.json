@@ -1,6 +1,6 @@
 {
   "name": "openviking-memory",
-  "version": "0.5.22",
+  "version": "0.5.37",
   "description": "Long-term semantic memory for Kimi Code CLI, powered by OpenViking.",
   "author": {
     "name": "OpenViking",
@@ -13,6 +13,7 @@
     "displayName": "OpenViking Memory",
     "shortDescription": "Recall and capture long-term memory through OpenViking"
   },
+  "skills": "./skills/",
   "mcpServers": {
     "openviking": {
       "command": "node",
@@ -26,10 +27,7 @@
     {
       "event": "SessionStart",
       "command": "node ./agent-integrations/kimicode/scripts/hook.mjs session-start kimicode",
-      "timeout": 30,
-      "env": {
-        "OPENVIKING_PENDING_REPLAY_LIMIT": "2"
-      }
+      "timeout": 30
     },
     {
       "event": "UserPromptSubmit",

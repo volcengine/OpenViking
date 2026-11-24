@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
+from openviking.observability.log_safety import safe_path_for_log
+
 if TYPE_CHECKING:
     from openviking.parse.feishu_import import FeishuImportPlan
 
@@ -87,7 +89,11 @@ class LocalResource:
             from openviking_cli.utils.logger import get_logger
 
             logger = get_logger(__name__)
-            logger.warning(f"[LocalResource] Failed to cleanup resource {cleanup_path}: {e}")
+            logger.info(
+                "Temporary resource cleanup failed path=%s error_type=%s",
+                safe_path_for_log(str(cleanup_path)),
+                type(e).__name__,
+            )
 
     def __enter__(self) -> "LocalResource":
         """Support context manager protocol."""

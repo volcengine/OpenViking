@@ -57,6 +57,8 @@ Hook 关闭时，MCP 工具仍可能正常使用。自动召回需要 `UserPromp
 
 </details>
 
+安装完成后，在 Codex 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
+
 ## 验证
 
 启动 `codex` 后，当前会话首次提交 prompt 时触发的 `SessionStart` 会加载 profile，之后插件将在每次用户输入前自动召回相关记忆。若设置环境变量 `OPENVIKING_DEBUG=1`，则会将相关事件日志写入 `~/.openviking/logs/codex-hooks.log`。
@@ -79,7 +81,6 @@ memory 插件默认内置 OV-Usage。报告汇总自动召回和显式 OpenVikin
 | `Stop` | 将新增对话追加到 OpenViking 会话。 |
 | `PreCompact` | 补齐并提交压缩前的完整对话记录。 |
 | `SessionEnd` | 正常退出时提交会话，触发后续记忆提取。 |
-| `PreToolUse`（`Bash`） | 检查命令中的 `viking://` URI，并提示模型使用 OpenViking MCP 工具。命令仍会执行；URI 是 `ov` 参数等有意传入的数据时，可以忽略提示。 |
 
 新会话启动时还会清理上次运行遗留、已超过闲置 TTL 的孤儿会话。
 

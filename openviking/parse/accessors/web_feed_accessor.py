@@ -36,7 +36,14 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.base import lazy_import
+from openviking.parse.network import (
+    ParserNetworkContext,
+    ParserNetworkOperation,
+    create_parser_httpx_client,
+)
+from openviking.parse.temp import get_parser_download_temp_dir
 from openviking.utils.network_guard import build_httpx_request_validation_hooks
 from openviking_cli.utils.logger import get_logger
 
@@ -288,28 +295,37 @@ class WebFeedAccessor(DataAccessor):
         include = kwargs.get("include")
         exclude = kwargs.get("exclude")
 
-        temp_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="ov_webfeed_")
+        temp_dir = await asyncio.to_thread(
+            tempfile.mkdtemp,
+            prefix="ov_webfeed_",
+            dir=get_parser_download_temp_dir(),
+        )
         try:
             client_kwargs = _build_httpx_client_kwargs(request_validator, cfg["request_timeout"])
             httpx = lazy_import("httpx")
-            async with httpx.AsyncClient(**client_kwargs) as client:
+            client = create_parser_httpx_client(
+                ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, source_url),
+                client_cls=httpx.AsyncClient,
+                **client_kwargs,
+            )
+            async with client as active_client:
                 # The given URL may already be a sitemap/feed, or it may be a plain
                 # page / bare domain (e.g. args={"site": True} on "https://t0saki.com").
                 # In the latter case, auto-discover the site's sitemap/RSS.
-                feed_url, prefetched = await self._resolve_feed_source(source_url, client)
+                feed_url, prefetched = await self._resolve_feed_source(source_url, active_client)
                 entries, feed_kind = await self._collect(
-                    feed_url, client, cfg, prefetched=prefetched
+                    feed_url, active_client, cfg, prefetched=prefetched
                 )
                 if not entries:
                     raise RuntimeError(f"No pages found in sitemap/feed: {feed_url}")
 
                 entries = self._filter_entries(entries, feed_url, cfg, include, exclude)
-                entries = await self._apply_robots(entries, feed_url, client, cfg)
+                entries = await self._apply_robots(entries, feed_url, active_client, cfg)
 
                 if len(entries) > cfg["max_pages"]:
-                    logger.warning(
-                        "[WebFeedAccessor] %s lists %d pages; truncating to max_pages=%d",
-                        feed_url,
+                    logger.info(
+                        "Feed page limit reached; truncating source=%s total=%d limit=%d",
+                        safe_uri_for_log(feed_url),
                         len(entries),
                         cfg["max_pages"],
                     )
@@ -318,7 +334,7 @@ class WebFeedAccessor(DataAccessor):
                 if not entries:
                     raise RuntimeError(f"No ingestible pages remained after filtering: {feed_url}")
 
-                pages = await self._mirror(entries, client, temp_dir, cfg)
+                pages = await self._mirror(entries, active_client, temp_dir, cfg)
 
             if not pages:
                 raise RuntimeError(f"Failed to fetch any page from: {feed_url}")
@@ -333,10 +349,10 @@ class WebFeedAccessor(DataAccessor):
                 "page_count": len(pages),
                 "pages": pages,
             }
-            logger.info(
-                "[WebFeedAccessor] Mirrored %d page(s) from %s (%s)",
+            logger.debug(
+                "Feed mirrored source=%s pages=%d kind=%s",
+                safe_uri_for_log(feed_url),
                 len(pages),
-                feed_url,
                 feed_kind,
             )
             return LocalResource(
@@ -347,7 +363,11 @@ class WebFeedAccessor(DataAccessor):
                 is_temporary=True,
             )
         except Exception as e:
-            logger.error("[WebFeedAccessor] Failed to access %s: %s", source_url, e, exc_info=True)
+            logger.debug(
+                "Feed access failed source=%s error_type=%s",
+                safe_uri_for_log(source_url),
+                type(e).__name__,
+            )
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise
 
@@ -438,7 +458,11 @@ class WebFeedAccessor(DataAccessor):
             except Exception:
                 continue
             if self._is_feed_document(cand_content):
-                logger.info("[WebFeedAccessor] auto-discovered feed %s for %s", candidate, url)
+                logger.debug(
+                    "Feed discovered source=%s feed=%s",
+                    safe_uri_for_log(url),
+                    safe_uri_for_log(candidate),
+                )
                 return candidate, cand_content
 
         raise RuntimeError(
@@ -463,13 +487,14 @@ class WebFeedAccessor(DataAccessor):
 
         if kind == "sitemapindex":
             if depth >= cfg["max_depth"]:
-                logger.warning(
-                    "[WebFeedAccessor] sitemapindex depth limit (%d) reached at %s",
+                logger.info(
+                    "Sitemap depth limit reached; skipping nested sitemap source=%s limit=%d",
+                    safe_uri_for_log(url),
                     cfg["max_depth"],
-                    url,
                 )
                 return [], "sitemap"
             all_entries: List[FeedEntry] = []
+            failed_sitemaps = 0
             for sub_url in self._parse_sitemapindex(root):
                 if sub_url in visited:
                     continue
@@ -478,9 +503,16 @@ class WebFeedAccessor(DataAccessor):
                     sub_entries, _ = await self._collect(sub_url, client, cfg, depth + 1, visited)
                     all_entries.extend(sub_entries)
                 except Exception as e:
-                    logger.warning(
-                        "[WebFeedAccessor] Failed to read sub-sitemap %s: %s", sub_url, e
+                    failed_sitemaps += 1
+                    logger.debug(
+                        "Sub-sitemap skipped source=%s error_type=%s",
+                        safe_uri_for_log(sub_url),
+                        type(e).__name__,
                     )
+            if failed_sitemaps:
+                logger.info(
+                    "Sitemap collection incomplete failed=%d degraded=true", failed_sitemaps
+                )
             return all_entries, "sitemap"
 
         if kind == "urlset":
@@ -598,7 +630,11 @@ class WebFeedAccessor(DataAccessor):
             rp.parse(response.text.splitlines())
             return [e for e in entries if rp.can_fetch(_USER_AGENT, e.url)]
         except Exception as e:
-            logger.debug("[WebFeedAccessor] robots.txt check skipped for %s: %s", feed_url, e)
+            logger.info(
+                "Robots check unavailable; continuing without filtering source=%s error_type=%s",
+                safe_uri_for_log(feed_url),
+                type(e).__name__,
+            )
             return entries
 
     # -- mirroring ---------------------------------------------------------- #
@@ -633,11 +669,7 @@ class WebFeedAccessor(DataAccessor):
                 if content_type and not any(
                     token in content_type for token in ("html", "xml", "text")
                 ):
-                    logger.debug(
-                        "[WebFeedAccessor] Skipping non-text page %s (%s)",
-                        entry.url,
-                        content_type,
-                    )
+                    logger.debug("Non-text page skipped source=%s", safe_uri_for_log(entry.url))
                     return False
                 await asyncio.to_thread(dest.write_bytes, response.content)
                 return True
@@ -650,10 +682,23 @@ class WebFeedAccessor(DataAccessor):
         pages: Dict[str, Optional[str]] = {}
         for (entry, _relpath), result in zip(planned, results, strict=True):
             if isinstance(result, Exception):
-                logger.warning("[WebFeedAccessor] Failed to mirror %s: %s", entry.url, result)
+                logger.debug(
+                    "Page mirror failed source=%s error_type=%s",
+                    safe_uri_for_log(entry.url),
+                    type(result).__name__,
+                )
                 continue
             if result:
                 pages[entry.url] = entry.lastmod
+        failed_pages = sum(isinstance(result, Exception) for result in results)
+        skipped_pages = sum(result is False for result in results)
+        if failed_pages or skipped_pages:
+            logger.info(
+                "Feed mirroring incomplete total=%d failed=%d skipped=%d degraded=true",
+                len(results),
+                failed_pages,
+                skipped_pages,
+            )
         return pages
 
 
@@ -788,11 +833,16 @@ async def _discover_feed_hint(url: str, request_validator) -> Optional[str]:
 
     httpx = lazy_import("httpx")
     client_kwargs = _build_httpx_client_kwargs(request_validator, 5.0)
-    async with httpx.AsyncClient(**client_kwargs) as client:
+    client = create_parser_httpx_client(
+        ParserNetworkContext(ParserNetworkOperation.HTTP_RESOURCE, url),
+        client_cls=httpx.AsyncClient,
+        **client_kwargs,
+    )
+    async with client as active_client:
         # Fetch the page once for <link> autodiscovery (best-effort).
         page_content = b""
         try:
-            response = await client.get(url, headers={"User-Agent": _USER_AGENT})
+            response = await active_client.get(url, headers={"User-Agent": _USER_AGENT})
             if (
                 response.status_code < 400
                 and "html" in response.headers.get("content-type", "").lower()
@@ -801,9 +851,9 @@ async def _discover_feed_hint(url: str, request_validator) -> Optional[str]:
         except Exception:
             pass
 
-        for candidate in await _gather_feed_candidates(client, url, page_content):
+        for candidate in await _gather_feed_candidates(active_client, url, page_content):
             try:
-                response = await client.get(candidate, headers={"User-Agent": _USER_AGENT})
+                response = await active_client.get(candidate, headers={"User-Agent": _USER_AGENT})
                 if response.status_code >= 400:
                     continue
                 info = _classify_and_count(response.content)

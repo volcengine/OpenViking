@@ -1,0 +1,79 @@
+import { useEffect, useRef, useState } from 'react';
+import { useViewActive } from '../../../shared/view-activity.js';
+import type { VikingBotInteractionProps } from './types.js';
+import type { InteractionLabels } from './labels.js';
+import { ErrorNotification } from '../../../shared/feedback/error-notification.js';
+import { interactionError } from './directory-state.js';
+
+export function CustomInteraction({
+  request,
+  disabled,
+  submitting,
+  error,
+  onSubmit,
+  onCancel,
+  labels,
+  locale,
+  onPrevious,
+}: Omit<VikingBotInteractionProps, 'labels'> & {
+  labels: InteractionLabels;
+  onPrevious?: () => void;
+}) {
+  const active = useViewActive();
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState<{ cause: unknown }>();
+  const lifetime = useRef(true);
+  const locked = useRef(false);
+  useEffect(() => {
+    lifetime.current = true;
+    return () => {
+      lifetime.current = false;
+    };
+  }, []);
+  if (request.kind !== 'custom') return null;
+  const busy = Boolean(submitting || pending);
+  const blocked = Boolean(disabled || busy || !active);
+  const message =
+    error ??
+    (failure
+      ? interactionError(failure.cause, labels, 'submitFailed')
+      : undefined);
+  return (
+    <>
+      {message ? (
+        <ErrorNotification
+          title={labels.submitFailed}
+          error={failure?.cause}
+          identity={error ?? failure}
+          locale={locale}
+        >
+          {message}
+        </ErrorNotification>
+      ) : null}
+      {active &&
+        request.render({
+          previous: onPrevious,
+          disabled: blocked,
+          submitting: busy,
+          clearError: () => setFailure(undefined),
+          submit: async (value) => {
+            if (blocked || locked.current || !lifetime.current) return;
+            locked.current = true;
+            setPending(true);
+            setFailure(undefined);
+            try {
+              await onSubmit?.({ kind: 'custom', value });
+            } catch (cause) {
+              if (lifetime.current) setFailure({ cause });
+            } finally {
+              locked.current = false;
+              if (lifetime.current) setPending(false);
+            }
+          },
+          cancel: () => {
+            if (!blocked) onCancel?.();
+          },
+        })}
+    </>
+  );
+}

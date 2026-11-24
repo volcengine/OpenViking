@@ -19,7 +19,7 @@ import pytest_asyncio
 
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import VolcengineKMSProvider
-from openviking.server.api_keys import is_new_format_key
+from openviking.server.api_keys import is_valid_format_key
 from openviking.server.store_assembly import build_api_key_manager
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
@@ -359,7 +359,7 @@ class TestVikingFSEncryptionWithVolcengineKMS:
         user_key = await api_key_manager.create_account(account_id, admin_user_id)
 
         assert user_key is not None
-        assert is_new_format_key(user_key)
+        assert is_valid_format_key(user_key)
 
         agfs_data_root = test_data_dir / "viking" / "viking"
 

@@ -12,12 +12,14 @@ from openviking.server.routers.console import router as console_router
 from openviking.server.routers.content import router as content_router
 from openviking.server.routers.debug import router as debug_router
 from openviking.server.routers.filesystem import router as filesystem_router
+from openviking.server.routers.mcps import router as mcps_router
 from openviking.server.routers.metrics import router as metrics_router
 from openviking.server.routers.observer import router as observer_router
 from openviking.server.routers.openviking_assets import router as openviking_assets_router
 from openviking.server.routers.pack import router as pack_router
 from openviking.server.routers.privacy_configs import router as privacy_configs_router
 from openviking.server.routers.resources import router as resources_router
+from openviking.server.routers.rules import router as rules_router
 from openviking.server.routers.search import router as search_router
 from openviking.server.routers.sessions import router as sessions_router
 from openviking.server.routers.skills import router as skills_router
@@ -38,6 +40,7 @@ __all__ = [
     "compile_router",
     "system_router",
     "resources_router",
+    "rules_router",
     "filesystem_router",
     "content_router",
     "console_router",
@@ -49,6 +52,7 @@ __all__ = [
     "pack_router",
     "privacy_configs_router",
     "debug_router",
+    "mcps_router",
     "metrics_router",
     "observer_router",
     "openviking_assets_router",

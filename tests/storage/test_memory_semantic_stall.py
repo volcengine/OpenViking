@@ -18,6 +18,7 @@ from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.utils.circuit_breaker import CircuitBreakerOpen
+from openviking_cli.utils.config.parser_config import SemanticConfig
 
 
 def _processor():
@@ -66,7 +67,7 @@ async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context
     entered, release = asyncio.Event(), asyncio.Event()
     written = []
 
-    async def enqueue(msg):
+    async def enqueue(msg, *, deduplicate_memory=True):
         entered.set()
         await release.wait()
         written.append(msg.id)
@@ -240,7 +241,7 @@ async def test_memory_write_error_returns_failed():
         patch(
             "openviking.storage.queuefs.semantic_processor.get_openviking_config",
             return_value=SimpleNamespace(
-                semantic=SimpleNamespace(
+                semantic=SemanticConfig(
                     overview_max_chars=100_000,
                     abstract_max_chars=10_000,
                 )

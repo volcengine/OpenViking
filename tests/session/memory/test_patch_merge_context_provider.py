@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
+from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
 from openviking.session.memory.patch_merge_context_provider import (
     PatchMergeContextProvider,
     PatchMergePatch,
@@ -78,6 +78,49 @@ async def test_patch_merge_context_provider_prefetch_reads_originals_and_renders
     assert "    +new line" in messages[1]["content"]
     assert "     keep line" in messages[1]["content"]  # n=1 context line
     assert "  status:" not in messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_experience_merge_uses_reasoning_without_loading_linked_trajectories():
+    exp_uri = "viking://user/u/memories/experiences/update.md"
+    success_uri = "viking://user/u/memories/trajectories/success.md"
+    failure_uri = "viking://user/u/memories/trajectories/failure.md"
+    old = _memory_file(name="update", uri=exp_uri, content="Old method")
+    old.links = [{"to_uri": success_uri, "link_type": "derived_from"}]
+    old.extra_fields["reasoning"] = "Old supporting evidence."
+    proposed = _memory_file(name="update", uri=exp_uri, content="Proposed method")
+    proposed.extra_fields["reasoning"] = "New evidence narrows applicability."
+    provider = PatchMergeContextProvider(
+        memory_type="experiences",
+        required_file_uris=[exp_uri],
+        patches=[
+            PatchMergePatch(
+                before_file=old,
+                after_file=proposed,
+                metadata={"links": [{"to_uri": failure_uri, "link_type": "derived_from"}]},
+            )
+        ],
+    )
+    provider._ctx = SimpleNamespace(user=SimpleNamespace(user_id="u"))
+    provider._viking_fs = SimpleNamespace(read_file=AsyncMock())
+    provider.read_file = AsyncMock(
+        return_value={
+            "content": "Old method",
+            "reasoning": "Old supporting evidence.",
+            "memory_type": "experiences",
+        }
+    )
+
+    messages = await provider.prefetch()
+
+    provider._viking_fs.read_file.assert_not_awaited()
+    provider.read_file.assert_awaited_once_with(exp_uri)
+    assert len(messages) == 2
+    existing = json.loads(messages[0]["content"])["result"]
+    assert existing["content"] == "Old method"
+    assert existing["reasoning"] == "Old supporting evidence."
+    assert "+Proposed method" in messages[-1]["content"]
+    assert "+New evidence narrows applicability." in messages[-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -250,7 +293,7 @@ async def test_patch_merge_context_provider_renders_compact_patch_metadata():
     messages = await provider.prefetch()
     content = messages[0]["content"]
 
-    assert 'meta: {"confidence": 0.9}' in content
+    assert "confidence" not in content
     assert "base_version" not in content
     assert "rationale" not in content
     assert "trajectory_outcome" not in content
@@ -258,6 +301,13 @@ async def test_patch_merge_context_provider_renders_compact_patch_metadata():
     assert "links" not in content
     assert "memory_fields" not in content
     assert "duplicated" not in content
+
+    # Other memory types keep their independently supplied confidence metadata.
+    provider.memory_type = "entities"
+    provider.patches[0].after_file.memory_type = "entities"
+    provider.patches[0].after_file.extra_fields["memory_type"] = "entities"
+    messages = await provider.prefetch()
+    assert 'meta: {"confidence": 0.9}' in messages[0]["content"]
 
 
 @pytest.mark.asyncio
@@ -327,13 +377,21 @@ async def test_patch_merge_context_provider_renders_create_patch_from_dev_null()
     assert "    +created line" in messages[0]["content"]
 
 
-def test_patch_merge_context_provider_get_memory_schema_single_type(monkeypatch):
+def test_patch_merge_context_provider_get_memory_schema_single_type():
     schema = MemoryTypeSchema(
         memory_type="experiences",
         description="Experiences",
         directory="viking://user/{{ user_space }}/memories/experiences",
         filename_template="{{ experience_name }}.md",
-        fields=[],
+        fields=[
+            MemoryField(
+                name="reasoning",
+                field_type="string",
+                description="Compare evaluation feedback to execution steps.",
+                merge_op="replace",
+            ),
+            MemoryField(name="content", field_type="string", description="Final experience body."),
+        ],
     )
     provider = PatchMergeContextProvider(
         memory_type="experiences",
@@ -342,7 +400,12 @@ def test_patch_merge_context_provider_get_memory_schema_single_type(monkeypatch)
     )
     provider._registry = SimpleNamespace(get=lambda name: schema if name == "experiences" else None)
 
-    assert provider.get_memory_schemas(ctx=None) == [schema]
+    merge_schema = provider.get_memory_schemas(ctx=None)[0]
+    assert merge_schema.memory_type == "experiences"
+    assert merge_schema.fields[0].description != schema.fields[0].description
+    assert schema.fields[0].description == "Compare evaluation feedback to execution steps."
+    assert merge_schema.fields[0].merge_op == schema.fields[0].merge_op
+    assert merge_schema.fields[1] == schema.fields[1]
 
 
 def test_patch_merge_context_provider_get_memory_schema_raises_for_missing_type():

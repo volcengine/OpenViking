@@ -23,11 +23,16 @@ V2 多写以一个 primary backend 作为业务真相，并把文件复制到配
 已有 account 始终使用持久化的 partition 数量和 routes，修改配置不会改变
 现有布局。本期不支持扩容或缩容。
 
-## 首次启用导入
+## 首次启用
 
-`.multiwrite.json` 不存在时，启动流程创建 `V2/migrating` 状态，先启用前台
-V2 事件提交，再在后台导入 primary 当前文件。导入成功后切换为 `stable`。
-导入不会删除 backup 中多余的旧文件。
+`.multiwrite.json` 不存在时，启动流程创建 `V2/migrating` 状态，并启用前台
+V2 事件提交。若 `reconcile_existing_data=true`，启动流程会扫描 primary 当前文件
+并写入 V2 metadata。初始化和可选对账成功后，状态切换为 `stable`。该流程
+不会删除 backup 中多余的旧文件。
+
+默认 `reconcile_existing_data=false` 时，primary 上启用前已存在的文件不会作为
+V2 write event 记录。只有在 backup 已与 primary 对齐，或明确跳过历史回填时
+才保持默认值。
 
 旧多写协议和旧迁移字段直接拒绝，不执行转换或解释。
 

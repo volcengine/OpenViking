@@ -64,6 +64,7 @@ class SemanticMsg:
     _task_work_id: str = ""
     target_uri: str = ""
     lock_handoff: Optional[Dict[str, Any]] = None
+    lock_handoff_retry: int = 0
     is_code_repo: bool = False
     ingest_options: IngestOptions = field(default_factory=IngestOptions)
     coalesce_key: str = ""
@@ -76,10 +77,6 @@ class SemanticMsg:
     aggregate_directory: bool = True
     use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
-    # Hold a producer's lease until already-enqueued embedding work settles.
-    wait_for_embeddings_only: bool = False
-    # Hold a producer's lease until every other root in this request settles.
-    wait_for_request_completion: bool = False
     copy_source_uri: str = ""
     # Per-file md5 of final stored bytes, keyed by target URI. Supplied by the
     # local incremental apply so the tree executor's re-vectorization writes a fresh
@@ -91,6 +88,7 @@ class SemanticMsg:
     file_vector_actions: Dict[str, str] = field(default_factory=dict)
     file_ingest_options: Dict[str, IngestOptions] = field(default_factory=dict)
     plan: Optional[SemanticPlan] = None
+    dashboard_source_type: str = ""
 
     def __init__(
         self,
@@ -118,8 +116,6 @@ class SemanticMsg:
         aggregate_directory: bool = True,
         use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
-        wait_for_embeddings_only: bool = False,
-        wait_for_request_completion: bool = False,
         copy_source_uri: str = "",
         file_md5s: Optional[Dict[str, str]] = None,
         artifact_ref: Optional[Dict[str, Any]] = None,
@@ -130,6 +126,8 @@ class SemanticMsg:
         plan: SemanticPlan | Dict[str, Any] | None = None,
         queue_enqueued_at: float = 0.0,
         failure_requeue_count: int = 0,
+        lock_handoff_retry: int = 0,
+        dashboard_source_type: str = "",
     ):
         self.id = str(uuid4())
         self.timestamp = int(datetime.now().timestamp())
@@ -149,6 +147,10 @@ class SemanticMsg:
         self._task_work_id = _task_work_id
         self.target_uri = target_uri
         self.lock_handoff = lock_handoff
+        try:
+            self.lock_handoff_retry = max(0, int(lock_handoff_retry or 0))
+        except (TypeError, ValueError):
+            self.lock_handoff_retry = 0
         self.is_code_repo = is_code_repo
         self.ingest_options = IngestOptions.from_value(ingest_options)
         self.coalesce_key = coalesce_key
@@ -156,11 +158,10 @@ class SemanticMsg:
         self.changes = changes
         self.source = dict(source) if source else None
         self.generation_trigger = generation_trigger
+        self.dashboard_source_type = str(dashboard_source_type or "")
         self.aggregate_directory = bool(aggregate_directory)
         self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
-        self.wait_for_embeddings_only = bool(wait_for_embeddings_only)
-        self.wait_for_request_completion = bool(wait_for_request_completion)
         self.copy_source_uri = copy_source_uri
         self.file_md5s = dict(file_md5s or {})
         self.artifact_ref = dict(artifact_ref) if artifact_ref else None
@@ -193,6 +194,8 @@ class SemanticMsg:
         }
         if self.plan is not None:
             data["plan"] = self.plan.to_dict()
+        if not self.dashboard_source_type:
+            data.pop("dashboard_source_type")
         return data
 
     def to_json(self) -> str:
@@ -234,6 +237,7 @@ class SemanticMsg:
             _task_work_id=data.get("_task_work_id", ""),
             target_uri=data.get("target_uri", ""),
             lock_handoff=data.get("lock_handoff"),
+            lock_handoff_retry=data.get("lock_handoff_retry", 0),
             is_code_repo=data.get("is_code_repo", False),
             ingest_options=(
                 data.get("ingest_options")
@@ -247,11 +251,10 @@ class SemanticMsg:
             changes=data.get("changes"),
             source=data.get("source"),
             generation_trigger=data.get("generation_trigger", "semantic_refresh"),
+            dashboard_source_type=data.get("dashboard_source_type", ""),
             aggregate_directory=data.get("aggregate_directory", True),
             use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),
-            wait_for_embeddings_only=data.get("wait_for_embeddings_only", False),
-            wait_for_request_completion=data.get("wait_for_request_completion", False),
             copy_source_uri=data.get("copy_source_uri", ""),
             file_md5s=(data.get("file_md5s") if isinstance(data.get("file_md5s"), dict) else None),
             artifact_ref=(

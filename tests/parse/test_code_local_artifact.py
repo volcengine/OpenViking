@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from openviking.parse.output import LocalParseOutputStore
+from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
 from openviking.parse.parsers.code.code import CodeRepositoryParser
 
 
@@ -50,6 +50,10 @@ class _FailingLocalStore(LocalParseOutputStore):
 @pytest.mark.asyncio
 async def test_code_parse_writes_to_local_store(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
+    (repo / "node_modules").mkdir()
+    (repo / "node_modules" / "library.js").write_text("library", encoding="utf-8")
+    (repo / "src" / "main.pyc").write_bytes(b"compiled")
+    (repo / "readme-link.md").symlink_to("README.md")
     store = LocalParseOutputStore(local_root=str(tmp_path / "artifacts"))
 
     parser = CodeRepositoryParser()
@@ -66,11 +70,17 @@ async def test_code_parse_writes_to_local_store(tmp_path, monkeypatch):
     assert result.artifact_ref.backend == "local"
     assert result.temp_dir_path == result.artifact_ref.root
 
-    # Files landed in the store under repository/... and match source bytes.
     ref = result.artifact_ref
-    names = {e.rel_path for e in await store.list(ref, "repository")}
-    assert "repository/README.md" in names
+    assert set(await read_artifact_manifest(store, ref)) == {
+        "repository/README.md",
+        "repository/src/main.py",
+    }
+    assert await store.read_bytes(ref, "repository/README.md") == b"# demo"
     assert await store.read_bytes(ref, "repository/src/main.py") == b"print('hi')"
+    assert not any(
+        (Path(ref.root) / "repository" / name).exists()
+        for name in (".git", "node_modules", "src/main.pyc", "readme-link.md")
+    )
 
 
 @pytest.mark.asyncio
