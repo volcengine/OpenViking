@@ -48,6 +48,50 @@ fn logging_output_is_single_line_and_omits_unknown_fields() {
 }
 
 #[test]
+fn logging_output_keeps_bounded_localfs_slow_phase_fields() {
+    let path = std::env::temp_dir().join(format!("ragfs-log-{}.txt", uuid::Uuid::new_v4()));
+    let writer = SharedFileWriter {
+        file: Arc::new(Mutex::new(
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .unwrap(),
+        )),
+    };
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .event_format(CommonLogFormat)
+        .with_writer(move || writer.clone())
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info!(
+            target: "ragfs.localfs",
+            operation = "read_dir",
+            phase = "entry_metadata",
+            path_class = "task",
+            duration_ms = 1_001u64,
+            outcome = "error",
+            entry_count = 37u64,
+            raw_path = "/local/private/_system/tasks/user/secret.json",
+            "localfs_slow_phase"
+        );
+    });
+    let content = std::fs::read_to_string(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+
+    assert!(content.contains(" INFO ragfs.localfs "));
+    assert!(content.contains("message=\"localfs_slow_phase\""));
+    assert!(content.contains("operation=\"read_dir\""));
+    assert!(content.contains("phase=\"entry_metadata\""));
+    assert!(content.contains("path_class=\"task\""));
+    assert!(content.contains("duration_ms=1001"));
+    assert!(content.contains("outcome=\"error\""));
+    assert!(content.contains("entry_count=37"));
+    assert!(!content.contains("secret.json"));
+}
+
+#[test]
 fn parse_tracing_level_accepts_critical_as_error() {
     assert_eq!(parse_tracing_level("CRITICAL").unwrap(), Level::ERROR);
 }

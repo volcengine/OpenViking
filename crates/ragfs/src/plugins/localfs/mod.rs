@@ -33,7 +33,7 @@ struct SlowFsPhaseEvent {
     operation: &'static str,
     phase: &'static str,
     path_class: &'static str,
-    elapsed_ms: u128,
+    duration_ms: u64,
     outcome: &'static str,
     entry_count: Option<usize>,
 }
@@ -67,7 +67,7 @@ fn slow_fs_phase_event(
         operation,
         phase,
         path_class: diagnostic_path_class(path),
-        elapsed_ms: elapsed.as_millis(),
+        duration_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         outcome: match outcome {
             "ok" => "ok",
             "skipped" => "skipped",
@@ -95,13 +95,13 @@ fn report_slow_fs_phase(
     ) else {
         return;
     };
-    tracing::warn!(
+    tracing::info!(
         operation = event.operation,
         phase = event.phase,
         path_class = event.path_class,
-        elapsed_ms = event.elapsed_ms,
+        duration_ms = event.duration_ms,
         outcome = event.outcome,
-        entry_count = event.entry_count.unwrap_or(0),
+        entry_count = u64::try_from(event.entry_count.unwrap_or(0)).unwrap_or(u64::MAX),
         "localfs_slow_phase"
     );
 }
@@ -1516,7 +1516,7 @@ mod tests {
         assert_eq!(task.operation, "read");
         assert_eq!(task.phase, "metadata");
         assert_eq!(task.path_class, "task");
-        assert_eq!(task.elapsed_ms, 1_000);
+        assert_eq!(task.duration_ms, 1_000);
         assert_eq!(task.outcome, "error");
         assert_eq!(task.entry_count, None);
 
