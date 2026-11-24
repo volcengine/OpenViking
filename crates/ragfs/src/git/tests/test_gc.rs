@@ -275,3 +275,49 @@ async fn gc_preserves_stat_index_and_refs_on_untouched_account() {
     assert_eq!(std::fs::read(index_path).unwrap(), index);
     assert_eq!(std::fs::read(ref_path).unwrap(), head);
 }
+
+#[tokio::test]
+async fn gc_stops_before_sweep_on_corrupt_overlay_blob() {
+    use crate::git::util::{parse_object_header, read_object, write_object, zlib_compress};
+    use std::time::{Duration, SystemTime};
+
+    let (dir, vfs, objects, refs, svc) = make_service("acct");
+    let commits = delete_chain(&svc, &vfs, 3).await;
+    svc.delete_commits(deletion(&commits[1..2], false))
+        .await
+        .unwrap();
+    let view = svc.overlay("acct").await.unwrap();
+    let root = view.root_oid.unwrap();
+    let shard = view.blob_oids().into_iter().find(|id| *id != root).unwrap();
+    let dangling = write_object(
+        objects.as_ref(),
+        "acct",
+        gix_object::Kind::Blob,
+        b"unreachable",
+    )
+    .await
+    .unwrap();
+    let grace = Duration::from_secs(600);
+    for oid in [root, shard] {
+        let path = gc_object_path(dir.path(), oid);
+        let original = std::fs::read(&path).unwrap();
+        let raw = read_object(objects.as_ref(), "acct", &oid).await.unwrap();
+        let (_, size, offset) = parse_object_header(&raw).unwrap();
+        // Wrong declared size on the root; valid JSON at the wrong OID on the shard.
+        let mut corrupt = format!("blob {}\0", size + 1).into_bytes();
+        corrupt.extend_from_slice(&raw[offset..]);
+        if oid == shard {
+            corrupt.push(b' ');
+        }
+        std::fs::write(&path, zlib_compress(&corrupt).unwrap()).unwrap();
+        let reader = GitService::new(vfs.clone(), objects.clone(), refs.clone());
+        assert!(matches!(
+            reader
+                .gc_at("acct", SystemTime::now() + 2 * grace, grace)
+                .await,
+            Err(GitError::CorruptedObject(_))
+        ));
+        assert!(objects.exists("acct", &dangling).await.unwrap());
+        std::fs::write(path, original).unwrap();
+    }
+}

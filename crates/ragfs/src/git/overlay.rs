@@ -73,13 +73,21 @@ async fn read_json<T: DeserializeOwned>(
     oid: &ObjectId,
 ) -> Result<T, GitError> {
     let raw = util::read_object(objects, account, oid).await?;
-    let (kind, _, offset) = util::parse_object_header(&raw)?;
+    let (kind, size, offset) = util::parse_object_header(&raw)?;
     if kind != Kind::Blob {
         return Err(GitError::CorruptedObject(
             "history metadata is not a blob".into(),
         ));
     }
-    serde_json::from_slice(&raw[offset..])
+    let data = &raw[offset..];
+    if size != data.len() as u64
+        || gix_object::compute_hash(gix_hash::Kind::Sha1, kind, data) != *oid
+    {
+        return Err(GitError::CorruptedObject(format!(
+            "corrupt history metadata {oid}"
+        )));
+    }
+    serde_json::from_slice(data)
         .map_err(|e| GitError::CorruptedObject(format!("history metadata: {e}")))
 }
 
