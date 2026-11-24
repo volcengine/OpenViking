@@ -594,6 +594,7 @@ def gateway(
         agent_loop=agent_loop,
     )
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
+    stop_requested = False  # set by SIGTERM; the cancellation it causes is a normal stop
 
     async def run():
         import uvicorn
@@ -613,9 +614,15 @@ def gateway(
         manager = getattr(agent_loop, "sandbox_manager", None)
         loop = asyncio.get_running_loop()
         current = asyncio.current_task()
-        previous_sigterm = signal.signal(
-            signal.SIGTERM, lambda *_: loop.call_soon_threadsafe(current.cancel)
-        )
+
+        def request_stop(*_):
+            nonlocal stop_requested
+            if stop_requested:  # a second SIGTERM must not interrupt sandbox cleanup
+                return
+            stop_requested = True
+            loop.call_soon_threadsafe(current.cancel)
+
+        previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
         tasks = []
         lifeline = lifeline_fd()
         if lifeline is not None:
@@ -680,6 +687,9 @@ def gateway(
     try:
         asyncio.run(run())
     except (Exception, asyncio.CancelledError) as exc:
+        if stop_requested and isinstance(exc, asyncio.CancelledError):
+            console.print("Gateway stopped.")
+            return
         report_startup("failed", error=str(exc) or "Gateway startup cancelled")
         console.print(f"[red]Gateway failed:[/red] {exc}")
         raise typer.Exit(1) from exc
