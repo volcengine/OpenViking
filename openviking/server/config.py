@@ -466,6 +466,7 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    gc_freeze_on_startup: StrictBool = False
     executor_threads: int = Field(
         default=64,
         ge=0,

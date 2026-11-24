@@ -800,3 +800,9 @@ Parser 或 Understanding API 后端自身的限制和上传行为。
   }
 }
 ```
+
+## 可选启动 GC 冻结
+
+`server.gc_freeze_on_startup` 默认 false。启用时，在初始化完成、lifespan 开始处理请求前执行一次 collect 和 freeze；自动 GC 与阈值不变，新对象 仍参与回收。lifespan 退出（包括异常退出）时先解冻，再清理运行时资源。
+
+GC 冻结作用于整个进程，仅适用于每进程一个长期运行的服务 lifespan。拒绝同时启用的 lifespan 或已有外部冻结对象；运行期间不要同时调用其他 freeze/unfreeze 策略。被冻结的循环引用可能保留到关闭。五分钟读取数据不能证明长期内存安全，也不覆盖写入与后台任务；需额外验证这些负载。回退时关闭该选项并重启。
