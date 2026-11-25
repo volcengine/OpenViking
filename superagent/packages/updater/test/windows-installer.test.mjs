@@ -20,6 +20,11 @@ const VERSION_A = '0.5.5-preview-windows-preview-aaaaaaaaaaaa';
 const VERSION_B = '0.5.5-preview-windows-preview-bbbbbbbbbbbb';
 const COMMIT_B = 'b'.repeat(40);
 
+// Windows makes a directory link a junction, which needs no privilege and is
+// what the real installer writes; POSIX uses a plain directory symlink.
+const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+const linkDir = (target, at) => symlink(target, at, linkType);
+
 async function fixture(version = VERSION_A) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-windows-installer-'));
   const baseDir = path.join(root, '.ov-superagent');
@@ -29,7 +34,7 @@ async function fixture(version = VERSION_A) {
   await writeFile(path.join(release, 'windows-preview.json'), `${JSON.stringify({
     name: 'superagent', version, commit: 'a'.repeat(40), platform: 'win32-x64', channel: 'windows-preview',
   })}\n`);
-  await symlink(release, path.join(baseDir, 'current'));
+  await linkDir(release, path.join(baseDir, 'current'));
   const installerPath = path.join(root, 'release', 'scripts', 'windows', 'install-preview.ps1');
   await mkdir(path.dirname(installerPath), { recursive: true });
   await writeFile(installerPath, '# fixture installer\n');
@@ -50,9 +55,9 @@ function installerStub({ baseDir, releasesRoot, calls, installVersion, fail = nu
         name: 'superagent', version: installVersion, commit: COMMIT_B, platform, channel: 'windows-preview',
       })}\n`);
     }
-    if (previous && previous !== release) await symlink(previous, path.join(baseDir, 'rollback.next'));
+    if (previous && previous !== release) await linkDir(previous, path.join(baseDir, 'rollback.next'));
     fs.rmSync(path.join(baseDir, 'current'), { force: true });
-    await symlink(release, path.join(baseDir, 'current'));
+    await linkDir(release, path.join(baseDir, 'current'));
     if (previous && previous !== release) {
       fs.rmSync(path.join(baseDir, 'rollback'), { force: true });
       fs.renameSync(path.join(baseDir, 'rollback.next'), path.join(baseDir, 'rollback'));
