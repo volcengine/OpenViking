@@ -185,3 +185,22 @@ describe('recorded task execution events', () => {
     expect(screen.queryByText('future_process_event')).toBeNull()
   })
 })
+
+describe('session commit pipeline', () => {
+  it.each([
+    ['cancelling', 'Cancelling'],
+    ['cancelled', 'Cancelled'],
+  ])('shows the %s state on the pipeline step', async (status, label) => {
+    api.getTask.mockResolvedValue({ ...task, status })
+    await showDetail()
+
+    const heading = await screen.findByRole('heading', {
+      name: en.tasksPage.pipeline.steps,
+    })
+    const pipeline = heading.closest('section')!
+    expect(within(pipeline).getByText(label)).toBeDefined()
+    expect(
+      within(pipeline).queryByText(en.tasksPage.pipeline.status.pending),
+    ).toBeNull()
+  })
+})

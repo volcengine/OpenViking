@@ -321,23 +321,11 @@ export function TasksRoute() {
   }
 
   const renderQueuePipeline = (task: TaskRecord) => {
-    const status = normalizeTaskStatus(task.status)
-    const type = task.task_type
-
-    interface StepItem {
-      name: string
-      state: 'completed' | 'running' | 'pending' | 'failed'
-    }
-
-    type PipelineGroup =
-      | { type: 'serial'; step: StepItem }
-      | { type: 'parallel'; steps: StepItem[] }
-
     const groups = getTaskPipelineGroups(task, t)
 
     return (
       <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 min-w-[210px]">
-        {groups.map((grp: PipelineGroup, i: number) => {
+        {groups.map((grp, i) => {
           const stepsInGroup = grp.type === 'serial' ? [grp.step] : grp.steps
 
           return (
@@ -358,22 +346,32 @@ export function TasksRoute() {
                     : 'labels.serialBatch',
                 )}
               >
-                {stepsInGroup.map((st: StepItem, j: number) => {
+                {stepsInGroup.map((st, j) => {
                   const isDone = st.state === 'completed'
                   const isRun = st.state === 'running'
                   const isFail = st.state === 'failed'
                   const isPend = st.state === 'pending'
+                  const isCancelling = st.state === 'cancelling'
+                  const isCancelled = st.state === 'cancelled'
+                  const cancellationLabel =
+                    isCancelling || isCancelled
+                      ? t(`status.${st.state}`)
+                      : undefined
 
                   return (
                     <span
                       key={j}
                       className="inline-flex items-center gap-1 shrink-0 transition-colors text-foreground/90 font-medium"
+                      title={cancellationLabel}
                     >
                       {isDone && (
                         <CheckIcon className="size-3 text-foreground/75 shrink-0" />
                       )}
-                      {isRun && (
+                      {(isRun || isCancelling) && (
                         <LoaderCircleIcon className="size-3 text-foreground/75 animate-spin shrink-0" />
+                      )}
+                      {isCancelled && (
+                        <CircleXIcon className="size-3 text-foreground/75 shrink-0" />
                       )}
                       {isPend && (
                         <CircleDashedIcon className="size-3 text-foreground/75 shrink-0" />
@@ -382,6 +380,9 @@ export function TasksRoute() {
                         <XIcon className="size-3 text-foreground/75 shrink-0" />
                       )}
                       <span>{st.name}</span>
+                      {cancellationLabel && (
+                        <span className="sr-only">{cancellationLabel}</span>
+                      )}
                     </span>
                   )
                 })}

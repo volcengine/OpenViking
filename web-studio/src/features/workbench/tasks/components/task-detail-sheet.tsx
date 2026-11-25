@@ -246,6 +246,9 @@ export function TaskDetailSheet({
                               const isDone = st.state === 'completed'
                               const isRun = st.state === 'running'
                               const isFail = st.state === 'failed'
+                              const isCancellation =
+                                st.state === 'cancelling' ||
+                                st.state === 'cancelled'
                               return (
                                 <div
                                   key={i}
@@ -271,13 +274,15 @@ export function TaskDetailSheet({
                                             : 'text-muted-foreground'
                                       }
                                     >
-                                      {isDone
-                                        ? t('pipeline.status.completed')
-                                        : isRun
-                                          ? t('pipeline.status.running')
-                                          : isFail
-                                            ? t('pipeline.status.failed')
-                                            : t('pipeline.status.pending')}
+                                      {isCancellation
+                                        ? t(`status.${st.state}`)
+                                        : isDone
+                                          ? t('pipeline.status.completed')
+                                          : isRun
+                                            ? t('pipeline.status.running')
+                                            : isFail
+                                              ? t('pipeline.status.failed')
+                                              : t('pipeline.status.pending')}
                                     </span>
                                   </span>
                                 </div>

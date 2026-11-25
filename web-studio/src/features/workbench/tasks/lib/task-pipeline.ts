@@ -1,6 +1,7 @@
-import type { TaskRecord } from '#/features/workbench/tasks/lib/task-record'
+import type { TaskRecord, TaskStatus } from '#/features/workbench/tasks/lib/task-record'
+import { normalizeTaskStatus } from '#/features/workbench/tasks/lib/task-record'
 
-export type StepState = 'completed' | 'running' | 'pending' | 'failed'
+export type StepState = Exclude<TaskStatus, 'unknown'>
 
 export type PipelineTranslate = (key: string) => string
 
@@ -22,6 +23,11 @@ type QueueStatus = Record<
   string,
   { error_count?: number; processed?: number } | undefined
 >
+
+function sessionCommitState(status: string | undefined): StepState {
+  const normalized = normalizeTaskStatus(status)
+  return normalized === 'unknown' ? 'pending' : normalized
+}
 
 function inferState(
   qKey: string | null,
@@ -56,7 +62,7 @@ export function getTaskPipelineSteps(
     return [
       {
         name: resolve('sessionPersistence', t),
-        state: status === 'completed' ? 'completed' : (status as StepState),
+        state: sessionCommitState(status),
       },
     ]
   }
@@ -158,7 +164,7 @@ export function getTaskPipelineGroups(
         type: 'serial',
         step: {
           name: resolve('sessionCommit', t),
-          state: status === 'completed' ? 'completed' : (status as StepState),
+          state: sessionCommitState(status),
         },
       },
     ]
