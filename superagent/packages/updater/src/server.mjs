@@ -191,9 +191,11 @@ export function scheduleUpdaterRestart({
       '@echo off',
       'rem Restart the updater from the release that was just installed.',
       'ping -n 3 127.0.0.1 >nul',
-      `"${pm2}" delete superagent-updater >nul 2>&1`,
-      `"${pm2}" start "${configPath}" --only superagent-updater --update-env >nul 2>&1`,
-      `"${pm2}" save >nul 2>&1`,
+      // `call` is what keeps this batch going: without it cmd hands control to
+      // bin\pm2.cmd and the remaining lines never run.
+      `call "${pm2}" delete superagent-updater >nul 2>&1`,
+      `call "${pm2}" start "${configPath}" --only superagent-updater --update-env >nul 2>&1`,
+      `call "${pm2}" save >nul 2>&1`,
       'del "%~f0" >nul 2>&1',
     ].join('\r\n');
     fs.writeFileSync(helper, `${script}\r\n`);
@@ -201,6 +203,11 @@ export function scheduleUpdaterRestart({
       detached: true,
       stdio: 'ignore',
       windowsHide: true,
+      // Node quotes the command string itself, which turns `start "" /b "<path>"`
+      // into something cmd cannot parse: the helper is then never launched and the
+      // updater keeps running the release it just replaced. Hand cmd the line as
+      // written.
+      windowsVerbatimArguments: true,
       env: { ...pm2Env },
     });
     child.unref();

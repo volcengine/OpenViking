@@ -665,10 +665,12 @@ test('the Windows replacement is a detached batch file that outlives the updater
   assert.match(args[3], /^start "" \/b ".+\.cmd"$/);
   assert.equal(options.detached, true);
   assert.equal(options.windowsHide, true);
+  // Without this Node re-quotes the command string and cmd never runs the helper.
+  assert.equal(options.windowsVerbatimArguments, true);
   const script = await readFile(helper, 'utf8');
   assert.match(script, /ping -n 3 127\.0\.0\.1 >nul/);
-  assert.ok(script.includes(`"${path.join(release, 'bin', 'pm2.cmd')}" delete superagent-updater`));
-  assert.ok(script.includes(`"${path.join(release, 'bin', 'pm2.cmd')}" start "${path.join(release, 'ecosystem.config.cjs')}" --only superagent-updater --update-env`));
+  assert.ok(script.includes(`call "${path.join(release, 'bin', 'pm2.cmd')}" delete superagent-updater`));
+  assert.ok(script.includes(`call "${path.join(release, 'bin', 'pm2.cmd')}" start "${path.join(release, 'ecosystem.config.cjs')}" --only superagent-updater --update-env`));
   assert.match(script, /del "%~f0" >nul 2>&1/);
 });
 
