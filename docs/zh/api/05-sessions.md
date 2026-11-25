@@ -1078,6 +1078,8 @@ POST /api/v1/sessions/{session_id}/messages
 
 助手回复中断时，可以在该消息中传入可选字段 `interrupted: true`。会话会保存已生成的内容，并在读取历史消息时返回该标记。批量添加消息时也可以为每条助手消息设置该字段。
 
+在 Python SDK 中，调用 `add_message()` 时传入 `options={"interrupted": True}`，或在调用 `batch_add_messages()` 时直接为对应的消息设置 `"interrupted": True`。
+
 **简单模式（向后兼容）**
 
 ```bash

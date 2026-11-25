@@ -214,6 +214,7 @@ class Message(_RequiredMessage, total=False):
     turn_id: str
     message_kind: Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
     source_message_ids: List[str]
+    interrupted: bool
     telemetry: Any
 
 
@@ -223,6 +224,7 @@ class AddMessageOptions(_ExtraOptions, total=False):
     turn_id: str
     message_kind: Literal["user_query", "assistant_step", "tool_transport", "checkpoint"]
     source_message_ids: List[str]
+    interrupted: bool
     telemetry: Any
 
 

@@ -1080,6 +1080,8 @@ POST /api/v1/sessions/{session_id}/messages
 
 Use the optional `interrupted: true` field on an assistant message to record that its reply stopped before completion. The stored message keeps the partial content and includes the flag on history reads. The same field is accepted on each assistant message in a batch.
 
+In the Python SDK, pass `options={"interrupted": True}` to `add_message()` or set `"interrupted": True` directly on a message in `batch_add_messages()`.
+
 **Simple Mode (Backward Compatible)**
 
 ```bash
