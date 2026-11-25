@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Dict, Optional
 
 from argon2 import PasswordHasher
@@ -23,6 +24,7 @@ from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
     AccountSummary,
     DeletionRecord,
+    EmptyFrozenFileCache,
     GroupSummary,
     UsersPage,
     UserSummary,
@@ -149,6 +151,7 @@ class FileStore(AccountStore):
         # File locks remain responsible for inter-instance coordination.
         self._mutation_lock = AsyncSemaphore(1)
         self._deletion_lock = AsyncSemaphore(1)
+        self._empty_frozen_files = EmptyFrozenFileCache()
 
     @property
     def read_only(self) -> bool:
@@ -227,6 +230,7 @@ class FileStore(AccountStore):
         )
 
     async def close(self) -> None:
+        self._empty_frozen_files.clear()
         if self._watch_task is None:
             return
         self._watch_task.cancel()
@@ -1492,19 +1496,32 @@ class FileStore(AccountStore):
         return self._account_summary(account_id, info)
 
     async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        if self._watcher_running():
+            info = self._accounts.get(account_id)
+            return info.frozen_files if info is not None else ()
+        if self._empty_frozen_files.contains(account_id):
+            return ()
+        started_at, revision = monotonic(), self._empty_frozen_files.revision
         await self._refresh_accounts_for_management_read()
         info = self._accounts.get(account_id)
-        return info.frozen_files if info is not None else ()
+        paths = info.frozen_files if info is not None else ()
+        if not paths:
+            self._empty_frozen_files.remember(account_id, started_at, revision)
+        return paths
 
     async def set_frozen_file(
         self, account_id: str, user_id: str, path: str, frozen: bool
     ) -> tuple[str, ...]:
         self._require_writable()
         uri = frozen_file_uri(user_id, path)
-        async with self._mutation_lock:
-            await self._refresh_accounts_for_management_read_unlocked()
-            await self._save_accounts_json(frozen_file_update=(account_id, uri, frozen))
-            return self._accounts[account_id].frozen_files
+        self._empty_frozen_files.invalidate(account_id)
+        try:
+            async with self._mutation_lock:
+                await self._refresh_accounts_for_management_read_unlocked()
+                await self._save_accounts_json(frozen_file_update=(account_id, uri, frozen))
+                return self._accounts[account_id].frozen_files
+        finally:
+            self._empty_frozen_files.invalidate(account_id)
 
     def _account_summary(self, account_id: str, info: AccountInfo) -> AccountSummary:
         """Credential-free metadata for one in-memory account (O(1))."""

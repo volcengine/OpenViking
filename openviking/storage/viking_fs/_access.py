@@ -115,7 +115,8 @@ class _AccessMixin:
     ) -> None:
         """Reject intersecting changes, independently of roles, ACL and task leases."""
         real_ctx = self._ctx_or_default(ctx)
-        await self._load_frozen_files(real_ctx)
+        if real_ctx.frozen_files is None:
+            await self._load_frozen_files(real_ctx)
         if not real_ctx.frozen_files:
             return
         for uri in dict.fromkeys(uris):

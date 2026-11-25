@@ -232,8 +232,9 @@ async def lightweight_admin_client(lightweight_admin_app):
 
 
 async def test_admin_frozen_files_reach_native_fs_and_background(
-    admin_app, admin_service, admin_client
+    admin_app, admin_service, admin_client, monkeypatch
 ):
+    import openviking.server.account_stores.models as account_models
     from openviking_cli.exceptions import PermissionDeniedError
 
     account_id = _uid()
@@ -246,6 +247,15 @@ async def test_admin_frozen_files_reach_native_fs_and_background(
     user = UserIdentifier(account_id, "agent")
     uri = "viking://user/agent/skills/example/SKILL.md"
     await fs.write_file(uri, "original", ctx=RequestContext(user, Role.USER))
+    with monkeypatch.context() as patch:
+        refresh = AsyncMock(side_effect=OSError("account metadata unavailable"))
+        patch.setattr(manager._store, "_refresh_accounts_for_management_read", refresh)
+        await fs.write_file(uri, "original", ctx=RequestContext(user, Role.USER))
+        refresh.assert_not_awaited()
+        patch.setattr(account_models, "monotonic", lambda: float("inf"))
+        with pytest.raises(OSError, match="account metadata unavailable"):
+            await fs.write_file(uri, "replacement", ctx=RequestContext(user, Role.USER))
+        assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "original"
     url = f"/api/v1/admin/accounts/{account_id}/users/agent/frozen-file"
     result = await admin_client.put(
         url,

@@ -13,6 +13,7 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import timezone
 from functools import lru_cache
+from time import monotonic
 from typing import AsyncGenerator
 from uuid import uuid4
 
@@ -34,6 +35,7 @@ from openviking.server.account_stores.models import (
     AccountSummary,
     AuthSnapshot,
     DeletionRecord,
+    EmptyFrozenFileCache,
     GroupSummary,
     UsersPage,
     UserSummary,
@@ -252,6 +254,7 @@ class SQLAccountStore(AccountStore):
         self._sql_lease = False
         self._engine: AsyncEngine | None = None
         self._sessions: async_sessionmaker[AsyncSession] | None = None
+        self._empty_frozen_files = EmptyFrozenFileCache()
 
     @staticmethod
     def _validate_credential_storage(mode: object) -> str:
@@ -399,6 +402,8 @@ class SQLAccountStore(AccountStore):
         self._sessions = sessions
 
     async def close(self) -> None:
+        self._empty_frozen_files.clear()
+
         async def cleanup() -> None:
             if self._engine is not None:
                 await self._engine.dispose()
@@ -504,33 +509,43 @@ class SQLAccountStore(AccountStore):
         return self._account_summary(*row) if row else None
 
     async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        if self._empty_frozen_files.contains(account_id):
+            return ()
+        started_at, revision = monotonic(), self._empty_frozen_files.revision
         async with self._session_factory() as session:
             value = await session.scalar(
                 select(Account.frozen_files).where(
                     Account.service_name == self._service_name, Account.account_id == account_id
                 )
             )
-        return validate_frozen_files(json.loads(value) if value is not None else [])
+        paths = validate_frozen_files(json.loads(value) if value is not None else [])
+        if not paths:
+            self._empty_frozen_files.remember(account_id, started_at, revision)
+        return paths
 
     async def set_frozen_file(
         self, account_id: str, user_id: str, path: str, frozen: bool
     ) -> tuple[str, ...]:
         uri = frozen_file_uri(user_id, path)
-        async with self._transaction() as session:
-            account = await self._lock_account(session, account_id)
-            self._require_active(account)
-            if frozen:
-                user = await self._lock_user(session, account, user_id)
-                self._require_active(user)
-                if user.role != Role.USER:
-                    raise PermissionDeniedError("Frozen files require a USER target")
-            await session.refresh(account, ["frozen_files"])
-            paths = update_frozen_files(
-                json.loads(account.frozen_files) if account.frozen_files is not None else [],
-                uri,
-                frozen,
-            )
-            account.frozen_files = json.dumps(paths)
+        self._empty_frozen_files.invalidate(account_id)
+        try:
+            async with self._transaction() as session:
+                account = await self._lock_account(session, account_id)
+                self._require_active(account)
+                if frozen:
+                    user = await self._lock_user(session, account, user_id)
+                    self._require_active(user)
+                    if user.role != Role.USER:
+                        raise PermissionDeniedError("Frozen files require a USER target")
+                await session.refresh(account, ["frozen_files"])
+                paths = update_frozen_files(
+                    json.loads(account.frozen_files) if account.frozen_files is not None else [],
+                    uri,
+                    frozen,
+                )
+                account.frozen_files = json.dumps(paths)
+        finally:
+            self._empty_frozen_files.invalidate(account_id)
         return paths
 
     async def get_user(self, account_id: str, user_id: str) -> UserSummary | None:

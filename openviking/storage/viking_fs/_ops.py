@@ -287,8 +287,10 @@ class _OpsMixin:
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(ctx, bypass_acl=True)
         await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
+        ctx.frozen_files = guard_ctx.frozen_files
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
@@ -776,8 +778,10 @@ class _OpsMixin:
 
         old_uri = self._normalize_transfer_uri(old_uri)
         new_uri = self._normalize_transfer_uri(new_uri)
-        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(ctx, bypass_acl=True)
         await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
+        ctx.frozen_files = guard_ctx.frozen_files
         await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
         await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
         old_scope = old_uri.rstrip("/")

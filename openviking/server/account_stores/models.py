@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Data structures returned by account storage operations."""
 
+from threading import Lock
+from time import monotonic
 from typing import TypedDict
 
 from openviking.core.global_policy import GlobalPolicyError, validate_global_policy_path
@@ -10,6 +12,37 @@ from openviking.storage.internal_names import is_storage_internal_name
 from openviking_cli.exceptions import InvalidArgumentError
 
 MAX_FROZEN_FILES = 10
+
+
+class EmptyFrozenFileCache:
+    """Bounded empty snapshots; expiry starts before the authoritative read."""
+
+    def __init__(self, ttl_seconds: float = 60.0):
+        self.ttl_seconds = ttl_seconds
+        self._deadlines: dict[str, float] = {}
+        self.revision = 0
+        self._lock = Lock()
+
+    def contains(self, account_id: str) -> bool:
+        return self._deadlines.get(account_id, 0.0) > monotonic()
+
+    def remember(self, account_id: str, started_at: float, revision: int) -> None:
+        with self._lock:
+            if revision != self.revision:
+                return
+            if account_id not in self._deadlines and len(self._deadlines) >= 1024:
+                self._deadlines.pop(next(iter(self._deadlines)))
+            self._deadlines[account_id] = started_at + self.ttl_seconds
+
+    def invalidate(self, account_id: str) -> None:
+        with self._lock:
+            self.revision += 1
+            self._deadlines.pop(account_id, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self.revision += 1
+            self._deadlines.clear()
 
 
 def frozen_file_uri(user_id: str, path: str) -> str:
