@@ -45,7 +45,7 @@ def parse_json_from_response(response: str) -> Optional[Any]:
         pass
 
     # Strategy 2: Extract JSON from code blocks
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response, re.DOTALL)
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response, re.DOTALL | re.IGNORECASE)
     if match:
         json_str = match.group(1).strip()
         try:

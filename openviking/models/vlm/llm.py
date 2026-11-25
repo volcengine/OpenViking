@@ -49,7 +49,7 @@ def parse_json_from_response(response: Union[str, Any]) -> Optional[Any]:
     except json.JSONDecodeError:
         pass
 
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response, re.DOTALL)
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response, re.DOTALL | re.IGNORECASE)
     if match:
         json_str = match.group(1).strip()
         try:
