@@ -33,6 +33,7 @@ logger = get_logger(__name__)
 
 # Durable per-step memory coverage recorded in archive metadata.
 _MEMORY_STEP_NAMES = ("long_term",)
+_LIST_PAGE = 1_000
 
 
 class _ArchiveMessagesCorruptError(ValueError):
@@ -224,16 +225,28 @@ class ArchiveStore:
         if not self._viking_fs:
             return []
 
-        try:
-            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self._ctx)
-        except Exception as exc:
-            if is_storage_not_found(exc):
-                return []
-            raise
+        names: set[str] = set()
+        offset = 0
+        while True:
+            try:
+                page = await self._viking_fs.ls(
+                    f"{self._session_uri}/history",
+                    node_limit=_LIST_PAGE,
+                    offset=offset,
+                    ctx=self._ctx,
+                )
+            except Exception as exc:
+                if is_storage_not_found(exc):
+                    break
+                raise
+            before = len(names)
+            names.update(item.get("name") if isinstance(item, dict) else item for item in page)
+            if len(page) < _LIST_PAGE or len(names) == before:
+                break
+            offset += len(page)
 
         refs: List[Dict[str, Any]] = []
-        for item in history_items:
-            name = item.get("name") if isinstance(item, dict) else item
+        for name in names:
             if not name or not name.startswith("archive_"):
                 continue
             try:

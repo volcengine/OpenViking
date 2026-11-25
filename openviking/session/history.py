@@ -39,7 +39,7 @@ from typing import Any, List, Optional, Sequence
 
 from openviking.message import Message
 from openviking.message.part import ContextPart, ImagePart, TextPart, ToolPart
-from openviking.session.archive_store import is_storage_not_found
+from openviking.session.archive_store import ArchiveStore, is_storage_not_found
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
     is_tool_transport,
@@ -91,7 +91,6 @@ _VISIBLE_CHUNK_CHARS = 3_000_000
 _ARCHIVE_READ_CONCURRENCY = 8
 _RENDER_CONCURRENCY = 8
 _RENDER_BATCH = 64
-_LIST_PAGE = 1_000
 _SELF_TOOL_SUFFIX = "session_history"
 _QUIET_TOOL_STATUSES = frozenset({"", "completed", "success", "succeeded", "ok", "done", "pending"})
 _TOOL_RESULT_ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -643,32 +642,6 @@ async def _read_jsonl(
         raise _Unreadable(where) from exc
 
 
-async def _list_archives(service: Any, ctx: Any, session_uri: str) -> List[dict]:
-    """Every ``history/archive_NNN`` ref by index; pages past the listing's node limit."""
-    names: set[str] = set()
-    offset = 0
-    while True:
-        try:
-            page = await service.viking_fs.ls(
-                f"{session_uri}/history", node_limit=_LIST_PAGE, offset=offset, ctx=ctx
-            )
-        except Exception as exc:
-            if isinstance(exc, NotFoundError) or is_storage_not_found(exc):
-                break
-            raise
-        before = len(names)
-        names.update(str(entry.get("name", "")) for entry in page if isinstance(entry, dict))
-        if len(page) < _LIST_PAGE or len(names) == before:
-            break
-        offset += len(page)
-    refs = [
-        {"archive_id": name, "archive_uri": f"{session_uri}/history/{name}", "index": int(digits)}
-        for name in names
-        if (digits := name.removeprefix("archive_")) != name and digits.isdigit()
-    ]
-    return sorted(refs, key=lambda ref: ref["index"])
-
-
 async def _read_volatile(service: Any, ctx: Any, session_uri: str) -> bool:
     try:
         meta = json.loads(await service.viking_fs.read_file(f"{session_uri}/.meta.json", ctx=ctx))
@@ -699,7 +672,8 @@ async def _load_scope(service: Any, ctx: Any, sid: str) -> _Scope | str | None:
         # two reads then shows up as duplicates (removed by id), never as a gap.
         live = await _read_jsonl(service, session_ctx, f"{uri}/messages.jsonl", "the live tail")
         try:
-            refs = await _list_archives(service, session_ctx, uri)
+            refs = await ArchiveStore(service.viking_fs, session_ctx, uri).list_refs()
+            refs.reverse()
         except Exception as exc:
             raise _Unreadable("the archive list") from exc
         sem = asyncio.Semaphore(_ARCHIVE_READ_CONCURRENCY)
