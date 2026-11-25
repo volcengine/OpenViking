@@ -19,7 +19,7 @@ import { TelegramState } from '../../daemon/src/telegram/state.mjs';
 import { configureOpenViking } from '../src/ov-setup.mjs';
 import { detectOpenViking, savedOVConfigPath } from '../src/ov.mjs';
 import { updateManifest } from '../../daemon/src/deployment-manifest.mjs';
-import { rolePresetText } from '../../daemon/src/conversation-policy.mjs';
+import { LEGACY_OV_SOUL_URI, OV_SOUL_URI, rolePresetText } from '../../daemon/src/conversation-policy.mjs';
 import { capabilities } from '../../daemon/src/capabilities.mjs';
 
 const RUNTIMES = [
@@ -136,6 +136,7 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     dataDir: path.join(h.home, '.ov-superagent', 'data', 'primary'),
     workspace: path.join(h.home, 'superagent-workspace', 'primary'),
     ovConfig: path.join(h.home, '.ov-superagent', 'ov', 'primary.json'),
+    soulUri: OV_SOUL_URI,
     stagedReplies: false,
     naturalWriting: true,
     // On by default for every runtime but Ark.
@@ -149,9 +150,9 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
   // Under an API key the key is the instance's identity; the copy names no peer.
   assert.deepEqual(JSON.parse(fs.readFileSync(manifest.agents[0].ovConfig, 'utf8')), { url: 'https://ov.example', api_key: 'k' });
   // The empty soul in OpenViking is seeded with the role, as the instance's own OV user.
-  const soul = { configPath: manifest.agents[0].ovConfig, uri: 'viking://~/memories/soul.md' };
+  const soul = { configPath: manifest.agents[0].ovConfig, uri: OV_SOUL_URI };
   assert.deepEqual(h.souls, [['read', soul], ['write', { ...soul, content: rolePresetText('colleague') }]]);
-  assert.match(h.written(), /角色已写入 viking:\/\/~\/memories\/soul\.md/);
+  assert.match(h.written(), /角色已写入 viking:\/\/~\/SOUL\.md/);
   assert.match(h.written(), /OpenViking 已就绪，接下来接入 IM（这个实例在 OpenViking 里是用户 amy）/);
   assert.ok(fs.statSync(manifest.agents[0].workspace).isDirectory());
   const dataDir = path.join(h.home, '.ov-superagent', 'data', 'primary');
@@ -605,11 +606,18 @@ function existing(h, agent) {
   fs.mkdirSync(path.join(h.home, '.ov-superagent'), { recursive: true });
   const full = { id: 'asd', displayName: 'ASD', channel: 'lark', connectors: ['lark'], profile: 'superagent-asd', port: 3738,
     dataDir: path.join(h.home, '.ov-superagent', 'data', 'asd'), workspace: path.join(h.home, 'ws'), ovConfig: path.join(h.home, '.ov-superagent', 'ov', 'asd.json'), ovAutoRecall: false,
-    stagedReplies: false, naturalWriting: true, explicitSilence: false, meetingNotes: false, model: 'codex:', ...agent };
+    soulUri: LEGACY_OV_SOUL_URI, stagedReplies: false, naturalWriting: true, explicitSilence: false, meetingNotes: false, model: 'codex:', ...agent };
   fs.writeFileSync(path.join(h.home, '.ov-superagent', 'config.json'),
     JSON.stringify({ version: 1, defaultInstance: full.id, env: {}, agents: [full] }));
   return full;
 }
+
+test('saving an older instance pins its historical default soul URI', async (t) => {
+  const h = harness(t, ['2', '1', 'New name', '11']);
+  const before = existing(h, { soulUri: undefined });
+  assert.equal(await setupCommand(h.options), 0);
+  assert.deepEqual(h.manifest().agents, [{ ...before, displayName: 'New name', soulUri: LEGACY_OV_SOUL_URI }]);
+});
 
 test('setup saves the safe temporary directory for /root data without moving the data or workspace', async (t) => {
   const h = harness(t, ['2', '1', 'New name', '11']);

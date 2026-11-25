@@ -13,7 +13,7 @@ import { loginWeixin } from '../../daemon/src/weixin/auth.mjs';
 import { WeixinState } from '../../daemon/src/weixin/state.mjs';
 import { bundledLarkCli } from '../../daemon/src/lark-cli-bin.mjs';
 import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
-import { OV_SOUL_URI, rolePresetText } from '../../daemon/src/conversation-policy.mjs';
+import { LEGACY_OV_SOUL_URI, OV_SOUL_URI, rolePresetText } from '../../daemon/src/conversation-policy.mjs';
 import { LarkCli } from './lark-cli.mjs';
 import {
   COMMENT_EVENT, LarkCredentialsError, LarkPolicyError, LarkRegistrationError, MESSAGE_EVENT, grantedUserScopes, inspectApp, lacksAny, missingConfig, readApp,
@@ -1995,6 +1995,9 @@ async function setupFlow({
       workspace: state.workspace,
       model: manifestModel(state, current),
     };
+    // Setup pins the address: new instances take the uppercase default, while
+    // an old manifest that omitted it keeps the lowercase address it used.
+    agent.soulUri = current?.soulUri ?? (current ? LEGACY_OV_SOUL_URI : OV_SOUL_URI);
     if (state.runtime?.id === 'dsh') {
       agent.dshHomeMode = state.dshHomeMode;
       agent.dshSkillRoots = [...state.dshSkillRoots];
