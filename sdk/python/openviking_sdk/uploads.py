@@ -18,6 +18,7 @@ def zip_directory(dir_path: str) -> str:
 
     root = path.resolve()
     zip_path = Path(tempfile.gettempdir()) / f"temp_upload_{uuid.uuid4().hex}.zip"
+    resolved_zip_path = zip_path.resolve()
 
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
@@ -25,7 +26,10 @@ def zip_directory(dir_path: str) -> str:
                 if file_path.is_symlink():
                     continue
                 if file_path.is_file():
-                    if not _path_is_relative_to(file_path.resolve(), root):
+                    resolved_file_path = file_path.resolve()
+                    if resolved_file_path == resolved_zip_path or not _path_is_relative_to(
+                        resolved_file_path, root
+                    ):
                         continue
                     arcname = str(file_path.relative_to(path)).replace("\\", "/")
                     zipf.write(file_path, arcname=arcname)
