@@ -41,7 +41,9 @@ class IngestOptions:
             return cls(search_tags=[], search_tag_mode="clear")
         if tags is None:
             return cls()
-        normalized_tags = normalize_search_tags(tags, discard_invalid=True)
+        normalized_tags = normalize_search_tags(
+            tags, discard_invalid=True, preserve_duplicates=mode == "append"
+        )
         if mode == "replace" and not normalized_tags:
             return cls()
         return cls(

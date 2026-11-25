@@ -2152,8 +2152,14 @@ async def test_tos_connector_forwards_tags_and_mode(monkeypatch, connector_confi
 
     for arguments, expected in (
         (
-            {"tags": [" Team=Search ", "env=test", "team=search"], "tag_mode": "append"},
-            {"tags": ["team=search", "env=test"], "tag_mode": "append"},
+            {
+                "tags": [" Team=Search ", "env=test", "team=search", "count+=1", "count+=1"],
+                "tag_mode": "append",
+            },
+            {
+                "tags": ["team=search", "env=test", "team=search", "count+=1", "count+=1"],
+                "tag_mode": "append",
+            },
         ),
         ({"tag_mode": "clear"}, {"tag_mode": "clear"}),
         ({"tags": ["invalid"], "tag_mode": "clear"}, {"tag_mode": "clear"}),

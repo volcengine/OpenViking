@@ -34,12 +34,14 @@ def normalize_search_tags(
     tags: Iterable[str] | None,
     *,
     discard_invalid: bool = False,
+    preserve_duplicates: bool = False,
 ) -> list[str]:
-    """Normalize explicit search tags while preserving stable order."""
+    """Normalize search tags, optionally retaining ordered duplicate operations."""
     if not tags:
         return []
 
     values_by_key: OrderedDict[str, str] = OrderedDict()
+    ordered_tags: list[str] = []
     invalid_tags: list[str] = []
     for item in tags:
         if item is None:
@@ -51,15 +53,22 @@ def normalize_search_tags(
                 invalid_tags.append(str(item))
                 continue
             raise
-        key, raw_value = value.split("=", 1)
-        values_by_key[key] = raw_value
+        if preserve_duplicates:
+            ordered_tags.append(value)
+        else:
+            key, raw_value = value.split("=", 1)
+            values_by_key[key] = raw_value
     if invalid_tags:
         logger.info(
             "invalid search tags discarded skipped=%d",
             len(invalid_tags),
             extra={"skipped": len(invalid_tags), "degraded": True},
         )
-    return [f"{key}={value}" for key, value in values_by_key.items()]
+    return (
+        ordered_tags
+        if preserve_duplicates
+        else [f"{key}={value}" for key, value in values_by_key.items()]
+    )
 
 
 def build_search_tags_filter(tags: Iterable[str] | None) -> dict[str, Any] | None:

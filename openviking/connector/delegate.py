@@ -705,7 +705,7 @@ class ConnectorDelegate:
         if tag_mode == "clear":
             extra_params = {"tag_mode": tag_mode}
         elif tags is not None:
-            normalized_tags = normalize_search_tags(tags)
+            normalized_tags = normalize_search_tags(tags, preserve_duplicates=tag_mode == "append")
             if normalized_tags:
                 extra_params = {
                     "tags": normalized_tags,

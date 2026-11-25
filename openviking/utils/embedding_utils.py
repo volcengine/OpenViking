@@ -106,6 +106,8 @@ def _apply_planned_field_patch(
 def _apply_ingest_options(
     embedding_msg,
     ingest_options: IngestOptions | None,
+    *,
+    preserve_search_tags: bool = False,
 ) -> None:
     ingest_options = IngestOptions.from_value(ingest_options)
     if not embedding_msg:
@@ -114,14 +116,18 @@ def _apply_ingest_options(
         embedding_msg.context_data.setdefault("_upsert_options", {})["acl_update"] = (
             ingest_options.acl_update.model_dump(mode="json")
         )
-    if ingest_options.search_tags is None:
+    if ingest_options.search_tags is None or (
+        preserve_search_tags and embedding_msg.action is IndexAction.UPSERT
+    ):
         return
     tag_mode = IngestOptions.vector_search_tag_mode(ingest_options.search_tag_mode)
     incoming_tags = list(ingest_options.search_tags or [])
-    if tag_mode == "append" and (
-        embedding_msg.action is IndexAction.MERGE
-        or embedding_msg.context_data.get("_upsert_options", {}).get("partial_update") is False
-    ):
+    if embedding_msg.action is IndexAction.MERGE:
+        planned_patch = getattr(embedding_msg, "field_patch", None)
+        if planned_patch is not None and "search_tags" in planned_patch.values:
+            # The planned patch resolves these tags against the stored record.
+            return
+    if tag_mode == "append" and embedding_msg.action is IndexAction.UPSERT:
         from openviking.utils.tags import merge_search_tags
 
         incoming_tags = merge_search_tags(
@@ -475,7 +481,13 @@ async def vectorize_directory_meta(
                 msg_abstract,
                 (field_patches or {}).get(int(ContextLevel.ABSTRACT.value)),
             )
-            _apply_ingest_options(msg_abstract, ingest_options)
+            _apply_ingest_options(
+                msg_abstract,
+                ingest_options,
+                preserve_search_tags=(
+                    level_overrides is not None and level_overrides.get("search_tags") is not None
+                ),
+            )
             if msg_abstract:
                 try:
                     enqueued = await _enqueue_embedding_message(
@@ -542,7 +554,13 @@ async def vectorize_directory_meta(
                 msg_overview,
                 (field_patches or {}).get(int(ContextLevel.OVERVIEW.value)),
             )
-            _apply_ingest_options(msg_overview, ingest_options)
+            _apply_ingest_options(
+                msg_overview,
+                ingest_options,
+                preserve_search_tags=(
+                    level_overrides is not None and level_overrides.get("search_tags") is not None
+                ),
+            )
             if msg_overview:
                 try:
                     enqueued = await _enqueue_embedding_message(

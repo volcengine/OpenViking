@@ -301,7 +301,11 @@ class ContentWriteCoordinator:
             resolved.encode("utf-8"),
             replace(
                 options,
-                search_tags=merge_search_tags(options.search_tags, conflict_tags),
+                search_tags=(
+                    [*(options.search_tags or []), *conflict_tags]
+                    if options.search_tag_mode == "append"
+                    else merge_search_tags(options.search_tags, conflict_tags)
+                ),
                 search_tag_mode=(
                     "append"
                     if options.search_tags is None

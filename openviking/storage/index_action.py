@@ -42,7 +42,9 @@ class FieldPatch:
         values = dict(self.values)
         if "search_tags" in values:
             values["search_tags"] = normalize_search_tags(
-                values["search_tags"], discard_invalid=True
+                values["search_tags"],
+                discard_invalid=True,
+                preserve_duplicates=str(self.modes.get("search_tags", "replace")) == "append",
             )
         object.__setattr__(self, "values", values)
         object.__setattr__(
@@ -71,7 +73,11 @@ class FieldPatch:
         resolved: dict[str, Any] = {}
         for name, value in self.values.items():
             if name == "search_tags":
-                incoming = normalize_search_tags(value, discard_invalid=True)
+                incoming = normalize_search_tags(
+                    value,
+                    discard_invalid=True,
+                    preserve_duplicates=self.modes.get(name, "replace") == "append",
+                )
                 resolved[name] = (
                     merge_search_tags(existing.get(name), incoming)
                     if self.modes.get(name, "replace") == "append"
