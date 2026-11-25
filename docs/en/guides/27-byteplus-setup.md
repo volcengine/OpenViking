@@ -1,6 +1,6 @@
 # Connect to OpenViking on BytePlus
 
-[BytePlus](https://openviking.ai/byteplus) hosts OpenViking in Asia Pacific (Johor). You connect a client to your managed instance. You do not run an OpenViking server on your computer.
+[BytePlus](https://openviking.ai/byteplus?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_27-byteplus-setup) hosts OpenViking in Asia Pacific (Johor). You connect a client to your managed instance. You do not run an OpenViking server on your computer.
 
 ## What you need
 

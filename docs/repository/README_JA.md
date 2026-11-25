@@ -167,7 +167,7 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>OpenViking Service を使う（BytePlus がホスト）</strong></summary>
 
-[BytePlus](https://openviking.ai/byteplus) はアジア太平洋（ジョホール）で OpenViking をホストしています。接続には BytePlus OpenViking のサービス URL と API キーを使います。CLI とエージェントの設定は [BytePlus セットアップガイド（英語）](https://docs.openviking.ai/en/guides/27-byteplus-setup)を参照してください。
+[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) はアジア太平洋（ジョホール）で OpenViking をホストしています。接続には BytePlus OpenViking のサービス URL と API キーを使います。CLI とエージェントの設定は [BytePlus セットアップガイド（英語）](https://docs.openviking.ai/en/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme)を参照してください。
 
 </details>
 
@@ -354,7 +354,7 @@ ov chat   # 別のターミナルで実行
 <img src="../images/commercial-saas.png" alt="マネージド SaaS 版" width="100%" />
 
 <h3>☁️ マネージド SaaS 版</h3>
-<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。<a href="https://openviking.ai/byteplus">BytePlus</a> はアジア太平洋（ジョホール）で OpenViking をホストしています。</p>
+<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。<a href="https://openviking.ai/byteplus?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">BytePlus</a> はアジア太平洋（ジョホール）で OpenViking をホストしています。</p>
 
 </td>
 <td width="50%" valign="top">

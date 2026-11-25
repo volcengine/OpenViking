@@ -168,7 +168,7 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>使用 OpenViking Service（BytePlus 托管）</strong></summary>
 
-[BytePlus](https://openviking.ai/byteplus) 在亚太地区（柔佛）托管 OpenViking。连接客户端时，使用你的 BytePlus OpenViking 服务地址和 API Key。CLI 与 Agent 接入方法见 [BytePlus 接入指南](https://docs.openviking.ai/zh/guides/27-byteplus-setup)。
+[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) 在亚太地区（柔佛）托管 OpenViking。连接客户端时，使用你的 BytePlus OpenViking 服务地址和 API Key。CLI 与 Agent 接入方法见 [BytePlus 接入指南](https://docs.openviking.ai/zh/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme)。
 
 </details>
 
@@ -355,7 +355,7 @@ ov chat   # 在另一个终端运行
 <img src="../images/commercial-saas.png" alt="商业化 SaaS 版" width="100%" />
 
 <h3>☁️ 商业化 SaaS 版</h3>
-<p>由<a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">火山引擎</a>托管和运维，提供个人版、企业版，以及开源部署的迁移工具。套餐与额度见<a href="https://docs.volcengine.com/docs/84313/2374478">服务文档</a>。<a href="https://openviking.ai/byteplus">BytePlus</a> 在亚太地区（柔佛）托管 OpenViking。</p>
+<p>由<a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">火山引擎</a>托管和运维，提供个人版、企业版，以及开源部署的迁移工具。套餐与额度见<a href="https://docs.volcengine.com/docs/84313/2374478">服务文档</a>。<a href="https://openviking.ai/byteplus?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">BytePlus</a> 在亚太地区（柔佛）托管 OpenViking。</p>
 
 </td>
 <td width="50%" valign="top">

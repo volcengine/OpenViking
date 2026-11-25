@@ -169,7 +169,7 @@ The same OpenViking service, run for you by Volcengine. The first 50 files are f
 <details>
 <summary><strong>Use OpenViking Service (hosted by BytePlus)</strong></summary>
 
-[BytePlus](https://openviking.ai/byteplus) hosts OpenViking in Asia Pacific (Johor). To connect a client, use your BytePlus OpenViking service URL and API key. See the [BytePlus setup guide](https://docs.openviking.ai/en/guides/27-byteplus-setup) for CLI and agent setup.
+[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) hosts OpenViking in Asia Pacific (Johor). To connect a client, use your BytePlus OpenViking service URL and API key. See the [BytePlus setup guide](https://docs.openviking.ai/en/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme) for CLI and agent setup.
 
 </details>
 
@@ -356,7 +356,7 @@ The server supports [accounts and user isolation](https://docs.openviking.ai/en/
 <img src="docs/images/commercial-saas.png" alt="Managed SaaS" width="100%" />
 
 <h3>☁️ Managed SaaS</h3>
-<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> hosts and operates OpenViking. Personal and Enterprise plans cover individual and team use, with migration tooling for open-source deployments. See the <a href="https://docs.volcengine.com/docs/84313/2374478">service documentation</a> for plans and limits. <a href="https://openviking.ai/byteplus">BytePlus</a> hosts OpenViking in Asia Pacific (Johor).</p>
+<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> hosts and operates OpenViking. Personal and Enterprise plans cover individual and team use, with migration tooling for open-source deployments. See the <a href="https://docs.volcengine.com/docs/84313/2374478">service documentation</a> for plans and limits. <a href="https://openviking.ai/byteplus?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">BytePlus</a> hosts OpenViking in Asia Pacific (Johor).</p>
 
 </td>
 <td width="50%" valign="top">

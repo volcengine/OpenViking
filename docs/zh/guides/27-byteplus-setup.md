@@ -1,6 +1,6 @@
 # 连接 BytePlus OpenViking
 
-[BytePlus](https://openviking.ai/byteplus) 在亚太地区（柔佛）托管 OpenViking。使用客户端连接你的托管实例，无需在本机运行 OpenViking 服务端。
+[BytePlus](https://openviking.ai/byteplus?utm_source=opensource_docs&utm_medium=referral&utm_campaign=guides_27-byteplus-setup) 在亚太地区（柔佛）托管 OpenViking。使用客户端连接你的托管实例，无需在本机运行 OpenViking 服务端。
 
 ## 准备工作
 
