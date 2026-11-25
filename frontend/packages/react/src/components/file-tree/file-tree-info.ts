@@ -59,6 +59,8 @@ const MEMORY_KEY_BY_SEGMENT: Record<string, FileTreeInfoKey> = {
   entities: 'entities',
   events: 'events',
   'identity.md': 'identity',
+  // TODO(2027-03-31): Stop assigning Soul semantics to this historical path
+  // no later than this date; root SOUL.md is the only canonical location.
   'soul.md': 'soul',
   cases: 'cases',
   trajectories: 'trajectories',

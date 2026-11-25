@@ -18,6 +18,8 @@ SKILL_USAGE = (
     "read <dir>/<name>/SKILL.md with the openviking_read tool."
 )
 SKILL_MORE = "search OpenViking skills to find the rest"
+# TODO(2027-03-31): Drop the lowercase fallback no later than this date. Keep
+# the canonical root path first throughout the bounded migration window.
 SOUL_PATHS = ("SOUL.md", "memories/soul.md")
 
 

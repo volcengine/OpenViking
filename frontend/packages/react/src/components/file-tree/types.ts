@@ -294,8 +294,8 @@ export type FileTreeInfoKey =
    */
   | 'identity'
   /**
-   * Agent 行为准则，`/SOUL.md`（兼容历史 `/memories/soul.md`）。
-   * Agent behaviour guidelines, `/SOUL.md` (with legacy `/memories/soul.md` support).
+   * Agent 行为准则，`/SOUL.md`（历史 `/memories/soul.md` 最晚兼容到 2027-03-31）。
+   * Agent behaviour guidelines, `/SOUL.md` (legacy `/memories/soul.md` support ends by 2027-03-31).
    */
   | 'soul'
   /**

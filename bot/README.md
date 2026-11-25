@@ -381,7 +381,7 @@ For example, the default local Soul file is `~/.openviking/data/bot/workspace/sh
 
 When an active Workspace is first used, VikingBot copies initial files from the built-in `bot/workspace` template. The main customization points are:
 
-When OpenViking is configured, VikingBot reads the current user's `viking://~/SOUL.md` on each turn and uses it in place of local `SOUL.md`. If it is absent or empty, VikingBot tries the historical `memories/soul.md`; if neither can be read within 5 seconds, it falls back to local `SOUL.md`. Root `SOUL.md` wins when both remote files exist. Without OpenViking, VikingBot uses local `SOUL.md` directly.
+When OpenViking is configured, VikingBot reads the current user's `viking://~/SOUL.md` on each turn and uses it in place of local `SOUL.md`. If it is absent or empty, VikingBot tries the historical `memories/soul.md`; if neither can be read within 5 seconds, it falls back to local `SOUL.md`. Root `SOUL.md` wins when both remote files exist. The historical remote fallback is a migration aid and will be removed no later than March 31, 2027; move its contents to root `SOUL.md` before then. Without OpenViking, VikingBot uses local `SOUL.md` directly.
 
 | File or directory | Purpose | How it is loaded |
 |-------------------|---------|------------------|

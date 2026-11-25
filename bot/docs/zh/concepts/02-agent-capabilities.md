@@ -121,7 +121,7 @@ ContextBuilder 实际读取按 `sandbox.mode` 选择的活动 Workspace：
 
 ContextBuilder 在每轮构建系统提示时，按本地 `AGENTS.md`、Agent 指令、本地 `TOOLS.md`、本地 `IDENTITY.md` 的顺序读取存在且非空的文件。
 
-配置 OpenViking 且当前用户根目录的 `viking://~/SOUL.md` 可读取、非空时，Agent 指令优先使用该文件；根目录文件不存在或为空时再读取历史路径 `memories/soul.md`，两者都无法在 5 秒内读到时使用本地 `SOUL.md`。两个远端文件同时存在时以根目录文件为准。每轮只注入一个指令文件，下一轮重新读取并选择。
+配置 OpenViking 且当前用户根目录的 `viking://~/SOUL.md` 可读取、非空时，Agent 指令优先使用该文件；根目录文件不存在或为空时再读取历史路径 `memories/soul.md`，两者都无法在 5 秒内读到时使用本地 `SOUL.md`。两个远端文件同时存在时以根目录文件为准。历史远端路径兜底最晚于 2027 年 3 月 31 日结束，请在此前迁移到根目录 `SOUL.md`。每轮只注入一个指令文件，下一轮重新读取并选择。
 
 | 文件 | 适合定义的内容 |
 |------|----------------|

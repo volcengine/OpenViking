@@ -45,7 +45,7 @@ Relevant memory from OpenViking. It is this user's own saved history (past conve
 
 ## 对话开头的内容 {#the-opening-context}
 
-新对话开始时，网关附上你的 soul 和 OpenViking 用户画像。soul 是你 OpenViking 账号根目录下的 `SOUL.md`，也就是你留给模型的长期指令（见[上下文类型](../concepts/02-context-types.md)）。根目录文件不存在或为空时，网关读取历史路径 `memories/soul.md`；两者同时存在时以根目录文件为准。网关会告诉模型遵循它，系统提示词或你在对话里另有要求时除外。模型能用 OpenViking 的 `read` 工具（`openviking_read`，见[OpenViking 工具](04-openviking-tools.md#choose-tools)）时，还附上记忆和技能目录，方便模型在自动召回之外继续查找。
+新对话开始时，网关附上你的 soul 和 OpenViking 用户画像。soul 是你 OpenViking 账号根目录下的 `SOUL.md`，也就是你留给模型的长期指令（见[上下文类型](../concepts/02-context-types.md)）。根目录文件不存在或为空时，网关读取历史路径 `memories/soul.md`；两者同时存在时以根目录文件为准。该兜底仅用于限期迁移，请在 2027 年 3 月 31 日前迁移到根目录 `SOUL.md`，兼容最晚于该日结束。网关会告诉模型遵循它，系统提示词或你在对话里另有要求时除外。模型能用 OpenViking 的 `read` 工具（`openviking_read`，见[OpenViking 工具](04-openviking-tools.md#choose-tools)）时，还附上记忆和技能目录，方便模型在自动召回之外继续查找。
 
 画像和目录有独立的 4,000 token 预算（**开头内容预算**），技能目录最多占四分之一，不占召回预算。soul 全文附上，两份预算都不占，所以 soul 写得长，这段对话的每次请求都会相应变大。
 

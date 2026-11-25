@@ -79,7 +79,7 @@ const profiles = {
     soul: {
       label: '会话开头提供 SOUL.md',
       description:
-        '新对话开始时，向模型提供你保存在 OpenViking 根目录的 SOUL.md，也就是你给模型的长期指令，并告诉模型遵循它。历史 memories/soul.md 仍受支持。SOUL.md 全文提供，不占开头内容预算。',
+        '新对话开始时，向模型提供你保存在 OpenViking 根目录的 SOUL.md，也就是你给模型的长期指令，并告诉模型遵循它。历史 memories/soul.md 兜底最晚于 2027 年 3 月 31 日结束。SOUL.md 全文提供，不占开头内容预算。',
     },
     profileMaxTokens: {
       label: '开头内容预算',

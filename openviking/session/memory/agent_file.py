@@ -11,6 +11,8 @@ from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking_cli.exceptions import NotFoundError
 
 SOUL_FILENAME = "SOUL.md"
+# TODO(2027-03-31): Remove the legacy path check no later than this date. It is
+# a migration window for existing data, not a second permanent Soul location.
 LEGACY_SOUL_PATH = "memories/soul.md"
 
 

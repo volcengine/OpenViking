@@ -18,7 +18,7 @@ Memory is produced by session commit or explicit extraction, stored in the user 
 
 These are the bundled types. `tools` and `skills` are disabled by default; extraction also depends on the effective memory policy and Agent Evolution settings. The table shows Self paths. Peer-enabled types can also be stored under `viking://user/{user_id}/peers/{peer_id}/memories/`. Deployment templates can extend or override the registry; the account template API permits only its documented fields and types.
 
-`SOUL.md` at the user root contains static agent instructions, initialized with the former Soul defaults when the user workspace is created. It is a setting rather than a memory, is editable through the file APIs, and is not extracted or merged on session commit. The historical `memories/soul.md` remains supported: existing files are left unchanged and used when root `SOUL.md` is absent. If both exist, root `SOUL.md` takes precedence. `profile.md` remains under `memories/`; new workspaces do not create `identity.md`.
+`SOUL.md` at the user root contains static agent instructions, initialized with the former Soul defaults when the user workspace is created. It is a setting rather than a memory, is editable through the file APIs, and is not extracted or merged on session commit. The historical `memories/soul.md` remains supported during a bounded migration window: existing files are left unchanged and used when root `SOUL.md` is absent. Move their contents to root `SOUL.md` by March 31, 2027; the fallback will be removed no later than that date. If both exist, root `SOUL.md` takes precedence. `profile.md` remains under `memories/`; new workspaces do not create `identity.md`.
 
 ---
 

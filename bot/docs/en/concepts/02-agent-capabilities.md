@@ -127,7 +127,7 @@ With the default `shared` mode, customize files under `<workspace>/shared`, not 
 
 On every turn, ContextBuilder reads existing non-empty files in this order: local `AGENTS.md`, Agent instructions, local `TOOLS.md`, and local `IDENTITY.md`.
 
-Agent instructions come from the current OpenViking user's root `viking://~/SOUL.md` when OpenViking is configured and the file is readable and non-empty. If it is absent or empty, VikingBot tries the historical `memories/soul.md`; if neither can be read within 5 seconds, it uses local `SOUL.md`. Root `SOUL.md` wins when both remote files exist. Only one instruction file is injected per turn, and the choice is refreshed on the next turn.
+Agent instructions come from the current OpenViking user's root `viking://~/SOUL.md` when OpenViking is configured and the file is readable and non-empty. If it is absent or empty, VikingBot tries the historical `memories/soul.md`; if neither can be read within 5 seconds, it uses local `SOUL.md`. Root `SOUL.md` wins when both remote files exist. The historical remote fallback ends no later than March 31, 2027; move its contents to root `SOUL.md` before then. Only one instruction file is injected per turn, and the choice is refreshed on the next turn.
 
 | File | Appropriate content |
 |------|---------------------|

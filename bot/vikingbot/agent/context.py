@@ -33,6 +33,8 @@ class ContextBuilder:
     """
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md"]
+    # TODO(2027-03-31): Remove the lowercase remote fallback no later than this
+    # date; it exists only to give existing users time to move to root SOUL.md.
     REMOTE_SOUL_URIS = (
         "viking://~/SOUL.md",
         "viking://~/memories/soul.md",

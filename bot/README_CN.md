@@ -378,7 +378,7 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 
 首次使用某个活动 Workspace 时，VikingBot 会从内置 `bot/workspace` 模板复制初始文件。常用定制入口如下：
 
-配置 OpenViking 后，VikingBot 每轮读取当前用户根目录的 `viking://~/SOUL.md`，优先使用该文件替代本地 `SOUL.md`。根目录文件不存在或为空时再尝试历史路径 `memories/soul.md`；两者都无法在 5 秒内读到时回退本地 `SOUL.md`。两个远端文件同时存在时以根目录文件为准。未配置 OpenViking 时直接使用本地 `SOUL.md`。
+配置 OpenViking 后，VikingBot 每轮读取当前用户根目录的 `viking://~/SOUL.md`，优先使用该文件替代本地 `SOUL.md`。根目录文件不存在或为空时再尝试历史路径 `memories/soul.md`；两者都无法在 5 秒内读到时回退本地 `SOUL.md`。两个远端文件同时存在时以根目录文件为准。历史远端路径仅用于限期迁移，请在 2027 年 3 月 31 日前将内容迁移到根目录 `SOUL.md`，该兜底最晚于该日移除。未配置 OpenViking 时直接使用本地 `SOUL.md`。
 
 | 文件或目录 | 作用 | 加载方式 |
 |------------|------|----------|
