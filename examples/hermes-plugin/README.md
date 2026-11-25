@@ -47,7 +47,7 @@ separate access.
 |------------|---------------|
 | **Quick Local** | A language model already configured in Hermes. Setup installs a local server and embedding model. |
 | **OpenViking Managed Service → Volcengine** | A service API key for Volcengine's [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme). The wizard supplies the service URL. |
-| **OpenViking Managed Service → BytePlus** | Your instance's HTTPS service URL and OpenViking API key. See [BytePlus setup](https://docs.openviking.ai/en/guides/27-byteplus-setup). |
+| **OpenViking Managed Service → BytePlus** | Your instance's HTTPS service URL and OpenViking API key. See [BytePlus setup](https://docs.openviking.ai/en/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme). |
 | **Custom** | Your server URL and credentials. Setup can also reuse a saved `ovcli.conf`. |
 
 For Volcengine, activate it and create an API key in the

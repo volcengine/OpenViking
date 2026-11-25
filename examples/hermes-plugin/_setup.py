@@ -12,6 +12,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from . import quick_local
 
@@ -157,6 +158,18 @@ def _prompt_endpoint(prompt, select, cancelled, *, byteplus: bool = False) -> st
                     "Enter the full HTTPS service URL for your BytePlus instance, without a query or fragment."
                 )
             endpoint = ov._normalize_openviking_url(value)
+            if byteplus:
+                candidate = urlparse(endpoint)
+                volcengine = urlparse(ov._OPENVIKING_SERVICE_ENDPOINT)
+                if (
+                    candidate.hostname == volcengine.hostname
+                    and candidate.port in (None, 443)
+                    and candidate.path.rstrip("/") == volcengine.path.rstrip("/")
+                ):
+                    raise ov._OpenVikingEndpointError(
+                        "This is the Volcengine service URL. Choose Volcengine or enter "
+                        "your BytePlus instance's HTTPS service URL."
+                    )
         except ov._OpenVikingEndpointError as exc:
             if _retry_or_cancel_manual_setup(select, "  Invalid OpenViking endpoint", str(exc), cancelled) is _SETUP_CANCELLED:
                 return _SETUP_CANCELLED
@@ -483,10 +496,18 @@ def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provid
 
     service = None
     if source_choice == 0:
+        language = (
+            os.environ.get("OPENVIKING_LANG")
+            or os.environ.get("LC_ALL")
+            or os.environ.get("LC_MESSAGES")
+            or os.environ.get("LANG")
+            or "en"
+        )
         provider_choice = select("  Cloud provider",
                                  [("Volcengine", "use the fixed service URL and your API key"),
                                   ("BytePlus", "enter your HTTPS service URL and API key")],
-                                 default=0, cancel_returns=cancelled)
+                                 default=0 if language.strip().lower().startswith("zh") else 1,
+                                 cancel_returns=cancelled)
         if provider_choice == cancelled:
             return _SETUP_CANCELLED
         service = "BytePlus" if provider_choice == 1 else "Volcengine"

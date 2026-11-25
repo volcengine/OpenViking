@@ -722,15 +722,18 @@ const { OVCLI_URL: url, OVCLI_API_KEY: apiKey, OVCLI_ACCOUNT: account, OVCLI_USE
 const read = (path) => {
   try { return JSON.parse(fs.readFileSync(path, "utf8")) || {}; } catch { return {}; }
 };
-const endpoint = (value) => typeof value === "string" ? value.replace(/\/+$/, "") : "";
+const endpoint = (value) => typeof value === "string" ? value.trim().replace(/\/+$/, "") : "";
 const c = read(file);
 if (url && endpoint(c.url) !== endpoint(url)) {
-  const home = process.env.HOME;
-  const legacyPath = process.env.OPENVIKING_CONFIG_FILE || `${home}/.openviking/ov.conf`;
+  const home = require("node:os").homedir();
+  const legacyPath = process.env.OPENVIKING_CONFIG_FILE?.trim() || `${home}/.openviking/ov.conf`;
   const legacy = read(legacyPath.replace(/^~\//, `${home}/`));
   const server = legacy.server || {};
-  const legacyHost = typeof server.host === "string" ? server.host.replace("0.0.0.0", "127.0.0.1") : "127.0.0.1";
-  const legacyUrl = server.url || `http://${legacyHost}:${server.port || 1933}`;
+  const legacyHost = typeof server.host === "string" && server.host.trim()
+    ? server.host.trim().replace("0.0.0.0", "127.0.0.1") : "127.0.0.1";
+  const legacyPort = Number.isFinite(Number(server.port)) ? Math.floor(Number(server.port)) : 1933;
+  const legacyUrl = typeof server.url === "string" && server.url.trim()
+    ? server.url.trim() : `http://${legacyHost}:${legacyPort}`;
   const legacyKey = server.root_api_key || legacy.api_key || Object.values(legacy).some(section => section?.apiKey);
   const envKey = process.env.OPENVIKING_BEARER_TOKEN?.trim() || process.env.OPENVIKING_API_KEY?.trim();
   const envUrl = process.env.OPENVIKING_URL?.trim() || process.env.OPENVIKING_BASE_URL?.trim();

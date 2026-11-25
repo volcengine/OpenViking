@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { resolveConnection } from "./lib/credentials.mjs";
 
 const installer = fileURLToPath(new URL("./install.sh", import.meta.url));
 const installerSource = readFileSync(installer, "utf8");
@@ -1201,4 +1202,90 @@ json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /could reuse a key from another server/);
   assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+});
+
+test("legacy endpoint normalization preserves the runtime credential boundary", (t) => {
+  for (const [server, expectedUrl, allowed] of [
+    [{ port: 0 }, "http://127.0.0.1:0", false],
+    [{ port: "0" }, "http://127.0.0.1:0", false],
+    [{ port: null }, "http://127.0.0.1:0", false],
+    [{ host: " 0.0.0.0 ", port: "1933.9" }, "http://127.0.0.1:1933", true],
+    [{ host: "", port: "invalid" }, "http://127.0.0.1:1933", true],
+    [{ url: " http://127.0.0.1:1933/ " }, "http://127.0.0.1:1933", true],
+  ]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const legacy = join(home, "ov.conf");
+    const previous = { timeout: 4 };
+    const legacyConfig = { server: { ...server, root_api_key: "legacy-root-key" } };
+    const env = { HOME: home, OPENVIKING_CONFIG_FILE: legacy };
+    writeFileSync(file, JSON.stringify(previous));
+    writeFileSync(legacy, JSON.stringify(legacyConfig));
+    const connection = resolveConnection("claude", {
+      env, rootKeyFallback: true,
+      files: { cliFile: previous, ovFile: legacyConfig, cliPath: file, ovPath: legacy },
+    });
+    assert.equal(connection.baseUrl, expectedUrl);
+    assert.equal(connection.apiKey, "legacy-root-key");
+    const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} http://127.0.0.1:1933 '' '' ''
+`, {
+      ...env,
+      OPENVIKING_URL: undefined, OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_API_KEY: undefined, OPENVIKING_BEARER_TOKEN: undefined,
+    });
+    if (allowed) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(readFileSync(file, "utf8")).url, expectedUrl);
+    } else {
+      assert.notEqual(result.status, 0, JSON.stringify(server));
+      assert.match(result.stderr, /could reuse a key from another server/);
+      assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+    }
+  }
+});
+
+test("legacy config path normalization cannot hide a key from the installer guard", (t) => {
+  for (const pathKind of ["absolute", "tilde", "blank"]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const directory = join(home, ".openviking");
+    const legacy = join(directory, "ov.conf");
+    mkdirSync(directory);
+    const previous = { timeout: 4 };
+    writeFileSync(file, JSON.stringify(previous));
+    writeFileSync(legacy, JSON.stringify({
+      server: { url: "https://previous.example/openviking", root_api_key: "legacy-root-key" },
+    }));
+    const path = {
+      absolute: ` ${legacy} `,
+      tilde: " ~/.openviking/ov.conf ",
+      blank: "   ",
+    }[pathKind];
+    const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' '' ''
+`, {
+      HOME: home, OPENVIKING_CONFIG_FILE: path,
+      OPENVIKING_URL: undefined, OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_API_KEY: undefined, OPENVIKING_BEARER_TOKEN: undefined,
+    });
+    assert.notEqual(result.status, 0, pathKind);
+    assert.match(result.stderr, /could reuse a key from another server/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+    const runtimeEnv = preludeEnv({ HOME: home });
+    for (const key of Object.keys(runtimeEnv)) {
+      if (key.startsWith("OPENVIKING_")) delete runtimeEnv[key];
+    }
+    runtimeEnv.OPENVIKING_CONFIG_FILE = path;
+    runtimeEnv.OPENVIKING_CLI_CONFIG_FILE = file;
+    const runtime = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+import { resolveConnection } from ${JSON.stringify(new URL("./lib/credentials.mjs", import.meta.url).href)};
+const connection = resolveConnection("agent-plugins", { rootKeyFallback: true });
+console.log(JSON.stringify({ baseUrl: connection.baseUrl, hasExpectedKey: connection.apiKey === "legacy-root-key" }));
+`], { env: runtimeEnv, encoding: "utf8", timeout: 10_000 });
+    assert.equal(runtime.status, 0, runtime.stderr);
+    assert.deepEqual(JSON.parse(runtime.stdout), {
+      baseUrl: "https://previous.example/openviking", hasExpectedKey: true,
+    });
+  }
 });

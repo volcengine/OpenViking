@@ -245,6 +245,7 @@ def test_managed_provider_setup_saves_only_the_selected_connection(
         if cloud == "Volcengine"
         else "https://byteplus.example/openviking"
     )
+    monkeypatch.setenv("OPENVIKING_LANG", "en")
     monkeypatch.setenv("OPENVIKING_ENDPOINT", "https://old.example/openviking")
     monkeypatch.setenv("OPENVIKING_API_KEY", "old-key")
     prompts, menus, checks = [], [], []
@@ -286,7 +287,7 @@ def test_managed_provider_setup_saves_only_the_selected_connection(
     assert all("API key type" not in title for title, _, _ in menus)
     cloud_menu = next(menu for menu in menus if menu[0] == "  Cloud provider")
     assert [label.partition(" - ")[0] for label in cloud_menu[1]] == ["Volcengine", "BytePlus"]
-    assert cloud_menu[2]["default"] == 0
+    assert cloud_menu[2]["default"] == 1
     url_prompts = [kwargs for label, kwargs in prompts if label == "BytePlus service URL"]
     assert url_prompts == ([{"default": ""}] if cloud == "BytePlus" else [])
     saved = yaml.safe_load((home / "config.yaml").read_text())
@@ -310,7 +311,7 @@ def test_managed_provider_setup_saves_only_the_selected_connection(
 
 @pytest.mark.parametrize(
     "stage",
-    ["provider", "empty_url", "http_url", "userinfo_url", "query_url", "fragment_url", "empty_key", "invalid_key", "save"],
+    ["provider", "empty_url", "http_url", "userinfo_url", "query_url", "fragment_url", "volcengine_url", "volcengine_default_port", "volcengine_caps_host", "empty_key", "invalid_key", "save"],
 )
 def test_cancelled_byteplus_setup_preserves_profiles_and_credentials(
     external_provider, monkeypatch, stage
@@ -327,6 +328,9 @@ def test_cancelled_byteplus_setup_preserves_profiles_and_credentials(
         "userinfo_url": "https://user:password@byteplus.example/openviking",
         "query_url": "https://byteplus.example/openviking?",
         "fragment_url": "https://byteplus.example/openviking#",
+        "volcengine_url": module._OPENVIKING_SERVICE_ENDPOINT,
+        "volcengine_default_port": "https://api.vikingdb.cn-beijing.volces.com:443/openviking/",
+        "volcengine_caps_host": "HTTPS://API.VIKINGDB.CN-BEIJING.VOLCES.COM/openviking",
     }
 
     def prompt(label, **kwargs):
@@ -359,6 +363,57 @@ def test_cancelled_byteplus_setup_preserves_profiles_and_credentials(
         assert all("API key" not in label for label in prompts)
     if stage not in {"invalid_key", "save"}:
         assert checks == []
+
+
+@pytest.mark.parametrize(
+    "environment, expected_provider",
+    [
+        ({"OPENVIKING_LANG": "zh"}, 0),
+        ({"OPENVIKING_LANG": "en", "LANG": "zh_CN.UTF-8"}, 1),
+        ({"LC_ALL": "zh_TW.UTF-8", "LANG": "en_US.UTF-8"}, 0),
+        ({"LC_MESSAGES": "zh_HK.UTF-8", "LANG": "en_US.UTF-8"}, 0),
+        ({"LANG": "ja_JP.UTF-8"}, 1),
+        ({}, 1),
+    ],
+)
+def test_managed_provider_default_uses_the_user_language(
+    external_provider, monkeypatch, environment, expected_provider
+):
+    home, provider, module, config, setup = setup_state(external_provider, monkeypatch)
+    before = copy.deepcopy(config)
+    for key in ("OPENVIKING_LANG", "LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in environment.items():
+        monkeypatch.setenv(key, value)
+    defaults, endpoints = [], []
+
+    def select(title, options, **kwargs):
+        if title == "  Cloud provider":
+            defaults.append(kwargs["default"])
+            return kwargs["default"]
+        return {
+            "  OpenViking usage profile": 0,
+            "  OpenViking connection": 0,
+        }.get(title, setup._CANCELLED)
+
+    def validate(values, **kwargs):
+        endpoints.append(values["endpoint"])
+        return True, "", "user"
+
+    monkeypatch.setattr(
+        setup, "_prompt",
+        lambda label, **kwargs: "https://byteplus.example/openviking"
+        if label == "BytePlus service URL" else "new-key",
+    )
+    monkeypatch.setattr(module, "_validate_openviking_setup_values", validate)
+    patch_menu(monkeypatch, select)
+    provider.post_setup(str(home), config)
+    assert defaults == [expected_provider]
+    assert endpoints == [
+        module._OPENVIKING_SERVICE_ENDPOINT
+        if expected_provider == 0 else "https://byteplus.example/openviking"
+    ]
+    assert config == before
 
 
 def test_byteplus_url_and_key_retry_validate_only_the_replacement_key(
