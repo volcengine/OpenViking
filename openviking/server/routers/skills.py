@@ -164,7 +164,10 @@ async def _list_skills_from_root(
         history = await read_skill_history(service.fs, ctx, summary["root_uri"])
         summary.update(skill_history_summary(history))
         results.append(summary)
-    return results
+    # The extra probe entry only compensates for ``.skill-history`` consuming a
+    # slot; it must never turn into an extra result when that directory is
+    # absent (legacy roots) or sits outside the fetched page.
+    return results[:node_limit]
 
 
 async def _entry_looks_like_skill(service, ctx: RequestContext, entry: Dict[str, Any]) -> bool:
