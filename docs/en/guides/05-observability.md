@@ -572,15 +572,14 @@ The most common labels you will use while investigating dashboards are:
 - To inspect why one specific request was slow, where tokens went, or which stage blocked resource processing, use `telemetry`
 - To inspect whether request volume, error rates, or latency are degrading over time, use `/metrics`
 
-## Optional Kafka event reporting
+## Optional event reporting
 
-Install `openviking[reporting]` and enable `server.observability.reporting.enabled`
-to read `server.observability.reporting.kafka` and
-`server.observability.reporting.telemetry` directly from `ov.conf`.
-The nested `telemetry.enabled` switch must also be enabled.
-KBS reads these settings from KMS and renders them into each instance's `ov.conf`;
-the kernel no longer connects to Nacos. Reporting is disabled
-by default and export failures do not interrupt business requests.
+Enable `server.observability.reporting.enabled` and
+`server.observability.reporting.telemetry.enabled` in `ov.conf`.
+For Kafka output, install `openviking[reporting]` and specify the broker, topic,
+and authentication settings under `reporting.kafka`. Set `reporting.file_log`
+to select local JSONL output. Reporting is disabled by default, and export
+failures do not interrupt business requests.
 
 The exporter uses an in-memory queue; `telemetry.queue_capacity` must be a positive
 integer (default `1024`). Full queues, exhausted delivery retries and process
@@ -589,9 +588,10 @@ warnings containing counts only. This exporter is suitable for best-effort analy
 it does not provide a durable audit or billing ledger. Allow a graceful shutdown to
 drain the queue before stopping the process.
 
-KBS binds the outer cloud account and instance through `account_id`, `resource_id`
-and `region` in `reporting.telemetry.deployment`; original space and member identities remain in
-`ov_account_id` and `ov_user_id`. Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
+Deployments may set `account_id`, `resource_id` and `region` in `reporting.telemetry.deployment`.
+`OV_METRICS_ACCOUNT_ID`, `OV_RESOURCE_ID` and `OV_REGION` remain fallback values.
+Original space and member identities remain in `ov_account_id` and `ov_user_id`.
+Set `OV_MODEL_COST_BEARER` to `customer` or `ov`
 only when the deployment knows who owns its model credentials. Otherwise the
 owner stays `unknown`. For mixed credentials, trusted provisioning should set
 `cost_bearer` (`ov`, `customer`, or `unknown`) on each VLM or embedding credential.
@@ -616,7 +616,7 @@ When ROOT provisions or rotates account model credentials through the configurat
 client. Model sections remain ROOT-only; account admins and members cannot set billing
 ownership through the configuration API.
 
-Example reporting section in `ov.conf` (KBS supplies authentication from KMS):
+Example Kafka reporting section in `ov.conf`:
 
 ```json
 {
@@ -644,10 +644,20 @@ Example reporting section in `ov.conf` (KBS supplies authentication from KMS):
 }
 ```
 
-The exporter does not read `NACOS_*`, external reporting JSON files or environment
-placeholders. After changing KMS, restart KBS, regenerate existing instances'
-`ov.conf` through a configuration update or version upgrade, and restart the
-kernels. Writer and Reader both read their own `ov.conf`.
+For local output, replace the `kafka` object in the example with this `file_log` object:
+
+```json
+{
+  "file_log": {
+    "path": "/var/log/metric_logs/metric.log",
+    "rotation_interval_hours": 1,
+    "backup_count": 168
+  }
+}
+```
+
+Each line contains one JSON event. Point your log collector at the active file and
+its rotated copies. Restart OpenViking after updating the reporting configuration.
 
 ## Related Documentation
 

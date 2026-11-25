@@ -10,12 +10,12 @@ import threading
 import time
 from pathlib import Path
 
-from openviking.usage_reporter.file_log_sink import _ProcessSafeTimedRotatingFileHandler
+from openviking.usage_reporter.file_log_sink import ProcessSafeTimedRotatingFileHandler
 
 from .reporter import _warn_count
 
 
-class _MetricFileHandler(_ProcessSafeTimedRotatingFileHandler):
+class _MetricFileHandler(ProcessSafeTimedRotatingFileHandler):
     def handleError(self, record):
         raise
 

@@ -193,7 +193,9 @@ class APIKeyManager:
                 account_id, admin_user_id, key, lease_ref=lease_ref
             )
         _report_registry_change("space_change", account_id, "", "created")
-        _report_registry_change("membership_change", account_id, admin_user_id, "created", role="admin")
+        _report_registry_change(
+            "membership_change", account_id, admin_user_id, "created", role="admin"
+        )
         return key
 
     async def delete_account(self, account_id: str) -> None:

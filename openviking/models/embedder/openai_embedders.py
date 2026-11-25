@@ -323,7 +323,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def supports_multimodal(self) -> bool:
         return self._supports_multimodal
 
-    def _prepare_embedding_input(self, text: EmbeddingInput | List[str]) -> EmbeddingInput | List[str]:
+    def _prepare_embedding_input(
+        self, text: EmbeddingInput | List[str]
+    ) -> EmbeddingInput | List[str]:
         if isinstance(text, list) and all(isinstance(item, str) for item in text):
             if self.max_input_tokens is None:
                 return text
@@ -409,7 +411,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
     @model_error_boundary
-    async def embed_async(self, text: EmbeddingInput | List[str], is_query: bool = False) -> EmbedResult:
+    async def embed_async(
+        self, text: EmbeddingInput | List[str], is_query: bool = False
+    ) -> EmbedResult:
         client = self._get_async_client()
         embedding_input = self._prepare_embedding_input(text)
 

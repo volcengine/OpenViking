@@ -564,12 +564,12 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 - 看某一次具体请求为什么慢、token 花在哪、资源处理卡在哪个阶段：看 `telemetry`
 - 看一段时间内请求量、错误率、时延是否持续恶化：看 `/metrics`
 
-## 可选 Kafka 事件上报
+## 可选事件上报
 
-安装 `openviking[reporting]`，并在 `ov.conf` 中开启 `server.observability.reporting.enabled`
-和 `server.observability.reporting.telemetry.enabled`。
-上报器从 `reporting.kafka` 读取 Kafka 的地址、认证和 topic，
-从 `reporting.telemetry` 读取队列和部署标识。
+在 `ov.conf` 中开启 `server.observability.reporting.enabled` 和
+`server.observability.reporting.telemetry.enabled`。发送到 Kafka 时，安装
+`openviking[reporting]` 并在 `reporting.kafka` 中填写地址、topic 和认证信息。
+配置 `reporting.file_log` 可写入本地 JSONL 文件。
 该功能默认关闭，业务调用不会因上报失败而中断。
 
 上报器使用内存队列；`telemetry.queue_capacity` 必须为正整数，默认 `1024`。
@@ -598,7 +598,7 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 并传递到实际 VLM／Embedding 客户端。模型配置章节仍只允许 ROOT 修改，空间管理员
 和普通成员不能通过配置接口指定费用归属。
 
-以下是 `ov.conf` 中 `server.observability.reporting` 的示例值。
+以下是 `ov.conf` 中 `server.observability.reporting` 的 Kafka 配置示例。
 
 ```json
 {
@@ -613,8 +613,19 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 }
 ```
 
-迁移时，将 Nacos 或外部 JSON 中的 `kafka` 和 `telemetry` 移到上述位置，再重启内核。
-`reporting` 中的字符串按字面值读取，Kafka 凭据应填入实际值。
+写入本地文件时，将示例中的 `kafka` 对象替换为以下 `file_log` 对象。
+
+```json
+{
+  "file_log": {
+    "path": "/var/log/metric_logs/metric.log",
+    "rotation_interval_hours": 1,
+    "backup_count": 168
+  }
+}
+```
+
+每行记录一个 JSON 事件。让日志采集器读取当前文件及轮转文件，修改配置后重启 OpenViking。
 
 ## 相关文档
 

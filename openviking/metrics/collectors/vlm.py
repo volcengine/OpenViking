@@ -55,7 +55,9 @@ class VLMCollector(EventMetricCollector):
     TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "tokens", unit="total")
     # rule: <METRICS_NAMESPACE>_<DOMAIN>_ingestion_tokens_total
     # e.g.: openviking_vlm_ingestion_tokens_total
-    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(DOMAIN, "ingestion_tokens", unit="total")
+    INGESTION_TOKENS_TOTAL: ClassVar[str] = MetricCollector.metric_name(
+        DOMAIN, "ingestion_tokens", unit="total"
+    )
 
     SUPPORTED_EVENTS: ClassVar[frozenset[str]] = frozenset({"vlm.call"})
 

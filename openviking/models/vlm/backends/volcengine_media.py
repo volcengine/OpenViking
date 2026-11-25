@@ -374,7 +374,9 @@ def _record_usage(
                 completion_tokens=getattr(usage, "output_tokens", None),
                 duration_seconds=duration_seconds,
                 prompt_cached_tokens=int(getattr(input_details, "cached_tokens", 0) or 0),
-                completion_reasoning_tokens=int(getattr(output_details, "reasoning_tokens", 0) or 0),
+                completion_reasoning_tokens=int(
+                    getattr(output_details, "reasoning_tokens", 0) or 0
+                ),
             )
     except Exception as error:
         _log_sanitized_exception("usage", error, logging.INFO)
