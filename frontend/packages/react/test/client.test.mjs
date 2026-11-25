@@ -3,101 +3,121 @@ import test from 'node:test';
 
 import { createOvClient, OV_PATHS } from '@openviking/react/client';
 
-/** 记录每次调用，并按 handler 返回预设响应。 */
-function fakeFetch(handler) {
-  const calls = [];
-  const impl = async (url, init) => {
-    calls.push({ url, init });
-    return handler(url, init);
-  };
-  impl.calls = calls;
-  return impl;
-}
-
-function json(body, init = {}) {
-  return new Response(JSON.stringify(body), {
-    status: init.status ?? 200,
-    headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
-  });
-}
-
-const ok = () => json({ status: 'ok', result: null });
-
-test('joins the gateway prefix with the API path', async () => {
-  const fetch = fakeFetch(() => json({ status: 'ok', result: [] }));
+test('joins the gateway prefix and applies per-request URL overrides', async () => {
+  const urls = [];
   const client = createOvClient({
     baseURL: 'https://ov.test/gateway/openviking',
-    fetch,
+    fetch: async (url) => {
+      urls.push(url);
+      return Response.json({ status: 'ok', result: [] });
+    },
   });
 
   await client.request({
     method: 'GET',
     path: OV_PATHS.fsLs,
-    query: { uri: 'viking://a' },
+    query: {
+      uri: 'viking://resources',
+      tags: ['x', 'y'],
+      include_tags: true,
+      node_limit: 5,
+      limit: undefined,
+      offset: null,
+    },
   });
-
-  assert.equal(
-    fetch.calls[0].url,
-    'https://ov.test/gateway/openviking/api/v1/fs/ls?uri=viking%3A%2F%2Fa',
-  );
-});
-
-test('identity fields become request headers', async () => {
-  const fetch = fakeFetch(ok);
-  const client = createOvClient({
-    baseURL: 'https://ov.test',
-    apiKey: 'sk-open-source',
-    accountId: 'acc_1',
-    userId: 'user_1',
-    resourceId: 'lib_1',
-    fetch,
-  });
-
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-
-  assert.deepEqual(fetch.calls[0].init.headers, {
-    'x-api-key': 'sk-open-source',
-    'x-openviking-account': 'acc_1',
-    'x-openviking-user': 'user_1',
-    'v-resource-id': 'lib_1',
-  });
-});
-
-test('an omitted identity field sends no header', async () => {
-  const fetch = fakeFetch(ok);
-  const client = createOvClient({
-    baseURL: 'https://ov.test',
-    accountId: 'acc_1',
-    userId: 'user_1',
-    resourceId: 'lib_1',
-    fetch,
-  });
-
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-
-  assert.deepEqual(fetch.calls[0].init.headers, {
-    'x-openviking-account': 'acc_1',
-    'x-openviking-user': 'user_1',
-    'v-resource-id': 'lib_1',
-  });
-});
-
-test('credentials default to include and can be restricted explicitly', async () => {
-  const fetch = fakeFetch(ok);
-
-  await createOvClient({ baseURL: 'https://ov.test', fetch }).request({
-    method: 'GET',
-    path: '/api/v1/x',
-  });
-  for (const credentials of ['same-origin', 'omit']) {
-    await createOvClient({
-      baseURL: 'https://ov.test',
-      credentials,
-      fetch,
-    }).request({ method: 'GET', path: '/api/v1/x' });
+  for (const baseURL of ['https://other.test', '']) {
+    await client.request({
+      method: 'GET',
+      path: OV_PATHS.fsLs,
+      options: { baseURL },
+    });
   }
 
-  assert.equal(fetch.calls[0].init.credentials, 'include');
-  assert.equal(fetch.calls[1].init.credentials, 'same-origin');
-  assert.equal(fetch.calls[2].init.credentials, 'omit');
+  assert.deepEqual(urls, [
+    'https://ov.test/gateway/openviking/api/v1/fs/ls?uri=viking%3A%2F%2Fresources&tags=x&tags=y&include_tags=true&node_limit=5',
+    'https://other.test/api/v1/fs/ls',
+    '/api/v1/fs/ls',
+  ]);
+});
+
+test('inherits, overrides, and clears identity per request with fresh credentials', async () => {
+  const requests = [];
+  let evaluations = 0;
+  const client = createOvClient({
+    baseURL: 'https://ov.test',
+    apiKey: () => `token-${++evaluations}`,
+    accountId: 'acc_1',
+    userId: 'user_1',
+    resourceId: 'lib_1',
+    fetch: async (_url, init) => {
+      requests.push(init.headers);
+      return Response.json({ status: 'ok', result: [] });
+    },
+  });
+
+  const list = { method: 'GET', path: OV_PATHS.fsLs };
+  await client.request(list);
+  await client.request({
+    ...list,
+    options: { accountId: 'acc_2', resourceId: 'lib_2' },
+  });
+  assert.equal(evaluations, 2);
+  await client.request({ ...list, options: { apiKey: '', accountId: '' } });
+
+  assert.deepEqual(requests, [
+    {
+      'x-api-key': 'token-1',
+      'x-openviking-account': 'acc_1',
+      'x-openviking-user': 'user_1',
+      'v-resource-id': 'lib_1',
+    },
+    {
+      'x-api-key': 'token-2',
+      'x-openviking-account': 'acc_2',
+      'x-openviking-user': 'user_1',
+      'v-resource-id': 'lib_2',
+    },
+    { 'x-openviking-user': 'user_1', 'v-resource-id': 'lib_1' },
+  ]);
+});
+
+test('uses browser credentials by default with no configured API key', async () => {
+  const credentials = [];
+  const fetch = async (_url, init) => {
+    assert.deepEqual(init.headers, { 'x-openviking-account': 'acc_1' });
+    credentials.push(init.credentials);
+    return Response.json({ status: 'ok', result: [] });
+  };
+
+  for (const configured of [undefined, 'same-origin', 'omit']) {
+    const client = createOvClient({
+      fetch,
+      credentials: configured,
+      accountId: 'acc_1',
+    });
+    await client.request({ method: 'GET', path: OV_PATHS.fsLs });
+  }
+  assert.deepEqual(credentials, ['include', 'same-origin', 'omit']);
+});
+
+test('creating a session sends JSON and listing sessions sends no body', async () => {
+  const requests = [];
+  const client = createOvClient({
+    fetch: async (_url, init) => {
+      requests.push(init);
+      return Response.json({ status: 'ok', result: null });
+    },
+  });
+
+  await client.request({
+    method: 'POST',
+    path: OV_PATHS.sessions,
+    body: { session_id: 'demo' },
+  });
+  await client.request({ method: 'GET', path: OV_PATHS.sessions });
+
+  assert.equal(requests[0].headers['content-type'], 'application/json');
+  assert.deepEqual(JSON.parse(requests[0].body), { session_id: 'demo' });
+  assert.equal(requests[1].headers['content-type'], undefined);
+  assert.equal(requests[1].body, undefined);
 });
