@@ -31,7 +31,10 @@ test('ecosystem runs the updater everywhere and preserves mixed-case Path', (t) 
     if (platform === 'win32') {
       assert.match(updater.env.OV_SUPERAGENT_UPDATER_SOCKET, /^\\\\\.\\pipe\\superagent-updater-[0-9a-f]{24}$/);
     } else {
-      assert.equal(updater.env.OV_SUPERAGENT_UPDATER_SOCKET, path.join(home, '.ov-superagent', 'updater.sock'));
+      // The POSIX implementation joins with path.posix, so the expectation must
+      // too when a POSIX platform is simulated on a Windows host.
+      assert.equal(updater.env.OV_SUPERAGENT_UPDATER_SOCKET,
+        path.posix.join(path.join(home, '.ov-superagent'), 'updater.sock'));
     }
     const daemon = apps.find(app => app.name === 'superagent-primary');
     if (platform === 'win32') assert.equal(daemon.env.PATH, 'inherited-path');
