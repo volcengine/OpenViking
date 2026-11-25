@@ -12,7 +12,7 @@ from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import AuthMode, RequestContext
+from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import UnauthenticatedError
@@ -225,11 +225,12 @@ async def wait_processed(
 ):
     """Wait for all processing to complete."""
     service = get_service()
-    result = (
-        await service.resources.wait_processed(ctx=ctx)
-        if request is not None and request.scope == "account"
-        else await service.resources.wait_processed()
-    )
+    if request is not None and request.scope == "account":
+        result = await service.resources.wait_processed(ctx=ctx)
+    else:
+        # The runtime status covers every tenant, so raw queue error messages may
+        # belong to someone else; only a root caller may see them.
+        result = await service.resources.wait_processed(redact_errors=ctx.role != Role.ROOT)
     return Response(status="ok", result=result)
 
 
