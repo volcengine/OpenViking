@@ -4,13 +4,16 @@
 """Tests for server infrastructure: health, system status, middleware, error handling."""
 
 import asyncio
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 
+from openviking.server.api_keys import generate_api_key
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.runtime import ServerRuntime
@@ -20,6 +23,7 @@ from openviking_cli.utils.config.open_viking_config import (
     OpenVikingConfig,
     OpenVikingConfigSingleton,
 )
+from tests.server.account_store_fakes import InMemoryAGFS
 
 
 async def test_health_endpoint(client: httpx.AsyncClient):
@@ -60,6 +64,67 @@ async def test_health_endpoint_checks_supplied_api_key_without_requiring_it(serv
                 "message": "Invalid API key format",
                 "details": {},
             }
+    finally:
+        await app.state.auth_plugin.shutdown()
+
+
+async def test_health_with_hashed_api_key_when_business_executor_is_busy(monkeypatch, tmp_path):
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", OpenVikingConfig.from_dict({}))
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        '{"server":{"auth_mode":"api_key","root_api_key":"test-root-key"},'
+        '"encryption":{"api_key_hashing":{"enabled":true}}}',
+        encoding="utf-8",
+    )
+    service = Mock(
+        spec=OpenVikingService,
+        viking_fs=SimpleNamespace(agfs=InMemoryAGFS(), acl_manager=None),
+    )
+    app = create_app(config_path=str(config_path), service=service)
+    await _initialize_auth_plugin(app, service, app.state.config)
+    try:
+        manager = app.state.api_key_manager
+        await manager.create_account("health-test", "owner")
+        key = await manager.register_user("health-test", "alice")
+
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        started = asyncio.Event()
+        release = threading.Event()
+
+        def occupy_business_worker():
+            loop.call_soon_threadsafe(started.set)
+            release.wait()
+
+        business_work = loop.run_in_executor(None, occupy_business_worker)
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2)
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                anonymous = await asyncio.wait_for(client.get("/health"), timeout=2)
+                assert anonymous.status_code == 200
+                assert anonymous.json()["healthy"] is True
+                try:
+                    response = await asyncio.wait_for(
+                        client.get("/health", headers={"X-API-Key": key}), timeout=2
+                    )
+                except asyncio.TimeoutError:
+                    pytest.fail("authenticated /health timed out with the business executor busy")
+                assert response.status_code == 200
+                assert response.json()["healthy"] is True
+                assert response.json()["user_id"] == "alice"
+                assert response.json()["role"] == "user"
+
+                wrong_key = generate_api_key("health-test", "alice")
+                rejected = await asyncio.wait_for(
+                    client.get("/health", headers={"X-API-Key": wrong_key}), timeout=2
+                )
+                assert rejected.status_code == 401
+                assert rejected.json()["error"]["code"] == "UNAUTHENTICATED"
+        finally:
+            release.set()
+            await business_work
     finally:
         await app.state.auth_plugin.shutdown()
 
