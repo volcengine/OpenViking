@@ -22,7 +22,7 @@ from openviking.pyagfs.exceptions import (
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.skill_history import reject_generic_skill_mutation
 from openviking_cli.exceptions import (
@@ -75,6 +75,8 @@ async def commit(
         if mapped is not None:
             raise mapped from e
         raise
+    if _ctx.role == Role.GLOBAL:
+        result = {key: value for key, value in result.items() if key not in ("changed", "ignored")}
     return Response(status="ok", result=result)
 
 
