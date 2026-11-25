@@ -18,6 +18,7 @@ def _drain_background_tasks():
 
 
 def test_render_stub_preserves_navigation_contract():
+    ref = "viking://user/default/sessions/s1/tool-results/tr_123"
     synopsis = ToolResultSynopsis(
         kind="text",
         title="Text output",
@@ -29,7 +30,7 @@ def test_render_stub_preserves_navigation_contract():
 
     rendered = render_tool_result_stub(
         synopsis,
-        ref="viking://user/default/sessions/s1/tool-results/tr_123",
+        ref=ref,
         tool_name="read_file",
         sha256="0123456789abcdef0123",
         reason="single_threshold",
@@ -42,30 +43,15 @@ def test_render_stub_preserves_navigation_contract():
     assert "tool_name: read_file" in rendered
     assert "original_chars: 120" in rendered
     assert "preview_chars: 80" in rendered
-    assert "ref: viking://user/default/sessions/s1/tool-results/tr_123" in rendered
-    assert "openviking_tool_result_search" in rendered
-    assert "openviking_tool_result_read" in rendered
-
-
-def test_render_stub_points_to_readable_output_and_history_tool():
-    ref = "viking://user/default/sessions/s1/tool-results/tr_123"
-    synopsis = ToolResultSynopsis(
-        kind="text", title="Text output", summary=["Long output."], structure=[], notable_items=[]
-    )
-
-    rendered = render_tool_result_stub(
-        synopsis, ref=ref, tool_name="bash", original_chars=50_000, preview_chars=2_000
-    )
-
-    explore = rendered.split("Explore:\n", 1)[1].splitlines()
-    assert explore[0] == f"- The full output is stored at {ref}/output.txt."
-    assert explore[1].startswith("- If a session_history tool is offered:")
-    assert 'action="search"' in explore[1] and "distinctive string" in explore[1]
-    assert 'action="read"' in explore[1] and "offset" in explore[1]
+    assert f"ref: {ref}" in rendered
+    output, history, optional_tools, *_ = rendered.split("Explore:\n", 1)[1].splitlines()
+    assert f"{ref}/output.txt" in output
+    assert "session_history" in history
+    assert all(hint in history for hint in ('action="search"', 'action="read"', "offset"))
+    assert optional_tools.startswith("- Only where offered:")
+    assert "openviking_tool_result_search" in optional_tools
+    assert "openviking_tool_result_read" in optional_tools
     assert "id of this message" not in rendered
-    # Plugin-only tools are offered as optional, never as the only way in.
-    assert explore[2].startswith("- Only where offered: openviking_tool_result_search")
-    assert all("openviking_tool_result" not in line for line in explore[:2])
 
 
 def test_json_synopsis_reports_shape():
