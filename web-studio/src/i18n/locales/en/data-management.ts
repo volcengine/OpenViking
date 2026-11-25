@@ -22,6 +22,7 @@ const dataManagement = {
   comparingVersions: 'Comparing versions...',
   selectDifferentVersions: 'Choose two different versions.',
   diffSection: 'Change section {{number}}',
+  diffNoFinalNewline: 'No newline at end of file',
   noChanges: 'No changes',
   invalidExport: 'The server returned an invalid OVPack export.',
   missingUploadId: 'The server did not return an upload ID.',

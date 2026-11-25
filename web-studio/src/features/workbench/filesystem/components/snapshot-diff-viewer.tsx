@@ -85,6 +85,11 @@ export function SnapshotDiffViewer({
                     </span>
                     <span className="min-w-0 flex-1 whitespace-pre-wrap break-all pl-3">
                       {row.oldText}
+                      {row.oldNoNewline && (
+                        <span className="block whitespace-normal break-normal font-sans text-muted-foreground">
+                          {t('diffNoFinalNewline')}
+                        </span>
+                      )}
                     </span>
                   </div>
                   <div
@@ -98,6 +103,11 @@ export function SnapshotDiffViewer({
                     </span>
                     <span className="min-w-0 flex-1 whitespace-pre-wrap break-all pl-3">
                       {row.newText}
+                      {row.newNoNewline && (
+                        <span className="block whitespace-normal break-normal font-sans text-muted-foreground">
+                          {t('diffNoFinalNewline')}
+                        </span>
+                      )}
                     </span>
                   </div>
                 </div>

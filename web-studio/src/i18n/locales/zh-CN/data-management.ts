@@ -21,6 +21,7 @@ const dataManagement = {
   comparingVersions: '正在比较版本…',
   selectDifferentVersions: '请选择两个不同的版本。',
   diffSection: '变更区块 {{number}}',
+  diffNoFinalNewline: '文件末尾没有换行',
   noChanges: '没有变化',
   invalidExport: '服务端返回了无效的 OVPack 导出文件。',
   missingUploadId: '服务端没有返回上传 ID。',
