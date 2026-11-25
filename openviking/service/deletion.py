@@ -334,7 +334,10 @@ class DeletionService:
             return None
 
         ctx = RequestContext(
-            user=UserIdentifier(account_id, user_id or SYSTEM_TASK_USER_ID), role=Role.ROOT
+            user=UserIdentifier(account_id, user_id or SYSTEM_TASK_USER_ID),
+            role=Role.ROOT,
+            # The matching deletion fence authorizes removal of all identity data.
+            frozen_files=(),
         )
         await tracker.start(task_id, **owner)
         try:

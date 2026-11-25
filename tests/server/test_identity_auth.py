@@ -92,6 +92,7 @@ async def test_key_identity_supplies_groups_to_both_contexts(runtime, groups, mo
 
     monkeypatch.setattr(runtime, "get_user_group_ids", redundant_read)
     monkeypatch.setattr(runtime, "get_deletion", redundant_read)
+    monkeypatch.setattr(runtime, "get_frozen_files", redundant_read)
     ctx = await get_request_context(request, identity, "peer", key, None)
     assert (ctx.user.user_id, ctx.role, ctx.group_ids) == ("bob", Role.USER, groups)
     assert ctx.actor_peer_id == "peer"

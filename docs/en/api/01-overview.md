@@ -557,6 +557,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | PATCH | `/api/v1/user-settings/add-locations` | Update current-user add locations (deprecated) |
 | DELETE | `/api/v1/user-settings/add-locations` | Clear current-user add-location overrides (deprecated) |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | Get membership in the account frozen file list; required query `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | Freeze or unfreeze a USER file |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change a user's role between USER and ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | Create a group |

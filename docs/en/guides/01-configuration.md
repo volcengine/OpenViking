@@ -2464,10 +2464,10 @@ deployment boundary when multiple OpenViking clusters share a database. Changing
 `service_name` selects a different logical account-store partition.
 
 The provider never creates or migrates database tables. Create the normalized
-tables in `openviking/server/account_stores/sql/init.sql` through your normal
-DBA or deployment process before starting the server. Future reviewed schema
-changes are stored as ordered SQL files in
-`openviking/server/account_stores/sql/changes/`. The five `ov_accounts*` table
+tables in `openviking/server/account_stores/sql/init.sql`, then apply the ordered
+migrations in `openviking/server/account_stores/sql/changes/` through your normal
+DBA or deployment process before starting the server. Existing databases apply
+only migrations not yet recorded by that process. The five `ov_accounts*` table
 names are fixed; use distinct top-level `service_name` values rather than
 separate table prefixes to isolate OpenViking clusters that share a database.
 
@@ -2493,8 +2493,10 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 For PostgreSQL Account Store, install `pip install 'openviking[postgres]'` and
 select the `postgres` provider. It connects through psycopg 3 and SQLAlchemy;
 Redis and pgvector are not required. Provision
-`openviking/server/account_stores/sql/postgres/init.sql` with your migration role
-before startup. The runtime never creates or migrates tables. Grant the runtime
+`openviking/server/account_stores/sql/postgres/init.sql`, then apply
+`openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql` with
+your migration role before startup. Existing databases apply this migration once.
+The runtime never creates or migrates tables. Grant the runtime
 role schema `USAGE`, `SELECT, INSERT, UPDATE, DELETE` on the five `ov_accounts*`
 tables, and `USAGE, SELECT` on their three primary-key sequences. Table ownership
 and schema `CREATE` are not required. A new deployment creates the `default`
