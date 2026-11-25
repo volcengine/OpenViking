@@ -14,6 +14,7 @@ from openviking.scheduling.expiry.redis_store import create_redis_client as crea
 from openviking.server.account_stores.file import FileStore
 from openviking.server.account_stores.redis_client import create_redis_client
 from openviking.server.config import AccountStoreConfig
+from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from tests.server.account_store_fakes import InMemoryAGFS
 
@@ -96,6 +97,15 @@ async def test_assembled_manager_supports_account_authentication(injected):
     await manager.load()
     try:
         key = await manager.create_account("acme", "alice")
-        assert (await manager.resolve_identity(key)).user_id == "alice"
+        identity = await manager.resolve_identity(key)
+        assert (identity.account_id, identity.user_id, identity.role) == (
+            "acme",
+            "alice",
+            Role.ADMIN,
+        )
+        if injected:
+            user = await account_store.get_user("acme", "alice")
+            assert user is not None
+            assert user["role"] == Role.ADMIN
     finally:
         await manager.close()

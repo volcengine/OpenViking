@@ -11,6 +11,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager, acl_allows, acl_filter
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.vectordb_adapters.opengauss_adapter import OpenGaussCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
@@ -647,10 +648,14 @@ def test_no_target_keeps_original_tenant_filter():
 
 
 @pytest.mark.asyncio
-async def test_tenant_search_preserves_raw_scope_across_decay_routes():
+@pytest.mark.parametrize("distributed", [False, True], ids=["standalone", "distributed"])
+async def test_tenant_search_preserves_raw_scope_across_decay_routes(distributed):
     backend = object.__new__(VikingVectorIndexBackend)
     backend.acl_manager = None
-    backend.search = AsyncMock(return_value=[])
+    adapter = object.__new__(OpenGaussCollectionAdapter)
+    adapter._distributed = distributed
+    account = SimpleNamespace(_adapter=adapter, query=AsyncMock())
+    backend._get_backend_for_context = AsyncMock(return_value=account)
     ctx = _ctx()
     raw_filter = {"op": "must", "field": "search_tags", "conds": ["team=search"]}
     options = {
@@ -672,22 +677,29 @@ async def test_tenant_search_preserves_raw_scope_across_decay_routes():
             In("level", [0, 1]),
         ]
     )
-    await backend.search_in_tenant(**options)
-    call = backend.search.await_args.kwargs
-    assert backend.search.await_count == 1
+    ordinary = [{"id": "ordinary", "_score": 0.7}]
+    account.query.return_value = ordinary
+    unmodified = await backend.search_in_tenant(**options)
+    call = account.query.await_args.kwargs
+    assert account.query.await_count == 1
     assert call["filter"] == scope
     assert (call["limit"], call["offset"]) == (1, 1)
     assert "advance" not in call
 
-    backend.search.reset_mock()
+    account.query.reset_mock()
     event = {"id": "event", "_score": 0.4, "_origin_score": 0.8, "_time_score": 0.5}
 
     async def recall(**kwargs):
-        return [event] if kwargs.get("advance") else [{"id": "ordinary", "_score": 0.7}]
+        return [event] if kwargs.get("advance") else ordinary
 
-    backend.search.side_effect = recall
-    result = await backend.search_in_tenant(**options, events_time_decay_protection="0")
-    calls = [call.kwargs for call in backend.search.await_args_list]
+    account.query.side_effect = recall
+    result = await backend.search_in_tenant(**options, events_time_decay_protection="30d")
+    if distributed:
+        account.query.assert_awaited_once_with(**call)
+        assert result == unmodified
+        return
+
+    calls = [call.kwargs for call in account.query.await_args_list]
     assert len(calls) == 2
     other = next(call for call in calls if "advance" not in call)
     events = next(call for call in calls if "advance" in call)

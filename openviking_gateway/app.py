@@ -124,7 +124,12 @@ def open_stores(config: GatewayConfig, encryptor, stats=None):
         close.push_async_callback(asyncio.to_thread, management.close)
     log, sink = stdout_log if config.request_log_sink == "stdout" else None, None
     if config.request_log_sink == "file":
-        sink = FileSink(config.request_log_path, config.request_log_max_bytes, stats)
+        sink = FileSink(
+            config.request_log_path,
+            config.request_log_rotation_interval_hours,
+            config.request_log_backup_count,
+            stats,
+        )
         close.callback(sink.close)
         log = sink.log
     return store, CachedManagement(management, log=log), close.aclose, sink

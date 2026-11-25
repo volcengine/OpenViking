@@ -60,26 +60,6 @@ def _log_telemetry_summary(snapshot: Optional[TelemetrySnapshot]) -> None:
     )
 
 
-def attach_telemetry_payload(
-    result: Any,
-    telemetry_payload: Optional[dict[str, Any]],
-) -> Any:
-    """Attach a telemetry payload to a dict result."""
-    if telemetry_payload is None:
-        return result
-
-    if result is None:
-        payload: dict[str, Any] = {}
-        payload["telemetry"] = telemetry_payload
-        return payload
-
-    if isinstance(result, dict):
-        result["telemetry"] = telemetry_payload
-        return result
-
-    return result
-
-
 # Try to import opentelemetry - will be None if not installed
 try:
     from opentelemetry import trace as otel_trace
@@ -117,7 +97,6 @@ def _fill_telemetry_summary_to_span(snapshot, span):
             span.add_event("telemetry_summary", attributes={"summary": str(snapshot.summary)})
     except Exception:
         logger.debug("failed to fill telemetry summary into span", exc_info=True)
-
 
 
 async def run_with_telemetry(
@@ -224,7 +203,6 @@ async def run_with_telemetry(
 
 __all__ = [
     "TelemetryExecutionResult",
-    "attach_telemetry_payload",
     "build_telemetry_payload",
     "parse_telemetry_selection",
     "run_with_telemetry",

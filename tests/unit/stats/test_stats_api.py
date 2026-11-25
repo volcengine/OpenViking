@@ -60,7 +60,7 @@ class TestGetMemoryStats:
     def test_invalid_category(self, client):
         """Unknown category returns an error."""
         response = client.get("/api/v1/stats/memories?category=bogus")
-        assert response.status_code == 200
+        assert response.status_code == 400
         data = response.json()
         assert data["status"] == "error"
         assert "INVALID_ARGUMENT" in data["error"]["code"]
@@ -100,7 +100,7 @@ class TestGetSessionStats:
         """Missing session returns NOT_FOUND error."""
         mock_service.sessions.get.side_effect = KeyError("nonexistent")
         response = client.get("/api/v1/stats/sessions/nonexistent")
-        assert response.status_code == 200
+        assert response.status_code == 404
         data = response.json()
         assert data["status"] == "error"
         assert data["error"]["code"] == "NOT_FOUND"
@@ -109,7 +109,7 @@ class TestGetSessionStats:
         """Unexpected exception returns INTERNAL_ERROR, not NOT_FOUND."""
         mock_service.sessions.get.side_effect = RuntimeError("db timeout")
         response = client.get("/api/v1/stats/sessions/some-session")
-        assert response.status_code == 200
+        assert response.status_code == 500
         data = response.json()
         assert data["status"] == "error"
         assert data["error"]["code"] == "INTERNAL_ERROR"

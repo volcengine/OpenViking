@@ -73,6 +73,8 @@ def test_postgres_stores_share_tls_rules_and_preserve_timezone(
     if utc:
         shared_options["connect_args"]["options"] = "-c timezone=UTC"
     assert options == shared_options
+    assert options["connect_args"]["sslmode"] == sslmode
+    assert options["connect_args"]["sslrootcert"] == "/ca.pem"
     # Store options must not leak into later shared calls.
     assert "options" not in postgres_connection_options(params)[1]["connect_args"]
 

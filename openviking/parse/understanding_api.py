@@ -210,6 +210,7 @@ class UnderstandingAPI(BaseParser):
                     url=url,
                     doc_type=doc_type,
                     lark_file=lark_file,
+                    parse_options=kwargs,
                 )
 
             if not prepared_response_id:
@@ -359,7 +360,8 @@ class UnderstandingAPI(BaseParser):
         response_obj = await self._create_response_for_url(
             url=source,
             doc_type=doc_type,
-            lark_file=lark_file if is_feishu_url else None,
+            lark_file=lark_file,
+            parse_options=kwargs,
         )
         response_id = response_obj.get("id")
         if not response_id:
@@ -555,6 +557,7 @@ class UnderstandingAPI(BaseParser):
         url: str,
         doc_type: str,
         lark_file: Optional[Dict[str, str]] = None,
+        parse_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if doc_type in self._video_exts:
             content: Dict[str, Any] = {"type": "input_video", "video_url": url}
@@ -566,11 +569,15 @@ class UnderstandingAPI(BaseParser):
             content = {"type": "input_file", "file_url": url}
         if lark_file:
             content["lark_file"] = dict(lark_file)
-        payload = {
+        payload: Dict[str, Any] = {
             "input": [{"role": "user", "content": [content]}],
             "tools": [{"type": "understanding"}],
             "store": True,
         }
+        if lark_file and parse_options:
+            for key in ("enable_nested_import", "nested_depth"):
+                if key in parse_options:
+                    payload[key] = parse_options[key]
         return await self._submit_response(payload)
 
     async def _submit_response(self, payload: Dict[str, Any]) -> Dict[str, Any]:

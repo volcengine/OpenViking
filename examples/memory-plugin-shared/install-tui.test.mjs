@@ -709,6 +709,8 @@ test("macOS detects DeepSeek Harness Desktop under ~/Applications and selects it
 
   const result = runInstallerPrelude(`
 HAVE_CURSOR=0
+HAVE_TRAE=0
+HAVE_TRAE_CN=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses

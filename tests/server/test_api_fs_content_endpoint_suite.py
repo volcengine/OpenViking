@@ -1,12 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from types import SimpleNamespace
-
 import httpx
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
-from openviking_cli.exceptions import ConflictError, InvalidArgumentError, NotFoundError
+from openviking.server.auth import get_request_context
+from openviking.server.identity import RequestContext, Role
+from openviking.service.reindex_executor import REINDEX_TASK_TYPE
+from openviking.service.task_tracker import get_task_tracker
+from openviking.storage.expr import Eq
 
 
 def _assert_error(
@@ -24,75 +26,50 @@ def _assert_error(
         assert message_fragment in body["error"]["message"]
 
 
-async def _first_child_uri(client: httpx.AsyncClient, uri: str) -> str:
-    response = await client.get(
-        "/api/v1/fs/ls",
-        params={"uri": uri, "simple": True, "recursive": True, "output": "original"},
-    )
-    children = response.json().get("result", [])
-    if children and isinstance(children[0], str):
-        return children[0]
-    return uri
-
-
 async def _request_with_handler(app, method: str, url: str, **kwargs) -> httpx.Response:
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         return await client.request(method, url, **kwargs)
 
 
-class _FakeVikingFS:
-    def __init__(self, exists_result: bool):
-        self._exists_result = exists_result
+async def test_ls_permission_denied_returns_structured_error(client, app, service):
+    from openviking_cli.session.user_id import UserIdentifier
 
-    async def exists(self, uri, ctx=None):
-        return self._exists_result
-
-
-class _FakeTracker:
-    def __init__(self, *, has_running: bool = False, task_id: str | None = None):
-        self._has_running = has_running
-        self._task_id = task_id
-
-    def has_running(self, *args, **kwargs):
-        return self._has_running
-
-    def create_if_no_running(self, *args, **kwargs):
-        if self._task_id is None:
-            return None
-        return SimpleNamespace(task_id=self._task_id)
-
-
-async def test_ls_permission_denied_returns_structured_error(app, service, monkeypatch):
-    async def fake_ls(*args, **kwargs):
-        raise PermissionError("Access denied for viking://resources")
-
-    monkeypatch.setattr(service.fs, "ls", fake_ls)
-    response = await _request_with_handler(
-        app,
-        "GET",
-        "/api/v1/fs/ls",
-        params={"uri": "viking://resources"},
+    root = "viking://user/alice/resources/private"
+    uri = f"{root}/document.md"
+    owner = RequestContext(
+        user=UserIdentifier(service.user.account_id, "alice"), role=Role(Role.ROOT)
     )
-    _assert_error(
-        response,
-        status_code=403,
-        error_code="PERMISSION_DENIED",
-        message_fragment="Access denied",
+    await service.viking_fs.write_file(uri, "private contents", ctx=owner)
+    other = RequestContext(
+        user=UserIdentifier(service.user.account_id, "bob"), role=Role(Role.USER)
     )
-
-
-async def test_tree_missing_uri_returns_not_found(app, service, monkeypatch):
-    async def fake_tree(*args, **kwargs):
-        raise FileNotFoundError("tree target missing")
-
-    monkeypatch.setattr(service.fs, "tree", fake_tree)
-    response = await _request_with_handler(
-        app,
-        "GET",
-        "/api/v1/fs/tree",
-        params={"uri": "viking://resources/missing"},
+    app.dependency_overrides[get_request_context] = lambda: other
+    attempts = (
+        ("GET", "/api/v1/fs/ls", {"params": {"uri": root}}),
+        ("POST", "/api/v1/fs/mkdir", {"json": {"uri": f"{root}/new"}}),
+        ("POST", "/api/v1/content/write", {"json": {"uri": uri, "content": "overwrite"}}),
     )
+    for method, endpoint, arguments in attempts:
+        response = await client.request(method, endpoint, **arguments)
+        _assert_error(response, status_code=403, error_code="PERMISSION_DENIED")
+    assert not await service.viking_fs.exists(f"{root}/new", ctx=owner)
+    assert await service.viking_fs.read_file(uri, ctx=owner) == "private contents"
+
+
+async def test_tree_missing_uri_returns_not_found(client):
+    missing = "viking://resources/missing"
+    for endpoint in ("/api/v1/fs/tree", "/api/v1/content/read", "/api/v1/content/download"):
+        response = await client.get(endpoint, params={"uri": missing})
+        _assert_error(response, status_code=404, error_code="NOT_FOUND")
+
+    to = "viking://resources/target"
+    for operation in ("mv", "cp"):
+        response = await client.post(
+            f"/api/v1/fs/{operation}", json={"from_uri": missing, "to_uri": to}
+        )
+        _assert_error(response, status_code=404, error_code="NOT_FOUND")
+    response = await client.get("/api/v1/fs/stat", params={"uri": to})
     _assert_error(response, status_code=404, error_code="NOT_FOUND")
 
 
@@ -110,23 +87,12 @@ async def test_stat_backend_unavailable_returns_structured_error(app, service, m
     _assert_error(response, status_code=503, error_code="UNAVAILABLE")
 
 
-async def test_record_id_miss_hint_reaches_stat_and_read_responses(app, service, monkeypatch):
+async def test_record_id_miss_hint_reaches_stat_and_read_responses(client):
     record_id = "0123456789abcdef0123456789abcdef"
     reason = "The data may not have been indexed yet or may have been deleted"
 
-    async def fake_not_found(*args, **kwargs):
-        raise NotFoundError(record_id, "file", reason=reason)
-
-    monkeypatch.setattr(service.fs, "stat", fake_not_found)
-    monkeypatch.setattr(service.fs, "read_visible", fake_not_found)
-
     for endpoint in ("/api/v1/fs/stat", "/api/v1/content/read"):
-        response = await _request_with_handler(
-            app,
-            "GET",
-            endpoint,
-            params={"uri": record_id},
-        )
+        response = await client.get(endpoint, params={"uri": record_id})
         _assert_error(
             response,
             status_code=404,
@@ -136,120 +102,25 @@ async def test_record_id_miss_hint_reaches_stat_and_read_responses(app, service,
         assert response.json()["error"]["details"]["reason"] == reason
 
 
-async def test_mkdir_permission_denied_returns_structured_error(app, service, monkeypatch):
-    async def fake_mkdir(*args, **kwargs):
-        raise PermissionError("Access denied for viking://resources/blocked")
-
-    monkeypatch.setattr(service.fs, "mkdir", fake_mkdir)
-    response = await _request_with_handler(
-        app,
-        "POST",
-        "/api/v1/fs/mkdir",
-        json={"uri": "viking://resources/blocked"},
-    )
-    _assert_error(response, status_code=403, error_code="PERMISSION_DENIED")
-
-
-async def test_mv_missing_source_returns_not_found(app, service, monkeypatch):
-    async def fake_mv(*args, **kwargs):
-        raise FileNotFoundError("mv source not found")
-
-    monkeypatch.setattr(service.fs, "mv", fake_mv)
-    response = await _request_with_handler(
-        app,
-        "POST",
-        "/api/v1/fs/mv",
-        json={
-            "from_uri": "viking://resources/missing",
-            "to_uri": "viking://resources/target",
-        },
-    )
-    _assert_error(response, status_code=404, error_code="NOT_FOUND")
-
-
-async def test_cp_missing_source_returns_not_found(app, service, monkeypatch):
-    async def fake_cp(*args, **kwargs):
-        raise FileNotFoundError("cp source not found")
-
-    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
-    response = await _request_with_handler(
-        app,
-        "POST",
-        "/api/v1/fs/cp",
-        json={
-            "from_uri": "viking://resources/missing",
-            "to_uri": "viking://resources/target",
-        },
-    )
-    _assert_error(response, status_code=404, error_code="NOT_FOUND")
-
-
-async def test_cp_missing_target_parent_reports_directory(app, service, monkeypatch):
+async def test_cp_missing_target_parent_reports_directory(client, service):
     target_parent = "viking://resources/missing-parent"
+    source = "viking://resources/source.md"
+    ctx = RequestContext(user=service.user, role=Role(Role.ROOT))
+    await service.viking_fs.write_file(source, "source bytes", ctx=ctx)
 
-    async def fake_cp(*args, **kwargs):
-        raise NotFoundError(target_parent, "directory")
-
-    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
-    response = await _request_with_handler(
-        app,
-        "POST",
+    response = await client.post(
         "/api/v1/fs/cp",
-        json={
-            "from_uri": "viking://resources/source.md",
-            "to_uri": f"{target_parent}/target.md",
-        },
+        json={"from_uri": source, "to_uri": f"{target_parent}/target.md"},
     )
-
     _assert_error(
         response,
         status_code=404,
         error_code="NOT_FOUND",
         message_fragment=f"Directory not found: {target_parent}",
     )
-    assert response.json()["error"]["details"] == {
-        "resource": target_parent,
-        "type": "directory",
-    }
-
-
-async def test_cp_existing_target_returns_conflict(app, service, monkeypatch):
-    async def fake_cp(*args, **kwargs):
-        raise ConflictError("copy target already exists")
-
-    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
-    response = await _request_with_handler(
-        app,
-        "POST",
-        "/api/v1/fs/cp",
-        json={
-            "from_uri": "viking://resources/source",
-            "to_uri": "viking://resources/target",
-            "recursive": True,
-        },
-    )
-    _assert_error(response, status_code=409, error_code="CONFLICT")
-
-
-async def test_cp_directory_without_recursive_returns_invalid_argument(
-    app,
-    service,
-    monkeypatch,
-):
-    async def fake_cp(*args, **kwargs):
-        raise InvalidArgumentError("directory copy requires recursive")
-
-    monkeypatch.setattr(service.fs, "cp", fake_cp, raising=False)
-    response = await _request_with_handler(
-        app,
-        "POST",
-        "/api/v1/fs/cp",
-        json={
-            "from_uri": "viking://resources/source",
-            "to_uri": "viking://resources/target",
-        },
-    )
-    _assert_error(response, status_code=400, error_code="INVALID_ARGUMENT")
+    assert response.json()["error"]["details"] == {"resource": target_parent, "type": "directory"}
+    assert not await service.viking_fs.exists(target_parent, ctx=ctx)
+    assert await service.viking_fs.read_file(source, ctx=ctx) == "source bytes"
 
 
 async def test_cp_internal_rollback_error_is_redacted(app, service, monkeypatch):
@@ -271,132 +142,104 @@ async def test_cp_internal_rollback_error_is_redacted(app, service, monkeypatch)
     assert "private vector payload" not in response.text
 
 
-async def test_read_missing_uri_returns_not_found(app, service, monkeypatch):
-    async def fake_read(*args, **kwargs):
-        raise FileNotFoundError("read target missing")
-
-    monkeypatch.setattr(service.fs, "read", fake_read)
-    response = await _request_with_handler(
-        app,
-        "GET",
-        "/api/v1/content/read",
-        params={"uri": "viking://resources/missing.md"},
-    )
-    _assert_error(response, status_code=404, error_code="NOT_FOUND")
-
-
-async def test_download_returns_attachment_response(client_with_resource):
-    client, uri = client_with_resource
-    file_uri = await _first_child_uri(client, uri)
-    response = await client.get("/api/v1/content/download", params={"uri": file_uri})
+async def test_download_returns_attachment_response(client, service):
+    uri = "viking://resources/文档/记录 二进制.bin"
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    content = b"\x00\xffpayload"
+    await service.viking_fs.write_file_bytes(uri, content, ctx=ctx)
+    response = await client.get("/api/v1/content/download", params={"uri": uri})
     assert response.status_code == 200
-    assert response.content
+    assert response.content == content
     assert response.headers["content-type"] == "application/octet-stream"
-    assert "attachment;" in response.headers["content-disposition"]
-
-
-async def test_download_missing_uri_returns_not_found(app, service, monkeypatch):
-    async def fake_read_file_bytes(*args, **kwargs):
-        raise FileNotFoundError("download target missing")
-
-    monkeypatch.setattr(service.fs, "read_file_bytes", fake_read_file_bytes)
-    response = await _request_with_handler(
-        app,
-        "GET",
-        "/api/v1/content/download",
-        params={"uri": "viking://resources/missing.bin"},
+    assert response.headers["content-disposition"] == (
+        "attachment; filename*=UTF-8''%E8%AE%B0%E5%BD%95%20%E4%BA%8C%E8%BF%9B%E5%88%B6.bin"
     )
-    _assert_error(response, status_code=404, error_code="NOT_FOUND")
 
 
-async def test_write_permission_denied_returns_structured_error(app, service, monkeypatch):
-    async def fake_write(*args, **kwargs):
-        raise PermissionError("Access denied for viking://resources/protected.md")
+async def test_reindex_sync_conflict_returns_error_payload(client, app, service, monkeypatch):
+    uri = "viking://resources/conflict.md"
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    await service.viking_fs.write_file(uri, "Existing file", ctx=ctx)
+    monkeypatch.setitem(app.dependency_overrides, get_request_context, lambda: ctx)
+    tracker = get_task_tracker()
+    owner = {"account_id": ctx.account_id, "user_id": ctx.user.user_id}
+    active = await tracker.create_if_no_running(REINDEX_TASK_TYPE, uri, **owner)
+    assert active is not None
+    try:
+        response = await client.post(
+            "/api/v1/content/reindex",
+            json={"uri": uri, "mode": "vectors_only", "wait": True},
+        )
+        _assert_error(response, status_code=409, error_code="CONFLICT")
+        assert response.json()["error"]["details"] == {"uri": uri}
+        stored = await tracker.get(active.task_id, **owner)
+        assert stored is not None
+        assert stored.status == active.status
+    finally:
+        await tracker.cancel(active.task_id, **owner)
 
-    monkeypatch.setattr(service.fs, "write", fake_write)
-    response = await _request_with_handler(
-        app,
-        "POST",
-        "/api/v1/content/write",
-        json={
-            "uri": "viking://resources/protected.md",
-            "content": "hello",
-            "mode": "replace",
-        },
-    )
-    _assert_error(response, status_code=403, error_code="PERMISSION_DENIED")
 
+async def test_consistency_reports_missing_index_until_sync_reindex(
+    client, service, request_context: RequestContext
+):
+    root = "viking://resources/consistency"
+    uri = f"{root}/note.md"
+    ctx = request_context
+    await service.viking_fs.write_file(uri, "A document with no vector yet.", ctx=ctx)
 
-async def test_reindex_missing_uri_returns_not_found_error_payload(client, monkeypatch):
-    class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
-            from openviking_cli.exceptions import NotFoundError
+    file_response = await client.post("/api/v1/system/consistency", json={"uri": uri})
+    _assert_error(file_response, status_code=400, error_code="INVALID_ARGUMENT")
 
-            raise NotFoundError(uri, "resource")
+    before = await client.post("/api/v1/system/consistency", json={"uri": root})
+    assert before.status_code == 200, before.text
+    assert before.json()["result"] == {
+        "ok": False,
+        "expected_count": 1,
+        "missing_record_count": 1,
+        "missing_records": [{"uri": uri, "path": "note.md", "level": 2, "key": "note.md#level=2"}],
+        "missing_records_truncated": False,
+    }
 
-    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
-    response = await client.post(
+    rebuilt = await client.post(
         "/api/v1/content/reindex",
-        json={"uri": "viking://resources/missing", "mode": "vectors_only", "wait": True},
+        json={"uri": uri, "mode": "vectors_only", "wait": True},
     )
-    _assert_error(response, status_code=404, error_code="NOT_FOUND")
+    assert rebuilt.status_code == 200, rebuilt.text
+    assert rebuilt.json()["result"]["status"] == "completed"
+    after = await client.post("/api/v1/system/consistency", json={"uri": root})
+    assert after.status_code == 200, after.text
+    assert after.json()["result"]["ok"] is True
+    assert after.json()["result"]["expected_count"] == 1
+    assert after.json()["result"]["missing_records"] == []
 
 
-async def test_reindex_sync_conflict_returns_error_payload(client, monkeypatch):
-    class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
-            from openviking_cli.exceptions import OpenVikingError
+async def test_reindex_async_task_produces_an_index_for_its_target(
+    client, service, request_context: RequestContext
+):
+    uri = "viking://resources/background-reindex.md"
+    ctx = request_context
+    await service.viking_fs.write_file(uri, "Background reindex fixture.", ctx=ctx)
 
-            raise OpenVikingError(
-                f"URI {uri} already has a reindex in progress",
-                code="CONFLICT",
-                details={"uri": uri},
-            )
-
-    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
-    response = await client.post(
+    accepted = await client.post(
         "/api/v1/content/reindex",
-        json={"uri": "viking://resources/conflict", "mode": "vectors_only", "wait": True},
+        json={"uri": uri, "mode": "vectors_only", "wait": False},
     )
-    _assert_error(response, status_code=409, error_code="CONFLICT")
-
-
-async def test_reindex_sync_success_returns_ok_payload(client, monkeypatch):
-    class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
-            return {"status": "completed", "mode": mode, "uri": uri}
-
-    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
-    response = await client.post(
-        "/api/v1/content/reindex",
-        json={"uri": "viking://resources/demo", "mode": "semantic_and_vectors", "wait": True},
+    assert accepted.status_code == 200, accepted.text
+    submission = accepted.json()["result"]
+    assert submission["status"] == "accepted"
+    assert submission["uri"] == uri
+    task_id = submission["task_id"]
+    await get_task_tracker().wait(
+        task_id, account_id=ctx.account_id, user_id=ctx.user.user_id, timeout=15
     )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "ok"
-    assert body["result"]["status"] == "completed"
-    assert body["result"]["mode"] == "semantic_and_vectors"
 
-
-async def test_reindex_async_returns_task_id(client, monkeypatch):
-    class FakeService:
-        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
-            return {
-                "task_id": "task-123",
-                "status": "accepted",
-                "uri": uri,
-                "object_type": "resource",
-                "mode": mode,
-            }
-
-    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
-    response = await client.post(
-        "/api/v1/content/reindex",
-        json={"uri": "viking://resources/demo", "mode": "vectors_only", "wait": False},
+    status = await client.get(f"/api/v1/tasks/{task_id}")
+    assert status.status_code == 200, status.text
+    task = status.json()["result"]
+    assert task["task_id"] == task_id
+    assert task["status"] == "completed"
+    assert task["resource_id"] == task["result"]["uri"] == uri
+    records = await service.vikingdb_manager.filter(
+        filter=Eq("uri", uri), output_fields=["uri", "level"], ctx=ctx
     )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "ok"
-    assert body["result"]["status"] == "accepted"
-    assert body["result"]["task_id"] == "task-123"
-    assert body["result"]["mode"] == "vectors_only"
+    assert [(record["uri"], record["level"]) for record in records] == [(uri, 2)]

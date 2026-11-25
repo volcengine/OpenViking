@@ -6,7 +6,14 @@ Give CodeBuddy Code long-term memory across projects and sessions. After install
 
 Prerequisites: macOS or Linux, Node.js 18+, and CodeBuddy Code with its `codebuddy` CLI on `PATH`. The installer guides you through the OpenViking connection settings; select **CodeBuddy Code** when it asks which agents to set up.
 
-When prompted for the connection, Volcengine Cloud users should select **Volcengine OpenViking Cloud** and enter their API key. Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`); for a remote self-hosted server, select **Custom URL / keep current** and enter its URL.
+For a managed connection, select **OpenViking Managed Service**, then:
+
+- **Volcengine:** enter your service API key. The installer supplies the URL.
+- **BytePlus:** enter your instance's full HTTPS service URL, then its API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older installers use **Custom URL** for BytePlus.
+
+Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`). For a remote self-hosted server, select **Custom URL** and enter its URL. If a connection is already saved, this option is named **Custom URL / keep current**.
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash

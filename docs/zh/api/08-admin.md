@@ -514,7 +514,7 @@ cuVS 调优和自定义适配器参数。
 本地模型路径、融合/视频参数和 `allow_metadata_override` 不在 Account API 范围内。
 每次更新都在持久化前联合校验有效 Embedding 和 VectorDB，失败保留原配置。
 
-显式 `embedding: {}` 是合法配置，表示未声明 Account 模型模式或运行策略。
+显式 `embedding: {}` 表示未声明 Account 模型模式或运行策略。
 作为 PATCH 提交时，`{}` 会与现有配置合并，不会清空已有值。未配置 Account
 模型模式时使用 Cluster 模型绑定。显式 Account VectorDB 配置会替换 Cluster
 的连接与鉴权字段，即使后端类型相同也不会拼接；仅支持 `http`、`volcengine`、
@@ -536,10 +536,11 @@ Feishu 时使用完整 Cluster 配置；一旦设置，`app_id`、`app_secret`�
 `request_timeout` 来自 Account 配置或 Feishu 默认值，只有 `domain` 仍由
 Cluster 管理。GitHub 和 ACL 不回退到 Cluster。
 
-VLM 业务解析器在 Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
+Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
 模型身份、服务端点和凭证仅来自 Account，部分运行参数按业务规则使用 Cluster
 配置。Account 设置 `timeout` 时覆盖 Cluster 的值，未设置或重置后使用 Cluster
-的值。Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
+的值。清除 Account VLM 时，Cluster VLM 必须有效。
+Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
 Cluster `query_planner`、Cluster `vlm`；这是 VLM 业务规则，不是配置框架的隐式继承。
 
 PATCH 会先做结构校验，再构造合并后的配置：未知路径和运行时配置面之外的字段会被拒绝。
@@ -1042,7 +1043,7 @@ DELETE /api/v1/user-settings/add-locations
 - 文件存储账户创建时，超过 255 个 UTF-8 字节的 `account_id` 会在写入账户注册表前返回 `INVALID_ARGUMENT`。新持久化的 user ID 在所有账户存储 Provider 中最多 255 个字符。trusted 模式会在加入自动注册队列前拒绝超长的新 user ID 和新建的超长账户，避免无效身份阻塞其他身份注册；已有的超长 File user 和 account 仍可读取。
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
-- `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
+- 创建要求 Account 配置或 Cluster 回退后有效的 VLM、Embedding、VectorDB。校验不发送模型请求或申请远端资源，失败不会留下 Account、用户或配置文件。
 - Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
 - `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。

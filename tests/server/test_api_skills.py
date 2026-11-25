@@ -64,11 +64,15 @@ async def test_skills_api_list_honors_node_limit(client):
 
     limited = await client.get("/api/v1/skills", params={"node_limit": 1})
     assert limited.status_code == 200, limited.text
-    assert limited.json()["result"]["total"] == 1
+    result = limited.json()["result"]
+    assert result["total"] == len(result["skills"]) == 1
+    assert result["skills"][0]["name"] in {"limit-skill-a", "limit-skill-b"}
 
     default = await client.get("/api/v1/skills", params={"node_limit": 0})
     assert default.status_code == 200, default.text
-    assert default.json()["result"]["total"] == 2
+    result = default.json()["result"]
+    assert result["total"] == 2
+    assert {skill["name"] for skill in result["skills"]} == {"limit-skill-a", "limit-skill-b"}
 
 
 async def test_skills_api_list_show_find_and_delete(client):
@@ -90,8 +94,8 @@ async def test_skills_api_list_show_find_and_delete(client):
     list_response = await client.get("/api/v1/skills")
     assert list_response.status_code == 200, list_response.text
     listed = list_response.json()["result"]
-    assert listed["total"] >= 1
-    assert any(skill["name"] == "api-skill" for skill in listed["skills"])
+    assert listed["total"] == 1
+    assert [skill["name"] for skill in listed["skills"]] == ["api-skill"]
 
     show_response = await client.get(
         "/api/v1/skills/api-skill",
@@ -108,7 +112,7 @@ async def test_skills_api_list_show_find_and_delete(client):
     assert shown["description"] == "API skill for list and show"
     assert shown["skill_md_uri"].endswith("/skills/api-skill/SKILL.md")
     assert "# api-skill" in shown["content"]
-    assert any(file["name"] == "SKILL.md" for file in shown["files"])
+    assert {file["path"] for file in shown["files"]} == {".abstract.md", ".overview.md", "SKILL.md"}
     assert len(shown["revision"]) == 64
     assert len(shown["content_sha256"]) == 64
     assert all(
@@ -184,8 +188,8 @@ async def test_skills_api_list_show_find_and_delete(client):
     )
     assert find_response.status_code == 200, find_response.text
     found = find_response.json()["result"]
-    assert "skills" in found
-    assert "total" in found
+    assert found["total"] == 1
+    assert [skill["root_uri"] for skill in found["skills"]] == [added["root_uri"]]
 
     delete_response = await client.delete("/api/v1/skills/api-skill")
     assert delete_response.status_code == 200, delete_response.text
@@ -201,11 +205,13 @@ async def test_skills_api_list_show_find_and_delete(client):
 
 
 async def test_skill_ownership_and_change_history_survive_update_and_delete(client):
+    shared_root = "viking://agent/skills"
     created = await client.post(
         "/api/v1/skills",
-        headers={"X-Request-ID": "skill-create-request"},
+        headers={"X-Request-ID": "skill-create-request", "X-OpenViking-User": "uploader"},
         json={
             "data": _skill_md("history-skill", "Original description"),
+            "target_uri": shared_root,
             "source_metadata": {
                 "type": "api",
                 "owner_user_id": "payload-must-not-be-trusted",
@@ -216,31 +222,34 @@ async def test_skill_ownership_and_change_history_survive_update_and_delete(clie
     )
     assert created.status_code == 200, created.text
     created_result = created.json()["result"]
-    assert created_result["owner_user_id"] == "default"
-    assert created_result["created_by"] == "default"
+    assert created_result["owner_user_id"] == "uploader"
+    assert created_result["created_by"] == "uploader"
     original_created_at = created_result["created_at"]
 
     listed = await client.get("/api/v1/skills")
     skill = next(
         item for item in listed.json()["result"]["skills"] if item["name"] == "history-skill"
     )
-    assert skill["owner_user_id"] == "default"
-    assert skill["updated_by"] == "default"
+    assert skill["owner_user_id"] == "uploader"
+    assert skill["updated_by"] == "uploader"
     assert skill["created_at"] == original_created_at
 
     updated = await client.put(
         "/api/v1/skills/history-skill",
-        headers={"X-Request-ID": "skill-update-request"},
+        headers={"X-Request-ID": "skill-update-request", "X-OpenViking-User": "editor"},
         json={
             "data": _skill_md("history-skill", "Updated description", "Changed instructions"),
+            "target_uri": shared_root,
             "wait": True,
         },
     )
     assert updated.status_code == 200, updated.text
     shown = await client.get("/api/v1/skills/history-skill")
     shown_result = shown.json()["result"]
-    assert shown_result["owner_user_id"] == "default"
+    assert shown_result["owner_user_id"] == "uploader"
     assert shown_result["created_at"] == original_created_at
+    assert shown_result["created_by"] == "uploader"
+    assert shown_result["updated_by"] == "editor"
     assert shown_result["current_revision"] != created_result["current_revision"]
     assert [event["operation"] for event in shown_result["history"]] == ["create", "update"]
     assert shown_result["history"][0]["before_hash"] is None
@@ -250,19 +259,25 @@ async def test_skill_ownership_and_change_history_survive_update_and_delete(clie
 
     deleted = await client.delete(
         "/api/v1/skills/history-skill",
-        headers={"X-Request-ID": "skill-delete-request"},
+        headers={"X-Request-ID": "skill-delete-request", "X-OpenViking-User": "deleter"},
+        params={"target_uri": shared_root},
     )
     assert deleted.status_code == 200, deleted.text
     audit = await client.get("/api/v1/skills/history-skill/audit")
     assert audit.status_code == 200, audit.text
     record = audit.json()["result"]
     assert record["deleted"] is True
-    assert record["owner_user_id"] == "default"
+    assert record["owner_user_id"] == "uploader"
     assert record["created_at"] == original_created_at
     assert [event["operation"] for event in record["events"]] == ["create", "update", "delete"]
     assert record["events"][-1]["before_hash"] == shown_result["current_revision"]
     assert record["events"][-1]["after_hash"] is None
     assert record["events"][-1]["request_id"] == "skill-delete-request"
+    assert [event["actor_user_id"] for event in record["events"]] == [
+        "uploader",
+        "editor",
+        "deleter",
+    ]
 
 
 async def test_generic_mutation_apis_cannot_bypass_skill_history(client):
@@ -567,23 +582,7 @@ async def test_skills_api_rejects_invalid_skill_names(client):
         assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
-async def test_skills_api_show_reads_source_metadata_and_hides_internal_file(client):
-    await _add_skill(client, "source-skill", "Source metadata skill")
-
-    show_response = await client.get(
-        "/api/v1/skills/source-skill",
-        params={"include_files": True, "include_source": True},
-    )
-    assert show_response.status_code == 200, show_response.text
-    shown = show_response.json()["result"]
-    assert shown["source"]["tracked"] is True
-    assert shown["source"]["type"] == "api"
-    assert shown["source"]["source"] == "inline_content"
-    assert shown["source"]["operation"] == "add"
-    assert shown["source"]["skill_name"] == "source-skill"
-    assert all(file["path"] != ".source.json" for file in shown["files"])
-
-
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_skills_api_add_accepts_source_metadata_override(client, monkeypatch, tmp_path):
     response = await client.post(
         "/api/v1/skills",

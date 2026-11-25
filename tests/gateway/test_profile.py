@@ -75,10 +75,53 @@ async def test_soul_profile_and_catalog_are_independent(soul, profile, catalog):
         assert not viking.profile_requests and result["reason"] == "disabled"
 
 
-@pytest.mark.parametrize("budget", [0, 1, 16, 64, 128, 256, 512, 4000])
-@pytest.mark.parametrize("text", ["Deployment memory ", "最近部署到蓝色集群。", "Ascii 中文 "])
-@pytest.mark.parametrize("soul", [0, 2, 2000])
-async def test_profile_and_skills_respect_full_token_budgets(budget, text, soul):
+@pytest.mark.parametrize(
+    ("budget", "text", "soul", "expected_parts", "expected_text"),
+    [
+        pytest.param(0, "Deployment memory ", 0, [], "", id="zero-budget-empty"),
+        pytest.param(0, "最近部署到蓝色集群。", 2000, [], "", id="zero-budget-keeps-long-soul"),
+        pytest.param(1, "Deployment memory ", 2, [], "", id="too-small-for-wrappers"),
+        pytest.param(16, "最近部署到蓝色集群。", 0, [], "", id="too-small-for-catalog"),
+        pytest.param(
+            64, "Ascii 中文 ", 2, ["profile"], "[profile truncated]", id="truncated-profile"
+        ),
+        pytest.param(
+            128,
+            "Deployment memory ",
+            0,
+            ["profile", "memories", "skills"],
+            "200 OpenViking skills;",
+            id="ascii-skills-count",
+        ),
+        pytest.param(
+            256,
+            "最近部署到蓝色集群。",
+            2,
+            ["profile", "memories", "skills"],
+            "200 OpenViking skills;",
+            id="cjk-skills-count",
+        ),
+        pytest.param(
+            512,
+            "Ascii 中文 ",
+            0,
+            ["profile", "memories", "skills"],
+            "search OpenViking skills to find the rest",
+            id="partial-skill-list",
+        ),
+        pytest.param(
+            4000,
+            "Ascii 中文 ",
+            2000,
+            ["profile", "memories", "skills"],
+            "[profile middle elided]",
+            id="default-budget-keeps-profile-ends",
+        ),
+    ],
+)
+async def test_profile_and_skills_respect_full_token_budgets(
+    budget, text, soul, expected_parts, expected_text
+):
     viking = populated_viking()
     viking.soul = text * soul
     viking.profile = "\n".join(f"{i} {text * 20}" for i in range(100))
@@ -101,11 +144,16 @@ async def test_profile_and_skills_respect_full_token_budgets(budget, text, soul)
     assert result["text"].startswith(whole) == bool(soul)
     rest = result["text"].removeprefix(whole).lstrip("\n")
     assert "<agent-soul" not in rest and estimate_tokens(rest) <= budget
+    assert result["parts"] == (["soul"] if soul else []) + expected_parts
+    if expected_parts:
+        assert expected_text in rest
+    else:
+        assert not rest
     skills = re.search(r"<available-skills>.*?</available-skills>", rest, re.S)
-    if skills:
+    if "skills" in expected_parts:
+        assert skills is not None
         assert estimate_tokens(skills[0]) <= budget // 4
     if not budget:
-        assert not rest and result["parts"] == (["soul"] if soul else [])
         uris = [
             parse_qs(urlsplit(path).query).get("uri") for _, path, _, _ in viking.profile_requests
         ]

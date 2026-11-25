@@ -74,6 +74,8 @@ async def test_failed_skill_files_do_not_break_global_wait_or_followup_work(
         json={"temp_file_id": uploaded.json()["result"]["temp_file_id"], "wait": True},
     )
     assert added.status_code == 200, added.text
+    root = added.json()["result"]["root_uri"]
+    assert await _download(client, f"{root}/healthy.md") == b"# A healthy resource\nContent.\n"
 
     after = await _assert_failed_package_settled(client, failed_paths)
     assert after.processed > before.processed

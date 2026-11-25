@@ -617,8 +617,8 @@ version, text source and input token limit are create-only. Provider fields outs
 fusion/video settings and metadata override are not on the Account API surface.
 Every change validates the effective Embedding/VectorDB pair before persistence.
 
-An explicit `embedding: {}` is valid and declares no Account model mode or runtime
-policy. As a PATCH, `{}` merges with existing settings and does not clear them.
+An explicit `embedding: {}` declares no Account model mode or runtime policy.
+As a PATCH, `{}` merges with existing settings and does not clear them.
 When no Account model mode is configured, Cluster model bindings are used.
 An explicit Account VectorDB connection replaces Cluster connection and
 authentication fields even when the backend type is unchanged; only remote
@@ -645,6 +645,7 @@ Account section or their Feishu defaults; only `domain` remains Cluster-owned.
 GitHub and ACL have no Cluster fallback.
 
 VLM business resolution uses Cluster VLM when an Account has no VLM section.
+Removing the Account VLM section requires a valid Cluster VLM.
 Once the Account section exists, its model-service identity fields come
 exclusively from Account settings, while selected runtime behavior is composed
 with Cluster settings. Account `timeout` overrides Cluster `timeout` when set;
@@ -1204,7 +1205,7 @@ Create a new workspace with its first admin user.
 - File-backed account creation rejects an `account_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the account registry. Newly persisted user IDs are limited to 255 characters across account-store providers. Trusted mode rejects an oversized new user or a new oversized account before enqueueing auto-registration, so invalid identities cannot block other identities from registering. Existing oversized File users and accounts remain readable.
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
-- `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
+- Creation requires valid effective VLM, Embedding, and VectorDB settings, using Account values or Cluster fallback. Validation checks configuration without model requests or remote provisioning; failure leaves no Account, user, or configuration file.
 - Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
 - `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
