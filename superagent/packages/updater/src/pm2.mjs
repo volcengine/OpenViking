@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 // stop, status). Starting an app from the installed release never fetches or
 // publishes anything; that is the updater's job alone.
 
+import { diagnoseAppFailure, readAppLogTail } from './app-failure.mjs';
 import { SHARED_WEB } from './targets.mjs';
 
 const require = createRequire(import.meta.url);
@@ -127,15 +128,38 @@ export async function verifyPm2App({
       Number.isInteger(state.unstable_restarts) ? `unstable_restarts=${state.unstable_restarts}` : null,
       state.pm_err_log_path ? `error_log=${state.pm_err_log_path}` : null,
     ].filter(Boolean).join(', ');
-    const message = `${app} is not online (${details})`;
-    if (TRANSITIONAL_PM2_STATES.has(state.status)) throw retryablePm2Error(message);
-    throw new Error(message);
+    const error = await notOnlineError(app, details, state);
+    if (TRANSITIONAL_PM2_STATES.has(state.status)) {
+      // Still changing: the log is read once, at the end of the wait, instead
+      // of on every poll.
+      error.retryablePm2State = true;
+      throw error;
+    }
+    throw await attachDiagnosis(error, state);
   }
   const execPath = await realpath(processInfo.pm2_env?.pm_exec_path || '');
   if (!isInside(release, execPath)) {
     throw new Error(`${app} is running outside the current release`);
   }
   return processInfo;
+}
+
+// The cause comes from the app's error log; the pm2 fields alone only say that
+// something failed. The technical message keeps the pm2 fields and gains the
+// log's own words; `diagnosis` is what lets the CLI word it for a person.
+async function attachDiagnosis(error, state) {
+  const diagnosis = diagnoseAppFailure({ state, tail: await readAppLogTail(state.pm_err_log_path) });
+  if (!diagnosis) return error;
+  error.diagnosis = diagnosis;
+  if (diagnosis.detail) error.message = `${error.message}: ${diagnosis.detail}`;
+  return error;
+}
+
+async function notOnlineError(app, details, state) {
+  const error = new Error(`${app} is not online (${details})`);
+  // Kept for the retry in waitUntilOnline and for the CLI.
+  error.pm2State = state;
+  return error;
 }
 
 // PM2 can answer `start` while a process is still in one-launch-status. A
@@ -166,6 +190,9 @@ export async function waitUntilOnline(options, {
       if (sleepMs > 0) await new Promise((resolve) => setTimeout(resolve, sleepMs));
     }
   }
+  // A crash loop stays in a transitional state, so this is where its reason is
+  // read: "waiting restart, exit_code=1" alone never says why.
+  if (lastError?.retryablePm2State && lastError.pm2State) throw await attachDiagnosis(lastError, lastError.pm2State);
   throw lastError;
 }
 
@@ -175,6 +202,21 @@ export async function pm2Processes({ pm2Bin, execFileImpl, pm2Env }) {
     env: pm2Env,
   });
   return parseJlist(result?.stdout);
+}
+
+// An app that is online but never answers /ready is a different failure from
+// one that keeps exiting. For the latter, the log tail says why; for the
+// former this returns null and the caller keeps its readiness error.
+export async function diagnoseStoppedApp(app, { pm2Bin, execFileImpl, pm2Env }) {
+  let processes;
+  try {
+    processes = await pm2Processes({ pm2Bin, execFileImpl, pm2Env: appControlEnv(app, pm2Env) });
+  } catch {
+    return null;
+  }
+  const state = processes.find((processInfo) => processInfo?.name === app)?.pm2_env;
+  if (!state || state.status === 'online') return null;
+  return diagnoseAppFailure({ state, tail: await readAppLogTail(state.pm_err_log_path) });
 }
 
 // The Web never sees Ark credentials, even when an older release's ecosystem

@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 export { spawn, execFile } from 'node:child_process';
+export const isWindows = false;
 export const spawnDetached = true;
 export const processOptions = Object.freeze({});
 export function normalizeEnvironment(env = process.env) { return env; }
