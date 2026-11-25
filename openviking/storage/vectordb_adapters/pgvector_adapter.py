@@ -14,8 +14,6 @@ import math
 import os
 import re
 import threading
-import time
-from collections import OrderedDict
 
 from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.collection.collection import Collection
@@ -45,11 +43,6 @@ logger = get_logger(__name__)
 
 class PgvectorCollection(OpenGaussCollection):
     """SQL collection with flat or native pgvector HNSW dense search."""
-
-    def __init__(self, *args, **kwargs):
-        self._filter_probe_admission = OrderedDict()
-        self._filter_probe_admission_lock = threading.Lock()
-        super().__init__(*args, **kwargs)
 
     def _normalized_index_meta(self, index_name, meta_data):
         meta = dict(meta_data)
@@ -200,23 +193,10 @@ class PgvectorCollection(OpenGaussCollection):
             [*filter_params, *filter_params],
         )
 
-    def _uses_filter_exact_routing(self, index_name, where):
-        return (
-            bool(where)
-            and self._indexes[index_name]["_pg_index_type"] == "hnsw"
-            and self._retrieval_config.get("filter_exact_threshold", 1000) > 0
-        )
-
-    def _native_dense_candidate_query(
-        self, index_name, where, filter_params, vector_text, op, budget
-    ):
+    def _dense_candidate_query(self, index_name, where, filter_params, vector_text, op, budget):
         if op != "<=>":
-            predicate, params = self._dense_filter_clause(op, where, filter_params)
-            return (
-                f'SELECT "id" AS _ov_candidate_id FROM public.{_quote_identifier(self._name)} '
-                f"WHERE {predicate} "
-                f'ORDER BY "vector" {op} %s::vector LIMIT %s',
-                [*params, vector_text, budget],
+            return super()._dense_candidate_query(
+                index_name, where, filter_params, vector_text, op, budget
             )
         # PostgreSQL sorts NaN after finite distances in ascending order. Cosine
         # zero vectors therefore cannot displace any eligible top-budget row.
@@ -232,107 +212,6 @@ class PgvectorCollection(OpenGaussCollection):
             "WHERE _ov_distance <> 'NaN'::double precision",
             [vector_text, *filter_params, budget],
         )
-
-    @staticmethod
-    def _plan_nodes(plan):
-        yield plan
-        for child in plan.get("Plans", []):
-            yield from PgvectorCollection._plan_nodes(child)
-
-    def _admit_filter_probe(self, index_name, where, filter_params, vector_text, op, budget):
-        """Estimates admit work only; the statement's actual count selects the branch."""
-        if not self._uses_filter_exact_routing(index_name, where):
-            return False
-        threshold = self._retrieval_config.get("filter_exact_threshold", 1000)
-        key = (index_name, where, repr(filter_params), op, budget, threshold)
-        # Cache only admission, never candidate ids/counts. Bound memory and
-        # re-plan after 30s so ANALYZE and administrator-added indexes take effect.
-        with self._filter_probe_admission_lock:
-            now = time.monotonic()
-            cached = self._filter_probe_admission.get(key)
-            if cached and now - cached[0] < 30:
-                self._filter_probe_admission.move_to_end(key)
-                return cached[1]
-        # Planning can wait on database resources. Keep it outside the cache
-        # lock so unrelated filters, including cache hits, can query independently.
-        table = f"public.{_quote_identifier(self._name)}"
-        _, rows = self._query_rows(
-            f'EXPLAIN (FORMAT JSON) SELECT "id" FROM {table} WHERE {where} LIMIT %s',
-            [*filter_params, threshold + 1],
-            index_name,
-        )
-        probe = rows[0][0][0]["Plan"]
-        nodes = list(self._plan_nodes(probe))
-        scans = [n for n in nodes if n.get("Index Name")]
-        admitted = (
-            bool(scans)
-            and not any(n["Node Type"] in {"Seq Scan", "Parallel Seq Scan"} for n in nodes)
-            and all(n.get("Index Cond") for n in scans)
-            and sum(n.get("Plan Rows", threshold + 1) for n in scans) <= threshold + 1
-        )
-        if admitted:
-            native_sql, native_params = self._native_dense_candidate_query(
-                index_name, where, filter_params, vector_text, op, budget
-            )
-            _, rows = self._query_rows(
-                "EXPLAIN (FORMAT JSON) " + native_sql, native_params, index_name
-            )
-            native = rows[0][0][0]["Plan"]
-            ann_name = self._indexes[index_name]["_pg_index_name"]
-            admitted = (
-                any(n.get("Index Name") == ann_name for n in self._plan_nodes(native))
-                and probe["Total Cost"] <= native["Total Cost"] * 0.25
-            )
-        with self._filter_probe_admission_lock:
-            # Start the TTL after planning finishes, rather than charging its
-            # wait time against the usable lifetime of this decision.
-            self._filter_probe_admission[key] = (time.monotonic(), admitted)
-            self._filter_probe_admission.move_to_end(key)
-            while len(self._filter_probe_admission) > 128:
-                self._filter_probe_admission.popitem(last=False)
-            return admitted
-
-    def _dense_candidate_query(self, index_name, where, filter_params, vector_text, op, budget):
-        if not self._admit_filter_probe(index_name, where, filter_params, vector_text, op, budget):
-            return self._native_dense_candidate_query(
-                index_name, where, filter_params, vector_text, op, budget
-            )
-        threshold = self._retrieval_config.get("filter_exact_threshold", 1000)
-        # Connections fix search_path to public. Qualify the table so a
-        # collection named like one of the CTEs cannot shadow the base table.
-        table = f"public.{_quote_identifier(self._name)}"
-        ann_sql, ann_params = self._native_dense_candidate_query(
-            index_name,
-            f"({where}) AND (SELECT n FROM _ov_filter_size) > %s",
-            [*filter_params, threshold],
-            vector_text,
-            op,
-            budget,
-        )
-        # Retain ids only in the probe, then fetch vectors for exact ranking
-        # after the bounded count proves the entire filtered set fits. The
-        # materialization barrier prevents HNSW from serving the exact branch.
-        # Both branches and the probe share the surrounding statement snapshot.
-        sql = (
-            f'WITH _ov_filter_probe AS MATERIALIZED (SELECT "id" FROM {table} '
-            f"WHERE ({where}) LIMIT %s), "
-            "_ov_filter_size AS MATERIALIZED (SELECT COUNT(*) AS n FROM _ov_filter_probe), "
-            f'_ov_exact_vectors AS MATERIALIZED (SELECT "id", "vector" FROM {table} '
-            'WHERE "id" IN (SELECT "id" FROM _ov_filter_probe) '
-            "AND (SELECT n FROM _ov_filter_size) <= %s) "
-            '(SELECT "id" AS _ov_candidate_id FROM _ov_exact_vectors '
-            f"WHERE {self._dense_vector_guard(op)} "
-            f'ORDER BY "vector" {op} %s::vector, "id" LIMIT %s) UNION ALL '
-            f"({ann_sql})"
-        )
-        return sql, [
-            *filter_params,
-            threshold + 1,
-            threshold,
-            vector_text,
-            budget,
-            *ann_params,
-        ]
 
     def search_by_vector(
         self,
@@ -370,33 +249,14 @@ class PgvectorCollection(OpenGaussCollection):
         where, params = _build_where_clause(
             self._normalize_filter_date_times(filters), self._array_fields
         )
-        if self._admit_filter_probe(index_name, where, params, vector_text, op, limit + offset):
-            candidate_sql, candidate_params = self._dense_candidate_query(
-                index_name, where, params, vector_text, op, limit + offset
-            )
-            # Re-rank only recalled ids for deterministic pagination. Adding
-            # zero keeps this outer sort from choosing another HNSW scan.
-            sql = (
-                f"SELECT {self._select_output_columns(output_fields)}, "
-                f"vector {op} %s::vector AS _ov_distance "
-                f"FROM {_quote_identifier(self._name)} "
-                f'WHERE "id" IN ({candidate_sql}) '
-                f"ORDER BY (vector {op} %s::vector) + 0, id LIMIT %s OFFSET %s"
-            )
-            query_params = [vector_text, *candidate_params, vector_text, limit, offset]
-        else:
-            condition = f"({where}) AND " if where else ""
-            sql = (
-                f"SELECT {self._select_output_columns(output_fields)}, "
-                f"vector {op} %s::vector AS _ov_distance "
-                f"FROM {_quote_identifier(self._name)} "
-                f'WHERE {condition}"vector" IS NOT NULL '
-                f"ORDER BY vector {op} %s::vector, id LIMIT %s OFFSET %s"
-            )
-            query_params = [vector_text, *params, vector_text, limit, offset]
+        condition = f"({where}) AND " if where else ""
         columns, rows = self._query_rows(
-            sql,
-            query_params,
+            f"SELECT {self._select_output_columns(output_fields)}, "
+            f"vector {op} %s::vector AS _ov_distance "
+            f"FROM {_quote_identifier(self._name)} "
+            f'WHERE {condition}"vector" IS NOT NULL '
+            f"ORDER BY vector {op} %s::vector, id LIMIT %s OFFSET %s",
+            [vector_text, *params, vector_text, limit, offset],
             index_name,
         )
         items = []
@@ -441,10 +301,7 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
         self._search_params = {"ef_search": config.ef_search}
         self._maintenance_work_mem_mb = 64
         self._parallel_workers = 0
-        self._retrieval_config = {
-            "candidate_limit": config.candidate_limit,
-            "filter_exact_threshold": config.filter_exact_threshold,
-        }
+        self._retrieval_config = {"candidate_limit": config.candidate_limit}
         self._sparse_weight = 0.0
         self._load_lock = threading.RLock()
         self._connect()

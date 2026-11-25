@@ -3,9 +3,7 @@
 """Real pgvector integration tests. Set OV_PGVECTOR_TEST_DSN to opt in."""
 
 import os
-import threading
 import uuid
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import Mock
 
@@ -118,22 +116,14 @@ def test_sparse_hybrid_and_atomic_batch(adapter):
     assert adapter.query(sparse_query_vector={"hello": 1}) == []
 
 
-@pytest.mark.parametrize("filtered", [False, True])
-def test_dense_equal_distance_pagination(adapter, filtered):
+def test_dense_equal_distance_pagination(adapter):
     ids = [f"tie_{i:02d}" for i in range(12)]
-    adapter.upsert(
-        [{"id": item_id, "vector": [1, 0, 0], "account_id": "one"} for item_id in reversed(ids)]
-    )
+    adapter.upsert([{"id": item_id, "vector": [1, 0, 0]} for item_id in reversed(ids)])
     for reload in (False, True):
         if reload:
             adapter._collection = None
         pages = [
-            adapter.query(
-                query_vector=[1, 0, 0],
-                filter=Eq("account_id", "one") if filtered else None,
-                limit=3,
-                offset=offset,
-            )
+            adapter.query(query_vector=[1, 0, 0], limit=3, offset=offset)
             for offset in range(0, len(ids), 3)
         ]
         assert [row["id"] for page in pages for row in page] == ids
@@ -187,10 +177,6 @@ def test_4096_flat_roundtrip():
         {"m": 40, "ef_construction": 64},
         {"ef_search": 0},
         {"candidate_limit": 10001},
-        {"filter_exact_threshold": -1},
-        {"filter_exact_threshold": 10001},
-        {"filter_exact_threshold": True},
-        {"filter_exact_threshold": 1.5},
         {"index_type": "ivfflat"},
         {"dsn_env": ""},
         {"unknown_option": True},
@@ -492,138 +478,18 @@ def test_distance_metrics(adapter, metric):
             "Fields": [
                 {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
                 {"FieldName": "vector", "FieldType": "vector", "Dim": 3},
-                {"FieldName": "account_id", "FieldType": "string"},
             ]
         }
         other.create_collection(
             name, schema, distance=metric, sparse_weight=0, index_name="default"
         )
-        other.upsert(
-            [
-                {"id": "near", "vector": [1, 0, 0], "account_id": "one"},
-                {"id": "far", "vector": [0, 1, 0], "account_id": "one"},
-            ]
-        )
-        rows = other.query(query_vector=[1, 0, 0], filter=Eq("account_id", "one"))
+        other.upsert([{"id": "near", "vector": [1, 0, 0]}, {"id": "far", "vector": [0, 1, 0]}])
+        rows = other.query(query_vector=[1, 0, 0])
         assert [row["id"] for row in rows] == ["near", "far"]
         assert rows[0]["_score"] > rows[1]["_score"]
     finally:
         other.drop_collection()
         other.close()
-
-
-@pytest.mark.parametrize("threshold", [0, 1, 1000, 10000])
-def test_filter_exact_threshold_config(threshold):
-    assert PgvectorConfig(filter_exact_threshold=threshold).filter_exact_threshold == threshold
-
-
-@pytest.mark.parametrize(
-    "index_type,where,threshold",
-    [
-        ("flat", '"account_id" = %s', 5),
-        ("hnsw", "", 5),
-        ("hnsw", '"account_id" = %s', 0),
-    ],
-)
-def test_nonadaptive_dense_query_has_no_probe(index_type, where, threshold):
-    collection = pgvector_adapter.PgvectorCollection.__new__(pgvector_adapter.PgvectorCollection)
-    collection._name = "test_pg"
-    collection._indexes = {"default": {"_pg_index_type": index_type}}
-    collection._retrieval_config = {"filter_exact_threshold": threshold}
-    sql, params = collection._dense_candidate_query(
-        "default", where, ["one"] if where else [], "[1,0,0]", "<=>", 10
-    )
-    assert "_ov_filter_probe" not in sql
-    assert params == ["[1,0,0]"] + (["one"] if where else []) + [10]
-
-
-@pytest.mark.parametrize(
-    "probe_scan,native_index,admitted",
-    [
-        ({"Node Type": "Seq Scan", "Plan Rows": 1}, "ann", False),
-        (
-            {
-                "Node Type": "Index Scan",
-                "Index Name": "scalar",
-                "Plan Rows": 10000,
-                "Index Cond": "account_id = 'one'",
-            },
-            "ann",
-            False,
-        ),
-        (
-            {
-                "Node Type": "Index Scan",
-                "Index Name": "scalar",
-                "Plan Rows": 1,
-                "Filter": "uri = 'one'",
-            },
-            "ann",
-            False,
-        ),
-        (
-            {
-                "Node Type": "Index Scan",
-                "Index Name": "scalar",
-                "Plan Rows": 1,
-                "Index Cond": "account_id = 'one'",
-            },
-            "scalar",
-            False,
-        ),
-        (
-            {
-                "Node Type": "Index Scan",
-                "Index Name": "scalar",
-                "Plan Rows": 1,
-                "Index Cond": "account_id = 'one'",
-            },
-            "ann",
-            True,
-        ),
-    ],
-)
-def test_probe_admission_plans_and_expiry(probe_scan, native_index, admitted, monkeypatch):
-    collection = pgvector_adapter.PgvectorCollection.__new__(pgvector_adapter.PgvectorCollection)
-    collection._name = "test_pg"
-    collection._indexes = {"default": {"_pg_index_type": "hnsw", "_pg_index_name": "ann"}}
-    collection._retrieval_config = {"filter_exact_threshold": 5}
-    collection._lock = threading.RLock()
-    collection._filter_probe_admission_lock = threading.Lock()
-    collection._filter_probe_admission = OrderedDict()
-    probe = {"Node Type": "Limit", "Total Cost": 10, "Plans": [probe_scan]}
-    native = {
-        "Node Type": "Limit",
-        "Total Cost": 100,
-        "Plans": [{"Node Type": "Index Scan", "Index Name": native_index}],
-    }
-    calls = []
-
-    def query(sql, params, index_name):
-        assert sql.startswith("EXPLAIN (FORMAT JSON)")  # No execution/counting at admission.
-        calls.append(sql)
-        plan = native if "ORDER BY" in sql else probe
-        return ["QUERY PLAN"], [([{"Plan": plan}],)]
-
-    monkeypatch.setattr(collection, "_query_rows", query)
-    clock = [100.0]
-    monkeypatch.setattr(pgvector_adapter.time, "monotonic", lambda: clock[0])
-    args = ("default", '"account_id" = %s', ["one"], "[1,0,0]", "<=>", 10)
-    assert collection._admit_filter_probe(*args) is admitted
-    count = len(calls)
-    assert collection._admit_filter_probe(*args) is admitted
-    assert len(calls) == count
-    clock[0] += 31
-    assert collection._admit_filter_probe(*args) is admitted
-    assert len(calls) == 2 * count
-    # A different tenant must have its own plan decision.
-    assert (
-        collection._admit_filter_probe(
-            "default", '"account_id" = %s', ["two"], "[1,0,0]", "<=>", 10
-        )
-        is admitted
-    )
-    assert len(calls) == 3 * count
 
 
 def test_cosine_guard_never_reads_scalar_rejected_vectors(adapter):
@@ -638,8 +504,8 @@ def test_cosine_guard_never_reads_scalar_rejected_vectors(adapter):
     predicate, params = collection._dense_filter_clause("<=>", '"account_id" = %s', ["one"])
     cursor = collection._cursor()
     try:
-        # Deliberately cheap function: an ordinary AND lets the planner evaluate
-        # this before scalar filtering. CASE must protect rejected heap rows.
+        # A cheap norm function lets the planner evaluate an ordinary AND before
+        # scalar filtering. CASE must protect scalar-rejected heap rows.
         cursor.execute(
             """CREATE FUNCTION pg_temp.ov_test_norm(v vector) RETURNS double precision
                LANGUAGE plpgsql COST 0.0001 AS $$
@@ -661,7 +527,6 @@ def test_cosine_guard_never_reads_scalar_rejected_vectors(adapter):
     finally:
         collection._conn.rollback()
         cursor.close()
-    collection._retrieval_config["filter_exact_threshold"] = 0
     assert [
         r["id"]
         for r in adapter.query(query_vector=[1, 0, 0], filter=Eq("account_id", "one"), limit=10)
@@ -677,8 +542,6 @@ def test_cosine_zero_vectors_after_dense_pagination(adapter, offset):
             *[{"id": f"zero_{i}", "vector": [0, 0, 0], "account_id": "one"} for i in range(8)],
         ]
     )
-    collection = adapter.get_collection()._Collection__collection
-    collection._retrieval_config["filter_exact_threshold"] = 0
     expected = ["first", "second"][offset : offset + 3]
     for advance in [None, {"time_decay": {"protection": "1d"}}]:
         rows = adapter.query(
@@ -692,228 +555,9 @@ def test_cosine_zero_vectors_after_dense_pagination(adapter, offset):
     assert adapter.query(query_vector=[0, 0, 0], filter=Eq("account_id", "one")) == []
 
 
-def _plan_nodes(plan):
-    yield plan
-    for child in plan.get("Plans", []):
-        yield from _plan_nodes(child)
-
-
-@pytest.mark.parametrize("name", ["_ov_filter_probe", "_ov_filter_size", "_ov_exact_vectors"])
-@pytest.mark.parametrize("metric", ["cosine", "l2", "ip", "l1"])
-@pytest.mark.parametrize("matched", [1, 6])
-def test_adaptive_cte_collection_names(name, metric, matched, monkeypatch):
-    if not os.environ.get("OV_PGVECTOR_TEST_DSN"):
-        pytest.skip("Set OV_PGVECTOR_TEST_DSN for real PostgreSQL tests")
-    other = create_collection_adapter(
-        VectorDBBackendConfig(
-            backend="pgvector",
-            name=name,
-            dimension=3,
-            distance_metric=metric,
-            pgvector={"dsn_env": "OV_PGVECTOR_TEST_DSN", "index_type": "hnsw"},
-        )
-    )
-    try:
-        other.create_collection(
-            name,
-            {
-                "Fields": [
-                    {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
-                    {"FieldName": "vector", "FieldType": "vector", "Dim": 3},
-                    {"FieldName": "account_id", "FieldType": "string"},
-                    {"FieldName": "updated_at", "FieldType": "date_time"},
-                ],
-                "ScalarIndex": ["account_id"],
-            },
-            distance=metric,
-            sparse_weight=0,
-            index_name="default",
-        )
-        other.upsert(
-            [
-                {"id": f"row_{i}", "vector": [1, i / 10, 0], "account_id": "one"}
-                for i in range(matched)
-            ]
-        )
-        collection = other.get_collection()._Collection__collection
-        collection._retrieval_config["filter_exact_threshold"] = 5
-        # Admission policy has its own real-plan test. Force both count branches
-        # here so even the unexecuted ANN branch must parse with a colliding name.
-        monkeypatch.setattr(collection, "_admit_filter_probe", lambda *args: True)
-        for advance in [None, {"time_decay": {"protection": "1d"}}]:
-            rows = other.query(
-                query_vector=[1, 0, 0],
-                filter=Eq("account_id", "one"),
-                limit=10,
-                advance=advance,
-            )
-            assert {row["id"] for row in rows} == {f"row_{i}" for i in range(matched)}
-    finally:
-        other.drop_collection()
-        other.close()
-
-
-def test_cold_probe_does_not_block_cached_filter(adapter, monkeypatch):
-    if adapter._config.index_type != "hnsw":
-        pytest.skip("Adaptive routing is specific to HNSW")
-    seed(adapter)
-    collection = adapter.get_collection()._Collection__collection
-    query_rows = collection._query_rows
-    # Warm the decision cache using the same public query as the worker.
-    expected = adapter.query(query_vector=[1, 0, 0], filter=Eq("account_id", "one"))
-    planning = threading.Event()
-    release = threading.Event()
-    hot_sql = threading.Event()
-
-    def query(sql, params, index_name=None):
-        if sql.startswith("EXPLAIN") and "cold" in params:
-            planning.set()
-            assert release.wait(10), "cold planning was not released"
-        elif not sql.startswith("EXPLAIN") and "one" in params:
-            hot_sql.set()
-        return query_rows(sql, params, index_name)
-
-    monkeypatch.setattr(collection, "_query_rows", query)
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        cold = executor.submit(
-            adapter.query, query_vector=[1, 0, 0], filter=Eq("account_id", "cold")
-        )
-        try:
-            assert planning.wait(5), "cold query did not reach planning"
-            hot = executor.submit(
-                adapter.query, query_vector=[1, 0, 0], filter=Eq("account_id", "one")
-            )
-            assert hot_sql.wait(3), "cached filter waited for unrelated EXPLAIN"
-            assert hot.result(timeout=3) == expected
-        finally:
-            release.set()
-        assert cold.result(timeout=5) == []
-
-
-def test_real_plan_admission_and_exact_execution(adapter):
-    if adapter._config.index_type != "hnsw":
-        pytest.skip("Adaptive routing is specific to HNSW")
-    collection = adapter.get_collection()._Collection__collection
-    collection._retrieval_config["filter_exact_threshold"] = 5
-    adapter.upsert(
-        [
-            {
-                "id": f"row_{i:04d}",
-                "vector": [1, i / 2000, 0],
-                "account_id": "one" if i == 0 else "two",
-            }
-            for i in range(2000)
-        ]
-    )
-    cursor = collection._cursor()
-    try:
-        cursor.execute(f'ANALYZE "{adapter.collection_name}"')
-        # Exercise a real native-ANN plan even with a selective scalar index.
-        # This is a planner-policy fixture, not a production tuning recommendation.
-        cursor.execute("SET enable_sort = off")
-        collection._conn.commit()
-        assert collection._admit_filter_probe(
-            "default", '"account_id" = %s', ["one"], "[1,0,0]", "<=>", 10
-        )
-        sql, params = collection._dense_candidate_query(
-            "default", '"account_id" = %s', ["one"], "[1,0,0]", "<=>", 10
-        )
-        cursor.execute("EXPLAIN (ANALYZE, FORMAT JSON) " + sql, params)
-        nodes = list(_plan_nodes(cursor.fetchone()[0][0]["Plan"]))
-        probe = next(n for n in nodes if n.get("Subplan Name") == "CTE _ov_filter_probe")
-        assert probe["Actual Rows"] == 1
-        assert [
-            r["id"]
-            for r in adapter.query(query_vector=[1, 0, 0], filter=Eq("account_id", "one"), limit=10)
-        ] == ["row_0000"]
-        adapter.upsert({"id": "new", "vector": [0, 1, 0], "account_id": "one"})
-        # Cached admission must still count fresh rows in the ranking snapshot.
-        assert [
-            r["id"]
-            for r in adapter.query(query_vector=[1, 0, 0], filter=Eq("account_id", "one"), limit=10)
-        ] == ["row_0000", "new"]
-    finally:
-        collection._conn.rollback()
-        cursor.close()
-        reset = collection._cursor()
-        try:
-            reset.execute("RESET enable_sort")
-            collection._conn.commit()
-        finally:
-            reset.close()
-
-
-@pytest.mark.parametrize("matched", [0, 4, 5, 6])
-def test_adaptive_plan_threshold_and_branch_execution(adapter, matched, monkeypatch):
-    if adapter._config.index_type != "hnsw":
-        pytest.skip("Adaptive routing is specific to HNSW")
-    import math
-
-    collection = adapter.get_collection()._Collection__collection
-    collection._retrieval_config["filter_exact_threshold"] = 5
-    # Test actual branch execution independently of planner admission. Admission
-    # is intentionally conservative on this tiny, unindexed array fixture.
-    monkeypatch.setattr(collection, "_admit_filter_probe", lambda *args: True)
-    adapter.upsert(
-        [
-            {
-                "id": f"row_{i:04d}",
-                "vector": [math.cos(i), math.sin(i), 0.1],
-                "account_id": "one" if i < matched else "two",
-                "search_tags": ["one" if i < matched else "two"],
-            }
-            for i in range(2000)
-        ]
-    )
-    sql, params = collection._dense_candidate_query(
-        "default", '%s = ANY("search_tags")', ["one"], "[1,0,0]", "<=>", 10
-    )
-    assert params[1] == 6  # probe threshold + 1, never full COUNT on the table
-    captured = []
-    query_rows = collection._query_rows
-
-    def capture_query(sql, params, index_name=None):
-        captured.append((sql, params))
-        return query_rows(sql, params, index_name)
-
-    monkeypatch.setattr(collection, "_query_rows", capture_query)
-    result = adapter.query(query_vector=[1, 0, 0], filter=Eq("search_tags", "one"), limit=10)
-    sql, params = captured[-1]
-    cursor = adapter._conn.cursor()
-    try:
-        cursor.execute(f'ANALYZE "{adapter.collection_name}"')
-        # Force ANN for the broad branch even on this small test collection.
-        cursor.execute("SET LOCAL enable_seqscan = off")
-        collection._apply_search_params_on_cursor(cursor, "default")
-        cursor.execute("EXPLAIN (ANALYZE, FORMAT JSON) " + sql, params)
-        nodes = list(_plan_nodes(cursor.fetchone()[0][0]["Plan"]))
-        probe = next(n for n in nodes if n.get("Subplan Name") == "CTE _ov_filter_probe")
-        assert probe["Actual Rows"] == min(matched, 6)
-        ann_name = collection._indexes["default"]["_pg_index_name"]
-        ann_nodes = [n for n in nodes if n.get("Index Name") == ann_name]
-        assert ann_nodes, [(n["Node Type"], n.get("Index Name")) for n in nodes]
-        ann = ann_nodes[0]
-        assert ann["Actual Loops"] == (0 if matched <= 5 else 1)
-        exact = next(n for n in nodes if n.get("CTE Name") == "_ov_exact_vectors")
-        assert exact["Actual Rows"] == (matched if matched <= 5 else 0)
-    finally:
-        adapter._conn.rollback()
-        cursor.close()
-    if matched <= 5:
-        assert len(result) == matched
-        distances = {f"row_{i:04d}": math.cos(i) / math.sqrt(1.01) for i in range(matched)}
-        assert [r["id"] for r in result] == sorted(distances, key=lambda k: -distances[k])
-
-
 @pytest.mark.parametrize("depth", [-1, 0, 1])
-def test_adaptive_exact_scope_acl_pagination_and_ranked(adapter, depth, monkeypatch):
+def test_cosine_zero_vectors_scoped_pagination_and_ranked(adapter, depth):
     collection = adapter.get_collection()._Collection__collection
-    collection._retrieval_config["filter_exact_threshold"] = 20
-    monkeypatch.setattr(
-        collection,
-        "_admit_filter_probe",
-        lambda index_name, *args: collection._indexes[index_name]["_pg_index_type"] == "hnsw",
-    )
     path = "viking://resources/目录_%"
     records = [
         {
@@ -972,8 +616,8 @@ def test_adaptive_exact_scope_acl_pagination_and_ranked(adapter, depth, monkeypa
         actual = adapter.query(
             query_vector=[1, 0, 0], filter=scope, limit=3, offset=1, output_fields=["uri"], **mode
         )
-        # Flat on the same table is the ground truth, including when a physical
-        # HNSW index exists. Restore metadata before the next adaptive query.
+        # Flat search on the same table is the oracle even with a physical HNSW
+        # index. Restore metadata before the next query.
         index_meta = collection._indexes["default"]
         previous_type = index_meta["_pg_index_type"]
         try:
@@ -997,24 +641,37 @@ def test_adaptive_exact_scope_acl_pagination_and_ranked(adapter, depth, monkeypa
         assert adapter.query(query_vector=[1, 0, 0], filter=scope, limit=3, offset=20) == []
 
 
-def test_adaptive_hybrid_keeps_candidate_budget(adapter):
-    seed(adapter)
-    collection = adapter.get_collection()._Collection__collection
-    collection._retrieval_config["filter_exact_threshold"] = 5
-    # The middle vector is second in each modality but first by fused score.
-    # It must remain outside a budget-one union even in a small exact space.
+def test_cosine_zero_vectors_do_not_consume_hybrid_sparse_budget(adapter):
     adapter.upsert(
-        {"id": "middle", "vector": [1, 1, 0], "account_id": "one", "sparse_vector": {"other": 0.9}}
+        [
+            {"id": "dense", "vector": [1, 0, 0], "account_id": "one"},
+            {
+                "id": "sparse",
+                "vector": [0, 1, 0],
+                "account_id": "one",
+                "sparse_vector": {"hello": 2},
+            },
+            {
+                "id": "zero",
+                "vector": [0, 0, 0],
+                "account_id": "one",
+                "sparse_vector": {"hello": 100},
+            },
+        ]
     )
+    collection = adapter.get_collection()._Collection__collection
     collection.create_sparse_index(candidate_limit=1, sparse_weight=0.5)
     rows = adapter.query(
         query_vector=[1, 0, 0],
-        sparse_query_vector={"other": 1},
+        sparse_query_vector={"hello": 1},
         filter=Eq("account_id", "one"),
         limit=1,
     )
-    assert [r["id"] for r in rows] == ["a"]
-    assert rows[0]["_score"] == pytest.approx(0.5)
+    assert [r["id"] for r in rows] == ["sparse"]
+    assert rows[0]["_score"] == pytest.approx(1)
+    # A zero dense vector remains eligible when no cosine score is requested.
+    rows = adapter.query(sparse_query_vector={"hello": 1}, filter=Eq("account_id", "one"), limit=1)
+    assert [r["id"] for r in rows] == ["zero"]
 
 
 @pytest.mark.asyncio

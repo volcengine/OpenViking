@@ -73,7 +73,6 @@ accept only `http`, `volcengine` and `vikingdb`.
 | `m` | `16` | HNSW connections per layer, from 2 to 100 |
 | `ef_construction` | `64` | HNSW build candidate list, from 4 to 1000, at least twice `m` |
 | `ef_search` | `100` | HNSW search candidate list, from 1 to 1000 |
-| `filter_exact_threshold` | `1000` | Admitted filtered HNSW queries use exact dense ranking at or below this row count; 0 disables routing, maximum 10000 |
 | `candidate_limit` | `1000` | Candidate budget per modality for sparse/hybrid or time-decay ranking, from 1 to 10000 |
 
 Dense values use full-precision `vector`, with 1–16000 dimensions. Native
@@ -95,43 +94,19 @@ For embeddings with at most 2000 dimensions, select:
 
 `distance_metric` accepts `cosine`, `l2`, `ip` and `l1`. Results use the
 OpenViking convention of higher scores ranking first. Scalar, tenant, ACL and
-URI scope filters are compiled to parameterized SQL. With HNSW, the adapter first
-checks execution-plan estimates. It admits a probe only when scalar index
-conditions estimate at most `filter_exact_threshold + 1` inspected rows, the
-probe costs at most one quarter of the native query, and that query still uses
-HNSW. Full scans and queries already using scalar filtering plus exact sorting
-skip the probe. Admitted queries probe at most that many scalar-matching IDs,
-without reading vectors. If the full filtered
-set fits the threshold, a materialized vector set is ranked exactly, with ID
-tie-breaking and pagination. Otherwise the existing filtered HNSW query remains
-available to the PostgreSQL planner and uses strict iterative scanning. The
-probe and ranking run in one statement and share one MVCC snapshot.
+URI scope filters are compiled to parameterized SQL. HNSW uses strict iterative
+scanning to improve recall with filters, but ANN recall and filtered TopK are
+not guaranteed; measure recall and p99 with representative filters. Cosine
+zero vectors are not included in a pgvector HNSW index.
 
-This applies to ordinary dense search and the dense candidate branch of hybrid
-and time-decay search. Unfiltered queries and flat indexes do not probe. Change
-`filter_exact_threshold` on reconnect without rebuilding the index; set it to
-`0` to disable routing. The threshold is independent of `candidate_limit`,
-which still bounds hybrid/time-decay recall and does not guarantee global fused
-TopK. NULL vectors and cosine zero vectors are excluded from dense candidates,
-including the exact path, to avoid undefined cosine scores. Native dense search
-removes NaN cosine distances after sorting/limiting: PostgreSQL sorts NaN after
-all finite distances, so zero vectors cannot displace eligible results or
-change valid pagination. This avoids separate norm reads. The exact branch
-checks norms after vector materialization. Hybrid sparse recall must exclude
-zeros before its sparse-score budget, so a CASE expression fences its norm
-check behind scalar filtering. Counting NULL/zero rows is conservative:
-they can cause a query to stay on the native path but never enter dense results.
-
-The probe bounds matching rows, not the number of rows inspected to find them.
-Admission decisions (not counts or IDs) are cached per filter and budget for
-30 seconds, up to 128 entries per collection, with a separate cache mutex so
-cache hits do not queue behind index metadata reads. Keep planner statistics current:
-estimates can be wrong, so admission is not a hard bound on inspected rows.
-Without suitable scalar indexes, native narrow/empty queries can remain slow.
-The planner may choose scalar filtering plus exact sorting above the threshold.
-Queries not admitted retain native recall behavior; ANN recall and filtered
-TopK remain unguaranteed. Measure recall and p99
-with representative filters and data.
+Cosine search also excludes zero vectors from flat results and dense candidates
+in hybrid/time-decay search. Native dense search drops NaN distances after
+sorting and pagination: PostgreSQL sorts NaN after all finite distances, so zero
+vectors cannot displace eligible results or alter valid pagination. Hybrid
+sparse recall excludes them before applying its candidate budget, with a CASE
+expression that evaluates the norm only after scalar filtering. Sparse-only
+search still accepts these records. Ordinary dense queries serialize the query
+vector once and reuse the string for both SQL parameters.
 
 Flat search stays exact even when the table also contains an ANN index. On
 reconnect, the configured collection dimension, metric and index type must

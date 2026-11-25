@@ -264,16 +264,8 @@ Future automation can share the SQL expression builder and handle new
 collections, existing-collection migrations and physical index-definition
 checks separately. Validate trailing slashes, empty paths, LIKE metacharacters,
 depth, ACL predicates, directory skew, concurrent writes and different memory
-settings. HNSW now supports narrow-candidate adaptive routing after execution-plan
-admission: cheap scalar index probes whose native query still uses HNSW can
-qualify. Full scans and existing exact plans skip probing. Admitted filtered sets at
-or below `filter_exact_threshold` (default 1000) are ranked exactly; larger sets
-retain the existing HNSW query. This complements the path expression index.
-The probe returns at most threshold plus one scalar-matching ID without reading
-vectors. Admission uses estimates, not a hard scan bound; keep statistics current. See
-[PostgreSQL + pgvector](25-pgvector.md) for configuration and hybrid budget
-boundaries. The historical benchmarks above did not enable adaptive routing,
-so their latency and recall do not describe the new policy.
+settings. Choosing exact or ANN retrieval by candidate size is a future
+option; the current backend has no automatic switching policy.
 
 This was a warmed, local synthetic benchmark with limited p99 samples.
 It did not cover realistic ACL complexity, the full service path, sustained

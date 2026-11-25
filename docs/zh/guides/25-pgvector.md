@@ -68,7 +68,6 @@ export OV_POSTGRES_DSN='host=127.0.0.1 port=5432 dbname=openviking user=ov passw
 | `m` | `16` | HNSW 每层连接数，范围 2–100 |
 | `ef_construction` | `64` | HNSW 构建候选列表，范围 4–1000，至少是 `m` 的两倍 |
 | `ef_search` | `100` | HNSW 检索候选列表，范围 1–1000 |
-| `filter_exact_threshold` | `1000` | 已准入的带过滤 HNSW 查询在匹配行数不超过该值时精确排序；0 关闭，最大 10000 |
 | `candidate_limit` | `1000` | sparse/hybrid 或时间衰减排序中每路候选预算，范围 1–10000 |
 
 Dense 使用全精度 `vector` 类型，支持 1–16000 维；该类型的原生 HNSW
@@ -89,33 +88,16 @@ Dense 使用全精度 `vector` 类型，支持 1–16000 维；该类型的原�
 
 `distance_metric` 支持 `cosine`、`l2`、`ip`、`l1`，结果遵循 OpenViking
 分数越高排名越靠前的约定。标量、租户、ACL 和 URI 范围过滤转换为参数化 SQL。
-HNSW 带过滤查询先检查执行计划估算：仅当标量索引条件估算扫描行数不超过
-`filter_exact_threshold + 1`、探测成本不超过原查询的四分之一，且原查询仍使用
-HNSW 时准入。全表扫描和已走标量过滤加精确排序的查询跳过探测。
-准入后最多探测该数量的标量匹配 ID，不读取向量。完整过滤
-结果不超过阈值时，物化这些向量并精确排序，按 ID 打破距离并列，支持分页；
-超过阈值时，保留原有带过滤 HNSW 查询，由 PostgreSQL 规划器选择计划，
-并启用 strict iterative scanning。探测与排序在同一条 SQL、同一个 MVCC
-快照内完成。
+HNSW 开启 strict iterative scanning 来改善带过滤的召回，但不保证 ANN
+召回率或过滤后 TopK 数量；需用真实过滤条件验证召回率和 p99。
+pgvector HNSW 的 cosine 索引不包含零向量。
 
-普通 dense 查询、hybrid 和时间衰减查询中的 dense 候选召回均使用该策略。
-无过滤查询和 flat 索引不执行探测。修改 `filter_exact_threshold` 在重新连接
-后生效，不需要重建索引；设为 `0` 可关闭。该阈值独立于 `candidate_limit`，
-后者仍限制 hybrid/时间衰减的候选预算，不保证全局融合 TopK。
-NULL 向量和 cosine 零向量在 dense 候选中被排除，精确路径也遵循此规则，
-避免产生未定义的 cosine 分数。原生 dense 查询在距离排序/截取之后排除 NaN：
-PostgreSQL 升序将 NaN 排在所有有限距离之后，零向量不会挤掉有效结果或改变有效分页，
-因此无需另读向量计算范数。精确分支在向量物化之后判断。hybrid 的 sparse 分支须在
-稀疏分数预算之前排除零向量，使用 CASE 保证先判断标量过滤。
-计数包含 NULL/零向量，因此可能保守地留在原路径，
-但这些记录不会进入 dense 结果。
-
-准入决策按过滤条件和预算缓存 30 秒，每个 collection 最多 128 项，
-不缓存计数或候选 ID，使用独立缓存锁避免命中检查在索引元数据读取后排队。
-应保持统计信息及时更新：估算可能失准，准入并不构成
-实际扫描行数的硬上限。缺少适当标量索引时，原查询的窄范围和空范围仍可能很慢。
-超过阈值后，规划器也可能选择标量过滤加精确排序。未准入查询保留原来的召回行为；
-ANN 召回率和过滤后 TopK 数量仍无保证，需验证召回率与 p99。
+Cosine 检索同样从 flat 结果以及 hybrid/时间衰减的 dense 候选中排除零向量。
+原生 dense 查询在距离排序和分页之后排除 NaN：PostgreSQL 将 NaN 排在所有
+有限距离之后，因此零向量不会挤掉有效结果或改变有效分页。hybrid 的 sparse
+分支在候选预算截取之前排除零向量，并通过 CASE 保证标量过滤通过后才计算范数。
+仅 sparse 查询仍允许这些记录参与检索。普通 dense 查询只将查询向量转为字符串
+一次，供两个 SQL 参数复用。
 
 即使表中额外存在 ANN 索引，flat 检索仍保持精确。重新连接时会校验配置与
 持久化元数据中的维度、距离和索引类型，ANN 索引缺失或无效会明确报错。
