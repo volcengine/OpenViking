@@ -193,8 +193,8 @@ class TestOpenAIDenseEmbedder:
         assert call_kwargs["extra_body"] == {"input_type": "passage"}
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_telemetry_skipped_when_no_usage(self, mock_openai_class):
-        """_update_telemetry_token_usage should no-op when response has no usage"""
+    def test_returns_vector_and_records_call_when_usage_is_missing(self, mock_openai_class):
+        """A provider response can return a vector with unknown token usage."""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -211,8 +211,16 @@ class TestOpenAIDenseEmbedder:
             api_key="test-api-key",
             dimension=1536,
         )
-        result = embedder.embed("Hello world")
-        assert result.dense_vector is not None
+        with patch("openviking.observability.events.try_publish_event") as publish:
+            result = embedder.embed("Hello world")
+
+        assert result.dense_vector == mock_embedding.embedding
+        publish.assert_called_once()
+        event_name, payload = publish.call_args.args
+        assert event_name == "embedding.call"
+        assert payload["error_code"] == "OK"
+        assert payload["prompt_tokens"] is None
+        assert payload["completion_tokens"] is None
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_telemetry_skipped_when_module_missing(self, mock_openai_class):

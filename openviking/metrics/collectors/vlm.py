@@ -107,8 +107,8 @@ class VLMCollector(EventMetricCollector):
         """
         Record one VLM call as counters for calls and tokens plus a latency histogram sample.
 
-        Input, output, and total token counters are all emitted because different dashboards care
-        about cost attribution at different levels of granularity.
+        Input and output counters track each known direction independently. The total uses the
+        known counts.
         """
         labels = {
             "provider": str(provider),
@@ -130,24 +130,23 @@ class VLMCollector(EventMetricCollector):
         )
         # A failed attempt has no reliable usage payload. Keep token families
         # success-only and avoid multiplying their cardinality by ``result``.
-        if labels["error_code"] != "OK" or prompt_tokens is None or completion_tokens is None:
+        if labels["error_code"] != "OK" or (prompt_tokens is None and completion_tokens is None):
             return
+
         token_labels = {"provider": str(provider), "model_name": str(model_name)}
-        registry.inc_counter(
-            self.TOKENS_INPUT_TOTAL,
-            labels=token_labels,
-            label_names=("provider", "model_name"),
-            amount=int(prompt_tokens),
-            account_id=account_id,
-        )
-        registry.inc_counter(
-            self.TOKENS_OUTPUT_TOTAL,
-            labels=token_labels,
-            label_names=("provider", "model_name"),
-            amount=int(completion_tokens),
-            account_id=account_id,
-        )
-        total_tokens = int(prompt_tokens) + int(completion_tokens)
+        for metric, token_count in (
+            (self.TOKENS_INPUT_TOTAL, prompt_tokens),
+            (self.TOKENS_OUTPUT_TOTAL, completion_tokens),
+        ):
+            if token_count is not None:
+                registry.inc_counter(
+                    metric,
+                    labels=token_labels,
+                    label_names=("provider", "model_name"),
+                    amount=int(token_count),
+                    account_id=account_id,
+                )
+        total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
         registry.inc_counter(
             self.TOKENS_TOTAL,
             labels=token_labels,
