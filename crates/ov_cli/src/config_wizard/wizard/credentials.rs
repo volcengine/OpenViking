@@ -3,9 +3,8 @@
 use super::prompts::{InputValueLabel, LiveRegion, PromptResult, prompt_text, status_live_lines};
 use crate::config::Config;
 use crate::config_wizard::store::{
-    ApiKeyRole, ConfigDraft, ConfigKind, IdentityField, build_config, byteplus_service_url,
-    custom_allows_empty_api_key, validate_candidate_config, validate_candidate_config_with_role,
-    validate_identity_value,
+    ApiKeyRole, ConfigDraft, ConfigKind, IdentityField, build_config, custom_allows_empty_api_key,
+    validate_candidate_config, validate_candidate_config_with_role, validate_identity_value,
 };
 use crate::error::{Error, Result};
 use crate::i18n::{Language, copy};
@@ -38,19 +37,11 @@ pub(super) enum CustomEditKeyAction {
     ClearAllKeys,
 }
 
-pub(super) fn provider_labels(language: Language) -> Vec<&'static str> {
-    let mut labels = match language {
-        Language::En => vec![ConfigKind::OpenVikingService.label(), "Custom"],
-        Language::ZhCn => vec!["OpenViking 服务（火山引擎云）", "自定义"],
-    };
-    if byteplus_service_url().is_some() {
-        labels.push(copy(
-            language,
-            "OpenViking Service (BytePlus)",
-            "OpenViking 服务（BytePlus）",
-        ));
+pub(super) fn provider_labels(language: Language) -> [&'static str; 2] {
+    match language {
+        Language::En => ["OpenViking Managed Service", "Custom"],
+        Language::ZhCn => ["OpenViking 托管服务", "自定义"],
     }
-    labels
 }
 
 pub(super) fn api_key_label(optional: bool) -> &'static str {

@@ -189,7 +189,8 @@ printf '%s:%s:%s\\n' "$SELECTED_HARNESSES" "$(list_words "$CODEX_BINS")" "$(tui_
 
 test("keeping the stored API key leaves the wizard on its feet", () => {
   const result = runInstallerPrelude(`
-tui_menu() { TUI_MENU_CHOICE=1; }
+MENU_ANSWERS="1 0"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
 INTERACTIVE=1
 exec 3< <(printf '\\n')
 prompt_connection "$VOLCENGINE_SERVICE_URL" "stored-key"
@@ -205,7 +206,8 @@ printf '%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 
 test("choosing the cloud service says where to get an API key", () => {
   const result = runInstallerPrelude(`
-tui_menu() { TUI_MENU_CHOICE=1; }
+MENU_ANSWERS="1 0"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
 INTERACTIVE=1
 exec 3< <(printf 'cloud-key\\n')
 prompt_connection "" ""
@@ -224,7 +226,8 @@ test("the credentials step writes ovcli.conf when the stored key is kept", (t) =
   writeFileSync(conf, `${JSON.stringify({ url: "https://api.vikingdb.cn-beijing.volces.com/openviking", api_key: "stored-key", output: "table" }, null, 2)}\n`);
 
   const result = runInstallerPrelude(`
-tui_menu() { TUI_MENU_CHOICE=1; }
+MENU_ANSWERS="1 1 0"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
 INTERACTIVE=1
 OV_HOME=${JSON.stringify(home)}
 OVCLI_CONF=${JSON.stringify(conf)}
@@ -286,7 +289,8 @@ test("the credentials step names the field it changed", (t) => {
   writeFileSync(conf, `${JSON.stringify({ url, api_key: "stored-key" }, null, 2)}\n`);
 
   const result = runInstallerPrelude(`
-tui_menu() { TUI_MENU_CHOICE=1; }
+MENU_ANSWERS="1 1 0"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
 INTERACTIVE=1
 OV_HOME=${JSON.stringify(home)}
 OVCLI_CONF=${JSON.stringify(conf)}
@@ -916,25 +920,123 @@ while [ "$idx" -lt "$(tui_selectable_count)" ]; do printf '%s\\n' "$(tui_item_at
 });
 
 
-test("BytePlus installer selection is hidden without a preset and never reuses a Volcengine key", () => {
+test("BytePlus is available without a preset and asks for a fresh URL and key", () => {
   const result = runInstallerPrelude(`
-info() { :; }
-ask() { :; }
-read_tty() { printf -v "$1" '%s' ""; }
-tui_menu() { printf 'options:%s\\n' "$#"; TUI_MENU_CHOICE="$TEST_CHOICE"; }
-TEST_CHOICE=1
-prompt_connection "$VOLCENGINE_SERVICE_URL/" "volcengine-test-key"
-printf '%s:%s\\n' "$WIZ_URL" "$WIZ_KEY"
-BYTEPLUS_SERVICE_URL=https://byteplus.example/openviking
-TEST_CHOICE=3
+MENU_ANSWERS="1 1"
+tui_menu() {
+  printf 'menu:%s\\n' "$1"
+  shift 2
+  printf 'choices:%s\\n' "$*"
+  set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"
+}
+INTERACTIVE=1
+exec 3< <(printf '\\nhttps://byteplus.example/openviking\\nbyteplus-test-key\\n')
 prompt_connection "$VOLCENGINE_SERVICE_URL" "volcengine-test-key"
-printf '%s:%s\\n' "$WIZ_URL" "$WIZ_KEY"
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 `);
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(result.stdout.trim().split("\n"), [
-    "options:5", "https://api.vikingdb.cn-beijing.volces.com/openviking:__OPENVIKING_KEEP__",
-    "options:6", "https://byteplus.example/openviking:",
-  ]);
+  assert.match(result.stdout, /OpenViking Managed Service/);
+  assert.match(result.stdout, /choices:Volcengine BytePlus/);
+  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|byteplus-test-key/);
+  assert.doesNotMatch(result.stdout, /volcengine-test-key/);
+  assert.match(result.stderr, /full HTTPS service URL/);
+});
+
+test("BytePlus rejects HTTP and an empty API key before settling on a connection", () => {
+  const result = runInstallerPrelude(`
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf 'http://byteplus.example/openviking\\nhttps://byteplus.example:443/openviking\\n   \\nnew-key\\n')
+prompt_connection "" ""
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /full HTTPS service URL/);
+  assert.match(result.stderr, /API key is required/);
+  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|new-key/);
+});
+
+test("a BytePlus preset remains editable and cannot reuse another server's key", () => {
+  const result = runInstallerPrelude(`
+BYTEPLUS_SERVICE_URL=https://byteplus.example/openviking
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf 'https://other.example/openviking\\nreplacement-key\\n')
+prompt_connection "$BYTEPLUS_SERVICE_URL" "old-byteplus-key"
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /connection:https:\/\/other.example\/openviking\|replacement-key/);
+  assert.doesNotMatch(result.stdout, /old-byteplus-key/);
+});
+
+test("EOF at a required BytePlus URL or key cancels without saving", () => {
+  const url = "https://byteplus.example/openviking";
+  for (const [input, currentUrl, currentKey] of [["", "", ""], [`${url}\n`, "", ""], [`${url}\n`, url, "saved-key"]]) {
+    const result = runInstallerPrelude(`
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf '%b' ${JSON.stringify(input)})
+prompt_connection ${JSON.stringify(currentUrl)} ${JSON.stringify(currentKey)}
+printf 'connection-would-be-saved\\n'
+`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Cancelled; nothing was changed/);
+    assert.doesNotMatch(result.stdout, /connection-would-be-saved/);
+    if (input) assert.match(result.stdout, /API key/);
+  }
+});
+
+test("BytePlus can keep a key explicitly for the same service URL", () => {
+  const result = runInstallerPrelude(`
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf 'https://byteplus.example/openviking/\\n\\n')
+prompt_connection https://byteplus.example/openviking saved-key
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|__OPENVIKING_KEEP__/);
+});
+
+test("a whitespace-only saved BytePlus key cannot be kept", () => {
+  const result = runInstallerPrelude(`
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf 'https://byteplus.example/openviking\\n\\nreplacement-key\\n')
+prompt_connection https://byteplus.example/openviking '   '
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /API key is required/);
+  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|replacement-key/);
+  assert.doesNotMatch(result.stdout, /Enter = keep/);
+});
+
+test("managed provider defaults follow the installer language", () => {
+  for (const [language, expected] of [["en", "1"], ["zh", "0"]]) {
+    const result = runInstallerPrelude(`
+UI_LANG=${language}
+MENU_COUNT=0
+tui_menu() {
+  MENU_COUNT=$((MENU_COUNT + 1))
+  if [ "$MENU_COUNT" -eq 1 ]; then TUI_MENU_CHOICE=1; else
+    printf 'provider-default:%s\\n' "$2"
+    TUI_MENU_CHOICE=0
+  fi
+}
+INTERACTIVE=1
+exec 3< <(printf 'volcengine-key\\n')
+prompt_connection "" ""
+`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`provider-default:${expected}`));
+  }
 });
 
 test("a changed installer URL clears inherited authentication but keeps client options", (t) => {

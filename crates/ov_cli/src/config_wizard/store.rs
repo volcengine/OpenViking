@@ -15,9 +15,14 @@ use crate::{
 
 pub const OPENVIKING_SERVICE_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
 
-/// An unbound release keeps the existing provider choices.
+/// A verified release URL is an optional default for the BytePlus URL prompt.
 pub(super) fn byteplus_service_url() -> Option<&'static str> {
     validate_byteplus_endpoint(option_env!("OPENVIKING_BYTEPLUS_SERVICE_URL")?)
+}
+
+pub(super) fn normalize_byteplus_service_url(input: &str) -> Option<String> {
+    let url = Url::parse(input.trim()).ok()?;
+    validate_byteplus_endpoint(url.as_str()).map(str::to_string)
 }
 
 fn validate_byteplus_endpoint(endpoint: &str) -> Option<&str> {
@@ -42,13 +47,6 @@ pub enum ConfigKind {
 }
 
 impl ConfigKind {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::OpenVikingService => "OpenViking Service (VolcEngine Cloud)",
-            Self::Custom => "Custom",
-        }
-    }
-
     pub(crate) fn compact_label(self) -> &'static str {
         match self {
             Self::OpenVikingService => "OpenViking Service",
@@ -1164,10 +1162,6 @@ mod tests {
     #[test]
     fn openviking_service_provider_label_uses_product_casing() {
         assert_eq!(
-            ConfigKind::OpenVikingService.label(),
-            "OpenViking Service (VolcEngine Cloud)"
-        );
-        assert_eq!(
             ConfigKind::OpenVikingService.compact_label(),
             "OpenViking Service"
         );
@@ -1332,7 +1326,10 @@ mod tests {
         let fixture = "https://byteplus.example/openviking";
         assert_eq!(super::validate_byteplus_endpoint(fixture), Some(fixture));
         let with_slash = format!("{fixture}/");
-        assert_eq!(super::validate_byteplus_endpoint(&with_slash), Some(fixture));
+        assert_eq!(
+            super::validate_byteplus_endpoint(&with_slash),
+            Some(fixture)
+        );
         for url in [
             "https://API.vikingdb.cn-beijing.volces.com:443/openviking",
             OPENVIKING_SERVICE_URL,
@@ -1340,6 +1337,11 @@ mod tests {
             "https://byteplus.example/openviking ",
             "https://byteplus.example/openviking?",
             "https://byteplus.example/openviking#",
+            "https://user:password@byteplus.example/openviking",
+            "https://byteplus.example/openviking?token=value",
+            "https://byteplus.example/openviking#section",
+            "byteplus.example/openviking",
+            "",
         ] {
             assert_eq!(super::validate_byteplus_endpoint(url), None, "{url}");
         }
@@ -1364,6 +1366,34 @@ mod tests {
         assert_eq!(reopened.url, url);
         assert_eq!(reopened.api_key.as_deref(), Some("byteplus-test-key"));
         assert_eq!(reopened.root_api_key.as_deref(), Some("separate-root-key"));
+    }
+
+    #[test]
+    fn manual_byteplus_url_normalizes_https_and_rejects_unsafe_addresses() {
+        for input in [
+            "https://byteplus.example/openviking",
+            "HTTPS://BYTEPLUS.EXAMPLE:443/openviking/",
+            " https://byteplus.example/openviking/ ",
+        ] {
+            assert_eq!(
+                super::normalize_byteplus_service_url(input),
+                Some("https://byteplus.example/openviking".to_string())
+            );
+        }
+        for input in [
+            "http://byteplus.example/openviking",
+            "https://user:password@byteplus.example/openviking",
+            "https://byteplus.example/openviking?key=value",
+            "https://byteplus.example/openviking#fragment",
+            "https://byteplus.example/openviking?",
+            OPENVIKING_SERVICE_URL,
+            "",
+        ] {
+            assert!(
+                super::normalize_byteplus_service_url(input).is_none(),
+                "{input}"
+            );
+        }
     }
 
     #[test]

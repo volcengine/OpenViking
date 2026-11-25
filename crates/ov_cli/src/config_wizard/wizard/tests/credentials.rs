@@ -11,8 +11,7 @@ use super::{
 };
 use crate::config::Config;
 use crate::config_wizard::store::{
-    ApiKeyRole, ConfigDraft, ConfigKind, byteplus_service_url, validate_account_id_value,
-    validate_user_id_value,
+    ApiKeyRole, ConfigDraft, ConfigKind, validate_account_id_value, validate_user_id_value,
 };
 use crate::i18n::Language;
 use crate::theme;
@@ -21,14 +20,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 #[test]
-fn byteplus_menu_requires_a_bound_service_url() {
-    let labels = provider_labels(Language::En);
-    assert_eq!(labels[1], "Custom");
-    if byteplus_service_url().is_some() {
-        assert_eq!(labels[2], "OpenViking Service (BytePlus)");
-    } else {
-        assert_eq!(labels.len(), 2);
-    }
+fn connection_menu_groups_managed_services_and_keeps_custom() {
+    assert_eq!(
+        provider_labels(Language::En),
+        ["OpenViking Managed Service", "Custom"]
+    );
+    assert_eq!(
+        provider_labels(Language::ZhCn),
+        ["OpenViking 托管服务", "自定义"]
+    );
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn provider_helper_copy_is_minimal_and_custom_is_clear() {
 
     assert_eq!(
         provider_labels(Language::En)[0],
-        "OpenViking Service (VolcEngine Cloud)"
+        "OpenViking Managed Service"
     );
     assert!(cloud.iter().any(|line| line.contains("Get your API key:")));
     assert!(cloud.iter().any(|line| {

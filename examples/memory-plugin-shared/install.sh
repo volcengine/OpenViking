@@ -172,8 +172,7 @@ DIST_ARG=""
 LANG_ARG=""
 URL_ARG=""
 VOLCENGINE_SERVICE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
-# A verified endpoint can be bound for a release build. Leave the preset
-# absent when this script has no such binding.
+# A verified release URL is an optional default for the BytePlus URL prompt.
 BYTEPLUS_SERVICE_URL=""
 API_KEY_ARG="__OPENVIKING_UNSET__"
 ACCOUNT_ARG="__OPENVIKING_UNSET__"
@@ -322,14 +321,16 @@ if [ "$YES" -ne 1 ] && ( exec 3</dev/tty ) 2>/dev/null; then
   INTERACTIVE=1
 fi
 
-read_tty() { # read_tty <varname> [-s]
-  local __var="$1" __val=""
+read_tty() { # read_tty <varname> [-s] [required]
+  local __var="$1" __val="" __eof=0
   if [ "${2:-}" = "-s" ]; then
-    if IFS= read -rs __val <&3 2>/dev/null; then printf '\n'; else __val=""; fi
+    if IFS= read -rs __val <&3 2>/dev/null; then printf '\n'; else __val=""; __eof=1; fi
   else
-    IFS= read -r __val <&3 || __val=""
+    IFS= read -r __val <&3 || { __val=""; __eof=1; }
   fi
   eval "$__var=\$__val"
+  if [ "${3:-}" = "required" ] && [ "$__eof" -eq 1 ]; then return 1; fi
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -1642,8 +1643,21 @@ EOF
 # ovcli.conf wizard
 # ---------------------------------------------------------------------------
 
+normalize_byteplus_service_url() {
+  printf '%s' "$1" | node -e '
+    const input = require("fs").readFileSync(0, "utf8").trim().replace(/\/+$/, "");
+    try {
+      const url = new URL(input);
+      if (url.protocol !== "https:" || !url.hostname || url.username || url.password ||
+          url.search || url.hash || input.includes("?") || input.includes("#") ||
+          url.href.replace(/\/+$/, "") === "https://api.vikingdb.cn-beijing.volces.com/openviking") process.exit(1);
+      process.stdout.write(url.href.replace(/\/+$/, ""));
+    } catch { process.exit(1); }
+  '
+}
+
 prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KEEP__)
-  local current_url="$1" current_key="$2" url_input reply def=2 custom hidden
+  local current_url="$1" current_key="$2" url_input reply def=2 custom hidden provider="" provider_def=1
   custom="$(t 'Custom URL' '自定义 URL')"
   if [ -n "$current_url" ]; then
     custom="$(t 'Custom URL / keep current' '自定义 URL / 保持当前')  [$current_url]"
@@ -1652,17 +1666,33 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
   fi
   local options=(
     "$(t 'Self-hosted / local' '自建 / 本地')  [http://127.0.0.1:1933]"
-    "$(t 'Volcengine OpenViking Cloud' '火山引擎 OpenViking 云服务')  [api.vikingdb.cn-beijing.volces.com]"
+    "$(t 'OpenViking Managed Service' 'OpenViking 托管服务')"
     "$custom"
   )
-  if [ -n "$BYTEPLUS_SERVICE_URL" ]; then
-    options+=("$(t 'BytePlus OpenViking Cloud' 'BytePlus OpenViking 云服务')")
-  fi
   tui_menu "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')" "$def" "${options[@]}"
   case "$TUI_MENU_CHOICE" in
     0) WIZ_URL="http://127.0.0.1:1933" ;;
-    1) WIZ_URL="$VOLCENGINE_SERVICE_URL" ;;
-    3) WIZ_URL="$BYTEPLUS_SERVICE_URL" ;;
+    1)
+      [ "$UI_LANG" != "zh" ] || provider_def=0
+      tui_menu "$(t 'Cloud provider' '云服务商')" "$provider_def" "Volcengine" "BytePlus"
+      if [ "$TUI_MENU_CHOICE" -eq 0 ]; then
+        provider="volcengine"
+        WIZ_URL="$VOLCENGINE_SERVICE_URL"
+      else
+        provider="byteplus"
+        while :; do
+          ask "$(t 'BytePlus service URL' 'BytePlus 服务地址')${BYTEPLUS_SERVICE_URL:+ [$BYTEPLUS_SERVICE_URL]}: "
+          if ! read_tty url_input "" required; then
+            info "$(t 'Cancelled; nothing was changed.' '已取消，未做任何修改。')"
+            exit 0
+          fi
+          if WIZ_URL="$(normalize_byteplus_service_url "${url_input:-$BYTEPLUS_SERVICE_URL}")"; then
+            break
+          fi
+          err "$(t 'Enter the full HTTPS service URL for your BytePlus instance, without login credentials, a query or a fragment.' '请输入 BytePlus 实例的完整 HTTPS 服务地址，不要包含登录凭据、查询参数或片段。')"
+        done
+      fi
+      ;;
     *)
       ask "$(t 'Server URL' '服务地址') [${current_url:-http://127.0.0.1:1933}]: "
       read_tty url_input
@@ -1675,30 +1705,49 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
     current_key=""
   fi
   hidden="$(t 'typing is not shown' '输入内容不会显示')"
-  if [ -n "$current_key" ]; then
-    ask "$(t "API key [Enter = keep $(mask_secret "$current_key"), '-' = clear; $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空；$hidden]: ")"
-  elif [ "$TUI_MENU_CHOICE" -eq 1 ]; then
-    info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
-    info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
-    ask "$(t "API key ($hidden): " "API key（${hidden}）: ")"
-  elif [ "$TUI_MENU_CHOICE" -eq 3 ]; then
-    ask "$(t "BytePlus OpenViking API key ($hidden): " "BytePlus OpenViking API key（${hidden}）: ")"
-  else
-    ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；${hidden}）: ")"
+  if [ "$provider" = "byteplus" ]; then
+    current_key="$(printf '%s' "$current_key" | node -e 'process.stdout.write(require("fs").readFileSync(0, "utf8").trim())')"
+    info "$(t 'Server' '服务器'): $WIZ_URL"
   fi
-  read_tty reply -s
-  if [ "$reply" = "-" ]; then
-    WIZ_KEY=""
-  elif [ -n "$reply" ]; then
-    WIZ_KEY="$reply"
-  else
-    # Not `[ -z ... ] && ...`: as the function's last command a false test makes
-    # prompt_connection return 1, and `set -e` aborts the whole installer.
-    WIZ_KEY="__OPENVIKING_KEEP__"
-    if [ -z "$current_key" ]; then
-      WIZ_KEY=""
+  while :; do
+    if [ -n "$current_key" ]; then
+      ask "$(t "API key [Enter = keep $(mask_secret "$current_key"), '-' = clear; $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空；$hidden]: ")"
+    elif [ "$provider" = "volcengine" ]; then
+      info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
+      info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
+      ask "$(t "API key ($hidden): " "API key（${hidden}）: ")"
+    elif [ "$provider" = "byteplus" ]; then
+      ask "$(t "BytePlus OpenViking API key ($hidden): " "BytePlus OpenViking API key（${hidden}）: ")"
+    else
+      ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；${hidden}）: ")"
     fi
-  fi
+    if [ "$provider" = "byteplus" ]; then
+      if ! read_tty reply -s required; then
+        info "$(t 'Cancelled; nothing was changed.' '已取消，未做任何修改。')"
+        exit 0
+      fi
+      reply="$(printf '%s' "$reply" | node -e 'process.stdout.write(require("fs").readFileSync(0, "utf8").trim())')"
+    else
+      read_tty reply -s
+    fi
+    if [ "$reply" = "-" ]; then
+      WIZ_KEY=""
+    elif [ -n "$reply" ]; then
+      WIZ_KEY="$reply"
+    else
+      # Not `[ -z ... ] && ...`: as the function's last command a false test makes
+      # prompt_connection return 1, and `set -e` aborts the whole installer.
+      WIZ_KEY="__OPENVIKING_KEEP__"
+      if [ -z "$current_key" ]; then
+        WIZ_KEY=""
+      fi
+    fi
+    if [ "$provider" = "byteplus" ] && [ -z "$WIZ_KEY" ]; then
+      err "$(t 'An API key is required for the BytePlus instance.' 'BytePlus 实例需要 API Key。')"
+    else
+      break
+    fi
+  done
 }
 
 # What the credentials step settled on. Nothing is written until the plan is
