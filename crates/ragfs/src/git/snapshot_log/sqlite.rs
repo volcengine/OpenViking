@@ -21,7 +21,6 @@ const SQLITE_SCHEMA: &[&str] = &[
         commit_oid TEXT NOT NULL, parent_oid TEXT, tree_oid TEXT NOT NULL,
         committed_at INTEGER NOT NULL, deleted_at INTEGER, integrity BLOB NOT NULL,
         PRIMARY KEY(account, branch, seq), UNIQUE(account, commit_oid))",
-    "CREATE INDEX IF NOT EXISTS idx_snapshot_commit_time ON snapshot_commit(account, branch, committed_at)",
     r#"CREATE TABLE IF NOT EXISTS snapshot_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account TEXT NOT NULL,

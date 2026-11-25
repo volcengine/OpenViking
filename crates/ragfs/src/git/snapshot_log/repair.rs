@@ -147,48 +147,6 @@ macro_rules! impl_path_history_repair {
 
         #[async_trait]
         impl super::PathHistoryGeneration for $store {
-            async fn clear_branch(
-                &self,
-                account: &str,
-                branch: &str,
-            ) -> Result<(), SnapshotLogError> {
-                let mut tx = self.pool.begin_with($begin).await?;
-                self.lock_generation(&mut tx, account, branch).await?;
-                sqlx::query(concat!(
-                    "DELETE FROM snapshot_log WHERE account=",
-                    $p1,
-                    " AND branch=",
-                    $p2
-                ))
-                .bind(account)
-                .bind(branch)
-                .execute(&mut *tx)
-                .await?;
-                Ok(tx.commit().await?)
-            }
-
-            async fn reparent_after_delete(
-                &self,
-                account: &str,
-                branch: &str,
-                deleted_commit_oids: &[String],
-                child_commit_oid: &str,
-                keep_paths: &[String],
-            ) -> Result<bool, SnapshotLogError> {
-                let mut tx = self.pool.begin_with($begin).await?;
-                self.lock_generation(&mut tx, account, branch).await?;
-                let run = super::PathHistoryRepair {
-                    deleted: deleted_commit_oids.to_vec(),
-                    child: child_commit_oid.to_owned(),
-                    keep_paths: keep_paths.to_vec(),
-                };
-                if !self.repair_run(&mut tx, account, branch, &run).await? {
-                    return Ok(false);
-                }
-                tx.commit().await?;
-                Ok(true)
-            }
-
             async fn generation(
                 &self,
                 account: &str,
@@ -284,18 +242,6 @@ pub(super) use impl_path_history_repair;
 /// Track which history overlay the path rows reflect, including across database processes.
 #[async_trait::async_trait]
 pub trait PathHistoryGeneration: Send + Sync {
-    /// Discard path rows for one branch.
-    async fn clear_branch(&self, account: &str, branch: &str) -> Result<(), SnapshotLogError>;
-    /// Repair one interval atomically, returning false when a full backfill is necessary.
-    async fn reparent_after_delete(
-        &self,
-        account: &str,
-        branch: &str,
-        deleted_commit_oids: &[String],
-        child_commit_oid: &str,
-        keep_paths: &[String],
-    ) -> Result<bool, SnapshotLogError>;
-
     /// Get the indexed overlay root, or the empty string for pre-overlay history.
     async fn generation(&self, account: &str, branch: &str) -> Result<String, SnapshotLogError>;
     /// Clear stale path rows before backfilling a different overlay.

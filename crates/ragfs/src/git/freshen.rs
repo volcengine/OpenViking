@@ -62,13 +62,6 @@ impl ObjectStore for FreshenObjectStore {
     async fn list_objects(&self, account: &str) -> Result<Vec<ObjectMeta>, ObjectStoreError> {
         self.inner.list_objects(account).await
     }
-    async fn delete_objects(
-        &self,
-        account: &str,
-        oids: &[ObjectId],
-    ) -> Result<(), ObjectStoreError> {
-        self.inner.delete_objects(account, oids).await
-    }
     async fn sweep_objects(
         &self,
         account: &str,

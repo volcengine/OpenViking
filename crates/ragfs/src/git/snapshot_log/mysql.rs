@@ -75,8 +75,7 @@ impl MySqlSnapshotLogStore {
             account VARBINARY(255) NOT NULL, branch VARBINARY(512) NOT NULL, seq BIGINT NOT NULL,
             commit_oid CHAR(40) CHARACTER SET ascii NOT NULL, parent_oid CHAR(40) CHARACTER SET ascii,
             tree_oid CHAR(40) CHARACTER SET ascii NOT NULL, committed_at BIGINT NOT NULL, deleted_at BIGINT, integrity BINARY(32) NOT NULL,
-            PRIMARY KEY(account, branch, seq), UNIQUE KEY(account, commit_oid),
-            KEY idx_snapshot_commit_time(account, branch, committed_at))").execute(&pool).await?;
+            PRIMARY KEY(account, branch, seq), UNIQUE KEY(account, commit_oid))").execute(&pool).await?;
         Ok(Self {
             pool,
             limits: SnapshotLogLimits::default(),

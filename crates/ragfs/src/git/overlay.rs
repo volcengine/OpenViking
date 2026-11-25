@@ -186,18 +186,6 @@ impl OverlayView {
         }
         Ok(out)
     }
-    pub async fn all_grafts(&self) -> Result<Vec<(ObjectId, Vec<ObjectId>)>, GitError> {
-        let mut out = Vec::new();
-        for key in self.shards.keys() {
-            for (id, ps) in &self.shard(key).await?.unwrap().grafts {
-                out.push((
-                    parse_id(id)?,
-                    ps.iter().map(|p| parse_id(p)).collect::<Result<_, _>>()?,
-                ));
-            }
-        }
-        Ok(out)
-    }
     pub fn blob_oids(&self) -> Vec<ObjectId> {
         self.root_oid
             .into_iter()

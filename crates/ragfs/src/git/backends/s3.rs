@@ -442,26 +442,6 @@ impl ObjectStore for S3ObjectStore {
         Ok(objects)
     }
 
-    async fn delete_objects(
-        &self,
-        account: &str,
-        oids: &[ObjectId],
-    ) -> Result<(), ObjectStoreError> {
-        for chunk in oids.chunks(1000) {
-            let batch = chunk
-                .iter()
-                .map(|oid| {
-                    aws_sdk_s3::types::ObjectIdentifier::builder()
-                        .key(self.object_key(account, oid))
-                        .build()
-                        .map_err(s3_error)
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            self.delete_batch(batch).await?;
-        }
-        Ok(())
-    }
-
     async fn sweep_objects(
         &self,
         account: &str,

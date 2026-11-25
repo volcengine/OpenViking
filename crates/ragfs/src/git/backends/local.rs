@@ -276,27 +276,6 @@ impl ObjectStore for LocalObjectStore {
         }
     }
 
-    async fn delete_objects(
-        &self,
-        account: &str,
-        oids: &[ObjectId],
-    ) -> Result<(), ObjectStoreError> {
-        let paths: Vec<_> = oids
-            .iter()
-            .map(|oid| self.object_path(account, oid))
-            .collect();
-        blocking(move || {
-            for path in paths {
-                match fs::remove_file(path) {
-                    Err(e) if e.kind() == ErrorKind::NotFound => (),
-                    result => result?,
-                }
-            }
-            Ok(())
-        })
-        .await
-    }
-
     async fn sweep_objects(
         &self,
         account: &str,

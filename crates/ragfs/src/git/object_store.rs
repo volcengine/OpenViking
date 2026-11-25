@@ -83,17 +83,6 @@ pub trait ObjectStore: Send + Sync + 'static {
         Err(ObjectStoreError::Backend("list_objects unsupported".into()))
     }
 
-    /// Remove the supplied objects idempotently.
-    async fn delete_objects(
-        &self,
-        _account: &str,
-        _oids: &[ObjectId],
-    ) -> Result<(), ObjectStoreError> {
-        Err(ObjectStoreError::Backend(
-            "delete_objects unsupported".into(),
-        ))
-    }
-
     /// Delete only the generations observed during listing. Production GC never
     /// issues an unconditional delete based on a possibly stale observation.
     async fn sweep_objects(
