@@ -63,8 +63,8 @@ impl TreeState {
         }
     }
 
-    /// Known root-level scopes in OpenViking
-    const ROOT_SCOPES: &'static [&'static str] = &["agent", "resources", "session", "user"];
+    /// Known root-level scopes in OpenViking (fallback when root ls is unavailable)
+    const ROOT_SCOPES: &'static [&'static str] = &["agent", "resources", "system", "user"];
 
     pub async fn load_root(&mut self, client: &HttpClient, uri: &str) {
         let is_root = uri == "viking://" || uri == "viking:///" || uri == "/";
@@ -84,32 +84,39 @@ impl TreeState {
                 children: Vec::new(),
             };
 
-            // Preload the children (root scopes) so they're ready when expanding
-            let mut scope_nodes = Vec::new();
-            for scope in Self::ROOT_SCOPES {
-                let scope_uri = format!("viking://{}", scope);
-                let mut node = TreeNode {
-                    entry: FsEntry {
-                        uri: scope_uri.clone(),
-                        _size: None,
-                        is_dir: true,
-                        _mod_time: None,
-                    },
-                    depth: 1,
-                    expanded: false,
-                    children_loaded: false,
-                    children: Vec::new(),
-                };
+            let mut scope_nodes = match Self::fetch_children(client, "viking://").await {
+                Ok(mut nodes) if !nodes.is_empty() => {
+                    for node in &mut nodes {
+                        node.depth = 1;
+                    }
+                    nodes
+                }
+                _ => Self::ROOT_SCOPES
+                    .iter()
+                    .map(|scope| TreeNode {
+                        entry: FsEntry {
+                            uri: format!("viking://{}", scope),
+                            _size: None,
+                            is_dir: true,
+                            _mod_time: None,
+                        },
+                        depth: 1,
+                        expanded: false,
+                        children_loaded: false,
+                        children: Vec::new(),
+                    })
+                    .collect(),
+            };
 
-                // Try to load children eagerly for scopes
-                if let Ok(mut children) = Self::fetch_children(client, &scope_uri).await {
+            // Preload children for each root scope so they're ready when expanding
+            for node in &mut scope_nodes {
+                if let Ok(mut children) = Self::fetch_children(client, &node.entry.uri).await {
                     for child in &mut children {
                         child.depth = 2;
                     }
                     node.children = children;
                     node.children_loaded = true;
                 }
-                scope_nodes.push(node);
             }
 
             root_node.children = scope_nodes;
@@ -370,5 +377,15 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].uri, "viking://resources/a.md");
+    }
+
+    #[test]
+    fn allow_deletion_protects_root_and_root_scopes() {
+        let state = TreeState::new();
+        assert!(!state.allow_deletion("/"));
+        for scope in ["agent", "resources", "system", "user"] {
+            assert!(!state.allow_deletion(&format!("viking://{}", scope)));
+        }
+        assert!(state.allow_deletion("viking://user/default/sessions/s1"));
     }
 }
