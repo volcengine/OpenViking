@@ -123,7 +123,7 @@ pub trait SnapshotLogStore: Send + Sync {
 }
 
 /// Maximum service_name length in bytes.
-pub const SNAPSHOT_LOG_SERVICE_NAME_BYTES: usize = 255;
+pub const SNAPSHOT_LOG_SERVICE_NAME_BYTES: usize = 128;
 
 /// Validate the deployment-scoped service_name used for shared-DB isolation.
 pub fn validate_service_name(service_name: &str) -> Result<(), SnapshotLogError> {
@@ -134,7 +134,7 @@ pub fn validate_service_name(service_name: &str) -> Result<(), SnapshotLogError>
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
         return Err(SnapshotLogError::Config(
-            "snapshot log service_name must be 1..=255 ASCII letters, digits, '.', '_' or '-'"
+            "snapshot log service_name must be 1..=128 ASCII letters, digits, '.', '_' or '-'"
                 .to_string(),
         ));
     }

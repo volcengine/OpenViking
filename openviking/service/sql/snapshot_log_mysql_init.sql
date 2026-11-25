@@ -3,7 +3,7 @@
 -- service_name isolates OV deployments that share a database.
 CREATE TABLE IF NOT EXISTS snapshot_log (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  service_name VARBINARY(255) NOT NULL,
+  service_name VARBINARY(128) NOT NULL,
   account VARBINARY(255) NOT NULL,
   branch VARBINARY(512) NOT NULL,
   path VARBINARY(2048) NOT NULL,
