@@ -217,6 +217,7 @@ ov read viking://resources/docs/api.md
 | uri | str | 是 | - | 要写入的文件 URI |
 | content | str | 是 | - | 要写入的新内容 |
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 是 `replace` 的兼容别名 |
+| expected_sha256 | str | 否 | 未设置 | 要求当前完整文件字节匹配此小写 64 位 SHA-256 摘要；不匹配或文件已不存在时返回冲突 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | use_snapshot | bool | 否 | `false` | 在内容锁内为写入文件保存快照|
 | defer_processing | bool | 否 | `false` | 对支持索引的命名空间，只保存正文，不派发语义或向量处理；FILE_ONLY 处理行为不变 |
@@ -227,13 +228,15 @@ ov read viking://resources/docs/api.md
 
 **说明**
 
+- `expected_sha256` 会在目标文件的精确锁内、任何内容写入或快照、tags/ACL 更新、后台任务派发之前校验。哈希不匹配或文件已不存在时返回 `CONFLICT`（HTTP `409`）；`replace`、`append`、`create` 和 `defer_processing=true` 都遵循该条件。省略或传入 `null` 时不检查哈希。
+- 哈希覆盖完整存储字节，包括换行和 Memory metadata。请对 `download_bytes()` 返回的字节计算哈希，普通 `read()` 或 `read_raw()` 的文本可能经过可见性、解码或 Privacy 处理。该条件检测内容是否相同；内容修改后又恢复原样时，原哈希仍可匹配。
 - `replace`、`append` 和作为兼容别名的 `create` 都会在目标缺失时创建文件；`append` 会以传入内容作为新文件的初始内容，其他情况下 `create` 与 `replace` 完全相同。目录始终会被拒绝。
 - 使用任意模式创建缺失文件时，都只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 对支持索引的命名空间，设置 `defer_processing=true` 后仍会保存正文；同时设置 `use_snapshot=true` 时，会在同一写锁内记录快照。`semantic_status` / `vector_status` 返回 `deferred`，但不会向 QueueFS 派发 `ContentWrite`、`Semantic` 或 `Embedding` 消息。持久化 Task 会被直接完成：`wait=false` 返回已经处于终态的 `task_id`，`wait=true` 读取终态结果并移除 `task_id`。依赖搜索前，应对该 URI 执行 `reindex()`。延迟处理不能与实际的 tags/ACL 更新或 `resolve_conflicts=true` 同时使用。
 - `viking://system/` 等 FILE_ONLY 命名空间在 `defer_processing` 为 true 或 false 时都保持原有处理行为：语义/向量状态为 `skipped`，仍通过一条 `ContentWrite` 根消息完成 Task，不执行索引处理。`wait=false` 在入队后返回，`wait=true` 等待该 Task 完成。FILE_ONLY 命名空间不支持 reindex；原有命名空间及参数校验仍然生效。
-- 正文提交后，如果后续语义/向量任务入队失败，不会回滚已写正文；接口会返回错误，调用方应重试同一次 write 以重新派发派生维护。显式 write 始终重新提交最终字节，因此在向量索引暂时落后于文件时也能安全重试。
+- 正文提交后，后续语义/向量任务入队失败不会回滚已写正文，接口会返回错误。重试前请重新读取确认正文状态：携带 `expected_sha256` 且已改变正文的请求，使用旧哈希重试会返回 `CONFLICT`。对支持索引的命名空间，可用 `reindex()` 恢复派生维护；再次编辑时应基于当前字节计算新哈希。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后会自动调度相关语义与向量处理。
 - 资源写入附带的父目录 L0/L1 刷新采用尽力更新：父目录锁冲突时跳过本次目录刷新，保留原文写入及文件自身的摘要、向量处理。跳过 L0/L1 写回时也跳过目录向量更新，不保证自动补刷；原文文件本身的锁冲突仍报错。提交任务前发现冲突时返回 `semantic_status: "skipped"`；后台运行期间的跳过记录在日志中，`wait=true` 也不保证父目录摘要更新。
 - 提供非空 `tags` 时，标签会在该文件首次向量 upsert 时写入，而非在处理完成后再单独更新。省略 `tags`，或显式传 `tags: []` 配合 `tag_mode: "replace"`，都不会修改已有标签。使用 `tag_mode: "clear"` 可清空全部已有标签，且 `clear` 会忽略同时传入的标签值。
@@ -251,6 +254,18 @@ result = client.write(
 )
 print(result["root_uri"])
 ```
+
+**条件写入**
+
+```python
+import hashlib
+
+uri = "viking://resources/docs/api.md"
+expected = hashlib.sha256(client.download_bytes(uri)).hexdigest()
+client.write(uri, "# Updated API\n", options={"expected_sha256": expected})
+```
+
+TypeScript 使用 `expectedSha256`，Go 使用 `ExpectedSHA256: openviking.String(expected)`。CLI 可传入 `--expected-sha256 <digest>`。
 
 **TypeScript SDK**
 

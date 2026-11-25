@@ -3,6 +3,7 @@
 
 """Service-level tests for content write coordination."""
 
+import hashlib
 from types import SimpleNamespace
 
 import pytest
@@ -49,6 +50,9 @@ async def test_write_updates_memory_file_and_parent_overview(service, monkeypatc
             content="Updated preference",
             ctx=ctx,
             mode="replace",
+            expected_sha256=hashlib.sha256(
+                await service.viking_fs.read_file_bytes(memory_uri, ctx=ctx)
+            ).hexdigest(),
             wait=True,
         )
     finally:
@@ -120,6 +124,9 @@ async def test_memory_replace_preserves_metadata(service):
         content="Updated preference",
         ctx=ctx,
         mode="replace",
+        expected_sha256=hashlib.sha256(
+            await service.viking_fs.read_file_bytes(memory_uri, ctx=ctx)
+        ).hexdigest(),
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
@@ -353,6 +360,9 @@ async def test_memory_append_preserves_metadata(service):
         content="\nUpdated preference",
         ctx=ctx,
         mode="append",
+        expected_sha256=hashlib.sha256(
+            await service.viking_fs.read_file_bytes(memory_uri, ctx=ctx)
+        ).hexdigest(),
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)

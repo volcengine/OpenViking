@@ -1473,6 +1473,7 @@ pub async fn handle_write(
     tags: Vec<String>,
     tag_mode: String,
     acl: Option<Value>,
+    expected_sha256: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
@@ -1498,6 +1499,7 @@ pub async fn handle_write(
         tags,
         &tag_mode,
         acl,
+        expected_sha256.as_deref(),
         ctx.output_format,
         ctx.compact,
     )

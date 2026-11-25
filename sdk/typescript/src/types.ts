@@ -168,6 +168,7 @@ export interface AddResourceOptions extends WaitOptions {
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
+  expectedSha256?: string;
   useSnapshot?: boolean;
   acl?: AclSpec;
   mode?: string;

@@ -289,9 +289,10 @@ type RemoveOptions struct {
 
 // WriteOptions controls Write.
 type WriteOptions struct {
-	ACL  *ACLSpec
-	Mode string
-	Wait bool
+	ExpectedSHA256 *string
+	ACL            *ACLSpec
+	Mode           string
+	Wait           bool
 	// Deprecated: Timeout is accepted for compatibility and ignored.
 	Timeout          *float64
 	Telemetry        any

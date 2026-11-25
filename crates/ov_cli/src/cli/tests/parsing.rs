@@ -841,3 +841,21 @@ fn compile_creation_requires_a_name() {
         assert!(error.to_string().contains("--compile-name"));
     }
 }
+
+#[test]
+fn cli_parses_write_expected_sha256() {
+    let digest = "a".repeat(64);
+    let cli = Cli::try_parse_from([
+        "ov",
+        "write",
+        "viking://resources/demo.md",
+        "--content",
+        "new",
+        "--expected-sha256",
+        &digest,
+    ])
+    .expect("conditional write should parse");
+    assert!(
+        matches!(cli.command, Commands::Write { expected_sha256: Some(value), .. } if value == digest)
+    );
+}

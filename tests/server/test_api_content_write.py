@@ -3,6 +3,7 @@
 
 """Tests for content write endpoint."""
 
+import hashlib
 import json
 
 import pytest
@@ -428,3 +429,63 @@ async def test_tag_updates_preserve_content_and_isolate_batch_failures(
     assert await service.vikingdb_manager.get_strict(record_ids, ctx=root_ctx) == after
     for uri, owner in [(file_uri, ctx), (unindexed, ctx), (foreign, foreign_ctx)]:
         assert await service.viking_fs.read_file(uri, ctx=owner) == "original content"
+
+
+@pytest.mark.parametrize("expected", ["A" * 64, "a" * 63])
+async def test_write_revision_rejects_invalid_http_digest(client, expected):
+    response = await client.post(
+        "/api/v1/content/write",
+        json={"uri": "viking://resources/page.md", "content": "new", "expected_sha256": expected},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+async def test_write_revision_http_conflict_preserves_content_and_tags(client_with_resource):
+    client, root = client_with_resource
+    uri = await _first_file_uri(client, root)
+    current = await client.get("/api/v1/content/download", params={"uri": uri})
+    assert current.status_code == 200
+    expected = hashlib.sha256(current.content).hexdigest()
+    write = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": uri,
+            "content": "first",
+            "expected_sha256": expected,
+            "tags": ["team=original"],
+            "wait": True,
+        },
+    )
+    assert write.status_code == 200, write.text
+    stale = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": uri,
+            "content": "stale",
+            "expected_sha256": expected,
+            "tags": ["team=stale"],
+            "use_snapshot": True,
+        },
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["error"]["code"] == "CONFLICT"
+    current = await client.get("/api/v1/content/download", params={"uri": uri})
+    assert current.content == b"first"
+    attrs = await client.get("/api/v1/fs/attrs", params={"uri": uri})
+    assert "team=original" in attrs.json()["result"]["attrs"]["tags"]
+    assert "team=stale" not in attrs.json()["result"]["attrs"]["tags"]
+
+
+async def test_write_revision_http_requires_existing_file(client):
+    response = await client.post(
+        "/api/v1/content/write",
+        json={
+            "uri": "viking://resources/missing.md",
+            "content": "new",
+            "mode": "create",
+            "expected_sha256": hashlib.sha256(b"").hexdigest(),
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "CONFLICT"

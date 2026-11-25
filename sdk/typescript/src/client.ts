@@ -841,6 +841,7 @@ export class OpenVikingClient {
     const body = compact({
       uri: normalizeURI(uri),
       content,
+      expected_sha256: options.expectedSha256,
       mode: options.mode,
       processing_mode: options.processingMode,
       use_snapshot: options.useSnapshot,

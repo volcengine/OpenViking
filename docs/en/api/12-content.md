@@ -217,6 +217,7 @@ Write a file and automatically refresh related semantics and vectors.
 | uri | str | Yes | - | File URI to write |
 | content | str | Yes | - | New content to write |
 | mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` is a compatibility alias for `replace` |
+| expected_sha256 | str | No | Unset | Require the complete existing file bytes to match this lowercase 64-character SHA-256 digest; a changed or missing file returns a conflict |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | use_snapshot | bool | No | `false` | Save the written file as a snapshot under the content lock|
 | defer_processing | bool | No | `false` | For indexed namespaces, save content without scheduling semantic or vector processing; FILE_ONLY processing is unchanged |
@@ -227,13 +228,15 @@ Write a file and automatically refresh related semantics and vectors.
 
 **Notes**
 
+- `expected_sha256` is checked under the target's exact file lock before content writes, snapshots, tags/ACL updates, or background dispatch. A changed or missing file returns `CONFLICT` (HTTP `409`). The guard applies to `replace`, `append`, `create`, and `defer_processing=true`. Omitting it or passing `null` skips the hash check.
+- Hash the complete stored bytes, including line endings and Memory metadata. Use bytes from `download_bytes()`; text returned by `read()` or `read_raw()` may undergo visibility, decoding, or Privacy processing. This guard checks content equality; changing content and later restoring the original bytes allows the original digest to match again.
 - `replace`, `append`, and the `create` compatibility alias create a missing target file. `append` uses the supplied content as the initial file content in that case; `create` otherwise behaves exactly like `replace`. Directories are always rejected.
 - Creating a missing file with any mode only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
 - File content is updated before the API returns. `wait` only controls whether the call waits for semantic/vector refresh to finish.
 - For indexed namespaces, `defer_processing=true` saves the content and, with `use_snapshot=true`, records a snapshot under the same write lock. It reports `semantic_status` and `vector_status` as `deferred`, and schedules no `ContentWrite`, `Semantic`, or `Embedding` QueueFS work. The persistent Task is completed directly: `wait=false` returns its already-terminal `task_id`, while `wait=true` reads the terminal result and omits `task_id`. Run `reindex()` for the URI before relying on search. Deferral cannot be combined with an effective tags/ACL update or `resolve_conflicts=true`.
 - FILE_ONLY namespaces such as `viking://system/` retain their existing processing behavior with either value of `defer_processing`: semantic/vector statuses are `skipped`, and a `ContentWrite` root message completes the Task without indexing. `wait=false` returns after enqueue; `wait=true` waits for that Task. FILE_ONLY namespaces do not support reindex. Existing namespace and parameter validation still applies.
-- Once file content is committed, a later semantic/vector enqueue failure does not roll it back. The request returns an error; retry the same write to resubmit derived maintenance. Explicit writes always recommit their final bytes, so retries remain safe while the vector index lags the file.
+- Once file content is committed, a later semantic/vector enqueue failure does not roll it back; the request returns an error. Read the file again before retrying: if a request with `expected_sha256` has changed the stored content, the old digest now causes `CONFLICT`. Use `reindex()` to recover derived maintenance in indexed namespaces, and compute a new digest from the current bytes for further edits.
 - The public API no longer accepts `regenerate_semantics` or `revectorize`; write automatically schedules related semantic and vector processing.
 - Parent L0/L1 refreshes for resource writes are best-effort: a parent lock conflict skips that directory refresh while preserving the file write and its own summary/vector work. Skipping L0/L1 persistence also skips directory vector updates; a later refresh is not guaranteed. Locks on the written file itself still raise conflicts. Contention detected before enqueueing returns `semantic_status: "skipped"`; skips during background execution are logged, and `wait=true` does not guarantee updated parent summaries.
 - When non-empty `tags` are supplied, tags are included in the file's first vector upsert rather than updated after processing. Omitting `tags`, or using `tags: []` with `tag_mode: "replace"`, preserves existing tags. Use `tag_mode: "clear"` to remove all existing tags; `clear` ignores any supplied tag values.
@@ -251,6 +254,18 @@ result = client.write(
 )
 print(result["root_uri"])
 ```
+
+**Conditional write**
+
+```python
+import hashlib
+
+uri = "viking://resources/docs/api.md"
+expected = hashlib.sha256(client.download_bytes(uri)).hexdigest()
+client.write(uri, "# Updated API\n", options={"expected_sha256": expected})
+```
+
+TypeScript uses `expectedSha256`; Go uses `ExpectedSHA256: openviking.String(expected)`. The CLI accepts `--expected-sha256 <digest>`.
 
 **TypeScript SDK**
 

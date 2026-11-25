@@ -1880,6 +1880,7 @@ class FSService:
         resolve_conflicts: bool = False,
         use_snapshot: bool = False,
         defer_processing: bool = False,
+        expected_sha256: str | None = None,
     ) -> Dict[str, Any]:
         """Write content with optional snapshots; restores supply their own commit callback."""
         viking_fs = self._ensure_initialized()
@@ -1904,6 +1905,7 @@ class FSService:
             acl=acl,
             resolve_conflicts=resolve_conflicts,
             defer_processing=defer_processing,
+            expected_sha256=expected_sha256,
         )
         return await write()
 
