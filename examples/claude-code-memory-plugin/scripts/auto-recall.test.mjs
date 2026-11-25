@@ -123,6 +123,29 @@ const NO_SERVER_ASSEMBLY = {
   "POST /api/v1/search/recall": () => ({ status: 404, body: { status: "error", error: { message: "gone" } } }),
 };
 
+test("auto-recall displays the server validation error with debug disabled", async () => {
+  let requests = 0;
+  const message = "Invalid request parameters: events_time_decay_protection";
+  const { stdout, state } = await recallTurn({
+    env: { OPENVIKING_DEBUG: "0" },
+    routes: {
+      ...HEALTHY,
+      "POST /api/v1/search/search": () => {
+        requests++;
+        return { status: 422, body: { status: "error", error: { code: "INVALID_ARGUMENT", message } } };
+      },
+      "POST /api/v1/search/recall": () => assert.fail("parameter errors must not fall back to /recall"),
+    },
+  });
+
+  assert.deepEqual(JSON.parse(stdout), {
+    decision: "approve",
+    systemMessage: `OpenViking auto recall failed (HTTP 422): ${message}`,
+  });
+  assert.equal(state.reason, "request_rejected");
+  assert.equal(requests, 1);
+});
+
 function memory(uri, score, abstract) {
   return { uri, score, abstract, level: 1, category: "entities" };
 }

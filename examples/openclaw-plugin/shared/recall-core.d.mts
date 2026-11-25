@@ -63,6 +63,7 @@ export type DetailedRecall = {
   hintCount: number;
   budgetUsed: number;
   stage: "server_assembled" | "ranked" | "no_results" | "filtered_out" | "request_rejected";
+  error?: string;
 };
 
 export function buildRecallBlockDetailed(

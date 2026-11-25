@@ -478,13 +478,11 @@ function wrapContext(body) {
   return RECALL_CONTEXT_TEMPLATE.replace("{context}", () => text);
 }
 
-const CONTEXT_REQUEST_REJECTED = Symbol("context request rejected");
-
 /**
  * Server-assembled context: the context face when the deployment has it, else
  * the deprecated /recall preset. Returns the injection block, "" when there was
  * nothing relevant, or null when no server-side path was usable at all.
- * A validation error is returned as CONTEXT_REQUEST_REJECTED.
+ * A validation error is returned as { error }.
  */
 export async function buildServerAssembledBlock(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
@@ -497,7 +495,7 @@ export async function buildServerAssembledBlock(fetchJSON, cfg, query, options =
 
 /**
  * Raw server-assembled context, null when a fallback can be tried, or
- * CONTEXT_REQUEST_REJECTED when the server rejects the request parameters.
+ * { error } when the server rejects the request parameters.
  */
 export async function fetchAssembledContext(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId || "";
@@ -515,7 +513,7 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
     if (status === 400 || status === 422) {
       const message = typeof res.error === "string" ? res.error : res.error?.message;
       log("recall_context_request_rejected", { status, message });
-      return CONTEXT_REQUEST_REJECTED;
+      return { error: `OpenViking auto recall failed (HTTP ${status}): ${message || "Invalid request parameters"}` };
     }
     log("recall_context_face_error", { status });
     return null;
@@ -594,7 +592,7 @@ async function finalizeRecall(result, cfg, query, options, log, shortContext) {
 
 async function recallViaContextFace(fetchJSON, cfg, query, options, log) {
   const assembled = await fetchAssembledContext(fetchJSON, cfg, query, { ...options, log });
-  if (assembled === null || assembled === CONTEXT_REQUEST_REJECTED) return assembled;
+  if (assembled === null || assembled.error) return assembled;
   const text = await finalizeRecall(assembled, cfg, query, options, log);
   return text ? wrapContext(text) : "";
 }
@@ -676,6 +674,7 @@ export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = 
 
   const log = options.log || (() => {});
   const legacy = await recallForPeer(fetchJSON, cfg, query, { ...options, actorPeerId: legacyPeerId });
+  if (legacy.error) return { ...(primary.block ? primary : legacy), error: legacy.error };
   if (!legacy.block) return primary;
   log("recall_legacy_peer_hit", { legacyPeerId });
   return {
@@ -687,9 +686,10 @@ export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = 
   };
 }
 
-/** The block alone, or null when nothing was injectable. */
+/** The block alone, with request errors reported to stderr. */
 export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
-  const { block } = await buildRecallBlockDetailed(fetchJSON, cfg, query, options);
+  const { block, error } = await buildRecallBlockDetailed(fetchJSON, cfg, query, options);
+  if (error) console.error(error);
   return block || null;
 }
 
@@ -709,7 +709,7 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
     actorPeerId,
     log,
   });
-  if (serverBlock === CONTEXT_REQUEST_REJECTED) return emptyRecall("request_rejected");
+  if (serverBlock?.error) return { ...emptyRecall("request_rejected"), error: serverBlock.error };
   if (serverBlock !== null) {
     if (!serverBlock) return emptyRecall("no_results");
     // The server rendered one budgeted unit, so nothing here degraded to a

@@ -80,6 +80,7 @@ test("context search reports an unknown parameter without retrying", async () =>
   assert.equal(calls[0].body.query, query);
   assert.equal(result.stage, "request_rejected");
   assert.equal(result.block, "");
+  assert.equal(result.error, `OpenViking auto recall failed (HTTP 400): ${message}`);
   assert.deepEqual(events, [{ event: "recall_context_request_rejected", data: { status: 400, message } }]);
 });
 
