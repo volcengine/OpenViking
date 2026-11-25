@@ -199,6 +199,10 @@ class OpenGaussCollectionAdapter(CollectionAdapter):
     _STRING_FIELD_BYTE_LIMIT = VIKINGDB_STRING_FIELD_BYTE_LIMIT
     _TEXT_FIELD_BYTE_LIMIT = VIKINGDB_TEXT_FIELD_BYTE_LIMIT
 
+    @property
+    def supports_event_time_decay(self) -> bool:
+        return not self._distributed
+
     def query(self, *, advance: Optional[Dict[str, Any]] = None, **kwargs):
         from .opengauss.retrieval import _parse_time_decay, _validate_search_parameters
 

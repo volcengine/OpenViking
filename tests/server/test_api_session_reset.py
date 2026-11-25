@@ -25,6 +25,7 @@ def isolated_config(tmp_path, monkeypatch):
                     "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
+                "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "unused"},
                 "embedding": {
                     "dense": {
                         "provider": "openai",
@@ -144,7 +145,16 @@ async def test_reset_empty_archive_survives_late_summary_and_next_commit(
 async def test_reset_rejects_retention_and_non_boolean_flag(client, options):
     response = await client.post("/api/v1/sessions/unused/commit", json=options)
     assert response.status_code == 400
-    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+    error = response.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    if isinstance(options["reset_context"], bool):
+        assert (
+            error["message"] == "reset_context requires keep_recent_count=0 and no retention_mode"
+        )
+    else:
+        [detail] = error["details"]["validation_errors"]
+        assert detail["loc"] == ["body", "reset_context"]
+        assert detail["type"] == "bool_type"
 
 
 async def test_reset_write_failure_does_not_block_next_archive(service, monkeypatch):

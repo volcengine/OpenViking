@@ -33,13 +33,25 @@ def test_observer_reports_empty_searches_without_degrading_health(collector):
 
 
 def test_observer_aggregates_results_and_keeps_snapshots_isolated(collector):
-    collector.record_query("memory", 2, [0.9, 0.6], latency_ms=50.0, rerank_used=True)
+    collector.record_query(
+        "memory", 2, [0.9, 0.6], latency_ms=50.0, rerank_used=True, account_id="A"
+    )
     snapshot = collector.snapshot()
-    collector.record_query("resource", 1, [0.3], latency_ms=20.0)
-    collector.record_query("memory", 0, [], latency_ms=5.0)
+    account_snapshot = collector.snapshot("A")
+    collector.record_query("resource", 1, [0.3], latency_ms=20.0, account_id="B")
+    collector.record_query("memory", 0, [], latency_ms=5.0, account_id="A")
 
     assert snapshot.total_queries == 1
     assert snapshot.queries_by_type == {"memory": 1}
+    assert account_snapshot.total_queries == 1
+    account = RetrievalObserver(account_id="A").get_status_json()
+    assert account["total_queries"] == 2
+    assert account["total_results"] == 2
+    assert account["zero_result_rate"] == 0.5
+    assert account["avg_score"] == 0.75
+    assert account["avg_latency_ms"] == 27.5
+    assert RetrievalObserver(account_id="B").get_status_json()["total_queries"] == 1
+    assert RetrievalObserver(account_id="unknown").get_status_json()["total_queries"] == 0
     observer = RetrievalObserver()
     status = observer.get_status_json()
     assert status == {

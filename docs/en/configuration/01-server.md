@@ -53,6 +53,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 |---|---|---|---|
 | `default_account` | string | `"default"` | Default account for the service context |
 | `default_user` | string | `"default"` | Default user for the service context |
+| `enable_default_resources` | boolean | `true` | Supply omitted local Embedding/VectorDB and preset default Account directories; see [resource configuration](../guides/01-configuration.md) |
 | `embedding` | object | built-in local dense model | Dense, sparse, and hybrid embedding; defaults to `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Model for retrieval intent analysis and recall rewriting. Falls back to `vlm` when omitted or empty; recall rewrite in `auto` mode requires a configured cluster `query_planner` or an account-level `query_planner` or `vlm` override |
@@ -567,6 +568,62 @@ native components. Rust has no `CRITICAL` level, so that threshold still maps to
 `server.observability.usage_audit` settings manage usage and HTTP request records;
 security-operation audit persistence remains a separate feature backlog. SDK imports do not take ownership of
 the host root logger. See the [logging policy](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md) for content rules.
+
+## Usage/Audit PostgreSQL Settings
+
+`server.observability.usage_audit.backend` accepts `sqlite` (default) and `postgres`.
+PostgreSQL shares Token, retrieval, context-write and HTTP audit projections across
+server instances, preserving the Console API and viewer timezone behavior.
+
+```json
+{
+  "server": {
+    "observability": {
+      "usage_audit": {
+        "backend": "postgres",
+        "postgres": {
+          "host": "localhost",
+          "port": 5432,
+          "user": "openviking_runtime",
+          "password": "<password>",
+          "database": "openviking",
+          "schema": "openviking_usage_audit",
+          "maxsize": 10,
+          "connect_timeout": 10,
+          "lock_timeout_ms": 1000,
+          "sslmode": "prefer"
+        }
+      }
+    }
+  }
+}
+```
+
+Install `openviking[postgres]`. An administrator must provision
+`openviking/observability/usage_audit/sql/001_usage_audit_postgres.sql` once.
+Startup validates the schema; it never creates or migrates tables. For a custom
+schema, replace the schema name throughout the SQL script. Names must be lowercase
+SQL identifiers of 1–63 characters. The runtime role needs schema `USAGE`,
+table `SELECT/INSERT/UPDATE/DELETE`, and sequence `USAGE/SELECT`.
+Connection settings also accept `sslrootcert`, `sslcert`, and `sslkey`; DSNs are
+not accepted. Set `verify-ca` or `verify-full` according to production TLS requirements.
+
+The schema is now v2. For a preview v1 schema, stop all writers, have an administrator
+run `openviking/observability/usage_audit/sql/002_usage_audit_deletion_fence.sql`,
+then restart all instances with the new code; do not mix old writers.
+`lock_timeout_ms` defaults to `1000` (range `1..60000`) and bounds each database lock
+wait in write/delete transactions. Timeout rolls back the batch; the best-effort
+worker drops that batch. Deletion persists account/user generation fences to reject
+older events queued on other instances. Events admitted for that scope before a
+remote writer refreshes its generation are also conservatively dropped. Each write
+refreshes the generation; subsequently admitted events, including recreated identity
+IDs, can be stored normally. This decision does not depend on machine clocks.
+
+Retention settings match SQLite; `0` disables the corresponding limit. Changing
+backends does not migrate historical data. Events still use an in-process queue,
+without restart recovery or exactly-once delivery. This setting only shares
+Usage/Audit projections; configure other storage and distributed locks separately.
+See the [module guide](https://github.com/volcengine/OpenViking/blob/main/openviking/observability/usage_audit/README.md).
 
 ## Compile API Settings
 

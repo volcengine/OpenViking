@@ -8,6 +8,13 @@ Source: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/
 
 Claude Code and Codex share one installer. It asks which harnesses to install and for your OpenViking credentials; every step is idempotent.
 
+For a managed connection, select **OpenViking Managed Service**, then:
+
+- **Volcengine:** enter your service API key. The installer supplies the URL.
+- **BytePlus:** enter your instance's full HTTPS service URL, then its API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older installers use **Custom URL** for BytePlus.
+
 ```bash
 curl -fsSL https://openviking.ai/install | bash
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
@@ -112,6 +119,7 @@ Credential source: env vars win by default — when any `OPENVIKING_*` credentia
 | `OPENVIKING_CODEX_LOCK_WAIT_MS` | `120000` (SessionEnd), `40000` (PreCompact) | How long a capture hook waits for the per-session state lock |
 | `OPENVIKING_CODEX_COMMITTED_TTL_MS` | `2592000000` | How long a committed session's transcript cursor is kept before its state file is retired |
 | `OPENVIKING_RECALL_QUERY_FILTERS` | `""` | CSV of sed-style regex rules applied to the prompt before it becomes a query ([grammar and examples](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/README.md#input-filters)) |
+| `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | `30d` | Event memories keep their original score for this period during auto recall and decay afterward. Set `off` to disable decay or select another period. MCP `find` and `search` use their own request parameters. |
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV of sed-style regex rules applied to every captured turn (same grammar) |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/codex-hooks.log` |
 

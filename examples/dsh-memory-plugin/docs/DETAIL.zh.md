@@ -43,6 +43,8 @@ curl -fsSL https://openviking.ai/install | bash
 "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh" plugin --profile desktop ls
 ```
 
+如有异常，让 agent 运行 `ov-memory-doctor` 技能，或运行 `node ~/.dsh/profiles/desktop/node_modules/@openviking/dsh-memory-plugin/scripts/ov-memory-doctor.mjs`。它检查安装、配置和服务端连接，并为发现的每个问题给出修复方法。
+
 ## 注意事项
 
 - **没有设置页面。** 通过 `ovcli.conf` 或 `OPENVIKING_*` 环境变量配置插件。行为参数也可以写进 `~/.dsh/profiles/desktop/cordis.patch.yml` 的 `openviking-memory-runtime` 条目。恢复对话框里的“禁用第三方插件、备份 profile patch 并重启”会重置 profile 的插件，并把这个文件挪作备份，所以长期设置请放在 `ovcli.conf`，恢复后记得重新启用插件。

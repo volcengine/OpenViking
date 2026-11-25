@@ -25,6 +25,7 @@ def build_api_key_manager(
     account_store_params: dict[str, object] | None = None,
     account_store_watch_enabled: bool = False,
     account_store_watch_interval_seconds: float = 30.0,
+    bootstrap_default_account: bool = True,
     issue_user_keys: bool = True,
     account_store: AccountStore | None = None,
 ) -> APIKeyManager:
@@ -40,6 +41,7 @@ def build_api_key_manager(
         account_store_params=account_store_params,
         account_store_watch_enabled=account_store_watch_enabled,
         account_store_watch_interval_seconds=account_store_watch_interval_seconds,
+        bootstrap_default_account=bootstrap_default_account,
         account_store=account_store,
     )
     return APIKeyManager(root_key, store, issue_user_keys=issue_user_keys)
@@ -54,6 +56,7 @@ def build_account_store(
     account_store_params: dict[str, object] | None,
     account_store_watch_enabled: bool,
     account_store_watch_interval_seconds: float,
+    bootstrap_default_account: bool = True,
     account_store: AccountStore | None = None,
 ) -> AccountStore:
     """Create one complete account store from the configured provider."""
@@ -73,13 +76,18 @@ def build_account_store(
             api_key_hashing_enabled=api_key_hashing_enabled,
             watch_enabled=account_store_watch_enabled,
             watch_interval_seconds=account_store_watch_interval_seconds,
+            bootstrap_default_account=bootstrap_default_account,
         )
     if provider == "postgres":
         try:
             from openviking.server.account_stores.postgres import PostgresAccountStore
         except ImportError:
             raise RuntimeError("PostgreSQL account storage requires openviking[postgres]") from None
-        return PostgresAccountStore(service_name=service_name, params=account_store_params)
+        return PostgresAccountStore(
+            service_name=service_name,
+            params=account_store_params,
+            bootstrap_default_account=bootstrap_default_account,
+        )
     if provider == "mysql":
         try:
             from openviking.server.account_stores.mysql import MySQLAccountStore
@@ -88,6 +96,7 @@ def build_account_store(
         return MySQLAccountStore(
             service_name=service_name,
             params=account_store_params,
+            bootstrap_default_account=bootstrap_default_account,
         )
     if provider == "redis_mysql":
         try:
@@ -96,11 +105,16 @@ def build_account_store(
             )
         except ImportError:
             raise RuntimeError(
-                "Redis MySQL account storage requires openviking[redis-mysql]"
+                "Redis MySQL account storage requires openviking[mysql]"
             ) from None
+        if viking_fs is None:
+            raise InvalidArgumentError("redis_mysql account storage requires VikingFS")
+        cache_instance = RedisMySQLAccountStore.cache_instance_from_params(account_store_params)
         return RedisMySQLAccountStore(
             service_name=service_name,
             params=account_store_params,
+            cache_runtime=viking_fs.agfs.cache_runtime(cache_instance),
+            bootstrap_default_account=bootstrap_default_account,
         )
     raise InvalidArgumentError(
         f"Unknown account store provider '{account_store_provider}'. "

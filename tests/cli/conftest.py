@@ -622,6 +622,10 @@ def pytest_collection_modifyitems(items):
 
 @pytest.fixture(scope="session")
 def ensure_resources_dir():
+    existing = ov(["stat", "viking://resources", "-o", "json"])
+    if existing["exit_code"] == 0:
+        return
+    skip_if_auth_error(existing)
     r = ov_mkdir("viking://resources")
     if r["exit_code"] != 0:
         if "already exists" in (r.get("stderr") or "").lower():

@@ -147,6 +147,13 @@ def test_clear_ingest_options_survive_semantic_message_round_trip():
         acl_update=update,
     )
 
+    # A persisted empty replacement carries no tag change, but still carries the ACL.
+    payload = msg.to_dict()
+    payload["ingest_options"] = IngestOptions(
+        search_tags=[], search_tag_mode="replace", acl_update=update
+    ).to_dict()
+    assert SemanticMsg.from_dict(payload).ingest_options == IngestOptions(acl_update=update)
+
 
 def test_semantic_msg_round_trips_per_file_ingest_options():
     uri = "viking://resources/demo/a.md"

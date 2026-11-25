@@ -149,6 +149,55 @@ When writing a memory schema, focus on:
 - whether the directory rule matches the intended retrieval scope
 - whether the merge strategy is appropriate for that memory type
 
+#### Memory schema template variables
+
+Each position is rendered with the data available at that stage. For example, a path can use `user_space`, while the description of a field can use `language`. To find the business fields for a memory type such as `events`, `entities`, or `preferences`, use `fields[].name` in the effective schema. The [built-in memory schemas](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/memory/memory_templates/builtin) are the starting point for a deployment override.
+
+| Position | When it is rendered | Inputs |
+|----------|---------------------|--------|
+| `description` and `fields[].description` | When building the extraction schema, before calling the model | `language` is the only supplied variable. If it is unset, use a fallback such as <code v-pre>{{ language or 'English' }}</code>. |
+| `directory` | When locating existing files, initializing a memory file, and forming the write URI | Use `user_space` for a directory that must also work during lookup or initialization. The write URI also receives the current memory fields. For peer memory, `user_space` can include the peer path. |
+| `filename_template` | When forming the write URI | The current memory fields and `user_space`. Fields referenced by a path template contribute to the memory's identity. For example, `entities` uses `category` and `name` to locate a file. |
+| `content_template` | When writing the Markdown body | A deployment template receives the merged fields, `content`, `links`, `backlinks`, `source_uri`, and the helpers `uri_basename(uri)` and `link_target(uri)`. On initialization, fields are seeded from `fields[].init_value` or empty strings. |
+| `embedding_template` | When preparing text for vector indexing | The memory file's extra fields plus `content`, which is the plain abstract prepared from the body. |
+| `overview_template` | When generating the directory's `.overview.md` | `memory_type`, `directory_name`, and `items`. Each item has a `file_name` and a `file_content` mapping with the file's fields and content. |
+
+Keep `directory` independent of fields that only exist after extraction. For example, put an entity's category in the filename template when lookup must start at the entity directory. File initialization supplies only `user_space` to paths and skips schemas with a filename placeholder. This example uses the `category`, `name`, and `content` fields from the Entities schema.
+
+```yaml
+description: "Describe third-party entities in {{ language or 'English' }}."
+directory: "viking://user/{{ user_space }}/memories/entities"
+filename_template: "{{ category|lower }}/{{ name|lower }}.md"
+content_template: |-
+  # {{ name }}
+  {{ content }}
+embedding_template: |-
+  {{ category }}
+  {{ name }}
+  {{ content }}
+overview_template: |-
+  # {{ directory_name }}
+  {% for item in items %}
+  - [{{ item.file_content.name|default(item.file_name, true) }}](./{{ item.file_name }})
+  {% endfor %}
+```
+
+**Extraction context.** During extraction, the path, body, embedding, and overview renderers can receive `extract_context` from the caller. File initialization has no extraction context. Check the rendering stage before calling a helper, and use the current memory's `ranges` field for helpers that select source messages.
+
+| Helper | Result |
+|--------|--------|
+| `read_message_ranges(ranges)` | A structured selection of the source messages for a deployment template. An empty range selects no messages. |
+| `get_first_message_time_from_ranges(ranges)`, `get_first_message_time_with_weekday_from_ranges(ranges)` | The first source message's date, with an optional weekday. Without a source date the return value can be empty. |
+| `get_year(ranges)`, `get_month(ranges)`, `get_day(ranges)`, `get_timestamp_from_ranges(ranges)` | Date parts or a compact timestamp from the selected messages, falling back to the current time when no source time is available. |
+| `get_session_timestamp()`, `get_source_archive_suffix()` | A timestamp from the session and a stable suffix derived from the source archive and extraction scope. The timestamp can fall back to the current time. The suffix is empty when neither the archive nor the scope is supplied. |
+| `get_event_content(ranges, summary[, ratio_threshold])`, `get_resource_event_content(ranges, summary)` | Event text assembled from the selected messages or summary, or formatted text for a resource-add event. The resource helper can return an empty string. |
+
+The built-in Events filename uses source dates, for example <code v-pre>filename_template: "{{ extract_context.get_year(ranges) }}/{{ event_name }}.md"</code>.
+
+**Account overrides.** A customized Events body can use `event_name`, `goal`, `summary`, `ranges`, and the approved read-only helpers. The account template API validates descriptions and customized bodies before applying the change. See [account memory templates](../api/08-admin.md) for the exact allowlists and the rules for inherited deployment templates.
+
+**Missing variables and render errors.** An undeclared variable in a description raises `unknown_variable` during schema construction, which can stop extraction for that batch. The error line is relative to the description text. Check both the type description and `fields[].description` when diagnosing a line-only error. For a write URI, an absent or null value for a simple placeholder is rejected. A missing embedding input or a render failure uses the plain abstract instead. The deployment body renderer falls back to plain content on render exceptions, and a failed overview render keeps the existing overview. Legacy renderers can leave simple undefined placeholders in the text, so check the rendered files and paths with sample data.
+
 ## Current Prompt Template Reference
 
 The sections below describe template purposes, inputs, and related processing stages. A file in the template directory does not mean a request uses it: the call path, model configuration, and feature switches determine whether it takes effect.

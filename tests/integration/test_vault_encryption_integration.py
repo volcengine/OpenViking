@@ -317,6 +317,8 @@ class TestVikingFSEncryptionWithVault:
             path=str(test_data_dir / "viking"), user=UserIdentifier.the_default_user("test_user")
         )
         await svc.initialize()
+        await svc.recover()
+        await svc.start_background()
 
         # Create APIKeyManager using VikingFS to ensure system files are encrypted
         api_key_manager = build_api_key_manager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)

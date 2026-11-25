@@ -6,7 +6,14 @@
 
 前置条件：macOS 或 Linux、Node.js 18+，并建议使用最新稳定版 Cursor。安装过程中会引导配置 OpenViking 连接信息。
 
-安装器询问连接方式时，火山引擎云服务用户请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。服务运行在本机时选择 **自建 / 本地**（`http://127.0.0.1:1933`）；远程自建服务请选择 **自定义 URL / 保持当前** 并填写其 URL。
+连接托管实例时，选择 **OpenViking 托管服务**，再选择服务商：
+
+- **Volcengine**：输入服务 API Key，安装器会提供服务地址。
+- **BytePlus**：先输入实例的完整 HTTPS 服务地址，再输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+
+旧版安装器连接 BytePlus 时使用**自定义 URL**。
+
+服务运行在本机时选择 **自建 / 本地**（`http://127.0.0.1:1933`）。远程自建服务选择**自定义 URL**并填写其地址；已有连接时，此选项显示为**自定义 URL / 保持当前**。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -23,6 +30,8 @@ curl -fsSL https://openviking.ai/install | bash
 - OpenViking MCP Server：提供 `search`、`read`、`remember`、`add_skill` 等工具；`search` 的 `mode="context"` 可返回组装后的上下文。
 - always-on Rule 和 `openviking-memory` Skill：告诉 Agent 如何使用已注入的上下文和记忆工具；另有 `openviking-skills` Skill，讲如何查找、使用、创建（`add_skill`）、共享和迁移存放在 OpenViking 里的 skill。
 - `ov-experience-memory` Skill：让 Agent 在执行类任务前检索并应用以往任务的 Experience。成功的 OpenViking MCP `read` 会与对话一起上报；包含该读取记录的 `session commit` 生成轨迹后，可查询经验的应用轨迹。
+- `openviking-rule-search` Skill：检索适用于当前操作的 OpenViking Rule，并检查是否合规。
+- `ov-memory-doctor` Skill：运行 `node ~/.openviking/agent-integrations/cursor/scripts/ov-memory-doctor.mjs`，诊断并修复集成安装、客户端配置以及与 OpenViking 服务端的连接。
 
 ## 验证
 

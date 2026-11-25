@@ -117,7 +117,3 @@ impl CliContext {
         self
     }
 }
-
-#[cfg(test)]
-#[path = "cli_context/tests.rs"]
-mod tests;

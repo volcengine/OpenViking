@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Watch store contracts on File, MySQL and PostgreSQL.
+"""Watch store contracts on File, SQLite, MySQL and PostgreSQL.
 
 In file mode every simulated node shares the one process's store. Set
 OPENVIKING_WATCH_MYSQL_PARAMS to a JSON object of connection parameters for
@@ -26,6 +26,7 @@ from openviking.resource.watch_store import WatchStore
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_store_mysql import MySQLWatchStore
 from openviking.resource.watch_store_postgres import PostgresWatchStore
+from openviking.resource.watch_store_sqlite import SQLiteWatchStore
 from openviking.resource.watch_types import (
     PermissionDeniedError,
     WatchAuthority,
@@ -53,13 +54,18 @@ def _mysql_connection(params):
     return pymysql.connect(**values, charset="utf8mb4", autocommit=True)
 
 
-@pytest_asyncio.fixture(params=["file", "mysql", "postgres"])
+@pytest_asyncio.fixture(params=["file", "sqlite", "mysql", "postgres"])
 async def make_store(request, tmp_path):
     """Return a factory for stores sharing one database (one per simulated node)."""
     created: list[WatchStore] = []
     cleanup = None
     if request.param == "file":
         viking_fs = local_viking_fs(tmp_path / "agfs")
+    elif request.param == "sqlite":
+        params = {
+            "path": str(tmp_path / "watch.db"),
+            "credential_encryption_key": ENCRYPTION_KEY,
+        }
     elif request.param == "mysql":
         if not MYSQL_PARAMS:
             pytest.skip("OPENVIKING_WATCH_MYSQL_PARAMS is not configured")
@@ -127,7 +133,11 @@ async def make_store(request, tmp_path):
                 return created[0]
             store: WatchStore = FileWatchStore(viking_fs)
         else:
-            cls = MySQLWatchStore if request.param == "mysql" else PostgresWatchStore
+            cls = {
+                "mysql": MySQLWatchStore,
+                "postgres": PostgresWatchStore,
+                "sqlite": SQLiteWatchStore,
+            }[request.param]
             store = cls(service_name=service_name, params={**params, **overrides})
         await store.initialize()
         created.append(store)
@@ -152,18 +162,18 @@ async def store(make_store):
 async def create(store, uri="viking://resources/a", *, initial_run_id=None, due=False, **values):
     values.setdefault("account_id", ACCOUNT)
     values.setdefault("user_id", "user-a")
+    values.setdefault("path", "https://example.org/doc")
     if due:
         values["created_at"] = datetime.now() - timedelta(minutes=5)
-    task = WatchTask(path="https://example.org/doc", to_uri=uri, watch_interval=1, **values)
+    task = WatchTask(to_uri=uri, watch_interval=1, **values)
     task.next_execution_time = task.calculate_next_execution_time() if task.is_active else None
     await store.create_task(task, initial_run_id=initial_run_id)
     return task
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("make_store", ["sqlite", "mysql", "postgres"], indirect=True)
 async def test_sql_duplicate_watch_id_reports_conflict_without_overwriting(store):
-    if store.provider == "file":
-        pytest.skip("SQL integrity-error contract")
     task = await create(store, task_id="duplicate-id")
     with pytest.raises(ConflictError, match="already exists"):
         await create(store, "viking://resources/other", task_id=task.task_id)
@@ -173,12 +183,13 @@ async def test_sql_duplicate_watch_id_reports_conflict_without_overwriting(store
 
 @pytest.mark.parametrize("violation", ["not_null", "check"])
 @pytest.mark.asyncio
+@pytest.mark.parametrize("make_store", ["sqlite", "mysql", "postgres"], indirect=True)
 async def test_sql_create_preserves_nonduplicate_constraint_error(store, violation):
     from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError, OperationalError
 
-    if store.provider == "file":
-        pytest.skip("SQL integrity-error contract")
+    if store.provider == "sqlite" and violation == "check":
+        pytest.skip("SQLite CHECK constraints must be defined before table creation")
     task = WatchTask(
         task_id="invalid-id",
         path="https://example.org/doc",
@@ -210,6 +221,8 @@ async def test_sql_create_preserves_nonduplicate_constraint_error(store, violati
         await store.create_task(task)
     if store.provider == "postgres":
         assert raised.value.orig.sqlstate == ("23502" if violation == "not_null" else "23514")
+    elif store.provider == "sqlite":
+        assert "NOT NULL constraint failed" in str(raised.value.orig)
     else:
         assert raised.value.orig.args[0] == (1048 if violation == "not_null" else 3819)
     assert await store.get_task(task.task_id) is None
@@ -606,8 +619,8 @@ async def test_scan_pages_do_not_lose_due_or_running_watches(store):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("make_store", ["mysql", "postgres"], indirect=True)
-async def test_mysql_running_scan_does_not_decrypt_private_state(make_store):
+@pytest.mark.parametrize("make_store", ["sqlite", "mysql", "postgres"], indirect=True)
+async def test_sql_running_scan_does_not_decrypt_private_state(make_store):
     first = await make_store()
     task = await create(
         first,
@@ -701,7 +714,7 @@ async def test_move_rejects_incomplete_explicit_task_selection(store):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("make_store", ["mysql"], indirect=True)
+@pytest.mark.parametrize("make_store", ["sqlite", "mysql", "postgres"], indirect=True)
 async def test_service_names_partition_rows(make_store):
     first = await make_store()
     other = await make_store("other-service")
@@ -713,11 +726,16 @@ async def test_service_names_partition_rows(make_store):
     await create(other)
 
 
-@pytest.mark.parametrize("key", ["not base64!", base64.b64encode(b"short").decode()])
-@pytest.mark.parametrize("store_class", [MySQLWatchStore, PostgresWatchStore])
-def test_mysql_store_rejects_malformed_encryption_keys(key, store_class):
-    with pytest.raises(ValueError, match="credential_encryption_key"):
-        store_class(
+@pytest.mark.parametrize(
+    "key,error",
+    [
+        ("not base64!", "must be base64-encoded"),
+        (base64.b64encode(b"short").decode(), "must decode to exactly 32 bytes"),
+    ],
+)
+def test_sql_store_rejects_malformed_encryption_keys(key, error):
+    with pytest.raises(ValueError, match=f"credential_encryption_key {error}"):
+        MySQLWatchStore(
             service_name="watch-test",
             params={
                 "user": "u",

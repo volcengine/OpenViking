@@ -9,6 +9,9 @@ import {
   INSTALLER_HARNESSES,
 } from './agent-connect-installer.js';
 
+export const PRELAUNCH_BASE_URL =
+  'https://shms8eb05es6du8q1aoq5.apigateway-cn-beijing.volceapi.com/openviking';
+
 export const DEFAULT_BASE_URL =
   'https://api.vikingdb.cn-beijing.volces.com/openviking';
 
@@ -60,7 +63,7 @@ export function getAgentConnectInstructions(
       () => text.hermesCustomIntro,
     );
     template = template.replace(
-      /^3\. (?:选择|Choose) \*\*OpenViking Service \(VolcEngine Cloud\)\*\*[。.][ \t]*$/m,
+      /^3\. (?:选择|Choose) \*\*(?:OpenViking Service \(VolcEngine Cloud\)|OpenViking Managed Service)\*\*(?:[。.]|[，,][^\r\n]*)[ \t]*$/m,
       () => text.hermesCustomStep,
     );
   }

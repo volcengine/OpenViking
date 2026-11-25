@@ -10,17 +10,21 @@ export function ComposerHeader({
   onOpenUri,
   labels,
   disabled,
+  referenceRemovalDisabled,
 }: Pick<
   VikingBotComposerProps,
   'attachments' | 'references' | 'onAttachmentRemove' | 'onOpenUri' | 'disabled'
-> & { labels: Required<VikingBotLabels> }) {
+> & {
+  labels: Required<VikingBotLabels>;
+  referenceRemovalDisabled?: boolean;
+}) {
   return (
     <>
       <ReferenceTags
         config={references}
         labels={labels}
         onOpenUri={onOpenUri}
-        disabled={disabled}
+        disabled={referenceRemovalDisabled}
       />
       <ComposerAttachments
         items={attachments}

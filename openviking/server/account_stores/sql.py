@@ -223,8 +223,10 @@ class SQLAccountStore(AccountStore):
         service_name: str,
         params: dict[str, object] | None = None,
         runtime: SQLRuntime | None = None,
+        bootstrap_default_account: bool = True,
     ) -> None:
         values = dict(params or {})
+        self._bootstrap_default_account = bootstrap_default_account
         try:
             self._service_name = normalize_service_name(service_name)
         except ValueError as exc:
@@ -360,8 +362,9 @@ class SQLAccountStore(AccountStore):
             async with sessions() as session:
                 for model in (Account, User, Group, GroupMember, Credential):
                     await session.execute(select(*model.__table__.columns).limit(1))
-                await session.execute(self._default_account_insert())
-                await session.commit()
+                if self._bootstrap_default_account:
+                    await session.execute(self._default_account_insert())
+                    await session.commit()
         except ImportError:
             await wait_sql_cleanup(cleanup_failed_load())
             raise RuntimeError(

@@ -76,10 +76,12 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
                 "status": "ok",
                 "duration_ms": 1200,
                 "tokens": {
-                    "total": 14,
+                    "total": 19,
+                    "embedding": {"total": 5},
                     "llm": {"input": 3, "output": 7},
                     "rerank": {"total": 4},
                     "stages": {
+                        "embed_query": {"embedding": {"total": 5}},
                         "vlm": {"llm": {"input": 3, "output": 7, "total": 10}},
                         "rerank": {"rerank": {"total": 4}},
                     },
@@ -124,10 +126,16 @@ def test_telemetry_bridge_records_operation_and_resource_metrics(registry, rende
             r'bucket_schema="[0-9a-f]{16}",operation="resource.process",status="ok"\} 1',
             text,
         )
-        assert (
-            'openviking_operation_tokens_total{account_id="__unknown__",operation="resource.process",stage="rerank",token_type="rerank"} 4'
-            in text
-        )
+        for stage, token_type, count in (
+            ("vlm", "llm_input", 3),
+            ("vlm", "llm_output", 7),
+            ("rerank", "rerank", 4),
+            ("embed_query", "embedding", 5),
+        ):
+            assert (
+                'openviking_operation_tokens_total{account_id="__unknown__",operation="resource.process",'
+                f'stage="{stage}",token_type="{token_type}"}} {count}'
+            ) in text
         assert 'openviking_vector_searches_total{operation="resource.process"} 1' in text
         assert (
             'openviking_memory_extracted_total{memory_type="preferences",operation="resource.process"} 2'

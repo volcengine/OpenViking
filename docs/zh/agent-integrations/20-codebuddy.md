@@ -6,7 +6,14 @@
 
 前置条件：macOS 或 Linux、Node.js 18+，以及 `codebuddy` CLI 在 `PATH` 中的 CodeBuddy Code。安装过程中会引导配置 OpenViking 连接信息；询问要接入哪些 Agent 时选择 **CodeBuddy Code**。
 
-安装器询问连接方式时，火山引擎云服务用户请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。服务运行在本机时选择 **自建 / 本地**（`http://127.0.0.1:1933`）；远程自建服务请选择 **自定义 URL / 保持当前** 并填写其 URL。
+连接托管实例时，选择 **OpenViking 托管服务**，再选择服务商：
+
+- **Volcengine**：输入服务 API Key，安装器会提供服务地址。
+- **BytePlus**：先输入实例的完整 HTTPS 服务地址，再输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+
+旧版安装器连接 BytePlus 时使用**自定义 URL**。
+
+服务运行在本机时选择 **自建 / 本地**（`http://127.0.0.1:1933`）。远程自建服务选择**自定义 URL**并填写其地址；已有连接时，此选项显示为**自定义 URL / 保持当前**。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -23,7 +30,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 - 生命周期 Hook：加载画像、提问时召回、捕获对话、提交 session，以及 `viking://` URI 保护。
 - 以 stdio 代理形式提供的 OpenViking MCP 服务，含 `search`、`read`、`remember`、`add_skill` 等工具。
-- `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search` 四个 skill。
+- `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` 五个 skill。
 
 ## 验证
 

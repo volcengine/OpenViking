@@ -6,7 +6,14 @@ Give Cursor long-term memory across projects and sessions. After installation, O
 
 Prerequisites: macOS or Linux, Node.js 18+, and preferably the latest stable Cursor release. The installer guides you through the OpenViking connection settings.
 
-When prompted for the connection, Volcengine Cloud users should select **Volcengine OpenViking Cloud** and enter their API key. Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`); for a remote self-hosted server, select **Custom URL / keep current** and enter its URL.
+For a managed connection, select **OpenViking Managed Service**, then:
+
+- **Volcengine:** enter your service API key. The installer supplies the URL.
+- **BytePlus:** enter your instance's full HTTPS service URL, then its API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older installers use **Custom URL** for BytePlus.
+
+Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`). For a remote self-hosted server, select **Custom URL** and enter its URL. If a connection is already saved, this option is named **Custom URL / keep current**.
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -23,6 +30,8 @@ Once installed, start a new Cursor session and ask it to follow https://docs.ope
 - The OpenViking MCP server with tools such as `search`, `read`, `remember`, and `add_skill`; `search` with `mode="context"` returns assembled context.
 - An always-on Rule and the `openviking-memory` Skill, which tell the Agent how to use injected context and memory tools, plus the `openviking-skills` Skill for finding, using, creating (`add_skill`), sharing, and migrating skills stored in OpenViking.
 - The `ov-experience-memory` Skill, which has the Agent search and apply prior task Experience before executable work. Successful OpenViking MCP `read` calls are captured with the conversation. When the `session commit` containing the read produces trajectories, those trajectories can be queried for the Experience.
+- The `openviking-rule-search` Skill, which retrieves the OpenViking Rules that apply to a planned action and checks compliance.
+- The `ov-memory-doctor` Skill, which diagnoses and fixes the integration's install, the client configuration, and the connection to the OpenViking server by running `node ~/.openviking/agent-integrations/cursor/scripts/ov-memory-doctor.mjs`.
 
 ## Verify
 
