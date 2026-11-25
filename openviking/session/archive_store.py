@@ -24,7 +24,18 @@ from typing import Any, Dict, List, Literal, Optional
 from openviking.message import Message
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError, AGFSNotFoundError
-from openviking.storage.abstract_overview import body_for_preview
+from openviking.session.working_memory import (
+    WM_DOCUMENT_TITLE,
+    extract_wm_abstract,
+    match_wm_template_descriptions,
+    recover_wm_template_descriptions,
+)
+from openviking.storage.abstract_overview import (
+    WM_TEMPLATE_DESCRIPTIONS_KEY,
+    AbstractOverviewDocument,
+    body_for_preview,
+    parse_abstract_overview,
+)
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -47,10 +58,14 @@ def is_storage_not_found(exc: BaseException) -> bool:
     return False
 
 
-def extract_abstract_from_summary(summary: str) -> str:
-    """Extract one-sentence overview from a structured summary."""
+def extract_abstract_from_summary(summary: str, descriptions: dict[str, str] | None = None) -> str:
+    """Extract a short abstract from a Working Memory or legacy summary."""
     if not summary:
         return ""
+
+    wm_abstract = extract_wm_abstract(summary, descriptions)
+    if wm_abstract is not None:
+        return wm_abstract
 
     match = re.search(r"^\*\*[^*]+\*\*:\s*(.+)$", summary, re.MULTILINE)
     if match:
@@ -404,27 +419,41 @@ class ArchiveStore:
     # Sidecar readers
     # ------------------------------------------------------------------
 
+    async def read_overview_document(self, archive_uri: str) -> AbstractOverviewDocument:
+        """Read the archive overview body and its generator metadata together."""
+        try:
+            raw = await self._viking_fs.read_file(f"{archive_uri}/.overview.md", ctx=self._ctx)
+        except Exception:
+            raw = ""
+        return parse_abstract_overview(raw or "")
+
     async def read_overview(self, archive_uri: str) -> str:
         """Read archive overview text."""
-        try:
-            overview = await self._viking_fs.read_file(f"{archive_uri}/.overview.md", ctx=self._ctx)
-        except Exception:
-            return ""
-        return body_for_preview(overview or "")
+        return (await self.read_overview_document(archive_uri)).preview_body
 
-    async def read_abstract(self, archive_uri: str, overview: str = "") -> str:
+    async def read_abstract(
+        self, archive_uri: str, overview: AbstractOverviewDocument | None = None
+    ) -> str:
         """Read archive abstract text, falling back to summary extraction."""
         try:
-            abstract = await self._viking_fs.read_file(f"{archive_uri}/.abstract.md", ctx=self._ctx)
+            stored = await self._viking_fs.read_file(f"{archive_uri}/.abstract.md", ctx=self._ctx)
+            abstract = body_for_preview(stored or "")
         except Exception:
             abstract = ""
 
-        if abstract:
-            return body_for_preview(abstract)
+        if overview is None:
+            overview = await self.read_overview_document(archive_uri)
+        descriptions = self._wm_template_descriptions(overview)
 
-        if not overview:
-            overview = await self.read_overview(archive_uri)
-        return extract_abstract_from_summary(overview)
+        # Legacy sidecars can retain a terminal newline in the body.
+        stored_line = abstract.rstrip("\r\n")
+        if (
+            abstract.strip()
+            and stored_line != WM_DOCUMENT_TITLE
+            and stored_line not in descriptions.values()
+        ):
+            return abstract
+        return extract_abstract_from_summary(overview.preview_body, descriptions)
 
     async def read_overview_tokens(self, archive_uri: str, overview: str) -> int:
         """Read overview token estimate from archive metadata."""
@@ -475,49 +504,32 @@ class ArchiveStore:
         except Exception:
             return {}
 
+    @staticmethod
+    def _wm_template_descriptions(overview: AbstractOverviewDocument) -> dict[str, str]:
+        recorded = overview.metadata.get(WM_TEMPLATE_DESCRIPTIONS_KEY)
+        if recorded is not None:
+            return match_wm_template_descriptions(overview.preview_body, recorded)
+        # Earlier archives can contain a custom line or a real state with
+        # identical text. Only the built-in descriptions are known here.
+        return recover_wm_template_descriptions(overview.preview_body)
+
     # ------------------------------------------------------------------
     # Derived summaries
     # ------------------------------------------------------------------
-
-    async def latest_completed_summary(
-        self,
-        exclude_archive_uri: Optional[str] = None,
-        before_archive_index: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Return the newest readable completed archive summary."""
-        for archive in await self.completed_refs(
-            exclude_archive_uri,
-            before_archive_index,
-        ):
-            if archive.get("context_reset"):
-                break
-            overview = await self.read_overview(archive["archive_uri"])
-            if not overview:
-                continue
-
-            return {
-                "archive_id": archive["archive_id"],
-                "archive_uri": archive["archive_uri"],
-                "overview": overview,
-                "abstract": await self.read_abstract(archive["archive_uri"], overview),
-                "overview_tokens": await self.read_overview_tokens(
-                    archive["archive_uri"], overview
-                ),
-            }
-
-        return None
 
     async def latest_completed_overview(
         self,
         exclude_archive_uri: Optional[str] = None,
         before_archive_index: Optional[int] = None,
-    ) -> str:
-        """Return the newest completed archive overview, skipping incomplete archives."""
-        summary = await self.latest_completed_summary(
-            exclude_archive_uri,
-            before_archive_index,
-        )
-        return summary["overview"] if summary else ""
+    ) -> tuple[str, dict[str, str]]:
+        """Return the newest completed overview with its recorded template descriptions."""
+        for archive in await self.completed_refs(exclude_archive_uri, before_archive_index):
+            if archive.get("context_reset"):
+                break
+            overview = await self.read_overview_document(archive["archive_uri"])
+            if overview.preview_body:
+                return overview.preview_body, self._wm_template_descriptions(overview)
+        return "", {}
 
     async def uncovered_messages(
         self,

@@ -108,6 +108,7 @@ API 认证指南，涵盖 OAuth 2.0、JWT 令牌和 API 密钥。
 | `source` | 可选的导入来源；通常只记录在导入根目录 |
 | `generated_by` | 生成组件和粗粒度触发原因 |
 | `freshness` | 直接子项覆盖率和已知的待刷新变化 |
+| `wm_template_descriptions` | 会话归档 L1 中匹配到的固定模板说明，按节标题记录 |
 
 已知字段会进行 schema 校验。未知顶层字段或已知对象中的未知嵌套字段会被静默丢弃，不会进入 preview、embedding、canonical writeback 或 metadata 写保护比较。没有 frontmatter 的旧 sidecar 继续作为 legacy Markdown 读取；YAML 损坏、缺少必填 `directory` 或已知字段类型错误仍会显式失败。
 

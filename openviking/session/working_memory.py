@@ -13,19 +13,22 @@ Memory document stored at ``archive_NNN/.overview.md``.
   requested checkpoint summaries, then run section-level merge against the
   previous WM.
 
-This module holds only pure/stateless helpers (string, dict and regex
-transforms plus the tool schemas). It has no dependency on the ``Session``
-object, so it can be imported and unit-tested in isolation. ``Session``
-composes these functions during Phase 2 processing.
+This module holds the document helpers and tool schemas used during Phase 2
+processing. It has no dependency on the ``Session`` object.
 """
 
 import json
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from functools import cache
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
+
+from yaml import YAMLError
 
 from openviking.message import Message
 from openviking.message.part import ContextPart, TextPart, ToolPart
 from openviking.observability.log_safety import short_hash
+from openviking.prompts.manager import PromptManager
+from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.retention import UserTurn, build_turns
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking.utils.token_estimation import estimate_text_tokens
@@ -80,6 +83,9 @@ def wm_debug(msg: str, *args: Any) -> None:
 # =====================================================================
 # Tool schemas and section definitions
 # =====================================================================
+
+WM_DOCUMENT_TITLE = "# Working Memory"
+WM_CREATE_PROMPT_ID = "compression.ov_wm_v2"
 
 WM_SEVEN_SECTIONS: List[str] = [
     "Session Title",
@@ -354,6 +360,143 @@ def parse_wm_sections(text: str) -> Dict[str, str]:
     if current is not None:
         sections[current] = "\n".join(buf).strip()
     return sections
+
+
+_WM_HEADING_OR_RULE_RE = re.compile(r"#{1,6}(?:\s.*)?|(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,}")
+_WM_BOLD_LABEL_RE = re.compile(r"^\*\*[^*]+\*\*:\s*")
+_WM_DESCRIPTION_MARKER = "<!-- wm-description -->"
+_WM_EXAMPLE_MARKER = "<!-- wm-example -->"
+
+
+def _wm_section_lines(body: str) -> tuple[str, str]:
+    first, _, rest = body.partition("\n")
+    if first.strip() in {_WM_DESCRIPTION_MARKER, _WM_EXAMPLE_MARKER}:
+        first, _, rest = rest.lstrip().partition("\n")
+    return first.strip(), rest
+
+
+def _wm_section_first_lines(text: str) -> dict[str, str]:
+    return {
+        header: _wm_section_lines(body)[0]
+        for header, body in parse_wm_sections(text).items()
+        if body and header.removeprefix("## ") in WM_SEVEN_SECTIONS
+    }
+
+
+def _wm_template_example(prompt: str) -> str:
+    blocks = re.split(rf"(?m)^{re.escape(WM_DOCUMENT_TITLE)}[ \t]*\r?$", prompt)
+    canonical_headers = {f"## {section}" for section in WM_SEVEN_SECTIONS}
+    # Prefer the complete structure over later fragments. Keep the last block on ties.
+    return max(
+        reversed(blocks[1:]),
+        key=lambda example: len(canonical_headers.intersection(parse_wm_sections(example))),
+        default="",
+    )
+
+
+@cache
+def _bundled_wm_template_descriptions() -> dict[str, str]:
+    manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
+    return _wm_section_first_lines(
+        _wm_template_example(manager.load_template(WM_CREATE_PROMPT_ID).template)
+    )
+
+
+def _known_bundled_descriptions() -> dict[str, str]:
+    try:
+        return _bundled_wm_template_descriptions()
+    except (OSError, ValueError, YAMLError):
+        return {}
+
+
+def rendered_wm_template_descriptions(prompt: str, overview: str) -> dict[str, str]:
+    """Match copied descriptions by position in the rendered template's example."""
+    if overview.lstrip().partition("\n")[0].strip() != WM_DOCUMENT_TITLE:
+        return {}
+    sections = parse_wm_sections(overview)
+    bundled = _known_bundled_descriptions()
+    descriptions = {}
+    for header, example in parse_wm_sections(_wm_template_example(prompt)).items():
+        if header.removeprefix("## ") not in WM_SEVEN_SECTIONS:
+            continue
+        marker = example.partition("\n")[0].strip()
+        if marker == _WM_EXAMPLE_MARKER:
+            continue
+        first, _ = _wm_section_lines(example)
+        output_first, _ = _wm_section_lines(sections.get(header, ""))
+        # Unmarked custom examples can also be the first line of real state.
+        if (
+            first
+            and first == output_first
+            and (marker == _WM_DESCRIPTION_MARKER or first == bundled.get(header))
+        ):
+            descriptions[header] = first
+    return descriptions
+
+
+def recover_wm_template_descriptions(text: str) -> dict[str, str]:
+    """Recognize only known built-in descriptions in unannotated archives."""
+    return match_wm_template_descriptions(text, _known_bundled_descriptions())
+
+
+def wm_output_language(messages: list[Message], output_language_override: str | None = None) -> str:
+    conversation = "\n".join(
+        f"[{message.role}]: {line}"
+        for message in messages
+        for part in message.parts
+        if isinstance(part, TextPart)
+        for line in part.text.splitlines()
+        if line.strip()
+    )
+    return resolve_output_language_from_conversation(
+        conversation, output_language_override=output_language_override
+    )
+
+
+def match_wm_template_descriptions(text: str, *sources: Mapping[str, str]) -> dict[str, str]:
+    """Keep known directions still present in the first line of their own section."""
+    if text.lstrip().partition("\n")[0].strip() != WM_DOCUMENT_TITLE:
+        return {}
+    return {
+        header: line
+        for header, line in _wm_section_first_lines(text).items()
+        if any(line == source.get(header) for source in sources)
+    }
+
+
+def _first_wm_abstract_line(body: str) -> str:
+    for raw_line in body.splitlines():
+        line = _WM_BOLD_LABEL_RE.sub("", raw_line.strip())
+        if line and not _WM_HEADING_OR_RULE_RE.fullmatch(line):
+            return line
+    return ""
+
+
+def _wm_section_abstract(body: str, description: str | None) -> str:
+    first, rest = _wm_section_lines(body)
+    return _first_wm_abstract_line(rest if first == description else f"{first}\n{rest}")
+
+
+def extract_wm_abstract(text: str, descriptions: Mapping[str, str] | None = None) -> Optional[str]:
+    """Return a v2 abstract, or None if the document has no Working Memory title."""
+    lines = text.lstrip().splitlines()
+    if not lines or lines[0].strip() != WM_DOCUMENT_TITLE:
+        return None
+    if descriptions is None:
+        descriptions = recover_wm_template_descriptions(text)
+
+    body = "\n".join(lines[1:])
+    sections = parse_wm_sections(body)
+    for header in ("## Current State", "## Session Title"):
+        if abstract := _wm_section_abstract(sections.pop(header, ""), descriptions.get(header)):
+            return abstract
+    preamble = re.split(r"(?m)^[^\S\n]*## [^\S\n]*\S", body, maxsplit=1)[0]
+    if abstract := _first_wm_abstract_line(preamble):
+        return abstract
+    for header, content in sections.items():
+        if abstract := _wm_section_abstract(content, descriptions.get(header)):
+            return abstract
+    return ""
 
 
 _WM_SECTION_BULLET_THRESHOLD = 25
@@ -1036,7 +1179,7 @@ def merge_wm_sections(old_wm: str, ops: Dict[str, Any]) -> str:
     )
     old_sections = parse_wm_sections(old_wm)
 
-    parts: List[str] = ["# Working Memory", ""]
+    parts: List[str] = [WM_DOCUMENT_TITLE, ""]
     for header in WM_SEVEN_SECTIONS:
         full_header = f"## {header}"
         op = (ops or {}).get(header)

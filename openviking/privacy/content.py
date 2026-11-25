@@ -13,7 +13,10 @@ import yaml
 
 from openviking.core.namespace import classify_uri
 from openviking.core.skill_loader import SkillLoader
-from openviking.storage.abstract_overview import is_abstract_overview_uri
+from openviking.storage.abstract_overview import (
+    WM_TEMPLATE_DESCRIPTIONS_KEY,
+    is_abstract_overview_uri,
+)
 from openviking_cli.exceptions import InvalidArgumentError
 
 _JSON_STRING = re.compile(r'("[^"\\]*(?:\\.[^"\\]*)*")(\s*:)?')
@@ -62,9 +65,18 @@ class PrivacyContent:
         if path.endswith((".md", ".markdown")):
             frontmatter = SkillLoader.FRONTMATTER_PATTERN.match(content)
             if frontmatter:
-                if not is_abstract_overview_uri(uri) and not (skill and preserve_skill_metadata):
+                header = frontmatter.group(1)
+                if is_abstract_overview_uri(uri):
+                    if path.endswith(".overview.md") and WM_TEMPLATE_DESCRIPTIONS_KEY in header:
+                        # These values also appear as text in the overview body.
+                        self._add_yaml(
+                            header,
+                            frontmatter.start(1),
+                            only=WM_TEMPLATE_DESCRIPTIONS_KEY,
+                        )
+                elif not (skill and preserve_skill_metadata):
                     self._add_yaml(
-                        frontmatter.group(1),
+                        header,
                         frontmatter.start(1),
                         skip={"name"} if skill else set(),
                     )
@@ -114,7 +126,9 @@ class PrivacyContent:
                 )
             )
 
-    def _add_yaml(self, content: str, offset: int, *, skip: set[str] | None = None) -> None:
+    def _add_yaml(
+        self, content: str, offset: int, *, skip: set[str] | None = None, only: str | None = None
+    ) -> None:
         if content.startswith("\ufeff"):
             # LibYAML excludes the BOM from node marks; keep both loaders aligned.
             content = content[1:]
@@ -145,10 +159,13 @@ class PrivacyContent:
         except RecursionError:
             raise self._structure_error() from None
         except yaml.YAMLError:
-            self.strings.append(ContentString(offset, offset + len(content), content))
+            if only is None:
+                self.strings.append(ContentString(offset, offset + len(content), content))
             return
         self._yaml_structures.append(structure)
-        pending = [(node, True) for node in nodes]
+        pending = [
+            (node, True) for node in nodes if only is None or isinstance(node, yaml.MappingNode)
+        ]
         visited: set[int] = set()
         tokens = None
         while pending:
@@ -158,7 +175,10 @@ class PrivacyContent:
             visited.add(id(current))
             if isinstance(current, yaml.MappingNode):
                 for key, value in current.value:
-                    if root and skip and isinstance(key.value, str) and key.value in skip:
+                    if root and (
+                        (only is not None and key.value != only)
+                        or (skip and isinstance(key.value, str) and key.value in skip)
+                    ):
                         visited.add(id(value))
                     else:
                         pending.append((value, False))
