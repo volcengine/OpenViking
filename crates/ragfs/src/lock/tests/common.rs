@@ -252,6 +252,12 @@ impl PathLockProvider for FaultProvider {
         stale: u128,
         source: Option<&str>,
     ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
+        if self.fail_write.lock().unwrap().is_some()
+            || self.race_write.load(Ordering::SeqCst)
+            || self.lose_source_on_write.lock().unwrap().is_some()
+        {
+            return Ok(None);
+        }
         self.inner
             .try_acquire_holders_atomic(requests, owner, holder, now, stale, source)
             .await

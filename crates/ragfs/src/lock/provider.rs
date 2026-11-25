@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
+use futures::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::RwLock;
 
 use crate::core::internal_names::is_hidden_runtime_lock_name;
@@ -712,6 +714,13 @@ impl PathLockProvider for MemoryPathLockProvider {
 
 // ── Filesystem provider ──
 
+const FILESYSTEM_HOLDER_PARALLELISM: usize = 32;
+struct FilesystemAcquisitionPlan {
+    request: PathLockRequest,
+    lock_path: String,
+    conflict_paths: Vec<String>,
+}
+
 /// Lock provider that stores tokens as files on the underlying filesystem.
 pub struct FilesystemPathLockProvider {
     fs: Arc<dyn FileSystem>,
@@ -767,6 +776,288 @@ impl FilesystemPathLockProvider {
             },
             other => PathLockError::Io(format!("{operation} CAS failed: {other}")),
         }
+    }
+
+    /// Build static lock-path plans without reading token state.
+    async fn acquisition_plans(
+        &self,
+        requests: &[PathLockRequest],
+    ) -> PathLockResult<Vec<FilesystemAcquisitionPlan>> {
+        if requests.is_empty() {
+            return Err(PathLockError::InvalidRequest(
+                "lock request batch must not be empty".into(),
+            ));
+        }
+        let resolver = super::resolver::LockPathResolver::new(self.fs.clone());
+        let mut plans = Vec::with_capacity(requests.len());
+        for request in requests {
+            super::path::validate_normalized_logical_path(&request.path)?;
+            let (lock_path, conflict_paths) = match request.kind {
+                PathLockKind::Exact => {
+                    let resolved = resolver.resolve_exact_paths(&request.path).await?;
+                    (resolved.acquire_lock_path, resolved.conflict_paths)
+                }
+                PathLockKind::Tree => {
+                    let resolved = resolver.resolve_tree_paths(&request.path).await?;
+                    (resolved.acquire_lock_path, resolved.conflict_paths)
+                }
+            };
+            plans.push(FilesystemAcquisitionPlan {
+                request: request.clone(),
+                lock_path,
+                conflict_paths,
+            });
+        }
+        Ok(plans)
+    }
+
+    /// Check that no live foreign Tree holder covers the requested path.
+    async fn check_ancestor_tree_locks(
+        &self,
+        path: &str,
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<()> {
+        let resolver = super::resolver::LockPathResolver::new(self.fs.clone());
+        for ancestor in super::resolver::LockPathResolver::ancestor_paths(path) {
+            for lock_path in resolver.resolve_tree_conflict_paths(&ancestor).await? {
+                if let Some(token) = self.read_token(&lock_path).await? {
+                    if token.owner_id != owner
+                        && token.live_kind(stale_before) == Some(PathLockKind::Tree)
+                    {
+                        return Err(PathLockError::Conflict {
+                            lock_path,
+                            owner: token.owner_id,
+                            kind: token.lock_type,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check a finite lock-file conflict set for live foreign holders.
+    async fn check_lock_paths(
+        &self,
+        lock_paths: &[String],
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<()> {
+        for lock_path in lock_paths {
+            if let Some(token) = self.read_token(lock_path).await? {
+                if token.owner_id != owner && token.live_kind(stale_before).is_some() {
+                    return Err(PathLockError::Conflict {
+                        lock_path: lock_path.clone(),
+                        owner: token.owner_id,
+                        kind: token.lock_type,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check that a Tree request has no live foreign descendant holders.
+    async fn check_descendant_locks(
+        &self,
+        path: &str,
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<()> {
+        for lock_path in self.scan_descendant_locks(path).await? {
+            if let Some(token) = self.read_token(&lock_path).await? {
+                if token.owner_id != owner && token.live_kind(stale_before).is_some() {
+                    return Err(PathLockError::Conflict {
+                        lock_path,
+                        owner: token.owner_id,
+                        kind: token.lock_type,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Ensure the parent directory for a lock sidecar exists.
+    async fn ensure_lock_dir(&self, lock_path: &str) -> PathLockResult<()> {
+        let Some(parent_end) = lock_path.rfind('/') else {
+            return Ok(());
+        };
+        let parent = &lock_path[..parent_end];
+        if parent.is_empty() || parent == "/" {
+            return Ok(());
+        }
+        let mut missing = Vec::new();
+        let mut current = parent.to_string();
+        loop {
+            match self.fs.stat(&current).await {
+                Ok(info) if info.is_dir => break,
+                _ => {
+                    missing.push(current.clone());
+                    match current.rsplit_once('/') {
+                        Some((ancestor, _)) if !ancestor.is_empty() => current = ancestor.into(),
+                        _ => break,
+                    }
+                }
+            }
+        }
+        for directory in missing.into_iter().rev() {
+            if let Err(error) = self.fs.mkdir(&directory, 0o755).await {
+                match self.fs.stat(&directory).await {
+                    Ok(info) if info.is_dir => {}
+                    _ => {
+                        return Err(PathLockError::Io(format!(
+                            "failed to create lock dir '{directory}': {error}"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Add one holder after checking the request's current conflict set.
+    async fn acquire_plan(
+        &self,
+        plan: &FilesystemAcquisitionPlan,
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale_before: u128,
+        source: Option<&str>,
+    ) -> PathLockResult<AtomicAcquisition> {
+        self.check_ancestor_tree_locks(&plan.request.path, owner, stale_before)
+            .await?;
+        self.check_lock_paths(&plan.conflict_paths, owner, stale_before)
+            .await?;
+        if plan.request.kind == PathLockKind::Tree {
+            self.check_descendant_locks(&plan.request.path, owner, stale_before)
+                .await?;
+        }
+        self.ensure_lock_dir(&plan.lock_path).await?;
+
+        for _ in 0..16 {
+            let mut replacement = LockToken::held(owner, holder, plan.request.kind, now);
+            let previous = self.read_token(&plan.lock_path).await?;
+            if let Some(source) = source {
+                validate_handoff_source(
+                    previous.as_ref(),
+                    owner,
+                    source,
+                    plan.request.kind,
+                    stale_before,
+                )?;
+            }
+            let Some(previous) = previous else {
+                match self.try_create_token(&plan.lock_path, &replacement).await {
+                    Ok(()) => {
+                        return Ok(AtomicAcquisition {
+                            handle: plan.lock_path.clone(),
+                            change: AcquisitionChange::Created { replacement },
+                        });
+                    }
+                    Err(PathLockError::Conflict { .. }) => continue,
+                    Err(error) => return Err(error),
+                }
+            };
+            if previous.owner_id != owner && previous.live_kind(stale_before).is_some() {
+                return Err(PathLockError::Conflict {
+                    lock_path: plan.lock_path.clone(),
+                    owner: previous.owner_id,
+                    kind: previous.lock_type,
+                });
+            }
+            if previous.owner_id == owner {
+                replacement = previous.clone();
+                replacement.add_holder(
+                    holder,
+                    plan.request.kind,
+                    now,
+                    stale_before,
+                    source,
+                );
+            }
+            if self
+                .compare_and_write_token(&plan.lock_path, &previous, &replacement)
+                .await?
+            {
+                return Ok(AtomicAcquisition {
+                    handle: plan.lock_path.clone(),
+                    change: AcquisitionChange::Upgraded {
+                        previous,
+                        replacement,
+                    },
+                });
+            }
+        }
+        Err(PathLockError::Busy {
+            lock_path: plan.lock_path.clone(),
+            operation: "acquire holder".into(),
+        })
+    }
+
+    /// Re-run request conflict checks after all parallel holder writes settle.
+    async fn verify_plans(
+        &self,
+        plans: &[FilesystemAcquisitionPlan],
+        owner: &str,
+        stale_before: u128,
+    ) -> PathLockResult<()> {
+        for plan in plans {
+            self.check_ancestor_tree_locks(&plan.request.path, owner, stale_before)
+                .await?;
+            self.check_lock_paths(&plan.conflict_paths, owner, stale_before)
+                .await?;
+            if plan.request.kind == PathLockKind::Tree {
+                self.check_descendant_locks(&plan.request.path, owner, stale_before)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove new holders and restore still-live handoff sources after a failed batch.
+    async fn rollback_holders(
+        &self,
+        acquisitions: &[AtomicAcquisition],
+        owner: &str,
+        holder: &str,
+        source: Option<&str>,
+        now: u128,
+        stale_before: u128,
+    ) -> PathLockResult<()> {
+        let mut first_error = None;
+        for acquisition in acquisitions.iter().rev() {
+            let restored = match (&acquisition.change, source) {
+                (AcquisitionChange::Upgraded { previous, .. }, Some(source))
+                    if previous.owner_id == owner =>
+                {
+                    previous.holders.iter().find(|item| item.id == source).cloned()
+                }
+                _ => None,
+            };
+            let result = match restored {
+                Some(restored) => {
+                    self.replace_holder(
+                        &acquisition.handle,
+                        owner,
+                        holder,
+                        restored,
+                        stale_before,
+                    )
+                    .await
+                }
+                None => self
+                    .mutate_holder(&acquisition.handle, owner, holder, now, 0, true)
+                    .await
+                    .map(|_| ()),
+            };
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 }
 
@@ -947,6 +1238,143 @@ mod tests {
 
 #[async_trait]
 impl PathLockProvider for FilesystemPathLockProvider {
+    async fn try_acquire_holders_atomic(
+        &self,
+        requests: &[PathLockRequest],
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale_before: u128,
+        source: Option<&str>,
+    ) -> PathLockResult<Option<AtomicAcquisitionResult>> {
+        if !LockTokenCodec::valid_id(owner) || !LockTokenCodec::valid_id(holder) {
+            return Err(PathLockError::InvalidRequest(
+                "invalid holder acquisition".into(),
+            ));
+        }
+        let plans = self.acquisition_plans(requests).await?;
+        if let Some(source) = source {
+            for plan in &plans {
+                validate_handoff_source(
+                    self.read_token(&plan.lock_path).await?.as_ref(),
+                    owner,
+                    source,
+                    plan.request.kind,
+                    stale_before,
+                )?;
+            }
+        }
+        let mut acquisitions: Vec<Option<AtomicAcquisition>> =
+            (0..plans.len()).map(|_| None).collect();
+        let mut next_plan = 0;
+        let mut first_error = None;
+        let mut in_flight: FuturesUnordered<
+            BoxFuture<'_, (usize, PathLockResult<AtomicAcquisition>)>,
+        > = FuturesUnordered::new();
+
+        while next_plan < plans.len() && in_flight.len() < FILESYSTEM_HOLDER_PARALLELISM {
+            let index = next_plan;
+            next_plan += 1;
+            let plan = &plans[index];
+            in_flight.push(Box::pin(async move {
+                (
+                    index,
+                    self.acquire_plan(plan, owner, holder, now, stale_before, source)
+                        .await,
+                )
+            }));
+        }
+        while let Some((index, result)) = in_flight.next().await {
+            match result {
+                Ok(acquisition) => acquisitions[index] = Some(acquisition),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+            if first_error.is_none() && next_plan < plans.len() {
+                let index = next_plan;
+                next_plan += 1;
+                let plan = &plans[index];
+                in_flight.push(Box::pin(async move {
+                    (
+                        index,
+                        self.acquire_plan(plan, owner, holder, now, stale_before, source)
+                            .await,
+                    )
+                }));
+            }
+        }
+
+        let acquisitions: Vec<_> = acquisitions.into_iter().flatten().collect();
+        let result = match first_error {
+            Some(error) => Err(error),
+            None => self.verify_plans(&plans, owner, stale_before).await,
+        };
+        if let Err(error) = result {
+            if let Err(rollback_error) = self
+                .rollback_holders(&acquisitions, owner, holder, source, now, stale_before)
+                .await
+            {
+                return Err(PathLockError::Internal(format!(
+                    "{error}; rollback failed: {rollback_error}"
+                )));
+            }
+            return Err(error);
+        }
+
+        Ok(Some(AtomicAcquisitionResult {
+            acquisitions,
+            stale_tokens_removed: 0,
+        }))
+    }
+
+    async fn refresh_holders(
+        &self,
+        paths: &[String],
+        owner: &str,
+        holder: &str,
+        now: u128,
+        stale_before: u128,
+    ) -> Vec<PathLockResult<bool>> {
+        let mut results: Vec<Option<PathLockResult<bool>>> =
+            (0..paths.len()).map(|_| None).collect();
+        let mut next_path = 0;
+        let mut in_flight: FuturesUnordered<BoxFuture<'_, (usize, PathLockResult<bool>)>> =
+            FuturesUnordered::new();
+
+        while next_path < paths.len() && in_flight.len() < FILESYSTEM_HOLDER_PARALLELISM {
+            let index = next_path;
+            next_path += 1;
+            let path = &paths[index];
+            in_flight.push(Box::pin(async move {
+                (
+                    index,
+                    self.mutate_holder(path, owner, holder, now, stale_before, false)
+                        .await,
+                )
+            }));
+        }
+        while let Some((index, result)) = in_flight.next().await {
+            results[index] = Some(result);
+            if next_path < paths.len() {
+                let index = next_path;
+                next_path += 1;
+                let path = &paths[index];
+                in_flight.push(Box::pin(async move {
+                    (
+                        index,
+                        self.mutate_holder(path, owner, holder, now, stale_before, false)
+                            .await,
+                    )
+                }));
+            }
+        }
+        results
+            .into_iter()
+            .map(|result| result.expect("every refresh task must complete"))
+            .collect()
+    }
+
     async fn compare_and_remove_token(
         &self,
         path: &str,
