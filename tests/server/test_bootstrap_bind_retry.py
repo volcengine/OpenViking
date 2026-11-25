@@ -121,3 +121,89 @@ def test_config_defaults_are_conservative():
     cfg = ServerConfig()
     assert cfg.bind_retry_attempts == 5
     assert cfg.bind_retry_interval_seconds == 1.0
+
+
+def _stub_app():
+    import types
+
+    return types.SimpleNamespace(state=types.SimpleNamespace())
+
+
+def test_restartable_server_hands_prebound_socket_to_server():
+    """sock= must be consumed, not leaked into uvicorn.Config kwargs (#5437)."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock, patch
+
+    import openviking.server.bootstrap as bootstrap
+
+    port = _free_port()
+    sock = _bind_socket_with_retry(
+        ServerConfig(host="127.0.0.1", port=port, bind_retry_attempts=0)
+    )
+    try:
+        with patch("uvicorn.Server") as server_cls:
+            server_cls.return_value = MagicMock()
+            bootstrap._run_restartable_server(
+                _stub_app(),
+                host="127.0.0.1",
+                port=port,
+                sock=sock,
+                access_log=False,
+            )
+        # run() must receive the pre-bound socket via sockets=.
+        assert server_cls.return_value.run.call_args.kwargs.get("sockets") == [sock]
+        # uvicorn.Config was built from the real class: if sock had leaked
+        # into the kwargs, its constructor would have raised TypeError above.
+    finally:
+        sock.close()
+
+
+def test_restartable_server_without_socket_runs_bare():
+    """No pre-bound socket keeps the historical bare Server.run() path."""
+    from unittest.mock import MagicMock, patch
+
+    import openviking.server.bootstrap as bootstrap
+
+    with patch("uvicorn.Server") as server_cls:
+        server_cls.return_value = MagicMock()
+        bootstrap._run_restartable_server(_stub_app(), host="127.0.0.1", port=_free_port())
+        assert server_cls.return_value.run.call_args == {}
+        assert "sockets" not in server_cls.return_value.run.call_args.kwargs
+
+
+def test_run_uvicorn_single_process_hands_socket_to_server():
+    """Single-process mode serves on the pre-bound socket via sockets=."""
+    from unittest.mock import MagicMock, patch
+
+    import openviking.server.bootstrap as bootstrap
+
+    port = _free_port()
+    with patch("uvicorn.Server") as server_cls, patch("uvicorn.run") as run_fn:
+        server_cls.return_value = MagicMock()
+        bootstrap._run_uvicorn(
+            ServerConfig(host="127.0.0.1", port=port, bind_retry_attempts=0),
+            "openviking.server.app:create_worker_app",
+            factory=True,
+            access_log=False,
+        )
+        run_fn.assert_not_called()
+        assert server_cls.return_value.run.call_args.kwargs.get("sockets") is not None
+
+
+def test_run_uvicorn_multi_worker_passes_integer_fd():
+    """workers>1 hands uvicorn.run an integer fd, never a string (#5401)."""
+    from unittest.mock import patch
+
+    import openviking.server.bootstrap as bootstrap
+
+    port = _free_port()
+    with patch("uvicorn.run") as run_fn:
+        bootstrap._run_uvicorn(
+            ServerConfig(host="127.0.0.1", port=port, bind_retry_attempts=0),
+            "openviking.server.app:create_worker_app",
+            factory=True,
+            workers=2,
+            access_log=False,
+        )
+        fd = run_fn.call_args.kwargs.get("fd")
+        assert isinstance(fd, int)

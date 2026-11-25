@@ -594,6 +594,10 @@ def _run_restartable_server(app, recovery=None, **kwargs) -> bool:
 
     # RequestIdMiddleware owns request-completion logging.
     kwargs.setdefault("access_log", False)
+    # A pre-bound socket (bind-retry path) is handed to Server.run via
+    # sockets=; uvicorn.Config has no sock= parameter, so it must never
+    # leak into the config kwargs.
+    sock = kwargs.pop("sock", None)
     server = uvicorn.Server(uvicorn.Config(app, **kwargs))
     controller = RestartController(lambda: setattr(server, "should_exit", True), recovery)
     app.state.restart_controller = controller
@@ -606,7 +610,10 @@ def _run_restartable_server(app, recovery=None, **kwargs) -> bool:
                 recovery.ready()
 
         server.startup = startup_with_recovery
-    server.run()
+    if sock is not None:
+        server.run(sockets=[sock])
+    else:
+        server.run()
     if recovery is not None and recovery.pending:
         raise RuntimeError("Server failed to complete startup")
     return controller.requested
@@ -653,14 +660,16 @@ def _run_uvicorn(config, *args, **kwargs):
 
     uvicorn 0.41's ``run()`` takes no ``sock=`` parameter, so the bound socket
     reaches uvicorn per mode: single-process servers go through
-    ``uvicorn.Config(sock=...)`` + ``Server.run()`` (the same pair ``run()``
-    itself assembles), while the multi-worker path passes the socket as the
-    inherited ``fd=`` that ``run()`` already supports.
+    ``uvicorn.Config`` + ``Server.run(sockets=[sock])``, while the multi-worker
+    path hands uvicorn the integer file descriptor — ``run()``'s workers>1
+    branch re-wraps it via ``Config.bind_socket()``/``socket.fromfd``, which
+    requires an int (a string fileno raises TypeError).
     """
     sock = _bind_socket_with_retry(config)
     try:
         if kwargs.get("workers", 1) > 1:
-            return uvicorn.run(*args, fd=str(sock.fileno()), **kwargs)
+            kwargs["fd"] = sock.fileno()
+            return uvicorn.run(*args, **kwargs)
         uvicorn_config = uvicorn.Config(*args, **kwargs)
         return uvicorn.Server(uvicorn_config).run(sockets=[sock])
     finally:
