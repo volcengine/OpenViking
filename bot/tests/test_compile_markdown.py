@@ -14,7 +14,12 @@ from vikingbot.agent.tools.filesystem import WriteFileTool
 from vikingbot.bus.queue import MessageBus
 from vikingbot.compile import simple
 from vikingbot.compile.file_ops import DocumentReader
-from vikingbot.compile.models import CompileFailure, CompileLimits, SanitizedCompileRequest
+from vikingbot.compile.models import (
+    CompileFailure,
+    CompileLimits,
+    CompileTask,
+    SanitizedCompileRequest,
+)
 from vikingbot.compile.ops import finalize
 from vikingbot.compile.ops import reduce as reduce_op
 from vikingbot.compile.ops.shuffle import Shuffle
@@ -29,9 +34,11 @@ from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.sandbox.backends.direct import DirectBackend
 from vikingbot.session.manager import SessionManager
 
+from openviking.utils.compile_recovery import source_set_digest
 from openviking_cli.exceptions import NotFoundError
 
 MAP_ONLY = "drafts = p.map(sources, task=contract.extract)\np.finalize(drafts, into=target)"
+INVALID_FRONTMATTER = "---\ntype: concept\ntitle: Rules\n description: invalid\n---\n"
 MERGE = (
     "drafts = p.map(sources, task=contract.extract)\n"
     "groups = p.shuffle(drafts, by=contract.routing)\n"
@@ -150,7 +157,7 @@ def test_plan_rejects_unsafe_or_invalid_flows(program):
         parse_plan(program, contract(True))
 
 
-async def configure_pipeline(pipeline, merge=False, fail_second=False):
+async def configure_pipeline(pipeline, merge=False, fail_second=False, invalid_sibling=False):
     """Use actual file collection with controlled agent jobs and JSON control responses."""
     proposal = PlanProposal(contract=contract(merge), plan=MERGE if merge else MAP_ONLY)
 
@@ -173,6 +180,8 @@ async def configure_pipeline(pipeline, merge=False, fail_second=False):
             assert len(data["documents"]) == 2
             content += "Combined details from both drafts.\n"
         await model.files.sandbox.write_file(f"{root}/{name}", content)
+        if invalid_sibling:
+            await model.files.sandbox.write_file(f"{root}/bad.md", INVALID_FRONTMATTER)
         await model.files.sandbox.write_file(
             root.rsplit("/", 1)[0] + "/scratch.md", "private scratch"
         )
@@ -432,7 +441,7 @@ async def test_failed_routes_keep_completed_drafts_through_finalization(
         f"# Fact {i}" in "\n".join(op["content"] for op in bundle.operations) for i in range(3)
     )
     await pipeline.write_coverage([op["uri"] for op in bundle.operations])
-    assert (await pipeline.files.get("coverage"))["counts"] == {"delivered": 3}
+    assert (await pipeline.files.get("coverage"))["counts"] == {"prepared": 3}
 
 
 async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline):
@@ -452,26 +461,7 @@ async def test_finalization_requires_unique_paths_and_prior_target_read(pipeline
         await finalize.run(pipeline, [doc])
 
 
-@pytest.mark.parametrize("cancelled,conflict", [(False, False), (False, True), (True, False)])
-async def test_service_publishes_final_markdown_with_batch_write_and_honors_cancel(
-    pipeline, monkeypatch, cancelled, conflict
-):
-    if conflict:
-        pipeline.client.batch_write.return_value = {
-            "created": [],
-            "updated": [],
-            "unchanged": [],
-            "conflicts": [
-                {
-                    "uri": pipeline.target + "/topic.md",
-                    "code": "ALREADY_EXISTS",
-                    "message": "Exists",
-                }
-            ],
-        }
-    await configure_pipeline(pipeline)
-    task = SimpleNamespace(status="cancelling" if cancelled else "running", meta={}, result=None)
-
+def compile_service_for_test(pipeline, task, monkeypatch):
     async def update(task_id, mutate):
         mutate(task)
 
@@ -489,17 +479,51 @@ async def test_service_publishes_final_markdown_with_batch_write_and_honors_canc
     )
     service._set_state = AsyncMock()
     monkeypatch.setattr("vikingbot.compile.service.Pipeline", lambda **kwargs: pipeline)
+    return service
+
+
+@pytest.mark.parametrize("case", ["normal", "cancelled", "conflict", "source", "worker", "sibling"])
+async def test_service_publishes_final_markdown_with_batch_write_and_honors_cancel(
+    pipeline, monkeypatch, case
+):
+    source_files = [pipeline.request.from_[0] + "/one.md"]
+    output_files = [pipeline.target + "/topic.md"]
+    if case in {"source", "worker"}:
+        source_files.append(pipeline.request.from_[0] + "/two.md")
+    if case == "conflict":
+        pipeline.client.batch_write.return_value = {
+            "created": [],
+            "conflicts": [
+                {
+                    "uri": output_files[0],
+                    "code": "ALREADY_EXISTS",
+                    "message": "Exists",
+                }
+            ],
+        }
+    await configure_pipeline(
+        pipeline, fail_second=case == "worker", invalid_sibling=case == "sibling"
+    )
+    if case == "source":
+        pipeline.client.read_raw.side_effect = [
+            "source fact",
+            ConnectionError("Source unavailable"),
+        ]
+    task = SimpleNamespace(
+        status="cancelling" if case == "cancelled" else "running", meta={}, result=None
+    )
+    service = compile_service_for_test(pipeline, task, monkeypatch)
     call = service._run_pipeline(
         task_id="test",
         request=pipeline.request,
         client=pipeline.client,
         sandbox=pipeline.files.sandbox,
         skill_text=pipeline.skill,
-        source_files=["viking://resources/source/one.md"],
+        source_files=source_files,
         usage={},
         agent_runner=pipeline.model.agent_runner,
     )
-    if cancelled:
+    if case == "cancelled":
         with pytest.raises(asyncio.CancelledError):
             await call
         pipeline.client.batch_write.assert_not_awaited()
@@ -509,14 +533,71 @@ async def test_service_publishes_final_markdown_with_batch_write_and_honors_canc
         assert write["root_uri"] == pipeline.target and write["skip_conflicts"] is True
         assert write["operations"] == [
             {
-                "uri": pipeline.target + "/topic.md",
+                "uri": output_files[0],
                 "content": "# Topic\n\n[Source](viking://resources/source/one.md)\n",
                 "mode": "create",
             }
         ]
-        assert task.status == ("failed" if conflict else "completed")
-        assert task.result.page_count == (0 if conflict else 1)
-        assert bool(task.result.conflicts) == conflict
+        assert task.status == ("failed" if case == "conflict" else "completed")
+        assert task.result.created == ([] if case == "conflict" else output_files)
+        assert task.result.page_count == len(task.result.created)
+        assert bool(task.result.conflicts) == (case == "conflict")
+        assert task.result.completion_status == (None if case == "normal" else "partial")
+
+
+def incremental_request(request, **changes):
+    return request.model_copy(
+        update={
+            "changes": {
+                "execution": {"mode": "incremental"},
+                "base": "base",
+                "head": "head",
+                "diff_dirs": request.from_,
+                "full_dirs": [],
+                **changes,
+            }
+        }
+    )
+
+
+@pytest.mark.parametrize("read_all", [True, False])
+async def test_complex_recovery_requires_read_evidence_for_unchanged_drafts(
+    pipeline, monkeypatch, read_all
+):
+    await configure_pipeline(pipeline)
+    original_worker = pipeline.model.agent_runner
+    source_files = [pipeline.request.from_[0] + "/" + name for name in ("one.md", "two.md")]
+    expected = source_set_digest(source_files)
+    pipeline.request = incremental_request(pipeline.request, recovery_sources=expected)
+    pipeline.changes = pipeline.request.changes
+    page = "# Topic\n\n[Source](viking://resources/source/one.md)\n"
+    pipeline.old.update({"topic.md": page, "independent.md": page})
+    pipeline.client.download_bytes.return_value = page.encode()
+    pipeline.client.git_show_bytes = AsyncMock(return_value=b"source fact")
+
+    async def worker(system, data, model, *, stage, runtime):
+        assigned = data["inputs"][0]
+        if read_all or assigned["payload"]["uri"] == source_files[0]:
+            runtime.recovery_evidence.add(assigned["id"])
+        return await original_worker(system, data, model, stage=stage, runtime=runtime)
+
+    task = SimpleNamespace(status="running", meta={}, result=None)
+    service = compile_service_for_test(pipeline, task, monkeypatch)
+    await service._run_pipeline(
+        task_id="test",
+        request=pipeline.request,
+        client=pipeline.client,
+        sandbox=pipeline.files.sandbox,
+        skill_text=pipeline.skill,
+        source_files=source_files,
+        usage={},
+        agent_runner=worker,
+    )
+    assert task.status == "completed"
+    assert task.result.completion_status is None
+    assert len(task.result.unchanged) == 2
+    pipeline.client.batch_write.assert_not_awaited()
+    assert task.result.recovery_proof == (expected if read_all else None)
 
 
 @pytest.mark.parametrize(
@@ -685,6 +766,143 @@ async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
 
     assert caught.value.code == "COMPILE_INCOMPLETE"
     pipeline.client.write.assert_not_awaited()
+
+
+async def run_simple_incremental(pipeline, agent_loop, request, calls, *replies):
+    loop, session_key, _ = agent_loop
+    pipeline.model.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(content="", tool_calls=[ToolCallRequest(str(index), name, args, 0)])
+            for index, (name, args) in enumerate(calls)
+        ]
+        + list(replies)
+    )
+    return await simple.run(
+        loop,
+        pipeline.client,
+        request,
+        request.from_,
+        pipeline.skill,
+        session_key,
+        None,
+        AsyncMock(),
+        {},
+    )
+
+
+@pytest.mark.parametrize("recovered", [False, True])
+async def test_simple_incremental_delivery_preserves_rejections(pipeline, agent_loop, recovered):
+    pipeline.client.write = AsyncMock(
+        side_effect=lambda uri, *args, **kwargs: {"uri": uri, "content_updated": True}
+    )
+    pipeline.client.diff_paths = AsyncMock(return_value={"changes": [], "has_more": False})
+    calls = [
+        ("openviking_diff_paths", {}),
+        ("openviking_write", {"path": "good.md", "content": "# Good"}),
+        ("openviking_write", {"path": "bad.md", "content": INVALID_FRONTMATTER}),
+    ]
+    if recovered:
+        calls.append(("openviking_write", {"path": "bad.md", "content": "# Rules"}))
+    result = await run_simple_incremental(
+        pipeline,
+        agent_loop,
+        incremental_request(pipeline.request),
+        calls,
+        LLMResponse(content="Done"),
+    )
+    assert pipeline.target + "/good.md" in result.updated
+    public = CompileTask.model_construct(result=result).public_dict()["result"]
+    if recovered:
+        assert "completion_status" not in public
+    else:
+        assert public["completion_status"] == "partial"
+
+
+@pytest.mark.parametrize(
+    "retry_args,expected_status",
+    [
+        ({"offset": 40, "limit": 20}, "partial"),
+        ({"offset": 20, "limit": 10}, "partial"),
+        ({"offset": 20}, None),
+    ],
+)
+async def test_simple_incremental_diff_failure_tracks_page(
+    pipeline, agent_loop, retry_args, expected_status
+):
+    pipeline.client.write = AsyncMock(
+        side_effect=lambda uri, *args, **kwargs: {"uri": uri, "content_updated": True}
+    )
+    pipeline.client.diff_paths = AsyncMock(
+        side_effect=[
+            {"changes": [], "has_more": True, "next_offset": 20},
+            ConnectionError("Source diff page unavailable"),
+            {"changes": [], "has_more": False},
+        ]
+    )
+    calls = [
+        ("openviking_diff_paths", {}),
+        ("openviking_diff_paths", {"offset": 20, "limit": 20}),
+        ("openviking_diff_paths", retry_args),
+        ("openviking_write", {"path": "good.md", "content": "# Good"}),
+    ]
+    result = await run_simple_incremental(
+        pipeline,
+        agent_loop,
+        incremental_request(pipeline.request),
+        calls,
+        LLMResponse(content="Done"),
+    )
+    assert result.updated == [pipeline.target + "/good.md"]
+    assert result.completion_status == expected_status
+
+
+@pytest.mark.parametrize("case", ["reminded", "omitted", "sliced", "stale"])
+async def test_simple_recovery_requires_each_changed_source_and_its_frozen_content(
+    pipeline, agent_loop, case
+):
+    alpha, beta = (pipeline.request.from_[0] + "/" + name for name in ("alpha.md", "beta.md"))
+    target = pipeline.target + "/topic.md"
+    expected = source_set_digest([alpha, beta])
+    request = incremental_request(pipeline.request, recovery_sources=expected)
+    pipeline.client.diff_paths = AsyncMock(
+        return_value={
+            "changes": [{"uri": uri, "change_type": "modified"} for uri in (alpha, beta)],
+            "has_more": False,
+        }
+    )
+    pipeline.client.download_bytes = AsyncMock(side_effect=lambda uri: uri.encode())
+    pipeline.client.read_content = AsyncMock(return_value="A window, not the whole file")
+    pipeline.client.git_show_bytes = AsyncMock(
+        side_effect=lambda uri, _: (
+            b"Different bytes" if uri == beta and case == "stale" else uri.encode()
+        )
+    )
+    beta_read = {"uris": [beta]}
+    if case == "sliced":
+        beta_read["limit"] = 1
+    calls = [
+        ("openviking_diff_paths", {}),
+        ("openviking_multi_read", {"uris": [alpha, target]}),
+        ("openviking_multi_read", beta_read),
+    ]
+    confirmed = {alpha: [target]}
+    if case != "omitted":
+        confirmed[beta] = [target]
+    confirmation = LLMResponse(
+        content="The targets already match.\nUNCHANGED_SOURCES: " + json.dumps(confirmed)
+    )
+    first_reply = (
+        LLMResponse(content="Done without changes.") if case == "reminded" else confirmation
+    )
+    result = await run_simple_incremental(
+        pipeline, agent_loop, request, calls, first_reply, confirmation
+    )
+    assert result.recovery_proof == (expected if case == "reminded" else None)
+    task = CompileTask.model_construct(result=result)
+    assert "recovery_proof" not in task.public_dict()["result"]
+    assert task.public_dict(include_recovery_proof=True)["result"].get("recovery_proof") == (
+        result.recovery_proof
+    )
 
 
 async def test_finalize_skips_invalid_okf_frontmatter_and_publishes_valid_pages(pipeline):

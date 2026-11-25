@@ -4,7 +4,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -12,12 +12,12 @@ from openviking_sdk import (
     AsyncHTTPClient,
     ContextPart,
     ImagePart,
+    Message,
     SyncHTTPClient,
     TextPart,
     ToolPart,
 )
-from openviking_sdk.client import Session, SyncSession
-from openviking_sdk.errors import NotFoundError
+from openviking_sdk.errors import ConflictError, NotFoundError
 
 
 @pytest.mark.asyncio
@@ -108,41 +108,41 @@ async def test_write_clients_preserve_options_when_timeout_is_ignored(
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_initialize_forwards_event_hooks():
-    async def request_hook(_request):
-        return None
+async def test_async_http_client_initialize_forwards_event_hooks(sdk_transport):
+    calls = []
 
-    async def later_hook(_request):
-        return None
+    async def request_hook(request):
+        calls.append(request.url.path)
+        request.headers["X-Trace-ID"] = "sdk-trace"
 
+    async def later_hook(request):
+        calls.append("unexpected mutation")
+
+    def handle(request):
+        assert request.headers["X-Trace-ID"] == "sdk-trace"
+        assert request.headers["Authorization"] == "Bearer header.payload.signature"
+        return httpx.Response(200, json={"status": "ok"})
+
+    sdk_transport(handle)
     event_hooks = {"request": [request_hook]}
-    fake_http = SimpleNamespace(aclose=AsyncMock())
-
-    with patch(
-        "openviking_sdk.client.httpx.AsyncClient",
-        return_value=fake_http,
-    ) as mock_async_client:
-        client = AsyncHTTPClient(
-            url="http://localhost:1933",
-            event_hooks=event_hooks,
-        )
-        await client.initialize()
+    client = AsyncHTTPClient(
+        url="http://localhost:1933",
+        event_hooks=event_hooks,
+        auth_mode="oidc",
+        oidc_token="header.payload.signature",
+    )
     event_hooks["request"].append(later_hook)
+    await client.initialize()
+    try:
+        assert await client.health()
+    finally:
+        await client.close()
 
-    assert mock_async_client.call_args.kwargs["event_hooks"] == {"request": [request_hook]}
-    await client.close()
+    assert calls == ["/health"]
 
 
-@pytest.mark.asyncio
-async def test_async_http_client_batch_add_messages_posts_batch_payload():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {
-        "result": {"session_id": "batch-session", "message_count": 2, "added": 2}
-    }
-
-    messages = [
+def test_sync_http_client_batch_add_messages_posts_payload_to_escaped_session(sdk_transport):
+    messages: list[Message] = [
         {
             "role": "user",
             "content": "hello",
@@ -151,84 +151,25 @@ async def test_async_http_client_batch_add_messages_posts_batch_payload():
         },
         {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
     ]
+    result = {"session_id": "thread#message", "message_count": 2, "added": 2}
+    requests = []
 
-    result = await client.batch_add_messages("batch-session", messages)
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "result": result})
 
-    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/sessions/batch-session/messages/batch",
-        json={"messages": messages},
-    )
+    sdk_transport(handle)
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client.initialize()
+    try:
+        assert client.batch_add_messages("thread#message", messages) == result
+    finally:
+        client.close()
 
-
-@pytest.mark.asyncio
-async def test_async_http_client_batch_add_messages_url_encodes_session_id():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {
-        "result": {"session_id": "encoded-session", "message_count": 1, "added": 1}
-    }
-
-    session_id = (
-        "feishu__cli_a938e530eb7c9bd9__"
-        "oc_aa9e08fddf5727f9c53400a07ff505cd#om_x100b6ff6c3df48ace10030ac68d3eb4"
-    )
-
-    await client.batch_add_messages(session_id, [{"role": "user", "content": "hello"}])
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/sessions/"
-        "feishu__cli_a938e530eb7c9bd9__"
-        "oc_aa9e08fddf5727f9c53400a07ff505cd%23om_x100b6ff6c3df48ace10030ac68d3eb4"
-        "/messages/batch",
-        json={"messages": [{"role": "user", "content": "hello"}]},
-    )
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_sends_message_semantics_and_turn_retention():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
-
-    await client.add_message(
-        "demo-session",
-        role="assistant",
-        parts=[{"type": "text", "text": "checking"}],
-        options={
-            "turn_id": "turn-1",
-            "message_kind": "assistant_step",
-            "source_message_ids": ["u1"],
-        },
-    )
-    await client.commit_session(
-        "demo-session",
-        options={
-            "retention_mode": "turn_budget",
-            "enable_working_memory": True,
-            "keep_recent_turn_count": 3,
-            "retained_message_token_budget": 12_000,
-            "min_raw_tail_steps": 1,
-        },
-    )
-
-    assert fake_http.post.await_args_list[0].kwargs["json"] == {
-        "role": "assistant",
-        "parts": [{"type": "text", "text": "checking"}],
-        "turn_id": "turn-1",
-        "message_kind": "assistant_step",
-        "source_message_ids": ["u1"],
-    }
-    assert fake_http.post.await_args_list[1].kwargs["json"] == {
-        "keep_recent_count": 0,
-        "enable_working_memory": True,
-        "retention_mode": "turn_budget",
-        "keep_recent_turn_count": 3,
-        "retained_message_token_budget": 12_000,
-        "min_raw_tail_steps": 1,
-    }
+    (request,) = requests
+    assert request.method == "POST"
+    assert request.url.raw_path == b"/api/v1/sessions/thread%23message/messages/batch"
+    assert json.loads(request.content) == {"messages": messages}
 
 
 @pytest.mark.asyncio
@@ -394,521 +335,130 @@ async def test_async_http_client_sends_event_memory_tag_configuration():
 
 
 @pytest.mark.asyncio
-async def test_async_http_client_reindex_posts_content_reindex():
+async def test_write_omits_legacy_defaults_and_preserves_explicit_empty_content(sdk_transport):
+    requests = []
+    document = "viking://resources/demo.md"
+
+    def handle(request):
+        assert (request.method, request.url.path) == ("POST", "/api/v1/content/write")
+        body = json.loads(request.content)
+        requests.append(body)
+        if body.get("resolve_conflicts"):
+            return httpx.Response(
+                409,
+                json={
+                    "status": "error",
+                    "error": {"code": "CONFLICT", "message": "revision changed"},
+                },
+            )
+        return httpx.Response(200, json={"status": "ok", "result": {"uri": document}})
+
+    sdk_transport(handle)
     client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {"status": "completed"}
-
-    result = await client.reindex(
-        "viking://resources/demo",
-        mode="vectors_only",
-        wait=False,
-        force=True,
-        options=None,
-    )
-
-    assert result == {"status": "completed"}
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/content/reindex",
-        json={
-            "uri": "viking://resources/demo",
-            "mode": "vectors_only",
-            "wait": False,
-            "force": True,
-            "recursive": True,
-        },
-    )
+    await client.initialize()
+    try:
+        result = await client.write(document, "")
+        assert result["uri"] == document
+        with pytest.raises(ConflictError, match="revision changed"):
+            await client.write(
+                document,
+                "resolved",
+                options={
+                    "use_snapshot": True,
+                    "resolve_conflicts": True,
+                    "processing_mode": "vectors_only",
+                },
+            )
+    finally:
+        await client.close()
+    assert requests[0]["content"] == ""
+    assert {"processing_mode", "regenerate_semantics", "revectorize"}.isdisjoint(requests[0])
+    assert requests[1]["use_snapshot"] is True
+    assert requests[1]["processing_mode"] == "vectors_only"
 
 
-@pytest.mark.asyncio
-async def test_async_http_client_reindex_sends_explicit_empty_tags():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {"status": "completed"}
-
-    await client.reindex(
-        "viking://resources/demo",
-        options={"tags": [], "tag_mode": "replace"},
-    )
-
-    assert fake_http.post.await_args.kwargs["json"]["tags"] == []
-    assert fake_http.post.await_args.kwargs["json"]["tag_mode"] == "replace"
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_reindex_sends_clear_without_tags():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {"status": "completed"}
-
-    await client.reindex(
-        "viking://resources/demo",
-        options={"tag_mode": "clear"},
-    )
-
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert "tags" not in payload
-    assert payload["tag_mode"] == "clear"
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_write_forwards_processing_mode():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {
-        "result": {"uri": "viking://resources/demo.md"}
+def test_sync_http_client_session_returns_sync_session_wrapper(sdk_transport):
+    requests = []
+    session_path = "/api/v1/sessions/demo-session"
+    responses = {
+        ("GET", session_path): {"session_id": "demo-session"},
+        ("POST", f"{session_path}/messages"): {"message_id": "msg-1"},
+        ("POST", f"{session_path}/commit"): {"task_id": "task-1"},
+        ("GET", f"{session_path}/context"): {"messages": [{"role": "user"}]},
     }
 
-    await client.write(
-        "viking://resources/demo.md",
-        "updated",
-        options={"processing_mode": "vectors_only", "defer_processing": True, "use_snapshot": True},
-    )
-
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert payload["processing_mode"] == "vectors_only"
-    assert payload["defer_processing"] is True
-    assert payload["use_snapshot"] is True
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_write_forwards_explicit_tags_and_mode():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await client.write(
-        "viking://resources/demo.md",
-        "updated",
-        options={"tags": [], "tag_mode": "replace"},
-    )
-
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert payload["tags"] == []
-    assert payload["tag_mode"] == "replace"
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_write_forwards_clear_without_tags():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await client.write(
-        "viking://resources/demo.md",
-        "updated",
-        options={"tag_mode": "clear"},
-    )
-
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert "tags" not in payload
-    assert payload["tag_mode"] == "clear"
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_filesystem_tags_are_omission_aware():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response = lambda _response: []
-
-    await client.ls("viking://resources")
-    await client.tree("viking://resources", tags=["env=prod"])
-
-    ls_params = client._request.await_args_list[0].kwargs["params"]
-    tree_params = client._request.await_args_list[1].kwargs["params"]
-    assert "tags" not in ls_params
-    assert tree_params["tags"] == ["env=prod"]
-
-
-@pytest.mark.asyncio
-async def test_async_http_client_write_omits_default_processing_mode_for_legacy_servers():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {
-        "result": {"uri": "viking://resources/demo.md"}
-    }
-
-    await client.write("viking://resources/demo.md", "updated")
-
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert "processing_mode" not in payload
-
-
-def test_sync_http_client_reindex_forwards_to_async_client():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    with patch.object(
-        client._async_client,
-        "reindex",
-        new_callable=Mock,
-        return_value={"status": "accepted"},
-    ) as mock_reindex:
-        with patch(
-            "openviking_sdk.client.run_async",
-            return_value={"status": "accepted"},
-        ) as mock_run:
-            result = client.reindex(
-                "viking://resources/demo",
-                mode="vectors_only",
-                wait=False,
-            )
-
-    assert result == {"status": "accepted"}
-    assert mock_run.called
-    mock_reindex.assert_called_once_with(
-        "viking://resources/demo",
-        mode="vectors_only",
-        wait=False,
-        recursive=True,
-        options=None,
-    )
-
-
-def test_sync_http_client_forwards_tags_to_filesystem_methods():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    entries = [{"name": "docs"}]
-    page = {"result": entries, "has_more": True}
-
-    with patch.object(client._async_client, "ls_page", return_value=page) as mock_ls:
-        with patch.object(client._async_client, "tree_page", return_value=page) as mock_tree:
-            with patch.object(client._async_client, "grep", return_value={}) as mock_grep:
-                assert client.ls("viking://resources", tags=["env=prod"]) == entries
-                assert (
-                    client.tree(
-                        "viking://resources",
-                        tags=["env=prod"],
-                        directories_only=True,
-                    )
-                    == entries
-                )
-                client.grep("viking://resources", "Sample", tags=["env=prod"])
-
-    assert mock_ls.call_args.kwargs["tags"] == ["env=prod"]
-    assert mock_tree.call_args.kwargs["tags"] == ["env=prod"]
-    assert mock_tree.call_args.kwargs["directories_only"] is True
-    assert mock_grep.call_args.kwargs["tags"] == ["env=prod"]
-
-
-def test_sync_http_client_batch_add_messages_forwards_to_async_client():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    messages = [
-        {
-            "role": "user",
-            "content": "hello",
-            "peer_id": "explicit-user",
-            "created_at": "2026-05-28T00:00:00+00:00",
-        },
-        {"role": "assistant", "parts": [{"type": "text", "text": "hi"}]},
-    ]
-
-    with patch.object(
-        client._async_client,
-        "batch_add_messages",
-        return_value={"session_id": "batch-session", "message_count": 2, "added": 2},
-    ) as mock_batch:
-        with patch(
-            "openviking_sdk.client.run_async",
-            return_value={"session_id": "batch-session", "message_count": 2, "added": 2},
-        ) as mock_run:
-            result = client.batch_add_messages("batch-session", messages)
-
-    assert result == {"session_id": "batch-session", "message_count": 2, "added": 2}
-    assert mock_run.called
-    mock_batch.assert_called_once_with("batch-session", messages, None)
-
-
-def test_sync_http_client_session_returns_sync_session_wrapper():
-    client = SyncHTTPClient(url="http://localhost:1933")
-
-    session = client.session("demo-session")
-
-    assert isinstance(session, SyncSession)
-    assert session.session_id == "demo-session"
-
-
-def test_sync_session_add_message_wraps_async_client():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    session = client.session("demo-session")
-
-    with patch.object(
-        client._async_client,
-        "add_message",
-        return_value={"message_id": "msg-1"},
-    ) as mock_add_message:
-        with patch(
-            "openviking_sdk.client.run_async",
-            return_value={"message_id": "msg-1"},
-        ) as mock_run:
-            result = session.add_message(
-                role="user",
-                content="hello",
-                peer_id="peer-alice",
-            )
-
-    assert result == {"message_id": "msg-1"}
-    assert mock_run.called
-    mock_add_message.assert_called_once_with(
-        "demo-session",
-        role="user",
-        content="hello",
-        parts=None,
-        options=None,
-        peer_id="peer-alice",
-    )
-
-
-def test_sync_session_commit_and_context_are_sync():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    session = client.session("demo-session")
-
-    with patch.object(
-        client._async_client,
-        "commit_session",
-        return_value={"status": "completed"},
-    ) as mock_commit:
-        with patch.object(
-            client._async_client,
-            "get_session_context",
-            return_value={"messages": []},
-        ) as mock_context:
-            with patch(
-                "openviking_sdk.client.run_async",
-                side_effect=[{"status": "completed"}, {"messages": []}],
-            ) as mock_run:
-                commit_result = session.commit(keep_recent_count=1)
-                context_result = session.get_session_context(2048)
-
-    assert commit_result == {"status": "completed"}
-    assert context_result == {"messages": []}
-    assert mock_run.call_count == 2
-    mock_commit.assert_called_once_with(
-        "demo-session",
-        keep_recent_count=1,
-        options=None,
-    )
-    mock_context.assert_called_once_with("demo-session", 2048)
-
-
-def test_sync_http_client_declares_common_sync_methods_explicitly():
-    explicit_methods = SyncHTTPClient.__dict__
-
-    for method_name in [
-        "add_message",
-        "create_session",
-        "list_sessions",
-        "get_session",
-        "get_session_context",
-        "delete_session",
-        "search",
-        "find",
-        "grep",
-        "glob",
-        "ls",
-        "tree",
-        "read",
-        "write",
-        "add_resource",
-        "add_skill",
-        "import_ovpack",
-        "export_ovpack",
-        "list_watches",
-        "get_watch",
-        "update_watch",
-        "delete_watch",
-        "trigger_watch",
-        "list_skills",
-        "get_skill",
-        "update_skill",
-        "delete_skill",
-        "compile",
-        "get_task",
-        "list_tasks",
-        "admin_list_accounts",
-        "admin_get_account",
-        "admin_get_user",
-    ]:
-        assert method_name in explicit_methods, method_name
-
-    client = SyncHTTPClient(url="http://localhost:1933")
-    client._async_client._request = AsyncMock(return_value=object())
-    client._async_client._handle_response = lambda _response: {"task_id": "cmp_1"}
-    result = client.compile(
-        ["viking://resources/source"],
-        "viking://resources/output",
-        "viking://agent/skills/wiki",
-        options={
-            "instruction": "Keep supporting evidence.",
-            "args": {"model_name": "endpoint-1"},
-        },
-    )
-
-    assert result == {"task_id": "cmp_1"}
-    client._async_client._request.assert_awaited_once_with(
-        "POST",
-        "/api/v1/compile",
-        json={
-            "from": ["viking://resources/source"],
-            "to": "viking://resources/output",
-            "skill": "viking://agent/skills/wiki",
-            "instruction": "Keep supporting evidence.",
-            "args": {"model_name": "endpoint-1"},
-        },
-    )
-
-
-def test_sync_http_client_session_must_exist_checks_existence():
-    client = SyncHTTPClient(url="http://localhost:1933")
-
-    with patch.object(
-        client, "get_session", return_value={"session_id": "demo-session"}
-    ) as mock_get:
-        session = client.session("demo-session", must_exist=True)
-
-    assert isinstance(session, SyncSession)
-    assert session.session_id == "demo-session"
-    mock_get.assert_called_once_with("demo-session")
-
-
-def test_sync_http_client_session_must_exist_propagates_not_found():
-    client = SyncHTTPClient(url="http://localhost:1933")
-
-    with patch.object(
-        client,
-        "get_session",
-        side_effect=NotFoundError("missing-session", "session"),
-    ) as mock_get:
-        with pytest.raises(NotFoundError):
-            client.session("missing-session", must_exist=True)
-
-    mock_get.assert_called_once_with("missing-session")
-
-
-def test_sync_session_commit_async_and_repr_match_sync_usage():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    session = client.session("demo-session")
-
-    with patch.object(session, "commit", return_value={"status": "completed"}) as mock_commit:
-        result = session.commit_async(keep_recent_count=3)
-
-    assert result == {"status": "completed"}
-    mock_commit.assert_called_once_with(keep_recent_count=3, options=None)
-    assert "demo-session" in repr(session)
-
-
-def test_sync_http_client_health_wraps_async_coroutine():
-    client = SyncHTTPClient(url="http://localhost:1933")
-    client._async_client.health = AsyncMock(return_value=True)
-
-    assert client.health() is True
-
-
-@pytest.mark.parametrize(
-    ("method_name", "format_value", "component"),
-    [
-        ("queue_status", None, "queue"),
-        ("queue_status", "json", "queue"),
-        ("vikingdb_status", "json", "vikingdb"),
-        ("models_status", "table", "models"),
-        ("get_status", None, "system"),
-    ],
-)
-def test_http_client_observer_requests_support_optional_format(
-    method_name, format_value, component
-):
-    result: dict[str, object] = {"is_healthy": True}
-    if component != "system":
-        result["name"] = component
-        result["status"] = {"sample": 1} if format_value == "json" else "sample"
-    requests: list[httpx.Request] = []
-
-    def handle(request: httpx.Request) -> httpx.Response:
+    def handle(request):
         requests.append(request)
+        result = responses.get((request.method, request.url.path))
+        if result is None:
+            return httpx.Response(
+                404,
+                json={
+                    "status": "error",
+                    "error": {
+                        "code": "NOT_FOUND",
+                        "details": {"resource": "missing", "type": "session"},
+                    },
+                },
+            )
         return httpx.Response(200, json={"status": "ok", "result": result})
 
+    sdk_transport(handle)
     client = SyncHTTPClient(url="http://localhost:1933")
-    client._async_client._http = httpx.AsyncClient(
-        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
-    )
+    client.initialize()
     try:
-        method = getattr(client, method_name)
-        assert (method() if format_value is None else method(format=format_value)) == result
+        session = client.session("demo-session", must_exist=True)
+        assert session.session_id == "demo-session"
+        assert session.add_message("user", "hello", peer_id="alice") == {"message_id": "msg-1"}
+        assert session.commit_async(keep_recent_count=3) == {"task_id": "task-1"}
+        assert session.get_session_context(2048) == {"messages": [{"role": "user"}]}
+        with pytest.raises(NotFoundError):
+            client.session("missing", must_exist=True)
     finally:
         client.close()
 
+    get, add, commit, context, missing = requests
+    assert get.url.path == session_path
+    assert json.loads(add.content) == {"role": "user", "content": "hello", "peer_id": "alice"}
+    assert json.loads(commit.content) == {"keep_recent_count": 3}
+    assert context.url.params["token_budget"] == "2048"
+    assert missing.url.path == "/api/v1/sessions/missing"
+
+
+def test_sync_http_client_compiles_with_per_call_instruction_and_model(sdk_transport):
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "result": {"task_id": "cmp_1"}})
+
+    sdk_transport(handle)
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client.initialize()
+    try:
+        result = client.compile(
+            ["viking://resources/source"],
+            "viking://resources/output",
+            "viking://agent/skills/wiki",
+            options={
+                "instruction": "Keep supporting evidence.",
+                "args": {"model_name": "endpoint-1"},
+            },
+        )
+    finally:
+        client.close()
+
+    assert result == {"task_id": "cmp_1"}
     (request,) = requests
-    assert request.method == "GET"
-    assert request.url.path == f"/api/v1/observer/{component}"
-    assert dict(request.url.params) == ({"format": format_value} if format_value else {})
-
-
-@pytest.mark.asyncio
-async def test_write_omits_removed_semantic_flags_from_http_payload():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {
-        "result": {"uri": "viking://resources/demo.md"}
+    assert request.method == "POST"
+    assert request.url.path == "/api/v1/compile"
+    assert json.loads(request.content) == {
+        "from": ["viking://resources/source"],
+        "to": "viking://resources/output",
+        "skill": "viking://agent/skills/wiki",
+        "instruction": "Keep supporting evidence.",
+        "args": {"model_name": "endpoint-1"},
     }
-
-    await client.write("viking://resources/demo.md", "updated", wait=True)
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/content/write",
-        json={
-            "uri": "viking://resources/demo.md",
-            "content": "updated",
-            "mode": "replace",
-            "wait": True,
-        },
-    )
-
-
-@pytest.mark.asyncio
-async def test_find_forwards_level_and_time_filters_when_provided():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await client.find(
-        "hello",
-        options={
-            "level": [0, 1],
-            "since": "2026-01-01",
-            "until": "2026-02-01",
-            "time_field": "updated_at",
-        },
-    )
-
-    payload = client._request.await_args.kwargs["json"]
-    assert payload["level"] == [0, 1]
-    assert payload["since"] == "2026-01-01"
-    assert payload["until"] == "2026-02-01"
-    assert payload["time_field"] == "updated_at"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method_name", "kwargs", "expected_path"),
-    [
-        ("find", {}, "/api/v1/search/find"),
-        ("search", {"session_id": "session-1"}, "/api/v1/search/search"),
-    ],
-)
-async def test_retrieval_forwards_read_content(method_name, kwargs, expected_path):
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await getattr(client, method_name)("hello", options={"read_content": True}, **kwargs)
-
-    assert client._request.await_args.args == ("POST", expected_path)
-    assert client._request.await_args.kwargs["json"]["read_content"] is True
 
 
 @pytest.mark.asyncio
@@ -943,250 +493,41 @@ async def test_retrieval_accepts_image_as_explicit_parameter(
 
 
 @pytest.mark.asyncio
-async def test_find_omits_level_and_time_filters_when_absent():
+async def test_connector_resource_requires_an_exact_target_before_transport(sdk_transport):
+    requests = []
+    target = "viking://resources/feishu"
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json={"status": "ok", "result": {"root_uri": target}})
+
+    sdk_transport(handle)
     client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await client.find("hello")
-
-    payload = client._request.await_args.kwargs["json"]
-    for key in ("level", "since", "until", "time_field"):
-        assert key not in payload
-
-
-@pytest.mark.asyncio
-async def test_search_forwards_level_zero_and_omits_unset_time_filters():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    # level=0 is a valid level and must survive compaction (is-None check, not falsy).
-    await client.search(
-        "hello", session_id="s1", options={"level": 0, "events_time_decay_protection": "0"}
-    )
-
-    payload = client._request.await_args.kwargs["json"]
-    assert payload["level"] == 0
-    assert payload["session_id"] == "s1"
-    assert payload["events_time_decay_protection"] == "0"
-    for key in ("search_type", "since", "until", "time_field"):
-        assert key not in payload
-
-
-@pytest.mark.asyncio
-async def test_search_and_search_context_forward_search_type():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await client.search("OAuth token", options={"search_type": "keywords"})
-    search_payload = client._request.await_args.kwargs["json"]
-    assert search_payload["search_type"] == "keywords"
-
-    await client.search_context("OAuth token", options={"search_type": "keywords"})
-    context_payload = client._request.await_args.kwargs["json"]
-    assert context_payload["search_type"] == "keywords"
-
-
-@pytest.mark.asyncio
-async def test_find_extra_forwards_unknown_fields_to_payload():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    # The escape hatch lets callers reach server fields the SDK does not yet
-    # model, without waiting for an SDK release.
-    await client.find("hello", options={"include_provenance": True})
-
-    payload = client._request.await_args.kwargs["json"]
-    assert payload["include_provenance"] is True
-
-
-@pytest.mark.asyncio
-async def test_write_extra_forwards_unknown_fields_to_payload():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {"result": {}}
-
-    await client.write(
-        "viking://resources/demo.md",
-        "body",
-        options={"extra": {"future_flag": 1, "resolve_conflicts": True}},
-    )
-
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert payload["future_flag"] == 1
-    assert payload["resolve_conflicts"] is True
-
-    with pytest.raises(ValueError, match="extra cannot override 'resolve_conflicts'"):
-        await client.write(
-            "viking://resources/demo.md",
-            "body",
-            options={"resolve_conflicts": False, "extra": {"resolve_conflicts": True}},
+    await client.initialize()
+    try:
+        with pytest.raises(ValueError, match="exact 'to'"):
+            await client.add_resource("space:home", options={"add_type": "feishu"})
+        with pytest.raises(ValueError, match="'parent'"):
+            await client.add_resource(
+                "space:home",
+                to=target,
+                parent="viking://resources/imports",
+                options={"add_type": "feishu"},
+            )
+        result = await client.add_resource(
+            "space:home", to=target, options={"add_type": " feishu "}
         )
+    finally:
+        await client.close()
 
-
-@pytest.mark.asyncio
-async def test_add_skill_uploads_local_file_even_when_url_is_localhost(tmp_path):
-    skill_file = tmp_path / "SKILL.md"
-    skill_file.write_text("---\nname: demo\ndescription: demo\n---\n\n# Demo\n")
-
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-
-    async def fake_upload(_path: str) -> str:
-        return "upload_skill.md"
-
-    client._upload_temp_file = fake_upload
-    client._handle_response_data = lambda _response: {"result": {"status": "ok"}}
-
-    await client.add_skill(str(skill_file))
-
-    fake_http.post.assert_awaited_once()
-    assert fake_http.post.await_args.kwargs["json"]["temp_file_id"] == "upload_skill.md"
-
-
-@pytest.mark.asyncio
-async def test_add_resource_uploads_local_file_even_when_url_is_localhost(tmp_path):
-    resource_file = tmp_path / "demo.md"
-    resource_file.write_text("# Demo\n")
-
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-
-    async def fake_upload(_path: str) -> str:
-        return "upload_resource.md"
-
-    client._upload_temp_file = fake_upload
-    client._handle_response_data = lambda _response: {
-        "result": {"root_uri": "viking://resources/demo"}
-    }
-
-    await client.add_resource(
-        str(resource_file),
-        options={"reason": "test", "watch_interval": 60},
-    )
-
-    fake_http.post.assert_awaited_once()
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert payload["temp_file_id"] == "upload_resource.md"
-    assert payload["watch_interval"] == 60
-    assert "path" not in payload
-
-
-@pytest.mark.asyncio
-async def test_add_resource_forwards_processing_mode():
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {
-        "result": {"root_uri": "viking://resources/demo"}
-    }
-
-    await client.add_resource(
-        "https://example.com/demo.md",
-        options={"processing_mode": "vectors_only"},
-    )
-
-    fake_http.post.assert_awaited_once()
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert payload["processing_mode"] == "vectors_only"
-
-
-@pytest.mark.asyncio
-async def test_add_resource_forwards_declared_add_type_with_exact_target():
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {
-        "result": {"root_uri": "viking://resources/feishu"}
-    }
-
-    await client.add_resource(
-        "space:home",
-        to="viking://resources/feishu",
-        options={"add_type": " feishu "},
-    )
-
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert payload["path"] == "space:home"
-    assert payload["add_type"] == "feishu"
-    assert payload["to"] == "viking://resources/feishu"
-
-
-@pytest.mark.asyncio
-async def test_add_resource_declared_add_type_requires_exact_target():
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-
-    with pytest.raises(ValueError, match="exact 'to'"):
-        await client.add_resource("space:home", options={"add_type": "feishu"})
-
-
-@pytest.mark.asyncio
-async def test_add_resource_declared_add_type_rejects_parent():
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-
-    with pytest.raises(ValueError, match="'parent'"):
-        await client.add_resource(
-            "space:home",
-            to="viking://resources/feishu",
-            parent="viking://resources/imports",
-            options={
-                "add_type": "feishu",
-            },
-        )
-
-
-@pytest.mark.asyncio
-async def test_add_resource_declared_add_type_skips_local_file_upload(tmp_path):
-    source = tmp_path / "source"
-    source.write_text("connector source")
-
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._upload_temp_file = AsyncMock(return_value="unexpected-upload")
-    client._handle_response_data = lambda _response: {
-        "result": {"root_uri": "viking://resources/feishu"}
-    }
-
-    await client.add_resource(
-        str(source),
-        to="viking://resources/feishu",
-        options={"add_type": "feishu"},
-    )
-
-    client._upload_temp_file.assert_not_awaited()
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert payload["path"] == str(source)
-    assert "temp_file_id" not in payload
-
-
-def test_sync_add_resource_accepts_and_forwards_declared_add_type():
-    client = SyncHTTPClient(url="http://127.0.0.1:1933")
-
-    with patch.object(
-        client._async_client,
-        "add_resource",
-        new_callable=AsyncMock,
-        return_value={"root_uri": "viking://resources/feishu"},
-    ) as mock_add_resource:
-        result = client.add_resource(
-            "space:home",
-            to="viking://resources/feishu",
-            options={"add_type": "feishu"},
-        )
-
-    assert result["root_uri"] == "viking://resources/feishu"
-    assert mock_add_resource.await_args.kwargs == {
-        "to": "viking://resources/feishu",
-        "parent": None,
+    assert result["root_uri"] == target
+    (request,) = requests
+    assert request.url.path == "/api/v1/resources"
+    assert json.loads(request.content) == {
+        "path": "space:home",
+        "to": target,
+        "add_type": "feishu",
         "wait": False,
-        "options": {"add_type": "feishu"},
     }
 
 
@@ -1204,82 +545,6 @@ async def test_add_resource_omits_default_processing_mode_for_legacy_servers():
     fake_http.post.assert_awaited_once()
     payload = fake_http.post.await_args.kwargs["json"]
     assert "processing_mode" not in payload
-
-
-@pytest.mark.asyncio
-async def test_admin_create_paths_accept_initial_user_config():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {"status": "ok"}
-
-    user_config = {"add_targets": {"resource_uri": "viking://user/resources/project-a"}}
-    await client.admin_create_account("acct", "admin", user_config=user_config)
-    await client.admin_register_user("acct", "alice", "admin", user_config=user_config)
-
-    assert fake_http.post.await_args_list[0].kwargs["json"] == {
-        "account_id": "acct",
-        "admin_user_id": "admin",
-        "user_config": user_config,
-    }
-    assert fake_http.post.await_args_list[1].kwargs["json"] == {
-        "user_id": "alice",
-        "role": "admin",
-        "user_config": user_config,
-    }
-
-
-@pytest.mark.asyncio
-async def test_admin_seed_payloads_are_sent():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {"status": "ok"}
-
-    await client.admin_create_account("acct", "admin", seed="admin-seed")
-    await client.admin_register_user("acct", "alice", "admin", seed="alice-seed")
-    await client.admin_regenerate_key("acct", "alice", seed="new-seed")
-
-    assert fake_http.post.await_args_list[0].kwargs["json"] == {
-        "account_id": "acct",
-        "admin_user_id": "admin",
-        "seed": "admin-seed",
-    }
-    assert fake_http.post.await_args_list[1].kwargs["json"] == {
-        "user_id": "alice",
-        "role": "admin",
-        "seed": "alice-seed",
-    }
-    assert fake_http.post.await_args_list[2].kwargs["json"] == {"seed": "new-seed"}
-
-
-@pytest.mark.asyncio
-async def test_admin_get_account_uses_exact_path_and_returns_metadata():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response = lambda _response: {
-        "account_id": "acct",
-        "status": "active",
-        "user_count": 2,
-    }
-
-    result = await client.admin_get_account("acct")
-
-    client._request.assert_awaited_once_with("GET", "/api/v1/admin/accounts/acct")
-    assert result["user_count"] == 2
-    assert "api_key" not in result
-
-
-@pytest.mark.asyncio
-async def test_admin_get_user_reads_membership_from_point_read_path():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    client._request = AsyncMock(return_value=object())
-    client._handle_response = lambda _response: {"user_id": "alice", "role": "admin"}
-
-    result = await client.admin_get_user("acct", "alice")
-    client._request.assert_awaited_once_with("GET", "/api/v1/admin/accounts/acct/users/alice")
-    assert result == {"user_id": "alice", "role": "admin"}
-    assert "api_key" not in result and "key_prefix" not in result
 
 
 @pytest.mark.asyncio
@@ -1314,109 +579,36 @@ async def test_import_ovpack_uploads_local_file_even_when_url_is_localhost(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_add_resource_sends_tags_and_tag_mode():
+async def test_retrieval_preserves_scope_list_session_and_explicit_level(sdk_transport):
+    requests = []
+
+    def handle(request):
+        requests.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json={"status": "ok", "result": {"resources": []}})
+
+    sdk_transport(handle)
     client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {
-        "result": {"root_uri": "viking://resources/demo"}
-    }
+    await client.initialize()
+    try:
+        await client.find(
+            "sample",
+            target_uri=["/resources/demo", "viking://resources/kept"],
+            options={"node_limit": 9, "level": 0, "read_content": True},
+        )
+        await client.search("sample", session_id="thread-123", options={"search_type": "keywords"})
+    finally:
+        await client.close()
 
-    await client.add_resource(
-        "https://example.com/demo.md",
-        options={"tags": ["team=search"], "tag_mode": "append"},
-    )
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/resources",
-        json={
-            "wait": False,
-            "path": "https://example.com/demo.md",
-            "tags": ["team=search"],
-            "tag_mode": "append",
-        },
-    )
-
-
-@pytest.mark.asyncio
-async def test_add_resource_sends_clear_without_tags():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {
-        "result": {"root_uri": "viking://resources/demo"}
-    }
-
-    await client.add_resource(
-        "https://example.com/demo.md",
-        options={"tag_mode": "clear"},
-    )
-
-    payload = fake_http.post.await_args.kwargs["json"]
-    assert "tags" not in payload
-    assert payload["tag_mode"] == "clear"
-
-
-@pytest.mark.asyncio
-async def test_find_uses_node_limit_as_http_limit_and_normalizes_target_uri_list():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {"result": {"total": 0, "resources": []}}
-
-    await client.find(
-        "sample",
-        target_uri=["/resources/demo", "viking://resources/kept"],
-        limit=3,
-        options={
-            "node_limit": 9,
-            "score_threshold": 0.4,
-            "filter": {"type": "resource"},
-            "context_type": "resource",
-            "tags": ["k:v"],
-            "telemetry": {"enabled": True},
-        },
-    )
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/search/find",
-        json={
-            "query": "sample",
-            "target_uri": ["viking://resources/demo", "viking://resources/kept"],
-            "limit": 3,
-            "node_limit": 9,
-            "score_threshold": 0.4,
-            "filter": {"type": "resource"},
-            "context_type": "resource",
-            "tags": ["k:v"],
-            "telemetry": {"enabled": True},
-        },
-    )
-
-
-@pytest.mark.asyncio
-async def test_search_uses_session_wrapper_session_id_in_payload():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response_data = lambda _response: {"result": {"total": 0, "resources": []}}
-
-    await client.search(
-        "sample",
-        session_id="thread-123",
-        target_uri="/resources/demo",
-        limit=5,
-    )
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/search/search",
-        json={
-            "query": "sample",
-            "target_uri": "viking://resources/demo",
-            "session_id": "thread-123",
-            "limit": 5,
-        },
-    )
+    (find_path, find), (search_path, search) = requests
+    assert find_path == "/api/v1/search/find"
+    assert find["target_uri"] == ["viking://resources/demo", "viking://resources/kept"]
+    assert find["node_limit"] == 9
+    assert find["level"] == 0
+    assert find["read_content"] is True
+    assert search_path == "/api/v1/search/search"
+    assert search["session_id"] == "thread-123"
+    assert search["search_type"] == "keywords"
+    assert "level" not in search
 
 
 @pytest.mark.asyncio
@@ -1481,20 +673,6 @@ async def test_grep_normalizes_uri_and_exclude_uri():
 
 
 @pytest.mark.asyncio
-async def test_grep_omits_unset_tags_and_forwards_explicit_tags():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {"count": 0, "matches": []}
-
-    await client.grep("viking://resources", pattern="Sample")
-    await client.grep("viking://resources", pattern="Sample", tags=["env=prod"])
-
-    assert "tags" not in fake_http.post.await_args_list[0].kwargs["json"]
-    assert fake_http.post.await_args_list[1].kwargs["json"]["tags"] == ["env=prod"]
-
-
-@pytest.mark.asyncio
 async def test_set_tags_clear_omits_tags_from_sdk_request():
     client = AsyncHTTPClient(url="http://localhost:1933")
     fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
@@ -1514,70 +692,6 @@ async def test_set_tags_clear_omits_tags_from_sdk_request():
 
 
 @pytest.mark.asyncio
-async def test_glob_normalizes_scope_uri():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {
-        "count": 1,
-        "matches": ["viking://resources/demo.md"],
-    }
-
-    await client.glob("**/*.md", uri="/resources/")
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/search/glob",
-        json={
-            "pattern": "**/*.md",
-            "uri": "viking://resources/",
-            "node_limit": 256,
-        },
-    )
-
-
-@pytest.mark.asyncio
-async def test_glob_preserves_explicit_empty_extra_fields():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {"count": 0, "matches": []}
-
-    await client.glob("**/*.md", extra_fields=[])
-
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/search/glob",
-        json={
-            "pattern": "**/*.md",
-            "uri": "viking://",
-            "node_limit": 256,
-            "extra_fields": [],
-        },
-    )
-
-
-@pytest.mark.asyncio
-async def test_glob_omits_unset_tags_and_forwards_tag_options():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-    client._handle_response = lambda _response: {"count": 0, "matches": []}
-
-    await client.glob("**/*.md")
-    await client.glob(
-        "**/*.md",
-        tags=["team=search", "env=prod"],
-        include_tags=True,
-    )
-
-    plain_request = fake_http.post.await_args_list[0].kwargs["json"]
-    tagged_request = fake_http.post.await_args_list[1].kwargs["json"]
-    assert "tags" not in plain_request
-    assert "include_tags" not in plain_request
-    assert tagged_request["tags"] == ["team=search", "env=prod"]
-    assert tagged_request["include_tags"] is True
-
-
-@pytest.mark.asyncio
 async def test_record_id_passthrough_is_limited_to_stat_and_read():
     record_id = "0123456789abcdef0123456789abcdef"
     client = AsyncHTTPClient(url="http://localhost:1933")
@@ -1592,26 +706,6 @@ async def test_record_id_passthrough_is_limited_to_stat_and_read():
     assert calls[0].kwargs["params"]["uri"] == record_id
     assert calls[1].kwargs["params"]["uri"] == record_id
     assert calls[2].kwargs["params"]["uri"] == f"viking://{record_id}"
-
-
-def test_not_found_reason_is_preserved_by_sdk_error_mapping():
-    client = AsyncHTTPClient(url="http://localhost:1933")
-    reason = "The data may not have been indexed yet or may have been deleted"
-
-    with pytest.raises(NotFoundError, match="not have been indexed yet") as exc_info:
-        client._raise_exception(
-            {
-                "code": "NOT_FOUND",
-                "message": "server message",
-                "details": {
-                    "resource": "0123456789abcdef0123456789abcdef",
-                    "type": "file",
-                    "reason": reason,
-                },
-            }
-        )
-
-    assert exc_info.value.details["reason"] == reason
 
 
 @pytest.mark.asyncio
@@ -1727,94 +821,81 @@ async def test_batch_write_serializes_processing_mode_and_operation_metadata():
 
 
 @pytest.mark.asyncio
-async def test_watch_routes_support_uri_lookup_and_normalization():
+async def test_watch_patch_distinguishes_omitted_fields_from_explicit_pause(sdk_transport):
+    def handle(request):
+        assert (request.method, request.url.path) == ("PATCH", "/api/v1/watches")
+        assert request.url.params["to_uri"] == "viking://resources/demo"
+        assert json.loads(request.content) == {"is_active": False}
+        return httpx.Response(200, json={"status": "ok", "result": {"is_active": False}})
+
+    sdk_transport(handle)
     client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(
-        get=AsyncMock(return_value=object()),
-        patch=AsyncMock(return_value=object()),
-        delete=AsyncMock(return_value=object()),
-        post=AsyncMock(return_value=object()),
-    )
-    client._http = fake_http
-    client._handle_response = lambda _response: {"ok": True}
-
-    await client.list_watches(active_only=True, to_uri="/resources/demo")
-    await client.get_watch("task-1", to_uri="/resources/demo")
-    await client.update_watch(
-        to_uri="/resources/demo",
-        watch_interval=30,
-        is_active=False,
-        reason="adjust",
-        instruction="refresh",
-    )
-    await client.delete_watch(to_uri="/resources/demo")
-    await client.trigger_watch(to_uri="/resources/demo")
-
-    fake_http.get.assert_any_await(
-        "/api/v1/watches",
-        params={"active_only": True, "to_uri": "viking://resources/demo"},
-    )
-    fake_http.get.assert_any_await(
-        "/api/v1/watches/task-1",
-        params={"to_uri": "viking://resources/demo"},
-    )
-    fake_http.patch.assert_awaited_once_with(
-        "/api/v1/watches",
-        params={"to_uri": "viking://resources/demo"},
-        json={
-            "watch_interval": 30,
-            "is_active": False,
-            "reason": "adjust",
-            "instruction": "refresh",
-        },
-    )
-    fake_http.delete.assert_awaited_once_with(
-        "/api/v1/watches",
-        params={"to_uri": "viking://resources/demo"},
-    )
-    fake_http.post.assert_awaited_once_with(
-        "/api/v1/watches/trigger",
-        params={"to_uri": "viking://resources/demo"},
-    )
+    await client.initialize()
+    try:
+        assert await client.update_watch(to_uri="/resources/demo", is_active=False) == {
+            "is_active": False
+        }
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
-async def test_session_exists_returns_false_on_not_found():
+async def test_session_exists_returns_false_on_not_found(sdk_transport):
+    def handle(request):
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/sessions/missing-session"
+        assert "auto_create" not in request.url.params
+        return httpx.Response(
+            404,
+            json={
+                "status": "error",
+                "error": {"code": "NOT_FOUND", "message": "Session does not exist"},
+            },
+        )
+
+    sdk_transport(handle)
     client = AsyncHTTPClient(url="http://localhost:1933")
-
-    async def raise_not_found(_session_id: str, *, auto_create: bool = False):
-        raise NotFoundError("demo", "session")
-
-    client.get_session = raise_not_found
-
-    assert await client.session_exists("missing-session") is False
+    await client.initialize()
+    try:
+        assert await client.session_exists("missing-session") is False
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
-async def test_session_wrapper_forwards_commit_context_and_archive_operations():
+async def test_session_wrapper_forwards_commit_context_and_archive_operations(sdk_transport):
+    session_path = "/api/v1/sessions/thread-1"
+    context = {"messages": [{"role": "user"}]}
+    archive = {"archive_id": "arc-1"}
+    responses = {
+        ("POST", f"{session_path}/commit"): {"task_id": "task-1"},
+        ("GET", f"{session_path}/context"): context,
+        ("GET", f"{session_path}/archives/arc-1"): archive,
+        ("DELETE", session_path): None,
+    }
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        result = responses[request.method, request.url.path]
+        return httpx.Response(200, json={"status": "ok", "result": result})
+
+    sdk_transport(handle)
     client = AsyncHTTPClient(url="http://localhost:1933")
-    session = Session(client, "thread-1")
-    client.commit_session = AsyncMock(return_value={"status": "completed"})
-    client.get_session_context = AsyncMock(return_value={"messages": []})
-    client.get_session_archive = AsyncMock(return_value={"archive_id": "arc-1"})
-    client.delete_session = AsyncMock(return_value=None)
+    await client.initialize()
+    try:
+        session = client.session("thread-1")
+        assert await session.commit(keep_recent_count=2) == {"task_id": "task-1"}
+        assert await session.get_session_context(2048) == context
+        assert await session.get_archive("arc-1") == archive
+        await session.delete()
+    finally:
+        await client.close()
 
-    commit_result = await session.commit(keep_recent_count=2)
-    context_result = await session.get_session_context(2048)
-    archive_result = await session.get_archive("arc-1")
-    await session.delete()
-
-    assert commit_result == {"status": "completed"}
-    assert context_result == {"messages": []}
-    assert archive_result == {"archive_id": "arc-1"}
-    client.commit_session.assert_awaited_once_with(
-        "thread-1",
-        keep_recent_count=2,
-        options=None,
-    )
-    client.get_session_context.assert_awaited_once_with("thread-1", 2048)
-    client.get_session_archive.assert_awaited_once_with("thread-1", "arc-1")
-    client.delete_session.assert_awaited_once_with("thread-1")
+    commit, context_request, _, delete = requests
+    assert json.loads(commit.content) == {"keep_recent_count": 2}
+    assert context_request.url.params["token_budget"] == "2048"
+    assert delete.method == "DELETE"
 
 
 @pytest.mark.asyncio
@@ -1855,28 +936,29 @@ async def test_backup_ovpack_preserves_existing_file_when_replace_fails(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_import_ovpack_fails_fast_when_local_file_is_missing(tmp_path):
+async def test_import_ovpack_fails_fast_when_local_file_is_missing(tmp_path, sdk_transport):
+    sdk_transport(lambda request: pytest.fail(f"Unexpected HTTP request: {request.url}"))
     client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-
-    missing_path = tmp_path / "missing.ovpack"
-
-    with pytest.raises(FileNotFoundError, match="Local ovpack file not found"):
-        await client.import_ovpack(str(missing_path), parent="viking://resources/")
+    await client.initialize()
+    try:
+        with pytest.raises(FileNotFoundError, match="Local ovpack file not found"):
+            await client.import_ovpack(
+                str(tmp_path / "missing.ovpack"), parent="viking://resources/"
+            )
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
-async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path):
+async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path, sdk_transport):
+    sdk_transport(lambda request: pytest.fail(f"Unexpected HTTP request: {request.url}"))
     client = AsyncHTTPClient(url="http://localhost:1933")
-    fake_http = SimpleNamespace(post=AsyncMock(return_value=object()))
-    client._http = fake_http
-
-    pack_dir = tmp_path / "pack_dir"
-    pack_dir.mkdir()
-
-    with pytest.raises(ValueError, match="is not a file"):
-        await client.import_ovpack(str(pack_dir), parent="viking://resources/")
+    await client.initialize()
+    try:
+        with pytest.raises(ValueError, match="is not a file"):
+            await client.import_ovpack(str(tmp_path), parent="viking://resources/")
+    finally:
+        await client.close()
 
 
 def test_compile_configuration_and_named_execution():

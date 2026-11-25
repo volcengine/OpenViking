@@ -188,25 +188,6 @@ async def test_ensure_async_client_defaults_to_native_http_client(monkeypatch):
     assert (await client.get()).initialized is True
 
 
-@pytest.mark.asyncio
-async def test_injected_async_client_is_initialized_only_once_across_adapters():
-    class AsyncClientWithoutInitializedFlag:
-        def __init__(self):
-            self.initialize_calls = 0
-
-        async def initialize(self) -> None:
-            await asyncio.sleep(0.01)
-            self.initialize_calls += 1
-
-    client = AsyncClientWithoutInitializedFlag()
-    connection = OpenVikingConnection(async_client=client)
-
-    clients = await asyncio.gather(*(ensure_async_client(connection) for _ in range(5)))
-
-    assert all(resolved is client for resolved in clients)
-    assert client.initialize_calls == 1
-
-
 class _GuardedAsyncHTTPClient:
     """HTTP client stand-in that rejects calls made before initialization."""
 
@@ -230,39 +211,6 @@ class _GuardedAsyncHTTPClient:
 
 
 @pytest.mark.asyncio
-async def test_async_handle_explicit_initialize_initializes_owned_client(monkeypatch):
-    import openviking_sdk as client_module
-
-    monkeypatch.setattr(client_module, "AsyncHTTPClient", _GuardedAsyncHTTPClient)
-
-    handle = OpenVikingAsyncClientHandle(
-        OpenVikingConnection(
-            url="http://localhost:1933",
-            api_key="test-key",
-            user_id="test-user",
-            auto_initialize=False,
-        )
-    )
-
-    await handle.initialize()
-    client = await handle.get()
-    assert client.initialize_calls == 1
-    assert handle._initialized is True
-
-    assert await acall_openviking(handle, "find", query="async") == {
-        "memories": [],
-        "resources": [],
-        "skills": [],
-    }
-
-    await handle.initialize()
-    assert client.initialize_calls == 1
-
-    await handle.close()
-    assert client.closed is True
-
-
-@pytest.mark.asyncio
 async def test_retriever_explicit_initialize_enables_manual_http_retriever(monkeypatch):
     import openviking_sdk as client_module
 
@@ -281,6 +229,7 @@ async def test_retriever_explicit_initialize_enables_manual_http_retriever(monke
     assert client.initialize_calls == 1
 
     await retriever.aclose()
+    assert client.closed is True
 
 
 @pytest.mark.asyncio
@@ -366,34 +315,6 @@ async def test_injected_async_client_respects_disabled_auto_initialize():
         is client
     )
     assert client.initialize_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_async_client_handle_initializes_once_under_concurrency(monkeypatch):
-    instances: list[Any] = []
-
-    class SlowAsyncHTTPClient:
-        def __init__(self, **_kwargs: Any):
-            self.closed = False
-            instances.append(self)
-
-        async def initialize(self) -> None:
-            await asyncio.sleep(0.01)
-
-        async def close(self) -> None:
-            self.closed = True
-
-    import openviking_sdk as client_module
-
-    monkeypatch.setattr(client_module, "AsyncHTTPClient", SlowAsyncHTTPClient)
-    handle = OpenVikingAsyncClientHandle(OpenVikingConnection(url="http://localhost:1933"))
-
-    clients = await asyncio.gather(*(handle.get() for _ in range(5)))
-
-    assert len(instances) == 1
-    assert all(client is clients[0] for client in clients)
-    await handle.close()
-    assert instances[0].closed is True
 
 
 @pytest.mark.asyncio

@@ -276,3 +276,9 @@ standalone plugin:
   `recallCompress*` in `ov.conf` as on any other host.
 - **No `last-recall.json` / `last-capture.json` / `daily-stats.json` snapshots**
   and no `cb_last_inject.md` audit mirror — those were standalone diagnostics.
+
+## 12. `session_history` (v2.185.0)
+
+- **Fill.** Every MCP `tools/call` carries `_meta["workbuddy.ai/conversationId"]` and `_meta.baggage` = `codebuddy.session_id=<id>,…` (**verified** headless). For the main agent both equal the hook `session_id`; inside a subagent the conversation id is the subagent's own while the baggage keeps the parent's, the session the hooks capture. The MCP proxy fills a missing `session` from the baggage, falling back to the conversation id. A per-process binding would not do: `/clear` starts a new session in the same process and ACP advertises `multitaskSupport`.
+- **Note.** `/compact` runs `PreCompact(manual)` → `PostCompact(manual)` → `Stop` → `SessionStart(compact)` (the last only when the summary parsed), all with the same `session_id`. `SessionStart` context reaches the model only on startup and `-c`; it is dropped after a compaction and after `--resume <id>`, and `PreCompact` / `PostCompact` output never reaches it. `-p -c '/compact'` fired `SessionStart(resume)` → `PostCompact` → `Stop` → `SessionStart(compact)` and **no `PreCompact`** (verified live, fake model). The adapter therefore notes `PreCompact` and `SessionStart(compact|resume)` in the hook state and adds the note to the next `UserPromptSubmit`, which since this version also fires headless (§3 predates that); a live `-c` run carried the note into the next model request.
+- Pending: TUI `/clear` and in-process resume, ACP / `--serve` multi-session (login required).

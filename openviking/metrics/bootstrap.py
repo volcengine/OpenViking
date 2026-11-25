@@ -80,6 +80,8 @@ def create_default_collector_manager(*, app=None, service=None, config=None) -> 
         A `CollectorManager` with the standard OpenViking collector set registered in the order
         expected by the metrics bootstrap path.
     """
+    cluster = getattr(service, "_config", None) or get_openviking_config()
+    cluster_vectors = cluster.storage.vectordb is not None
     manager = CollectorManager()
     manager.register(QueueCollector(data_source=QueuePipelineStateDataSource()))
     manager.register(TaskTrackerCollector(data_source=TaskStateDataSource()))
@@ -89,7 +91,8 @@ def create_default_collector_manager(*, app=None, service=None, config=None) -> 
     manager.register(ObserverHealthCollector(data_source=ObserverStateDataSource(service=service)))
     manager.register(ObserverStateCollector(data_source=ObserverStateDataSource(service=service)))
     manager.register(RagfsMetricCollector(data_source=RagfsMetricDataSource(service=service)))
-    manager.register(VikingDBCollector(data_source=VikingDBStateDataSource(service=service)))
+    if cluster_vectors:
+        manager.register(VikingDBCollector(data_source=VikingDBStateDataSource(service=service)))
     manager.register(
         ModelUsageCollector(
             data_source=ModelUsageDataSource(config_provider=get_openviking_config, service=service)
@@ -99,14 +102,18 @@ def create_default_collector_manager(*, app=None, service=None, config=None) -> 
         ServiceProbeCollector(data_source=ServiceProbeDataSource(app=app, service=service))
     )
     manager.register(StorageProbeCollector(data_source=StorageProbeDataSource()))
-    manager.register(
-        RetrievalBackendProbeCollector(data_source=RetrievalBackendProbeDataSource(service=service))
-    )
-    manager.register(
-        ModelProviderProbeCollector(
-            data_source=ModelProviderProbeDataSource(config_provider=get_openviking_config)
+    if cluster_vectors:
+        manager.register(
+            RetrievalBackendProbeCollector(
+                data_source=RetrievalBackendProbeDataSource(service=service)
+            )
         )
-    )
+    if cluster.vlm.model:
+        manager.register(
+            ModelProviderProbeCollector(
+                data_source=ModelProviderProbeDataSource(config_provider=get_openviking_config)
+            )
+        )
     manager.register(AsyncSystemProbeCollector(data_source=AsyncSystemProbeDataSource()))
     manager.register(
         EncryptionProbeCollector(

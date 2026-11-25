@@ -34,6 +34,18 @@ class AccountStore(ABC):
     @abstractmethod
     async def get_account(self, account_id: str) -> AccountSummary | None: ...
 
+    async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        """Account authorization metadata; legacy external stores have no frozen files."""
+        return ()
+
+    async def set_frozen_file(
+        self, account_id: str, user_id: str, path: str, frozen: bool
+    ) -> tuple[str, ...]:
+        """Atomically change one path; providers without this capability reject it."""
+        from openviking_cli.exceptions import FailedPreconditionError
+
+        raise FailedPreconditionError("Account store does not support frozen files")
+
     @abstractmethod
     async def create_account(
         self,

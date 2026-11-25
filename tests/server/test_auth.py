@@ -225,6 +225,8 @@ async def auth_service(temp_dir):
         path=str(temp_dir / "auth_data"), user=UserIdentifier.the_default_user("auth_user")
     )
     await svc.initialize()
+    await svc.recover()
+    await svc.start_background()
     yield svc
     await svc.close()
 

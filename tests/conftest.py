@@ -159,6 +159,8 @@ async def service(
     )
     try:
         await instance.initialize()
+        await instance.recover()
+        await instance.start_background()
         yield instance
     finally:
         await instance.close()

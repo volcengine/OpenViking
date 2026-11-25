@@ -19,3 +19,16 @@ export function deriveDshSessionId(sessionId) {
   const digest = createHash("sha256").update(original).digest("hex").slice(0, 12);
   return `${portable}__${digest}`;
 }
+
+// A seeded session (a fork, or a subagent that inherits its parent's turns)
+// never captures its inherited prefix, so its record continues in the parent
+// chain. Newest first, as session_history takes them.
+export function historySessionIds(session, sessions) {
+  const ids = [deriveDshSessionId(session.id)];
+  let header = session.header;
+  while (header?.isSeeded && header.parentSession != null && ids.length < 10) {
+    ids.push(deriveDshSessionId(header.parentSession));
+    header = sessions?.get?.(header.parentSession)?.header;
+  }
+  return ids.join(",");
+}

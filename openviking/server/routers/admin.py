@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from openviking.config.scope import ConfigScope
 from openviking.config.validate import ConfigPatchError
+from openviking.server.account_stores.models import frozen_file_uri
 from openviking.server.api_keys.models import validate_account_user_creation_role
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
@@ -86,6 +87,13 @@ class RegisterUserRequest(BaseModel):
 
 class SetRoleRequest(BaseModel):
     role: str
+
+
+class FrozenFileRequest(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+
+    path: str
+    frozen: bool
 
 
 class RegenerateKeyRequest(BaseModel):
@@ -337,6 +345,7 @@ def _has_initial_user_config(user_config: UserConfig | None) -> bool:
             or user_config.memory_policy
             or user_config.ttl is not None
             or user_config.privacy.model_dump(exclude_none=True)
+            or "team_compile_status" in user_config.model_fields_set
         )
     )
 
@@ -460,6 +469,7 @@ def _user_settings_result(
     return {
         "account_id": ctx.account_id,
         "user_id": ctx.user.user_id,
+        "team_compile_status": user_config.team_compile_status,
         "add_targets": {
             "resource_uri": add_targets.resource_uri,
             "skill_uri": add_targets.skill_uri,
@@ -1294,6 +1304,66 @@ async def regenerate_key(
 
 
 # ---- Group endpoints ----
+
+
+@router.get("/accounts/{account_id}/users/{user_id}/frozen-file")
+@require_auth_root_or_admin
+async def get_frozen_file(
+    request: Request,
+    account_id: str,
+    user_id: str,
+    path: str = Query(..., description="Literal path relative to the user root"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Inspect only account authorization metadata, never the target file."""
+    _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
+    uri = frozen_file_uri(user_id, path)
+    manager = _get_api_key_manager(request)
+    await _check_account_exists(request, account_id)
+    paths = await manager.get_frozen_files(account_id)
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "user_id": user_id,
+            "path": path,
+            "frozen": uri in paths,
+        },
+    )
+
+
+@router.put("/accounts/{account_id}/users/{user_id}/frozen-file")
+@require_auth_root_or_admin
+async def set_frozen_file(
+    request: Request,
+    body: FrozenFileRequest,
+    account_id: str,
+    user_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Set persistent write protection without obtaining the user's data identity."""
+    _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
+    manager = _get_api_key_manager(request, for_write=True)
+    await manager.set_frozen_file(account_id, user_id, body.path, body.frozen)
+    logger.info(
+        "Admin frozen file changed account=%s user=%s path=%s frozen=%s actor=%s",
+        account_id,
+        user_id,
+        body.path,
+        body.frozen,
+        ctx.user.user_id,
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "user_id": user_id,
+            "path": body.path,
+            "frozen": body.frozen,
+        },
+    )
 
 
 @router.post("/accounts/{account_id}/groups")

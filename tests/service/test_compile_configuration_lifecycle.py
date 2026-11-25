@@ -29,6 +29,7 @@ from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import TaskTracker
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.utils.compile_recovery import source_set_digest
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError, PermissionDeniedError
 from tests.test_task_tracker import _FakeAgfs
 
@@ -503,6 +504,87 @@ async def test_scheduled_run_without_output_changes_preserves_manual_baseline(
     assert (run["meta"]["finish_snapshot"] == run["meta"]["start_snapshot"]) != source_changed
     assert run["result"] == {"created": 0, "updated": 0, "deleted": 0}
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == state["progress"]
+
+
+async def test_partial_delivery_retains_baseline_after_restart(setup, registered, monkeypatch):
+    _, name, first = registered
+
+    async def finish_after_restart(lifecycle, task, result):
+        with monkeypatch.context() as patch:
+            patch.setattr(setup.fs, "commit", AsyncMock(side_effect=OSError("Interrupted")))
+            with pytest.raises(OSError, match="Interrupted"):
+                await lifecycle.on_finish(
+                    task, ExternalTaskSnapshot(status="completed", result=result)
+                )
+        restored = deepcopy(setup.tracker.tasks[task.task_id])
+        restarted = CompileLifecycle(setup.store, setup.fs)
+        terminal = ExternalTaskSnapshot(status="completed")
+        outcome = await restarted.on_finish(restored, terminal)
+        assert await restarted.on_finish(restored, terminal) == outcome
+        return restarted, outcome.result
+
+    await setup.lifecycle.on_start(first)
+    setup.fs.output_changes = [{"uri": TARGET + "/baseline.md", "change_type": "added"}]
+    await setup.lifecycle.on_finish(first, ExternalTaskSnapshot(status="completed"))
+    previous = await setup.store.get("acme", "alice", name)
+    task = make_task(setup, compile_name=name, record=previous, created_at=200)
+    setup.fs.source_changes = [{"uri": SOURCE + "/missed.md", "change_type": "modified"}]
+    assert await setup.lifecycle.on_start(task) == "proceed"
+    setup.fs.output_changes = [{"uri": TARGET + "/good.md", "change_type": "added"}]
+    restarted, result = await finish_after_restart(
+        setup.lifecycle, task, {"completion_status": "partial"}
+    )
+    assert result == {
+        "created": 1,
+        "updated": 0,
+        "deleted": 0,
+        "completion_status": "partial",
+    }
+    retained = await setup.store.get("acme", "alice", name)
+    assert retained["progress"] == previous["progress"]
+    setup.fs.restore.assert_not_awaited()
+    retry = make_task(setup, compile_name=name, record=retained, created_at=300)
+    assert await restarted.on_start(retry) == "proceed"
+    plan = await restarted.runtime_changes(retry.meta["request"], "acme", retry.task_id, "alice")
+    assert plan["base"] == previous["progress"]["source_commit"]
+    assert plan["diff_dirs"] == [SOURCE]
+    expected = source_set_digest([SOURCE + "/missed.md"])
+    assert plan["recovery_sources"] == expected
+
+    setup.fs.output_changes = []
+    await restarted.on_finish(
+        retry,
+        ExternalTaskSnapshot(status="completed", result={"recovery_proof": source_set_digest([])}),
+    )
+    retained = await setup.store.get("acme", "alice", name)
+    assert retained["progress"] == previous["progress"]
+
+    verified = make_task(setup, compile_name=name, record=retained, created_at=400)
+    assert await restarted.on_start(verified) == "proceed"
+    plan = await restarted.runtime_changes(
+        verified.meta["request"], "acme", verified.task_id, "alice"
+    )
+    restarted, result = await finish_after_restart(
+        restarted, verified, {"recovery_proof": expected}
+    )
+    assert result == {"created": 0, "updated": 0, "deleted": 0}
+    committed = await setup.store.get("acme", "alice", name)
+    assert committed["progress"]["source_commit"] == plan["head"]
+    assert "partial_compile" not in committed["execution_context"]
+
+    setup.fs.source_changes = []
+    unchanged = make_task(setup, compile_name=name, record=committed, created_at=500)
+    assert await restarted.on_start(unchanged) == ExternalTaskSnapshot(
+        status="completed", result={"created": 0, "updated": 0, "deleted": 0}
+    )
+    setup.fs.source_changes = [{"uri": SOURCE + "/new.md", "change_type": "added"}]
+    changed = make_task(setup, compile_name=name, record=committed, created_at=600)
+    assert await restarted.on_start(changed) == "proceed"
+    next_plan = await restarted.runtime_changes(
+        changed.meta["request"], "acme", changed.task_id, "alice"
+    )
+    assert next_plan["base"] == plan["head"]
+    assert "recovery_sources" not in next_plan
 
 
 async def test_changes_new_roots_and_updated_configuration_do_not_rewrite_frozen_inputs(setup):

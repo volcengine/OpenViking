@@ -67,6 +67,7 @@ class ResponseCapture:
     def nonstream(self, body):
         adapter = tool_protocol(self.protocol)({})
         adapter.begin()
+        self.assembler = adapter
         adapter.load(body)
         vars(self).update(adapter.reply())
 

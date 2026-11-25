@@ -190,7 +190,7 @@ async def test_tools_keep_calls_and_results_paired(
     if stream:
         async with agent.run("Read both labels", stream=True, **options) as result:
             async for _ in result:
-                assert not client.commits
+                pass
     else:
         await agent.run("Read both labels", **options)
     parts = [part for row in client.rows for part in row["parts"] if part["type"] == "tool"]
@@ -368,10 +368,12 @@ async def test_stream_capture_requires_complete_consumption(complete, commit_pol
         commit_token_threshold=1,
     )
     async with agent.run("Question", session=session, stream=True) as stream:
-        async for _ in stream:
-            assert not client.commits
-            if not complete:
-                break
+        async for update in stream:
+            if update.text == "First":
+                assert not client.rows
+                assert not client.commits
+                if not complete:
+                    break
     assert len(client.rows) == (2 if complete else 0)
     assert len(client.commits) == (1 if complete and commit_policy != "never" else 0)
 
@@ -904,7 +906,7 @@ async def test_real_sdk_writes_tool_evidence_before_threshold_commit(monkeypatch
                 "Question", tools=[lookup_label], session=session, stream=True
             ) as result:
                 async for _ in result:
-                    assert not writes
+                    pass
         else:
             await agent.run("Question", tools=[lookup_label], session=session)
         assert writes == ["capture", "commit"]

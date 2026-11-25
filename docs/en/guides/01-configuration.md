@@ -15,7 +15,11 @@ openviking-server init
 openviking-server doctor
 ```
 
-OpenViking requires both an Embedding model and a VLM to start. The default local Embedding model is available when no Embedding model is specified. `openviking-server init` prompts for both models. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
+The wizard configures Embedding and VLM. API-based providers require credentials; `OpenAI Codex` supports importing existing authentication or logging in.
+
+`enable_default_resources` defaults to `true`, supplying omitted local Embedding/VectorDB resources and preset directories for the default Account. `false` disables these defaults; explicit Cluster resources remain available. System files follow `reconcile_system_assets_on_startup`.
+
+`dev` and `trusted` require valid Cluster VLM, Embedding, and VectorDB. With defaults disabled, `api_key` can start without Cluster resources; ROOT supplies them through [Account creation settings](../api/08-admin.md#account-configuration-reference). `api_key` and `trusted` create a default Account record only when Cluster resources are valid.
 
 ## Configuration File
 
@@ -1401,7 +1405,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
-| `watch_store` | object | Watch store: `file` (single node), `mysql` or `postgres` (shared) | `{"provider":"file"}` |
+| `watch_store` | object | Watch store: `file` (single process), `sqlite` (one host), or `mysql` / `postgres` (shared) | `{"provider":"file"}` |
 
 
 ```json
@@ -1506,6 +1510,40 @@ across processes sharing tasks. Changing providers does not migrate existing
 tasks; plan the data migration before switching a deployed store.
 
 #### watch_store
+
+For durable local Watch metadata, install `openviking[sqlite]` and select
+`sqlite`. The database and tables are created automatically. By default the
+database is `{storage.workspace}/_system/watch/watch.db`; `params.path` can
+override it with an absolute path on local disk. `params.table` defaults to
+`ov_watch_tasks` and `params.busy_timeout_ms` to `5000` (a positive integer).
+SQLite acquires its writer lock before reading transaction state.
+Transactions are serialized, including reads, so this backend is intended for
+local deployments with modest Watch traffic. Multiple processes on the same
+host can share the database and `service_name`; different service names isolate
+their rows. Do not put the SQLite database on NFS/EFS or share it across hosts.
+Selecting SQLite does not change the Task store or PathLock backend; configure
+shared coordination and target locks separately if multiple processes run the
+scheduler. SQLite does not automatically select Redis coordination.
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "sqlite",
+      "params": {
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+Like MySQL, SQLite requires `params.credential_encryption_key` (base64-encoded
+32 bytes) to encrypt private `auth_state` and `connector_states` with AES-GCM.
+Keep the key across restarts and use the same key for processes sharing rows.
+Reservations, Task associations, deleted-but-running Watches and checkpoint
+versions survive restart and retain the existing missing-Task grace period.
+Existing file-provider Watches are not imported automatically.
 
 The default `file` provider keeps Watch tasks in the internal control file
 `viking://resources/.watch_tasks.json`, as earlier releases did; it belongs to
@@ -2239,13 +2277,13 @@ Notes:
 - When `enabled=false`, sessions created without an explicit or `server.user_config_defaults.auto_commit_policy` policy keep auto commit disabled and return `auto_commit_policy: null`; `SessionAutoCommitScheduler` is not started.
 - When `enabled=true`:
   - Sessions without an explicit or deployment-default policy get the built-in policy below.
-  - With `idle_backend="local"`, `SessionAutoCommitScheduler` starts a scan round immediately, then waits at least `check_interval_seconds` before the next round. Session `.meta.json` files are read serially at no more than `scan_rate_limit_files_per_second`.
-  - With `idle_backend="redis"`, the server enables expiry reporting, publishing, and callback consumption together using the top-level `expiry` configuration.
+  - With `idle_backend="local"`, `scheduler` nodes run `SessionAutoCommitScheduler`, which scans immediately and waits at least `check_interval_seconds` between rounds. Session `.meta.json` files are read serially at no more than `scan_rate_limit_files_per_second`.
+  - With `idle_backend="redis"`, top-level `expiry` settings control shared scheduling: `scheduler` nodes publish due events and `queue_worker` nodes execute callbacks.
 - Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, but still require the session to carry an `auto_commit_policy`.
 
 #### Distributed Expiry Configuration
 
-All API, publisher, and callback instances that share expiry state must use the same stable `service_name`. It identifies the deployed document service, not an individual pod.
+All nodes sharing expiry state must use the same stable `service_name`. It identifies the deployed document service, not an individual pod. See [server roles](../configuration/03-server-roles.md).
 
 ```json
 {
@@ -2267,16 +2305,16 @@ All API, publisher, and callback instances that share expiry state must use the 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `service_name` | string | Stable document service name shared by all instances using the same expiry data | `""` |
-| `publisher_separate_process` | bool | Let `openviking-server` supervise publisher in a dedicated child process; when `false`, publisher runs in each API process | `true` |
+| `publisher_separate_process` | bool | On `scheduler` nodes, supervise publisher in a child process; when `false`, run it inside each `scheduler` process | `true` |
 | `shard_count` | int | Number of logical expiry shards; all instances sharing a namespace must use the same value, in the range `1..512` | `128` |
-| `session_consumer_concurrency` | int | Concurrent Session expiry callbacks per API process; must be greater than `0` | `8` |
+| `session_consumer_concurrency` | int | Concurrent Session expiry callbacks per `queue_worker` process; must be greater than `0` | `8` |
 | `redis.mode` | string | Redis deployment mode: `standalone` or `cluster` | `standalone` |
 | `redis.endpoints` | string array | Redis endpoints; a cluster may use one proxy endpoint | `[]` |
 | `redis.username` | string | Redis ACL username | `""` |
 | `redis.password_env` | string | Environment variable containing the Redis password; startup fails if it is not set | `""` |
 | `redis.password` | string | Legacy plaintext password; prefer `password_env`; mutually exclusive with it | `""` |
 
-`service_name` and Redis endpoints are required when Redis idle auto commit is enabled. Credentials must use the dedicated fields above and cannot be embedded in endpoint URIs. With the default `publisher_separate_process=true`, `openviking-server` starts one internal publisher before serving traffic, stops it during shutdown, and exits if that child fails unexpectedly. This publisher is not exposed as a public CLI command.
+`service_name` and Redis endpoints are required when Redis idle auto commit is enabled. Credentials must use the dedicated fields above and cannot be embedded in endpoint URIs. With `publisher_separate_process=true`, `scheduler` startup launches one internal publisher, stops it during shutdown, and exits if that child fails unexpectedly. This publisher is not exposed as a public CLI command.
 
 ##### Per-session Auto Commit Policy
 
@@ -2426,10 +2464,10 @@ deployment boundary when multiple OpenViking clusters share a database. Changing
 `service_name` selects a different logical account-store partition.
 
 The provider never creates or migrates database tables. Create the normalized
-tables in `openviking/server/account_stores/sql/init.sql` through your normal
-DBA or deployment process before starting the server. Future reviewed schema
-changes are stored as ordered SQL files in
-`openviking/server/account_stores/sql/changes/`. The five `ov_accounts*` table
+tables in `openviking/server/account_stores/sql/init.sql`, then apply the ordered
+migrations in `openviking/server/account_stores/sql/changes/` through your normal
+DBA or deployment process before starting the server. Existing databases apply
+only migrations not yet recorded by that process. The five `ov_accounts*` table
 names are fixed; use distinct top-level `service_name` values rather than
 separate table prefixes to isolate OpenViking clusters that share a database.
 
@@ -2455,8 +2493,10 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 For PostgreSQL Account Store, install `pip install 'openviking[postgres]'` and
 select the `postgres` provider. It connects through psycopg 3 and SQLAlchemy;
 Redis and pgvector are not required. Provision
-`openviking/server/account_stores/sql/postgres/init.sql` with your migration role
-before startup. The runtime never creates or migrates tables. Grant the runtime
+`openviking/server/account_stores/sql/postgres/init.sql`, then apply
+`openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql` with
+your migration role before startup. Existing databases apply this migration once.
+The runtime never creates or migrates tables. Grant the runtime
 role schema `USAGE`, `SELECT, INSERT, UPDATE, DELETE` on the five `ov_accounts*`
 tables, and `USAGE, SELECT` on their three primary-key sequences. Table ownership
 and schema `CREATE` are not required. A new deployment creates the `default`
