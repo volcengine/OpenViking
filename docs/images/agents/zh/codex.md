@@ -7,7 +7,12 @@
    # AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
    ```
 
-2. 安装器会依次询问以下信息：要安装的 harness（勾选 **Codex**）、OpenViking 凭据。在 OpenViking 凭据配置中，选择连接至「OpenViking 托管服务 → Volcengine」，并填入 API KEY：
+2. 安装器会依次询问以下信息：要安装的 harness（勾选 **Codex**）、OpenViking 凭据。连接配置中，选择 **OpenViking 托管服务**，再选择 **Volcengine** 或 **BytePlus**。
+
+   - **Volcengine**：输入服务 API Key，安装器会提供服务地址。
+   - **BytePlus**：先输入实例的完整 HTTPS 服务地址，再输入 API Key。详见 [BytePlus 接入指南](https://docs.openviking.ai/zh/guides/27-byteplus-setup)。
+
+   旧版安装器连接 BytePlus 时使用**自定义 URL**。请使用所选实例的 API Key：
 
    ```text
    {{OPENVIKING_API_KEY}}
