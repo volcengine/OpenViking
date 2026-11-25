@@ -4,6 +4,7 @@
 
 import json
 import re
+import secrets
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any, AsyncIterator, Optional
@@ -24,6 +25,10 @@ from openviking.privacy.models import (
     UserPrivacyConfigVersion,
     UserPrivacyFieldDeleteResult,
 )
+from openviking.privacy.reference import (
+    contains_privacy_reference,
+    parse_privacy_field_reference,
+)
 from openviking.privacy.validation import (
     validate_privacy_field_name,
     validate_privacy_identifier,
@@ -36,9 +41,23 @@ from openviking.server.user_config import (
     read_user_privacy,
     resolve_user_privacy,
 )
-from openviking.storage.viking_fs import VikingFS
+from openviking.storage.viking_fs import LS_ALL_NODES, VikingFS
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import AlreadyExistsError, InvalidArgumentError, NotFoundError
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
+
+# Values the seal endpoint enrolls automatically live in their own category.
+# Only that endpoint writes into it; saving one under a name removes it.
+AUTO_CATEGORY = "auto"
+AUTO_ENROLL_RULE_LABEL = "ov.rule"
+# Categories whose values the seal endpoint replaces; a write to either changes
+# the revision. Earlier categories win when both hold a value.
+SEALED_CATEGORIES = ("credential", AUTO_CATEGORY)
+# Internal state kept beside the user's settings, outside the category namespace.
+_CREDENTIAL_REVISION_FILE = "privacy_credential_revision.json"
+_ENROLL_LOCK_DIR = "privacy_enroll"
 
 
 class UserPrivacyConfigService:
@@ -47,16 +66,51 @@ class UserPrivacyConfigService:
     def __init__(self, viking_fs: VikingFS):
         self._viking_fs = viking_fs
         self._global_policies = UserGlobalPolicyService(viking_fs)
-        self._credential_revisions: dict[tuple[str, str], int] = {}
 
     @property
     def global_policies(self) -> UserGlobalPolicyService:
         """Owner-scoped GLOBAL access policy cache with TTL and FIFO eviction."""
         return self._global_policies
 
-    def credential_revision(self, ctx: RequestContext) -> int:
-        """Return the process-local revision of the caller's Credential catalog."""
-        return self._credential_revisions.get((ctx.account_id, ctx.user.user_id), 0)
+    def _credential_revision_uri(self, ctx: RequestContext) -> str:
+        return f"{self._user_root(ctx)}/settings/{_CREDENTIAL_REVISION_FILE}"
+
+    async def credential_revision(self, ctx: RequestContext) -> str:
+        """Return the caller's persisted Credential catalog revision.
+
+        The revision is an opaque random token shared by every worker. A user
+        without one (created before revisions were persisted) gets a fresh
+        token, so a value is never reused across users or re-created users.
+        """
+        revision = await self._read_credential_revision(ctx)
+        if revision is not None:
+            return revision
+        async with self._exact_lock(ctx, self._credential_revision_uri(ctx)) as lease:
+            # Another worker may have created it while this one waited.
+            revision = await self._read_credential_revision(ctx)
+            if revision is not None:
+                return revision
+            return await self._write_credential_revision(ctx, lease)
+
+    async def _read_credential_revision(self, ctx: RequestContext) -> Optional[str]:
+        try:
+            content = await self._viking_fs.read_file(self._credential_revision_uri(ctx), ctx=ctx)
+            revision = json.loads(content).get("revision")
+        except (NotFoundError, FileNotFoundError, ValueError, AttributeError):
+            return None
+        return revision if isinstance(revision, str) and revision else None
+
+    async def _write_credential_revision(
+        self, ctx: RequestContext, lease: Optional[dict[str, Any]]
+    ) -> str:
+        revision = secrets.token_hex(16)
+        await self._viking_fs.write_file(
+            self._credential_revision_uri(ctx),
+            json.dumps({"revision": revision}),
+            ctx=ctx,
+            lease_ref=lease,
+        )
+        return revision
 
     async def get_settings(self, ctx: RequestContext) -> ResolvedPrivacyConfig:
         """Return the current user's effective privacy settings."""
@@ -67,10 +121,11 @@ class UserPrivacyConfigService:
         defaults = server_config.user_config_defaults.privacy if server_config is not None else None
         return resolve_user_privacy(override, defaults)
 
-    def _bump_credential_revision(self, ctx: RequestContext, category: str) -> None:
-        if category == "credential":
-            key = (ctx.account_id, ctx.user.user_id)
-            self._credential_revisions[key] = self._credential_revisions.get(key, 0) + 1
+    async def _bump_credential_revision(self, ctx: RequestContext, category: str) -> None:
+        """Publish a new revision after a completed sealed-category write, under its lock."""
+        if category in SEALED_CATEGORIES:
+            async with self._exact_lock(ctx, self._credential_revision_uri(ctx)) as lease:
+                await self._write_credential_revision(ctx, lease)
 
     def _user_root(self, ctx: RequestContext) -> str:
         return canonical_user_root(ctx)
@@ -119,7 +174,7 @@ class UserPrivacyConfigService:
                 await self._clear_contents(ctx, category, target_key, lease)
             else:
                 await self._viking_fs.rm(root_uri, recursive=True, ctx=ctx, lease_ref=lease)
-            self._bump_credential_revision(ctx, category)
+            await self._bump_credential_revision(ctx, category)
             return True
 
     async def _clear_contents(
@@ -165,6 +220,49 @@ class UserPrivacyConfigService:
         wait_for_lock: bool = True,
     ) -> AsyncIterator[Optional[dict[str, Any]]]:
         """Keep internal mutations waiting while explicit API calls can fail on contention."""
+        async with self._tree_lock(
+            ctx,
+            self.get_config_root(ctx, category, target_key),
+            owner_lease_ref=owner_lease_ref,
+            wait_for_lock=wait_for_lock,
+        ) as lease:
+            yield lease
+
+    @asynccontextmanager
+    async def enroll_lock(self, ctx: RequestContext) -> AsyncIterator[Optional[dict[str, Any]]]:
+        """Serialize automatic Credential enrollment for one user across workers."""
+        async with self._tree_lock(
+            ctx, f"{self._user_root(ctx)}/settings/{_ENROLL_LOCK_DIR}"
+        ) as lease:
+            yield lease
+
+    @asynccontextmanager
+    async def _exact_lock(
+        self, ctx: RequestContext, uri: str
+    ) -> AsyncIterator[Optional[dict[str, Any]]]:
+        """Wait for a short exclusive lock on one file; concurrent writers would otherwise fail."""
+        uri_to_path = getattr(self._viking_fs, "_uri_to_path", None)
+        agfs = getattr(self._viking_fs, "_async_agfs", None)
+        acquire = getattr(agfs, "pathlock_acquire_exact", None)
+        release = getattr(agfs, "pathlock_release", None)
+        if not callable(uri_to_path) or not callable(acquire) or not callable(release):
+            yield None
+            return
+        lease = await acquire(uri_to_path(uri, ctx=ctx), timeout_secs=30.0)
+        try:
+            yield lease
+        finally:
+            await release(lease)
+
+    @asynccontextmanager
+    async def _tree_lock(
+        self,
+        ctx: RequestContext,
+        uri: str,
+        *,
+        owner_lease_ref: Optional[dict[str, Any]] = None,
+        wait_for_lock: bool = True,
+    ) -> AsyncIterator[Optional[dict[str, Any]]]:
         uri_to_path = getattr(self._viking_fs, "_uri_to_path", None)
         agfs = getattr(self._viking_fs, "_async_agfs", None)
         acquire = getattr(agfs, "pathlock_acquire_tree", None)
@@ -173,7 +271,7 @@ class UserPrivacyConfigService:
             yield None
             return
         lease = await acquire(
-            uri_to_path(self.get_config_root(ctx, category, target_key), ctx=ctx),
+            uri_to_path(uri, ctx=ctx),
             timeout_secs=30.0 if wait_for_lock else 0.0,
             **({"owner_lease_ref": owner_lease_ref} if owner_lease_ref is not None else {}),
         )
@@ -243,7 +341,9 @@ class UserPrivacyConfigService:
         validate_privacy_identifier(category, "category")
         uri = f"{self._user_root(ctx)}/privacy/{category}"
         try:
-            entries = await self._viking_fs.ls(uri, ctx=ctx)
+            # Every target: the matchers are built from this list, and one left
+            # out would stay unreplaced. ``auto`` grows past the default page.
+            entries = await self._viking_fs.ls(uri, ctx=ctx, node_limit=LS_ALL_NODES)
         except (NotFoundError, FileNotFoundError):
             return []
         return sorted(entry["name"] for entry in entries if entry.get("name"))
@@ -276,6 +376,7 @@ class UserPrivacyConfigService:
         preserve_fields: Optional[set[str]] = None,
         wait_for_lock: bool = True,
     ) -> UserPrivacyConfigVersion:
+        values, sources = await self._resolve_value_references(ctx, category, target_key, values)
         async with self._config_lock(
             ctx, category, target_key, owner_lease_ref=owner_lease_ref, wait_for_lock=wait_for_lock
         ) as lease:
@@ -289,7 +390,7 @@ class UserPrivacyConfigService:
                     else {}
                 )
                 values = {**retained, **values}
-            return await self._upsert_locked(
+            result = await self._upsert_locked(
                 ctx=ctx,
                 category=category,
                 target_key=target_key,
@@ -300,6 +401,8 @@ class UserPrivacyConfigService:
                 lease_ref=lease,
                 current=current,
             )
+        await self._remove_auto_enrolled_sources(ctx, sources)
+        return result
 
     async def patch_values(
         self,
@@ -314,13 +417,14 @@ class UserPrivacyConfigService:
         wait_for_lock: bool = True,
     ) -> UserPrivacyConfigVersion:
         """Atomically update named fields, preserving independent fields with equal values."""
+        updates, sources = await self._resolve_value_references(ctx, category, target_key, updates)
         async with self._config_lock(
             ctx, category, target_key, wait_for_lock=wait_for_lock
         ) as lease:
             current = await self.get_current(ctx, category, target_key)
             values = dict(current.values) if current is not None else {}
             values.update(updates)
-            return await self._upsert_locked(
+            result = await self._upsert_locked(
                 ctx=ctx,
                 category=category,
                 target_key=target_key,
@@ -331,6 +435,8 @@ class UserPrivacyConfigService:
                 lease_ref=lease,
                 current=current,
             )
+        await self._remove_auto_enrolled_sources(ctx, sources)
+        return result
 
     async def credential_warnings(
         self, ctx: RequestContext, values: dict[str, Any]
@@ -393,6 +499,73 @@ class UserPrivacyConfigService:
                 lease_ref=lease,
                 current=current,
             )
+
+    async def _resolve_value_references(
+        self,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        values: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+        """Replace whole-value references to the caller's sealed fields by their values.
+
+        A source may be a ``credential`` or ``auto`` field. Any other
+        reference-shaped string is rejected so a reference is never stored as
+        a literal secret. Returns the values to persist and the referenced
+        ``(category, target_key)`` sources.
+        """
+        if category == AUTO_CATEGORY:
+            raise InvalidArgumentError(
+                f"Privacy category {AUTO_CATEGORY!r} is written only by automatic enrollment; "
+                "save the value under another category, such as credential",
+                details={"field": "category", "reason": "automatic_category"},
+            )
+        resolved = dict(values)
+        sources: list[tuple[str, str]] = []
+        for field, value in values.items():
+            if not isinstance(value, str):
+                continue
+            reference = parse_privacy_field_reference(value)
+            if reference is None:
+                if contains_privacy_reference(value):
+                    raise _reference_value_error(
+                        field, "a reference must be the complete value, not part of it"
+                    )
+                continue
+            if (
+                reference.owner_user_id != ctx.user.user_id
+                or reference.category not in SEALED_CATEGORIES
+            ):
+                raise _reference_value_error(
+                    field,
+                    "only references to the caller's own credential or auto fields are accepted",
+                )
+            source = await self.get_current(ctx, reference.category, reference.target_key)
+            if source is None or reference.field not in source.values:
+                raise _reference_value_error(field, "the referenced field does not exist")
+            resolved[field] = source.values[reference.field]
+            if (reference.category, reference.target_key) not in sources:
+                sources.append((reference.category, reference.target_key))
+        return resolved, sources
+
+    async def _remove_auto_enrolled_sources(
+        self,
+        ctx: RequestContext,
+        sources: list[tuple[str, str]],
+    ) -> None:
+        """Delete ``auto`` targets whose value was just saved elsewhere; keep credentials."""
+        for source_category, source in sources:
+            if source_category != AUTO_CATEGORY:
+                continue
+            try:
+                await self.delete(ctx, AUTO_CATEGORY, source)
+            except Exception as exc:
+                # The value is saved under its new name; only log the leftover entry.
+                logger.warning(
+                    "privacy auto-enrolled source cleanup failed target=%s error=%s",
+                    source,
+                    type(exc).__name__,
+                )
 
     async def _upsert_locked(
         self,
@@ -467,7 +640,7 @@ class UserPrivacyConfigService:
         if labels is not None:
             meta.labels = dict(labels)
         await self._save_meta(ctx, category, target_key, meta, lease_ref)
-        self._bump_credential_revision(ctx, category)
+        await self._bump_credential_revision(ctx, category)
         return version
 
     async def activate_version(
@@ -499,7 +672,7 @@ class UserPrivacyConfigService:
             meta.updated_by = updated_by
             meta.last_accessed_at = get_current_timestamp()
             await self._save_meta(ctx, category, target_key, meta, lease)
-            self._bump_credential_revision(ctx, category)
+            await self._bump_credential_revision(ctx, category)
             return snapshot
 
     async def delete_field(
@@ -535,7 +708,7 @@ class UserPrivacyConfigService:
                     ctx=ctx,
                     lease_ref=lease,
                 )
-                self._bump_credential_revision(ctx, category)
+                await self._bump_credential_revision(ctx, category)
                 return UserPrivacyFieldDeleteResult(
                     category=category,
                     target_key=target_key,
@@ -572,7 +745,7 @@ class UserPrivacyConfigService:
             meta.updated_by = updated_by
             meta.last_accessed_at = now
             await self._save_meta(ctx, category, target_key, meta, lease)
-            self._bump_credential_revision(ctx, category)
+            await self._bump_credential_revision(ctx, category)
             return UserPrivacyFieldDeleteResult(
                 category=category,
                 target_key=target_key,
@@ -580,3 +753,10 @@ class UserPrivacyConfigService:
                 target_deleted=False,
                 active_version=snapshot.version,
             )
+
+
+def _reference_value_error(field: str, reason: str) -> InvalidArgumentError:
+    return InvalidArgumentError(
+        f"Invalid Privacy reference in values.{field}: {reason}.",
+        details={"field": f"values.{field}", "reason": reason},
+    )
