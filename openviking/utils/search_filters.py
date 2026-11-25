@@ -113,7 +113,9 @@ def merge_time_filter(
     }
 
     if since_dt is not None:
-        time_filter["gte"] = _serialize_time_value(since_dt)
+        since_utc = normalize_datetime_for_comparison(since_dt)
+        lower_operator = "gt" if since_utc.microsecond % 1000 else "gte"
+        time_filter[lower_operator] = _serialize_time_value(since_utc)
     if until_dt is not None:
         time_filter["lte"] = _serialize_time_value(until_dt)
 
