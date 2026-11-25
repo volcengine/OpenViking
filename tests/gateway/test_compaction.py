@@ -478,7 +478,8 @@ def test_summary_requests_keep_client_settings_and_set_the_cap(protocol, body, c
     request = adapter.summary_request(body, span, "Summarize", 8000)
     assert request[adapter.field] == [*span, {"role": "user", "content": "Summarize"}]
     assert request["stream"] is False and "stream_options" not in request
-    assert request["tools"] == body["tools"] and request["tool_choice"] == "auto"
+    assert request["tools"] == body["tools"]
+    assert request["tool_choice"] == ("none" if protocol == "responses" else "auto")
     assert {key: request[key] for key in cap} == cap
     for key in ("thinking", "reasoning", "reasoning_effort"):
         assert request.get(key) == body.get(key)
@@ -646,6 +647,64 @@ async def test_proxy_sends_the_summary_with_vendor_alias_and_headers(running_gat
     logs = (await client.get("/admin/logs", headers=admin)).json()
     [log] = [entry for entry in logs if entry.get("compaction_tokens")]
     assert log["compaction_applied"] and log["context_window"] == 1024
+
+
+@pytest.mark.parametrize("choice", [None, "auto", "none"])
+async def test_responses_proxy_only_disables_tools_for_the_summary(running_gateway, choice):
+    app, client, admin, key, seen, _ = running_gateway
+    response = await client.put(
+        "/admin/upstreams/responses",
+        headers=admin,
+        json={
+            "name": "responses",
+            "protocol": "responses",
+            "base_url": app.state.openviking_url + "/v1",
+            "models": ["model"],
+            "context_windows": {"model": 1024},
+        },
+    )
+    assert response.status_code == 200, response.text
+    summaries = []
+
+    async def backend(request):
+        if request.path != "/v1/responses":
+            return None
+        body = await request.json()
+        if text_content(body["input"][-1]).startswith(INSTRUCTION_START):
+            summaries.append(body)
+            if body.get("tool_choice") != "none":
+                return web.json_response(
+                    {"status": "completed", "output": [{"type": "function_call"}]}
+                )
+            return web.json_response(summary_response("responses", "Blue cluster chosen."))
+        seen.append((request.path, orjson.dumps(body), dict(request.headers)))
+        value = summary_response("responses", "Use the blue cluster.")
+        value["output"][0]["role"] = "assistant"
+        value["usage"] = {"input_tokens": 1000, "output_tokens": 5}
+        return web.json_response(value)
+
+    app.state.test_backend["handler"] = backend
+    headers = {"Authorization": "Bearer " + key["key"], "X-OpenViking-Session": "tool-summary"}
+    tools = [{"type": "function", "name": "status", "parameters": {"type": "object"}}]
+    body = {
+        "model": "model",
+        "input": [{"role": "user", "content": "How do I deploy?"}],
+        "tools": tools,
+        "store": False,
+    }
+    if choice is not None:
+        body["tool_choice"] = choice
+    first = await client.post("/v1/responses", headers=headers, json=body)
+    assert first.status_code == 200, first.text
+    body["input"].extend([*first.json()["output"], {"role": "user", "content": "Next?"}])
+    second = await client.post("/v1/responses", headers=headers, json=body)
+    assert second.status_code == 200, second.text
+
+    [summary] = summaries
+    assert summary["tools"] == tools and summary.get("tool_choice") == "none"
+    forwarded = orjson.loads(seen[-1][1])
+    assert "Blue cluster chosen." in text_content(forwarded["input"][0])
+    assert forwarded["tools"] == tools and forwarded.get("tool_choice") == choice
 
 
 async def test_hints_name_the_sessions_that_hold_earlier_history(setup_kernel, credential, policy):

@@ -156,6 +156,8 @@ class ResponsesProtocol(ToolProtocol):
     @classmethod
     def summary_request(cls, body, messages, instruction, max_tokens, headroom=SUMMARY_HEADROOM):
         request = super().summary_request(body, messages, instruction, max_tokens)
+        if request.get("tools"):
+            cls.disable_tools(request)
         # Some models reason without a reasoning field, so the headroom does not depend on it.
         request["max_output_tokens"] = max_tokens + headroom
         return request

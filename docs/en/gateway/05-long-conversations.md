@@ -49,7 +49,7 @@ To set and check a model's window:
 
 ## How the summary is written {#how-the-summary-is-written}
 
-The gateway sends one extra, non-streaming request to the same upstream and model. The client's system prompt, tools and thinking settings stay the same, so most of the request hits the provider's [prompt cache](01-how-it-works.md#replay). Settings that a plain-text summary cannot follow are removed: a forced tool choice becomes "no tool call", and structured output formats and stop sequences are dropped.
+The gateway sends one extra, non-streaming request to the same upstream and model. It keeps the client's system prompt, tool definitions and thinking settings so the provider can reuse the [prompt cache](01-how-it-works.md#replay). The Responses API summary disables tool calls whenever tools are present. For other protocols, a forced tool choice becomes "no tool call". The summary also drops structured output formats and stop sequences.
 
 The request contains the conversation up to the cut, plus an instruction for the model to summarize it for itself. An earlier summary is folded into the new one. The summary covers:
 
