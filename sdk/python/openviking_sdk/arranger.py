@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import shutil
+import sys
 import textwrap
 from dataclasses import dataclass, field
 from enum import Enum
@@ -240,9 +241,11 @@ class _ContextArrangerBase:
 
     async def _managed_entries(self) -> Dict[str, Dict[str, Any]]:
         try:
-            entries = await self._client.ls(
+            entries = await self._client.tree(
                 self.root_uri,
-                recursive=True,
+                # The tree API defaults to three levels. An inventory must also
+                # find older owned mounts below that depth so pruning can see them.
+                level_limit=sys.maxsize,
                 include_tags=True,
                 tags=[self.owner_tag],
                 node_limit=self.max_managed_resources,
