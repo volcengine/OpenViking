@@ -536,6 +536,64 @@ async fn late_refresh_success_does_not_resurrect_an_expired_lease() {
 }
 
 #[tokio::test]
+async fn background_refresh_keeps_other_owners_alive_when_an_owner_is_busy() {
+    use crate::plugins::localfs::LocalFileSystem;
+
+    let root = tempfile::tempdir().unwrap();
+    let fs = Arc::new(LocalFileSystem::new(root.path().to_str().unwrap()).unwrap());
+    fs.mkdir("/data", 0o755).await.unwrap();
+    let config = PathLockConfig {
+        lock_expire_secs: 1.0,
+        ..PathLockConfig::default()
+    };
+    let provider = Arc::new(FilesystemPathLockProvider::new(
+        fs.clone(),
+        config.lock_expire_secs,
+    ));
+    let manager = PathLockManager::new(fs, provider, config);
+    let busy = manager
+        .acquire_exact("/data/busy.md", Duration::ZERO, None)
+        .await
+        .unwrap();
+    let owner = manager
+        .lease_registry
+        .resolve(&busy.lease.lease_ref)
+        .unwrap();
+    // Model an owner whose foreground operation is still awaiting provider I/O.
+    let busy_guard = owner.registry.lock().await;
+    let paths = ["/data/profile.md".into(), "/data/.overview.md".into()];
+    let healthy = manager
+        .acquire_exact_batch(&paths, Duration::ZERO, None)
+        .await
+        .unwrap();
+
+    let started = Instant::now();
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+    let capability = (
+        healthy.lease.lease_ref.as_str(),
+        healthy.ownership_ref.as_str(),
+    );
+    let nested = manager
+        .acquire_exact_batch(&paths, Duration::from_millis(100), Some(capability))
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "healthy lease rejected after {:?}: {error}",
+                started.elapsed()
+            )
+        });
+    manager.release(&nested).await.unwrap();
+    for path in &paths {
+        assert!(matches!(
+            manager.acquire_exact(path, Duration::ZERO, None).await,
+            Err(PathLockError::Timeout { .. })
+        ));
+    }
+    manager.release(&healthy).await.unwrap();
+    drop(busy_guard);
+}
+
+#[tokio::test]
 async fn background_refresh_invalidates_and_bounds_cleanup_during_outage() {
     for definite_loss in [true, false] {
         let fs = Arc::new(MemFileSystem::new());

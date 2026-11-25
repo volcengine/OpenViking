@@ -1,6 +1,46 @@
 use super::*;
 
 impl PathLockManager {
+    pub(super) async fn maintain_lease_with(
+        provider: &Arc<dyn PathLockProvider>,
+        registry: &Arc<LeaseRegistry>,
+        owner: Arc<OwnerState>,
+        lease_ref: &str,
+        validity: Duration,
+        cleanup_window: Duration,
+    ) -> PathLockResult<bool> {
+        {
+            let mut owner_registry = owner.registry.lock().await;
+            owner_registry.invalidate_expired(Instant::now(), validity);
+            let Some(entry) = owner_registry.entries.get(lease_ref) else {
+                return Ok(false);
+            };
+            if entry.invalidation.is_none() {
+                Self::refresh_entry_with(
+                    provider,
+                    &mut owner_registry,
+                    &owner.owner_id,
+                    lease_ref,
+                    validity,
+                )
+                .await;
+            }
+            if owner_registry.entries[lease_ref].invalidation.is_none() {
+                return Ok(false);
+            }
+        }
+        Self::release_lease_paths_with(
+            provider,
+            registry,
+            owner,
+            lease_ref,
+            None,
+            None,
+            Some(cleanup_window),
+        )
+        .await
+    }
+
     pub(super) async fn refresh_entry_with(
         provider: &Arc<dyn PathLockProvider>,
         registry: &mut OwnerRegistry,
