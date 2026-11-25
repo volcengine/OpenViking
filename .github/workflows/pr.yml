@@ -60,8 +60,9 @@ jobs:
       - name: Committed generator output must be up to date
         run: |
           # A module the closure grew reaches the committed lanes as an
-          # untracked file, which `git diff` does not see at all.
-          status=$(git status --porcelain --untracked-files=normal -- examples agent-plugins)
+          # untracked file, which `git diff` does not see at all. The gateway
+          # package holds a committed copy of the server feature table.
+          status=$(git status --porcelain --untracked-files=normal -- examples agent-plugins openviking_gateway)
           if [ -n "$status" ]; then
             printf '%s\n' "$status"
             exit 1
