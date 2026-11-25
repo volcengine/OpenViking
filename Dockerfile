@@ -34,6 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ccache \
     cmake \
     git \
+    libssl-dev \
+    pkg-config \
  && rm -rf /var/lib/apt/lists/*
 
 # Route gcc/g++/cc through ccache so cmake (which asks shutil.which("gcc")) picks
