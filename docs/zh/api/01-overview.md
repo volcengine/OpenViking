@@ -444,6 +444,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | 在工具结果内搜索 |
 | GET | `/api/v1/sessions/{session_id}/context` | 获取组装后的上下文 |
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | 获取会话归档 |
+| POST | `/api/v1/sessions/history` | 搜索、读取或概览已保存的历史（面向模型的文本） |
 | DELETE | `/api/v1/sessions/{session_id}` | 删除会话 |
 | POST | `/api/v1/sessions/{session_id}/commit` | 归档会话并提取记忆 |
 | POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | 重试失败或无主的会话归档 |

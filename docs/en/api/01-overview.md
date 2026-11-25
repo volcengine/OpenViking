@@ -449,6 +449,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | Search within a tool result |
 | GET | `/api/v1/sessions/{session_id}/context` | Get assembled context |
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a session archive |
+| POST | `/api/v1/sessions/history` | Search, read or overview the saved history (model-facing text) |
 | DELETE | `/api/v1/sessions/{session_id}` | Delete a session |
 | POST | `/api/v1/sessions/{session_id}/commit` | Archive a session and extract memory |
 | POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | Retry a failed or ownerless session archive |
