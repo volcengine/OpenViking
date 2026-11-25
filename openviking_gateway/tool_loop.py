@@ -215,6 +215,7 @@ class HiddenToolLoop:
             else:
                 result = await self.executor.execute(call)
             window = result.pop("cut", window)
+            skipped = result.pop("skipped", False) or skipped
             if show:
                 events = self.adapter.notice(tool_tail(result.get("failed", False), skipped))
             results.append(result)
