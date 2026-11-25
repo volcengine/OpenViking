@@ -54,25 +54,37 @@ vi.mock('#/features/workbench/compile/components/shared', () => ({
   ),
 }))
 
+// Shapes follow GET /api/v1/compile/configs.
 const daily = {
+  compile_name: 'daily',
+  from: ['viking://resources/source'],
   to: 'viking://resources/daily',
-  status: 'ready',
-  initialized: true,
-  running: true,
+  skill: 'viking://agent/skills/wiki',
+  instruction: null,
+  args: {},
   auto_update: true,
   update_schedule: { frequency: 'daily', hour: 8, minute: 5 },
-  next_run_at: '2026-11-03T08:05:00+00:00',
+  task_first_create_time: '2026-11-01T08:00:00+08:00',
+  last_run_time: '2026-11-02T08:05:00+00:00',
+  last_triggered_slot: '2026-11-02T08:05:00+00:00',
+  next_triggered_slot: '2026-11-03T08:05:00+00:00',
+  owner_user_id: 'alice',
+  executor_user_id: 'alice',
+  updated_by: 'alice',
 }
 const weekly = {
   ...daily,
+  compile_name: 'weekly',
   to: 'viking://resources/weekly',
-  running: false,
   auto_update: false,
   update_schedule: { frequency: 'weekly', weekday: 3, hour: 14, minute: 30 },
-  next_run_at: null,
+  last_run_time: null,
+  last_triggered_slot: null,
+  next_triggered_slot: null,
 }
 const unscheduled = {
   ...weekly,
+  compile_name: 'unscheduled',
   to: 'viking://resources/unscheduled',
   update_schedule: null,
 }
@@ -91,7 +103,10 @@ function mount(cachedConfig?: unknown) {
   })
   clients.push(client)
   if (cachedConfig)
-    client.setQueryData(['compile-config', 'account-a', daily.to], cachedConfig)
+    client.setQueryData(
+      ['compile-config', 'account-a', daily.compile_name],
+      cachedConfig,
+    )
   const content = () => (
     <QueryClientProvider client={client}>
       <CompileScheduleList />
@@ -114,7 +129,7 @@ afterEach(() => {
 
 it('shows all registered targets, schedule details, execution state, and editor actions', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [daily, weekly, unscheduled],
+    configs: [daily, weekly, unscheduled],
     next_cursor: null,
   })
   const page = mount()
@@ -125,22 +140,24 @@ it('shows all registered targets, schedule details, execution state, and editor 
     page.getByText('schedule.weeklyAt schedule.weekdays.3 14:30'),
   ).toBeTruthy()
   expect(page.getByText('schedule.noSchedule')).toBeTruthy()
-  expect(page.getByText('schedule.running')).toBeTruthy()
-  expect(page.getAllByText('schedule.idle')).toHaveLength(2)
+  expect(page.getByRole('heading', { name: daily.compile_name })).toBeTruthy()
+  expect(page.getAllByText('schedule.neverRun')).toHaveLength(2)
   expect(page.getAllByText('schedule.active')).toHaveLength(1)
   const nextRun = page.container.querySelector('time')!
   expect(nextRun.dateTime).toBe('2026-11-03T08:05:00.000Z')
   expect(nextRun.textContent).toBe(
-    new Date(daily.next_run_at).toLocaleString('en', {
+    new Date(daily.next_triggered_slot).toLocaleString('en', {
       timeZone: 'Asia/Shanghai',
     }),
   )
+  const lastRun = page.container.querySelectorAll('time')[1]
+  expect(lastRun.dateTime).toBe('2026-11-02T08:05:00.000Z')
   fireEvent.click(
-    page.getByRole('button', { name: `schedule.edit: ${weekly.to}` }),
+    page.getByRole('button', { name: `schedule.edit: ${weekly.compile_name}` }),
   )
   expect(mocks.navigate).toHaveBeenCalledWith({
     to: '/compile/new',
-    search: { target: weekly.to },
+    search: { name: weekly.compile_name },
   })
   expect(mocks.fetchCompileConfigs).toHaveBeenCalledWith(
     undefined,
@@ -150,8 +167,8 @@ it('shows all registered targets, schedule details, execution state, and editor 
 
 it('filters loaded targets locally and keeps pagination available when a page has no matches', async () => {
   mocks.fetchCompileConfigs
-    .mockResolvedValueOnce({ targets: [daily], next_cursor: 'page-2' })
-    .mockResolvedValueOnce({ targets: [weekly], next_cursor: null })
+    .mockResolvedValueOnce({ configs: [daily], next_cursor: 'page-2' })
+    .mockResolvedValueOnce({ configs: [weekly], next_cursor: null })
   const page = mount()
   await page.findByRole('link', { name: daily.to })
   await choose(
@@ -178,7 +195,7 @@ it('filters loaded targets locally and keeps pagination available when a page ha
 
 it('only claims an exhaustive filtered empty result after the last page', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [daily],
+    configs: [daily],
     next_cursor: null,
   })
   const page = mount()
@@ -199,7 +216,7 @@ it('shows loading and retryable errors, then the empty registered-target state',
   await page.findByRole('alert')
   expect(page.queryByText('schedule.empty')).toBeNull()
   mocks.fetchCompileConfigs.mockResolvedValueOnce({
-    targets: [],
+    configs: [],
     next_cursor: null,
   })
   fireEvent.click(page.getByRole('button', { name: 'Retry' }))
@@ -209,9 +226,9 @@ it('shows loading and retryable errors, then the empty registered-target state',
 
 it('refreshes the current list and isolates data when the active identity changes', async () => {
   mocks.fetchCompileConfigs
-    .mockResolvedValueOnce({ targets: [daily], next_cursor: null })
-    .mockResolvedValueOnce({ targets: [weekly], next_cursor: null })
-    .mockResolvedValueOnce({ targets: [unscheduled], next_cursor: null })
+    .mockResolvedValueOnce({ configs: [daily], next_cursor: null })
+    .mockResolvedValueOnce({ configs: [weekly], next_cursor: null })
+    .mockResolvedValueOnce({ configs: [unscheduled], next_cursor: null })
   const page = mount()
   await page.findByRole('link', { name: daily.to })
   fireEvent.click(page.getByRole('button', { name: 'refresh' }))
@@ -229,13 +246,12 @@ const freshConfig = {
   from: ['viking://resources/fresh-source'],
   skill: 'viking://agent/skills/fresh-skill',
   instruction: 'Keep current instructions',
-  last_error: null,
-  last_run: null,
+  args: { mode_hint: 'summary' },
 }
 
 it('turns off directly from the list, preserves fresh compilation settings, and blocks duplicate clicks', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [daily],
+    configs: [daily],
     next_cursor: null,
   })
   mocks.fetchCompileConfig.mockResolvedValue(freshConfig)
@@ -248,15 +264,16 @@ it('turns off directly from the list, preserves fresh compilation settings, and 
   )
   const page = mount()
   const toggle = await page.findByRole('switch', {
-    name: `schedule.autoUpdate: ${daily.to}`,
+    name: `schedule.autoUpdate: ${daily.compile_name}`,
   })
   fireEvent.click(toggle)
   await waitFor(() =>
     expect(mocks.updateCompileConfig).toHaveBeenCalledWith({
-      to: daily.to,
+      compile_name: daily.compile_name,
       from: freshConfig.from,
       skill: freshConfig.skill,
       instruction: freshConfig.instruction,
+      args: freshConfig.args,
       auto_update: false,
       update_schedule: null,
     }),
@@ -270,10 +287,10 @@ it('turns off directly from the list, preserves fresh compilation settings, and 
     ...freshConfig,
     auto_update: false,
     update_schedule: null,
-    next_run_at: null,
+    next_triggered_slot: null,
   }
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [disabled],
+    configs: [disabled],
     next_cursor: null,
   })
   finish(disabled)
@@ -285,7 +302,7 @@ it('turns off directly from the list, preserves fresh compilation settings, and 
 
 it('keeps the switch on when disabling fails and allows retry', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [daily],
+    configs: [daily],
     next_cursor: null,
   })
   mocks.fetchCompileConfig.mockResolvedValue(freshConfig)
@@ -302,11 +319,11 @@ it('keeps the switch on when disabling fails and allows retry', async () => {
     ...freshConfig,
     auto_update: false,
     update_schedule: null,
-    next_run_at: null,
+    next_triggered_slot: null,
   }
   mocks.updateCompileConfig.mockResolvedValueOnce(disabled)
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [disabled],
+    configs: [disabled],
     next_cursor: null,
   })
   fireEvent.click(page.getByRole('button', { name: 'Retry' }))
@@ -316,7 +333,7 @@ it('keeps the switch on when disabling fails and allows retry', async () => {
 
 it('opens time settings before enabling and cancel leaves the plan disabled', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [unscheduled],
+    configs: [unscheduled],
     next_cursor: null,
   })
   mocks.fetchCompileConfig.mockResolvedValue({ ...freshConfig, ...unscheduled })
@@ -335,7 +352,7 @@ it('opens time settings before enabling and cancel leaves the plan disabled', as
 
 it('enables a weekly plan in place and refetches current source settings before saving', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [unscheduled],
+    configs: [unscheduled],
     next_cursor: null,
   })
   mocks.fetchCompileConfig
@@ -343,13 +360,14 @@ it('enables a weekly plan in place and refetches current source settings before 
     .mockResolvedValueOnce(freshConfig)
   const enabled = {
     ...freshConfig,
+    compile_name: unscheduled.compile_name,
     to: unscheduled.to,
     auto_update: true,
     update_schedule: { frequency: 'weekly', weekday: 7, hour: 0, minute: 5 },
   }
   mocks.updateCompileConfig.mockImplementationOnce(async () => {
     mocks.fetchCompileConfigs.mockResolvedValue({
-      targets: [enabled],
+      configs: [enabled],
       next_cursor: null,
     })
     return enabled
@@ -372,10 +390,11 @@ it('enables a weekly plan in place and refetches current source settings before 
   fireEvent.click(dialog.getByRole('button', { name: 'schedule.turnOn' }))
   await waitFor(() =>
     expect(mocks.updateCompileConfig).toHaveBeenCalledWith({
-      to: unscheduled.to,
+      compile_name: unscheduled.compile_name,
       from: freshConfig.from,
       skill: freshConfig.skill,
       instruction: freshConfig.instruction,
+      args: freshConfig.args,
       auto_update: true,
       update_schedule: enabled.update_schedule,
     }),
@@ -390,7 +409,7 @@ it('enables a weekly plan in place and refetches current source settings before 
 
 it('waits for fresh settings when adjusting a cached plan and retains edits after a save failure', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [daily],
+    configs: [daily],
     next_cursor: null,
   })
   let load: (value: unknown) => void = () => {}
@@ -404,7 +423,9 @@ it('waits for fresh settings when adjusting a cached plan and retains edits afte
   mocks.updateCompileConfig.mockRejectedValueOnce(new Error('Save failed'))
   const page = mount(freshConfig)
   fireEvent.click(
-    await page.findByRole('button', { name: `schedule.adjust: ${daily.to}` }),
+    await page.findByRole('button', {
+      name: `schedule.adjust: ${daily.compile_name}`,
+    }),
   )
   const dialog = within(await page.findByRole('dialog'))
   expect(
@@ -443,13 +464,15 @@ it('waits for fresh settings when adjusting a cached plan and retains edits afte
 
 it('retries loading schedule settings without allowing a save from stale data', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [daily],
+    configs: [daily],
     next_cursor: null,
   })
   mocks.fetchCompileConfig.mockRejectedValueOnce(new Error('Unavailable'))
   const page = mount(freshConfig)
   fireEvent.click(
-    await page.findByRole('button', { name: `schedule.adjust: ${daily.to}` }),
+    await page.findByRole('button', {
+      name: `schedule.adjust: ${daily.compile_name}`,
+    }),
   )
   const dialog = within(await page.findByRole('dialog'))
   await dialog.findByRole('alert')
@@ -470,7 +493,7 @@ it('retries loading schedule settings without allowing a save from stale data', 
 
 it('removes a disabled plan from the enabled filter after the server confirms the update', async () => {
   mocks.fetchCompileConfigs.mockResolvedValue({
-    targets: [daily],
+    configs: [daily],
     next_cursor: null,
   })
   mocks.fetchCompileConfig.mockResolvedValue(freshConfig)
@@ -478,11 +501,11 @@ it('removes a disabled plan from the enabled filter after the server confirms th
     ...freshConfig,
     auto_update: false,
     update_schedule: null,
-    next_run_at: null,
+    next_triggered_slot: null,
   }
   mocks.updateCompileConfig.mockImplementationOnce(async () => {
     mocks.fetchCompileConfigs.mockResolvedValue({
-      targets: [disabled],
+      configs: [disabled],
       next_cursor: null,
     })
     return disabled
@@ -498,8 +521,8 @@ it('removes a disabled plan from the enabled filter after the server confirms th
 
 it('does not submit settings under a new identity after switching connections during a read', async () => {
   mocks.fetchCompileConfigs
-    .mockResolvedValueOnce({ targets: [daily], next_cursor: null })
-    .mockResolvedValueOnce({ targets: [daily], next_cursor: null })
+    .mockResolvedValueOnce({ configs: [daily], next_cursor: null })
+    .mockResolvedValueOnce({ configs: [daily], next_cursor: null })
   let finish: (value: unknown) => void = () => {}
   mocks.fetchCompileConfig.mockImplementationOnce(
     () =>
@@ -523,7 +546,7 @@ it('does not submit settings under a new identity after switching connections du
 
 it('retains loaded rows and allows retry after a later page fails', async () => {
   mocks.fetchCompileConfigs
-    .mockResolvedValueOnce({ targets: [daily], next_cursor: 'page-2' })
+    .mockResolvedValueOnce({ configs: [daily], next_cursor: 'page-2' })
     .mockRejectedValueOnce(new Error('Page unavailable'))
   const page = mount()
   await page.findByRole('link', { name: daily.to })
@@ -532,7 +555,7 @@ it('retains loaded rows and allows retry after a later page fails', async () => 
   expect(page.getByRole('link', { name: daily.to })).toBeTruthy()
   expect(page.queryByText('schedule.empty')).toBeNull()
   mocks.fetchCompileConfigs.mockResolvedValueOnce({
-    targets: [weekly],
+    configs: [weekly],
     next_cursor: null,
   })
   fireEvent.click(page.getByRole('button', { name: 'more' }))

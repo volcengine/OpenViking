@@ -19,33 +19,46 @@ export type CompileRequest = {
 export type UpdateSchedule =
   | { frequency: 'daily'; hour: number; minute: number }
   | { frequency: 'weekly'; weekday: number; hour: number; minute: number }
-export type CompileConfigSummary = {
-  status: string
-  to: string
-  initialized: boolean
-  running: boolean
-  auto_update: boolean
-  update_schedule: UpdateSchedule | null
-  next_run_at: string | null
-}
-export type CompileConfig = Omit<CompileConfigSummary, 'running'> & {
+// Saved configurations are identified by their creator-scoped compile_name.
+export type CompileConfig = {
+  compile_name: string
   from: string[]
+  to: string
   skill: string
   instruction: string | null
-  last_error: string | null
-  last_run: unknown
+  args: Record<string, unknown> | null
+  auto_update: boolean
+  update_schedule: UpdateSchedule | null
+  task_first_create_time: string | null
+  last_run_time: string | null
+  last_triggered_slot: string | null
+  next_triggered_slot: string | null
 }
+export type CompileConfigSummary = CompileConfig & {
+  owner_user_id?: string
+  executor_user_id?: string | null
+  updated_by?: string | null
+}
+export type CompileConfigCreate = Required<
+  Pick<CompileRequest, 'from' | 'to' | 'skill'>
+> &
+  Pick<CompileRequest, 'instruction' | 'args'> & { compile_name: string }
 export type CompileConfigUpdate = {
-  to: string
+  compile_name: string
   from: string[]
   skill: string
   instruction?: string | null
+  args?: Record<string, unknown> | null
   auto_update: boolean
   update_schedule: UpdateSchedule | null
 }
+// Mirrors the server's CompileName pattern; the server remains authoritative.
+const COMPILE_NAME =
+  /^(?:[A-Za-z0-9_][A-Za-z0-9_-]{0,63}|[\p{Script=Han}A-Za-z0-9_][\p{Script=Han}A-Za-z0-9_-]{0,31})$/u
+export const isCompileName = (name: string) => COMPILE_NAME.test(name)
 export function fetchCompileConfigs(cursor?: string, signal?: AbortSignal) {
   return getOvResult<{
-    targets: CompileConfigSummary[]
+    configs: CompileConfigSummary[]
     next_cursor: string | null
   }>(
     ovClient.client.get({
@@ -55,13 +68,18 @@ export function fetchCompileConfigs(cursor?: string, signal?: AbortSignal) {
     }),
   )
 }
-export function fetchCompileConfig(to: string, signal?: AbortSignal) {
+export function fetchCompileConfig(compileName: string, signal?: AbortSignal) {
   return getOvResult<CompileConfig>(
     ovClient.client.get({
       url: '/api/v1/compile/config',
       signal,
-      query: { to },
+      query: { compile_name: compileName },
     }),
+  )
+}
+export function createCompileConfig(body: CompileConfigCreate) {
+  return getOvResult<{ compile_name: string }>(
+    ovClient.client.post({ url: '/api/v1/compile/create', body }),
   )
 }
 export function updateCompileConfig(body: CompileConfigUpdate) {
@@ -147,15 +165,16 @@ export async function fetchCompileTask(id: string, signal?: AbortSignal) {
 export async function createCompile(
   body: CompileRequest,
   key: string,
-): Promise<CompileTask | CompileConfig> {
-  const result = await getOvResult<CompileTaskPayload | CompileConfig>(
-    ovClient.client.post({
-      url: '/api/v1/compile',
-      body,
-      headers: { 'Idempotency-Key': key },
-    }),
+): Promise<CompileTask> {
+  return normalizeCompileTask(
+    await getOvResult<CompileTaskPayload>(
+      ovClient.client.post({
+        url: '/api/v1/compile',
+        body,
+        headers: { 'Idempotency-Key': key },
+      }),
+    ),
   )
-  return 'task_id' in result ? normalizeCompileTask(result) : result
 }
 export async function cancelCompile(id: string) {
   return normalizeCompileTask(
