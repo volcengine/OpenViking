@@ -211,8 +211,6 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: Opti
         endpoint = _prompt_endpoint(prompt, select, cancelled, byteplus=service == "BytePlus")
         if endpoint is _SETUP_CANCELLED:
             return _SETUP_CANCELLED
-        if service == "BytePlus":
-            _say(f"BytePlus service endpoint: {endpoint}")
 
     is_local = ov._is_local_openviking_url(endpoint)
     api_key_type = "user" if service else ""
