@@ -1642,6 +1642,8 @@ When long-term memory extraction runs successfully, the commit writes a `memory_
 
 An empty `memory_diff.json` (all counts zero) is written when long-term memory extraction runs but produces no applied or intentionally skipped operations.
 
+During session extraction, whole-page deletion requires an explicit surviving replacement. A proposal that omits the replacement is skipped with reason code `missing_delete_replacement` in the archive diff and the commit task's `memory_extraction.skipped_operations`. Other valid operations can still be applied.
+
 <a id="built-in-memory-types"></a>
 
 ## Full Example

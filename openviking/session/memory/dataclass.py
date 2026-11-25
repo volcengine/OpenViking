@@ -187,6 +187,7 @@ class MemoryOperationSkipCode(str, Enum):
     NO_WRITABLE_TARGET = "no_writable_target"
     PAGE_ID_TYPE_MISMATCH = "page_id_type_mismatch"
     INVALID_URI_TEMPLATE_VARS = "invalid_uri_template_vars"
+    MISSING_DELETE_REPLACEMENT = "missing_delete_replacement"
 
 
 class MemoryOperationSkip(BaseModel):

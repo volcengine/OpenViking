@@ -244,6 +244,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
 - ONLY read and search tools are available - DO NOT use write tool
 - Before editing ANY existing memory file, you MUST first read its complete content
 - ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls{resource_deletion_read_source}
+- For this session extraction, specify a surviving replacement for every whole-page deletion. Keep the source when no replacement is available, even if the output format permits a pure delete.
 
 ## Target Output Language
 All memory content MUST be written in {output_language}.
