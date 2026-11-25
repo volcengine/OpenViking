@@ -145,12 +145,18 @@ def _confirm_replace_existing_profile(path: Path, values: dict, select, cancelle
     return {1: True, 0: False}.get(choice, _SETUP_CANCELLED)
 
 
-def _prompt_endpoint(prompt, select, cancelled) -> str | object:
-    """Ask for a custom server URL until it normalizes and answers /health."""
+def _prompt_endpoint(prompt, select, cancelled, *, byteplus: bool = False) -> str | object:
+    """Ask for a server URL until it normalizes and answers /health."""
     ov = _ov()
     while True:
         try:
-            endpoint = ov._normalize_openviking_url(prompt("OpenViking server URL", default=ov._DEFAULT_ENDPOINT))
+            label = "BytePlus service URL" if byteplus else "OpenViking server URL"
+            value = ov._clean_config_value(prompt(label, default="" if byteplus else ov._DEFAULT_ENDPOINT))
+            if byteplus and (not value.lower().startswith("https://") or "?" in value or "#" in value):
+                raise ov._OpenVikingEndpointError(
+                    "Enter the full HTTPS service URL for your BytePlus instance, without a query or fragment."
+                )
+            endpoint = ov._normalize_openviking_url(value)
         except ov._OpenVikingEndpointError as exc:
             if _retry_or_cancel_manual_setup(select, "  Invalid OpenViking endpoint", str(exc), cancelled) is _SETUP_CANCELLED:
                 return _SETUP_CANCELLED
@@ -181,17 +187,19 @@ class _Cancelled(Exception):
     """Internal unwind for the manual-connection loop (converted to _SETUP_CANCELLED at the boundary)."""
 
 
-def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool = False):
+def _prompt_manual_connection_values(prompt, select, cancelled, *, service: Optional[str] = None):
     """Loop until a validated connection dict is built, or _SETUP_CANCELLED.
     ``continue`` re-enters the loop with ``api_key_type`` / ``prefilled_api_key`` carried over."""
     ov = _ov()
-    if service:
+    if service == "Volcengine":
         endpoint = ov._OPENVIKING_SERVICE_ENDPOINT
         _say(f"OpenViking Service endpoint: {endpoint}")
     else:
-        endpoint = _prompt_endpoint(prompt, select, cancelled)
+        endpoint = _prompt_endpoint(prompt, select, cancelled, byteplus=service == "BytePlus")
         if endpoint is _SETUP_CANCELLED:
             return _SETUP_CANCELLED
+        if service == "BytePlus":
+            _say(f"BytePlus service endpoint: {endpoint}")
 
     is_local = ov._is_local_openviking_url(endpoint)
     api_key_type = "user" if service else ""
@@ -239,6 +247,8 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
 
             values["api_key_type"] = api_key_type
             api_key_label = "OpenViking API key" if service else f"OpenViking {api_key_type} API key"
+            if service == "BytePlus":
+                api_key_label = "BytePlus OpenViking API key"
             if prefilled_api_key:
                 values["api_key"], prefilled_api_key = prefilled_api_key, ""
             else:
@@ -269,7 +279,7 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
                     continue
 
             _say("Validating OpenViking API access...")
-            valid, message, role = ov._validate_openviking_setup_values(values, require_api_key=service or not is_local)
+            valid, message, role = ov._validate_openviking_setup_values(values, require_api_key=bool(service) or not is_local)
             if not valid:
                 retry("  OpenViking API access failed", message)
                 continue
@@ -460,7 +470,7 @@ def _run_quick_local_setup(*, config: dict, provider_config: dict, env_path: Pat
 
 def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provider_config: dict, env_path: Path) -> bool | object:
     source_choice = select("  OpenViking connection",
-                           [("OpenViking Service (VolcEngine Cloud)", "use the managed OpenViking endpoint"),
+                           [("OpenViking Managed Service", "choose Volcengine or BytePlus"),
                             ("Custom", "use a local, VPS, or self-hosted OpenViking server"),
                             ("Quick Local", "install local embeddings; use the configured Hermes LLM")],
                            default=0, cancel_returns=cancelled)
@@ -471,7 +481,17 @@ def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provid
         return _run_quick_local_setup(config=config, provider_config=provider_config, env_path=env_path,
                                      select=select, cancelled=cancelled)
 
-    values = _prompt_manual_connection_values(prompt, select, cancelled, service=(source_choice == 0))
+    service = None
+    if source_choice == 0:
+        provider_choice = select("  Cloud provider",
+                                 [("Volcengine", "use the fixed service URL and your API key"),
+                                  ("BytePlus", "enter your HTTPS service URL and API key")],
+                                 default=0, cancel_returns=cancelled)
+        if provider_choice == cancelled:
+            return _SETUP_CANCELLED
+        service = "BytePlus" if provider_choice == 1 else "Volcengine"
+
+    values = _prompt_manual_connection_values(prompt, select, cancelled, service=service)
     if values is _SETUP_CANCELLED:
         return _SETUP_CANCELLED
     if values is None:
