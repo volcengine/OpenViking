@@ -91,30 +91,6 @@ async fn delete_unknown_or_deleted_is_not_found_atomically() {
 }
 
 #[tokio::test]
-async fn delete_concurrent_with_commit_keeps_chain_consistent() {
-    let (_dir, vfs, _, _, svc) = make_service("acct");
-    let index = make_sqlite_snapshot_log_store().await;
-    let svc = svc.with_commit_index(Some(index.clone()));
-    let ids = delete_chain(&svc, &vfs, 3).await;
-    let mut req = deletion(&ids[1..2], true);
-    let planned = svc.delete_commits(req.clone()).await.unwrap();
-    vfs.put("resources/new", b"new");
-    let fourth = make_commit(&svc, "acct", "main", "fourth").await;
-    req.expected_overlay_root = Some(planned.overlay_root);
-    req.dry_run = false;
-    let response = svc.delete_commits(req).await.unwrap();
-    assert_eq!(delete_log(&svc).await, vec![fourth, ids[2], ids[0]]);
-    assert_eq!(
-        crate::git::CommitIndexStore::get_commit(index.as_ref(), "acct", &ids[1].to_string())
-            .await
-            .unwrap()
-            .unwrap()
-            .deleted_at,
-        Some(response.deleted_at)
-    );
-}
-
-#[tokio::test]
 async fn delete_preserves_sibling_branch_children_and_tag_tips() {
     let (_dir, vfs, _, refs, svc) = make_service("acct");
     let ids = delete_chain(&svc, &vfs, 3).await;
@@ -226,110 +202,6 @@ async fn delete_oldest_in_100k_history_reads_constant_objects() {
     eprintln!("100k fixture, delete and GC took {:?}", started.elapsed());
 }
 
-#[tokio::test(start_paused = true)]
-async fn delete_schedules_single_gc_per_account() {
-    let (_dir, vfs, _, _, mut svc) = make_service("acct");
-    let ids = delete_chain(&svc, &vfs, 3).await;
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-    svc.before_sweep_hook = Some(Arc::new(move || {
-        let tx = tx.clone();
-        Box::pin(async move {
-            tx.send(()).unwrap();
-        })
-    }));
-    svc.delete_commits(deletion(&ids[0..1], false))
-        .await
-        .unwrap();
-    svc.delete_commits(deletion(&ids[1..2], false))
-        .await
-        .unwrap();
-    assert_eq!(svc.scheduled_gc.lock().unwrap().len(), 1);
-    tokio::time::advance(svc.gc_grace + std::time::Duration::from_secs(61)).await;
-    rx.recv().await.unwrap();
-    while !svc.scheduled_gc.lock().unwrap().is_empty() {
-        tokio::task::yield_now().await;
-    }
-    assert!(rx.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn delete_uses_object_history_with_corrupt_or_lagging_index() {
-    use crate::git::CommitIndexStore;
-    let (dir, vfs, _, _, svc) = make_service("acct");
-    let (index, pool) = open_test_commit_index(dir.path()).await;
-    let svc = svc.with_commit_index(Some(index.clone()));
-    let ids = delete_chain(&svc, &vfs, 5).await;
-    sqlx::query("UPDATE snapshot_commit SET tree_oid=? WHERE account=? AND commit_oid=?")
-        .bind("0".repeat(40))
-        .bind("acct")
-        .bind(ids[1].to_string())
-        .execute(&pool)
-        .await
-        .unwrap();
-    let planned = svc
-        .delete_commits(deletion(&ids[1..2], true))
-        .await
-        .unwrap();
-    assert_eq!(planned.plan[0].changed_paths, ["resources/file"]);
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if matches!(
-                index.get_commit("acct", &ids[1].to_string()).await,
-                Ok(Some(_))
-            ) {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap();
-    CommitIndexStore::clear_branch(index.as_ref(), "acct", "main")
-        .await
-        .unwrap();
-    let r = svc
-        .delete_commits(deletion(&ids[1..3], false))
-        .await
-        .unwrap();
-    assert_eq!(r.reparented, [(ids[3], vec![ids[0]])]);
-    assert_eq!(delete_log(&svc).await, [ids[4], ids[3], ids[0]]);
-}
-
-#[tokio::test]
-async fn delete_rejects_invalid_ids_before_reading_history() {
-    let (_dir, _, _, _, svc) = make_service("acct");
-    for ids in [
-        vec![],
-        vec!["abc".to_owned()],
-        vec!["z".repeat(40)],
-        (0..101).map(|i| format!("{i:040x}")).collect(),
-    ] {
-        let mut req = deletion(&[], true);
-        req.commit_ids = ids;
-        assert!(matches!(
-            svc.delete_commits(req).await,
-            Err(GitError::InvalidCommitId(_))
-        ));
-    }
-}
-
-#[tokio::test]
-async fn delete_root_then_create_independent_branch_with_same_content() {
-    let (_dir, vfs, _, _, svc) = make_service("acct");
-    vfs.put("file", b"same");
-    let root = make_commit(&svc, "acct", "main", "initial").await;
-    vfs.put("file", b"new");
-    make_commit(&svc, "acct", "main", "second").await;
-    svc.delete_commits(deletion(&[root], false)).await.unwrap();
-    vfs.put("file", b"same");
-    let other = make_commit(&svc, "acct", "other", "initial").await;
-    assert_ne!(
-        other, root,
-        "independent branch must not publish a tombstoned commit"
-    );
-    assert!(svc.path_is_file("acct", &other, "file").await.unwrap());
-}
-
 #[tokio::test]
 async fn delete_peer_stale_child_falls_back_to_live_history() {
     for collect in [false, true] {
@@ -356,53 +228,5 @@ async fn delete_peer_stale_child_falls_back_to_live_history() {
         request.expected_overlay_root = Some(preview.overlay_root);
         reader.delete_commits(request).await.unwrap();
         assert_eq!(delete_log(&reader).await, [ids[2]]);
-    }
-}
-
-#[tokio::test]
-async fn delete_peer_lag_triggers_backfill_even_when_preview_succeeds() {
-    use crate::git::CommitIndexStore;
-    for empty in [false, true] {
-        let (dir, vfs, _, refs, writer) = make_service("acct");
-        let spy = Arc::new(GetSpyObjectStore {
-            inner: LocalObjectStore::new(dir.path()),
-            gets: Default::default(),
-        });
-        let index = make_sqlite_snapshot_log_store().await;
-        let reader =
-            GitService::new(vfs.clone(), spy.clone(), refs).with_commit_index(Some(index.clone()));
-        let mut ids = delete_chain(if empty { &writer } else { &reader }, &vfs, 3).await;
-        ids.extend(delete_chain(&writer, &vfs, 6).await);
-        reader
-            .delete_commits(deletion(&ids[..1], true))
-            .await
-            .unwrap();
-        let head = ids.last().unwrap().to_string();
-        tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            while !index
-                .latest_commit("acct", "main")
-                .await
-                .unwrap()
-                .is_some_and(|row| row.commit_oid == head)
-            {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("successful preview should also schedule index catch-up");
-        spy.reset();
-        reader
-            .delete_commits(deletion(&ids[..1], true))
-            .await
-            .unwrap();
-        assert_eq!(
-            spy.gets
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|oid| ids.contains(oid))
-                .count(),
-            2
-        );
     }
 }

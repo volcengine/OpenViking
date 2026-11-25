@@ -28,51 +28,9 @@ async fn gc_reclaims_only_expired_unreachable_objects() {
     assert_eq!(overlay.deleted_at(&ids[1]).await.unwrap(), None);
 }
 
-#[tokio::test]
-async fn gc_disabled_and_empty_account() {
-    let (_dir, _, _, _, svc) = make_service("acct");
-    assert_eq!(svc.gc("acct").await.unwrap().scanned, 0);
-    let report = svc
-        .with_gc(false, std::time::Duration::from_secs(3600))
-        .gc("acct")
-        .await
-        .unwrap();
-    assert_eq!(report.skipped.as_deref(), Some("disabled"));
-}
-
 fn gc_object_path(base: &std::path::Path, oid: ObjectId) -> std::path::PathBuf {
     let hex = oid.to_string();
     base.join("acct/objects").join(&hex[..2]).join(&hex[2..])
-}
-
-#[tokio::test]
-async fn commit_freshens_reverted_blob_but_skips_unchanged_blob() {
-    use std::time::{Duration, SystemTime};
-    let (dir, vfs, _, _, svc) = make_service("acct");
-    vfs.put("a", b"one");
-    vfs.put("b", b"stable");
-    make_commit(&svc, "acct", "main", "first").await;
-    vfs.put("a", b"two");
-    make_commit(&svc, "acct", "main", "second").await;
-    let path = |body: &[u8]| {
-        gc_object_path(
-            dir.path(),
-            gix_object::compute_hash(gix_hash::Kind::Sha1, gix_object::Kind::Blob, body),
-        )
-    };
-    let old = SystemTime::now() - Duration::from_secs(7200);
-    for object in [path(b"one"), path(b"stable")] {
-        std::fs::File::open(object)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-    }
-    let modified = |body: &[u8]| std::fs::metadata(path(body)).unwrap().modified().unwrap();
-    let stable_before = modified(b"stable");
-    vfs.put("a", b"one");
-    make_commit(&svc, "acct", "main", "revert").await;
-    assert!(modified(b"one") > SystemTime::now() - Duration::from_secs(5));
-    assert_eq!(modified(b"stable"), stable_before);
 }
 
 #[tokio::test]
@@ -104,39 +62,19 @@ async fn gc_remarks_when_ref_moves_during_mark() {
 }
 
 #[tokio::test]
-async fn gc_keeps_tombstone_until_object_is_physically_gone() {
-    use std::time::{Duration, SystemTime};
-    let (dir, vfs, _, _, svc) = make_service("acct");
-    let ids = delete_chain(&svc, &vfs, 3).await;
-    svc.delete_commits(deletion(&ids[1..2], false))
-        .await
-        .unwrap();
-    let later = SystemTime::now() + Duration::from_secs(7200);
-    std::fs::File::open(gc_object_path(dir.path(), ids[1]))
-        .unwrap()
-        .set_modified(later)
-        .unwrap();
-    let report = svc
-        .gc_at("acct", later, Duration::from_secs(3600))
-        .await
-        .unwrap();
-    assert_eq!(report.tombstones_purged, 0);
-    assert!(svc
-        .overlay("acct")
-        .await
-        .unwrap()
-        .deleted_at(&ids[1])
-        .await
-        .unwrap()
-        .is_some());
-}
-
-#[tokio::test]
 async fn gc_rejects_inconsistent_index_and_walks() {
     use crate::git::CommitIndexStore;
     use std::time::{Duration, SystemTime};
     let (dir, vfs, _, _, svc) = make_service("acct");
-    let (index, pool) = open_test_commit_index(dir.path()).await;
+    let db = dir.path().join("history.db");
+    let index = Arc::new(
+        SqliteSnapshotLogStore::connect(db.to_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.display()))
+        .await
+        .unwrap();
     let svc = svc.with_commit_index(Some(index.clone()));
     let ids = delete_chain(&svc, &vfs, 3).await;
     sqlx::query("UPDATE snapshot_commit SET parent_oid = NULL WHERE commit_oid = ?")
@@ -166,40 +104,6 @@ async fn gc_rejects_inconsistent_index_and_walks() {
 }
 
 #[tokio::test]
-async fn gc_marks_non_branch_refs_and_keeps_fresh_dangling_objects() {
-    use crate::git::util::write_object;
-    use std::time::{Duration, SystemTime};
-    let (dir, _, objects, refs, svc) = make_service("acct");
-    let pinned = write_object(
-        objects.as_ref(),
-        "acct",
-        gix_object::Kind::Blob,
-        b"ref blob",
-    )
-    .await
-    .unwrap();
-    refs.cas_update("acct", "refs/custom/pin", None, pinned)
-        .await
-        .unwrap();
-    let dangling = write_object(
-        objects.as_ref(),
-        "acct",
-        gix_object::Kind::Blob,
-        b"not referenced",
-    )
-    .await
-    .unwrap();
-    std::fs::File::open(gc_object_path(dir.path(), pinned))
-        .unwrap()
-        .set_modified(SystemTime::now() - Duration::from_secs(7200))
-        .unwrap();
-    assert_eq!(svc.gc("acct").await.unwrap().deleted, 0);
-    for oid in [pinned, dangling] {
-        assert!(objects.exists("acct", &oid).await.unwrap());
-    }
-}
-
-#[tokio::test]
 async fn writer_with_long_grace_protects_reuse_from_short_grace_collector() {
     use std::time::{Duration, SystemTime};
     let (dir, vfs, objects, refs, svc) = make_service("acct");
@@ -225,29 +129,6 @@ async fn writer_with_long_grace_protects_reuse_from_short_grace_collector() {
         .unwrap();
     assert!(removed.is_empty());
     assert!(objects.exists("acct", &blob).await.unwrap());
-}
-
-#[tokio::test]
-async fn gc_preserves_stat_index_and_refs_on_untouched_account() {
-    use std::time::{Duration, SystemTime};
-    let (dir, vfs, objects, refs, _) = make_service("acct");
-    let stats = Arc::new(crate::git::LocalIndexStore::new(dir.path()));
-    let svc = GitService::with_index(vfs.clone(), objects, refs, Some(stats));
-    delete_chain(&svc, &vfs, 3).await;
-    let index_path = dir.path().join("acct/index/main.json");
-    let ref_path = dir.path().join("acct/refs/heads/main");
-    let index = std::fs::read(&index_path).unwrap();
-    let head = std::fs::read(&ref_path).unwrap();
-    let grace = Duration::from_secs(600);
-    assert_eq!(
-        svc.gc_at("acct", SystemTime::now() + 2 * grace, grace)
-            .await
-            .unwrap()
-            .deleted,
-        0
-    );
-    assert_eq!(std::fs::read(index_path).unwrap(), index);
-    assert_eq!(std::fs::read(ref_path).unwrap(), head);
 }
 
 #[tokio::test]

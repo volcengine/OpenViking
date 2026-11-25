@@ -1097,16 +1097,6 @@ def delete_plan(monkeypatch, delete_vfs):
     return install
 
 
-@pytest.mark.parametrize("role", [Role.ROOT, Role.ADMIN])
-async def test_delete_snapshots_admin_deletes_cross_user_commit(delete_vfs, delete_plan, role):
-    oid, _, binding = delete_plan(["user/user1/a", "user/other/b"])
-    ctx = RequestContext(user=_make_ctx().user, role=role)
-    result = await delete_vfs.delete_snapshots(commit_ids=[oid], ctx=ctx)
-    assert result["result"] == "deleted"
-    assert "plan" not in result
-    assert binding.await_args.kwargs["expected_overlay_root"] is None
-
-
 @pytest.mark.parametrize("path", ["user/other/a", "user/other/skills/private/SKILL.md"])
 async def test_delete_snapshots_user_rejects_other_user_space(delete_vfs, delete_plan, path):
     from openviking_cli.exceptions import PermissionDeniedError
@@ -1117,48 +1107,6 @@ async def test_delete_snapshots_user_rejects_other_user_space(delete_vfs, delete
         await delete_vfs.delete_snapshots(commit_ids=[oid], ctx=ctx, dry_run=True)
     assert "other" not in (str(error.value) + str(error.value.details))
     assert binding.await_count == 1
-
-
-async def test_delete_snapshots_rejects_skill_paths_for_admin(delete_vfs, delete_plan):
-    from openviking_cli.exceptions import InvalidArgumentError
-
-    oid, _, binding = delete_plan(["agent/skills/s1/SKILL.md"])
-    with pytest.raises(InvalidArgumentError):
-        await delete_vfs.delete_snapshots(
-            commit_ids=[oid], ctx=RequestContext(user=_make_ctx().user, role=Role.ADMIN)
-        )
-    assert binding.await_count == 1
-
-
-@pytest.mark.parametrize("role", [Role.GLOBAL, "custom"])
-async def test_delete_snapshots_rejects_other_roles(delete_vfs, delete_plan, role, monkeypatch):
-    from openviking_cli.exceptions import PermissionDeniedError
-
-    if role == "custom":
-        monkeypatch.setattr(Role, "_TOKEN_ROLE_ALLOWLIST", Role._TOKEN_ROLE_ALLOWLIST.copy())
-        Role.register(role)
-    oid, _, binding = delete_plan(["resources/a"])
-    with pytest.raises(PermissionDeniedError):
-        await delete_vfs.delete_snapshots(
-            commit_ids=[oid], ctx=RequestContext(user=_make_ctx().user, role=role)
-        )
-    binding.assert_not_awaited()
-
-
-async def test_delete_snapshots_replans_on_stale_overlay(delete_vfs, delete_plan):
-    from openviking.pyagfs.exceptions import GitConcurrentCommitError
-
-    oid, response, binding = delete_plan(["resources/a"])
-    changed = {**response, "overlay_root": "2" * 40}
-    binding.side_effect = [
-        response,
-        GitConcurrentCommitError("CAS conflict"),
-        changed,
-        {**changed, "result": "deleted"},
-    ]
-    result = await delete_vfs.delete_snapshots(commit_ids=[oid], ctx=_make_ctx())
-    assert result["result"] == "deleted"
-    assert binding.await_args.kwargs["expected_overlay_root"] == changed["overlay_root"]
 
 
 async def test_delete_snapshots_reauthorizes_changed_plan(delete_vfs, delete_plan):

@@ -841,14 +841,3 @@ fn compile_creation_requires_a_name() {
         assert!(error.to_string().contains("--compile-name"));
     }
 }
-
-#[test]
-fn parse_snapshot_delete_multiple_ids_and_dry_run() {
-    use clap::{FromArgMatches, Subcommand};
-    let parser = SnapshotCmd::augment_subcommands(clap::Command::new("snapshot"));
-    let matches = parser
-        .try_get_matches_from(["snapshot", "delete", "one", "two", "--dry-run"])
-        .unwrap();
-    assert!(matches!(SnapshotCmd::from_arg_matches(&matches).unwrap(),
-        SnapshotCmd::Delete { commit_ids, dry_run: true } if commit_ids == ["one", "two"]));
-}

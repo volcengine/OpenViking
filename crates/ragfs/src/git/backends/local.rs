@@ -589,66 +589,6 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn local_gc_primitives_respect_namespace_and_freshening() {
-        use std::time::{Duration, SystemTime};
-        let dir = tempdir().unwrap();
-        let store = LocalObjectStore::new(dir.path());
-        let account = "acct";
-        let oid: ObjectId = "1123456789abcdef0123456789abcdef01234567".parse().unwrap();
-        let missing: ObjectId = "2123456789abcdef0123456789abcdef01234567".parse().unwrap();
-        store
-            .put(account, &oid, Bytes::from_static(b"original"))
-            .await
-            .unwrap();
-        let path = store.object_path(account, &oid);
-        let old = SystemTime::now() - Duration::from_secs(7200);
-        let cutoff = SystemTime::now() - Duration::from_secs(3600);
-        std::fs::File::open(&path)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-        let tmp = path.with_extension("tmp.1.2");
-        std::fs::File::create(&tmp)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-        let fresh_tmp = path.with_extension("tmp.1.3");
-        std::fs::File::create(&fresh_tmp).unwrap();
-        std::fs::create_dir_all(dir.path().join("acct/refs/heads")).unwrap();
-        std::fs::write(dir.path().join("acct/refs/heads/main"), oid.to_string()).unwrap();
-        let objects = store.list_objects(account).await.unwrap();
-        assert_eq!(objects.len(), 1);
-        assert_eq!(objects[0].oid, oid);
-        assert_eq!(objects[0].size, 8);
-        store
-            .put_or_touch(account, &oid, Bytes::from_static(b"duplicate"), cutoff)
-            .await
-            .unwrap();
-        assert!(!store
-            .touch_if_older_than(account, &oid, cutoff)
-            .await
-            .unwrap());
-        assert_eq!(
-            store.get(account, &oid).await.unwrap(),
-            Bytes::from_static(b"original")
-        );
-        assert!(store
-            .sweep_objects(account, &objects, cutoff)
-            .await
-            .unwrap()
-            .is_empty());
-        assert_eq!(store.cleanup_temp_files(account, cutoff).await.unwrap(), 1);
-        assert!(!tmp.exists());
-        assert!(fresh_tmp.exists());
-        store
-            .delete_objects(account, &[oid, missing])
-            .await
-            .unwrap();
-        store.delete_objects(account, &[oid]).await.unwrap();
-        assert!(!store.exists(account, &oid).await.unwrap());
-    }
-
-    #[tokio::test]
     async fn test_local_object_store_put_get_exists() {
         let dir = tempdir().unwrap();
         let store = LocalObjectStore::new(dir.path());

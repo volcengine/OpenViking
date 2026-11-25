@@ -343,12 +343,12 @@ class TestSnapshotRestore:
 def test_cli_snapshot_delete():
     base = "viking://resources/cli_snapshot_delete_" + uuid.uuid4().hex
     ids = []
-    for version in ("first", "tip"):
+    for version in ("first", "middle", "tip"):
         uri = f"{base}/{version}.md"
         assert _create_file(uri, version)["exit_code"] == 0
         ids.append(_commit(version, paths=[uri])["commit_oid"])
     for flags, expected in [(["--dry-run"], "dry_run"), ([], "deleted")]:
-        result = ov(["snapshot", "delete", ids[0], *flags, "-o", "json"])
+        result = ov(["snapshot", "delete", *ids[:-1], *flags, "-o", "json"])
         assert result["exit_code"] == 0, result["stderr"]
         assert result["json"]["result"]["result"] == expected
-        assert result["json"]["result"]["deleted"] == ids[:1]
+        assert result["json"]["result"]["deleted"] == ids[:-1]

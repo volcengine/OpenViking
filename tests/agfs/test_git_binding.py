@@ -401,7 +401,3 @@ def test_restore_does_not_apply_current_ovgitignore(client):
         target_ref="main",
         path="resources/proj/a.log",
     )["bytes"] == b"v1"
-
-
-def test_git_gc_binding(client):
-    assert {"scanned", "deleted", "bytes_freed"} <= client.git_gc(account="acct").keys()

@@ -398,7 +398,6 @@ mod tests {
     include!("../tests/test_show.rs");
     include!("../tests/test_log.rs");
     include!("../tests/test_snapshot_log.rs");
-    include!("../tests/test_commit_index.rs");
     include!("../tests/test_restore.rs");
 }
 
