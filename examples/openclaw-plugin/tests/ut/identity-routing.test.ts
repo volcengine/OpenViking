@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -10,28 +11,40 @@ import {
 } from "../../routing/identity-routing.js";
 
 describe("identity routing registry", () => {
-  it("keeps OpenClaw session to OpenViking storage id behavior byte-compatible", () => {
+  it("keeps the storage ID stable for UUIDs, host session keys, and Windows paths", () => {
     const uuid = "A1B2C3D4-E5F6-7890-ABCD-EF1234567890";
-    expect(openClawSessionToOvStorageId(uuid, undefined)).toBe(uuid.toLowerCase());
-    expect(openClawSessionToOvStorageId("plain-session", undefined)).toBe("plain-session");
-    expect(openClawSessionToOvStorageId(undefined, "agent:myagent:session123")).toMatch(/^[a-f0-9]{64}$/);
-    expect(openClawSessionToOvStorageId("C:\\Users\\test", undefined)).toMatch(/^[a-f0-9]{64}$/);
-    expect(() => openClawSessionToOvStorageId("", "")).toThrow("need sessionId or sessionKey");
-  });
+    const sessionKey = "agent:myagent:session123";
+    const hash = createHash("sha256").update(sessionKey).digest("hex");
+    const windowsId = "C:\\Users\\test";
 
-  it("normalizes hook/tool session refs in the concrete routing module", () => {
-    expect(openClawSessionRefToOvStorageId(" A1B2C3D4-E5F6-7890-ABCD-EF1234567890 ")).toBe(
-      "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    expect(openClawSessionToOvStorageId(`  ${uuid}  `, sessionKey)).toBe(uuid.toLowerCase());
+    expect(openClawSessionRefToOvStorageId(` ${uuid} `)).toBe(uuid.toLowerCase());
+    expect(openClawSessionToOvStorageId("plain-session", undefined)).toBe("plain-session");
+    expect(openClawSessionRefToOvStorageId("plain-session")).toBe("plain-session");
+    expect(openClawSessionToOvStorageId("plain-session", sessionKey)).toBe(hash);
+    expect(openClawSessionToOvStorageId(undefined, sessionKey)).toBe(hash);
+    expect(openClawSessionRefToOvStorageId(sessionKey)).toBe(hash);
+    expect(openClawSessionToOvStorageId(windowsId, undefined)).toBe(
+      createHash("sha256").update(`openclaw-session:${windowsId}`).digest("hex"),
     );
-    expect(openClawSessionRefToOvStorageId("safe-session")).toBe("safe-session");
-    expect(openClawSessionRefToOvStorageId("C:\\bad\\path")).toMatch(/^[a-f0-9]{64}$/);
+    expect(openClawSessionRefToOvStorageId(windowsId)).toBe(
+      createHash("sha256").update(windowsId).digest("hex"),
+    );
+    expect(() => openClawSessionToOvStorageId("", "")).toThrow("need sessionId or sessionKey");
+    expect(() => openClawSessionToOvStorageId(undefined, undefined)).toThrow("need sessionId or sessionKey");
     expect(() => openClawSessionRefToOvStorageId("   ")).toThrow("empty session ref");
   });
 
-  it("sanitizes OpenViking actor peer headers in the concrete routing module", () => {
-    expect(sanitizeOpenVikingAgentIdHeader("agent:role:v1")).toBe("agent_role_v1");
-    expect(sanitizeOpenVikingAgentIdHeader("   ")).toBe("default");
-    expect(sanitizeOpenVikingAgentIdHeader("@#$%")).toBe("ov_agent");
+  it("normalizes the actor peer header while preserving its valid characters", () => {
+    for (const [input, expected] of [
+      ["my-Agent_v2", "my-Agent_v2"],
+      [" _a::b:::c_ ", "a_b_c"],
+      ["my agent", "my_agent"],
+      [" ", "default"],
+      ["@#$%", "ov_agent"],
+    ]) {
+      expect(sanitizeOpenVikingAgentIdHeader(input)).toBe(expected);
+    }
   });
 
   it("routes sender scope to the sender peer for messages and data-plane requests", () => {
@@ -79,6 +92,10 @@ describe("identity routing registry", () => {
     expect(createSessionAgentResolver("default").resolve()).toMatchObject({
       resolved: "main",
       branch: "default_no_session",
+    });
+    expect(createSessionAgentResolver("prefix").resolve()).toMatchObject({
+      resolved: "prefix_main",
+      branch: "config_only_fallback",
     });
     expect(createSessionAgentResolver("prefix").resolve(undefined, "agent:worker:session123")).toMatchObject({
       resolved: "prefix_worker",

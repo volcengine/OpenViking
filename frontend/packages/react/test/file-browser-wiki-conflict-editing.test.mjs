@@ -171,14 +171,15 @@ test('navigating away discards a pending Wiki conflict edit before preview loadi
       view.container.textContent,
       new RegExp(`${otherBody.length} characters`),
     );
-    const otherReads = editReads(otherFile);
+    const otherDashboardReads = editReads(otherFile);
 
     await act(async () => preview.resolve());
     await settle();
     assert.equal(activeTab(), otherFile);
     assert.equal(view.container.querySelector('.cm-content'), null);
     assert.equal(editReads(file), dashboardReads);
-    assert.equal(editReads(otherFile), otherReads);
+    assert.equal(editReads(otherFile), otherDashboardReads);
+    assert.equal(fetch.countOf('/api/v1/content/write'), 0);
   } finally {
     await view.unmount();
   }

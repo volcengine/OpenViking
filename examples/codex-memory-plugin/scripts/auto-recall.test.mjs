@@ -6,7 +6,7 @@ import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { expectExit, readRequestBody, runHookScript, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { resolveCodexLaunch, trySpawnCodex } from "./codex-launch.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -43,30 +43,32 @@ function writeStatusJson(res, status, value) {
   res.end(JSON.stringify(value));
 }
 
-function runAutoRecall(input, env) {
-  return new Promise((resolve, reject) => {
-    const cleanEnv = { ...process.env };
-    for (const key of Object.keys(cleanEnv)) {
-      if (key.startsWith("OPENVIKING_")) delete cleanEnv[key];
-    }
-    const child = spawn(process.execPath, [join(SCRIPT_DIR, "auto-recall.mjs")], {
-      env: { ...cleanEnv, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`auto-recall exited ${code}: ${stderr}`));
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-    child.stdin.end(JSON.stringify(input));
-  });
+async function runAutoRecall(input, env) {
+  const result = expectExit(await runHookScript(join(SCRIPT_DIR, "auto-recall.mjs"), {
+    input,
+    env,
+    inheritOpenVikingEnv: false,
+  }));
+  return result;
+}
+
+function recallEnv(stateDir, baseUrl, overrides = {}) {
+  return {
+    OPENVIKING_AUTO_RECALL: "1",
+    OPENVIKING_CODEX_STATE_DIR: stateDir,
+    OPENVIKING_STATE_DIR: stateDir,
+    OPENVIKING_HOME: join(stateDir, "home"),
+    OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+    OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+    OPENVIKING_CREDENTIAL_SOURCE: "env",
+    OPENVIKING_RECALL_COMPRESS: "0",
+    OPENVIKING_RECALL_TIMEOUT_MS: "10000",
+    OPENVIKING_MIN_QUERY_LENGTH: "1",
+    OPENVIKING_SCORE_THRESHOLD: "0",
+    OPENVIKING_TIMEOUT_MS: "5000",
+    OPENVIKING_URL: baseUrl,
+    ...overrides,
+  };
 }
 
 async function withFakeCodex(output, fn, { exitCode = 0 } = {}) {
@@ -152,14 +154,8 @@ async function runEndpointCompressionCase({
         res.end(JSON.stringify({ status: "error", error: "not found" }));
       }, async (baseUrl) => runAutoRecall(
         { prompt, session_id: "codex:endpoint-compress" },
-        {
+        recallEnv(stateDir, baseUrl, {
           ...env,
-          OPENVIKING_AUTO_RECALL: "1",
-          OPENVIKING_CODEX_STATE_DIR: stateDir,
-          OPENVIKING_STATE_DIR: stateDir,
-          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-          OPENVIKING_CREDENTIAL_SOURCE: "env",
           OPENVIKING_RECALL_COMPRESS: "1",
           // With recallTimeoutMs=10000 the compressor child inherits only
           // max(1000, recallTimeoutMs - 10000) = 1000ms, which a fresh
@@ -168,12 +164,8 @@ async function runEndpointCompressionCase({
           // codex subprocess a budget that cannot race with process startup.
           OPENVIKING_RECALL_TIMEOUT_MS: "60000",
           OPENVIKING_RECALL_COMPRESS_TIMEOUT_MS: "30000",
-          OPENVIKING_MIN_QUERY_LENGTH: "1",
-          OPENVIKING_SCORE_THRESHOLD: "0",
-          OPENVIKING_TIMEOUT_MS: "5000",
-          OPENVIKING_URL: baseUrl,
           ...extraEnv,
-        },
+        }),
       ));
       const compressorCallLog = await readFile(callLog, "utf-8").catch(() => "");
       const compressorArgs = await readFile(argsLog, "utf-8").catch(() => "");
@@ -227,23 +219,11 @@ async function contextRecallCase(excludeUris) {
     }, async (baseUrl) => {
       const result = await runAutoRecall(
         { prompt: "please use prior context", session_id: "codex:123" },
-        {
-          OPENVIKING_AUTO_RECALL: "1",
-          OPENVIKING_CODEX_STATE_DIR: stateDir,
-          OPENVIKING_STATE_DIR: stateDir,
-          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-          OPENVIKING_CREDENTIAL_SOURCE: "env",
-          OPENVIKING_RECALL_COMPRESS: "0",
+        recallEnv(stateDir, baseUrl, {
           OPENVIKING_RECALL_EXCLUDE_URIS: excludeUris,
           OPENVIKING_RECALL_LIMIT: "1",
           OPENVIKING_RECALL_MAX_TOKENS: "800",
-          OPENVIKING_RECALL_TIMEOUT_MS: "10000",
-          OPENVIKING_MIN_QUERY_LENGTH: "1",
-          OPENVIKING_SCORE_THRESHOLD: "0",
-          OPENVIKING_TIMEOUT_MS: "5000",
-          OPENVIKING_URL: baseUrl,
-        },
+        }),
       );
 
       const output = JSON.parse(result.stdout.trim());
@@ -290,17 +270,10 @@ test("auto-recall displays the server validation error with debug disabled", asy
     }
     requests.push({ url: req.url, body: await readRequestBody(req) });
     writeStatusJson(res, 400, { status: "error", error: { code: "INVALID_ARGUMENT", message } });
-  }, (baseUrl) => runAutoRecall({ prompt: "How did we handle the last incident?", cwd: stateDir }, {
-    OPENVIKING_AUTO_RECALL: "1",
-    OPENVIKING_CODEX_STATE_DIR: stateDir,
-    OPENVIKING_STATE_DIR: stateDir,
-    OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-    OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-    OPENVIKING_CREDENTIAL_SOURCE: "env",
-    OPENVIKING_DEBUG: "0",
-    OPENVIKING_RECALL_COMPRESS: "off",
-    OPENVIKING_URL: baseUrl,
-  }));
+  }, (baseUrl) => runAutoRecall(
+    { prompt: "How did we handle the last incident?", cwd: stateDir },
+    recallEnv(stateDir, baseUrl, { OPENVIKING_DEBUG: "0" }),
+  ));
 
   assert.deepEqual(JSON.parse(result.stdout), { systemMessage: `OpenViking auto recall failed (HTTP 400): ${message}` });
   assert.deepEqual(requests.map(({ url }) => url), ["/api/v1/search/search"]);
@@ -339,10 +312,7 @@ test("auto-recall uses the server recall endpoint when Context search is unavail
       }
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         requests.push({ path: url.pathname, body: await readRequestBody(req) });
-        writeStatusJson(res, 404, {
-          status: "error",
-          error: "Context search unavailable",
-        });
+        writeStatusJson(res, 404, { status: "error", error: "Context search unavailable" });
         return;
       }
       res.writeHead(404, { "Content-Type": "application/json" });
@@ -350,21 +320,9 @@ test("auto-recall uses the server recall endpoint when Context search is unavail
     }, async (baseUrl) => {
       const result = await runAutoRecall(
         { prompt: "please use server recall", session_id: "codex:recall" },
-        {
-          OPENVIKING_AUTO_RECALL: "1",
-          OPENVIKING_CODEX_STATE_DIR: stateDir,
-          OPENVIKING_STATE_DIR: stateDir,
-          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-          OPENVIKING_CREDENTIAL_SOURCE: "env",
-          OPENVIKING_RECALL_COMPRESS: "0",
+        recallEnv(stateDir, baseUrl, {
           OPENVIKING_RECALL_LIMIT: "2",
-          OPENVIKING_RECALL_TIMEOUT_MS: "10000",
-          OPENVIKING_MIN_QUERY_LENGTH: "1",
-          OPENVIKING_SCORE_THRESHOLD: "0",
-          OPENVIKING_TIMEOUT_MS: "5000",
-          OPENVIKING_URL: baseUrl,
-        },
+        }),
       );
 
       const output = JSON.parse(result.stdout.trim());
@@ -470,10 +428,7 @@ test("auto-recall gives the compressor full content from the raw-search fallback
           if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
             const body = await readRequestBody(req);
             if (body.mode === "context") {
-              writeStatusJson(res, 404, {
-                status: "error",
-                error: "Context search unavailable",
-              });
+              writeStatusJson(res, 404, { status: "error", error: "Context search unavailable" });
               return;
             }
             const isMemoryScope = body.target_uri === "viking://user/zeus/memories";
@@ -494,23 +449,12 @@ test("auto-recall gives the compressor full content from the raw-search fallback
           writeStatusJson(res, 404, { status: "error", error: "not found" });
         }, async (baseUrl) => runAutoRecall(
           { prompt: "use the raw fallback details", session_id: "codex:raw-compress" },
-          {
+          recallEnv(stateDir, baseUrl, {
             ...env,
-            OPENVIKING_AUTO_RECALL: "1",
-            OPENVIKING_CODEX_STATE_DIR: stateDir,
-            OPENVIKING_STATE_DIR: stateDir,
-            OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-            OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-            OPENVIKING_CREDENTIAL_SOURCE: "env",
             OPENVIKING_RECALL_COMPRESS: "1",
             OPENVIKING_RECALL_LIMIT: "6",
-            OPENVIKING_RECALL_TIMEOUT_MS: "10000",
-            OPENVIKING_MIN_QUERY_LENGTH: "1",
-            OPENVIKING_SCORE_THRESHOLD: "0",
-            OPENVIKING_TIMEOUT_MS: "5000",
-            OPENVIKING_URL: baseUrl,
             OPENVIKING_USER: "zeus",
-          },
+          }),
         ));
 
         const compressorPrompt = await readFile(promptLog, "utf8");
@@ -634,179 +578,50 @@ syncBuiltinESMExports();
   }
 });
 
-test("auto-recall expands configured user in memory search target", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-user-target-"));
-  const requests = [];
-
-  try {
+for (const user of ["zeus", "default"]) {
+  test(`legacy recall searches and reads the selected user's memories (${user})`, async (t) => {
+    const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-target-"));
+    t.after(() => rm(stateDir, { recursive: true, force: true }));
+    const target = `viking://user/${user}/memories`;
+    const memoryUri = `${target}/entities/project/example.md`;
+    const searches = [];
+    const reads = [];
     await withMockOpenViking(async (req, res) => {
       const url = new URL(req.url, "http://127.0.0.1");
       if (req.method === "GET" && url.pathname === "/health") {
-        writeJson(res, { status: "ok", result: { ok: true } });
-        return;
+        return writeJson(res, { status: "ok", result: { ok: true } });
       }
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         const body = await readRequestBody(req);
         if (body.mode === "context") {
-          // Exercise the legacy per-scope sweep below.
-          writeStatusJson(res, 404, {
-            status: "error",
-            error: "Context search unavailable",
-          });
-          return;
+          return writeJson(res, { status: "error", error: "Context search unavailable" }, 404);
         }
-        requests.push({ path: url.pathname, body });
-        if (body.target_uri === "viking://user/zeus/memories") {
-          writeJson(res, {
-            status: "ok",
-            result: {
-              memories: [{
-                uri: "viking://user/zeus/memories/entities/project/example.md",
-                level: 2,
-                score: 0.9,
-                category: "entities",
-                abstract: "configured user memory",
-              }],
-              skills: [],
-            },
-          });
-          return;
-        }
-        writeJson(res, { status: "ok", result: { memories: [], skills: [] } });
-        return;
+        searches.push(body);
+        const memories = body.target_uri === target
+          ? [{ uri: memoryUri, level: 2, score: 0.9, category: "entities", abstract: "Indexed memory" }]
+          : [];
+        return writeJson(res, { status: "ok", result: { memories, skills: [] } });
       }
       if (req.method === "GET" && url.pathname === "/api/v1/content/read") {
-        writeJson(res, { status: "ok", result: "configured user recalled detail" });
-        return;
+        reads.push(url.searchParams.get("uri"));
+        return writeJson(res, { status: "ok", result: "full remembered detail" });
       }
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "error", error: "not found" }));
+      return writeJson(res, { status: "error", error: "not found" }, 404);
     }, async (baseUrl) => {
       const result = await runAutoRecall(
-        { prompt: "please use configured user memory", session_id: "codex:456" },
-        {
-          OPENVIKING_AUTO_RECALL: "1",
-          OPENVIKING_CODEX_STATE_DIR: stateDir,
-          OPENVIKING_STATE_DIR: stateDir,
-          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-          OPENVIKING_CREDENTIAL_SOURCE: "env",
-          OPENVIKING_USER: "zeus",
+        { prompt: "please recall the saved context", session_id: "codex:target" },
+        recallEnv(stateDir, baseUrl, {
+          OPENVIKING_USER: user,
           OPENVIKING_RECALL_PREFER_ABSTRACT: "0",
-          OPENVIKING_RECALL_COMPRESS: "0",
           OPENVIKING_RECALL_LIMIT: "1",
-          OPENVIKING_RECALL_TIMEOUT_MS: "10000",
-          OPENVIKING_MIN_QUERY_LENGTH: "1",
-          OPENVIKING_SCORE_THRESHOLD: "0",
-          OPENVIKING_TIMEOUT_MS: "5000",
-          OPENVIKING_URL: baseUrl,
-        },
+        }),
       );
-
-      const output = JSON.parse(result.stdout.trim());
-      assert.match(
-        output.hookSpecificOutput.additionalContext,
-        /configured user recalled detail/,
-      );
+      assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /full remembered detail/);
     });
-
-    // Memory and skill searches run in parallel; arrival order is not guaranteed.
-    const memorySearch = requests.find(
-      (request) => request.body.target_uri === "viking://user/zeus/memories",
-    );
-    assert.ok(memorySearch, "expected a memories search request");
-    assert.equal(memorySearch.body.session_id, "cx-codex_456");
-  } finally {
-    await rm(stateDir, { recursive: true, force: true });
-  }
-});
-
-test("auto-recall preserves explicit default user memory target", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-default-user-"));
-  const requests = [];
-
-  try {
-    await withMockOpenViking(async (req, res) => {
-      const url = new URL(req.url, "http://127.0.0.1");
-      if (req.method === "GET" && url.pathname === "/health") {
-        writeJson(res, { status: "ok", result: { ok: true } });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
-        const body = await readRequestBody(req);
-        if (body.mode === "context") {
-          // Exercise the legacy per-scope sweep below.
-          writeStatusJson(res, 404, {
-            status: "error",
-            error: "Context search unavailable",
-          });
-          return;
-        }
-        requests.push({ path: url.pathname, body });
-        if (body.target_uri === "viking://user/default/memories") {
-          writeJson(res, {
-            status: "ok",
-            result: {
-              memories: [{
-                uri: "viking://user/default/memories/preferences/default-food.md",
-                level: 2,
-                score: 0.9,
-                category: "preferences",
-                abstract: "explicit default user memory",
-              }],
-              skills: [],
-            },
-          });
-          return;
-        }
-        writeJson(res, { status: "ok", result: { memories: [], skills: [] } });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/api/v1/content/read") {
-        writeJson(res, { status: "ok", result: "explicit default user recalled detail" });
-        return;
-      }
-      res.writeHead(404, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ status: "error", error: "not found" }));
-    }, async (baseUrl) => {
-      const result = await runAutoRecall(
-        { prompt: "please use default user memory", session_id: "codex:789" },
-        {
-          OPENVIKING_AUTO_RECALL: "1",
-          OPENVIKING_CODEX_STATE_DIR: stateDir,
-          OPENVIKING_STATE_DIR: stateDir,
-          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-          OPENVIKING_CREDENTIAL_SOURCE: "env",
-          OPENVIKING_USER: "default",
-          OPENVIKING_RECALL_PREFER_ABSTRACT: "0",
-          OPENVIKING_RECALL_COMPRESS: "0",
-          OPENVIKING_RECALL_LIMIT: "1",
-          OPENVIKING_RECALL_TIMEOUT_MS: "10000",
-          OPENVIKING_MIN_QUERY_LENGTH: "1",
-          OPENVIKING_SCORE_THRESHOLD: "0",
-          OPENVIKING_TIMEOUT_MS: "5000",
-          OPENVIKING_URL: baseUrl,
-        },
-      );
-
-      const output = JSON.parse(result.stdout.trim());
-      assert.match(
-        output.hookSpecificOutput.additionalContext,
-        /explicit default user recalled detail/,
-      );
-    });
-
-    // Memory and skill searches run in parallel; arrival order is not guaranteed.
-    const memorySearch = requests.find(
-      (request) => request.body.target_uri === "viking://user/default/memories",
-    );
-    assert.ok(memorySearch, "expected a memories search request");
-    assert.equal(memorySearch.body.session_id, "cx-codex_789");
-  } finally {
-    await rm(stateDir, { recursive: true, force: true });
-  }
-});
+    assert.equal(searches.find(({ target_uri }) => target_uri === target)?.session_id, "cx-codex_target");
+    assert.deepEqual(reads, [memoryUri]);
+  });
+}
 
 test("the actor peer comes from the workspace named by the payload's cwd", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-workspace-"));
@@ -840,20 +655,7 @@ test("the actor peer comes from the workspace named by the payload's cwd", async
     }, async (baseUrl) => {
       await runAutoRecall(
         { prompt: "what did we decide", session_id: "codex:peer", cwd: workspaceDir },
-        {
-          OPENVIKING_AUTO_RECALL: "1",
-          OPENVIKING_CODEX_STATE_DIR: stateDir,
-          OPENVIKING_STATE_DIR: stateDir,
-          OPENVIKING_HOME: join(stateDir, "home"),
-          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-          OPENVIKING_CREDENTIAL_SOURCE: "env",
-          OPENVIKING_RECALL_COMPRESS: "0",
-          OPENVIKING_RECALL_TIMEOUT_MS: "10000",
-          OPENVIKING_MIN_QUERY_LENGTH: "1",
-          OPENVIKING_TIMEOUT_MS: "5000",
-          OPENVIKING_URL: baseUrl,
-        },
+        recallEnv(stateDir, baseUrl),
       );
     });
 
@@ -940,88 +742,37 @@ test("a bypassed directory gets no injected memory and makes no request", async 
   }
 });
 
-function filterEnv(stateDir, baseUrl, filters) {
-  return {
-    OPENVIKING_AUTO_RECALL: "1",
-    OPENVIKING_CODEX_STATE_DIR: stateDir,
-    OPENVIKING_STATE_DIR: stateDir,
-    OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-    OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-    OPENVIKING_CREDENTIAL_SOURCE: "env",
-    OPENVIKING_RECALL_COMPRESS: "0",
-    OPENVIKING_RECALL_TIMEOUT_MS: "10000",
-    OPENVIKING_MIN_QUERY_LENGTH: "3",
-    OPENVIKING_SCORE_THRESHOLD: "0",
-    OPENVIKING_TIMEOUT_MS: "5000",
-    OPENVIKING_URL: baseUrl,
-    OPENVIKING_RECALL_QUERY_FILTERS: filters,
-  };
-}
-
-test("a recall query filter drop ends the turn before any request", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-filter-drop-"));
-  const requests = [];
-  try {
+for (const [name, prompt, filter, query] of [
+  ["drop rule", "/status please", "d|^\\s*[/!]|", null],
+  ["empty replacement", "ultrathink", "s/^ultrathink$//", null],
+  ["retained replacement", "ultrathink what did we decide about retries", "s/^\\s*ultrathink\\s+//i", "what did we decide about retries"],
+]) {
+  test(`applies the recall input filter for a ${name}`, async (t) => {
+    const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-filter-"));
+    t.after(() => rm(stateDir, { recursive: true, force: true }));
+    const queries = [];
     await withMockOpenViking(async (req, res) => {
-      requests.push(req.url);
-      writeJson(res, { status: "ok", result: {} });
-    }, async (baseUrl) => {
-      const result = await runAutoRecall(
-        { prompt: "/status please", session_id: "codex:filter-drop" },
-        filterEnv(stateDir, baseUrl, "d|^\\s*[/!]|"),
-      );
-      assert.deepEqual(JSON.parse(result.stdout.trim()), {});
-    });
-    assert.deepEqual(requests, []);
-  } finally {
-    await rm(stateDir, { recursive: true, force: true });
-  }
-});
-
-test("a recall query filter rewrites the query the server is asked for", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-filter-sub-"));
-  const queries = [];
-  try {
-    await withMockOpenViking(async (req, res) => {
-      const url = new URL(req.url, "http://127.0.0.1");
-      if (req.method === "GET" && url.pathname === "/health") {
-        writeJson(res, { status: "ok", result: { ok: true } });
-        return;
-      }
       const body = await readRequestBody(req);
       if (body?.query) queries.push(body.query);
-      writeJson(res, { status: "ok", result: { entries: [], rendered: "", stats: {} } });
-    }, async (baseUrl) => {
-      await runAutoRecall(
-        { prompt: "ultrathink what did we decide about retries", session_id: "codex:filter-sub" },
-        filterEnv(stateDir, baseUrl, "s/^\\s*ultrathink\\s+//i"),
+      writeJson(res, { status: "ok", result: { ok: true, entries: [], rendered: "", stats: {} } });
+    }, async (baseUrl, requests) => {
+      const result = await runAutoRecall(
+        { prompt, session_id: "codex:filter" },
+        recallEnv(stateDir, baseUrl, {
+          OPENVIKING_RECALL_QUERY_FILTERS: filter,
+          OPENVIKING_MIN_QUERY_LENGTH: "3",
+        }),
       );
+      if (query === null) {
+        assert.deepEqual(JSON.parse(result.stdout), {});
+        assert.deepEqual(requests, []);
+      } else {
+        assert.ok(queries.length > 0);
+        assert.deepEqual([...new Set(queries)], [query]);
+      }
     });
-    assert.ok(queries.length > 0, "the hook made no query request");
-    for (const query of queries) assert.equal(query, "what did we decide about retries");
-  } finally {
-    await rm(stateDir, { recursive: true, force: true });
-  }
-});
-
-test("a query stripped to nothing never reaches the server", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-filter-empty-"));
-  const requests = [];
-  try {
-    await withMockOpenViking(async (req, res) => {
-      requests.push(req.url);
-      writeJson(res, { status: "ok", result: {} });
-    }, async (baseUrl) => {
-      await runAutoRecall(
-        { prompt: "ultrathink", session_id: "codex:filter-empty" },
-        filterEnv(stateDir, baseUrl, "s/^ultrathink$//"),
-      );
-    });
-    assert.deepEqual(requests, []);
-  } finally {
-    await rm(stateDir, { recursive: true, force: true });
-  }
-});
+  });
+}
 
 test("auto-recall authenticates with Bearer alone and gates the identity headers", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-headers-"));
