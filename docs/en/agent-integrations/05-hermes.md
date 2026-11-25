@@ -29,16 +29,18 @@ under the same OpenViking user. Shared Agent asks for confirmation.
 
 Then choose a connection in **Hermes's own setup menu**:
 
+- **OpenViking Managed Service** lets you choose **Volcengine** or **BytePlus**.
+  Volcengine uses a fixed service URL and an API key from its
+  [managed service](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes).
+  BytePlus asks for your instance's HTTPS service URL and OpenViking API key.
+  See [BytePlus setup](../guides/27-byteplus-setup.md).
+- **Custom** connects using a service URL and credentials. It can also reuse
+  a saved `ovcli.conf`.
 - **Quick Local** installs a local server and embedding model. It reuses your
   supported Hermes language model for extraction, which can use a remote API.
-- **OpenViking Service (VolcEngine Cloud)** connects to VolcEngine's
-  [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)
-  with a service API key. You do not need to install a server or configure
-  local models.
-- **Custom** connects using a service URL and credentials. It can also reuse
-  a saved `ovcli.conf`. In this Hermes menu, choose **Custom** for BytePlus and
-  enter your BytePlus OpenViking instance's service URL and API key. See
-  [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older plugin versions use **OpenViking Service (VolcEngine Cloud)** for
+Volcengine and **Custom** for BytePlus.
 
 After setup, chat as usual. The plugin requests a commit at 20,000 pending
 tokens by default, at session end and when switching sessions. Memories become

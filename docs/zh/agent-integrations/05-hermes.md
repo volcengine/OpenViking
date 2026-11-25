@@ -26,14 +26,17 @@ hermes
 
 然后在 **Hermes 自己的配置菜单**中选择连接方式：
 
+- **OpenViking Managed Service** 提供 **Volcengine** 和 **BytePlus** 两个选项。
+  Volcengine 使用固定的服务地址和
+  [托管服务](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)的 API Key。
+  BytePlus 需要输入实例的 HTTPS 服务地址和 OpenViking API Key。
+  详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+- **Custom** 使用服务地址和凭据连接 OpenViking，也可以复用已保存的 `ovcli.conf`。
 - **Quick Local** 安装本地服务和 embedding 模型，复用受支持的 Hermes LLM 抽取记忆。
   LLM 仍可使用远程 API。
-- **OpenViking Service (VolcEngine Cloud)** 通过服务 API Key 连接火山引擎的
-  [OpenViking 托管云服务](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)，
-  无需安装服务端或配置本地模型。
-- **Custom** 使用服务地址和凭据连接 OpenViking，也可以复用已保存的 `ovcli.conf`。
-  在此 Hermes 菜单中连接 BytePlus 时，选择 **Custom**，输入 BytePlus OpenViking 实例的服务地址和 API Key。
-  详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+
+旧版插件连接 Volcengine 时使用 **OpenViking Service (VolcEngine Cloud)**，
+连接 BytePlus 时使用 **Custom**。
 
 配置后正常聊天即可。插件默认在待提交内容达到 20,000 tokens、会话结束或切换时
 请求提交。OpenViking 完成抽取后，记忆才能被召回。已有服务端数据会保留。
