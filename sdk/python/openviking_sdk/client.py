@@ -229,8 +229,14 @@ class Session:
             kwargs["peer_id"] = peer_id
         return await self._client.add_message(self.session_id, **kwargs)
 
-    async def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
-        return await self._client.batch_add_messages(self.session_id, messages)
+    async def batch_add_messages(
+        self,
+        messages: list[dict],
+        options: Optional[BatchAddMessagesOptions] = None,
+    ) -> Dict[str, Any]:
+        if options is None:
+            return await self._client.batch_add_messages(self.session_id, messages)
+        return await self._client.batch_add_messages(self.session_id, messages, options=options)
 
     async def commit(
         self,
@@ -279,8 +285,14 @@ class SyncSession:
             kwargs["peer_id"] = peer_id
         return self._client.add_message(self.session_id, **kwargs)
 
-    def batch_add_messages(self, messages: list[dict]) -> Dict[str, Any]:
-        return self._client.batch_add_messages(self.session_id, messages)
+    def batch_add_messages(
+        self,
+        messages: list[dict],
+        options: Optional[BatchAddMessagesOptions] = None,
+    ) -> Dict[str, Any]:
+        if options is None:
+            return self._client.batch_add_messages(self.session_id, messages)
+        return self._client.batch_add_messages(self.session_id, messages, options=options)
 
     def commit(
         self,
