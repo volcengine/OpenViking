@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { draftRules } from './conversation-policy.mjs';
 import { chatTag, metadataTag, oneLine } from './runtime-input.mjs';
 import { safeError } from './logger.mjs';
 import { emptyTrash, formatBytes, isDirectory, isDirectoryWithin, moveToTrash, scanDir, TRASH, unsavedWork } from './task-dirs.mjs';
@@ -82,6 +83,9 @@ const CANDIDATES = 3;
 const THREAD_TASKS = 10;
 // How much of a nearby task's current request its hint shows.
 const HINT_REQUEST_CHARS = 40;
+// A brief names at most this many of the requester's earlier tasks.
+const HISTORY_TASKS = 5;
+const HISTORY_SUMMARY_CHARS = 160;
 // Ended tasks' directories: dependency folders are deleted this many days
 // after the task ended, the whole directory and its worker's sessions after
 // DIR_REMOVE_DAYS, and past the budget the directories of the tasks that ended
@@ -563,9 +567,7 @@ export class TaskManager {
     }
     // A search looks past the working set at the dormant tasks too.
     let rows = requester
-      ? this.db.prepare(`SELECT * FROM tasks WHERE id IN (SELECT task_id FROM task_rounds
-            WHERE requester_id = ?${requester.direct ? '' : ' AND origin_chat = ?'})
-          ORDER BY updated_at_ms DESC, rowid DESC LIMIT ?`).all(...[requester.id, ...(requester.direct ? [] : [requester.chatId]), ASKER_TASKS])
+      ? this.askedBy(requester, ASKER_TASKS)
       : includeEnded ? this.db.prepare('SELECT * FROM tasks ORDER BY created_at_ms DESC LIMIT 200').all()
         : [...this.workingSet(), ...(query ? this.dormant() : [])];
     if (query) {
@@ -581,6 +583,35 @@ export class TaskManager {
       lines.push(`Also waiting, with nothing for days: ${dormant.map((task) => `${task.id} (${this.ago(task.updated_at_ms)})`).join(', ')}. task_id= shows one.`);
     }
     return lines;
+  }
+
+  // The tasks a person asked for, newest first: in a direct chat all of
+  // theirs, in a group only those asked there (a group hears only of its own).
+  askedBy(requester, limit = -1) {
+    return this.db.prepare(`SELECT * FROM tasks WHERE id IN (SELECT task_id FROM task_rounds
+        WHERE requester_id = ?${requester.direct ? '' : ' AND origin_chat = ?'})
+      ORDER BY updated_at_ms DESC, rowid DESC LIMIT ?`).all(...[requester.id, ...(requester.direct ? [] : [requester.chatId]), limit]);
+  }
+
+  // Whose tasks a worker may look up: what the requester of its current round
+  // asked for, scoped as askedBy scopes it. Null when that is unknown.
+  requesterScope(task) {
+    const round = this.roundOf(task);
+    return round.requester_id
+      ? { id: round.requester_id, chatId: round.origin_chat, direct: round.origin_chat_type === 'p2p' } : null;
+  }
+
+  // task_list for a worker: the tasks in its requester's scope only, never
+  // another person's; one in detail with the directory it worked in.
+  listForWorker(taskId, { taskId: wanted = null, query = '' } = {}) {
+    const own = this.get(taskId);
+    const requester = own ? this.requesterScope(own) : null;
+    if (!requester) return [];
+    if (wanted) {
+      const task = this.askedBy(requester).find((row) => row.id === wanted);
+      return task ? [`${this.card(task, { detail: true })}\ndirectory: ${task.workdir}`] : [];
+    }
+    return this.list({ query, requester });
   }
 
   // Message ids that belong to a task: its routed inputs and what the router
@@ -1129,7 +1160,9 @@ export class TaskManager {
           : [`Requested by ${task.requester_name ?? 'unknown'}${where}. The request, as the agent received it:`, ...owner.map((row) => row.text)]),
         ...(context.length ? ['Context:', ...context.map((row) => row.text)] : []),
         ...(task.note ? [`Routing note from the agent: ${task.note}`] : []),
+        ...this.replyBrief(round ?? this.roundOf(task)),
         ...this.parentBrief(task),
+        ...this.historyBrief(task),
         `Your directory: ${task.workdir}`,
         ...dirNote,
         ...(recovery && task.summary ? [opening ? 'What your earlier rounds found:' : 'Previous work summary (may be incomplete):', quoted(task.summary)] : []),
@@ -1151,6 +1184,7 @@ export class TaskManager {
         ...owner.map((row) => row.text),
         ...(context.length ? ['Context only (act on it only if it changes your task):', ...context.map((row) => row.text)] : []),
         ...(unfinished && task.summary ? ['Why the previous round ended:', quoted(clip(task.summary, SUMMARY_CHARS))] : []),
+        ...(round.origin_source !== this.roundOf(task, round.round - 1).origin_source ? this.replyBrief(round) : []),
         ...dirNote,
         unfinished
           ? 'Before you start, check whether what stopped the previous round is resolved, and the state of your directory and of what you changed outside it. If it still stands in the way, report blocked again with what is missing now. Finish with task_report: its result answers this request.'
@@ -1186,6 +1220,26 @@ export class TaskManager {
       return ['The dependency folders in your directory (node_modules, virtual environments, build caches) were deleted to save disk after the task ended: install again only what you need.'];
     }
     return [];
+  }
+
+  // How a reply reads where this round was asked (draftRules): the brief says
+  // it, since the router sends the draft as written.
+  replyBrief(origin) {
+    const rules = draftRules(this.config, origin.origin_source);
+    return rules.length ? [`Your draft goes out on ${origin.origin_source}, where:`, ...rules] : [];
+  }
+
+  // The requester's earlier tasks where this one was asked, newest first, as
+  // task_list shows them to a worker: related work to start from instead of
+  // redoing it. The parent is in parentBrief already.
+  historyBrief(task) {
+    const requester = this.requesterScope(task);
+    if (!requester) return [];
+    const earlier = this.askedBy(requester, HISTORY_TASKS + 2)
+      .filter((row) => row.id !== task.id && row.id !== task.parent_id).slice(0, HISTORY_TASKS);
+    if (!earlier.length) return [];
+    return [`Earlier tasks ${this.roundOf(task).requester_name ?? task.requester_name ?? 'the requester'} asked for${requester.direct ? '' : ' here'}, newest first (task_list with task_id shows one, with its directory):`,
+      ...earlier.map((row) => `- ${row.id} [${this.state(row)}] "${oneLine(clip(row.title, 80))}"${row.summary ? `: ${oneLine(clip(row.summary, HISTORY_SUMMARY_CHARS))}` : ''}`)];
   }
 
   // What a task that follows another starts from: that work's request and

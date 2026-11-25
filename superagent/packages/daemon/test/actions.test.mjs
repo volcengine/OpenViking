@@ -2040,6 +2040,23 @@ describe('workers scheduler', () => {
     assert.equal(connectors.calls.length, 0);
   });
 
+  it('a worker\'s task_list shows only what its requester asked for there', async (t) => {
+    const { service, store, workspace, call } = setup(t, { scheduler: 'workers' });
+    const { tasks, turns } = attachTasks(service, store, workspace);
+    const rowOf = (fields) => store.db.prepare('SELECT * FROM connector_events WHERE seq = ?')
+      .get(store.ingest(chatEvent({ chatType: 'group', ...fields })).inbound.seq);
+    tasks.create({ rows: [rowOf({ messageId: 'om_listMine0001', senderId: 'ou-alice' })], title: 'mine', runtime: 'pi' });
+    tasks.create({ rows: [rowOf({ messageId: 'om_listBob00001', senderId: 'ou-bob' })], title: 'bob', runtime: 'pi' });
+    tasks.create({ rows: [rowOf({ messageId: 'om_listMine0002', senderId: 'ou-alice' })], title: 'mine again', runtime: 'pi' });
+    const token = turns.find((turn) => turn.task.id === 't3').authority;
+    assert.ok(service.tools({ authority: token }).some((tool) => tool.name === 'task_list'));
+    const listed = await call('task_list', { include_ended: true }, token);
+    assert.deepEqual(listed.text.split('\n').map((line) => line.split(' ')[0]).toSorted(), ['t1', 't3']);
+    assert.match((await call('task_list', { task_id: 't1' }, token)).text, /^t1 \[[a-z]+\] "mine"[\s\S]*\ndirectory: /);
+    assert.match((await call('task_list', { task_id: 't2' }, token)).text, /^No such task asked for by your requester here\./);
+    assert.match((await call('task_list', {})).text, /t2 /, 'the router still sees every task');
+  });
+
   it('task_create hands the named inputs to a worker and counts as the decision on them', async (t) => {
     const { service, store, workspace, call } = setup(t, { scheduler: 'workers', explicitSilence: true });
     const { turns } = attachTasks(service, store, workspace);

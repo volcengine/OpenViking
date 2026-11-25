@@ -15,7 +15,7 @@ import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
-import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice, withTurnSkills } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { prepareOpencodeConfigHome } from './ov-isolation.mjs';
 
@@ -573,7 +573,7 @@ export class OpencodeAgent {
       beforeSeq,
       this.cognitionEpoch,
     ) ?? 0;
-    let body = withTurnNotice(this, items.map((item) => item.text).join('\n'));
+    let body = withTurnNotice(this, withTurnSkills(items, { active: this.turnActive }));
     let prefixThroughSeq = this.deliveredThroughSeq;
     if (this.needsHistoryPrefix) {
       const catchup = cognitionHistoryPrefix(

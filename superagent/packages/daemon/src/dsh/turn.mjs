@@ -10,7 +10,7 @@
 import { cognitionHistoryPrefix, CognitionLimitError } from '../cognition.mjs';
 import { safeError as safe } from '../logger.mjs';
 import {
-  deliveryItem, receiptIds, withReceiptIds, withTurnNotice,
+  deliveryItem, receiptIds, withReceiptIds, withTurnNotice, withTurnSkills,
 } from '../runtime-input.mjs';
 import { turnErrorText } from '../codex.mjs';
 
@@ -225,7 +225,7 @@ export default {
     // frame is written, never when it is acknowledged. Waiting for the ack made
     // every input prepared in between re-attach the same history (P2-6).
     const historyPrefix = Boolean(this.needsHistoryPrefix);
-    let body = withTurnNotice(this, items.map((item) => item.text).join('\n'));
+    let body = withTurnNotice(this, withTurnSkills(items, { active: Boolean(this.turn) }));
     let prefixThroughSeq = this.deliveredThroughSeq;
     if (historyPrefix) {
       const catchup = cognitionHistoryPrefix(this.store, this.cognitionEpoch, throughSeq, 0);

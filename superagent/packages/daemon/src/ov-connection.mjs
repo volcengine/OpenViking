@@ -69,10 +69,30 @@ export class OVConnection {
       });
       if (!response.ok) throw new Error();
       const declared = Number(response.headers.get('content-length'));
-      if (Number.isFinite(declared) && declared > maxBytes) throw new Error();
-      const bytes = Buffer.from(await response.arrayBuffer());
-      if (bytes.length < 1 || bytes.length > maxBytes) throw new Error();
-      return bytes;
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        await response.body?.cancel();
+        throw new Error();
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error();
+      const chunks = [];
+      let size = 0;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > maxBytes) {
+            await reader.cancel();
+            throw new Error();
+          }
+          chunks.push(Buffer.from(value));
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      if (size < 1) throw new Error();
+      return Buffer.concat(chunks, size);
     } catch (error) {
       throw Object.assign(new OVUnavailableError(
         `OpenViking request failed${response ? ` (HTTP ${response.status})` : ' or timed out'}`,

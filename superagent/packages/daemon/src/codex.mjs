@@ -14,7 +14,7 @@ import { captureStartupStderr } from './runtime-diagnostics.mjs';
 import { activityPayload } from './activity.mjs';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
-import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice, withTurnSkills } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { codexConfigFile, codexIsolationArgs } from './ov-isolation.mjs';
 import { routerToolHookArgs } from './router-tool-hook.mjs';
@@ -403,7 +403,7 @@ export class CodexAgent {
   }
 
   _startTurn(items, { prime = false } = {}) {
-    const text = items.map((item) => item.text).join('\n');
+    const text = withTurnSkills(items);
     // The daemon notice (RuntimeAdapter.setTurnNotice) belongs to the next real
     // turn, never to a catch-up prime; a failed turn/start puts it back.
     const notice = prime ? null : this.turnNotice;
@@ -484,7 +484,7 @@ export class CodexAgent {
   _steerBatch(items) {
     const expectedTurnId = this.activeTurnId;
     const owner = this.activeOwner;
-    const text = items.map((item) => item.text).join('\n');
+    const text = withTurnSkills(items, { active: true });
     const seqs = [...new Set(
       items.map((item) => item.seq).filter((seq) => seq !== null && seq !== undefined),
     )];

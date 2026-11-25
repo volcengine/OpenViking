@@ -53,11 +53,15 @@ export function matchPrefix(token, candidates) {
 export function commandCandidate(event) {
   // A choice on a card the Core answered a command with runs the command it
   // names, in the direct chat the card is in: the task picked in /tasks opens
-  // as /tasks <id>. Only that command and a task id: never text anyone wrote.
+  // as /tasks <id>, and a card's refresh button runs the /tasks it was drawn
+  // by. Only that command, with no argument or a task id: never text anyone
+  // wrote.
   if (event.kind === 'message.action' && event.messageType === 'card_action') {
     const { value, option } = event.data?.interaction ?? {};
-    if (event.chatType !== 'p2p' || !event.chatId || !event.replyRoute) return null;
-    return value?.[CARD_COMMAND] === '/tasks' && /^t[0-9]{1,6}$/.test(option ?? '') ? `/tasks ${option}` : null;
+    if (event.chatType !== 'p2p' || !event.chatId || !event.replyRoute || value?.[CARD_COMMAND] !== '/tasks') return null;
+    const arg = value.refresh === true ? value.arg : option;
+    if (value.refresh === true && arg === '') return '/tasks';
+    return /^t[0-9]{1,6}$/.test(arg ?? '') ? `/tasks ${arg}` : null;
   }
   if (event.kind !== 'message.created' || !event.chatId || !event.messageId
     || !event.replyRoute || !['text', 'post'].includes(event.messageType)) return null;

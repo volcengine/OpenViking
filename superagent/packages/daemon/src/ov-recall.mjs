@@ -73,23 +73,39 @@ export class OVRecall {
     const query = String(event.content ?? '').trim();
     const sender = owner ? null : personId(event);
     const senderDirectory = sender ? personDirectory(event) : null;
+    const [ownerPreferences, senderPreferences, entries, skills] = await this.bounded([
+      this.preferences({ owner: true }),
+      sender ? this.preferences({ id: sender, directory: senderDirectory }) : null,
+      this.autoRecall && query.length >= MIN_QUERY_CHARS ? this.search(query) : null,
+      this.skillRecall && query.length > 0 ? this.findSkills(query) : null,
+    ]);
+    return this.render(event, { sender, ownerPreferences, senderPreferences, entries: entries ?? [], skills: skills ?? [] });
+  }
+
+  // A worker's Standing preferences (worker-executor.mjs): the owner's, and the
+  // requester's unless the requester is the owner, read like forEvent's and
+  // within the same deadline, without the search. { owner, requester }, each
+  // text or null; never rejects.
+  async preferencesFor(event, { owner = false } = {}) {
+    const person = owner ? null : personId(event);
+    const [ownerPreferences, requesterPreferences] = await this.bounded([
+      this.preferences({ owner: true }),
+      person ? this.preferences({ id: person, directory: personDirectory(event) }) : null,
+    ]);
+    return { owner: ownerPreferences, requester: requesterPreferences };
+  }
+
+  // Reads (promises, or null for none) under one deadline: each comes back as
+  // its value, or null once it failed or the deadline passed.
+  async bounded(reads) {
     const settled = (promise) => Promise.resolve().then(() => promise).catch((error) => {
       this.logger.debug('ov_recall_skipped', { status: error.httpStatus ?? null });
       return null;
     });
     let timer;
     const deadline = new Promise((resolve) => { timer = setTimeout(resolve, this.timeoutMs); });
-    const bounded = (promise) => (promise ? Promise.race([settled(promise), deadline.then(() => null)]) : null);
     try {
-      const [ownerPreferences, senderPreferences, entries, skills] = await Promise.all([
-        bounded(this.preferences({ owner: true })),
-        sender ? bounded(this.preferences({ id: sender, directory: senderDirectory })) : null,
-        this.autoRecall && query.length >= MIN_QUERY_CHARS ? bounded(this.search(query)) : null,
-        this.skillRecall && query.length > 0 ? bounded(this.findSkills(query)) : null,
-      ]);
-      return this.render(event, {
-        sender, ownerPreferences, senderPreferences, entries: entries ?? [], skills: skills ?? [],
-      });
+      return await Promise.all(reads.map((read) => (read ? Promise.race([settled(read), deadline.then(() => null)]) : null)));
     } finally {
       clearTimeout(timer);
     }
@@ -108,7 +124,7 @@ export class OVRecall {
 
   async findSkills(query) {
     const { result } = await this.connection.json('/api/v1/skills/find', {
-      query, limit: SKILL_LIMIT,
+      query, limit: SKILL_LIMIT, target_uri: 'viking://~/skills',
     }, { timeoutMs: this.timeoutMs });
     return Array.isArray(result?.skills) ? result.skills : [];
   }

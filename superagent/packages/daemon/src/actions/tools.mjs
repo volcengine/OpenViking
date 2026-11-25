@@ -248,7 +248,7 @@ export const TOOLS = [
     name: 'task_list',
     router: true,
     title: 'List tasks',
-    description: 'The open tasks and the most recently ended ones, one line each: id, status, title, requester, where, how long it has been working, and whether its latest result was sent (how long ago, as which msg=). With task_id, that task in detail (latest summary, waiting question, artifacts, the reply sent or a draft never sent). With for_event, the tasks the sender of that message asked for. With query, tasks with similar titles, ended ones included. Use it to answer questions about progress without starting work.',
+    description: 'The open tasks and the most recently ended ones, one line each: id, status, title, requester, where, how long it has been working, and whether its latest result was sent (how long ago, as which msg=). With task_id, that task in detail (latest summary, waiting question, artifacts, the reply sent or a draft never sent). With for_event, the tasks the sender of that message asked for. With query, tasks with similar titles, ended ones included. Use it to answer questions about progress without starting work. A worker sees only what its requester asked for (in a group, there): with task_id, that task in detail with its directory.',
     inputSchema: schema({
       task_id: { type: 'string', pattern: '^t[0-9]{1,6}$' },
       for_event: { type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH, description: 'event= of a message: the tasks its sender asked for, newest first, ended ones included. In a group only those asked in that chat; in a direct chat all of theirs.' },

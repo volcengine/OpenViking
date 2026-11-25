@@ -357,6 +357,24 @@ describe('CodexAgent handshake', () => {
 });
 
 describe('CodexAgent turn/steer state machine', () => {
+  it('sends only the initial Skill view across batched inputs and later steering', async () => {
+    const { agent, children } = newAgent(makeStore());
+    const child = await handshake(agent, children);
+    const first = '<available_skills>\n- first\n</available_skills>';
+    const later = '<available_skills>\n- later\n</available_skills>';
+    agent.deliverBatch([{ text: `one\n${first}` }, { text: `two\n${later}` }]);
+    assert.equal(child.ofMethod('turn/start').at(-1).params.input[0].text, `one\ntwo\n${first}`);
+    child.feed({ method: 'turn/started', params: { turn: { id: 't-skills' } } });
+    agent.deliver(`three\n${later}`);
+    const steer = child.ofMethod('turn/steer').at(-1);
+    assert.equal(steer.params.input[0].text, 'three');
+    child.feed({ id: steer.id, result: {} });
+    await flush();
+    child.feed({ method: 'turn/completed', params: { turn: { id: 't-skills', status: 'completed' } } });
+    agent.deliver(`next\n${later}`);
+    assert.equal(child.ofMethod('turn/start').at(-1).params.input[0].text, `next\n${later}`);
+  });
+
   it('starts a turn when idle', async () => {
     const store = makeStore();
     const { agent, children } = newAgent(store);

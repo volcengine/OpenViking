@@ -127,6 +127,23 @@ test('a line from someone else shows the owner\'s standing preferences and the s
   assert.equal(ov.calls.some(({ url }) => url.includes('profile.md')), false, 'profile sections are matched by name, so never shown');
 });
 
+test('a worker gets the owner\'s preferences and its requester\'s, without the search, and nothing from an OV that is down', async (t) => {
+  names(t);
+  const ov = fakeOV({ entries: entries(), files: withAlias(files()) });
+  const recall = new OVRecall({ configPath: configFile(t), fetchImpl: ov.fetchImpl, logger, store: sessionStore(), autoRecall: true });
+  assert.deepEqual(await recall.preferencesFor(zhiheng), {
+    owner: '## 信息披露\n- 外部群里不透露公司内部信息',
+    requester: '## 回复风格\n- 回复先给结论\n\n## 评审格式\n- 评审建议用表格',
+  });
+  assert.deepEqual(await recall.preferencesFor(zhiheng, { owner: true }), { owner: '## 信息披露\n- 外部群里不透露公司内部信息', requester: null });
+  assert.deepEqual(await recall.preferencesFor(null), { owner: '## 信息披露\n- 外部群里不透露公司内部信息', requester: null });
+  assert.equal(ov.calls.some(({ url }) => url.endsWith('/api/v1/search/search')), false, 'no context search for a worker');
+  const down = new OVRecall({ configPath: configFile(t), fetchImpl: fakeOV({ fail: true }).fetchImpl, logger });
+  assert.deepEqual(await down.preferencesFor(zhiheng), { owner: null, requester: null });
+  const slow = new OVRecall({ configPath: configFile(t), fetchImpl: fakeOV({ files: withAlias(files()), delayMs: 500 }).fetchImpl, logger, timeoutMs: 20 });
+  assert.deepEqual(await slow.preferencesFor(zhiheng), { owner: null, requester: null });
+});
+
 test('namesakes, a display name of "owner" and a name-only directory never stand in for someone', async (t) => {
   names(t);
   const ov = fakeOV({ files: withAlias(files()) });
@@ -161,7 +178,7 @@ test('every non-empty line receives up to eight sorted OpenViking Skill summarie
   const recall = new OVRecall({ configPath: configFile(t), fetchImpl: ov.fetchImpl, logger });
   const block = await recall.forEvent(chatEvent({ senderId: 'ou_owner', messageId: 'om-skills', content: '处理 PDF' }), { owner: true });
   const request = ov.calls.find(({ url }) => url.endsWith('/api/v1/skills/find'));
-  assert.deepEqual(request.body, { query: '处理 PDF', limit: 8 });
+  assert.deepEqual(request.body, { query: '处理 PDF', limit: 8, target_uri: 'viking://~/skills' });
   assert.match(block, /<available_skills>/);
   assert.ok(block.indexOf('alpha: First by name') < block.indexOf('zeta: Last by name'));
   assert.match(block, /viking:\/\/user\/owner\.asd\/skills\/alpha\/SKILL\.md/);
@@ -169,7 +186,7 @@ test('every non-empty line receives up to eight sorted OpenViking Skill summarie
   assert.doesNotMatch(block, /# Instructions|<memory/);
 
   await recall.forEvent(chatEvent({ senderId: 'ou_owner', messageId: 'om-short', content: '查' }), { owner: true });
-  assert.deepEqual(ov.calls.at(-1).body, { query: '查', limit: 8 });
+  assert.deepEqual(ov.calls.at(-1).body, { query: '查', limit: 8, target_uri: 'viking://~/skills' });
 
   const disabledOV = fakeOV({ skills });
   const disabled = new OVRecall({

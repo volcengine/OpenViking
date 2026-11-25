@@ -17,7 +17,7 @@ import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
 import { assertPiVersion, piCommand, piShellTimeoutEnv, piToolArgs, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
 import { piIsolationArgs } from './ov-isolation.mjs';
-import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice, withTurnSkills } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { BoundedLineReader, lineTypeFromPrefix, stringFieldFromPrefix } from './line-reader.mjs';
 
@@ -539,7 +539,7 @@ export class PiAgent {
     ) ?? 0;
     // Native transcripts already own their history, even when the cursor is zero.
     const needsCatchup = this.needsHistoryPrefix;
-    let body = withTurnNotice(this, items.map((item) => item.text).join('\n'));
+    let body = withTurnNotice(this, withTurnSkills(items, { active: this.turnActive }));
     let prefixThroughSeq = this.deliveredThroughSeq;
     if (needsCatchup) {
       const catchup = cognitionHistoryPrefix(

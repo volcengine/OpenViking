@@ -17,7 +17,7 @@ import { executeCommand, statusHeadline } from './commands.mjs';
 import { settingsModels } from './settings-models.mjs';
 import { SETTINGS_CARD, applySettings, redrawn, settingsCard, settledCard, statusCard, workerStatusLine } from './settings-card.mjs';
 import { executePrimaryCommand } from './primary-channel.mjs';
-import { executeTasksCommand, taskStatusLine } from './task-commands.mjs';
+import { executeTasksCommand, refreshesCard, taskStatusLine } from './task-commands.mjs';
 import { executeWorkersCommand } from './worker-commands.mjs';
 import { ConnectorManager } from './connectors/process.mjs';
 import { ActionService } from './actions/service.mjs';
@@ -31,7 +31,7 @@ import { InstanceLock } from './lock.mjs';
 import { pruneLarkMedia } from './lark-media.mjs';
 import { safeChatLookupError, safeError } from './logger.mjs';
 import { approvalNote } from './actions/approval.mjs';
-import { resolveCardAction, settledChoiceCard } from './card-messages.mjs';
+import { CARD_BUSY, CARD_TOO_OLD, editCard, resolveCardAction, settledChoiceCard } from './card-messages.mjs';
 import { LARK_MESSAGE_EVENT_KINDS, resolveLarkMessageEvent } from './lark-message-events.mjs';
 import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
@@ -89,6 +89,10 @@ export class PersonalAgentDaemon {
     this.startedAt = Date.now();
     this.ready = false;
     this.shuttingDown = false;
+    // The /tasks cards being redrawn by their refresh button (refreshCard).
+    this.cardRefreshes = new Map();
+    // How long a card edit Lark refused for the lock waits to try again (editCard).
+    this.cardEditWaitMs = 1000;
     this.shutdownPromise = null;
     this.maintenanceTimer = null;
     this.runId = randomUUID();
@@ -124,6 +128,16 @@ export class PersonalAgentDaemon {
       this.logger.warn('activity_persist_failed', { kind, error: safeError(error) });
       return false;
     }
+  }
+
+  // A worker turn's Standing preferences: the owner's, and those of whoever
+  // asked for the task's current round, found from the line that asked as
+  // the router's recall finds them. Null without OpenViking.
+  async workerPreferences(task) {
+    if (!this.recall || !this.tasks) return null;
+    const round = this.tasks.roundOf(task);
+    const event = round?.origin_seq != null ? this.store.inboundBySeq(round.origin_seq) : null;
+    return this.recall.preferencesFor(event, { owner: event ? this.connectors.isOwner(event) : false });
   }
 
   // A config or credential OV rejects needs the owner, so startup stops. An
@@ -331,6 +345,14 @@ export class PersonalAgentDaemon {
         maxAgeMs: this.config.maxEventAgeMs,
       }) : null;
       this.actions.attachInbox(this.inbox);
+      // Preferences are always shown; the per-line search only with ovAutoRecall.
+      // One recall serves the router's lines (Harness) and the workers'
+      // policies, so a changed preference reaches both.
+      this.recall = this.config.openVikingConfigPath
+        ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
+          skillRecall: this.config.ovSkillRecall,
+          store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
+        : null;
       // The workers scheduler: tasks the router hands to worker sessions on
       // its own runtime. Their reports come back through the inbox.
       if (this.config.scheduler === 'workers') {
@@ -339,6 +361,7 @@ export class PersonalAgentDaemon {
           config: this.config,
           logger: this.logger.child({ component: 'worker' }),
           settings: router,
+          preferences: (task) => this.workerPreferences(task),
         });
         // What workers run on, apart from the router (/workers).
         this.workerSettings = new WorkerSettings({
@@ -372,12 +395,7 @@ export class PersonalAgentDaemon {
         runtime: this.agentRuntime,
         roster: this.roster,
         liveness: this.liveness,
-        // Preferences are always shown; the per-line search only with ovAutoRecall.
-        recall: this.config.openVikingConfigPath
-          ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
-            skillRecall: this.config.ovSkillRecall,
-            store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
-          : null,
+        recall: this.recall,
         prepareEvent: (event) => event.source !== 'lark' ? event
           : event.kind === 'message.action' ? resolveCardAction(this.store.db, event, this.config.profile)
             : LARK_MESSAGE_EVENT_KINDS.has(event.kind) ? resolveLarkMessageEvent(this.store.db, event) : event,
@@ -412,7 +430,7 @@ export class PersonalAgentDaemon {
         onInboundChat: (chatId) => this.chatNames.schedule(chatId),
         afterEvent: (event) => {
           const card = settledChoiceCard(event);
-          if (card) return this.connectors.updateCard(event.parentId, card);
+          if (card) return editCard(this.connectors, event.parentId, card, { waitMs: this.cardEditWaitMs });
         },
         isOwner: (event) => this.connectors.isOwner(event),
         mentionTarget: (event) => this.connectors.mentionTarget(event),
@@ -526,6 +544,15 @@ export class PersonalAgentDaemon {
       text: `slash command ${String(event.content).trim()}`,
       dedupeKey: `command:${event.messageId}`,
     });
+    // A press of a /tasks card's refresh button is answered off this queue.
+    if (refreshesCard(event)) {
+      void this.refreshCard({ command, event, inbound, label, at: Date.now() });
+      return;
+    }
+    await this.replyCommand(await this.runCommand(command, event, inbound, label), event, inbound);
+  }
+
+  async runCommand(command, event, inbound, label) {
     let outcome;
     try {
       outcome = await executeCommand(command, this.agentRuntime, {
@@ -555,7 +582,11 @@ export class PersonalAgentDaemon {
       inboundSeq: inbound?.seq,
       metadata: { chatType: event.chatType },
     });
-    // A command may answer with a card too (/tasks); the text goes where it cannot.
+    return outcome;
+  }
+
+  // A command may answer with a card too (/tasks); the text goes where it cannot.
+  async replyCommand(outcome, event, inbound) {
     const sent = await this.actions.replyToEvent({ ...event, seq: inbound?.seq }, outcome.text, 'command-reply', { card: outcome.card ?? null });
     if (!sent.ok) {
       this.recordSystemActivity('command.reply_failed', {
@@ -565,6 +596,63 @@ export class PersonalAgentDaemon {
         inboundSeq: inbound?.seq,
       });
     }
+  }
+
+  // The refresh button on a /tasks card redraws that card in place, off the
+  // ingress queue: waiting for Lark to take an edit of the card (editCard)
+  // never holds up a message. Only the newest press on a card is drawn. A press
+  // made while the card is being drawn takes the place of any still waiting,
+  // and the drawing stops waiting for the card, since a newer press will draw it.
+  refreshCard(press) {
+    const cardId = press.event.parentId;
+    const drawing = this.cardRefreshes.get(cardId);
+    if (drawing) {
+      if (drawing.next) this.logRefresh(drawing.next, 'replaced');
+      drawing.next = press;
+      return drawing.done;
+    }
+    const state = { next: press };
+    this.cardRefreshes.set(cardId, state);
+    state.done = (async () => {
+      while (state.next && !this.shuttingDown) {
+        const current = state.next;
+        state.next = null;
+        await this.drawRefresh(current, () => state.next !== null)
+          .catch((error) => this.logRefresh(current, 'failed', { error: safeError(error) }));
+      }
+    })().finally(() => this.cardRefreshes.delete(cardId));
+    return state.done;
+  }
+
+  // One press: the command runs now, so the card shows the tasks as they are
+  // when it is drawn. A press only ever edits its card: the answer goes as a
+  // reply only when it has no card, or when Lark says the card is too old to
+  // edit. A card still busy at the last try is being pressed again; any other
+  // refusal is logged, and nothing is sent.
+  async drawRefresh(press, superseded) {
+    const { command, event, inbound, label } = press;
+    const outcome = await this.runCommand(command, event, inbound, label);
+    if (!outcome.card) {
+      await this.replyCommand(outcome, event, inbound);
+      return this.logRefresh(press, 'replied');
+    }
+    try {
+      const edit = await editCard(this.connectors, event.parentId, outcome.card, { superseded, waitMs: this.cardEditWaitMs });
+      this.logRefresh(press, edit.superseded ? 'superseded' : 'redrawn', { tries: edit.tries });
+    } catch (error) {
+      const reason = safeError(error);
+      const tooOld = CARD_TOO_OLD.test(reason);
+      this.logRefresh(press, CARD_BUSY.test(reason) ? 'busy' : tooOld ? 'too_old' : 'failed', { error: reason });
+      if (tooOld) await this.replyCommand(outcome, event, inbound);
+    }
+  }
+
+  // What became of each press, and how long after it: redrawn, superseded or
+  // replaced by a newer press, replied (no card), still busy at the last try,
+  // too old (sent as a new card), or failed (nothing sent).
+  logRefresh(press, outcome, fields = {}) {
+    const level = ['redrawn', 'superseded', 'replaced', 'replied'].includes(outcome) ? 'info' : 'warn';
+    this.logger[level]('command_card_refresh', { command: press.label, outcome, ms: Date.now() - press.at, ...fields });
   }
 
   // The model and effort the router last had on a runtime, which it takes
@@ -603,7 +691,7 @@ export class PersonalAgentDaemon {
         status: result.stale || result.steps.some((step) => !step.ok) ? 'FAILED' : 'OK', conversationKey: event.conversationKey,
       });
     }
-    if (card) await this.connectors.updateCard(event.parentId, card);
+    if (card) await editCard(this.connectors, event.parentId, card, { waitMs: this.cardEditWaitMs });
   }
 
   runMaintenance() {

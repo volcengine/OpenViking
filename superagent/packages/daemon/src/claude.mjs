@@ -16,7 +16,7 @@ import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
 import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
-import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice, withTurnSkills } from './runtime-input.mjs';
 import { getRuntimeDefinition, isModelUnavailableError } from './runtime-catalog.mjs';
 import { claudeIsolationSettings, isOpenViking } from './ov-isolation.mjs';
 import { BoundedLineReader, lineTypeFromPrefix, stringFieldFromPrefix } from './line-reader.mjs';
@@ -462,7 +462,7 @@ export class ClaudeAgent {
     ) ?? 0;
     // Native transcripts already own their history, even when the cursor is zero.
     const needsCatchup = this.needsHistoryPrefix;
-    let body = withTurnNotice(this, items.map((item) => item.text).join('\n'));
+    let body = withTurnNotice(this, withTurnSkills(items, { active: this.turnActive }));
     let prefixThroughSeq = this.deliveredThroughSeq;
     if (needsCatchup) {
       const catchup = cognitionHistoryPrefix(

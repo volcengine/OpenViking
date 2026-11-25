@@ -6,7 +6,7 @@ import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { assembleVolcSelfHostedConversationPolicy } from './conversation-policy.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
-import { deliveryItem, receiptIds, withReceiptIds } from './runtime-input.mjs';
+import { deliveryItem, receiptIds, withReceiptIds, withTurnSkills } from './runtime-input.mjs';
 import { getRuntimeDefinition, staticModelEntries } from './runtime-catalog.mjs';
 
 const RECONNECT_BASE_MS = 500;
@@ -419,7 +419,7 @@ export class VolcAgent {
     const seqs = items.map((item) => item.seq).filter((seq) => seq != null);
     const beforeSeq = seqs.length > 0 ? Math.min(...seqs) : null;
     const throughSeq = this.store.cognitionJournalBeforeInbound?.(beforeSeq, this.cognitionEpoch) ?? 0;
-    let body = items.map((item) => item.text).join('\n');
+    let body = withTurnSkills(items, { active: this.turnActive });
     let deliveredThroughSeq = this.deliveredThroughSeq;
     if (throughSeq > this.deliveredThroughSeq) {
       const catchup = cognitionHistoryPrefix(

@@ -16,6 +16,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { unzipSync } from 'fflate';
+import { parse as parseYaml } from 'yaml';
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
 import { OV_PREFERENCES, OWNER_DIRECTORY, directoryPerson, findPersonDirectory, topicFile } from './ov-person.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
@@ -113,10 +115,59 @@ function inlineSkill(data) {
   const value = String(data);
   const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(value);
   if (!match) throw ovError('invalid_input', 'SKILL.md must start with YAML frontmatter');
-  const field = (name) => new RegExp(`^${name}:\\s*(.+?)\\s*$`, 'm').exec(match[1])?.[1]?.replace(/^['"]|['"]$/g, '') ?? '';
-  const name = field('name');
+  let metadata;
+  try { metadata = parseYaml(match[1]); } catch {
+    throw ovError('invalid_input', 'SKILL.md frontmatter must be valid YAML');
+  }
+  const name = metadata?.name;
+  if (typeof name !== 'string') throw ovError('invalid_input', 'SKILL.md name is required');
   if (!SKILL_NAME.test(name)) throw ovError('invalid_input', 'SKILL.md name must use only letters, numbers, underscore or hyphen');
-  if (!field('description')) throw ovError('invalid_input', 'SKILL.md description is required');
+  if (typeof metadata?.description !== 'string' || !metadata.description.trim()) {
+    throw ovError('invalid_input', 'SKILL.md description is required');
+  }
+}
+
+function validateSkillArchive(bytes, maxBytes) {
+  let total = 0;
+  let entries = 0;
+  let definitions;
+  try {
+    definitions = unzipSync(bytes, {
+      filter(file) {
+        const relative = file.name.replace(/\/$/, '');
+        if (!relative || /^[\\/]/.test(relative) || /[\\\u0000-\u001f]/.test(relative)
+          || /^[A-Za-z]:/.test(relative)
+          || relative.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
+          throw new Error('unsafe path');
+        }
+        total += file.originalSize;
+        entries += 1;
+        if (file.originalSize > maxBytes || total > 64 * 1024 * 1024 || entries > 512) {
+          throw new Error('package too large');
+        }
+        return relative.split('/').at(-1) === 'SKILL.md';
+      },
+    });
+  } catch {
+    throw ovError('invalid_input', 'Skill package must be a valid, size-bounded ZIP with safe paths');
+  }
+  const contents = Object.values(definitions);
+  if (!contents.length) throw ovError('invalid_input', 'Skill package must contain SKILL.md');
+  for (const content of contents) inlineSkill(Buffer.from(content).toString('utf8'));
+}
+
+function pruneSkillCache(directory, kept, prefix = '') {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const target = path.join(directory, entry.name);
+    if (entry.isSymbolicLink()) throw ovError('invalid_input', 'Skill cache contains an unsafe directory');
+    if (entry.isDirectory()) {
+      pruneSkillCache(target, kept, relative);
+      if (!fs.readdirSync(target).length) fs.rmdirSync(target);
+    } else if (!kept.has(relative)) {
+      fs.unlinkSync(target);
+    }
+  }
 }
 
 function skillAddress(uri) {
@@ -339,6 +390,7 @@ export class OVToolClient {
       if (path.posix.isAbsolute(relative) || relative.split('/').some((part) => !part || part === '.' || part === '..')) {
         throw ovError('invalid_input', 'OpenViking returned an invalid Skill file path');
       }
+      privateDirectory(root, [requested.name, ...relative.split('/').slice(0, -1)].join('/'));
       const target = path.resolve(root, requested.name, ...relative.split('/'));
       let result;
       if (fs.existsSync(target) && fs.lstatSync(target).isFile() && !fs.lstatSync(target).isSymbolicLink()) {
@@ -359,6 +411,9 @@ export class OVToolClient {
         result = cacheFile(root, requested.name, relative, bytes, digest);
       }
       landed.push({ uri: file.uri, path: result.path, sha256: file.sha256, cached: result.cached });
+    }
+    if (!requested.relative) {
+      pruneSkillCache(path.join(root, requested.name), new Set(files.map((file) => String(file.path))));
     }
     const output = requested.relative ? landed[0].path : path.join(root, requested.name);
     return {
@@ -410,9 +465,6 @@ export class OVToolClient {
     };
   }
 
-  // Install one Skill into the instance user's private Skill root. OV owns
-  // format, archive and package validation; the Core only selects one source
-  // and safely uploads a workspace package when needed.
   async addSkill({ data, git_url, file_path, skills, workspace } = {}) {
     const sources = [trimmed(data), trimmed(git_url), trimmed(file_path)].filter(Boolean);
     if (sources.length !== 1) {
@@ -425,6 +477,7 @@ export class OVToolClient {
         throw ovError('invalid_input', 'file_path must name a .zip or .skill package');
       }
       const file = readWorkspaceFile(String(file_path), workspace, this.uploadMaxBytes);
+      validateSkillArchive(file.bytes, this.uploadMaxBytes);
       let upload;
       try {
         upload = (await this.conn().upload('/api/v1/resources/temp_upload', {

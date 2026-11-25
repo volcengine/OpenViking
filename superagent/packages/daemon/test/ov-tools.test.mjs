@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
+import { zipSync, strToU8 } from 'fflate';
 import { OVRecall } from '../src/ov-recall.mjs';
 import { OV_DEFAULT_PARENT, OVToolClient, reservedTarget } from '../src/ov-tools.mjs';
 import { chatEvent } from './event-fixture.mjs';
@@ -277,7 +278,10 @@ describe('OpenViking tool client', () => {
     const ov = await fakeOV(t);
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-skill-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-    fs.writeFileSync(path.join(directory, 'report.skill'), 'PK fake skill archive');
+    fs.writeFileSync(path.join(directory, 'report.skill'), zipSync({
+      'report/SKILL.md': strToU8('---\nname: report\ndescription: Report\n---\n'),
+      'report/scripts/run.py': strToU8('print("ok")\n'),
+    }));
     const added = await client(ov).addSkill({
       file_path: 'report.skill',
       workspace: directory,
@@ -302,6 +306,58 @@ describe('OpenViking tool client', () => {
     assert.equal(first.data.path, second.data.path);
     assert.equal(fs.readFileSync(first.data.path, 'utf8'), 'print("ok")\n');
     assert.equal(requests(ov, 'GET /api/v1/content/download').length, 1);
+  });
+
+  it('rejects malformed Skill archives before uploading anything', async (t) => {
+    const ov = await fakeOV(t);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-invalid-archive-'));
+    t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+    const packages = [
+      Buffer.from('not a zip'),
+      zipSync({ 'README.md': strToU8('no skill') }),
+      zipSync({ 'SKILL.md': strToU8('---\nname: bad name\ndescription: Test\n---\n') }),
+      zipSync({ 'SKILL.md': strToU8('---\nname: report\ndescription: " "\n---\n') }),
+      zipSync({ 'SKILL.md': strToU8('---\nname: report\ndescription: null\n---\n') }),
+      zipSync({ '../SKILL.md': strToU8('---\nname: report\ndescription: Test\n---\n') }),
+      zipSync({
+        'SKILL.md': strToU8('---\nname: report\ndescription: Test\n---\n'),
+        'large.bin': new Uint8Array(21 * 1024 * 1024),
+      }),
+    ];
+    for (const bytes of packages) {
+      fs.writeFileSync(path.join(workspace, 'report.zip'), bytes);
+      await assert.rejects(() => client(ov).addSkill({ file_path: 'report.zip', workspace }),
+        (error) => error.code === 'invalid_input');
+    }
+    assert.equal(requests(ov, 'POST /api/v1/resources/temp_upload').length, 0);
+  });
+
+  it('removes remotely deleted files when syncing a whole Skill', async (t) => {
+    const ov = await fakeOV(t);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-sync-delete-'));
+    t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+    const root = 'viking://user/owner/skills/report';
+    ov.state.files.set(`${root}/SKILL.md`, Buffer.from('Report'));
+    ov.state.files.set(`${root}/scripts/old.sh`, Buffer.from('echo stale'));
+    const tools = client(ov);
+    const first = await tools.download({ skill: 'report', workspace });
+    ov.state.files.delete(`${root}/scripts/old.sh`);
+    await tools.download({ skill: 'report', workspace });
+    assert.equal(fs.existsSync(path.join(first.data.path, 'scripts/old.sh')), false);
+    assert.equal(fs.readFileSync(path.join(first.data.path, 'SKILL.md'), 'utf8'), 'Report');
+  });
+
+  it('does not remove other cached files when downloading one Skill file', async (t) => {
+    const ov = await fakeOV(t);
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-single-keep-'));
+    t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+    const root = 'viking://user/owner/skills/report';
+    ov.state.files.set(`${root}/SKILL.md`, Buffer.from('Report'));
+    ov.state.files.set(`${root}/scripts/run.py`, Buffer.from('print("ok")'));
+    const tools = client(ov);
+    const synced = await tools.download({ skill: 'report', workspace });
+    await tools.download({ uri: `${root}/SKILL.md`, workspace });
+    assert.equal(fs.readFileSync(path.join(synced.data.path, 'scripts/run.py'), 'utf8'), 'print("ok")');
   });
 
   it('syncs a whole Skill from its integrity manifest and refuses non-Skill paths', async (t) => {

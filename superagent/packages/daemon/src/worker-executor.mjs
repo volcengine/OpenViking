@@ -299,9 +299,22 @@ const RUNTIMES = {
 export class WorkerExecutor {
   // settings(): the router's { runtime, model, effort }, which a task without
   // a model of its own follows on the router's runtime (tasks from before
-  // workers had settings of their own).
-  constructor({ config, logger = null, settings = () => ({}), spawn = nodeSpawn }) {
-    Object.assign(this, { config, logger, settings, spawn });
+  // workers had settings of their own). preferences(task): the owner's and
+  // the requester's preferences for the turn's policy (daemon.mjs), or null.
+  constructor({ config, logger = null, settings = () => ({}), spawn = nodeSpawn, preferences = null }) {
+    Object.assign(this, { config, logger, settings, spawn, preferences });
+  }
+
+  // Read for every turn, so a preference changed while the task works counts
+  // from its next turn. A turn goes on without them when OpenViking is slow or
+  // down: the recall bounds the read and never rejects.
+  async preferencesFor(task) {
+    try {
+      return this.preferences ? await this.preferences(task) : null;
+    } catch (error) {
+      this.logger?.warn?.('worker_preferences_failed', { task: task.id, error: safeError(error) });
+      return null;
+    }
   }
 
   supports(runtime) {
@@ -348,7 +361,7 @@ export class WorkerExecutor {
       const scratch = path.join(this.config.dataDir, 'workers', task.id);
       fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
       fs.mkdirSync(task.workdir, { recursive: true });
-      const policy = assembleWorkerPolicy(this.config, { runtime: task.runtime });
+      const policy = assembleWorkerPolicy(this.config, { runtime: task.runtime, preferences: await this.preferencesFor(task) });
       const policyFile = path.join(scratch, 'worker-policy.md');
       fs.writeFileSync(policyFile, policy, { mode: 0o600 });
       const { model, effort } = this.modelFor(task);
