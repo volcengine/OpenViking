@@ -203,12 +203,17 @@ class PgvectorCollection(OpenGaussCollection):
         # Filter after LIMIT to avoid norm/TOAST reads on scalar-rejected rows
         # and a second vector read on scalar exact plans. HNSW itself omits zeros.
         condition = f"({where}) AND " if where else ""
+        # PostgreSQL 16 cannot match a second sort key to the HNSW ordering.
+        # Keep candidate recall distance-only for ANN; final ranking sorts ties.
+        order = "_ov_distance"
+        if self._indexes[index_name]["_pg_index_type"] == "flat":
+            order += ", _ov_candidate_id"
         return (
             'SELECT _ov_candidate_id FROM (SELECT "id" AS _ov_candidate_id, '
             f'"vector" {op} %s::vector AS _ov_distance '
             f"FROM public.{_quote_identifier(self._name)} "
             f'WHERE {condition}"vector" IS NOT NULL '
-            "ORDER BY _ov_distance, _ov_candidate_id LIMIT %s) _ov_native_candidates "
+            f"ORDER BY {order} LIMIT %s) _ov_native_candidates "
             "WHERE _ov_distance <> 'NaN'::double precision",
             [vector_text, *filter_params, budget],
         )

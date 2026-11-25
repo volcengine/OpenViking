@@ -641,6 +641,53 @@ def test_cosine_zero_vectors_scoped_pagination_and_ranked(adapter, depth):
         assert adapter.query(query_vector=[1, 0, 0], filter=scope, limit=3, offset=20) == []
 
 
+@pytest.mark.parametrize("adapter", ["hnsw"], indirect=True)
+def test_cosine_ranked_candidates_use_hnsw_without_forcing_planner(adapter):
+    collection = adapter.get_collection()._Collection__collection
+    meta = collection._indexes["default"]
+    cursor = collection._cursor()
+    try:
+        # A tiny table favors a sequential scan. Use enough nonzero rows to
+        # exercise natural HNSW selection, including PostgreSQL 16's planner.
+        cursor.execute(
+            f'INSERT INTO "{adapter.collection_name}" (id, vector, updated_at) '
+            "SELECT 'plan_' || i, "
+            "ARRAY[sin(i::double precision), cos(i::double precision), 1]::vector, "
+            "(extract(epoch FROM '2026-11-12T00:00:00Z'::timestamptz) * 1000)::bigint "
+            "FROM generate_series(1, 25000) i"
+        )
+        cursor.execute(f'ANALYZE "{adapter.collection_name}"')
+        collection._conn.commit()
+        collection._apply_search_params_on_cursor(cursor, "default")
+        sql, params = collection._dense_candidate_query("default", "", [], "[1,0,0]", "<=>", 100)
+        cursor.execute("EXPLAIN (ANALYZE, FORMAT JSON) " + sql, params)
+        plan = cursor.fetchone()[0][0]["Plan"]
+
+        def nodes(node):
+            yield node
+            for child in node.get("Plans", []):
+                yield from nodes(child)
+
+        scans = [node for node in nodes(plan) if node.get("Index Name") == meta["_pg_index_name"]]
+        assert len(scans) == 1, plan
+        assert scans[0]["Node Type"] == "Index Scan"
+        assert scans[0]["Actual Rows"] == 100
+    finally:
+        collection._conn.rollback()
+        cursor.close()
+
+    for mode in [
+        {"sparse_query_vector": {"hello": 1}},
+        {"advance": {"time_decay": {"protection": "1d", "origin": "2026-11-15T00:00:00Z"}}},
+    ]:
+        rows = adapter.query(query_vector=[1, 0, 0], limit=10, **mode)
+        assert len(rows) == 10
+        assert all(row["id"].startswith("plan_") for row in rows)
+        assert [(-row["_score"], row["id"]) for row in rows] == sorted(
+            (-row["_score"], row["id"]) for row in rows
+        )
+
+
 def test_cosine_zero_vectors_do_not_consume_hybrid_sparse_budget(adapter):
     adapter.upsert(
         [
