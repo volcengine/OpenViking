@@ -168,11 +168,7 @@ class VikingDBCatalog:
         return self._scan(scope, {**_eq("uri", [uri]), "para": "-d=-1"})
 
     def _write(self, rows: list[dict[str, Any]]) -> None:
-        empty_text = {
-            f["FieldName"]: ""
-            for f in self.collection.meta_data.get("Fields", [])
-            if f.get("FieldType") == "text"
-        }
+        empty_text = {f["FieldName"]: "" for f in self._fields() if f.get("FieldType") == "text"}
         for start in range(0, len(rows), _BATCH_SIZE):
             self.collection.upsert_data(
                 [{**empty_text, **row} for row in rows[start : start + _BATCH_SIZE]]
@@ -238,7 +234,7 @@ class VikingDBCatalog:
             "level": CATALOG_LEVEL,
             "type": node_type,
         }
-        for field in self.collection.meta_data.get("Fields", []):
+        for field in self._fields():
             if field.get("FieldType") == "text":
                 row[field["FieldName"]] = ""
         return row
@@ -400,7 +396,17 @@ class VikingDBCatalog:
             raise
         return {"moved_nodes": len(moved), "undo": undo}
 
+    def _fields(self) -> list[dict[str, Any]]:
+        fields = self.collection.meta_data.get("Fields")
+        if fields is None:
+            fields = self.collection.get_meta_data().get("Fields", [])
+        return fields
+
     def _schema_mode(self) -> str:
+        if hasattr(self.collection, "_item_metadata") and self.collection._item_metadata() is None:
+            # The public data-plane Item protocol uses union inheritance.
+            # Its schema is checked by the engine, not a provisioning snapshot.
+            return catalog_mode(self.collection.meta_data) or "union"
         mode = catalog_mode(self.collection.meta_data)
         fields = {f["FieldName"]: f for f in self.collection.meta_data.get("Fields", [])}
         required = {"id": "string", "account_id": "string", "level": "int64", "type": "string"}

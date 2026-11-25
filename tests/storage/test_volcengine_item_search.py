@@ -62,10 +62,11 @@ def adapter_for(schema):
 
 
 @pytest.mark.parametrize("aggregation", ["max", "sum"])
+@pytest.mark.parametrize("provide_metadata", [True, False])
 def test_api_key_adapter_uses_native_group_metadata_and_passes_attrs_filter_once(
-    schema, aggregation
+    schema, aggregation, provide_metadata
 ):
-    _, adapter, collection = adapter_for(schema)
+    _, adapter, collection = adapter_for(schema if provide_metadata else None)
     collection.data_client = Client(
         {
             "groups": [
@@ -104,8 +105,9 @@ def test_api_key_adapter_uses_native_group_metadata_and_passes_attrs_filter_once
 
 
 @pytest.mark.asyncio
-async def test_api_key_adapter_passes_each_accounts_point_scope(schema):
-    config, adapter, collection = adapter_for(schema)
+@pytest.mark.parametrize("provide_metadata", [True, False])
+async def test_api_key_adapter_passes_each_accounts_point_scope(schema, provide_metadata):
+    config, adapter, collection = adapter_for(schema if provide_metadata else None)
     collection.data_client = Client({})
     a = _SingleAccountBackend(config, "a", shared_adapter=adapter)
     b = _SingleAccountBackend(config, "b", shared_adapter=adapter)
@@ -135,19 +137,24 @@ def test_api_key_schema_snapshot_is_preserved_and_not_mutated(schema):
     assert adapter.supports_partition_scope
 
 
-def test_legacy_api_key_backend_keeps_ordinary_request_and_rejects_item_before_io():
+def test_api_key_without_metadata_forwards_item_request_and_keeps_unscoped_ordinary_query():
     collection = VolcengineApiKeyCollection(
         "test-key", host="unused.invalid", meta_data={"CollectionName": "context"}
     )
     collection.data_client = Client({"data": []})
-    condition = {"op": "must", "field": "account_id", "conds": ["a"]}
-    collection.search_by_vector("default", dense_vector=[1.0, 0.0], filters=condition)
+    collection.search_by_vector("default", dense_vector=[1.0, 0.0])
     body = collection.data_client.calls[0][2]
-    assert body["filter"] == condition
+    assert body.get("filter") is None
     assert "partition" not in body and "group_by" not in body
-    with pytest.raises(NotImplementedError, match="pre-created account-partitioned"):
-        collection.search_item_groups("default", dense_vector=[1.0, 0.0], filters=condition)
-    assert len(collection.data_client.calls) == 1
+    condition = {"op": "must", "field": "account_id", "conds": ["a"]}
+    collection.data_client.result = {"groups": []}
+    assert collection.search_item_groups("default", dense_vector=[1.0, 0.0], filters=condition) == {
+        "groups": []
+    }
+    assert len(collection.data_client.calls) == 2
+    body = collection.data_client.calls[-1][2]
+    assert body["partition"] == "a" and body["group_by"]["item_ids_field"] == "item_uuids"
+    assert condition in body["filter"]["conds"]
 
 
 def test_api_key_metadata_for_another_collection_fails_before_io(schema):

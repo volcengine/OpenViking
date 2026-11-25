@@ -51,6 +51,11 @@ class VolcengineApiKeyCollection(VikingDBItemCollectionMixin, ICollection):
         self.index_name = self.meta_data.get("IndexName", "default")
         self._initialize_item_collection(self.index_name)
 
+    def _item_metadata(self) -> None:
+        # The API-key data plane validates the pre-created schema itself.
+        # Do not require control-plane metadata to issue Item operations.
+        return None
+
     @staticmethod
     def _build_response_error(response: Any, action: str) -> ConnectionError:
         try:

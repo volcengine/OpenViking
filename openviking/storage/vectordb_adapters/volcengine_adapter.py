@@ -8,7 +8,6 @@ from copy import deepcopy
 from typing import Any, Dict, List
 
 from openviking.storage.vectordb.collection.collection import Collection
-from openviking.storage.vectordb.collection.vikingdb_catalog import is_account_sharded
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
     VolcengineApiKeyCollection,
 )
@@ -61,7 +60,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         for field, expected in (("ProjectName", project_name), ("CollectionName", collection_name)):
             if self._collection_meta.get(field, expected) != expected:
                 raise ValueError(f"Volcengine collection_meta {field} does not match configuration")
-        self.supports_partition_scope = bool(api_key and is_account_sharded(self._collection_meta))
+        self.supports_partition_scope = bool(api_key)
 
     @classmethod
     def from_config(cls, config: Any):

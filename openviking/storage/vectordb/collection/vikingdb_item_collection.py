@@ -8,11 +8,16 @@ from .vikingdb_catalog import CATALOG_LEVEL, VikingDBCatalog, catalog_mode, is_a
 
 
 class VikingDBItemCollectionMixin:
+    def _item_metadata(self) -> Dict[str, Any] | None:
+        return self.meta_data
+
     def _initialize_item_collection(self, index_name: str) -> None:
         self.catalog_index_name = index_name
         self._catalog = VikingDBCatalog(self)
-        self._has_catalog_metadata = catalog_mode(self.meta_data) is not None and any(
-            f.get("FieldName") == "level" for f in self.meta_data.get("Fields", [])
+        meta = self._item_metadata()
+        self._has_catalog_metadata = meta is None or (
+            catalog_mode(meta) is not None
+            and any(f.get("FieldName") == "level" for f in meta.get("Fields", []))
         )
 
     def _prepare_data_request(
@@ -20,19 +25,27 @@ class VikingDBItemCollectionMixin:
     ) -> Dict[str, Any]:
         is_search = path.startswith("/api/vikingdb/data/search/")
         is_query = is_search or path == "/api/vikingdb/data/agg"
-        if is_account_sharded(getattr(self, "meta_data", {})):
+        meta = self._item_metadata()
+        if meta is None or is_account_sharded(meta):
             if is_query:
                 from .vikingdb_item_search import _partition_values
 
                 scopes = _partition_values(data.get("filter"))
                 scope = scopes.pop() if len(scopes) == 1 else None
                 partition_key = "partition"
-                if scope is None or data.get(partition_key, scope) != scope:
+                if (scope is None and meta is not None) or (
+                    scope is not None and data.get(partition_key, scope) != scope
+                ):
                     raise ValueError("VikingDB partitioned queries require one account_id scope")
-                data = {**data, partition_key: scope}
-            elif ("ids" in data or path.endswith("/update")) and not data.get("partition_by"):
+                if scope is not None:
+                    data = {**data, partition_key: scope}
+            elif (
+                meta is not None
+                and ("ids" in data or path.endswith("/update"))
+                and not data.get("partition_by")
+            ):
                 raise ValueError("VikingDB partitioned point operations require partition_by")
-            if path.endswith("/update"):
+            if path.endswith("/update") and data.get("partition_by"):
                 scope = data["partition_by"]
                 rows = data.get("data", [])
                 if any(row.get("account_id", scope) != scope for row in rows):
@@ -43,7 +56,12 @@ class VikingDBItemCollectionMixin:
                     **data,
                     "data": [{k: v for k, v in row.items() if k != "account_id"} for row in rows],
                 }
-        if is_query and not include_catalog and getattr(self, "_has_catalog_metadata", False):
+        if (
+            is_query
+            and not include_catalog
+            and getattr(self, "_has_catalog_metadata", False)
+            and (meta is not None or data.get("partition"))
+        ):
             hidden = {"op": "must_not", "field": "level", "conds": [CATALOG_LEVEL]}
             condition = data.get("filter")
             data = {
@@ -74,7 +92,7 @@ class VikingDBItemCollectionMixin:
         )
 
         request = build_item_group_request(
-            self.meta_data,
+            self._item_metadata(),
             project=self.project_name,
             collection_name=self.collection_name,
             index_name=index_name,

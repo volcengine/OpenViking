@@ -31,7 +31,7 @@ def _partition_values(condition: Any) -> set[str]:
 
 
 def build_item_group_request(
-    meta: dict[str, Any],
+    meta: dict[str, Any] | None,
     *,
     project: str,
     collection_name: str,
@@ -51,16 +51,17 @@ def build_item_group_request(
     if type(max_groups) is not int or max_groups <= 0:
         raise ValueError("Item group limit must be a positive integer")
 
-    mode = catalog_mode(meta)
-    if mode is None:
-        raise NotImplementedError(
-            "VikingDB Item search requires a pre-created account-partitioned collection "
-            "with inherited item_uuids and non-inherited item_attrs"
-        )
-    if mode != "union" and not filter_only:
-        raise NotImplementedError(
-            "The VikingDB group_by protocol currently requires union inheritance"
-        )
+    if meta is not None:
+        mode = catalog_mode(meta)
+        if mode is None:
+            raise NotImplementedError(
+                "VikingDB Item search requires a pre-created account-partitioned collection "
+                "with inherited item_uuids and non-inherited item_attrs"
+            )
+        if mode != "union" and not filter_only:
+            raise NotImplementedError(
+                "The VikingDB group_by protocol currently requires union inheritance"
+            )
     partitions = _partition_values(filters)
     if len(partitions) != 1:
         raise ValueError("VikingDB Item search requires one unconditional account_id equality")
