@@ -21,7 +21,7 @@ from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 
 from openviking.config.binding import manager_over_source
-from openviking.config.source import MemoryConfigSource
+from openviking.config.source import FileConfigSource, MemoryConfigSource
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, UserConfig
@@ -1805,15 +1805,21 @@ async def test_account_memory_templates_reset_removes_legacy_before_current(
     assert path + ".backup" not in fs.agfs._files
 
 
+@pytest.mark.parametrize("cluster_resources", [True, False])
 async def test_create_account(
-    admin_client: httpx.AsyncClient, admin_service: OpenVikingService, monkeypatch
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+    monkeypatch,
+    cluster_resources,
 ):
     """ROOT provisioning applies account settings before initializing storage."""
+    credential = {"provider": "openai", "api_key": "account-key"}
     settings = {
         "output_language_override": "en",
         "memory": {"extraction_enabled": False},
         "parser_api": {"api_key": "parser-private-key"},
         "embedding": {"max_retries": 5},
+        "vlm": {"model": "account-vlm", "credentials": [credential]},
         "vectordb": {
             "backend": "vikingdb",
             "name": "account_context",
@@ -1822,6 +1828,21 @@ async def test_create_account(
             "vikingdb": {"host": "https://account.invalid"},
         },
     }
+    original_cluster = get_openviking_config()
+    if not cluster_resources:
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+        values = original_cluster.to_dict()
+        values.update(enable_default_resources=False, embedding={}, vlm={})
+        values["storage"]["vectordb"] = None
+        await admin_service.runtime_config_manager.replace_base_config(
+            OpenVikingConfig.from_dict(values)
+        )
+        settings["embedding"]["dense"] = {
+            "model": "account-embedding",
+            "dimension": 1024,
+            "credentials": [credential],
+        }
     adapter = Mock(mode="vikingdb", USE_CONTENT_FIELD=True)
     adapter.get.return_value = []
     adapter.get_collection.return_value.get_meta_data.return_value = {
@@ -1904,6 +1925,26 @@ async def test_create_account(
     assert invalid.status_code == 400, invalid.text
     stored = await admin_client.get(url, headers=root_headers())
     assert stored.json()["result"]["settings"]["parser_api"] == settings["parser_api"]
+    cleared = await admin_client.patch(
+        url, headers=root_headers(), json={"settings": {"vlm": None}}
+    )
+    assert cleared.status_code == (200 if cluster_resources else 400), cleared.text
+    if not cluster_resources:
+        assert "VLM" in cleared.text
+    reloaded = manager_over_source(
+        FileConfigSource(admin_service.viking_fs._async_agfs),
+        base_config=get_openviking_config(),
+    )
+    await reloaded.initialize()
+    vlm = await reloaded.get_account(acct, "vlm")
+    assert (vlm.model if vlm is not None else None) == (
+        None if cluster_resources else settings["vlm"]["model"]
+    )
+    assert (await admin_service.vlm_resolver.effective_vlm_config(acct)).model == (
+        original_cluster.vlm.model if cluster_resources else settings["vlm"]["model"]
+    )
+    if not cluster_resources:
+        await admin_service.runtime_config_manager.replace_base_config(original_cluster)
 
 
 async def test_create_account_rolls_back_when_runtime_config_write_fails(

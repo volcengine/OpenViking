@@ -26,10 +26,16 @@ from openviking.server.app import (
     WORKER_BOT_API_URL_ENV,
     WORKER_HOST_ENV,
     WORKER_PORT_ENV,
+    WORKER_ROLES_ENV,
     WORKER_WITH_BOT_ENV,
     create_app,
 )
-from openviking.server.config import get_server_url_from_server_data, load_server_config
+from openviking.server.config import (
+    ServerConfig,
+    get_server_url_from_server_data,
+    load_server_config,
+    validate_server_config,
+)
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.config_loader import expand_config_environment, resolve_config_path
 from openviking_cli.utils.config.consts import (
@@ -304,6 +310,12 @@ def _main(recovery):
         help="Number of uvicorn worker processes (default: 1, or server.workers in ov.conf)",
     )
     parser.add_argument(
+        "--roles",
+        type=str,
+        default=None,
+        help="Comma-separated roles: api,queue_worker,scheduler (default: all roles)",
+    )
+    parser.add_argument(
         "--bot",
         "--with-bot",
         action="store_true",
@@ -433,6 +445,13 @@ def _main(recovery):
         config.workers = args.workers
     if args.with_bot:
         config.with_bot = True
+    if getattr(args, "roles", None) is not None:
+        config.roles = ServerConfig(roles=[role.strip() for role in args.roles.split(",")]).roles
+    if config.workers < 1:
+        raise ValueError("--workers must be at least 1")
+    if config.with_bot and "api" not in config.roles:
+        raise ValueError("--with-bot requires the api role")
+    validate_server_config(config)
 
     if recovery.pending and config.workers > 1:
         raise ValueError("Remote restart recovery requires a single worker")
@@ -485,30 +504,17 @@ def _main(recovery):
                 or (compile_api is not None and compile_api.scheduler_enabled)
                 or (config.ttl_adapter is not None and config.ttl_adapter.writer_enabled)
             )
-            if uses_redis and expiry is not None and expiry.publisher_separate_process:
+            if (
+                "scheduler" in config.roles
+                and uses_redis
+                and expiry is not None
+                and expiry.publisher_separate_process
+            ):
                 if resolved_config_path is None:
                     raise RuntimeError(
                         "Cannot start expiry publisher without a resolved ov.conf path"
                     )
                 expiry_publisher_process = _start_expiry_publisher(resolved_config_path)
-
-            # Create and run server app only after managed dependencies are ready.
-            app = create_app(
-                config,
-                server_overrides={
-                    key: getattr(config, key)
-                    for key in ("host", "port", "workers", "with_bot")
-                    if getattr(args, key) is not None and (key != "with_bot" or args.with_bot)
-                },
-                config_path=(
-                    str(resolved_config_path) if resolved_config_path is not None else args.config
-                ),
-            )
-            workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
-            print(
-                f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}",
-                flush=True,
-            )
 
             workers = config.workers
             if workers > 1:
@@ -520,6 +526,7 @@ def _main(recovery):
                 os.environ[WORKER_PORT_ENV] = str(config.port)
                 os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
                 os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
+                os.environ[WORKER_ROLES_ENV] = ",".join(config.roles)
                 uvicorn.run(
                     "openviking.server.app:create_worker_app",
                     factory=True,
@@ -531,6 +538,21 @@ def _main(recovery):
                     access_log=False,
                 )
             else:
+                app = create_app(
+                    config,
+                    server_overrides={
+                        key: getattr(config, key)
+                        for key in ("host", "port", "workers", "with_bot", "roles")
+                        if getattr(args, key, None) is not None
+                        and (key != "with_bot" or args.with_bot)
+                    },
+                    config_path=(
+                        str(resolved_config_path)
+                        if resolved_config_path is not None
+                        else args.config
+                    ),
+                )
+                print(f"OpenViking HTTP Server is running on {config.host}:{config.port}", flush=True)
                 restart_requested = _run_restartable_server(
                     app,
                     recovery=recovery,

@@ -265,6 +265,7 @@ export const sections: DocSection[] = [
         p('reference/01-overview'),
         p('api/01-overview'),
         p('configuration/01-server'),
+        p('configuration/03-server-roles'),
         p('configuration/02-client'),
         p('guides/06-mcp-integration')
       ]),

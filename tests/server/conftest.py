@@ -196,6 +196,8 @@ async def service(temp_dir: Path, monkeypatch):
         path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user")
     )
     await svc.initialize()
+    await svc.recover()
+    await svc.start_background()
     svc.viking_fs.query_embedder = svc._config.embedding.get_embedder()
     _install_session_commit_queue_fallback(svc, monkeypatch)
     yield svc

@@ -15,7 +15,11 @@ openviking-server init
 openviking-server doctor
 ```
 
-OpenViking 启动时需要 Embedding 和 VLM。未指定 Embedding 模型时使用内置的本地默认模型。`openviking-server init` 会引导你配置这两种模型。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
+向导配置 Embedding 和 VLM。API 型 Provider 需要填写凭证；`OpenAI Codex` 支持导入已有鉴权或登录。
+
+`enable_default_resources` 默认为 `true`，补齐缺省的本地 Embedding/VectorDB，并预置默认 Account 目录。`false` 关闭这些默认行为，显式 Cluster 资源仍生效。系统文件按 `reconcile_system_assets_on_startup` 同步。
+
+`dev` 和 `trusted` 要求 Cluster VLM、Embedding、VectorDB 配置完整合法。关闭默认资源后，`api_key` 可在没有 Cluster 资源时启动，由 ROOT 在 [Account 创建配置](../api/08-admin.md#account-configuration-接口参考)中提供资源。`api_key` 和 `trusted` 仅在 Cluster 资源合法时自动创建默认 Account 记录。
 
 ## 快速开始
 
@@ -2230,13 +2234,13 @@ openviking-server --config /path/to/ov.conf
 - `enabled=false` 时：既无显式 policy、也无 `server.user_config_defaults.auto_commit_policy` 的新 Session 保持 auto commit 关闭，并返回 `auto_commit_policy: null`；同时不启动 `SessionAutoCommitScheduler`。
 - `enabled=true` 时：
   - 既无显式 policy、也无部署级默认 policy 的新 Session 会带上下方内置 policy。
-  - `idle_backend="local"` 时，`SessionAutoCommitScheduler` 启动后立即开始扫描；扫描过程以 `scan_rate_limit_files_per_second` 为上限串行读取 session `.meta.json`，每轮结束后至少等待 `check_interval_seconds`。
-  - `idle_backend="redis"` 时，服务通过顶层 `expiry` 配置整体启用 expiry 上报、发布和 callback 消费。
+  - `idle_backend="local"` 时，`scheduler` 节点启动 `SessionAutoCommitScheduler` 并立即扫描；扫描过程以 `scan_rate_limit_files_per_second` 为上限串行读取 session `.meta.json`，每轮结束后至少等待 `check_interval_seconds`。
+  - `idle_backend="redis"` 时，顶层 `expiry` 配置控制共享调度：`scheduler` 节点发布到期事件，`queue_worker` 节点执行 callback。
 - token 和 message-count 自动触发在消息写入后内联执行，不依赖 scheduler，但同样以 session 是否带有 `auto_commit_policy` 为前提。
 
 #### 分布式 Expiry 配置
 
-共享同一份 expiry 状态的 API、publisher 和 callback 实例必须使用相同且稳定的 `service_name`。它表示部署的文档服务名，不是单个 Pod 名。
+共享 expiry 状态的各节点必须使用相同且稳定的 `service_name`，它表示部署的文档服务名，不是单个 Pod 名。角色划分见[服务角色与启停](../configuration/03-server-roles.md)。
 
 ```json
 {
@@ -2258,16 +2262,16 @@ openviking-server --config /path/to/ov.conf
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `service_name` | string | 使用同一份 expiry 数据的所有实例共享的稳定文档服务名 | `""` |
-| `publisher_separate_process` | bool | 由 `openviking-server` 在独立子进程中托管 publisher；为 `false` 时 publisher 在各 API 进程内运行 | `true` |
+| `publisher_separate_process` | bool | `scheduler` 节点由父进程托管 publisher 子进程；为 `false` 时在各 `scheduler` 进程内运行 | `true` |
 | `shard_count` | int | expiry 逻辑分片数；所有共享同一 namespace 的实例必须一致，取值范围为 `1..512` | `128` |
-| `session_consumer_concurrency` | int | 每个 API 进程中 Session expiry callback 的并发数，必须大于 `0` | `8` |
+| `session_consumer_concurrency` | int | 每个 `queue_worker` 进程中 Session expiry callback 的并发数，必须大于 `0` | `8` |
 | `redis.mode` | string | Redis 部署模式：`standalone` 或 `cluster` | `standalone` |
 | `redis.endpoints` | string array | Redis 地址；集群模式可以只配置一个统一 proxy 地址 | `[]` |
 | `redis.username` | string | Redis ACL 用户名 | `""` |
 | `redis.password_env` | string | 保存 Redis 密码的环境变量名；变量不存在时启动失败 | `""` |
 | `redis.password` | string | 兼容用明文密码；建议使用 `password_env`，两者互斥 | `""` |
 
-启用 Redis idle auto commit 时必须配置 `service_name` 和 Redis 地址。用户名与密码只能使用上述独立字段，不能写入 endpoint URI。默认 `publisher_separate_process=true` 时，`openviking-server` 会在开始服务前拉起一个内部 publisher 子进程，在服务关闭时停止它，并在子进程异常退出时一并退出。publisher 不再暴露为公共 CLI 命令。
+启用 Redis idle auto commit 时必须配置 `service_name` 和 Redis 地址。用户名与密码只能使用上述独立字段，不能写入 endpoint URI。`publisher_separate_process=true` 时，`scheduler` 启动会拉起一个内部 publisher 子进程，关闭时停止它，子进程异常退出时一并退出。publisher 不提供公共 CLI 入口。
 
 ##### 单 session 自动 commit 策略
 
