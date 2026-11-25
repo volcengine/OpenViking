@@ -429,7 +429,13 @@ describe("OpenVikingClient", () => {
         Response.json({ status: "ok", result: first, has_more: true }),
       )
       .mockResolvedValueOnce(ok(last))
-      .mockResolvedValueOnce(ok(first));
+      .mockResolvedValueOnce(ok(first))
+      .mockResolvedValueOnce(
+        Response.json({ status: "ok", result: first, has_more: true }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ status: "ok", result: [], has_more: false }),
+      );
     const client = new OpenVikingClient({
       baseUrl: "https://example.com",
       fetch: fetcher,
@@ -447,15 +453,27 @@ describe("OpenVikingClient", () => {
       hasMore: false,
     });
     await expect(client.list(uri)).resolves.toEqual(first);
+    expect(await client.treePage(uri, { levelLimit: 1, limit: 1 })).toEqual({
+      result: first,
+      hasMore: true,
+    });
+    expect(await client.treePage(uri, { levelLimit: 0, limit: 1 })).toEqual({
+      result: [],
+      hasMore: false,
+    });
 
     const requests = fetcher.mock.calls.map(([url]) => new URL(String(url)));
-    const [firstPage, lastPage, legacy] = requests;
+    const [firstPage, lastPage, legacy, treeFirstPage, treeZeroDepth] =
+      requests;
     expect(firstPage!.searchParams.getAll("extra_fields")).toEqual([
       "locked",
       "id",
     ]);
     expect(lastPage!.searchParams.get("offset")).toBe("1");
     expect(legacy!.searchParams.has("offset")).toBe(false);
+    expect(treeFirstPage!.searchParams.get("level_limit")).toBe("1");
+    expect(treeZeroDepth!.pathname).toBe("/api/v1/fs/tree");
+    expect(treeZeroDepth!.searchParams.get("level_limit")).toBe("0");
   });
 
   it("sets and clears tags while protecting official fields", async () => {
