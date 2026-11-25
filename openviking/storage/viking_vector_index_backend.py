@@ -2068,22 +2068,23 @@ class VikingVectorIndexBackend:
             level=level,
             acl_enabled=acl_enabled,
         )
-        if events_time_decay_protection is None:
-            return await self.search(
+        if events_time_decay_protection is not None:
+            parse_duration_ms(
+                events_time_decay_protection, parameter_name="events_time_decay_protection"
+            )
+        backend = await self._get_backend_for_context(ctx)
+        if events_time_decay_protection is None or not backend._adapter.supports_event_time_decay:
+            return await backend.query(
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,
                 filter=scope_filter,
                 limit=limit,
                 offset=offset,
                 output_fields=RETRIEVAL_OUTPUT_FIELDS,
-                ctx=ctx,
             )
 
-        parse_duration_ms(
-            events_time_decay_protection, parameter_name="events_time_decay_protection"
-        )
         return await self._search_with_event_time_decay(
-            ctx=ctx,
+            backend=backend,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             scope_filter=scope_filter,
@@ -2181,7 +2182,7 @@ class VikingVectorIndexBackend:
     async def _search_with_event_time_decay(
         self,
         *,
-        ctx: RequestContext,
+        backend: _SingleAccountBackend,
         query_vector: Optional[List[float]],
         sparse_query_vector: Optional[Dict[str, float]],
         scope_filter: Optional[FilterExpr],
@@ -2205,7 +2206,6 @@ class VikingVectorIndexBackend:
             }
         }
         search_kwargs: Dict[str, Any] = {
-            "ctx": ctx,
             "query_vector": query_vector,
             "sparse_query_vector": sparse_query_vector,
             "limit": final_window,
@@ -2213,8 +2213,8 @@ class VikingVectorIndexBackend:
             "output_fields": RETRIEVAL_OUTPUT_FIELDS,
         }
         remaining_results, event_results = await asyncio.gather(
-            self.search(filter=non_event_filter, **search_kwargs),
-            self.search(filter=event_filter, advance=advance, **search_kwargs),
+            backend.query(filter=non_event_filter, **search_kwargs),
+            backend.query(filter=event_filter, advance=advance, **search_kwargs),
         )
 
         results = remaining_results + event_results
