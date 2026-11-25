@@ -122,6 +122,25 @@ pub trait SnapshotLogStore: Send + Sync {
     ) -> Result<Vec<SnapshotLogHit>, SnapshotLogError>;
 }
 
+/// Maximum service_name length in bytes.
+pub const SNAPSHOT_LOG_SERVICE_NAME_BYTES: usize = 255;
+
+/// Validate the deployment-scoped service_name used for shared-DB isolation.
+pub fn validate_service_name(service_name: &str) -> Result<(), SnapshotLogError> {
+    if service_name.is_empty()
+        || service_name.len() > SNAPSHOT_LOG_SERVICE_NAME_BYTES
+        || !service_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(SnapshotLogError::Config(
+            "snapshot log service_name must be 1..=255 ASCII letters, digits, '.', '_' or '-'"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Return whether an account and branch fit provider index limits.
 pub fn can_index_account_branch(
     limits: SnapshotLogLimits,
