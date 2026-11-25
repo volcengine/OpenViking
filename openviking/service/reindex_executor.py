@@ -36,6 +36,7 @@ from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import bind_task_context, get_task_context
+from openviking.session.archive_source_index import archive_source_embedding_text
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.storage.abstract_overview import (
     ABSTRACT_OVERVIEW_FILENAMES,
@@ -1772,11 +1773,13 @@ class ReindexExecutor:
 
                 parent_uri = VikingURI(file_uri).parent.uri
                 detail_abstract = abstract or memory_content or body
+                vector_text = body or abstract
+                excerpt = archive_source_embedding_text(file_uri, vector_text)
                 await self._upsert_context(
                     uri=file_uri,
                     parent_uri=parent_uri,
                     abstract=detail_abstract,
-                    vector_text=body or abstract,
+                    vector_text=vector_text if excerpt is None else excerpt,
                     is_leaf=True,
                     context_type=ContextType.MEMORY.value,
                     level=ContextLevel.DETAIL,
