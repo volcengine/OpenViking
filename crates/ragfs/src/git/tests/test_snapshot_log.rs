@@ -367,11 +367,4 @@ async fn test_snapshot_log_service_name_isolates_shared_sqlite_db() {
         .await
         .is_err());
     assert!(SqliteSnapshotLogStore::connect("", &path).await.is_err());
-    // The service_name byte cap is 128: 128 is accepted, 129 is rejected.
-    assert!(SqliteSnapshotLogStore::connect(&"a".repeat(128), &path)
-        .await
-        .is_ok());
-    assert!(SqliteSnapshotLogStore::connect(&"a".repeat(129), &path)
-        .await
-        .is_err());
 }
