@@ -228,6 +228,30 @@ async def test_memory_usage_extractor_multi_read_counts_only_successful_experien
     assert [(e.event_type, e.resource_uri) for e in events] == [("memory.injected", read[0][0])]
 
 
+async def test_memory_usage_extractor_parses_bounded_multi_read_sections():
+    """Bounded multi-read headers carry a ``(lines a..b)`` range suffix.
+
+    The section marker is only an exact match for unbounded reads; a bounded
+    read that failed rendered ``ERROR:`` inside a suffixed section that the
+    exact marker missed, so a failed read was reported as an injection.
+    """
+    failed_uri = f"{EXPERIENCES}/failed-bounded.md"
+    ok_uri = f"{EXPERIENCES}/ok-bounded.md"
+    output = (
+        "Multi-read results for 2 resources (level: 2):\n"
+        f"--- START OF {failed_uri} (lines 0..49) ---\n"
+        "ERROR: File not found\n"
+        f"--- END OF {failed_uri} ---\n"
+        f"--- START OF {ok_uri} (lines 0..49) ---\n"
+        "Experience body.\n"
+        f"--- END OF {ok_uri} ---"
+    )
+    events = await extract(
+        tool("openviking_multi_read", {"uris": [failed_uri, ok_uri], "limit": 50}, output)
+    )
+    assert [(e.event_type, e.resource_uri) for e in events] == [("memory.injected", ok_uri)]
+
+
 @pytest.mark.parametrize(
     "user_root",
     ["viking://user/test", "viking://user", "viking://~"],

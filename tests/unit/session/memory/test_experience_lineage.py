@@ -170,6 +170,41 @@ def test_collect_read_experience_uris_filters_failed_multi_read_results(tool_nam
     assert collect_read_experience_uris(messages, ctx=_ctx()) == [first_uri]
 
 
+def test_collect_read_experience_uris_filters_bounded_multi_read_failure_text():
+    """Bounded multi-read headers carry a ``(lines a..b)`` range suffix.
+
+    The exact ``--- START OF <uri> ---`` marker never matched those sections,
+    so an Experience whose bounded read failed was recorded as read.
+    """
+    failed_uri = "viking://user/alice/memories/experiences/failed-bounded.md"
+    ok_uri = "viking://user/alice/memories/experiences/ok-bounded.md"
+    messages = [
+        Message(
+            id="multi-read-bounded",
+            role="user",
+            parts=[
+                ToolPart(
+                    tool_id="multi-read-bounded-1",
+                    tool_name="openviking_multi_read",
+                    tool_input={"uris": [failed_uri, ok_uri], "limit": 50},
+                    tool_status="completed",
+                    tool_output=(
+                        "Multi-read results for 2 resources (level: 2):\n"
+                        f"--- START OF {failed_uri} (lines 0..49) ---\n"
+                        "ERROR: File not found\n"
+                        f"--- END OF {failed_uri} ---\n"
+                        f"--- START OF {ok_uri} (lines 0..49) ---\n"
+                        "Experience body.\n"
+                        f"--- END OF {ok_uri} ---"
+                    ),
+                )
+            ],
+        )
+    ]
+
+    assert collect_read_experience_uris(messages, ctx=_ctx()) == [ok_uri]
+
+
 def test_collect_read_experience_uris_ignores_other_plugin_read_tools():
     messages = [
         Message(
