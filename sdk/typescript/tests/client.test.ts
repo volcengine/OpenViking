@@ -19,6 +19,51 @@ const ok = (result: unknown) =>
   });
 
 describe("OpenVikingClient", () => {
+  it("addMCP preserves the native connection payload", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ valid: true }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const headers = {
+      Authorization: "Bearer native-token",
+      Accept: "application/json",
+    };
+    await client.addMCP("weather", "https://mcp.example.com", headers, {
+      targetUri: "viking://agent/tools",
+    });
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://example.com/api/v1/mcps");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: "weather",
+      url: "https://mcp.example.com",
+      headers,
+      wait: false,
+      target_uri: "viking://agent/tools",
+    });
+  });
+
+  it("validateMCP sends only native connection info", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ valid: true }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const headers = { Authorization: "Bearer native-token" };
+    await client.validateMCP("weather", "http://mcp.example.com", headers);
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://example.com/api/v1/mcps/validate");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: "weather",
+      url: "http://mcp.example.com",
+      headers,
+    });
+  });
+
   it("does not expose a top-level resource parse mode option", () => {
     const options: AddResourceOptions = {
       // @ts-expect-error parse_mode is configured through args

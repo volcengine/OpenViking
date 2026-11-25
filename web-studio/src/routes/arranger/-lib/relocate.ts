@@ -16,6 +16,7 @@ import {
   unmountLiveContext,
 } from './api'
 import type { MountInput } from './model'
+import { assertResourceIdle } from './processing'
 import {
   assertMutationBoundary,
   isWithinRoot,
@@ -128,6 +129,7 @@ export async function relocateResource(options: {
   // Same-path requests are harmless, including normalized trailing slashes.
   if (kind === 'move' && source === target && source !== root) return target
   assertMutationBoundary(source, target, root)
+  await assertResourceIdle(source)
   const index = await loadLiveMounts(root)
   if (!index.complete) {
     throw new Error(i18n.t('arranger:errors.mountInventoryIncomplete'))
@@ -197,6 +199,11 @@ export async function relocateResource(options: {
   let completed = 0
   let current = source
   try {
+    // A single directory move preserves metadata and refreshes parents once.
+    if (kind === 'move' && directories.length && !liveFiles.size) {
+      await moveResource(source, target)
+      return target
+    }
     for (const directory of directories) {
       current = directory.uri
       await createDirectory(
@@ -221,15 +228,27 @@ export async function relocateResource(options: {
       completed += 1
     }
     if (kind === 'copy') return target
-    for (const directory of [...directories].reverse()) {
+    const sourceDirectories = new Set(
+      directories.map((directory) => directory.uri),
+    )
+    for (const directory of directories) {
       current = directory.uri
-      // Existing APIs cannot make the empty check and removal atomic.
-      if ((await children(current)).length) {
+      // Only the original directories may remain; reject new files or folders.
+      if (
+        (await children(current)).some(
+          (entry) => !entry.isDir || !sourceDirectories.has(entry.uri),
+        )
+      ) {
         throw new Error(
           i18n.t('arranger:errors.directoryChanged', { uri: current }),
         )
       }
-      await removeResource(current, true)
+    }
+    if (directories.length) {
+      current = source
+      // Delete the subtree once to avoid refreshing directories we will delete.
+      // The existing API cannot make the validation and removal atomic.
+      await removeResource(source, true)
     }
   } catch (error) {
     throw new RelocationError(

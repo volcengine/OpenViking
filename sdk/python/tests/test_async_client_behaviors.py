@@ -22,6 +22,70 @@ from openviking_sdk.errors import NotFoundError
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+async def test_add_mcp_preserves_native_connection_payload(client_type):
+    headers = {"Authorization": "Bearer native-token", "Accept": "application/json"}
+
+    def handle(request):
+        expected = {
+            "name": "weather",
+            "url": "https://mcp.example.com",
+            "headers": headers,
+            "target_uri": "viking://agent/tools",
+            "wait": False,
+        }
+        assert request.url.path == "/api/v1/mcps"
+        assert json.loads(request.content) == expected
+        return httpx.Response(200, json={"status": "ok", "result": {"valid": True}})
+
+    client = client_type(url="http://localhost:1933")
+    async_client = client if client_type is AsyncHTTPClient else client._async_client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    try:
+        result = client.add_mcp(
+            "weather",
+            "https://mcp.example.com",
+            headers=headers,
+            target_uri="agent/tools",
+        )
+        if client_type is AsyncHTTPClient:
+            result = await result
+        assert result == {"valid": True}
+    finally:
+        await async_client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
+async def test_validate_mcp_sends_only_native_connection_info(client_type):
+    headers = {"Authorization": "Bearer native-token"}
+
+    def handle(request):
+        assert request.url.path == "/api/v1/mcps/validate"
+        assert json.loads(request.content) == {
+            "name": "weather",
+            "url": "http://mcp.example.com",
+            "headers": headers,
+        }
+        return httpx.Response(200, json={"status": "ok", "result": {"valid": True}})
+
+    client = client_type(url="http://localhost:1933")
+    async_client = client if client_type is AsyncHTTPClient else client._async_client
+    async_client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    try:
+        result = client.validate_mcp("weather", "http://mcp.example.com", headers=headers)
+        if client_type is AsyncHTTPClient:
+            result = await result
+        assert result == {"valid": True}
+    finally:
+        await async_client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_type", [AsyncHTTPClient, SyncHTTPClient])
 @pytest.mark.parametrize("timeout_seconds", [None, 65.5])
 async def test_invoke_mcp_tool_timeout_payload(client_type, timeout_seconds):
     def handle(request):

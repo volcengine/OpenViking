@@ -11,9 +11,9 @@
 
 ## 使用前提与约束
 
-- MCP Server 只支持 Streamable HTTP，地址可以使用 HTTP 或 HTTPS。HTTP 不提供传输加密，使用方需自行评估凭证和工具数据的暴露风险。
+- MCP Server 只支持 Streamable HTTP，地址支持 HTTP 和 HTTPS。
 - Server 名称只能包含字母、数字、`_` 和 `-`，最长 64 个字符。工具名必须能作为 OpenViking 文件名使用。
-- 注册时提交的 HTTP Header 按账号保存，但 API 只返回按字母排序的 `header_names`，不会返回 Header 值。
+- 注册时提交的机密 HTTP Header 值保存至当前用户 Privacy，注册表和 API 中的 `headers` 只包含普通值和相对 Privacy 引用，不包含机密明文。
 - 工具目录可以位于用户空间 `viking://~/tools/<server>/<tool>.json`，也可以位于账号共享空间 `viking://agent/tools/<server>/<tool>.json`。调用和挂载参数会按工具的 `inputSchema` 校验。
 - `target_uri` 只接受 `viking://~/tools` 或 `viking://agent/tools`。注册及名称型操作未指定时使用用户空间；列出和检索未指定时合并两个空间。同名 Server 可以同时存在于两个空间。
 - 两个 tools 目录都是受管目录，不能通过普通 `mkdir`、`rm`、`cp` 或 `mv` 修改，应使用 MCP 管理接口。
@@ -43,7 +43,7 @@
 
 ### 校验和注册
 
-`POST /api/v1/mcps/validate` 会连接 Server、完成 MCP 初始化并列出工具，但不会写入注册表或工具目录。`POST /api/v1/mcps` 执行相同校验，然后注册 Server 并发布工具定义。默认发布到 `viking://~/tools/<name>/`；通过 `target_uri` 可以选择 `viking://agent/tools/<name>/`。同一空间内的同名 Server 已存在时注册失败。
+`POST /api/v1/mcps/validate` 仅接收原生连接信息 `name`、`url`、`headers`，连接 Server、完成 MCP 初始化并列出工具，不读取或写入 Privacy，也不写入注册表或工具目录。下表为 `POST /api/v1/mcps` 的注册参数；注册时解析或提取 Privacy 凭证，检查连接并发布工具定义。默认发布到 `viking://~/tools/<name>/`；通过 `target_uri` 可以选择 `viking://agent/tools/<name>/`。同一空间内的同名 Server 已存在时注册失败。
 
 **请求体**
 
@@ -51,11 +51,56 @@
 |------|------|------|--------|------|
 | `name` | string | 是 | - | Server 名称 |
 | `url` | string | 是 | - | Streamable HTTP 地址 |
-| `headers` | object | 否 | `{}` | 发往上游的 HTTP Header |
+| `headers` | object | 否 | `{}` | 原生 Header；自动将含机密信息的 Header 值提取到当前用户 Privacy |
 | `target_uri` | string | 否 | `viking://~/tools` | 用户或共享 tools 根目录 |
 | `wait` | boolean | 否 | `false` | 仅注册接口使用；是否等待工具目录处理完成 |
 
 未知字段会返回 `INVALID_ARGUMENT`。凭证应从环境变量或密钥系统注入请求，不要写入资源文件或提交到代码仓库。
+
+### 自动提取凭证与公共 MCP
+
+`ov mcps add` 沿用原生 `mcpServers` 配置，不需要额外凭证参数。认证 Header（如 `Authorization`、`X-API-Key`、`Cookie`）以及 Skills 同款规则识别出机密信息的 Header，自动将完整值保存至当前用户的 Privacy。`Accept`、地域等普通 Header 保留在注册表中。
+
+个人 MCP 默认位于 `viking://~/tools`，凭证目标为 `credential/mcp.user.<name>`。公共 MCP 发布到 `viking://agent/tools`，凭证目标为每个用户自己的 `credential/mcp.agent.<name>`。两者的 Privacy 字段名都是 Header 名；注册表仅保存机密 Header 的相对引用，连接时使用调用者当前生效的 Privacy 版本。
+
+例如，Alice 使用自己的 token 注册公共 MCP：
+
+```bash
+ov mcps add -p viking://agent/tools --wait "{
+  \"mcpServers\": {
+    \"weather\": {
+      \"url\": \"https://mcp.example.com/mcp\",
+      \"headers\": {
+        \"Authorization\": \"Bearer $WEATHER_MCP_TOKEN\",
+        \"Accept\": \"application/json\"
+      }
+    }
+  }
+}"
+```
+
+Bob 使用此公共 MCP 前，只需以自己的身份配置对应凭证，无需重复注册：
+
+```bash
+ov privacy upsert credential mcp.agent.weather \
+  --field "Authorization=Bearer $WEATHER_MCP_TOKEN"
+```
+
+缺失目标或字段时返回 `NOT_FOUND`，不会回退使用 Alice 的凭证。本版本不支持共享用户凭证；公共工具的调用仍遵循工具 ACL。无认证 MCP 无需配置 Privacy。`sync` 和 `remove` 根据目录 ACL 校验写权限。
+
+自动提取沿用 Skills 的 Privacy 写入流程：保留已有其他字段，相同值不产生新版本，拒绝用已轮换的历史值覆盖当前凭证。`headers` 也可以使用 Skills 同款 `{{ov_privacy:<当前用户>:viking://~/privacy/<category>/<target>#/values/<field>}}` 引用，或在引用前加 `Bearer `；注册时检查引用所属用户，再转换为相对引用。公共 MCP 的其他用户仍需在自己的同名目标和字段中配置凭证。
+
+所有 Header 统一保存在 `headers` 中，例如机密值替换为 `{{ov_privacy:viking://~/privacy/credential/mcp.agent.weather#/values/Authorization}}`，普通值保持原样。`mcps show` 返回这些安全的 Header 值和引用，连接时才按调用者解析；引用前后的文本会保留。
+
+Python、TypeScript、Go SDK 的 `add` 参数保持原样，直接传入 `headers`。CLI `add` 支持 `-p`，也可在 Server 配置中填写 `target_uri`。`validate` 继续直接使用原生 URL 和 headers 测试连接，不涉及 Privacy。
+
+**轮换与撤销**
+
+更新或激活自己的 Privacy 版本后，下一次连接即使用新值，无需 `mcps sync`。删除自己的凭证目标或字段后，后续调用失败；已发出的请求不会被取消。
+
+删除 MCP 会保留 Privacy 及独立的实时上下文节点，凭证是否删除需通过 `ov privacy delete` 显式管理。
+
+调用时使用已注册工具定义校验参数，实时读取也按该定义检查只读标记；解析当前调用者凭证后直接调用上游工具，不额外执行 `list_tools` 预检。上游 MCP Server 负责最终权限校验。工具定义变化时通过 `mcps sync` 更新。
 
 **Python SDK**
 
@@ -634,7 +679,9 @@ curl -X DELETE \
 |--------|----------|
 | `INVALID_ARGUMENT` | 名称或 URL 不合法、查询为空、URI 格式错误、节点不是 `.md`、参数不符合工具 schema、批量 URI 重复 |
 | `ALREADY_EXISTS` | 注册了同名 MCP Server |
+| `CONFLICT` | 重新注册时提交了已轮换字段的旧凭证值 |
 | `NOT_FOUND` | Server、工具或挂载不存在 |
+| `PERMISSION_DENIED` | 目录或工具 ACL 不允许访问、越权引用 Privacy、当前凭证不可用该工具 |
 | `UNAVAILABLE` | 无法连接 MCP Server、初始化失败、工具调用失败或工具调用超时 |
 
 工具调用失败不会自动重试。收到 `UNAVAILABLE` 或超时后，不应假设上游没有执行具有副作用的操作。
@@ -643,5 +690,6 @@ curl -X DELETE \
 
 - [实时上下文接入和编排](../guides/24-live-context-arrangement.md)
 - [MCP 集成](../guides/06-mcp-integration.md)
+- [Privacy API](10-privacy.md)
 - [内容 API](12-content.md)
 - [SDK、HTTP 与 CLI 约定](01-overview.md)

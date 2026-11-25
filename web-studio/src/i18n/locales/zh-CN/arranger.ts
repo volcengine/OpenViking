@@ -161,6 +161,9 @@ const arranger = {
     mcpToolCatalog: 'MCP 工具目录',
   },
   errors: {
+    resourceProcessing: '{{uri}} 仍在处理中，请等待处理完成后再复制或移动。',
+    processingCheckFailed: '无法确认处理状态，尚未执行复制或移动：{{detail}}',
+    invalidProcessingStatus: '处理状态响应无效或当前服务版本不支持。',
     copyFailed:
       '复制在 {{source}} → {{target}} 处停止，已复制 {{completed}} 个文件：{{detail}}。部分变更可能已生效，请刷新并检查目标内容后再操作。',
     liveContextMoveRolledBack:

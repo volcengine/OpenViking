@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 import yaml
@@ -27,19 +27,36 @@ from mcp.types import CallToolResult, InitializeResult, Tool
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.privacy.operations import require_privacy_owner, resolve_privacy_field
+from openviking.privacy.reference import PrivacyFieldReference, parse_privacy_field_selector
+from openviking.privacy.rules import prepare_privacy_extractor
+from openviking.privacy.validation import (
+    validate_privacy_field_name,
+    validate_privacy_identifier,
+    validate_privacy_values,
+)
 from openviking.pyagfs import AGFSNotFoundError, AsyncAGFSClient
 from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import (
     AlreadyExistsError,
+    ConflictError,
     InvalidArgumentError,
     NotFoundError,
     OpenVikingError,
+    PermissionDeniedError,
     ProcessingError,
     UnavailableError,
 )
 
 _SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
+_CREDENTIAL_HEADER_RE = re.compile(
+    r"authorization|proxy-authorization|cookie|set-cookie|"
+    r".*(?:api[-_]?key|token|secret|password|credential).*",
+    re.IGNORECASE,
+)
+_PRIVACY_PLACEHOLDER_RE = re.compile(r"\{\{[ \t]*ov_privacy:[^{}\r\n]*\}\}")
 _TOOL_URI_RE = re.compile(
     r"^viking://(?P<scope>agent|user/[^/]+)/tools/"
     r"(?P<server>[A-Za-z0-9_-]{1,64})/"
@@ -290,19 +307,118 @@ class MCPService:
 
     @staticmethod
     def _validate_headers(headers: dict[str, str]) -> dict[str, str]:
-        normalized: dict[str, str] = {}
-        for raw_name, raw_value in headers.items():
-            name = raw_name.strip()
-            value = raw_value.strip()
+        for name, value in headers.items():
             if (
-                not name
-                or not value
-                or any(char in name for char in "\r\n:")
-                or any(char in value for char in "\r\n")
+                not isinstance(name, str)
+                or _HEADER_NAME_RE.fullmatch(name) is None
+                or not isinstance(value, str)
+                or not value.strip()
+                or any(ord(char) < 32 or ord(char) > 126 for char in value)
             ):
                 raise InvalidArgumentError("Invalid MCP HTTP header")
-            normalized[name] = value
-        return normalized
+        return dict(headers)
+
+    @classmethod
+    def _prepare_credentials(
+        cls,
+        name: str,
+        headers: dict[str, str],
+        ctx: RequestContext,
+        tools_root: str,
+    ) -> tuple[dict[str, str], dict[str, str], str]:
+        """Replace secret headers with caller-relative references without writing Privacy."""
+        shared_root = tools_root == _AGENT_TOOLS_ROOT
+        headers = cls._validate_headers(headers)
+        target = f"mcp.{'agent' if shared_root else 'user'}.{name}"
+        if len({header.lower() for header in headers}) != len(headers):
+            raise InvalidArgumentError("Duplicate MCP HTTP header")
+        prepared: dict[str, str] = {}
+        values: dict[str, str] = {}
+        find_matches = prepare_privacy_extractor()
+        for header, value in headers.items():
+            placeholders = list(_PRIVACY_PLACEHOLDER_RE.finditer(value))
+            if "ov_privacy:" in value:
+                if len(placeholders) != value.count("ov_privacy:"):
+                    raise InvalidArgumentError("Invalid MCP Privacy header reference")
+                prepared[header] = _PRIVACY_PLACEHOLDER_RE.sub(
+                    lambda match: cls._relative_header_reference(
+                        cls._parse_header_reference(match.group(), ctx)
+                    ),
+                    value,
+                )
+            elif _CREDENTIAL_HEADER_RE.fullmatch(header) or find_matches(value):
+                values[header] = value
+                prepared[header] = cls._relative_header_reference(
+                    PrivacyFieldReference(ctx.user.user_id, "credential", target, header)
+                )
+            else:
+                prepared[header] = value
+        validate_privacy_values(values, category="credential")
+        return prepared, values, target
+
+    @staticmethod
+    def _relative_header_reference(reference: PrivacyFieldReference) -> str:
+        return (
+            f"{{{{ov_privacy:viking://~/privacy/{quote(reference.category, safe='')}/"
+            f"{quote(reference.target_key, safe='')}#/values/{quote(reference.field, safe='')}}}}}"
+        )
+
+    @staticmethod
+    def _parse_header_reference(value: str, ctx: RequestContext) -> PrivacyFieldReference:
+        selector = value[2:-2].strip().removeprefix("ov_privacy:")
+        reference = parse_privacy_field_selector(
+            selector if selector.startswith("viking://") else value,
+            current_user_id=ctx.user.user_id,
+        )
+        if reference is None:
+            raise InvalidArgumentError("MCP header requires a field-level Privacy reference")
+        require_privacy_owner(reference.owner_user_id, ctx)
+        validate_privacy_identifier(reference.category, "category")
+        validate_privacy_identifier(reference.target_key, "target_key")
+        validate_privacy_field_name(reference.field)
+        return reference
+
+    async def _apply_credentials(
+        self, target: str, headers: dict[str, str], ctx: RequestContext
+    ) -> None:
+        """Preserve current fields and reject stale credential values, as Skill ingestion does."""
+        if not headers:
+            return
+        privacy = self._service.privacy_configs
+        if privacy is None:
+            raise InvalidArgumentError("MCP credentials require an initialized Privacy service")
+        async with privacy._config_lock(ctx, "credential", target) as lease:
+            current = await privacy.get_current(ctx, "credential", target)
+            existing_fields = set(current.values) if current is not None else set()
+            changed = {
+                field: value
+                for field, value in headers.items()
+                if current is not None
+                and field in current.values
+                and current.values[field] != value
+            }
+            if changed:
+                for number in await privacy.list_versions(ctx, "credential", target):
+                    previous = await privacy.get_version(ctx, "credential", target, number)
+                    if previous is None:
+                        continue
+                    for field, value in changed.items():
+                        if previous.values.get(field) == value:
+                            raise ConflictError(
+                                "MCP registration contains a previous value of a rotated field; "
+                                "use its current value or an explicit Privacy reference.",
+                                resource=f"credential/{target}/{field}",
+                            )
+            await privacy.upsert(
+                ctx=ctx,
+                category="credential",
+                target_key=target,
+                values=headers,
+                updated_by=ctx.user.user_id,
+                change_reason="auto-extracted from add_mcp",
+                owner_lease_ref=lease,
+                preserve_fields=existing_fields,
+            )
 
     @staticmethod
     def _public_server(
@@ -311,14 +427,49 @@ class MCPService:
         tools_root: str,
     ) -> dict[str, Any]:
         return {
-            key: value
-            for key, value in server.items()
-            if key not in {"header_names", "headers", "tools"}
+            key: value for key, value in server.items() if key not in {"header_names", "tools"}
         } | {
             "root_uri": tools_root,
-            "header_names": sorted(server.get("headers", {})),
+            "header_names": sorted(server["headers"]),
             "tool_count": tool_count,
         }
+
+    async def _connection_headers(
+        self, server: dict[str, Any], ctx: RequestContext
+    ) -> dict[str, str]:
+        """Resolve current Privacy values only after checking the caller's resource access."""
+        headers = self._validate_headers(server["headers"])
+        for header, template in headers.items():
+            chunks: list[str] = []
+            cursor = 0
+            placeholders = list(_PRIVACY_PLACEHOLDER_RE.finditer(template))
+            if len(placeholders) != template.count("ov_privacy:"):
+                raise InvalidArgumentError("Invalid MCP Privacy header reference")
+            for placeholder in placeholders:
+                reference = self._parse_header_reference(placeholder.group(), ctx)
+                resolved = await resolve_privacy_field(
+                    self._service.privacy_configs, ctx, reference.render()
+                )
+                value = resolved["value"]
+                if not isinstance(value, str) or not value.strip():
+                    raise InvalidArgumentError(
+                        "MCP Privacy header value must be a non-empty string"
+                    )
+                chunks.extend((template[cursor : placeholder.start()], value))
+                cursor = placeholder.end()
+            chunks.append(template[cursor:])
+            headers[header] = "".join(chunks)
+        return self._validate_headers(headers)
+
+    async def _ensure_server_read(self, name: str, ctx: RequestContext, tools_root: str) -> None:
+        uri = f"{tools_root}/{name}"
+        if not (await self._service.fs.can_read_many([uri], ctx)).get(uri, False):
+            raise PermissionDeniedError("MCP server access denied", resource=uri)
+
+    async def _ensure_server_write(
+        self, server: dict[str, Any], ctx: RequestContext, tools_root: str
+    ) -> None:
+        await self._service.fs.ensure_write_access(f"{tools_root}/{server['name']}", ctx)
 
     @staticmethod
     def _input_revision(tool: dict[str, Any]) -> str:
@@ -376,7 +527,7 @@ class MCPService:
                         read_timeout_seconds=timedelta(seconds=timeout_seconds),
                     ) as session:
                         yield session
-        except (InvalidArgumentError, NotFoundError, UnavailableError):
+        except OpenVikingError:
             raise
         except Exception as exc:
             raise UnavailableError(
@@ -741,9 +892,24 @@ class MCPService:
         tools_root = self._resolve_tools_root(ctx, target_uri)
         name = self._validate_server_name(name)
         url = self._validate_url(url)
-        headers = self._validate_headers(headers)
-        candidate = {"name": name, "url": url}
-        initialized, discovered = await self._discover(candidate, headers)
+        prepared_headers, values, privacy_target = self._prepare_credentials(
+            name,
+            headers,
+            ctx,
+            tools_root,
+        )
+        await self._service.fs.ensure_write_access(f"{tools_root}/{name}", ctx)
+        registry = await self._load(ctx, tools_root)
+        if name in registry["servers"]:
+            raise AlreadyExistsError(name, "MCP server")
+        candidate = {
+            "name": name,
+            "url": url,
+            "created_by": ctx.user.user_id,
+            "headers": {**prepared_headers, **values},
+        }
+        resolved = await self._connection_headers(candidate, ctx)
+        initialized, discovered = await self._discover(candidate, resolved)
         tools = [self._tool_document(candidate, tool) for tool in discovered]
         invalid_names = [
             tool["tool"]["name"]
@@ -763,10 +929,12 @@ class MCPService:
             server = {
                 "name": name,
                 "url": url,
-                "headers": headers,
+                "headers": prepared_headers,
+                "created_by": ctx.user.user_id,
                 "created_at": timestamp,
                 "updated_at": timestamp,
             }
+            await self._apply_credentials(privacy_target, values, ctx)
             processing = await self._publish_catalog(
                 name,
                 tools,
@@ -802,6 +970,7 @@ class MCPService:
             registry = await self._load(ctx, tools_root)
             if name not in registry["servers"]:
                 raise NotFoundError(name, "MCP server")
+            await self._ensure_server_write(registry["servers"][name], ctx, tools_root)
             await self._service.fs.rm(
                 f"{tools_root}/{name}",
                 ctx=ctx,
@@ -949,8 +1118,7 @@ class MCPService:
         server = registry["servers"].get(name)
         if server is None:
             raise NotFoundError(name, "MCP server")
-        headers = server.get("headers", {})
-        return server, headers
+        return server, server.get("headers", {})
 
     async def validate(
         self,
@@ -960,7 +1128,6 @@ class MCPService:
     ) -> dict[str, Any]:
         name = self._validate_server_name(name)
         server = {"name": name, "url": self._validate_url(url)}
-        headers = self._validate_headers(headers)
         initialized, tools = await self._discover(server, headers)
         return {
             "name": name,
@@ -980,7 +1147,10 @@ class MCPService:
     ) -> dict[str, Any]:
         tools_root = self._resolve_tools_root(ctx, target_uri)
         async with self._lock(ctx.account_id):
-            server, headers = await self._registered(name, ctx, target_uri=tools_root)
+            server, _ = await self._registered(name, ctx, target_uri=tools_root)
+            await self._ensure_server_write(server, ctx, tools_root)
+            await self._ensure_server_read(name, ctx, tools_root)
+            headers = await self._connection_headers(server, ctx)
             initialized, discovered = await self._discover(server, headers)
             tools = [self._tool_document(server, tool) for tool in discovered]
             invalid_names = [
@@ -1068,7 +1238,8 @@ class MCPService:
         server = registry["servers"].get(name)
         if server is None:
             raise NotFoundError(name, "MCP server")
-        headers = server.get("headers", {})
+        await self._ensure_server_read(name, ctx, tools_root)
+        headers = await self._connection_headers(server, ctx)
         try:
             initialized, tools = await self._discover(server, headers)
             return {
@@ -1749,12 +1920,13 @@ class MCPService:
         uri: str,
         arguments: dict[str, Any],
         ctx: RequestContext,
-        timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+        timeout_seconds: float | None = _DEFAULT_TIMEOUT_SECONDS,
         *,
         require_read_only: bool = False,
     ) -> dict[str, Any]:
         uri, tools_root, server_name, tool_name = self._parse_tool_uri(uri, ctx)
-        server, headers = await self._registered(
+        timeout_seconds = _DEFAULT_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        server, _ = await self._registered(
             server_name,
             ctx,
             target_uri=tools_root,
@@ -1773,6 +1945,7 @@ class MCPService:
                 source=uri,
             )
         self._validate_tool_arguments(tool_document, arguments)
+        headers = await self._connection_headers(server, ctx)
 
         async with self._session(server, headers, timeout_seconds) as session:
             await session.initialize()

@@ -3,14 +3,21 @@ use crate::error::{Error, Result};
 use crate::output::{OutputFormat, output_success};
 use crate::theme;
 use colored::Colorize;
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Deserialize)]
-struct McpConfig {
+struct McpConfig<T = McpServerConfig> {
     #[serde(rename = "mcpServers")]
-    mcp_servers: BTreeMap<String, McpServerConfig>,
+    mcp_servers: BTreeMap<String, T>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NativeMcpServerConfig {
+    url: String,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -18,6 +25,78 @@ struct McpServerConfig {
     url: String,
     #[serde(default)]
     headers: BTreeMap<String, String>,
+    target_uri: Option<String>,
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn validation_parses_native_connection_info_only() {
+        let config = parse_mcp_config::<NativeMcpServerConfig>(
+            r#"{"mcpServers":{"weather":{
+                "url":"http://example.com/mcp",
+                "headers":{"Authorization":"Bearer native-token"},
+                "transport":"streamable_http"
+            }}}"#,
+        )
+        .unwrap();
+        let server = &config.mcp_servers["weather"];
+        assert_eq!(server.url, "http://example.com/mcp");
+        assert_eq!(server.headers["Authorization"], "Bearer native-token");
+    }
+
+    #[test]
+    fn add_preserves_native_headers_and_tools_root() {
+        let config = parse_add_config(
+            r#"{"mcpServers":{"weather":{
+            "url":"https://example.com",
+            "target_uri":"viking://agent/tools",
+            "headers":{"Authorization":"Bearer native-token"}
+        }}}"#,
+        )
+        .unwrap();
+        let server = &config.mcp_servers["weather"];
+        assert_eq!(server.target_uri.as_deref(), Some("viking://agent/tools"));
+        assert_eq!(server.headers["Authorization"], "Bearer native-token");
+    }
+
+    #[test]
+    fn accepts_servers_without_headers() {
+        let config =
+            parse_add_config(r#"{"mcpServers":{"weather":{"url":"https://example.com"}}}"#)
+                .unwrap();
+        let server = &config.mcp_servers["weather"];
+        assert!(server.headers.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_headers_and_empty_server_configs() {
+        assert!(
+            parse_add_config(
+                r#"{"mcpServers":{"weather":{
+            "url":"https://example.com","headers":{"Authorization":123}
+        }}}"#
+            )
+            .is_err()
+        );
+        assert!(parse_add_config(r#"{"mcpServers":{}}"#).is_err());
+    }
+
+    #[test]
+    fn show_renders_header_values_and_privacy_references() {
+        let reference =
+            "{{ov_privacy:viking://~/privacy/credential/mcp.agent.weather#/values/Authorization}}";
+        let response = json!({"result": {
+            "name": "weather",
+            "headers": {"Authorization": reference, "Accept": "application/json"},
+            "tools": [],
+        }});
+        let rendered = render_show_for_table(&response, OutputFormat::Table).unwrap();
+        assert!(rendered.contains(&format!("   Authorization: {reference}")));
+        assert!(rendered.contains("   Accept: application/json"));
+    }
 }
 
 fn validate_server_name(name: &str) -> Result<()> {
@@ -35,7 +114,11 @@ fn validate_server_name(name: &str) -> Result<()> {
 }
 
 fn parse_add_config(raw: &str) -> Result<McpConfig> {
-    let config: McpConfig = serde_json::from_str(raw)
+    parse_mcp_config(raw)
+}
+
+fn parse_mcp_config<T: DeserializeOwned>(raw: &str) -> Result<McpConfig<T>> {
+    let config: McpConfig<T> = serde_json::from_str(raw)
         .map_err(|error| Error::Parse(format!("Invalid MCP configuration JSON: {error}")))?;
     if config.mcp_servers.is_empty() {
         return Err(Error::Parse(
@@ -82,7 +165,7 @@ pub async fn add(
             "headers": server.headers,
             "wait": wait,
         });
-        if let Some(target_uri) = target_uri {
+        if let Some(target_uri) = target_uri.or(server.target_uri.as_deref()) {
             body["target_uri"] = json!(target_uri);
         }
         let response: Value = client.post("/api/v1/mcps", &body).await?;
@@ -232,15 +315,13 @@ pub async fn validate(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let config = parse_add_config(raw_config)?;
+    let config = parse_mcp_config::<NativeMcpServerConfig>(raw_config)?;
     let mut responses = Vec::with_capacity(config.mcp_servers.len());
     for (name, server) in config.mcp_servers {
-        let response: Value = client
-            .post(
-                "/api/v1/mcps/validate",
-                &json!({"name": name, "url": server.url, "headers": server.headers}),
-            )
-            .await?;
+        let body = json!({
+            "name": name, "url": server.url, "headers": server.headers,
+        });
+        let response: Value = client.post("/api/v1/mcps/validate", &body).await?;
         responses.push(response);
     }
     if responses.len() == 1 {
@@ -287,6 +368,15 @@ fn render_show_for_table(response: &Value, output_format: OutputFormat) -> Optio
     push_show_field(&mut lines, "url", server.get("url"));
     push_show_field(&mut lines, "tool_count", server.get("tool_count"));
     push_show_field(&mut lines, "header_names", server.get("header_names"));
+    push_show_field(&mut lines, "created_by", server.get("created_by"));
+    if let Some(headers) = server.get("headers").and_then(Value::as_object) {
+        if !headers.is_empty() {
+            lines.push("headers:".to_string());
+            for (name, value) in headers {
+                push_indented_field(&mut lines, name, Some(value));
+            }
+        }
+    }
     push_show_field(&mut lines, "created_at", server.get("created_at"));
     push_show_field(&mut lines, "updated_at", server.get("updated_at"));
     lines.push(String::new());

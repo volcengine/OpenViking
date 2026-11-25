@@ -16,12 +16,15 @@ from openviking.service.mcp_service import MCPToolMount
 router = APIRouter(prefix="/api/v1/mcps", tags=["mcps"])
 
 
-class AddMCPRequest(BaseModel):
+class ValidateMCPRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
+
+
+class AddMCPRequest(ValidateMCPRequest):
     target_uri: str | None = None
     wait: bool = False
 
@@ -251,7 +254,7 @@ async def show_mcp(
 
 @router.post("/validate")
 async def validate_mcp(
-    body: AddMCPRequest,
+    body: ValidateMCPRequest,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     result = await get_service().mcps.validate(body.name, body.url, body.headers)

@@ -12,9 +12,9 @@ This module registers Streamable HTTP MCP servers, synchronizes and searches the
 
 ## Prerequisites and constraints
 
-- MCP servers must use Streamable HTTP, and URLs may use HTTP or HTTPS. HTTP does not encrypt transport; users are responsible for assessing exposure risks for credentials and tool data.
+- MCP servers must use Streamable HTTP. Endpoint URLs support both HTTP and HTTPS.
 - Server names may contain only letters, numbers, `_`, and `-`, up to 64 characters. Tool names must be valid OpenViking filenames.
-- HTTP headers submitted at registration are stored within the account scope. APIs return only sorted `header_names`, never header values.
+- Secret HTTP header values submitted at registration are stored in the caller's Privacy. Registry and API `headers` contain ordinary values and relative Privacy references, never plaintext secrets.
 - Tool definitions can live in the user space at `viking://~/tools/<server>/<tool>.json` or in the account-shared space at `viking://agent/tools/<server>/<tool>.json`. Invocation and mount arguments are validated against the tool's `inputSchema`.
 - `target_uri` accepts only `viking://~/tools` or `viking://agent/tools`. Registration and name-based operations default to the user space; list and search merge both spaces when omitted. The same server name may exist in both spaces.
 - Both tools roots are managed directories. Do not mutate them with ordinary `mkdir`, `rm`, `cp`, or `mv`; use the MCP management APIs.
@@ -44,7 +44,7 @@ This module registers Streamable HTTP MCP servers, synchronizes and searches the
 
 ### Validate and register
 
-`POST /api/v1/mcps/validate` connects to the server, performs MCP initialization, and discovers tools without changing the registry or tool catalog. `POST /api/v1/mcps` performs the same checks, then registers the server and publishes definitions. It defaults to `viking://~/tools/<name>/`; set `target_uri` to publish under `viking://agent/tools/<name>/`. Registration fails when the name already exists in the selected space.
+`POST /api/v1/mcps/validate` accepts only native connection information: `name`, `url`, and `headers`. It connects to the server, initializes MCP, and discovers tools without reading or writing Privacy, the registry, or the tool catalog. The table below describes registration parameters for `POST /api/v1/mcps`, which resolves or extracts Privacy credentials, checks connectivity, and publishes definitions. It defaults to `viking://~/tools/<name>/`; set `target_uri` to publish under `viking://agent/tools/<name>/`. Registration fails when the name already exists in the selected space.
 
 **Request body**
 
@@ -52,11 +52,56 @@ This module registers Streamable HTTP MCP servers, synchronizes and searches the
 |-----------|------|----------|---------|-------------|
 | `name` | string | Yes | - | Server name |
 | `url` | string | Yes | - | Streamable HTTP endpoint |
-| `headers` | object | No | `{}` | HTTP headers sent to the upstream server |
+| `headers` | object | No | `{}` | Native headers; values containing secrets are automatically extracted to the caller's Privacy |
 | `target_uri` | string | No | `viking://~/tools` | User or shared tools root |
 | `wait` | boolean | No | `false` | Registration only; wait for tool catalog processing |
 
 Unknown fields return `INVALID_ARGUMENT`. Inject credentials from environment variables or a secret manager; do not put them in resource files or commit them to source control.
+
+### Automatic credential extraction and public MCPs
+
+`ov mcps add` keeps its native `mcpServers` configuration with no additional credential options. Authentication headers such as `Authorization`, `X-API-Key`, and `Cookie`, as well as headers containing secrets detected by the same rules used for Skills, have their complete values saved in the current user's Privacy. Ordinary headers such as `Accept` and region settings remain in the registry.
+
+Personal MCPs default to `viking://~/tools` and use `credential/mcp.user.<name>`. Public MCPs are published to `viking://agent/tools` and use each caller's own `credential/mcp.agent.<name>`. Privacy field names match header names. The registry stores relative references for secret headers, resolved against the caller's active Privacy version on each connection.
+
+For example, Alice registers a public MCP using her own token:
+
+```bash
+ov mcps add -p viking://agent/tools --wait "{
+  \"mcpServers\": {
+    \"weather\": {
+      \"url\": \"https://mcp.example.com/mcp\",
+      \"headers\": {
+        \"Authorization\": \"Bearer $WEATHER_MCP_TOKEN\",
+        \"Accept\": \"application/json\"
+      }
+    }
+  }
+}"
+```
+
+Before using this public MCP, Bob configures the matching credential under his own identity, without registering the MCP again:
+
+```bash
+ov privacy upsert credential mcp.agent.weather \
+  --field "Authorization=Bearer $WEATHER_MCP_TOKEN"
+```
+
+Missing targets or fields return `NOT_FOUND`, with no fallback to Alice's credentials. This version does not support sharing user credentials. Public tool invocations still enforce tool ACLs, and unauthenticated MCPs need no Privacy configuration. `sync` and `remove` check write access according to directory ACLs.
+
+Automatic extraction follows the Skills Privacy write flow: unrelated fields are retained, equal values do not create a new version, and historical values cannot overwrite rotated credentials. Headers may also use the same `{{ov_privacy:<current-user>:viking://~/privacy/<category>/<target>#/values/<field>}}` references as Skills, optionally preceded by `Bearer `. Registration checks reference ownership, then stores a relative reference. Other callers of a public MCP must still configure the matching target and field in their own Privacy.
+
+All headers are stored together in `headers`: secret values become references such as `{{ov_privacy:viking://~/privacy/credential/mcp.agent.weather#/values/Authorization}}`, while ordinary values remain unchanged. `mcps show` returns these safe values and references. Connections resolve references for the caller and preserve the surrounding text.
+
+Python, TypeScript, and Go SDK registration methods retain their existing arguments and accept native `headers`. CLI `add` supports `-p` and a per-server `target_uri`. `validate` continues testing native URLs and headers directly without involving Privacy.
+
+**Rotation and revocation**
+
+Updating or activating your own Privacy version affects the next connection without `mcps sync`. Deleting your credential target or field makes subsequent calls fail; requests already sent are not canceled.
+
+Removing an MCP retains Privacy and separate live context nodes; use `ov privacy delete` to explicitly delete credentials.
+
+Calls validate arguments against the registered tool definition; live reads also check its read-only annotations. After resolving the caller's credentials, invocation calls the upstream tool directly without an extra `list_tools` precheck. The upstream MCP server enforces final authorization. Update changed tool definitions with `mcps sync`.
 
 **Python SDK**
 
@@ -636,7 +681,9 @@ The batch body is `{"node_uris":["viking://resources/live/weather-beijing.md"],"
 |------------|---------------|
 | `INVALID_ARGUMENT` | Invalid name or URL, empty search, malformed URI, non-`.md` node, schema-invalid arguments, duplicate batch URI |
 | `ALREADY_EXISTS` | A server with the same name is already registered |
+| `CONFLICT` | Re-registration supplied a historical value of a rotated credential field |
 | `NOT_FOUND` | Server, tool, or mount does not exist |
+| `PERMISSION_DENIED` | Directory or tool ACL denies access, a Privacy reference has another owner, or the current credential cannot use the tool |
 | `UNAVAILABLE` | MCP connection, initialization, or tool call failed or timed out |
 
 Tool calls are not retried automatically. After `UNAVAILABLE` or a timeout, do not assume that an upstream operation with side effects did not execute.
@@ -645,5 +692,6 @@ Tool calls are not retried automatically. After `UNAVAILABLE` or a timeout, do n
 
 - [Live context integration and arrangement](../guides/24-live-context-arrangement.md)
 - [MCP integration](../guides/06-mcp-integration.md)
+- [Privacy API](10-privacy.md)
 - [Content API](12-content.md)
 - [SDK, HTTP and CLI conventions](01-overview.md)

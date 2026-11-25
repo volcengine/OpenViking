@@ -168,6 +168,12 @@ const arranger = {
     mcpToolCatalog: 'MCP tool catalog',
   },
   errors: {
+    resourceProcessing:
+      '{{uri}} is still processing. Wait for processing to finish before copying or moving it.',
+    processingCheckFailed:
+      'Could not confirm processing status. Copy or move was not started: {{detail}}',
+    invalidProcessingStatus:
+      'The processing status response is invalid or unsupported.',
     copyFailed:
       'Copy stopped at {{source}} → {{target}} after copying {{completed}} files: {{detail}}. Changes may have been applied. Refresh and inspect the destination before trying again.',
     liveContextMoveRolledBack:
