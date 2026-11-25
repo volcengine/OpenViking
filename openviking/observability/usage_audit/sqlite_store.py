@@ -20,6 +20,7 @@ from openviking.observability.events import ObservabilityEvent
 
 from .projection import UsageAuditProjection, project_events, safe_int
 from .schema import RESET_ON_SCHEMA_UPGRADE_TABLES, SCHEMA_VERSION, SQLITE_SCHEMA
+from .time import ceil_utc_hour
 
 UTC = timezone.utc
 
@@ -525,6 +526,8 @@ class SQLiteUsageAuditStore:
         end_day = date.fromisoformat(end_user_date)
         utc_start, _ = _user_day_window_utc(start_day, tz)
         _, utc_end = _user_day_window_utc(end_day, tz)
+        utc_start = ceil_utc_hour(utc_start)
+        utc_end = ceil_utc_hour(utc_end)
         rows: dict[tuple[str, int], dict[str, Any]] = {}
         for event_date in _date_range(start_user_date, end_user_date):
             for hour in range(0, 24, bucket_size):
@@ -586,6 +589,8 @@ class SQLiteUsageAuditStore:
     ) -> list[tuple[str, str, str, int, int]]:
         """Return rows [(source, token_type, date_utc, hour_utc, total)]."""
         assert self._conn is not None
+        utc_start = ceil_utc_hour(utc_start)
+        utc_end = ceil_utc_hour(utc_end)
         utc_start_d = utc_start.date().isoformat()
         utc_end_d = utc_end.date().isoformat()
         user_filter, user_params = self._user_scope_sql(user_id)
@@ -631,6 +636,8 @@ class SQLiteUsageAuditStore:
     ) -> list[tuple[str, int]]:
         """Return [(operation, total_request_count)] for successful retrievals."""
         assert self._conn is not None
+        utc_start = ceil_utc_hour(utc_start)
+        utc_end = ceil_utc_hour(utc_end)
         utc_start_d = utc_start.date().isoformat()
         utc_end_d = utc_end.date().isoformat()
         user_filter, user_params = self._user_scope_sql(user_id)

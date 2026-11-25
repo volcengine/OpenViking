@@ -613,3 +613,60 @@ async def test_usage_queries_rebucket_utc_events_to_viewer_timezones(tmp_path):
         ] == [(may13, 7, 1, 1)]
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+async def test_usage_queries_handle_sub_hour_timezone_offsets(tmp_path):
+    """A local day in a half-hour-offset zone starts and ends mid UTC hour.
+
+    An hourly row belongs to the local date of its hour start. Window queries
+    that compare only the hour number used to pull in rows from the previous
+    local day and drop the current day's last partial hour, so `today`
+    disagreed with `series`/heatmap for the same local date.
+    """
+    store = SQLiteUsageAuditStore(tmp_path / "usage.sqlite3")
+    await store.initialize()
+    kolkata = ZoneInfo("Asia/Kolkata")
+    try:
+        await store.record_batch(
+            [
+                # 23:40 on May 12 in Kolkata — previous local day.
+                _tokens(10, ts=datetime(2026, 5, 12, 18, 10, tzinfo=UTC)),
+                # 23:40 on May 13 in Kolkata — inside the requested local day.
+                _tokens(20, ts=datetime(2026, 5, 13, 18, 10, tzinfo=UTC)),
+                _request(
+                    "req-kolkata-commit",
+                    "/api/v1/sessions/{session_id}/messages",
+                    ts=datetime(2026, 5, 13, 18, 10, tzinfo=UTC),
+                ),
+            ]
+        )
+
+        today = await store.get_today_tokens(
+            account_id="acct-1", user_date="2026-05-13", tz=kolkata
+        )
+        assert today["vlm_input"] == today["total"] == 20
+
+        series = await store.get_token_series(
+            account_id="acct-1",
+            start_user_date="2026-05-13",
+            end_user_date="2026-05-13",
+            bucket="day",
+            tz=kolkata,
+        )
+        assert {row["date"]: row["vlm_input"] for row in series} == {"2026-05-13": 20}
+
+        commits = await store.get_context_commit_heatmap(
+            account_id="acct-1",
+            start_user_date="2026-05-13",
+            end_user_date="2026-05-13",
+            bucket="hour",
+            tz=kolkata,
+        )
+        assert [
+            (row["date"], row["hour"], row["session_add_message"])
+            for row in commits
+            if row["total"]
+        ] == [("2026-05-13", 23, 1)]
+    finally:
+        await store.close()

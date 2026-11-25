@@ -31,6 +31,7 @@ from .postgres_schema import (
     validate_lock_timeout,
 )
 from .projection import normalize_identity, project_events, safe_int
+from .time import ceil_utc_hour
 
 UTC = timezone.utc
 _USAGE_TABLES = ("usage_token_hourly", "usage_retrieval_hourly", "usage_context_write_bucket")
@@ -446,7 +447,11 @@ class PostgresUsageAuditStore:
     ) -> list[dict[str, Any]]:
         table = self._tables[name]
         first, last = _window(start, end, tz)
-        # Preserve the existing hour-grained timezone boundary semantics.
+        # Hourly rows cover [hour, hour + 1). A user-tz day in a sub-hour-offset
+        # zone starts and ends inside a UTC hour, so ceiling the edges selects
+        # exactly the rows that rebucket into the requested local days.
+        first = ceil_utc_hour(first)
+        last = ceil_utc_hour(last)
         lower, upper = first.date().isoformat(), last.date().isoformat()
         statement = (
             select(*(table.c[key] for key in dimensions), func.sum(table.c[count]).label("total"))

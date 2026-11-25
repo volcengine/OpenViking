@@ -5,10 +5,26 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
+
+
+def ceil_utc_hour(moment: datetime) -> datetime:
+    """Round a UTC instant up to the next whole hour.
+
+    Hourly usage rows cover ``[hour, hour + 1)``. A user-tz day in a zone whose
+    UTC offset is not a whole number of hours (Asia/Kolkata,
+    Australia/Adelaide, ...) starts and ends inside a UTC hour, so window
+    queries over ``(date_utc, hour_utc)`` need whole-hour edges: ceiling both
+    ends selects exactly the rows whose start instant lies inside the day,
+    which is how the per-date rebucketing assigns them to a local date.
+    """
+    floor = moment.replace(minute=0, second=0, microsecond=0)
+    if floor == moment:
+        return moment
+    return floor + timedelta(hours=1)
 
 
 def resolve_usage_timezone(timezone_name: str) -> tzinfo:
