@@ -44,12 +44,13 @@ The installer assembles a self-contained plugin under `~/.openviking/agent-integ
 - **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`. Host-generated continuation turns are skipped, so a turn the host produced on its own never triggers a search.
 - **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. Shell commands are not checked, so `ov` invocations and literal `viking://` arguments still work.
 - **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.
+- After a compaction or a resume, the next **UserPromptSubmit** also adds a short note naming the session's OpenViking id and the `session_history` MCP tool for looking up exact earlier details. The MCP proxy fills that tool's `session` argument from the call when the Agent leaves it out.
 
 Hooks and MCP read the same credentials from `~/.openviking/ovcli.conf`, so they cannot disagree about the server, account, or user. `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.codebuddy` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Sessions are stored in OpenViking as `cb-<session id>`.
 
 ### Behaviour that follows from the host
 
-`UserPromptSubmit` and `SessionEnd` fire **only in the interactive TUI**. Headless runs (`-p`, `--input-format stream-json`) never emit them, so a headless session captures on `Stop` but never sends the final commit. `SessionStart` carries no `cwd` and can be delivered twice per session, so the session-start hook is idempotent and falls back to the process working directory. A hook that overruns its timeout is killed, but its child processes are not, which is what lets commits run in a detached worker after the hook process returns.
+`SessionEnd` fires **only in the interactive TUI**, so a headless session (`-p`, `--input-format stream-json`) captures on `Stop` but never sends the final commit. `UserPromptSubmit` also fires only in the TUI before CodeBuddy Code 2.185.0; from 2.185.0 it fires in headless `-p` runs too. `SessionStart` carries no `cwd` and can be delivered twice per session, so the session-start hook is idempotent and falls back to the process working directory. A hook that overruns its timeout is killed, but its child processes are not, which is what lets commits run in a detached worker after the hook process returns.
 
 Subagent capture is not supported yet: the host fires `SubagentStart`/`SubagentStop`, but the shared dispatcher has no subagent stage. The verified host contract and transcript format are recorded in [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md).
 
@@ -67,7 +68,7 @@ Uninstall removes the plugin, its local marketplace, the copy CodeBuddy caches, 
 
 | Symptom | Cause and fix |
 |---------|---------------|
-| No recall in headless runs | `UserPromptSubmit` fires only in the interactive TUI. Use an interactive session. |
+| No recall in headless runs | Before CodeBuddy Code 2.185.0, `UserPromptSubmit` fires only in the interactive TUI. Upgrade or use an interactive session. |
 | The plugin is not listed | Re-run the installer and check that `codebuddy` is on `PATH`, then start a new session. |
 | MCP does not connect | Check the URL/API key in `~/.openviking/ovcli.conf`, then start a new session. |
 | Detailed diagnostics are needed | Start CodeBuddy with `OPENVIKING_DEBUG=1` and inspect `~/.openviking/logs/codebuddy-hooks.log`. |

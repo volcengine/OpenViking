@@ -94,6 +94,8 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   let enqueueFailed = 0;
   const payloads = [];
   for (const turn of turns) {
+    // Counted by the cursor, never sent.
+    if (turn.hostAuthored) continue;
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
     // Sanitize injected context before applying the configured filters.

@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { isRecallEnabled } from "./shared/recall-core.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
+import { fillHistorySession } from "./session-history.mjs"
 import { log } from "./utils.mjs"
 
 const METADATA_KEY = "openviking"
@@ -63,6 +64,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   if (ctx?.tool?.hook) {
     await ctx.tool.hook("execute.before", async (event) => {
       await runtime.ready
+      fillHistorySession(sessionManager, { tool: event.tool, sessionID: event.sessionID, args: event.input })
       await vikingUriGuard(
         { tool: event.tool, args: event.input },
         { args: event.input },

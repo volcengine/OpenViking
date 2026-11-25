@@ -5,6 +5,7 @@ import { createRecallCompressor } from "./compressor.mjs";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
 import {
   dequeue,
   enqueue,
@@ -19,7 +20,7 @@ import {
   pluginMessage,
   promptText,
 } from "./capture.mjs";
-import { deriveDshSessionId } from "./session-id.mjs";
+import { deriveDshSessionId, historySessionIds } from "./session-id.mjs";
 
 export class OpenVikingRuntime {
   constructor(client, config, logger = console, resolveSessionConfig = null) {
@@ -55,6 +56,7 @@ export class OpenVikingRuntime {
       ready: false,
       profileBlock: "",
       profileDelivered: false,
+      historyPointer: null,
       toolNames: new Map(),
       writes: Promise.resolve(),
       warnedFailures: new Set(),
@@ -166,6 +168,23 @@ export class OpenVikingRuntime {
       },
     );
     return block && !signal?.aborted ? pluginMessage(block, { form: "recall" }) : null;
+  }
+
+  // A finished compaction or a resume leaves the session-history note for the
+  // agent's next step.
+  markHistoryPointer(session, event) {
+    this.stateFor(session).historyPointer = event;
+  }
+
+  historyPointerMessage(agent, sessions) {
+    const state = this.stateFor(agent.session);
+    const event = state.historyPointer;
+    if (!event) return null;
+    state.historyPointer = null;
+    if (!state.config.sessionHistoryPointer || !isCaptureEnabled(state.config)) return null;
+    return pluginMessage(formatSessionHistoryPointer(historySessionIds(agent.session, sessions), { event }), {
+      form: "session-history",
+    });
   }
 
   capture(session, event) {

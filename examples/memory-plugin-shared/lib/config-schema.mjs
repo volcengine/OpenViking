@@ -167,6 +167,9 @@ export const KNOBS = [
   { name: "resumeArchiveInject", type: "bool", default: false, env: "OPENVIKING_RESUME_ARCHIVE_INJECT", capability: "session" },
   { name: "resumeArchiveTokenBudget", type: "int", default: 32000, min: 0, max: 128000, env: "OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET", capability: "session" },
   { name: "resumeArchiveMaxChars", type: "int", default: 6000, min: 1000, max: 200000, env: "OPENVIKING_RESUME_ARCHIVE_MAX_CHARS", capability: "session" },
+  // After a host compaction, tell the model where the full record of the
+  // session is and how to look things up in it.
+  { name: "sessionHistoryPointer", type: "bool", default: true, env: "OPENVIKING_SESSION_HISTORY_POINTER", capability: "session" },
   { name: "skillExperience", type: "bool", default: false, env: "OPENVIKING_SKILL_EXPERIENCE", capability: "session" },
   { name: "skillExperienceLimit", type: "int", default: 3, min: 1, max: 50, env: "OPENVIKING_SKILL_EXPERIENCE_LIMIT", capability: "session" },
   { name: "skillCatalog", type: "bool", default: true, env: "OPENVIKING_SKILL_CATALOG", capability: "session" },
