@@ -42,7 +42,7 @@ The gateway writes no HTTP access log, and its error messages never repeat submi
 
 ## What providers see {#what-providers-see}
 
-Every [upstream](../guides/15-gateway.md#key-terms) receives the full model input, including memory the gateway added and OpenViking tool results. Only add providers you trust with that data.
+Every [upstream](../guides/15-gateway.md#key-terms) receives the full model input, including memory the gateway added and OpenViking tool results. Only add providers you trust with that data. To send a user's registered secrets only as references, turn on [Seal secrets](14-seal-secrets.md) in the context profile. A request that cannot be sealed is then refused, never sent unsealed.
 
 Some things never leave the gateway: `X-OpenViking-*` headers, client credentials and cookies are never forwarded to upstreams, and `X-OpenViking-*` headers in a provider's response are never passed to the client. When an upstream takes each client's own provider key, that key reaches the provider only as the upstream's credential.
 
