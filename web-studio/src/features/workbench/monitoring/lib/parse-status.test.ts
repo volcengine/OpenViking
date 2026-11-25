@@ -30,6 +30,22 @@ describe('parseObserverStatus', () => {
     ])
   })
 
+  it('preserves ambiguous tables as text and still parses the next table', () => {
+    const raw = [
+      '+--------------+----------+------------+',
+      '|    Model     | Provider |   Status   |',
+      '+--------------+----------+------------+',
+      '| 研究 | 总结  | example  | configured |',
+      '+--------------+----------+------------+',
+    ].join('\n')
+    const next = ['+-------+', '| Queue |', '+-------+', '| Embed |', '+-------+']
+
+    expect(parseObserverStatus([raw, ...next].join('\n'))).toEqual([
+      { kind: 'text', value: raw },
+      { kind: 'table', headers: ['Queue'], rows: [['Embed']] },
+    ])
+  })
+
   it('keeps adjacent ASCII tables as separate blocks', () => {
     expect(
       parseObserverStatus(`

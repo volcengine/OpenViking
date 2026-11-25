@@ -25,6 +25,7 @@ export function parseObserverStatus(status: string): ObserverStatusBlock[] {
 
   for (let index = 0; index < lines.length; ) {
     if (lines[index].startsWith('+') && lines[index + 1]?.startsWith('|')) {
+      const tableStart = index
       const headers = parseRow(lines[index + 1])
       const rows: string[][] = []
       index += 2
@@ -48,11 +49,15 @@ export function parseObserverStatus(status: string): ObserverStatusBlock[] {
         break
       }
 
-      blocks.push({
-        headers,
-        kind: 'table',
-        rows,
-      })
+      // A literal pipe in a cell can make the column split ambiguous.
+      if (rows.some((row) => row.length !== headers.length)) {
+        blocks.push({
+          kind: 'text',
+          value: lines.slice(tableStart, index).join('\n'),
+        })
+      } else {
+        blocks.push({ headers, kind: 'table', rows })
+      }
       continue
     }
 

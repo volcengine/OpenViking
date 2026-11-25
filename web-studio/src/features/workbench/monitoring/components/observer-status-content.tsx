@@ -29,7 +29,11 @@ export function ObserverStatusContent({ status }: { status: string }) {
         block.kind === 'text' ? (
           <p
             key={`${block.value}-${blockIndex}`}
-            className="rounded-lg border bg-muted/20 px-3 py-2 text-sm text-muted-foreground"
+            className={`rounded-lg border bg-muted/20 px-3 py-2 text-muted-foreground ${
+              block.value.includes('\n')
+                ? 'overflow-x-auto whitespace-pre font-mono text-xs'
+                : 'text-sm'
+            }`}
           >
             {block.value}
           </p>
