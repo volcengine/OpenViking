@@ -143,7 +143,8 @@ async def test_snapshot_delete_posts_body(snapshot_transport):
     ids = ["a" * 40]
     result = {"result": "dry_run", "deleted": ids}
     client._http = connect(httpx.Response(200, json={"status": "ok", "result": result}))
-    assert await client.snapshot.delete(ids, dry_run=True) == result
+    actual = await client.snapshot.delete(ids, dry_run=True)
+    assert actual == result
 
     (request,) = requests
     assert (request.method, request.url.path) == ("POST", "/api/v1/snapshot/delete")
