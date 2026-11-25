@@ -478,7 +478,8 @@ def test_summary_requests_keep_client_settings_and_set_the_cap(protocol, body, c
     request = adapter.summary_request(body, span, "Summarize", 8000)
     assert request[adapter.field] == [*span, {"role": "user", "content": "Summarize"}]
     assert request["stream"] is False and "stream_options" not in request
-    assert request["tools"] == body["tools"] and request["tool_choice"] == "auto"
+    expected_tool_choice = {"type": "none"} if protocol == "anthropic" else "none"
+    assert request["tools"] == body["tools"] and request["tool_choice"] == expected_tool_choice
     assert {key: request[key] for key in cap} == cap
     for key in ("thinking", "reasoning", "reasoning_effort"):
         assert request.get(key) == body.get(key)
