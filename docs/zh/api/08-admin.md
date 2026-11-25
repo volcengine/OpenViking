@@ -70,7 +70,9 @@ ov admin frozen-file-status acme agent-a skills/example/SKILL.md
 ov admin unfreeze-file acme agent-a skills/example/SKILL.md
 ```
 
-ROOT 可以使用 `--sudo` 管理指定 account。普通 USER 和 GLOBAL 无权管理账号内冻结列表；新增冻结只允许 USER 目标。路径相对于目标 user 根目录，采用 GLOBAL 的严格字面路径语法：不支持通配符、URI、编码转义、`..` 或内部存储文件名，单段不得超过 255 字节。为防止 localfs 大小写别名绕过，冻结匹配及解冻保守地忽略大小写；大小写敏感后端上的同名大小写变体也会受保护。
+这三个 CLI 命令也接受 `viking://user/agent-a/skills/example/SKILL.md` 这样的完整 user URI，自动转换为相对路径。URI 中的 user 必须与命令的 `user-id` 一致，否则 CLI 会报错。转换保留原始路径，不解码转义或消除 `..`；服务端继续校验相对路径。
+
+ROOT 可以使用 `--sudo` 管理指定 account。普通 USER 和 GLOBAL 无权管理账号内冻结列表；新增冻结只允许 USER 目标。服务端接收的路径相对于目标 user 根目录，采用 GLOBAL 的严格字面路径语法：不支持通配符、URI、编码转义、`..` 或内部存储文件名，单段不得超过 255 字节。为防止 localfs 大小写别名绕过，冻结匹配及解冻保守地忽略大小写；大小写敏感后端上的同名大小写变体也会受保护。
 
 冻结路径可以尚不存在。状态仅表示路径是否在账号内冻结列表中，不暴露文件存在性、内容、大小或摘要。重复冻结、解冻是幂等的；目标 user 已删除或变更角色后仍可清除旧规则。
 

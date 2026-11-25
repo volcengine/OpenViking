@@ -70,7 +70,9 @@ ov admin frozen-file-status acme agent-a skills/example/SKILL.md
 ov admin unfreeze-file acme agent-a skills/example/SKILL.md
 ```
 
-ROOT can manage a specified account with `--sudo`. USER and GLOBAL cannot manage these rules; freezing requires a USER target. Paths are relative to that user's root and use GLOBAL's strict literal path syntax: no globs, URIs, encoded escapes, traversal or storage-internal filenames, and at most 255 bytes per component. Matching and unfreezing conservatively ignore case to prevent localfs alias bypasses; case variants on case-sensitive backends are protected too.
+All three CLI commands also accept a full user URI such as `viking://user/agent-a/skills/example/SKILL.md` and convert it to a relative path. The URI user must match the command's `user-id`, otherwise the CLI reports an error. Conversion preserves the literal path without decoding escapes or resolving `..`; the server still validates the relative path.
+
+ROOT can manage a specified account with `--sudo`. USER and GLOBAL cannot manage these rules; freezing requires a USER target. Server-side paths are relative to that user's root and use GLOBAL's strict literal path syntax: no globs, URIs, encoded escapes, traversal or storage-internal filenames, and at most 255 bytes per component. Matching and unfreezing conservatively ignore case to prevent localfs alias bypasses; case variants on case-sensitive backends are protected too.
 
 The file need not exist. Status only reports membership in the account frozen file list, without existence, content, size or summaries. Repeated freeze/unfreeze operations are idempotent; old rules can still be removed after the target user is deleted or changes role.
 

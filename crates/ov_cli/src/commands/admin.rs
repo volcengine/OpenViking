@@ -237,6 +237,7 @@ pub async fn frozen_file(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
+    let path = frozen_file_relative_path(user_id, path)?;
     show_admin(
         client
             .admin_frozen_file(account_id, user_id, path, frozen)
@@ -244,6 +245,27 @@ pub async fn frozen_file(
         output_format,
         compact,
     )
+}
+
+fn frozen_file_relative_path<'a>(user_id: &str, path: &'a str) -> Result<&'a str> {
+    if !path.starts_with("viking://") {
+        return Ok(path);
+    }
+    let user_path = path.strip_prefix("viking://user/").ok_or_else(|| {
+        Error::InvalidPath("Frozen file URI must use viking://user/<user-id>/<path>".to_string())
+    })?;
+    let (uri_user_id, relative_path) = user_path
+        .split_once('/')
+        .filter(|(_, relative_path)| !relative_path.is_empty())
+        .ok_or_else(|| {
+            Error::InvalidPath("Frozen file URI must include a file path".to_string())
+        })?;
+    if uri_user_id != user_id {
+        return Err(Error::InvalidPath(format!(
+            "Frozen file URI user '{uri_user_id}' does not match target user '{user_id}'"
+        )));
+    }
+    Ok(relative_path)
 }
 
 pub async fn set_role(
@@ -275,7 +297,8 @@ pub async fn regenerate_key(
                 .as_deref()
                 .is_some_and(|key| key_belongs_to(key, account_id, user_id))
     }) {
-        let update = ConfigStore::new()?.prepare_api_key_update(config, request_key.as_deref().unwrap())?;
+        let update =
+            ConfigStore::new()?.prepare_api_key_update(config, request_key.as_deref().unwrap())?;
         eprintln!(
             "Rotating your API key will update api_key in {} and any matching authentication headers.",
             update.path().display()
@@ -506,6 +529,40 @@ fn mask_api_key(api_key: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn frozen_file_uri_preserves_literal_user_relative_path() {
+        for path in [
+            "GLOBAL_POLICY.md",
+            "skills/example/SKILL.md",
+            "a/../b",
+            "a%2Fb",
+        ] {
+            let uri = format!("viking://user/alice/{path}");
+            assert_eq!(frozen_file_relative_path("alice", &uri).unwrap(), path);
+            assert_eq!(frozen_file_relative_path("alice", path).unwrap(), path);
+        }
+    }
+
+    #[test]
+    fn frozen_file_uri_rejects_wrong_owner_namespace_and_user_root() {
+        for uri in [
+            "viking://user/bob/GLOBAL_POLICY.md",
+            "viking://user/alice-other/GLOBAL_POLICY.md",
+            "viking://resources/alice/GLOBAL_POLICY.md",
+            "viking://agent/alice/GLOBAL_POLICY.md",
+            "viking://user/alice",
+            "viking://user/alice/",
+        ] {
+            assert!(
+                matches!(
+                    frozen_file_relative_path("alice", uri),
+                    Err(Error::InvalidPath(_))
+                ),
+                "must reject {uri}"
+            );
+        }
+    }
 
     fn strip_ansi(input: &str) -> String {
         let mut output = String::new();

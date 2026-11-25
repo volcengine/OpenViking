@@ -10,7 +10,7 @@ pub(crate) enum AdminCommands {
         account_id: String,
         #[arg(value_name = "user-id")]
         user_id: String,
-        /// Literal path relative to the user's root
+        /// Literal user-relative path or viking://user/<user-id>/<path> URI
         #[arg(value_name = "path")]
         path: String,
     },
@@ -20,6 +20,7 @@ pub(crate) enum AdminCommands {
         account_id: String,
         #[arg(value_name = "user-id")]
         user_id: String,
+        /// Literal user-relative path or viking://user/<user-id>/<path> URI
         #[arg(value_name = "path")]
         path: String,
     },
@@ -29,6 +30,7 @@ pub(crate) enum AdminCommands {
         account_id: String,
         #[arg(value_name = "user-id")]
         user_id: String,
+        /// Literal user-relative path or viking://user/<user-id>/<path> URI
         #[arg(value_name = "path")]
         path: String,
     },
