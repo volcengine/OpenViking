@@ -17,6 +17,7 @@ import { createPortal } from 'react-dom';
 import FocusLock from 'react-focus-lock';
 import { CSSTransition } from 'react-transition-group';
 import CloseIcon from '../../../../../icons/svg/viking-bot/remove.svg?react';
+import { useViewActive } from '../../view-activity.js';
 import { useLocale } from '../../locale-context.js';
 import { NotificationScope } from '../../feedback/notification-scope.js';
 import { resolveLocale } from '../../locale.js';
@@ -50,15 +51,20 @@ export function Modal({
   closeIcon,
   maskClosable = true,
 }: ModalProps) {
+  const active = useViewActive();
+  const currentActivity = useRef(active);
+  currentActivity.current = active;
   const locale = useLocale(localeProp);
   const text = resolveLocale({ 'en-US': enUS, 'zh-CN': zhCN }, locale);
   const label = closeLabel ?? text.closeLabel;
   const generatedId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const maskRef = useRef<HTMLButtonElement>(null);
-  const [present, setPresent] = useState(open);
+  const [present, setPresent] = useState(open && active);
+  const wasPresent = useRef(open && active);
+  if (!active && present) setPresent(false);
   const [layer, setLayer] = useState<HTMLDivElement | null>(null);
-  usePortalTheme(Boolean(layer), triggerRef, layer);
+  usePortalTheme(active && Boolean(layer), triggerRef, layer);
 
   // 浮层 portal 到 body 后不在弹窗的 DOM 子树里，`FocusLock` 的 Tab 序列看不到
   // 它。把浮层节点登记成 shard，`FocusLock` 就会把它算进自己的焦点范围，Tab 能
@@ -85,12 +91,24 @@ export function Modal({
 
   // useEffect 必要性：Portal 提交后才可锁定所属 document 的 body；
   // 锁属于浏览器外部资源，需一直保留到退出动画卸载 Portal，再释放本层令牌。
-  // 与 Drawer 共用所有者计数，最后一个浮层释放时才恢复宿主原样式。
+  // 所属视图隐藏时也会移除 Portal 并释放锁；与 Drawer 共用计数，最后一个持有者恢复宿主样式。
   useEffect(() => {
-    if (layer) return lockBodyScroll(layer.ownerDocument.body);
-  }, [layer]);
+    if (active && layer) return lockBodyScroll(layer.ownerDocument.body);
+  }, [active, layer]);
 
-  if (!open && !present) return null;
+  const finishClose = useCallback(() => {
+    const notify = wasPresent.current && !open;
+    wasPresent.current = false;
+    if (notify) afterClose?.();
+  }, [open, afterClose]);
+  // Effect necessity: hiding the view removes CSSTransition before its exit
+  // callback can run. Complete that external transition after removal; the ref
+  // consumes the close once, including effect replay and subsequent reactivation.
+  useEffect(() => {
+    if (!active) finishClose();
+  }, [active, finishClose]);
+
+  if (!active || (!open && !present)) return null;
   return createPortal(
     <div
       ref={setLayer}
@@ -136,10 +154,13 @@ export function Modal({
         appear
         mountOnEnter
         unmountOnExit
-        onEnter={() => setPresent(true)}
+        onEnter={() => {
+          wasPresent.current = true;
+          setPresent(true);
+        }}
         onExited={() => {
           setPresent(false);
-          afterClose?.();
+          finishClose();
         }}
       >
         <div
@@ -152,7 +173,9 @@ export function Modal({
         >
           <FocusLock
             className="ov-modal__focus-lock"
-            returnFocus={{ preventScroll: true }}
+            returnFocus={() =>
+              currentActivity.current && { preventScroll: true }
+            }
             crossFrame={false}
             shards={shards}
           >

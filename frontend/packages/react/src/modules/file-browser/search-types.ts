@@ -10,6 +10,12 @@
 /** 检索方式。Retrieval mode. */
 export type SearchMode = 'find' | 'search' | 'grep' | 'glob';
 
+/** Request failures normalized by the search hook for presentation. */
+export interface SearchFailure {
+  reason: 'invalid-pattern' | 'request';
+  message: string;
+}
+
 /** 模式顺序，与设计稿的下拉一致。Mode order, matching the design's menu. */
 export const SEARCH_MODES: readonly SearchMode[] = [
   'find',

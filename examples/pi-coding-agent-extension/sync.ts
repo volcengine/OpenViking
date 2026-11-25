@@ -360,6 +360,20 @@ export class SyncManager {
       this.lastCommitFailure = "no OpenViking session yet";
       return null;
     }
+    // Takeover commits only once its flush barrier has drained this session.
+    if (!this.config.takeoverEnabled) {
+      const deferred = await this.pending.deferCommitBehindPendingWrites(
+        (path: string, init?: any) => this.client.fetchJSON(path, init, opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : undefined),
+        this.ovSessionId,
+        { keep_recent_count: opts.keepRecentCount ?? 0 },
+        (stage: string, data: unknown) => this.logger.log(stage, data),
+      );
+      if (deferred) {
+        this.lastCommitFailure = "messages are still queued; the commit will follow them";
+        this.logger.log("commit", { session: this.ovSessionId, ok: false, queued: deferred.ok, reason: "pending_writes" });
+        return null;
+      }
+    }
     const response = await this.client.commitSessionResponse(
       this.ovSessionId,
       opts.keepRecentCount,

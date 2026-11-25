@@ -69,7 +69,7 @@ test('the five quick commands use scoped native requests and command-specific re
         .textContent,
       /Task id/,
     );
-    await host.execute('ov compile --compile-name demo-wiki');
+    await host.execute('ov compile --compile-name research-Wiki');
     assert.match(
       host.records.at(-1).querySelector('.ov-command-console__write')
         .textContent,
@@ -114,7 +114,7 @@ test('the five quick commands use scoped native requests and command-specific re
           },
         },
       ],
-      ['/gateway/api/v1/compile', { compile_name: 'demo-wiki' }],
+      ['/gateway/api/v1/compile', { compile_name: 'research-Wiki' }],
       ['/gateway/api/v1/tasks/compile-task', undefined],
       [
         '/gateway/api/v1/compile',
@@ -125,17 +125,24 @@ test('the five quick commands use scoped native requests and command-specific re
         },
       ],
     ]);
+    await host.execute('ov compile --compile-name 研发-Wiki');
+    assert.equal(host.records.at(-1).dataset.status, 'success');
+    assert.deepEqual(calls.at(-1), [
+      '/gateway/api/v1/compile',
+      { compile_name: '研发-Wiki' },
+    ]);
     for (const command of [
       'ov compile --from viking://resources/notes',
       'ov compile --compile-name demo-wiki --from viking://resources/notes',
       'ov compile --compile-name "invalid name"',
+      `ov compile --compile-name ${'a'.repeat(32)}汉`,
       'ov compile create --compile-name demo-wiki --from viking://resources/notes --to viking://resources/wiki',
       `ov compile create --compile-name demo-wiki --from ${root} --to viking://resources/wiki --skill ${compileSkill} --args '[]'`,
     ]) {
       await host.execute(command);
       assert.equal(host.records.at(-1).dataset.status, 'error', command);
     }
-    assert.equal(calls.length, 9);
+    assert.equal(calls.length, 10);
   } finally {
     await host.dispose();
   }

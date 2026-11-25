@@ -48,6 +48,17 @@
   transition: background-color 160ms ease;
 }
 
+.ov-resizable-handle[aria-orientation='horizontal'] {
+  width: auto;
+  height: var(--ov-ui-resizable-handle-hit);
+  cursor: ns-resize;
+}
+
+.ov-resizable-handle[aria-orientation='horizontal'] .ov-resizable-handle__line {
+  width: 100%;
+  height: var(--ov-ui-resizable-handle-line);
+}
+
 .ov-resizable-handle:hover .ov-resizable-handle__line,
 .ov-resizable-handle:focus-visible .ov-resizable-handle__line,
 .ov-resizable-handle[data-dragging] .ov-resizable-handle__line {
@@ -62,8 +73,14 @@
  * light background and makes a weak focus cue. No outline, because the divider
  * spans the full column height and a box would enclose a lot of empty space.
  */
-.ov-resizable-handle:focus-visible .ov-resizable-handle__line {
+.ov-resizable-handle[aria-orientation='vertical']:focus-visible
+  .ov-resizable-handle__line {
   width: calc(var(--ov-ui-resizable-handle-line) * 2);
+}
+
+.ov-resizable-handle[aria-orientation='horizontal']:focus-visible
+  .ov-resizable-handle__line {
+  height: calc(var(--ov-ui-resizable-handle-line) * 2);
 }
 
 @media (prefers-reduced-motion: reduce) {

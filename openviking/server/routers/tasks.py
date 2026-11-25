@@ -12,8 +12,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from openviking.server.auth import get_request_context
+from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.service.task_domain import TaskRecord, TaskStatus
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import (
@@ -23,6 +25,14 @@ from openviking_cli.exceptions import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
+
+
+def _list_item(task: TaskRecord) -> dict:
+    """Return a task list entry with Compile rollback bookkeeping reserved for task details."""
+    item = task.to_dict()
+    if task.task_type == "compile":
+        item["meta"].pop("rollback_lock_retries", None)
+    return item
 
 
 @router.get("/tasks/{task_id}")
@@ -84,6 +94,14 @@ async def cancel_task(
             code="NOT_FOUND",
             details={"resource": task_id, "type": "task"},
         )
+    if (
+        task.task_type == "compile"
+        and task.status == TaskStatus.CANCELLED
+        and task.stage == "queued"
+    ):
+        lifecycle = get_service().compile.lifecycle
+        if lifecycle is not None:
+            await lifecycle.store.cancel_queued_run(task)
     return Response(status="ok", result=task.to_dict())
 
 
@@ -146,7 +164,7 @@ async def list_tasks(
         )
         tasks = await list_call
         more = len(tasks) > limit
-        items = [t.to_dict() for t in tasks[:limit]]
+        items = [_list_item(t) for t in tasks[:limit]]
         return Response(
             status="ok",
             result={
@@ -185,4 +203,4 @@ async def list_tasks(
             user_id=_ctx.user.user_id,
             include_internal=include_internal,
         )
-    return Response(status="ok", result=[t.to_dict() for t in tasks])
+    return Response(status="ok", result=[_list_item(t) for t in tasks])

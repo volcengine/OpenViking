@@ -99,11 +99,13 @@ class FileStore(AccountStore):
         api_key_hashing_enabled: bool = False,
         watch_enabled: bool = False,
         watch_interval_seconds: float = 30.0,
+        bootstrap_default_account: bool = True,
     ):
         params = dict(params or {})
         reserved = {
             "viking_fs",
             "api_key_hashing_enabled",
+            "bootstrap_default_account",
         }
         if overridden := reserved.intersection(params):
             names = ", ".join(sorted(overridden))
@@ -127,6 +129,7 @@ class FileStore(AccountStore):
         self._viking_fs = viking_fs
         self._async_agfs = AsyncAGFSClient(viking_fs.agfs)
         self._api_key_hashing_enabled = api_key_hashing_enabled
+        self._bootstrap_default_account = bootstrap_default_account
         self._read_only = configured_read_only
         self._watch_enabled = configured_watch_enabled
         self._watch_interval_seconds = (
@@ -161,14 +164,25 @@ class FileStore(AccountStore):
             return
         try:
             await self._save_accounts_json(delete_account_ids={account_id})
-        except Exception:
-            logger.exception("Failed to persist rollback for account %s", account_id)
+        except Exception as exc:
+            logger.error(
+                "Account creation rollback persistence failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     async def load(self) -> None:
         """Load persisted identities; only writers bootstrap and migrate the store."""
-        if self._read_only:
-            await self._reload()
-            if not self._accounts:
+        # Ordinary watched loads are non-mutating; writable hashing upgrades
+        # must retain their initial migration.
+        if self._read_only or (
+            self._watch_enabled
+            and not self._api_key_hashing_enabled
+            and await self._read_json(ACCOUNTS_PATH) is not None
+        ):
+            initialized = await self._reload()
+            if self._read_only and (
+                not initialized or (self._bootstrap_default_account and not self._accounts)
+            ):
                 raise FailedPreconditionError(
                     "Read-only account store requires an initialized registry."
                 )
@@ -177,9 +191,10 @@ class FileStore(AccountStore):
         async with self._mutation_lock:
             accounts_data = await self._read_json(ACCOUNTS_PATH)
             if accounts_data is None:
-                # First run: create default account
-                now = datetime.now(timezone.utc).isoformat()
-                accounts_data = {"accounts": {"default": {"created_at": now}}}
+                accounts_data = {"accounts": {}}
+                if self._bootstrap_default_account:
+                    now = datetime.now(timezone.utc).isoformat()
+                    accounts_data["accounts"]["default"] = {"created_at": now}
                 await self._write_json(ACCOUNTS_PATH, accounts_data)
 
             accounts, account_key_indexes, user_group_ids = await self._build_state(
@@ -226,9 +241,10 @@ class FileStore(AccountStore):
             # become the baseline for an older in-memory snapshot.
             if self._read_only:
                 await self._reload()
-        except Exception:
-            logger.warning(
-                "Initial account store signature failed; watcher will retry", exc_info=True
+        except Exception as exc:
+            logger.info(
+                "Initial account store signature failed; watcher will retry",
+                extra={"error_type": type(exc).__name__},
             )
             last_signature = None
 
@@ -236,8 +252,11 @@ class FileStore(AccountStore):
             await asyncio.sleep(self._watch_interval_seconds)
             try:
                 signature = await self._compute_store_signature()
-            except Exception:
-                logger.debug("Account store signature check failed", exc_info=True)
+            except Exception as exc:
+                logger.info(
+                    "Account store signature check failed; watcher will retry",
+                    extra={"error_type": type(exc).__name__},
+                )
                 continue
             if signature == last_signature:
                 continue
@@ -245,21 +264,24 @@ class FileStore(AccountStore):
                 await self._reload()
                 last_signature = signature
                 logger.info("Account store change detected; provider cache reloaded")
-            except Exception:
-                logger.warning("Account store reload failed; will retry", exc_info=True)
+            except Exception as exc:
+                logger.info(
+                    "Account store reload failed; will retry",
+                    extra={"error_type": type(exc).__name__},
+                )
 
-    async def _reload(self) -> None:
-        """Read-only refresh: re-read store and atomically swap state (never writes/migrates)."""
+    async def _reload(self) -> bool:
+        """Refresh without writes or migration; return whether the registry exists."""
         async with self._mutation_lock:
-            await self._reload_unlocked()
+            return await self._reload_unlocked()
 
-    async def _reload_unlocked(self) -> None:
+    async def _reload_unlocked(self) -> bool:
         """Reload while holding ``_mutation_lock``."""
         async with self._reload_lock:
             accounts_data = await self._read_json(ACCOUNTS_PATH)
             if accounts_data is None:
                 # Store not initialized yet (reader started before writer): keep state.
-                return
+                return False
 
             accounts, account_key_indexes, user_group_ids = await self._build_state(
                 accounts_data, allow_migration=False
@@ -273,6 +295,7 @@ class FileStore(AccountStore):
                 len(self._accounts),
                 sum(len(info.users) for info in self._accounts.values()),
             )
+            return True
 
     async def _refresh_accounts_from_store_unlocked(self) -> None:
         accounts_data = await self._read_json(ACCOUNTS_PATH)
@@ -350,6 +373,7 @@ class FileStore(AccountStore):
             )
 
             if self._api_key_hashing_enabled and allow_migration:
+                migrated_keys = 0
                 for user_id, user_info in users.items():
                     key_or_hash = user_info.get("key", "")
                     if not key_or_hash or key_or_hash.startswith("$argon2"):
@@ -360,7 +384,12 @@ class FileStore(AccountStore):
                     user_info["key"] = stored_key
                     user_info["key_prefix"] = key_prefix
                     await self._save_users_json(account_id, {user_id: user_info})
-                    logger.info("Migrated API key for user %s in account %s", user_id, account_id)
+                    migrated_keys += 1
+                if migrated_keys:
+                    logger.info(
+                        "Account API key hashing migration completed",
+                        extra={"account_id": account_id, "total": migrated_keys},
+                    )
             account_key_indexes[account_id] = self._build_account_key_index(account_id, users)
 
         return accounts, account_key_indexes, user_group_ids
@@ -389,8 +418,11 @@ class FileStore(AccountStore):
             info = await self._async_agfs.stat(path, bypass_cache=True)
         except AGFSNotFoundError:
             return (path, None, None)
-        except Exception:
-            logger.debug("Failed to stat %s for key-store signature", path, exc_info=True)
+        except Exception as exc:
+            logger.info(
+                "Account store stat failed; using unavailable signature",
+                extra={"error_type": type(exc).__name__},
+            )
             return (path, None, None)
 
         if not isinstance(info, dict):
@@ -652,9 +684,8 @@ class FileStore(AccountStore):
                     await self._write_json(path, users_data, lease_ref=users_lease)
                     created_users += len(new_users)
                     logger.info(
-                        "Persisted trusted identities for account %s: %s",
-                        account_id,
-                        new_users,
+                        "Trusted identities persisted",
+                        extra={"account_id": account_id, "total": len(new_users)},
                     )
 
                 account = self._accounts.get(account_id)

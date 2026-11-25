@@ -14,6 +14,7 @@ import os
 import re
 import threading
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import SearchItemResult, SearchResult
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
@@ -441,10 +442,11 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             if table_created:
                 try:
                     self._execute_cleanup()
-                except Exception:
-                    logger.exception(
-                        "pgvector_adapter: failed to clean up partially created collection %s",
-                        self._collection_name,
+                except Exception as _log_error:
+                    logger.info(
+                        "pgvector_adapter: failed to clean up partially created collection %s error_type=%s",
+                        short_hash(str(self._collection_name)),
+                        type(_log_error).__name__,
                     )
             raise
 

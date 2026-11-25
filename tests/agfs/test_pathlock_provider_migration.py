@@ -87,8 +87,12 @@ Path(sys.argv[2]).write_text(json.dumps(handoff))
     config = RagfsBindingConfig(
         agfs=AGFSConfig(path=str(tmp_path), backend="local", pathlock={"provider": "cache"}),
         cache=CacheConfig(
-            provider="redis",
-            params={"endpoints": [redis_url], "command_timeout_ms": 1000},
+            instances={
+                "default": {
+                    "provider": "redis",
+                    "params": {"endpoints": [redis_url], "command_timeout_ms": 1000},
+                }
+            },
         ),
         service_name=f"migration-{uuid.uuid4().hex}",
     )
@@ -265,8 +269,12 @@ async def test_sqlite_backlog_migrates_to_redis_and_is_consumed(
             pathlock={"provider": "cache"},
         ),
         cache=CacheConfig(
-            provider="redis",
-            params={"endpoints": [redis_url], "command_timeout_ms": 1000},
+            instances={
+                "default": {
+                    "provider": "redis",
+                    "params": {"endpoints": [redis_url], "command_timeout_ms": 1000},
+                }
+            },
         ),
         service_name=f"backlog-migration-{uuid.uuid4().hex}",
     )
@@ -429,8 +437,12 @@ async def test_two_queue_managers_recover_same_backlog_coverage(tmp_path, monkey
             pathlock={"provider": "cache"},
         ),
         cache=CacheConfig(
-            provider="redis",
-            params={"endpoints": [redis_url], "command_timeout_ms": 1000},
+            instances={
+                "default": {
+                    "provider": "redis",
+                    "params": {"endpoints": [redis_url], "command_timeout_ms": 1000},
+                }
+            },
         ),
         service_name=f"contended-migration-{uuid.uuid4().hex}",
     )
@@ -600,8 +612,12 @@ async def test_recovery_retry_exhaustion_fails_task_and_drains_queue(tmp_path, m
                 pathlock={"provider": "cache"},
             ),
             cache=CacheConfig(
-                provider="redis",
-                params={"endpoints": [redis_url], "command_timeout_ms": 1000},
+                instances={
+                    "default": {
+                        "provider": "redis",
+                        "params": {"endpoints": [redis_url], "command_timeout_ms": 1000},
+                    }
+                },
             ),
             service_name=f"exhausted-migration-{uuid.uuid4().hex}",
         )

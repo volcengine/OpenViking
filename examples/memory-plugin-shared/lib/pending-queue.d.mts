@@ -4,6 +4,7 @@ export function createPendingQueue(scope?: string): {
   directory(): string;
   enqueue: typeof enqueue;
   replayPending: typeof replayPending;
+  deferCommitBehindPendingWrites: typeof deferCommitBehindPendingWrites;
   listPending: typeof listPending;
   dequeue: typeof dequeue;
   claimForReplay: typeof claimForReplay;
@@ -20,3 +21,14 @@ export function claimForReplay(filename: string): Promise<string | null>;
 export function dequeue(filename: string): Promise<boolean>;
 export function incrementRetry(filename: string, entry: Record<string, any>): Promise<boolean>;
 export function cleanStale(): Promise<number>;
+export function hasPendingWrites(sessionId: string): Promise<boolean>;
+export function enqueueCommitAfterWrites(
+  sessionId: string,
+  payload?: Record<string, any>,
+): Promise<{ ok: boolean; path?: string; error?: string }>;
+export function deferCommitBehindPendingWrites(
+  fetchJSON: (path: string, init?: any) => Promise<{ ok: boolean; status?: number; result?: any; error?: any }>,
+  sessionId: string,
+  payload?: Record<string, any>,
+  log?: (stage: string, data?: any) => void,
+): Promise<{ ok: boolean; path?: string; error?: string } | null>;

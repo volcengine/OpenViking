@@ -159,6 +159,11 @@ def get_privacy_matcher_class():
         ) from exc
 
 
+def compile_grep_pattern(pattern: str, case_insensitive: bool):
+    """Compile a pattern with the native RAGFS grep matcher."""
+    return _load_rust_module().GrepPattern(pattern, case_insensitive)
+
+
 def get_privacy_extractor_class():
     """Return the native fixed-rule credential extractor."""
     try:
@@ -209,10 +214,10 @@ try:
     RAGFSBindingClient, BindingFileHandle = get_binding_client()
     # Backward compatibility alias
     AGFSBindingClient = RAGFSBindingClient
-except Exception:
-    _logger.warning(
-        "Failed to initialize RAGFSBindingClient during module import; "
-        "RAGFSBindingClient will be None. Use get_binding_client() for explicit handling."
+except Exception as _log_error:
+    _logger.info(
+        "Failed to initialize RAGFSBindingClient during module import; RAGFSBindingClient will be None. Use get_binding_client() for explicit handling. error_type=%s",
+        type(_log_error).__name__,
     )
     RAGFSBindingClient = None
     AGFSBindingClient = None

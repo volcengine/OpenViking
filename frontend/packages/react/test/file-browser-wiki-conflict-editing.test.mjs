@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { act, button, click, settle } from './helpers/preview-native-dom.mjs';
+import {
+  act,
+  button,
+  click,
+  ok,
+  settle,
+} from './helpers/preview-native-dom.mjs';
 import { deferred } from './helpers/module-dom.mjs';
 import { setEditor, waitForEditor } from './helpers/preview-editor-dom.mjs';
 import {
@@ -13,10 +19,17 @@ import {
   otherBody,
   otherFile,
   pending,
+  wikiSaveNotice,
 } from './helpers/wiki-conflict-editor-dom.mjs';
 
-test('the FileBrowser editor highlights pending Wiki anchors without including metadata in the draft', async () => {
-  const { view, fetch } = await mountWikiFile();
+const editableBody = (editor) =>
+  [...editor.querySelectorAll('.cm-line')]
+    .map((line) => line.textContent)
+    .join('\n');
+
+test('the FileBrowser editor keeps Wiki metadata outside the draft and confirms a successful save', async () => {
+  const writing = deferred();
+  const { view, fetch } = await mountWikiFile({}, undefined, writing.promise);
   const dashboard = () =>
     view.container.querySelector('[role="tab"][data-key^="dashboard:"]');
   try {
@@ -29,12 +42,12 @@ test('the FileBrowser editor highlights pending Wiki anchors without including m
     ];
     const highlighted = () => markedLines().map((line) => line.textContent);
     assert.deepEqual(highlighted(), [body]);
+    assert.equal(editableBody(editor).trimEnd(), documentBody);
+    const suffix = editor.querySelector('.ov-file-preview__editor-suffix');
+    assert.equal(suffix?.contentEditable, 'false');
     assert.equal(
-      [...editor.querySelectorAll('.cm-line')]
-        .map((line) => line.textContent)
-        .join('\n')
-        .trimEnd(),
-      documentBody,
+      suffix?.textContent,
+      `<!-- CONFLICTS_CONTENT\n${JSON.stringify(pending)},\n${JSON.stringify(fixed)}\n-->`,
     );
     await act(async () =>
       markedLines()[0].dispatchEvent(
@@ -58,7 +71,19 @@ test('the FileBrowser editor highlights pending Wiki anchors without including m
     assert.deepEqual(highlighted(), []);
     await setEditor(editor, 'The process requires three approvals.');
     assert.deepEqual(highlighted(), []);
+    assert.equal(editableBody(editor), 'The process requires three approvals.');
+    assert.equal(editor.lastElementChild, suffix);
     await click(button('Save', view.container));
+    assert.deepEqual(wikiSaveNotice(), {
+      title: 'Processing Wiki changes',
+      content: 'Saving. Please wait.',
+      closable: false,
+    });
+    await act(async () => writing.resolve(await ok({})));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 240)));
+    await settle();
+    assert.equal(wikiSaveNotice(), null);
+    assert.equal(wikiSaveNotice('success')?.content, 'Saved successfully.');
     const write = fetch.calls.find(({ path }) =>
       path.endsWith('/content/write'),
     );
@@ -88,7 +113,7 @@ test('the FileBrowser Wiki conflict pencil opens the matching file directly in t
       const editor = await waitForEditor(view.container);
       assert.equal(activeTab(), file);
       assert.equal(dashboard(), null);
-      assert.equal(editor.textContent, body + fixedSentence);
+      assert.equal(editableBody(editor).trimEnd(), documentBody);
       await click(button('Cancel', view.container));
       assert.equal(view.container.querySelector('.cm-content'), null);
       assert.equal(activeTab(), file);
@@ -113,8 +138,8 @@ test('the FileBrowser Wiki conflict pencil waits for the selected file preview',
     assert.equal(view.container.querySelector('.cm-content'), null);
     await act(async () => preview.resolve());
     assert.equal(
-      (await waitForEditor(view.container)).textContent,
-      body + fixedSentence,
+      editableBody(await waitForEditor(view.container)).trimEnd(),
+      documentBody,
     );
   } finally {
     await view.unmount();
@@ -146,13 +171,14 @@ test('navigating away discards a pending Wiki conflict edit before preview loadi
       view.container.textContent,
       new RegExp(`${otherBody.length} characters`),
     );
+    const otherReads = editReads(otherFile);
 
     await act(async () => preview.resolve());
     await settle();
     assert.equal(activeTab(), otherFile);
     assert.equal(view.container.querySelector('.cm-content'), null);
     assert.equal(editReads(file), dashboardReads);
-    assert.equal(editReads(otherFile), 0);
+    assert.equal(editReads(otherFile), otherReads);
   } finally {
     await view.unmount();
   }

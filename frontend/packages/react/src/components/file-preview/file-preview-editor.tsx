@@ -14,6 +14,8 @@ import type { FilePreviewCodeEditorProps } from './file-preview-code-editor.js';
 export interface FilePreviewEditorProps {
   draft: string;
   annotations?: FilePreviewCodeEditorProps['annotations'];
+  initialAnnotation?: string;
+  readOnlySuffix?: string;
   source: FilePreviewSource;
   text: Required<FilePreviewLabels>;
   loading: boolean;
@@ -40,6 +42,8 @@ const loadCodeEditor = async () => {
 export function FilePreviewEditor({
   draft,
   annotations,
+  initialAnnotation,
+  readOnlySuffix,
   source,
   text,
   loading,
@@ -133,6 +137,8 @@ export function FilePreviewEditor({
         <Editor
           draft={draft}
           annotations={annotations}
+          initialAnnotation={initialAnnotation}
+          readOnlySuffix={readOnlySuffix}
           source={source}
           saving={saving}
           text={text}
@@ -148,6 +154,11 @@ export function FilePreviewEditor({
             spellCheck={false}
             onChange={(event) => onChange(event.target.value)}
           />
+          {readOnlySuffix ? (
+            <pre className="ov-file-preview__editor-suffix">
+              {readOnlySuffix}
+            </pre>
+          ) : null}
           <ErrorNotification
             title={text.editorLoadFailed}
             identity={editorFailure}

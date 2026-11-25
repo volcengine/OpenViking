@@ -260,13 +260,35 @@ async def test_pg_credentials_groups_rotation_and_service_isolation(pg_database,
         assert (await peer.resolve_identity(user_key)).group_ids == ("engineering",)
         await writer.set_role("acme", "alice", "admin")
         assert (await peer.resolve_identity(user_key)).role == Role.ADMIN
+        for hints in (
+            {},
+            {"account_id_hint": "acme"},
+            {"user_id_hint": "alice"},
+            {"account_id_hint": "acme", "user_id_hint": "alice"},
+        ):
+            snapshot = await peer._store.get_auth_snapshot(user_key, **hints)
+            assert snapshot["user_id"] == "alice"
+            assert snapshot["group_ids"] == ("engineering",)
+            assert await other._store.get_auth_snapshot(user_key, **hints) is None
+            assert await peer._store.get_auth_snapshot("unknown-key", **hints) is None
+        for hints in (
+            {"account_id_hint": "missing"},
+            {"user_id_hint": "missing"},
+            {"account_id_hint": "acme", "user_id_hint": "missing"},
+            {"account_id_hint": "missing", "user_id_hint": "alice"},
+        ):
+            assert await peer._store.get_auth_snapshot(user_key, **hints) is None
         page = await peer.list_users_page("acme", name_filter="ali*", limit=1)
         assert page["total"] == 1 and page["account_total"] == 2
         assert page["manager_count"] == 2 and page["key_count"] == 2
-        assert ("api_key" in page["users"][0]) == (mode == "encrypted")
+        if mode == "encrypted":
+            assert page["users"][0]["api_key"] == user_key
+        else:
+            assert "api_key" not in page["users"][0]
         materials = admin.execute(
             "SELECT material FROM ov_accounts_credentials WHERE service_name=%s", (service,)
         ).fetchall()
+        assert len(materials) == 2
         assert all(
             user_key not in material and admin_key not in material for (material,) in materials
         )
@@ -413,8 +435,11 @@ def test_pg_runtime_supports_separate_caller_event_loops(pg_database):
         assert asyncio.run(store.get_account("acme"))["user_count"] == 1
     finally:
         asyncio.run(store.close())
-    asyncio.run(store.load())
-    asyncio.run(store.close())
+    try:
+        asyncio.run(store.load())
+        assert asyncio.run(store.get_account("acme"))["user_count"] == 1
+    finally:
+        asyncio.run(store.close())
 
 
 async def test_pg_missing_schema_fails_without_ddl_or_runtime_lease(pg_database):

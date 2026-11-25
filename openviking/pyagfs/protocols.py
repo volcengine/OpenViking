@@ -3,14 +3,165 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, Awaitable, BinaryIO, Dict, Literal, Protocol, overload, runtime_checkable
+from typing import (
+    Any,
+    Awaitable,
+    BinaryIO,
+    Dict,
+    Literal,
+    Protocol,
+    TypeAlias,
+    overload,
+    runtime_checkable,
+)
 
 AGFSByteStream = Iterator[bytes]
+CacheScriptValue: TypeAlias = None | bool | int | bytes | list["CacheScriptValue"]
 
+
+class CacheRuntimeHandleProtocol(Protocol):
+    """Asynchronous cache Runtime handle returned by the native AGFS binding."""
+
+    @property
+    def instance(self) -> str:
+        """Return the configured cache instance name."""
+
+    @property
+    def default_ttl_seconds(self) -> float | None:
+        """Return the default TTL in seconds, or None when disabled."""
+
+    def get(self, key: str) -> Awaitable[bytes | None]:
+        """Read key and return its bytes value or None."""
+
+    def set(
+        self,
+        key: str,
+        value: bytes,
+        *,
+        ttl_seconds: float | None = None,
+        if_not_exists: bool = False,
+        if_exists: bool = False,
+        keep_ttl: bool = False,
+    ) -> Awaitable[bool]:
+        """Store bytes at key and return whether the condition allowed the write."""
+
+    def delete(self, keys: list[str]) -> Awaitable[int]:
+        """Delete keys and return the number removed."""
+
+    def unlink(self, keys: list[str]) -> Awaitable[int]:
+        """Unlink keys and return the number removed."""
+
+    def mget(self, keys: list[str]) -> Awaitable[list[bytes | None]]:
+        """Read keys and preserve the input order."""
+
+    def mset(self, entries: dict[str, bytes]) -> Awaitable[None]:
+        """Store multiple byte values."""
+
+    def incr(self, key: str) -> Awaitable[int]:
+        """Increment key by one and return the resulting value."""
+
+    def decr(self, key: str) -> Awaitable[int]:
+        """Decrement key by one and return the resulting value."""
+
+    def incr_by(self, key: str, delta: int = 1) -> Awaitable[int]:
+        """Increment key by delta and return the resulting value."""
+
+    def decr_by(self, key: str, delta: int = 1) -> Awaitable[int]:
+        """Decrement key by delta and return the resulting value."""
+
+    def expire(self, key: str, ttl_seconds: float) -> Awaitable[bool]:
+        """Set key expiration and return whether the key exists."""
+
+    def hget(self, key: str, field: str) -> Awaitable[bytes | None]:
+        """Read a hash field and return bytes or None."""
+
+    def hset(self, key: str, field: str, value: bytes) -> Awaitable[int]:
+        """Store a hash field and return the number of newly added fields."""
+
+    def sismember(self, key: str, member: bytes) -> Awaitable[bool]:
+        """Return whether member belongs to the set at key."""
+
+    def smembers(self, key: str) -> Awaitable[list[bytes]]:
+        """Return all members in the set at key."""
+
+    def scard(self, key: str) -> Awaitable[int]:
+        """Return the cardinality of the set at key."""
+
+    def zadd(self, key: str, score: float, member: str) -> Awaitable[int]:
+        """Add or update a sorted-set member and return whether it was newly added."""
+
+    def zscan_match(self, key: str, pattern: str, count: int) -> Awaitable[list[str]]:
+        """Return sorted-set members matching pattern."""
+
+    def zrangebyscore(
+        self, key: str, min_score: float, max_score: float, limit: int
+    ) -> Awaitable[list[str]]:
+        """Return sorted-set members in the inclusive score range."""
+
+    def zrem(self, key: str, members: list[str]) -> Awaitable[int]:
+        """Remove members from a sorted set and return the number removed."""
+
+    def lpush(self, key: str, values: list[bytes]) -> Awaitable[int]:
+        """Push byte values onto the head of a list and return its length."""
+
+    def rpush(self, key: str, values: list[bytes]) -> Awaitable[int]:
+        """Push byte values onto the tail of a list and return its length."""
+
+    def lpop(self, key: str, count: int | None = None) -> Awaitable[list[bytes]]:
+        """Pop up to count values from the head of a list."""
+
+    def rpop(self, key: str, count: int | None = None) -> Awaitable[list[bytes]]:
+        """Pop up to count values from the tail of a list."""
+
+    def llen(self, key: str) -> Awaitable[int]:
+        """Return the length of the list at key."""
+
+    def lrange(self, key: str, start: int, stop: int) -> Awaitable[list[bytes]]:
+        """Return the inclusive list range from start through stop."""
+
+    def lindex(self, key: str, index: int) -> Awaitable[bytes | None]:
+        """Return one list element by index."""
+
+    def lset(self, key: str, index: int, value: bytes) -> Awaitable[None]:
+        """Replace one list element by index."""
+
+    def ltrim(self, key: str, start: int, stop: int) -> Awaitable[None]:
+        """Trim a list to the inclusive range from start through stop."""
+
+    def lrem(self, key: str, count: int, value: bytes) -> Awaitable[int]:
+        """Remove matching list elements and return the number removed."""
+
+    def linsert(
+        self, key: str, position: str, pivot: bytes, value: bytes
+    ) -> Awaitable[int]:
+        """Insert value before or after pivot and return the new list length."""
+
+    def lmove(
+        self,
+        source: str,
+        destination: str,
+        source_direction: str,
+        destination_direction: str,
+    ) -> Awaitable[bytes | None]:
+        """Move one list element and return the moved bytes or None."""
+
+    def register_script(self, script_id: str, redis_lua: str) -> None:
+        """Register a named Redis Lua script without performing I/O."""
+
+    def execute_script(
+        self, script_id: str, keys: list[str], args: list[bytes]
+    ) -> Awaitable[CacheScriptValue]:
+        """Execute one registered script and return its recursive Python result."""
+
+    def ping(self) -> Awaitable[None]:
+        """Check cache provider health."""
 
 @runtime_checkable
 class AGFSSyncClientProtocol(Protocol):
     """AGFS binding contract used by OpenViking."""
+
+    def cache_runtime(self, instance: str = "default") -> CacheRuntimeHandleProtocol:
+        """Return the native cache Runtime handle selected by instance."""
 
     def ls(
         self,

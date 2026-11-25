@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { act, createElement as h } from 'react';
-import { DirectoryTour } from '@openviking/react/components/directory-tour';
+import {
+  DirectoryTour,
+  getOpenVikingDirectoryTourSteps,
+} from '@openviking/react/components/directory-tour';
 import { ScopeSelector } from '@openviking/react/components/scope-switcher';
 import { mount } from './helpers/module-dom.mjs';
 
@@ -47,6 +50,51 @@ test('a selector opened after the tour claims Escape before the tour closes', as
 
     await act(async () => trigger.dispatchEvent(escape()));
     assert.equal(closed, 1);
+  } finally {
+    await view.unmount();
+    anchor.remove();
+  }
+});
+
+test('the localized preset advances all six cards without a close button', async () => {
+  const preset = getOpenVikingDirectoryTourSteps('zh-CN');
+  const anchor = document.createElement('div');
+  anchor.getBoundingClientRect = () => new window.DOMRect(100, 100, 120, 32);
+  document.body.append(anchor);
+  const panel = () => document.querySelector('.ov-directory-tour');
+  const next = () =>
+    act(async () =>
+      panel().querySelector('.ov-directory-tour__primary').click(),
+    );
+  const results = [];
+  let closed = 0;
+  const view = await mount(
+    h(DirectoryTour, {
+      open: true,
+      locale: 'zh-CN',
+      steps: preset,
+      locateTarget: async () => anchor,
+      onClose: () => closed++,
+      onComplete: (result) => results.push(result),
+    }),
+  );
+  try {
+    for (const [index, step] of preset.entries()) {
+      assert.equal(panel().querySelector('h2').textContent, step.title);
+      assert.equal(
+        panel().querySelector('.ov-directory-tour__description').textContent,
+        step.description,
+      );
+      assert.equal(panel().querySelector('.ov-directory-tour__close'), null);
+      assert.equal(
+        panel().querySelector('.ov-directory-tour__primary').textContent,
+        index === 5 ? '知道了' : '下一步',
+      );
+      await next();
+    }
+    assert.equal(panel(), null);
+    assert.equal(closed, 0);
+    assert.deepEqual(results, [{ skippedStepIds: [] }]);
   } finally {
     await view.unmount();
     anchor.remove();

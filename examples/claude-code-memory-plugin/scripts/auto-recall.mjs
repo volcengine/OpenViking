@@ -32,9 +32,10 @@ function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
-function approve(msg) {
+function approve({ block, error } = {}) {
   const out = { decision: "approve" };
-  if (msg) out.hookSpecificOutput = { hookEventName: "UserPromptSubmit", additionalContext: msg };
+  if (block) out.hookSpecificOutput = { hookEventName: "UserPromptSubmit", additionalContext: block };
+  if (error) out.systemMessage = error;
   output(out);
 }
 
@@ -129,7 +130,7 @@ runHookStage({
   if (!recalled.block) {
     log("skip", { reason: recalled.stage });
     writeRecallState({ count: 0, reason: recalled.stage, cc_session_id: sessionId });
-    return;
+    return recalled;
   }
 
   writeRecallState({
@@ -145,5 +146,5 @@ runHookStage({
     cc_session_id: sessionId,
     reason: "ok",
   });
-  return recalled.block;
+  return recalled;
 }).catch((err) => { logError("uncaught", err); approve(); });

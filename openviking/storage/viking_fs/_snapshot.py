@@ -7,6 +7,7 @@ import sys
 from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
@@ -14,7 +15,7 @@ from openviking.pyagfs.exceptions import (
     AGFSResourceExhaustedError,
 )
 from openviking.server.error_mapping import is_not_found_error, map_exception
-from openviking.server.identity import RequestContext, Role
+from openviking.server.identity import AccessDecision, RequestContext, Role
 from openviking.service.task_domain import TaskPatch
 from openviking.service.task_work_index import detach_task_context
 from openviking.storage.acl import AclAction
@@ -39,6 +40,25 @@ _DERIVED_FILE_NAMES = frozenset({".abstract.md", ".overview.md", ".relations.jso
 
 class _SnapshotMixin:
     """Snapshot/git-like version control (commit/restore/show/diff/log)."""
+
+    def _snapshot_read_check_uris(self, uris: List[str], ctx: RequestContext) -> List[str]:
+        """Return commit/diff-paths targets that require ordinary read authorization."""
+        checked = []
+        for uri in uris:
+            parts = self._safe_uri_parts(uri)
+            if (
+                ctx.role == Role.GLOBAL
+                and parts[:1] == ["user"]
+                and (len(parts) < 2 or parts[1] != ctx.user.user_id)
+            ):
+                if len(parts) >= 3 and parts[2] in {"memories", "resources", "peers", "skills"}:
+                    continue
+                raise PermissionDeniedError(
+                    "GLOBAL cross-user snapshots require memories/resources/peers/skills",
+                    resource=uri,
+                )
+            checked.append(uri)
+        return checked
 
     def _ensure_snapshot_admin(self, ctx: RequestContext) -> None:
         if ctx.role not in {Role.ROOT, Role.ADMIN}:
@@ -254,6 +274,7 @@ class _SnapshotMixin:
         }
         if real_ctx.role == Role.ROOT or not paths:
             return await self._async_agfs.run("git_commit", **kwargs)
+        read_uris = self._snapshot_read_check_uris(paths, real_ctx)
 
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
@@ -300,7 +321,7 @@ class _SnapshotMixin:
                     uri=paths[0],
                 ) from exc
         try:
-            scope_uris = await self._snapshot_scope_uris(paths, real_ctx)
+            scope_uris = await self._snapshot_scope_uris(read_uris, real_ctx)
             await self._ensure_access_many(scope_uris, real_ctx, action=AclAction.READ)
             return await self._async_agfs.run("git_commit", **kwargs)
         finally:
@@ -480,10 +501,10 @@ class _SnapshotMixin:
                     project_dir=project_dir,
                     real_ctx=real_ctx,
                 )
-            except Exception:
-                logger.exception(
-                    "[VikingFS] git restore partial: reindex scheduling failed; "
-                    "HEAD advanced but reindex was not queued"
+            except Exception as _log_error:
+                logger.error(
+                    "git restore partial: reindex scheduling failed; HEAD advanced but reindex was not queued error_type=%s",
+                    type(_log_error).__name__,
                 )
             raise partial_exc
 
@@ -503,10 +524,10 @@ class _SnapshotMixin:
                 )
                 if task_id is not None:
                     result["task_id"] = task_id
-            except Exception:
-                logger.exception(
-                    "[VikingFS] git restore reindex task creation failed; "
-                    "falling back to fire-and-forget rebuild"
+            except Exception as _log_error:
+                logger.info(
+                    "git restore reindex task creation failed; falling back to fire-and-forget rebuild error_type=%s",
+                    type(_log_error).__name__,
                 )
                 self._schedule_vector_rebuild(
                     written=written,
@@ -608,6 +629,7 @@ class _SnapshotMixin:
         Returns ``oid`` (blob ID), ``size``, ``bytes``, ``commit_oid``, and
         ``commit_time_seconds`` (committer Unix seconds, not file modification time).
         Access is checked before resolving the ref; missing commits or paths propagate.
+        A missing tree path carries whether it was a file in the first parent.
         """
         real_ctx = self._ctx_or_default(ctx)
         await self._ensure_access(path, real_ctx)
@@ -618,12 +640,19 @@ class _SnapshotMixin:
         )
         # Pin moving refs so the content and timestamp always describe the same commit.
         commit_oid = commit["oid"]
-        resp = await self._async_agfs.run(
-            "git_show",
-            account=account,
-            target_ref=commit_oid,
-            path=tree_path,
-        )
+        try:
+            resp = await self._async_agfs.run(
+                "git_show",
+                account=account,
+                target_ref=commit_oid,
+                path=tree_path,
+            )
+        except AGFSPathNotFoundError as exc:
+            first_parent = next(iter(commit["parents"]), None)
+            exc.deleted_file = first_parent is not None and await self._async_agfs.run(
+                "git_path_is_file", account=account, commit_oid=first_parent, path=tree_path
+            )
+            raise
         if not isinstance(resp, dict) or "bytes" not in resp:
             raise TypeError(
                 f"git_show returned unexpected shape for blob path: {type(resp).__name__}"
@@ -759,12 +788,14 @@ class _SnapshotMixin:
         *,
         branch: str = "main",
         limit: int = 20,
+        offset: int = 0,
         paths: Optional[List[str]] = None,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Walk back from ``branch``'s HEAD along ``parents[0]`` up to ``limit`` commits.
 
-        Returns a list of commit metadata dicts (same shape as ``show(target_ref)``).
+        Skip ``offset`` matching commits before collecting results. Returns a
+        list of commit metadata dicts (same shape as ``show(target_ref)``).
         """
         if limit <= 0:
             return []
@@ -786,6 +817,7 @@ class _SnapshotMixin:
             account=account,
             branch=branch,
             limit=limit,
+            offset=offset,
             paths=tree_paths,
         )
 
@@ -799,12 +831,31 @@ class _SnapshotMixin:
     ) -> List[Dict[str, str]]:
         """List files changed under ``dirs`` between two commits.
 
-        ``base=None`` treats every file as added. Requires read access only;
-        derived summaries (.abstract.md / .overview.md / .relations.json) are
-        omitted so regenerated summaries do not count as source changes.
+        ``base=None`` treats every file as added.
+        Omit derived summaries so regeneration does not count as a source change.
         """
         real_ctx = self._ctx_or_default(ctx)
-        await self._ensure_access_many(dirs, real_ctx, action=AclAction.READ)
+        checked_dirs = self._snapshot_read_check_uris(dirs, real_ctx)
+        await self._ensure_access_many(checked_dirs, real_ctx, action=AclAction.READ)
+        scoped_contexts: Dict[str, RequestContext] = {}
+        if len(checked_dirs) < len(dirs):
+            allowed_dirs = set(checked_dirs)
+            owner_dirs: Dict[str, List[str]] = {}
+            for uri in dirs:
+                if uri not in allowed_dirs:
+                    owner_dirs.setdefault(self._safe_uri_parts(uri)[1], []).append(uri)
+            for owner, targets in owner_dirs.items():
+                try:
+                    scoped_ctx = self.authorize_read(real_ctx, targets)
+                except PermissionDeniedError:
+                    continue
+                scoped_contexts[owner] = scoped_ctx
+                # A directory can contain readable files even if it cannot be read itself.
+                allowed_dirs.update(uri for uri in targets if self._is_traversable(uri, scoped_ctx))
+            dirs = [uri for uri in dirs if uri in allowed_dirs]
+            if not dirs:
+                return []
+
         changes = await self._async_agfs.run(
             "git_diff_paths",
             account=real_ctx.account_id,
@@ -812,11 +863,35 @@ class _SnapshotMixin:
             head=head,
             paths=[self._uri_to_tree_path(uri, ctx=real_ctx) for uri in dirs],
         )
-        return [
+        source_changes = [
             {"uri": self._tree_path_to_uri(path), "change_type": change}
             for path, change in changes
             if path.rsplit("/", 1)[-1] not in _DERIVED_FILE_NAMES
         ]
+        if real_ctx.role == Role.GLOBAL and source_changes:
+            return self._filter_global_snapshot_changes(source_changes, real_ctx, scoped_contexts)
+        return source_changes
+
+    def _filter_global_snapshot_changes(
+        self,
+        changes: List[Dict[str, str]],
+        ctx: RequestContext,
+        scoped_contexts: Dict[str, RequestContext],
+    ) -> List[Dict[str, str]]:
+        """Filter cross-user file changes using the owner scopes resolved before Git traversal."""
+        visible = []
+        for change in changes:
+            uri = change["uri"]
+            parts = self._safe_uri_parts(uri)
+            if parts[:1] == ["user"] and len(parts) >= 2 and parts[1] != ctx.user.user_id:
+                scoped_ctx = scoped_contexts.get(parts[1])
+                if (
+                    scoped_ctx is None
+                    or self._access_decision(uri, scoped_ctx) is not AccessDecision.ALLOWED
+                ):
+                    continue
+            visible.append(change)
+        return visible
 
     def _collect_restore_vector_tasks(
         self,
@@ -868,14 +943,20 @@ class _SnapshotMixin:
         """
         try:
             from openviking.service.reindex_executor import ReindexExecutor
-        except Exception:
-            logger.exception("[VikingFS] ReindexExecutor import failed; skipping rebuild")
+        except Exception as _log_error:
+            logger.info(
+                "ReindexExecutor import failed; skipping rebuild error_type=%s",
+                type(_log_error).__name__,
+            )
             return
 
         try:
             loop = asyncio.get_running_loop()
-        except RuntimeError:
-            logger.warning("[VikingFS] git restore vector rebuild skipped: no running event loop")
+        except RuntimeError as _log_error:
+            logger.info(
+                "git restore vector rebuild skipped: no running event loop error_type=%s",
+                type(_log_error).__name__,
+            )
             return
 
         tasks = self._collect_restore_vector_tasks(written, deleted)
@@ -998,6 +1079,15 @@ class _SnapshotMixin:
             elif op == "delete":
                 await executor.delete_uri_level(uri=uri, level=level, ctx=ctx)
             else:  # pragma: no cover - defensive
-                logger.warning("[VikingFS] unknown vector rebuild op %r for %s", op, uri)
-        except Exception:
-            logger.exception("[VikingFS] git restore vector task %s failed for %s", op, uri)
+                logger.info(
+                    "unknown vector rebuild op %s for %s",
+                    short_hash(str(op)),
+                    safe_uri_for_log(str(uri)),
+                )
+        except Exception as _log_error:
+            logger.error(
+                "git restore vector task %s failed for %s error_type=%s",
+                short_hash(str(op)),
+                safe_uri_for_log(str(uri)),
+                type(_log_error).__name__,
+            )

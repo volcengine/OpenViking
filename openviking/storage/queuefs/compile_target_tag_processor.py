@@ -8,6 +8,7 @@ from typing import Any
 
 from async_timeout import timeout
 
+from openviking.observability.log_safety import safe_log_fields
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -18,6 +19,7 @@ from openviking.service.task_work_index import (
     extract_task_metadata,
 )
 from openviking.storage.errors import HandoffRecoveryRequired
+from openviking.storage.pathlock_recovery import is_stale_compile_lease
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
@@ -90,7 +92,9 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                         if handoff:
                             try:
                                 await guard.adopt(handoff)
-                            except HandoffRecoveryRequired:
+                            except (HandoffRecoveryRequired, ValueError) as exc:
+                                if not is_stale_compile_lease(exc):
+                                    raise
                                 try:
                                     await self._fs._ensure_initialized().stat(
                                         payload["uri"], ctx=ctx, skip_count=True
@@ -130,6 +134,7 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
         failures = 0
         while True:
             await sleep(delay)
+            lease = guard.lease
             try:
                 async with timeout(ATTEMPT_TIMEOUT_SECONDS):
 
@@ -138,7 +143,7 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                             QueueManager.COMPILE_TARGET_TAG, payload
                         )
 
-                    if guard.lease is not None:
+                    if lease is not None:
                         payload["target_lock"] = await guard.to_handoff()
                         await guard.handoff_and_dispatch(payload["target_lock"], enqueue)
                     else:
@@ -150,6 +155,8 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
                 return ProcessResult.cancelled()
             except Exception as exc:
                 self._warn(payload, failures, exc)
+                if lease is not None and guard.lease is lease and is_stale_compile_lease(exc):
+                    guard.detach()
                 failures += 1
                 delay = min(60.0, delay * 2)
 
@@ -157,9 +164,9 @@ class CompileTargetTagProcessor(DequeueHandlerBase):
     def _warn(payload: dict, attempt: int, error: Exception) -> None:
         """Log the first failure and exponentially spaced repeats without raw errors."""
         if attempt == 0 or attempt & (attempt - 1) == 0:
-            logger.warning(
-                "Compile target tag retry task_id=%s attempt=%d error_type=%s",
-                payload.get("task_id"),
+            logger.info(
+                "Compile target tag retry attempt=%d error_type=%s",
                 attempt + 1,
                 type(error).__name__,
+                extra=safe_log_fields({"task_id": payload.get("task_id")}),
             )

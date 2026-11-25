@@ -3,13 +3,13 @@ import { resolveLabels, resolveSummaryLabels } from './file-browser-labels.js';
 import { useMemo, useRef, useState } from 'react';
 import { useDirectoryPreviewLevels } from './use-directory-preview-levels.js';
 
-import type { FileTreeEntryRow } from '../../components/file-tree/index.js';
 import { useOvClient } from '../../client/provider.js';
 import { useFsPreview } from './use-fs-preview.js';
 import { dashboardKey, mergeDashboardTab } from './dashboard-model.js';
 import { useBrowserDashboards } from './use-browser-dashboards.js';
 import { useFsTree } from './use-fs-tree.js';
 import { useFileBrowserTreeActions } from './use-file-browser-tree-actions.js';
+import { useStableCallback } from './use-stable-callback.js';
 import { findSelectedRowId } from './fs-uri.js';
 import type {
   FileBrowserActions,
@@ -31,17 +31,18 @@ export function useFileBrowser({
   locale: localeProp,
   dashboardKinds,
   experienceDataSource,
+  experienceDashboardSlots,
   renderDashboard,
   dashboardLabels,
   controlled = false,
   summaryLabels,
   accessLabels,
   formatCharacterCount,
-  defaultExpandedUri,
   currentUri,
   requestOptions,
   onUriChange,
   onSelect,
+  ...expansionOptions
 }: UseFileBrowserOptions): FileBrowserApi {
   const locale = useLocale(localeProp);
   const text = resolveLabels(accessLabels, locale);
@@ -50,8 +51,8 @@ export function useFileBrowser({
   const tree = useFsTree({
     client,
     rootUri,
-    defaultExpandedUri,
     requestOptions,
+    ...expansionOptions,
   });
   const {
     actions: treeActions,
@@ -116,22 +117,19 @@ export function useFileBrowser({
   // a host passing an inline arrow function changes it every render, which would
   // change this callback, and the preview's loading effect depends on it — so every
   // commit would re-run the effect and cancel the previous request, turning one
-  // selection into an endless reload. A ref carries the latest notification and
-  // only the tree operations remain as dependencies.
+  // selection into an endless reload. Refs carry the latest notification and tree
+  // operations while the callback identity stays fixed.
   const { open: openTree, toggleExpand, cancelReveal } = tree;
   const notifyUriChange = useRef(onUriChange);
   notifyUriChange.current = onUriChange;
   const notifySelect = useRef(onSelect);
   notifySelect.current = onSelect;
-  const openParent = useMemo(
-    () => async (uri: string) => {
-      cancelReveal();
-      setPendingUri(uri);
-      notifyUriChange.current(uri);
-      await openTree(uri);
-    },
-    [cancelReveal, openTree],
-  );
+  const openParent = useStableCallback(async (uri: string) => {
+    cancelReveal();
+    setPendingUri(uri);
+    notifyUriChange.current(uri);
+    await openTree(uri);
+  });
 
   const { rows, openPath, reveal } = tree;
   const openResource = useMemo(
@@ -148,9 +146,11 @@ export function useFileBrowser({
     [cancelReveal, openPath, tree.directoryUris, identifyUri, requestUri],
   );
 
+  const resourceType = tree.resourceTypeOf(activeUri);
   const boards = useBrowserDashboards({
     rows,
     metadataRows: tree.metadataRows,
+    resourceType,
     uri: blocked ? null : activeUri,
     rootUri,
     identifyUri,
@@ -160,12 +160,17 @@ export function useFileBrowser({
     onOpenUri: openResource,
     dashboardKinds,
     experienceDataSource,
+    experienceDashboardSlots,
     renderDashboard,
     dashboardLabels,
   });
 
   const { setActiveKey, ...preview } = useFsPreview({
-    client: tree.isReady ? client : null,
+    // A controlled deep link already identifies the preview target. Let the preview
+    // resolve its type and body while the root tree loads instead of serializing the
+    // two independent requests. The preview lookup owns cancellation and stale-result
+    // isolation; the tree can still replace the unknown type once its listing lands.
+    client,
     // 非受控模式下 currentUri 是 null，真正选中的是 pendingUri；预览要跟着
     // 实际选中的资源走，否则内部维护的选中永远不会加载预览。
     //
@@ -173,18 +178,15 @@ export function useFileBrowser({
     // real selection, so the preview follows that instead — otherwise a selection
     // the module owns would never load anything.
     uri: blocked ? null : activeUri,
-    resourceType: tree.resourceTypeOf(activeUri),
+    resourceType,
     ...previewLevel,
+    listedUpdatedAt: tree.listedUpdatedAtOf(activeUri),
     labels: summaryLabels ?? resolveSummaryLabels(locale),
     formatCharacterCount: formatCharacterCount ?? text.formatCharacterCount,
     openParent,
     generation: refreshGeneration,
     requestOptions,
-    contentKind: boards.contentPending
-      ? 'pending'
-      : boards.isWiki
-        ? 'wiki'
-        : 'plain',
+    ...boards.previewOptions,
   });
 
   const { open: openDashboard, close: closeDashboard } = boards;
@@ -216,7 +218,7 @@ export function useFileBrowser({
       // and reporting only after it returns would let this late callback overwrite a
       // resource the user picked in the meantime. The selection belongs to the moment
       // of the click, not to a listing that arrives afterwards.
-      select: (row: FileTreeEntryRow) => {
+      select: (row) => {
         if (row.disabled || row.selectable === false) return Promise.resolve();
         cancelReveal();
         closeDashboard();
@@ -284,12 +286,15 @@ export function useFileBrowser({
     currentUri: activeUri,
     treeMonitoring: tree.monitoring,
     previewMonitoring: preview.monitoring,
+    wikiSaveFeedback: preview.wikiSaveFeedback,
     isReady: tree.isReady,
     error: tree.error ?? previewError,
     treeError: tree.error,
     previewError,
     dashboards: boards.dashboards,
     previewDashboard: boards.current,
+    previewIsCompile: preview.isCompileOutput,
+    previewHasDirectorySummary: preview.hasDirectorySummary,
     dashboardError: boards.error,
     refreshWikiConflicts: boards.refreshConflicts,
     previewTabs: mergeDashboardTab(preview.tabs, boards.tab, Boolean(blocked)),
@@ -298,6 +303,7 @@ export function useFileBrowser({
     previewFooter: preview.footer,
     previewUpdatedAt: preview.updatedAt,
     refreshing,
+    refreshGeneration,
     actions,
   };
 }

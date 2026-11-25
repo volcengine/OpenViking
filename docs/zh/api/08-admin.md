@@ -514,7 +514,7 @@ cuVS 调优和自定义适配器参数。
 本地模型路径、融合/视频参数和 `allow_metadata_override` 不在 Account API 范围内。
 每次更新都在持久化前联合校验有效 Embedding 和 VectorDB，失败保留原配置。
 
-显式 `embedding: {}` 是合法配置，表示未声明 Account 模型模式或运行策略。
+显式 `embedding: {}` 表示未声明 Account 模型模式或运行策略。
 作为 PATCH 提交时，`{}` 会与现有配置合并，不会清空已有值。未配置 Account
 模型模式时使用 Cluster 模型绑定。显式 Account VectorDB 配置会替换 Cluster
 的连接与鉴权字段，即使后端类型相同也不会拼接；仅支持 `http`、`volcengine`、
@@ -536,10 +536,11 @@ Feishu 时使用完整 Cluster 配置；一旦设置，`app_id`、`app_secret`�
 `request_timeout` 来自 Account 配置或 Feishu 默认值，只有 `domain` 仍由
 Cluster 管理。GitHub 和 ACL 不回退到 Cluster。
 
-VLM 业务解析器在 Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
+Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
 模型身份、服务端点和凭证仅来自 Account，部分运行参数按业务规则使用 Cluster
 配置。Account 设置 `timeout` 时覆盖 Cluster 的值，未设置或重置后使用 Cluster
-的值。Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
+的值。清除 Account VLM 时，Cluster VLM 必须有效。
+Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
 Cluster `query_planner`、Cluster `vlm`；这是 VLM 业务规则，不是配置框架的隐式继承。
 
 PATCH 会先做结构校验，再构造合并后的配置：未知路径和运行时配置面之外的字段会被拒绝。
@@ -944,7 +945,7 @@ Account 路由，ROOT 代表某个 Account 执行业务时也遵守这一规则�
 
 ROOT 可读写任意 User 的配置，ADMIN 可读写所属 account 内非 GLOBAL User 的配置，
 USER 仅可读写自己的配置：URL 中的 `account_id` 和 `user_id` 必须同时匹配认证身份。
-User 配置接口支持 `add_targets`、`memory_policy` 和 `ttl`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
+User 配置接口支持 `add_targets`、`memory_policy`、`ttl` 和 `privacy`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
 用户记忆根据每条 Message 的 `peer_id` 自动写入 Self 或 Peer；Agent 记忆始终只写入
 Self。
 
@@ -994,6 +995,17 @@ DELETE /api/v1/user-settings/add-locations
 
 `ttl` 仍返回用户显式设置的值，不在此接口补全其他层级的 TTL。
 
+`privacy` 在 GET/PATCH 响应中返回生效配置：
+
+| 字段 | 说明 | 内置默认值 |
+|---|---|---|
+| `privacy.mode` | `off`、`registered`、`auto` 或 `auto_strict`，详见[隐私配置](../concepts/13-privacy.md#使用方法) | `off` |
+| `privacy.restore` | 是否在 `raw=true` 读取 Skill、Session 时还原占位符 | `true` |
+| `privacy.custom_rules` | 自定义规则数组；每项提供唯一的 `id`，以及 `prefix` + `min_length` 或 `regex` | `[]` |
+| `privacy.never_mask` | 不参与自动发现和按值匹配的精确字符串值 | `[]` |
+
+例如 PATCH `{"privacy":{"mode":"auto"}}` 开启 Skill、Session 的自动发现与保护。规则中的 `min_length` 是前缀后至少需要的字符数，`regex` 使用 Rust 正则语法。省略字段表示保留，`null` 恢复继承，数组整体替换（`[]` 表示清空）；`{"privacy":null}` 清除所有用户隐私设置。
+
 ---
 
 ### create_account
@@ -1024,14 +1036,14 @@ DELETE /api/v1/user-settings/add-locations
 | account_id | str | 是 | - | 工作区 ID；新建文件存储账户不超过 255 个 UTF-8 字节 |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 | settings | object | 否 | `null` | Account 运行时初始配置。仅 ROOT 可提交；支持 `feishu`、`github`、`acl`、`agent_evolution`、`vlm`、`query_planner`、`embedding` 和 `vectordb`。其中 `vectordb` 及 Embedding 创建期字段只能在这里设置 |
 
 **说明：**
 - 文件存储账户创建时，超过 255 个 UTF-8 字节的 `account_id` 会在写入账户注册表前返回 `INVALID_ARGUMENT`。新持久化的 user ID 在所有账户存储 Provider 中最多 255 个字符。trusted 模式会在加入自动注册队列前拒绝超长的新 user ID 和新建的超长账户，避免无效身份阻塞其他身份注册；已有的超长 File user 和 account 仍可读取。
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
-- `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
+- 创建要求 Account 配置或 Cluster 回退后有效的 VLM、Embedding、VectorDB。校验不发送模型请求或申请远端资源，失败不会留下 Account、用户或配置文件。
 - Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
 - `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。
@@ -1422,7 +1434,7 @@ ov --sudo task status <task_id>
 | user_id | str | 是 | - | 用户 ID |
 | role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`；只有 `ROOT` 可以注册 `"global"`。ROOT 身份只来自 `server.root_api_key`。 |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 
 **说明：**
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from aiohttp import web
-from conftest import default_upstreams, make_due
+from conftest import default_upstreams
 
 from openviking_gateway import storage
 from openviking_gateway.cli import load_config
@@ -83,13 +83,8 @@ async def test_same_identity_keys_isolate_recall_capture_models_and_logs(running
     for record in records:
         scope = digest(record["account"] + "\0alice\0chat")
         document = await app.state.store.capture.get(scope, session)
-        targets[document.value["account"]] = document.value["ov_session"]
+        targets[record["account"]] = document.value["ov_session"]
     assert len(set(targets.values())) == 2
-    await make_due(app.state.store)
-    for _ in range(6):
-        if len(writes) == 2:
-            break
-        await app.state.worker.once()
     assert len(writes) == 2
     for record, key in zip(records, KEYS, strict=True):
         delivered = [
@@ -112,12 +107,15 @@ async def test_same_identity_keys_isolate_recall_capture_models_and_logs(running
 @pytest.mark.parametrize("gateway_config", [{"tenancy": "account"}], indirect=True)
 async def test_account_tenancy_shares_a_users_session(running_gateway):
     app, client, _, _, _, _ = running_gateway
+    history = [{"role": "user", "content": "same message"}]
     for key in KEYS:
-        await chat(client, key, [{"role": "user", "content": "same message"}])
+        await chat(client, key, history)
         record = await credential(app, key)
         assert record["account"] == record["openviking_account"] == "tenant"
+        history = [*history, {"role": "assistant", "content": "hello"}, history[0]]
     shared = await app.state.store.capture.get(digest("tenant\0alice\0chat"), digest("shared-name"))
-    assert shared.value["pending"]
+    logs = await app.state.management.logs("tenant")
+    assert [log["openviking_session"] for log in logs] == [shared.value["ov_session"]] * 2
 
 
 @pytest.mark.parametrize(

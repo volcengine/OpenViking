@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.storage.viking_fs._base import LS_ALL_NODES
 from openviking_cli.utils.uri import VikingURI
 
@@ -170,8 +171,10 @@ class _SyncMixin:
                         try:
                             changed = await check_changed(root_file, target_file)
                         except Exception as e:
-                            logger.error(
-                                f"[SyncDiff] Failed to compare file content for {root_file}: {e}, treating as unchanged"
+                            logger.info(
+                                "Failed to compare file content for %s: %s, treating as unchanged",
+                                type(root_file).__name__,
+                                type(e).__name__,
                             )
                             changed = False
                     if changed:
@@ -254,5 +257,9 @@ class _SyncMixin:
             try:
                 await self.delete_temp(root_uri, ctx=ctx)
             except Exception as e:
-                logger.error(f"[SyncDiff] Failed to delete temp root {root_uri}: {e}")
+                logger.info(
+                    "Failed to delete temp root %s: %s",
+                    safe_uri_for_log(str(root_uri)),
+                    type(e).__name__,
+                )
         return diff

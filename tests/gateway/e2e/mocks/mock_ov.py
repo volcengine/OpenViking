@@ -2,7 +2,9 @@
 
 GET /_records exposes requests and libraries. POST /_fail accepts on and status;
 /_revoke and /_unorder accept key. /_auth_mode accepts mode; /_tool_delay accepts
-seconds. Every library deliberately identifies as default/default.
+seconds. Every library deliberately identifies as default/default. Sessions keep the
+auto_commit_policy that POST /api/v1/sessions and PATCH /api/v1/sessions/{id}/config set,
+every message written, the uncommitted ones, and each commit.
 """
 
 import argparse
@@ -42,9 +44,7 @@ def create_app():
     control = {"auth_mode": "api_key", "fail": None, "tool_delay": 0}
 
     def library(name):
-        return libraries.setdefault(
-            name, {"sessions": {}, "recalls": [], "tool_calls": [], "archives": {}}
-        )
+        return libraries.setdefault(name, {"sessions": {}, "recalls": [], "tool_calls": []})
 
     async def controls(request):
         if request.path == "/_records":
@@ -80,6 +80,7 @@ def create_app():
             "path": request.path,
             "body": body,
             "status": None,
+            "time": time.time(),
         }
         requests.append(record)
         request["record"], request["body"] = record, body
@@ -163,6 +164,9 @@ def create_app():
                 "messages": [],
                 "pending": [],
                 "commits": [],
+                "auto_commit_policy": body.get("auto_commit_policy"),
+                "memory_policy": body.get("memory_policy"),
+                "config_updates": [],
             }
             return ok({"session_id": sid})
         if path.startswith("/api/v1/sessions/"):
@@ -177,6 +181,7 @@ def create_app():
                 return ok(
                     {
                         "added": len(body["messages"]),
+                        "message_count": len(session["pending"]),
                         "pending_tokens": len(json.dumps(session["pending"])) // 3,
                     }
                 )
@@ -184,33 +189,24 @@ def create_app():
                 keep = max(0, int(body.get("keep_recent_count", 0)))
                 archived = session["pending"][:-keep] if keep else session["pending"][:]
                 session["pending"] = session["pending"][-keep:] if keep else []
-                uri = f"viking://user/default/sessions/{sid}/history/archive_{len(session['commits']) + 1:03d}"
-                commit = {
-                    "archive_uri": uri,
-                    "messages": archived,
-                    "keep_recent_count": keep,
-                    "key": request["record"]["key"],
-                    "time": time.time(),
-                }
-                session["commits"].append(commit)
-                data["archives"][uri] = archived
-                return ok({"archive_uri": uri})
-            if request.method == "GET":
-                return ok(
+                number = len(session["commits"]) + 1
+                uri = f"viking://user/default/sessions/{sid}/history/archive_{number:03d}"
+                session["commits"].append(
                     {
-                        "session_id": sid,
-                        "pending_tokens": len(json.dumps(session["pending"])) // 3
-                        if session["pending"]
-                        else 0,
-                        "messages": session["pending"],
+                        "archive_uri": uri,
+                        "messages": archived,
+                        "keep_recent_count": keep,
+                        "key": request["record"]["key"],
+                        "source_pod": request["record"]["source_pod"],
+                        "time": request["record"]["time"],
                     }
                 )
+                return ok({"archive_uri": uri})
+            if path.endswith("/config") and request.method == "PATCH":
+                session["auto_commit_policy"] = body["auto_commit_policy"]
+                session["config_updates"].append(body["auto_commit_policy"])
+                return ok({"session_id": sid})
         if path == "/api/v1/content/read":
-            uri = request.query.get("uri", "")
-            if uri.removesuffix("/.done") in data["archives"] and uri.endswith("/.done"):
-                return ok("")
-            if uri in data["archives"]:
-                return ok(json.dumps(data["archives"][uri]))
             return failure(404, "NOT_FOUND")
         if path == "/mcp":
             method, params = body.get("method"), body.get("params", {})

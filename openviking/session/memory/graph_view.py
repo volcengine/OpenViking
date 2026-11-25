@@ -14,6 +14,7 @@ import hashlib
 import json
 from typing import Any, Dict, List
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.link_renderer import LinkRenderer
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
@@ -106,7 +107,11 @@ class MemoryGraph:
                 and not entry.get("rel_path", "").endswith("/.abstract.md")
             ]
 
-            logger.info(f"[build_graph] Found {len(md_uris)} memory files under {space_uri}")
+            logger.debug(
+                "memory graph source files total=%d uri=%s",
+                len(md_uris),
+                safe_uri_for_log(space_uri),
+            )
 
             for uri in md_uris:
                 try:
@@ -115,7 +120,12 @@ class MemoryGraph:
                         continue
                     mf = MemoryFileUtils.read(content, uri=uri)
                 except Exception as e:
-                    logger.error(f"Failed to read/parse {uri}: {e}")
+                    logger.debug(
+                        "memory graph read failed uri=%s error_type=%s",
+                        safe_uri_for_log(uri),
+                        type(e).__name__,
+                        extra={"error_type": type(e).__name__},
+                    )
                     raise
 
                 inferred_memory_type = self._infer_memory_type(uri, mf.memory_type or "")
@@ -162,7 +172,7 @@ class MemoryGraph:
                 seen.add(key)
                 unique_edges.append(e)
 
-        logger.info(f"[build_graph] Built graph: {len(nodes)} nodes, {len(unique_edges)} edges")
+        logger.debug("memory graph built nodes=%d edges=%d", len(nodes), len(unique_edges))
         return list(nodes.values()), unique_edges
 
     async def gen_graph(
@@ -196,7 +206,12 @@ class MemoryGraph:
             await viking_fs.write_file(output_uri, html, ctx=ctx)
             tracer.info(f"[build_graph] Generated graph: {output_uri}")
         except Exception as e:
-            logger.error(f"Failed to write graph {output_uri}: {e}")
+            logger.debug(
+                "memory graph write failed uri=%s error_type=%s",
+                safe_uri_for_log(output_uri),
+                type(e).__name__,
+                extra={"error_type": type(e).__name__},
+            )
             raise
 
         return output_uri

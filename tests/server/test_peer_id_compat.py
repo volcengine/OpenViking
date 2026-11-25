@@ -4,26 +4,28 @@
 """Peer ID request validation tests."""
 
 import pytest
+from pydantic import ValidationError
 
 from openviking.server.routers.search import FindRequest
 from openviking.server.routers.sessions import AddMessageRequest
 
 
 def test_find_request_rejects_unpublished_peer_id_body_field():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError) as error:
         FindRequest.model_validate({"query": "invoice", "peer_id": "code-agent"})
+    assert [(entry["loc"], entry["type"]) for entry in error.value.errors()] == [
+        (("peer_id",), "extra_forbidden"),
+    ]
 
 
-def test_add_message_request_normalizes_explicit_peer_id():
+def test_add_message_request_validates_explicit_peer_id():
     request = AddMessageRequest.model_validate(
         {"role": "assistant", "content": "hello", "peer_id": " code-agent "}
     )
 
     assert request.peer_id == "code-agent"
 
-
-def test_add_message_request_rejects_path_like_peer_id():
-    with pytest.raises(ValueError, match="Invalid peer_id"):
+    with pytest.raises(ValidationError, match="Invalid peer_id") as error:
         AddMessageRequest.model_validate(
             {
                 "role": "assistant",
@@ -31,3 +33,4 @@ def test_add_message_request_rejects_path_like_peer_id():
                 "peer_id": "code/agent",
             }
         )
+    assert error.value.errors()[0]["loc"] == ("peer_id",)

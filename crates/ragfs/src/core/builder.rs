@@ -10,6 +10,8 @@
 
 use std::sync::Arc;
 #[cfg(feature = "cache")]
+use std::collections::HashMap;
+#[cfg(feature = "cache")]
 use std::time::Duration;
 
 use super::filesystem::FileSystem;
@@ -79,6 +81,8 @@ pub enum CacheRuntimeProviderConfig {
 pub struct CacheFsConfig {
     /// Whether mounted data filesystems are wrapped by CachedFileSystem.
     pub enabled: bool,
+    /// Named Runtime selected for CacheFS.
+    pub instance: String,
     /// OpenViking instance name used by CacheFS keys.
     pub service_name: String,
     /// Optional TTL override for query buckets on a shared Redis service.
@@ -90,6 +94,7 @@ impl Default for CacheFsConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            instance: "default".to_string(),
             service_name: String::new(),
             shared_redis_ttl: None,
         }
@@ -100,8 +105,8 @@ impl Default for CacheFsConfig {
 #[cfg(feature = "cache")]
 #[derive(Clone, Default)]
 pub struct CacheStackConfig {
-    /// One global provider. `None` means no Runtime is initialized.
-    pub provider: Option<CacheRuntimeProviderConfig>,
+    /// Provider configurations keyed by Runtime instance name.
+    pub instances: HashMap<String, CacheRuntimeProviderConfig>,
     /// CacheFS enablement.
     pub cachefs: CacheFsConfig,
 }
@@ -114,9 +119,17 @@ pub struct RagfsStack {
     pub top: Arc<dyn FileSystem>,
     /// PathLock manager. OpenViking always constructs the stack with PathLock enabled.
     pub pathlock_manager: Arc<PathLockManager>,
-    /// Shared cache runtime, present only when a provider was configured.
+    /// Named cache runtimes, present when cache instances were configured.
     #[cfg(feature = "cache")]
-    pub cache_runtime: Option<Arc<CacheRuntime>>,
+    pub cache_runtimes: HashMap<String, Arc<CacheRuntime>>,
+}
+
+impl RagfsStack {
+    /// Return a configured cache Runtime by instance name.
+    #[cfg(feature = "cache")]
+    pub fn cache_runtime(&self, instance: &str) -> Result<Arc<CacheRuntime>> {
+        require_runtime(&self.cache_runtimes, instance, "RagfsStack")
+    }
 }
 
 /// Build the standard RAGFS stack.
@@ -137,11 +150,15 @@ pub async fn build_stack_with_mountable(
     config: RagfsConfig,
     mountable: Arc<MountableFS>,
 ) -> Result<RagfsStack> {
+    #[cfg(feature = "cache")]
+    return build_stack_with_mountable_and_runtime(config, mountable, HashMap::new()).await;
+
+    #[cfg(not(feature = "cache"))]
     build_stack_with_mountable_and_runtime(config, mountable, None).await
 }
 
 #[cfg(feature = "cache")]
-/// Build the standard stack and initialize at most one shared CacheRuntime.
+/// Build the standard stack and initialize configured named CacheRuntimes.
 pub async fn build_configured_stack(
     config: RagfsConfig,
     cache: Option<CacheStackConfig>,
@@ -149,41 +166,57 @@ pub async fn build_configured_stack(
     let Some(cache) = cache else {
         return build_default_stack(config).await;
     };
+    let CacheStackConfig { instances, cachefs } = cache;
     let pathlock_uses_cache = config.pathlock.provider == "cache";
-    if (cache.cachefs.enabled || pathlock_uses_cache) && cache.provider.is_none() {
-        return Err(Error::config(
-            "cache provider is required when CacheFS or cache-backed PathLock is enabled"
-                .to_string(),
-        ));
-    }
-    if cache.cachefs.enabled && cache.cachefs.service_name.trim().is_empty() {
+    if cachefs.enabled && cachefs.service_name.trim().is_empty() {
         return Err(Error::config(
             "cachefs service_name is required when CacheFS is enabled".to_string(),
         ));
     }
-    if pathlock_uses_cache && !matches!(&cache.provider, Some(CacheRuntimeProviderConfig::Redis(_)))
-    {
-        return Err(Error::config(
-            "cache-backed PathLock requires the shared cache provider to be redis".to_string(),
-        ));
+    if pathlock_uses_cache {
+        let provider = instances
+            .get(&config.pathlock.instance)
+            .ok_or_else(|| {
+                Error::config(format!(
+                    "PathLock references unknown cache instance '{}'",
+                    config.pathlock.instance
+                ))
+            })?;
+        if !matches!(provider, CacheRuntimeProviderConfig::Redis(_)) {
+            return Err(Error::config(format!(
+                "cache-backed PathLock requires cache instance '{}' to use redis",
+                config.pathlock.instance
+            )));
+        }
     }
-    let runtime = match cache.provider {
-        Some(CacheRuntimeProviderConfig::Redis(provider)) => Some(
-            CacheRuntime::redis(provider)
-                .await
-                .map_err(|error| Error::config(format!("cache provider init failed: {error}")))?,
-        ),
-        Some(CacheRuntimeProviderConfig::Dynamic(provider)) => Some(
-            CacheRuntime::dynamic(provider)
-                .await
-                .map_err(|error| Error::config(format!("cache provider init failed: {error}")))?,
-        ),
-        None => None,
-    };
-    if cache.cachefs.enabled {
-        runtime
-            .as_ref()
-            .expect("cache provider is validated")
+
+    let mut runtimes = HashMap::with_capacity(instances.len());
+    for (name, provider) in instances {
+        let runtime = match provider {
+            CacheRuntimeProviderConfig::Redis(provider) => CacheRuntime::redis(provider).await,
+            CacheRuntimeProviderConfig::Dynamic(provider) => CacheRuntime::dynamic(provider).await,
+        };
+        let runtime = match runtime {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                close_cache_runtimes(&runtimes).await;
+                return Err(Error::config(format!(
+                    "cache instance '{name}' initialization failed: {error}"
+                )));
+            }
+        };
+        runtimes.insert(name, runtime);
+    }
+
+    let cachefs_runtime = if cachefs.enabled {
+        let runtime = match require_runtime(&runtimes, &cachefs.instance, "CacheFS") {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                close_cache_runtimes(&runtimes).await;
+                return Err(error);
+            }
+        };
+        if let Err(error) = runtime
             .require_operations(&[
                 CacheOperation::Hget,
                 CacheOperation::Hset,
@@ -195,33 +228,61 @@ pub async fn build_configured_stack(
                 CacheOperation::Unlink,
                 CacheOperation::ExecuteScript,
             ])
-            .map_err(|error| Error::config(format!("CacheFS provider is incompatible: {error}")))?;
-    }
-    let mountable = if cache.cachefs.enabled {
-        Arc::new(MountableFS::with_cache_runtime_and_shared_redis_ttl(
-            runtime
-                .as_ref()
-                .expect("cache provider is validated")
-                .clone(),
-            cache.cachefs.service_name,
-            cache.cachefs.shared_redis_ttl,
-        ))
-    } else if let Some(runtime) = runtime.as_ref() {
-        Arc::new(MountableFS::with_shared_cache_runtime(runtime.clone()))
+        {
+            close_cache_runtimes(&runtimes).await;
+            return Err(Error::config(format!("CacheFS provider is incompatible: {error}")));
+        }
+        Some(runtime)
     } else {
-        Arc::new(MountableFS::new())
+        None
     };
-    build_stack_with_mountable_and_runtime(config, mountable, runtime).await
+    let mountable = if let Some(runtime) = cachefs_runtime {
+        Arc::new(MountableFS::with_cache_runtimes_and_shared_redis_ttl(
+            runtimes.clone(),
+            runtime,
+            cachefs.service_name,
+            cachefs.shared_redis_ttl,
+        ))
+    } else {
+        Arc::new(MountableFS::with_cache_runtimes(runtimes.clone()))
+    };
+    let result = build_stack_with_mountable_and_runtime(config, mountable, runtimes.clone()).await;
+    if result.is_err() {
+        close_cache_runtimes(&runtimes).await;
+    }
+    result
+}
+
+#[cfg(feature = "cache")]
+/// Return one Runtime selected by name for a configured cache consumer.
+fn require_runtime(
+    runtimes: &HashMap<String, Arc<CacheRuntime>>,
+    instance: &str,
+    consumer: &str,
+) -> Result<Arc<CacheRuntime>> {
+    runtimes.get(instance).cloned().ok_or_else(|| {
+        Error::config(format!(
+            "{consumer} references unknown cache instance '{instance}'"
+        ))
+    })
+}
+
+#[cfg(feature = "cache")]
+/// Close every Runtime after stack construction fails.
+async fn close_cache_runtimes(runtimes: &HashMap<String, Arc<CacheRuntime>>) {
+    for runtime in runtimes.values() {
+        let _ = runtime.close().await;
+    }
 }
 
 async fn build_stack_with_mountable_and_runtime(
     config: RagfsConfig,
     mountable: Arc<MountableFS>,
-    #[cfg(feature = "cache")] runtime: Option<Arc<CacheRuntime>>,
+    #[cfg(feature = "cache")] runtimes: HashMap<String, Arc<CacheRuntime>>,
     #[cfg(not(feature = "cache"))] _runtime: Option<()>,
 ) -> Result<RagfsStack> {
     #[cfg(feature = "cache")]
-    register_builtin_plugins_with_runtime(&mountable, runtime.clone()).await;
+    register_builtin_plugins_with_runtimes(&mountable, runtimes.clone()).await;
     #[cfg(not(feature = "cache"))]
     register_builtin_plugins(&mountable).await;
 
@@ -290,9 +351,7 @@ async fn build_stack_with_mountable_and_runtime(
         }
         #[cfg(feature = "cache")]
         "cache" => {
-            let runtime = runtime.clone().ok_or_else(|| {
-                Error::config("cache provider is required for cache-backed PathLock".to_string())
-            })?;
+            let runtime = require_runtime(&runtimes, &config.pathlock.instance, "PathLock")?;
             let service_name = config.pathlock.service_name.as_deref().ok_or_else(|| {
                 Error::config("pathlock service_name is required for cache-backed PathLock".to_string())
             })?;
@@ -335,31 +394,28 @@ async fn build_stack_with_mountable_and_runtime(
         top,
         pathlock_manager,
         #[cfg(feature = "cache")]
-        cache_runtime: runtime,
+        cache_runtimes: runtimes,
     })
 }
 
 /// The single built-in plugin registration sequence (eliminates drift across call sites).
 pub async fn register_builtin_plugins(fs: &MountableFS) {
     #[cfg(feature = "cache")]
-    return register_builtin_plugins_with_runtime(fs, None).await;
+    return register_builtin_plugins_with_runtimes(fs, HashMap::new()).await;
 
     #[cfg(not(feature = "cache"))]
     register_builtin_plugins_without_runtime(fs).await;
 }
 
 #[cfg(feature = "cache")]
-async fn register_builtin_plugins_with_runtime(
+async fn register_builtin_plugins_with_runtimes(
     fs: &MountableFS,
-    runtime: Option<Arc<CacheRuntime>>,
+    runtimes: HashMap<String, Arc<CacheRuntime>>,
 ) {
     fs.register_plugin(MemFSPlugin).await;
     fs.register_plugin(KVFSPlugin).await;
-    fs.register_plugin(match runtime {
-        Some(runtime) => QueueFSPlugin::with_cache_runtime(runtime),
-        None => QueueFSPlugin::new(),
-    })
-    .await;
+    fs.register_plugin(QueueFSPlugin::with_cache_runtimes(runtimes))
+        .await;
     fs.register_plugin(SQLFSPlugin::new()).await;
     fs.register_plugin(LocalFSPlugin::new()).await;
     fs.register_plugin(ServerInfoFSPlugin::new()).await;
@@ -407,6 +463,7 @@ mod tests {
             }),
             pathlock: PathLockConfig {
                 provider: "filesystem".to_string(),
+                instance: "default".to_string(),
                 service_name: None,
                 sqlite_path: None,
                 postgres_dsn_env: None,
@@ -588,7 +645,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(stack.cache_runtime.is_none());
+        assert!(stack.cache_runtimes.is_empty());
     }
 
     #[tokio::test]
@@ -665,7 +722,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("cache provider"));
+        assert!(error.to_string().contains("PathLock"));
     }
 
     #[cfg(feature = "cache")]
@@ -687,11 +744,14 @@ mod tests {
         let stack = build_configured_stack(
             config,
             Some(CacheStackConfig {
-                provider: Some(CacheRuntimeProviderConfig::Redis(RedisProviderConfig {
-                    endpoints: vec![endpoint],
-                    command_timeout_ms: 1_000,
-                    ..RedisProviderConfig::default()
-                })),
+                instances: HashMap::from([(
+                    "default".to_string(),
+                    CacheRuntimeProviderConfig::Redis(RedisProviderConfig {
+                        endpoints: vec![endpoint],
+                        command_timeout_ms: 1_000,
+                        ..RedisProviderConfig::default()
+                    }),
+                )]),
                 cachefs: CacheFsConfig::default(),
             }),
         )
@@ -708,7 +768,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(stack.cache_runtime.is_some());
+        assert!(stack.cache_runtimes.contains_key("default"));
         assert_eq!(lease.lease.lock_paths, vec!["/local/account-a/builder"]);
         stack.pathlock_manager.release(&lease).await.unwrap();
     }
@@ -719,7 +779,7 @@ mod tests {
         let result = build_configured_stack(
             RagfsConfig::default(),
             Some(CacheStackConfig {
-                provider: None,
+                instances: HashMap::new(),
                 cachefs: CacheFsConfig {
                     enabled: true,
                     ..CacheFsConfig::default()
@@ -732,7 +792,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("cache provider"));
+        assert!(error.to_string().contains("CacheFS"));
     }
 
     #[cfg(feature = "cache")]
@@ -744,11 +804,14 @@ mod tests {
         let stack = build_configured_stack(
             RagfsConfig::default(),
             Some(CacheStackConfig {
-                provider: Some(CacheRuntimeProviderConfig::Redis(RedisProviderConfig {
-                    endpoints: vec![endpoint],
-                    command_timeout_ms: 1_000,
-                    ..RedisProviderConfig::default()
-                })),
+                instances: HashMap::from([(
+                    "default".to_string(),
+                    CacheRuntimeProviderConfig::Redis(RedisProviderConfig {
+                        endpoints: vec![endpoint],
+                        command_timeout_ms: 1_000,
+                        ..RedisProviderConfig::default()
+                    }),
+                )]),
                 cachefs: CacheFsConfig::default(),
             }),
         )
@@ -872,3 +935,7 @@ mod tests {
         assert!(crypto::is_encrypted(&manifest));
     }
 }
+
+#[cfg(all(test, feature = "cache"))]
+#[path = "tests/test_multi_runtime_builder.rs"]
+mod test_multi_runtime_builder;

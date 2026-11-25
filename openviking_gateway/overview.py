@@ -150,9 +150,12 @@ def overview_summary(logs, now):
             degradations[reason] = degradations.get(reason, 0) + 1
     # "disabled" means recall was skipped (off, budget spent or query too short).
     recalls = [log for log in requests if log.get("recall_reason", "disabled") != "disabled"]
+    # Only a request that ended a turn tried to save; the newest of those decides.
     capture = {}
     for log in logs:
-        if log.get("session") and log.get("capture_status"):
+        if log.get("session") and (
+            log.get("capture_status") == "failed" or log.get("capture_messages")
+        ):
             capture.setdefault((log["session"], log.get("protocol")), log["capture_status"])
     return {
         "requests": len(requests),
@@ -165,10 +168,8 @@ def overview_summary(logs, now):
         "recall_ms": sum(log.get("recall_ms", 0) for log in recalls) / len(recalls)
         if recalls
         else 0,
-        "capture_issues": {
-            status: sum(1 for value in capture.values() if value == status)
-            for status in ("retrying", "paused")
-        },
+        # Conversations whose latest attempt to save a finished turn failed.
+        "capture_issues": {"failed": sum(1 for value in capture.values() if value == "failed")},
         "cache_alerts": cache_alerts(requests, now),
         "sample_limit": 10000,
     }

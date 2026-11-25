@@ -14,11 +14,11 @@ import { createLogger } from "./debug-log.mjs";
 import {
   commitSession,
   deriveOvSessionId,
-  enqueuePendingDirectly,
   isRetryableFailure,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { enqueueCommitAfterWrites } from "./lib/pending-queue.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 
 if (!isPluginEnabled()) {
@@ -61,7 +61,7 @@ async function main() {
     const ovSessionId = deriveOvSessionId(sessionId);
     const health = await fetchJSON("/health");
     if (!health.ok && isRetryableFailure(health)) {
-      const queued = await enqueuePendingDirectly("commitSession", ovSessionId, {});
+      const queued = await enqueueCommitAfterWrites(ovSessionId);
       log("commit", { ovSessionId, ok: false, queued: queued.ok, reason: "health_retryable" });
       return;
     }

@@ -178,7 +178,7 @@ def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
     return uri
 
 
-@router.get("/read")
+@router.get("/read", response_model=Response)
 async def read(
     uri: str = Query(..., description="Viking URI"),
     offset: int = Query(0, description="Starting line number (0-indexed)"),

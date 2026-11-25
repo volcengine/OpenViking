@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""New-process restart and actual multiprocess MySQL claim checks."""
+"""New-process restart and actual multiprocess relational claim checks."""
 
 import asyncio
 import json
@@ -12,6 +12,7 @@ import pytest
 from tests.resource.test_watch_store import (
     ENCRYPTION_KEY,
     MYSQL_PARAMS,
+    POSTGRES_PARAMS,
     create,
     make_store,  # noqa: F401
 )
@@ -38,7 +39,14 @@ async def probe(mode, material):
         await process.wait()
         raise
     assert process.returncode == 0, stderr.decode()
-    return json.loads(stdout.decode().splitlines()[-1])
+    lines = stdout.decode().splitlines()
+    results = [
+        line.removeprefix("WATCH_PROBE_RESULT ")
+        for line in lines
+        if line.startswith("WATCH_PROBE_RESULT ")
+    ]
+    assert len(results) == 1, stdout.decode()
+    return json.loads(results[0])
 
 
 @pytest.mark.asyncio
@@ -56,15 +64,15 @@ async def test_file_restart_retries_due_watch_without_persisting_occupancy(tmp_p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("make_store", ["mysql", "postgres"], indirect=True)
 async def test_mysql_start_is_exclusive_across_processes(make_store):  # noqa: F811
     store = await make_store()
-    if store.provider != "mysql":
-        pytest.skip("multiprocess claims require MySQL; File is single-process")
+    material = MYSQL_PARAMS if store.provider == "mysql" else POSTGRES_PARAMS
     task = await create(store, due=True)
     config = {
         "service_name": store._service_name,
         "params": {
-            **json.loads(MYSQL_PARAMS),
+            **json.loads(material),
             "table": store._table_name,
             "credential_encryption_key": ENCRYPTION_KEY,
         },
@@ -73,7 +81,7 @@ async def test_mysql_start_is_exclusive_across_processes(make_store):  # noqa: F
     }
     results = await asyncio.gather(
         *[
-            probe("mysql", json.dumps({**config, "attempt": f"process-{index}"}))
+            probe(store.provider, json.dumps({**config, "attempt": f"process-{index}"}))
             for index in range(4)
         ]
     )

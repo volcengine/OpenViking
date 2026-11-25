@@ -14,12 +14,13 @@ description: 根据现象、Studio 标签或错误码，找到 OpenViking 网关
 | Studio 显示一张卡片，看不到网关标签页 | 网关没有开启、OpenViking API 密钥缺失或无效，或者网关连不上 OpenViking。 | [Studio 显示设置卡片](#studio-shows-a-setup-card) |
 | “上游”和“上下文配置”标签页只读 | 部署者设置了网关管理密钥。 | [解锁编辑](06-manage-in-studio.md#unlock-editing)；没人记得密钥时，见[忘记网关管理密钥](../guides/22-gateway-operations.md#lost-the-management-key) |
 | **无法签发密钥** | 新网关密钥要绑定的 OpenViking API 密钥没有通过校验。 | [签发密钥失败](#issuing-a-key-fails) |
-| 客户端报错，请求日志里却没有这条请求 | 请求在到达服务商之前就被网关拒绝了。 | [客户端收到网关返回的错误](#clients-get-an-error-from-the-gateway) |
+| 客户端收到的错误响应体里带有 `reason` | 网关自己拒绝了请求，大多发生在请求到达服务商之前。 | [客户端收到网关返回的错误](#clients-get-an-error-from-the-gateway) |
 | 请求日志中某条请求的状态码为 400 及以上 | 服务商拒绝了请求或调用失败。 | [上游返回错误](#the-upstream-returned-an-error) |
 | 某段对话没有召回，也没有保存 | 检测到 OpenViking 插件，网关把召回、保存和工具都让给了插件。 | 正常行为，避免同一份内容被补充、保存两次，见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)。 |
 | 请求不带记忆 | OpenViking 无法访问或超时、预算用完、没有相关内容等。 | [没有补充记忆](#no-memory-is-added) |
-| 保存显示**重试中**，之后变成**已暂停** | OpenViking 拒绝保存或无法访问；或者这段对话的网关密钥已被吊销（`gateway_key_revoked`），例如用户的 OpenViking 密钥被重新生成过。 | OpenViking 恢复后网关会自动恢复保存。原因为 `gateway_key_revoked` 时：签发的网关密钥需要重新签发，之后的下一个请求会恢复保存；直接使用的 OpenViking 密钥若记录过期、被驱逐或保存时收到 401，用户的下一个有效请求会恢复保存（account 租户模式；`tenancy: key` 下换用新密钥会开始新的对话）。见[OpenViking 中看不到对话](#conversations-do-not-appear-in-openviking)。 |
-| 上下文配置开启了工具，对话里却没有 | 还没有能用工具的请求，第一个能用的请求加载工具清单失败，客户端没有回传完整历史，或者客户端自己接了 OpenViking 工具。 | 在请求日志里查看原因，见[什么时候不提供工具](04-openviking-tools.md#when-tools-are-not-offered)。客户端接了 OpenViking MCP 服务器时出现**客户端已接入 OpenViking 工具**（`tool_name_collision`）是正常的；其他原因修正后开始新对话。 |
+| 请求的**保存**列显示**保存失败** | 结束这一轮的请求没能把它写入 OpenViking：OpenViking 无法访问、超时，或拒绝了写入。 | 网关不重试；OpenViking 恢复后，这段对话的下一轮结束时会补上缺的内容。一直失败时，修复原因。见[OpenViking 中看不到对话](#conversations-do-not-appear-in-openviking)。 |
+| 会话里有消息，却一直没有归档或提取出记忆 | 会话没有提交。默认由网关提交时：空闲提交时间还没到；提交一直失败（网关日志中有 `could not commit`，网关每分钟再试一次；被 OpenViking 以 401、403、404 拒绝的不再重试）；或者保存时用的密钥在空闲提交执行之前被吊销或过期，这次提交就不再执行。开启 `openviking_auto_commit` 时由 OpenViking 提交：对话达不到**提交阈值**，而 OpenViking Server 没有开启 `memory.session_auto_commit.enabled`。 | 见[会话出现了，记忆还没有](#conversations-do-not-appear-in-openviking)。 |
+| 上下文配置开启了工具，对话里却没有 | 还没有能用工具的请求，加载工具清单失败（下一个能用工具的请求会重试），客户端没有回传完整历史，或者客户端自己接了 OpenViking 工具。 | 在请求日志里查看原因，见[什么时候不提供工具](04-openviking-tools.md#when-tools-are-not-offered)。客户端接了 OpenViking MCP 服务器时出现**客户端已接入 OpenViking 工具**（`tool_name_collision`）是正常的；`tools_unavailable` 在 OpenViking 恢复响应后会自行消失；其他原因修正后开始新对话。 |
 | **首次调用缓存命中率**下降，或者概览提示缓存连续未命中 | 记忆无法原样放回、对话换了上游，或者客户端、中转服务改动了请求开头的内容。 | [首次调用缓存命中率下降](#the-first-call-cache-hit-rate-dropped) |
 | 长对话被服务商以过长为由拒绝 | 网关不知道模型的实际窗口，压缩得太晚。 | [长对话超出上下文长度](#long-conversations-hit-the-context-limit) |
 | 文件导入或下载链接失败 | 没有设置 `public_url` 或设置有误，或者代理没有转发文件相关路径。 | [文件导入或下载失败](#file-imports-or-downloads-fail) |
@@ -67,37 +68,45 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 这个 OpenViking API 密钥属于其他账号。（`other_account`） | 密钥所属的账号不是你在 Studio 中管理的账号。 |
 | OpenViking 拒绝了这个密钥。（`openviking_http_401`、`openviking_http_403`） | 密钥不完整、已被重新生成，或者用户已被删除。使用该用户当前的密钥。 |
 | OpenViking 无法识别这个密钥所属的用户（`openviking_identity_missing`） | OpenViking 没有返回这个密钥对应的用户。使用本账号中某个用户的密钥。 |
-| 网关连不上 OpenViking，无法校验这个密钥。（`openviking_unavailable`） | 网关访问不到 OpenViking；独立网关检查 `openviking_url`。 |
+| 网关连不上 OpenViking，无法校验这个密钥。（`openviking_unavailable`、`openviking_timeout`） | 网关访问不到 OpenViking；独立网关检查 `openviking_url`。 |
 | OpenViking 版本低于网关的要求。（`openviking_version_mismatch`） | 仅独立网关：OpenViking Server 低于 `min_server_version`（0.4.16），请升级。从源码安装、没有版本标签的服务可能报告 `0.1.dev123` 这样的开发版本号；请安装正式版本，或者把 `min_server_version` 改成与之匹配的值。 |
 | 没有执行此操作的权限。（`forbidden`） | 粘贴的 OpenViking API 密钥不属于对话框中选中的用户，例如管理员粘贴了自己的密钥，而不是所选用户的。请粘贴所选用户自己的密钥，或者改选密钥所属的用户。普通用户粘贴的密钥不是自己的，也会报这个错。 |
 | 这个用户已不在本账号中，请重新选择。（`unknown_user`） | 对话框打开期间，所选用户被移出了本账号。`unknown_policy` 和 `unknown_upstream` 同理，分别表示所选的上下文配置或上游已被删除。刷新后重新选择。 |
 
 ## 客户端收到网关返回的错误 {#clients-get-an-error-from-the-gateway}
 
-网关在转发每个客户端请求之前，会先检查网关密钥、模型和是否有匹配的上游。下面这些拒绝都发生在请求到达服务商之前，所以不会出现在请求日志里。服务商自己返回的错误见[上游返回错误](#the-upstream-returned-an-error)。
+网关在转发每个客户端请求之前，会先检查网关密钥、模型和是否有匹配的上游。网关自己产生的错误带有 JSON 响应体 `{"reason": ..., "detail": ..., "request_id": ...}`，全部原因见[模型路由的错误](../api/25-gateway.md#model-route-errors)。这些请求都会以同样的原因（`error_reason`）记入请求日志，只是默认的 store 输出无法保存密钥从未确认过的请求（见[请求日志](10-overview-and-requests.md#requests)）。服务商自己返回的错误见[上游返回错误](#the-upstream-returned-an-error)。
 
-| 状态码和提示 | 原因和处理 |
+| 状态码和原因 | 原因和处理 |
 | --- | --- |
-| 401 "Invalid gateway key. It may have been revoked, or removed because its OpenViking API key was regenerated…" | 客户端没有发送网关密钥，发送了已吊销的密钥或服务商的 API Key，或者用户的 OpenViking API 密钥重新生成后，网关删除了这把密钥。检查客户端实际发送的密钥，必要时[重新签发](09-gateway-keys.md#issue-a-key)。 |
-| 402 `openviking_http_402` "OpenViking service is not ordered for this API key."，403 `openviking_http_403` "OpenViking request failed." | 网关检查密钥时，OpenViking 拒绝了这把 OpenViking 密钥（或网关密钥背后的 OpenViking 密钥），例如服务未下单；请求不会转发。请恢复服务订购或密钥权限。 |
-| 403 "Claude subscription OAuth credentials are not supported" | 客户端发送了 Claude 订阅令牌，例如 Claude Code 用订阅账号登录且没有设置 `ANTHROPIC_AUTH_TOKEN`；或者上游保存的就是订阅令牌。请改用 API Key。 |
-| 403 "Model is not allowed by this key" | 模型不在密钥[允许的模型](09-gateway-keys.md#allowed-models)范围内。签发一把允许这个模型的密钥。 |
-| 400 "Request model is missing"、415 "Compressed request bodies are not supported" | 只出现在限定了模型的密钥上：请求体必须写明模型，且不能经过压缩编码。 |
-| 404 "This upstream is an exact endpoint for … only" | 密钥绑定的上游关闭了**拼接协议接口路径**（见[直接发往完整请求地址](07-upstreams.md#exact-endpoint)），只接受该协议的接口地址，而客户端调用了别的路径，例如 `/v1/models`。 |
-| 404 "No allowed upstream matches this protocol and model" | 密钥绑定的已启用上游中，没有一个使用客户端调用的 API 并提供所请求的模型。检查上游的协议、模型和别名、是否启用，以及密钥绑定了哪些上游。 |
-| 400 `peer_invalid` "X-OpenViking-Actor-Peer must be one path segment…" | 请求的 Peer 不是合法的 Peer ID，例如含有 `/` 或空格。见[按 Peer 区分记忆](03-connect-clients.md#peer)。 |
-| 403 "Upstream URL is not allowed" | `X-OpenViking-Upstream-URL` 与密钥绑定的任何上游的 Base URL 都不相同。见[按请求指定上游](07-upstreams.md#upstream-url-header)。 |
-| 401 "Upstream API key is missing" | 上游要求每个客户端在 `X-OpenViking-Upstream-Key` 中自带 API Key，或者由网关保管 API Key 的上游没有填写。见[凭证](07-upstreams.md#credentials)。 |
-| 403 "Coding Plan upstreams are disabled; configure a model API key" | 上游被标记为 [Coding Plan 密钥](07-upstreams.md#coding-plan-keys)。改用模型 API Key，或者有意勾选**允许通过网关使用这个套餐**。 |
-| 403 "Context policy is unavailable" | 密钥绑定的上下文配置已不存在。用现有的上下文配置重新签发密钥。 |
-| 404 "Unknown response for this key"、403 "Response upstream is no longer allowed" | 查询的 Responses 响应不是这把密钥创建的，或者创建它的上游已停用、不再绑定到这把密钥。 |
-| 413 "Request exceeds configured body limit" | 请求体超过了 `max_body_bytes`（见[请求大小上限](05-long-conversations.md#side-effects)），或者超过了代理自己的上限。 |
+| 401 `gateway_key_invalid` | 客户端没有发送网关密钥，发送了已吊销的密钥或服务商的 API Key，或者用户的 OpenViking API 密钥重新生成后，网关删除了这把密钥。检查客户端实际发送的密钥，必要时[重新签发](09-gateway-keys.md#issue-a-key)。 |
+| 401 `openviking_key_invalid` | OpenViking 拒绝了客户端发送的 OpenViking API 密钥，例如密钥已重新生成。请使用用户当前的 OpenViking API 密钥。 |
+| 402 `openviking_not_ordered`，403 `openviking_forbidden` | 网关检查密钥时，OpenViking 拒绝了这把 OpenViking 密钥（或网关密钥背后的 OpenViking 密钥），例如服务未下单；请求不会转发。请恢复服务订购或密钥权限。 |
+| 429 `openviking_rate_limited`，503 `openviking_unavailable`，503 `openviking_timeout`，`openviking_error` | 使用 OpenViking 密钥的第一个请求无法确认：OpenViking 对检查限流、无法访问、5 秒内没有应答或返回了错误。稍后重试，并检查 OpenViking。网关已经认识的密钥不会因此被拒绝，它的请求会带着 `revocation_check_unavailable` 继续处理。 |
+| 403 `oauth_credential_unsupported` | 客户端发送了 Claude 订阅令牌，例如 Claude Code 用订阅账号登录且没有设置 `ANTHROPIC_AUTH_TOKEN`；或者上游保存的就是订阅令牌。请改用 API Key。 |
+| 403 `model_not_allowed` | 模型不在密钥[允许的模型](09-gateway-keys.md#allowed-models)范围内。签发一把允许这个模型的密钥。 |
+| 400 `model_missing`、415 `compressed_body_unsupported` | 只出现在限定了模型的密钥上：请求体必须写明模型，且不能经过压缩编码。 |
+| 404 `upstream_endpoint_mismatch` | 密钥绑定的上游关闭了**拼接协议接口路径**（见[直接发往完整请求地址](07-upstreams.md#exact-endpoint)），只接受该协议的接口地址，而客户端调用了别的路径，例如 `/v1/models`。 |
+| 404 `no_matching_upstream` | 密钥绑定的已启用上游中，没有一个使用客户端调用的 API 并提供所请求的模型。检查上游的协议、模型和别名、是否启用，以及密钥绑定了哪些上游。 |
+| 400 `peer_invalid` | 请求的 Peer 不是合法的 Peer ID，例如含有 `/` 或空格。见[按 Peer 区分记忆](03-connect-clients.md#peer)。 |
+| 400 `context_override_invalid`、403 `context_override_not_allowed` | `X-OpenViking-Context` 不是合法的配置覆盖，或者密钥的上下文配置不接受覆盖。`detail` 会说明是哪一种。 |
+| 403 `upstream_url_not_allowed` | `X-OpenViking-Upstream-URL` 与密钥绑定的任何上游的 Base URL 都不相同。见[按请求指定上游](07-upstreams.md#upstream-url-header)。 |
+| 401 `upstream_key_missing` | 上游要求每个客户端在 `X-OpenViking-Upstream-Key` 中自带 API Key，或者由网关保管 API Key 的上游没有填写。见[凭证](07-upstreams.md#credentials)。 |
+| 403 `coding_plan_disabled` | 上游被标记为 [Coding Plan 密钥](07-upstreams.md#coding-plan-keys)。改用模型 API Key，或者有意勾选**允许通过网关使用这个套餐**。 |
+| 403 `policy_unavailable` | 密钥绑定的上下文配置已不存在。用现有的上下文配置重新签发密钥。 |
+| 404 `response_unknown`、403 `response_upstream_disallowed` | 查询的 Responses 响应不是这把密钥创建的，或者创建它的上游已停用、不再绑定到这把密钥。 |
+| 413 `body_too_large` | 请求体超过了 `max_body_bytes`（见[请求大小上限](05-long-conversations.md#side-effects)），或者超过了代理自己的上限。 |
 | 426 | 对 Responses API 发起了 WebSocket 连接。这是预期行为，Codex 会改用 HTTP。 |
-| 502 "Model upstream is unavailable" | 网关连不上服务商，或者服务商没有在 `upstream_timeout_seconds` 内开始回复。在上游上点**测试**（见[测试和删除](07-upstreams.md#test-and-delete)）。 |
+| 503 `gateway_overloaded` | 网关进程正在处理的模型请求已达 `max_inflight_requests`。请求没有发给服务商；按 `Retry-After` 稍后重试，或增加副本。见[扩展](../guides/22-gateway-operations.md#scaling)。 |
+| 503 `store_unavailable` | 网关在鉴权或路由时状态存储出错。请求没有发给服务商；按 `Retry-After` 稍后重试。见 [Redis 不可用](#redis-unavailable)。 |
+| 500 `internal_error` | 网关意外出错。调用栈在网关日志里；请求记录带有与响应相同的 `request_id`。 |
+| 504 `upstream_timeout` | 服务商没有在 `upstream_timeout_seconds` 内开始回复，或者非流式回复中途这么久没有数据。检查服务商状态；对回答前思考很久的模型，可以调大 `upstream_timeout_seconds`。 |
+| 502 `upstream_unreachable` | 网关连不上服务商：地址无法解析、没有服务接受连接，或者 TLS 失败。检查上游的 Base URL，并在上游上点**测试**（见[测试和删除](07-upstreams.md#test-and-delete)）。 |
+| 502 `upstream_disconnected` | 服务商或通往它的代理在回复完成前关闭了连接。重试；如果一直出现，检查服务商和中间的代理。 |
 
-"Hidden tool request timed out"（504）发生在调用服务商之后，会记入请求日志，见[失败处理](04-openviking-tools.md#failure-handling)。
+"Hidden tool request timed out"（504 `tool_loop_timeout`）和其他 `tool_*` 原因发生在调用服务商之后，见[失败处理](04-openviking-tools.md#failure-handling)。
 
-已经开始的流式回复不会因为时间长被切断，只有服务商超过 `upstream_timeout_seconds` 没有发送任何数据，或者使用 OpenViking 工具的请求用完了工具**总时长**时才会中断；这时流提前结束，使用 OpenViking 工具的请求会报 "Hidden tool request timed out"。
+已经开始的流式回复不会因为时间长被切断，只有服务商超过 `upstream_timeout_seconds` 没有发送任何数据、断开连接，或者使用 OpenViking 工具的请求用完了工具**总时长**时才会中断。这时 HTTP 状态码已经是 200，所以网关用一条当前 API 的错误事件结束流：Chat Completions 和 Anthropic Messages 是类型为原因（例如 `upstream_timeout`）的 `error`，Responses 是 `response.failed`；消息开头是原因。使用 OpenViking 工具的请求收到的是工具循环的错误事件，用完**总时长**时为 "Hidden tool request timed out"。服务商停在一个事件的中间，或者停在回复的最后一个事件之后时，无法再追加事件，连接会直接断开。请求记录在 `stream_error` 中保留原因。服务商自己在流中发送的错误事件会原样转发，记录中标为 `stream_error: upstream_event`，并带上服务商的错误码。
 
 ## 上游返回错误 {#the-upstream-returned-an-error}
 
@@ -115,10 +124,18 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 原因 | 处理 |
 | --- | --- |
 | OpenViking 无法访问或响应超时（`openviking_unavailable`） | OpenViking 没有运行或无法访问。独立网关检查 `openviking_url` 和网络。 |
+| OpenViking 响应超时（`openviking_timeout`） | OpenViking 接受了连接，但在超时前没有应答。检查它的负载和服务端日志。 |
 | OpenViking 返回了 HTTP …（`openviking_http_<status>`），或 OpenViking 报告了错误 …（`openviking_<CODE>`） | OpenViking 返回了错误。查看 OpenViking Server 的日志。 |
 | `trusted_mode_unsupported` | OpenViking 使用 Trusted 模式。把它改为 `api_key` 认证。 |
 
-OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存对话会一直重试，直到 OpenViking 恢复。网关会以逐渐拉长的间隔重新检查，最长间隔为 `health_interval_seconds`（默认 60 秒）。
+OpenViking 异常期间，请求照常发给模型，只是不带记忆，结束的轮次保存失败；OpenViking 恢复后，每段对话的下一轮结束时补上缺的内容。请求会立即跳过召回、用户画像和对网关已知密钥的检查，原因与卡片上的相同，不再等待 OpenViking。网关会以逐渐拉长的间隔重新检查，最长间隔为 `health_interval_seconds`（默认 60 秒）。
+
+健康检查比较粗：两次检查之间，每个请求仍会等每次 OpenViking 调用各自的超时（密钥检查 5 秒，召回为配置中的**超时时间**）。OpenViking 卡住而不是拒绝连接时，有两项设置可以限制等待：
+
+- `openviking_budget_seconds` 给每个请求一个从到达时开始计算的截止时间，覆盖密钥检查、召回、用户画像和工具列表。时间用完后，请求不再等剩下的调用，按下文的原因继续处理。网关还没见过的密钥离开 OpenViking 无法确认，所以它的第一个请求在时间用完时收到 503 `openviking_timeout`。
+- `openviking_breaker_failures` 在某个账号的 OpenViking 调用连续这么多次没有应答（超时、连接错误、HTTP 5xx 或 429）后，暂停调用。在 `openviking_breaker_seconds`（默认 30 秒）内，这个账号的请求立即跳过密钥检查、召回、用户画像和工具，不带记忆发给模型，原因为 `openviking_circuit_open`；之后由一次试探调用决定是否恢复。拒绝（401、402、403）和不存在的应答不计数。保存一轮和其他调用一样计数；暂停期间结束的轮次不写入，保存失败，原因为 `openviking_circuit_open`。[状态行](../guides/22-gateway-operations.md#status-line)以 `openviking.open_circuits` 报告暂停中的账号数。
+
+两项默认都关闭；见[配置](13-configuration.md#gateway-fields)。
 
 ## 没有补充记忆 {#no-memory-is-added}
 
@@ -129,7 +146,9 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 | **没有找到相关内容**（`empty`） | 新用户通常如此。对话提交、OpenViking 提取之后才会有记忆。 | 继续使用即可；一直没有记忆时，见[OpenViking 中看不到对话](#conversations-do-not-appear-in-openviking)。 |
 | **召回已关闭或预算已用完**（`disabled`） | 上下文配置关闭了召回，当前上下文窗口剩下的召回预算不足 64 token，或者消息短于 3 个字符。 | 召回被关闭时，在上下文配置中打开。 |
 | **剩余预算不足，未补充记忆**（`budget`） | 这条消息的召回预算扣掉记忆块的包装后，留给检索结果的不足 64 token，所以没有检索。可能是这段对话快用完了**单个上下文窗口预算**（进入下一个上下文窗口后重新计算，例如压缩之后），也可能是**单条消息预算**设得太低，接近 64 token 的下限。 | **单条消息预算**接近下限时，调大它。 |
-| **OpenViking 无法访问或响应超时**（`openviking_unavailable`）、**召回超时**（`recall_timeout`） | 检索没有完成。 | 查看 OpenViking 卡片（见[OpenViking 异常](#openviking-is-degraded)）。OpenViking 在运行但响应慢时，调长**超时时间**。 |
+| **OpenViking 无法访问或响应超时**（`openviking_unavailable`）、**OpenViking 响应超时**（`openviking_timeout`）、**召回超时**（`recall_timeout`） | 检索没有完成。 | 查看 OpenViking 卡片（见[OpenViking 异常](#openviking-is-degraded)）。OpenViking 在运行但响应慢时，调长**超时时间**。 |
+| **分配给 OpenViking 调用的时间已用完**（`openviking_budget_exhausted`） | 这个请求之前的 OpenViking 调用用完了 `openviking_budget_seconds`，检索没有运行或被截断。 | 查明 OpenViking 为什么慢；如果设得太紧，调大 `openviking_budget_seconds`。 |
+| **OpenViking 对这个账号持续无响应，暂时跳过**（`openviking_circuit_open`） | 这个账号最近的调用都没有应答，网关暂时跳过了 OpenViking。 | 查看 OpenViking 卡片和服务端；试探调用成功后会自动恢复。 |
 | **OpenViking 拒绝了这个密钥**（`openviking_http_401`） | 用户的 OpenViking 密钥已失效。 | 用当前的密钥签发新的网关密钥，见[用户的 OpenViking API 密钥变了](09-gateway-keys.md#when-the-openviking-key-changes)。 |
 | **OpenViking 返回了 HTTP …**（`openviking_http_<status>`）或 **OpenViking 报告了错误 …**（`openviking_<CODE>`） | 检索在 OpenViking 内部失败。OpenViking Server 低于 `min_server_version` 时也可能这样失败。 | 查看 OpenViking Server 的日志。 |
 | **检测到 OpenViking 插件**（`plugin_present`） | 网关发现了 OpenViking 插件，让出了这段对话。 | 正常行为，见[两者同时使用时](../guides/15-gateway.md#when-both-are-in-use)。 |
@@ -139,17 +158,19 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 
 ## OpenViking 中看不到对话 {#conversations-do-not-appear-in-openviking}
 
-[保存](08-context-profiles.md#save-conversations)会把每一轮完成的对话写进名为 `gateway-…` 的 OpenViking 会话，会话属于网关密钥背后的 OpenViking 用户。预期中的某一轮没有出现时，对照下表：
+[保存](08-context-profiles.md#save-conversations)会在每一轮的回复结束时，把这一轮写进名为 `gateway-…` 的 OpenViking 会话，会话属于网关密钥背后的 OpenViking 用户。预期中的某一轮没有出现时，对照下表：
 
 | 看到的情况 | 原因 | 处理 |
 | --- | --- | --- |
-| 缺少最新的一轮 | 保存晚一轮：下一条消息到达时，上一轮才会出现；最后一轮要等**最新回复等待时长**（默认 10 分钟）。 | 稍等，或者发送下一条消息。 |
+| 缺少最新的一轮 | 这一轮还没有结束：回复把这一轮交给了客户端执行工具，这一轮在客户端的下一个请求里继续；或者回复没有正常结束，例如流式回复中断或客户端中途断开。 | 一轮结束时才会保存；没有正常结束的回复，由下一轮结束时随历史一起写入。 |
 | **保存**列显示**已关闭** | 上下文配置不保存对话。 | 在上下文配置中打开保存；修改只对新对话生效（见[修改何时生效](06-manage-in-studio.md#when-changes-take-effect)）。 |
-| **重试中**或**已暂停** | 保存失败，展开的行会显示原因。 | 修复原因（例如让 OpenViking 恢复访问）后，网关会在 5 分钟内重试。原因为 `gateway_key_revoked` 时：签发的网关密钥需要重新签发，之后的下一个请求会恢复保存；OpenViking 密钥若记录过期、被驱逐或收到 401，下一个有效请求会恢复保存（account 租户模式；`tenancy: key` 下换用新密钥会开始新的对话）。修改 `capture_memory_types` 后出现 `openviking_http_400` 时，先在配置中改正名称，再开始新的对话；进行中的对话保留原来的设置（见[保存对话](13-configuration.md#profile-saving)）。对话一直暂停时，用**重新同步对话…**（见[重新同步对话](10-overview-and-requests.md#resync-a-conversation)）。 |
+| **保存**列显示**保存失败**（`failed`） | 结束这一轮的请求写入 OpenViking 失败或超过 30 秒，展开的行会显示原因（见[保存状态](10-overview-and-requests.md#saving-status)）。网关不重试。 | 修复原因，例如让 OpenViking 恢复访问；原因为 `openviking_http_402` 或 `openviking_http_429` 时，检查 OpenViking 账号的订购或限流；原因为 `openviking_http_401` 时，用用户当前的 OpenViking 密钥签发新的网关密钥，见[用户的 OpenViking API 密钥变了](09-gateway-keys.md#when-the-openviking-key-changes)；原因为 `save_timeout` 或 `openviking_timeout` 时，检查 OpenViking 的负载。之后这段对话的下一轮结束时，网关会把缺的内容一起写入，前提是客户端原样发回了历史；没有下一轮时，失败的这一轮不会保存。 |
+| 每一轮都失败，原因为 `openviking_http_400` | 修改 `capture_memory_types` 后，其中有 OpenViking 不认识或已停用的记忆类型，OpenViking 拒绝创建会话。 | 在配置中改正名称，再开始新的对话；进行中的对话保留原来的设置（见[保存对话](13-configuration.md#profile-saving)）。 |
 | **检测到 OpenViking 插件**（`plugin_present`） | 检测到 OpenViking 插件的对话，网关不保存任何内容。 | 正常行为；同一个客户端在插件和网关之间二选一。 |
-| 会话里只有部分对话 | 以下情况下，网关会把当前历史写进新的 `gateway-…` 会话：客户端编辑、重新生成或压缩了历史（`history_changed`、`history_changed_during_delivery`），已在**最新回复等待时长**之后保存的一轮又继续了（`continued_after_idle`），或者有人用了**重新同步对话…**（`manual_reset`）。之前的轮次留在旧会话里。 | 到旧会话里找，见[保存状态](10-overview-and-requests.md#saving-status)。 |
+| 同一条用户消息出现两次，或者有两个版本的回答 | 客户端重新生成或编辑了回答、自己压缩了历史，网关从这一轮最新的用户消息开始继续写入同一个会话；之前写入的版本保留。一次写入的响应丢失时，下一轮也会把这些消息再写一次。 | 正常行为，见[对话什么时候保存](01-how-it-works.md#when-conversations-are-saved)。 |
+| 会话里只有部分对话 | 有人用了**重新同步对话…**（`manual_reset`），或者网关丢失了这段对话的保存进度时，下一轮结束时完整历史写入新的 `gateway-…` 会话，之前的轮次留在旧会话里。对话也可能在更早版本的网关中换过会话（例如原因为 `history_changed`）。 | 到旧会话里找，见[保存状态](10-overview-and-requests.md#saving-status)。 |
 | 完全看不到 `gateway-…` 会话 | 你查看时用的 OpenViking 用户，不是网关密钥背后的那个用户。 | 换成那个用户查看。 |
-| 会话出现了，记忆还没有 | OpenViking 在提交之后才在后台提取记忆。 | 等提取完成。 |
+| 会话出现了，记忆还没有 | OpenViking 在提交之后才在后台提取记忆。默认由网关提交：待提交内容达到**提交阈值**的一轮结束时立即提交；否则要等最后一轮结束后的**空闲提交时间**（默认 600 秒），网关在这期间重启只会让这次提交晚一两分钟。一直没有提交时，可能是提交失败，网关日志中会有 `could not commit` 警告及原因，网关每分钟再试一次，被 OpenViking 以 401、403、404 拒绝的不再重试；也可能是保存时用的密钥在空闲提交执行之前被吊销或过期，提交时找不到这份密钥记录，就不再执行。开启 `openviking_auto_commit` 时由 OpenViking 提交，空闲提交只在 Server 开启 `memory.session_auto_commit.enabled` 时发生，最早也要 300 秒；Server 使用本地扫描（`local` 后端）时，最多再晚一个 `check_interval_seconds`（默认 600 秒）。 | 等提交和提取完成。提交失败时，修复日志中的原因；密钥被吊销或过期时，这段对话的下一轮结束后会重新计时。开启 `openviking_auto_commit` 时，在 Server 的 `ov.conf` 中设置 `memory.session_auto_commit.enabled: true` 并重启 Server。见[保存对话](08-context-profiles.md#save-conversations)。 |
 
 ## 首次调用缓存命中率下降 {#the-first-call-cache-hit-rate-dropped}
 
@@ -205,6 +226,7 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 | 异常 | 发生了什么 | 怎么处理 |
 | --- | --- | --- |
 | 记忆不可用（`memory_store_failure`） | 网关无法读写自己的存储，或者该用户的网关数据刚被删除。请求不带记忆发给了模型；Claude 对话中之前的思考内容被去掉。 | 检查磁盘空间、权限和网关日志。刚[删除过该用户的网关数据](09-gateway-keys.md#delete-a-users-gateway-data)时出现属于正常。 |
+| 准备超时（`prepare_timeout`） | 补充记忆的时间超过了 `prepare_timeout_seconds`，例如 OpenViking 或状态存储响应慢。请求不带记忆发给了模型；Claude 对话中之前的思考内容被去掉。 | 检查 OpenViking 和状态存储。Studio 按代码显示这个问题。 |
 | 原样转发（`unsafe_json`） | 请求中有无法精确重新编码的数字或重复的键，网关逐字节原样转发，没有补充记忆。 | 通常只与某个客户端有关，网关这边无需调整。 |
 | 上游已切换（`upstream_changed`） | 对话原来的上游无法再服务，转到了另一个上游，造成一次缓存未命中，之前的 Claude 思考内容也被去掉。 | 重新启用这个上游，或者让客户端改用包含它的密钥；也可以接受这次切换。 |
 | 记忆记录缺失（`missing_injection_record`） | Claude 对话中，之前补充的记忆已经没有记录，之前的思考内容被去掉一次。 | 存储丢失后，或者在很久以前的对话里出现，都在预期之内。反复出现时，开始新对话。 |
@@ -213,12 +235,12 @@ OpenViking 异常期间，请求照常发给模型，只是不带记忆；保存
 | 工具历史无法继续使用（`hidden_tool_history_unavailable`） | Claude 对话用过 OpenViking 工具，但当前请求不能使用这些工具，之前的思考内容已被去掉。 | 查看请求详情中的工具停用原因，恢复原设置，或者开始新对话。 |
 | OpenViking 工具调用失败（`hidden_tool_loop_failed`） | 模型使用 OpenViking 工具时未能完成回答，客户端收到错误。 | 见[失败处理](04-openviking-tools.md#failure-handling)。 |
 | 模型未返回回答（`hidden_reply_without_anchor`） | 模型在这次请求中使用了 OpenViking 工具，但没有返回可用于继续对话的内容。客户端仍收到了回复，但下一轮无法沿用这次工具调用的结果。 | 重试本次提问，或开始一段新对话。 |
-| 回复未保存（`capture_parse_failure`） | 流式回复无法解析，这条回复没有保存，客户端不受影响。 | 无需处理，仅供了解。 |
+| 回复未保存（`capture_parse_failure`） | 流式回复无法解析，这次请求没有保存这一轮，客户端不受影响。 | 无需处理。客户端在下一轮发回这条回复时，它随下一轮一起保存。 |
 | 密钥未校验（`revocation_check_unavailable`） | OpenViking 无法确认这把网关密钥，请求在没有检查是否已吊销的情况下照常处理。 | 检查 OpenViking 是否可达、运行是否正常。 |
 
 ## Redis 不可用 {#redis-unavailable}
 
-启动在 Redis PING 处失败时，检查 `storage.redis.endpoints`、TLS 信任链和密码环境变量；官方镜像之外需要安装 `openviking[expiry]`。鉴权时返回纯文本 `Internal Server Error` 的 HTTP 500 也可能是 Redis 不可用，请查看 stderr。运行时 Redis 故障期间 `/health` 仍返回健康，不代表 Redis 连接正常。ACL 和超时配置见[存储后端](13-configuration.md#storage)，持久化配置见 [Redis 内存策略](../guides/22-gateway-operations.md#redis-memory-policy)。
+启动在 Redis PING 处失败时，检查 `storage.redis.endpoints`、TLS 信任链和密码环境变量；官方镜像之外需要安装 `openviking[expiry]`。运行时状态存储（Redis 或 SQLite）出故障期间，需要它来鉴权或路由的请求收到 503 `store_unavailable`，带 `Retry-After: 1` 和 `X-OpenViking-Upstream-Attempted: 0`；已经过了这一步的请求不带记忆发给模型（`memory_store_failure`）。请查看 stderr。OpenViking 拒绝的密钥仍然收到 401、402 或 403。每条 Redis 命令连同等待空闲连接的时间最长 `connect_timeout_ms + command_timeout_ms`，所以不再响应的 Redis 会让请求在这段时间内失败，而不是一直排队。运行时 Redis 故障期间 `/health` 仍返回健康，不代表 Redis 连接正常。ACL 和超时配置见[存储后端](13-configuration.md#storage)，持久化配置见 [Redis 内存策略](../guides/22-gateway-operations.md#redis-memory-policy)。
 
 ## 下一步 {#next-steps}
 

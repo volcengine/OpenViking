@@ -45,7 +45,7 @@ async function withPendingDir(fn) {
   }
 }
 
-test("capture and replay keep identical session IDs in separate connection queues", async () => {
+test("offline capture and commit replay in order within the selected connection", async () => {
   await withPendingDir(async () => {
     let healthy = false;
     const sent = [];
@@ -63,11 +63,13 @@ test("capture and replay keep identical session IDs in separate connection queue
     const personal = "Personal-only project guidance captured while offline.";
     assert.equal((await first.syncBranch(branch(work))).queued, 1);
     assert.equal((await second.syncBranch(branch(personal))).queued, 1);
+    assert.equal(await first.commit({ keepRecentCount: 3 }), null);
     healthy = true;
     await first.replayPending();
-    assert.equal(sent.length, 1);
+    assert.equal(sent.length, 2);
     assert.ok(JSON.stringify(sent[0]).includes(work));
     assert.ok(!JSON.stringify(sent[0]).includes(personal));
+    assert.deepEqual(sent[1], { keep_recent_count: 3 });
     assert.equal((await createPendingQueue("personal").listPending()).length, 1);
   });
 });
@@ -619,5 +621,29 @@ test("the takeover barrier drains only within the budget it is given", async () 
 
     assert.equal(await sync.flushForTakeover(), true);
     assert.equal(calls.length, 1);
+  });
+});
+
+test("a commit without takeover waits behind the session's queued messages", async () => {
+  await withPendingDir(async () => {
+    let commits = 0;
+    const c = client({
+      fetchJSON: async () => ({ ok: false, status: 503, error: { code: "UNAVAILABLE" } }),
+      commitSessionResponse: async () => {
+        commits++;
+        return { result: { task_id: "t-1" } };
+      },
+    });
+    const sync = new SyncManager(c, config({ takeoverEnabled: false }));
+    await sync.ensureSession("pi-shutdown");
+    const sid = sync.sessionId;
+    await enqueue("addMessage", sid, { role: "user", content: "parked" }, { createdAt: Date.now() + 60_000 });
+
+    assert.equal(await sync.commit({ timeoutMs: 3000 }), null);
+    assert.equal(commits, 0, "no commit overtakes the queued message");
+    assert.deepEqual((await listPending()).map(({ entry }) => [entry.type, entry.sessionId]), [
+      ["addMessage", sid],
+      ["commitSession", sid],
+    ]);
   });
 });

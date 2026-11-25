@@ -11,6 +11,7 @@ import type {
   ViewerViewModeOption,
 } from '@ark-design/ui/file-viewer/core';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
+import type { DirectoryLinkMode } from './file-preview-adapters.js';
 
 import { FilePreviewMedia, mediaKind } from './file-preview-media.js';
 import { FilePreviewImageFrame } from './file-preview-image-frame.js';
@@ -37,6 +38,7 @@ export interface FilePreviewBodyProps {
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
   /** Markdown 正文里的链接被点击时调用。 */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
+  directoryLinks?: DirectoryLinkMode;
   /** 读取失败后退出编辑态。Leaves editing after a failed load. */
   onCancelEditing: () => void;
   /** 底座加载状态变化时调用；过渡层用它判断新内容何时就绪。 */
@@ -75,6 +77,7 @@ function FilePreviewBodyContent({
   onHandleChange,
   onViewModesChange,
   onLinkClick,
+  directoryLinks,
   onCancelEditing,
   onStateChange,
   reports = true,
@@ -100,6 +103,8 @@ function FilePreviewBodyContent({
       <FilePreviewEditor
         draft={editing.draft}
         annotations={editing.annotations}
+        initialAnnotation={editing.initialAnnotation}
+        readOnlySuffix={editing.readOnlySuffix}
         source={fileTab.source}
         text={text}
         loading={editing.loadingEdit}
@@ -118,7 +123,8 @@ function FilePreviewBodyContent({
   if (fileTab.loading)
     return fileTab.slots?.loadingFallback ?? <LoadingState text={text} />;
 
-  if (isEmptyFile(fileTab.source)) return <EmptyFileState text={text} />;
+  if (isEmptyFile(fileTab.source))
+    return <EmptyFileState text={text} label={fileTab.emptyLabel} />;
 
   const media = mediaKind(fileTab.source);
   if (media)
@@ -126,6 +132,7 @@ function FilePreviewBodyContent({
       <FilePreviewMedia
         source={fileTab.source}
         kind={media}
+        videoDetails={fileTab.videoDetails}
         text={text}
         slots={fileTab.slots}
         reports={reports}
@@ -151,6 +158,7 @@ function FilePreviewBodyContent({
         onHandleChange={onHandleChange}
         onViewModesChange={onViewModesChange}
         onLinkClick={onLinkClick}
+        directoryLinks={directoryLinks}
         onStateChange={(state) => {
           setReady(state === 'ready');
           onStateChange?.(state);

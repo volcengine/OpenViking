@@ -11,6 +11,7 @@ import {
   click,
   button,
   ok,
+  settle,
 } from './helpers/preview-native-dom.mjs';
 
 const uri = `${target}/guide.md`;
@@ -22,27 +23,39 @@ const commits = ['a', 'b', 'c'].map((character, index) => ({
 }));
 
 test('native snapshot versions use commit IDs and snapshot cursors for preview and restore', async () => {
+  const restored = {
+    oid: 'd'.repeat(40),
+    message: `restore ${uri} to ${commits[2].oid}`,
+    committer: { time_seconds: 1794270000 },
+  };
+  let versions = commits;
   const fetch = fixture(
     uri,
     false,
     (call) => {
       if (call.path.endsWith('/snapshot/versions')) {
         assert.equal(call.query.before_version, undefined);
+        const start = call.query.before_snapshot
+          ? versions.findIndex(
+              ({ oid }) => oid === call.query.before_snapshot,
+            ) + 1
+          : 0;
+        const page = versions.slice(start, start + 2);
         return ok({
-          versions: call.query.before_snapshot
-            ? commits.slice(2)
-            : commits.slice(0, 2),
-          next_before_snapshot: call.query.before_snapshot
-            ? null
-            : commits[1].oid,
+          uri,
+          versions: page,
+          next_before_snapshot:
+            start + page.length < versions.length ? page.at(-1).oid : null,
         });
       }
       if (call.path.endsWith('/snapshot/show')) {
         assert.equal(call.query.path, uri);
         return Promise.resolve(new Response(`# ${call.query.target_ref}`));
       }
-      if (call.path.endsWith('/snapshot/restore'))
+      if (call.path.endsWith('/snapshot/restore')) {
+        versions = [restored, ...commits];
         return ok({ result: 'created' });
+      }
     },
     [{ to: target }],
   );
@@ -75,6 +88,19 @@ test('native snapshot versions use commit IDs and snapshot cursors for preview a
     );
     assert.equal(restore.body.restore_commit_id, commits[2].oid);
     assert.equal(restore.body.current_commit_id, commits[0].oid);
+    await settle();
+    const badges = workflow().querySelectorAll(
+      '.ov-file-history__commit-list .ov-file-history__version-badge',
+    );
+    assert.deepEqual(
+      Array.from(badges, (badge) => badge.textContent),
+      ['Restored'],
+    );
+    assert.equal(
+      badges[0].closest('button').querySelector('time').dateTime,
+      new Date(restored.committer.time_seconds * 1000).toISOString(),
+    );
+    assert.equal(badges[0].previousElementSibling.textContent, 'Latest');
   } finally {
     await view.unmount();
   }

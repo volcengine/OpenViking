@@ -42,15 +42,20 @@ from openviking.connector.routing import (
     detect_connector_add_type,
     is_full_commit_sha,
 )
+from openviking.connector.watch_auth import (
+    WATCH_AUTH_PROVIDER,
+    WATCH_PLAINTEXT_AUTH_PROVIDER,
+    is_watch_auth_state,
+)
 from openviking.core.namespace import NamespaceShapeError
 from openviking.core.uri_validation import matches_content_kind
 from openviking.crypto.encryptor import MAGIC as ENCRYPTED_ENVELOPE_MAGIC
 from openviking.crypto.encryptor import build_credential_encryptor
 from openviking.metrics.datasources.resource import ResourceIngestionEventDataSource
 from openviking.observability.http_error_context import (
-    sanitize_public_error_details,
     sanitize_public_http_error,
 )
+from openviking.observability.log_safety import safe_log_fields
 from openviking.parse.mode import ParseMode
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -78,17 +83,6 @@ logger = get_logger(__name__)
 
 _TOS_BUCKET_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])$")
 CONNECTOR_DISPLAY_RESOURCE_CONFIG_ARG = "resource_config"
-
-
-def _safe_http_response(response: httpx.Response) -> Any:
-    """Return a bounded, credential-redacted response body for logs."""
-    try:
-        payload = response.json()
-    except (TypeError, ValueError):
-        payload = response.text
-    if isinstance(payload, dict):
-        return sanitize_public_error_details(payload)
-    return sanitize_public_http_error(code="CONNECTOR_HTTP_ERROR", message=payload).message
 
 
 def _validate_tos_uri(
@@ -155,8 +149,8 @@ class ConnectorDelegate:
         self._resource_memory_link_service = resource_memory_link_service
         self._watch_credential_encryptor: Any = None
 
-    _WATCH_AUTH_PROVIDER = "connector_encrypted"
-    _WATCH_PLAINTEXT_AUTH_PROVIDER = "connector_plaintext"
+    _WATCH_AUTH_PROVIDER = WATCH_AUTH_PROVIDER
+    _WATCH_PLAINTEXT_AUTH_PROVIDER = WATCH_PLAINTEXT_AUTH_PROVIDER
 
     def _watch_encryptor(self) -> Any:
         encryptor = getattr(self._viking_fs, "_encryptor", None)
@@ -210,10 +204,7 @@ class ConnectorDelegate:
 
     @classmethod
     def is_watch_auth_state(cls, auth_state: Optional[Dict[str, Any]]) -> bool:
-        return isinstance(auth_state, dict) and auth_state.get("provider") in {
-            cls._WATCH_AUTH_PROVIDER,
-            cls._WATCH_PLAINTEXT_AUTH_PROVIDER,
-        }
+        return is_watch_auth_state(auth_state)
 
     async def restore_watch_request(
         self,
@@ -393,9 +384,7 @@ class ConnectorDelegate:
                         "standard import pipeline; pass a full 40-character commit SHA."
                     )
                 logger.info(
-                    "Connector git import degrades to the standard pipeline: "
-                    "abbreviated commit SHA %r needs a local clone to resolve.",
-                    commit,
+                    "Abbreviated git revision requires local resolution; using standard import pipeline"
                 )
                 return False
 
@@ -424,8 +413,8 @@ class ConnectorDelegate:
                 f"standard import pipeline. Connector import does not support: {detail}"
             )
         logger.info(
-            f"[ConnectorDelegate] Connector does not support {detail}; "
-            "falling back to the standard import pipeline"
+            "Connector arguments unsupported; using standard import pipeline unsupported_count=%d",
+            len(unsupported),
         )
         return False
 
@@ -849,23 +838,20 @@ class ConnectorDelegate:
             "api_key": private_payload["api_key"],
             "auth_config": private_payload.get("auth_config") or None,
         }
-        safe_request = {**request, "api_key": "[REDACTED]"}
-        if safe_request["auth_config"] is not None:
-            safe_request["auth_config"] = "[REDACTED]"
-        logger.info(
-            "[ConnectorDelegate] Connector task add request: ov_task_id=%s request=%s",
-            ov_task_id,
-            sanitize_public_error_details(safe_request),
-        )
+        logger.debug("Connector submission started", extra=safe_log_fields({"task_id": ov_task_id}))
         try:
             result = await self._client(connection["account_id"]).submit_doc_add(**request)
         except httpx.HTTPStatusError as exc:
-            logger.error(
-                "[ConnectorDelegate] Connector task add response: ov_task_id=%s status=%s "
-                "response=%s",
-                ov_task_id,
+            logger.info(
+                "Connector submission failed http_status=%d retrying=%s",
                 exc.response.status_code,
-                _safe_http_response(exc.response),
+                exc.response.status_code in {408, 429} or exc.response.status_code >= 500,
+                extra=safe_log_fields(
+                    {
+                        "task_id": ov_task_id,
+                        "error_code": "CONNECTOR_SUBMISSION_FAILED",
+                    }
+                ),
             )
             raise ExternalTaskError(
                 "CONNECTOR_SUBMISSION_FAILED",
@@ -878,10 +864,8 @@ class ConnectorDelegate:
                 "Connector submission transport failed",
                 transient=True,
             ) from exc
-        logger.info(
-            "[ConnectorDelegate] Connector task add response: ov_task_id=%s response=%s",
-            ov_task_id,
-            sanitize_public_error_details(result),
+        logger.debug(
+            "Connector submission response received", extra=safe_log_fields({"task_id": ov_task_id})
         )
         key = result.get("task_key") or result.get("TaskKey")
         if not isinstance(key, str) or not key.strip():
@@ -919,12 +903,9 @@ class ConnectorDelegate:
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
             retrying = code in {408, 429} or code >= 500
-            logger.warning(
-                "[ConnectorDelegate] Connector task info error response: "
-                "connector_task_key=%s status=%s response=%s retrying=%s",
-                external_task_id,
+            logger.info(
+                "Connector task query failed http_status=%d retrying=%s error_code=CONNECTOR_QUERY_FAILED",
                 code,
-                _safe_http_response(exc.response),
                 retrying,
             )
             if retrying:

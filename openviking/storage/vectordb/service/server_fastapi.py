@@ -19,7 +19,9 @@ from fastapi.responses import JSONResponse
 
 from openviking.storage.vectordb.service import api_fastapi
 from openviking.storage.vectordb.service.api_fastapi import VikingDBException, error_response
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Global counter for tracking active requests
 _active_requests = 0
@@ -139,4 +141,4 @@ if __name__ == "__main__":
         logger.info("Starting VikingDB server on 0.0.0.0:5000")
         uvicorn.run(app, host="0.0.0.0", port=5000, log_level="info")
     except Exception as e:
-        logger.error(f"Failed to start VikingDB server: {e}")
+        logger.error("Failed to start VikingDB server: %s", type(e).__name__)

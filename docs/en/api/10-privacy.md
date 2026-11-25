@@ -2,6 +2,8 @@
 
 Privacy configs manage sensitive values in Skills and Sessions (such as `api_key` and `token`) by `category + target_key` in the current user's space. Changed values create a version snapshot. You can query history and switch the active version. Submitting the same values as the current version does not create a new version.
 
+> You can manage Privacy configs and their versions even when automatic processing is disabled in [User settings](08-admin.md#user-settings).
+
 These examples use the current user’s API key. In trusted mode, supply the identity headers required by your deployment. Value-reading endpoints and CLI commands return stored values; tree and field-metadata endpoints omit them. `***` below is an example placeholder, not automatic redaction.
 
 Activating a version changes only the values stored in OpenViking. It does not rotate, revoke, or restore credentials at the external provider.
@@ -42,7 +44,7 @@ Mutations of the same `category + target_key` for the same user require the targ
 
 ## Scan Stored Content
 
-Explicitly scan one persisted file or directory. The default is a dry run and never returns the matched value. With `fix=true`, unambiguous matches are replaced and affected content is refreshed asynchronously.
+Explicitly scan one persisted file or directory. The default is a dry run and never returns the matched value. With `fix=true`, matches are replaced and affected content is refreshed asynchronously.
 
 ```text
 POST /api/v1/privacy-configs/scan
@@ -57,6 +59,7 @@ POST /api/v1/privacy-configs/scan
 ```
 
 `uri` is required. Broad scope-based scans are intentionally unsupported. `node_limit` must be between 1 and 1000. The server also enforces one scan per process, 20 file reads per second, 1 MiB per file, 16 MiB total input, 1,000 replacements per file, at most 32 reference details per matched file, at most 100 repaired files, and a cooperative 60-second scan budget. A second concurrent request receives `RESOURCE_EXHAUSTED`. Repair never waits for semantic/vector refresh work. Responses report skipped files, truncation, the stop reason, and the effective limits. When one value maps to multiple Privacy fields, the result reports `ambiguous` and never chooses a reference arbitrarily.
+By default, a fixed order selects a restorable reference. Set `OPENVIKING_PRIVACY_AMBIGUOUS_STRICT=1` to reject such matching operations.
 
 ---
 
@@ -624,6 +627,29 @@ ov privacy delete '{{ov_privacy:alice:viking://~/privacy/credential/github-prod#
 ov privacy scan --uri viking://~/resources/project-a
 ov privacy scan --uri viking://~/resources/project-a --fix --node-limit 500
 ```
+
+### Run external commands with Privacy references
+
+`ov privacy run` lets callers or Agents run local external commands (such as `gh` or `curl`) directly with Privacy references (<code v-pre>{{ov_privacy:...}}</code>, obtained via `ov privacy reference` or `ov privacy tree --references`). Before launching the external command, `ov privacy run` resolves references in environment variables or arguments and injects the sensitive values; in the command's `stdout`/`stderr` output, matching sensitive values are replaced back with their corresponding Privacy references in real time.
+
+> Output replacement applies only to the external command's `stdout` and `stderr`, not to files it writes or data it sends over the network.
+
+```bash
+# 1. Pass via environment variable (recommended to keep sensitive values out of argv)
+ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- gh api user
+
+# 2. Load from a file (one NAME={{ov_privacy:...}} entry per line; supports matching quotes and # comments)
+ov privacy run --env-file ./privacy.env -- gh api user
+
+# 3. Embed directly inside an argument of the external command
+ov privacy run -- curl -H 'Authorization: Bearer {{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' https://api.example.com
+
+# 4. Invoke sh -c explicitly for shell pipelines or redirections, passing references via --env
+ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github-prod#/values/api_key}}' -- \
+  sh -c 'curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" https://api.example.com | jq .login'
+```
+
+> In examples 3 and 4 above, the sensitive value still ends up in `curl`'s process arguments (via `ov privacy run` expanding the argument reference in example 3, or `sh` expanding `$GITHUB_TOKEN` in example 4), which may be visible to other local processes, other containers, or the host. Prefer `--env` / `--env-file` so the target program reads environment variables directly (as in examples 1 and 2), and set `OPENVIKING_PRIVACY_RUN_STRICT=1` to reject references in `ov privacy run` command arguments.
 
 ---
 

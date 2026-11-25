@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { act } from './helpers/command-console-dom.mjs';
 const { useConversation } = await import(
@@ -99,79 +99,103 @@ for (const failure of ['session', 'stream']) {
   });
 }
 
-test('native Console accepts follow-ups while streaming and preserves newer drafts across acceptance and completion', async () => {
-  let view;
-  let draft = 'question';
-  let advance;
-  let accept;
-  const streamGate = new Promise((resolve) => {
-    advance = resolve;
+for (const reselected of [false, true]) {
+  test(`native Console preserves draft and reference changes across follow-up acceptance (reselected: ${reselected})`, async () => {
+    let view;
+    let draft = 'question';
+    let advance;
+    let accept;
+    const streamGate = new Promise((resolve) => {
+      advance = resolve;
+    });
+    const ackGate = new Promise((resolve) => {
+      accept = resolve;
+    });
+    let reject = true;
+    let selectReferences;
+    const original = { uri: 'viking://resources/original.md', type: 'file' };
+    const added = { uri: 'viking://resources/added.md', type: 'file' };
+    const service = {
+      createSession: async () => ({ id: 's', title: 's' }),
+      loadMessages: async () => [],
+      listSessions: async () => [],
+      removeSession: async () => {},
+      steer: async () => (reject ? { accepted: false } : ackGate),
+      async *stream() {
+        yield { type: 'reasoning', text: 'before', delta: true };
+        await streamGate;
+        yield { type: 'iteration', iteration: 2 };
+        yield { type: 'complete', text: 'answer' };
+      },
+    };
+    function Host() {
+      const [selected, onChange] = useState([]);
+      selectReferences = onChange;
+      view = useConversation(
+        {
+          chatOptions: { service, referenceSelection: { selected, onChange } },
+        },
+        (next) => {
+          draft = typeof next === 'function' ? next(draft) : next;
+        },
+      );
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    try {
+      await act(() => root.render(createElement(Host)));
+      await act(async () => {
+        view.onSend({ text: 'question', attachments: [] });
+        await tick();
+      });
+      assert.equal(draft, '');
+      assert.equal(view.canSendWhileStreaming, true);
+      await act(() => selectReferences([original]));
+      const sendFollowUp = () =>
+        view.onSend({
+          text: 'follow',
+          attachments: [],
+          references: view.references.selected,
+        });
+      draft = 'follow';
+      await act(async () => {
+        sendFollowUp();
+        await tick();
+      });
+      assert.equal(draft, 'follow');
+      assert.deepEqual(view.references.selected, [original]);
+      assert.equal(
+        view.messages.filter((item) => item.role === 'user').length,
+        1,
+      );
+      reject = false;
+      await act(sendFollowUp);
+      assert.equal(view.isSubmitting, true);
+      if (reselected) await act(() => selectReferences([added]));
+      await act(() => selectReferences([{ ...original }, added]));
+      draft = 'new draft';
+      await act(async () => {
+        accept({ accepted: true });
+        await tick();
+      });
+      assert.equal(view.isSubmitting, false);
+      assert.deepEqual(
+        view.references.selected,
+        reselected ? [original, added] : [added],
+      );
+      assert.equal(draft, 'new draft');
+      await act(async () => {
+        advance();
+        await tick();
+      });
+      assert.equal(view.isSending, false);
+      assert.equal(draft, 'new draft');
+      assert.deepEqual(
+        view.messages.map((item) => item.role),
+        ['user', 'assistant', 'user', 'assistant'],
+      );
+    } finally {
+      await act(() => root.unmount());
+    }
   });
-  const ackGate = new Promise((resolve) => {
-    accept = resolve;
-  });
-  let reject = true;
-  const service = {
-    createSession: async () => ({ id: 's', title: 's' }),
-    loadMessages: async () => [],
-    listSessions: async () => [],
-    removeSession: async () => {},
-    steer: async () => (reject ? { accepted: false } : ackGate),
-    async *stream() {
-      yield { type: 'reasoning', text: 'before', delta: true };
-      await streamGate;
-      yield { type: 'iteration', iteration: 2 };
-      yield { type: 'complete', text: 'answer' };
-    },
-  };
-  function Host() {
-    view = useConversation({ chatOptions: { service } }, (next) => {
-      draft = typeof next === 'function' ? next(draft) : next;
-    });
-    return null;
-  }
-  const root = createRoot(document.createElement('div'));
-  try {
-    await act(() => root.render(createElement(Host)));
-    await act(async () => {
-      view.onSend({ text: 'question', attachments: [] });
-      await tick();
-    });
-    assert.equal(draft, '');
-    assert.equal(view.canSendWhileStreaming, true);
-    draft = 'follow';
-    await act(async () => {
-      view.onSend({ text: 'follow', attachments: [] });
-      await tick();
-    });
-    assert.equal(draft, 'follow');
-    assert.equal(
-      view.messages.filter((item) => item.role === 'user').length,
-      1,
-    );
-    reject = false;
-    await act(() => {
-      view.onSend({ text: 'follow', attachments: [] });
-    });
-    assert.equal(view.isSubmitting, true);
-    draft = 'new draft';
-    await act(async () => {
-      accept({ accepted: true });
-      await tick();
-    });
-    assert.equal(view.isSubmitting, false);
-    assert.equal(draft, 'new draft');
-    await act(async () => {
-      advance();
-      await tick();
-    });
-    assert.equal(view.isSending, false);
-    assert.equal(draft, 'new draft');
-    assert.deepEqual(
-      view.messages.map((item) => item.role),
-      ['user', 'assistant', 'user', 'assistant'],
-    );
-  } finally {
-    await act(() => root.unmount());
-  }
-});
+}

@@ -8,9 +8,7 @@ import {
 import {
   deriveHarnessSessionId,
 } from "./shared/session-model.mjs"
-import {
-  createPendingQueue,
-} from "./shared/pending-queue.mjs"
+import { createPendingQueue } from "./shared/pending-queue.mjs"
 import {
   sendSessionMessages,
 } from "./shared/batch-send.mjs"
@@ -521,6 +519,20 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
     const body = { keep_recent_count: 0 }
+    const deferred = await pending.deferCommitBehindPendingWrites(
+      (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
+      ovSessionId,
+      body,
+      (stage, data) => log("DEBUG", "pending", stage, data),
+    )
+    if (deferred) {
+      log("WARN", "session", "Queued OpenViking session commit behind queued messages", {
+        openviking_session: ovSessionId,
+        reason,
+        queued: deferred.ok,
+      })
+      return { status: "queued" }
+    }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
       method: "POST",
       body: JSON.stringify(body),

@@ -3,6 +3,8 @@ import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { OV_PATHS } from '../../client/paths.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
+import { useExperienceSources } from './use-experience-sources.js';
+import { useExperienceTests } from './use-experience-tests.js';
 import type {
   ExperienceListPage,
   FileBrowserExperienceDataSource,
@@ -12,7 +14,6 @@ import {
   EXPERIENCE_PAGE_SIZE,
   isExperienceDirectory,
   readExperiences,
-  readExperienceSources,
 } from './experience-data.js';
 import type { ExperienceOutcomeResult } from './experience-data.js';
 
@@ -59,10 +60,15 @@ export function useExperienceDashboard({
     days: 7,
     tab: 'impact' as 'impact' | 'source' | 'test',
   });
-  const current =
+  let current =
     state.owner === owner
       ? state
       : { owner, page: 0, days: 7, tab: 'impact' as const };
+  // Revoking Test also expires its saved selection, so restoring it stays on Impact.
+  if (current.tab === 'test' && !dataSource?.tests) {
+    current = { ...current, tab: 'impact', page: 0 };
+    setState(current);
+  }
   const { page, days, tab } = current;
   const setPage = (value: number) =>
     setState({ ...current, page: Math.max(0, value) });
@@ -71,11 +77,7 @@ export function useExperienceDashboard({
   const setTab = (value: 'impact' | 'source' | 'test') =>
     setState({ ...current, tab: value, page: 0 });
   const directory = isExperienceDirectory(uri);
-  const {
-    list: listSource,
-    sources: sourcesSource,
-    outcomes: outcomesSource,
-  } = dataSource ?? {};
+  const { list: listSource, outcomes: outcomesSource } = dataSource ?? {};
   const loadList = useCallback(
     async (
       client: OvClient,
@@ -91,16 +93,6 @@ export function useExperienceDashboard({
       return custom ?? readExperiences(client, uri, page, options);
     },
     [uri, page, listSource],
-  );
-  const loadSources = useCallback(
-    async (
-      client: OvClient,
-      options: OvRequestOptions & { signal: AbortSignal },
-    ) =>
-      sourcesSource
-        ? sourcesSource({ uri, signal: options.signal })
-        : readExperienceSources(client, uri, options),
-    [uri, sourcesSource],
   );
   const loadOutcomes = useCallback(
     async (
@@ -154,15 +146,13 @@ export function useExperienceDashboard({
     (value) => value.items.length === 0,
     !!listSource,
   );
-  const sources = useDashboardQuery(
-    loadSources,
+  const sources = useExperienceSources({
+    uri,
+    dataSource,
     requestOptions,
-    enabled && !directory && tab === 'source',
+    enabled: enabled && !directory && tab === 'source',
     refreshGeneration,
-    'file_browser_experience_dashboard_load',
-    (value) => value.length === 0,
-    !!sourcesSource,
-  );
+  });
   const outcomes = useDashboardQuery(
     loadOutcomes,
     requestOptions,
@@ -172,10 +162,27 @@ export function useExperienceDashboard({
     (value) => value.length === 0,
     !!outcomesSource,
   );
+  const tests = useExperienceTests({
+    uri,
+    page,
+    loader: dataSource?.tests,
+    requestOptions,
+    enabled: enabled && !directory && tab === 'test',
+    refreshGeneration,
+  });
+  // A refresh can remove the final page; reset before committing the empty view.
+  if (tests.data) {
+    const lastPage = Math.max(
+      0,
+      Math.ceil(tests.data.total / EXPERIENCE_PAGE_SIZE) - 1,
+    );
+    if (page > lastPage) setPage(lastPage);
+  }
   return {
     list,
     sources,
     outcomes,
+    tests,
     page,
     setPage,
     days,

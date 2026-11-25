@@ -7,8 +7,6 @@ Automatically starts an OpenViking server in a background thread so that
 AsyncHTTPClient integration tests can run without a manually started server process.
 """
 
-import copy
-import math
 import os
 import shutil
 import socket
@@ -18,22 +16,15 @@ from pathlib import Path
 
 import httpx
 import pytest
-import pytest_asyncio
 import uvicorn
 
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
-from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_integration"
-
-# ── Gemini integration test helpers ──────────────────────────────────────────
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
-requires_api_key = pytest.mark.skipif(not GOOGLE_API_KEY, reason="GOOGLE_API_KEY not set")
 
 # ── Vault integration test helpers ──────────────────────────────────────────
 VAULT_ADDR = os.environ.get("VAULT_ADDR", "http://127.0.0.1:8200")
@@ -49,123 +40,6 @@ requires_volcengine_kms = pytest.mark.skipif(
     not (VOLCENGINE_ACCESS_KEY and VOLCENGINE_SECRET_KEY and VOLCENGINE_KMS_KEY_ID),
     reason="VOLCENGINE_ACCESS_KEY, VOLCENGINE_SECRET_KEY, or VOLCENGINE_KMS_KEY_ID not set",
 )
-
-# (model_name, default_dimension, token_limit)
-GEMINI_MODELS = [
-    ("gemini-embedding-2", 3072, 8192),
-]
-
-
-def _local_engine_available() -> bool:
-    try:
-        from openviking.storage.vectordb.engine import ENGINE_VARIANT
-    except Exception:
-        return False
-    return ENGINE_VARIANT != "unavailable"
-
-
-requires_engine = pytest.mark.skipif(
-    not _local_engine_available(),
-    reason="local vectordb engine unavailable",
-)
-
-
-def l2_norm(vec: list[float]) -> float:
-    """Compute L2 norm of a vector."""
-    return math.sqrt(sum(v * v for v in vec))
-
-
-@pytest.fixture(scope="session")
-def gemini_embedder():
-    """Session-scoped GeminiDenseEmbedder for integration tests."""
-    if not GOOGLE_API_KEY:
-        pytest.skip("GOOGLE_API_KEY not set")
-    try:
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-    except (ImportError, ModuleNotFoundError, AttributeError):
-        pytest.skip("google-genai not installed")
-    return GeminiDenseEmbedder("gemini-embedding-2", api_key=GOOGLE_API_KEY, dimension=768)
-
-
-def gemini_config_dict(
-    model: str,
-    dim: int,
-    query_param: str | None = None,
-    doc_param: str | None = None,
-) -> dict:
-    """Build a minimal service config for Gemini-backed integration tests."""
-    return {
-        "storage": {
-            "workspace": str(TEST_TMP_DIR / "gemini"),
-            "agfs": {"backend": "local"},
-            "vectordb": {"name": "test", "backend": "local", "project": "default"},
-        },
-        "embedding": {
-            "dense": {
-                "provider": "gemini",
-                "api_key": GOOGLE_API_KEY,
-                "model": model,
-                "dimension": dim,
-                **({"query_param": query_param} if query_param else {}),
-                **({"document_param": doc_param} if doc_param else {}),
-            }
-        },
-    }
-
-
-async def teardown_ov_service(service: OpenVikingService | None = None) -> None:
-    if service is not None:
-        await service.close()
-    OpenVikingConfigSingleton.reset_instance()
-
-
-async def make_ov_service(
-    config_dict: dict,
-    data_path: str,
-) -> tuple[OpenVikingService, RequestContext]:
-    if not GOOGLE_API_KEY:
-        pytest.skip("GOOGLE_API_KEY not set")
-    try:
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder  # noqa: F401
-    except (ImportError, ModuleNotFoundError, AttributeError):
-        pytest.skip("google-genai not installed")
-
-    OpenVikingConfigSingleton.reset_instance()
-    workspace = Path(data_path)
-    shutil.rmtree(workspace, ignore_errors=True)
-    workspace.mkdir(parents=True, exist_ok=True)
-
-    effective_config = copy.deepcopy(config_dict)
-    storage = effective_config.setdefault("storage", {})
-    storage["workspace"] = str(workspace)
-    storage.setdefault("agfs", {"backend": "local"})
-    storage.setdefault("vectordb", {"name": "test", "backend": "local", "project": "default"})
-    OpenVikingConfigSingleton.initialize(config_dict=effective_config)
-
-    user = UserIdentifier.the_default_user("gemini_test")
-    service = OpenVikingService(path=str(workspace), user=user)
-    await service.initialize()
-    return service, RequestContext(user=user, role=Role.USER)
-
-
-def sample_markdown(base_dir: Path, slug: str, content: str) -> Path:
-    path = base_dir / f"{slug}.md"
-    path.write_text(content, encoding="utf-8")
-    return path
-
-
-@pytest_asyncio.fixture(scope="function")
-async def gemini_ov_service(tmp_path):
-    model = "gemini-embedding-2"
-    dim = 768
-    service, ctx = await make_ov_service(
-        gemini_config_dict(model, dim),
-        str(tmp_path / "ov_gemini"),
-    )
-    try:
-        yield service, ctx, model, dim
-    finally:
-        await teardown_ov_service(service)
 
 
 @pytest.fixture(scope="session")

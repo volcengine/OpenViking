@@ -1,6 +1,9 @@
 import { Switch } from '../../shared/primitives/switch/switch.js';
 import { Fragment, type ReactNode } from 'react';
-import { historyVersionLabel } from './preview-history-controls.js';
+import {
+  historyVersionBadge,
+  historyVersionLabel,
+} from './preview-history-controls.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { Empty } from '../../shared/primitives/empty/empty.js';
 import { PreviewQueryState } from './preview-query-state.js';
@@ -15,6 +18,7 @@ export function PreviewHistoryList({
   query,
   showContent,
   selectedId,
+  deletedIds,
   compare,
   canCompare,
   comparison,
@@ -26,6 +30,7 @@ export function PreviewHistoryList({
   query: DashboardQuery<PreviewHistoryEntry[]>;
   showContent: boolean;
   selectedId?: string;
+  deletedIds: ReadonlySet<string>;
   compare: boolean;
   canCompare: boolean;
   comparison?: ReactNode;
@@ -62,19 +67,31 @@ export function PreviewHistoryList({
             const title = entry.numbered
               ? `${text.version} ${entry.title}`
               : entry.title;
+            const versionLabel = historyVersionLabel(entry, locale);
+            const badge = historyVersionBadge(
+              entry,
+              deletedIds.has(entry.id),
+              text,
+            );
             const label = (
               <>
                 <time
                   className="ov-file-history__version-name"
+                  title={versionLabel}
                   dateTime={
                     entry.timestamp
                       ? new Date(entry.timestamp * 1000).toISOString()
                       : undefined
                   }
                 >
-                  {historyVersionLabel(entry, locale)}
+                  {versionLabel}
                 </time>
                 {index === 0 ? <i>{text.latest}</i> : null}
+                {badge ? (
+                  <span className="ov-file-history__version-badge">
+                    {badge}
+                  </span>
+                ) : null}
               </>
             );
             return (
@@ -87,7 +104,13 @@ export function PreviewHistoryList({
                         ? 'ov-file-history__commit-active'
                         : undefined
                     }
-                    aria-label={entry.numbered ? title : undefined}
+                    aria-label={
+                      entry.numbered && badge
+                        ? `${title} · ${badge}`
+                        : entry.numbered
+                          ? title
+                          : undefined
+                    }
                     aria-pressed={selectedId === entry.id}
                     onClick={() => {
                       track('file_browser_history_revision_select');

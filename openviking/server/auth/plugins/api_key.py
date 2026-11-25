@@ -9,10 +9,12 @@ from typing import Optional
 
 from fastapi import Request
 
+from openviking.config.binding import has_valid_cluster_resources
 from openviking.server.auth.plugin import AuthPlugin
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import PermissionDeniedError, UnauthenticatedError
+from openviking_cli.utils.config import get_openviking_config
 
 _API_KEY_ROOT_ALLOWED_PATHS = {
     "/api/v1/system/status",
@@ -126,9 +128,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
 
         recorded_fp = record.authorizing_key_fp
         manager = request.app.state.api_key_manager
-        current_fp = await manager.get_user_key_fingerprint(
-            record.account_id, record.user_id
-        )
+        current_fp = await manager.get_user_key_fingerprint(record.account_id, record.user_id)
         if not recorded_fp or not current_fp or not hmac.compare_digest(recorded_fp, current_fp):
             raise UnauthenticatedError(
                 "OAuth token's authorizing API key has been rotated or revoked; "
@@ -152,25 +152,25 @@ class ApiKeyAuthPlugin(AuthPlugin):
     def validate_config(self, config) -> None:
         if config.root_api_key and config.root_api_key != "":
             return
-        import logging
-
-        logger = logging.getLogger(__name__)
         if _is_localhost(config.host):
-            logger.error(
-                "server.auth_mode='api_key' requires server.root_api_key to be configured.\n"
+            print(
+                "server.auth_mode='api_key' requires server.root_api_key to be configured. "
                 'To run without authentication on localhost, either set server.auth_mode="dev" '
-                "or simply remove the server.auth_mode setting to auto-detect."
+                "or simply remove the server.auth_mode setting to auto-detect.",
+                file=sys.stderr,
+                flush=True,
             )
         else:
-            logger.error(
+            print(
                 "SECURITY: server.auth_mode='api_key' requires server.root_api_key "
-                "to be configured when server.host is '%s' (non-localhost).",
-                config.host,
+                "to be configured for a non-localhost server.host.",
+                file=sys.stderr,
+                flush=True,
             )
-        logger.error(
-            "To fix, either:\n"
-            "  1. Set server.root_api_key in ov.conf, or\n"
-            '  2. Use server.auth_mode="dev" (localhost only)'
+        print(
+            'Set server.root_api_key in ov.conf, or use server.auth_mode="dev" (localhost only).',
+            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 
@@ -186,9 +186,12 @@ class ApiKeyAuthPlugin(AuthPlugin):
             account_store_params=config.account_store.params,
             account_store_watch_enabled=config.api_key_watch_enabled,
             account_store_watch_interval_seconds=config.api_key_watch_interval_seconds,
+            bootstrap_default_account=has_valid_cluster_resources(get_openviking_config()),
             issue_user_keys=True,
         )
         await manager.load()
+        if service.viking_fs.acl_manager is not None:
+            service.viking_fs.acl_manager.set_principal_directory(manager)
         self._api_key_manager = manager
         app.state.api_key_manager = manager
 

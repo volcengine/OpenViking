@@ -1,3 +1,5 @@
+import type { FilePreviewLabels } from './label-types.js';
+export type { FilePreviewLabels } from './label-types.js';
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { FilePreviewActionSource } from './action-types.js';
 import type { FilePreviewEditing } from './editing-types.js';
@@ -92,6 +94,8 @@ export interface FilePreviewTabBase {
    * What the tab row shows. It can be plain text or a node with styling or icons.
    */
   title?: ReactNode;
+  /** Positive count shown beside the title, capped at 99+. The label explains its unit. */
+  badge?: { count: number; label: string };
   /**
    * 页签图标，由宿主提供；省略时该页签只显示标题，不占图标位。
    *
@@ -154,6 +158,8 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * Tab kind discriminator, always `file`.
    */
   kind: 'file';
+  /** Overrides the empty body label for this tab. */
+  emptyLabel?: string;
   /** Injected commands; no copy/download/delete commands are supplied by default. */
   actions?: FilePreviewActionSource;
   /**
@@ -184,6 +190,25 @@ export interface FilePreviewFileTab extends FilePreviewTabBase {
    * textures of a 3D model.
    */
   resources?: readonly FileViewerResource[];
+  /** Optional transcript and extracted frames supplied by the video host. */
+  videoDetails?: {
+    segments: readonly {
+      startMs: number;
+      endMs: number;
+      text: string;
+      speaker?: string;
+    }[];
+    frames: readonly {
+      id: string;
+      name: string;
+      src?: string;
+      failed?: boolean;
+    }[];
+    framesLoading?: boolean;
+    onLoadFrames?: () => void;
+    /** Report an image load/decode failure; the host invalidates the matching source. */
+    onFrameError?: (frameId: string, src: string) => void;
+  };
   /** 可选的分级内容，宿主提供 L0/L1/L2 等视图与内容。 Optional host-supplied content levels. */
   levels?: readonly FilePreviewLevel[];
   /** 受控分级 key。 Controlled content-level key. */
@@ -320,9 +345,10 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
    */
   onActiveLevelChange?: (key: string) => void;
   /**
-   * 目录操作的执行能力，例如沿路径向上打开。省略对应方法时该操作不可用。
-   * Directory operation capabilities, for example opening an ancestor. Omitting a
-   * method makes its operation unavailable.
+   * 目录操作的执行能力，例如打开祖先目录或摘要中的资源链接。
+   * 省略对应方法时该操作不可用。
+   * Directory operation capabilities, such as opening an ancestor or a resource
+   * link in a summary. Omitting a method makes its operation unavailable.
    */
   operations?: FilePreviewOperations;
   /**
@@ -336,6 +362,8 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
  * 目录的一级摘要。One summary level of a directory.
  */
 export interface FilePreviewDirectoryLevel {
+  /** Overrides the empty body label for this directory level. */
+  emptyLabel?: string;
   /**
    * 层级唯一标识，用于切换与受控状态。
    * Unique level key, used for switching and controlled state.
@@ -369,15 +397,21 @@ export interface FilePreviewOperations {
    */
   openParent?: (uri: string) => Promise<void>;
   /**
-   * 打开正文里被点击的链接，完成后返回。传入后由宿主接管导航，组件阻止默认
-   * 跳转；相对路径的解析也归宿主，组件给出的是 Markdown 里的原始目标。
+   * 打开 Markdown 链接，参数为原始目标，完成后返回；地址解析由宿主负责。
+   * 文件页签传入后由宿主接管所有链接，包括外链，组件阻止默认跳转。
+   * 目录摘要只将 Viking URI 和相对资源链接交给宿主；HTTP(S)、mailto、tel 和
+   * // 外链保留浏览器原生行为。指向带显式 id 的 HTML 标题的同文档锚点在目录预览内定位，
+   * 无需此回调；普通 Markdown 标题不会自动生成 ID。
    *
    * 目前只有 Markdown 正文会触发：其它格式的渲染器不提供链接点击回调。
    *
-   * Opens a link clicked inside the body and resolves on completion. Supplying it
-   * hands navigation to the host — the component prevents the default jump — and
-   * resolving relative paths is the host's job too; the component passes the raw
-   * target as written in the Markdown.
+   * Opens a Markdown link and resolves on completion. The host receives and resolves
+   * the original target. In file tabs, supplying it takes over all links, including
+   * external links, and prevents default navigation. Directory summaries only pass
+   * Viking URIs and relative resource links to the host; HTTP(S), mailto, tel and //
+   * external links retain native behavior. Same-document anchors targeting HTML
+   * headings with explicit IDs scroll within the directory preview without this callback; plain
+   * Markdown headings do not generate IDs.
    *
    * Only Markdown bodies fire this today: the other renderers expose no link-click
    * callback.
@@ -512,54 +546,6 @@ export interface FilePreviewFileTabSlots extends FilePreviewHeaderSlots {
  * 可替换文案，组件内置中英文文案。
  * Replaceable copy with built-in Chinese and English defaults.
  */
-export interface FilePreviewLabels {
-  previewImage?: string;
-  closePreview?: string;
-  /** 展开折叠路径层级的无障碍名称。Accessible name for hidden path levels. */
-  showHiddenPath?: string;
-  copyPath?: string;
-  copied?: string;
-  copyFailed?: string;
-  moreActions?: string;
-  actionFailed?: string;
-  previewMode?: string;
-  sourceMode?: string;
-  viewSwitch?: string;
-  edit?: string;
-  editFile?: string;
-  save?: string;
-  /** 编辑区文本框的无障碍名称。Accessible name of the editor. */
-  editor?: string;
-  /** 编辑器加载失败时的提示。Message shown when the editor fails to load. */
-  editorLoadFailed?: string;
-  /** 语法高亮加载失败时的提示。Message shown when syntax highlighting fails to load. */
-  highlightFailed?: string;
-  /** 读取失败后退出编辑态的按钮文案。Label of the button that leaves editing after a failed load. */
-  leaveEditing?: string;
-  /** 重试按钮文案。Retry button label. */
-  retry?: string;
-  /** 读取失败时的提示。Message shown when reading failed. */
-  loadFailed?: string;
-  /** 保存失败时的提示。Message shown when saving failed. */
-  saveFailed?: string;
-  versionNoteTitle?: string;
-  versionNoteLabel?: string;
-  versionNotePlaceholder?: string;
-  versionNoteCancel?: string;
-  versionNoteConfirm?: string;
-  versionNotCreated?: string;
-  /** 无法预览该格式时的提示。Message shown when the format cannot be previewed. */
-  unsupported?: string;
-  /** 取回正文时的加载提示。Message shown while the text is being fetched. */
-  loading?: string;
-  /** 文件长度为 0 时的提示。Message shown when the file itself is empty. */
-  fileEmpty?: string;
-  /** 文件非空但没有可展示内容时的提示。Message shown for a non-empty file with nothing to render. */
-  noContent?: string;
-  /** 正文被截断时的提示。Message shown when the body was truncated. */
-  truncated?: string;
-}
-
 /**
  * 通过组件 ref 切换或查询当前页签，并透传底座的命令式能力。
  * Switches or queries the active tab through the component ref, and exposes the

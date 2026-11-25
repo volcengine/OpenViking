@@ -15,9 +15,34 @@ const load = async () => {
   return { default: VikingBotMessageListView };
 };
 
-/** 加载态的占位高度，避免列表出现时页面跳动。 */
-function ListSkeleton() {
-  return <div className="ov-viking-bot__list ov-viking-bot__list--loading" />;
+const diamondPoints = [
+  [1, 3],
+  [2, 4],
+  [3, 5],
+  [4, 4],
+  [5, 3],
+  [4, 2],
+  [3, 1],
+  [2, 2],
+];
+
+export function VikingBotMessageListLoading({ label }: { label: string }) {
+  return (
+    <div
+      className="ov-viking-bot__list ov-viking-bot__list--loading"
+      role="status"
+    >
+      <span className="ov-viking-bot__loading-diamond" aria-hidden="true">
+        {diamondPoints.map(([gridRow, gridColumn], index) => (
+          <span
+            key={`${gridRow}-${gridColumn}`}
+            style={{ gridRow, gridColumn, animationDelay: `${index * 100}ms` }}
+          />
+        ))}
+      </span>
+      {label}
+    </div>
+  );
 }
 
 /** 消息列表。The message list. */
@@ -39,7 +64,7 @@ function VikingBotMessageListContent(props: VikingBotMessageListProps) {
       monitoringTarget="viking_bot_message_list_load"
       load={load}
       contentProps={{ ...props, locale }}
-      fallback={<ListSkeleton />}
+      fallback={<VikingBotMessageListLoading label={labels.loading} />}
     />
   );
 }

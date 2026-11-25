@@ -22,9 +22,35 @@ from openviking_cli.retrieve import ContextType
 TAG_FILTER = {"op": "must", "field": "search_tags", "conds": ["legacy_memory_id=mem-1"]}
 
 
-def test_empty_query_with_filter_is_accepted():
-    _validate_query("", None, TAG_FILTER)
-    _validate_query("   ", None, TAG_FILTER)
+async def test_empty_query_with_filter_is_accepted(service, request_context):
+    root = "viking://resources/filter-lookup"
+    matching = f"{root}/matching.md"
+    for uri, tag in (
+        (matching, "legacy_memory_id=mem-1"),
+        (f"{root}/other.md", "legacy_memory_id=mem-2"),
+    ):
+        await service.vikingdb_manager.upsert(
+            {
+                "uri": uri,
+                "parent_uri": root,
+                "context_type": "resource",
+                "level": 2,
+                "abstract": "Identical body.",
+                "vector": [0.1] * service.vikingdb_manager.vector_dim,
+                "search_tags": [tag],
+            },
+            ctx=request_context,
+        )
+
+    for query in ("", "   "):
+        result = await service.search.find(
+            query, ctx=request_context, filter=TAG_FILTER, target_uri=root, level=[2]
+        )
+        [hit] = result.resources
+        assert result.total == 1
+        assert hit.uri == matching
+        assert hit.score == 0.0
+        assert hit.match_reason == "filter"
 
 
 def test_empty_query_without_filter_is_still_rejected():
