@@ -48,6 +48,24 @@ async def test_ordinary_writes_and_reads_follow_matching_scope(service):
     assert await service.fs.read(uri, ctx=ctx) == expected
 
 
+async def test_global_write_masks_shared_directory_summaries_in_auto_strict(service):
+    ctx = RequestContext(user=service.user, role=Role.GLOBAL)
+    settings = UserSettingsPatch.model_validate({"privacy": {"mode": "auto_strict"}})
+    await patch_user_config(service.viking_fs, ctx, settings)
+    secret = "Fake summary for testing."  # Emitted by the service fixture's VLM.
+    await service.privacy_configs.upsert(ctx, "credential", "deployment", {"key": secret})
+
+    parent = "viking://resources/team/deployment"
+    await service.fs.write(f"{parent}/guide.md", "Deployment steps.", ctx, mode="create", wait=True)
+    await service.resources.wait_processed()
+
+    reference = build_privacy_field_reference(ctx.user.user_id, "credential", "deployment", "key")
+    for name in (".abstract.md", ".overview.md"):
+        stored = await service.viking_fs.read_file(f"{parent}/{name}", ctx=ctx)
+        assert reference in stored
+        assert secret not in stored
+
+
 async def test_skill_preserves_metadata_and_protects_body_through_add_update_and_read(
     service, client, monkeypatch
 ):

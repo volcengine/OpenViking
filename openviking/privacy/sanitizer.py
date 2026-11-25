@@ -11,7 +11,7 @@ import os
 import time
 from collections import ChainMap, Counter
 from collections.abc import Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
@@ -27,7 +27,7 @@ from openviking.privacy.content import PrivacyContent
 from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import PrivacyFieldReference
 from openviking.pyagfs import get_privacy_matcher_class
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.utils import get_logger
@@ -294,6 +294,9 @@ class PrivacySanitizer:
         """Apply automatic matching, keeping input on overflow or structure failure."""
         if not content:
             return content
+        if ctx.role == Role.GLOBAL and ctx.bypass_acl:
+            # The actor's private settings and credentials require ordinary read permissions.
+            ctx = replace(ctx, bypass_acl=False)
         if settings is None:
             settings = await self.settings_for_uri(uri, ctx)
         if settings is None:
