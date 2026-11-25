@@ -11,7 +11,7 @@
     1. 停止所有使用源工作目录的服务和工作进程。
     2. 预检查：读取、解析源数据，不创建目标数据库，也不修改源队列。
        python -m scripts.maintenance.task_store.migrate_file_to_sqlite --config ov.conf
-    3. 正式迁移：写入 Task、事件和 Work，并释放成功消息的旧租约。
+    3. 正式迁移：写入 Task、事件和 Work。
        python -m scripts.maintenance.task_store.migrate_file_to_sqlite --config ov.conf --execute
     4. 确认退出码为 0 后，修改 ov.conf，再启动服务：
        storage.task_store.provider = "sqlite"
@@ -22,7 +22,7 @@
     --sqlite-path /path/to/tasks.db 覆盖目标路径；默认取 task_store.params.path，
                                    未配置时使用 <workspace>/task_store/tasks.db。
     --queue-db /path/to/queue.db    覆盖源 QueueFS 数据库路径。
-    --skip-queue-works              只迁移 Task 和事件，不检查或修改源队列。
+    --skip-queue-works              只迁移 Task 和事件，不检查源队列。
     --on-conflict update|skip|fail  已有记录的处理策略，默认为 update。
     --account-id / --user-id        按账户或用户筛选任务文件，不筛选队列消息。
     --queue-name Semantic          按队列名筛选消息，可重复提供。
@@ -38,7 +38,8 @@
     预检查不验证目标数据库的实际写入，不能代替正式迁移结果。
 
 迁移范围：
-    源任务 JSON 文件保留不变；正式迁移会将成功消息的 processing 状态改为 pending。
+    源任务 JSON 文件和队列数据库保留不变。
+    存量消息对应的 Work 重建为 pending；消息状态恢复由 QueueFS 启动逻辑负责。
     必须显式切换 provider，否则保留的源任务目录仍会使默认探测选择 File 后端。
     File 后端未持久化已完成 Work 的历史，因此无法重建这些记录。
 
@@ -699,29 +700,6 @@ async def _insert_work(
     return await store._sql_runtime.run(insert)
 
 
-def reset_processing_queue_messages(queue_db: Path, message_ids: set[str]) -> int:
-    if not message_ids:
-        return 0
-    with closing(sqlite3.connect(queue_db)) as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(queue_messages)")}
-        if "status" not in columns:
-            return 0
-        started = ", processing_started_at=NULL" if "processing_started_at" in columns else ""
-        count = 0
-        ordered = sorted(message_ids)
-        with connection:
-            # 分批更新，避免超过旧版 SQLite 的 999 个 SQL 参数限制。
-            for offset in range(0, len(ordered), 900):
-                batch = ordered[offset : offset + 900]
-                placeholders = ",".join("?" for _ in batch)
-                count += connection.execute(
-                    f"UPDATE queue_messages SET status='pending'{started} "
-                    f"WHERE status='processing' AND message_id IN ({placeholders})",
-                    batch,
-                ).rowcount
-        return count
-
-
 async def migrate(
     *,
     workspace: Path,
@@ -782,7 +760,6 @@ async def migrate(
     reader = SourceReader(config)
     tasks: dict[str, tuple[str, str]] = {}
     failed_tasks: set[str] = set()
-    queue_message_ids_to_reset: set[str] = set()
     store = SQLiteTaskWorkStore(params=params, service_name=service_name) if execute else None
     lock = acquire_data_dir_lock(str(workspace)) if execute else None
     started = time.monotonic()
@@ -838,7 +815,7 @@ async def migrate(
         _stage_finished(summary, "tasks", started)
         started = time.monotonic()
         if not skip_queue_works:
-            # 4. 从队列消息中重建work，processing → pending，`processing_started_at → NULL`
+            # 4. 从存量队列消息中重建待执行 Work，不修改源消息状态。
             for work in iter_queue_works(queue_db, queue_names, summary):
                 summary.queue_messages_seen += 1
                 try:
@@ -852,8 +829,6 @@ async def migrate(
                         )
                         if outcome == "missing_task":
                             raise ValueError("queue work has no owned target task")
-                        if work.queue_message_id:
-                            queue_message_ids_to_reset.add(work.queue_message_id)
                     summary.works_reconstructed += 1
                 except Exception as exc:
                     _record_failure(
@@ -866,16 +841,6 @@ async def migrate(
                     if isinstance(exc, OperationalError):
                         raise MigrationAborted from exc
                 last_progress = _progress(summary, "works", last_progress)
-            if execute:
-                # 6. 将已成功迁移的 QueueFS 消息的 processing 状态重置为 pending
-                reset_count = reset_processing_queue_messages(queue_db, queue_message_ids_to_reset)
-                _write_log(
-                    {
-                        "event": "migration_stage_finished",
-                        "stage": "lease_reset",
-                        "completed": reset_count,
-                    }
-                )
         _stage_finished(summary, "works", started)
     finally:
         try:
