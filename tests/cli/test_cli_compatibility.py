@@ -1,128 +1,65 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""CLI compatibility checks: binary availability, version, GLIBC, config, server connectivity."""
+"""Verify the version, output formats, and error reporting of the CLI binary."""
 
 import json
-import os
-import platform
-import subprocess
 
 import pytest
-from conftest import CLI_BIN, CLI_CONFIG_PATH, _env, ov
+from conftest import ov, ov_mkdir, ov_rm
 
 pytestmark = pytest.mark.cli_remote
 
 
-class TestCLIBinaryAvailability:
-    def test_binary_exists(self):
-        assert CLI_BIN is not None, (
-            "openviking CLI binary should be found. "
-            "Install via: curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash"
-        )
-
-    def test_binary_is_executable(self):
-        assert os.path.isfile(CLI_BIN), f"CLI binary path should be a file: {CLI_BIN}"
-        assert os.access(CLI_BIN, os.X_OK), f"CLI binary should be executable: {CLI_BIN}"
-
-
 class TestCLIVersion:
     def test_version_command(self):
-        r = ov(["version"])
-        assert r["exit_code"] == 0, (
-            f"ov version should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-        )
-        assert len(r["stdout"]) > 0, "version output should not be empty"
+        flag = ov(["--version"])
+        assert flag["exit_code"] == 0, flag["stderr"]
+        program, _, cli_version = flag["stdout"].partition(" ")
+        assert program == "openviking" and cli_version
 
-    def test_version_flag(self):
-        r = ov(["--version"])
-        assert r["exit_code"] == 0, (
-            f"ov --version should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-        )
-        assert len(r["stdout"]) > 0, "--version output should not be empty"
-
-    def test_version_format(self):
-        r = ov(["version", "-o", "json"])
-        if r["exit_code"] == 0 and r["json"] is not None:
-            data = r["json"]
-            assert data.get("ok") is True or "version" in str(data).lower(), (
-                f"version JSON should contain version info, got: {r['stdout'][:200]}"
-            )
-
-
-class TestCLIGlibcCompat:
-    def test_no_glibc_error(self):
-        result = subprocess.run(
-            [CLI_BIN, "version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env=_env(),
-        )
-        assert "GLIBC" not in result.stderr, (
-            f"CLI should not have GLIBC compatibility issues. stderr: {result.stderr[:300]}"
-        )
-
-
-class TestCLIConfigCompat:
-    def test_config_file_exists(self):
-        assert os.path.isfile(CLI_CONFIG_PATH), f"CLI config file should exist at {CLI_CONFIG_PATH}"
-
-    def test_config_file_valid_json(self):
-        with open(CLI_CONFIG_PATH, "r") as f:
-            config = json.load(f)
-        assert "url" in config, "config should contain 'url' field"
-        assert "api_key" in config, "config should contain 'api_key' field"
-        assert "timeout" in config, "config should contain 'timeout' field"
-
-    def test_config_url_set(self):
-        with open(CLI_CONFIG_PATH, "r") as f:
-            config = json.load(f)
-        assert config["url"], "config 'url' should not be empty"
+        result = ov(["version"])
+        assert result["exit_code"] == 0, result["stderr"]
+        versions = dict(line.split(":", 1) for line in result["stdout"].splitlines())
+        assert versions["CLI"].strip() == cli_version
+        assert versions["Server"].strip()
 
 
 class TestCLIServerConnectivity:
     def test_health_check(self):
-        r = ov(["health", "-o", "json"])
-        assert r["exit_code"] == 0, (
-            f"ov health should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-        )
-
-    def test_server_reachable(self):
-        r = ov(["health", "-o", "json"])
-        assert r["exit_code"] != 3, "CLI exit code 3 means connection error - server is unreachable"
+        result = ov(["health", "-o", "json"])
+        assert result["exit_code"] == 0, result["stderr"]
 
 
 class TestCLIOutputFormats:
-    def test_json_output(self, test_dir_uri):
-        r = ov(["ls", test_dir_uri, "-o", "json"])
-        assert r["exit_code"] == 0, (
-            f"ov ls -o json should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-        )
-        assert r["json"] is not None, "JSON output should be parseable"
+    def test_json_and_table_output(self, test_dir_uri):
+        name = "cli_output_child"
+        child = f"{test_dir_uri}/{name}"
+        created = ov_mkdir(child)
+        assert created["exit_code"] == 0, created["stderr"]
+        try:
+            structured = ov(["ls", test_dir_uri, "-o", "json"])
+            assert structured["exit_code"] == 0, structured["stderr"]
+            assert structured["json"]["ok"] is True
+            assert child in {entry["uri"] for entry in structured["json"]["result"]}
 
-    def test_table_output(self, test_dir_uri):
-        r = ov(["ls", test_dir_uri, "-o", "table"])
-        assert r["exit_code"] == 0, (
-            f"ov ls -o table should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-        )
+            table = ov(["ls", test_dir_uri, "-o", "table"])
+            assert table["exit_code"] == 0, table["stderr"]
+            assert table["json"] is None
+            assert name in table["stdout"]
+        finally:
+            ov_rm(child)
 
 
 class TestCLIExitCodes:
-    def test_success_exit_code(self):
-        r = ov(["health", "-o", "json"])
-        assert r["exit_code"] == 0, "successful command should exit with code 0"
-
-    def test_error_exit_code_for_invalid_uri(self):
-        r = ov(["stat", "viking://nonexistent/path/xyz", "-o", "json"])
-        assert r["exit_code"] != 0, "invalid URI should return non-zero exit code"
-
-
-class TestCLIPlatformCompat:
-    def test_platform_info(self):
-        system = platform.system()
-        machine = platform.machine()
-        assert system in ("Linux", "Darwin", "Windows"), f"Unsupported platform: {system}"
-        if system == "Linux":
-            assert machine in ("x86_64", "aarch64"), f"Unsupported Linux architecture: {machine}"
-        elif system == "Darwin":
-            assert machine in ("x86_64", "arm64"), f"Unsupported macOS architecture: {machine}"
+    def test_error_exit_code_for_invalid_uri(self, test_dir_uri):
+        cases = [
+            ("viking://nonexistent/path/xyz", "INVALID_URI"),
+            (f"{test_dir_uri}/missing", "NOT_FOUND"),
+        ]
+        for uri, code in cases:
+            result = ov(["stat", uri, "-o", "json"])
+            assert result["exit_code"] != 0, uri
+            assert result["stdout"] == "", uri
+            envelope = json.loads(result["stderr"])
+            assert envelope["ok"] is False
+            assert envelope["error"]["code"] == code

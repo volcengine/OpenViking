@@ -58,7 +58,7 @@ function isConversionTarget(url: URL): boolean {
   if (url.origin === 'https://console.volcengine.com') {
     return /^\/vikingdb\/openviking(?:\/|$)/.test(url.pathname)
   }
-  return WEBSITE_ORIGINS.has(url.origin) && /^\/(?:enterprise\/?)?$/.test(url.pathname)
+  return WEBSITE_ORIGINS.has(url.origin) && /^\/(?:enterprise\/?|byteplus\/?)?$/.test(url.pathname)
 }
 
 /** 只传标准 UTM，业务 query、区域路径及锚点保持不变。 */

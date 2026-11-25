@@ -465,12 +465,8 @@ class QueueManager:
                     t.cancel()
                 await asyncio.gather(*active_tasks, return_exceptions=True)
 
-    def stop(self) -> None:
-        """Stop QueueManager and release resources."""
-        global _instance
-        if not self._started:
-            return
-
+    def stop_workers(self) -> None:
+        """Drain consumers while retaining queue clients and handlers for reuse."""
         # Stop queue workers
         for stop_event in self._queue_stop_events.values():
             stop_event.set()
@@ -488,10 +484,15 @@ class QueueManager:
             raise RuntimeError(f"Queue workers did not stop: {', '.join(alive_workers)}")
         self._queue_threads.clear()
         self._queue_stop_events.clear()
+        self._started = False
+        logger.info("[QueueManager] Workers stopped")
 
+    def stop(self) -> None:
+        """Stop QueueManager and release resources."""
+        global _instance
+        self.stop_workers()
         self._agfs = None
         self._queues.clear()
-        self._started = False
 
         if _instance is self:
             _instance = None

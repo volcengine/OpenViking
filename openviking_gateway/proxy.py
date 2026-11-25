@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from openviking.core.peer_id import normalize_peer_id
 from openviking.observability.log_safety import short_hash
 
+from .billing import UpstreamBilling
 from .client import PEER_HEADER
 from .kernel import Budget
 from .models import KEY_PLACEHOLDER, Policy, validation_detail
@@ -356,6 +357,8 @@ class ProxyRequest:
         # The record under construction: what the request writes however it ends.
         self.metrics = self.record.metrics
         self.metrics.setdefault("kind", "passthrough")
+        self.billing = UpstreamBilling(self.metrics)
+        self.model_call = None
 
     async def run(self):
         if self.request.headers.get("upgrade", "").lower() == "websocket":
@@ -385,6 +388,15 @@ class ProxyRequest:
         self.started = time.monotonic()
         self.metrics["added_ms"] = elapsed_ms(self.record.started)
         self.record.attempted = True
+        self.model_call = self.begin_call(
+            "model"
+            if self.request.method == "POST"
+            and self.path in {"/v1/responses", "/v1/messages", "/v1/chat/completions"}
+            else "passthrough",
+            self.upstream,
+            self.body,
+            self.headers,
+        )
         try:
             self.response = await open_upstream(
                 self.app.state.http,
@@ -395,7 +407,11 @@ class ProxyRequest:
                 headers=self.headers,
                 allow_redirects=False,
             )
+        except asyncio.CancelledError:
+            self.billing.end(self.model_call, error="client_disconnected")
+            raise
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            self.billing.end(self.model_call, error=upstream_failure(error).detail["reason"])
             self.metrics["duration_ms"] = elapsed_ms(self.started)
             raise upstream_failure(error) from None
         self.metrics.update(
@@ -544,7 +560,10 @@ class ProxyRequest:
             raise SummaryError(f"summary_http_{error.status_code}") from error
         headers.setdefault("content-type", "application/json")
         body = await self.outgoing(body, upstream, prepared)
+        call = self.begin_call("summary", upstream, body, headers)
         self.record.attempted = True
+        value, status = None, None
+        complete, failure = False, ""
         try:
             async with self.app.state.http.post(
                 target,
@@ -556,11 +575,58 @@ class ProxyRequest:
                 ),
                 allow_redirects=False,
             ) as response:
+                status = response.status
+                raw = await response.read()
+                try:
+                    value = orjson.loads(raw)
+                except ValueError:
+                    if response.status < 300:
+                        raise
                 if response.status >= 300:
                     raise SummaryError(f"summary_http_{response.status}")
-                return orjson.loads(await response.read())
+                try:
+                    tool_protocol(upstream["protocol"]).summary_text(value)
+                    complete = True
+                except SummaryError as error:
+                    failure = str(error)
+                return value
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+            failure = "summary_unavailable"
             raise SummaryError("summary_unavailable") from error
+        except BaseException as error:
+            failure = (
+                "client_disconnected" if isinstance(error, asyncio.CancelledError) else str(error)
+            )
+            raise
+        finally:
+            self.billing.end(
+                call,
+                status=status,
+                envelope=value,
+                usage=value.get("usage") if isinstance(value, dict) else None,
+                complete=complete,
+                error=failure,
+            )
+
+    def begin_call(self, kind, upstream, body, headers):
+        return self.billing.begin(
+            kind,
+            upstream,
+            body,
+            authenticated=any(
+                key.lower()
+                in {
+                    "authorization",
+                    "x-api-key",
+                    "api-key",
+                    upstream.get("key_header", "authorization").lower(),
+                }
+                and bool(value)
+                for key, value in headers.items()
+            )
+            or KEY_PLACEHOLDER in upstream["base_url"],
+            account_header=any(key.lower() == "chatgpt-account-id" for key in headers),
+        )
 
     async def relay(self):
         """Record a finished reply before the client receives its end."""
@@ -576,6 +642,16 @@ class ProxyRequest:
     async def finish(self):
         """Book an answered request and write its record; called once per answered request."""
         try:
+            assembler = self.capture.assembler
+            self.billing.end(
+                self.model_call,
+                status=self.response.status,
+                envelope=assembler.envelope if assembler else None,
+                usage=assembler.usage if assembler else None,
+                complete=self.capture.finished and not self.metrics.get("error_reason"),
+                error=self.metrics.get("error_reason", "")
+                or ("upstream_error" if self.response.status >= 300 else ""),
+            )
             self.metrics.update(self.capture.usage or {})
             if self.upstream.get("vendor") in ARK_VENDORS:
                 self.metrics["cache_min_tokens"] = self.upstream.get("cache_min_tokens", 1024)
@@ -686,6 +762,28 @@ class ProxyRequest:
         loop = HiddenToolLoop(
             prepared, executor, self.store, capture, self.app.state.kernel.capture
         )
+
+        def record_round(adapter, upstream_response, error):
+            self.billing.end(
+                self.model_call,
+                status=upstream_response.status if upstream_response is not None else None,
+                envelope=adapter.envelope,
+                usage=adapter.usage,
+                complete=error is None,
+                error=(
+                    tool_failure(error).code
+                    if isinstance(error, (ToolLoopError, aiohttp.ClientError, asyncio.TimeoutError))
+                    else (
+                        "client_disconnected"
+                        if isinstance(error, (asyncio.CancelledError, GeneratorExit))
+                        else "upstream_read_failed"
+                    )
+                )
+                if error
+                else "",
+            )
+
+        loop.observe_upstream = record_round
         headers = {
             k.lower(): v
             for k, v in filtered_headers(response.headers).items()
@@ -694,6 +792,9 @@ class ProxyRequest:
 
         async def send(payload, timeout):
             # A total tool deadline also bounds the whole continuation, body included.
+            self.model_call = self.begin_call(
+                "tool_continuation", self.upstream, payload, self.headers
+            )
             return await open_upstream(
                 self.app.state.http,
                 "POST",
@@ -850,6 +951,11 @@ class ProxyRequest:
                 content = await response.read()
             except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                 capture.complete = False
+                self.billing.end(
+                    self.model_call,
+                    status=response.status,
+                    error=upstream_failure(error).detail["reason"],
+                )
                 self.metrics["duration_ms"] = elapsed_ms(self.started)
                 raise upstream_failure(error) from None
             if response.status < 300 and not response.headers.get("content-encoding"):
@@ -859,6 +965,15 @@ class ProxyRequest:
                     pass
             elif response.status >= 300 and (code := error_code(content)):
                 self.metrics["upstream_error_code"] = code
+        except BaseException as error:
+            self.billing.end(
+                self.model_call,
+                status=response.status,
+                error="client_disconnected"
+                if isinstance(error, asyncio.CancelledError)
+                else "upstream_read_failed",
+            )
+            raise
         finally:
             response.close()
         await self.relay()

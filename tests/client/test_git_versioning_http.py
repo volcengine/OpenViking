@@ -92,6 +92,8 @@ async def http_service(http_temp_dir: Path, monkeypatch):
         user=UserIdentifier.the_default_user("git_http_test_user"),
     )
     await svc.initialize()
+    await svc.recover()
+    await svc.start_background()
     svc.viking_fs.query_embedder = fake_embedder_cls()
 
     test_ctx = RequestContext(

@@ -7,7 +7,7 @@ import { pluginReact } from '@rsbuild/plugin-react';
 import { JSDOM, ResourceLoader } from 'jsdom';
 
 /** Exercise lazy browser renderers through the bundled public preview entry. */
-export async function withBundledPreview(fixture, run) {
+export async function withBundledPreview(fixture, run, search = '') {
   const output = await mkdtemp(join(tmpdir(), 'ov-preview-'));
   let dom;
   try {
@@ -25,7 +25,7 @@ export async function withBundledPreview(fixture, run) {
     });
     await builder.build();
     dom = new JSDOM(await readFile(join(output, 'index.html'), 'utf8'), {
-      url: 'https://preview.test/',
+      url: `https://preview.test/${search}`,
       runScripts: 'dangerously',
       pretendToBeVisual: true,
       resources: new (class extends ResourceLoader {

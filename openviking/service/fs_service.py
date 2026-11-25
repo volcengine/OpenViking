@@ -1688,11 +1688,7 @@ class FSService:
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
         ctx = self._ensure_initialized().authorize_read(ctx, [resolved_uri])
-        settings = (
-            await self._privacy_sanitizer.settings_for_uri(resolved_uri, ctx)
-            if self._privacy_sanitizer is not None and ctx.data_access is None
-            else None
-        )
+        settings = await self._visible_read_settings(resolved_uri, ctx)
         max_bytes = (
             self._privacy_sanitizer.max_content_bytes
             if self._privacy_sanitizer is not None and settings is not None
@@ -1713,6 +1709,23 @@ class FSService:
         lines = content.splitlines(keepends=True)
         sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
         return "".join(sliced)
+
+    async def _visible_read_settings(
+        self, uri: str, ctx: RequestContext
+    ) -> ResolvedPrivacyConfig | None:
+        if self._privacy_sanitizer is None or ctx.data_access is not None:
+            return None
+        return await self._privacy_sanitizer.settings_for_uri(uri, ctx)
+
+    async def make_visible(self, uri: str, content: str, ctx: RequestContext) -> str:
+        """Apply ``read_visible``'s read-time visibility step to text already read from uri.
+
+        Raises ``ResourceExhaustedError`` when privacy matching applies and the
+        text exceeds the sanitizer's size or replacement limit.
+        """
+        ctx = self._ensure_initialized().authorize_read(ctx, [uri])
+        settings = await self._visible_read_settings(uri, ctx)
+        return await self._make_content_visible(uri, content, ctx, settings=settings)
 
     async def _make_content_visible(
         self,
@@ -2829,10 +2842,8 @@ class FSService:
         offset: int = 0,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        """Page changed source URIs between snapshots; a null base means an empty tree.
-
-        Every changed path requires current read permission, including deleted paths.
-        Any denied descendant rejects the whole query without exposing its URI.
+        """
+        Page changed source URIs between snapshots; a null base means an empty tree.
         """
         viking_fs = self._ensure_initialized()
         if not paths or not to_ref.strip() or (from_ref is not None and not from_ref.strip()):
@@ -2844,8 +2855,9 @@ class FSService:
         )
         changes_by_uri = {change["uri"]: change for change in changes}
         uris = sorted(changes_by_uri)
-        access = await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
-        if any(not access.get(uri, False) for uri in uris):
+        read_uris = viking_fs._snapshot_read_check_uris(uris, ctx)
+        access = await viking_fs._can_access_many(read_uris, ctx, action=AclAction.READ)
+        if any(not access.get(uri, False) for uri in read_uris):
             raise PermissionDeniedError("Snapshot changes include inaccessible paths")
         page = [changes_by_uri[uri] for uri in uris[offset : offset + limit]]
         next_offset = offset + len(page)
