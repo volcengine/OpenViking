@@ -7,4 +7,7 @@ from copy import deepcopy
 
 def load_configuration(settings) -> dict:
     """Return an isolated snapshot of the reporting sections in ov.conf."""
-    return deepcopy({"kafka": settings.kafka, "telemetry": settings.telemetry})
+    configuration = {"kafka": settings.kafka, "telemetry": settings.telemetry}
+    if settings.file_log:
+        configuration["file_log"] = settings.file_log
+    return deepcopy(configuration)

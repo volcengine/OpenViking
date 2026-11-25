@@ -404,6 +404,7 @@ class EventReportingConfig(BaseModel):
 
     enabled: bool = False
     kafka: Dict[str, Any] = Field(default_factory=dict)
+    file_log: Dict[str, Any] = Field(default_factory=dict)
     telemetry: Dict[str, Any] = Field(default_factory=dict)
 
 

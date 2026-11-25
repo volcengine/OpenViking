@@ -191,6 +191,8 @@ def emit_file_change(uri, ctx, change_type, *, old_uri=None, is_dir=False, opera
             operation=operation,
             is_new_file=change_type == "added" if change_type else None,
         )
+        if change_type == "added" and not is_dir and data["scope"] in {"resources", "agent"}:
+            data["first_contributor_user_id"] = data.get("user_id")
         from openviking.service.task_work_index import get_task_context
 
         pending = _deferred_file_changes.get()

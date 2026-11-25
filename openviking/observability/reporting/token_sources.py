@@ -9,7 +9,9 @@ from typing import Iterator
 from .fact_context import event_context
 
 _source_type: ContextVar[str | None] = ContextVar("dashboard_token_source_type", default=None)
-_task_sources = frozenset({"session_commit", "add_skill", "content_write", "reindex", "compile"})
+_task_sources = frozenset(
+    {"session_commit", "add_resource", "add_skill", "content_write", "reindex", "compile"}
+)
 _semantic_sources = {
     "content_write": "content_write",
     "reindex": "reindex",

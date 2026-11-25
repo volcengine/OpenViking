@@ -12,6 +12,7 @@ from openviking.observability.events import register_event_subscriber, unregiste
 from openviking.telemetry import get_ingestion_source_type
 
 from .config import load_configuration
+from .file_reporter import FileEventReporter
 from .reporter import KafkaEventReporter
 from .token_sources import get_dashboard_token_source_type
 
@@ -24,8 +25,10 @@ _NAMES = {
     "embedding.call": "embedding_call",
 }
 _FIELDS = frozenset(
-    "task_id source_task_ids task_type mode uri old_uri skill_uri operation change_type is_dir is_new_file scope output_role visibility_scope owner_user_id context_type level memory_type memory_group template_id peer_id source_type usage_purpose cost_bearer status created_at updated_at model_name provider prompt_tokens completion_tokens error_code".split()
+    "task_id source_task_ids task_type mode uri old_uri skill_uri operation change_type is_dir is_new_file scope output_role visibility_scope owner_user_id context_type level memory_type memory_group template_id peer_id source_type usage_purpose cost_bearer status created_at updated_at model_name provider prompt_tokens completion_tokens error_code role first_contributor_user_id".split()
 )
+
+_REGISTRY_EVENTS = {"space_change", "membership_change"}
 
 
 def is_reporting_enabled():
@@ -37,7 +40,7 @@ def make_subscriber(reporter, config):
 
     def subscriber(event):
         name = _NAMES.get(event.event_name, event.event_name)
-        if name not in {
+        if name not in _REGISTRY_EVENTS and name not in {
             "http_request",
             "vlm_call",
             "embedding_call",
@@ -89,7 +92,7 @@ def make_subscriber(reporter, config):
             payload["timestamp"] = int(source.get("updated_at") or payload["timestamp"])
         elif name == "file_mutation" and source.get("operation") == "compile_commit":
             payload["timestamp"] = int(source.get("updated_at") or payload["timestamp"])
-        if name in {"vlm_call", "embedding_call"}:
+        if name in {"vlm_call", "embedding_call", "understanding_call"}:
             source_type = payload.get("source_type")
             if not isinstance(source_type, str) or not source_type.strip():
                 payload["source_type"] = (
@@ -97,6 +100,9 @@ def make_subscriber(reporter, config):
                     or get_dashboard_token_source_type(source.get("task_type"))
                     or "unknown"
                 )
+            payload["usage_purpose"] = _usage_purpose(name, payload)
+            payload["call_count"] = 1
+        if name in {"vlm_call", "embedding_call"}:
             # An unclassified billing owner stays unknown, rather than silently charged to OV.
             mappings = config.get("telemetry", {}).get("model_cost_bearers", [])
             matching = [
@@ -143,10 +149,39 @@ def make_subscriber(reporter, config):
                     ).hexdigest()
                 )
                 reporter.report({**payload, **task, "event_id": task_event_id})
+        elif name in _REGISTRY_EVENTS and isinstance(reporter, FileEventReporter):
+            reporter.report_committed(payload)
         else:
             reporter.report(payload)
 
     return subscriber
+
+
+def _usage_purpose(name, payload):
+    purpose = payload.get("usage_purpose")
+    if isinstance(purpose, str) and purpose.strip() and purpose != "unknown":
+        return purpose
+    source_type = payload["source_type"]
+    if source_type in {"semantic_search", "skill_search"}:
+        return "search_query"
+    if name == "embedding_call":
+        return {
+            "session_commit": "memory",
+            "add_skill": "skill",
+            "add_resource": "resource",
+            "content_write": "resource",
+        }.get(source_type, "unknown")
+    if name == "vlm_call":
+        return {
+            "session_commit": "memory_extract",
+            "add_resource": "resource_parse",
+            "content_write": "resource_parse",
+            "document": "resource_parse",
+            "repository": "resource_parse",
+            "compile": "compile",
+            "add_skill": "other",
+        }.get(source_type, "unknown")
+    return "unknown"
 
 
 async def start_reporting(settings):
@@ -157,7 +192,8 @@ async def start_reporting(settings):
         config = await asyncio.to_thread(load_configuration, settings)
         if not config.get("telemetry", {}).get("enabled", False):
             return None
-        reporter = await asyncio.to_thread(KafkaEventReporter, config)
+        reporter_class = FileEventReporter if config.get("file_log") else KafkaEventReporter
+        reporter = await asyncio.to_thread(reporter_class, config)
         register_event_subscriber(_SUBSCRIBER, make_subscriber(reporter, config))
         _reporter = reporter
         return reporter

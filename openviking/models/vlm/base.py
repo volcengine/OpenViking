@@ -252,8 +252,8 @@ class VLMBase(ABC):
         self,
         model_name: str,
         provider: str,
-        prompt_tokens: int,
-        completion_tokens: int,
+        prompt_tokens: Optional[int],
+        completion_tokens: Optional[int],
         duration_seconds: float = 0.0,
         prompt_cached_tokens: int = 0,
         completion_reasoning_tokens: int = 0,
@@ -272,8 +272,8 @@ class VLMBase(ABC):
         self._token_tracker.update(
             model_name=model_name,
             provider=provider,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            prompt_tokens=prompt_tokens or 0,
+            completion_tokens=completion_tokens or 0,
         )
         # Operation-level telemetry aggregation (no-op when telemetry is disabled).
         try:
@@ -282,8 +282,8 @@ class VLMBase(ABC):
             telemetry = get_current_telemetry()
             stage = get_current_telemetry_stage() or "vlm"
             telemetry.add_token_usage(
-                prompt_tokens,
-                completion_tokens,
+                prompt_tokens or 0,
+                completion_tokens or 0,
                 stage=stage,
                 prompt_cached_tokens=max(int(prompt_cached_tokens), 0),
                 completion_reasoning_tokens=max(int(completion_reasoning_tokens), 0),
@@ -308,8 +308,8 @@ class VLMBase(ABC):
                 provider=str(provider),
                 model_name=str(model_name),
                 duration_seconds=float(duration_seconds),
-                prompt_tokens=int(prompt_tokens),
-                completion_tokens=int(completion_tokens),
+                prompt_tokens=None if prompt_tokens is None else int(prompt_tokens),
+                completion_tokens=None if completion_tokens is None else int(completion_tokens),
                 error_code=_usage_error_code.get(),
                 account_id=root_context.account_id if root_context is not None else None,
                 source_type=get_ingestion_source_type(),
@@ -334,8 +334,8 @@ class VLMBase(ABC):
                 provider=str(self.provider),
                 model_name=str(self.model or "unknown"),
                 duration_seconds=max(float(duration_seconds), 0.0),
-                prompt_tokens=0,
-                completion_tokens=0,
+                prompt_tokens=None,
+                completion_tokens=None,
                 error_code=extract_metric_error_code(error),
                 cost_bearer=self.cost_bearer,
                 account_id=root_context.account_id if root_context is not None else None,
