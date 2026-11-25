@@ -10,6 +10,7 @@ import {
   cleanOpenVikingRequestHeaders,
   type OpenVikingRequestHeaders,
 } from "../../request-headers.js";
+import { memoryOpenVikingConfigSchema } from "../../config.js";
 
 export type { SetupIO, SlotActivationResult };
 
@@ -134,6 +135,25 @@ export function isLegacyLocalMode(existing: Record<string, unknown>): boolean {
 function nonEmptyOpenVikingRequestHeaders(value: unknown): OpenVikingRequestHeaders | undefined {
   const headers = cleanOpenVikingRequestHeaders(value);
   return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+export function resolveExistingConnectionConfig(
+  existing: Record<string, unknown>,
+  defaultRemoteUrl: string,
+): {
+  baseUrl: string;
+  apiKey: string | undefined;
+  headers: OpenVikingRequestHeaders | undefined;
+} {
+  const resolved = memoryOpenVikingConfigSchema.parse({
+    ...existing,
+    baseUrl: existing.baseUrl ?? defaultRemoteUrl,
+  });
+  return {
+    baseUrl: resolved.baseUrl,
+    apiKey: resolved.apiKey || undefined,
+    headers: nonEmptyOpenVikingRequestHeaders(resolved.headers),
+  };
 }
 
 function callHealthProbe(
@@ -304,9 +324,7 @@ export function createOpenVikingSetupService({
     },
 
     async useExistingRemoteConfig(configPath: string, existing: Record<string, unknown>): Promise<SetupResult> {
-      const baseUrl = String(existing.baseUrl ?? defaultRemoteUrl);
-      const apiKey = existing.apiKey ? String(existing.apiKey) : undefined;
-      const headers = nonEmptyOpenVikingRequestHeaders(existing.headers);
+      const { baseUrl, apiKey, headers } = resolveExistingConnectionConfig(existing, defaultRemoteUrl);
       const health = await callHealthProbe(checkServiceHealth, baseUrl, apiKey, headers);
       const slot = activateContextEngineSlot(configPath, false, io);
       return {
@@ -336,9 +354,7 @@ export function createOpenVikingSetupService({
         return { configured: false, slotActive };
       }
 
-      const baseUrl = String(existing.baseUrl ?? defaultRemoteUrl);
-      const apiKey = existing.apiKey ? String(existing.apiKey) : undefined;
-      const headers = nonEmptyOpenVikingRequestHeaders(existing.headers);
+      const { baseUrl, apiKey, headers } = resolveExistingConnectionConfig(existing, defaultRemoteUrl);
       const health = await callHealthProbe(checkServiceHealth, baseUrl, apiKey, headers);
       const keyProbe = health.ok ? await callApiKeyProbe(probeApiKeyType, baseUrl, apiKey, headers) : undefined;
 
