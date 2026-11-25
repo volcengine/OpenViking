@@ -6,6 +6,7 @@
 import httpx
 import pytest
 
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSDirectoryNotEmptyError,
@@ -308,6 +309,36 @@ def test_upstream_failures_keep_their_status_through_wrappers(
     mapped = map_exception(blocked.value)
     assert mapped.code == expected_code
     assert ERROR_CODE_TO_HTTP_STATUS[mapped.code] == expected_status
+
+
+@pytest.mark.parametrize(
+    ("other_kind", "expected_code"),
+    [(ModelErrorKind.RATE_LIMIT_ERROR, "RESOURCE_EXHAUSTED"), (ModelErrorKind.UNKNOWN, "INTERNAL")],
+)
+def test_credential_failover_only_reports_rate_limit_for_matching_failures(
+    other_kind, expected_code
+):
+    throttled = ModelError(ModelErrorKind.RATE_LIMIT_ERROR, "Slow down")
+    error = AllCredentialsFailedError(
+        [
+            ("primary", throttled.kind, throttled, 0),
+            ("secondary", other_kind, ModelError(other_kind, "Backend busy"), 1),
+        ]
+    )
+    mapped = map_exception(error)
+    assert mapped.code == expected_code
+    if expected_code == "RESOURCE_EXHAUSTED":
+        assert mapped.details["model_error_kind"] == "rate_limit_error"
+
+
+def test_ark_account_rate_limit_code_without_http_status():
+    ark = pytest.importorskip("volcenginesdkarkruntime._exceptions")
+    mapped = map_exception(
+        ark.ArkAPIError("Slow down", body={"error": {"code": "AccountRateLimitExceeded"}})
+    )
+    assert mapped.code == "RESOURCE_EXHAUSTED"
+    assert mapped.details["model_error_kind"] == "rate_limit_error"
+    assert mapped.details["upstream_error_code"] == "AccountRateLimitExceeded"
 
 
 def test_model_api_key_configuration_error_maps_to_failed_precondition():

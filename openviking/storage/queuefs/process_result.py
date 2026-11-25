@@ -53,7 +53,7 @@ class ProcessResult:
         cls,
         error: str,
         *,
-        errors: Optional[Tuple[str, ...]] = None,
+        errors: Optional[Tuple[Union[str, dict], ...]] = None,
     ) -> "ProcessResult":
         return cls(ProcessOutcome.FAILED, error=error, errors=errors)
 

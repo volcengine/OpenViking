@@ -189,7 +189,9 @@ class SkillSemanticMessageWork(SemanticMessageWork):
         # Report every file error, but settle this queue item only once.
         self.processor._merge_request_stats(self.msg.telemetry_id, error_count=len(stats.failures))
         return ProcessResult.failed(
-            "\n".join(stats.failures),
+            "\n".join(
+                item["message"] if isinstance(item, dict) else item for item in stats.failures
+            ),
             errors=tuple(stats.failures),
         )
 

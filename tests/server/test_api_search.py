@@ -9,7 +9,9 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from openviking.config.embedding import AccountEmbeddingProvider
 from openviking.models.embedder.base import EmbedResult
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.vectordb.collection.vikingdb_clients import VikingDBClient
@@ -19,6 +21,20 @@ from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VikingDBConfig
+
+
+async def test_find_reports_upstream_model_rate_limit(client, monkeypatch):
+    async def throttled(*args, **kwargs):
+        raise ModelError(ModelErrorKind.RATE_LIMIT_ERROR, "Slow down", provider="test-provider")
+
+    monkeypatch.setattr(AccountEmbeddingProvider, "embed", throttled)
+    response = await client.post("/api/v1/search/find", json={"query": "test"})
+
+    assert response.status_code == 429
+    error = response.json()["error"]
+    assert error["code"] == "RESOURCE_EXHAUSTED"
+    assert "model" in error["message"].lower()
+    assert error["details"]["model_error_kind"] == "rate_limit_error"
 
 
 async def test_keyword_search_sends_args_to_vikingdb(

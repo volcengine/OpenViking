@@ -44,6 +44,7 @@ from openviking.parse.parsers.media.utils import (
 from openviking.prompts import render_prompt
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.server.identity import RequestContext, Role
+from openviking.service.task_domain import make_work_error
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import detach_task_context, get_task_context
@@ -80,6 +81,7 @@ from openviking.telemetry import (
 )
 from openviking.telemetry.span_models import create_root_span_attributes
 from openviking.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+from openviking.utils.exceptions import model_rate_limit_error
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
@@ -940,6 +942,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 if msg is not None:
                     self._merge_request_stats(msg.telemetry_id, error_count=1)
                     await self._cleanup_local_artifact(msg)
+                if throttled := model_rate_limit_error(e):
+                    detail = make_work_error(
+                        str(e),
+                        msg.uri if msg else None,
+                        rate_limit=throttled,
+                    )
+                    return ProcessResult.failed(throttled.message, errors=(detail,))
                 return ProcessResult.failed(str(e))
         finally:
             if msg is not None and execute_started_at is not None:

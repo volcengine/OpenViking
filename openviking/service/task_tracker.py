@@ -29,12 +29,10 @@ from uuid import uuid4
 
 from openviking.service.task_domain import (
     ACTIVE_TASK_STATUSES,
-    MAX_QUEUE_ERROR_DETAILS,
     SENSITIVE_TASK_KEYS,
     TERMINAL_TASK_STATUSES,
     TERMINAL_WORK_STATES,
     DeleteExpiredResult,
-    QueueWorkSummary,
     TaskPatch,
     TaskRecord,
     TaskRetentionPolicy,
@@ -44,7 +42,8 @@ from openviking.service.task_domain import (
     WorkRecoveryMode,
     WorkState,
     WorkSummary,
-    project_work_error,
+    queue_result,
+    raise_for_task_model_rate_limit,
     sanitize_error,
     sanitize_task_result,
 )
@@ -296,6 +295,7 @@ async def run_tracked_operation(
                 if terminal.status == TaskStatus.FAILED and not (
                     accept_failed_result is not None and accept_failed_result(result)
                 ):
+                    raise_for_task_model_rate_limit(terminal.result, task_id=task.task_id)
                     raise OpenVikingError(
                         terminal.error or "Task processing failed",
                         code="PROCESSING_ERROR",
@@ -1363,18 +1363,10 @@ class TaskTracker:
     def format_queue_status(
         summary: WorkSummary,
     ) -> Dict[str, Dict[str, object]]:
-        result: Dict[str, Dict[str, object]] = {}
-        for queue_name in _PUBLIC_QUEUE_NAMES:
-            queue = summary.queues.get(queue_name, QueueWorkSummary())
-            result[queue_name] = {
-                "processed": queue.processed,
-                "requeue_count": queue.requeue_count,
-                "error_count": queue.error_count,
-                "errors": [
-                    project_work_error(error) for error in queue.errors[:MAX_QUEUE_ERROR_DETAILS]
-                ],
-            }
-        return result
+        return {
+            name: queue_result(summary.queues.get(name), queue_name=name)
+            for name in _PUBLIC_QUEUE_NAMES
+        }
 
     async def get_work_summary(
         self,

@@ -58,6 +58,59 @@ async def _add_skill(client, name: str = "api-skill", description: str = "API sk
     return response.json()["result"]
 
 
+@pytest.mark.parametrize("mixed", [False, True], ids=["account-rate-limit", "with-storage-failure"])
+async def test_skill_wait_reports_legacy_volcengine_account_rate_limit(client, monkeypatch, mixed):
+    from openviking.service.task_tracker import get_task_tracker
+
+    provider_error = (
+        "Error code: 429 - {'error': {'code': 'AccountRateLimitExceeded', "
+        "'message': 'Requests are too frequent.', 'param': '', 'type': 'TooManyRequests'}}"
+    )
+    root = "viking://agent/skills/rate-limited"
+    status = {
+        "Semantic": {
+            "processed": 0,
+            "requeue_count": 0,
+            "error_count": 2,
+            "errors": [
+                {"message": f"{root}/{name}: {provider_error}, request_id: req-{i}"}
+                for i, name in enumerate(("SKILL.md", "README.md"))
+            ],
+        },
+        "Embedding": {
+            "processed": 5,
+            "requeue_count": 0,
+            "error_count": 1,
+            "errors": [
+                {
+                    "message": f"Failed to generate embedding: Volcengine embedding failed: "
+                    f"{provider_error}, request_id: req-3 (uri={root}/SK...[truncated]"
+                }
+            ],
+        },
+    }
+    if mixed:
+        status["Embedding"]["errors"][0] = {"message": "Failed to write to vector database"}
+    replay = AsyncMock(return_value=status)
+    monkeypatch.setattr(get_task_tracker(), "build_queue_status", replay)
+    response = await client.post(
+        "/api/v1/skills", json={"data": _skill_md("rate-limited", "Test"), "wait": True}
+    )
+    replay.assert_awaited()
+    if mixed:
+        assert response.status_code == 500
+        assert response.json()["error"]["code"] == "INTERNAL"
+        return
+    assert response.status_code == 429, response.text
+    error = response.json()["error"]
+    assert error["code"] == "RESOURCE_EXHAUSTED"
+    assert "model" in error["message"].lower()
+    assert error["details"]["model_error_kind"] == "rate_limit_error"
+    assert "account rate limit" in error["message"].lower()
+    assert error["details"]["upstream_error_code"] == "AccountRateLimitExceeded"
+    assert error["details"]["queue_status"] == status
+
+
 async def test_skills_api_list_honors_node_limit(client):
     await _add_skill(client, "limit-skill-a", "First skill")
     await _add_skill(client, "limit-skill-b", "Second skill")

@@ -57,6 +57,8 @@ def chat_finish_error(finish_reason: str | None, provider: str) -> ModelError | 
     return None
 
 
+ACCOUNT_RATE_LIMIT_CODE = "AccountRateLimitExceeded"
+
 _CODE_KINDS = {
     # Authentication and authorization.
     "APIKEYINVALID": ModelErrorKind.AUTHENTICATION_ERROR,
@@ -74,6 +76,7 @@ _CODE_KINDS = {
     "BILLINGHARDLIMITREACHED": ModelErrorKind.QUOTA_EXHAUSTED,
     "ACCOUNTOVERDUE": ModelErrorKind.QUOTA_EXHAUSTED,
     # Request rate limits.
+    ACCOUNT_RATE_LIMIT_CODE.upper(): ModelErrorKind.RATE_LIMIT_ERROR,
     "RATELIMITEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
     "REQUESTLIMITEXCEEDED": ModelErrorKind.RATE_LIMIT_ERROR,
     "REQUESTBURSTTOOFAST": ModelErrorKind.RATE_LIMIT_ERROR,
@@ -99,7 +102,8 @@ _TRANSIENT_SERVICE_STATUS = {409, 500, 502, 503}
 _TRANSIENT_NETWORK_STATUS = {408, 504}
 
 
-def _exception_chain(error: BaseException) -> list[BaseException]:
+def exception_chain(error: BaseException) -> list[BaseException]:
+    """Follow the explicit cause or implicit context, stopping at cycles."""
     chain: list[BaseException] = []
     seen: set[int] = set()
     current: BaseException | None = error
@@ -333,7 +337,7 @@ def model_error_from_status(
 
 def model_error_from_exception(error: BaseException) -> ModelError | None:
     """Convert a recognized SDK/API exception at the provider boundary."""
-    for item in _exception_chain(error):
+    for item in exception_chain(error):
         if isinstance(item, ModelError):
             return item
         classified = _sdk_kind(item)
@@ -352,7 +356,7 @@ def model_error_from_exception(error: BaseException) -> ModelError | None:
 
 def model_error_kind(error: BaseException) -> ModelErrorKind | None:
     """Return the structured model kind carried by an exception chain."""
-    for item in _exception_chain(error):
+    for item in exception_chain(error):
         kind = getattr(item, "kind", None)
         if isinstance(kind, ModelErrorKind):
             return kind
@@ -378,7 +382,7 @@ def model_error_boundary(func: F) -> F:
                     raise
                 if args and isinstance(getattr(args[0], "provider", None), str):
                     converted.provider = args[0].provider
-                if any(item is converted for item in _exception_chain(error)):
+                if any(item is converted for item in exception_chain(error)):
                     raise converted
                 raise converted from error
 
@@ -394,7 +398,7 @@ def model_error_boundary(func: F) -> F:
                 raise
             if args and isinstance(getattr(args[0], "provider", None), str):
                 converted.provider = args[0].provider
-            if any(item is converted for item in _exception_chain(error)):
+            if any(item is converted for item in exception_chain(error)):
                 raise converted
             raise converted from error
 
@@ -405,6 +409,7 @@ def model_error_boundary(func: F) -> F:
 # User-facing brief: model error kind -> one short, actionable sentence
 # ---------------------------------------------------------------------------
 
+MODEL_RATE_LIMIT_MESSAGE = "The upstream model service is rate-limited. Please try again later."
 #: Generic sentence for any failure the user cannot fix by changing input.
 UNKNOWN_BRIEF = "Failed to process the resource. Please try again."
 
@@ -421,7 +426,7 @@ _MODEL_BRIEFS: dict["ModelErrorKind", str] = {
     ),
     ModelErrorKind.INPUT_TOO_LARGE: "The content exceeds the model's size limit.",
     ModelErrorKind.CONTENT_SAFETY: "The content was blocked by the model's safety filter.",
-    ModelErrorKind.RATE_LIMIT_ERROR: "The model service is rate-limited; please try again later.",
+    ModelErrorKind.RATE_LIMIT_ERROR: MODEL_RATE_LIMIT_MESSAGE,
     ModelErrorKind.UNKNOWN: UNKNOWN_BRIEF,
 }
 

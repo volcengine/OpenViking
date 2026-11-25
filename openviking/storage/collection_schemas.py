@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.core.context import ContextType, ResourceContentType
 from openviking.models.embedder.base import embed_compat
-from openviking.models.model_error import UNKNOWN_BRIEF, ModelErrorKind, brief_for, model_error_kind
+from openviking.models.model_error import UNKNOWN_BRIEF, ModelErrorKind, brief_for
 from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_domain import make_work_error
@@ -46,6 +46,11 @@ from openviking.storage.viking_vector_index_backend import (
 )
 from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, resolve_telemetry
 from openviking.utils.circuit_breaker import CircuitBreakerOpen
+from openviking.utils.exceptions import (
+    ModelRateLimitError,
+    model_rate_limit_error,
+    reported_model_error_kind,
+)
 from openviking.utils.log_correlation import log_correlation
 from openviking.utils.tags import merge_search_tags
 from openviking.utils.time_utils import get_current_timestamp
@@ -591,6 +596,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         message: str,
         *,
         kind: Optional[ModelErrorKind] = None,
+        rate_limit: Optional[ModelRateLimitError] = None,
     ) -> ProcessResult:
         """Fail with one structured per-resource error (uri + user brief).
 
@@ -603,6 +609,8 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             message=message,
             uri=cls._embedding_uri(embedding_msg),
             err_brief=err_brief,
+            model_error_kind=kind,
+            rate_limit=rate_limit,
         )
         return ProcessResult.failed(message, errors=(detail,))
 
@@ -812,13 +820,18 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         request_failed_message = self._embedding_error_msg(
                             embedding_msg, "Circuit breaker open and no queue manager"
                         )
-                        return self._embedding_failed(embedding_msg, request_failed_message)
+                        return self._embedding_failed(
+                            embedding_msg,
+                            request_failed_message,
+                            kind=reported_model_error_kind(embed_err),
+                            rate_limit=model_rate_limit_error(embed_err),
+                        )
                     except Exception as embed_err:
                         error_msg = self._embedding_error_msg(
                             embedding_msg,
                             f"Failed to generate embedding: {embed_err}",
                         )
-                        kind = model_error_kind(embed_err)
+                        kind = reported_model_error_kind(embed_err)
                         try:
                             from openviking.metrics.datasources import EmbeddingEventDataSource
 
@@ -875,7 +888,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         execute_status = "error"
                         self._log_embedding_error(logging.ERROR, error_msg, embedding_msg)
                         request_failed_message = error_msg
-                        return self._embedding_failed(embedding_msg, error_msg, kind=kind)
+                        return self._embedding_failed(
+                            embedding_msg,
+                            error_msg,
+                            kind=kind,
+                            rate_limit=model_rate_limit_error(embed_err),
+                        )
 
                     # Add dense vector
                     if result.dense_vector:

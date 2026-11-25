@@ -47,6 +47,7 @@ from openviking.utils.embedding_utils import (
     vectorize_directory_meta,
     vectorize_file,
 )
+from openviking.utils.exceptions import model_rate_limit_error
 from openviking.utils.git_auth import is_git_https_url
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.log_correlation import log_correlation
@@ -997,6 +998,8 @@ class ResourceProcessor:
             except OpenVikingError:
                 raise
             except Exception as e:
+                if throttled := model_rate_limit_error(e):
+                    raise throttled from e
                 result["status"] = "error"
                 error_message = f"Parse error: {e}"
                 error_meta = getattr(e, "meta", {})

@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from openviking.config.embedding import AccountEmbeddingProvider
+from openviking.models.model_error import ModelError, ModelErrorKind
 from openviking.server.identity import RequestContext, Role
 from openviking.server.routers.resources import AddResourceRequest
 from openviking.storage.queuefs.named_queue import QueueError, QueueStatus
@@ -143,6 +145,36 @@ async def test_add_resource_with_wait(
     )
     assert response.status_code == 200, response.text
     assert response.json()["result"].strip() == expected_content
+
+
+async def test_add_resource_wait_reports_embedding_rate_limit(
+    client, sample_markdown_file, upload_temp_dir, monkeypatch
+):
+    async def throttled(*args, **kwargs):
+        raise ModelError(
+            ModelErrorKind.RATE_LIMIT_ERROR,
+            "Slow down",
+            status_code=429,
+            code="AccountRateLimitExceeded",
+        )
+
+    monkeypatch.setattr(AccountEmbeddingProvider, "embed", throttled)
+    response = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "processing_mode": "vectors_only",
+            "wait": True,
+        },
+    )
+    assert response.status_code == 429, response.text
+    error = response.json()["error"]
+    assert error["code"] == "RESOURCE_EXHAUSTED"
+    assert "model" in error["message"].lower()
+    detail = error["details"]["errors"][0]
+    assert detail["model_error_kind"] == "rate_limit_error"
+    assert detail["upstream_status_code"] == 429
+    assert detail["upstream_error_code"] == "AccountRateLimitExceeded"
 
 
 @pytest.mark.usefixtures("public_resource_dns")

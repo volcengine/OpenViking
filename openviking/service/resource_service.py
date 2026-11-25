@@ -67,7 +67,11 @@ from openviking.server.user_config import (
     effective_resource_add_target,
     effective_skill_add_target,
 )
-from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
+from openviking.service.task_domain import (
+    TaskPatch,
+    collect_queue_work_errors,
+    raise_for_queue_model_rate_limit,
+)
 from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.expr import And, Eq, In, Or, PathScope
 from openviking.storage.pathlock_transfer import PathLockGuard
@@ -2623,6 +2627,7 @@ class ResourceService:
             and (int(group.get("error_count", 0) or 0) > 0 or bool(group.get("errors")))
         }
         if failed:
+            raise_for_queue_model_rate_limit(failed)
             raise InternalError(f"queue processing failed: {failed}")
 
     # ── Connector routing ──

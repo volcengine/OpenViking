@@ -337,6 +337,8 @@ JSON 输出 - 错误：
 | `SESSION_EXPIRED` | 410 | 会话已过期 |
 | `NOT_INITIALIZED` | - | 服务或组件未初始化（需要先调用 initialize()） |
 
+请求因上游模型限流而失败时，API 返回 HTTP 429 和错误码 `RESOURCE_EXHAUSTED`。错误消息会提示限流来自模型服务，客户端可以通过 `error.details.model_error_kind` 的值 `rate_limit_error` 识别这一原因。火山引擎返回账号级限流时，`upstream_error_code` 可进一步标明 `AccountRateLimitExceeded`。
+
 文件／目录类型不符合操作要求、复制或删除目录时缺少 `recursive=true`，以及 HTTP 来源域名明确不存在，均返回 `INVALID_ARGUMENT`（400）。正常路径锁竞争（包括加密写入）返回 `CONFLICT`（409）；锁令牌损坏、锁 I/O 故障和落盘数据解密失败返回 `INTERNAL`（500）。HTTP 来源站不可用或发生临时网络故障时返回 `UNAVAILABLE`（503），抓取超时返回 `DEADLINE_EXCEEDED`（504）。
 
 ---

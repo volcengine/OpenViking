@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import ast
+import json
 import math
 import re
 import time
@@ -13,7 +15,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Iterable, Optional
 
+from openviking.models.model_error import ACCOUNT_RATE_LIMIT_CODE, ModelErrorKind
 from openviking.service.task_events import append_task_event
+from openviking.utils.exceptions import ModelRateLimitError
 
 
 class TaskStatus(str, Enum):
@@ -155,6 +159,10 @@ _SENSITIVE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 _MAX_ERROR_LEN = 500
+# Match a complete field in a truncated SDK body. Its nesting is verified by parsing below.
+_ARK_ACCOUNT_LIMIT_FIELD = re.compile(
+    r"""(?:'code'|"code")\s*:\s*(?:'AccountRateLimitExceeded'|"AccountRateLimitExceeded")"""
+)
 
 
 def sanitize_error(error: str) -> str:
@@ -168,6 +176,9 @@ def make_work_error(
     message: str,
     uri: Optional[str] = None,
     err_brief: Optional[str] = None,
+    *,
+    model_error_kind: Optional[ModelErrorKind] = None,
+    rate_limit: Optional[ModelRateLimitError] = None,
 ) -> Dict[str, Any]:
     """Build one per-resource work error dict (the persisted/public shape).
 
@@ -175,30 +186,91 @@ def make_work_error(
     omitted when empty so legacy ``{message}`` records stay byte-stable.
     """
     entry: Dict[str, Any] = {"message": message}
+    if rate_limit is not None:
+        model_error_kind = ModelErrorKind.RATE_LIMIT_ERROR
+        err_brief = rate_limit.message
+        for key in ("upstream_status_code", "upstream_error_code"):
+            if key in rate_limit.details:
+                entry[key] = rate_limit.details[key]
     if uri:
         entry["uri"] = uri
     if err_brief:
         entry["err_brief"] = err_brief
+    if model_error_kind is not None:
+        entry["model_error_kind"] = model_error_kind.value
     return entry
 
 
-def project_work_error(raw: Any) -> Dict[str, Any]:
-    """Project one work error (legacy string or shaped dict) into
-    ``{message, uri?, err_brief?}``, keeping known fields only.
+def _has_account_limit_code(body: str) -> bool:
+    try:
+        parsed = ast.literal_eval(body)
+    except (ValueError, SyntaxError):
+        try:
+            parsed = json.loads(body)
+        except ValueError:
+            return False
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    return isinstance(error, dict) and error.get("code") == ACCOUNT_RATE_LIMIT_CODE
 
-    Unknown types yield an empty ``message`` so callers drop them instead of
-    fabricating a fake error; historical records are never back-filled.
-    """
+
+def _legacy_account_rate_limit(queue_name: str | None, message: str) -> bool:
+    """Recognize an Ark SDK error in a single persisted model work item."""
+    if queue_name not in ("Semantic", "Embedding") or "\n" in message:
+        return False
+    if queue_name == "Semantic" and message.startswith("viking://"):
+        _, _, message = message.partition(": ")
+    elif queue_name == "Embedding":
+        message = message.removeprefix("Failed to generate embedding: ").removeprefix(
+            "Volcengine embedding failed: "
+        )
+
+    prefix = "Error code: 429 - "
+    if not message.startswith(prefix):
+        return False
+    payload = message[len(prefix) :]
+    # A complete SDK body can be followed by a request ID or the embedding URI.
+    body, brace, suffix = payload.rpartition("}")
+    sdk_suffix = not suffix or suffix.startswith((", request_id:", " (uri=", "...[truncated]"))
+    if (
+        brace
+        and sdk_suffix
+        and len(body) < _MAX_ERROR_LEN
+        and _has_account_limit_code(body + brace)
+    ):
+        return True
+    if message.endswith("...[truncated]") or (brace and sdk_suffix and len(body) >= _MAX_ERROR_LEN):
+        # Reconstruct just the dictionary through error.code. This also works if
+        # code follows message; text quoted inside message cannot supply the field.
+        for match in _ARK_ACCOUNT_LIMIT_FIELD.finditer(payload, 0, _MAX_ERROR_LEN):
+            if _has_account_limit_code(payload[: match.end()] + "}}"):
+                return True
+    return False
+
+
+def project_work_error(raw: Any, *, queue_name: str | None = None) -> Dict[str, Any]:
+    """Project known work-error fields, including legacy model queue failures."""
     if isinstance(raw, str):
-        return {"message": raw}
-    if isinstance(raw, dict):
-        entry: Dict[str, Any] = {"message": str(raw.get("message") or "")}
-        if isinstance(raw.get("uri"), str) and raw["uri"]:
-            entry["uri"] = raw["uri"]
-        if isinstance(raw.get("err_brief"), str) and raw["err_brief"]:
-            entry["err_brief"] = raw["err_brief"]
-        return entry
-    return {"message": ""}
+        raw = {"message": raw}
+    if not isinstance(raw, dict):
+        return {"message": ""}
+    entry: Dict[str, Any] = {"message": str(raw.get("message") or "")}
+    for key in ("uri", "err_brief", "model_error_kind", "upstream_error_code"):
+        if isinstance(raw.get(key), str) and raw[key]:
+            entry[key] = raw[key]
+    if type(raw.get("upstream_status_code")) is int:
+        entry["upstream_status_code"] = raw["upstream_status_code"]
+    if (
+        "model_error_kind" not in raw
+        and "upstream_status_code" not in raw
+        and "upstream_error_code" not in raw
+        and _legacy_account_rate_limit(queue_name, entry["message"])
+    ):
+        entry.update(
+            model_error_kind=ModelErrorKind.RATE_LIMIT_ERROR.value,
+            upstream_status_code=429,
+            upstream_error_code=ACCOUNT_RATE_LIMIT_CODE,
+        )
+    return entry
 
 
 def serialize_work_errors(values: Optional[Iterable[Any]]) -> list[Dict[str, Any]]:
@@ -410,18 +482,71 @@ def append_task_events(task: TaskRecord, previous: Optional[TaskRecord]) -> None
         )
 
 
-def queue_result(summary: Optional[QueueWorkSummary]) -> Dict[str, Any]:
+def _common_rate_limit(details: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return only the rate-limit attribution shared by every failure."""
+    common = {}
+    account_limited = True
+    for entry in details:
+        if entry.get("model_error_kind") != ModelErrorKind.RATE_LIMIT_ERROR:
+            return {}
+        common["model_error_kind"] = ModelErrorKind.RATE_LIMIT_ERROR.value
+        account_limited = (
+            account_limited and entry.get("upstream_error_code") == ACCOUNT_RATE_LIMIT_CODE
+        )
+    if common and account_limited:
+        common["upstream_error_code"] = ACCOUNT_RATE_LIMIT_CODE
+    return common
+
+
+def _queue_rate_limit(
+    queue_name: str | None, errors: Any, error_count: int | None
+) -> Dict[str, Any]:
+    if not isinstance(errors, (list, tuple)) or len(errors) != error_count:
+        return {}
+    return _common_rate_limit(project_work_error(error, queue_name=queue_name) for error in errors)
+
+
+def queue_result(
+    summary: Optional[QueueWorkSummary], *, queue_name: str | None = None
+) -> Dict[str, Any]:
     """Project queue aggregates into the public Task result shape."""
     summary = summary or QueueWorkSummary()
-    return {
+    result = {
         "processed": summary.processed,
         "requeue_count": summary.requeue_count,
         "error_count": summary.error_count,
         "errors": [
-            project_work_error(error)
+            project_work_error(error, queue_name=queue_name)
             for error in summary.errors[:MAX_QUEUE_ERROR_DETAILS]
         ],
     }
+    # Compute the group classification from the full persisted list.
+    result.update(_queue_rate_limit(queue_name, summary.errors, summary.error_count))
+    return result
+
+
+def raise_for_queue_model_rate_limit(status: Dict[str, Any]) -> None:
+    if not isinstance(status, dict):
+        return
+    failed = (
+        group
+        if "model_error_kind" in group
+        else _queue_rate_limit(name, group.get("errors"), group.get("error_count"))
+        for name, group in status.items()
+        if isinstance(group, dict) and (group.get("error_count") or group.get("errors"))
+    )
+    if details := _common_rate_limit(failed):
+        raise ModelRateLimitError({**details, "queue_status": status})
+
+
+def raise_for_task_model_rate_limit(result: Optional[Dict[str, Any]], **context: Any) -> None:
+    if result and result.get("code") == "RESOURCE_EXHAUSTED":
+        details = result.get("details")
+        if (
+            isinstance(details, dict)
+            and details.get("model_error_kind") == ModelErrorKind.RATE_LIMIT_ERROR
+        ):
+            raise ModelRateLimitError({**details, **context})
 
 
 def collect_queue_work_errors(result: Optional[Dict[str, Any]]) -> list[Dict[str, Any]]:
@@ -440,7 +565,9 @@ def collect_queue_work_errors(result: Optional[Dict[str, Any]]) -> list[Dict[str
     for stage_name in ("Semantic", "Embedding"):
         stage = queue_status.get(stage_name)
         if isinstance(stage, dict) and isinstance(stage.get("errors"), (list, tuple)):
-            collected.extend(project_work_error(item) for item in stage["errors"])
+            collected.extend(
+                project_work_error(item, queue_name=stage_name) for item in stage["errors"]
+            )
     return collected[:MAX_QUEUE_ERROR_DETAILS]
 
 
@@ -449,6 +576,10 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     works = list(works)
     if task.status not in ACTIVE_TASK_STATUSES or any(work.is_open() for work in works):
         return False
+    queues = {
+        name: queue_result(queue, queue_name=name)
+        for name, queue in summarize_works(works).queues.items()
+    }
     rollback_failed = (
         task.task_type == "compile"
         and isinstance(task.result, dict)
@@ -461,7 +592,22 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     else:
         work_error = first_work_error(works)
         if work_error and task.error is None:
-            task.error = sanitize_error(work_error)
+            rate_limit = _common_rate_limit(
+                queue for queue in queues.values() if queue["error_count"]
+            )
+            if rate_limit:
+                limited = ModelRateLimitError(rate_limit)
+                task.error = limited.message
+                if task.result is None:
+                    task.result = {}
+                task.result["code"] = limited.code
+                details = task.result.get("details")
+                task.result["details"] = {
+                    **(details if isinstance(details, dict) else {}),
+                    **limited.details,
+                }
+            else:
+                task.error = sanitize_error(work_error)
         if task.error is not None:
             task.status = TaskStatus.FAILED
         elif task.result is not None:
@@ -470,10 +616,9 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
             task.error = "Task operation interrupted before its result was persisted"
             task.status = TaskStatus.FAILED
     if isinstance(task.result, dict):
-        summary = summarize_works(works)
         projected = {
-            queue_name: queue_result(summary.queues.get(queue_name))
-            for queue_name in ("Semantic", "Embedding")
+            name: queues[name] if name in queues else queue_result(None)
+            for name in ("Semantic", "Embedding")
         }
         if any(work.queue_name in projected for work in works):
             task.result["queue_status"] = projected

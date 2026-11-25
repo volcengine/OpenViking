@@ -19,6 +19,7 @@ from openviking.observability.reporting.token_sources import (
 )
 from openviking.parse.parsers.media import get_media_type
 from openviking.server.identity import RequestContext
+from openviking.service.task_domain import make_work_error
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
     bind_task_context,
@@ -40,6 +41,7 @@ from openviking.storage.index_action import FieldPatch
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
+from openviking.utils.exceptions import model_rate_limit_error
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.log_correlation import log_correlation
 from openviking_cli.utils import VikingURI
@@ -96,7 +98,7 @@ class SemanticTreeStats:
     pending_nodes: int = 0
     in_progress_nodes: int = 0
     done_nodes: int = 0
-    failures: List[str] = field(default_factory=list)
+    failures: List[str | dict] = field(default_factory=list)
     indexed_records: int = 0
 
 
@@ -381,7 +383,17 @@ class SemanticTreeExecutor:
 
     def _record_skill_failure(self, uri: str, error: Exception) -> None:
         if self._context_type == "skill":
-            self._stats.failures.append(f"{uri}: {error}")
+            message = f"{uri}: {error}"
+            throttled = model_rate_limit_error(error)
+            self._stats.failures.append(
+                make_work_error(
+                    message,
+                    uri,
+                    rate_limit=throttled,
+                )
+                if throttled
+                else message
+            )
 
     async def run(self, root_uri: str) -> None:
         """Run DAG execution starting from root_uri."""

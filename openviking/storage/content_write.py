@@ -37,7 +37,11 @@ from openviking.resource.processing_mode import (
 )
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_domain import collect_queue_work_errors
+from openviking.service.task_domain import (
+    collect_queue_work_errors,
+    raise_for_queue_model_rate_limit,
+    raise_for_task_model_rate_limit,
+)
 from openviking.service.task_tracker import (
     TaskStatus,
     get_task_tracker,
@@ -446,6 +450,7 @@ class ContentWriteCoordinator:
             details: Dict[str, Any] = {"task_id": task_id}
             if work_errors:
                 details["errors"] = work_errors
+            raise_for_task_model_rate_limit(terminal_result, **details)
             raise OpenVikingError(
                 terminal.error or "Task processing failed",
                 code="PROCESSING_ERROR",
@@ -1540,6 +1545,7 @@ class ContentWriteCoordinator:
 
     @staticmethod
     def _raise_refresh_errors(queue_status: Dict[str, Any]) -> None:
+        raise_for_queue_model_rate_limit(queue_status)
         for name in ("Semantic", "Embedding"):
             status = queue_status.get(name, {}) if isinstance(queue_status, dict) else {}
             if isinstance(status, dict) and (
