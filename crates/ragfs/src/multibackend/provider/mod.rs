@@ -21,6 +21,11 @@ pub use cache::CacheProvider;
 /// Persists and reads partitioned multi-write segment state.
 #[async_trait]
 pub trait MultiWriteProvider: Send + Sync {
+    /// Removes provider runtime state for one partition before or during metadata reset.
+    async fn reset_scope(&self, _scope: &ScopeKey) -> Result<()> {
+        Ok(())
+    }
+
     /// Creates missing provider state without replacing an existing manifest.
     async fn bootstrap_manifest(
         &self,

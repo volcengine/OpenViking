@@ -4,9 +4,10 @@
 import json
 
 import httpx
+import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.retrieve import ContextType, MatchedContext
+from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -26,40 +27,6 @@ def _memory(uri: str, score: float = 0.9, abstract: str = "", level: int = 2):
         abstract=abstract,
         category=uri.split("/memories/", 1)[-1].split("/", 1)[0],
     )
-
-
-async def test_context_mode_returns_flat_entries_within_budget(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    async def fake_find(**kwargs):
-        del kwargs
-        return _FakeFindResult(
-            [
-                _memory("viking://user/test_user/memories/events/launch.md", 0.71, "Launch"),
-                _memory("viking://user/test_user/memories/entities/ov.md", 0.55, "OpenViking"),
-            ]
-        )
-
-    async def fake_read(uri, **kwargs):
-        del kwargs
-        return f"# Summary\ngist of {uri}\n\n# ChatLog:\n" + "x" * 300
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read", fake_read)
-
-    response = await client.post(
-        "/api/v1/search/search",
-        json={"query": "what changed", "mode": "context", "max_tokens": 1200},
-    )
-
-    assert response.status_code == 200
-    result = response.json()["result"]
-    assert [entry["category"] for entry in result["entries"]] == ["events", "entities"]
-    assert all(entry["detail"] != "uri" for entry in result["entries"])
-    assert result["rendered"].count("<memory ") == 2
-    assert result["stats"]["used_tokens"] <= 1200
 
 
 async def test_context_mode_quotas_use_category_ownership_roots(
@@ -91,8 +58,9 @@ async def test_context_mode_quotas_use_category_ownership_roots(
     )
 
     assert response.status_code == 200
-    assert any(target.endswith("/memories/events") for target in targets)
+    assert set(targets) == {"viking://user/default/memories/events"}
     assert skill_targets == [["viking://user/default/skills", "viking://agent/skills"]]
+    assert response.json()["result"]["stats"]["quotas"] == {"events": 2, "skills": 1}
 
 
 async def test_context_mode_forwards_keywords_to_every_internal_search(
@@ -195,32 +163,35 @@ async def test_context_and_list_default_limit_is_ten(
     service,
     monkeypatch,
 ):
-    limits = []
+    hits = [
+        _memory(f"viking://user/test_user/memories/events/{i}.md", 0.9 - i * 0.01, f"Entry {i}")
+        for i in range(12)
+    ]
 
-    async def fake_find(**kwargs):
-        limits.append(("context", kwargs["limit"]))
-        return _FakeFindResult()
-
-    async def fake_search(**kwargs):
-        limits.append(("list", kwargs["limit"]))
-        return _FakeFindResult()
+    async def fake_find(*, limit, **kwargs):
+        return FindResult(memories=hits[:limit], resources=[], skills=[])
 
     monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.search, "search", fake_search)
+    monkeypatch.setattr(service.search, "search", fake_find)
 
-    context_response = await client.post(
-        "/api/v1/search/search",
-        json={"query": "defaults", "mode": "context"},
+    expected = [hit.uri for hit in hits[:10]]
+    list_response = await client.post("/api/v1/search/search", json={"query": "defaults"})
+    explicit = await client.post(
+        "/api/v1/search/search", json={"query": "defaults", "mode": "list"}
     )
-    list_response = await client.post(
-        "/api/v1/search/search",
-        json={"query": "defaults"},
-    )
+    assert list_response.status_code == 200, list_response.text
+    assert explicit.status_code == 200, explicit.text
+    listed = list_response.json()["result"]
+    assert listed == explicit.json()["result"]
+    assert [hit["uri"] for hit in listed["memories"]] == expected
+    assert "rendered" not in listed
 
-    assert context_response.status_code == 200
-    assert list_response.status_code == 200
-    assert ("context", 10) in limits
-    assert ("list", 10) in limits
+    context = await client.post(
+        "/api/v1/search/search",
+        json={"query": "defaults", "mode": "context", "peer_scope": "actor"},
+    )
+    assert context.status_code == 200, context.text
+    assert [entry["uri"] for entry in context.json()["result"]["entries"]] == expected
 
 
 async def test_context_and_list_parameter_domains_do_not_overlap(client: httpx.AsyncClient):
@@ -257,43 +228,32 @@ async def test_context_mode_degrades_a_retrieval_failure(
     service,
     monkeypatch,
 ):
-    async def fake_find(**kwargs):
-        del kwargs
-        raise RuntimeError("embedder unreachable")
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    entity = "viking://user/default/memories/entities/release.md"
+    await service.viking_fs.write_file(entity, "Release details are still available.", ctx=ctx)
 
-    monkeypatch.setattr(service.search, "find", fake_find)
+    async def retrieve(*, target_uri, **_kwargs):
+        if target_uri.endswith("/events"):
+            raise RuntimeError("events embedder unavailable")
+        return _FakeFindResult([_memory(entity, 0.9, "Release details")])
+
+    monkeypatch.setattr(service.search, "find", retrieve)
     response = await client.post(
         "/api/v1/search/search",
-        json={"query": "still a valid request", "mode": "context"},
+        json={
+            "query": "release",
+            "mode": "context",
+            "peer_scope": "actor",
+            "detail": "full",
+            "quotas": {"events": 1, "entities": 1},
+        },
     )
 
-    assert response.status_code == 200
-    assert response.json()["result"]["stats"]["retrieval_errors"]
-
-
-async def test_list_mode_response_is_unchanged(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    hit = _memory("viking://user/test_user/memories/events/a.md", 0.5, "abs")
-
-    async def fake_result(**kwargs):
-        del kwargs
-        return _FakeFindResult([hit])
-
-    monkeypatch.setattr(service.search, "find", fake_result)
-    monkeypatch.setattr(service.search, "search", fake_result)
-
-    default = await client.post("/api/v1/search/search", json={"query": "plain"})
-    explicit = await client.post(
-        "/api/v1/search/search",
-        json={"query": "plain", "mode": "list"},
-    )
-
-    assert default.status_code == 200
-    assert default.json() == explicit.json()
-    assert "rendered" not in default.json()["result"]
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert [entry["uri"] for entry in result["entries"]] == [entity]
+    assert result["entries"][0]["text"] == "Release details are still available."
+    assert result["stats"]["retrieval_errors"] == ["RuntimeError: events embedder unavailable"]
 
 
 async def test_context_mode_reads_real_agfs_content_and_sidecars(
@@ -337,7 +297,11 @@ async def test_context_mode_reads_real_agfs_content_and_sidecars(
     )
 
     assert response.status_code == 200
-    by_uri = {entry["uri"]: entry for entry in response.json()["result"]["entries"]}
+    result = response.json()["result"]
+    assert [entry["category"] for entry in result["entries"]] == ["events", "entities"]
+    assert result["stats"]["used_tokens"] <= 1200
+    assert result["rendered"].count("<memory ") == 2
+    by_uri = {entry["uri"]: entry for entry in result["entries"]}
     assert "Shipped the stdio MCP proxy." in by_uri[file_uri]["text"]
     assert "MEMORY_FIELDS" not in by_uri[file_uri]["text"]
     assert by_uri[directory_uri]["detail"] == "overview"
@@ -487,12 +451,14 @@ async def test_context_mode_session_materialization_failure_stays_stateless(
     assert not await service.viking_fs.exists(f"{session_uri}/.recall_log.json", ctx=ctx)
 
 
-async def test_context_mode_does_not_materialize_session_when_session_features_are_off(
+@pytest.mark.parametrize("query_expansion", ["off", "auto"])
+async def test_context_mode_without_dedup_does_not_materialize_a_missing_session(
     client: httpx.AsyncClient,
     service,
     monkeypatch,
+    query_expansion,
 ):
-    session_id = "context-with-session-features-off"
+    session_id = "context-without-dedup"
     ctx = RequestContext(user=UserIdentifier.the_default_user("default"), role=Role.ROOT)
 
     async def fake_find(**kwargs):
@@ -507,7 +473,7 @@ async def test_context_mode_does_not_materialize_session_when_session_features_a
             "mode": "context",
             "session_id": session_id,
             "dedup_turns": 0,
-            "query_expansion": "off",
+            "query_expansion": query_expansion,
         },
     )
 

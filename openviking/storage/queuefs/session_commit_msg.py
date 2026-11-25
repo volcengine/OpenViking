@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Persistent Session Phase 2 queue message."""
 
+import json
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Dict, List
 
@@ -34,6 +35,15 @@ class SessionCommitMsg:
     # Version 1 snapshots explicitly encode WM. Version 0 (before default-off)
     # omitted true; only queued work, never saved user intent, inherits that value.
     memory_policy_version: int = 1
+
+    @property
+    def queue_group_key(self) -> str:
+        """All sessions of one account/user share a streaming-memory consumer."""
+        return json.dumps(
+            [self.user["account_id"], self.user["user_id"]],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

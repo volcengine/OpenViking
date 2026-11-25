@@ -145,7 +145,7 @@ class LocalDenseEmbedder(DenseEmbedderBase):
         return target
 
     def _download_model(self, url: str, target: Path) -> None:
-        logger.info("Downloading local embedding model %s to %s", self.model_name, target)
+        logger.info("local embedding model download started")
         tmp_target = target.with_suffix(target.suffix + ".part")
         try:
             with requests.get(url, stream=True, timeout=(10, 300)) as response:

@@ -109,6 +109,65 @@ class TestLoadJsonConfig:
 
         assert data == {"api_key": "sk-test-123"}
 
+    def test_only_inline_reporting_uses_literal_values(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TEST_API_KEY", "expanded-key")
+        reporting = {"kafka": {"password": "${TEST_API_KEY}", "$TEST_API_KEY": "$TEST_API_KEY"}}
+        conf = tmp_path / "ov.conf"
+        conf.write_text(
+            json.dumps(
+                {
+                    "server": {
+                        "observability": {
+                            "reporting": reporting,
+                            "traces": {"headers": {"api-key": "${TEST_API_KEY}"}},
+                        }
+                    },
+                    "reporting": reporting,
+                    "items": [{"server": {"observability": {"reporting": reporting}}}],
+                }
+            )
+        )
+        data = load_json_config(conf)
+        assert data["server"]["observability"]["reporting"] == reporting
+        assert data["server"]["observability"]["traces"]["headers"]["api-key"] == "expanded-key"
+        assert data["reporting"]["kafka"]["password"] == "expanded-key"
+        assert (
+            data["items"][0]["server"]["observability"]["reporting"]["kafka"]["password"]
+            == "expanded-key"
+        )
+
+    def test_business_json_escapes_keep_original_expansion_semantics(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TEST_API_KEY", "expanded-key")
+        conf = tmp_path / "ov.conf"
+        conf.write_text(
+            '{"server":{"observability":{"reporting":{"kafka":{"password":"$TEST_API_KEY"}}}},'
+            '"literal":"\\u0024TEST_API_KEY","expanded":"${TEST_API_KEY}"}'
+        )
+        data = load_json_config(conf)
+        assert data["literal"] == "$TEST_API_KEY"
+        assert data["expanded"] == "expanded-key"
+        assert data["server"]["observability"]["reporting"]["kafka"]["password"] == "$TEST_API_KEY"
+
+    def test_reporting_literals_survive_windows_expansion(self, tmp_path, monkeypatch):
+        import ntpath
+        import os
+
+        monkeypatch.setenv("TEST_API_KEY", "expanded-key")
+        reporting = {"kafka": {"password": "$TEST_API_KEY-${TEST_API_KEY}-%TEST_API_KEY%"}}
+        conf = tmp_path / "ov.conf"
+        conf.write_text(
+            json.dumps(
+                {
+                    "server": {"observability": {"reporting": reporting}},
+                    "api_key": "%TEST_API_KEY%",
+                }
+            )
+        )
+        monkeypatch.setattr(os.path, "expandvars", ntpath.expandvars)
+        data = load_json_config(conf)
+        assert data["server"]["observability"]["reporting"] == reporting
+        assert data["api_key"] == "expanded-key"
+
 
 class TestRequireConfig:
     """Tests for require_config."""
@@ -131,11 +190,10 @@ def test_runtime_concurrency_uses_scope_specific_defaults():
     assert config.queue_workers.external_parse.max_concurrent == 4
     assert config.queue_workers.add_resource.max_concurrent == 4
     assert config.queue_workers.reindex.max_concurrent == 4
-    assert config.queue_workers.add_resource.file_operation_concurrency == 16
-    assert config.queue_workers.add_resource.file_vectorization_concurrency == 8
     assert config.queue_workers.session_commit.max_concurrent == 8
     assert config.queue_workers.external_task.max_concurrent == 10
-    assert config.reindex.file_vectorization_concurrency == 8
+    assert set(config.queue_workers.add_resource.__class__.model_fields) == {"max_concurrent"}
+    assert "reindex" not in config.__class__.model_fields
 
 
 def test_glob_uses_safe_defaults():
@@ -150,27 +208,21 @@ def test_runtime_concurrency_accepts_separate_values():
         {
             "queue_workers": {
                 "external_parse": {"max_concurrent": 9},
-                "add_resource": {
-                    "max_concurrent": 7,
-                    "file_operation_concurrency": 20,
-                    "file_vectorization_concurrency": 12,
-                },
+                "add_resource": {"max_concurrent": 7},
                 "reindex": {"max_concurrent": 6},
                 "session_commit": {"max_concurrent": 50},
                 "external_task": {"max_concurrent": 11},
             },
-            "reindex": {"file_vectorization_concurrency": 16},
         }
     )
 
     assert config.queue_workers.external_parse.max_concurrent == 9
     assert config.queue_workers.add_resource.max_concurrent == 7
     assert config.queue_workers.reindex.max_concurrent == 6
-    assert config.queue_workers.add_resource.file_operation_concurrency == 20
-    assert config.queue_workers.add_resource.file_vectorization_concurrency == 12
     assert config.queue_workers.session_commit.max_concurrent == 50
     assert config.queue_workers.external_task.max_concurrent == 11
-    assert config.reindex.file_vectorization_concurrency == 16
+    assert set(config.queue_workers.add_resource.__class__.model_fields) == {"max_concurrent"}
+    assert "reindex" not in config.__class__.model_fields
 
 
 @pytest.mark.parametrize("value", [0, -1])
@@ -183,6 +235,9 @@ def test_queue_worker_concurrency_rejects_non_positive_value(value):
 
 def test_parser_and_compile_api_validation():
     assert ParserApiConfig(max_concurrent=9) == ParserApiConfig()
+    assert ParserApiConfig(enable=True, host="https://parser.example.test").api_key == ""
+    with pytest.raises(ValueError, match="parser_api.host is required"):
+        ParserApiConfig(enable=True)
     with pytest.raises(ValueError, match="compile_api.base_url must include scheme"):
         CompileApiConfig(base_url="compile.example.com")
 
@@ -324,7 +379,7 @@ def test_openviking_config_ignores_unknown_fields(monkeypatch, caplog):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
     logger = logging.getLogger("openviking_cli.utils.config.open_viking_config")
     monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
-    caplog.set_level(logging.WARNING, logger=logger.name)
+    caplog.set_level(logging.INFO, logger=logger.name)
     config = OpenVikingConfig.from_dict(
         {
             "retired_section": {"api_key": "test-secret"},
@@ -372,16 +427,11 @@ def test_openviking_config_ignores_unknown_fields(monkeypatch, caplog):
     assert "retired_field" not in dumped["glob"]
     assert "unknown_memory_field" not in dumped["memory"]
     assert "cache" not in dumped["storage"]["agfs"]
-    assert "Ignoring unknown config field 'storage.agfs.cache'" in caplog.text
-    assert "Ignoring unknown config field 'parsers.markdown.unknown_field'" in caplog.text
-    assert "Ignoring unknown config field 'vlm.credentials[0].retired_field'" in caplog.text
-    assert "Ignoring unknown config field 'ingest.harnesses.claude_code'" not in caplog.text
-    assert "Ignoring unknown config field 'ingest.harnesses.codex'" not in caplog.text
-    assert "Ignoring unknown config field 'ingest.harnesses.codex.retired_field'" in caplog.text
-    assert (
-        "Ignoring unknown config field 'ingest.harnesses.codex.commit.retired_field'" in caplog.text
-    )
-    assert "ingest.memory_policy" not in caplog.text
+    assert "unknown_field" not in dumped["markdown"]
+    assert "retired_field" not in dumped["vlm"]["credentials"][0]
+    assert "retired_field" not in dumped["ingest"]["harnesses"]["codex"]
+    assert "retired_field" not in dumped["ingest"]["harnesses"]["codex"]["commit"]
+    assert "unknown configuration fields ignored" in caplog.text
     assert "test-secret" not in caplog.text
 
 
@@ -453,25 +503,12 @@ def test_openviking_config_ignores_deprecated_agent_memory_enabled(monkeypatch):
 def test_openviking_config_ignores_deprecated_code_summary_mode(monkeypatch):
     monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/codex-no-config.json")
 
-    from openviking_cli.utils.config import parser_config
-    from openviking_cli.utils.config.open_viking_config import (
-        OpenVikingConfig,
-        OpenVikingConfigSingleton,
+    config = OpenVikingConfig.from_dict(
+        {"parsers": {"code": {"code_summary_mode": "llm", "max_line_length": 120}}}
     )
 
-    warnings: list[str] = []
-    monkeypatch.setattr(
-        parser_config.logger,
-        "warning",
-        lambda message, *args, **kwargs: warnings.append(message % args if args else message),
-    )
-
-    config = OpenVikingConfig.from_dict({"code": {"code_summary_mode": "llm"}})
-
-    assert not hasattr(config.code, "code_summary_mode")
-    assert any("code.code_summary_mode is deprecated and ignored" in item for item in warnings)
-
-    OpenVikingConfigSingleton.reset_instance()
+    assert config.code.max_line_length == 120
+    assert "code_summary_mode" not in config.to_dict()["code"]
 
 
 def test_openviking_config_transaction_redo_recovery_enabled_defaults_true(monkeypatch):
@@ -642,7 +679,7 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
             "{"
             '"storage": {"workspace": "%s"}, '
             '"log": {"output": "file", "level": "INFO", '
-            '"format": "%%(message)s", "rotation": false, "rotation_days": 7, '
+            '"rotation": false, "rotation_days": 7, '
             '"rotation_interval": "midnight"}'
             "}"
         )
@@ -664,13 +701,13 @@ def test_early_logger_initialization_is_reconfigured_to_file_output(tmp_path, mo
         assert openviking_root.handlers == uvicorn_root.handlers
 
         refreshed_logger.info("child-line")
-        uvicorn_access.info("access-line")
+        logging.getLogger("uvicorn.error").info("uvicorn-line")
         for handler in openviking_root.handlers:
             handler.flush()
 
         content = (tmp_path / "log" / "openviking.log").read_text(encoding="utf-8")
         assert content.count("child-line") == 1
-        assert content.count("access-line") == 1
+        assert content.count("uvicorn-line") == 1
     finally:
         for name in ("openviking", "uvicorn", "uvicorn.error", "uvicorn.access", logger_name):
             logger = logging.getLogger(name)

@@ -307,9 +307,11 @@ class TestSessionConversationToolFiltering:
         provider = SessionExtractContextProvider(
             messages=messages,
             vlm_config=fake_vlm,
+            output_language_override="zh-CN",
         )
 
         await provider.prepare_extraction_messages()
+        assert provider.get_output_language() == "zh-CN"
         prompt_message = provider._build_conversation_message()
 
         assert "Please remember this image." in prompt_message["content"]

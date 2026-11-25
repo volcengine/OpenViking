@@ -27,8 +27,8 @@ from openviking.connector.auth import (
     is_external_feishu_auth,
     validate_feishu_auth_args,
 )
-from openviking.core.namespace import is_content_root_uri
-from openviking.observability.http_error_context import sanitize_public_http_error
+from openviking.core.namespace import classify_uri, is_content_root_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.network import (
@@ -69,6 +69,7 @@ from openviking.server.user_config import (
 )
 from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
 from openviking.storage.acl import AclAction, AclSpec
+from openviking.storage.expr import And, Eq, In, Or, PathScope
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import QueueManager, get_queue_manager
 from openviking.storage.queuefs.add_resource_msg import AddResourcePhase
@@ -86,7 +87,7 @@ from openviking.utils.git_auth import (
 )
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.media_processor import _smart_stem
-from openviking.utils.network_guard import ensure_public_remote_target
+from openviking.utils.network_guard import RequestValidator, ensure_public_remote_target
 from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessingPreparation, SkillProcessor
@@ -133,6 +134,7 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "enforce_public_remote_targets",
         "resource_lock",
         "stage_callback",
+        "target_was_reserved",
         "args",
         "strict",
         "source_name",
@@ -157,6 +159,9 @@ _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
         "target_validator",
         "on_task_created",
         "task_id",
+        "api_key",
+        "parser_api",
+        "parser_api_config",
     }
 )
 _ADD_RESOURCE_TRANSIENT_ARGS = frozenset({"tos_signature", "tos_access"})
@@ -246,7 +251,6 @@ class ResourceService:
         self._runtime_config_manager = runtime_config_manager
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._connector_delegate: Optional["ConnectorDelegate"] = None
-        self.compile_versions: Optional[Any] = None
 
     def set_dependencies(
         self,
@@ -273,23 +277,36 @@ class ResourceService:
     async def _ensure_resource_target_available(
         self, uri: str, ctx: RequestContext, *, is_parent: bool = False
     ) -> None:
-        """Reject active Compile output destinations in this account before ingestion.
+        """Reject ingestion overlapping tagged output nodes without reading compile configuration.
 
-        A parent only supplies a new child's location; an exact destination mirrors
-        its subtree and must also exclude Compile targets nested beneath it.
+        Parent destinations only test ancestors; exact destinations also protect tagged
+        descendants whose content an ingestion replacement could overwrite.
         """
-        if self.compile_versions is None or not uri:
+        if not uri:
             return
         uri = normalize_storage_target_uri(uri)
         await self._viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
-        target = await self.compile_versions.owning_target(ctx.account_id, uri)
-        if target is None and not is_parent:
-            targets = await self.compile_versions._targets_under(ctx.account_id, uri)
-            if targets:
-                target = targets[0]
-        if target is not None:
+        store = self._viking_fs._get_vector_store()
+        if store is None:
+            return
+        namespace = classify_uri(uri)
+        boundary = (namespace.content_index or 0) + 1
+        ancestors = [
+            "viking://" + "/".join(namespace.parts[:length])
+            for length in range(boundary, len(namespace.parts) + 1)
+        ]
+        scope = Or([Eq("uri", ancestor) for ancestor in ancestors])
+        if not is_parent:
+            scope = Or([scope, PathScope("uri", uri)])
+        records, _ = await store.scroll(
+            filter=And([scope, In("level", [0, 1]), Eq("search_tags", "compile_target=true")]),
+            limit=1,
+            output_fields=["uri"],
+            ctx=ctx,
+        )
+        if records:
             raise ConflictError(
-                "Add-resource destination overlaps a Compile target.",
+                "Add-resource destination overlaps a tagged Compile output directory.",
                 resource="COMPILE_TARGET",
             )
 
@@ -306,19 +323,11 @@ class ResourceService:
         if not execution_task_id or self._watch_manager is None:
             return
         applied = await self._watch_manager.settle(task_id, execution_task_id)
-        sanitized_error = (
-            sanitize_public_http_error(code="WATCH_EXECUTION_FAILED", message=error).message
-            if error
-            else None
-        )
         logger.info(
-            "[ResourceService] Watch first round recorded: watch_task_id=%s status=%s "
-            "execution_task_id=%s applied=%s%s",
-            task_id,
-            status,
-            execution_task_id,
+            "Watch execution recorded applied=%s%s",
             applied,
-            f" error={sanitized_error}" if sanitized_error else "",
+            " error=[REDACTED]" if error else "",
+            extra={"task_id": task_id, "task_status": status, "target_id": execution_task_id},
         )
 
     def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -337,6 +346,7 @@ class ResourceService:
                 "temp_file_id",
                 "git_head_sha_hint",
                 "resource_lock",
+                "target_was_reserved",
             }:
                 continue
             try:
@@ -494,8 +504,28 @@ class ResourceService:
                 except ConflictError:
                     raise
                 except Exception as e:
-                    logger.warning(
-                        f"[ResourceService] Failed to create watch task for {watch_to}: {e}"
+                    log_failure = (
+                        logger.info
+                        if isinstance(e, OpenVikingError)
+                        and e.code
+                        in {
+                            "INVALID_ARGUMENT",
+                            "NOT_FOUND",
+                            "PERMISSION_DENIED",
+                            "UNAUTHENTICATED",
+                            "FAILED_PRECONDITION",
+                            "ALREADY_EXISTS",
+                            "CONFLICT",
+                            "RESOURCE_EXHAUSTED",
+                        }
+                        else logger.error
+                    )
+                    log_failure(
+                        "Watch task creation failed",
+                        extra={
+                            "target_id": safe_uri_for_log(watch_to),
+                            "error_type": type(e).__name__,
+                        },
                     )
                     raise
             elif to:
@@ -504,7 +534,10 @@ class ResourceService:
                 except ConflictError:
                     raise
                 except Exception as e:
-                    logger.warning(f"[ResourceService] Failed to cancel watch task for {to}: {e}")
+                    logger.info(
+                        "Watch task cancellation skipped after failure",
+                        extra={"target_id": safe_uri_for_log(to), "error_type": type(e).__name__},
+                    )
 
     async def _normalize_add_resource_args(
         self,
@@ -712,15 +745,15 @@ class ResourceService:
             await self._viking_fs.rm(
                 root_uri,
                 recursive=True,
+                no_vector=True,
                 ctx=ctx,
                 lease_ref=resource_lock,
             )
             return True
         except Exception as exc:
-            logger.warning(
-                "[ResourceService] Failed to clean empty reserved target %s: %s",
-                root_uri,
-                exc,
+            logger.info(
+                "Empty reserved target cleanup failed; retaining target",
+                extra={"target_id": safe_uri_for_log(root_uri), "error_type": type(exc).__name__},
             )
             return False
 
@@ -802,7 +835,13 @@ class ResourceService:
 
             async def dispatch() -> str:
                 nonlocal enqueued
-                with bind_task_context(task.task_id, task_account_id, task_user_id):
+                with bind_task_context(
+                    task.task_id,
+                    task_account_id,
+                    task_user_id,
+                    task_type=task.task_type,
+                    mode=task.meta.get("mode"),
+                ):
                     result = await get_queue_manager().enqueue(queue_name, msg.to_dict())
                 enqueued = True
                 if on_enqueued is not None:
@@ -930,6 +969,9 @@ class ResourceService:
                         viking_fs=self._viking_fs,
                         ctx=ctx,
                     )
+            internal_kwargs["target_was_reserved"] = (
+                msg.cleanup_empty_target_on_failure and not msg.defer_target_resolution
+            )
             if msg.defer_target_resolution:
                 from openviking_cli.utils.uri import VikingURI
 
@@ -1165,6 +1207,7 @@ class ResourceService:
             source_info = await self._preflight_git_source(
                 path,
                 auth_config=preflight_git_auth,
+                request_validator=processor_kwargs.get("request_validator"),
                 branch=processor_kwargs.get("branch") or processor_kwargs.get("ref"),
                 commit=processor_kwargs.get("commit"),
             )
@@ -1202,8 +1245,14 @@ class ResourceService:
                 feishu_access_token=token.strip() if isinstance(token, str) else None,
                 feishu_config=feishu_config,
                 **({"feishu_recursive": True} if recursive else {}),
+                **(
+                    {"lark_file": processor_kwargs["lark_file"]}
+                    if processor_kwargs.get("lark_file") is not None
+                    else {}
+                ),
             )
             source_name = source_name or preflight.source_name
+            feishu_kwargs["_feishu_resolved_type"] = preflight.doc_type
             source_info = _ResourceSourceInfo(
                 source_name=source_name,
                 source_path=path,
@@ -1220,13 +1269,13 @@ class ResourceService:
             if direct_understanding:
                 understanding_response_id = await self._resource_processor.submit_understanding(
                     path,
+                    ctx=ctx,
                     **feishu_kwargs,
                 )
                 if watch_auth_state is None:
                     task_auth = {}
             else:
-                source_type, _ = FeishuAccessor._parse_feishu_url(path)
-                if source_type in {"folder", "file"} or recursive:
+                if preflight.doc_type in {"folder", "file", "slides"} or recursive:
                     if processor_kwargs.get("lark_file") is not None:
                         raise InvalidArgumentError(
                             "Feishu sources requiring preparation use args.feishu_access_token "
@@ -1272,12 +1321,15 @@ class ResourceService:
                     ):
                         if processor_kwargs.get("temp_file_id"):
                             understanding_file_id = (
-                                await self._resource_processor.upload_understanding_file(prepared)
+                                await self._resource_processor.upload_understanding_file(
+                                    prepared, ctx=ctx
+                                )
                             )
                         else:
                             understanding_response_id = (
                                 await self._resource_processor.submit_understanding(
                                     prepared,
+                                    ctx=ctx,
                                     **processor_kwargs,
                                 )
                             )
@@ -1645,6 +1697,7 @@ class ResourceService:
         source: str,
         *,
         auth_config: Optional[GitHttpAuthConfig] = None,
+        request_validator: Optional[RequestValidator] = None,
         branch: Optional[str] = None,
         commit: Optional[str] = None,
     ) -> _ResourceSourceInfo:
@@ -1674,15 +1727,15 @@ class ResourceService:
             ref = "HEAD"
             ls_remote_args = ["git", "ls-remote", repo_url, "HEAD"]
 
+        env = build_git_http_auth_env(auth_config, repo_url) if auth_config is not None else None
+        env = overlay_parser_subprocess_env(
+            ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
+            env,
+            request_validator=request_validator,
+        )
+
         proc = None
         try:
-            env = (
-                build_git_http_auth_env(auth_config, repo_url) if auth_config is not None else None
-            )
-            env = overlay_parser_subprocess_env(
-                ParserNetworkContext(ParserNetworkOperation.GIT_COMMAND, repo_url),
-                env,
-            )
             proc = await asyncio.create_subprocess_exec(
                 *ls_remote_args,
                 env=env,
@@ -2555,7 +2608,10 @@ class ResourceService:
             )
             result["memory_linking"] = link_result
         except Exception as exc:
-            logger.warning("[ResourceService] Failed to link resource reason memory: %s", exc)
+            logger.info(
+                "Resource ingestion completed without reason memory linking",
+                extra={"error_type": type(exc).__name__, "degraded": True},
+            )
             result.setdefault("warnings", []).append(f"Memory linking failed: {exc}")
 
     @staticmethod
@@ -2641,7 +2697,10 @@ class ResourceService:
             initial_run_id=initial_run_id,
             lease_ref=lease_ref,
         )
-        logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
+        logger.info(
+            "Watch task created",
+            extra={"task_id": task.task_id, "target_id": safe_uri_for_log(to_uri)},
+        )
         return task
 
     async def _handle_watch_task_cancellation(self, to_uri: str, ctx: RequestContext) -> None:
@@ -2655,12 +2714,20 @@ class ResourceService:
         if not watch_manager:
             return
 
+        from openviking.connector.delegate import ConnectorDelegate
+
         existing_task = await watch_manager.get_task_by_uri(
             to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             role=str(ctx.role),
         )
+        if existing_task and ConnectorDelegate.is_watch_auth_state(existing_task.auth_state):
+            logger.debug(
+                "Connector watch task deactivation skipped",
+                extra={"task_id": existing_task.task_id, "target_id": safe_uri_for_log(to_uri)},
+            )
+            return
         if existing_task:
             await watch_manager.update_task(
                 task_id=existing_task.task_id,
@@ -2671,7 +2738,8 @@ class ResourceService:
                 invalidate_source_checkpoint=True,
             )
             logger.info(
-                f"[ResourceService] Deactivated watch task {existing_task.task_id} for {to_uri}"
+                "Watch task deactivated",
+                extra={"task_id": existing_task.task_id, "target_id": safe_uri_for_log(to_uri)},
             )
 
     async def add_skill(
@@ -2687,6 +2755,8 @@ class ResourceService:
         source_metadata: Optional[Dict[str, Any]] = None,
         task_id: Optional[str] = None,
         owner_lease_ref: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None,
+        before_hash: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -2716,23 +2786,6 @@ class ResourceService:
         outcome_recorded = False
         telemetry_id = get_current_telemetry().telemetry_id
         telemetry_cleanup_scheduled = False
-
-        async def record_package(skill_uri: str, lease_ref: Any) -> None:
-            """Record an ordinary Skill package operation under its content lease."""
-            if (
-                self.compile_versions is not None
-                and owner_lease_ref is None
-                and (source_metadata or {}).get("source") != "compile"
-                and (target := await self.compile_versions.owning_target(ctx.account_id, skill_uri))
-                and await self.compile_versions._write_meta(ctx.account_id, target)
-            ):
-                await self.compile_versions.record_operation(
-                    [skill_uri],
-                    ctx,
-                    "agent_revise",
-                    {},
-                    lambda: self.compile_versions.register_transfer(ctx),
-                )
 
         try:
             # Establish ownership before any queue work can start. Descendant
@@ -2764,6 +2817,8 @@ class ResourceService:
                     ctx.account_id,
                     ctx.user.user_id,
                     work_id=running_work_id,
+                    task_type=task.task_type,
+                    mode=task.meta.get("mode"),
                 ):
                     if isinstance(data, SkillProcessingPreparation):
                         result = await self._skill_processor.process_prepared_skill(
@@ -2775,7 +2830,8 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
-                            on_package_written=record_package,
+                            request_id=request_id,
+                            before_hash=before_hash,
                         )
                     else:
                         result = await self._skill_processor.process_skill(
@@ -2789,7 +2845,8 @@ class ResourceService:
                             target_uri=target_uri,
                             source_metadata=source_metadata,
                             owner_lease_ref=owner_lease_ref,
-                            on_package_written=record_package,
+                            request_id=request_id,
+                            before_hash=before_hash,
                         )
                 if isinstance(result, dict) and "root_uri" not in result and result.get("uri"):
                     result["root_uri"] = result["uri"]
@@ -2876,11 +2933,11 @@ class ResourceService:
                 unregister_telemetry(telemetry_id)
 
     async def cancel_skill_processing(self, task_id: str, ctx: RequestContext) -> None:
-        """Stop one failed update's work before its caller restores the old package."""
+        """Stop one failed update's work before its caller releases the package lock."""
         from openviking.service.task_tracker import get_task_tracker
 
         tracker = get_task_tracker()
-        task = await tracker.cancel_skill_update_for_rollback(
+        task = await tracker.cancel_skill_processing(
             task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
         )
         if task is None:
@@ -2924,20 +2981,36 @@ class ResourceService:
         self._ensure_initialized()
         return await self._resource_processor.summarize(resource_uris, ctx, **kwargs)
 
-    async def wait_processed(self) -> Dict[str, Any]:
+    async def wait_processed(self, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete.
 
         Returns:
             Queue status
         """
         qm = get_queue_manager()
-        status = await qm.wait_complete()
+        if ctx is None:
+            status = await qm.wait_complete()
+        else:
+            from openviking.service.task_tracker import get_task_tracker
+            from openviking_cli.exceptions import UnavailableError
+
+            tracker = get_task_tracker()
+            try:
+                while await tracker.has_work(account_id=ctx.account_id, exclude_inline=True):
+                    await asyncio.sleep(5)
+                status = await qm.check_status(account_id=ctx.account_id)
+            except Exception as exc:
+                logger.exception("Account wait task-store query failed")
+                raise UnavailableError("task store", "account wait query failed") from exc
         return {
             name: {
                 "processed": s.processed,
                 "requeue_count": getattr(s, "requeue_count", 0),
                 "error_count": s.error_count,
-                "errors": [{"message": e.message} for e in s.errors],
+                "errors": [
+                    {"message": e.message if ctx is None else "Queue processing error"}
+                    for e in s.errors
+                ],
             }
             for name, s in status.items()
         }

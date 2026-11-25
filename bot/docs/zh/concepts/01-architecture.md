@@ -36,7 +36,7 @@ VikingBot 是 OpenViking 仓库内的多渠道 AI Agent 运行时。它将命令
 |------|------|----------|
 | **Channels** | 适配平台事件、媒体、权限和回复格式 | `vikingbot/channels/` |
 | **MessageBus** | 解耦消息接收、Agent 执行和结果交付 | `vikingbot/bus/` |
-| **AgentLoop** | 驱动模型与工具多轮迭代 | `vikingbot/agent/loop.py` |
+| **AgentLoop** | 驱动模型与工具多轮迭代 | `vikingbot/agent/loop/loop.py` |
 | **Context** | 组装身份、工作区、Skill、记忆与历史 | `vikingbot/agent/context.py` |
 | **Providers** | 统一模型、流式输出和工具调用协议 | `vikingbot/providers/` |
 | **Tools & Sandbox** | 提供可执行能力及其运行边界 | `vikingbot/agent/tools/`、`vikingbot/sandbox/` |

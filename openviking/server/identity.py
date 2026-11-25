@@ -7,14 +7,19 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, List, Optional
 
 if TYPE_CHECKING:
     from openviking.storage.acl import AclAction
     from openviking.storage.expr import FilterExpr
     from openviking.storage.viking_fs import VikingFS
 
-from openviking.core.global_policy import GlobalPolicyError, PolicyScopePlan
+from openviking.core.global_policy import (
+    GlobalAccessPolicy,
+    GlobalPolicyError,
+    PolicyPathScope,
+    PolicyScopePlan,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -162,6 +167,9 @@ class AccessDecision(str, Enum):
 
 @dataclass(frozen=True)
 class DataAccessScope:
+    # Owner-root files exposed by default to delegated reads and listings.
+    _DEFAULT_READABLE_FILES: ClassVar[tuple[str, ...]] = ("GLOBAL_POLICY.md",)
+
     owner_user_id: str
     operation: AclAction
     plan: PolicyScopePlan
@@ -169,6 +177,19 @@ class DataAccessScope:
     request_root: str
     requested_targets: tuple[str, ...]
     effective_targets: tuple[str, ...]
+
+    @classmethod
+    def read_plan(cls, policy: GlobalAccessPolicy | None) -> PolicyScopePlan:
+        """Combine ordinary policy grants with default-readable owner-root files."""
+        plan = policy.restrict_scope() if policy is not None else PolicyScopePlan("denied", (), ())
+        return PolicyScopePlan(
+            "allowed",
+            (
+                *plan.includes,
+                *(PolicyPathScope(name, False) for name in cls._DEFAULT_READABLE_FILES),
+            ),
+            tuple(s for s in plan.excludes if s.path not in cls._DEFAULT_READABLE_FILES),
+        )
 
     def query_filter(self) -> FilterExpr:
         """Filter before query limits; public paths retain actor ACL filtering."""
@@ -245,7 +266,8 @@ class DataAccessScope:
         if not any(uri == t or uri.startswith(t + "/") for t in self.requested_targets):
             return AccessDecision.DENIED
         path = uri[len(self.request_root) + 1 :] or None
-        if path == "GLOBAL_POLICY.md" or (path and path.startswith("GLOBAL_POLICY.md/")):
+        # Default-readable entries grant only the file itself, never a subtree.
+        if path and "/" in path and path.split("/", 1)[0] in self._DEFAULT_READABLE_FILES:
             return AccessDecision.DENIED
         if path is not None and (path == ".overview.md" or path.endswith("/.overview.md")):
             if not self.allows_overview(uri):

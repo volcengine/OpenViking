@@ -1,0 +1,87 @@
+/**
+ * 浮层的组件变量，颜色取自包级主题基线 `src/theme.css`。宿主想换肤时改基线，
+ * 只想调这一处时覆盖下面任意一条。
+ *
+ * Component variables of the surface, derived from the package-level baseline in
+ * `src/theme.css`. A host re-skins by overriding the baseline, or adjusts just
+ * this component by overriding any variable below.
+ */
+.ov-tooltip {
+  /* 提示形态：深色底、浅色字，与周围内容拉开层次，读一眼就够。 */
+  --ov-ui-tooltip-bg: var(
+    --ov-ui-color-tooltip-bg,
+    var(--ov-ui-tooltip-bg-default, #1f2329)
+  );
+  --ov-ui-tooltip-text: var(
+    --ov-ui-color-tooltip-text,
+    var(--ov-ui-tooltip-text-default, #ffffff)
+  );
+  --ov-ui-tooltip-border: transparent;
+  --ov-ui-tooltip-radius: var(--ov-ui-radius, 6px);
+  --ov-ui-tooltip-offset: 6px;
+
+  position: fixed;
+  z-index: 1000;
+  box-sizing: border-box;
+  max-width: 320px;
+  padding: 6px 8px;
+  border: 1px solid var(--ov-ui-tooltip-border);
+  border-radius: var(--ov-ui-tooltip-radius);
+  background: var(--ov-ui-tooltip-bg);
+  color: var(--ov-ui-tooltip-text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: break-word;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 12%);
+  animation: ov-tooltip-enter 120ms ease-out;
+}
+
+/*
+ * 点击展开的浮层放的是可交互内容（菜单、按钮），改用与页面一致的浅色底：
+ * 深色块里放列表既压不住层次，也和宿主的菜单风格不一致。
+ *
+ * The surface opened on click holds interactive content — menus, buttons — so it
+ * switches to the same light palette as the page: a dark block neither carries the
+ * hierarchy of a list nor matches the host's menu styling.
+ */
+.ov-tooltip[role='dialog'] {
+  --ov-ui-tooltip-bg: var(
+    --ov-ui-color-bg-1,
+    var(--ov-ui-bg-1-default, #ffffff)
+  );
+  --ov-ui-tooltip-text: var(
+    --ov-ui-color-text-1,
+    var(--ov-ui-text-1-default, #0b0b0f)
+  );
+  --ov-ui-tooltip-border: var(
+    --ov-ui-color-border-2,
+    var(--ov-ui-border-2-default, #e1e4f2)
+  );
+
+  max-width: 360px;
+  min-width: 120px;
+  padding: 4px;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 12%);
+}
+
+.ov-tooltip[popover] {
+  inset: auto;
+  margin: 0;
+}
+
+@keyframes ov-tooltip-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ov-tooltip {
+    animation: none;
+  }
+}

@@ -412,3 +412,47 @@ fn retargeting_config_symlink_during_rotation_preserves_both_files() {
     );
     assert!(String::from_utf8_lossy(&result.stderr).contains("Config changed during key rotation"));
 }
+
+#[test]
+fn only_direct_compile_warns_and_stdout_is_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let inputs =
+        "--from viking://resources/a --to viking://resources/b --skill viking://agent/skills/w";
+    let name = "--compile-name wiki";
+    let args = r#"{"owner_user_id":"alice"}"#;
+    let delegated = format!("{name} --args {args}");
+    let create = format!("create {name} {inputs}");
+    let saved = json!({"compile_name": "wiki"});
+    let task = json!({"task_id": "cmp_1", "status": "pending"});
+    for form in [
+        inputs,
+        &create,
+        name,
+        &delegated,
+        "memory",
+        "--skill memory",
+    ] {
+        let result = if form == create { &saved } else { &task };
+        let (url, server) = serve(200, json!({"status": "ok", "result": result}), || {});
+        seed(dir.path(), &url);
+        let command = format!("-o json compile {form}");
+        let output = run(dir.path(), &command.split_whitespace().collect::<Vec<_>>());
+        assert!(output.status.success(), "{command}: {output:?}");
+        let request = server.join().unwrap();
+        if form == delegated {
+            let body: Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(
+                body,
+                json!({"compile_name": "wiki", "args": {"owner_user_id": "alice"}})
+            );
+        }
+        assert!(serde_json::from_slice::<Value>(&output.stdout).unwrap()["ok"] == true);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.contains("is no longer recommended"),
+            form == inputs,
+            "{stderr}"
+        );
+    }
+}

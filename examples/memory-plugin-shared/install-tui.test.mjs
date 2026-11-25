@@ -59,6 +59,7 @@ SEL_TRAE=1
 SEL_TRAE_CN=0
 SEL_KIMICODE=0
 SEL_CODEBUDDY=0
+SEL_QODER=0
 tui_finish_selection
 printf '%s\\n' "$SELECTED_HARNESSES"
 `);
@@ -95,6 +96,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -117,6 +119,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -147,6 +150,7 @@ add_detected_traecode_cli_alias
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 tui_reset_bin_selection
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
@@ -589,10 +593,10 @@ test("a non-interactive run with no server says so and how to re-run", (t) => {
   assert.ok(result.stdout.indexOf("Review") < result.stdout.search(notice));
   assert.match(result.stdout, /curl -fsSL https:\/\/openviking\.ai\/install \| bash -s -- --yes --harness dsh --url <server-url> --api-key <api-key>/);
   assert.match(result.stdout, /\[4\/4\] Validation/);
-  assert.match(result.stdout, /DeepSeek Harness\n {4}Next: start a new dsh session: dsh --profile web\n {4}Updates: re-run this installer\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
+  assert.match(result.stdout, /DeepSeek Harness\n {4}Next: start a new dsh session: dsh --profile web\n {4}Updates: re-run this installer\n {4}Verify: node ~\/\.dsh\/profiles\/web\/node_modules\/@openviking\/dsh-memory-plugin\/scripts\/ov-memory-doctor\.mjs\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
   assert.equal(JSON.parse(readFileSync(join(home, ".openviking", "ovcli.conf"), "utf8")).url, "http://127.0.0.1:1933");
   // The unreachable server is repeated at the end, then where the agent goes next.
-  assert.match(result.stdout, /!! {2}Not done:\n {6}- Cannot reach http:\/\/127\.0\.0\.1:1933\. If the server is not running yet, start it before using the plugin\.\n==> Onboarding guide \(for your agent\): https:\/\/docs\.openviking\.ai\/agents\/en\/onboarding\.md\n$/);
+  assert.match(result.stdout, /!! {2}Not done:\n {6}- Cannot reach http:\/\/127\.0\.0\.1:1933\. If the server is not running yet, start it before using the plugin\.\n==> Onboarding guide \(for your agent\): https:\/\/docs\.openviking\.ai\/agents\/en\/onboarding\.md\n==> Using another edition of the guide \(such as the team edition\)\? Follow the link in your prompt instead\.\n$/);
 
   // Once a server is configured, a re-run has nothing to warn about.
   const again = run(["--harness", "dsh", "--lang", "en", "--yes"]);
@@ -601,18 +605,23 @@ test("a non-interactive run with no server says so and how to re-run", (t) => {
 });
 
 test("what was asked for but not installed is listed again just before the onboarding link", (t) => {
-  const { run } = detachedInstaller(t);
+  const { home, run: runWithPath } = detachedInstaller(t);
+  // pi is selected but not on PATH; dsh is. The directory node itself sits in
+  // may hold a real pi, so node is reached through a directory of its own.
+  const nodeBin = join(home, "node-bin");
+  mkdirSync(nodeBin);
+  symlinkSync(process.execPath, join(nodeBin, "node"));
+  const run = (args) => runWithPath(args, { PATH: `${join(home, "bin")}:${nodeBin}:/usr/bin:/bin` });
 
-  // pi is selected but not on PATH; dsh is.
   const result = run(["--harness", "dsh,pi", "--lang", "en", "--yes"]);
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
   const tail = result.stdout.slice(result.stdout.lastIndexOf("Not done:"));
-  assert.match(tail, /^Not done:\n {6}- Cannot reach [^\n]+\n {6}- pi CLI not found; skipping pi extension install\.\n==> Onboarding guide \(for your agent\): \S+\n$/);
+  assert.match(tail, /^Not done:\n {6}- Cannot reach [^\n]+\n {6}- pi CLI not found; skipping pi extension install\.\n==> Onboarding guide \(for your agent\): \S+\n==> Using another edition of the guide[^\n]*\n$/);
 
   const zh = run(["--harness", "dsh,pi", "--lang", "zh", "--yes"]);
   assert.equal(zh.status, 0, `${zh.stdout}\n${zh.stderr}`);
-  assert.match(zh.stdout, /未完成：\n {6}- 无法连接[^\n]+\n {6}- 未找到 pi 命令，跳过 pi 扩展安装。\n==> 接入引导（给 Agent 看）： https:\/\/docs\.openviking\.net\/agents\/zh\/onboarding\.md\n$/);
+  assert.match(zh.stdout, /未完成：\n {6}- 无法连接[^\n]+\n {6}- 未找到 pi 命令，跳过 pi 扩展安装。\n==> 接入引导（给 Agent 看）： https:\/\/docs\.openviking\.net\/agents\/zh\/onboarding\.md\n==> 用的是另一版接入引导（例如团队版）？以提示词里给的链接为准。\n$/);
 });
 
 test("run from inside a dsh session, the plugin goes into that session's profile", (t) => {
@@ -742,6 +751,8 @@ test("Linux never offers DeepSeek Harness Desktop", (t) => {
 
   const result = runInstallerPrelude(`
 HAVE_CURSOR=0
+HAVE_TRAE=0
+HAVE_TRAE_CN=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -886,4 +897,20 @@ test("without Node.js, a Mac with Desktop is told how to install from its Plugin
   assert.match(result.stdout, /Plugins → Add plugin → enter @openviking\/dsh-memory-plugin → Install, then turn it on if its switch is off/);
   assert.match(result.stdout, /ovcli\.conf: \{"url": "<server-url>", "api_key": "<api-key>"\}/);
   assert.equal(log(), "");
+});
+
+test("the TUI menu lists every fixed harness once, ending with the CLI", () => {
+  const result = runInstallerPrelude(`
+TUI_CLAUDE_BINS=""
+TUI_CODEX_BINS=""
+DSH_DESKTOP_OFFERED=0
+idx=0
+while [ "$idx" -lt "$(tui_selectable_count)" ]; do printf '%s\\n' "$(tui_item_at "$idx")"; idx=$((idx + 1)); done
+`);
+
+  assert.equal(result.status, 0, result.stderr);
+  const kinds = result.stdout.trim().split("\n").map((row) => row.split("|")[0]);
+  assert.deepEqual(kinds, [
+    "opencode", "pi", "dsh", "cursor", "trae", "trae-cn", "zcode", "kimicode", "codebuddy", "qoder", "antigravity", "cli",
+  ]);
 });

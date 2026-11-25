@@ -87,14 +87,24 @@ class CohereRerankClient(RerankBase):
                 idx = result["index"]
                 scores[idx] = result["relevance_score"]
 
-            logger.debug(f"[CohereRerank] Reranked {len(documents)} documents")
+            logger.debug(
+                "rerank completed total=%d", len(documents), extra={"total": len(documents)}
+            )
             return scores
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"[CohereRerank] API error: {e.response.status_code} {e.response.text}")
+            logger.info(
+                "rerank request rejected; using vector scores http_status_code=%d degraded=true",
+                e.response.status_code,
+                extra={"http_status_code": e.response.status_code, "degraded": True},
+            )
             return None
         except Exception as e:
-            logger.error(f"[CohereRerank] Rerank failed: {e}")
+            logger.info(
+                "rerank failed; using vector scores error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
             return None
 
     def close(self):

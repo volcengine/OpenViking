@@ -10,11 +10,6 @@ from pathlib import Path
 
 import pytest
 
-
-# Skip the whole module if the native extension is not built locally.
-ragfs_python = pytest.importorskip("ragfs_python")
-
-
 # ---------------- fixtures ----------------
 
 
@@ -42,6 +37,9 @@ author_email = "test@example.com"
 
 [git.local]
 base_dir = "{git_root}"
+
+[git.snapshot.log]
+provider = "none"
 """
     )
 
@@ -66,12 +64,14 @@ enabled = false
 
 
 @pytest.fixture
-def client(git_workspace):
+def client(git_workspace, ragfs_client_type):
     config_path, localfs_root, _ = git_workspace
-    c = ragfs_python.RAGFSBindingClient(git_config_path=str(config_path))
-    # Mount localfs at /local so we can write files into the account tree.
-    c.mount("localfs", "/local", {"local_dir": str(localfs_root)})
-    return c
+    client = ragfs_client_type(git_config_path=str(config_path))
+    try:
+        client.mount("localfs", "/local", {"local_dir": str(localfs_root)})
+        yield client
+    finally:
+        client.close()
 
 
 # ---------------- helper: write a file into account tree ----------------
@@ -88,65 +88,37 @@ def _write(client, account: str, rel_path: str, body: bytes) -> str:
 # ---------------- tests ----------------
 
 
-def test_git_concurrent_commit_error_class_exists():
-    from openviking.pyagfs import GitConcurrentCommitError
-    from openviking.pyagfs.exceptions import AGFSClientError
-    assert issubclass(GitConcurrentCommitError, AGFSClientError)
-
-
 def test_health_reports_git_enabled(client):
     h = client.health()
     assert h["git_enabled"] == "true"
     assert h.get("git_backend") == "local"
 
 
-def test_commit_then_show_roundtrip(client):
-    """Write a file, commit it, then show it back and verify bytes match."""
+def test_git_path_is_file_checks_exact_tree_entry_at_commit(client):
     account = "acct1"
-    _write(client, account, "resources/a.md", b"hello world")
-
-    resp = client.git_commit(
+    path = "resources/proj/a.md"
+    _write(client, account, path, b"tracked file")
+    commit = client.git_commit(
         account=account,
         branch="main",
         message="initial",
         author_name="alice",
         author_email="a@e.com",
-        paths=["resources/a.md"],
+        paths=[path],
     )
-    assert resp["result"] == "created"
-    assert resp["changed"] == 1
-    commit_oid = resp["commit_oid"]
-    assert len(commit_oid) == 40
-
-    shown = client.git_show(
-        account=account,
-        target_ref="main",
-        path="resources/a.md",
+    commit_oid = commit["commit_oid"]
+    assert client.git_path_is_file(account=account, commit_oid=commit_oid, path=path)
+    assert not client.git_path_is_file(
+        account=account, commit_oid=commit_oid, path="resources/proj"
     )
-    assert shown["bytes"] == b"hello world"
-    assert shown["size"] == 11
-
-
-def test_commit_then_show_commit_metadata(client):
-    account = "acct1"
-    _write(client, account, "resources/a.md", b"x")
-    resp = client.git_commit(
-        account=account,
-        branch="main",
-        message="m1",
-        author_name="alice",
-        author_email="a@e.com",
-        paths=["resources/a.md"],
+    assert not client.git_path_is_file(
+        account=account, commit_oid=commit_oid, path="resources/absent"
     )
-    meta = client.git_show(account=account, target_ref="main")
-    assert meta["message"].startswith("m1")
-    assert meta["oid"] == resp["commit_oid"]
-    assert meta["parents"] == []
-    assert meta["author"]["name"] == "alice"
+    with pytest.raises(ValueError, match="full commit OID"):
+        client.git_path_is_file(account=account, commit_oid="main", path=path)
 
 
-def test_restore_roundtrip(client):
-    """Commit v1 → modify → commit v2 → restore v1 → file reverts; HEAD moves to v3."""
+def test_snapshot_show_preview_and_restore_roundtrip(client):
     account = "acct1"
     _write(client, account, "resources/proj/a.md", b"v1-content")
     _write(client, account, "resources/proj/b.md", b"retained in v1")
@@ -159,7 +131,16 @@ def test_restore_roundtrip(client):
         author_email="a@e",
         paths=["resources/proj"],
     )
+    assert v1["result"] == "created"
+    assert v1["changed"] == 2
     v1_oid = v1["commit_oid"]
+    meta = client.git_show(account=account, target_ref="main")
+    assert meta["oid"] == v1_oid
+    assert meta["parents"] == []
+    assert meta["message"].startswith("v1")
+    assert meta["author"]["name"] == "a"
+    blob = client.git_show(account=account, target_ref="main", path="resources/proj/a.md")
+    assert (blob["bytes"], blob["size"]) == (b"v1-content", len(b"v1-content"))
 
     _write(client, account, "resources/proj/a.md", b"v2-content")
     client.rm(f"/local/{account}/resources/proj/b.md")
@@ -185,6 +166,21 @@ def test_restore_roundtrip(client):
         ("resources/proj/b.md", "deleted"),
         ("resources/proj/c.md", "added"),
     ]
+
+    preview = client.git_restore(
+        account=account,
+        branch="main",
+        project_dir="resources/proj",
+        source_commit=v1_oid,
+        author_name="a",
+        author_email="a@e",
+        dry_run=True,
+    )
+    assert preview["result"] == "dry_run"
+    assert {item["path"] for item in preview["diff"]["to_write"]} == {"a.md", "b.md"}
+    assert client.read(f"/local/{account}/resources/proj/a.md") == b"v2-content"
+    assert client.read(f"/local/{account}/resources/proj/c.md") == b"added in v2"
+    assert client.git_show(account=account, target_ref="main")["oid"] == v2_oid
 
     restored = client.git_restore(
         account=account,
@@ -216,37 +212,6 @@ def test_restore_roundtrip(client):
     )
 
 
-def test_restore_dry_run_does_not_mutate(client):
-    account = "acct1"
-    _write(client, account, "resources/proj/a.md", b"v1")
-    v1 = client.git_commit(
-        account=account, branch="main", message="v1",
-        author_name="a", author_email="a@e",
-        paths=["resources/proj/a.md"],
-    )
-
-    _write(client, account, "resources/proj/a.md", b"v2")
-    client.git_commit(
-        account=account, branch="main", message="v2",
-        author_name="a", author_email="a@e",
-        paths=["resources/proj/a.md"],
-    )
-
-    res = client.git_restore(
-        account=account, branch="main",
-        project_dir="resources/proj",
-        source_commit=v1["commit_oid"],
-        author_name="a", author_email="a@e",
-        dry_run=True,
-    )
-    assert res["result"] == "dry_run"
-    assert "diff" in res
-    assert any(item["path"] == "a.md" for item in res["diff"]["to_write"])
-
-    # VFS still holds v2 — dry_run did not write
-    assert client.read(f"/local/{account}/resources/proj/a.md") == b"v2"
-
-
 def test_account_isolation(client):
     """A commit under account A is invisible to account B."""
     _write(client, "acct_a", "resources/a.md", b"x")
@@ -261,17 +226,24 @@ def test_account_isolation(client):
         client.git_show(account="acct_b", target_ref="main")
 
 
-def test_feature_disabled_raises(git_disabled_workspace):
+def test_feature_disabled_raises(git_disabled_workspace, ragfs_client_type):
     from openviking.pyagfs import AGFSNotSupportedError
-    c = ragfs_python.RAGFSBindingClient(git_config_path=str(git_disabled_workspace))
-    with pytest.raises(AGFSNotSupportedError):
-        c.git_commit(
-            account="a", branch="main", message="m",
-            author_name="n", author_email="e",
-        )
+
+    c = ragfs_client_type(git_config_path=str(git_disabled_workspace))
+    try:
+        with pytest.raises(AGFSNotSupportedError):
+            c.git_commit(
+                account="a",
+                branch="main",
+                message="m",
+                author_name="n",
+                author_email="e",
+            )
+    finally:
+        c.close()
 
 
-def test_invalid_backend_at_construct_time(tmp_path):
+def test_invalid_backend_at_construct_time(tmp_path, ragfs_client_type):
     cfg = tmp_path / "bad.toml"
     cfg.write_text(
         """
@@ -281,18 +253,12 @@ backend = "bogus"
 """
     )
     with pytest.raises(Exception) as excinfo:
-        ragfs_python.RAGFSBindingClient(git_config_path=str(cfg))
+        ragfs_client_type(git_config_path=str(cfg))
     assert "unsupported git backend" in str(excinfo.value).lower()
 
 
 def test_cas_conflict_surface(client):
-    """Two commits trying to advance from the same parent — one should win,
-    the other should raise GitConcurrentCommitError.
-
-    We provoke this by writing two different files, then issuing two
-    git_commit calls back-to-back with paths overlapping enough that both
-    actually produce new tree objects.
-    """
+    """Concurrent commits must preserve every acknowledged change on the branch."""
     import threading
 
     from openviking.pyagfs import GitConcurrentCommitError
@@ -310,39 +276,37 @@ def test_cas_conflict_surface(client):
     _write(client, account, "resources/b.md", b"BBB")
 
     errors: list[BaseException] = []
-    results: list[dict] = []
+    committed_paths: list[str] = []
     barrier = threading.Barrier(2)
 
     def do_commit(path: str):
         try:
-            barrier.wait()
-            r = client.git_commit(
-                account=account, branch="main", message=f"commit {path}",
-                author_name="n", author_email="e",
+            barrier.wait(timeout=5)
+            client.git_commit(
+                account=account,
+                branch="main",
+                message=f"commit {path}",
+                author_name="n",
+                author_email="e",
                 paths=[path],
             )
-            results.append(r)
+            committed_paths.append(path)
         except BaseException as e:
             errors.append(e)
 
     t1 = threading.Thread(target=do_commit, args=("resources/a.md",))
     t2 = threading.Thread(target=do_commit, args=("resources/b.md",))
-    t1.start(); t2.start()
-    t1.join(); t2.join()
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
-    # The LocalRefStore mutex + CAS may serialize the two so well that the
-    # second sees the new parent and the conflict never surfaces. In that case
-    # both succeed and form a linear history — that is also correct behavior.
-    # We accept either outcome but verify that NO silent data loss occurs:
-    # if both succeed, the second's commit_oid != the first's; if one fails,
-    # the failure must be GitConcurrentCommitError.
-    if len(errors) == 1:
-        assert isinstance(errors[0], GitConcurrentCommitError), errors[0]
-        assert len(results) == 1
-    else:
-        assert errors == [], errors
-        assert len(results) == 2
-        assert results[0]["commit_oid"] != results[1]["commit_oid"]
+    assert committed_paths and len(committed_paths) + len(errors) == 2
+    assert all(isinstance(error, GitConcurrentCommitError) for error in errors)
+    expected = {"resources/seed.md": b"seed", "resources/a.md": b"AAA", "resources/b.md": b"BBB"}
+    for path in ["resources/seed.md", *committed_paths]:
+        shown = client.git_show(account=account, target_ref="main", path=path)
+        assert shown["bytes"] == expected[path]
 
 
 def test_commit_respects_account_ovgitignore(client):

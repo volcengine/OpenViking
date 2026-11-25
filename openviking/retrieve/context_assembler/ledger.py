@@ -11,9 +11,11 @@ processing, and any failure degrades to "no dedup" rather than failing recall.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, Iterable, Optional, Set
 
 from openviking.server.identity import RequestContext
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -102,7 +104,17 @@ class RecallLedger:
                 ledger._data = parsed
             ledger.status = "ok"
         except Exception as exc:
-            logger.debug("Recall ledger unreadable (%s); starting empty", exc)
+            logger.log(
+                logging.DEBUG
+                if isinstance(exc, (FileNotFoundError, NotFoundError))
+                else logging.INFO,
+                "recall ledger unavailable; starting empty error_type=%s",
+                type(exc).__name__,
+                extra={
+                    "degraded": not isinstance(exc, (FileNotFoundError, NotFoundError)),
+                    "error_type": type(exc).__name__,
+                },
+            )
             ledger._data = {}
             ledger.status = "new"
         return ledger
@@ -169,5 +181,9 @@ class RecallLedger:
                 ctx=self._ctx,
             )
         except Exception as exc:
-            logger.debug("Recall ledger write failed (%s); dedup stays best-effort", exc)
+            logger.info(
+                "recall ledger write failed; continuing without persisted dedup error_type=%s",
+                type(exc).__name__,
+                extra={"degraded": True, "error_type": type(exc).__name__},
+            )
             self.status = "write_failed"

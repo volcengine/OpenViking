@@ -5,9 +5,43 @@ on:
   workflow_dispatch:
 
 jobs:
+  select-languages:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      languages: ${{ steps.select.outputs.languages }}
+    steps:
+    - name: Checkout history for change detection
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Test CodeQL language selection
+      run: python3 -m unittest discover -s tests/misc -p test_codeql_selection.py
+
+    - name: Select changed languages
+      id: select
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        python3 .github/scripts/codeql_plan.py \
+          --event "$EVENT_NAME" --base "$BASE_SHA" --head "$HEAD_SHA" \
+          --output "$GITHUB_OUTPUT"
+
   analyze:
     name: Analyze
+    needs: select-languages
+    if: needs.select-languages.outputs.languages != '[]'
     runs-on: ubuntu-24.04
+    container:
+      image: ${{ vars.CI_UBUNTU24_IMAGE || 'ubuntu:24.04' }}
+      options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
+    defaults:
+      run:
+        shell: bash
     permissions:
       actions: read
       contents: read
@@ -16,13 +50,39 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ 'python', 'cpp' ]
+        language: ${{ fromJSON(needs.select-languages.outputs.languages) }}
 
     steps:
+    - name: Bootstrap Ubuntu test container
+      if: runner.os == 'Linux'
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        packages=(git ca-certificates curl python3 cmake build-essential unzip xz-utils)
+        ready=true
+        for package in "${packages[@]}"; do
+          if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+            ready=false
+            break
+          fi
+        done
+        if "$ready"; then
+          echo "System dependencies are already installed in the CI image."
+          exit 0
+        fi
+        sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+        apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+          -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+          -o APT::Update::Error-Mode=any update
+        apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+          -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+          install -y --no-install-recommends "${packages[@]}"
     - name: Checkout repository
       uses: actions/checkout@v6
       with:
         submodules: recursive
+    - uses: ./.github/actions/linux-test-env
+      if: runner.os == 'Linux'
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -34,14 +94,10 @@ jobs:
       with:
         enable-cache: true
 
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential
-
     - name: Install dependencies
       run: |
-        uv sync --frozen
+        # Install dependencies without invoking the project's native builds.
+        uv sync --frozen --no-install-project
         uv pip install setuptools setuptools_scm cmake wheel
 
     - name: Initialize CodeQL
@@ -52,7 +108,12 @@ jobs:
 
     - name: Build extensions
       if: matrix.language == 'cpp'
-      run: uv run python setup.py build_ext --inplace
+      env:
+        OV_SKIP_OV_BUILD: '1'
+        OV_SKIP_RAGFS_BUILD: '1'
+        OV_SKIP_STUDIO_BUILD: '1'
+      # Compile C++ once after CodeQL initialization so its extractor observes it.
+      run: uv run --no-sync python setup.py build_ext --inplace
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4

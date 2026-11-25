@@ -348,10 +348,15 @@ def scan_directory(
             f"Unsupported: {unsupported_paths[:10]}{'...' if len(unsupported_paths) > 10 else ''}"
         )
         if strict:
-            logger.error(msg)
+            logger.info(
+                "Directory rejected for unsupported files total=%d", len(result.unsupported)
+            )
             raise UnsupportedDirectoryFilesError(msg, unsupported_paths)
         else:
-            logger.warning(msg)
+            logger.info(
+                "Unsupported directory files skipped total=%d degraded=true",
+                len(result.unsupported),
+            )
             result.warnings.append(msg)
 
     result.processable.sort(key=lambda x: x.rel_path)

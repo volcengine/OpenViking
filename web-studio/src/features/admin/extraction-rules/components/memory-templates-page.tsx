@@ -21,7 +21,6 @@ import { Link } from '@tanstack/react-router'
 import {
   ArrowLeftIcon,
   BookOpenTextIcon,
-  BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   RotateCcwIcon,
@@ -48,24 +47,6 @@ const editableFields: Record<EditableMemoryType, string[]> = {
     'description',
     'fields.event_name.description',
     'fields.summary.description',
-    'content_template',
-  ],
-  soul: [
-    'description',
-    'fields.core_truths.description',
-    'fields.boundaries.description',
-    'fields.vibe.description',
-    'fields.continuity.description',
-    'content_template',
-  ],
-  identity: [
-    'description',
-    'fields.creature.description',
-    'fields.name.description',
-    'fields.vibe.description',
-    'fields.avatar.description',
-    'fields.emoji.description',
-    'fields.introduction.description',
     'content_template',
   ],
 }
@@ -242,15 +223,7 @@ export function MemoryTemplatesPage() {
             title={t('memoryTemplates.userGroup')}
             hint={t('memoryTemplates.userGroupHint')}
             icon={<UserRoundIcon className="size-12 stroke-[1.2]" />}
-            types={editableMemoryTypes.slice(0, 4)}
-            templates={templatesQuery.data.templates}
-            onSelect={choose}
-          />
-          <TemplateGroup
-            title={t('memoryTemplates.agentGroup')}
-            hint={t('memoryTemplates.agentGroupHint')}
-            icon={<BotIcon className="size-12 stroke-[1.2]" />}
-            types={editableMemoryTypes.slice(4)}
+            types={editableMemoryTypes}
             templates={templatesQuery.data.templates}
             onSelect={choose}
           />

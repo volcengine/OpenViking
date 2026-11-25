@@ -2,7 +2,7 @@ import base64
 import json
 import re
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 from loguru import logger
 
@@ -635,6 +635,10 @@ class VikingClient:
             return "".join(lines[offset:] if limit == -1 else lines[offset : offset + limit])
         return await self.client.read_raw(uri, offset=offset, limit=limit)
 
+    async def git_show_bytes(self, uri: str, snapshot_id: str) -> bytes:
+        """Read a frozen snapshot blob via git show with the task's authenticated client."""
+        return (await self.client.git_show(snapshot_id, path=uri))["bytes"]
+
     async def download_bytes(self, uri: str) -> bytes:
         client = self.client
         should_close = False
@@ -719,6 +723,10 @@ class VikingClient:
             wait=wait,
         )
 
+    async def write(self, uri: str, content: str, mode: str = "replace") -> Dict[str, Any]:
+        """Write one text file with the task identity and return the OV content receipt."""
+        return await self.client.write(uri, content, mode=mode)
+
     async def batch_write(
         self,
         *,
@@ -727,7 +735,6 @@ class VikingClient:
         wait: bool = True,
         skip_conflicts: bool = False,
         defer_processing: bool = False,
-        edit_source: Literal["manual", "agent", "compile"] = "manual",
     ) -> Dict[str, Any]:
         """Publish a bundle, optionally retaining conflicting targets and reporting their URIs."""
         return await self.client.batch_write(
@@ -737,7 +744,6 @@ class VikingClient:
             options={
                 "skip_conflicts": skip_conflicts,
                 "defer_processing": defer_processing,
-                "edit_source": edit_source,
             },
         )
 
@@ -748,6 +754,8 @@ class VikingClient:
         user_id: Optional[str] = None,
         offset: int = 0,
         limit: int = -1,
+        *,
+        raise_on_error: bool = False,
     ) -> str:
         """读取内容
 
@@ -756,6 +764,7 @@ class VikingClient:
             level: 读取级别 ("abstract" - L0摘要, "overview" - L1概览, "read" - L2完整内容)
             offset: Starting line number (0-indexed); only used for level="read"
             limit: Number of lines to read, -1 means read to end; only used for level="read"
+            raise_on_error: Propagate read errors when the caller must distinguish them from empty files.
         """
         if self._skill_snapshot_ref(uri):
             if level in {"read", "raw"}:
@@ -792,8 +801,12 @@ class VikingClient:
             else:
                 raise ValueError(f"Unsupported level: {level}")
         except FileNotFoundError:
+            if raise_on_error:
+                raise
             return ""
         except Exception as e:
+            if raise_on_error:
+                raise
             logger.warning(f"Failed to read content from {uri}: {e}")
             return ""
         finally:
@@ -858,6 +871,18 @@ class VikingClient:
             "query": query,
             "target_uri": target_uri,
         }
+
+    async def find_mcp_tools(self, query: str, limit: int = 10) -> Dict[str, Any]:
+        """Discover OpenViking-managed MCP tools with complete definitions."""
+        return await self.client.find_mcp_tools(query, limit=limit)
+
+    async def invoke_mcp_tool(
+        self,
+        tool_uri: str,
+        arguments: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Invoke an OpenViking-managed MCP tool using the current identity."""
+        return await self.client.invoke_mcp_tool(tool_uri, arguments=arguments)
 
     async def search_user_memory(self, query: str, user_id: str) -> list[Any]:
         effective_user_id = self._effective_user_id(user_id)

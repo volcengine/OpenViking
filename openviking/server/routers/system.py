@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """System endpoints for OpenViking HTTP Server."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -207,6 +209,7 @@ class WaitRequest(BaseModel):
         deprecated=True,
         description="Deprecated compatibility parameter; accepted and ignored.",
     )
+    scope: Literal["account", "runtime"] | None = None
 
 
 class ConsistencyRequest(BaseModel):
@@ -218,11 +221,15 @@ class ConsistencyRequest(BaseModel):
 @router.post("/api/v1/system/wait", tags=["system"])
 async def wait_processed(
     request: WaitRequest | None = Body(None),
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Wait for all processing to complete."""
     service = get_service()
-    result = await service.resources.wait_processed()
+    result = (
+        await service.resources.wait_processed(ctx=ctx)
+        if request is not None and request.scope == "account"
+        else await service.resources.wait_processed()
+    )
     return Response(status="ok", result=result)
 
 

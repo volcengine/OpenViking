@@ -35,10 +35,6 @@ from pathlib import Path
 
 import pytest
 
-# Skip the whole module if the native extension is not built locally.
-ragfs_python = pytest.importorskip("ragfs_python")
-
-
 # ---------------- config discovery / skip gating ----------------
 
 
@@ -137,6 +133,9 @@ def git_s3_workspace():
         lines.append(f"secret_key = {_toml_quote(s3['secret_key'])}\n")
     lines.append(f"cas_mode = {_toml_quote(s3.get('cas_mode', 'native'))}\n")
     lines.append(f"use_path_style = {_toml_bool(s3.get('use_path_style', True))}\n")
+    lines.append(
+        f"\n[git.snapshot.log.sqlite]\npath = {_toml_quote(str(root / 'snapshot-log.db'))}\n"
+    )
     config_path.write_text("".join(lines))
 
     yield config_path, fs_prefix, s3
@@ -145,9 +144,9 @@ def git_s3_workspace():
 
 
 @pytest.fixture
-def client(git_s3_workspace):
+def client(git_s3_workspace, ragfs_client_type):
     config_path, fs_prefix, s3 = git_s3_workspace
-    c = ragfs_python.RAGFSBindingClient(git_config_path=str(config_path))
+    c = ragfs_client_type(git_config_path=str(config_path))
     # Mount s3fs at /local so the working tree lives on the same S3 backend.
     mount_cfg = {
         "bucket": s3["bucket"],
@@ -161,8 +160,11 @@ def client(git_s3_workspace):
         mount_cfg["access_key_id"] = s3["access_key"]
     if s3.get("secret_key"):
         mount_cfg["secret_access_key"] = s3["secret_key"]
-    c.mount("s3fs", "/local", mount_cfg)
-    return c
+    try:
+        c.mount("s3fs", "/local", mount_cfg)
+        yield c
+    finally:
+        c.close()
 
 
 # ---------------- helpers ----------------
@@ -300,10 +302,7 @@ def test_cross_scope_atomic_snapshot_s3(client):
     )["bytes"] == b"knowledge body"
 
 
-def test_derived_file_rolls_back_with_restore_s3(client):
-    """Derived files (e.g. .abstract.md) created after the source commit are
-    removed when restoring to that earlier commit (design §15.2).
-    """
+def test_restore_leaves_unversioned_derived_file_on_s3(client):
     account = _acct()
     _write(client, account, "resources/proj/a.md", b"A v1")
     src = client.git_commit(
@@ -328,10 +327,6 @@ def test_derived_file_rolls_back_with_restore_s3(client):
         author_name="a", author_email="a@e",
     )
     assert restored["result"] == "applied"
-    assert restored["deleted"] >= 1
-
-    # a.md rolled back, derived file gone from the working tree.
+    assert restored["deleted"] == 0
     assert client.read(f"/local/{account}/resources/proj/a.md") == b"A v1"
-    from openviking.pyagfs import AGFSNotFoundError
-    with pytest.raises(AGFSNotFoundError):
-        client.read(f"/local/{account}/resources/proj/.abstract.md")
+    assert client.read(f"/local/{account}/resources/proj/.abstract.md") == b"derived summary"
