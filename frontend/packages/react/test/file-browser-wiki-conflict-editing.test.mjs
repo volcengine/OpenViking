@@ -27,7 +27,7 @@ const editableBody = (editor) =>
     .map((line) => line.textContent)
     .join('\n');
 
-test('the FileBrowser editor keeps Wiki metadata outside the draft and reports save progress', async () => {
+test('the FileBrowser editor keeps Wiki metadata outside the draft and confirms a successful save', async () => {
   const writing = deferred();
   const { view, fetch } = await mountWikiFile({}, undefined, writing.promise);
   const dashboard = () =>
@@ -83,6 +83,7 @@ test('the FileBrowser editor keeps Wiki metadata outside the draft and reports s
     await act(() => new Promise((resolve) => setTimeout(resolve, 240)));
     await settle();
     assert.equal(wikiSaveNotice(), null);
+    assert.equal(wikiSaveNotice('success')?.content, 'Saved successfully.');
     const write = fetch.calls.find(({ path }) =>
       path.endsWith('/content/write'),
     );
@@ -170,13 +171,14 @@ test('navigating away discards a pending Wiki conflict edit before preview loadi
       view.container.textContent,
       new RegExp(`${otherBody.length} characters`),
     );
+    const otherReads = editReads(otherFile);
 
     await act(async () => preview.resolve());
     await settle();
     assert.equal(activeTab(), otherFile);
     assert.equal(view.container.querySelector('.cm-content'), null);
     assert.equal(editReads(file), dashboardReads);
-    assert.equal(editReads(otherFile), 0);
+    assert.equal(editReads(otherFile), otherReads);
   } finally {
     await view.unmount();
   }

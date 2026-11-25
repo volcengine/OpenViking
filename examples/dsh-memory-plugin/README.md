@@ -129,6 +129,16 @@ range and DSH refuses to load the bundle; `dsh plugin allow-version` grants an e
 exemption if you accept the risk. Local devDependencies and `overrides` stay
 pinned to rc.6 to exercise the minimum supported contract.
 
+## Diagnostics
+
+`scripts/ov-memory-doctor.mjs` checks the profile install, the client configuration, and the server connection, and lists a fix for every problem it finds. The `ov-memory-doctor` skill runs it from inside a session; from a terminal, replace `web` with the profile:
+
+```bash
+node ~/.dsh/profiles/web/node_modules/@openviking/dsh-memory-plugin/scripts/ov-memory-doctor.mjs
+```
+
+`DSH_HOME` moves `~/.dsh`. Options: `--json`, `--offline`, `--timeout <ms>`, `--no-color`.
+
 ## Troubleshooting startup
 
 If startup reports that `@deepseek-ai/dsh-llm` does not export `assertNever`,
@@ -228,6 +238,7 @@ Two consequences follow from the proxy being one process per profile:
 
 The bridge and the skill provider are mounted last in `apply()`, after every
 lifecycle registration, so a proxy that cannot start holds up nothing above it.
+With `mcpEnabled: false` neither is mounted, because the skills direct the model to the MCP tools.
 
 ### Why the skill gets its own provider
 
@@ -279,6 +290,8 @@ The profile's `cordis.patch.yml` can also carry plugin config:
     commitTokenThreshold: 20000
     mcpToolCallTimeoutMs: 60000
 ```
+
+`mcpEnabled: false`, in this block or in `ovcli.conf`'s `plugin` or `plugin.dsh`, mounts neither the OpenViking MCP tools nor the bundled skills; recall, capture, and commit continue.
 
 Recall normally uses `POST /api/v1/search/search` with `mode: "context"`.
 `recallMaxTokens` (`OPENVIKING_RECALL_MAX_TOKENS`) sets this request's
@@ -348,10 +361,10 @@ upgrade adds tools without a bundle release.
 use it only when the user explicitly requests deletion.
 
 The bundle also serves the shared `openviking-memory`, `openviking-skills`,
-`ov-experience-memory`, and `openviking-rule-search` skills from `skills/`
+`ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` skills from `skills/`
 through its own isolated `ctx.skills` provider, so the
 model gets the same guidance the other integrations ship: when to search, read,
-and write, and how to find, use, create, share, and migrate OpenViking skills.
+and write, how to find, use, create, share, and migrate OpenViking skills, and how to diagnose the bundle.
 
 ## Testing
 

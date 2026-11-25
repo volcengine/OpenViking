@@ -19,8 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import re
-import struct
 import threading
 import time
 import traceback
@@ -71,10 +69,6 @@ class CuVSMemoryBudgetError(RuntimeError):
 
 class CuVSNativeRouteError(RuntimeError):
     """Raised when auto mode predicts that a filtered native search is cheaper."""
-
-
-class UnsupportedCuVSFilterError(ValueError):
-    """Raised when a filter cannot be translated to a cuVS prefilter."""
 
 
 class _StalePreparedFilter(RuntimeError):
@@ -235,75 +229,6 @@ def _normalize(vector: Sequence[float]) -> List[float]:
     return [float(value) / norm for value in vector]
 
 
-def _normalize_path(value: str) -> str:
-    stripped = value.strip()
-    return stripped if stripped.startswith("/") else f"/{stripped}"
-
-
-def _path_matches(value: Any, expected: Any, depth: Optional[int]) -> bool:
-    if not isinstance(value, str) or not isinstance(expected, str):
-        return False
-    value_path = _normalize_path(value).rstrip("/") or "/"
-    expected_path = _normalize_path(expected).rstrip("/") or "/"
-    if value_path == expected_path:
-        relative_depth = 0
-    elif expected_path == "/":
-        relative_depth = len([part for part in value_path.split("/") if part])
-    elif value_path.startswith(expected_path + "/"):
-        suffix = value_path[len(expected_path) + 1 :]
-        relative_depth = len([part for part in suffix.split("/") if part])
-    else:
-        return False
-
-    if depth is None or depth < 0:
-        return True
-    return relative_depth <= depth
-
-
-def _parse_depth(para: Any) -> Optional[int]:
-    if para in (None, ""):
-        return None
-    if not isinstance(para, str):
-        raise UnsupportedCuVSFilterError(f"Unsupported path filter parameter: {para!r}")
-    match = re.fullmatch(r"\s*-d=(-?\d+)\s*", para)
-    if not match:
-        raise UnsupportedCuVSFilterError(f"Unsupported path filter parameter: {para!r}")
-    return int(match.group(1))
-
-
-def _value_matches(value: Any, conditions: Sequence[Any]) -> bool:
-    if isinstance(value, list):
-        return any(condition in value for condition in conditions)
-    return value in conditions
-
-
-def _contains(value: Any, substring: Any) -> bool:
-    if not isinstance(substring, str):
-        return False
-    if isinstance(value, str):
-        return substring in value
-    if isinstance(value, list):
-        return any(substring in item for item in value if isinstance(item, str))
-    return False
-
-
-def _in_range(value: Any, node: Mapping[str, Any]) -> bool:
-    if value is None:
-        return False
-    try:
-        if node.get("gt") is not None and not value > node["gt"]:
-            return False
-        if node.get("gte") is not None and not value >= node["gte"]:
-            return False
-        if node.get("lt") is not None and not value < node["lt"]:
-            return False
-        if node.get("lte") is not None and not value <= node["lte"]:
-            return False
-    except TypeError:
-        return False
-    return True
-
-
 def _filter_uses_field_type(
     node: Optional[Mapping[str, Any]],
     field_types: Mapping[str, str],
@@ -325,74 +250,6 @@ def _filter_uses_field_type(
             if isinstance(child, Mapping)
         )
     return False
-
-
-def matches_filter(
-    fields: Mapping[str, Any],
-    node: Optional[Mapping[str, Any]],
-    field_types: Mapping[str, str],
-) -> bool:
-    """Evaluate the scalar-filter subset supported by the cuVS backend.
-
-    The supported DSL is the one emitted by ``CollectionAdapter`` for normal
-    OpenViking search: ``and``, ``or``, ``must``, ``must_not``, ``contains``,
-    ``range``, ``range_out``, and path depth parameters.  Unsupported nodes are
-    rejected so the caller can safely fall back to the native local engine.
-    """
-
-    if not node:
-        return True
-    if not isinstance(node, Mapping):
-        raise UnsupportedCuVSFilterError(f"Filter node must be an object: {node!r}")
-    if "filter" in node and len(node) == 1:
-        nested = node.get("filter")
-        if nested is None:
-            return True
-        if not isinstance(nested, Mapping):
-            raise UnsupportedCuVSFilterError("The filter wrapper must contain an object")
-        return matches_filter(fields, nested, field_types)
-
-    op = str(node.get("op", "")).lower()
-    if op in {"and", "or"}:
-        children = node.get("conds", [])
-        if not isinstance(children, list):
-            raise UnsupportedCuVSFilterError(f"{op} filter conds must be a list")
-        results = [matches_filter(fields, child, field_types) for child in children]
-        return all(results) if op == "and" else any(results)
-
-    field = node.get("field")
-    if not isinstance(field, str):
-        raise UnsupportedCuVSFilterError(f"Filter field must be a string: {node!r}")
-    field_type = str(field_types.get(field, "")).lower()
-    if field_type in {"date_time", "geo_point"}:
-        # Those fields require OpenViking's type conversion logic.  Falling back
-        # avoids subtly different results for timezone and geo comparisons.
-        raise UnsupportedCuVSFilterError(f"cuVS prefilter does not support {field_type} fields")
-    value = fields.get(field)
-
-    if op in {"must", "must_not"}:
-        conditions = node.get("conds", [])
-        if not isinstance(conditions, list):
-            raise UnsupportedCuVSFilterError(f"{op} filter conds must be a list")
-        if field_type == "path":
-            depth = _parse_depth(node.get("para"))
-            matched = any(_path_matches(value, condition, depth) for condition in conditions)
-        else:
-            if node.get("para") not in (None, ""):
-                raise UnsupportedCuVSFilterError(
-                    f"Filter parameters are only supported for path fields: {node!r}"
-                )
-            matched = _value_matches(value, conditions)
-        return matched if op == "must" else not matched
-
-    if op == "contains":
-        return _contains(value, node.get("substring"))
-    if op == "range":
-        return _in_range(value, node)
-    if op == "range_out":
-        return not _in_range(value, node)
-
-    raise UnsupportedCuVSFilterError(f"Unsupported cuVS filter operation: {op!r}")
 
 
 @dataclass(frozen=True)
@@ -427,10 +284,6 @@ class _PackedFP32Rows(Sequence[Sequence[float]]):
     def __iter__(self) -> Iterator[Sequence[float]]:
         for row in self.rows:
             yield memoryview(row).cast("f")
-
-    @property
-    def nbytes(self) -> int:
-        return len(self.rows) * self.dimension * _FP32_BYTES
 
     def iter_packed_batches(
         self,
@@ -519,8 +372,11 @@ class _CuVSRuntime:
         with self.device_scope():
             try:
                 self.cp.get_default_memory_pool().free_all_blocks()
-            except Exception:
-                logger.debug("Could not release unused CuPy memory-pool blocks", exc_info=True)
+            except Exception as _log_error:
+                logger.debug(
+                    "Could not release unused CuPy memory-pool blocks error_type=%s",
+                    type(_log_error).__name__,
+                )
 
     def is_out_of_memory(self, exc: Exception) -> bool:
         out_of_memory_type = getattr(self.cp.cuda.memory, "OutOfMemoryError", ())
@@ -610,21 +466,6 @@ class _CuVSRuntime:
                 self._owned_resources.pop(owned_index)
             self._resource_condition.notify()
 
-    def _prefilter(self, mask: Sequence[bool]):
-        with self.device_scope():
-            return self.filters.from_bitset(self.prepare_filter(mask))
-
-    def prepare_filter(self, mask: Sequence[bool]):
-        """Pack a host mask once and retain its device allocation for reuse."""
-
-        with self.device_scope():
-            word_count = (len(mask) + 31) // 32
-            words = [0] * word_count
-            for index, included in enumerate(mask):
-                if included:
-                    words[index // 32] |= 1 << (index % 32)
-            return self.cp.asarray(words, dtype=self.cp.uint32)
-
     def prepare_filter_words(self, words: NativeFilterWords):
         """Copy an already packed native filter bitmap to the device."""
 
@@ -702,12 +543,8 @@ class _CuVSRuntime:
                 resource_kwargs = {"resources": resources}
                 query_count = len(queries)
                 device_queries = self.cp.asarray(queries, dtype=self.device_dtype)
-                if mask is None:
-                    prefilter = None
-                elif isinstance(mask, self.cp.ndarray) and mask.dtype == self.cp.uint32:
+                if mask is not None:
                     prefilter = self.filters.from_bitset(mask)
-                else:
-                    prefilter = self._prefilter(mask)
                 if self.algorithm == "brute_force":
                     distances, neighbors = self.brute_force.search(
                         index,
@@ -777,12 +614,6 @@ class _CuVSRuntime:
                 self._resource_condition.notify_all()
             owned_resources.clear()
             self.release_index()
-
-
-@dataclass(frozen=True)
-class _Record:
-    vector: bytes
-    fields: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -989,7 +820,7 @@ class CuVSDenseIndex:
             getattr(self._runtime, "search_batch", None)
         ):
             raise ValueError("The configured cuVS runtime does not support batched search")
-        self._records: Dict[int, _Record] = {}
+        self._records: Dict[int, bytes] = {}
         self._snapshot: Optional[_CuVSIndexSnapshot] = None
         self._dirty = True
         self._filter_cache: OrderedDict[str, _CachedFilter] = OrderedDict()
@@ -1021,7 +852,7 @@ class CuVSDenseIndex:
                 daemon=True,
             )
             self._micro_batch_worker.start()
-        logger.info(
+        logger.debug(
             "Initialized cuVS dense index: algorithm=%s metric=%s dimension=%d micro_batching=%s",
             self.algorithm,
             self._metric,
@@ -1037,13 +868,6 @@ class CuVSDenseIndex:
     def size(self) -> int:
         with self._lock:
             return len(self._records)
-
-    @property
-    def host_shadow_nbytes(self) -> int:
-        """Return the compact FP32 vector payload size, excluding Python metadata."""
-
-        with self._lock:
-            return len(self._records) * self.dimension * _FP32_BYTES
 
     @property
     def needs_rebuild(self) -> bool:
@@ -1066,25 +890,12 @@ class CuVSDenseIndex:
             raise RuntimeError("cuVS host vector storage requires 4-byte IEEE FP32 values")
         return packed.tobytes()
 
-    @staticmethod
-    def _parse_fields(value: str) -> Mapping[str, Any]:
-        if not value:
-            return {}
-        try:
-            parsed = json.loads(value)
-        except (TypeError, json.JSONDecodeError):
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-
     def add_candidates(self, candidates: Iterable[CandidateData]) -> None:
         with self._lock:
             for candidate in candidates:
                 if not candidate.vector:
                     continue
-                self._records[int(candidate.label)] = _Record(
-                    vector=self._pack_vector(candidate.vector),
-                    fields=self._parse_fields(candidate.fields),
-                )
+                self._records[int(candidate.label)] = self._pack_vector(candidate.vector)
             self._invalidate()
 
     def upsert(self, records: Iterable[DeltaRecord]) -> None:
@@ -1093,10 +904,7 @@ class CuVSDenseIndex:
             for record in records:
                 if not record.vector:
                     continue
-                self._records[int(record.label)] = _Record(
-                    vector=self._pack_vector(record.vector),
-                    fields=self._parse_fields(record.fields),
-                )
+                self._records[int(record.label)] = self._pack_vector(record.vector)
                 changed = True
             if changed:
                 self._invalidate()
@@ -1538,8 +1346,7 @@ class CuVSDenseIndex:
     def _prepare_filter(
         self,
         filters: Mapping[str, Any],
-        labels: Sequence[int],
-        native_filter_resolver: Optional[NativeFilterResolver] = None,
+        native_filter_resolver: NativeFilterResolver,
         resolved_native_filter: Optional[_ResolvedNativeFilter] = None,
     ) -> _CachedFilter:
         cache_key = self._filter_cache_key(filters)
@@ -1547,58 +1354,19 @@ class CuVSDenseIndex:
         if cached is not None:
             return cached
 
-        resolved: Optional[_ResolvedNativeFilter] = None
-        if native_filter_resolver is not None:
-            resolved = resolved_native_filter or self._resolve_native_filter(
-                filters, native_filter_resolver
-            )
-            eligible_count = resolved.eligible_count
-            native_threshold = resolved.native_threshold
-            route_native = resolved.route_native
-            if route_native or eligible_count == 0:
-                prepared = None
-            else:
-                prepare_filter_words = getattr(self._runtime, "prepare_filter_words", None)
-                if prepare_filter_words is not None:
-                    prepared = prepare_filter_words(resolved.bitset_words)
-                else:
-                    prepared = tuple(
-                        bool(
-                            (
-                                struct.unpack_from(
-                                    "<I",
-                                    resolved.bitset_words,
-                                    (row // 32) * _U32_BYTES,
-                                )[0]
-                                if isinstance(resolved.bitset_words, bytes)
-                                else resolved.bitset_words[row // 32]
-                            )
-                            & (1 << (row % 32))
-                        )
-                        for row in range(len(labels))
-                    )
-        else:
-            mask = [
-                matches_filter(self._records[label].fields, filters, self.field_types)
-                for label in labels
-            ]
-            eligible_count = sum(mask)
-            prepare_filter = getattr(self._runtime, "prepare_filter", None)
-            if eligible_count == 0:
-                prepared = None
-            elif prepare_filter is not None:
-                prepared = prepare_filter(mask)
-            else:
-                prepared = tuple(mask)
-            route_native = False
-            native_threshold = 0
+        resolved = resolved_native_filter or self._resolve_native_filter(
+            filters, native_filter_resolver
+        )
+        prepared = None
+        if not resolved.route_native and resolved.eligible_count > 0:
+            prepared = self._runtime.prepare_filter_words(resolved.bitset_words)
         cached = _CachedFilter(
             prepared=prepared,
-            eligible_count=eligible_count,
-            route_native=route_native,
-            native_threshold=native_threshold,
-            native_filter_token=(resolved.native_filter_token if resolved is not None else 0),
-            filter_words_packed=(resolved.filter_words_packed if resolved is not None else False),
+            eligible_count=resolved.eligible_count,
+            route_native=resolved.route_native,
+            native_threshold=resolved.native_threshold,
+            native_filter_token=resolved.native_filter_token,
+            filter_words_packed=resolved.filter_words_packed,
         )
         self._cache_filter(cache_key, cached)
         return cached
@@ -1679,7 +1447,7 @@ class CuVSDenseIndex:
                     )
                 labels = tuple(self._records)
                 dataset = _PackedFP32Rows(
-                    tuple(self._records[label].vector for label in labels),
+                    tuple(self._records[label] for label in labels),
                     self.dimension,
                 )
 
@@ -1750,10 +1518,8 @@ class CuVSDenseIndex:
                     else None
                 )
             self._dirty = False
-            logger.info(
-                "Built cuVS %s index with %d vectors",
-                self.algorithm,
-                len(candidate.labels),
+            logger.debug(
+                "Built cuVS %s index with %d vectors", self.algorithm, len(candidate.labels)
             )
             return True
 
@@ -2150,7 +1916,7 @@ class CuVSDenseIndex:
                     return
                 self._dispatch_micro_batch(requests)
         except BaseException as exc:
-            logger.exception("The cuVS micro-batch worker stopped unexpectedly")
+            logger.error("The cuVS micro-batch worker stopped unexpectedly")
             with self._micro_batch_condition:
                 self._micro_batch_worker_failure = exc
                 pending = [
@@ -2181,11 +1947,9 @@ class CuVSDenseIndex:
         query = self._prepare_vector(query_vector)
         while True:
             prepared_filter: Optional[_PreparedHostFilter] = None
-            if (
-                filters
-                and native_filter_resolver is not None
-                and native_filter_layout_registrar is not None
-            ):
+            if filters:
+                if native_filter_resolver is None or native_filter_layout_registrar is None:
+                    raise ValueError("Filtered cuVS search requires a native resolver and layout")
                 filter_started = time.perf_counter()
                 try:
                     prepared_filter = self._prepare_host_filter(
@@ -2335,70 +2099,6 @@ class CuVSDenseIndex:
                     if telemetry is not None:
                         telemetry.filter_cache_hit = False
                         telemetry.filter_cache_eviction_fallback = True
-            filter_layout_is_current = self._filter_layout_generation == self._records_generation
-
-            # Auto mode decides whether a selective filter should remain native
-            # before paying GPU admission or rebuild costs. A dirty native
-            # layout is refreshed against the pending cuVS row order only; the
-            # live GPU row mapping is not changed until a build actually runs.
-            if (
-                filters
-                and self.auto_memory
-                and native_filter_resolver is not None
-                and prepared_filter is None
-            ):
-                cache_key = self._filter_cache_key(filters)
-                cached_filter = self._get_cached_filter(cache_key)
-                if cached_filter is not None and telemetry is not None:
-                    telemetry.filter_cache_hit = True
-                    telemetry.eligible_count = cached_filter.eligible_count
-                    telemetry.filter_words_packed = cached_filter.filter_words_packed
-                if cached_filter is None:
-                    resolved_native_filter = self._get_preflight_filter(cache_key)
-                    if resolved_native_filter is not None and telemetry is not None:
-                        telemetry.filter_cache_hit = True
-                        telemetry.eligible_count = resolved_native_filter.eligible_count
-                        telemetry.filter_words_packed = resolved_native_filter.filter_words_packed
-                    if resolved_native_filter is None:
-                        if (
-                            self._dirty
-                            and native_filter_layout_registrar is not None
-                            and not filter_layout_is_current
-                        ):
-                            native_filter_layout_registrar(list(self._records))
-                            filter_layout_is_current = True
-                            self._filter_layout_generation = self._records_generation
-                        resolved_native_filter = self._resolve_native_filter(
-                            filters, native_filter_resolver
-                        )
-                        if telemetry is not None:
-                            telemetry.filter_words_packed = (
-                                resolved_native_filter.filter_words_packed
-                            )
-                    if (
-                        resolved_native_filter.route_native
-                        or resolved_native_filter.eligible_count == 0
-                    ):
-                        cached_filter = _CachedFilter(
-                            prepared=None,
-                            eligible_count=resolved_native_filter.eligible_count,
-                            route_native=resolved_native_filter.route_native,
-                            native_threshold=resolved_native_filter.native_threshold,
-                            native_filter_token=resolved_native_filter.native_filter_token,
-                            filter_words_packed=resolved_native_filter.filter_words_packed,
-                        )
-                        self._cache_filter(cache_key, cached_filter)
-
-                if cached_filter is not None:
-                    if cached_filter.eligible_count == 0:
-                        return [], []
-                    if cached_filter.route_native:
-                        raise CuVSNativeRouteError(
-                            "cuVS auto mode routed a selective filter to native search "
-                            f"({cached_filter.eligible_count} candidates <= "
-                            f"{cached_filter.native_threshold})"
-                        )
-
             self._rebuild_if_needed(
                 native_filter_layout_registrar,
                 telemetry=telemetry,
@@ -2415,12 +2115,11 @@ class CuVSDenseIndex:
                     if cached_filter is not None and telemetry is not None:
                         telemetry.filter_cache_hit = True
                         telemetry.filter_words_packed = cached_filter.filter_words_packed
-                cached_filter = cached_filter or self._prepare_filter(
-                    filters,
-                    snapshot.labels,
-                    native_filter_resolver,
-                    resolved_native_filter,
-                )
+                if cached_filter is None:
+                    assert native_filter_resolver is not None
+                    cached_filter = self._prepare_filter(
+                        filters, native_filter_resolver, resolved_native_filter
+                    )
                 if telemetry is not None:
                     telemetry.filter_prepare_ms += (time.perf_counter() - filter_started) * 1000.0
                     telemetry.eligible_count = cached_filter.eligible_count

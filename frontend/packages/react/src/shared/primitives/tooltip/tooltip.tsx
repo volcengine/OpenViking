@@ -9,10 +9,9 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 
+import { useViewActive } from '../../view-activity.js';
 import { useOverlayPosition } from '../overlay/use-overlay-position.js';
-import type { TooltipLabels, TooltipProps } from './types.js';
-
-const DEFAULT_LABELS: Required<TooltipLabels> = { close: 'Close' };
+import type { TooltipProps } from './types.js';
 
 /**
  * 把外部 ref 与内部 ref 合并成一个回调 ref。
@@ -74,8 +73,10 @@ export function Tooltip({
   onOpenChange,
   labels,
 }: TooltipProps) {
-  const text = { ...DEFAULT_LABELS, ...labels };
-  const [open, setOpen] = useState(false);
+  const closeLabel = labels?.close ?? 'Close';
+  const active = useViewActive();
+  const [localOpen, setOpen] = useState(false);
+  const open = active && localOpen;
   const triggerRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
   // 用 state 而不是 ref 持有浮层节点：定位 effect 要在节点挂载后重跑，
@@ -105,10 +106,8 @@ export function Tooltip({
   );
 
   const clearTimer = useCallback(() => {
-    if (timerRef.current !== undefined) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = undefined;
-    }
+    window.clearTimeout(timerRef.current);
+    timerRef.current = undefined;
   }, []);
 
   // useEffect 必要性：浏览器延迟打开/关闭定时器可能晚于组件卸载；
@@ -116,13 +115,13 @@ export function Tooltip({
   useEffect(() => clearTimer, [clearTimer]);
 
   // useEffect 必要性：宿主可在事件外禁用触发器，需同步撤销浏览器 timer 和 Portal；
-  // props 提交后清理旧 timer 并收起浮层，无额外订阅需要释放。
+  // props 或所属视图停用后清理旧 timer 并收起浮层，无额外订阅需要释放。
   useEffect(() => {
-    if (disabled) {
+    if (disabled || !active) {
       clearTimer();
       setOpen(false);
     }
-  }, [disabled, clearTimer]);
+  }, [active, disabled, clearTimer]);
 
   // useEffect 必要性：点击浮层响应外部按下，两种浮层都响应 Esc，这是文档级
   // 事件，只有挂到 document 才能捕获；浮层渲染在 portal 里，DOM 上不是触发
@@ -158,7 +157,7 @@ export function Tooltip({
   }, [change, clearTimer, open, surfaceNode, trigger]);
 
   const show = () => {
-    if (disabled) return;
+    if (disabled || !active) return;
     if (trigger === 'click') {
       change(!open);
       return;
@@ -218,15 +217,14 @@ export function Tooltip({
       if (trigger === 'hover') hide();
     },
     onFocus: (event: React.FocusEvent) => {
-      (childProps.onFocus as ((e: React.FocusEvent) => void) | undefined)?.(
-        event,
-      );
+      (childProps.onFocus as React.FocusEventHandler | undefined)?.(event);
+      if (trigger !== 'hover') return;
+      const { currentTarget, target } = event;
       if (
-        trigger === 'hover' &&
-        (!focusVisibleOnly || event.currentTarget.matches(':focus-visible'))
-      ) {
+        !focusVisibleOnly ||
+        (currentTarget.contains(target) && target.matches(':focus-visible'))
+      )
         show();
-      }
     },
     onBlur: (event: React.FocusEvent) => {
       (childProps.onBlur as ((e: React.FocusEvent) => void) | undefined)?.(
@@ -248,7 +246,7 @@ export function Tooltip({
           ref={surfaceRef}
           id={id}
           role={trigger === 'hover' ? 'tooltip' : 'dialog'}
-          aria-label={trigger === 'click' ? text.close : undefined}
+          aria-label={trigger === 'click' ? closeLabel : undefined}
           className={['ov-tooltip', className].filter(Boolean).join(' ')}
           data-placement={position.placement}
           style={{ top: position.top, left: position.left, ...style }}

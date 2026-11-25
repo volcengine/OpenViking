@@ -1,5 +1,11 @@
 import type { VikingBotInteractionAnswer } from '../../../components/viking-bot/index.js';
 import type { HitlCard, HitlGroup } from './types.js';
+import {
+  compileTargetError,
+  parseCompileUri,
+  parseSourceUris,
+  splitSourceLines,
+} from './uris.js';
 import { weekdays } from './json.js';
 
 function wireValue(card: HitlCard, answer: VikingBotInteractionAnswer) {
@@ -18,15 +24,21 @@ function wireValue(card: HitlCard, answer: VikingBotInteractionAnswer) {
             ? { weekday: weekdays[answer.value.weekday - 1] }
             : {}),
         };
-  if (card.cardType === 'compile_source' && answer.kind === 'text')
-    return [
-      ...new Set(
-        answer.value
-          .split(/\r?\n/)
-          .map((uri) => uri.trim())
-          .filter(Boolean),
-      ),
-    ];
+  if (card.cardType === 'compile_source' && answer.kind === 'text') {
+    // A replacement card owns its validation; preserve its prior string-list payload.
+    if (card.options?.createRequest) return splitSourceLines(answer.value);
+    const sources = parseSourceUris(answer.value);
+    if (!sources?.length) throw new Error('Invalid compile source directories');
+    return sources;
+  }
+  if (card.cardType === 'compile_target' && answer.kind === 'text') {
+    const target = parseCompileUri(answer.value);
+    // Host text may carry presets, while valid URI answers keep canonical wire formatting.
+    if (card.options?.createRequest) return target ?? answer.value;
+    if (!target || compileTargetError(target))
+      throw new Error('Invalid compile output directory');
+    return target;
+  }
   return answer.value;
 }
 

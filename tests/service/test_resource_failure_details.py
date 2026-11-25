@@ -80,7 +80,7 @@ async def test_resource_outcome_survives_task_wait_and_http(
 
 
 @pytest.mark.asyncio
-async def test_failed_resource_wait_exposes_queue_work_errors(monkeypatch):
+async def test_failed_resource_wait_exposes_queue_work_errors(monkeypatch, watch_vfs):
     """Embedding/semantic queue errors keep uri/brief in the wait=true envelope."""
     monkeypatch.setattr("openviking.service.resource_service.is_git_repo_url", lambda _: False)
     monkeypatch.setattr("openviking.connector.routing.is_git_repo_url", lambda _: False)
@@ -99,7 +99,7 @@ async def test_failed_resource_wait_exposes_queue_work_errors(monkeypatch):
     monkeypatch.setattr("openviking.service.task_tracker.get_task_tracker", lambda: tracker)
 
     service = ResourceService(
-        viking_fs=SimpleNamespace(),
+        viking_fs=watch_vfs,
         resource_processor=SimpleNamespace(),
         skill_processor=object(),
     )

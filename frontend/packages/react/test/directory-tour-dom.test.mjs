@@ -55,6 +55,7 @@ test('Escape respects a host control and is consumed only when the tour can clos
   const view = await mount(
     h(DirectoryTour, { ...props, locateTarget, onClose: () => closed++ }),
   );
+  assert.equal(surface().querySelector('.ov-directory-tour__close'), null);
   const input = document.createElement('input');
   document.body.append(input);
   input.addEventListener('keydown', (event) => event.preventDefault());
@@ -74,7 +75,22 @@ test('Escape respects a host control and is consumed only when the tour can clos
   await act(async () => document.dispatchEvent(owned));
   assert.equal(closed, 1);
   assert.equal(owned.defaultPrevented, true);
-  await view.render(h(DirectoryTour, { ...props, locateTarget }));
+  await view.render(
+    h(DirectoryTour, {
+      ...props,
+      locateTarget,
+      showCloseButton: true,
+      onClose: () => closed++,
+    }),
+  );
+  await act(async () =>
+    surface().querySelector('.ov-directory-tour__close').click(),
+  );
+  assert.equal(closed, 2);
+  await view.render(
+    h(DirectoryTour, { ...props, locateTarget, showCloseButton: true }),
+  );
+  assert.equal(surface().querySelector('.ov-directory-tour__close'), null);
   const unowned = new window.KeyboardEvent('keydown', {
     key: 'Escape',
     bubbles: true,

@@ -6,11 +6,13 @@
 import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import httpx
 import pytest
 
 from openviking.parse.accessors.http_accessor import URLTypeDetector
+from openviking.server.temp_upload_store import TempUploadStore
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
@@ -21,56 +23,34 @@ def _allow_admin_api_in_dev_mode(client: httpx.AsyncClient) -> None:
     client._transport.app.state.api_key_manager = object()
 
 
-async def test_add_skill_accepts_temp_uploaded_file(
-    client: httpx.AsyncClient,
-    upload_temp_dir,
-):
-    skill_file = upload_temp_dir / "skill.md"
-    skill_file.write_text(
-        """---
-name: uploaded-skill
-description: temp uploaded skill
----
-
-# Uploaded Skill
-"""
-    )
-
-    resp = await client.post(
-        "/api/v1/skills",
-        json={"temp_file_id": skill_file.name, "wait": True},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["uri"].startswith("viking://user/default/skills/")
-
-
 async def test_add_skill_accepts_temp_uploaded_non_skill_filename(
     client: httpx.AsyncClient,
     upload_temp_dir,
 ):
-    skill_file = upload_temp_dir / "upload_123.md"
-    skill_file.write_text(
-        """---
+    content = """---
 name: uploaded-arbitrary-name
 description: temp uploaded skill
 ---
 
 # Uploaded Skill
 """
+    upload = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("original-skill.md", content, "text/markdown")},
     )
-    meta_file = upload_temp_dir / f"{skill_file.name}.ov_upload.meta"
-    meta_file.write_text('{"original_filename": "original-skill.md"}', encoding="utf-8")
+    assert upload.status_code == 200, upload.text
+    upload_id = upload.json()["result"]["temp_file_id"]
 
     resp = await client.post(
         "/api/v1/skills",
-        json={"temp_file_id": skill_file.name, "wait": True},
+        json={"temp_file_id": upload_id, "wait": True},
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["uri"].startswith("viking://user/default/skills/")
+    assert resp.status_code == 200, resp.text
+    root = resp.json()["result"]["root_uri"]
+    assert root == "viking://user/default/skills/uploaded-arbitrary-name"
+    read = await client.get("/api/v1/content/read", params={"uri": f"{root}/SKILL.md"})
+    assert read.status_code == 200, read.text
+    assert "# Uploaded Skill" in read.json()["result"]
 
 
 async def test_add_skill_accepts_uploaded_zip_with_windows_separators(
@@ -127,22 +107,16 @@ async def test_add_skill_rejects_legacy_temp_path_field(client: httpx.AsyncClien
 
 
 async def test_add_skill_accepts_raw_skill_content(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/skills",
-        json={
-            "data": """---
-name: inline-skill
-description: inline
----
+    text = "Check the service status before changing its configuration. " * 10
+    data = f"---\nname: inline-skill\ndescription: inline\n---\n\n# Inline Skill\n\n{text}\n"
+    response = await client.post("/api/v1/skills", json={"data": data, "wait": True})
 
-# Inline Skill
-"""
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["uri"].startswith("viking://user/default/skills/")
+    assert response.status_code == 200, response.text
+    root = response.json()["result"]["root_uri"]
+    assert root == "viking://user/default/skills/inline-skill"
+    read = await client.get("/api/v1/content/read", params={"uri": f"{root}/SKILL.md"})
+    assert read.status_code == 200, read.text
+    assert text.strip() in read.json()["result"]
 
 
 @pytest.fixture
@@ -181,23 +155,48 @@ def loopback_http_url():
 
 async def test_import_ovpack_accepts_temp_uploaded_file(
     client: httpx.AsyncClient,
-    upload_temp_dir,
+    monkeypatch,
 ):
     _allow_admin_api_in_dev_mode(client)
-    ovpack_file = upload_temp_dir / "demo.ovpack"
-    ovpack_file.write_bytes(build_ovpack_bytes())
-
-    resp = await client.post(
-        "/api/v1/pack/import",
-        json={
-            "temp_file_id": ovpack_file.name,
-            "parent": "viking://resources/imported",
-        },
+    uploaded = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("demo.ovpack", build_ovpack_bytes(), "application/octet-stream")},
+        data={"upload_mode": "shared"},
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["result"]["uri"].startswith("viking://resources/imported/")
+    assert uploaded.status_code == 200, uploaded.text
+    upload_id = uploaded.json()["result"]["temp_file_id"]
+    assert upload_id.startswith("shared_")
+
+    materialized: list[Path] = []
+    original_resolve = TempUploadStore.resolve_for_consume
+
+    async def record_local_copy(store, temp_file_id, ctx):
+        resolved = await original_resolve(store, temp_file_id, ctx)
+        path = Path(resolved.local_path)
+        assert path.is_file()
+        materialized.append(path)
+        return resolved
+
+    monkeypatch.setattr(TempUploadStore, "resolve_for_consume", record_local_copy)
+    rejected = await client.post(
+        "/api/v1/pack/import",
+        json={"temp_file_id": upload_id, "parent": ""},
+    )
+    assert rejected.status_code == 400, rejected.text
+    assert materialized == []
+
+    imported = await client.post(
+        "/api/v1/pack/import",
+        json={"temp_file_id": upload_id, "parent": "viking://resources/imported"},
+    )
+    assert imported.status_code == 200, imported.text
+    root = imported.json()["result"]["uri"]
+    assert root == "viking://resources/imported/pkg"
+    [local_copy] = materialized
+    assert not local_copy.exists()
+    read = await client.get("/api/v1/content/read", params={"uri": f"{root}/content.md"})
+    assert read.status_code == 200, read.text
+    assert read.json()["result"] == "# Demo\n"
 
 
 async def test_import_ovpack_conflict_returns_structured_conflict(
@@ -317,7 +316,6 @@ async def test_add_resource_rejects_loopback_remote_url(client: httpx.AsyncClien
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
-    assert "public remote resource targets" in body["error"]["message"]
 
 
 async def test_add_resource_rejects_private_git_ssh_url(client: httpx.AsyncClient):

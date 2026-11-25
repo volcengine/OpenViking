@@ -6,6 +6,7 @@ import type { MonitoringSpan } from '../monitoring/trace/span.js';
 import {
   isTaskTerminal,
   type TaskReference,
+  type TaskOrigin,
   type TaskService,
   type TaskSource,
   type TrackedTask,
@@ -150,7 +151,7 @@ export function createTaskTracker({ interval = 3000, concurrency = 4 } = {}) {
       reference: TaskReference,
       source: TaskSource,
       monitoringOrigin?: MonitoringSpan,
-      taskOrigin?: TrackedTask['origin'],
+      taskOrigin: TaskOrigin = 'tool',
     ) {
       const key = `${source.key}:${reference.id}`;
       if (!reference.id.trim()) return key;
@@ -167,7 +168,7 @@ export function createTaskTracker({ interval = 3000, concurrency = 4 } = {}) {
             ...task,
             key,
             ...(uri && { uri }),
-            ...(taskOrigin && { origin: taskOrigin }),
+            origins: [taskOrigin],
           },
           due: Date.now(),
           failures: 0,
@@ -176,8 +177,11 @@ export function createTaskTracker({ interval = 3000, concurrency = 4 } = {}) {
         entries.set(key, entry);
         publish();
         schedule();
-      } else if (taskOrigin && !existing.snapshot.origin) {
-        existing.snapshot = { ...existing.snapshot, origin: taskOrigin };
+      } else if (!existing.snapshot.origins.includes(taskOrigin)) {
+        existing.snapshot = {
+          ...existing.snapshot,
+          origins: [...existing.snapshot.origins, taskOrigin],
+        };
         publish();
       }
       return key;

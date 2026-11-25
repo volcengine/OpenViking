@@ -4,6 +4,7 @@ import json
 import os
 from typing import Any, Dict, Optional
 
+from openviking.observability.log_safety import safe_path_for_log, short_hash
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
@@ -13,7 +14,9 @@ from openviking.storage.vectordb.utils.path_safety import (
     safe_join_name,
 )
 from openviking.storage.vectordb.utils.validation import validate_name_str
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_or_create_local_project(path: str = ""):
@@ -66,22 +69,33 @@ class LocalProject:
         Scans all subdirectories under path, each subdirectory is treated as a collection.
         """
         if not os.path.exists(self.path):
-            logger.info(f"Project path does not exist: {self.path}")
+            logger.info("Project path does not exist: %s", safe_path_for_log(str(self.path)))
             return
 
         # Scan all subdirectories under path
         try:
             entries = os.listdir(self.path)
         except Exception as e:
-            logger.error(f"Failed to list directory {self.path}: {e}")
+            logger.info(
+                "Failed to list directory %s: %s",
+                safe_path_for_log(str(self.path)),
+                type(e).__name__,
+            )
             return
 
+        skipped_collections = 0
         for entry in entries:
             try:
                 entry_path = safe_join(self.path, entry)
                 meta_path = safe_join(entry_path, "collection_meta.json")
-            except ValueError:
-                logger.warning(f"Skipping invalid collection directory under {self.path}: {entry}")
+            except ValueError as _log_error:
+                skipped_collections += 1
+                logger.debug(
+                    "Skipping invalid collection directory under %s: %s error_type=%s",
+                    safe_path_for_log(str(self.path)),
+                    safe_path_for_log(str(entry)),
+                    type(_log_error).__name__,
+                )
                 continue
 
             # Only process directories
@@ -90,7 +104,11 @@ class LocalProject:
 
             # Check if it's a collection directory (should contain collection_meta.json)
             if not meta_path.exists():
-                logger.warning(f"Directory {entry} does not contain collection_meta.json, skipping")
+                skipped_collections += 1
+                logger.debug(
+                    "Directory %s does not contain collection_meta.json, skipping",
+                    safe_path_for_log(str(entry)),
+                )
                 continue
 
             # Read collection metadata
@@ -102,14 +120,28 @@ class LocalProject:
                 validate_name_str(collection_name)
 
                 # Load collection
-                logger.info(f"Loading collection: {collection_name} from {entry_path}")
+                logger.debug(
+                    "Loading collection: %s from %s",
+                    short_hash(str(collection_name)),
+                    safe_path_for_log(str(entry_path)),
+                )
                 collection = get_or_create_local_collection(path=str(entry_path))
                 self.collections.set(collection_name, collection)
 
-                logger.info(f"Successfully loaded collection: {collection_name}")
+                logger.debug("Successfully loaded collection: %s", short_hash(str(collection_name)))
             except Exception as e:
-                logger.error(f"Failed to load collection from {entry_path}: {e}")
+                skipped_collections += 1
+                logger.debug(
+                    "Failed to load collection from %s: %s",
+                    safe_path_for_log(str(entry_path)),
+                    type(e).__name__,
+                )
                 continue
+
+        if skipped_collections:
+            logger.info(
+                "Collection loading incomplete skipped=%d degraded=true", skipped_collections
+            )
 
     def close(self):
         """Close project, release all collection resources."""
@@ -183,13 +215,17 @@ class LocalProject:
             validate_name_str(collection_name)
             collection_path = safe_join_name(self.path, collection_name)
             os.makedirs(collection_path, exist_ok=True)
-            logger.info(f"Creating persistent collection: {collection_name} at {collection_path}")
+            logger.debug(
+                "Creating persistent collection: %s at %s",
+                short_hash(str(collection_name)),
+                safe_path_for_log(str(collection_path)),
+            )
             collection = get_or_create_local_collection(
                 meta_data=meta_data, path=str(collection_path)
             )
         else:
             # Volatile collection
-            logger.info(f"Creating volatile collection: {collection_name}")
+            logger.debug("Creating volatile collection: %s", short_hash(str(collection_name)))
             collection = get_or_create_local_collection(meta_data=meta_data, path="")
 
         self.collections.set(collection_name, collection)
@@ -218,4 +254,4 @@ class LocalProject:
         if collection:
             collection.drop()
             self.collections.remove(collection_name)
-            logger.info(f"Dropped collection: {collection_name}")
+            logger.debug("Dropped collection: %s", short_hash(str(collection_name)))

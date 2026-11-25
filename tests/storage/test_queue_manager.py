@@ -270,42 +270,43 @@ def transport(monkeypatch):
     return client
 
 
-async def test_constructor_middlewares_apply_to_all_queues(transport):
-    calls = []
-
-    class Recorder(QueueMiddleware):
-        async def enqueue(self, ctx, call_next):
-            calls.append(ctx.queue)
-            return await call_next(ctx)
-
-    middlewares = [Recorder()]
-    manager = QueueManager(object(), middlewares=middlewares)
-    middlewares.clear()
-    existing = manager.get_queue("existing", allow_create=True)
-    await existing.enqueue({})
-    middlewares.append(Recorder())
-    future = manager.get_queue("future", allow_create=True)
-    await future.enqueue({})
-    assert calls == ["existing", "future"]
-    assert transport.write.await_count == 2
-
-
-async def test_init_queue_manager_forwards_constructor_middlewares(transport, monkeypatch):
+async def test_initialized_manager_preserves_middleware_for_each_new_queue(tmp_path, monkeypatch):
     from openviking.storage.queuefs import queue_manager as queue_module
+    from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
+    from openviking_cli.utils.config.agfs_config import AGFSConfig
 
-    calls = []
-
-    class Recorder(QueueMiddleware):
+    class AddQueueName(QueueMiddleware):
         async def enqueue(self, ctx, call_next):
-            calls.append(ctx.queue)
+            ctx.payload = {"queue": ctx.queue, "body": ctx.payload}
             return await call_next(ctx)
 
+    class Replacement(QueueMiddleware):
+        async def enqueue(self, ctx, call_next):
+            raise AssertionError("mutating the caller's list changed the queue middleware")
+
+    client = create_agfs_client(
+        RagfsBindingConfig(agfs=AGFSConfig(path=str(tmp_path), backend="memory"))
+    )
     monkeypatch.setattr(queue_module, "_instance", None)
-    manager = queue_module.init_queue_manager(object(), middlewares=[Recorder()])
-    assert queue_module.get_queue_manager() is manager
-    await manager.get_queue("Test", allow_create=True).enqueue({})
-    assert calls == ["Test"]
-    transport.write.assert_awaited_once_with("/queue/Test/enqueue", b"{}")
+    try:
+        middlewares = [AddQueueName()]
+        initialized = queue_module.init_queue_manager(client, middlewares=middlewares)
+        manager = queue_module.get_queue_manager()
+        assert manager is initialized
+
+        original = manager.get_queue("original", allow_create=True)
+        middlewares[:] = [Replacement()]
+        future = manager.get_queue("future", allow_create=True)
+
+        for name, queue in [("original", original), ("future", future)]:
+            await queue.enqueue("payload")
+            message = await queue.dequeue_raw()
+            assert message is not None
+            assert json.loads(message["data"]) == {"queue": name, "body": "payload"}
+            await queue.ack(message["id"], message)
+            assert (await queue.get_status()).is_complete
+    finally:
+        client.close()
 
 
 @pytest.mark.parametrize("fail", [False, True])

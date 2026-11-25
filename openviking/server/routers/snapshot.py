@@ -16,12 +16,13 @@ from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.pyagfs.exceptions import (
     AGFSClientError,
     AGFSNotFoundError,
+    AGFSPathNotFoundError,
     GitRestoreWritebackPartialError,
 )
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.server.skill_history import reject_generic_skill_mutation
 from openviking_cli.exceptions import (
@@ -74,6 +75,8 @@ async def commit(
         if mapped is not None:
             raise mapped from e
         raise
+    if _ctx.role == Role.GLOBAL:
+        return Response(status="ok", result={})
     return Response(status="ok", result=result)
 
 
@@ -100,7 +103,9 @@ async def log(
         else None
     )
     try:
-        result = await service.fs.log(branch=branch, limit=limit, offset=offset, paths=canonical_paths, ctx=_ctx)
+        result = await service.fs.log(
+            branch=branch, limit=limit, offset=offset, paths=canonical_paths, ctx=_ctx
+        )
     except AGFSNotFoundError:
         raise NotFoundError(branch, "git_ref")
     except (AGFSClientError, ValueError) as e:
@@ -250,9 +255,12 @@ async def show(
         blob = await service.fs.show_blob_raw(target_ref, path=canonical_path, ctx=_ctx)
     except AGFSNotFoundError as e:
         resource = canonical_path if canonical_path is not None else target_ref
-        raise NotFoundError(
-            resource, "git_blob" if canonical_path is not None else "git_ref"
-        ) from e
+        error = NotFoundError(resource, "git_blob" if canonical_path is not None else "git_ref")
+        if canonical_path is not None and isinstance(e, AGFSPathNotFoundError):
+            error.details["reason"] = "path_not_found"
+            if e.deleted_file is not None:
+                error.details["deleted_file"] = e.deleted_file
+        raise error from e
     except (AGFSClientError, ValueError) as e:
         mapped = map_exception(e)
         if mapped is not None:

@@ -26,6 +26,7 @@ from typing import Any, Optional
 from openviking.core.building_tree import BuildingTree
 from openviking.core.context import Context
 from openviking.core.namespace import is_content_root_uri
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_type
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
@@ -123,8 +124,8 @@ class TreeBuilder:
             parent_exists = await viking_fs.exists(effective_parent_uri, ctx=ctx)
             if not parent_exists:
                 if create_parent or parent_is_content_root:
-                    logger.info(
-                        f"[TreeBuilder] Parent URI does not exist, creating: {effective_parent_uri}"
+                    logger.debug(
+                        "Parent missing; creating target=%s", safe_uri_for_log(effective_parent_uri)
                     )
                     await viking_fs.mkdir(effective_parent_uri, exist_ok=True, ctx=ctx)
                 else:
@@ -190,8 +191,10 @@ class TreeBuilder:
             doc_dirs = [e for e in entries if e.get("isDir") and e["name"] not in [".", ".."]]
 
             if len(doc_dirs) != 1:
-                logger.error(
-                    f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
+                logger.debug(
+                    "Artifact document directory count invalid target=%s total=%d",
+                    safe_uri_for_log(temp_uri),
+                    len(doc_dirs),
                 )
                 raise ValueError(
                     f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
@@ -213,7 +216,7 @@ class TreeBuilder:
                     temp_doc_uri = f"{temp_doc_uri}/{original_name}"
                     root_is_file = True
         if original_name != doc_name:
-            logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
+            logger.debug("Document name normalized path=%s", safe_path_for_log(original_name))
 
         planned_uri, unique_candidate_uri = await self.resolve_target_uri(
             ctx=ctx,

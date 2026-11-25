@@ -319,35 +319,57 @@ async def test_bookkeeping_that_hangs_is_cut_off(running_gateway, capsys, monkey
     assert record["bookkeeping_failed"] == ["completed"]
 
 
+@pytest.mark.parametrize("hangs, reason", [(True, "save_timeout"), (False, "save_failed")])
+async def test_save_that_fails_or_hangs_is_recorded(
+    running_gateway, capsys, monkeypatch, hangs, reason
+):
+    app, client, _, issued, _, _ = running_gateway
+    monkeypatch.setattr(proxy, "BOOKKEEPING_SECONDS", 0.05)
+
+    async def save(*args):
+        if hangs:
+            await asyncio.sleep(5)
+        raise RuntimeError("store failed")
+
+    monkeypatch.setattr(app.state.kernel, "save", save)
+    capsys.readouterr()
+    async with async_timeout.timeout(2):
+        response = await client.post(
+            "/v1/chat/completions",
+            headers=bearer(issued, **{"X-OpenViking-Session": "s"}),
+            json=CHAT,
+        )
+    assert response.status_code == 200
+    record = only_record(capsys)
+    assert record["capture_status"] == "failed" and record["capture_reason"] == reason
+    assert "error_reason" not in record and "bookkeeping_failed" not in record
+
+
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.parametrize("tools", [False, True])
-async def test_one_record_per_request(running_gateway, capsys, stream, tools):
+async def test_one_record_per_hidden_tool_request(running_gateway, capsys, stream):
     app, client, admin, issued, _, _ = running_gateway
-    path, body = "/v1/chat/completions", {**CHAT, "stream": stream}
-    if tools:
-        await enable_tools(client, admin, show_tool_calls=False)
-        calls = []
-        path, body = PATHS["responses"], request_body("responses", stream)
+    path, body = PATHS["responses"], request_body("responses", stream)
+    await enable_tools(client, admin, show_tool_calls=False)
+    calls = []
 
-        async def backend(request):
-            if request.path == "/mcp":
-                if (await request.json()).get("method") == "tools/list":
-                    return None
-                return web.json_response({"id": 1, "result": {"content": []}})
-            if request.path == path:
-                calls.append(await request.json())
-                value = native_response("responses", len(calls), owned=len(calls) == 1)
-                return await wire_response(request, "responses", value, stream)
+    async def backend(request):
+        if request.path == "/mcp":
+            if (await request.json()).get("method") == "tools/list":
+                return None
+            return web.json_response({"id": 1, "result": {"content": []}})
+        if request.path == path:
+            calls.append(await request.json())
+            value = native_response("responses", len(calls), owned=len(calls) == 1)
+            return await wire_response(request, "responses", value, stream)
 
-        app.state.test_backend["handler"] = backend
+    app.state.test_backend["handler"] = backend
     capsys.readouterr()
     response = await client.post(path, headers=bearer(issued), json=body)
     assert response.status_code == 200, response.text
     record = only_record(capsys)
     assert record["status"] == 200 and "error_reason" not in record
     assert record["stream"] is stream and record["upstream_attempted"] is True
-    if tools:
-        assert len(calls) == 2 and record["hidden_rounds"] == 1
+    assert len(calls) == 2 and record["hidden_rounds"] == 1
 
 
 async def test_record_carries_ids_and_timings(running_gateway, capsys):
@@ -362,6 +384,9 @@ async def test_record_carries_ids_and_timings(running_gateway, capsys):
         assert response.status_code == 200
         record = only_record(capsys)
         assert record["event"] == "request" and len(record["request_id"]) == 32
+        assert record["request_id"] == response.headers["X-OpenViking-Request-Id"]
+        assert record["status"] == 200 and "error_reason" not in record
+        assert record["stream"] is stream
         assert record["method"] == "POST" and record["endpoint"] == "chat"
         assert record["account"] == "tenant" and record["openviking_account"] == "tenant"
         assert record["credential_id"] == issued["id"] and record["session_source"] == "header"

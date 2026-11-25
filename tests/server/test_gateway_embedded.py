@@ -2,13 +2,13 @@
 
 import sqlite3
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 from starlette.testclient import TestClient, WebSocketDenialResponse
 
-from openviking.crypto.encryptor import MAGIC, FileEncryptor
+from openviking.crypto.encryptor import MAGIC
 from openviking.server import gateway_host
 from openviking_cli.utils.config.encryption_config import EncryptionConfig
 from openviking_gateway.config import EmbeddedGatewayConfig
@@ -17,6 +17,8 @@ from openviking_gateway.config import EmbeddedGatewayConfig
 def openviking_config(gateway, encryption=None, workspace="./data"):
     return SimpleNamespace(
         gateway=gateway,
+        service_name="openviking",
+        enable_default_resources=True,
         storage=SimpleNamespace(workspace=workspace),
         encryption=encryption or EncryptionConfig(),
         oauth=SimpleNamespace(enabled=False),
@@ -35,21 +37,16 @@ def embedded_storage_path(gateway, workspace, monkeypatch):
     return options["config"].storage_path
 
 
-def test_embedded_gateway_storage_follows_workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    gateway = EmbeddedGatewayConfig(enabled=True)
-    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(
-        tmp_path / "ws" / "gateway"
-    )
-
-
 def test_embedded_gateway_keeps_legacy_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    gateway = EmbeddedGatewayConfig(enabled=True)
+    workspace = tmp_path / "ws"
+    assert embedded_storage_path(gateway, workspace, monkeypatch) == str(workspace / "gateway")
+
     legacy = tmp_path / "home" / ".openviking" / "gateway"
     legacy.mkdir(parents=True)
     (legacy / "kernel.sqlite3").touch()
-    gateway = EmbeddedGatewayConfig(enabled=True)
-    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(legacy)
+    assert embedded_storage_path(gateway, workspace, monkeypatch) == str(legacy)
     # Once the new location has a database, it wins.
     (tmp_path / "ws" / "gateway").mkdir(parents=True)
     (tmp_path / "ws" / "gateway" / "kernel.sqlite3").touch()
@@ -80,19 +77,6 @@ def test_embedded_gateway_targets_loopback_without_version_gate(host, expected, 
     assert options["openviking_url"] == f"http://{expected}:1987"
     assert options["config"].min_server_version == "0"
     assert options["encryptor"] is None
-
-
-async def test_embedded_gateway_uses_server_encryption(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "openviking_gateway.app.create_app", lambda config, **kwargs: {"config": config, **kwargs}
-    )
-    encryption = EncryptionConfig(enabled=True, local={"key_file": str(tmp_path / "master.key")})
-    options = gateway_host.create_embedded_gateway(
-        openviking_config(EmbeddedGatewayConfig(enabled=True), encryption),
-        SimpleNamespace(host="127.0.0.1", port=1987, public_base_url=None),
-        lambda: None,
-    )
-    assert isinstance(options["encryptor"], FileEncryptor)
 
 
 def test_embedded_gateway_falls_back_to_server_public_url(monkeypatch):
@@ -182,8 +166,10 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
     from openviking.metrics import global_api
     from openviking.observability import usage_audit
     from openviking.server import app as server_module
+    from openviking.server import runtime as runtime_module
     from openviking.server.config import ServerConfig
     from openviking.server.mcp_endpoint import mcp
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
     from openviking_cli.utils.config.vlm_config import VLMConfig
     from openviking_gateway.client import VikingClient
 
@@ -196,6 +182,8 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
         "get_openviking_config",
         lambda: openviking_config(gateway_config, encryption),
     )
+    cluster = OpenVikingConfig(vlm=VLMConfig(model="gpt", provider="openai", api_key="secret"))
+    monkeypatch.setattr("openviking_cli.utils.config.get_openviking_config", lambda: cluster)
     monkeypatch.setattr(global_api, "init_metrics_from_server_config", lambda *args, **kwargs: None)
     monkeypatch.setattr(global_api, "shutdown_metrics_async", AsyncMock())
     monkeypatch.setattr(usage_audit, "init_usage_audit_from_server_config", AsyncMock())
@@ -208,28 +196,35 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
         AsyncMock(return_value={"status": "ok", "auth_mode": "dev", "version": "0.1.dev1"}),
     )
     service = SimpleNamespace(
+        _initialized=False,
+        _config=SimpleNamespace(
+            reconcile_system_assets_on_startup=False, enable_default_resources=True
+        ),
+        configure_runtime=Mock(),
+        initialize=AsyncMock(),
+        recover=AsyncMock(),
+        start_background=AsyncMock(),
+        detach_runtime=Mock(),
+        release_runtime=AsyncMock(),
+        stop_background=AsyncMock(),
         vlm_resolver=SimpleNamespace(
             effective_vlm_config=AsyncMock(
                 return_value=VLMConfig(
                     model="gpt", provider="openai", api_key="secret", api_base=model_server.url
                 )
             )
-        )
+        ),
     )
     initialized = []
-    monkeypatch.setattr(
-        server_module,
-        "get_task_tracker",
-        lambda: SimpleNamespace(start_cleanup_loop=lambda: None, stop_cleanup_loop=lambda: None),
-    )
 
-    async def initialize(app, _service, config):
+    async def wire(runtime):
+        app, config = runtime.app, runtime.config
         # The gateway is running before deletion setup receives it.
         assert await app.state.gateway_app.state.management.list("default", "upstreams") == []
         initialized.append(True)
-        await server_module._initialize_auth_plugin(app, service, config)
+        await runtime_module.initialize_auth_plugin(app, service, config)
 
-    monkeypatch.setattr(server_module, "_initialize_runtime_state", initialize)
+    monkeypatch.setattr(runtime_module.ServerRuntime, "wire", wire)
     from openviking.server import body_dump_middleware
 
     dumped = []

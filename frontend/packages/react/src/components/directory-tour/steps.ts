@@ -1,48 +1,33 @@
+import { resolveLocale, type Locale } from '../../shared/locale.js';
 import type { DirectoryTourStep, DirectoryTourTarget } from './types.js';
+import enUS from './locales/en-US.js';
+import zhCN from './locales/zh-CN.js';
 
-/** Optional English preset; pass translated steps and illustrations in the host. */
-export const openVikingDirectoryTourSteps: readonly (DirectoryTourStep & {
+const targets = [
+  { id: 'memories', target: 'userMemories' },
+  { id: 'sessions', target: 'userSessions' },
+  { id: 'personal-resources', target: 'userResources' },
+  { id: 'shared-resources', target: 'sharedResources' },
+  { id: 'experiences', target: 'userExperiences' },
+  { id: 'peers', target: 'userPeers' },
+] as const;
+
+type Preset = readonly (DirectoryTourStep & {
   target: DirectoryTourTarget;
-})[] = [
-  {
-    id: 'memories',
-    target: 'userMemories',
-    title: 'User memories (memories)',
-    description:
-      'Long-term memories extracted from conversations: your identity, preferences and decisions.',
-  },
-  {
-    id: 'sessions',
-    target: 'userSessions',
-    title: 'Conversations (sessions)',
-    description:
-      'Conversations and task records. Return to the original context to understand an Agent’s decisions.',
-  },
-  {
-    id: 'personal-resources',
-    target: 'userResources',
-    title: 'Personal resources (resources)',
-    description: 'Documents, notes and knowledge you import for your own use.',
-  },
-  {
-    id: 'shared-resources',
-    target: 'sharedResources',
-    title: 'Team resources (resources)',
-    description:
-      'Shared documents, conventions and past projects available to the team.',
-  },
-  {
-    id: 'experiences',
-    target: 'userExperiences',
-    title: 'Agent experiences (experiences)',
-    description:
-      'Successful tasks become reusable experience for similar problems.',
-  },
-  {
-    id: 'peers',
-    target: 'userPeers',
-    title: 'Object memories (peers)',
-    description:
-      'Memories specific to a repository, Agent or colleague stay separate. General preferences belong in memories.',
-  },
-];
+})[];
+
+const stepsByLocale: Record<Locale, Preset> = {
+  'en-US': targets.map((step) => ({ ...step, ...enUS.steps[step.target] })),
+  'zh-CN': targets.map((step) => ({ ...step, ...zhCN.steps[step.target] })),
+};
+
+/** Six standard directory steps, with localized titles and descriptions. */
+export function getOpenVikingDirectoryTourSteps(
+  locale: Locale = 'en-US',
+): Preset {
+  return resolveLocale(stepsByLocale, locale);
+}
+
+/** English preset retained for consumers that provide their own step content. */
+export const openVikingDirectoryTourSteps =
+  getOpenVikingDirectoryTourSteps('en-US');

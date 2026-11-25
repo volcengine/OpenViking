@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import time
-from dataclasses import replace
 from typing import NamedTuple
 from urllib.parse import quote, unquote_plus
 
@@ -18,8 +17,8 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import ValidationError
 
 from openviking.core.peer_id import normalize_peer_id
+from openviking.observability.log_safety import short_hash
 
-from .capture import CapturePipeline
 from .client import PEER_HEADER
 from .kernel import Budget
 from .models import KEY_PLACEHOLDER, Policy, validation_detail
@@ -51,10 +50,6 @@ PATH_PROTOCOL = {
 }
 # Each bookkeeping step after a reply gets this long; the record is written either way.
 BOOKKEEPING_SECONDS = 30
-# Waits before each retry of queueing a finished turn for saving.
-STAGE_RETRY_SECONDS = (1, 5, 25)
-# Staging retries pending per process at most; past this a turn is recorded as lost at once.
-STAGE_RETRY_LIMIT = 256
 PRIMARY_PATH = {
     "anthropic": "/v1/messages",
     "chat": "/v1/chat/completions",
@@ -574,7 +569,9 @@ class ProxyRequest:
         try:
             await self.app.state.kernel.relayed(self.prepared, self.capture)
         except Exception:
-            logger.exception("OpenViking Gateway reply bookkeeping failed")
+            logger.info(
+                "gateway reply bookkeeping failed; preserving response", extra={"degraded": True}
+            )
 
     async def finish(self):
         """Book an answered request and write its record; called once per answered request."""
@@ -594,14 +591,6 @@ class ProxyRequest:
                     await self.completed()
                 except Exception:
                     self.bookkeeping_failed("completed")
-                    # The turn is not queued for saving yet: try again in the background.
-                    background = self.app.state.background
-                    if len(background) < STAGE_RETRY_LIMIT:
-                        task = asyncio.create_task(self.retry_completed())
-                        background.add(task)
-                        task.add_done_callback(background.discard)
-                    else:
-                        await self.stage_lost()
             try:
                 if (
                     self.capture.response_id
@@ -622,21 +611,9 @@ class ProxyRequest:
                         )
             except Exception:
                 self.bookkeeping_failed("responses")
-            if self.prepared:
-                # Delivery may have failed or recovered while this request was in flight.
-                # A worker row inserted between this read and the log below can still be
-                # older than this row; if the read fails, the prepare-time fields are kept.
-                try:
-                    async with async_timeout.timeout(BOOKKEEPING_SECONDS):
-                        capture = await self.store.capture.get(
-                            self.prepared.scope, self.prepared.session
-                        )
-                    CapturePipeline.metrics(
-                        replace(self.prepared, capture=capture, metrics=self.metrics),
-                        Policy.model_validate(self.prepared.root["policy"]),
-                    )
-                except Exception:
-                    self.bookkeeping_failed("capture_status")
+            # Last: a slow OpenViking holds up nothing but this request's record.
+            if self.response.status < 300 and self.prepared:
+                await self.save()
         finally:
             await self.record.emit()
 
@@ -645,41 +622,54 @@ class ProxyRequest:
             if await self.management.get(self.credential["account"], "keys", self.credential["id"]):
                 await self.app.state.kernel.completed(self.prepared, self.credential, self.capture)
 
-    async def retry_completed(self):
-        # Each part of completed() is idempotent, so a retry after a partial run is safe.
-        for delay in STAGE_RETRY_SECONDS:
-            await asyncio.sleep(delay)
-            try:
-                await self.completed()
-                return
-            except Exception as error:
-                logger.warning(
-                    "OpenViking Gateway could not queue a finished turn for saving: %s",
-                    type(error).__name__,
-                )
-        await self.stage_lost()
+    async def save(self):
+        """Write the turn this reply ends to OpenViking; a failure is recorded, never raised.
 
-    async def stage_lost(self):
-        logger.error("OpenViking Gateway lost a finished turn: it could not be queued for saving")
+        Nothing retries it. The next turn that ends writes what is missing, as long as
+        the client resends the history unchanged.
+        """
+        stats = self.app.state.stats
         try:
-            await self.management.log(
-                self.credential["account"],
-                {
-                    "kind": "capture",
-                    "event": "capture",
-                    "session": self.prepared.session,
-                    "protocol": self.prepared.protocol,
-                    "credential_id": self.credential["id"],
-                    "capture_status": "lost",
-                    "capture_reason": "stage_failed",
+            async with async_timeout.timeout(BOOKKEEPING_SECONDS):
+                if not await self.management.get(
+                    self.credential["account"], "keys", self.credential["id"]
+                ):
+                    return
+                saved = await self.app.state.kernel.save(
+                    self.prepared, self.credential, self.capture
+                )
+        except Exception as error:
+            reason = getattr(error, "reason", "")
+            if not reason:
+                reason = (
+                    "save_timeout" if isinstance(error, asyncio.TimeoutError) else "save_failed"
+                )
+            stats.capture_failed += 1
+            self.metrics.update(capture_status="failed", capture_reason=reason)
+            logger.error(
+                "gateway finished turn save failed; preserving response session_hash=%s error_type=%s",
+                short_hash(str(self.prepared.session)),
+                type(error).__name__,
+                extra={
+                    "degraded": True,
+                    "operation": "gateway.capture_save",
+                    "error_type": type(error).__name__,
                 },
-                user_id=self.credential["user_id"],
             )
-        except Exception:
-            logger.exception("OpenViking Gateway could not record a lost turn")
+            return
+        if saved:
+            stats.capture_delivered += 1
+            self.metrics.update(
+                capture_messages=saved,
+                openviking_session=self.prepared.capture.value["ov_session"],
+            )
 
     def bookkeeping_failed(self, step):
-        logger.exception("OpenViking Gateway response bookkeeping failed: %s", step)
+        logger.info(
+            "gateway response bookkeeping failed; preserving response stage=%s",
+            step,
+            extra={"degraded": True},
+        )
         self.metrics.setdefault("bookkeeping_failed", []).append(step)
 
     async def tool_response(self):
@@ -693,7 +683,9 @@ class ProxyRequest:
             self.config.max_body_bytes,
             self.config.mcp_file_links,
         )
-        loop = HiddenToolLoop(prepared, executor, self.store, capture)
+        loop = HiddenToolLoop(
+            prepared, executor, self.store, capture, self.app.state.kernel.capture
+        )
         headers = {
             k.lower(): v
             for k, v in filtered_headers(response.headers).items()

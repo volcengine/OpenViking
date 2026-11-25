@@ -165,7 +165,7 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 | HTTP API | 结果 |
 |----------|------|
-| `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度与调用时间 |
+| `GET /api/v1/compile/config?compile_name={compile_name}` | 公开配置输入、调度、创建与执行时间 |
 | `POST /api/v1/compile/config/update` | 按请求体 `compile_name` 替换配置 |
 | `GET /api/v1/compile/configs` | `configs` 和 `next_cursor`；按配置名称的字典序划分页，每页内部按 `last_run_time` 倒序排列（null 置后） |
 | `GET /api/v1/compile/runs?compile_name={compile_name}` | `runs` 和 `next_cursor`，按 `created_at`、`task_id` 从新到旧排序 |
@@ -182,12 +182,12 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 嵌套 `args` 的私有字段在公开响应中脱敏并加密保存供执行使用：公开参数不变时保留私有值，修改含私有字段的嵌套子树时须重新传入这些私有字段，删除子树则同时删除其保存的私有值。
 
-两个调用时间都使用 Unix 秒：
+创建与执行时间使用 Unix 秒。
 
-- `task_first_create_time`：第一次成功受理的执行 task 的 `created_at`；未执行时为 null，首次设置后不变。
-- `last_run_time`：最近一次成功受理的新 task 的 `created_at`。后续失败或取消不回退，幂等重放不刷新。
+- `task_first_create_time` 记录 `POST /api/v1/compile/create` 保存配置的时间，保存后保持固定。
+- `last_run_time` 记录最近一次成功受理的新 task 的 `created_at`。首次受理前为 null。后续失败或取消不回退，幂等重放不刷新。
 
-手动与定时提交均更新这些时间。`last_triggered_slot`、`next_triggered_slot` 仅用于调度，手动执行不推进 slot。
+手动与定时提交均更新 `last_run_time`。`last_triggered_slot`、`next_triggered_slot` 仅用于调度，手动执行不推进 slot。
 
 run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、`finished_at`、`params`、`result`、`error`、`meta`。`params` 是本次受理时的完整公开输入及调度配置；`result` 包含 `created`、`updated`、`deleted` 数量。`meta` 仅包含：
 
@@ -202,6 +202,10 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 
 无变化时可复用开始快照。失败、取消不推进成功源基线。执行计划及必要恢复检查点保存在私有 Task 状态；公共配置、run 和 Task 不暴露执行凭据。
 
+VikingBot 在已知来源、worker 或写入失败仍未解决时返回 `result.completion_status: "partial"`。
+已确认输出会保留，命名 Compile 保留原成功源基线，使遗漏且未再次变化的输入仍能进入下一轮。
+其他结果省略该标记；没有标记不代表语义覆盖完整或索引成功。
+
 Compile 业务文件仅有：
 
 ```text
@@ -215,7 +219,7 @@ Compile 业务文件仅有：
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
 
-Compile 成功收尾时发布产物快照并推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+Compile 成功收尾时发布产物快照。完整交付且目标有文件新增、修改或删除时推进增量基线。部分交付后的增量恢复也可在目标零变更时推进基线，但仅限本轮所有新增或修改的来源均已处理，且能核对实际读取内容与冻结源快照一致。涉及未验证来源、删除或全量扫描时，零变更结果保留原基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
 
 ### 检查 Compile 可用性
 

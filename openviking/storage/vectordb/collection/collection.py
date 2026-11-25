@@ -83,6 +83,9 @@ class ICollection(ABC):
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         raise NotImplementedError
 
@@ -388,6 +391,9 @@ class Collection:
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ):
         """Search by keywords or query string using vectorization.
 
@@ -400,6 +406,9 @@ class Collection:
             filters (Optional[Dict[str, Any]]): Query filters to narrow down results. Defaults to None.
             output_fields (Optional[List[str]]): List of field names to include in results.
                 If None, returns all fields. Defaults to None.
+            bm25_k1 (Optional[float]): BM25 k1 parameter. Defaults to None (engine default).
+            bm25_b (Optional[float]): BM25 b parameter. Defaults to None (engine default).
+            advance (Optional[Dict[str, Any]]): Advanced engine options. Defaults to None.
 
         Returns:
             SearchResult: Search results containing matching documents with scores and field values.
@@ -420,6 +429,9 @@ class Collection:
             offset=offset,
             filters=filters,
             output_fields=output_fields,
+            bm25_k1=bm25_k1,
+            bm25_b=bm25_b,
+            advance=advance,
         )
 
     def search_by_id(

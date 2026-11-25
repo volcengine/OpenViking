@@ -9,17 +9,11 @@ Implements V5.0 asynchronous architecture:
 - No LLM generation in parser phase
 """
 
-import asyncio
-import os
-import shutil
-import stat
 import time
-import urllib.request
-import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple, Union
-from urllib.parse import unquote, urlparse
 
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.base import (
     NodeType,
     ParseResult,
@@ -27,19 +21,8 @@ from openviking.parse.base import (
     create_parse_result,
 )
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.constants import (
-    CODE_EXTENSIONS,
-    DOCUMENTATION_EXTENSIONS,
-    FILE_TYPE_CODE,
-    FILE_TYPE_DOCUMENTATION,
-    FILE_TYPE_OTHER,
-    IGNORE_DIRS,
-    IGNORE_EXTENSIONS,
-)
 from openviking.parse.parsers.upload_utils import upload_directory
-from openviking.utils import is_github_url, parse_code_hosting_url
-from openviking.utils.code_hosting_utils import _domain_matches
-from openviking_cli.utils.config import get_openviking_config
+from openviking.utils import parse_code_hosting_url
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -47,10 +30,9 @@ logger = get_logger(__name__)
 
 class CodeRepositoryParser(BaseParser):
     """
-    Parser for code repositories (Git/Zip).
+    Parser for local repository checkouts staged by the accessor layer.
 
     Features:
-    - Shallow clone for Git repositories
     - Automatic filtering based on .gitignore and of non-code directories (.git, node_modules, etc.)
     - Direct mapping to VikingFS temp directory
     - Preserves directory structure without chunking
@@ -80,34 +62,10 @@ class CodeRepositoryParser(BaseParser):
         - root_uri = "viking://resources/markwhen/gogetxueqiu"
     """
 
-    # Class constants imported from constants.py
-    IGNORE_DIRS = IGNORE_DIRS
-    IGNORE_EXTENSIONS = IGNORE_EXTENSIONS
-
     @property
     def supported_extensions(self) -> List[str]:
         # This parser is primarily invoked by URLTypeDetector, not by file extension
         return [".git", ".zip"]
-
-    def _detect_file_type(self, file_path: Path) -> str:
-        """
-        Detect file type based on extension for potential metadata tagging.
-
-        Returns:
-            "code" for programming language files
-            "documentation" for documentation files (md, txt, rst, etc.)
-            "other" for other text files
-            "binary" for binary files (already filtered by IGNORE_EXTENSIONS)
-        """
-        extension = file_path.suffix.lower()
-
-        if extension in CODE_EXTENSIONS:
-            return FILE_TYPE_CODE
-        elif extension in DOCUMENTATION_EXTENSIONS:
-            return FILE_TYPE_DOCUMENTATION
-        else:
-            # For other text files not in the lists
-            return FILE_TYPE_OTHER
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
@@ -142,7 +100,7 @@ class CodeRepositoryParser(BaseParser):
                 f"Source type: {type(source)}, value: {source}"
             )
 
-        logger.info(f"[CodeRepositoryParser] Parsing code repository: {source_path}")
+        logger.debug("Parsing code repository source=%s", safe_path_for_log(str(source_path)))
 
         try:
             # Get metadata from DataAccessor
@@ -176,7 +134,9 @@ class CodeRepositoryParser(BaseParser):
             temp_viking_uri = artifact_ref.root
             target_root_uri = f"{temp_viking_uri}/repository"
 
-            logger.debug(f"Uploading code repository artifacts to: {target_root_uri}")
+            logger.debug(
+                "Uploading repository artifacts target=%s", safe_uri_for_log(target_root_uri)
+            )
 
             # 4. Upload to the artifact store (filtering on the fly)
             file_count, upload_failures = await self._upload_directory(
@@ -195,7 +155,11 @@ class CodeRepositoryParser(BaseParser):
                     f"Failed to upload {len(upload_failures)} repository file(s): {detail}"
                 )
 
-            logger.info(f"Uploaded {file_count} files to {target_root_uri}")
+            logger.debug(
+                "Repository artifacts uploaded target=%s files=%d",
+                safe_uri_for_log(target_root_uri),
+                file_count,
+            )
 
             # 5. Create result
             # Root node is just a placeholder, TreeBuilder relies on temp_dir_path
@@ -239,15 +203,19 @@ class CodeRepositoryParser(BaseParser):
             return result
 
         except Exception as e:
-            logger.error(f"Failed to parse repository {source}: {e}", exc_info=True)
+            logger.debug(
+                "Repository parsing failed source=%s error_type=%s",
+                safe_uri_for_log(str(source)),
+                type(e).__name__,
+            )
             if artifact_ref is not None:
                 try:
                     await output_store.cleanup(artifact_ref)
                 except Exception as cleanup_error:
-                    logger.warning(
-                        "Failed to clean repository parse artifact %s: %s",
-                        artifact_ref.root,
-                        cleanup_error,
+                    logger.info(
+                        "Repository artifact cleanup failed path=%s error_type=%s",
+                        safe_path_for_log(str(artifact_ref.root)),
+                        type(cleanup_error).__name__,
                     )
             # Use original URL for error case as well - still important for TreeBuilder
             # Even on failure, we want TreeBuilder to potentially get org/repo from the URL
@@ -266,347 +234,6 @@ class CodeRepositoryParser(BaseParser):
     ) -> ParseResult:
         """Not supported for repositories."""
         raise NotImplementedError("CodeRepositoryParser does not support parse_content")
-
-    def _parse_repo_source(self, source: str, **kwargs) -> Tuple[str, Optional[str], Optional[str]]:
-        branch = kwargs.get("branch") or kwargs.get("ref")
-        commit = kwargs.get("commit")
-        repo_url = source
-        if source.startswith(("http://", "https://", "git://", "ssh://")):
-            parsed = urlparse(source)
-            repo_url = parsed._replace(query="", fragment="").geturl()
-            if commit is None or branch is None:
-                branch, commit = self._extract_ref_from_url(parsed, branch, commit)
-        repo_url = self._normalize_repo_url(repo_url)
-        return repo_url, branch, commit
-
-    def _extract_ref_from_url(
-        self,
-        parsed: Any,
-        branch: Optional[str],
-        commit: Optional[str],
-    ) -> Tuple[Optional[str], Optional[str]]:
-        if parsed.path:
-            path_branch, path_commit = self._parse_ref_from_path(parsed.path)
-            commit = path_commit or commit
-            # If commit is present in path, ignore branch entirely
-            if commit:
-                branch = None
-            else:
-                branch = branch or path_branch
-        return branch, commit
-
-    def _parse_ref_from_path(self, path: str) -> Tuple[Optional[str], Optional[str]]:
-        parts = [p for p in path.split("/") if p]
-        branch = None
-        commit = None
-        if "commit" in parts:
-            idx = parts.index("commit")
-            if idx + 1 < len(parts):
-                commit = parts[idx + 1]
-        if "tree" in parts:
-            idx = parts.index("tree")
-            if idx + 1 < len(parts):
-                ref = unquote(parts[idx + 1])
-                if self._looks_like_sha(ref):
-                    commit = ref
-                else:
-                    branch = ref
-        return branch, commit
-
-    @staticmethod
-    def _looks_like_sha(ref: str) -> bool:
-        """Return True if ref looks like a git commit SHA (7-40 hex chars)."""
-        return 7 <= len(ref) <= 40 and all(c in "0123456789abcdefABCDEF" for c in ref)
-
-    def _normalize_repo_url(self, url: str) -> str:
-        if url.startswith(("http://", "https://", "git://", "ssh://")):
-            parsed = urlparse(url)
-            path_parts = [p for p in parsed.path.split("/") if p]
-            base_parts = path_parts
-            git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
-            if git_index is not None:
-                base_parts = path_parts[: git_index + 1]
-
-            config = get_openviking_config()
-            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
-                base_parts = path_parts[:2]
-            base_path = "/" + "/".join(base_parts)
-            return parsed._replace(path=base_path, query="", fragment="").geturl()
-        return url
-
-    def _get_repo_name(self, url: str) -> str:
-        """Get repository name with organization for configured code-hosting URLs.
-
-        For https://github.com/volcengine/OpenViking, returns "volcengine/OpenViking"
-        For other URLs, falls back to just the repo name.
-        """
-        # First try to parse as code hosting URL
-        parsed_org_repo = parse_code_hosting_url(url)
-        if parsed_org_repo:
-            return parsed_org_repo
-
-        # Fallback for other URLs
-        name_source = url
-        if url.startswith(("http://", "https://", "git://", "ssh://")):
-            name_source = urlparse(url).path.rstrip("/")
-        elif ":" in url and not url.startswith("file://"):
-            name_source = url.split(":", 1)[1]
-
-        # Fallback for URLs outside the configured code-hosting domains
-        name = name_source.rstrip("/").split("/")[-1]
-        if name.endswith(".git"):
-            name = name[:-4]
-        name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
-        return name or "repository"
-
-    async def _run_git(self, args: List[str], cwd: Optional[str] = None) -> str:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            error_msg = stderr.decode().strip()
-            user_msg = "Git command failed."
-            if "Could not resolve hostname" in error_msg:
-                user_msg = (
-                    "Git command failed: could not resolve hostname. Check the URL or your network."
-                )
-            elif "Permission denied" in error_msg or "publickey" in error_msg:
-                user_msg = (
-                    "Git command failed: authentication error. Check your SSH keys or credentials."
-                )
-            raise RuntimeError(
-                f"{user_msg} Command: git {' '.join(args[1:])}. Details: {error_msg}"
-            )
-        return stdout.decode().strip()
-
-    async def _has_commit(self, repo_dir: str, commit: str) -> bool:
-        try:
-            await self._run_git(["git", "-C", repo_dir, "rev-parse", "--verify", commit])
-            return True
-        except RuntimeError:
-            return False
-
-    @staticmethod
-    def _is_github_url(url: str) -> bool:
-        """Return True for github.com URLs (supports ZIP archive API)."""
-        return is_github_url(url)
-
-    async def _github_zip_download(
-        self,
-        repo_url: str,
-        branch: Optional[str],
-        target_dir: str,
-    ) -> Tuple[Path, str]:
-        """Download a GitHub repo as a ZIP archive and extract it.
-
-        Uses the GitHub archive API (single HTTPS GET, no git history).
-
-        Returns:
-            (content_dir, repo_name) — content_dir is the extracted repo root.
-        """
-        repo_name = self._get_repo_name(repo_url)
-
-        # Build archive URL from owner/repo path components.
-        parsed = urlparse(repo_url)
-        path_parts = [p for p in parsed.path.split("/") if p]
-        owner = path_parts[0]
-        repo_raw = path_parts[1]
-        # Strip .git suffix for the archive URL (git clone keeps it, ZIP API does not).
-        repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
-
-        if branch:
-            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/{branch}.zip"
-        else:
-            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/HEAD.zip"
-
-        logger.info(f"Downloading GitHub ZIP: {zip_url}")
-
-        zip_path = os.path.join(target_dir, "_archive.zip")
-        extract_dir = os.path.join(target_dir, "_extracted")
-        os.makedirs(extract_dir, exist_ok=True)
-
-        # Download (blocking HTTP; run in thread pool to avoid stalling event loop).
-        def _download() -> None:
-            headers = {"User-Agent": "OpenViking"}
-            github_token = os.environ.get("GITHUB_TOKEN")
-            if github_token:
-                headers["Authorization"] = f"token {github_token}"
-
-            req = urllib.request.Request(zip_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
-                shutil.copyfileobj(resp, f)
-
-        try:
-            await asyncio.to_thread(_download)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to download GitHub ZIP {zip_url}: {exc}")
-
-        # Safe extraction with Zip Slip validation (mirrors _extract_zip logic).
-        target = Path(extract_dir).resolve()
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for info in zf.infolist():
-                mode = info.external_attr >> 16
-                if info.is_dir() or stat.S_ISDIR(mode):
-                    continue
-                if stat.S_ISLNK(mode):
-                    logger.warning(f"Skipping symlink entry in GitHub ZIP: {info.filename}")
-                    continue
-                raw = info.filename.replace("\\", "/")
-                raw_parts = [p for p in raw.split("/") if p]
-                if ".." in raw_parts:
-                    raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
-                if PurePosixPath(raw).is_absolute():
-                    raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
-                extracted = Path(zf.extract(info, extract_dir)).resolve()
-                if not extracted.is_relative_to(target):
-                    extracted.unlink(missing_ok=True)
-                    raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
-
-        # Remove downloaded archive to free disk space.
-        try:
-            os.unlink(zip_path)
-        except OSError:
-            pass
-
-        # GitHub ZIPs have a single top-level directory: {repo}-{branch}/ or {repo}-{sha}/.
-        # Return that directory as the content root so callers see bare repo files.
-        top_level = [d for d in Path(extract_dir).iterdir() if d.is_dir()]
-        content_dir = top_level[0] if len(top_level) == 1 else Path(extract_dir)
-
-        logger.info(f"GitHub ZIP extracted to {content_dir} ({repo_name})")
-        return content_dir, repo_name
-
-    async def _git_clone(
-        self,
-        url: str,
-        target_dir: str,
-        branch: Optional[str] = None,
-        commit: Optional[str] = None,
-    ) -> str:
-        """Clone a git repository into target_dir; return the repo name.
-
-        Uses --depth 1 for speed. If a specific commit is requested, it is
-        fetched and checked out after the shallow clone.
-
-        Returns:
-            Repository name derived from the URL (e.g. "OpenViking").
-        """
-        name = self._get_repo_name(url)
-        logger.info(f"Cloning {url} to {target_dir}...")
-
-        clone_args = [
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--no-recurse-submodules",
-        ]
-        if branch and not commit:
-            clone_args.extend(["--branch", branch])
-        clone_args.extend([url, target_dir])
-        await self._run_git(clone_args)
-        if commit:
-            try:
-                await self._run_git(["git", "-C", target_dir, "fetch", "origin", commit])
-            except RuntimeError:
-                try:
-                    await self._run_git(
-                        ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"]
-                    )
-                except RuntimeError:
-                    pass
-                ok = await self._has_commit(target_dir, commit)
-                if not ok:
-                    try:
-                        await self._run_git(
-                            ["git", "-C", target_dir, "fetch", "--unshallow", "origin"]
-                        )
-                    except RuntimeError:
-                        pass
-                ok = await self._has_commit(target_dir, commit)
-                if not ok:
-                    await self._run_git(
-                        [
-                            "git",
-                            "-C",
-                            target_dir,
-                            "fetch",
-                            "origin",
-                            "+refs/heads/*:refs/remotes/origin/*",
-                        ]
-                    )
-                    ok = await self._has_commit(target_dir, commit)
-                    if not ok:
-                        raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
-            await self._run_git(["git", "-C", target_dir, "checkout", commit])
-
-        return name
-
-    async def _extract_zip(self, zip_path: str, target_dir: str) -> str:
-        """Extract a local zip file into target_dir; return the archive stem as the repo name."""
-        if zip_path.startswith(("http://", "https://")):
-            # TODO: implement download logic or rely on caller?
-            # For now, assume it's implemented if needed, but raise error as strictly we only support git URL for now as per plan
-            raise NotImplementedError(
-                "Zip URL download not yet implemented in CodeRepositoryParser"
-            )
-
-        path = Path(zip_path)
-        name = path.stem
-
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            target = Path(target_dir).resolve()
-            for info in zip_ref.infolist():
-                mode = info.external_attr >> 16
-                # Skip directory entries (check both name convention and external attrs)
-                if info.is_dir() or stat.S_ISDIR(mode):
-                    continue
-                # Skip symlink entries to prevent symlink-based escapes
-                if stat.S_ISLNK(mode):
-                    logger.warning(f"Skipping symlink entry in zip: {info.filename}")
-                    continue
-                # Reject entries with suspicious raw path components before extraction
-                raw = info.filename.replace("\\", "/")
-                raw_parts = [p for p in raw.split("/") if p]
-                if ".." in raw_parts:
-                    raise ValueError(f"Zip Slip detected: entry {info.filename!r} contains '..'")
-                if PurePosixPath(raw).is_absolute() or (len(raw) >= 2 and raw[1] == ":"):
-                    raise ValueError(
-                        f"Zip Slip detected: entry {info.filename!r} is an absolute path"
-                    )
-                # Normalize the member name the same way zipfile does
-                # (strip drive/UNC, remove empty/"."/ ".." components) then verify
-                arcname = info.filename.replace("/", os.sep)
-                if os.path.altsep:
-                    arcname = arcname.replace(os.path.altsep, os.sep)
-                arcname = os.path.splitdrive(arcname)[1]
-                arcname = os.sep.join(p for p in arcname.split(os.sep) if p not in ("", ".", ".."))
-                if not arcname:
-                    continue  # entry normalizes to empty path, skip
-                member_path = (Path(target_dir) / arcname).resolve()
-                if not member_path.is_relative_to(target):
-                    raise ValueError(
-                        f"Zip Slip detected: entry {info.filename!r} escapes target directory"
-                    )
-                # Extract single member and verify the actual path on disk
-                extracted = Path(zip_ref.extract(info, target_dir)).resolve()
-                if not extracted.is_relative_to(target):
-                    # Best-effort cleanup of the escaped file
-                    try:
-                        extracted.unlink(missing_ok=True)
-                    except OSError as cleanup_err:
-                        logger.warning(
-                            f"Failed to clean up escaped file {extracted}: {cleanup_err}"
-                        )
-                    raise ValueError(
-                        f"Zip Slip detected: entry {info.filename!r} escapes target directory"
-                    )
-
-        return name
 
     async def _upload_directory(
         self,

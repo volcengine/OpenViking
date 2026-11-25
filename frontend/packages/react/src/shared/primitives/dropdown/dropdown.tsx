@@ -1,4 +1,4 @@
-import { cloneElement, useCallback, useId, version } from 'react';
+import { cloneElement, useCallback, useContext, useId, version } from 'react';
 import type { HTMLAttributes, ReactElement, Ref } from 'react';
 import { DropdownSurface } from './dropdown-surface.js';
 import { DropdownContext } from './dropdown-context.js';
@@ -28,7 +28,13 @@ export function Dropdown({
   menuClassName,
   onOpenChange,
 }: DropdownProps) {
-  const controls = useDropdown(triggerMode === 'hover', open, onOpenChange);
+  const parent = useContext(DropdownContext);
+  const controls = useDropdown(
+    triggerMode === 'hover',
+    open,
+    onOpenChange,
+    Boolean(parent),
+  );
   const id = useId();
   const child = trigger as ReactElement<
     HTMLAttributes<HTMLButtonElement> & { ref?: Ref<HTMLButtonElement> }
@@ -70,8 +76,11 @@ export function Dropdown({
           alignment={alignment}
           className={className}
           onReady={controls.onReady}
+          portalContainer={parent?.menu.current ?? undefined}
         >
-          <DropdownContext.Provider value={controls.close}>
+          <DropdownContext.Provider
+            value={{ close: controls.close, menu: controls.menu }}
+          >
             <div
               {...controls.menuProps}
               {...{ focusgroup: 'menu nomemory' }}

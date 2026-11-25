@@ -44,7 +44,7 @@ Your gateway address is `https://ov.example.com/gateway`, with your server's add
 
 ## Send a test request {#send-a-test-request}
 
-> **Tip**: step 3 of [Confirm that memory works](#confirm-that-memory-works) waits 10 quiet minutes before memories are extracted. To try it faster, first create a context profile with a shorter **Save the latest reply after** (for example 30 s), issue a key with it, and use that key as `GATEWAY_KEY` below. A context profile change reaches only conversations that start afterwards ([when changes take effect](06-manage-in-studio.md#when-changes-take-effect)).
+> **Tip**: step 3 of [Confirm that memory works](#confirm-that-memory-works) waits 10 quiet minutes before memories are extracted. To try it faster, first create a context profile with a shorter **Commit when idle for** (for example 30 s), issue a key with it, and use that key as `GATEWAY_KEY` below. A context profile change reaches only conversations that start afterwards ([when changes take effect](06-manage-in-studio.md#when-changes-take-effect)).
 
 Send two requests with curl: one lists the models the key can use, the other asks a model a question through the gateway. Set `GATEWAY_URL` to your gateway address (`http://127.0.0.1:1933/gateway` for a local server) and replace `<model>` with a model the upstream serves:
 
@@ -73,21 +73,8 @@ The model list can be incomplete or even empty while requests still work: an ups
 Check three things in order: the request went through the gateway, the conversation was saved, and memories come back in a new conversation.
 
 1. **The request went through the gateway.** Open the Requests tab. You should see your request as a **New message** with status 200. Once OpenViking has something relevant, the **Memory** column shows how many entries were added, for example `+3`; on a brand-new account it stays empty.
-2. **The conversation is saved.** Send a second request with the same `X-OpenViking-Session` value. Its `messages` must hold the whole conversation: your first message, the reply you got back and a new message. Chat clients do this for you; with curl you add them yourself:
-
-   ```bash
-   curl -s "$GATEWAY_URL/v1/chat/completions" \
-     -H "Authorization: Bearer $GATEWAY_KEY" \
-     -H "Content-Type: application/json" \
-     -H "X-OpenViking-Session: quickstart-1" \
-     -d '{"model": "<model>", "messages": [
-       {"role": "user", "content": "Remember that I prefer short answers."},
-       {"role": "assistant", "content": "<the reply you got>"},
-       {"role": "user", "content": "Thanks."}]}'
-   ```
-
-   The first turn is saved as soon as this request arrives ([why saving runs one turn behind](01-how-it-works.md#when-conversations-are-saved)). Open the **Sessions** page in Studio, and you should see a `gateway-…` session. Sessions belong to the key's user: if the key was issued for someone else, sign in under **Connection Settings** with that user's OpenViking API key to see it.
-3. **Memories are extracted.** After **Save the latest reply after** (10 minutes by default) passes with no new message, the gateway commits the session, and OpenViking extracts memories in the background, which takes a moment. Then start a new conversation with another session value and ask something that depends on the memory, such as "How long should your answers be?". The **Memory** column should show recalled entries, and the reply should use them.
+2. **The conversation is saved.** The turn is saved as soon as its reply has been sent ([When conversations are saved](01-how-it-works.md#when-conversations-are-saved)). Open the **Sessions** page in Studio, and you should see a `gateway-…` session. Sessions belong to the key's user: if the key was issued for someone else, sign in under **Connection Settings** with that user's OpenViking API key to see it.
+3. **Memories are extracted.** After **Commit when idle for** (10 minutes by default) passes with no new message, the gateway commits the session, and OpenViking extracts memories in the background, which takes a moment. Then start a new conversation with another session value and ask something that depends on the memory, such as "How long should your answers be?". The **Memory** column should show recalled entries, and the reply should use them.
 
 If the **Memory** column stays empty or no session appears, see [No memory is added](12-troubleshooting.md#no-memory-is-added) and [Conversations do not appear in OpenViking](12-troubleshooting.md#conversations-do-not-appear-in-openviking).
 

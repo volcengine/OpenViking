@@ -24,3 +24,10 @@ The Ubuntu 20.04 image is built for amd64. ARM wheel jobs continue to use
 When a variable is unset, its jobs fall back to the corresponding Ubuntu base
 image. Wheel jobs skip apt only when all required packages are installed, and
 reject an image with a different glibc version before compiling.
+
+When changing the wheel system-package list in `_build.yml`, update
+`ubuntu20-ci.Dockerfile` to match, rebuild and publish the validated image, then
+update `CI_UBUNTU20_IMAGE` to its new immutable digest. Apply the same process to
+Ubuntu 24.04 when changing its consumers' system dependencies. An older image
+still works through apt fallback, but wheel logs report the missing packages and
+the build loses the preinstalled-image speedup until the variable is updated.

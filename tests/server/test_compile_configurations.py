@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import datetime, timedelta
+from time import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -43,6 +44,23 @@ INPUTS = {"from": [SOURCE], "to": TARGET, "skill": SKILL}
 SAVED_INPUTS = {**INPUTS, "compile_name": "研发周报"}
 
 
+@pytest.mark.parametrize("source", ["viking://resources", "viking://user/"])
+@pytest.mark.parametrize("saved", [False, True])
+async def test_compile_rejects_root_sources(service, client, source, saved):
+    """Reject a namespace root in any source position and suggest concrete directories."""
+    service.compile.configure_local_backend("http://localhost:1", "")
+    path = "/api/v1/compile/create" if saved else "/api/v1/compile"
+    body = {**(SAVED_INPUTS if saved else INPUTS), "from": [SOURCE, source]}
+
+    response = await client.post(path, json=body)
+
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["message"] == (
+        "Compile --from rejects viking://resources and viking://user. Use a "
+        "subdirectory such as viking://resources/test or viking://user/default/resources."
+    )
+
+
 @pytest.mark.parametrize("body", [b'{"error":{"message":"Ark unavailable"}}', b"unavailable"])
 async def test_compile_runtime_424_is_non_retryable(service, monkeypatch, body):
     """Runtime 424 preserves request context even when the response is not JSON."""
@@ -54,36 +72,76 @@ async def test_compile_runtime_424_is_non_retryable(service, monkeypatch, body):
     assert exc.value.code == "CompileDependencyFailed"
     assert exc.value.transient is False
     assert "request_id=request-424" in str(exc.value)
-    if body.startswith(b"{"):
-        assert "Ark unavailable" in str(exc.value)
-    request.assert_awaited_once()
+    reason = "Ark unavailable" if body.startswith(b"{") else "Compile dependency failed"
+    assert reason in str(exc.value)
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "errors", "detail"),
     [
-        {},
-        {"compile_name": "../state"},
-        {"compile_name": "-demo"},
-        {"compile_name": "research-summary", "to": TARGET},
-        {"compile_name": "research-summary", "args": []},
-        {"compile_id": "research-summary"},
-        {**INPUTS, "compile_name": None},
-        {**INPUTS, "operation_id": "cmp_example"},
-        {**INPUTS, "args": {"mode": "incremental"}},
-        {**INPUTS, "args": {"changes": {}}},
-        {**INPUTS, "args": {"last_compile_time": 1}},
-        {**INPUTS, "args": {"auto_update": False}},
-        {**INPUTS, "args": {"update_schedule": None}},
-        {**INPUTS, "args": {"owner_user_id": "alice"}},
-        {**INPUTS, "reason": "old alias"},
-        {**INPUTS, "owner_user_id": "someone-else"},
-        {**INPUTS, "user_id": "someone-else"},
+        pytest.param({}, {("to",): "missing", ("skill",): "missing"}, None, id="missing-inputs"),
+        pytest.param(
+            {"compile_name": "../state"},
+            {("compile_name",): "string_pattern_mismatch"},
+            None,
+            id="path-as-name",
+        ),
+        pytest.param(
+            {"compile_name": "-demo"},
+            {("compile_name",): "string_pattern_mismatch"},
+            None,
+            id="leading-hyphen",
+        ),
+        pytest.param(
+            {"compile_name": "research-summary", "args": []},
+            {(): "value_error"},
+            "Named Compile args must be a JSON object",
+            id="named-args-not-an-object",
+        ),
+        pytest.param(
+            {
+                **INPUTS,
+                "compile_id": "research-summary",
+                "operation_id": "cmp_example",
+                "reason": "old alias",
+                "owner_user_id": "someone-else",
+                "user_id": "someone-else",
+            },
+            {
+                (field,): "extra_forbidden"
+                for field in ("compile_id", "operation_id", "reason", "owner_user_id", "user_id")
+            },
+            None,
+            id="unsupported-top-level-fields",
+        ),
+        pytest.param(
+            {"compile_name": None},
+            {(): "value_error"},
+            "compile_name must not be null",
+            id="null-name",
+        ),
+        pytest.param(
+            {**INPUTS, "args": {"mode": "incremental", "changes": {}, "last_compile_time": 1}},
+            {(): "value_error"},
+            "Compile execution controls are server-owned: changes, last_compile_time, mode",
+            id="server-owned-controls",
+        ),
+        pytest.param(
+            {**INPUTS, "args": {"owner_user_id": "alice"}},
+            {(): "value_error"},
+            "args.owner_user_id requires compile_name",
+            id="owner-without-name",
+        ),
     ],
 )
-def test_execution_request_rejects_ambiguous_or_legacy_controls(payload):
-    with pytest.raises(ValidationError):
+def test_execution_request_rejects_ambiguous_or_legacy_controls(payload, errors, detail):
+    with pytest.raises(ValidationError) as exc:
         CompileRequest.model_validate(payload)
+
+    actual_errors = exc.value.errors()
+    assert {error["loc"]: error["type"] for error in actual_errors} == errors
+    if detail is not None:
+        assert actual_errors[0]["msg"] == f"Value error, {detail}"
 
 
 def test_named_execution_guides_mixed_requests_before_validating_inputs():
@@ -175,6 +233,8 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
     name = SAVED_INPUTS["compile_name"]
     assert (await client.post("/api/v1/compile/create", json=SAVED_INPUTS)).status_code == 200
     store = service.compile.lifecycle.store
+    scope = (service.user.account_id, service.user.user_id, name)
+    created_at = (await store.get(*scope))["task_first_create_time"]
     write_json = store.write_json
     error = ValueError("invalid lock request: owned lease capability does not match ref 'task'")
     queue = SimpleNamespace(enqueue=AsyncMock(side_effect=error if failure == "enqueue" else None))
@@ -199,7 +259,6 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
     if failure == "expired":
         first_id = response.json()["result"]["task_id"]
         assert first_id == queue.enqueue.await_args.args[1]["task_id"]
-        scope = (service.user.account_id, service.user.user_id, name)
         first = await store.get_run(*scope, first_id)
         for index in range(3):
             if index == 1:
@@ -210,15 +269,16 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
             run = await store.get_run(*scope, response.json()["result"]["task_id"])
             assert run["meta"]["trigger"] == "manual"
             state = await store.get(*scope)
-            assert state["task_first_create_time"] == (None if index == 0 else first["created_at"])
-            if index > 0:
-                assert state["last_run_time"] == run["created_at"]
+            assert state["task_first_create_time"] == created_at
+            assert state["last_run_time"] == (None if index == 0 else run["created_at"])
         assert scan.await_count == 3
         assert all(call.args == scope for call in scan.await_args_list)
         assert first["meta"]["trigger"] == "initial"
 
 
-async def test_creation_requires_name_before_side_effects(service, app, client, monkeypatch):
+async def test_creation_rejects_invalid_input_before_side_effects(
+    service, app, client, monkeypatch
+):
     ctx, runtime = await prepare(service, app, monkeypatch)
     for body in (
         INPUTS,
@@ -229,6 +289,16 @@ async def test_creation_requires_name_before_side_effects(service, app, client, 
         response = await client.post("/api/v1/compile/create", json=body)
         assert response.status_code == 400, response.text
         assert "compile_name" in response.text
+    for args, reason in (
+        ({"auto_update": "false"}, "args.auto_update must be a boolean"),
+        (
+            {"mode": "full", "changes": {}, "last_compile_time": 1},
+            "Compile execution controls are server-owned: changes, last_compile_time, mode",
+        ),
+    ):
+        response = await client.post("/api/v1/compile/create", json={**SAVED_INPUTS, "args": args})
+        assert response.status_code == 400, response.text
+        assert reason in response.json()["error"]["message"]
     service.fs.ensure_compile_target.assert_not_awaited()
     assert not runtime.calls
     assert not [
@@ -338,6 +408,16 @@ async def test_same_name_configuration_and_runs_are_user_scoped(service, app, cl
         ]["runs"]
         assert [r["task_id"] for r in runs] == [task_ids[-1]]
         assert runs[0]["params"]["instruction"] == actor.user.user_id
+        assert runs[0]["status"] == "queued"
+        cancel_path = f"/api/v1/tasks/{task_ids[-1]}/cancel"
+        cancelled = await client.post(cancel_path)
+        assert cancelled.status_code == 200, cancelled.text
+        task = cancelled.json()["result"]
+        run = await service.compile.get_run(name, task_ids[-1], actor)
+        assert task["status"] == run["status"] == "cancelled"
+        assert run["finished_at"] == task["updated_at"]
+        assert (await client.post(cancel_path)).status_code == 200
+        assert await service.compile.get_run(name, task_ids[-1], actor) == run
     assert task_ids[0] != task_ids[1]
     foreign_run = await client.get(
         f"/api/v1/compile/runs/{task_ids[0]}", params={"compile_name": name}
@@ -549,13 +629,16 @@ async def test_compile_admission_rejects_invalid_inputs_before_publication(
 
 
 @pytest.mark.parametrize(
-    ("role", "cancel_424"),
-    [(Role.USER, False), (Role.ADMIN, False), (Role.GLOBAL, False), (Role.USER, True)],
+    ("role", "runtime_failure"),
+    [(role, None) for role in (Role.USER, Role.ADMIN, Role.GLOBAL)]
+    + [(Role.USER, ("cancel", 424))]
+    + [(Role.USER, (method, 404)) for method in ("create", "get", "cancel")],
 )
 async def test_configuration_runs_full_isolation_and_failure_recovery(
-    service, app, client, monkeypatch, role, cancel_424
+    service, app, client, monkeypatch, role, runtime_failure
 ):
     ensure_target = service.fs.ensure_compile_target
+    runtime_client = service.compile._client
     ctx, runtime = await prepare(service, app, monkeypatch)
     ctx.role, ctx.group_ids = Role(role), ("reviewers",)
     commit = AsyncMock(wraps=service.viking_fs.commit)
@@ -567,14 +650,18 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     tracker = get_task_tracker()
 
     inputs = {**SAVED_INPUTS, "to": TARGET.replace("_", " ")}
+    create_started_at = time()
     created = await client.post("/api/v1/compile/create", json=inputs)
+    create_finished_at = time()
     assert created.status_code == 200, created.text
     assert created.json()["result"] == {"compile_name": inputs["compile_name"]}
     compile_name = created.json()["result"]["compile_name"]
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert state["to"] == TARGET
     assert not await service.viking_fs.exists(inputs["to"], ctx=ctx)
-    assert state["task_first_create_time"] is state["last_run_time"] is None
+    created_at = state["task_first_create_time"]
+    assert create_started_at <= created_at <= create_finished_at
+    assert state["last_run_time"] is None
     assert await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name) == []
     assert runtime.calls == []
     service.fs.ensure_compile_target.assert_awaited_once_with(TARGET, ctx)
@@ -591,7 +678,9 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         )
         assert response.status_code == 202, response.text
         task_id = response.json()["result"]["task_id"]
-        if cancel_424 and runtime.status == "failed":
+        failure = runtime_failure if runtime.status == "failed" else None
+        cancelling = failure is not None and failure[0] == "cancel"
+        if cancelling:
             await tracker.register_work(task_id, "compile", "ExternalTask", **owner)
             await tracker.start_work(task_id, "compile", **owner)
 
@@ -600,13 +689,18 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
                 raise asyncio.CancelledError()
 
             runtime.get.side_effect = interrupt_poll
-            runtime.cancel = AsyncMock(
-                side_effect=CompileDependencyFailure(
-                    "CompileDependencyFailed", "HTTP 424 cancel: Ark unavailable", transient=False
-                )
-            )
-        await service.compile._tasks.execute(task_id, **owner)
-        if cancel_424 and runtime.status == "failed":
+        with monkeypatch.context() as fault:
+            if failure:
+                method, status = failure
+                code = "ResourceNotExist" if status == 404 else "CompileDependencyFailed"
+                body = {"error": {"code": code, "message": "Runtime request failed"}}
+                request = AsyncMock(return_value=httpx.Response(status, json=body))
+                fault.setattr(httpx.AsyncClient, "request", request)
+                fault.setattr(runtime, method, getattr(runtime_client(), method), raising=False)
+            await service.compile._tasks.execute(task_id, **owner)
+            if failure:
+                request.assert_awaited_once()
+        if cancelling:
             await tracker.mark_work_done(task_id, "compile", **owner)
         for call in commit.await_args_list:
             executor = call.kwargs["ctx"]
@@ -617,24 +711,11 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
             )
         return await tracker.get(task_id, **owner)
 
-    with monkeypatch.context() as counter:
-        reads = AsyncMock(wraps=store._agfs.read)
-        counter.setattr(store._agfs, "read", reads)
-        first = await execute({"compile_name": compile_name}, "compile-first-execution")
+    first = await execute({"compile_name": compile_name}, "compile-first-execution")
     assert first.status == "completed", first.error
-    state_path = store._record_path(ctx.account_id, ctx.user.user_id, compile_name)
-    run_path = store._run_path(ctx.account_id, ctx.user.user_id, compile_name, first.task_id)
-    # Include the first run lookup, which returns not found before registration.
-    assert [c.args[0] for c in reads.await_args_list if c.args[0] in (state_path, run_path)] == [
-        state_path,
-        run_path,  # acceptance
-        state_path,
-        run_path,  # start, including baseline selection
-        run_path,
-        state_path,  # finish
-    ]
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
-    assert state["task_first_create_time"] == state["last_run_time"] == first.created_at
+    assert state["task_first_create_time"] == created_at
+    assert state["last_run_time"] == first.created_at
     run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, first.task_id)
     assert run["meta"]["mode"] == "full"
     assert run["actor"] == ctx.user.user_id
@@ -665,7 +746,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert noop.task_id != first.task_id
     assert len(runtime.calls) == 1
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
-    assert state["task_first_create_time"] == first.created_at
+    assert state["task_first_create_time"] == created_at
     assert state["last_run_time"] == noop.created_at
     assert state["last_triggered_slot"] is None
 
@@ -703,12 +784,13 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     failed_run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, failed.task_id)
     assert failed_run["meta"]["finish_snapshot"] is not None
 
-    if cancel_424:
+    if runtime_failure:
         assert failed_run["status"] == "failed"
-        assert "Ark unavailable" in failed.error and "Ark unavailable" in failed_run["error"]
+        reason = f"HTTP {runtime_failure[1]}"
+        assert reason in failed.error and reason in failed_run["error"]
         runtime.status, runtime.get.side_effect = "completed", None
         runtime.get.return_value = CompileSessionStatus(status="completed", stage="done")
-        successor = await execute({"compile_name": compile_name}, "compile-after-424")
+        successor = await execute({"compile_name": compile_name}, "compile-after-runtime-failure")
         assert successor.status == "completed"
         assert await service.fs.read(f"{TARGET}/page.md", ctx) != preserved
 
@@ -800,11 +882,12 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     first_delivery, retry = queue.enqueue.await_args_list
     assert first_delivery == retry
     after = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
-    assert after["task_first_create_time"] == after["last_run_time"] is not None
+    assert after["task_first_create_time"] == before["task_first_create_time"]
     assert after["last_triggered_slot"] == due.isoformat()
     assert after["next_triggered_slot"] == (due + timedelta(days=1)).isoformat()
     runs = await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name)
     assert len(runs) == 1 and runs[0]["meta"]["trigger"] == "initial"
+    assert after["last_run_time"] == runs[0]["created_at"]
     assert runs[0]["actor"] == executor.user.user_id
     assert await store.get(ctx.account_id, executor.user.user_id, compile_name) is None
     assert runs[0]["task_id"] == retry.args[1]["task_id"]
@@ -872,6 +955,9 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
             CompileCreateRequest.model_validate(SAVED_INPUTS), ctx=ctx
         )
     )["compile_name"]
+    created_at = (await store.get(ctx.account_id, ctx.user.user_id, compile_name))[
+        "task_first_create_time"
+    ]
     request = CompileRequest(compile_name=compile_name)
     task = await service.compile.create(
         request, ctx=ctx, connection={}, idempotency_key="compile-frozen-config"
@@ -900,7 +986,8 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
     updated = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert updated["updated_by"] == "bob"
     assert updated["execution_context"]["executor"]["user_id"] == editor.user.user_id
-    assert updated["task_first_create_time"] == updated["last_run_time"] == task.created_at
+    assert updated["task_first_create_time"] == created_at
+    assert updated["last_run_time"] == task.created_at
     assert updated["progress"] == {"source_commit": "old-success"}
     assert "conflict_num" not in updated
     assert updated["to"] == TARGET

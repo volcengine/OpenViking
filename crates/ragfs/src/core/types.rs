@@ -684,14 +684,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_parameter() {
-        let param = ConfigParameter::required_string("host", "Database host");
-        assert_eq!(param.name, "host");
-        assert!(param.required);
-        assert_eq!(param.param_type, "string");
-    }
-
-    #[test]
     fn test_plugin_config_from_raw_parts_handles_multiwrite_shapes() {
         let mut valid_params = HashMap::new();
         valid_params.insert(

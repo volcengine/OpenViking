@@ -9,14 +9,17 @@ import { useCallback, useRef } from 'react';
 import type { MarkdownAdapterOptions } from '@ark-design/ui/file-viewer/adapters/markdown';
 
 import { createFilePreviewAdapterList } from './file-preview-adapters.js';
+import type { DirectoryLinkMode } from './file-preview-adapters.js';
 
 export interface FilePreviewAdapterOptions {
   /** 底座交出或收回命令式句柄时调用。 */
   onHandleChange: (handle: ViewerHandle | null) => void;
   /** 命中的 Adapter 加载完成时，上报它支持的视图模式。 */
   onViewModesChange: (modes: readonly ViewerViewModeOption[]) => void;
-  /** Markdown 正文里的链接被点击时调用；传入即由宿主接管导航。 */
+  /** Markdown 正文链接的点击回调；目录策略可限定接管范围。 */
   onLinkClick?: MarkdownAdapterOptions['onLinkClick'];
+  directoryLinks?: DirectoryLinkMode;
+  sessionMessages?: boolean;
   resolveImage?: (src: string) => Promise<string>;
 }
 
@@ -40,43 +43,48 @@ export function createFilePreviewAdapters({
   onViewModesChange,
   onLinkClick,
   resolveImage,
+  directoryLinks,
+  sessionMessages,
 }: FilePreviewAdapterOptions): FileViewerCoreProps['adapters'] {
-  return createFilePreviewAdapterList({ onLinkClick, resolveImage }).map(
-    (adapter) => {
-      const wrap: Adapter = (context) => {
-        const descriptor = adapter(context);
-        return {
-          ...descriptor,
-          load: async (loadContext) => {
-            const { Component } = await descriptor.load(loadContext);
-            onViewModesChange(descriptor.supportedViewModes ?? []);
-            function HandleCapture(props: {
-              registerHandle?: (handle: ViewerHandle | null) => void;
-            }) {
-              // `proxy` 必须完全稳定：底座把 `registerHandle` 当依赖，每次渲染
-              // 换一个新函数会让它重新 setState，我们的回调再 setState，形成
-              // 无限循环。底座传下来的 `registerHandle` 也可能每次渲染都变，
-              // 因此用 ref 持有最新的那个，让 `proxy` 的依赖数组为空。
-              //
-              // `proxy` must be fully stable: the base treats `registerHandle` as a
-              // dependency, and a fresh function every render makes it setState
-              // again, which our callback answers with another setState — an endless
-              // loop. The `registerHandle` the base passes in can change per render
-              // too, so a ref holds the latest one and `proxy` keeps an empty dep list.
-              const latest = useRef(props.registerHandle);
-              latest.current = props.registerHandle;
-              const proxy = useCallback((handle: ViewerHandle | null) => {
-                onHandleChange(handle);
-                latest.current?.(handle);
-              }, []);
-              return <Component {...props} registerHandle={proxy} />;
-            }
-            HandleCapture.displayName = 'FilePreviewHandleCapture';
-            return { Component: HandleCapture };
-          },
-        };
+  return createFilePreviewAdapterList({
+    onLinkClick,
+    resolveImage,
+    directoryLinks,
+    sessionMessages,
+  }).map((adapter) => {
+    const wrap: Adapter = (context) => {
+      const descriptor = adapter(context);
+      return {
+        ...descriptor,
+        load: async (loadContext) => {
+          const { Component } = await descriptor.load(loadContext);
+          onViewModesChange(descriptor.supportedViewModes ?? []);
+          function HandleCapture(props: {
+            registerHandle?: (handle: ViewerHandle | null) => void;
+          }) {
+            // `proxy` 必须完全稳定：底座把 `registerHandle` 当依赖，每次渲染
+            // 换一个新函数会让它重新 setState，我们的回调再 setState，形成
+            // 无限循环。底座传下来的 `registerHandle` 也可能每次渲染都变，
+            // 因此用 ref 持有最新的那个，让 `proxy` 的依赖数组为空。
+            //
+            // `proxy` must be fully stable: the base treats `registerHandle` as a
+            // dependency, and a fresh function every render makes it setState
+            // again, which our callback answers with another setState — an endless
+            // loop. The `registerHandle` the base passes in can change per render
+            // too, so a ref holds the latest one and `proxy` keeps an empty dep list.
+            const latest = useRef(props.registerHandle);
+            latest.current = props.registerHandle;
+            const proxy = useCallback((handle: ViewerHandle | null) => {
+              onHandleChange(handle);
+              latest.current?.(handle);
+            }, []);
+            return <Component {...props} registerHandle={proxy} />;
+          }
+          HandleCapture.displayName = 'FilePreviewHandleCapture';
+          return { Component: HandleCapture };
+        },
       };
-      return wrap;
-    },
-  );
+    };
+    return wrap;
+  });
 }

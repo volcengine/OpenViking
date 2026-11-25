@@ -1,5 +1,6 @@
 import { asBotError as asError } from './errors.js';
 import { loadHistory } from './chat-history.js';
+import { createInterruptedReplyHistory } from './interrupted-reply-history.js';
 import { createPersistence } from './chat-persistence.js';
 import type { AnalyticsReporter } from '../../../shared/analytics/reporter.js';
 import { tagData, readData } from '../../../shared/monitoring/data.js';
@@ -23,6 +24,7 @@ export function createChatController(
   parentSignal?: AbortSignal,
   analytics?: import('react').RefObject<AnalyticsReporter | undefined>,
   monitoring?: MonitoringBinding,
+  nativeCommit?: VikingBotChatService['commitSession'],
 ) {
   const loadOnStart = options.enabled !== false && !options.initialMessages;
   let state: VikingBotChatState = {
@@ -37,11 +39,12 @@ export function createChatController(
   let appendInput: AppendInput | undefined;
   let lifetime = new AbortController();
   const undelivered: VikingBotDraft[] = [];
+  const reconcile = createInterruptedReplyHistory();
   const update = (
     patch: Partial<VikingBotChatState>,
     span?: MonitoringSpan,
   ) => {
-    state = { ...state, ...patch };
+    state = reconcile(state, patch);
     if (span) {
       if ('messages' in patch) tagData(monitoring, state.messages, [span]);
       if ('streaming' in patch) tagData(monitoring, state.streaming, [span]);
@@ -90,13 +93,9 @@ export function createChatController(
   const send: VikingBotChatResult['send'] = async (input, onDelivered) => {
     const draft =
       typeof input === 'string' ? { text: input, attachments: [] } : input;
-    if (
-      !active ||
-      (!draft.text.trim() &&
-        !draft.attachments.length &&
-        !draft.references?.length)
-    )
-      return false;
+    const hasInput =
+      draft.text.trim() || draft.attachments.length || draft.references?.length;
+    if (!active || !hasInput) return false;
     if (request) {
       const controller = request;
       return steerInput({
@@ -143,7 +142,7 @@ export function createChatController(
     undelivered.length = 0;
     update({
       sessionId,
-      responseComplete: false,
+      responseComplete: undefined,
       messages: [],
       streaming: undefined,
       status: active && sessionId ? 'loading' : 'idle',
@@ -156,9 +155,7 @@ export function createChatController(
   return {
     subscribe: (listener: () => void) => {
       listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
+      return () => void listeners.delete(listener);
     },
     getSnapshot: () => state,
     monitoringOf: (snapshot: VikingBotChatState) =>
@@ -175,6 +172,10 @@ export function createChatController(
     },
     send,
     reload,
+    commitSession: persistence.commit(
+      service.commitSession?.bind(service) ?? nativeCommit,
+      () => (active ? state : undefined),
+    ),
     abort: async () => {
       const controller = request;
       const id = state.sessionId;

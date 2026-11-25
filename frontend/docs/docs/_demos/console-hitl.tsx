@@ -65,7 +65,9 @@ function InstructionEditor({
 export default function ConsoleHitl() {
   const zh = useLang() === 'zh';
   const [fail, setFail] = useState(false);
+  const [customize, setCustomize] = useState(false);
   const [copied, setCopied] = useState('');
+  const [opened, setOpened] = useState('');
   const state = useRef({ zh, fail });
   state.current = { zh, fail };
   const service = useMemo(
@@ -174,9 +176,12 @@ export default function ConsoleHitl() {
     <>
       <p>
         {zh
-          ? '模拟服务，不访问后端。发送任意消息触发问题组，逐项提交后继续对话。'
-          : 'Simulated service, with no backend calls. Send any message to request input, then submit each card to continue.'}
+          ? '模拟服务，不访问后端。发送任意消息体验 Wiki 创建，或发送「日报」体验定时更新。逐项提交后继续对话。'
+          : 'Simulated service, with no backend calls. Send any message to create a Wiki, or send “daily report” to configure scheduled updates. Submit each card to continue.'}
       </p>
+      <Checkbox checked={customize} onChange={setCustomize}>
+        {zh ? '启用宿主自定义表单' : 'Enable host form customizations'}
+      </Checkbox>
       <Checkbox checked={fail} onChange={setFail}>
         {zh ? '模拟答案发送失败' : 'Simulate answer send failure'}
       </Checkbox>
@@ -185,12 +190,13 @@ export default function ConsoleHitl() {
           <Console
             locale={zh ? 'zh-CN' : 'en-US'}
             modes={['conversation']}
-            chatOptions={{ service, hitl }}
-            conversation={{ onCopy: setCopied }}
+            chatOptions={{ service, hitl: customize ? hitl : undefined }}
+            conversation={{ onCopy: setCopied, onOpenUri: setOpened }}
           />
         </div>
       </OpenVikingProvider>
       {copied ? <pre>{copied}</pre> : null}
+      {opened ? <pre>{opened}</pre> : null}
     </>
   );
 }

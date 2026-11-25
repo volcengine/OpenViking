@@ -104,12 +104,17 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
     async def prefetch(self) -> List[Dict[str, Any]]:
         if not self._include_session_skills:
             if not isinstance(self.messages, list):
-                logger.warning(f"Expected List[Message], got {type(self.messages)}")
+                logger.info(
+                    "trajectory messages invalid; skipping expected=list actual_type=%s",
+                    type(self.messages).__name__,
+                )
                 return []
             messages = [self._build_conversation_message()]
         else:
             self._sync_skill_provider_state()
             messages = await self._skill_provider.prefetch()
+            if self._include_trajectories:
+                messages[0] = self._build_conversation_message()
         if len(self.case_candidates) > 1:
             candidates = [
                 {key: case[key] for key in ("id", "name", "task_signature", "input")}

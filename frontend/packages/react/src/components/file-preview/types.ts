@@ -94,6 +94,8 @@ export interface FilePreviewTabBase {
    * What the tab row shows. It can be plain text or a node with styling or icons.
    */
   title?: ReactNode;
+  /** Positive count shown beside the title, capped at 99+. The label explains its unit. */
+  badge?: { count: number; label: string };
   /**
    * 页签图标，由宿主提供；省略时该页签只显示标题，不占图标位。
    *
@@ -343,9 +345,10 @@ export interface FilePreviewDirectoryTab extends FilePreviewTabBase {
    */
   onActiveLevelChange?: (key: string) => void;
   /**
-   * 目录操作的执行能力，例如沿路径向上打开。省略对应方法时该操作不可用。
-   * Directory operation capabilities, for example opening an ancestor. Omitting a
-   * method makes its operation unavailable.
+   * 目录操作的执行能力，例如打开祖先目录或摘要中的资源链接。
+   * 省略对应方法时该操作不可用。
+   * Directory operation capabilities, such as opening an ancestor or a resource
+   * link in a summary. Omitting a method makes its operation unavailable.
    */
   operations?: FilePreviewOperations;
   /**
@@ -394,15 +397,21 @@ export interface FilePreviewOperations {
    */
   openParent?: (uri: string) => Promise<void>;
   /**
-   * 打开正文里被点击的链接，完成后返回。传入后由宿主接管导航，组件阻止默认
-   * 跳转；相对路径的解析也归宿主，组件给出的是 Markdown 里的原始目标。
+   * 打开 Markdown 链接，参数为原始目标，完成后返回；地址解析由宿主负责。
+   * 文件页签传入后由宿主接管所有链接，包括外链，组件阻止默认跳转。
+   * 目录摘要只将 Viking URI 和相对资源链接交给宿主；HTTP(S)、mailto、tel 和
+   * // 外链保留浏览器原生行为。指向带显式 id 的 HTML 标题的同文档锚点在目录预览内定位，
+   * 无需此回调；普通 Markdown 标题不会自动生成 ID。
    *
    * 目前只有 Markdown 正文会触发：其它格式的渲染器不提供链接点击回调。
    *
-   * Opens a link clicked inside the body and resolves on completion. Supplying it
-   * hands navigation to the host — the component prevents the default jump — and
-   * resolving relative paths is the host's job too; the component passes the raw
-   * target as written in the Markdown.
+   * Opens a Markdown link and resolves on completion. The host receives and resolves
+   * the original target. In file tabs, supplying it takes over all links, including
+   * external links, and prevents default navigation. Directory summaries only pass
+   * Viking URIs and relative resource links to the host; HTTP(S), mailto, tel and //
+   * external links retain native behavior. Same-document anchors targeting HTML
+   * headings with explicit IDs scroll within the directory preview without this callback; plain
+   * Markdown headings do not generate IDs.
    *
    * Only Markdown bodies fire this today: the other renderers expose no link-click
    * callback.

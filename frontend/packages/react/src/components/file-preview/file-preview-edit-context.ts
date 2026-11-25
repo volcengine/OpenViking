@@ -1,14 +1,19 @@
 import { createContext, useCallback, useContext, useRef } from 'react';
 import type { FilePreviewActions, FilePreviewFileTab } from './types.js';
 
+type StartEditingAtAnnotation = (matchText?: string) => void;
+export type FilePreviewPanelActions = FilePreviewActions & {
+  startEditingAtAnnotation: StartEditingAtAnnotation;
+};
+
 export const FilePreviewEditContext = createContext<{
-  editFile: (() => void) | null;
-  onFileReady: (key: string, startEditing?: () => void) => void;
+  editFile: ((matchText: string) => void) | null;
+  onFileReady: (key: string, startEditing?: StartEditingAtAnnotation) => void;
 } | null>(null);
 
 export function useFilePreviewReadyRef(
   fileTab: FilePreviewFileTab | undefined,
-  { busy, canEdit, startEditing }: FilePreviewActions,
+  { busy, canEdit, startEditingAtAnnotation }: FilePreviewPanelActions,
   editEnabled: boolean,
 ) {
   const panelRef = useRef<HTMLDivElement>(null);
@@ -16,7 +21,7 @@ export function useFilePreviewReadyRef(
   const readyKey = fileTab?.loading ? undefined : fileTab?.key;
   const edit =
     onFileReady && editEnabled && canEdit && !busy && !fileTab?.disabled
-      ? startEditing
+      ? startEditingAtAnnotation
       : undefined;
   // Continue the click when the target file panel attaches with its loaded tab.
   const attachPanel = useCallback(

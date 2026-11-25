@@ -14,9 +14,11 @@ import uuid
 
 import pytest
 
+from openviking.privacy.global_policy import UserGlobalPolicyService
 from openviking.pyagfs import get_binding_client
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
@@ -32,6 +34,7 @@ def snapshot_binding_config(tmp_path, request):
     config = tmp_path / "ragfs.toml"
     config.write_text(
         f'[git]\nenabled=true\nbackend="local"\n[git.local]\nbase_dir="{tmp_path / "git"}"\n'
+        '[git.snapshot.log]\nprovider="none"\n'
     )
     pathlock = {"provider": provider}
     if provider == "sqlite":
@@ -49,8 +52,11 @@ def snapshot_env(snapshot_binding_config):
     client_type, _ = get_binding_client()
     kwargs, fs_root = snapshot_binding_config
     client = client_type(**kwargs)
-    client.mount("localfs", "/local", {"local_dir": str(fs_root)})
-    return VikingFS(agfs=client), fs_root
+    try:
+        client.mount("localfs", "/local", {"local_dir": str(fs_root)})
+        yield VikingFS(agfs=client), fs_root
+    finally:
+        client.close()
 
 
 def _ctx(role):
@@ -138,15 +144,13 @@ async def test_commit_lock_kinds_follow_target_state(snapshot_env, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot_binding_config", ["memory", "sqlite", "postgres"], indirect=True)
 async def test_missing_target_tree_lock_blocks_recreation(
     snapshot_env, snapshot_binding_config, monkeypatch
 ):
     vfs, fs_root = snapshot_env
     kwargs, _ = snapshot_binding_config
     provider = kwargs["config"]["pathlock"]["provider"]
-    if provider == "filesystem":
-        pytest.skip("filesystem cannot lock a missing target without recreating it")
-
     if provider == "memory":
         peer = vfs._async_agfs  # Memory coordinates only users of the same client.
     else:
@@ -181,3 +185,21 @@ async def test_missing_target_tree_lock_blocks_recreation(
     assert not target.exists()
     lease = await peer.pathlock_acquire_exact(path)
     await peer.pathlock_release(lease)
+
+
+async def test_global_snapshot_shows_only_shared_changes(snapshot_env):
+    vfs, fs_root = snapshot_env
+    ctx = _ctx(Role.GLOBAL)
+    uri = "viking://user/bob/resources"
+    home = fs_root / "test/user/bob"
+    (home / "resources").mkdir(parents=True)
+    for name in ("shared.md", "private.md"):
+        (home / "resources" / name).write_text(name)
+    (home / "GLOBAL_POLICY.md").write_text(
+        "---\ntype: global-access-policy\nschema_version: 1\ndefault: deny\nrules:\n"
+        "  - effect: allow\n    path: resources/shared.md\n    recursive: false\n---\n"
+    )
+    vfs.set_global_policy_service(UserGlobalPolicyService(vfs))
+    assert (await vfs.commit(message="snapshot", paths=[uri], ctx=ctx))["changed"] == 2
+    page = await FSService(viking_fs=vfs).diff_paths([uri], from_ref=None, to_ref="main", ctx=ctx)
+    assert page["changes"] == [{"uri": f"{uri}/shared.md", "change_type": "added"}]

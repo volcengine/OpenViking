@@ -6,8 +6,10 @@
 @import '../../components/viking-bot/style.css';
 @import '../../shared/primitives/tooltip/style.css';
 @import './console.css';
+@import './console-skeleton.css';
 @import './console-toolbar.css';
 @import './console-history.css';
 
 @import '../../shared/primitives/notification/style.css';
 @import './task-notifications.css';
+@import './activation-card/activation-card.css';

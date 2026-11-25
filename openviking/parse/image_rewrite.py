@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Set
 from urllib.parse import quote, unquote
 
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
@@ -44,6 +45,7 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
     """
     root = root_dir.resolve()
     mappings: Dict[str, Dict[str, str]] = {}
+    failed_files = 0
 
     for md_path in root.rglob("*.md"):
         if not md_path.is_file():
@@ -51,7 +53,10 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
         try:
             content = md_path.read_text(encoding="utf-8")
         except (OSError, UnicodeError):
-            logger.warning(f"[image_rewrite] Failed to read artifact markdown: {md_path}")
+            failed_files += 1
+            logger.debug(
+                "Artifact markdown read failed; skipping path=%s", safe_path_for_log(str(md_path))
+            )
             continue
 
         protected = _protected_ranges(content)
@@ -91,6 +96,8 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
         if file_mappings:
             mappings[md_path.relative_to(root).as_posix()] = file_mappings
 
+    if failed_files:
+        logger.info("Artifact image mapping incomplete failed=%d degraded=true", failed_files)
     return mappings
 
 
@@ -296,6 +303,8 @@ async def rewrite_image_uris(
 
     files_processed = 0
     references_rewritten = 0
+    failed_files = 0
+    log_stats = {"skipped": 0}
 
     for md_uri in md_uris:
         # Resolve this markdown file's mapping from the sidecar of the document
@@ -320,16 +329,17 @@ async def rewrite_image_uris(
                 e["name"] for e in entries if not e.get("isDir") and not e["name"].startswith(".")
             }
         except Exception:
-            logger.debug(f"[image_rewrite] Failed to list directory {md_dir}")
+            logger.debug("Image directory listing failed path=%s", safe_uri_for_log(md_dir))
 
         try:
             content = await viking_fs.read_file(md_uri, ctx=ctx)
         except Exception:
-            logger.warning(f"[image_rewrite] Failed to read {md_uri}, skipping")
+            failed_files += 1
+            logger.debug("Markdown read failed; skipping target=%s", safe_uri_for_log(md_uri))
             continue
 
         new_content, rewrite_count = _rewrite_content(
-            content, md_dir, available_images, path_to_image_name
+            content, md_dir, available_images, path_to_image_name, log_stats=log_stats
         )
 
         if rewrite_count > 0:
@@ -342,9 +352,14 @@ async def rewrite_image_uris(
                 )
                 files_processed += 1
                 references_rewritten += rewrite_count
-                logger.debug(f"[image_rewrite] Rewrote {rewrite_count} image ref(s) in {md_uri}")
+                logger.debug(
+                    "Image references rewritten target=%s total=%d",
+                    safe_uri_for_log(md_uri),
+                    rewrite_count,
+                )
             except Exception:
-                logger.warning(f"[image_rewrite] Failed to write {md_uri}")
+                failed_files += 1
+                logger.debug("Markdown image rewrite failed target=%s", safe_uri_for_log(md_uri))
 
     # Clean up mapping sidecars — no longer needed after rewrite
     for map_dir in mappings_by_dir:
@@ -355,13 +370,23 @@ async def rewrite_image_uris(
                 lease_ref=lease_ref,
             )
         except Exception as e:
-            logger.warning(
-                f"[image_rewrite] Failed to delete {map_dir}/{IMAGE_MAPPINGS_FILENAME}: {e}"
+            logger.info(
+                "Image mapping cleanup failed target=%s error_type=%s",
+                safe_uri_for_log(map_dir),
+                type(e).__name__,
             )
 
-    logger.info(
-        f"[image_rewrite] Processed {len(md_uris)} .md files, "
-        f"rewrote {references_rewritten} image reference(s) in {files_processed} file(s)"
+    if failed_files or log_stats["skipped"]:
+        logger.info(
+            "Image rewrite incomplete failed=%d skipped=%d degraded=true",
+            failed_files,
+            log_stats["skipped"],
+        )
+    logger.debug(
+        "Image rewrite completed total=%d rewritten=%d files=%d",
+        len(md_uris),
+        references_rewritten,
+        files_processed,
     )
 
     return {"files_processed": files_processed, "references_rewritten": references_rewritten}
@@ -372,10 +397,12 @@ def _rewrite_content(
     image_dir: str,
     available_images: Set[str],
     path_to_image_name: Optional[Dict[str, str]] = None,
+    *,
+    log_stats: Optional[Dict[str, int]] = None,
 ) -> tuple[str, int]:
     """Rewrite local image references in markdown content.
 
-    Returns (new_content, rewrite_count).
+    Returns (new_content, rewrite_count). Optional log_stats accumulates skipped references.
     """
     rewrite_count = 0
     mappings = path_to_image_name or {}
@@ -393,10 +420,9 @@ def _rewrite_content(
         image_name = mappings.get(path)
         if image_name and image_name in available_images:
             return f"{image_dir}/{quote(image_name, safe='')}"
-        logger.warning(
-            f"[image_rewrite] Image not found in VikingFS: path = {path}, "
-            f"image_dir = {image_dir}, leaving reference unchanged"
-        )
+        if log_stats is not None:
+            log_stats["skipped"] = log_stats.get("skipped", 0) + 1
+        logger.debug("Image missing; leaving reference unchanged target=%s", safe_uri_for_log(path))
         return None
 
     def replacer(match: re.Match) -> str:

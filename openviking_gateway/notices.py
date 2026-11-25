@@ -26,6 +26,7 @@ NOTICE_LINES = re.compile(rf"^(?:{TOOL_LINE}|{RECALL_LINE})$\n*", re.M)
 
 # What the session-start block holds, in the order the recall notice names it.
 SESSION_PARTS = {
+    "soul": "soul",
     "profile": "user profile",
     "memories": "memory index",
     "skills": "skill list",

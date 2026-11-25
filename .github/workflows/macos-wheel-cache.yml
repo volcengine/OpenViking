@@ -17,6 +17,7 @@ on:
       - '.gitignore'
       - 'scripts/build_support/**'
       - '.github/actions/compiler-cache/**'
+      - '.github/scripts/cache_maintenance.py'
       - '.github/workflows/_build.yml'
       - '.github/workflows/macos-wheel-cache.yml'
   # Refresh after hosted image / stable toolchain updates, even without code changes.
@@ -42,3 +43,29 @@ jobs:
       python_json: '["3.10"]'
       build_sdist: false
       build_wheels: true
+
+  cleanup:
+    needs: warm
+    if: github.repository == 'volcengine/OpenViking' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Remove superseded Cargo and closed PR caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/cache_maintenance.py --repo "$GH_REPO" --apply \
+            | tee "$RUNNER_TEMP/cache-maintenance.json"
+          {
+            echo '### Cache maintenance'
+            echo '```json'
+            cat "$RUNNER_TEMP/cache-maintenance.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

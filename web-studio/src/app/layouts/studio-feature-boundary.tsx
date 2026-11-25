@@ -57,7 +57,9 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
       role: connectionRole,
       serverMode,
     })
-    if (
+    if (serverMode === 'dev' && feature.id !== 'gateway')
+      reason = 'managementRequired'
+    else if (
       feature.id === 'gateway' &&
       service.provider === 'opensource' &&
       serverMode !== 'api_key' &&
@@ -66,12 +68,6 @@ export function StudioFeatureBoundary({ children }: { children: ReactNode }) {
     )
       reason = 'gatewayAuthMode'
     else if (
-      serverMode === 'dev' &&
-      (feature.id === 'configuration' || feature.id === 'botManagement')
-    ) {
-      if (isConnectionRoleLoading || connectionRole !== 'root')
-        reason = 'managementRequired'
-    } else if (
       feature.id === 'gateway'
         ? !canManageStudioGateway({
             serviceProvider: service.provider,

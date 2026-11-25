@@ -1,5 +1,5 @@
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
-import type { HTMLAttributes } from 'react';
+import type { HTMLAttributes, ReactNode } from 'react';
 import type { DashboardStatus } from '../../shared/dashboard/dashboard-state.js';
 
 export interface ExperienceItem {
@@ -140,6 +140,38 @@ export interface ExperienceDashboardLabels {
   open: string;
 }
 
+export type ExperienceDashboardSection =
+  'list' | 'effect' | 'outcomes' | 'trajectories' | 'sources' | 'tests';
+
+export interface ExperienceDashboardSectionContext extends Pick<
+  ExperienceDashboardProps,
+  | 'uri'
+  | 'page'
+  | 'pageSize'
+  | 'startIndex'
+  | 'hasMore'
+  | 'loadingMore'
+  | 'onPageChange'
+  | 'onLoadMore'
+  | 'onOpenUri'
+  | 'onOpenTrajectory'
+> {
+  data: ExperienceDashboardData;
+  state?: ExperienceDashboardState;
+  days: number;
+  locale: NonNullable<ExperienceDashboardProps['locale']>;
+}
+
+export type ExperienceDashboardSections = Partial<
+  Record<
+    ExperienceDashboardSection,
+    (
+      context: ExperienceDashboardSectionContext,
+      defaultContent: ReactNode,
+    ) => ReactNode
+  >
+>;
+
 export interface ExperienceDashboardProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onChange'
@@ -156,10 +188,7 @@ export interface ExperienceDashboardProps extends Omit<
   loadingMore?: boolean;
   startIndex?: number;
   states?: Partial<
-    Record<
-      'list' | 'effect' | 'outcomes' | 'trajectories' | 'sources' | 'tests',
-      ExperienceDashboardState
-    >
+    Record<ExperienceDashboardSection, ExperienceDashboardState>
   >;
   locale?: 'en-US' | 'zh-CN';
   onTabChange?: (tab: ExperienceDashboardTab) => void;
@@ -176,7 +205,11 @@ export interface ExperienceDashboardProps extends Omit<
     trigger: HTMLButtonElement,
   ) => void;
   /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
-  slots?: { errorFallback?: ErrorFallback };
+  slots?: {
+    errorFallback?: ErrorFallback;
+    /** Replaces individual sections while keeping their data and controls available. */
+    sections?: ExperienceDashboardSections;
+  };
   labels?: Partial<ExperienceDashboardLabels>;
 }
 

@@ -14,7 +14,7 @@ from starlette.requests import Request
 
 from openviking.server.auth import resolve_identity
 from openviking.server.config import ServerConfig
-from openviking.server.identity import ResolvedIdentity, Role
+from openviking.server.identity import Role
 from openviking.server.oauth.provider import (
     ACCESS_TOKEN_PREFIX,
     OpenVikingOAuthProvider,
@@ -23,6 +23,8 @@ from openviking.server.oauth.storage import OAuthStore
 from openviking.server.store_assembly import build_api_key_manager
 from openviking_cli.exceptions import UnauthenticatedError
 from tests.server.account_store_fakes import InMemoryAGFS
+
+_ROOT_KEY = ACCESS_TOKEN_PREFIX + "configured-root-key-1234567890abcd"
 
 
 def _make_request(
@@ -42,7 +44,7 @@ def _make_request(
     for k, v in (extra_headers or {}).items():
         raw_headers.append((k.lower().encode(), v.encode()))
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode="api_key", root_api_key="root-test-1234567890abcd")
+    app.state.config = ServerConfig(auth_mode="api_key", root_api_key=_ROOT_KEY)
     app.state.api_key_manager = api_key_manager
     if oauth_provider is not None:
         app.state.oauth_provider = oauth_provider
@@ -65,50 +67,23 @@ _TEST_FP = "f" * 64  # stand-in sha256 fingerprint shared across tests
 
 
 class _StubKeyManager:
-    """API-key manager that asserts when reached unexpectedly.
+    async def resolve_identity(self, key: str):
+        raise AssertionError(f"API-key authentication should not be reached for {key!r}")
 
-    Tests for the OAuth path want to assert API-key fallback is *not* taken;
-    backwards-compat tests flip ``raise_on_resolve`` to False.
+    async def get_user_key_fingerprint(self, account_id: str, user_id: str) -> str:
+        return _TEST_FP
 
-    ``fingerprints`` maps (account_id, user_id) → fp. Defaults to a permissive
-    map that returns ``_TEST_FP`` for any user, so existing tests don't have
-    to know about the binding. Tests that exercise rotation / deletion pass
-    a sparser map.
-    """
 
-    def __init__(
-        self,
-        raise_on_resolve: bool = True,
-        fingerprints: Optional[dict[tuple[str, str], str]] = None,
-        default_fingerprint: Optional[str] = _TEST_FP,
-    ):
-        self._raise = raise_on_resolve
-        self._fps = fingerprints
-        self._default_fp = default_fingerprint
-
-    def resolve(self, key: str):  # noqa: D401
-        if self._raise:
-            raise AssertionError(f"API-key path should not be reached for {key!r}")
-        from openviking.server.identity import ResolvedIdentity
-
-        return ResolvedIdentity(role=Role.USER, account_id="api-acct", user_id="api-user")
-
-    async def get_user_key_fingerprint(self, account_id: str, user_id: str) -> Optional[str]:
-        if self._fps is None:
-            return self._default_fp
-        return self._fps.get((account_id, user_id))
-
-    async def resolve_oauth_identity(self, account_id, user_id, role):
-        return ResolvedIdentity(
-            role=role,
-            account_id=account_id,
-            user_id=user_id,
-            from_oauth=True,
-        )
-
-    async def resolve_identity(self, key):
-        identity = self.resolve(key)
-        return identity
+@pytest_asyncio.fixture
+async def registered_key():
+    manager = build_api_key_manager(_ROOT_KEY, SimpleNamespace(agfs=InMemoryAGFS()))
+    await manager.load()
+    try:
+        await manager.create_account("tenant-a", "owner")
+        key = await manager.register_user("tenant-a", "alice")
+        yield manager, key
+    finally:
+        await manager.close()
 
 
 @pytest_asyncio.fixture
@@ -144,27 +119,12 @@ async def _mint_token(provider: OpenVikingOAuthProvider, store: OAuthStore, **id
 
 
 @pytest.mark.asyncio
-async def test_oauth_token_resolves_to_bound_identity(provider, store):
-    token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="user")
-    request = _make_request(
-        bearer=token,
-        api_key_manager=_StubKeyManager(),
-        oauth_provider=provider,
-    )
-    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
-    assert identity.role == Role.USER
-    assert identity.account_id == "tenant-a"
-    assert identity.user_id == "alice"
-    assert identity.from_oauth is True
-
-
-@pytest.mark.asyncio
 async def test_unknown_oauth_token_fails_closed(provider):
     """A bearer with the OAuth prefix but unknown to the store must NOT fall back to API key."""
     bogus = ACCESS_TOKEN_PREFIX + "not-a-real-token"
     request = _make_request(
         bearer=bogus,
-        api_key_manager=_StubKeyManager(raise_on_resolve=True),
+        api_key_manager=_StubKeyManager(),
         oauth_provider=provider,
     )
     with pytest.raises(UnauthenticatedError, match="OAuth access token"):
@@ -177,74 +137,76 @@ async def test_revoked_oauth_token_rejected(provider, store):
     await store.revoke_access(token)
     request = _make_request(
         bearer=token,
-        api_key_manager=_StubKeyManager(raise_on_resolve=True),
+        api_key_manager=_StubKeyManager(),
         oauth_provider=provider,
     )
-    with pytest.raises(UnauthenticatedError):
+    with pytest.raises(
+        UnauthenticatedError, match="OAuth access token is invalid, expired, or revoked"
+    ):
         await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
 
 
 @pytest.mark.asyncio
-async def test_non_prefixed_bearer_falls_through_to_api_key(provider):
-    """A plain API key (no OAuth prefix) must still resolve via APIKeyManager."""
-    plain_key = "ov_user_NOTAOATAH_abcdefghijklmnop"
-    request = _make_request(
-        bearer=plain_key,
-        api_key_manager=_StubKeyManager(raise_on_resolve=False),
-        oauth_provider=provider,
-    )
+async def test_non_prefixed_bearer_falls_through_to_api_key(provider, registered_key):
+    manager, plain_key = registered_key
+    request = _make_request(bearer=plain_key, api_key_manager=manager, oauth_provider=provider)
+
     identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {plain_key}")
-    assert identity.role == Role.USER
-    assert identity.account_id == "api-acct"
+
+    assert (identity.role, identity.account_id, identity.user_id) == (
+        Role.USER,
+        "tenant-a",
+        "alice",
+    )
     assert identity.from_oauth is False
 
 
 @pytest.mark.asyncio
-async def test_oauth_path_skipped_when_disabled(store):
-    """If no oauth_provider on app.state, prefixed tokens go to API-key path."""
-    plain_key = ACCESS_TOKEN_PREFIX + "anything"
-    request = _make_request(
-        bearer=plain_key,
-        api_key_manager=_StubKeyManager(raise_on_resolve=False),
-        oauth_provider=None,
-    )
-    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {plain_key}")
-    # Falls through to API key; stub returns USER identity.
+async def test_oauth_path_skipped_when_disabled(registered_key):
+    manager, _ = registered_key
+    request = _make_request(bearer=_ROOT_KEY, api_key_manager=manager, oauth_provider=None)
+
+    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {_ROOT_KEY}")
+
+    assert identity.role == Role.ROOT
     assert identity.from_oauth is False
 
 
 @pytest.mark.asyncio
-async def test_oauth_user_role_ignores_account_override(provider, store):
-    """A USER OAuth token cannot impersonate another tenant via header."""
-    token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="user")
+async def test_oauth_user_role_ignores_account_override(provider, store, registered_key):
+    manager, _ = registered_key
+    token = await _mint_token(
+        provider,
+        store,
+        account_id="tenant-a",
+        user_id="alice",
+        role="user",
+        authorizing_key_fp=await manager.get_user_key_fingerprint("tenant-a", "alice"),
+    )
     request = _make_request(
         bearer=token,
-        api_key_manager=_StubKeyManager(),
+        api_key_manager=manager,
         oauth_provider=provider,
-        extra_headers={"x-openviking-account": "tenant-b"},
+        extra_headers={"x-openviking-account": "tenant-b", "x-openviking-user": "bob"},
     )
+
     identity = await resolve_identity(
         request,
         x_api_key=None,
         authorization=f"Bearer {token}",
         x_openviking_account="tenant-b",
+        x_openviking_user="bob",
     )
-    assert (identity.account_id, identity.user_id) == ("tenant-a", "alice")
-    assert "x-openviking-account" not in request.headers
 
-
-@pytest.mark.asyncio
-async def test_oauth_root_can_be_used_without_explicit_tenant_headers(provider, store):
-    """ROOT OAuth tokens carry account/user in claims — no header requirement."""
-    token = await _mint_token(provider, store, account_id="tenant-a", user_id="alice", role="root")
-    request = _make_request(
-        bearer=token,
-        api_key_manager=_StubKeyManager(),
-        oauth_provider=provider,
+    assert (identity.role, identity.account_id, identity.user_id) == (
+        Role.USER,
+        "tenant-a",
+        "alice",
     )
-    identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
-    assert identity.role == Role.ROOT
     assert identity.from_oauth is True
+    forwarded_headers = Request(request.scope).headers
+    assert "x-openviking-account" not in forwarded_headers
+    assert "x-openviking-user" not in forwarded_headers
 
 
 # ---------------------------------------------------------------------------
@@ -253,50 +215,35 @@ async def test_oauth_root_can_be_used_without_explicit_tenant_headers(provider, 
 
 
 @pytest.mark.asyncio
-async def test_oauth_token_rejected_when_authorizing_key_rotated(provider, store):
-    """Rotating the user's API key must invalidate every derived OAuth token."""
-    token = await _mint_token(
-        provider,
-        store,
-        account_id="tenant-a",
-        user_id="alice",
-        role="user",
-        authorizing_key_fp=_TEST_FP,
-    )
-    # Simulate rotation: the manager now reports a different fingerprint.
-    rotated_manager = _StubKeyManager(
-        raise_on_resolve=True,
-        fingerprints={("tenant-a", "alice"): "9" * 64},
-    )
-    request = _make_request(
-        bearer=token,
-        api_key_manager=rotated_manager,
-        oauth_provider=provider,
-    )
-    with pytest.raises(UnauthenticatedError, match="rotated or revoked"):
-        await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+async def test_oauth_token_follows_authorizing_key_lifetime(provider, store, registered_key):
+    manager, _ = registered_key
 
+    for change in ("rotate", "delete"):
+        token = await _mint_token(
+            provider,
+            store,
+            account_id="tenant-a",
+            user_id="alice",
+            role="user",
+            authorizing_key_fp=await manager.get_user_key_fingerprint("tenant-a", "alice"),
+        )
+        request = _make_request(bearer=token, api_key_manager=manager, oauth_provider=provider)
+        identity = await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+        assert (identity.account_id, identity.user_id) == ("tenant-a", "alice")
 
-@pytest.mark.asyncio
-async def test_oauth_token_rejected_when_authorizing_user_removed(provider, store):
-    """Removing the user (fp lookup → None) invalidates the token."""
-    token = await _mint_token(
-        provider,
-        store,
-        account_id="tenant-a",
-        user_id="alice",
-        role="user",
-        authorizing_key_fp=_TEST_FP,
-    )
-    # Sparse map ⇒ no fp for (tenant-a, alice) ⇒ user is gone.
-    removed_manager = _StubKeyManager(raise_on_resolve=True, fingerprints={})
-    request = _make_request(
-        bearer=token,
-        api_key_manager=removed_manager,
-        oauth_provider=provider,
-    )
-    with pytest.raises(UnauthenticatedError, match="rotated or revoked"):
-        await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
+        if change == "rotate":
+            await manager.regenerate_key("tenant-a", "alice")
+        else:
+            await manager.begin_deletion(
+                "tenant-a",
+                "alice",
+                task_id="delete-alice",
+                owner_account_id="_system",
+                owner_user_id="root",
+            )
+
+        with pytest.raises(UnauthenticatedError, match="rotated or revoked"):
+            await resolve_identity(request, x_api_key=None, authorization=f"Bearer {token}")
 
 
 @pytest.mark.parametrize("initial,current", [(Role.ADMIN, Role.USER), (Role.USER, Role.ADMIN)])
@@ -344,7 +291,7 @@ async def test_oauth_token_without_recorded_fp_fails_closed(provider, store):
     )
     request = _make_request(
         bearer=token,
-        api_key_manager=_StubKeyManager(raise_on_resolve=True),
+        api_key_manager=_StubKeyManager(),
         oauth_provider=provider,
     )
     with pytest.raises(UnauthenticatedError, match="rotated or revoked"):
