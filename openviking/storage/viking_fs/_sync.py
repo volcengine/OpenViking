@@ -4,7 +4,7 @@
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.storage.viking_fs._base import LS_ALL_NODES
@@ -53,7 +53,9 @@ class _SyncMixin:
         file_change_status: Optional[Dict[str, bool]] = None,
         lease_ref: Optional[Dict[str, Any]] = None,
         delete_temp_after: bool = False,
-        is_changed: Optional[Callable[[str, str, "RequestContext"], "bool"]] = None,
+        is_changed: Optional[
+            Callable[[str, str, Optional["RequestContext"]], Awaitable[bool]]
+        ] = None,
     ) -> SyncDiff:
         """Recursively merge ``root_uri`` into ``target_uri``.
 
@@ -80,7 +82,9 @@ class _SyncMixin:
             is_changed: Optional async predicate ``(root_file, target_file,
                 ctx) -> bool`` used to decide if an existing file needs to
                 be replaced.  Defaults to a stat-size shortcut followed by
-                byte-for-byte content comparison.
+                byte-for-byte content comparison.  If the predicate raises,
+                the file is treated as changed so the target never silently
+                keeps stale content.
 
         Returns:
             A :class:`SyncDiff` describing the applied changes (URIs are
@@ -111,7 +115,9 @@ class _SyncMixin:
                     files[name] = item_uri
             return files, dirs
 
-        async def default_is_changed(root_file: str, target_file: str) -> bool:
+        async def default_is_changed(
+            root_file: str, target_file: str, _ctx: Optional["RequestContext"]
+        ) -> bool:
             try:
                 current_stat = await self.stat(root_file, ctx=ctx, skip_count=True)
                 target_stat = await self.stat(target_file, ctx=ctx, skip_count=True)
@@ -169,14 +175,14 @@ class _SyncMixin:
                         changed = file_change_status[root_file]
                     else:
                         try:
-                            changed = await check_changed(root_file, target_file)
+                            changed = await check_changed(root_file, target_file, ctx)
                         except Exception as e:
                             logger.info(
-                                "Failed to compare file content for %s: %s, treating as unchanged",
-                                type(root_file).__name__,
+                                "Failed to compare file content for %s: %s, treating as changed",
+                                safe_uri_for_log(str(root_file)),
                                 type(e).__name__,
                             )
-                            changed = False
+                            changed = True
                     if changed:
                         await self.rm(target_file, ctx=ctx, lease_ref=lease_ref)
                         await self.mv(
