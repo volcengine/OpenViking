@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createOpenVikingSetupService, maskKey, type SetupIO } from "../../services/setup/setup-flow.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function createMemoryIO(initialConfig: Record<string, unknown> = {}): SetupIO & { config: Record<string, unknown> } {
   return {
@@ -21,6 +25,47 @@ describe("setup flow service", () => {
   it("masks API keys without exposing full secrets", () => {
     expect(maskKey("short")).toBe("****");
     expect(maskKey("sk-root-secret")).toBe("sk-r...cret");
+  });
+
+  it("resolves environment-backed connection settings before the status probe", async () => {
+    vi.stubEnv("OPENVIKING_STATUS_TEST_URL", "http://remote:1933");
+    vi.stubEnv("OPENVIKING_STATUS_TEST_KEY", "resolved-user-key");
+    const io = createMemoryIO({
+      plugins: {
+        entries: {
+          openviking: {
+            config: {
+              mode: "remote",
+              baseUrl: "${OPENVIKING_STATUS_TEST_URL}",
+              apiKey: "${OPENVIKING_STATUS_TEST_KEY}",
+            },
+          },
+        },
+      },
+    });
+    const checkServiceHealth = vi.fn(async () => ({
+      ok: true,
+      version: "2026.6.1",
+      error: "",
+      compatibility: "compatible" as const,
+      pluginVersion: "2026.6.5",
+      compatRange: "any",
+    }));
+    const service = createOpenVikingSetupService({
+      io,
+      checkServiceHealth,
+      probeApiKeyType: async () => ({
+        keyType: "user_key",
+        needsAccountId: false,
+        needsUserId: false,
+        detail: "ok",
+      }),
+    });
+
+    const result = await service.getStatus("/tmp/openclaw.json");
+
+    expect(checkServiceHealth).toHaveBeenCalledWith("http://remote:1933", "resolved-user-key");
+    expect(result.health?.ok).toBe(true);
   });
 
   it("refuses root keys without tenant identity before writing config", async () => {

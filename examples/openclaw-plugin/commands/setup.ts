@@ -14,6 +14,7 @@ import {
   type SetupHealthResult,
 } from "../services/setup/probe-service.js";
 import { grantPromptRecallHook } from "../services/setup/config-writer.js";
+import { resolveExistingConnectionConfig } from "../services/setup/setup-flow.js";
 
 const HOME = os.homedir();
 const OPENCLAW_DIR = getEnv("OPENCLAW_STATE_DIR") || path.join(HOME, ".openclaw");
@@ -696,9 +697,7 @@ async function runRemoteCheck(
   zh: boolean,
   existing: Record<string, unknown>,
 ): Promise<void> {
-  const baseUrl = String(existing.baseUrl ?? DEFAULT_REMOTE_URL);
-  const apiKey = existing.apiKey ? String(existing.apiKey) : undefined;
-  const headers = nonEmptyOpenVikingRequestHeaders(existing.headers);
+  const { baseUrl, apiKey, headers } = resolveExistingConnectionConfig(existing, DEFAULT_REMOTE_URL);
   console.log(tr(zh, `Testing connectivity to ${baseUrl}...`, `正在测试连接 ${baseUrl}...`));
   const health = await setupProbes.checkServiceHealth(baseUrl, apiKey, headers);
   if (health.ok) {
@@ -880,9 +879,7 @@ async function getStatus(configPath: string): Promise<StatusResult> {
     return { configured: false, slotActive };
   }
 
-  const baseUrl = String(existing.baseUrl ?? DEFAULT_REMOTE_URL);
-  const apiKey = existing.apiKey ? String(existing.apiKey) : undefined;
-  const headers = nonEmptyOpenVikingRequestHeaders(existing.headers);
+  const { baseUrl, apiKey, headers } = resolveExistingConnectionConfig(existing, DEFAULT_REMOTE_URL);
   const health = await setupProbes.checkServiceHealth(baseUrl, apiKey, headers);
   const keyProbe = health.ok ? await setupProbes.probeApiKeyType(baseUrl, apiKey, headers) : undefined;
 
