@@ -27,7 +27,7 @@ memory while keeping your conversation history settings. Choose **Shared Agent**
 to share history within each group or thread and recall all senders' memories
 under the same OpenViking user. Shared Agent asks for confirmation.
 
-Then choose a connection:
+Then choose a connection in **Hermes's own setup menu**:
 
 - **Quick Local** installs a local server and embedding model. It reuses your
   supported Hermes language model for extraction, which can use a remote API.
@@ -35,9 +35,9 @@ Then choose a connection:
   [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)
   with a service API key. You do not need to install a server or configure
   local models.
-- **Custom** connects to your own server with its URL and credentials. Setup
-  can also reuse a saved `ovcli.conf`. For BytePlus, choose **Custom** and
-  enter the service URL and API key for your BytePlus OpenViking instance. See
+- **Custom** connects using a service URL and credentials. It can also reuse
+  a saved `ovcli.conf`. In this Hermes menu, choose **Custom** for BytePlus and
+  enter your BytePlus OpenViking instance's service URL and API key. See
   [BytePlus setup](../guides/27-byteplus-setup.md).
 
 After setup, chat as usual. The plugin requests a commit at 20,000 pending
