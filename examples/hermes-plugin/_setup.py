@@ -257,15 +257,15 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: Opti
                 api_key_type = "root" if credential_choice == 1 else "user"
 
             values["api_key_type"] = api_key_type
-            api_key_label = "OpenViking API key" if service else f"OpenViking {api_key_type} API key"
+            prompt_label = "OpenViking API key" if service else f"OpenViking {api_key_type} API key"
             if service == "BytePlus":
-                api_key_label = "BytePlus OpenViking API key"
+                prompt_label = "BytePlus OpenViking API key"
             if prefilled_api_key:
                 values["api_key"], prefilled_api_key = prefilled_api_key, ""
             else:
-                values["api_key"] = ov._clean_config_value(prompt(api_key_label, secret=True))
+                values["api_key"] = ov._clean_config_value(prompt(prompt_label, secret=True))
             if not values["api_key"]:
-                retry("  OpenViking API key required", f"{api_key_label} is required.")
+                retry("  OpenViking API key required", f"{prompt_label} is required.")
                 continue
 
             if api_key_type == "root":
