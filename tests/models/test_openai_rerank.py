@@ -3,6 +3,7 @@
 """Wire contracts for the native DashScope and OpenAI-compatible rerank endpoints."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -94,6 +95,35 @@ def test_native_rerank_accepts_legacy_plural_score_field(provider_post):
     reranker = RerankClient.from_config(RerankConfig(api_key="test-key", api_base=NATIVE_URL))
     assert reranker is not None
     assert reranker.rerank_batch("search", DOCUMENTS[:1]) == [0.4]
+
+
+def test_rerank_records_provider_call_duration(provider_post, monkeypatch):
+    """The metrics event must carry the wall-clock provider latency.
+
+    The other rerank clients (Cohere, LiteLLM, VikingDB) all pass their
+    measured duration; the OpenAI-compatible client used to fall back to the
+    default 0.0, so its rerank latency graphs reported zero.
+    """
+    provider_post.return_value = provider_response(
+        {"results": [{"index": 0, "relevance_score": 0.9}, {"index": 1, "relevance_score": 0.1}]}
+    )
+    ticks = iter([100.0, 100.25])
+    monkeypatch.setattr(
+        "openviking.models.rerank.openai_rerank.time",
+        SimpleNamespace(monotonic=lambda: next(ticks)),
+    )
+    recorded: dict = {}
+    monkeypatch.setattr(
+        "openviking.metrics.datasources.RerankEventDataSource.record_call",
+        classmethod(lambda cls, **kwargs: recorded.update(kwargs)),
+    )
+
+    reranker = RerankClient.from_config(RerankConfig(api_key="test-key", api_base=COMPATIBLE_URL))
+    assert reranker is not None
+    assert reranker.rerank_batch("search", DOCUMENTS[:2]) == [0.9, 0.1]
+
+    assert recorded["provider"] == "openai"
+    assert recorded["duration_seconds"] == pytest.approx(0.25)
 
 
 def test_empty_documents_do_not_call_rerank_provider(provider_post):

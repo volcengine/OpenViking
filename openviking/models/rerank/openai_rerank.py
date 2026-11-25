@@ -8,6 +8,7 @@ via api_key + api_base configuration.
 """
 
 # For logging, use Python's built-in logging
+import time
 from typing import Dict, List, Optional
 
 import requests
@@ -140,6 +141,7 @@ class OpenAIRerankClient(RerankBase):
             if self.extra_headers:
                 headers.update(self.extra_headers)
 
+            started = time.monotonic()
             response = requests.post(
                 url=self.api_base,
                 headers=headers,
@@ -150,7 +152,12 @@ class OpenAIRerankClient(RerankBase):
             result = response.json()
 
             # Update token usage tracking (estimate, OpenAI rerank doesn't provide token info)
-            self._extract_and_update_token_usage(result, query, documents)
+            self._extract_and_update_token_usage(
+                result,
+                query,
+                documents,
+                duration_seconds=time.monotonic() - started,
+            )
 
             results = self._extract_results(result)
             if not results:
