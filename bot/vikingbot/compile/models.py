@@ -13,6 +13,7 @@ DEFAULT_COMPILE_INSTRUCTION = (
     "Follow the loaded Skill's instructions to transform the provided source materials "
     "into the outputs required by the Skill."
 )
+DEFAULT_SIMPLE_AGENT_ITERATIONS = 150
 COMPILE_STAGING_ROOT = "__compile_staging__"
 COMPILE_DRAFT_ROOT = f"{COMPILE_STAGING_ROOT}/drafts"
 OKF_VERSION = "0.1"
@@ -29,7 +30,9 @@ class CompileLimits(BaseModel):
     merge_input_chars: int = Field(default=60_000, ge=1)
     # Source text plus repeated context per range/read batch, independent of request packing.
     source_batch_chars: int = Field(default=40_000, ge=1)
-    simple_agent_iterations: int = Field(default=150, ge=1, description="Simple compile rounds.")
+    simple_agent_iterations: int = Field(
+        default=DEFAULT_SIMPLE_AGENT_ITERATIONS, ge=1, description="Simple compile rounds."
+    )
     # Maximum model/tool rounds for one complex pipeline file worker.
     subagent_iterations: int = Field(default=70, ge=1)
     # Per-task Map workers, also used for Resource source subagents.
@@ -72,6 +75,8 @@ class SanitizedCompileRequest(BaseModel):
     skill: str
     # The OV service freezes the directory plan before submitting this execution.
     changes: dict[str, Any] | None = None
+    # Effective per-task Simple round limit; None uses the service's configured limit.
+    loop_turn: int | None = Field(default=None, ge=DEFAULT_SIMPLE_AGENT_ITERATIONS)
 
 
 def has_directory_plan(changes: dict[str, Any] | None) -> bool:

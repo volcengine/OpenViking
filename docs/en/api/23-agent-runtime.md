@@ -95,6 +95,8 @@ Both ordinary execution forms validate the target, create its directory when nee
 
 Scheduling controls are rejected by the execution endpoint. `args.mode`, `last_compile_time`, `changes`, and `operation_id` are not public execution controls. OpenViking owns the execution plan.
 
+In VikingBot Simple mode, a positive JSON integer in `args.loop_turn` sets the task's maximum number of rounds to `max(150, loop_turn)`. For example, `--args '{"loop_turn":300}'` allows up to 300 rounds. Tasks can finish earlier. Omitted, non-integer, or non-positive values use the service default (normally 150 rounds). Complex mode ignores this argument.
+
 Every accepted execution returns `202 Accepted` with the ordinary TaskRecord:
 
 ```json
@@ -202,10 +204,6 @@ A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `f
 
 No-op runs may reuse the start snapshot. Failure and cancellation do not advance the successful source baseline. Execution plans and necessary recovery checkpoints remain private Task state; public configuration, runs and tasks never expose execution credentials.
 
-VikingBot reports `result.completion_status: "partial"` when known source, worker or write
-failures remain after execution. Confirmed output is retained, and a named Compile keeps
-its previous source baseline so unchanged missed inputs remain eligible for the next run.
-The marker is omitted otherwise; its absence does not prove semantic coverage or successful indexing.
 
 The only Compile business files are:
 

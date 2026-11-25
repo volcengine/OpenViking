@@ -730,16 +730,20 @@ async def test_compile_write_tool_allows_valid_okf_frontmatter():
     client.write.assert_awaited_once()
 
 
+@pytest.mark.parametrize("incremental", [False, True])
 async def test_simple_compile_reports_rejected_output_when_no_page_was_written(
-    pipeline, agent_loop
+    pipeline, agent_loop, incremental
 ):
     pipeline.client.write = AsyncMock()
     calls = [("openviking_write", {"path": "selection-rules.md", "content": INVALID_FRONTMATTER})]
+    request = pipeline.request
+    if incremental:
+        request = incremental_request(request)
+        pipeline.client.diff_paths = AsyncMock(return_value={"changes": [], "has_more": False})
+        calls.insert(0, ("openviking_diff_paths", {}))
 
     with pytest.raises(CompileFailure, match=r"selection-rules\.md.*line 4, column 13") as caught:
-        await run_simple_compile(
-            pipeline, agent_loop, pipeline.request, calls, LLMResponse(content="Done")
-        )
+        await run_simple_compile(pipeline, agent_loop, request, calls, LLMResponse(content="Done"))
 
     assert caught.value.code == "COMPILE_INCOMPLETE"
     pipeline.client.write.assert_not_awaited()
@@ -767,19 +771,21 @@ async def run_simple_compile(pipeline, agent_loop, request, calls, *replies):
     )
 
 
-@pytest.mark.parametrize("recovered", [False, True])
-async def test_simple_incremental_delivery_preserves_rejections(pipeline, agent_loop, recovered):
+@pytest.mark.parametrize(
+    "content,expected_status", [(INVALID_FRONTMATTER, None), ("# Draft", "partial")]
+)
+async def test_simple_incremental_delivery_with_rejected_or_unconfirmed_write(
+    pipeline, agent_loop, content, expected_status
+):
     pipeline.client.write = AsyncMock(
-        side_effect=lambda uri, *args, **kwargs: {"uri": uri, "content_updated": True}
+        side_effect=[{"uri": pipeline.target + "/good.md", "content_updated": True}, {}]
     )
     pipeline.client.diff_paths = AsyncMock(return_value={"changes": [], "has_more": False})
     calls = [
         ("openviking_diff_paths", {}),
         ("openviking_write", {"path": "good.md", "content": "# Good"}),
-        ("openviking_write", {"path": "bad.md", "content": INVALID_FRONTMATTER}),
+        ("openviking_write", {"path": "bad.md", "content": content}),
     ]
-    if recovered:
-        calls.append(("openviking_write", {"path": "bad.md", "content": "# Rules"}))
     result = await run_simple_compile(
         pipeline,
         agent_loop,
@@ -789,47 +795,38 @@ async def test_simple_incremental_delivery_preserves_rejections(pipeline, agent_
     )
     assert pipeline.target + "/good.md" in result.updated
     public = CompileTask.model_construct(result=result).public_dict()["result"]
-    if recovered:
-        assert "completion_status" not in public
-    else:
-        assert public["completion_status"] == "partial"
+    assert public.get("completion_status") == expected_status
+    assert any("bad.md" in warning for warning in result.warnings)
 
 
-@pytest.mark.parametrize("recovered", [False, True])
-async def test_simple_incremental_tracks_failed_uris_in_mixed_reads(
-    pipeline, agent_loop, recovered
+@pytest.mark.parametrize(
+    "final,expected_status", [("Done", None), ("INCOMPLETE: missing input", "partial")]
+)
+async def test_simple_incremental_delivery_with_mixed_reads(
+    pipeline, agent_loop, final, expected_status
 ):
     good, missing = (pipeline.request.from_[0] + "/" + name for name in ("good.md", "missing.md"))
-    pipeline.client.read_content = AsyncMock(side_effect=["Facts", FileNotFoundError(), "Retry"])
+    pipeline.client.read_content = AsyncMock(side_effect=["Facts", FileNotFoundError("missing")])
     pipeline.client.write = AsyncMock(
         side_effect=lambda uri, *args, **kwargs: {"uri": uri, "content_updated": True}
     )
-    calls = [("openviking_multi_read", {"uris": [good, missing + "/"]})]
-    if recovered:
-        calls.append(("openviking_multi_read", {"uris": [missing]}))
-    calls.append(("openviking_write", {"path": "good.md", "content": "# Good"}))
+    calls = [
+        ("openviking_multi_read", {"uris": [good, missing + "/"]}),
+        ("openviking_write", {"path": "good.md", "content": "# Good"}),
+    ]
     result = await run_simple_compile(
         pipeline,
         agent_loop,
         incremental_request(pipeline.request),
         calls,
-        LLMResponse(content="Done"),
+        LLMResponse(content=final),
     )
     assert result.updated == [pipeline.target + "/good.md"]
-    assert result.completion_status == (None if recovered else "partial")
+    assert result.completion_status == expected_status
+    assert any(missing in warning for warning in result.warnings)
 
 
-@pytest.mark.parametrize(
-    "retry_args,expected_status",
-    [
-        ({"offset": 40, "limit": 20}, "partial"),
-        ({"offset": 20, "limit": 10}, "partial"),
-        ({"offset": 20}, None),
-    ],
-)
-async def test_simple_incremental_diff_failure_tracks_page(
-    pipeline, agent_loop, retry_args, expected_status
-):
+async def test_simple_incremental_delivery_warns_on_diff_failure(pipeline, agent_loop):
     pipeline.client.write = AsyncMock(
         side_effect=lambda uri, *args, **kwargs: {"uri": uri, "content_updated": True}
     )
@@ -837,13 +834,11 @@ async def test_simple_incremental_diff_failure_tracks_page(
         side_effect=[
             {"changes": [], "has_more": True, "next_offset": 20},
             ConnectionError("Source diff page unavailable"),
-            {"changes": [], "has_more": False},
         ]
     )
     calls = [
         ("openviking_diff_paths", {}),
         ("openviking_diff_paths", {"offset": 20, "limit": 20}),
-        ("openviking_diff_paths", retry_args),
         ("openviking_write", {"path": "good.md", "content": "# Good"}),
     ]
     result = await run_simple_compile(
@@ -854,7 +849,8 @@ async def test_simple_incremental_diff_failure_tracks_page(
         LLMResponse(content="Done"),
     )
     assert result.updated == [pipeline.target + "/good.md"]
-    assert result.completion_status == expected_status
+    assert result.completion_status is None
+    assert any("Source diff page unavailable" in warning for warning in result.warnings)
 
 
 @pytest.mark.parametrize("case", ["reminded", "omitted", "sliced", "stale"])
@@ -907,15 +903,19 @@ async def test_simple_recovery_requires_each_changed_source_and_its_frozen_conte
 
 
 @pytest.mark.parametrize("exec_enabled", [True, False])
+@pytest.mark.parametrize("turns,expected", [(300, 300), (1, 150), (True, 7), (None, 7)])
 async def test_simple_task_with_packaged_script(
-    exec_enabled, pipeline, agent_loop, tmp_path, monkeypatch
+    exec_enabled, turns, expected, pipeline, agent_loop, tmp_path, monkeypatch
 ):
     loop, _, _ = agent_loop
     loop.config.storage_workspace = str(tmp_path)
     loop.config.sandbox.backends.direct.allow_compile_exec = exec_enabled
     loop.config.ov_server.set_effective_auth_mode("dev")
-    service = BotCompileService(agent_loop=loop)
-    request = CompileRequest.model_validate(pipeline.request.model_dump(exclude={"changes"}))
+    service = BotCompileService(agent_loop=loop, limits=CompileLimits(simple_agent_iterations=7))
+    request = CompileRequest.model_validate(pipeline.request.model_dump(exclude_none=True))
+    request.args = {"loop_turn": turns} if turns is not None else None
+    run = AsyncMock(wraps=simple.run)
+    monkeypatch.setattr(simple, "run", run)
     skill = "---\nname: wiki\ndescription: Compile fixture\n---\nUse scripts/write.py."
     script = (
         "import sys\nfrom pathlib import Path\n"
@@ -955,10 +955,12 @@ async def test_simple_task_with_packaged_script(
     script_uri = f"{request.skill}/scripts/write.py"
     calls = []
     if exec_enabled:
+        client.read_content = AsyncMock(side_effect=IsADirectoryError("Expected a file URI"))
         command = shlex.join(
             [sys.executable, script_uri, "workspace:changes.md", str(output), "开源项目/openviking"]
         )
         calls = [
+            ("openviking_multi_read", {"uris": request.from_}),
             ("write_file", {"path": "changes.md", "content": markdown}),
             ("write_file", {"path": str(outside), "content": "outside"}),
             ("exec", {"command": command}),
@@ -977,12 +979,15 @@ async def test_simple_task_with_packaged_script(
     finally:
         await service.close()
 
+    assert run.await_args.args[0].max_iterations == expected
     tools = loop.provider.chat.await_args_list[0].kwargs["tools"]
     names = {tool["function"]["name"] for tool in tools}
     assert ("exec" in names) == exec_enabled
     assert "write_file" in names
     if exec_enabled:
         assert task.status == "completed", task.error
+        assert task.result.completion_status is None
+        assert any("Expected a file URI" in warning for warning in task.result.warnings)
         assert output.read_text(encoding="utf-8") == markdown
         assert not outside.exists()
         client.download_bytes.assert_awaited_once_with(script_uri)

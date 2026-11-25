@@ -417,68 +417,48 @@ async def run(
     result.page_count = len(writer.outcomes)
     inspected_source = False
     write_error = ""
-    unresolved: dict[tuple[str, str], str] = {}
     for call in calls:
         name = call["tool_name"]
-        args = call["resolved_args"]
         output = call["result"]
-        resources = args.get("uris") or [args.get("path") or args.get("uri") or name]
-        if isinstance(output, VikingMultiReadResult):
-            resources = [validate_safe_viking_uri_path(uri) for uri in resources]
-        if name == CompileDiffTool.name:
-            # Only retrying the same diff page can clear its failure.
-            resources = [(args.get("offset", 0), args.get("limit", 20))]
-        tracked = [
-            (name, str(resource))
-            for resource in resources
-            if name in {writer.name, CompileDiffTool.name}
-            or any(resource == root or str(resource).startswith(root + "/") for root in sources)
-        ]
-        for key in tracked:
-            unresolved.pop(key, None)
-        if isinstance(output, VikingMultiReadResult):
-            for key in tracked:
-                if key[1] in output.errors:
-                    warning = f"{key[1]}: {output.errors[key[1]]}"[:300]
-                    result.warnings.append(warning)
-                    unresolved[key] = warning
-            resources = [uri for uri in resources if uri not in output.errors]
-        elif not call["execute_success"]:
+        if not call["execute_success"]:
             warning = str(output)[:300]
             result.warnings.append(warning)
-            unresolved.update(dict.fromkeys(tracked, warning))
             if name == writer.name:
                 write_error = warning
             continue
-        for resource in resources:
-            if name == CompileDiffTool.name or (
-                name in {"openviking_multi_read", "openviking_list"}
-                and any(
-                    resource == root or str(resource).startswith(root + "/") for root in sources
-                )
-            ):
-                inspected_source = True
+        if name == CompileDiffTool.name:
+            inspected_source = True
+        elif name in {"openviking_multi_read", "openviking_list"}:
+            args = call["resolved_args"]
+            for uri in args.get("uris") or [args["uri"]]:
+                uri = validate_safe_viking_uri_path(uri)
+                if any(uri == root or uri.startswith(root + "/") for root in sources):
+                    if isinstance(output, VikingMultiReadResult) and uri in output.errors:
+                        result.warnings.append(f"{uri}: {output.errors[uri]}"[:300])
+                    else:
+                        inspected_source = True
     if writer.unconfirmed:
         result.warnings.append("Unconfirmed writes: " + ", ".join(sorted(writer.unconfirmed)))
     incomplete = final and final.lstrip().startswith("INCOMPLETE:")
     if incomplete:
         result.warnings.append(final[:600])
-    if final is not None and not count and (writer.unconfirmed or incomplete or unresolved):
-        message = next(reversed(unresolved.values()), result.warnings[0])
-        raise CompileFailure("COMPILE_INCOMPLETE", message, stage="agent")
+    if final is not None and not count and (writer.unconfirmed or incomplete):
+        raise CompileFailure("COMPILE_INCOMPLETE", result.warnings[-1], stage="agent")
     if final is None:
         result.warnings.append("Partial compilation: iteration limit reached.")
-    elif (
-        not writer.outcomes
-        and not (incremental and inspected_source)
-        and (write_error or runtime is None or not runtime.allows_tool("exec"))
+    elif not writer.outcomes and (
+        write_error
+        or (
+            not (incremental and inspected_source)
+            and (runtime is None or not runtime.allows_tool("exec"))
+        )
     ):
         raise CompileFailure(
             "COMPILE_INCOMPLETE",
             write_error or "No output or verified incremental no-change result.",
             stage="agent",
         )
-    if writer.unconfirmed or incomplete or final is None or unresolved:
+    if writer.unconfirmed or incomplete or final is None:
         result.completion_status = "partial"
     elif confirmed_reads and not count:
         result.recovery_proof = await verify_recovery_sources(client, changes, *confirmed_reads)

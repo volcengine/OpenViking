@@ -29,6 +29,7 @@ from vikingbot.compile.hashing import content_hash
 from vikingbot.compile.models import (
     COMPILE_STAGING_ROOT,
     DEFAULT_COMPILE_INSTRUCTION,
+    DEFAULT_SIMPLE_AGENT_ITERATIONS,
     TERMINAL_STATUSES,
     CompileAccepted,
     CompileErrorInfo,
@@ -457,12 +458,14 @@ class BotCompileService:
         connection: Mapping[str, Any],
     ) -> SanitizedCompileRequest:
         args = request.args or {}
-        if args.keys() - {"changes"}:
-            raise CompileFailure(
-                "INVALID_ARGUMENT",
-                "VikingBot Compile does not implement provider-specific args.",
-                stage="queued",
-            )
+        loop_turn = None
+        requested_turns = args.get("loop_turn")
+        if (
+            self.config.compile.mode == "simple"
+            and type(requested_turns) is int
+            and requested_turns > 0
+        ):
+            loop_turn = max(DEFAULT_SIMPLE_AGENT_ITERATIONS, requested_turns)
         changes = args.get("changes")
         if changes is not None:
             valid = (
@@ -566,6 +569,7 @@ class BotCompileService:
                 "instruction": instruction or DEFAULT_COMPILE_INSTRUCTION,
                 "skill": canonical_skill,
                 "changes": changes,
+                "loop_turn": loop_turn,
             }
         )
 
@@ -776,7 +780,7 @@ class BotCompileService:
                     workspace=workspace,
                     model=self.agent_loop.model,
                     temperature=self.agent_loop.temperature,
-                    max_iterations=self.limits.simple_agent_iterations,
+                    max_iterations=request.loop_turn or self.limits.simple_agent_iterations,
                     sandbox_manager=sandbox_manager,
                     config=task_config,
                 )

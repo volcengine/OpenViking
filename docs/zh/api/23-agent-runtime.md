@@ -95,6 +95,8 @@ POST /api/v1/compile
 
 执行接口拒绝调度控制。`args.mode`、`last_compile_time`、`changes` 和 `operation_id` 不是公开执行参数；执行计划由 OpenViking 生成。
 
+VikingBot Simple 模式接受正整数 `args.loop_turn`，将本次任务的最大轮数设为 `max(150, loop_turn)`，任务可以提前完成。例如 `--args '{"loop_turn":300}'` 允许最多 300 轮。省略或传入其他类型、非正数时沿用服务默认上限（通常为 150 轮）。Complex 模式忽略此参数。
+
 每次成功受理均返回 `202 Accepted` 和通用 TaskRecord：
 
 ```json
@@ -202,9 +204,6 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 
 无变化时可复用开始快照。失败、取消不推进成功源基线。执行计划及必要恢复检查点保存在私有 Task 状态；公共配置、run 和 Task 不暴露执行凭据。
 
-VikingBot 在已知来源、worker 或写入失败仍未解决时返回 `result.completion_status: "partial"`。
-已确认输出会保留，命名 Compile 保留原成功源基线，使遗漏且未再次变化的输入仍能进入下一轮。
-其他结果省略该标记；没有标记不代表语义覆盖完整或索引成功。
 
 Compile 业务文件仅有：
 
