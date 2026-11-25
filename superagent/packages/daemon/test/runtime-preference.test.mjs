@@ -54,6 +54,8 @@ test('uses the same stable runtime selectors as setup', () => {
   assert.equal(runtimeManifestSelector('pi'), 'pi');
   assert.equal(runtimeManifestSelector('traex'), 'traex');
   assert.equal(runtimeManifestSelector('agy'), 'agy');
+  assert.equal(runtimeManifestSelector('copilot'), 'copilot');
+  assert.equal(runtimeManifestSelector('droid'), 'droid');
   assert.equal(runtimeManifestSelector('volc'), 'ark');
   assert.throws(() => runtimeManifestSelector('missing'), /Unknown runtime/);
 });

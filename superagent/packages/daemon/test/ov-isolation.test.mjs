@@ -7,8 +7,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
-  OV_PLUGIN_ID, PI_BUILTIN_EXTENSIONS, agyWorkspaceOpenVikingPieces, claudeIsolationSettings, codexConfigFile, codexIsolationArgs, piIsolationArgs,
-  prepareAgyGeminiDir, prepareOpencodeConfigHome, traexConfigFile,
+  OV_PLUGIN_ID, PI_BUILTIN_EXTENSIONS, agyWorkspaceOpenVikingPieces, claudeIsolationSettings, codexConfigFile, codexIsolationArgs,
+  copilotWorkspaceOpenVikingPieces, droidWorkspaceOpenVikingPieces, piIsolationArgs,
+  prepareAgyGeminiDir, prepareCopilotHome, prepareDroidHome, prepareOpencodeConfigHome, traexConfigFile,
 } from '../src/ov-isolation.mjs';
 import { OV_ISOLATION, RUNTIME_CATALOG } from '../src/runtime-catalog.mjs';
 
@@ -343,4 +344,98 @@ test('Windows config projection reports copy failures instead of dropping plugin
   write('.config/opencode/plugins/keep.js', 'export {}');
   t.mock.method(fs, 'copyFileSync', () => { throw Object.assign(new Error('fixture access denied'), { code: 'EACCES' }); });
   assert.throws(() => prepareOpencodeConfigHome(path.join(directory, 'superagent-home'), env), { code: 'EACCES' });
+});
+
+test('Copilot home preserves auth and non-OV extensions/MCPs, strips OpenViking, disables built-in memory, and preserves sessions', (t) => {
+  const { write, env, directory } = home(t);
+  const configFile = write('.copilot/config.json', `// header comment\n{"loggedInUsers":[{"host":"https://github.com","login":"alice"}],"disabled_mcp_servers":["openviking","keep-me"]}`);
+  write('.copilot/settings.json', {
+    hooks: {
+      SessionStart: [
+        { type: 'command', bash: 'echo ov openviking' },
+        { type: 'command', bash: 'echo user-hook' },
+      ],
+    },
+    plugins: ['openviking-memory@openviking', 'user-plugin'],
+    memory: true,
+  });
+  write('.copilot/mcp-config.json', {
+    mcpServers: {
+      openviking: { type: 'local', command: 'ov' },
+      'magpie-artifacts': { type: 'local', command: 'magpie' },
+    },
+  });
+  write('.copilot/installed-plugins/openviking-memory/plugin.json', { name: 'openviking-memory' });
+  write('.copilot/installed-plugins/useful/plugin.json', { name: 'useful' });
+  write('.copilot/skills/openviking-recall/SKILL.md', '# ov');
+  write('.copilot/skills/custom/SKILL.md', '# keep');
+
+  const before = fs.readFileSync(configFile, 'utf8');
+  const target = path.join(directory, 'data', 'copilot', 'home');
+  fs.mkdirSync(path.join(target, 'session-state', 'sess-1'), { recursive: true });
+  fs.writeFileSync(path.join(target, 'session-state', 'sess-1', 'events.jsonl'), '{}\n');
+
+  prepareCopilotHome(target, env, { workspace: path.join(directory, 'ws') });
+  assert.equal(fs.readFileSync(configFile, 'utf8'), before, 'source config stays untouched');
+  assert.equal(fs.existsSync(path.join(target, 'session-state', 'sess-1', 'events.jsonl')), true);
+
+  const targetConfig = JSON.parse(fs.readFileSync(path.join(target, 'config.json'), 'utf8'));
+  assert.equal(targetConfig.loggedInUsers[0].login, 'alice');
+  assert.deepEqual(targetConfig.disabled_mcp_servers, ['keep-me']);
+  assert.ok(targetConfig.trusted_folders.includes(path.resolve(path.join(directory, 'ws'))));
+
+  const targetSettings = JSON.parse(fs.readFileSync(path.join(target, 'settings.json'), 'utf8'));
+  assert.equal(targetSettings.memory, false);
+  assert.equal(targetSettings.autoUpdate, false);
+  assert.equal(targetSettings.hooks.SessionStart.length, 1);
+  assert.match(targetSettings.hooks.SessionStart[0].bash, /user-hook/);
+  assert.deepEqual(targetSettings.plugins, ['user-plugin']);
+
+  const targetMcp = JSON.parse(fs.readFileSync(path.join(target, 'mcp-config.json'), 'utf8'));
+  assert.deepEqual(Object.keys(targetMcp.mcpServers), ['magpie-artifacts']);
+  assert.equal(fs.existsSync(path.join(target, 'installed-plugins', 'useful')), true);
+  assert.equal(fs.existsSync(path.join(target, 'installed-plugins', 'openviking-memory')), false);
+  assert.equal(fs.existsSync(path.join(target, 'skills', 'custom')), true);
+  assert.equal(fs.existsSync(path.join(target, 'skills', 'openviking-recall')), false);
+
+  write('ws/.github/hooks/openviking.json', { SessionStart: [] });
+  write('ws/AGENTS.md', 'normal workspace instructions');
+  assert.deepEqual(copilotWorkspaceOpenVikingPieces(path.join(directory, 'ws')), [
+    path.join(directory, 'ws/.github/hooks/openviking.json'),
+  ]);
+});
+
+test('Droid home links auth artifacts, strips OpenViking from settings/mcp/skills/hooks, and preserves existing sessions', (t) => {
+  const { write, env, directory } = home(t);
+  write('.factory/auth.v2.loginkeychain', 'keychain-blob');
+  write('.factory/settings.json', `// User settings belong in settings.json.\n{"logoAnimation":"on","hooks":{"SessionStart":[{"hooks":[{"command":"openviking hook"}]},{"hooks":[{"command":"echo keep"}]}]}}`);
+  write('.factory/mcp.json', {
+    mcpServers: {
+      ov_local: { command: 'node', args: ['/opt/openviking/mcp.js'] },
+      'magpie-artifacts': { command: 'magpie', args: ['mcp'] },
+    },
+  });
+  write('.factory/skills/openviking/SKILL.md', '# ov');
+  write('.factory/skills/keep/SKILL.md', '# keep');
+
+  const target = path.join(directory, 'data', 'droid', 'home');
+  fs.mkdirSync(path.join(target, '.factory', 'sessions'), { recursive: true });
+  fs.writeFileSync(path.join(target, '.factory', 'sessions', 's1.jsonl'), '{}\n');
+
+  prepareDroidHome(target, env, { workspace: path.join(directory, 'ws') });
+  assert.equal(fs.existsSync(path.join(target, '.factory', 'auth.v2.loginkeychain')), true);
+  assert.equal(fs.existsSync(path.join(target, '.factory', 'sessions', 's1.jsonl')), true);
+  const settings = JSON.parse(fs.readFileSync(path.join(target, '.factory', 'settings.json'), 'utf8'));
+  assert.equal(settings.logoAnimation, 'off');
+  assert.equal(settings.hooks.SessionStart.length, 1);
+  assert.equal(settings.hooks.SessionStart[0].hooks[0].command, 'echo keep');
+  const mcp = JSON.parse(fs.readFileSync(path.join(target, '.factory', 'mcp.json'), 'utf8'));
+  assert.deepEqual(Object.keys(mcp.mcpServers), ['magpie-artifacts']);
+  assert.equal(fs.existsSync(path.join(target, '.factory', 'skills', 'keep')), true);
+  assert.equal(fs.existsSync(path.join(target, '.factory', 'skills', 'openviking')), false);
+
+  write('ws/.factory/skills/openviking-team/SKILL.md', '# ov');
+  assert.deepEqual(droidWorkspaceOpenVikingPieces(path.join(directory, 'ws')), [
+    path.join(directory, 'ws/.factory/skills/openviking-team'),
+  ]);
 });

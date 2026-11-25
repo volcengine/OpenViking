@@ -168,8 +168,13 @@ export class AgentRuntime {
     // starting exactly as it did before (no adoption), which must never become a
     // startup failure of its own.
     if (overrides.allowModelFallback !== undefined) {
+      const allow = overrides.allowModelFallback === true;
       try {
-        implementation.allowModelFallback = overrides.allowModelFallback === true;
+        if (typeof implementation.setAllowModelFallback === 'function') {
+          implementation.setAllowModelFallback(allow);
+        } else {
+          implementation.allowModelFallback = allow;
+        }
       } catch {
         this.logger.warn('runtime_fallback_policy_unsettable', { runtime });
       }
@@ -234,26 +239,25 @@ export class AgentRuntime {
 
   whenIdle() { return this.backend?.whenIdle() ?? Promise.resolve(); }
 
-  // Volc's tool executor is the remote Environment Worker, which only has the
-  // Lark CLI path; it cannot reach the daemon's agent tools.
+  // Runtimes whose tool executor lacks the daemon's core agent tools cannot
+  // drive non-Lark connectors (for example Volc's remote Environment Worker).
   _assertConnectorSupport(runtime) {
-    if (runtime === 'volc' && this.config.connectors.includes('qq')) {
-      throw new Error('QQ is not supported on the Volc runtime');
+    if (getRuntimeDefinition(runtime)?.capabilities.agentTools === 'core') return;
+    const label = runtime === 'volc' ? 'Volc' : runtime;
+    const restricted = [
+      ['qq', 'QQ'],
+      ['telegram', 'Telegram'],
+      ['slack', 'Slack'],
+      ['onebot', 'OneBot'],
+      ['weixin', 'Weixin'],
+    ];
+    for (const [id, name] of restricted) {
+      if (this.config.connectors.includes(id)) {
+        throw new Error(`${name} is not supported on the ${label} runtime`);
+      }
     }
-    if (runtime === 'volc' && this.config.connectors.includes('telegram')) {
-      throw new Error('Telegram is not supported on the Volc runtime');
-    }
-    if (runtime === 'volc' && this.config.connectors.includes('slack')) {
-      throw new Error('Slack is not supported on the Volc runtime');
-    }
-    if (runtime === 'volc' && this.config.connectors.includes('onebot')) {
-      throw new Error('OneBot is not supported on the Volc runtime');
-    }
-    if (runtime === 'volc' && this.config.connectors.includes('weixin')) {
-      throw new Error('Weixin is not supported on the Volc runtime');
-    }
-    if (runtime === 'volc' && (this.config.externalConnectors ?? []).some((item) => this.config.connectors.includes(item.id))) {
-      throw new Error('An external connector is not supported on the Volc runtime');
+    if ((this.config.externalConnectors ?? []).some((item) => this.config.connectors.includes(item.id))) {
+      throw new Error(`An external connector is not supported on the ${label} runtime`);
     }
   }
 

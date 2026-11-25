@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import path from 'node:path';
-import { agentToolEnv, agentToolServer } from './actions/api.mjs';
+import { AcpAgent } from './acp-agent.mjs';
+import { agentToolServer } from './actions/api.mjs';
 import { agyHandshakeProblem } from './agy-runtime.mjs';
-import { OpencodeAgent, sanitizeOpencodeEnv } from './opencode.mjs';
 import { agyWorkspaceOpenVikingPieces, prepareAgyGeminiDir } from './ov-isolation.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 
@@ -29,7 +29,7 @@ function notLoggedIn() {
 //   replays nothing is a lost transcript once anything was acknowledged. With
 //   nothing acknowledged yet, it just keeps the journal catch-up (base class).
 // - Authentication required is an account problem, never a lost transcript.
-export class AgyAgent extends OpencodeAgent {
+export class AgyAgent extends AcpAgent {
   constructor(config, store, logger, options = {}) {
     super(config, store, logger, {
       ...options,
@@ -59,11 +59,6 @@ export class AgyAgent extends OpencodeAgent {
     // Unattended like Claude's bypass; the base class still declines any
     // session/request_permission that arrives anyway.
     return ['acp', '--dangerously-skip-permissions', `--gemini-dir=${this.geminiDir}`];
-  }
-
-  _spawnEnv() {
-    return sanitizeOpencodeEnv(process.env, this._larkProfile(),
-      agentToolEnv(this.config, this.authorityToken), this.config);
   }
 
   _assertAgent(result) {

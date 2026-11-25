@@ -363,7 +363,7 @@ const escapePattern = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const AGY_WORKSPACE_FOLDERS = ['.agents', '.agent', '_agents', '_agent'];
 const AGY_WORKSPACE_FILES = ['mcp_config.json', 'hooks.json', ...AGY_DECLARATIVE_CONFIGS];
 
-function agyWorkspaceLevels(workspace) {
+function workspaceLevels(workspace) {
   const levels = [];
   let directory = workspace;
   for (;;) {
@@ -378,7 +378,7 @@ function agyWorkspaceLevels(workspace) {
 export function agyWorkspaceOpenVikingPieces(workspace) {
   if (!workspace) return [];
   const pieces = [];
-  for (const level of agyWorkspaceLevels(path.resolve(workspace))) {
+  for (const level of workspaceLevels(path.resolve(workspace))) {
     for (const folder of AGY_WORKSPACE_FOLDERS) {
       const agents = path.join(level, folder);
       for (const name of AGY_WORKSPACE_FILES) {
@@ -400,11 +400,198 @@ export function agyWorkspaceOpenVikingPieces(workspace) {
   return pieces;
 }
 
+function syncEntry(from, to) {
+  fs.rmSync(to, { recursive: true, force: true });
+  linkConfig(from, to);
+}
+
+function filterHookMap(hooks) {
+  if (!hooks || typeof hooks !== 'object' || Array.isArray(hooks)) return hooks;
+  return Object.fromEntries(Object.entries(hooks).map(([event, entries]) => [
+    event,
+    Array.isArray(entries) ? entries.filter((item) => !isOpenViking(JSON.stringify(item))) : entries,
+  ]).filter(([, entries]) => !Array.isArray(entries) || entries.length > 0));
+}
+
+function filterPluginCollection(collection) {
+  if (Array.isArray(collection)) return collection.filter((item) => !isOpenViking(JSON.stringify(item)));
+  if (collection && typeof collection === 'object') {
+    return Object.fromEntries(Object.entries(collection)
+      .filter(([name, value]) => !isOpenViking(name) && !isOpenViking(JSON.stringify(value))));
+  }
+  return collection;
+}
+
+const COPILOT_PLUGIN_MANIFESTS = [
+  'plugin.json', '.github/plugin/plugin.json', '.claude-plugin/plugin.json', 'hooks.json', 'mcp-config.json',
+];
+const COPILOT_DIR_KINDS = ['hooks', 'installed-plugins', 'plugin-data', 'skills', 'agents', 'instructions'];
+
+function copilotEntryIsOpenViking(entryPath, name) {
+  if (isOpenViking(name)) return true;
+  try { if (isOpenViking(path.basename(fs.realpathSync(entryPath)))) return true; } catch {}
+  try {
+    if (fs.statSync(entryPath).isFile()) return isOpenViking(read(entryPath));
+  } catch { return false; }
+  return COPILOT_PLUGIN_MANIFESTS.some((manifest) => isOpenViking(read(path.join(entryPath, manifest))));
+}
+
+function syncFilteredDir(fromDir, toDir, isExcluded) {
+  fs.rmSync(toDir, { recursive: true, force: true });
+  fs.mkdirSync(toDir, { recursive: true, mode: 0o700 });
+  for (const item of safeList(fromDir)) {
+    const src = path.join(fromDir, item);
+    if (!isExcluded(src, item)) linkConfig(src, path.join(toDir, item));
+  }
+}
+
+// GitHub Copilot CLI reads auth, settings, hooks, skills, plugins and sessions
+// from COPILOT_HOME. Keep durable session folders in target while refreshing
+// sanitized config/MCP/plugins/hooks from the owner's ~/.copilot (read-only)
+// and switching Copilot's own memory/autoUpdate off so OpenViking belongs to SuperAgent.
+export function prepareCopilotHome(target, env = process.env, { workspace = null } = {}) {
+  const source = env.COPILOT_HOME || path.join(home(env), '.copilot');
+  fs.mkdirSync(target, { recursive: true, mode: 0o700 });
+  const writeJson = (name, value) => fs.writeFileSync(path.join(target, name), JSON.stringify(value), { mode: 0o600 });
+
+  const config = readJsonc(path.join(source, 'config.json')) ?? {};
+  for (const key of ['disabled_mcp_servers', 'disabledMcpServers', 'plugins', 'enabledPlugins', 'installedPlugins']) {
+    if (config[key] !== undefined) config[key] = filterPluginCollection(config[key]);
+  }
+  if (workspace) {
+    config.trusted_folders = uniq([...(Array.isArray(config.trusted_folders) ? config.trusted_folders : []), path.resolve(workspace)]);
+  }
+  writeJson('config.json', config);
+
+  const settings = readJsonc(path.join(source, 'settings.json')) ?? {};
+  if (settings.hooks !== undefined) settings.hooks = filterHookMap(settings.hooks);
+  for (const key of ['plugins', 'enabledPlugins', 'installedPlugins', 'skillDirectories']) {
+    if (settings[key] !== undefined) settings[key] = filterPluginCollection(settings[key]);
+  }
+  writeJson('settings.json', {
+    ...settings,
+    memory: false,
+    autoUpdate: false,
+    notifications: false,
+    banner: 'never',
+  });
+
+  const mcp = readJsonc(path.join(source, 'mcp-config.json')) ?? {};
+  writeJson('mcp-config.json', mcp.mcpServers ? { ...mcp, mcpServers: withoutOpenViking(mcp.mcpServers) } : mcp);
+
+  for (const folder of COPILOT_DIR_KINDS) {
+    syncFilteredDir(path.join(source, folder), path.join(target, folder), copilotEntryIsOpenViking);
+  }
+  const permissionsFile = path.join(source, 'permissions-config.json');
+  if (fs.existsSync(permissionsFile)) syncEntry(permissionsFile, path.join(target, 'permissions-config.json'));
+  return target;
+}
+
+const COPILOT_WORKSPACE_DIRS = ['hooks', 'skills', 'agents', 'instructions', 'plugins'];
+
+export function copilotWorkspaceOpenVikingPieces(workspace) {
+  if (!workspace) return [];
+  const pieces = [];
+  for (const level of workspaceLevels(path.resolve(workspace))) {
+    for (const file of [
+      path.join(level, 'AGENTS.md'),
+      path.join(level, '.mcp.json'),
+      path.join(level, '.github', 'copilot-instructions.md'),
+      path.join(level, '.github', 'mcp-config.json'),
+      path.join(level, '.github', 'copilot', 'settings.json'),
+    ]) {
+      if (isOpenViking(read(file))) pieces.push(file);
+    }
+    for (const folder of COPILOT_WORKSPACE_DIRS) {
+      const dir = path.join(level, '.github', folder);
+      for (const entry of safeList(dir)) {
+        const entryPath = path.join(dir, entry);
+        if (copilotEntryIsOpenViking(entryPath, entry)) pieces.push(entryPath);
+      }
+    }
+  }
+  return pieces;
+}
+
+const DROID_AUTH_ENTRIES = [
+  'auth.v2.loginkeychain', 'auth.v2.keyring', 'auth.v2.file', 'auth.v2.key',
+  'auth.json', 'host.json', 'org-managed-settings.cache.json', 'certs', 'bin', 'update-policy.json',
+];
+const DROID_PLUGIN_MANIFESTS = ['plugin.json', '.claude-plugin/plugin.json', 'hooks.json', 'mcp.json'];
+const DROID_DIR_KINDS = ['hooks', 'plugins', 'skills', 'droids', 'commands'];
+
+function droidEntryIsOpenViking(entryPath, name) {
+  if (isOpenViking(name)) return true;
+  try { if (isOpenViking(path.basename(fs.realpathSync(entryPath)))) return true; } catch {}
+  try {
+    if (fs.statSync(entryPath).isFile()) return isOpenViking(read(entryPath));
+  } catch { return false; }
+  return DROID_PLUGIN_MANIFESTS.some((manifest) => isOpenViking(read(path.join(entryPath, manifest))));
+}
+
+// Factory Droid resolves `.factory/` beneath FACTORY_HOME_OVERRIDE (while
+// keeping HOME intact so macOS Login Keychain decryption for auth.v2.loginkeychain
+// still works). Sync auth/host entries safely and copy/filter settings, MCPs,
+// hooks, skills, plugins, droids and commands without touching ~/.factory.
+export function prepareDroidHome(target, env = process.env, { workspace = null } = {}) {
+  const sourceRoot = env.FACTORY_HOME_OVERRIDE || home(env);
+  const source = path.join(sourceRoot, '.factory');
+  const targetFactory = path.join(target, '.factory');
+  fs.mkdirSync(targetFactory, { recursive: true, mode: 0o700 });
+
+  for (const name of DROID_AUTH_ENTRIES) {
+    const src = path.join(source, name);
+    if (fs.existsSync(src)) syncEntry(src, path.join(targetFactory, name));
+  }
+
+  const writeJson = (name, value) => fs.writeFileSync(path.join(targetFactory, name), JSON.stringify(value), { mode: 0o600 });
+  const mcp = readJsonc(path.join(source, 'mcp.json')) ?? {};
+  writeJson('mcp.json', mcp.mcpServers ? { ...mcp, mcpServers: withoutOpenViking(mcp.mcpServers) } : mcp);
+
+  const settings = readJsonc(path.join(source, 'settings.json')) ?? {};
+  if (settings.hooks !== undefined) settings.hooks = filterHookMap(settings.hooks);
+  for (const key of ['plugins', 'enabledPlugins', 'installedPlugins']) {
+    if (settings[key] !== undefined) settings[key] = filterPluginCollection(settings[key]);
+  }
+  const trustedFolders = workspace
+    ? uniq([...(Array.isArray(settings.trustedFolders) ? settings.trustedFolders : []), path.resolve(workspace)])
+    : settings.trustedFolders;
+  writeJson('settings.json', {
+    ...settings,
+    logoAnimation: 'off',
+    ...(trustedFolders !== undefined ? { trustedFolders } : {}),
+  });
+
+  for (const folder of DROID_DIR_KINDS) {
+    syncFilteredDir(path.join(source, folder), path.join(targetFactory, folder), droidEntryIsOpenViking);
+  }
+  return target;
+}
+
+export function droidWorkspaceOpenVikingPieces(workspace) {
+  if (!workspace) return [];
+  const pieces = [];
+  for (const level of workspaceLevels(path.resolve(workspace))) {
+    const factory = path.join(level, '.factory');
+    for (const file of [path.join(factory, 'mcp.json'), path.join(factory, 'settings.json')]) {
+      if (isOpenViking(read(file))) pieces.push(file);
+    }
+    for (const folder of DROID_DIR_KINDS) {
+      const dir = path.join(factory, folder);
+      for (const entry of safeList(dir)) {
+        const entryPath = path.join(dir, entry);
+        if (droidEntryIsOpenViking(entryPath, entry)) pieces.push(entryPath);
+      }
+    }
+  }
+  return pieces;
+}
+
 function safeList(folder) {
   try { return fs.readdirSync(folder); } catch { return []; }
 }
 
-// OpenCode configs may be JSONC: comments and trailing commas.
+// OpenCode/Copilot/Droid configs may be JSONC: comments and trailing commas.
 function readJsonc(file) {
   const text = read(file);
   if (!text) return null;

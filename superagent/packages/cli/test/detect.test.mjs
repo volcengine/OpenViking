@@ -205,6 +205,8 @@ test('runtimes: installed and logged-in CLIs are offered, the rest say what is m
     { id: 'opencode', available: false, model: 'opencode' },
     { id: 'agy', available: false, model: 'agy' },
     { id: 'dsh', available: false, model: 'dsh' },
+    { id: 'copilot', available: false, model: 'copilot' },
+    { id: 'droid', available: false, model: 'droid' },
   ]);
   assert.equal(runtimes[0].bin, path.join(bin, 'codex'));
   assert.match(runtimes[1].note, /claude auth login/);
@@ -245,7 +247,7 @@ test('runtimes: a Pi with no model points the user at ov-superagent pi', async (
     execFileImpl: async () => ({ stdout: 'No models available.\n' }),
   });
   assert.deepEqual(runtimes.map(({ id, available }) => [id, available]), [
-    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['traex', false], ['opencode', false], ['agy', false], ['dsh', false],
+    ['codex', false], ['claude', false], ['pi', false], ['durable', false], ['traex', false], ['opencode', false], ['agy', false], ['dsh', false], ['copilot', false], ['droid', false],
   ]);
   assert.match(runtimes[2].note, /ov-superagent pi/);
 });
@@ -503,6 +505,69 @@ test('OpenCode: an unsupported 2.x CLI is reported and not offered', async (t) =
   assert.equal(runtime.available, false);
   assert.match(runtime.note, /OpenCode 1\.x/);
   assert.deepEqual(acpProbes, [], 'version gate runs before the ACP handshake');
+});
+
+test('Copilot: detects logged-in binary, COPILOT_BIN override, and unauthenticated state', async (t) => {
+  const bin = tempDir(t, 'superagent-copilot-');
+  fs.writeFileSync(path.join(bin, 'copilot-custom'), '#!/bin/sh\n', { mode: 0o755 });
+  const ok = (await detectRuntimes({
+    env: { PATH: bin, COPILOT_BIN: 'copilot-custom' }, piBin: '/managed/pi.js',
+    execFileImpl: async () => ({ stdout: 'GitHub Copilot CLI 1.0.114.\n' }),
+    copilotProbe: async () => ({ compatible: true, loggedIn: true }),
+  })).find(({ id }) => id === 'copilot');
+  assert.equal(ok.installed, true);
+  assert.equal(ok.available, true);
+  assert.equal(ok.bin, path.join(bin, 'copilot-custom'));
+  assert.match(ok.note, /1\.0\.114/);
+
+  const unauth = (await detectRuntimes({
+    env: { PATH: bin, COPILOT_BIN: 'copilot-custom' }, piBin: '/managed/pi.js',
+    execFileImpl: async () => ({ stdout: 'GitHub Copilot CLI 1.0.114.\n' }),
+    copilotProbe: async () => ({ compatible: true, loggedIn: false }),
+  })).find(({ id }) => id === 'copilot');
+  assert.equal(unauth.installed, true);
+  assert.equal(unauth.available, false);
+  assert.match(unauth.note, /copilot login/);
+
+  const badProto = (await detectRuntimes({
+    env: { PATH: bin, COPILOT_BIN: 'copilot-custom' }, piBin: '/managed/pi.js',
+    execFileImpl: async () => ({ stdout: 'GitHub Copilot CLI 1.0.114.\n' }),
+    copilotProbe: async () => ({ compatible: false, reason: 'unexpected agent' }),
+  })).find(({ id }) => id === 'copilot');
+  assert.equal(badProto.available, false);
+  assert.match(badProto.note, /unexpected agent/);
+});
+
+test('Droid: verifies stream-jsonrpc handshake plus keychain/API-key auth without mutating ~/.factory', async (t) => {
+  const bin = tempDir(t, 'superagent-droid-bin-');
+  const home = tempDir(t, 'superagent-droid-home-');
+  fs.writeFileSync(path.join(bin, 'droid'), '#!/bin/sh\n', { mode: 0o755 });
+
+  const noAuth = (await detectRuntimes({
+    env: { PATH: bin, HOME: home }, piBin: '/managed/pi.js',
+    execFileImpl: async () => ({ stdout: '0.241.1\n' }),
+    droidProbe: async () => ({ compatible: true }),
+  })).find(({ id }) => id === 'droid');
+  assert.equal(noAuth.installed, true);
+  assert.equal(noAuth.available, false);
+  assert.match(noAuth.note, /FACTORY_API_KEY/);
+
+  const withApiKey = (await detectRuntimes({
+    env: { PATH: bin, HOME: home, FACTORY_API_KEY: 'fk-test' }, piBin: '/managed/pi.js',
+    execFileImpl: async () => ({ stdout: '0.241.1\n' }),
+    droidProbe: async () => ({ compatible: true }),
+  })).find(({ id }) => id === 'droid');
+  assert.equal(withApiKey.available, true);
+  assert.match(withApiKey.note, /0\.241\.1/);
+
+  fs.mkdirSync(path.join(home, '.factory'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.factory', 'auth.v2.loginkeychain'), 'opaque');
+  const withKeychain = (await detectRuntimes({
+    env: { PATH: bin, HOME: home }, piBin: '/managed/pi.js',
+    execFileImpl: async () => ({ stdout: '0.241.1\n' }),
+    droidProbe: async () => ({ compatible: true }),
+  })).find(({ id }) => id === 'droid');
+  assert.equal(withKeychain.available, true);
 });
 
 // An OV with two accounts whose administrators share a name. Deleting a user

@@ -10,6 +10,8 @@ import { DurableAgent } from './durable.mjs';
 import { OpencodeAgent } from './opencode.mjs';
 import { AgyAgent } from './agy.mjs';
 import { DshAgent } from './dsh.mjs';
+import { CopilotAgent } from './copilot.mjs';
+import { DroidAgent } from './droid.mjs';
 import { RUNTIME_IDS, getRuntimeDefinition } from './runtime-catalog.mjs';
 
 // Composition root for transport implementations. The coordinator depends on
@@ -26,6 +28,8 @@ export function createRuntimeFactories(config, store, logger, overrides = {}) {
     opencode: OpencodeAgent,
     agy: AgyAgent,
     dsh: DshAgent,
+    copilot: CopilotAgent,
+    droid: DroidAgent,
   };
   return Object.fromEntries(definitions.map((definition) => {
     const override = overrides[`${definition.id}Factory`];
