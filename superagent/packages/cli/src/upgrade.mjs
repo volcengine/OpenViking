@@ -4,12 +4,12 @@
 import { capabilities } from '../../daemon/src/capabilities.mjs';
 
 import http from 'node:http';
-import { assertUpgradeTarget, defaultUpdaterEndpoint, upgradeTargetNames } from '../../updater/src/targets.mjs';
+import { assertUpgradeTarget, defaultUpdaterEndpoint, readUpdaterToken, upgradeTargetNames } from '../../updater/src/targets.mjs';
 
 // `ov-superagent upgrade` only asks the updater process; the updater fetches, publishes
 // and rolls the apps, so the upgrade survives the caller disconnecting.
 
-function requestUpgrade(socketPath, target) {
+function requestUpgrade(socketPath, target, token = '') {
   const body = JSON.stringify({ target });
   return new Promise((resolve, reject) => {
     const request = http.request({
@@ -19,6 +19,8 @@ function requestUpgrade(socketPath, target) {
       headers: {
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(body),
+        // The Windows endpoint is a named pipe whose name cannot prove who answers.
+        ...(token ? { 'x-superagent-token': token } : {}),
       },
     }, (response) => {
       const chunks = [];
@@ -58,7 +60,8 @@ export async function upgradeCommand(args, { stdout = process.stdout, stderr = p
     return 2;
   }
   assertUpgradeTarget(target);
-  const result = await requestUpgrade(env.OV_SUPERAGENT_UPDATER_SOCKET || defaultUpdaterEndpoint(), target);
+  const endpoint = env.OV_SUPERAGENT_UPDATER_SOCKET || defaultUpdaterEndpoint();
+  const result = await requestUpgrade(endpoint, target, await readUpdaterToken().catch(() => ''));
   const apps = Array.isArray(result.apps) && result.apps.length > 0
     ? result.apps
     : [result.app].filter(Boolean);

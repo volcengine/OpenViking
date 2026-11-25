@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { hostPlatform } from './artifacts.mjs';
-import { currentRelease, readReleaseMetadata } from './publisher.mjs';
+import { activateRelease, currentRelease, readReleaseMetadata } from './publisher.mjs';
 
 // A Windows release is a ZIP preview with its own channel
 // (<base>/windows-preview/latest and <base>/windows-preview/<version>), so the
@@ -109,13 +109,63 @@ export async function publishWithInstaller({
 }
 
 // Puts the publication back on the version that was running before a release
-// that installed cleanly but could not start. The installer compares the existing
-// directory with the package it downloads and switches `current`/`rollback` back
-// without touching a running instance.
+// that installed cleanly but could not start.
+//
+// The previous release is normally still unpacked under releases/: it is what
+// `current` named a moment ago, so switching the links back is the whole job.
+// Doing that locally is what lets a rollback work when the network is gone or the
+// channel no longer serves that version; only when no verified directory is left
+// does it go back through the installer, which downloads and checks the package
+// again.
 export async function republishPrevious({
   previousVersion,
   ...options
 }) {
   if (!previousVersion) throw new Error('no previous version to fall back to');
+  const baseDir = options.baseDir ?? path.join(os.homedir(), '.ov-superagent');
+  const local = await localRelease(baseDir, previousVersion);
+  if (local) {
+    const from = await currentRelease(baseDir);
+    await activateRelease(baseDir, local, from);
+    const metadata = await readReleaseMetadata(local);
+    const fromMetadata = await readReleaseMetadata(from);
+    return {
+      release: local,
+      version: previousVersion,
+      commit: typeof metadata?.commit === 'string' ? metadata.commit : undefined,
+      published: true,
+      previousRelease: from,
+      previousVersion: fromMetadata?.version,
+    };
+  }
   return publishWithInstaller({ ...options, version: previousVersion });
+}
+
+// What a release directory must carry to be adopted without the installer: the
+// metadata naming the version asked for, and the two files a start needs. The
+// installer wrote and verified this directory when it was installed, so its
+// contents are not re-hashed here - a full-tree digest of 24k files is the check
+// the installer itself skips when its metadata digest already matches.
+const REQUIRED_RELEASE_FILES = Object.freeze([
+  'ecosystem.config.cjs',
+  path.join('packages', 'daemon', 'src', 'main.mjs'),
+]);
+
+function isInside(parent, child) {
+  const relative = path.relative(parent, child);
+  return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
+}
+
+async function localRelease(baseDir, version) {
+  if (typeof version !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z._-]*$/.test(version)) return null;
+  const releasesRoot = await fs.promises.realpath(path.join(baseDir, 'releases')).catch(() => null);
+  if (!releasesRoot) return null;
+  const real = await fs.promises.realpath(path.join(releasesRoot, version)).catch(() => null);
+  if (!real || !isInside(releasesRoot, real)) return null;
+  const metadata = await readReleaseMetadata(real);
+  if (!metadata || metadata.version !== version) return null;
+  for (const relative of REQUIRED_RELEASE_FILES) {
+    if (!fs.existsSync(path.join(real, relative))) return null;
+  }
+  return real;
 }

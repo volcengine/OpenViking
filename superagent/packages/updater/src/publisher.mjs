@@ -57,10 +57,18 @@ export async function readReleaseMetadata(release) {
   return null;
 }
 
+// A directory link needs a type on Windows: a junction, which is what the
+// PowerShell installer writes and what needs no privilege to create. POSIX takes
+// no type at all.
+const DIRECTORY_LINK = process.platform === 'win32' ? 'junction' : undefined;
+
 async function atomicSymlink(target, linkPath) {
   const temporary = `${linkPath}.pending-${process.pid}-${Date.now()}`;
-  await symlink(target, temporary);
+  await symlink(target, temporary, DIRECTORY_LINK);
   try {
+    // Windows cannot rename a directory link over an existing one, so the old
+    // link goes first - the same two steps the PowerShell installer takes.
+    if (DIRECTORY_LINK) await rm(linkPath, { force: true });
     await rename(temporary, linkPath);
   } catch (error) {
     await rm(temporary, { force: true });

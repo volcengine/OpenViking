@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import { homeDir as platformHomeDir, localSocketPath } from '../../daemon/src/platform/index.mjs';
 import path from 'node:path';
@@ -92,6 +93,20 @@ export function shouldUpgradeSharedWeb(target, targets = loadTargets()) {
 // and the updater both derive without being told.
 export function defaultUpdaterEndpoint(homeDir = platformHomeDir() || os.homedir()) {
   return localSocketPath(path.join(homeDir, '.ov-superagent'), 'updater', { shared: true });
+}
+
+// A named pipe's name says nothing about who answers on it, so the updater writes
+// a per-install token and an upgrade request has to carry it: a process that
+// squats the pipe name without being able to read this file is refused, and the
+// CLI cannot be told "published" by anyone but this installation's updater.
+export function updaterTokenPath(homeDir = platformHomeDir() || os.homedir()) {
+  return path.join(homeDir, '.ov-superagent', 'updater.token');
+}
+
+export async function readUpdaterToken(homeDir = platformHomeDir() || os.homedir()) {
+  const token = await readFile(updaterTokenPath(homeDir), 'utf8').catch(() => '');
+  const trimmed = String(token).trim();
+  return /^[0-9a-f]{32,}$/i.test(trimmed) ? trimmed : '';
 }
 
 export function defaultReleaseLink(homeDir = platformHomeDir() || os.homedir()) {

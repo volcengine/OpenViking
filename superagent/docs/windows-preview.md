@@ -173,7 +173,9 @@ uniquely labelled message/reply with no duplicate delivery. Report the commit,
 Windows/PowerShell versions, results and sanitized errors. `ov-superagent upgrade <instance|all>`
 installs the newest preview through the `install-preview.ps1` inside the installed
 release, restarts the instances and rolls a release back if it cannot start; see
-[Upgrade and rollback](installation-reference.md#upgrade-and-rollback). A default install keeps
+[Upgrade and rollback](installation-reference.md#upgrade-and-rollback). Only a
+release that ships the updater can run this: an older preview install updates by
+running `install.ps1` once from a newer package, after which `upgrade` works. A default install keeps
 the version it replaced under `~\.ov-superagent\releases` and names it in
 `~\.ov-superagent\rollback`, so a manual rollback means installing that version again
 (`install.ps1 -Version <version>`) and running `ov-superagent restart`; an isolated

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
-import { chmod, lstat, mkdir, realpath, rm, rmdir } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, realpath, rm, rmdir, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
@@ -19,6 +20,7 @@ import {
   getUpgradeTargets,
   loadTargets,
   shouldUpgradeSharedWeb,
+  updaterTokenPath,
 } from './targets.mjs';
 import { publishLatestRelease } from './publisher.mjs';
 import { updaterMode } from './artifacts.mjs';
@@ -124,6 +126,7 @@ async function previousConfigForProcess(processInfo, release) {
 }
 
 async function upgradeApp(spec, {
+  baseDir,
   release,
   configPath,
   pm2Bin,
@@ -136,6 +139,14 @@ async function upgradeApp(spec, {
   const processes = await pm2Processes({ pm2Bin, execFileImpl, pm2Env: appPm2Env });
   const previous = processes.find((processInfo) => processInfo?.name === spec.app) || null;
   const previousWasOnline = previous?.pm2_env?.status === 'online';
+  // Already on the release being published and answering: restarting it would
+  // only take a working instance down, which is what makes `upgrade` on the
+  // installed version a no-op. An instance still behind keeps its restart.
+  if (previousWasOnline && releaseOfProcess(baseDir, previous) === path.basename(release)) {
+    const ready = await waitUntilReady(spec.readyUrl, fetchImpl, { ...(readyOptions ?? {}), attempts: 2, intervalMs: 500 })
+      .then(() => true, () => false);
+    if (ready) return { skipped: true };
+  }
   const previousConfig = previous ? await previousConfigForProcess(previous, release) : null;
   if (previous) {
     await execFileImpl(pm2Bin, ['delete', spec.app], { timeout: 30_000, env: appPm2Env });
@@ -161,11 +172,26 @@ async function upgradeApp(spec, {
     }
     throw error;
   }
+  return { skipped: false };
 }
 
 function describeFailure(error) {
   return String(error?.message || error);
 }
+
+// The release an app is actually running from. pm2 keeps the script path it was
+// given; only a path under releases/<version>/ names the code the live process
+// loaded, because a path through `current` resolves to whatever the link names
+// now.
+function releaseOfProcess(baseDir, processInfo) {
+  const execPath = processInfo?.pm2_env?.pm_exec_path;
+  if (typeof execPath !== 'string' || execPath === '') return null;
+  const relative = path.relative(path.join(baseDir, 'releases'), path.resolve(execPath));
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  return relative.split(path.sep)[0];
+}
+
+
 
 // After an upgrade the updater still runs the old release. It cannot
 // replace itself from inside its own pm2 process (pm2 kills the process tree
@@ -284,6 +310,7 @@ export async function upgradeTarget(target, {
     if (shouldUpgradeSharedWeb(target, targets)) specs.push(SHARED_WEB);
 
     const startSpec = (appRelease, appConfig, spec) => upgradeApp(spec, {
+      baseDir,
       release: appRelease,
       configPath: appConfig,
       pm2Bin,
@@ -294,10 +321,12 @@ export async function upgradeTarget(target, {
     });
 
     const upgraded = [];
+    const skipped = [];
     try {
       for (const spec of specs) {
-        await startSpec(release, configPath, spec);
-        upgraded.push(spec);
+        const outcome = await startSpec(release, configPath, spec);
+        if (outcome?.skipped) skipped.push(spec.app);
+        else upgraded.push(spec);
       }
     } catch (error) {
       // A Windows publication has already moved `current` by the time the first
@@ -338,18 +367,22 @@ export async function upgradeTarget(target, {
     }
 
     const upgradedApps = upgraded.map((spec) => spec.app);
+    const readyApps = [...upgradedApps, ...skipped];
     const removedApps = target === 'all'
       ? await removeStaleManagedDaemonApps({ targets, release, pm2Bin, execFileImpl, pm2Env })
       : [];
     await execFileImpl(pm2Bin, ['save'], { timeout: 30_000, env: pm2Env });
     const realSelf = await realpath(selfEntry).catch(() => selfEntry);
-    const restartsUpdater = Boolean(restartSelfImpl) && !isInside(release, realSelf);
+    // Nothing was restarted, so there is nothing to replace the updater for.
+    const restartsUpdater = Boolean(restartSelfImpl) && upgraded.length > 0 && !isInside(release, realSelf);
     if (restartsUpdater) restartSelfImpl({ release, pm2Bin, pm2Env });
 
     return {
       target,
-      ...(upgradedApps.length === 1 ? { app: upgradedApps[0] } : {}),
-      apps: upgradedApps,
+      ...(readyApps.length === 1 ? { app: readyApps[0] } : {}),
+      apps: readyApps,
+      skipped,
+      upgraded: upgradedApps,
       removedApps,
       release,
       commit: publication.commit,
@@ -407,12 +440,28 @@ async function removeStaleSocket(socketPath) {
   await rm(socketPath);
 }
 
+// A named pipe cannot say who is on the other end, so the updater keeps a token
+// in the install directory (readable only by this account) and an upgrade
+// request has to present it. A process that merely learns the pipe name is
+// refused.
+async function ensureUpdaterToken(file = updaterTokenPath()) {
+  const existing = String(await readFile(file, 'utf8').catch(() => '')).trim();
+  if (/^[0-9a-f]{32,}$/i.test(existing)) return existing;
+  const token = randomBytes(32).toString('hex');
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await writeFile(file, `${token}\n`, { mode: 0o600 });
+  return token;
+}
+
 export async function createUpdaterServer({
   socketPath = process.env.OV_SUPERAGENT_UPDATER_SOCKET || defaultUpdaterEndpoint(),
   upgrade = (target) => upgradeTarget(target, { restartSelfImpl: scheduleUpdaterRestart }),
   requestBodyTimeoutMs = 5000,
+  tokenPath = updaterTokenPath(),
 } = {}) {
   let activeTarget = null;
+  // Filled in below for a named pipe; the handler only runs after listen.
+  let pipeToken = '';
   const server = http.createServer(async (request, response) => {
     request.setTimeout(requestBodyTimeoutMs, () => request.destroy(new Error('request body timed out')));
     if (request.method === 'GET' && request.url === '/ready') {
@@ -425,6 +474,10 @@ export async function createUpdaterServer({
     }
     if (activeTarget) {
       writeJson(response, 409, { error: `upgrade already running for ${activeTarget}` });
+      return;
+    }
+    if (pipeToken && request.headers['x-superagent-token'] !== pipeToken) {
+      writeJson(response, 403, { error: 'updater token mismatch' });
       return;
     }
     activeTarget = 'pending';
@@ -452,6 +505,7 @@ export async function createUpdaterServer({
   // A Windows endpoint is a named pipe: nothing to create, check or remove on
   // disk, and the name belongs to this user alone.
   const namedPipe = platform.isNamedPipe(socketPath);
+  pipeToken = namedPipe ? await ensureUpdaterToken(tokenPath) : '';
   const resolvedSocketPath = namedPipe ? socketPath : path.resolve(socketPath);
   if (!namedPipe) {
     await mkdir(path.dirname(resolvedSocketPath), { recursive: true, mode: 0o700 });

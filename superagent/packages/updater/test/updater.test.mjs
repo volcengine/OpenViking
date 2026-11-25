@@ -121,14 +121,14 @@ function replacePm2Harness({ app, initialEntry, entriesByConfig }) {
   };
 }
 
-function post(socketPath, body) {
+function post(socketPath, body, extraHeaders = {}) {
   const payload = JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const request = http.request({
       socketPath,
       path: '/v1/upgrade',
       method: 'POST',
-      headers: { 'content-length': Buffer.byteLength(payload) },
+      headers: { 'content-length': Buffer.byteLength(payload), ...extraHeaders },
     }, (response) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
@@ -217,26 +217,35 @@ test('upgradeTarget cold-starts only the allowlisted Beta app from current relea
 
 test('upgrade all rolls both daemons and the shared web from one ecosystem config', async () => {
   const fixture = await fixtureRelease();
-  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
-  const webEntry = path.join(fixture.release, 'packages', 'web', 'src', 'main.mjs');
-  await mkdir(path.dirname(daemonEntry), { recursive: true });
-  await mkdir(path.dirname(webEntry), { recursive: true });
-  await writeFile(daemonEntry, '');
-  await writeFile(webEntry, '');
+  // The apps run the previous release; an app already on the published one is a
+  // no-op and has its own case.
+  const older = path.join(path.dirname(fixture.release), '0.3.0-test');
+  const targetDaemon = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  const targetWeb = path.join(fixture.release, 'packages', 'web', 'src', 'main.mjs');
+  const olderDaemon = path.join(older, 'packages', 'daemon', 'src', 'main.mjs');
+  const olderWeb = path.join(older, 'packages', 'web', 'src', 'main.mjs');
+  for (const entry of [targetDaemon, targetWeb, olderDaemon, olderWeb]) {
+    await mkdir(path.dirname(entry), { recursive: true });
+    await writeFile(entry, '');
+  }
+  await writeFile(path.join(older, 'ecosystem.config.cjs'), 'module.exports = {};\n');
   const calls = [];
   const fetches = [];
-  const processes = [
-    { name: 'superagent-alpha', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
-    { name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
-    { name: 'superagent-web', pm2_env: { status: 'online', pm_exec_path: webEntry } },
-  ];
+  const moved = new Set();
+  const entryFor = (app) => (moved.has(app)
+    ? (app === 'superagent-web' ? targetWeb : targetDaemon)
+    : (app === 'superagent-web' ? olderWeb : olderDaemon));
+  const processesFor = () => ['superagent-alpha', 'superagent-beta', 'superagent-web'].map((name) => ({
+    name, pm2_env: { status: 'online', pm_exec_path: entryFor(name) },
+  }));
   const result = await upgradeTarget('all', {
     releaseLink: fixture.releaseLink,
     publishReleaseImpl: useFixtureRelease(fixture),
     pm2Bin: '/fake/pm2',
     execFileImpl: async (_command, args) => {
       calls.push(args);
-      return { stdout: args[0] === 'jlist' ? JSON.stringify(processes) : '' };
+      if (args[0] === 'start') moved.add(args[3]);
+      return { stdout: args[0] === 'jlist' ? JSON.stringify(processesFor()) : '' };
     },
     fetchImpl: async (url) => { fetches.push(url); return { ok: true }; },
     readyOptions: { attempts: 1, intervalMs: 0 },
@@ -595,16 +604,27 @@ test('upgradeTarget publishes upstream before rolling the target', async () => {
 
 test('the updater replaces itself after an upgrade that moved it to another release', async () => {
   const fixture = await fixtureRelease();
-  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
-  await mkdir(path.dirname(daemonEntry), { recursive: true });
-  await writeFile(daemonEntry, '');
+  const older = path.join(path.dirname(fixture.release), '0.3.0-test');
+  const daemonEntry = path.join(older, 'packages', 'daemon', 'src', 'main.mjs');
+  const targetEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  for (const entry of [daemonEntry, targetEntry]) {
+    await mkdir(path.dirname(entry), { recursive: true });
+    await writeFile(entry, '');
+  }
+  await writeFile(path.join(older, 'ecosystem.config.cjs'), 'module.exports = {};\n');
+  let restartedApp = false;
   const restarts = [];
   const options = {
     releaseLink: fixture.releaseLink,
     publishReleaseImpl: async () => ({ release: fixture.release, commit: 'c', version: '0.5.0', published: true }),
-    execFileImpl: async (_command, args) => ({
-      stdout: args[0] === 'jlist' ? JSON.stringify([{ name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } }]) : '',
-    }),
+    execFileImpl: async (_command, args) => {
+      if (args[0] === 'start') restartedApp = true;
+      return {
+        stdout: args[0] === 'jlist'
+          ? JSON.stringify([{ name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: restartedApp ? targetEntry : daemonEntry } }])
+          : '',
+      };
+    },
     fetchImpl: async () => ({ ok: true }),
     readyOptions: { attempts: 1, intervalMs: 0 },
     restartSelfImpl: (request) => restarts.push(request.release),
@@ -686,16 +706,25 @@ test('a Windows updater endpoint is one stable named pipe per install directory'
 
 test('the updater serves and closes a Windows named pipe', { skip: process.platform !== 'win32' }, async (t) => {
   const { localSocketPath } = await import('../../daemon/src/platform/index.mjs');
+  const root = await fixtureTempRoot('superagent-updater-pipe-');
   const socketPath = localSocketPath(path.join(os.tmpdir(), 'superagent-updater-pipe'), 'updater', { shared: true });
+  const tokenPath = path.join(root, 'updater.token');
   const first = await createUpdaterServer({
     socketPath,
+    tokenPath,
     upgrade: async (target) => ({ target, status: 'ready' }),
   });
-  await assert.rejects(createUpdaterServer({ socketPath, upgrade: async () => ({}) }), { code: 'EADDRINUSE' });
-  const response = await post(socketPath, { target: 'beta' });
+  await assert.rejects(createUpdaterServer({ socketPath, tokenPath, upgrade: async () => ({}) }), { code: 'EADDRINUSE' });
+  const token = (await readFile(tokenPath, 'utf8')).trim();
+  assert.match(token, /^[0-9a-f]{64}$/);
+  // Knowing the pipe name is not enough to drive an upgrade: the token lives in
+  // the install directory, which belongs to this account.
+  const refused = await post(socketPath, { target: 'beta' });
+  assert.equal(refused.status, 403);
+  const response = await post(socketPath, { target: 'beta' }, { 'x-superagent-token': token });
   assert.equal(response.status, 200);
   await first.close();
-  const again = await createUpdaterServer({ socketPath, upgrade: async () => ({}) });
+  const again = await createUpdaterServer({ socketPath, tokenPath, upgrade: async () => ({}) });
   await again.close();
 });
 
@@ -819,6 +848,8 @@ test('a second updater cannot unlink the live updater socket', { skip: process.p
     socketPath,
     upgrade: async (target) => ({ target, status: 'ready' }),
   });
+  // An unclosed server keeps the test process alive on the socket file.
+  t.after(() => first.close());
 
   await assert.rejects(
     createUpdaterServer({ socketPath, upgrade: async () => ({}) }),
@@ -1033,4 +1064,41 @@ test('a failed Windows rollback keeps the original failure and says so', async (
     fetchImpl: async () => ({ ok: true }),
     readyOptions: { attempts: 1, intervalMs: 0 },
   }), /is not online .*could not be made current again \(the release host answered 503\)/);
+});
+
+test('an app already on the published release is left running', async () => {
+  const fixture = await fixtureRelease();
+  const calls = [];
+  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  await mkdir(path.dirname(daemonEntry), { recursive: true });
+  await writeFile(daemonEntry, '');
+  const result = await upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    publishReleaseImpl: async () => ({
+      release: fixture.release, version: '0.4.0', published: false, previousRelease: null,
+    }),
+    pm2Bin: '/fake/pm2',
+    execFileImpl: async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (args[0] === 'jlist') {
+        return {
+          stdout: JSON.stringify([{
+            name: 'superagent-beta',
+            pm2_env: { status: 'online', pm_exec_path: daemonEntry },
+          }]),
+        };
+      }
+      return { stdout: '' };
+    },
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+    pm2Env: { HOME: '/safe-home' },
+    restartSelfImpl: () => { throw new Error('the updater must not replace itself for a no-op'); },
+  });
+
+  assert.deepEqual(result.skipped, ['superagent-beta']);
+  assert.deepEqual(result.upgraded, []);
+  assert.deepEqual(result.apps, ['superagent-beta']);
+  assert.equal(result.restartsUpdater, false);
+  assert.ok(!calls.some(({ args }) => args[0] === 'start'), 'nothing was started again');
 });

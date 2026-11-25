@@ -130,13 +130,26 @@ export function execFile(command, args, options, callback) {
 // Random for each daemon process: only the returned endpoint is passed to clients.
 // This reduces guessing/squatting; Node does not expose pipe-owner verification.
 const pipeNonce = randomBytes(24).toString('hex');
-// `shared` names the endpoint from the install directory alone, so a client and
-// the process serving it can agree on it without passing the name (the updater
-// outlives any one CLI call). A same-named pipe already bound by another process
-// makes listen fail instead of being reused; it cannot cross the Windows user
-// boundary, since the default pipe DACL stays within the creating user.
+
+// Who is running, as the OS sees it. Two Windows accounts on one machine then
+// derive different pipe names for the same install path, so one account can never
+// attach to the other's endpoint by knowing where it is installed.
+function accountIdentity() {
+  const name = typeof os.userInfo === 'function'
+    ? (() => { try { return os.userInfo().username; } catch { return ''; } })()
+    : '';
+  return name || process.env.USERNAME || process.env.USER || '';
+}
+
+// `shared` names the endpoint from the install directory and the account, so a
+// client and the process serving it can agree on it without passing the name (the
+// updater outlives any one CLI call). A same-named pipe already bound by another
+// process makes listen fail instead of being reused. The name is per-account, but
+// it does not by itself prove who answers, so an upgrade request also carries the
+// per-install token the updater writes (targets.mjs, server.mjs).
 export function localSocketPath(directory, name = 'actions', { shared = false } = {}) {
-  const identity = path.win32.resolve(directory).toLowerCase() + (shared ? '' : `\0${os.homedir()}`);
+  const identity = path.win32.resolve(directory).toLowerCase()
+    + `\0${shared ? `user:${accountIdentity()}` : os.homedir()}`;
   const digest = createHash('sha256').update(identity).digest('hex').slice(0, 24);
   return `\\\\.\\pipe\\superagent-${name}-${digest}${shared ? '' : `-${pipeNonce}`}`;
 }

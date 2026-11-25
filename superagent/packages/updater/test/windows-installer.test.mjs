@@ -177,3 +177,36 @@ test('each published platform names how its builds reach a machine', () => {
   // Windows on ARM is not a published build, so it has no upgrade path at all.
   assert.throws(() => updaterMode('win32-arm64'), /no automatic upgrade path/);
 });
+
+test('a rollback switches to the release on disk instead of downloading it', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-windows-rollback-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const baseDir = path.join(root, '.ov-superagent');
+  const releasesRoot = path.join(baseDir, 'releases');
+  const previous = path.join(releasesRoot, VERSION_A);
+  const failed = path.join(releasesRoot, VERSION_B);
+  for (const [directory, version] of [[previous, VERSION_A], [failed, VERSION_B]]) {
+    await mkdir(path.join(directory, 'packages', 'daemon', 'src'), { recursive: true });
+    await writeFile(path.join(directory, 'ecosystem.config.cjs'), 'module.exports = { apps: [] };\n');
+    await writeFile(path.join(directory, 'packages', 'daemon', 'src', 'main.mjs'), '\n');
+    await writeFile(path.join(directory, 'windows-preview.json'), `${JSON.stringify({
+      name: 'superagent', version, commit: 'a'.repeat(40), platform: 'win32-x64', channel: 'windows-preview',
+    })}\n`);
+  }
+  await linkDir(failed, path.join(baseDir, 'current'));
+  const calls = [];
+  const reverted = await republishPrevious({
+    baseDir,
+    previousVersion: VERSION_A,
+    platformId: 'win32-x64',
+    execFileImpl: async (...args) => {
+      calls.push(args);
+      throw new Error('the installer must not run when the release is still on disk');
+    },
+  });
+
+  assert.equal(reverted.version, VERSION_A);
+  assert.equal(await realpath(path.join(baseDir, 'current')), await realpath(previous));
+  assert.equal(await realpath(path.join(baseDir, 'rollback')), await realpath(failed));
+  assert.deepEqual(calls, []);
+});
