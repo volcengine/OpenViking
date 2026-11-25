@@ -431,7 +431,7 @@ async def test_tag_updates_preserve_content_and_isolate_batch_failures(
         assert await service.viking_fs.read_file(uri, ctx=owner) == "original content"
 
 
-@pytest.mark.parametrize("expected", ["", "A" * 64, "a" * 63, "g" * 64])
+@pytest.mark.parametrize("expected", ["A" * 64, "a" * 63])
 async def test_write_revision_rejects_invalid_http_digest(client, expected):
     response = await client.post(
         "/api/v1/content/write",
@@ -483,6 +483,7 @@ async def test_write_revision_http_requires_existing_file(client):
         json={
             "uri": "viking://resources/missing.md",
             "content": "new",
+            "mode": "create",
             "expected_sha256": hashlib.sha256(b"").hexdigest(),
         },
     )

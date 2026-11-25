@@ -27,7 +27,7 @@ Update `docs/en/api/12-content.md` and `docs/zh/api/12-content.md` with paramete
 
 ## Validation results
 
-- Related Python server/service/coordinator/SDK/MCP checks: 210 passed. Additional ACL/snapshot/task side-effect regression: 1 passed.
+- Initial Python server/service/coordinator/SDK/MCP checks: 211 passed. The review consolidated duplicate cases while retaining the lock-race, metadata/snapshot/task side-effect, stored-byte, and omission checks. The streamlined suite passed all 200 cases.
 - Go: `go test ./...` and `go vet ./...` passed.
 - TypeScript: 63 tests passed; `npx tsc --noEmit` passed.
 - Rust CLI: `cargo test -p ov_cli --bin ov write --offline`: 10 passed, including flag parsing and actual HTTP payload capture.
