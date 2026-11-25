@@ -19,7 +19,7 @@ test("extractBranchCapturePayloads converts user text to message payload", () =>
 for (const role of ["toolResult", "tool_result", "tool"]) {
   for (const isError of [false, true]) {
     test(`extractBranchCapturePayloads preserves ${role} ${isError ? "error" : "completed"} results`, () => {
-      const output = [{ type: "text", text: "OVTOOLMARKER98765\n" }];
+      const output = [{ type: "text", text: "OVTOOLMARKER98765\nsecond line\n" }];
       const branch = [
         { type: "message", message: { role: "user", content: "Run the command and report its output." } },
         {
@@ -54,7 +54,7 @@ for (const role of ["toolResult", "tool_result", "tool"]) {
         tool_id: "call-1",
         tool_name: "bash",
         tool_status: isError ? "error" : "completed",
-        tool_output: JSON.stringify(output),
+        tool_output: "OVTOOLMARKER98765\nsecond line",
       }]);
 
       const incremental = extractBranchCapturePayloads(branch, 2, cfg);

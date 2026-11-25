@@ -6,6 +6,7 @@ import { splitWikiMetadata } from './wiki-metadata.js';
 import { isCompileOwnedFile } from './dashboard-data.js';
 import type { ReadDashboardHint } from './dashboard-resource.js';
 import { isOvClientError } from '../../client/errors.js';
+import type { CachedPreviewBody } from './preview-body-cache.js';
 
 /** Read and project text once for preview, editing and Wiki business data. */
 export async function readFileContent(
@@ -16,6 +17,7 @@ export async function readFileContent(
   isWiki = false,
   readHint?: ReadDashboardHint,
   deferWiki = false,
+  cache?: CachedPreviewBody,
 ) {
   const read = async (lineLimit: number) => {
     const value = await client.request<string>({
@@ -29,8 +31,11 @@ export async function readFileContent(
   };
   const memory = isMemoryUri(uri);
   const markdown = /\.md$/i.test(uri);
-  const first = await read(limit);
+  const cached = cache?.read();
+  const first = cached ?? (await read(limit));
   const reachedCap = limit >= 0 && splitLines(first).length >= limit;
+  if (cached === undefined && !reachedCap && !options.signal?.aborted)
+    cache?.write(first);
   const candidate =
     !memory && markdown && splitWikiMetadata(first).payloads.length > 0;
   const format = markdown
@@ -71,13 +76,21 @@ export async function readFileContent(
     return { ...(await readWiki()), resolveWiki: undefined };
   const resolveWiki = async () => {
     try {
+      let knownWiki = isWiki;
+      const readOwnershipHint =
+        readHint &&
+        (async () => {
+          const hint = await readHint();
+          knownWiki ||= hint?.tags.includes('compile_target=true') ?? false;
+          return hint;
+        });
       if (
         isWiki ||
-        (await isCompileOwnedFile(client, uri, options, readHint))
+        (await isCompileOwnedFile(client, uri, options, readOwnershipHint))
       ) {
         const result = await readWiki();
         // Directory ownership alone does not turn a manual file into a Wiki draft.
-        if (!deferWiki || isWiki || result.hasWikiTrailer) return result;
+        if (!deferWiki || knownWiki || result.hasWikiTrailer) return result;
         return;
       }
     } catch (error) {

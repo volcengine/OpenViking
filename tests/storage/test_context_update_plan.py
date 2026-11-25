@@ -382,7 +382,7 @@ def test_reuse_entry_rejects_index_mutation():
 
 
 @pytest.mark.asyncio
-async def test_resolver_compares_missing_fingerprints_with_bounded_reads():
+async def test_resolver_compares_missing_fingerprints_with_bounded_reads(monkeypatch):
     from openviking.storage.resource_rnfv import (
         FormalEntry,
         FormalTreeSnapshot,
@@ -392,6 +392,8 @@ async def test_resolver_compares_missing_fingerprints_with_bounded_reads():
         RNFVSnapshot,
         VectorIndexSnapshot,
     )
+
+    monkeypatch.setattr(resource_diff, "FILE_TASK_CONCURRENCY", 2, raising=False)
 
     paths = [f"{i}.py" for i in range(8)]
     snapshot = RNFVSnapshot(
@@ -422,7 +424,6 @@ async def test_resolver_compares_missing_fingerprints_with_bounded_reads():
         store=SimpleNamespace(read_bytes=read),
         artifact_ref=None,
         target=SimpleNamespace(read_file=read),
-        concurrency=2,
     )
     assert peak == 4
     assert active == 0
@@ -2360,7 +2361,7 @@ async def test_hydration_reads_summaries_before_full_scalars_for_active_records(
 
 
 @pytest.mark.asyncio
-async def test_content_executor_uploads_files_with_bounded_concurrency():
+async def test_content_executor_uploads_files_with_bounded_concurrency(monkeypatch):
     from unittest.mock import patch
 
     import openviking.concurrency as concurrency_utils
@@ -2368,6 +2369,8 @@ async def test_content_executor_uploads_files_with_bounded_concurrency():
         ContentTreeAction,
         execute_content_tree_actions,
     )
+
+    monkeypatch.setattr("openviking.storage.context_update_plan.FILE_TASK_CONCURRENCY", 3)
 
     active = peak = 0
     gate = asyncio.Event()
@@ -2411,7 +2414,6 @@ async def test_content_executor_uploads_files_with_bounded_concurrency():
             store=Store(),
             artifact_ref=object(),
             target=Target(),
-            concurrency=3,
         )
 
     assert peak == 3

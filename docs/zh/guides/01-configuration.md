@@ -15,7 +15,7 @@ openviking-server init
 openviking-server doctor
 ```
 
-`openviking-server init` 会分别引导你填写 Embedding 和 VLM 的配置。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
+OpenViking 启动时需要 Embedding 和 VLM。未指定 Embedding 模型时使用内置的本地默认模型。`openviking-server init` 会引导你配置这两种模型。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
 
 ## 快速开始
 
@@ -1405,7 +1405,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
-| `watch_store` | object | Watch 存储：`file`（单节点）、`mysql` 或 `postgres`（多节点共享） | `{"provider":"file"}` |
+| `watch_store` | object | Watch 存储：`file`（单进程）、`sqlite`（同机）或 `mysql` / `postgres`（多节点共享） | `{"provider":"file"}` |
 
 
 ```json
@@ -1505,6 +1505,36 @@ Task/Work/Event 更新使用 READ COMMITTED 事务，先锁 Task 行，再修改
 已有任务；生产部署切换前需安排数据迁移。
 
 #### watch_store
+
+需要本地持久化 Watch 元数据时，安装 `openviking[sqlite]` 并选择 `sqlite`。
+数据库和表会自动创建，默认路径为
+`{storage.workspace}/_system/watch/watch.db`。可通过 `params.path` 指定本地磁盘上的
+绝对路径；`params.table` 默认为 `ov_watch_tasks`，
+`params.busy_timeout_ms` 默认为 `5000`，必须为正整数。
+SQLite 在读取事务状态前获取写锁。事务（包括读取）串行执行，
+适用于 Watch 流量较低的本地部署。同一主机的多个进程可以共享数据库及
+`service_name`，不同 service name 的数据互相隔离。数据库不能放在 NFS/EFS 上，
+也不能跨主机共享。选择 SQLite 不会更改 Task store 或 PathLock 后端；
+多进程运行调度器时仍需单独配置共享协调和目标锁。SQLite 不会自动启用 Redis 协调。
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "sqlite",
+      "params": {
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+与 MySQL 一样，SQLite 必须配置 `params.credential_encryption_key`（base64 编码的
+32 字节密钥），以 AES-GCM 加密私有 `auth_state` 和 `connector_states`。
+重启时须保留密钥，共享数据的进程须使用相同密钥。运行占用、Task 关联、
+已删除但仍运行的 Watch 和 checkpoint 版本均在重启后保留，沿用缺失 Task 的宽限期。
+已有 file provider 的 Watch 不会自动导入。
 
 默认的 `file` provider 与旧版本一样，把 Watch 任务保存在内部控制文件
 `viking://resources/.watch_tasks.json` 中，只供单个 OpenViking 进程使用。任务启动时
@@ -1839,7 +1869,7 @@ export OV_POSTGRES_DSN='host=pg.example.com port=5432 dbname=openviking user=ope
 }
 ```
 
-标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`，或多写选择 `backups.provider=cache` 时，会从 `cache.instances` 初始化 CacheRuntime。Cache PathLock 选择的实例必须使用 `redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
+标准配置没有全局 `cache.enabled`，也没有各模块自己的 Redis namespace 字段。CacheFS 或 QueueFS 选择 `backend=cache`、PathLock 或 coordination 选择 `provider=cache`、多写选择 `backups.provider=cache`，或 Redis MySQL Account Store 选择 `server.account_store.params.cache.instance` 时，会从 `cache.instances` 初始化 CacheRuntime。Cache PathLock 和 Redis MySQL Account Store 选择的实例必须使用 `redis`，不支持 DynamicProvider。只要这些模块都没有选择 cache Provider，就不连接 CacheRuntime；PathLock 使用 PostgreSQL 时同样如此。
 Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
 只配置 `cache.instances` 不会建立独立的 Provider 连接。
 
@@ -1850,11 +1880,13 @@ Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `mode` | str | QueueFS 命名空间模式：`"shared"` 使用 `/queue`；`"worker"` 为每个 worker 隔离到 `/queue/worker-<index\|pid>` | `"shared"` |
-| `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"`、`"sqlite3"` 或 `"cache"` | `"sqlite"` |
+| `backend` | str | QueueFS 后端：`"memory"`、`"sqlite"`、`"sqlite3"`、`"cache"` 或 `"postgres"` | `"sqlite"` |
 | `instance` | str | `backend="cache"` 时选择的 Runtime | `"default"` |
 | `db_path` | str（可选） | 当 backend 为 `"sqlite"` 或 `"sqlite3"` 时使用的 QueueFS sqlite 数据库路径 | `null` |
 | `recover_stale_sec` | int | 启动时恢复超过该秒数的 `processing` 队列消息；`0` 表示恢复全部 stale processing 消息 | `0` |
 | `busy_timeout_ms` | int | QueueFS sqlite 的 busy timeout，单位毫秒 | `5000` |
+| `postgres_dsn_env` | str / null | `postgres` 必填：保存 PostgreSQL DSN 的环境变量名 | `null` |
+| `postgres_lease_seconds` | int | PostgreSQL 消费者租约时长，范围 `10..=86400` 秒 | `60` |
 
 说明：
 
@@ -1863,6 +1895,7 @@ Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
 - `db_path` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
 - `recover_stale_sec` 和 `busy_timeout_ms` 仅在 QueueFS backend 为 `sqlite` 或 `sqlite3` 时生效。
 - `queuefs.backend=cache` 从 `cache.instances` 选择 `queuefs.instance`，并使用顶层 `service_name` 作为 key 前缀。
+- `queuefs.backend=postgres` 直连 PostgreSQL，使用顶层 `service_name` 作为命名空间，不需要 Redis。启动前必须初始化表，见 [PostgreSQL QueueFS](15-postgres-queuefs.md)。
 - Redis Cluster 模式的 endpoints 是初始节点，且必须配置 `db=0`；slot 路由、`MOVED`/`ASK`、拓扑更新和重连由 Fred RedisProvider 处理。
 - Redis Sentinel 模式的 endpoints 是 Sentinel 节点，并且必须配置非空 `master_name`；master 发现和故障切换后的重连由 Fred RedisProvider 处理。
 - `username` 和 `password` 用于 Redis 数据节点；`sentinel_username` 和 `sentinel_password` 仅用于 Sentinel 节点。
@@ -2446,26 +2479,44 @@ PG 凭证存储支持与 MySQL 相同的 `hash` 和 `encrypted` 模式及
 已有 File/MySQL 账号数据不会自动迁移。此设置仅替换 Account Store；
 Task、Work 和 Watch 的存储配置分别独立。
 
-`redis_mysql` 需要安装 `redis-mysql` extra。`mysql` 部分使用与 MySQL provider
-相同的参数；`cache` 部分沿用顶层缓存的 `provider/params` 结构，支持
-`standalone`、`cluster` 和 `sentinel` 三种 Redis 部署模式。
+`redis_mysql` 需要安装 `mysql` extra。`mysql` 部分使用与 MySQL provider
+相同的参数；`cache` 只能包含 `instance`，用于选择顶层
+`cache.instances` 中的 Redis 配置。即使没有其他缓存消费者，被选择的实例也会启用
+CacheRuntime。
 
 MySQL 是数据来源，Redis 缓存鉴权结果、用户信息、组和删除状态。缓存未命中或
-Redis 读取失败时会查询 MySQL。通过 `server.account_store.params.cache.params.ttl_seconds` 配置缓存有效期，
-默认 60 秒；命中不会延长有效期。
+Redis 读取失败时会查询 MySQL。通过
+`cache.instances.<instance>.params.default_ttl_seconds` 配置 payload 缓存有效期。
+Runtime 默认值为 300 秒；Redis MySQL Account Store 要求该值为正整数。命中不会延长有效期。
 
 凭据、权限和删除状态变更会失效相关缓存。如果失效操作失败，缓存可能保持旧值
 直到 TTL 到期。共享同一缓存的实例应一起升级，旧、新缓存格式无法互相失效。
-缓存版本元数据不会自动过期，需要计入 Redis 容量规划。旧的 `lock_ttl_seconds`
-和 `lock_wait_seconds` 配置兼容接受，但不再使用。
-
-Redis 连接和命令超时分别通过 `server.account_store.params.cache.params.connect_timeout_ms` 和
-`server.account_store.params.cache.params.command_timeout_ms` 配置，默认均为 5000 毫秒；它们不是整个请求的
-总超时。`server.account_store.params.cache.params.pool_size` 应按并发 Redis 请求数配置，默认 32，下面示例
-使用 100；连接池耗尽会触发连接错误并转为查询 MySQL。
+缓存版本元数据不会自动过期，需要计入 Redis 容量规划。账号缓存 key 前缀固定为
+`ov:account-cache`。Redis 连接、连接池和超时参数配置在选中的
+`cache.instances` 条目中。
 
 ```json
 {
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://redis.example.com:6379"]
+        }
+      },
+      "accountstore": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["rediss://account-cache.example.com:6379"],
+          "username": "openviking",
+          "password_env": "OPENVIKING_ACCOUNT_REDIS_PASSWORD",
+          "pool_size": 100,
+          "default_ttl_seconds": 60
+        }
+      }
+    }
+  },
   "server": {
     "account_store": {
       "provider": "redis_mysql",
@@ -2477,22 +2528,7 @@ Redis 连接和命令超时分别通过 `server.account_store.params.cache.param
           "database": "openviking"
         },
         "cache": {
-          "provider": "redis",
-          "params": {
-            "mode": "sentinel",
-            "endpoints": [
-              "rediss://sentinel-1.example.com:26379",
-              "rediss://sentinel-2.example.com:26379",
-              "rediss://sentinel-3.example.com:26379"
-            ],
-            "master_name": "openviking",
-            "username": "openviking",
-            "password_env": "OPENVIKING_REDIS_PASSWORD",
-            "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
-            "key_prefix": "ov:account-auth",
-            "pool_size": 100,
-            "ttl_seconds": 60
-          }
+          "instance": "accountstore"
         }
       }
     }

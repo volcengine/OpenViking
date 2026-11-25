@@ -3,7 +3,7 @@ export type ConsoleTaskService = TaskService;
 export type { TaskSnapshot as ConsoleTaskSnapshot } from '../../shared/task-tracking/types.js';
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
-import type { HTMLAttributes, ReactNode, SetStateAction } from 'react';
+import type { HTMLAttributes, ReactNode, Ref, SetStateAction } from 'react';
 import type { OvRequestOptions } from '../../client/types.js';
 import type {
   UseVikingBotChatOptions,
@@ -19,6 +19,7 @@ import type {
 import type {
   VikingBotLabels,
   VikingBotProps,
+  VikingBotReference,
   VikingBotReferences,
 } from '../../components/viking-bot/index.js';
 
@@ -29,6 +30,10 @@ export type ConsoleBotActivationStatus = 'not-started' | 'ready';
 
 /** Optional lifecycle managed by the host for the current library and identity. */
 export interface ConsoleBotActivation {
+  /** Resolved startup result for the current scope. Console skips its initial lookup when supplied. */
+  initialState?:
+    | { status: ConsoleBotActivationStatus }
+    | { status: 'error'; error: unknown };
   /**
    * Confirm whether the current scope allows Bot use. The tab stays visible while
    * checking or on failure; false hides it, while true proceeds to runtime readiness.
@@ -93,7 +98,10 @@ export type ConsoleChatOptions = Omit<
   /** Set false to hide the built-in session commit action. */
   memoryCommit?: false;
   /** Control selected references while Console loads the picker tree and search. Console notifies the host to remove submitted references and clears selection when resetting the conversation. */
-  referenceSelection?: Pick<VikingBotReferences, 'selected' | 'onChange'>;
+  referenceSelection?: Pick<VikingBotReferences, 'selected' | 'onChange'> & {
+    /** Replaces the draft references from a host action while chat is ready and idle. */
+    replaceRef?: Ref<(reference: VikingBotReference) => void>;
+  };
 };
 
 /**

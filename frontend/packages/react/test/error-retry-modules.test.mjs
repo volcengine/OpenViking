@@ -34,6 +34,7 @@ const wrap = (slots, content, transport = fetch) =>
   );
 const browser = () => ({
   rows: [],
+  treeMonitoring: [],
   dashboards: new Map(),
   isReady: true,
   actions: {

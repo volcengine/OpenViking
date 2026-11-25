@@ -57,7 +57,7 @@ const panel = loading ? (
 
 请求、会话和流式状态由 Console 内部管理；可通过 `chatOptions.service` 适配其他后端，服务同时实现对话与会话契约。模块切换保留当前对话；新建或切换会话会取消旧连接。历史保存失败单独提示，不改变已成功的回答。
 
-点击「创建 Wiki」或「定时日报」可填入空白草稿或切换预设。发送后由配置的对话服务处理请求，编译相关的确认问题通过下方介绍的流程展示。用 `conversation.quickInputs` 提供自定义列表，传入 `[]` 可隐藏快捷入口。
+点击「Wiki」或「定时日报」可填入空白草稿或切换预设。发送后由配置的对话服务处理请求，编译相关的确认问题通过下方介绍的流程展示。用 `conversation.quickInputs` 提供自定义列表，传入 `[]` 可隐藏快捷入口。
 
 ```tsx file="../../_demos/console-chat.tsx" preview
 
@@ -65,7 +65,9 @@ const panel = loading ? (
 
 示例使用模拟服务，可切换原生能力与火山当前契约。原生适配器提供 `interrupt` 和 `steer`，支持停止及生成中追问；火山当前适配器省略这两个方法，生成中禁用发送且不显示停止。回答后的下一轮提问两者均支持。
 
-点击底部的 `@`，或在输入框中键入 `@`，可浏览、搜索并引用文件和目录。内置选择器使用当前请求作用域下的 `/api/v1/fs/ls` 和 `/api/v1/search/glob`，打开时才加载。通过 `chatOptions.referenceSelection` 传入 `{ selected, onChange }`，可以让目录树与内置 `@` 选择器共享已选引用。发送新消息时，Console 立即移除已提交的引用。流式追问经服务端确认后才移除本次提交的引用，保留等待期间新选的引用。追问被拒绝时保留选择。等待确认期间移除后重新选中的引用视为新选择。重置会话时清空选择。设置 `conversation.references` 可自行提供候选项和已选引用，替代内置选择器。自定义对话服务可通过发送参数中的 `references` 读取已选引用。
+点击底部的 `@`，或在输入框中键入 `@`，可浏览、搜索并引用文件和目录。内置选择器使用当前请求作用域下的 `/api/v1/fs/ls` 和 `/api/v1/search/glob`，打开时才加载。通过 `chatOptions.referenceSelection` 传入 `{ selected, onChange }`，可以让目录树与内置 `@` 选择器共享已选引用。若要让目录树只在会话就绪且空闲时替换引用，传入可选的 `replaceRef`，并在选中文件或目录时调用 `replaceRef.current?.(reference)`。VikingBot 回复期间仍可移除草稿引用。
+
+发送新消息时，Console 立即移除已提交的引用。流式追问经服务端确认后才移除本次提交的引用，保留等待期间新选的引用。追问被拒绝时保留选择。等待确认期间移除后重新选中的引用视为新选择。重置会话时清空选择。设置 `conversation.references` 可自行提供候选项和已选引用，替代内置选择器。自定义对话服务可通过发送参数中的 `references` 读取已选引用。
 
 ### 启用 VikingBot
 
@@ -83,7 +85,7 @@ const panel = loading ? (
 
 作用域的请求 signal 已取消或随后被取消时，Console 保留 Bot 标签页并显示静态取消提示，不显示加载状态，也不提供无法重启已取消请求的重试按钮。宿主须换用未取消的新 signal，或移除已取消的 signal，才能重新检查。只修改 `scopeKey` 而继续传入同一个已取消的 signal，面板仍保持取消状态。
 
-`isEligible` 返回 `true` 后，Console 通过 `getStatus` 查询 Bot 是否已就绪。尚未启动时，用户点击「启用 VikingBot」会触发宿主的 `start` 回调。Console 会再次确认状态，就绪后加载对话和会话历史。切换库或身份时，更新 `scopeKey` 或传入对应的 `activation`。模拟火山宿主适配器将 `GetOpenVikingCollection` 返回的 `EnableVikingBot === true` 映射为 `isEligible` 的布尔结果。
+`isEligible` 返回 `true` 后，Console 通过 `getStatus` 查询 Bot 是否已就绪。尚未启动时，用户点击「开始使用 VikingBot」会触发宿主的 `start` 回调。Console 会再次确认状态，就绪后加载对话和会话历史。切换库或身份时，更新 `scopeKey` 或传入对应的 `activation`。模拟火山宿主适配器将 `GetOpenVikingCollection` 返回的 `EnableVikingBot === true` 映射为 `isEligible` 的布尔结果。
 
 当前库和身份不变时保持适配器引用稳定。三个回调都接收 `AbortSignal`，失败时应抛出错误。可通过 `media` 用介绍视频或封面替换默认插图。
 
@@ -166,29 +168,30 @@ Console 在 `request_user_input` 工具成功且当前轮正常结束后展示�
 
 ### ConsoleChatOptions
 
-| 参数               | 说明                                                | 类型                                                  | 默认值           |
-| ------------------ | --------------------------------------------------- | ----------------------------------------------------- | ---------------- |
-| taskService        | 对话后台任务查询适配器，默认共享 Console 的查询服务 | `ConsoleTaskService`                                  | 继承 Console     |
-| locale             | 对话文案语言                                        | `'zh-CN' \| 'en-US'`                                  | 继承 Console     |
-| persist            | 保存已完成的消息                                    | `boolean`                                             | `true`           |
-| scopeKey           | 动态身份的隔离键                                    | `string`                                              | 继承 Console     |
-| service            | 对话与会话适配器，保持引用稳定                      | `VikingBotChatService & VikingBotSessionService`      | 原生服务         |
-| activation         | 检查库是否允许使用 Bot，并在 Console 内启动         | `ConsoleBotActivation`                                | 可选             |
-| requestOptions     | 对话请求配置                                        | `OvRequestOptions`                                    | 继承 Console     |
-| hitl               | 自动问题组、字段校验与自定义卡片配置                | `ConsoleHitlOptions \| false`                         | 自动启用内置卡片 |
-| referenceSelection | 内置 `@` 选择器的受控引用状态                       | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | 可选             |
-| memoryCommit       | 隐藏「提交会话」操作                                | `false`                                               | 服务支持时启用   |
+| 参数               | 说明                                                                    | 类型                                             | 默认值           |
+| ------------------ | ----------------------------------------------------------------------- | ------------------------------------------------ | ---------------- |
+| taskService        | 对话后台任务查询适配器，默认共享 Console 的查询服务                     | `ConsoleTaskService`                             | 继承 Console     |
+| locale             | 对话文案语言                                                            | `'zh-CN' \| 'en-US'`                             | 继承 Console     |
+| persist            | 保存已完成的消息                                                        | `boolean`                                        | `true`           |
+| scopeKey           | 动态身份的隔离键                                                        | `string`                                         | 继承 Console     |
+| service            | 对话与会话适配器，保持引用稳定                                          | `VikingBotChatService & VikingBotSessionService` | 原生服务         |
+| activation         | 检查库是否允许使用 Bot，并在 Console 内启动                             | `ConsoleBotActivation`                           | 可选             |
+| requestOptions     | 对话请求配置                                                            | `OvRequestOptions`                               | 继承 Console     |
+| hitl               | 自动问题组、字段校验与自定义卡片配置                                    | `ConsoleHitlOptions \| false`                    | 自动启用内置卡片 |
+| referenceSelection | 内置 `@` 选择器的受控引用状态，可用 `replaceRef` 在空闲时由宿主替换引用 | `ConsoleChatOptions['referenceSelection']`       | 可选             |
+| memoryCommit       | 隐藏「提交会话」操作                                                    | `false`                                          | 服务支持时启用   |
 
 适配器每个方法都收到 `AbortSignal`，应响应取消并在失败时抛出错误。后端自动保存消息时省略 `saveMessage`。 `loadMessages` 应为已知中断的助手回复返回 `interrupted: true`，打开历史会话时这些回复不会显示「提交会话」。
 
 ### ConsoleBotActivation
 
-| 参数       | 说明                                                    | 类型                                                         | 默认值   |
-| ---------- | ------------------------------------------------------- | ------------------------------------------------------------ | -------- |
-| isEligible | 确认当前作用域是否允许使用 Bot，返回 false 时隐藏标签页 | `(signal: AbortSignal) => Promise<boolean>`                  | 必填     |
-| getStatus  | 资格确认后读取运行状态                                  | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>` | 必填     |
-| start      | 用户点击启用后启动 Bot，Console 随后再次确认状态        | `(signal: AbortSignal) => Promise<void>`                     | 必填     |
-| media      | 启用卡片中的介绍媒体                                    | `ReactNode`                                                  | 内置插画 |
+| 参数         | 说明                                                    | 类型                                                                          | 默认值   |
+| ------------ | ------------------------------------------------------- | ----------------------------------------------------------------------------- | -------- |
+| initialState | 使用宿主已解析的初始状态，跳过首次检查                  | `{ status: 'ready' \| 'not-started' } \| { status: 'error'; error: unknown }` | 可选     |
+| isEligible   | 确认当前作用域是否允许使用 Bot，返回 false 时隐藏标签页 | `(signal: AbortSignal) => Promise<boolean>`                                   | 必填     |
+| getStatus    | 资格确认后读取运行状态                                  | `(signal: AbortSignal) => Promise<'not-started' \| 'ready'>`                  | 必填     |
+| start        | 用户点击启用后启动 Bot，Console 随后再次确认状态        | `(signal: AbortSignal) => Promise<void>`                                      | 必填     |
+| media        | 启用卡片中的介绍媒体                                    | `ReactNode`                                                                   | 内置插画 |
 
 ### ConsoleHitlOptions
 
@@ -364,7 +367,7 @@ Console 按适配器是否提供方法决定停止与追问能力。`steer` 返�
 
 ## 命令
 
-命令模式只执行内置的原生 API 命令。输入 `/` 或运行 `ov help`，可以按「核心流程」「文件系统」「搜索与上下文」「文件传输」「会话」「配置与状态」查看命令和各自的选项。
+命令模式只执行内置的原生 API 命令。输入 `/` 或运行 `ov help`，可以按「核心流程」「文件系统」「搜索与上下文」「文件传输」「会话」「配置与状态」查看简短的命令名称和摘要。在 `/` 候选列表中高亮命令后，参数指南会展示完整语法和选项。
 
 ### 写法
 

@@ -189,6 +189,8 @@ class ApiKeyAuthPlugin(AuthPlugin):
             issue_user_keys=True,
         )
         await manager.load()
+        if service.viking_fs.acl_manager is not None:
+            service.viking_fs.acl_manager.set_principal_directory(manager)
         self._api_key_manager = manager
         app.state.api_key_manager = manager
 

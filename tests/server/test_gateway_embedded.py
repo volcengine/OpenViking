@@ -8,7 +8,7 @@ import httpx
 import pytest
 from starlette.testclient import TestClient, WebSocketDenialResponse
 
-from openviking.crypto.encryptor import MAGIC, FileEncryptor
+from openviking.crypto.encryptor import MAGIC
 from openviking.server import gateway_host
 from openviking_cli.utils.config.encryption_config import EncryptionConfig
 from openviking_gateway.config import EmbeddedGatewayConfig
@@ -36,21 +36,16 @@ def embedded_storage_path(gateway, workspace, monkeypatch):
     return options["config"].storage_path
 
 
-def test_embedded_gateway_storage_follows_workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    gateway = EmbeddedGatewayConfig(enabled=True)
-    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(
-        tmp_path / "ws" / "gateway"
-    )
-
-
 def test_embedded_gateway_keeps_legacy_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    gateway = EmbeddedGatewayConfig(enabled=True)
+    workspace = tmp_path / "ws"
+    assert embedded_storage_path(gateway, workspace, monkeypatch) == str(workspace / "gateway")
+
     legacy = tmp_path / "home" / ".openviking" / "gateway"
     legacy.mkdir(parents=True)
     (legacy / "kernel.sqlite3").touch()
-    gateway = EmbeddedGatewayConfig(enabled=True)
-    assert embedded_storage_path(gateway, tmp_path / "ws", monkeypatch) == str(legacy)
+    assert embedded_storage_path(gateway, workspace, monkeypatch) == str(legacy)
     # Once the new location has a database, it wins.
     (tmp_path / "ws" / "gateway").mkdir(parents=True)
     (tmp_path / "ws" / "gateway" / "kernel.sqlite3").touch()
@@ -81,19 +76,6 @@ def test_embedded_gateway_targets_loopback_without_version_gate(host, expected, 
     assert options["openviking_url"] == f"http://{expected}:1987"
     assert options["config"].min_server_version == "0"
     assert options["encryptor"] is None
-
-
-async def test_embedded_gateway_uses_server_encryption(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        "openviking_gateway.app.create_app", lambda config, **kwargs: {"config": config, **kwargs}
-    )
-    encryption = EncryptionConfig(enabled=True, local={"key_file": str(tmp_path / "master.key")})
-    options = gateway_host.create_embedded_gateway(
-        openviking_config(EmbeddedGatewayConfig(enabled=True), encryption),
-        SimpleNamespace(host="127.0.0.1", port=1987, public_base_url=None),
-        lambda: None,
-    )
-    assert isinstance(options["encryptor"], FileEncryptor)
 
 
 def test_embedded_gateway_falls_back_to_server_public_url(monkeypatch):

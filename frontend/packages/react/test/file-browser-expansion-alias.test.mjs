@@ -45,7 +45,8 @@ test('restores a saved canonical branch under its aliased root', async () => {
   const view = await mount(browser(fixture(), { onExpandedUrisChange }));
   try {
     await toggle(view, folder);
-    await toggle(view, nested);
+    // Opening the parent now expands this sole child automatically.
+    assert.equal(expanded(view, nested), 'true');
     assert.deepEqual(snapshots.at(-1), [folder, nested]);
   } finally {
     await view.unmount();

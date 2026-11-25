@@ -43,6 +43,8 @@ try {
               'fs-tree': './src/modules/file-browser/use-fs-tree.ts',
               'fs-page': './src/shared/directory-tree/fs-page.ts',
               'directory-rows': './src/shared/directory-tree/rows.ts',
+              'directory-row-view':
+                './src/shared/directory-tree/use-directory-rows.ts',
               'browser-preview-model': './src/modules/file-browser/fs-model.ts',
               'scope-page':
                 './src/modules/file-browser/use-search-scope-page.ts',
@@ -83,6 +85,8 @@ try {
               'bot-client': './src/client/client.ts',
               'bot-service': './src/modules/console/chat/native-service.ts',
               'bot-submit': './src/components/viking-bot/composer-controls.tsx',
+              'bot-composer-tools':
+                './test/fixtures/viking-bot-composer-tools.ts',
               'bot-composer-events':
                 './src/components/viking-bot/composer-events.ts',
               'bot-message-debug': './test/fixtures/viking-bot-debug.ts',
@@ -175,9 +179,8 @@ try {
     {
       cwd: root,
       env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
-      // The full suite needs headroom on shared CI runners; focused runs keep
-      // the guard's default limit.
-      timeout: process.argv.length > 2 ? undefined : 600_000,
+      // Full-suite runs need room for slower hosted runners; keep the watchdog.
+      timeout: 600_000,
     },
   );
   process.exitCode = await completed;

@@ -178,8 +178,10 @@ jobs:
         if: steps.published.outputs.exists == 'false'
       - run: npm run typecheck
         if: steps.published.outputs.exists == 'false'
-      - run: npm run test
+      - name: Test React UI
         if: steps.published.outputs.exists == 'false'
+        timeout-minutes: 10
+        run: timeout --signal=TERM --kill-after=10s 8m npm run test
       - run: npm run build:docs
         if: steps.published.outputs.exists == 'false'
       - run: npm pack --dry-run --workspace @openviking/react

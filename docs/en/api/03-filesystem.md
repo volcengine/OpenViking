@@ -667,7 +667,7 @@ On case-insensitive `localfs`, creating a directory that differs only by case ma
 
 ### rm()
 
-Remove file or directory. When removing directories recursively, returns the estimated number of items deleted.
+Remove a file or directory. Recursive removal cleans vector records by URI scope and sends one recursive delete request to the storage backend, without listing the filesystem subtree in Python.
 
 `rm` is idempotent: removing a valid URI that does not exist still succeeds.
 Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or `queue` return `INVALID_URI`.
@@ -755,9 +755,9 @@ ov rm viking://resources/old.md [--recursive]
 }
 ```
 
-The `estimated_deleted_count` field (for recursive deletes) contains the estimated number of items (files and directories) deleted (from vector index). The CLI will display this information in output.
+The `estimated_deleted_count` field reports the number of vector records submitted for deletion. A file or directory may have multiple records, and unindexed content contributes zero. The count does not guarantee immediate vector-index visibility. The CLI displays this count in its output.
 
-When deleting `viking://resources/...`, the response may include `memory_cleanup`, indicating that user memories referencing that resource URI were cleaned up before deletion.
+Deleting a resource leaves existing memory content and `resource_refs` in place. The HTTP response no longer includes `memory_cleanup`.
 
 On case-insensitive `localfs`, case-only aliases may affect the delete target. For example, if the real file is `viking://resources/bob-private/private.md`, `ov rm viking://resources/BOB-PRIVATE/private.md` may delete the same file; on case-sensitive systems, deleting the missing alias path still succeeds because `rm` is idempotent, but it does not delete the real file.
 

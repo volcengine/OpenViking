@@ -15,7 +15,7 @@ openviking-server init
 openviking-server doctor
 ```
 
-`openviking-server init` prompts for embedding and VLM settings separately. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
+OpenViking requires both an Embedding model and a VLM to start. The default local Embedding model is available when no Embedding model is specified. `openviking-server init` prompts for both models. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
 
 ## Configuration File
 
@@ -1401,7 +1401,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
-| `watch_store` | object | Watch store: `file` (single node), `mysql` or `postgres` (shared) | `{"provider":"file"}` |
+| `watch_store` | object | Watch store: `file` (single process), `sqlite` (one host), or `mysql` / `postgres` (shared) | `{"provider":"file"}` |
 
 
 ```json
@@ -1506,6 +1506,40 @@ across processes sharing tasks. Changing providers does not migrate existing
 tasks; plan the data migration before switching a deployed store.
 
 #### watch_store
+
+For durable local Watch metadata, install `openviking[sqlite]` and select
+`sqlite`. The database and tables are created automatically. By default the
+database is `{storage.workspace}/_system/watch/watch.db`; `params.path` can
+override it with an absolute path on local disk. `params.table` defaults to
+`ov_watch_tasks` and `params.busy_timeout_ms` to `5000` (a positive integer).
+SQLite acquires its writer lock before reading transaction state.
+Transactions are serialized, including reads, so this backend is intended for
+local deployments with modest Watch traffic. Multiple processes on the same
+host can share the database and `service_name`; different service names isolate
+their rows. Do not put the SQLite database on NFS/EFS or share it across hosts.
+Selecting SQLite does not change the Task store or PathLock backend; configure
+shared coordination and target locks separately if multiple processes run the
+scheduler. SQLite does not automatically select Redis coordination.
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "sqlite",
+      "params": {
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+Like MySQL, SQLite requires `params.credential_encryption_key` (base64-encoded
+32 bytes) to encrypt private `auth_state` and `connector_states` with AES-GCM.
+Keep the key across restarts and use the same key for processes sharing rows.
+Reservations, Task associations, deleted-but-running Watches and checkpoint
+versions survive restart and retain the existing missing-Task grace period.
+Existing file-provider Watches are not imported automatically.
 
 The default `file` provider keeps Watch tasks in the internal control file
 `viking://resources/.watch_tasks.json`, as earlier releases did; it belongs to
@@ -1874,7 +1908,7 @@ coordination, keeping SQLite state off EFS.
 }
 ```
 
-The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized from `cache.instances` when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, or multi-write selects `backups.provider=cache`. Cache-backed PathLock currently requires its selected instance to use `redis`; DynamicProvider is not supported for PathLock. When none of these modules selects a cache provider, no CacheRuntime connection is opened, including when PathLock uses PostgreSQL.
+The canonical configuration has no global `cache.enabled` and no per-module Redis namespace field. CacheRuntime is initialized from `cache.instances` when CacheFS or QueueFS selects `backend=cache`, PathLock or coordination selects `provider=cache`, multi-write selects `backups.provider=cache`, or the Redis MySQL Account Store selects `server.account_store.params.cache.instance`. Cache-backed PathLock and Redis MySQL Account Store require their selected instances to use `redis`; DynamicProvider is not supported. When none of these modules selects a cache provider, no CacheRuntime connection is opened, including when PathLock uses PostgreSQL.
 Python `cache_runtime()` handles are available only for a Runtime created by one
 of these consumers; configuring `cache.instances` alone does not open a
 standalone provider connection.
@@ -1886,11 +1920,13 @@ Move Provider settings to `cache.instances.<name>`, set top-level `service_name`
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `mode` | str | QueueFS namespace mode: `"shared"` uses `/queue`; `"worker"` isolates each worker under `/queue/worker-<index\|pid>` | `"shared"` |
-| `backend` | str | QueueFS backend: `"memory"`, `"sqlite"`, `"sqlite3"`, or `"cache"` | `"sqlite"` |
+| `backend` | str | QueueFS backend: `"memory"`, `"sqlite"`, `"sqlite3"`, `"cache"`, or `"postgres"` | `"sqlite"` |
 | `instance` | str | Runtime selected when `backend="cache"` | `"default"` |
 | `db_path` | str (optional) | SQLite database path for QueueFS when backend is `"sqlite"` or `"sqlite3"` | `null` |
 | `recover_stale_sec` | int | Recover `processing` queue messages older than this many seconds on startup. `0` means recover all stale processing messages | `0` |
 | `busy_timeout_ms` | int | SQLite busy timeout for QueueFS in milliseconds | `5000` |
+| `postgres_dsn_env` | str / null | Required for `postgres`: environment variable holding the DSN | `null` |
+| `postgres_lease_seconds` | int | PostgreSQL consumer lease duration, `10..=86400` seconds | `60` |
 
 Notes:
 
@@ -1898,6 +1934,7 @@ Notes:
 - `mode=shared` keeps the historical global queue namespace at `/queue`; `mode=worker` isolates each worker under `/queue/worker-<index|pid>`.
 - `db_path` is only used when QueueFS backend is `sqlite` or `sqlite3`.
 - `backend=cache` selects `queuefs.instance` from `cache.instances` and uses top-level `service_name` as the key prefix.
+- `backend=postgres` connects directly to PostgreSQL and uses top-level `service_name` as its namespace. Provision the schema before startup; see [PostgreSQL QueueFS](15-postgres-queuefs.md). It does not require Redis.
 - `recover_stale_sec` and `busy_timeout_ms` apply only to SQLite backends.
 - Redis Cluster endpoints are seed nodes, and `db` must be `0`. Slot routing, `MOVED`/`ASK`, topology refresh, and reconnects are handled by Fred RedisProvider.
 - Redis Sentinel endpoints are Sentinel nodes and require a non-empty `master_name`; the provider handles master discovery and reconnects.
@@ -2495,31 +2532,49 @@ snapshot. Existing File/MySQL accounts are not migrated automatically. This
 setting replaces only Account Store; Task, Work, and Watch stores have independent
 configuration.
 
-`redis_mysql` requires the `redis-mysql` extra. Its `mysql` block uses the
-same parameters as the MySQL provider; its `cache` block follows the top-level
-cache `provider/params` structure and supports `standalone`, `cluster`, and
-`sentinel` Redis deployments.
+`redis_mysql` requires the `mysql` extra. Its `mysql` block uses the
+same parameters as the MySQL provider. Its `cache` block contains only
+`instance`, which selects a Redis entry from top-level `cache.instances`.
+The selected instance enables CacheRuntime even when no other cache consumer
+is configured.
 
 MySQL is the source of truth. Redis caches authentication results, user
 information, groups, and deletion status. Cache misses and Redis read failures
-fall back to MySQL. Configure `server.account_store.params.cache.params.ttl_seconds` to control cache lifetime;
-the default is 60 seconds. Hits do not extend the TTL.
+fall back to MySQL. Configure
+`cache.instances.<instance>.params.default_ttl_seconds` to control payload
+cache lifetime. The Runtime default is 300 seconds; Redis MySQL Account Store
+requires a positive integer. Hits do not extend the TTL.
 
 Credential, permission, and deletion changes invalidate the affected cache.
 If invalidation fails, cached data may remain stale until its TTL expires.
 Upgrade all instances sharing the cache together: old and new cache formats
 do not invalidate each other. Cache-version metadata does not expire automatically
-and should be included in Redis capacity planning. Legacy `lock_ttl_seconds` and
-`lock_wait_seconds` settings are accepted but no longer used.
-
-Redis connection and command timeouts use `server.account_store.params.cache.params.connect_timeout_ms` and
-`server.account_store.params.cache.params.command_timeout_ms`, both defaulting to 5000 milliseconds. These
-are socket timeouts, not an overall request deadline. Set `server.account_store.params.cache.params.pool_size`
-for the expected concurrent Redis requests; the default is 32, and the example
-below uses 100. Pool exhaustion causes connection errors and MySQL fallback.
+and should be included in Redis capacity planning. The account-cache key prefix
+is fixed as `ov:account-cache`. Redis connection, pool, and timeout settings
+belong to the selected `cache.instances` entry.
 
 ```json
 {
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://redis.example.com:6379"]
+        }
+      },
+      "accountstore": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["rediss://account-cache.example.com:6379"],
+          "username": "openviking",
+          "password_env": "OPENVIKING_ACCOUNT_REDIS_PASSWORD",
+          "pool_size": 100,
+          "default_ttl_seconds": 60
+        }
+      }
+    }
+  },
   "server": {
     "account_store": {
       "provider": "redis_mysql",
@@ -2531,22 +2586,7 @@ below uses 100. Pool exhaustion causes connection errors and MySQL fallback.
           "database": "openviking"
         },
         "cache": {
-          "provider": "redis",
-          "params": {
-            "mode": "sentinel",
-            "endpoints": [
-              "rediss://sentinel-1.example.com:26379",
-              "rediss://sentinel-2.example.com:26379",
-              "rediss://sentinel-3.example.com:26379"
-            ],
-            "master_name": "openviking",
-            "username": "openviking",
-            "password_env": "OPENVIKING_REDIS_PASSWORD",
-            "sentinel_password_env": "OPENVIKING_SENTINEL_PASSWORD",
-            "key_prefix": "ov:account-auth",
-            "pool_size": 100,
-            "ttl_seconds": 60
-          }
+          "instance": "accountstore"
         }
       }
     }

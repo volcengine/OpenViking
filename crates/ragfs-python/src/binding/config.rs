@@ -36,9 +36,9 @@ use ragfs::core::builder::{
 };
 use ragfs::core::{
     build_configured_stack, ConfigValue, FileInfo, FileSystem, FilesystemStats, FsContext,
-    FsContextInner, FsOperation, GlobPage, GrepOptions, GrepResult, ListSortBy, MountableFS,
-    OperationStats, PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry, WriteFlag,
-    FS_CTX,
+    FsContextInner, FsContextView, FsOperation, GlobPage, GrepOptions, GrepResult, ListSortBy,
+    MountableFS, OperationStats, PathLockContext, PluginConfig, RagfsConfig, SortOrder, TreeEntry,
+    WriteFlag, FS_CTX,
 };
 use ragfs::lock::types::PathLockError;
 use ragfs::lock::{

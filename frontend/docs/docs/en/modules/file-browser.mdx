@@ -96,6 +96,8 @@ FileBrowser manages the daily, weekly and disabled schedule choices. Weekly sche
 
 History dialogs reserve their content height and show a centred loading indicator while reading files, versions and content. Compilation directory and Skill pickers remain busy from opening until their initial path has finished expanding.
 
+Opening a folder automatically expands a chain of sole child folders. Expansion stops at files, siblings, incomplete pages, errors or denied access; folding or changing the request scope stops pending expansion.
+
 ## API
 
 ### FileBrowser
@@ -113,6 +115,7 @@ History dialogs reserve their content height and show a centred loading indicato
 | defaultExpansionSnapshot  | Restores expanded paths and explicit folds for this mount. Takes precedence over `defaultExpandedUris`.                                                                                     | `FileBrowserExpansionSnapshot`                                          | -                              |
 | onExpansionSnapshotChange | Reports the complete snapshot, including optional ordered `pendingEdits`. Save the full object for restoration.                                                                             | `(snapshot: FileBrowserExpansionSnapshot) => void`                      | -                              |
 | readOnly                  | Disables editing, import and deletion and makes the compile configuration view-only; the permission dialog is unaffected, so use `acl.readOnly` there                                       | `boolean`                                                               | `false`                        |
+| hideDeniedEntries         | Hides tree entries with `access: 'denied'`; keeps traversal-only directories and server pagination                                                                                          | `boolean`                                                               | `false`                        |
 | acl                       | Turns on permission display and grant management for shared resources, see `FileBrowserAclOptions` below                                                                                    | `boolean \| FileBrowserAclOptions`                                      | `false`                        |
 | agentConnect              | Shows the Connect agent button that opens the connection drawer, see [AgentConnect](../components/agent-connect); hidden when omitted                                                       | `AgentConnectProps`                                                     | -                              |
 | agentConnectOpen          | Controls the built-in drawer when `agentConnect` is provided, so an external entry can open it; see the [controlled example](../components/file-browser-action-bar#open-from-another-entry) | `boolean`                                                               | -                              |
@@ -155,18 +158,18 @@ Navigation options passed to `FileBrowserHandle.openResource(uri, options)`.
 
 Each flag defaults to showing the action when the current resource supports it. `false` hides it, and `true` does not add a capability the resource lacks.
 
-| Property    | Description                                                                                                                                                                                | Type      | Default |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | ------- |
-| copyPath    | The Copy path button beside the breadcrumb; shown when the preview has a path                                                                                                              | `boolean` | `true`  |
-| viewSwitch  | The Preview / Source switch; hidden while editing; only for formats that support both views, so not for images, video or directories under `viking://system`                               | `boolean` | `true`  |
-| edit        | The edit button; only for writable files in an editable format, never for experience files, `viking://system` resources or L0/L1 summaries                                                 | `boolean` | `true`  |
-| copyContent | The Copy content action, which copies the previewed text or directory summary (only the displayed part if truncated); hidden for binary media and `viking://system` directories            | `boolean` | `true`  |
-| download    | The Download action, which saves the original content of a file; shown for files only                                                                                                      | `boolean` | `true`  |
-| history     | The Version history action; shown for Wiki outputs, Wiki directories and non-resource text files                                                                                           | `boolean` | `true`  |
-| configure   | The Compile configuration action; shown only on the root directory of a Wiki compile target, and still viewable when read-only                                                             | `boolean` | `true`  |
-| importPack  | The Import .ovpack action; shown only for writable directories under `viking://user` (including `viking://~`) or `viking://resources`                                                      | `boolean` | `true`  |
-| exportPack  | The Export .ovpack action; shown for files and directories under `viking://user` (including `viking://~`) or `viking://resources`, except internal control files such as `.relations.json` | `boolean` | `true`  |
-| delete      | The Delete document action; shown only for files you can manage, never for directories, resources under `viking://system` or L0/L1 summaries                                               | `boolean` | `true`  |
+| Property    | Description                                                                                                                                                                           | Type      | Default |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------- |
+| copyPath    | The Copy path button beside the breadcrumb; shown when the preview has a path                                                                                                         | `boolean` | `true`  |
+| viewSwitch  | The Preview / Source switch; hidden while editing; only for formats that support both views, so not for images, video or directories under `viking://system`                          | `boolean` | `true`  |
+| edit        | The edit button; only for writable files in an editable format, never for experience files, `viking://system` resources or L0/L1 summaries                                            | `boolean` | `true`  |
+| copyContent | The Copy content action, which copies the previewed text or directory summary (only the displayed part if truncated); hidden for binary media and `viking://system` directories       | `boolean` | `true`  |
+| download    | The Download action, which saves the original content of a file; shown for files only                                                                                                 | `boolean` | `true`  |
+| history     | The Version history action; shown for experience files and Wiki nodes (Wiki directories included), never for other files                                                              | `boolean` | `true`  |
+| configure   | The Compile configuration action; shown only on the root directory of a Wiki compile target, and still viewable when read-only                                                        | `boolean` | `true`  |
+| importPack  | The Import .ovpack action; shown only for writable directories under `viking://user` (including `viking://~`) or `viking://resources`                                                 | `boolean` | `true`  |
+| exportPack  | The Export .ovpack action; shown only for directories under `viking://user` (including `viking://~`) or `viking://resources`, except internal control files such as `.relations.json` | `boolean` | `true`  |
+| delete      | The Delete document action; shown only for files you can manage, never for directories, resources under `viking://system` or L0/L1 summaries                                          | `boolean` | `true`  |
 
 ### FileBrowserPreviewSlots
 
@@ -340,14 +343,16 @@ All fields are optional, and omitted fields follow `locale`.
 
 All fields are optional, and omitted fields follow `locale`. Text inside a dashboard is overridden through that dashboard's own `labels`, which you pass when you render it in `renderDashboard`.
 
-| Property        | Description                                                | Type     | Default                                  |
-| --------------- | ---------------------------------------------------------- | -------- | ---------------------------------------- |
-| experienceTitle | Title of the experience dashboard tab                      | `string` | `'Experience dashboard'`                 |
-| wikiTitle       | Title of the Wiki dashboard tab                            | `string` | `'Dashboard'`                            |
-| openExperience  | Name of the experience dashboard icon in the tree          | `string` | `'Open experience dashboard'`            |
-| openWiki        | Name of the Wiki dashboard icon in the tree                | `string` | `'Open Wiki dashboard'`                  |
-| wikiConflicts   | Name of the Wiki dashboard icon when conflicts are pending | `string` | `'View pending Wiki conflicts'`          |
-| failed          | Message shown when dashboard information fails to load     | `string` | `'Could not load dashboard information'` |
+| Property              | Description                                                                    | Type                        | Default                                     |
+| --------------------- | ------------------------------------------------------------------------------ | --------------------------- | ------------------------------------------- |
+| experienceTitle       | Title of the experience dashboard tab                                          | `string`                    | `'Experience dashboard'`                    |
+| wikiTitle             | Title of the Wiki dashboard tab                                                | `string`                    | `'Dashboard'`                               |
+| openExperience        | Name of the experience dashboard icon in the tree                              | `string`                    | `'Open experience dashboard'`               |
+| openWiki              | Name of the Wiki dashboard icon in the tree                                    | `string`                    | `'Open Wiki dashboard'`                     |
+| wikiConflicts         | Name of the Wiki dashboard icon when conflicts are pending                     | `string`                    | `'View pending Wiki conflicts'`             |
+| wikiConflictCount     | Tooltip for the Wiki tab badge: unresolved conflict records in a file          | `(count: number) => string` | `'{count} unresolved conflicts'`            |
+| wikiConflictFileCount | Tooltip for the Wiki tab badge: files with unresolved conflicts in a directory | `(count: number) => string` | `'{count} files with unresolved conflicts'` |
+| failed                | Message shown when dashboard information fails to load                         | `string`                    | `'Could not load dashboard information'`    |
 
 ### FileBrowserWorkflowLabels
 
@@ -360,16 +365,6 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 | configurationEmpty | Message when the current user has no configuration for this directory | `string`                     | `'No compilation configuration is available for this directory in your user scope.'` |
 | historyEmpty       | Message shown when there is no version history                        | `string`                     | `'No version history yet'`                                                           |
 | historyLimit       | Message shown when the history reaches the 500-entry limit            | `string`                     | `'Showing up to 500 recent snapshots.'`                                              |
-| snapshotPrompt     | Title of the post-save snapshot choice                                | `string`                     | `'Keep a snapshot?'`                                                                 |
-| snapshotChoice     | Explanation of the post-save snapshot choice                          | `string`                     | `'The file is saved. Would you like to keep a snapshot in version history?'`         |
-| keepSnapshot       | Button that opens the snapshot description                            | `string`                     | `'Keep a snapshot'`                                                                  |
-| skipSnapshot       | Button that skips snapshot creation                                   | `string`                     | `'Skip'`                                                                             |
-| snapshotFileSaved  | Reminder shown with the snapshot description                          | `string`                     | `'The file is saved. Describe this snapshot before saving it.'`                      |
-| done               | Button that closes the snapshot result                                | `string`                     | `'Done'`                                                                             |
-| snapshotNote       | Label for the snapshot note field                                     | `string`                     | `'Describe this snapshot'`                                                           |
-| saveSnapshot       | Button that saves a snapshot                                          | `string`                     | `'Save snapshot'`                                                                    |
-| snapshotSaved      | Message shown after a snapshot is saved                               | `string`                     | `'Snapshot saved.'`                                                                  |
-| snapshotUnchanged  | Message shown when the file has no changes to snapshot                | `string`                     | `'The file has no changes to snapshot.'`                                             |
 | version            | Text before the version number of a Wiki file                         | `string`                     | `'Version'`                                                                          |
 | importFile         | Label of the file field in the import dialog                          | `string`                     | `'Package file'`                                                                     |
 | importHint         | Hint in the import dialog                                             | `string`                     | `'Choose an .ovpack package to import into this directory.'`                         |
@@ -387,6 +382,7 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 | noSchedule         | The "no scheduled update" option                                      | `string`                     | `'Do not update'`                                                                    |
 | daily              | The "daily" option                                                    | `string`                     | `'Daily'`                                                                            |
 | weekly             | The "weekly" option                                                   | `string`                     | `'Weekly'`                                                                           |
+| weeklySchedule     | Formats the recurring weekly update summary                           | `(day: string) => string`    | e.g. `Every Thursday`, following locale                                              |
 | time               | Label of the run time field                                           | `string`                     | `'Run time (Beijing time)'`                                                          |
 | weekday            | Label of the day of week select                                       | `string`                     | `'Day of week'`                                                                      |
 | frequency          | Frequency radio group label                                           | `string`                     | `'Update frequency'`                                                                 |
@@ -397,6 +393,7 @@ All fields are optional, and omitted fields follow `locale`. Text inside a dashb
 | timezone           | Beijing time description                                              | `string`                     | `'Runs in Beijing time (UTC+8), to the minute.'`                                     |
 | historyView        | History display mode label                                            | `string`                     | `'Historical version content view'`                                                  |
 | copyPath           | Copy file path action                                                 | `string`                     | `'Copy file path'`                                                                   |
+| pathCopied         | Path-copy success feedback in the history preview                     | `string`                     | `'Node path copied'`                                                                 |
 | rollbackConfirm    | Restore confirmation action                                           | `string`                     | `'Confirm restore'`                                                                  |
 | target             | Target directory                                                      | `string`                     | `'Target directory'`                                                                 |
 | selectSources      | Select source directories                                             | `string`                     | `'Select source directories'`                                                        |
@@ -465,6 +462,7 @@ All fields are optional, and omitted fields follow `locale`.
 | loading                  | Message shown while permissions or members load                 | `string` | `'Loading permissions…'`                                                               |
 | saving                   | Message shown while saving                                      | `string` | `'Saving…'`                                                                            |
 | saved                    | Message shown after saving                                      | `string` | `'Permissions saved'`                                                                  |
+| permissionChanged        | Message shown when management permission changes                | `string` | `'Your permissions have changed. You can no longer manage this node.'`                 |
 | loadFailed               | Message shown when permissions fail to load                     | `string` | `'Could not load permissions'`                                                         |
 | saveFailed               | Message shown when permissions fail to save                     | `string` | `'Could not save permissions'`                                                         |
 | principalsFailed         | Message shown when the member list fails to load                | `string` | `'Could not load users or groups'`                                                     |
@@ -494,7 +492,7 @@ All fields are optional, and omitted fields follow `locale`.
 - Directories expand on demand and load 200 entries per page; Load more at the end of a directory loads the next page.
 - Under the `viking://` root, directories appear in the order user, session, agent, resources, followed by the rest. With any other `rootUri`, the order the server returns is kept.
 - Click a file to preview its content; click a directory to expand and select it, and the preview shows its L0 summary and L1 overview.
-- Names derived from resource URIs are decoded once for tree rows, preview tabs, search labels and breadcrumbs. Requests, selection and expansion snapshots keep the original URI; malformed escapes remain unchanged.
+- The left directory tree displays the original final segment of each resource URI. Preview tabs, search labels and breadcrumbs decode URI-derived names once and preserve malformed escapes. Requests, selection and expansion snapshots use the original URI.
 - Directories under `viking://system` show no summaries.
 - Use `defaultExpandedUri` on its own to expand the tree to a single location at mount. After the first render, changes to the controlled `uri` [open and reveal the resource](#open-and-reveal-a-resource).
 - To persist tree expansion across mounts, save the complete `onExpansionSnapshotChange` object per account and root and pass it as `defaultExpansionSnapshot` on the next mount. Keep optional `pendingEdits` in their emitted order. After identity resolution, a stored fold takes precedence over an equivalent expanded URI unless a later pending reopen supersedes it. An initial controlled URI is located within the restored open folders.
@@ -511,7 +509,7 @@ All fields are optional, and omitted fields follow `locale`.
 - The dashboard tab is hidden while editing a file and returns after saving or cancelling.
 - Saving a Wiki file shows a progress notice in the upper right, followed by a success notice if the write succeeds. Wiki saves send `use_snapshot: true` to preserve version history and `resolve_conflicts: true` so the server preserves and updates conflict records. Ordinary text saves leave snapshots disabled by default.
 - All YAML frontmatter, ordinary HTML comments and fenced Markdown examples survive. In a Markdown file with confirmed scope, an unclosed reserved trailer starting on its own line is hidden through the end of the file; markers quoted in YAML frontmatter, code fences or inline examples survive.
-- The refresh button reloads the expanded directories and the current preview.
+- The refresh button reloads the expanded directories, the current preview and its effective permissions.
 
 ### Open and reveal a resource
 
@@ -567,6 +565,7 @@ Directory listings needed to locate the target, or required home alias lookups, 
 ### Preview actions
 
 - While browsing, the right side of the header holds the Preview / Source switch, the edit button and the action menu. Copy path sits beside the breadcrumb, followed by the permission tag.
+- File, directory and history previews share path-copy feedback: after copying succeeds, the button shows a checkmark and a bubble above it shows a green checkmark with the success message. The feedback resets after 1.5 seconds; failures show an error message.
 - Editing hides the Preview / Source switch. Save and Cancel stay visible, along with Version history, Copy content and Copy path when available for the current file.
 - The visibility flags only control whether a default button is shown, not the capability: `canDelete`, `deleteFile()` and the editing methods in the `previewSlots` context keep working.
 - Compilation settings display source directories, target directory, Skill and update schedule. Edit each field with its picker or schedule form; changes apply to future runs.
@@ -574,16 +573,15 @@ Directory listings needed to locate the target, or required home alias lookups, 
 - `readOnly` disables all writes, including saving the compile configuration. With `acl` on, editing, import and saving the compile configuration require `write` or `manage`, and deletion requires `manage`.
 - Copying content, downloading, exporting, viewing version history and viewing the compile configuration remain available regardless of `readOnly` and ACL settings.
 - Without `acl`, or for resources outside `viking://resources/`, the block does not probe permissions and the server enforces access.
-- After an editable non-resource text file saves, choose **Keep a snapshot** or **Skip**. Keeping it opens a required description field; **Save snapshot** sends `POST /api/v1/snapshot/commit`. Skipping or cancelling leaves the file saved. Failures keep the description for retry, and unchanged content shows a separate result. Wiki compile files retain their automatic versions.
-- The history dialog also lets you describe and save a non-resource text file snapshot. It captures the server’s current file at submission time; intervening writes may be included.
-- Wiki directories let users select a descendant file, preview historical content, compare two versions, and restore a single file through `POST /api/v1/snapshot/restore`. History pages native Git commits through `GET /api/v1/snapshot/versions` with `before_snapshot`, displays committer time, and reads content with the selected commit ID and current file path. Legacy version indexes remain supported; services without the versions endpoint fall back to the latest 500 entries from `GET /api/v1/snapshot/log`. The first version supports an added-file diff. Turn off Show changes to read the full document. A version that deletes the file can show the removed lines in Show changes. With Show changes off, that version shows a deletion notice instead of an empty document.
+- The history entry appears only on experience files and Wiki nodes. Ordinary resource files and server-managed configuration such as `settings/user_config.json` never show it.
+- Wiki directories let users select a descendant file, preview historical content, compare two versions, and restore a single file through `POST /api/v1/snapshot/restore`. History pages native Git commits through `GET /api/v1/snapshot/versions` with `before_snapshot`, displays committer time, and reads content with the selected commit ID and current file path. Legacy version indexes remain supported; services without the versions endpoint fall back to the latest 500 entries from `GET /api/v1/snapshot/log`. The first version supports an added-file diff. Turn off Show changes to read the full document. A version that deletes the file can show the removed lines in Show changes. With Show changes off, that version shows a deletion notice instead of an empty document. Versions come from Wiki compilation or an edit save; the UI offers no manual snapshot entry.
 - Gateways can provide history through `GET /api/v1/snapshot/log` and historical content through `GET /api/v1/snapshot/show`. Both deletion confirmation paths require an HTTP 404 from `/show` with `error.code` set to `"NOT_FOUND"`, `error.details.type` set to `"git_blob"`, and a string `error.details.resource` (the requested file URI in the native response).
 - Within `error.details`, `reason: "path_not_found"` and `deleted_file: true` confirm that the path is missing in the selected commit and the first parent has a file at that exact path. `deleted_file: false` leaves the read error in place.
 - For a matching 404 with no `error.details.deleted_file`, the legacy fallback accepts an omitted `error.details.reason` or `"path_not_found"`. FileBrowser queries `/log` from the selected commit (`branch`) with the file URI (`paths`). If the selected commit matches, it uses `GET /api/v1/snapshot/diff` to confirm a `deleted` change from `parents[0]` to the selected commit. The `/log` filter compares the exact tree entry against `parents[0]`, including for merge commits. A different `reason` or a non-boolean `deleted_file` leaves the read error in place.
 - The native `/diff` endpoint handles UTF-8 text up to 10 MiB and 100,000 lines per input, with a 20 MiB limit on the generated diff. If this fallback cannot confirm a deletion, the history view displays a read error.
 - Compile configuration: `GET /api/v1/compile/config` reads it, and `POST /api/v1/compile/config/update` saves source directories, Skill and the update schedule. The target directory is read-only, and existing instructions and execution arguments are preserved. When multiple configurations share a directory, tabs switch between their settings and edits, initially showing the first configuration. A single configuration opens directly without tabs. Reads and updates identify it by `compile_name`. An empty state appears when the current user has no associated configuration.
 - Import .ovpack: the file is first uploaded through `POST /api/v1/resources/temp_upload`, then `POST /api/v1/pack/import` imports it into the current directory. On failure the chosen file is kept, and a retry uploads it again.
-- Export .ovpack: `POST /api/v1/pack/export` returns the content, which is saved as `<name>.ovpack`; downloads use `GET /api/v1/content/download`.
+- Export .ovpack: available for directories; `POST /api/v1/pack/export` returns the content, which is saved as `<name>.ovpack`; downloads use `GET /api/v1/content/download`.
 - Delete: after confirmation, `DELETE /api/v1/fs?uri=...&wait=true` runs. On failure the dialog stays open and can retry; on success the parent directory is selected and the tree is refreshed. Only files can be deleted, not directories.
 - A request is not submitted twice while one is running, and in-flight requests are aborted when the account or resource changes or the component unmounts.
 
@@ -600,6 +598,7 @@ Directory listings needed to locate the target, or required home alias lookups, 
 - While saving, the dialog cannot be submitted again or closed. If saving fails, the last saved grants stay and the server's reason is shown.
 - After a successful save the tree and preview refresh; the server's index update may finish later, and the server's authorization result is authoritative.
 - In the directory listing (`fs/ls`), nodes with `access: 'denied'` cannot be selected or expanded, and nodes with `access: 'container'` can only be expanded to reach accessible children and cannot be previewed themselves.
+- Set `hideDeniedEntries` to hide denied nodes from the tree. Traversal-only containers stay visible. This only changes presentation: cached pages, pagination offsets and permission checks keep the server response.
 - Grants use `GET` and `PUT /api/v1/acl`. Restoring inheritance sends an empty direct grant list with `acl_mode: inherit`. The member directory calls the account's user and group endpoints (20 users per page, `include_credentials=false`) and needs an `accountId` from the Provider or `requestOptions`.
 - The group directory needs account administration access. When a resource manager cannot read it, the dialog shows a failure with Retry; supply your own directory through `acl.listPrincipals`.
 - `acl.readOnly` only blocks changing grants and is independent of `readOnly`.
@@ -649,12 +648,16 @@ Pass `experienceDashboardSlots.sections` to customize the built-in dashboard whi
 
 ### Tree width
 
-- When the container is narrower than 521px, the tree and preview stack and the horizontal resizer is hidden.
-
 - A draggable divider sits between the tree and the preview: drag it, or focus it and press the left and right arrow keys (16px each). Its accessible name comes from `labels.resizeTree`.
-- The tree is 352px wide by default and at least 200px. Its maximum is the smaller of 520px and the container width minus 321px (the preview keeps at least 320px, plus a 1px divider), so in a narrow column the tree shrinks instead of crowding out the preview.
+- The default tree width is 352px in Chinese and 500px in English. In the side-by-side layout, the tree is at least 200px wide. Its maximum is the smaller of 520px and the container width minus 321px, leaving at least 321px for the preview and divider.
 - The width applies to the current instance only and is not written to `localStorage`; whether to remember it is up to your app.
 - The current width is written as the CSS variable `--ov-file-browser-tree-width` in the root element's inline style. You can read it, but overriding it has no effect.
+
+### Tree height
+
+- When the container is narrower than 521px, the tree and preview stack. The tree starts at 40% of the container height, subject to the divider's limits.
+- Drag the divider up or down, or focus it and press the up and down arrow keys (16px each). The tree keeps at least 160px and the preview keeps at least 240px while resizing.
+- At a container height of 401px or less, the divider becomes a static line and the tree uses the 40% split. Each instance remembers its adjusted width and height separately.
 
 ## Analytics
 

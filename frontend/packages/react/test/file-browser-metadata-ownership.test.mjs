@@ -106,6 +106,7 @@ test('a known Wiki keeps the truncation hint when its full read fails', async ()
     content,
     taggedTarget: uri,
     fullRead: full.promise,
+    kinds: [],
   });
   try {
     assert.equal(f.tab.source.truncated, true);

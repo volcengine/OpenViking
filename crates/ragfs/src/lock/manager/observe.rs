@@ -62,6 +62,35 @@ impl PathLockManager {
         }
     }
 
+    /// Observe only this account's local leases and acquisition counters.
+    pub async fn observe_account(&self, account_id: &str) -> PathLockObserveSnapshot {
+        let account = self
+            .account_metrics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&Some(account_id.to_owned()))
+            .cloned();
+        let Some(account) = account else {
+            return PathLockObserveSnapshot {
+                active_locks: self.lease_registry.active_account_count(account_id),
+                waiting_locks: 0,
+                stale_locks_removed: 0,
+                conflicts: Vec::new(),
+            };
+        };
+        let metrics = account.counters();
+        PathLockObserveSnapshot {
+            active_locks: self.lease_registry.active_account_count(account_id),
+            waiting_locks: account.waiting.load(AtomicOrdering::Relaxed),
+            stale_locks_removed: metrics.stale_tokens_removed,
+            conflicts: metrics
+                .recent_conflicts
+                .iter()
+                .map(|(_, c)| c.clone())
+                .collect(),
+        }
+    }
+
     /// Look up an owned lease by owner_id for cross-FFI lease operations.
     pub async fn get_owned_lease(&self, owner_id: &str) -> Option<OwnedPathLockLease> {
         let owner = self.lease_registry.resolve_owner(owner_id)?;
@@ -196,8 +225,32 @@ impl PathLockManager {
     pub async fn metrics_snapshot(&self) -> LockMetrics {
         let mut metrics = self.metrics.read().await.clone();
         metrics.active_lock_count = self.lease_registry.active_count();
-        metrics.waiting_lock_count = self.waiting_lock_count.load(AtomicOrdering::Relaxed);
-        metrics.wait_duration_ns = self.wait_duration_ns.load(AtomicOrdering::Relaxed);
+        let accounts: Vec<_> = self
+            .account_metrics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect();
+        metrics.waiting_lock_count = 0;
+        metrics.wait_duration_ns = 0;
+        metrics.stale_tokens_removed = 0;
+        metrics.conflict_count = 0;
+        let mut conflicts = Vec::new();
+        for account in accounts {
+            let counters = account.counters();
+            metrics.waiting_lock_count += account.waiting.load(AtomicOrdering::Relaxed);
+            metrics.wait_duration_ns = metrics
+                .wait_duration_ns
+                .saturating_add(counters.wait_duration_ns);
+            metrics.stale_tokens_removed += counters.stale_tokens_removed;
+            metrics.conflict_count += counters.conflict_count;
+            conflicts.extend(counters.recent_conflicts.iter().cloned());
+        }
+        // Sequence numbers preserve runtime ordering across account buckets.
+        conflicts.sort_unstable_by_key(|(sequence, _)| *sequence);
+        let start = conflicts.len().saturating_sub(MAX_RECENT_CONFLICTS);
+        metrics.recent_conflicts = conflicts.into_iter().skip(start).map(|(_, c)| c).collect();
         self.provider.update_metrics(&mut metrics);
         metrics
     }

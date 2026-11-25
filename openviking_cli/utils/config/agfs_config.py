@@ -120,7 +120,7 @@ class QueueFSConfig(BaseModel):
 
     backend: str = Field(
         default="sqlite",
-        description="QueueFS backend: 'memory' | 'sqlite' | 'sqlite3' | 'cache'",
+        description="QueueFS backend: 'memory' | 'sqlite' | 'sqlite3' | 'cache' | 'postgres'",
     )
     instance: str = Field(
         default="default",
@@ -142,6 +142,15 @@ class QueueFSConfig(BaseModel):
         description="SQLite busy timeout for QueueFS in milliseconds.",
     )
 
+    postgres_dsn_env: Optional[str] = Field(
+        default=None,
+        description="Environment variable holding the PostgreSQL QueueFS DSN.",
+    )
+    postgres_lease_seconds: int = Field(
+        default=60,
+        description="PostgreSQL consumer lease duration in seconds (10..=86400).",
+    )
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate QueueFS mode and backend choices."""
@@ -149,10 +158,10 @@ class QueueFSConfig(BaseModel):
         if self.mode not in valid_modes:
             raise ValueError("queuefs mode must be one of: 'shared', 'worker'")
 
-        valid_backends = {"memory", "sqlite", "sqlite3", "cache"}
+        valid_backends = {"memory", "sqlite", "sqlite3", "cache", "postgres"}
         if self.backend not in valid_backends:
             raise ValueError(
-                "queuefs backend must be one of: 'memory', 'sqlite', 'sqlite3', 'cache'; "
+                "queuefs backend must be one of: 'memory', 'sqlite', 'sqlite3', 'cache', 'postgres'; "
                 "backend='redis' was removed, use backend='cache' with cache.instances"
             )
         if self.backend != "cache" and "instance" in self.model_fields_set:
@@ -163,6 +172,15 @@ class QueueFSConfig(BaseModel):
             raise ValueError("queuefs recover_stale_sec must be >= 0")
         if self.busy_timeout_ms < 0:
             raise ValueError("queuefs busy_timeout_ms must be >= 0")
+        if not 10 <= self.postgres_lease_seconds <= 86400:
+            raise ValueError("queuefs postgres_lease_seconds must be 10..=86400")
+        if self.backend == "postgres":
+            name = self.postgres_dsn_env or ""
+            if not name or not name.isascii() or not (
+                (name[0].isalpha() or name[0] == "_")
+                and all(c.isalnum() or c == "_" for c in name)
+            ):
+                raise ValueError("queuefs postgres_dsn_env must be an environment variable name")
         return self
 
 

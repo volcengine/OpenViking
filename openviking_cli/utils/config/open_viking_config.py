@@ -56,7 +56,6 @@ from .parser_config import (
 )
 from .prompts_config import PromptsConfig
 from .queue_worker_config import QueueWorkersConfig
-from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
 from .rules_config import RulesConfig
@@ -353,11 +352,6 @@ class OpenVikingConfig(BaseModel):
         description="Queue worker runtime configuration",
     )
 
-    reindex: ReindexConfig = Field(
-        default_factory=ReindexConfig,
-        description="Admin reindex runtime configuration",
-    )
-
     parser_api: ParserApiConfig = Field(
         default_factory=ParserApiConfig,
         description="Third-party parser API configuration (files/responses)",
@@ -457,7 +451,8 @@ class OpenVikingConfig(BaseModel):
             )
         coordination = self.storage.agfs.coordination
         uses_cache = self.watch_leader_provider == "cache" or (
-            self.watch_leader_provider == "auto" and self.storage.watch_store.provider != "file"
+            self.watch_leader_provider == "auto"
+            and self.storage.watch_store.provider in {"mysql", "postgres"}
         )
         if uses_cache and "provider" not in coordination.model_fields_set:
             self.storage.agfs.coordination = coordination.model_copy(update={"provider": "cache"})
@@ -563,10 +558,10 @@ class OpenVikingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_watch_store(self) -> "OpenVikingConfig":
-        if self.storage.watch_store.provider == "mysql":
+        if self.storage.watch_store.provider in {"mysql", "sqlite"}:
             if not self.storage.watch_store.params.get("credential_encryption_key"):
                 raise ValueError(
-                    "storage.watch_store.provider='mysql' requires "
+                    f"storage.watch_store.provider='{self.storage.watch_store.provider}' requires "
                     "storage.watch_store.params.credential_encryption_key"
                 )
         return self
@@ -962,6 +957,10 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     # Validate account identifier
     if not config.default_account or not config.default_account.strip():
         errors.append("Default account identifier cannot be empty")
+    if not config.vlm.model:
+        errors.append(
+            "A VLM is required. Configure the vlm section in ov.conf or run openviking-server init."
+        )
 
     if errors:
         error_message = "Invalid OpenViking configuration:\n" + "\n".join(

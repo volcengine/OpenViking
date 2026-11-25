@@ -42,6 +42,14 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 示例使用固定数据：发送只清空草稿，选择的文件不会上传。
 
+### 附件数量上限
+
+选择 10 个附件后，悬停已禁用的添加文件按钮查看数量限制；移除一个附件后可继续选择。示例只在浏览器保留所选附件，不上传文件。
+
+```tsx file="../../_demos/viking-bot-attachment-limit.tsx" preview
+
+```
+
 ### 用户消息
 
 用户消息靠右显示，附件在气泡外，只有附件时不生成空气泡；点击附件或复制按钮，回调收到的内容显示在示例下方。
@@ -63,6 +71,14 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 演示输出目录、文本、定时和修复表单，提交结果显示在示例底部。输出目录支持搜索、自动定位、新建子目录、权限状态和提交前复核；目录与请求均为离线模拟。
 
 ```tsx file="../../_demos/viking-bot-interaction.tsx" preview
+
+```
+
+### 配置确认
+
+通过显式数据向 `VikingBotConfirmation` 传入摘要行。修改按钮打开宿主的预填表单；确认按钮等待回调，提交期间禁用两项操作，失败后保留摘要。示例使用固定数据和模拟提交。
+
+```tsx file="../../_demos/viking-bot-confirmation.tsx" preview
 
 ```
 
@@ -366,33 +382,41 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 
 ### VikingBotComposer
 
-| 参数                  | 说明                                                                              | 类型                                                                  | 默认值                   |
-| --------------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------ |
-| value                 | 输入框的草稿文本，受控                                                            | `string`                                                              | 必填                     |
-| attachments           | 已选中的附件，显示在输入框上方                                                    | `readonly VikingBotAttachment[]`                                      | `[]`                     |
-| references            | 文件和目录引用的候选与已选项，省略时不显示引用入口                                | `VikingBotReferences`                                                 | -                        |
-| quickInputs           | 快捷输入，显示在输入框上方，点击后填入草稿，不自动发送                            | `readonly VikingBotQuickInput[]`                                      | -                        |
-| disabled              | 禁用输入区，包括输入、发送、添加文件和选择引用                                    | `boolean`                                                             | `false`                  |
-| disabledReason        | 禁用时显示的说明                                                                  | `string`                                                              | -                        |
-| isSending             | 正在回复；停止与追加输入入口由 `onCancel` 和 `canSendWhileStreaming` 控制         | `boolean`                                                             | `false`                  |
-| isSubmitting          | 追加输入正在等待后端接受，期间禁止重复发送                                        | `boolean`                                                             | `false`                  |
-| canSendWhileStreaming | 生成中允许追加输入；由宿主映射服务的 `canSteer`                                   | `boolean`                                                             | `false`                  |
-| variant               | 输入区的布局形态                                                                  | `'default' \| 'compact'`                                              | `'default'`              |
-| accept                | 文件选择器接受的文件类型，传给 `<input type="file">` 的 `accept`                  | `string`                                                              | -                        |
-| maxAttachments        | 附件数量上限；达到上限后添加文件按钮禁用，超出剩余数量的文件不会上报              | `number`                                                              | `10`                     |
-| onValueChange         | 输入变化时触发；省略时输入内容不会上报，也不能发送                                | `(value: string) => void`                                             | -                        |
-| onSend                | 发送时触发，参数为文本、附件和引用；草稿和附件由宿主清空，省略时不能发送          | `(draft: VikingBotDraft) => void`                                     | -                        |
-| onCancel              | 点击停止时触发；省略时回复期间不显示停止按钮                                      | `() => void`                                                          | -                        |
-| onFilesAdded          | 用户选择或拖入文件时触发，上传由宿主完成；设置后显示添加文件按钮                  | `(files: readonly File[]) => void`                                    | -                        |
-| onAttachmentRemove    | 点击附件的移除按钮时触发；省略时不显示移除按钮                                    | `(attachment: VikingBotAttachment) => void`                           | -                        |
-| onOpenUri             | 点击引用标签时触发，参数为引用的 URI                                              | `(uri: string) => void`                                               | -                        |
-| onQuickInputSelect    | 接管快捷输入的点击，设置后不再自动填入草稿                                        | `(input: VikingBotQuickInput) => void`                                | -                        |
-| actions               | 工具栏里附件和引用按钮之后的额外控件                                              | `ReactNode`                                                           | -                        |
-| slots                 | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示) | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
-| labels                | 覆盖界面文案，全部键见 `DEFAULT_LABELS`                                           | `VikingBotLabels`                                                     | -                        |
-| locale                | 界面语言，规则见[国际化](../guide/i18n)                                           | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
-| className             | 附加到根元素的类名                                                                | `string`                                                              | -                        |
-| ref                   | 输入区的命令式入口                                                                | `Ref<VikingBotComposerRef>`                                           | -                        |
+| 参数                  | 说明                                                                                   | 类型                                                                  | 默认值                   |
+| --------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------ |
+| value                 | 输入框的草稿文本，受控                                                                 | `string`                                                              | 必填                     |
+| attachments           | 已选中的附件，显示在输入框上方                                                         | `readonly VikingBotAttachment[]`                                      | `[]`                     |
+| references            | 文件和目录引用的候选与已选项，省略时不显示引用入口                                     | `VikingBotReferences`                                                 | -                        |
+| quickInputs           | 快捷输入，显示在输入框上方，点击后填入草稿，不自动发送                                 | `readonly VikingBotQuickInput[]`                                      | -                        |
+| disabled              | 禁用输入区，包括输入、发送、添加文件和选择引用                                         | `boolean`                                                             | `false`                  |
+| disabledReason        | 禁用时显示的说明                                                                       | `string`                                                              | -                        |
+| isSending             | 正在回复；停止与追加输入入口由 `onCancel` 和 `canSendWhileStreaming` 控制              | `boolean`                                                             | `false`                  |
+| isSubmitting          | 追加输入正在等待后端接受，期间禁止重复发送                                             | `boolean`                                                             | `false`                  |
+| canSendWhileStreaming | 生成中允许追加输入；由宿主映射服务的 `canSteer`                                        | `boolean`                                                             | `false`                  |
+| variant               | 输入区的布局形态                                                                       | `'default' \| 'compact'`                                              | `'default'`              |
+| accept                | 文件选择器接受的文件类型，传给 `<input type="file">` 的 `accept`                       | `string`                                                              | -                        |
+| maxAttachments        | 附件数量上限；达到上限后添加文件按钮禁用，悬停显示数量限制；超出剩余数量的文件不会上报 | `number`                                                              | `10`                     |
+| onValueChange         | 输入变化时触发；省略时输入内容不会上报，也不能发送                                     | `(value: string) => void`                                             | -                        |
+| onSend                | 发送时触发，参数为文本、附件和引用；草稿和附件由宿主清空，省略时不能发送               | `(draft: VikingBotDraft) => void`                                     | -                        |
+| onCancel              | 点击停止时触发；省略时回复期间不显示停止按钮                                           | `() => void`                                                          | -                        |
+| onFilesAdded          | 用户选择或拖入文件时触发，上传由宿主完成；设置后显示添加文件按钮                       | `(files: readonly File[]) => void`                                    | -                        |
+| onAttachmentRemove    | 点击附件的移除按钮时触发；省略时不显示移除按钮                                         | `(attachment: VikingBotAttachment) => void`                           | -                        |
+| onOpenUri             | 点击引用标签时触发，参数为引用的 URI                                                   | `(uri: string) => void`                                               | -                        |
+| onQuickInputSelect    | 接管快捷输入的点击，设置后不再自动填入草稿                                             | `(input: VikingBotQuickInput) => void`                                | -                        |
+| actions               | 工具栏里附件和引用按钮之后的额外控件                                                   | `ReactNode`                                                           | -                        |
+| slots                 | 替换渲染异常的展示内容，见[错误展示插槽](../guide/getting-started#自定义错误展示)      | `{ errorFallback?: ReactNode \| ((reset: () => void) => ReactNode) }` | -                        |
+| labels                | 覆盖界面文案，全部键见 `DEFAULT_LABELS`                                                | `VikingBotLabels`                                                     | -                        |
+| locale                | 界面语言，规则见[国际化](../guide/i18n)                                                | `'zh-CN' \| 'en-US'`                                                  | 继承上级，默认 `'en-US'` |
+| className             | 附加到根元素的类名                                                                     | `string`                                                              | -                        |
+| ref                   | 输入区的命令式入口                                                                     | `Ref<VikingBotComposerRef>`                                           | -                        |
+
+### VikingBotLabels
+
+| 参数            | 说明                                                    | 类型                        | 默认值                        |
+| --------------- | ------------------------------------------------------- | --------------------------- | ----------------------------- |
+| attachmentLimit | 达到附件上限时的提示格式化函数，参数为 `maxAttachments` | `(limit: number) => string` | `单次最多上传 {limit} 个附件` |
+
+其余文案见 `DEFAULT_LABELS`。
 
 ### VikingBotComposerRef
 
@@ -433,6 +457,43 @@ import '@openviking/react/components/viking-bot/interaction/style.css';
 | onCopy    | 接管会话标识的复制；省略时写入剪贴板                                   | `(text: string) => void` | -                        |
 | labels    | 覆盖界面文案，全部键见 `DEFAULT_LABELS`                                | `VikingBotLabels`        | -                        |
 | locale    | 界面语言，规则见[国际化](../guide/i18n)                                | `'zh-CN' \| 'en-US'`     | 继承上级，默认 `'en-US'` |
+
+### VikingBotConfirmationProps
+
+从 `@openviking/react/components/viking-bot` 或其 `interaction` 子路径引入 `VikingBotConfirmation`，使用对应的 VikingBot 或 interaction 样式入口。
+
+| 参数       | 说明                                                               | 类型                                   | 默认值               |
+| ---------- | ------------------------------------------------------------------ | -------------------------------------- | -------------------- |
+| rows       | 按展示顺序提供摘要行，值支持长 URI、多行文本或自定义内容           | `readonly VikingBotConfirmationRow[]`  | 必填                 |
+| title      | 摘要上方的标题                                                     | `ReactNode`                            | 请确认创建配置       |
+| onEdit     | 进入宿主的编辑流程，由宿主保留已有值；省略时隐藏修改按钮           | `() => void`                           | -                    |
+| onConfirm  | 校验并提交宿主配置，Promise 拒绝时展示重试反馈；省略时禁用确认按钮 | `() => void \| Promise<void>`          | -                    |
+| disabled   | 禁用两项操作                                                       | `boolean`                              | `false`              |
+| submitting | 宿主控制的提交状态                                                 | `boolean`                              | `false`              |
+| error      | 宿主控制的提交错误                                                 | `ReactNode`                            | -                    |
+| requestKey | 切换配置时变更此身份，以重置提交反馈                               | `string`                               | -                    |
+| className  | 附加到根元素的类名                                                 | `string`                               | -                    |
+| locale     | 界面语言                                                           | `'zh-CN' \| 'en-US'`                   | 继承，否则 `'en-US'` |
+| labels     | 覆盖 title、edit、confirm 和 submitFailed 文案                     | `Partial<VikingBotConfirmationLabels>` | 当前语言             |
+| slots      | 渲染错误替代内容                                                   | `{ errorFallback?: ErrorFallback }`    | 继承或内置           |
+
+### VikingBotConfirmationRow
+
+| 参数  | 说明       | 类型        | 默认值 |
+| ----- | ---------- | ----------- | ------ |
+| label | 摘要行名称 | `ReactNode` | 必填   |
+| value | 摘要行内容 | `ReactNode` | 必填   |
+
+### VikingBotConfirmationLabels
+
+| 参数         | 说明         | 类型     | 默认值           |
+| ------------ | ------------ | -------- | ---------------- |
+| title        | 默认标题     | `string` | 请确认创建配置   |
+| edit         | 修改按钮     | `string` | 修改             |
+| confirm      | 确认按钮     | `string` | 确认并提交       |
+| submitFailed | 提交错误标题 | `string` | 提交失败，请重试 |
+
+组件展示调用方提供的摘要行并报告操作。调用方决定展示时机、保留全部配置、映射后端类型、校验权限并进入编辑流程。组件不从 Bot 消息推断信息完整性，也不改变 Console 的问题协议。确认成功后，由调用方更新或移除摘要。
 
 ### VikingBotInteraction
 

@@ -95,7 +95,7 @@ for (const persistsFlag of [true, false]) {
       assert.equal(view.messages.at(-1)?.parts[0]?.text, 'Complete answer.');
       assert.equal(
         view.messages.at(-1)?.actions?.[0]?.action.label,
-        'Commit session',
+        'Extract long-term memory',
       );
     } finally {
       await host.unmount();

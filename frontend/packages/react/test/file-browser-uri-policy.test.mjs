@@ -2,28 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fixture, tree, mount, target } from './helpers/preview-native-dom.mjs';
 const cases = [
-  ['viking://user/alice/memories/experiences/a.md/', true, false, true, true],
-  ['viking://~/memories/experiences/a.md///', true, false, true, true],
+  ['viking://user/alice/memories/experiences/a.md/', true, false, true],
+  ['viking://~/memories/experiences/a.md///', true, false, true],
   [
     'viking://user/alice/peers/agent_x/memories/experiences/a.md/',
     true,
     false,
     true,
-    true,
   ],
-  [
-    'viking://~/peers/agent_x/memories/experiences/a.md///',
-    true,
-    false,
-    true,
-    true,
-  ],
-  [`${target}/.overview.md/`, false, false, false, true],
-  [`${target}/.abstract.md///`, false, false, false, true],
-  [`${target}/.relations.json/`, false, true, true, false],
-  ['viking://resources/.watch_tasks.json.tmp/', false, false, true, false],
+  ['viking://~/peers/agent_x/memories/experiences/a.md///', true, false, true],
+  [`${target}/.overview.md/`, false, false, false],
+  [`${target}/.abstract.md///`, false, false, false],
+  [`${target}/.relations.json/`, false, true, true],
+  ['viking://resources/.watch_tasks.json.tmp/', false, false, true],
 ];
-for (const [uri, history, edit, canDelete, exportPack] of cases) {
+for (const [uri, history, edit, canDelete] of cases) {
   test(`canonical resource classification: ${uri}`, async () => {
     let context;
     const view = await mount(
@@ -42,7 +35,7 @@ for (const [uri, history, edit, canDelete, exportPack] of cases) {
       assert.equal(commands.includes('history'), history);
       assert.equal(context.canEdit, edit);
       assert.equal(commands.includes('delete'), canDelete);
-      assert.equal(commands.includes('exportPack'), exportPack);
+      assert.equal(commands.includes('exportPack'), false);
     } finally {
       await view.unmount();
     }

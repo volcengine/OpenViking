@@ -48,11 +48,6 @@ const demoWikiVersions = [
   deletedWikiVersion,
   wikiVersion(1, 'Created release guide'),
 ];
-const savedSnapshots = new Map<
-  string,
-  { info: typeof originalSnapshot; content: string }[]
->();
-let nextSnapshot = 1;
 const canonicalUri = (path: string) =>
   path.replace(/^viking:\/\/~(?=\/|$)/, DEMO_USER);
 
@@ -100,32 +95,6 @@ export function nativePreviewDemoResponse(
           )
         : undefined;
     }
-    case '/api/v1/snapshot/commit': {
-      const { message, paths } = JSON.parse(body) as {
-        message: string;
-        paths: string[];
-      };
-      const targets = paths.map(canonicalUri);
-      const changed = targets.filter((target) => {
-        const latest = savedSnapshots.get(target)?.[0];
-        return latest?.content !== files[target];
-      });
-      if (changed.length === 0) {
-        const latest = savedSnapshots.get(targets[0] ?? '')?.[0];
-        return ok({ result: 'noop', commit_oid: latest?.info.oid });
-      }
-      const oid = (nextSnapshot++).toString(16).padStart(40, '0');
-      const timestamp = { time_seconds: Math.floor(Date.now() / 1000) };
-      const info = { oid, message, author: timestamp, committer: timestamp };
-      for (const target of changed) {
-        const snapshot = { info, content: files[target] ?? '' };
-        savedSnapshots.set(target, [
-          snapshot,
-          ...(savedSnapshots.get(target) ?? []),
-        ]);
-      }
-      return ok({ result: 'created', commit_oid: oid });
-    }
     case '/api/v1/snapshot/log': {
       const path = canonicalUri(url.searchParams.get('paths') ?? '');
       if (path === DEMO_WIKI_FILE) {
@@ -133,8 +102,7 @@ export function nativePreviewDemoResponse(
           return ok([deletedWikiVersion]);
         return ok(demoWikiVersions);
       }
-      const history = (savedSnapshots.get(path) ?? []).map(({ info }) => info);
-      return ok([...history, originalSnapshot]);
+      return ok([originalSnapshot]);
     }
     case '/api/v1/snapshot/versions':
       return ok({
@@ -170,12 +138,8 @@ export function nativePreviewDemoResponse(
           { status: 404 },
         );
       }
-      const snapshot = savedSnapshots
-        .get(path)
-        ?.find(({ info }) => info.oid === target);
       return new Response(
-        snapshot?.content ??
-          `# Historical content\n\nSimulated ${target ?? 'revision'}.`,
+        `# Historical content\n\nSimulated ${target ?? 'revision'}.`,
       );
     }
     case '/api/v1/snapshot/restore':

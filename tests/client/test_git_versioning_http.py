@@ -163,22 +163,7 @@ async def _write_blob(service: OpenVikingService, uri: str, body: bytes) -> None
     await service.viking_fs.write_file(uri, body, ctx=ctx)
 
 
-async def test_http_commit_and_log_roundtrip(http_git_client, http_service):
-    client = http_git_client
-
-    await _write_blob(http_service, "viking://resources/http_a.md", b"hello-http")
-
-    commit = await client.snapshot.commit(message="http parity")
-    assert commit["result"] in ("created", "noop")
-    assert isinstance(commit["commit_oid"], str)
-    assert OID_RE.match(commit["commit_oid"])
-
-    log = await client.snapshot.log(limit=5)
-    assert isinstance(log, list) and len(log) >= 1
-    assert "oid" in log[0] and "message" in log[0]
-
-
-async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service):
+async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service, http_git_client):
     target_uri = "viking://resources/http_log_paths/a.md"
     directory_uri = "viking://resources/http_log_paths/docs"
     child_uri = f"{directory_uri}/guide.md"
@@ -199,10 +184,13 @@ async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service
                 json={"message": message, "paths": [uri]},
             )
             assert response.status_code == 200
-            return response.json()["result"]
+            result = response.json()["result"]
+            assert result["result"] == "created"
+            assert OID_RE.fullmatch(result["commit_oid"])
+            return result
 
         target_commit = await commit(target_uri, b"target", "add target")
-        await commit(unrelated_uri, b"unrelated", "add unrelated")
+        unrelated = await commit(unrelated_uri, b"unrelated", "add unrelated")
         directory_commit = await commit(child_uri, b"guide", "add directory child")
 
         response = await client.get(
@@ -216,11 +204,19 @@ async def test_http_log_filters_repeated_paths_end_to_end(http_app, http_service
         )
 
     assert response.status_code == 200
-    assert response.request.url.params.get_list("paths") == [target_uri, directory_uri]
     history = response.json()["result"]
     assert [item["oid"] for item in history] == [
         directory_commit["commit_oid"],
         target_commit["commit_oid"],
+    ]
+    next_page = await http_git_client.snapshot.log(
+        limit=1, offset=1, paths=[target_uri, directory_uri]
+    )
+    assert [item["oid"] for item in next_page] == [target_commit["commit_oid"]]
+    unfiltered = await http_git_client.snapshot.log(limit=2, paths=[])
+    assert [(item["oid"], item["message"].strip()) for item in unfiltered] == [
+        (directory_commit["commit_oid"], "add directory child"),
+        (unrelated["commit_oid"], "add unrelated"),
     ]
 
 
@@ -277,7 +273,8 @@ async def test_http_restore_dry_run_does_not_mutate(http_git_client, http_servic
     assert blob_after["bytes"] == b"v2"
 
     log_after = await client.snapshot.log(limit=10)
-    assert len(log_after) == len(log_before)
+    assert [entry["oid"] for entry in log_after] == [entry["oid"] for entry in log_before]
+    assert await client.read("viking://resources/proj/a.md") == "v2"
 
 
 _AUTH_HEADERS = {
@@ -287,62 +284,7 @@ _AUTH_HEADERS = {
 }
 
 
-async def test_http_ignore_get_set_delete_roundtrip(http_app, http_service):
-    """Drive the /api/v1/snapshot/ignore routes directly via httpx.
-
-    Bypasses AsyncHTTPClient (whose snapshot namespace is not wired in this
-    environment) and confirms the FastAPI routes -> FsService -> VikingFS
-    path works end-to-end, including the ignore rule taking effect at commit.
-    """
-    transport = httpx.ASGITransport(app=http_app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver", headers=_AUTH_HEADERS, timeout=30.0
-    ) as c:
-        # Absent -> empty string result.
-        r = await c.get("/api/v1/snapshot/ignore")
-        assert r.status_code == 200
-        assert r.json()["result"] == ""
-
-        # Set via PUT.
-        r = await c.put("/api/v1/snapshot/ignore", json={"content": "*.log\n"})
-        assert r.status_code == 200
-        assert r.json()["status"] == "ok"
-
-        # Read back.
-        r = await c.get("/api/v1/snapshot/ignore")
-        assert r.json()["result"] == "*.log\n"
-
-        # The rule affects commits over HTTP: a .log file is skipped.
-        await _write_blob(http_service, "viking://resources/h_keep.md", b"keep")
-        await _write_blob(http_service, "viking://resources/h_skip.log", b"skip")
-        r = await c.post(
-            "/api/v1/snapshot/commit",
-            json={"message": "http ignore"},
-        )
-        assert r.status_code == 200
-        body = r.json()["result"]
-        assert body["result"] == "created"
-        assert body["ignored"] == 1
-
-        # Delete is idempotent.
-        r = await c.delete("/api/v1/snapshot/ignore")
-        assert r.status_code == 200
-        r = await c.delete("/api/v1/snapshot/ignore")
-        assert r.status_code == 200
-
-        # Gone -> empty string again.
-        r = await c.get("/api/v1/snapshot/ignore")
-        assert r.json()["result"] == ""
-
-
 async def test_http_sdk_snapshot_ignore_roundtrip(http_git_client, http_service):
-    """Drive ignore management through the real AsyncHTTPClient.snapshot namespace.
-
-    Unlike test_http_ignore_get_set_delete_roundtrip (which hits the routes
-    with raw httpx), this exercises the SDK surface end-to-end:
-    AsyncHTTPClient.snapshot.get/set/delete_gitignore -> httpx -> FastAPI ->
-    FsService -> VikingFS, including the rule taking effect at commit time.
-    """
     client = http_git_client
 
     # Absent -> empty string.
@@ -360,5 +302,6 @@ async def test_http_sdk_snapshot_ignore_roundtrip(http_git_client, http_service)
     assert commit["ignored"] == 1
 
     # Delete via the SDK namespace, then confirm it is gone.
+    await client.snapshot.delete_gitignore()
     await client.snapshot.delete_gitignore()
     assert await client.snapshot.get_gitignore() == ""

@@ -170,6 +170,7 @@ export const VikingBotComposerView = forwardRef<
               attachments={attachments}
               onAttachmentRemove={onAttachmentRemove}
               disabled={locked}
+              referenceRemovalDisabled={disabled}
             />
           )}
           renderSubmit={(props) => (
@@ -198,6 +199,7 @@ export const VikingBotComposerView = forwardRef<
               labels={labels}
               disabled={locked}
               filesDisabled={Boolean(locked || remaining === 0)}
+              attachmentLimit={remaining === 0 ? maxAttachments : undefined}
               accept={accept}
               onFiles={onFilesAdded ? reportFiles : undefined}
               actions={actions}

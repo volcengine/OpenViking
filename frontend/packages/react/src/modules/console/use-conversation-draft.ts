@@ -1,4 +1,24 @@
-import { useCallback, useMemo, useState, type SetStateAction } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type SetStateAction,
+} from 'react';
+import type { VikingBotChatResult } from './chat/types.js';
+
+export function useDraftRequestOwner(send: VikingBotChatResult['send']) {
+  const owner = useMemo(() => ({ send, active: true }), [send]);
+  // Request continuations can settle after a controller change or an unmount.
+  // Invalidate the old owner on cleanup, when those continuations can no longer update this draft.
+  useEffect(() => {
+    owner.active = true;
+    return () => {
+      owner.active = false;
+    };
+  }, [owner]);
+  return owner;
+}
 
 /** Local text follows its conversation owner without resetting command state. */
 export function useConversationDraft(
