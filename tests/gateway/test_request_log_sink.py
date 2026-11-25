@@ -1,8 +1,10 @@
 """Request logs select storage or promptly flushed JSON on stdout."""
 
 import json
+import os
 import sys
 import time
+from datetime import datetime, timezone
 
 import pytest
 from aiohttp import web
@@ -184,19 +186,59 @@ async def test_file_sink_writes_one_line_per_record(tmp_path, gateway_backend, c
         assert secret not in path.read_text()
 
 
-def test_file_sink_rotates(tmp_path):
+def test_file_sink_rotates_hourly_like_the_usage_log(tmp_path):
     from openviking_gateway.sinks import FileSink
 
-    path = tmp_path / "requests.jsonl"
-    sink = FileSink(str(path), max_bytes=200)
-    for index in range(40):
-        sink.write({"index": index, "padding": "x" * 40})
+    # The missing directory is created.
+    path = tmp_path / "logs" / "requests.jsonl"
+    sink = FileSink(str(path), backup_count=2)
+    output = sink.listener.handlers[0]
+    deadline = int(time.time()) - 1
+    for hour in (3, 2, 1, 0):
+        if hour < 3:
+            # A due rollover names the old file after the UTC hour it covers.
+            output.rolloverAt = deadline - hour * 3600
+        sink.write({"hour": hour})
+        sink.queue.join()
     sink.close()
-    files = sorted(p.name for p in tmp_path.iterdir())
-    # Four old files are kept beside the current one.
-    assert files == [f"requests.jsonl{suffix}" for suffix in ("", ".1", ".2", ".3", ".4")]
-    assert all(p.stat().st_size <= 200 for p in tmp_path.iterdir())
-    assert json.loads(path.read_text().splitlines()[-1])["index"] == 39
+    rotated = {
+        hour: f"requests.jsonl.{datetime.fromtimestamp(deadline - hour * 3600, timezone.utc):%Y-%m-%d_%H}"
+        for hour in (2, 1)
+    }
+    # Two old files are kept beside the current one.
+    assert sorted(p.name for p in path.parent.glob("requests.jsonl*")) == sorted(
+        ["requests.jsonl", *rotated.values()]
+    )
+    for hour, name in rotated.items():
+        assert json.loads((path.parent / name).read_text()) == {"hour": hour}
+    assert json.loads(path.read_text()) == {"hour": 0}
+
+
+@pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0, reason="needs file permissions")
+def test_file_sink_survives_a_write_error(tmp_path, monkeypatch):
+    from openviking_gateway.sinks import FileSink
+
+    monkeypatch.setattr("logging.raiseExceptions", False)
+    path = tmp_path / "requests.jsonl"
+    sink = FileSink(str(path))
+    sink.write({"index": 0})
+    sink.queue.join()
+    lock = tmp_path / ".requests.jsonl.lock"
+    # An unopenable rollover lock loses this line only.
+    lock.chmod(0)
+    try:
+        sink.write({"index": 1})
+        deadline = time.monotonic() + 5
+        # A dead writer thread never finishes the line, so wait with a deadline.
+        while sink.queue.unfinished_tasks and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        lock.chmod(0o600)
+    assert sink.listener._thread.is_alive()
+    sink.write({"index": 2})
+    sink.queue.join()
+    sink.close()
+    assert [json.loads(line)["index"] for line in path.read_text().splitlines()] == [0, 2]
 
 
 async def test_full_queue_drops_and_counts(tmp_path, monkeypatch):
@@ -204,7 +246,7 @@ async def test_full_queue_drops_and_counts(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sinks, "QUEUE_SIZE", 3)
     stats = sinks.Stats()
-    sink = sinks.FileSink(str(tmp_path / "requests.jsonl"), max_bytes=1 << 20, stats=stats)
+    sink = sinks.FileSink(str(tmp_path / "requests.jsonl"), stats=stats)
     # With the writer thread stopped, nothing leaves the queue.
     sink.listener.stop()
     for index in range(5):
@@ -221,8 +263,9 @@ def test_file_sink_requires_a_path():
     with pytest.raises(ValidationError, match="requires request_log_path"):
         GatewayConfig(request_log_sink="file")
     assert GatewayConfig(request_log_sink="file", request_log_path="/tmp/r.jsonl")
-    with pytest.raises(ValidationError):
-        GatewayConfig(request_log_sink="file", request_log_path="r", request_log_max_bytes=1024)
+    for invalid in ({"request_log_rotation_interval_hours": 0}, {"request_log_backup_count": -1}):
+        with pytest.raises(ValidationError):
+            GatewayConfig(request_log_sink="file", request_log_path="r", **invalid)
 
 
 @pytest.mark.parametrize(
