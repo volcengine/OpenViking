@@ -3,7 +3,7 @@
 SVG geometry comes from the OpenViking console implementation, authorized for use here.
 
 - `experience-board.svg` and `wiki-board.svg`: `assets/context-console/dashboard.svg`; both products use the same layout glyph with contextual colour.
-- `wiki-conflict-board.svg`: `pages/ContextManagement/components/assets/wiki-conflict-dashboard.svg`, including the original badge background, warning triangle, and punctuation.
+- `wiki-conflict-board.svg`: the authorized console conflict indicator, using the original 12px orange dashboard glyph.
 - `wiki-book.svg`: `pages/ContextManagement/components/assets/wiki-book-open.svg`.
 - `severity-filter.svg` and `filter-chevron.svg`: the same `WikiPreview/assets` directory, with original geometry.
 - `warning.svg`: `pages/ContextManagement/components/ContextDetailPanel/WikiPreview/assets/warning.svg`.

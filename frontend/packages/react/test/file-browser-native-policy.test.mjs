@@ -15,6 +15,8 @@ const cases = [
   [`${rootUri}/folder`, true, [], ['importPack', 'exportPack'], false],
   ['viking://system/config.json', false, [], ['download'], false],
   ['viking://system/skills', true, [], [], false],
+  // 版本历史只在经验文件上出现；经验目录的子目录文件、用户配置与其他文本文件
+  // 都没有。
   ...[
     'viking://user/alice',
     'viking://~',
@@ -32,10 +34,31 @@ const cases = [
       `${home}/memories/experiences/nested/a.md`,
       false,
       [],
-      ['download', 'history', 'delete'],
+      ['download', 'delete'],
       true,
     ],
   ]),
+  [
+    'viking://user/alice/settings/user_config.json',
+    false,
+    [],
+    ['download', 'delete'],
+    true,
+  ],
+  [
+    'viking://user/alice/memories/profile.md',
+    false,
+    [],
+    ['download', 'delete'],
+    true,
+  ],
+  [
+    'viking://user/alice/skills/guide/SKILL.md',
+    false,
+    [],
+    ['download', 'delete'],
+    true,
+  ],
   [
     target,
     true,

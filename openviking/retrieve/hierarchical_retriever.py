@@ -158,8 +158,8 @@ class HierarchicalRetriever:
 
         if not await vector_proxy.collection_exists_bound():
             logger.info(
-                "retrieval collection missing; returning empty results collection_hash=%s",
-                short_hash(vector_proxy.collection_name),
+                "retrieval collection missing; returning empty results account_hash=%s",
+                short_hash(ctx.account_id),
                 extra={"degraded": True},
             )
             return QueryResult(
@@ -271,6 +271,7 @@ class HierarchicalRetriever:
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         get_stats_collector().record_query(
+            account_id=ctx.account_id,
             context_type=context_type or "unknown",
             result_count=len(final),
             scores=[m.score for m in final],

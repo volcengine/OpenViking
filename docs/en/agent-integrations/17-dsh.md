@@ -1,6 +1,6 @@
 # DeepSeek Harness
 
-Give [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`), and the DeepSeek Harness Desktop app, cross-project and cross-session long-term memory. Once installed, every conversation automatically recalls relevant memories and captures new content, and the model gets the OpenViking tools and the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills without any extra setup.
+Give [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`), and the DeepSeek Harness Desktop app, cross-project and cross-session long-term memory. Once installed, every conversation automatically recalls relevant memories and captures new content, and the model gets the OpenViking tools and the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` skills without any extra setup.
 
 The Rule skill requires bundle `0.5.33` or later and a server build that advertises
 `rule_search` on `/mcp`. Upgrade both and reconnect DSH to use it.
@@ -115,7 +115,7 @@ The bundle runs inside DSH as a Cordis plugin rather than as external hooks, so 
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking, and every subagent gets its own session.
 
-The model-facing surface is the OpenViking MCP tool set, reached through the same stdio proxy the other memory integrations use and published under an `mcp__openviking__` prefix. Because that proxy runs once per profile, `mcp__openviking__remember` stores into a short-lived server-side session rather than the current one—automatic capture still records the conversation itself. With `OPENVIKING_RECALL_PEER_SCOPE=actor`, a fixed `OPENVIKING_PEER_ID` attributes that profile’s tool calls to one peer; the default `all` scope omits the actor-peer header. Use separate profiles/processes when workspaces need different tool identities. The bundle also ships four shared skills: `openviking-memory`, so the model knows when to search, read, and write; `openviking-skills`, which covers finding, using, creating, sharing, and migrating skills stored in OpenViking; `ov-experience-memory`, which retrieves and applies prior task Experience before executable work; and `openviking-rule-search`, which uses the server-advertised `mcp__openviking__rule_search` tool to check task-specific Rules. Tool results are captured by default (`captureToolResults: true`), which lets the server link the skill's reads back to the Experience they used; with `false` the skill only retrieves and applies Experience.
+The model-facing surface is the OpenViking MCP tool set, reached through the same stdio proxy the other memory integrations use and published under an `mcp__openviking__` prefix. Because that proxy runs once per profile, `mcp__openviking__remember` stores into a short-lived server-side session rather than the current one—automatic capture still records the conversation itself. With `OPENVIKING_RECALL_PEER_SCOPE=actor`, a fixed `OPENVIKING_PEER_ID` attributes that profile’s tool calls to one peer; the default `all` scope omits the actor-peer header. Use separate profiles/processes when workspaces need different tool identities. The bundle also ships five shared skills: `openviking-memory`, so the model knows when to search, read, and write; `openviking-skills`, which covers finding, using, creating, sharing, and migrating skills stored in OpenViking; `ov-experience-memory`, which retrieves and applies prior task Experience before executable work; `openviking-rule-search`, which uses the server-advertised `mcp__openviking__rule_search` tool to check task-specific Rules; and `ov-memory-doctor`, which diagnoses the bundle install, the client configuration, and the server connection. Tool results are captured by default (`captureToolResults: true`), which lets the server link the skill's reads back to the Experience they used; with `false` the skill only retrieves and applies Experience.
 
 A filesystem tool call whose path is a `viking://` URI is blocked with a hint pointing at the right OpenViking tool. For a write or edit under a skill directory such as `viking://~/skills/<name>/`, that tool is `mcp__openviking__add_skill`, which creates or replaces a whole skill from its `SKILL.md` text. A shell command that carries a `viking://` URI still runs, and the model gets a notice suggesting the OpenViking tools, which it can ignore when the URI is intentional data.
 
@@ -179,6 +179,8 @@ Behavior knobs live in the profile's Cordis patch entry:
     commitTokenThreshold: 20000
 ```
 
+`mcpEnabled: false` in that block, or in `ovcli.conf`'s `plugin` or `plugin.dsh`, mounts neither the OpenViking MCP tools nor the bundled skills; recall and capture continue.
+
 `syncTurns: false` in that block disables automatic capture, commit, and replay of pending writes. Profile injection and recall continue; queued writes remain for a later writing session. This does not revoke the model’s MCP write tools or change server permissions.
 
 `peerSource`, in that same `config` block, decides how the workspace peer is derived. The default `"git"` uses the repository's normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), falling back to the repository root path, so every clone, worktree, and subdirectory of one repository shares a single peer; outside a repository no peer is sent at all, and what is remembered there goes to your user-level space at `viking://user/<you>/memories`. `"cwd"` restores the earlier behavior — the working directory with every non-alphanumeric character replaced by `-` — and `"none"` sends no peer at all. To give a directory outside a repository its own memory, set `OPENVIKING_PEER_ID` for it ([Give a Directory Its Own Peer](../configuration/02-client.md#give-a-directory-its-own-peer)).
@@ -190,6 +192,8 @@ Credentials given in the patch win over the environment. Behavior knobs resolve 
 </details>
 
 ## Troubleshooting
+
+Run the doctor first: ask the agent to run the `ov-memory-doctor` skill, or run `node ~/.dsh/profiles/web/node_modules/@openviking/dsh-memory-plugin/scripts/ov-memory-doctor.mjs` (replace `web` with your profile; `DSH_HOME` moves `~/.dsh`). It checks the profile install, the client configuration, and the server connection, and lists a fix for every problem it finds (`--json`, `--offline`, `--timeout <ms>`, `--no-color`).
 
 | Issue | What to check |
 |-------|---------------|

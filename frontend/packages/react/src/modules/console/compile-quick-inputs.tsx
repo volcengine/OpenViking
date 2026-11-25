@@ -35,7 +35,15 @@ export function compileQuickInputProps({
     {
       id: 'create-wiki',
       ...copy.createWiki,
-      icon: <VikingBotIcon name="book" width={14} height={14} />,
+      icon: (
+        <VikingBotIcon
+          name="book"
+          width={14}
+          height={14}
+          viewBox="-0.833333 -2.357143 16 16"
+          strokeWidth={8 / 7}
+        />
+      ),
     },
     {
       id: 'daily-report',

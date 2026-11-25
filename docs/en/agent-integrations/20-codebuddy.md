@@ -23,7 +23,7 @@ The installer assembles a self-contained plugin under `~/.openviking/agent-integ
 
 - Lifecycle Hooks for profile loading, prompt recall, conversation capture, session commit, and `viking://` URI protection.
 - The OpenViking MCP server as a stdio proxy, with tools such as `search`, `read`, `remember`, and `add_skill`.
-- The `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills.
+- The `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` skills.
 
 ## Verify
 

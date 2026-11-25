@@ -23,6 +23,9 @@ export function builtinRequest(
     const values = options.map((item) => ({
       label: item!.label as string,
       value: item![skill ? 'uri' : 'value'] as string,
+      ...(skill && typeof item!.description === 'string'
+        ? { description: item!.description }
+        : {}),
     }));
     if (new Set(values.map((item) => item.value)).size !== values.length)
       return;

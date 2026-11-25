@@ -64,10 +64,10 @@ const messages = {
   telemetryResult: (value: string) => `Telemetry: ${value}`,
   taskResult: 'Task result',
   memoryCommit: {
-    idle: 'Commit session',
-    pending: 'Committing session',
-    submitted: 'Committing session',
-    success: 'Session committed',
+    idle: 'Extract long-term memory',
+    pending: 'Extract long-term memory',
+    submitted: 'Extract long-term memory',
+    success: 'Long-term memory extracted',
     empty: 'There are no new messages to extract memories from.',
     skipped: 'No new memories were generated.',
     failed: 'Could not submit the session',
@@ -77,9 +77,8 @@ const messages = {
   },
   compileQuickInputs: {
     createWiki: {
-      label: 'Create Wiki',
-      prompt:
-        'Organize the files in the selected directory into a Wiki, preserving sources and the relationships between documents',
+      label: 'Wiki',
+      prompt: 'Organize the files in the selected directory into a Wiki.',
     },
     dailyReport: {
       label: 'Schedule daily report',

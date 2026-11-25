@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -40,6 +40,55 @@ test("URI guard emits Kimi's permission decision at the process boundary", async
     "permissionDecisionReason",
   ]);
   assert.equal(output.hookSpecificOutput.permissionDecision, "deny");
+});
+
+// Kimi parses each hook entry with a strict schema and drops one that fails it.
+test("every manifest hook entry carries only the keys Kimi accepts", () => {
+  const manifest = JSON.parse(readFileSync(join(ROOT, "hosts", "kimicode", "kimi.plugin.json"), "utf8"));
+  for (const hook of manifest.hooks) {
+    assert.deepEqual(
+      Object.keys(hook).filter((key) => !["event", "matcher", "command", "timeout"].includes(key)),
+      [],
+      hook.event,
+    );
+  }
+});
+
+test("SessionStart replays a bounded batch of queued writes", async (t) => {
+  const replayed = [];
+  const server = createServer((request, response) => {
+    if (request.method === "POST" && request.url.endsWith("/messages")) replayed.push(request.url);
+    request.resume();
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ status: "ok", result: {} }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const home = mkdtempSync(join(tmpdir(), "ov-kimi-replay-"));
+  const pendingDir = join(home, "pending");
+  const env = {
+    HOME: home,
+    KIMI_CODE_HOME: home,
+    OPENVIKING_HOOK_STATE_DIR: join(home, "state"),
+    OPENVIKING_PENDING_DIR: pendingDir,
+    OPENVIKING_PENDING_REPLAY_LIMIT: "",
+    OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
+  };
+  const previous = process.env.OPENVIKING_PENDING_DIR;
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  t.after(() => {
+    if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR;
+    else process.env.OPENVIKING_PENDING_DIR = previous;
+  });
+  const { enqueue, listPending } = await import("../../memory-plugin-shared/lib/pending-queue.mjs");
+  for (const text of ["one", "two", "three"]) {
+    await enqueue("addMessage", "kc-queued", { role: "user", content: text });
+  }
+
+  const result = await runHook(["session-start", "kimicode"], { session_id: "session-replay", cwd: home }, env);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(replayed.length, 2);
+  assert.equal((await listPending()).length, 1);
 });
 
 test("profile retries until success, emits raw text, then injects only once", async (t) => {

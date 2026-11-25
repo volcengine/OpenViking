@@ -11,6 +11,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclAction, AclManager, acl_allows, acl_filter
 from openviking.storage.collection_schemas import CollectionSchemas
 from openviking.storage.expr import And, Eq, In, Or, PathScope, RawDSL
+from openviking.storage.vectordb_adapters.opengauss_adapter import OpenGaussCollectionAdapter
 from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
@@ -96,6 +97,31 @@ async def test_search_by_random_passes_runtime_acl_state_to_tenant_filter():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("acl_enabled", [False, True])
+async def test_count_prunes_only_the_visible_root_for_a_required_uri_scope(acl_enabled):
+    ctx = _ctx()
+    adapter = SimpleNamespace(count=AsyncMock(return_value=4))
+    backend = object.__new__(VikingVectorIndexBackend)
+    backend.acl_manager = AclManager(backend, _AclConfigReader(acl_enabled))
+    backend._get_backend_for_context = AsyncMock(return_value=adapter)
+    scope = PathScope("uri", "viking://resources/docs", depth=1)
+    request = And([scope, Eq("level", 2)])
+
+    assert await backend.count(filter=request, ctx=ctx) == 4
+    account_filter = Eq("account_id", "acct")
+    expected = (
+        And([account_filter, acl_filter(ctx, AclAction.READ)]) if acl_enabled else account_filter
+    )
+    adapter.count.assert_awaited_once_with(filter=And([request, expected]))
+
+    for unproven in (Eq("level", 2), Or([scope, Eq("level", 2)])):
+        await backend.count(filter=unproven, ctx=ctx)
+        assert adapter.count.await_args.kwargs["filter"] == And(
+            [unproven, _tenant_filter(ctx, acl_enabled=acl_enabled)]
+        )
+
+
+@pytest.mark.asyncio
 async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, tmp_path):
     ctx = _ctx()
     backend = vector_backend_factory(
@@ -144,6 +170,15 @@ async def test_scroll_and_count_hide_cross_user_records(vector_backend_factory, 
         assert next_cursor is None
         assert [record["id"] for record in records] == ["alice-memory"]
         assert count == 1
+        own_count = await backend.count(
+            filter=And([PathScope("uri", "viking://user/alice/memories"), Eq("level", 2)]),
+            ctx=ctx,
+        )
+        other_count = await backend.count(
+            filter=PathScope("uri", "viking://user/bob/memories"), ctx=ctx
+        )
+        assert own_count == 1
+        assert other_count == 0
     finally:
         await backend.close()
 
@@ -464,6 +499,9 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
                 ctx=record_ctx,
             )
 
+        resource_scope = And([PathScope("uri", "viking://resources"), Eq("level", 2)])
+        assert await backend.count(filter=resource_scope, ctx=ctx) == 4
+
         # The same ACL predicate supports existence checks for read, write and manage.
         finance_ctx = RequestContext(user=ctx.user, role=ctx.role, group_ids=("finance",))
         account_backend = await backend.get_account_backend(ctx.account_id)
@@ -552,6 +590,7 @@ async def test_tenant_search_enforces_visible_roots_and_shared_acl(
         )
 
         acl_config.enabled = False
+        assert await backend.count(filter=resource_scope, ctx=ctx) == 6
         shared = await backend.search_in_tenant(
             ctx=ctx,
             query_vector=[1.0, 0.0, 0.0, 0.0],
@@ -609,10 +648,14 @@ def test_no_target_keeps_original_tenant_filter():
 
 
 @pytest.mark.asyncio
-async def test_tenant_search_preserves_raw_scope_across_decay_routes():
+@pytest.mark.parametrize("distributed", [False, True], ids=["standalone", "distributed"])
+async def test_tenant_search_preserves_raw_scope_across_decay_routes(distributed):
     backend = object.__new__(VikingVectorIndexBackend)
     backend.acl_manager = None
-    backend.search = AsyncMock(return_value=[])
+    adapter = object.__new__(OpenGaussCollectionAdapter)
+    adapter._distributed = distributed
+    account = SimpleNamespace(_adapter=adapter, query=AsyncMock())
+    backend._get_backend_for_context = AsyncMock(return_value=account)
     ctx = _ctx()
     raw_filter = {"op": "must", "field": "search_tags", "conds": ["team=search"]}
     options = {
@@ -634,22 +677,29 @@ async def test_tenant_search_preserves_raw_scope_across_decay_routes():
             In("level", [0, 1]),
         ]
     )
-    await backend.search_in_tenant(**options)
-    call = backend.search.await_args.kwargs
-    assert backend.search.await_count == 1
+    ordinary = [{"id": "ordinary", "_score": 0.7}]
+    account.query.return_value = ordinary
+    unmodified = await backend.search_in_tenant(**options)
+    call = account.query.await_args.kwargs
+    assert account.query.await_count == 1
     assert call["filter"] == scope
     assert (call["limit"], call["offset"]) == (1, 1)
     assert "advance" not in call
 
-    backend.search.reset_mock()
+    account.query.reset_mock()
     event = {"id": "event", "_score": 0.4, "_origin_score": 0.8, "_time_score": 0.5}
 
     async def recall(**kwargs):
-        return [event] if kwargs.get("advance") else [{"id": "ordinary", "_score": 0.7}]
+        return [event] if kwargs.get("advance") else ordinary
 
-    backend.search.side_effect = recall
-    result = await backend.search_in_tenant(**options, events_time_decay_protection="0")
-    calls = [call.kwargs for call in backend.search.await_args_list]
+    account.query.side_effect = recall
+    result = await backend.search_in_tenant(**options, events_time_decay_protection="30d")
+    if distributed:
+        account.query.assert_awaited_once_with(**call)
+        assert result == unmodified
+        return
+
+    calls = [call.kwargs for call in account.query.await_args_list]
     assert len(calls) == 2
     other = next(call for call in calls if "advance" not in call)
     events = next(call for call in calls if "advance" in call)

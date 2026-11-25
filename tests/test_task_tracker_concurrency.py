@@ -16,27 +16,22 @@ async def test_work_index_groups_and_cancels_active_tasks_by_owner():
     index = TaskWorkIndex()
     first = asyncio.create_task(asyncio.Event().wait())
     second = asyncio.create_task(asyncio.Event().wait())
-    index.register_active(
-        "shared-id", first, account_id="account-a", user_id="user"
-    )
-    index.register_active(
-        "shared-id", second, account_id="account-b", user_id="user"
-    )
+    index.register_active("shared-id", first, account_id="account-a", user_id="user")
+    index.register_active("shared-id", second, account_id="account-b", user_id="user")
 
-    assert index.active_tasks_by_owner() == {
-        ("account-a", "user"): {"shared-id"},
-        ("account-b", "user"): {"shared-id"},
-    }
-
-    index.cancel_active(
-        "shared-id", account_id="account-a", user_id="user"
-    )
-    await asyncio.gather(first, return_exceptions=True)
-    assert first.cancelled()
-    assert not second.done()
-
-    second.cancel()
-    await asyncio.gather(second, return_exceptions=True)
+    try:
+        assert index.active_tasks_by_owner() == {
+            ("account-a", "user"): {"shared-id"},
+            ("account-b", "user"): {"shared-id"},
+        }
+        index.cancel_active("shared-id", account_id="account-a", user_id="user")
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(first, timeout=2)
+        assert not second.done()
+    finally:
+        first.cancel()
+        second.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -82,7 +77,7 @@ async def test_owner_loop_dispatcher_propagates_foreign_cancellation():
         async def invoke() -> None:
             task = asyncio.create_task(dispatcher.run(work))
             foreign_ready.set()
-            await asyncio.to_thread(cancel_foreign.wait)
+            assert await asyncio.to_thread(cancel_foreign.wait, 2)
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
@@ -90,11 +85,15 @@ async def test_owner_loop_dispatcher_propagates_foreign_cancellation():
         asyncio.run(invoke())
 
     foreign_call = asyncio.create_task(asyncio.to_thread(run_from_foreign_loop))
-    await work_started.wait()
-    await asyncio.to_thread(foreign_ready.wait)
-    cancel_foreign.set()
-    await foreign_call
-    await asyncio.wait_for(work_cancelled.wait(), timeout=1)
+    try:
+        await asyncio.wait_for(work_started.wait(), timeout=2)
+        assert await asyncio.to_thread(foreign_ready.wait, 2)
+        cancel_foreign.set()
+        await asyncio.wait_for(foreign_call, timeout=2)
+        await asyncio.wait_for(work_cancelled.wait(), timeout=2)
+    finally:
+        cancel_foreign.set()
+        await asyncio.gather(foreign_call, return_exceptions=True)
 
 
 def test_owner_loop_dispatcher_rejects_closed_or_stopped_owner_loop():
@@ -131,8 +130,8 @@ def test_owner_loop_dispatcher_concurrent_first_calls_share_winning_loop():
     from openviking.service.task_tracker_concurrency import OwnerLoopDispatcher
 
     dispatcher = OwnerLoopDispatcher()
-    calls_started = threading.Barrier(2)
-    work_started = threading.Barrier(2)
+    calls_started = threading.Barrier(2, timeout=2)
+    work_started = threading.Barrier(2, timeout=2)
     results: list[int] = []
     errors: list[BaseException] = []
 
@@ -151,7 +150,8 @@ def test_owner_loop_dispatcher_concurrent_first_calls_share_winning_loop():
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=2)
+        thread.join(timeout=5)
+        assert not thread.is_alive()
 
     assert not errors
     assert len(results) == 2
@@ -188,19 +188,20 @@ async def test_run_to_completion_releases_request_and_preserves_cancellation(can
 
     gc_was_enabled = gc.isenabled()
     gc.disable()
+    operation = asyncio.create_task(request())
     try:
-        operation = asyncio.create_task(request())
-        await started.wait()
+        await asyncio.wait_for(started.wait(), timeout=2)
         if cancel:
             operation.cancel()
         await asyncio.sleep(0)
         assert not operation.done()
         release.set()
-        payload_ref = await operation
+        payload_ref = await asyncio.wait_for(operation, timeout=2)
         await asyncio.sleep(0)
         assert payload_ref() is None
     finally:
         release.set()
+        await asyncio.gather(operation, return_exceptions=True)
         if gc_was_enabled:
             gc.enable()
 
@@ -251,16 +252,16 @@ async def test_keyed_lock_registry_is_cleaned_after_waiter_cancellation():
             pass
 
     blocker_task = asyncio.create_task(blocker())
-    await blocker_entered.wait()
-    waiter_task = asyncio.create_task(waiter())
-    await asyncio.sleep(0)
-
-    waiter_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await waiter_task
-
-    release_blocker.set()
-    await blocker_task
+    try:
+        await asyncio.wait_for(blocker_entered.wait(), timeout=2)
+        waiter_task = asyncio.create_task(waiter())
+        await asyncio.sleep(0)
+        waiter_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(waiter_task, timeout=2)
+    finally:
+        release_blocker.set()
+        await asyncio.wait_for(blocker_task, timeout=2)
     assert pool.entry_count == 0
 
 
@@ -336,4 +337,9 @@ async def test_file_store_create_if_no_running_is_unique_per_business_key():
         ]
     )
 
-    assert sum(task is not None for task in results) == 1
+    accepted = [task for task in results if task is not None]
+    assert len(accepted) == 1
+    persisted = await tracker.list_tasks(account_id="acme", user_id="alice")
+    assert [(task.task_id, task.resource_id) for task in persisted] == [
+        (accepted[0].task_id, "viking://resources/shared")
+    ]

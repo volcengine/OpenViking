@@ -11,12 +11,13 @@ import hmac
 import secrets
 from contextlib import asynccontextmanager
 from datetime import timezone
+from functools import lru_cache
 from typing import AsyncGenerator
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from sqlalchemy import and_, case, delete, func, select, update
+from sqlalchemy import and_, bindparam, case, delete, func, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -151,6 +152,64 @@ def _utc_isoformat(value) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
+@lru_cache(maxsize=4)
+def _auth_snapshot_statement(has_account_hint: bool, has_user_hint: bool):
+    """Reuse query structure; credentials and authorization are always read live."""
+    predicates = [
+        Credential.service_name == bindparam("auth_service_name"),
+        Credential.lookup_digest == bindparam("auth_lookup_digest"),
+        Credential.revoked.is_(False),
+        Account.deletion_task_id.is_(None),
+        User.deletion_task_id.is_(None),
+    ]
+    if has_account_hint:
+        predicates.append(Account.account_id == bindparam("auth_account_id"))
+    if has_user_hint:
+        predicates.append(User.user_id == bindparam("auth_user_id"))
+    return (
+        select(
+            Credential.credential_id,
+            Credential.material,
+            Account.account_id,
+            User.user_id,
+            User.role,
+            Group.group_id,
+        )
+        .select_from(Credential)
+        .join(
+            User,
+            and_(
+                User.service_name == Credential.service_name,
+                User.user_pk == Credential.user_pk,
+            ),
+        )
+        .join(
+            Account,
+            and_(
+                Account.service_name == User.service_name,
+                Account.account_pk == User.account_pk,
+            ),
+        )
+        .outerjoin(
+            GroupMember,
+            and_(
+                GroupMember.service_name == User.service_name,
+                GroupMember.account_pk == User.account_pk,
+                GroupMember.user_pk == User.user_pk,
+            ),
+        )
+        .outerjoin(
+            Group,
+            and_(
+                Group.service_name == GroupMember.service_name,
+                Group.account_pk == GroupMember.account_pk,
+                Group.group_pk == GroupMember.group_pk,
+            ),
+        )
+        .where(*predicates)
+    )
+
+
 @sql_runtime_store
 class SQLAccountStore(AccountStore):
     """A manually provisioned relational account store scoped by service name."""
@@ -164,8 +223,10 @@ class SQLAccountStore(AccountStore):
         service_name: str,
         params: dict[str, object] | None = None,
         runtime: SQLRuntime | None = None,
+        bootstrap_default_account: bool = True,
     ) -> None:
         values = dict(params or {})
+        self._bootstrap_default_account = bootstrap_default_account
         try:
             self._service_name = normalize_service_name(service_name)
         except ValueError as exc:
@@ -301,8 +362,9 @@ class SQLAccountStore(AccountStore):
             async with sessions() as session:
                 for model in (Account, User, Group, GroupMember, Credential):
                     await session.execute(select(*model.__table__.columns).limit(1))
-                await session.execute(self._default_account_insert())
-                await session.commit()
+                if self._bootstrap_default_account:
+                    await session.execute(self._default_account_insert())
+                    await session.commit()
         except ImportError:
             await wait_sql_cleanup(cleanup_failed_load())
             raise RuntimeError(
@@ -1265,61 +1327,17 @@ class SQLAccountStore(AccountStore):
         user_id_hint: str | None = None,
     ) -> AuthSnapshot | None:
         """Verify credentials and read current authorization in one unlocked SELECT."""
-        predicates = [
-            Credential.service_name == self._service_name,
-            Credential.lookup_digest == _credential_digest(api_key),
-            Credential.revoked.is_(False),
-            Account.deletion_task_id.is_(None),
-            User.deletion_task_id.is_(None),
-        ]
+        statement = _auth_snapshot_statement(account_id_hint is not None, user_id_hint is not None)
+        parameters = {
+            "auth_service_name": self._service_name,
+            "auth_lookup_digest": _credential_digest(api_key),
+        }
         if account_id_hint is not None:
-            predicates.append(Account.account_id == account_id_hint)
+            parameters["auth_account_id"] = account_id_hint
         if user_id_hint is not None:
-            predicates.append(User.user_id == user_id_hint)
-        statement = (
-            select(
-                Credential.credential_id,
-                Credential.material,
-                Account.account_id,
-                User.user_id,
-                User.role,
-                Group.group_id,
-            )
-            .select_from(Credential)
-            .join(
-                User,
-                and_(
-                    User.service_name == Credential.service_name,
-                    User.user_pk == Credential.user_pk,
-                ),
-            )
-            .join(
-                Account,
-                and_(
-                    Account.service_name == User.service_name,
-                    Account.account_pk == User.account_pk,
-                ),
-            )
-            .outerjoin(
-                GroupMember,
-                and_(
-                    GroupMember.service_name == User.service_name,
-                    GroupMember.account_pk == User.account_pk,
-                    GroupMember.user_pk == User.user_pk,
-                ),
-            )
-            .outerjoin(
-                Group,
-                and_(
-                    Group.service_name == GroupMember.service_name,
-                    Group.account_pk == GroupMember.account_pk,
-                    Group.group_pk == GroupMember.group_pk,
-                ),
-            )
-            .where(*predicates)
-        )
+            parameters["auth_user_id"] = user_id_hint
         async with self._session_factory() as session:
-            candidates = (await session.execute(statement)).all()
+            candidates = (await session.execute(statement, parameters)).all()
         verified: dict[str, bool] = {}
         snapshot: AuthSnapshot | None = None
         groups: set[str] = set()

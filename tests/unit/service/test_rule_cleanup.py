@@ -1,53 +1,48 @@
+from asyncio import Event, wait_for
 from types import SimpleNamespace
-from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.server.identity import Role
 from openviking.service.rule_cleanup import RuleCleanupScheduler
+from openviking.storage.viking_fs import VikingFS
 from openviking_cli.utils.config.rules_config import RulesConfig
-
-
-class _AGFS:
-    async def ls(self, path):
-        if path == "/local":
-            return [
-                {"name": "_system", "isDir": True},
-                {"name": "acme", "isDir": True},
-                {"name": "ignored-file", "isDir": False},
-            ]
-        if path == "/local/acme/user":
-            return [
-                {"name": "alice", "isDir": True},
-                {"name": "bob", "isDir": True},
-            ]
-        raise AssertionError(path)
-
-    async def stat(self, path):
-        return {"isDir": path == "/local/acme/user/alice/memories/rules"}
+from tests.utils.mock_agfs import MockLocalAGFS
 
 
 @pytest.mark.asyncio
-async def test_rule_cleanup_scheduler_scans_only_existing_rule_libraries():
-    cleanup = AsyncMock(
-        return_value={
-            "scanned": 2,
-            "deleted": ["viking://user/alice/memories/rules/file-operations/old.md"],
-            "failed": [],
-        }
-    )
+async def test_rule_cleanup_scheduler_scans_only_existing_rule_libraries(tmp_path):
+    agfs = MockLocalAGFS(root_path=tmp_path)
+    for path in (
+        "/local/acme/user/alice/memories/rules",
+        "/local/acme/user/bob/memories",
+        "/local/_system/user/ignored/memories/rules",
+    ):
+        agfs.mkdir(path)
+    agfs.write("/local/ignored-file", b"not an account")
+    cleanup = AsyncMock(return_value={"scanned": 0, "deleted": [], "failed": []})
+
+    scan_finished = Event()
+
+    async def sleep(_delay):
+        scan_finished.set()
+        await Event().wait()
+
     scheduler = RuleCleanupScheduler(
         SimpleNamespace(cleanup_archived_rules=cleanup),
-        SimpleNamespace(agfs=object()),
+        VikingFS(agfs=agfs),
         RulesConfig(),
+        sleep=sleep,
     )
-    scheduler._agfs_client = cast(Any, _AGFS())
-
-    await scheduler._scan_once()
+    await scheduler.start()
+    try:
+        await wait_for(scan_finished.wait(), 2)
+    finally:
+        await wait_for(scheduler.stop(), 2)
 
     cleanup.assert_awaited_once()
     call = cleanup.await_args
     assert call is not None
     ctx = call.kwargs["ctx"]
-    assert ctx.account_id == "acme"
-    assert ctx.user.user_id == "alice"
+    assert (ctx.account_id, ctx.user.user_id, ctx.role) == ("acme", "alice", Role.USER)

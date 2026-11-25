@@ -49,3 +49,8 @@ export const renderErrors = {
   content: 'Tab content could not be displayed.',
   editor: 'File editor could not be displayed.',
 };
+
+export const jsonPreviewLabels = {
+  collapseLine: (lineNumber: number) => `Collapse line ${lineNumber}`,
+  expandLine: (lineNumber: number) => `Expand line ${lineNumber}`,
+};

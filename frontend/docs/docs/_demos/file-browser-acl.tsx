@@ -12,14 +12,13 @@ export default function FileBrowserAclDemo() {
   const locale = useLang() === 'zh' ? 'zh-CN' : 'en-US';
   const zh = locale === 'zh-CN';
   const [demo] = useState(createAclDemo);
-  const [revision, setRevision] = useState(0);
   const [hideDeniedEntries, setHideDeniedEntries] = useState(false);
   return (
     <div lang={locale}>
       <p>
         {zh
-          ? '离线模拟数据 · 不修改真实授权。'
-          : 'Offline simulation · no real grants are changed.'}
+          ? '离线模拟数据 · 切换当前权限后点击刷新，不修改真实授权。'
+          : 'Offline simulation · change the permission, then click Refresh. No real grants are changed.'}
       </p>
       <div
         style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 16 }}
@@ -49,7 +48,6 @@ export default function FileBrowserAclDemo() {
             onChange={([value]) => {
               if (value === undefined) return;
               demo.setLevel(value);
-              setRevision((value) => value + 1);
             }}
           >
             <SelectOption value="manage">
@@ -67,7 +65,6 @@ export default function FileBrowserAclDemo() {
       <div style={{ height: 580 }}>
         <OpenVikingProvider fetch={demo.fetch} accountId="demo" userId="alice">
           <FileBrowser
-            key={revision}
             acl
             hideDeniedEntries={hideDeniedEntries}
             locale={locale}

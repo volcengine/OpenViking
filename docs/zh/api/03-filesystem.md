@@ -693,7 +693,7 @@ ov mkdir viking://resources/new-project/ --description "接口文档目录"
 
 ### rm()
 
-删除文件或目录。递归删除目录时会返回删除的项目估计数量。
+删除文件或目录。递归删除按 URI 范围清理向量记录，并向存储后端发起一次递归删除请求，无需在 Python 层遍历文件子树。
 
 `rm` 是幂等操作：删除一个合法但不存在的 URI 仍会成功。
 URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用域时返回 `INVALID_URI`。
@@ -781,9 +781,9 @@ ov rm viking://resources/old.md [--recursive]
 }
 ```
 
-`estimated_deleted_count` 字段（递归删除时）包含删除的项目（文件和目录）估计数量（来自向量索引）。CLI 会在输出中显示此信息。
+`estimated_deleted_count` 表示已提交删除的向量记录数量。一个文件或目录可以对应多条记录，未索引内容不计入数量；该数量不保证向量索引立即可见。CLI 会在输出中显示此数量。
 
-删除 `viking://resources/...` 时，响应可能包含 `memory_cleanup`，表示删除前已清理引用该资源 URI 的用户记忆。
+删除资源后，已有记忆会保留原有内容和 `resource_refs`，HTTP 响应不再包含 `memory_cleanup`。
 
 在大小写不敏感的 `localfs` 上，大小写别名可能影响删除目标。例如真实文件是 `viking://resources/bob-private/private.md`，执行 `ov rm viking://resources/BOB-PRIVATE/private.md` 可能删除同一个文件；大小写敏感系统上，别名目标不存在时该幂等删除仍会成功，但不会删除真实文件。
 

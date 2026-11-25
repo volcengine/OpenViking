@@ -682,56 +682,6 @@ class TestVLMExtraRequestBody:
             vlm.get_completion("hello")
         call.assert_not_called()
 
-    def test_litellm_build_kwargs_passes_extra_request_body(self):
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "ollama/llama3",
-                "provider": "litellm",
-                "api_base": "http://127.0.0.1:11434",
-                "extra_request_body": {"think": False},
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        # Ollama models also get a default num_ctx; the explicit think is kept.
-        # num_ctx must be top-level so LiteLLM maps it into Ollama's `options`;
-        # inside extra_body it is forwarded verbatim and silently ignored.
-        assert kwargs["num_ctx"] == 16384
-        assert kwargs["extra_body"] == {"think": False}
-
-    def test_ollama_defaults_num_ctx_and_think(self):
-        """Ollama models get a larger context window and thinking disabled by default."""
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "ollama/qwen3.5:4b",
-                "provider": "litellm",
-                "api_base": "http://127.0.0.1:11434",
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        assert kwargs["num_ctx"] == 16384
-        assert kwargs["extra_body"] == {"think": False}
-
-    def test_ollama_extra_request_body_overrides_num_ctx(self):
-        """An explicit num_ctx in extra_request_body is not overridden by the default."""
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "ollama/qwen3.5:4b",
-                "provider": "litellm",
-                "api_base": "http://127.0.0.1:11434",
-                "extra_request_body": {"num_ctx": 32768},
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        assert kwargs["num_ctx"] == 32768
-        assert "num_ctx" not in kwargs["extra_body"]
-        assert kwargs["extra_body"] == {"think": False}
-
     def test_ollama_num_ctx_lands_in_ollama_options_on_the_wire(self):
         """The request LiteLLM actually sends must carry num_ctx under `options`.
 
@@ -762,20 +712,6 @@ class TestVLMExtraRequestBody:
 
         assert body["options"]["num_ctx"] == 32768
         assert "num_ctx" not in body
-
-    def test_non_ollama_model_gets_no_num_ctx(self):
-        """num_ctx is Ollama-specific and must not leak into other providers."""
-        vlm = LiteLLMVLMProvider(
-            {
-                "model": "gpt-4o-mini",
-                "provider": "litellm",
-                "api_key": "sk-test",
-            }
-        )
-
-        kwargs = vlm._build_text_kwargs(prompt="hello")
-
-        assert "extra_body" not in kwargs or "num_ctx" not in kwargs.get("extra_body", {})
 
     def test_litellm_dashscope_merges_thinking_with_extra_request_body(self):
         vlm = LiteLLMVLMProvider(

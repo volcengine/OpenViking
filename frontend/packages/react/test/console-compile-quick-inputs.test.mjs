@@ -9,7 +9,7 @@ import { act } from './helpers/command-console-dom.mjs';
 const { useConversation } = await import(
   pathToFileURL(join(process.env.OV_UI_TEST_HOOKS, 'console-conversation.js'))
 );
-const wiki = '将选中的目录中的文件整理成 Wiki，保留来源和文档之间的关联';
+const wiki = '将选中目录中的文件整理成 Wiki。';
 const report = '基于选中的目录生成日报，并设置定时更新';
 const reportEn =
   'Generate a daily report from the selected directory and schedule updates';
@@ -65,7 +65,7 @@ test('Console compile shortcuts fill the draft and leave explicit sending to cha
     await render();
     assert.deepEqual(
       view.quickInputs.map(({ label }) => label),
-      ['创建 Wiki', '定时日报'],
+      ['Wiki', '定时日报'],
     );
     await choose(0);
     assert.equal(draft, wiki);
