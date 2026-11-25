@@ -665,6 +665,13 @@ pub(crate) enum Commands {
         /// ACL JSON, for example {"acl_mode":"restricted","entries":[]}
         #[arg(long, value_parser = |s: &str| serde_json::from_str::<serde_json::Value>(s))]
         acl: Option<serde_json::Value>,
+        /// Require the existing file bytes to match this SHA-256 digest
+        #[arg(
+            long = "expected-sha256",
+            value_name = "digest",
+            help_heading = "Advanced options"
+        )]
+        expected_sha256: Option<String>,
     },
     /// [Data] Update explicit retrieval tags metadata for a file or directory
     #[command(hide = true)]

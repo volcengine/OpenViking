@@ -217,6 +217,7 @@ ov read viking://resources/docs/api.md
 | uri | str | 是 | - | 要写入的文件 URI |
 | content | str | 是 | - | 要写入的新内容 |
 | mode | str | 否 | `replace` | `replace` 覆盖已有文件、缺失时创建；`append` 追加已有文件、缺失时创建；`create` 是 `replace` 的兼容别名 |
+| expected_sha256 | str | 否 | 未设置 | 要求当前完整文件字节匹配此小写 64 位 SHA-256 摘要；不匹配或文件已不存在时返回冲突 |
 | wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
 | use_snapshot | bool | 否 | `false` | 在内容锁内为写入文件保存快照|
 | defer_processing | bool | 否 | `false` | 对支持索引的命名空间，只保存正文，不派发语义或向量处理；FILE_ONLY 处理行为不变 |
@@ -227,6 +228,8 @@ ov read viking://resources/docs/api.md
 
 **说明**
 
+- `expected_sha256` 会在目标文件的精确锁内、任何内容写入或快照、tags/ACL 更新、后台任务派发之前校验。哈希不匹配或文件已不存在时返回 `CONFLICT`（HTTP `409`）；`replace`、`append`、`create` 和 `defer_processing=true` 都遵循该条件。省略或传入 `null` 时不检查哈希。
+- 哈希覆盖完整存储字节，包括换行和 Memory metadata。请对 `download_bytes()` 返回的字节计算哈希，普通 `read()` 或 `read_raw()` 的文本可能经过可见性、解码或 Privacy 处理。该条件检测内容是否相同；内容修改后又恢复原样时，原哈希仍可匹配。
 - `replace`、`append` 和作为兼容别名的 `create` 都会在目标缺失时创建文件；`append` 会以传入内容作为新文件的初始内容，其他情况下 `create` 与 `replace` 完全相同。目录始终会被拒绝。
 - 使用任意模式创建缺失文件时，都只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。所有写入模式都会自动创建父目录。
 - 已存在的 `.abstract.md` / `.overview.md` 可以修改正文，但不能通过公共 API 创建；只提交正文时会保留现有 OKF metadata，提交完整 OKF 时 metadata 必须与存量值一致。未知 metadata 字段会静默丢弃。sidecar 正文写入只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成。
@@ -251,6 +254,18 @@ result = client.write(
 )
 print(result["root_uri"])
 ```
+
+**条件写入**
+
+```python
+import hashlib
+
+uri = "viking://resources/docs/api.md"
+expected = hashlib.sha256(client.download_bytes(uri)).hexdigest()
+client.write(uri, "# Updated API\n", options={"expected_sha256": expected})
+```
+
+TypeScript 使用 `expectedSha256`，Go 使用 `ExpectedSHA256: openviking.String(expected)`。CLI 可传入 `--expected-sha256 <digest>`。
 
 **TypeScript SDK**
 

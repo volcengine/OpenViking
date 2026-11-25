@@ -1572,3 +1572,166 @@ async def test_batch_write_rejects_path_traversal(client_with_resource):
     )
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "root,filename,defer_processing",
+    [
+        ("viking://resources/wiki", "page.md", False),
+        ("viking://agent/default/skills/demo", "SKILL.md", False),
+        ("viking://user/default/memories/preferences", "theme.md", False),
+        ("viking://resources/wiki", ".overview.md", False),
+        ("viking://resources/wiki", "page.md", True),
+        ("viking://system/memory/memory_templates/custom/demo", "template.md", False),
+    ],
+)
+async def test_write_revision_rejects_content_changed_before_lock(
+    _coordinator_queue_for_unit_tests, root, filename, defer_processing
+):
+    uri = f"{root}/{filename}"
+    vfs = _VFS(root, {uri: "old"})
+    acquire = vfs._async_agfs.pathlock_acquire_exact
+    read_bytes = vfs.read_file_bytes
+
+    async def acquire_after_change(path):
+        vfs.files[uri] = "newer"
+        return await acquire(path)
+
+    async def read_under_lock(target, ctx=None):
+        assert vfs._async_agfs.held
+        return await read_bytes(target, ctx=ctx)
+
+    vfs._async_agfs.pathlock_acquire_exact = acquire_after_change
+    vfs.read_file_bytes = read_under_lock
+    commit = AsyncMock()
+    coordinator = FSService(viking_fs=vfs)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
+    with pytest.raises(ConflictError, match="Content revision changed"):
+        await coordinator.write(
+            uri,
+            "replacement",
+            ctx=ctx,
+            expected_sha256=hashlib.sha256(b"old").hexdigest(),
+            defer_processing=defer_processing,
+            commit_content=commit,
+        )
+    assert vfs.files[uri] == "newer"
+    assert vfs.writes == []
+    assert vfs._async_agfs.releases == 1
+    assert not vfs._async_agfs.held
+    commit.assert_not_awaited()
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_not_awaited()
+    _coordinator_queue_for_unit_tests.semantic.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["replace", "append", "create"])
+async def test_write_revision_requires_existing_file(mode):
+    root = "viking://resources/wiki"
+    uri = f"{root}/missing.md"
+    vfs = _VFS(root)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    with pytest.raises(ConflictError, match="Expected content no longer exists"):
+        await ContentWriteCoordinator(vfs).write(
+            uri=uri,
+            content="new",
+            ctx=ctx,
+            mode=mode,
+            expected_sha256=hashlib.sha256(b"").hexdigest(),
+            defer_processing=True,
+        )
+    assert vfs.files == {}
+    assert vfs.writes == []
+    assert vfs._async_agfs.releases == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected", ["", "A" * 64, "g" * 64, "a" * 63, 17])
+async def test_write_revision_rejects_invalid_digest(expected):
+    root = "viking://resources/wiki"
+    uri = f"{root}/page.md"
+    vfs = _VFS(root, {uri: "old"})
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    with pytest.raises(InvalidArgumentError, match="lowercase SHA-256"):
+        await ContentWriteCoordinator(vfs).write(
+            uri=uri,
+            content="new",
+            ctx=ctx,
+            expected_sha256=expected,
+        )
+    assert vfs.files[uri] == "old"
+    assert not vfs._async_agfs.paths
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode,final", [("replace", "new"), ("create", "new"), ("append", "旧\r\nnew")]
+)
+async def test_write_revision_matches_stored_bytes(mode, final):
+    root = "viking://resources/wiki"
+    uri = f"{root}/page.md"
+    original = "旧\r\n"
+    vfs = _VFS(root, {uri: original})
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    result = await FSService(viking_fs=vfs).write(
+        uri,
+        "new",
+        ctx=ctx,
+        mode=mode,
+        expected_sha256=hashlib.sha256(original.encode("utf-8")).hexdigest(),
+        defer_processing=True,
+    )
+    assert vfs.files[uri] == final
+    assert result["vector_status"] == "deferred"
+    assert vfs._async_agfs.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_write_revision_none_skips_hash_read():
+    root = "viking://resources/wiki"
+    uri = f"{root}/page.md"
+    vfs = _VFS(root, {uri: "old"})
+    vfs.read_file_bytes = AsyncMock(side_effect=AssertionError("unexpected hash read"))
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    await FSService(viking_fs=vfs).write(
+        uri,
+        "new",
+        ctx=ctx,
+        expected_sha256=None,
+        defer_processing=True,
+    )
+    assert vfs.files[uri] == "new"
+    vfs.read_file_bytes.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_write_revision_conflict_skips_metadata_and_task_creation(
+    _coordinator_queue_for_unit_tests,
+    monkeypatch,
+):
+    root = "viking://resources/wiki"
+    uri = f"{root}/page.md"
+    vfs = _VFS(root, {uri: "newer"})
+    update = AclUpdate(uri=uri, acl=AclSpec(acl_mode="restricted", entries=()))
+    vfs.prepare_acl_update = AsyncMock(return_value=update)
+    vfs.acl_manager = SimpleNamespace(apply_indexed_update=AsyncMock())
+    create_task = AsyncMock()
+    monkeypatch.setattr(get_task_tracker(), "create", create_task)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ADMIN)
+    with pytest.raises(ConflictError, match="Content revision changed"):
+        await FSService(viking_fs=vfs).write(
+            uri,
+            "stale",
+            ctx=ctx,
+            expected_sha256=hashlib.sha256(b"old").hexdigest(),
+            tags=["team=stale"],
+            acl={"acl_mode": "restricted", "entries": []},
+            resolve_conflicts=True,
+            use_snapshot=True,
+        )
+    assert vfs.files[uri] == "newer"
+    assert vfs.writes == []
+    vfs.acl_manager.apply_indexed_update.assert_not_awaited()
+    create_task.assert_not_awaited()
+    _coordinator_queue_for_unit_tests.content_write.enqueue.assert_not_awaited()

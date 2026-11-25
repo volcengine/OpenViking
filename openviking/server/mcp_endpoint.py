@@ -1753,6 +1753,7 @@ async def write(
     resolve_conflicts: bool = False,
     use_snapshot: bool = False,
     defer_processing: bool = False,
+    expected_sha256: Annotated[Optional[str], Field(pattern=r"^[a-f0-9]{64}$")] = None,
 ) -> str:
     """Write text to a viking:// file. Use this for files you author yourself (notes, profiles, state), the same way you would use a working directory. To change part of an existing file, prefer the edit tool over a full rewrite. To store a file, document, URL, or repo the user gives you, use add_resource; for a skill, use add_skill. Do not copy its text into a file here instead.
 
@@ -1760,6 +1761,8 @@ async def write(
     - mode="create": compatibility alias for replace; overwrite an existing file or create it if missing.
     - Any new file (whether created by "replace", "append", or "create") must end in one of: .md .txt .json .yaml .yml .toml .py .js .ts
     - mode="append": append to the end of an existing file; use the supplied content as the initial body if it is missing.
+    - expected_sha256: require the complete stored bytes to match this lowercase SHA-256
+      digest; a missing or changed file returns a conflict before writing. Omit to write unconditionally.
     - resolve_conflicts: mark this edit as conflict resolution for an existing resource
       Markdown file in replace mode (including its create alias); defaults to false.
     - defer_processing: save content without semantic or vector processing. Run reindex
@@ -1785,6 +1788,7 @@ async def write(
         resolve_conflicts=resolve_conflicts,
         use_snapshot=use_snapshot,
         defer_processing=defer_processing,
+        expected_sha256=expected_sha256,
     )
     written = result.get("written_bytes", 0)
     message = (

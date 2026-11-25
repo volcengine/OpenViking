@@ -95,6 +95,7 @@ class UpdateSkillOptions(AddSkillOptions, total=False):
 
 
 class WriteOptions(_ExtraOptions, total=False):
+    expected_sha256: str
     use_snapshot: bool
     acl: Dict[str, Any]
     telemetry: Any

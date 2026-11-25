@@ -8,6 +8,7 @@ and service dependency, avoiding MCP protocol complexity.
 """
 
 import base64
+import hashlib
 import json
 import re
 from contextlib import asynccontextmanager
@@ -52,6 +53,7 @@ from openviking.server.mcp_endpoint import (
 from openviking.server.mcp_endpoint import ls as list_tool
 from openviking.server.routers import content as content_router
 from openviking_cli.exceptions import (
+    ConflictError,
     InvalidArgumentError,
     InvalidURIError,
     NotFoundError,
@@ -2483,6 +2485,16 @@ async def test_write_user_managed_subtree_rejected(service):
         await write(uri="viking://user/test_user/skills/demo/SKILL.md", content="x")
 
 
+async def test_write_revision_tool_preserves_newer_content(service):
+    uri = "viking://resources/test_write_revision/page.md"
+    await write(uri=uri, content="old", wait=True)
+    expected = hashlib.sha256(await service.fs.read_file_bytes(uri, ctx=DEFAULT_CTX)).hexdigest()
+    await write(uri=uri, content="new", expected_sha256=expected, wait=True)
+    with pytest.raises(ConflictError, match="Content revision changed"):
+        await write(uri=uri, content="stale", expected_sha256=expected)
+    assert await service.fs.read_file_bytes(uri, ctx=DEFAULT_CTX) == b"new"
+
+
 async def test_write_tool_schema_is_portable():
     tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
     props = tools["write"].inputSchema["properties"]
@@ -2491,6 +2503,9 @@ async def test_write_tool_schema_is_portable():
     assert props["mode"]["enum"] == ["replace", "append", "create"]
     assert props["resolve_conflicts"]["type"] == "boolean"
     assert props["resolve_conflicts"]["default"] is False
+    assert props["expected_sha256"]["type"] == "string"
+    assert props["expected_sha256"]["pattern"] == r"^[a-f0-9]{64}$"
+    assert "expected_sha256" not in tools["write"].inputSchema.get("required", [])
     assert "resolve_conflicts" not in tools["write"].inputSchema.get("required", [])
     assert {"uri", "content"} <= set(tools["write"].inputSchema.get("required", []))
 

@@ -451,6 +451,7 @@ describe("OpenVikingClient", () => {
       wait: true,
       deferProcessing: true,
       useSnapshot: true,
+      expectedSha256: "a".repeat(64),
     });
 
     const [url, init] = fetcher.mock.calls[0]!;
@@ -462,6 +463,7 @@ describe("OpenVikingClient", () => {
       wait: true,
       defer_processing: true,
       use_snapshot: true,
+      expected_sha256: "a".repeat(64),
     });
   });
 

@@ -890,7 +890,7 @@ func TestSearchContextSendsContextOptionsAndRejectsModeOverride(t *testing.T) {
 func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 	client, closeServer := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := readJSONBody(t, r)
-		if body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" || body["use_snapshot"] != true || body["resolve_conflicts"] != true {
+		if body["expected_sha256"] != strings.Repeat("a", 64) || body["processing_mode"] != "vectors_only" || body["future_flag"] != float64(0) || body["wait"] != true || !reflect.DeepEqual(body["tags"], []any{}) || body["tag_mode"] != "replace" || body["use_snapshot"] != true || body["resolve_conflicts"] != true {
 			t.Fatalf("body = %#v", body)
 		}
 		writeOK(t, w, map[string]any{"uri": "viking://resources/a.md"})
@@ -899,6 +899,7 @@ func TestWriteSendsProcessingModeAndExtra(t *testing.T) {
 
 	if _, err := client.Write(context.Background(), "resources/a.md", "", &WriteOptions{
 		ProcessingMode:   "vectors_only",
+		ExpectedSHA256:   String(strings.Repeat("a", 64)),
 		Tags:             []string{},
 		TagMode:          "replace",
 		Wait:             true,

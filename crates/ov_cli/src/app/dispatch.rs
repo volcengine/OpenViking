@@ -718,6 +718,7 @@ pub(super) async fn dispatch(
             tags,
             tag_mode,
             acl,
+            expected_sha256,
         } => {
             let effective_mode = if let Some(m) = mode {
                 m
@@ -738,6 +739,7 @@ pub(super) async fn dispatch(
                 tags,
                 tag_mode,
                 acl,
+                expected_sha256,
                 ctx,
             )
             .await

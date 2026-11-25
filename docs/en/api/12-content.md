@@ -217,6 +217,7 @@ Write a file and automatically refresh related semantics and vectors.
 | uri | str | Yes | - | File URI to write |
 | content | str | Yes | - | New content to write |
 | mode | str | No | `replace` | `replace` overwrites an existing file or creates a missing file; `append` appends to an existing file or creates a missing file; `create` is a compatibility alias for `replace` |
+| expected_sha256 | str | No | Unset | Require the complete existing file bytes to match this lowercase 64-character SHA-256 digest; a changed or missing file returns a conflict |
 | wait | bool | No | `false` | Wait for background semantic/vector refresh |
 | use_snapshot | bool | No | `false` | Save the written file as a snapshot under the content lock|
 | defer_processing | bool | No | `false` | For indexed namespaces, save content without scheduling semantic or vector processing; FILE_ONLY processing is unchanged |
@@ -227,6 +228,8 @@ Write a file and automatically refresh related semantics and vectors.
 
 **Notes**
 
+- `expected_sha256` is checked under the target's exact file lock before content writes, snapshots, tags/ACL updates, or background dispatch. A changed or missing file returns `CONFLICT` (HTTP `409`). The guard applies to `replace`, `append`, `create`, and `defer_processing=true`. Omitting it or passing `null` skips the hash check.
+- Hash the complete stored bytes, including line endings and Memory metadata. Use bytes from `download_bytes()`; text returned by `read()` or `read_raw()` may undergo visibility, decoding, or Privacy processing. This guard checks content equality; changing content and later restoring the original bytes allows the original digest to match again.
 - `replace`, `append`, and the `create` compatibility alias create a missing target file. `append` uses the supplied content as the initial file content in that case; `create` otherwise behaves exactly like `replace`. Directories are always rejected.
 - Creating a missing file with any mode only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically for every write mode.
 - Existing `.abstract.md` and `.overview.md` bodies may be updated, but public APIs cannot create them. A body-only request preserves stored OKF metadata; a full-OKF request must match the stored metadata. Unknown metadata fields are silently dropped. A sidecar body write rebuilds only the directory's existing L0/L1 vectors and does not regenerate semantics.
@@ -251,6 +254,18 @@ result = client.write(
 )
 print(result["root_uri"])
 ```
+
+**Conditional write**
+
+```python
+import hashlib
+
+uri = "viking://resources/docs/api.md"
+expected = hashlib.sha256(client.download_bytes(uri)).hexdigest()
+client.write(uri, "# Updated API\n", options={"expected_sha256": expected})
+```
+
+TypeScript uses `expectedSha256`; Go uses `ExpectedSHA256: openviking.String(expected)`. The CLI accepts `--expected-sha256 <digest>`.
 
 **TypeScript SDK**
 

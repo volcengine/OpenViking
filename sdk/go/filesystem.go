@@ -279,6 +279,9 @@ func (c *Client) Write(ctx context.Context, uri string, content string, opts *Wr
 		"mode":    mode,
 		"wait":    opts.Wait,
 	}
+	if opts.ExpectedSHA256 != nil {
+		payload["expected_sha256"] = *opts.ExpectedSHA256
+	}
 	if opts.UseSnapshot {
 		payload["use_snapshot"] = true
 	}

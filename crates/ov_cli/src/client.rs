@@ -467,6 +467,7 @@ impl HttpClient {
         tags: Vec<String>,
         tag_mode: &str,
         acl: Option<Value>,
+        expected_sha256: Option<&str>,
     ) -> Result<serde_json::Value> {
         let mut body = Self::build_write_body(uri, content, mode, wait, processing_mode);
         if use_snapshot {
@@ -478,6 +479,9 @@ impl HttpClient {
         add_resource_tag_fields(&mut body, &tags, tag_mode);
         if let Some(acl) = acl {
             body["acl"] = acl;
+        }
+        if let Some(expected) = expected_sha256 {
+            body["expected_sha256"] = json!(expected);
         }
         self.post("/api/v1/content/write", &body).await
     }
@@ -2812,6 +2816,39 @@ mod tests {
         );
 
         assert_eq!(body["processing_mode"], "vectors_only");
+    }
+
+    #[tokio::test]
+    async fn write_sends_expected_sha256_only_when_provided() {
+        for expected in [Some("a".repeat(64)), None] {
+            let (base_url, request_rx) = spawn_request_capture_server().await;
+            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+            client
+                .write(
+                    "viking://resources/demo.md",
+                    "new",
+                    "append",
+                    false,
+                    false,
+                    "semantic_and_vectors",
+                    false,
+                    vec![],
+                    "replace",
+                    None,
+                    expected.as_deref(),
+                )
+                .await
+                .expect("write request should succeed");
+            let request = request_rx.await.expect("request should be captured");
+            assert!(request.starts_with("POST /api/v1/content/write "));
+            let body: serde_json::Value =
+                serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            if let Some(expected) = expected {
+                assert_eq!(body["expected_sha256"], expected);
+            } else {
+                assert!(body.get("expected_sha256").is_none());
+            }
+        }
     }
 
     #[tokio::test]

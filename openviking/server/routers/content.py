@@ -44,6 +44,7 @@ class WriteContentRequest(BaseModel):
 
     uri: str
     content: str
+    expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     mode: str = "replace"
     wait: bool = False
     use_snapshot: bool = False
@@ -322,6 +323,7 @@ async def write(
             resolve_conflicts=request.resolve_conflicts,
             use_snapshot=request.use_snapshot,
             defer_processing=request.defer_processing,
+            expected_sha256=request.expected_sha256,
         ),
     )
     return Response(

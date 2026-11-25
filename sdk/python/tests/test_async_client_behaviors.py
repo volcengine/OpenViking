@@ -424,13 +424,19 @@ async def test_async_http_client_write_forwards_processing_mode():
     await client.write(
         "viking://resources/demo.md",
         "updated",
-        options={"processing_mode": "vectors_only", "defer_processing": True, "use_snapshot": True},
+        options={
+            "processing_mode": "vectors_only",
+            "defer_processing": True,
+            "use_snapshot": True,
+            "expected_sha256": "a" * 64,
+        },
     )
 
     payload = fake_http.post.await_args.kwargs["json"]
     assert payload["processing_mode"] == "vectors_only"
     assert payload["defer_processing"] is True
     assert payload["use_snapshot"] is True
+    assert payload["expected_sha256"] == "a" * 64
 
 
 @pytest.mark.asyncio
