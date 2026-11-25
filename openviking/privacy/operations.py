@@ -46,14 +46,23 @@ async def build_privacy_tree(
     privacy: UserPrivacyConfigService | None,
     ctx: RequestContext,
     category: str | None = None,
+    *,
+    omit_unless_named: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """List the caller's active targets and safe field metadata."""
+    """List the caller's active targets and safe field metadata.
+
+    Categories in ``omit_unless_named`` are listed only when asked for by name.
+    """
     if category is not None:
         validate_privacy_identifier(category, "category")
     result: dict[str, Any] = {"owner_user_id": ctx.user.user_id, "categories": []}
     if privacy is None:
         return result
-    categories = [category] if category is not None else await privacy.list_categories(ctx)
+    categories = (
+        [category]
+        if category is not None
+        else [name for name in await privacy.list_categories(ctx) if name not in omit_unless_named]
+    )
     for name in categories:
         targets = []
         for target_key in await privacy.list_targets(ctx, name):
@@ -61,13 +70,17 @@ async def build_privacy_tree(
             if current is None:
                 # A directory retained for its lock is not a saved configuration.
                 continue
-            targets.append(
-                {
-                    "target_key": target_key,
-                    "version": current.version,
-                    "fields": privacy_field_metadata(ctx, name, target_key, current.values),
-                }
-            )
+            node = {
+                "target_key": target_key,
+                "version": current.version,
+                "fields": privacy_field_metadata(ctx, name, target_key, current.values),
+            }
+            meta = await privacy.get_meta(ctx, name, target_key)
+            description = None if meta is None else meta.labels.get("description")
+            if isinstance(description, str) and description:
+                # Only the description is exposed; other labels stay internal.
+                node["description"] = description
+            targets.append(node)
         result["categories"].append({"category": name, "targets": targets})
     return result
 
