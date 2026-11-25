@@ -76,7 +76,7 @@ async def commit(
             raise mapped from e
         raise
     if _ctx.role == Role.GLOBAL:
-        result = {key: value for key, value in result.items() if key not in ("changed", "ignored")}
+        return Response(status="ok", result={})
     return Response(status="ok", result=result)
 
 
