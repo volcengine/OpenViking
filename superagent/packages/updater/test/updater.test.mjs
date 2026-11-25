@@ -1093,7 +1093,8 @@ test('an app already on the published release is left running', async () => {
     fetchImpl: async () => ({ ok: true }),
     readyOptions: { attempts: 1, intervalMs: 0 },
     pm2Env: { HOME: '/safe-home' },
-    restartSelfImpl: () => { throw new Error('the updater must not replace itself for a no-op'); },
+    // The updater is already inside this release, so nothing has to replace it.
+    selfEntry: path.join(fixture.release, 'packages', 'updater', 'src', 'server.mjs'),
   });
 
   assert.deepEqual(result.skipped, ['superagent-beta']);
@@ -1101,4 +1102,71 @@ test('an app already on the published release is left running', async () => {
   assert.deepEqual(result.apps, ['superagent-beta']);
   assert.equal(result.restartsUpdater, false);
   assert.ok(!calls.some(({ args }) => args[0] === 'start'), 'nothing was started again');
+});
+test('a no-op for the instances still replaces an updater left behind', async () => {
+  const fixture = await fixtureRelease();
+  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  await mkdir(path.dirname(daemonEntry), { recursive: true });
+  await writeFile(daemonEntry, '');
+  const calls = [];
+  const restarts = [];
+  const result = await upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    publishReleaseImpl: async () => ({
+      release: fixture.release, version: '0.4.0', published: false, previousRelease: null,
+    }),
+    pm2Bin: '/fake/pm2',
+    execFileImpl: async (_command, args) => {
+      calls.push(args);
+      if (args[0] === 'jlist') {
+        return {
+          stdout: JSON.stringify([{
+            name: 'superagent-beta',
+            pm2_env: { status: 'online', pm_exec_path: daemonEntry },
+          }]),
+        };
+      }
+      return { stdout: '' };
+    },
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+    pm2Env: { HOME: '/safe-home' },
+    restartSelfImpl: (request) => restarts.push(request.release),
+    selfEntry: path.join(fixture.root, 'old-release', 'packages', 'updater', 'src', 'server.mjs'),
+  });
+
+  assert.deepEqual(result.skipped, ['superagent-beta']);
+  assert.deepEqual(result.upgraded, []);
+  assert.equal(result.restartsUpdater, true);
+  assert.deepEqual(restarts, [fixture.release]);
+  assert.ok(!calls.some((args) => args[0] === 'start'), 'the instance was not restarted');
+});
+
+test('nothing restarts when the instances and the updater are on the target release', async () => {
+  const fixture = await fixtureRelease();
+  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  await mkdir(path.dirname(daemonEntry), { recursive: true });
+  await writeFile(daemonEntry, '');
+  const restarts = [];
+  const result = await upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    publishReleaseImpl: async () => ({
+      release: fixture.release, version: '0.4.0', published: false, previousRelease: null,
+    }),
+    pm2Bin: '/fake/pm2',
+    execFileImpl: async (_command, args) => ({
+      stdout: args[0] === 'jlist'
+        ? JSON.stringify([{ name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } }])
+        : '',
+    }),
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+    pm2Env: { HOME: '/safe-home' },
+    restartSelfImpl: (request) => restarts.push(request.release),
+    selfEntry: path.join(fixture.release, 'packages', 'updater', 'src', 'server.mjs'),
+  });
+
+  assert.deepEqual(result.skipped, ['superagent-beta']);
+  assert.equal(result.restartsUpdater, false);
+  assert.deepEqual(restarts, []);
 });

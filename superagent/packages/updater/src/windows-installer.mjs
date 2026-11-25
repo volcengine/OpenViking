@@ -117,26 +117,64 @@ export async function publishWithInstaller({
 // channel no longer serves that version; only when no verified directory is left
 // does it go back through the installer, which downloads and checks the package
 // again.
+// The lock is the installer's own: a directory next to the releases, created by
+// install-preview.ps1 for the whole run and by the POSIX publisher for its own
+// deployments. Holding it means no install can move `current` while the links are
+// switched back.
+const DEPLOY_LOCK = 'deploy.lock';
+
+async function acquireDeployLock(baseDir) {
+  const lock = path.join(baseDir, DEPLOY_LOCK);
+  try {
+    await fs.promises.mkdir(lock, { mode: 0o700 });
+  } catch (error) {
+    if (error?.code === 'EEXIST') return null;
+    throw error;
+  }
+  return async () => { await fs.promises.rmdir(lock).catch(() => {}); };
+}
+
 export async function republishPrevious({
   previousVersion,
+  failedRelease = null,
   ...options
 }) {
   if (!previousVersion) throw new Error('no previous version to fall back to');
   const baseDir = options.baseDir ?? path.join(os.homedir(), '.ov-superagent');
   const local = await localRelease(baseDir, previousVersion);
   if (local) {
-    const from = await currentRelease(baseDir);
-    await activateRelease(baseDir, local, from);
-    const metadata = await readReleaseMetadata(local);
-    const fromMetadata = await readReleaseMetadata(from);
-    return {
-      release: local,
-      version: previousVersion,
-      commit: typeof metadata?.commit === 'string' ? metadata.commit : undefined,
-      published: true,
-      previousRelease: from,
-      previousVersion: fromMetadata?.version,
-    };
+    const releaseLock = await acquireDeployLock(baseDir);
+    // An install is running: it owns `current` right now, so a rollback that
+    // switched links under it would fight it. Leave both links as they are.
+    if (!releaseLock) {
+      return { skipped: true, reason: 'another install or upgrade is running (it holds deploy.lock)' };
+    }
+    try {
+      const from = await currentRelease(baseDir);
+      const running = from ? await fs.promises.realpath(from).catch(() => null) : null;
+      const failed = failedRelease ? await fs.promises.realpath(failedRelease).catch(() => null) : null;
+      // Someone (or another tool) already moved the publication: the release that
+      // failed is not what would start next, so there is nothing to undo.
+      if (failedRelease && running !== failed) {
+        return {
+          skipped: true,
+          reason: `current no longer names the release that failed to start (${path.basename(failedRelease)})`,
+        };
+      }
+      await activateRelease(baseDir, local, from);
+      const metadata = await readReleaseMetadata(local);
+      const fromMetadata = await readReleaseMetadata(from);
+      return {
+        release: local,
+        version: previousVersion,
+        commit: typeof metadata?.commit === 'string' ? metadata.commit : undefined,
+        published: true,
+        previousRelease: from,
+        previousVersion: fromMetadata?.version,
+      };
+    } finally {
+      await releaseLock();
+    }
   }
   return publishWithInstaller({ ...options, version: previousVersion });
 }

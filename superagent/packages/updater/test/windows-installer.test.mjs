@@ -198,6 +198,7 @@ test('a rollback switches to the release on disk instead of downloading it', asy
   const reverted = await republishPrevious({
     baseDir,
     previousVersion: VERSION_A,
+    failedRelease: failed,
     platformId: 'win32-x64',
     execFileImpl: async (...args) => {
       calls.push(args);
@@ -208,5 +209,75 @@ test('a rollback switches to the release on disk instead of downloading it', asy
   assert.equal(reverted.version, VERSION_A);
   assert.equal(await realpath(path.join(baseDir, 'current')), await realpath(previous));
   assert.equal(await realpath(path.join(baseDir, 'rollback')), await realpath(failed));
+  assert.deepEqual(calls, []);
+});
+test('a rollback leaves the links alone while an install holds the lock', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-windows-locked-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const baseDir = path.join(root, '.ov-superagent');
+  const releasesRoot = path.join(baseDir, 'releases');
+  const previous = path.join(releasesRoot, VERSION_A);
+  const failed = path.join(releasesRoot, VERSION_B);
+  for (const [directory, version] of [[previous, VERSION_A], [failed, VERSION_B]]) {
+    await mkdir(path.join(directory, 'packages', 'daemon', 'src'), { recursive: true });
+    await writeFile(path.join(directory, 'ecosystem.config.cjs'), 'module.exports = { apps: [] };\n');
+    await writeFile(path.join(directory, 'packages', 'daemon', 'src', 'main.mjs'), '\n');
+    await writeFile(path.join(directory, 'windows-preview.json'), `${JSON.stringify({
+      name: 'superagent', version, platform: 'win32-x64',
+    })}\n`);
+  }
+  await linkDir(failed, path.join(baseDir, 'current'));
+  // The installer's own lock: a directory next to the releases.
+  await mkdir(path.join(baseDir, 'deploy.lock'));
+
+  const calls = [];
+  const reverted = await republishPrevious({
+    baseDir,
+    previousVersion: VERSION_A,
+    failedRelease: failed,
+    platformId: 'win32-x64',
+    execFileImpl: async (...args) => { calls.push(args); throw new Error('the installer must not run'); },
+  });
+
+  assert.equal(reverted.skipped, true);
+  assert.match(reverted.reason, /deploy\.lock/);
+  assert.equal(await realpath(path.join(baseDir, 'current')), await realpath(failed));
+  assert.equal(fs.existsSync(path.join(baseDir, 'rollback')), false);
+  assert.deepEqual(calls, []);
+});
+
+test('a rollback leaves a publication someone else already moved alone', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-windows-moved-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const baseDir = path.join(root, '.ov-superagent');
+  const releasesRoot = path.join(baseDir, 'releases');
+  const previous = path.join(releasesRoot, VERSION_A);
+  const failed = path.join(releasesRoot, VERSION_B);
+  const manualVersion = '0.5.5-preview-windows-preview-cccccccccccc';
+  const manual = path.join(releasesRoot, manualVersion);
+  for (const [directory, version] of [[previous, VERSION_A], [failed, VERSION_B], [manual, manualVersion]]) {
+    await mkdir(path.join(directory, 'packages', 'daemon', 'src'), { recursive: true });
+    await writeFile(path.join(directory, 'ecosystem.config.cjs'), 'module.exports = { apps: [] };\n');
+    await writeFile(path.join(directory, 'packages', 'daemon', 'src', 'main.mjs'), '\n');
+    await writeFile(path.join(directory, 'windows-preview.json'), `${JSON.stringify({
+      name: 'superagent', version, platform: 'win32-x64',
+    })}\n`);
+  }
+  // A manual install already switched current away from the release that failed.
+  await linkDir(manual, path.join(baseDir, 'current'));
+
+  const calls = [];
+  const reverted = await republishPrevious({
+    baseDir,
+    previousVersion: VERSION_A,
+    failedRelease: failed,
+    platformId: 'win32-x64',
+    execFileImpl: async (...args) => { calls.push(args); throw new Error('the installer must not run'); },
+  });
+
+  assert.equal(reverted.skipped, true);
+  assert.match(reverted.reason, /no longer names/);
+  assert.equal(await realpath(path.join(baseDir, 'current')), await realpath(manual));
+  assert.equal(fs.existsSync(path.join(baseDir, 'rollback')), false);
   assert.deepEqual(calls, []);
 });

@@ -339,9 +339,15 @@ export async function upgradeTarget(target, {
           const reverted = await republishPreviousImpl({
             baseDir,
             previousVersion: publication.previousVersion,
+            failedRelease: release,
             env: process.env,
             execFileImpl,
           });
+          // A rollback that could not take the lock, or found `current` moved by
+          // someone else, changed nothing: say so instead of pretending it did.
+          if (reverted?.skipped) {
+            throw new Error(`the previous release was not restored: ${reverted.reason}`);
+          }
           const revertedRelease = await resolveRelease(releaseLink);
           if (await realpath(reverted.release) !== revertedRelease) {
             throw new Error('publisher did not activate the previous release');
@@ -373,8 +379,10 @@ export async function upgradeTarget(target, {
       : [];
     await execFileImpl(pm2Bin, ['save'], { timeout: 30_000, env: pm2Env });
     const realSelf = await realpath(selfEntry).catch(() => selfEntry);
-    // Nothing was restarted, so there is nothing to replace the updater for.
-    const restartsUpdater = Boolean(restartSelfImpl) && upgraded.length > 0 && !isInside(release, realSelf);
+    // The updater follows the release it is running from, whatever the instances
+    // did: a no-op for them must still move it forward, and one already inside
+    // the release is never replaced.
+    const restartsUpdater = Boolean(restartSelfImpl) && !isInside(release, realSelf);
     if (restartsUpdater) restartSelfImpl({ release, pm2Bin, pm2Env });
 
     return {
