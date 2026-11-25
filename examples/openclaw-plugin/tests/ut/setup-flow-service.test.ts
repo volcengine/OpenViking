@@ -54,7 +54,7 @@ describe("setup flow service", () => {
     expect(io.config).toEqual({});
   });
 
-  it("interactive remote config save preserves existing fields, removes local-only fields, and activates slot", async () => {
+  it("interactive remote setup saves the configuration and replaces an occupied context engine only when forced", async () => {
     const existing = {
       mode: "local",
       port: 1933,
@@ -66,7 +66,12 @@ describe("setup flow service", () => {
       accountId: "old-account",
       userId: "old-user",
     };
-    const io = createMemoryIO({ plugins: { entries: { openviking: { config: existing } } } });
+    const io = createMemoryIO({
+      plugins: {
+        entries: { openviking: { config: existing } },
+        slots: { contextEngine: "other-engine" },
+      },
+    });
     const service = createOpenVikingSetupService({
       io,
       checkServiceHealth: async () => ({
@@ -85,7 +90,8 @@ describe("setup flow service", () => {
       }),
     });
 
-    const result = await service.saveInteractiveRemoteConfig("/tmp/openclaw.json", {
+    const configPath = "/tmp/openclaw.json";
+    const params = {
       existing,
       baseUrl: "http://remote:1933",
       apiKey: "",
@@ -93,17 +99,29 @@ describe("setup flow service", () => {
       peerPrefix: "",
       accountId: "",
       userId: "new-user",
-    });
-
+    };
     const expectedConfig = {
       mode: "remote",
       baseUrl: "http://remote:1933",
       customFlag: "keep-me",
       userId: "new-user",
     };
-    expect(result).toEqual({ config: expectedConfig, slot: { activated: true, replaced: false } });
-    expect(io.config).toMatchObject({ plugins: { slots: { contextEngine: "openviking" } } });
-    expect((io.config.plugins as any).entries.openviking.config).toEqual(expectedConfig);
+    const regular = await service.saveInteractiveRemoteConfig(configPath, params);
+    expect(regular).toEqual({
+      config: expectedConfig,
+      slot: { activated: false, previousOwner: "other-engine", replaced: false },
+    });
+    expect(io.config).toHaveProperty("plugins.slots.contextEngine", "other-engine");
+    expect(io.config).toHaveProperty("plugins.entries.openviking.config", expectedConfig);
+
+    const forced = await service.saveInteractiveRemoteConfig(configPath, {
+      ...params,
+      existing: regular.config,
+      forceSlot: true,
+    });
+    expect(forced.slot).toEqual({ activated: true, previousOwner: "other-engine", replaced: true });
+    expect(io.config).toHaveProperty("plugins.slots.contextEngine", "openviking");
+    expect(io.config).toHaveProperty("plugins.entries.openviking.config", expectedConfig);
   });
 
   it("existing remote config flow checks health, masks secrets, and activates the slot via the service seam", async () => {
