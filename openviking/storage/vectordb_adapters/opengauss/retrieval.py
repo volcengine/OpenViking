@@ -432,6 +432,23 @@ class OpenGaussRetrievalMixin:
     def _validate_ranked_filters(self, filters) -> None:
         _validate_filters(filters, self._field_names)
 
+    def _dense_vector_guard(self, op: str) -> str:
+        return '"vector" IS NOT NULL'
+
+    def _dense_filter_clause(self, op, where, filter_params):
+        condition = f"({where})" if where else "TRUE"
+        return f"{condition} AND {self._dense_vector_guard(op)}", list(filter_params)
+
+    def _dense_candidate_query(self, index_name, where, filter_params, vector_text, op, budget):
+        """Backend hook for dense recall, kept inside the ranking statement's snapshot."""
+        predicate, params = self._dense_filter_clause(op, where, filter_params)
+        return (
+            f'SELECT "id" AS _ov_candidate_id FROM {_quote_identifier(self._name)} '
+            f"WHERE {predicate} "
+            f'ORDER BY "vector" {op} %s::vector LIMIT %s',
+            [*params, vector_text, budget],
+        )
+
     def search_ranked(
         self,
         index_name: str,
@@ -505,24 +522,27 @@ class OpenGaussRetrievalMixin:
             for term, weight in sparse.items():
                 params.extend([term, weight])
         if has_dense:
-            ctes.append(
-                f'dense_candidates AS (SELECT "id" AS _ov_candidate_id FROM {table} '
-                f'WHERE {condition} AND "vector" IS NOT NULL '
-                f'ORDER BY "vector" {op} %s::vector LIMIT %s)'
+            dense_sql, dense_params = self._dense_candidate_query(
+                index_name, where, filter_params, vector_text, op, budget
             )
-            params.extend([*filter_params, vector_text, budget])
+            ctes.append(f"dense_candidates AS ({dense_sql})")
+            params.extend(dense_params)
             candidate_selects.append("SELECT _ov_candidate_id FROM dense_candidates")
         if has_sparse:
-            vector_guard = ' AND "vector" IS NOT NULL' if has_dense else ""
+            sparse_predicate, sparse_params = (
+                self._dense_filter_clause(op, where, filter_params)
+                if has_dense
+                else (condition, list(filter_params))
+            )
             ctes.append(
                 f"sparse_candidates AS (SELECT p.id AS _ov_candidate_id FROM {postings} p "
                 "JOIN query_sparse q ON p.term = q.term "
                 f'WHERE EXISTS (SELECT 1 FROM {table} WHERE "id" = p.id '
-                f"AND {condition}{vector_guard}) GROUP BY p.id "
+                f"AND {sparse_predicate}) GROUP BY p.id "
                 "HAVING SUM(p.weight * q.weight) > 0 "
                 "ORDER BY SUM(p.weight * q.weight) DESC, p.id LIMIT %s)"
             )
-            params.extend([*filter_params, budget])
+            params.extend([*sparse_params, budget])
             candidate_selects.append("SELECT _ov_candidate_id FROM sparse_candidates")
         ctes.append("candidates AS (" + " UNION ".join(candidate_selects) + ")")
         distance_sql = (

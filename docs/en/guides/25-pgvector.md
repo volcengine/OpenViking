@@ -99,6 +99,15 @@ scanning to improve recall with filters, but ANN recall and filtered TopK are
 not guaranteed; measure recall and p99 with representative filters. Cosine
 zero vectors are not included in a pgvector HNSW index.
 
+Cosine search also excludes zero vectors from flat results and dense candidates
+in hybrid/time-decay search. Native dense search drops NaN distances after
+sorting and pagination: PostgreSQL sorts NaN after all finite distances, so zero
+vectors cannot displace eligible results or alter valid pagination. Hybrid
+sparse recall excludes them before applying its candidate budget, with a CASE
+expression that evaluates the norm only after scalar filtering. Sparse-only
+search still accepts these records. Ordinary dense queries serialize the query
+vector once and reuse the string for both SQL parameters.
+
 Flat search stays exact even when the table also contains an ANN index. On
 reconnect, the configured collection dimension, metric and index type must
 match persisted metadata; missing or invalid ANN indexes produce errors.
