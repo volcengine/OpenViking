@@ -377,6 +377,16 @@ fn render_show_for_table(response: &Value, output_format: OutputFormat) -> Optio
             }
         }
     }
+    if let Some(params) = server.get("query_params").and_then(Value::as_object) {
+        if !params.is_empty() {
+            lines.push("query_params:".to_string());
+            for (name, value) in params {
+                if let Some(value) = value.as_str() {
+                    lines.push(format!("   {name}: {value}"));
+                }
+            }
+        }
+    }
     push_show_field(&mut lines, "created_at", server.get("created_at"));
     push_show_field(&mut lines, "updated_at", server.get("updated_at"));
     lines.push(String::new());
