@@ -69,10 +69,6 @@ class VikingDBCollector(StateMetricCollector):
             label_names=("collection", "valid"),
         )
 
-    def collect_error_hook(self, registry, error: Exception) -> None:
-        """Delegate failure handling to the stale hook by re-raising the datasource error."""
-        raise error
-
     def collect_stale_hook(self, registry, error: Exception) -> None:
         """Export stale VikingDB gauges under `valid=0` when datasource refresh fails."""
         collection = self._last_collection

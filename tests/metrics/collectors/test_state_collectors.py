@@ -380,3 +380,61 @@ def test_ragfs_collector_serializes_whole_refresh():
             release.set()
         first.result(timeout=5)
     assert registry.gauge_get("openviking_ragfs_tasks") == 3
+
+
+def test_observer_health_collector_emits_stale_series_on_refresh_failure(
+    registry, render_prometheus
+):
+    class Status:
+        def __init__(self, ok: bool, err: bool) -> None:
+            self.is_healthy = ok
+            self.has_errors = err
+
+    class DataSource:
+        fail = False
+
+        def read_component_states(self):
+            if self.fail:
+                raise RuntimeError("observer state unavailable")
+            return {"lock": Status(False, True)}
+
+    data_source = DataSource()
+    collector = ObserverHealthCollector(data_source=data_source)
+    collector.collect(registry)
+    assert 'component="lock",valid="1"' in render_prometheus(registry)
+
+    data_source.fail = True
+    collector.collect(registry)
+
+    text = render_prometheus(registry)
+    assert 'openviking_component_health{component="lock",valid="0"} 0.0' in text
+    assert 'openviking_component_errors{component="lock",valid="0"} 1.0' in text
+    assert 'component="lock",valid="1"' not in text
+
+
+def test_vikingdb_collector_emits_stale_series_on_refresh_failure(registry, render_prometheus):
+    class DummyVikingDB:
+        collection_name = "my_collection"
+
+        async def health_check(self):
+            return True
+
+        async def count(self, filter=None, ctx=None):
+            return 123
+
+    class Service:
+        _vikingdb_manager = DummyVikingDB()
+
+    collector = VikingDBCollector(data_source=VikingDBStateDataSource(service=Service()))
+    collector.collect(registry)
+    assert 'collection="my_collection",valid="1"' in render_prometheus(registry)
+
+    Service._vikingdb_manager = None
+    collector.collect(registry)
+
+    text = render_prometheus(registry)
+    assert 'openviking_vikingdb_collection_health{collection="my_collection",valid="0"} 0.0' in text
+    assert (
+        'openviking_vikingdb_collection_vectors{collection="my_collection",valid="0"} 123.0' in text
+    )
+    assert 'collection="my_collection",valid="1"' not in text
