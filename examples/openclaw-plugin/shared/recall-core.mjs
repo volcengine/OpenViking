@@ -433,23 +433,9 @@ async function writeJsonFile(path, value) {
 }
 
 /**
- * Hooks are one-shot processes, so "this server has no context face" has to be
- * remembered on disk or every turn pays for a rejected request.
- */
-export async function isContextFaceLegacy(path = stateFile("context-face.json"), now = Date.now()) {
-  const cached = await readJsonFile(path);
-  return Boolean(cached?.legacyUntil && Number(cached.legacyUntil) > now);
-}
-
-export async function markContextFaceLegacy(path = stateFile("context-face.json"), now = Date.now()) {
-  await writeJsonFile(path, { legacyUntil: now + LEGACY_CACHE_TTL_MS });
-}
-
-/**
- * A `peer_scope` the server rejects is remembered the same way, but unlike the
- * context face this one is not a silent capability probe: dropping the field
- * widens recall from the caller's own peer to the whole user root, so doctor
- * reads this file back and warns.
+ * Remember when the server rejects `peer_scope`. Dropping the field widens
+ * recall from the caller's own peer to the whole user root, so doctor reads
+ * this file back and warns.
  */
 export function peerScopeMemoPath() {
   return stateFile("peer-scope.json");
@@ -517,7 +503,6 @@ export async function buildServerAssembledBlock(fetchJSON, cfg, query, options =
 export async function fetchAssembledContext(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId || "";
   const log = options.log || (() => {});
-  if (await isContextFaceLegacy(options.legacyCachePath)) return null;
 
   const body = buildContextSearchBody(cfg, options);
   body.query = query;
@@ -528,25 +513,13 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   if (!res.ok) {
     const status = res.status || 0;
-    if (status !== 400 && status !== 422) {
-      log("recall_context_face_error", { status });
-      return null;
+    if (status === 400 || status === 422) {
+      const message = typeof res.error === "string" ? res.error : res.error?.message;
+      log("recall_context_request_rejected", { status, message });
+      return CONTEXT_REQUEST_REJECTED;
     }
-
-    const message = typeof res.error === "string" ? res.error : res.error?.message;
-    const errors = res.error?.details?.validation_errors;
-    const unsupportedMode = Array.isArray(errors)
-      ? errors.some(({ type, loc }) => type === "extra_forbidden"
-        && loc?.length === 2 && loc[0] === "body" && loc[1] === "mode")
-      : /\b(?:extra inputs?|unexpected (?:keyword )?argument)\b[^.\n]*\bmode\b/i.test(message || "");
-    if (unsupportedMode) {
-      await markContextFaceLegacy(options.legacyCachePath);
-      log("recall_context_face_unsupported", { status });
-      return null;
-    }
-
-    log("recall_context_request_rejected", { status, message });
-    return CONTEXT_REQUEST_REJECTED;
+    log("recall_context_face_error", { status });
+    return null;
   }
 
   const result = res.result || {};
@@ -731,8 +704,7 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
   const trimmed = String(query || "").trim();
   if (!trimmed) return emptyRecall("no_results");
 
-  // Assembly happens server-side when the deployment offers the context face;
-  // older servers fall through to /recall, then to raw find.
+  // When Context is unavailable, fall back to /recall and then raw find.
   const serverBlock = await buildServerAssembledBlock(fetchJSON, cfg, trimmed, {
     ...options,
     actorPeerId,

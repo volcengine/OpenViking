@@ -277,7 +277,7 @@ for (const excludeUris of ["", "viking://user/default/skills, viking://agent/ski
     () => contextRecallCase(excludeUris));
 }
 
-test("auto-recall prefers the server recall endpoint when available", async () => {
+test("auto-recall uses the server recall endpoint when Context search is unavailable", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-"));
   const requests = [];
 
@@ -309,10 +309,9 @@ test("auto-recall prefers the server recall endpoint when available", async () =
       }
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         requests.push({ path: url.pathname, body: await readRequestBody(req) });
-        // Pre-context-face deployment: extra fields are rejected outright.
-        writeStatusJson(res, 400, {
+        writeStatusJson(res, 404, {
           status: "error",
-          error: "Extra inputs are not permitted: mode",
+          error: "Context search unavailable",
         });
         return;
       }
@@ -441,9 +440,9 @@ test("auto-recall gives the compressor full content from the raw-search fallback
           if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
             const body = await readRequestBody(req);
             if (body.mode === "context") {
-              writeStatusJson(res, 400, {
+              writeStatusJson(res, 404, {
                 status: "error",
-                error: "Extra inputs are not permitted: mode",
+                error: "Context search unavailable",
               });
               return;
             }
@@ -620,9 +619,9 @@ test("auto-recall expands configured user in memory search target", async () => 
         const body = await readRequestBody(req);
         if (body.mode === "context") {
           // Exercise the legacy per-scope sweep below.
-          writeStatusJson(res, 400, {
+          writeStatusJson(res, 404, {
             status: "error",
-            error: "Extra inputs are not permitted: mode",
+            error: "Context search unavailable",
           });
           return;
         }
@@ -707,9 +706,9 @@ test("auto-recall preserves explicit default user memory target", async () => {
         const body = await readRequestBody(req);
         if (body.mode === "context") {
           // Exercise the legacy per-scope sweep below.
-          writeStatusJson(res, 400, {
+          writeStatusJson(res, 404, {
             status: "error",
-            error: "Extra inputs are not permitted: mode",
+            error: "Context search unavailable",
           });
           return;
         }

@@ -12,8 +12,6 @@ Long-term semantic memory for Claude Code, powered by [OpenViking](https://githu
 
 ## Quick Start
 
-Update your OpenViking server to **v0.4.23 or later** before installing or updating the plugin. This server release added the event time-decay parameter that auto recall now sends by default.
-
 ### One-line installer (recommended)
 
 ```bash

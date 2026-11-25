@@ -193,7 +193,7 @@ Skills follow their own path. Create, install, or replace them with the MCP `add
 Every integration except OpenClaw and Hermes uses the shared plugin code, which tries up to three requests:
 
 1. **Context search.** `POST /api/v1/search/search` with `mode: "context"`, `purpose: "coding"`, and the session ID. Budgets, quotas, query expansion, and digest options are sent only when you configure them; otherwise the server defaults apply, including a 1,600-token injection budget (`max_tokens`).
-2. **Legacy recall.** If the server rejects context mode as an older version, the plugin records that in `~/.openviking/state/context-face.json` for six hours and calls `/api/v1/search/recall` instead. The file is shared by every integration on the machine, so one integration's result applies to all of them.
+2. **Legacy recall.** If Context search is unavailable, the plugin can fall back to `/api/v1/search/recall`. A Context request rejected with HTTP `400` or `422` ends the recall for that turn and records the server error in the debug log.
 3. **Plain find.** As a last resort the plugin runs `find` on `viking://~/memories` and `viking://~/skills`, ranks the results locally, and fills its own token budget. `recallTokenBudget`, `recallMaxContentChars`, and `recallPreferAbstract` apply only at this step.
 
 The shared-plugin recall pipeline excludes resources; the model searches resource documents by calling `search` itself. Hermes can include resources when its resource-recall option is enabled.

@@ -439,39 +439,6 @@ done
   assert.doesNotMatch(readFileSync(log, "utf8"), /good|wrong/);
 });
 
-test("plugin installs require server 0.4.23 when the health response reports a version", async (t) => {
-  const server = createServer((req, res) => {
-    const [, version, endpoint] = req.url.split("/");
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(endpoint === "health" && version !== "missing" ? { version } : {}));
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  t.after(() => server.close());
-  const url = `http://127.0.0.1:${server.address().port}`;
-
-  for (const [version, harnesses, status] of [
-    ["0.4.22", "codex,cli", 1],
-    ["0.4.23", "codex", 0],
-    ["0.5.5", "codex", 0],
-    ["0.0.0+unknown", "codex", 0],
-    ["missing", "codex", 0],
-    ["0.4.22", "cli", 0],
-  ]) {
-    const result = await runInstallerPreludeAsync(`
-INTERACTIVE=0
-SELECTED_HARNESSES=${JSON.stringify(harnesses)}
-CRED_URL=${JSON.stringify(`${url}/${version}`)}
-CUR_KEY=""
-CUR_ACCOUNT=""
-CUR_USER=""
-check_server
-`);
-    assert.equal(result.status, status, `${version} / ${harnesses}: ${result.stderr}`);
-    if (status) assert.match(result.stderr, /Upgrade the server to 0\.4\.23 or later/);
-    else assert.match(result.stdout, /Server check passed/);
-  }
-});
-
 test("re-entering after a failed server check probes the new values", async (t) => {
   const server = createServer((req, res) => {
     res.writeHead(req.headers.authorization === "Bearer fresh-key" || req.url.endsWith("/health") ? 200 : 401);

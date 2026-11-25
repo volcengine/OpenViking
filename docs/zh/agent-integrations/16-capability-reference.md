@@ -191,7 +191,7 @@ skill 走单独的路径。创建、安装或替换 skill 用 MCP `add_skill` �
 除 OpenClaw 和 Hermes 外，所有集成都使用共享插件代码，最多依次尝试三种请求：
 
 1. **context 检索**。`POST /api/v1/search/search`，带 `mode: "context"`、`purpose: "coding"` 和会话 ID。预算、配额、查询扩写和摘要选项只在你配置后才发送；否则使用服务端默认值，包括 1,600 token 的注入预算（`max_tokens`）。
-2. **旧版 recall**。服务端版本较旧、拒绝 context 模式时，插件在 `~/.openviking/state/context-face.json` 中记录这一结果，有效 6 小时，并改调 `/api/v1/search/recall`。这个文件由本机所有集成共享，一个集成的判断对所有集成生效。
+2. **旧版 recall**。Context 检索不可用时，插件可回退到 `/api/v1/search/recall`。Context 请求返回 HTTP `400` 或 `422` 时，本轮召回结束，服务端错误会写入调试日志。
 3. **普通 find**。最后一步，插件对 `viking://~/memories` 和 `viking://~/skills` 执行 `find`，在本地排序，并按自己的 token 预算装填。`recallTokenBudget`、`recallMaxContentChars` 和 `recallPreferAbstract` 只在这一步生效。
 
 共享插件的召回不包含资源；资源文档由模型自己调用 `search` 检索。Hermes 开启资源召回选项后可以包含资源。

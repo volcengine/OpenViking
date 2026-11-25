@@ -54,7 +54,6 @@ export type RecallOptions = {
   localCompressorAvailable?: boolean;
   runCompressor?: ((prompt: string) => Promise<string | null>) | null;
   digestCachePath?: string;
-  legacyCachePath?: string;
 };
 
 export type DetailedRecall = {

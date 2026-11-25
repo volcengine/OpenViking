@@ -11,7 +11,6 @@ import {
   buildRecallBlockDetailed,
   contextRequestTimeoutMs,
   estimateTokens,
-  isContextFaceLegacy,
   postRecall,
   readPeerScopeDowngrade,
 } from "./lib/recall-core.mjs";
@@ -55,10 +54,9 @@ test("explicit event decay settings override the default protection period", () 
   assert.equal(buildContextSearchBody({ recallEventsDecayProtection: "0" }).events_time_decay_protection, "0");
 });
 
-test("context search reports an unknown parameter without retrying or marking the server as legacy", async () => {
+test("context search reports an unknown parameter without retrying", async () => {
   const calls = [];
   const events = [];
-  const legacyCachePath = await tempPath("context-face.json");
   const query = "最近一次部署故障怎么处理的？";
   const message = "Invalid request parameters: events_time_decay_protection: Extra inputs are not permitted";
   const result = await buildRecallBlockDetailed(async (path, init) => {
@@ -71,7 +69,6 @@ test("context search reports an unknown parameter without retrying or marking th
       ] } },
     };
   }, { ...resolveKnobs().settings, recallPeerScope: "actor" }, query, {
-    legacyCachePath,
     actorPeerId: "current-peer",
     legacyPeerId: "old-peer",
     log: (event, data) => events.push({ event, data }),
@@ -81,7 +78,6 @@ test("context search reports an unknown parameter without retrying or marking th
   assert.equal(calls[0].path, "/api/v1/search/search");
   assert.equal(calls[0].body.events_time_decay_protection, "30d");
   assert.equal(calls[0].body.query, query);
-  assert.equal(await isContextFaceLegacy(legacyCachePath), false);
   assert.equal(result.stage, "request_rejected");
   assert.equal(result.block, "");
   assert.deepEqual(events, [{ event: "recall_context_request_rejected", data: { status: 400, message } }]);
@@ -118,7 +114,6 @@ test("coding-agent fallback recall explicitly uses the 0.35 threshold", () => {
 
 test("buildRecallBlock injects context assembled by the server", async () => {
   const calls = [];
-  const legacyCachePath = await tempPath("context-face.json");
   const block = await buildRecallBlock(async (path, init) => {
     calls.push({ path, body: init?.body ? JSON.parse(init.body) : null });
     return {
@@ -129,7 +124,7 @@ test("buildRecallBlock injects context assembled by the server", async () => {
         stats: { used_tokens: 42, rewrite: "off" },
       },
     };
-  }, { recallMaxTokens: 1600 }, "hello world", { legacyCachePath });
+  }, { recallMaxTokens: 1600 }, "hello world");
 
   assert.equal(calls[0].path, "/api/v1/search/search");
   assert.equal(calls[0].body.mode, "context");
@@ -154,12 +149,8 @@ test("a server-side digest outlasts the ordinary request timeout", async () => {
   };
 
   const cfg = { timeoutMs: 15000, recallRewrite: "server" };
-  await buildRecallBlock(fetchJSON, cfg, "hello", {
-    legacyCachePath: await tempPath("context-face.json"),
-  });
-  await buildRecallBlock(fetchJSON, { timeoutMs: 15000 }, "hello", {
-    legacyCachePath: await tempPath("context-face.json"),
-  });
+  await buildRecallBlock(fetchJSON, cfg, "hello");
+  await buildRecallBlock(fetchJSON, { timeoutMs: 15000 }, "hello");
 
   // The server pipeline is serial: the 5s expansion fuse, retrieval and body
   // reads all run before the 30s rewrite fuse even starts, so covering the
@@ -203,7 +194,6 @@ test("explicit recall context timeout applies without rewrite or expansion", () 
 });
 
 test("buildRecallBlock prefers a cited server digest", async () => {
-  const legacyCachePath = await tempPath("context-face.json");
   const block = await buildRecallBlock(async () => ({
     ok: true,
     result: {
@@ -212,7 +202,7 @@ test("buildRecallBlock prefers a cited server digest", async () => {
       entries: [{ uri: "viking://a" }],
       stats: { rewrite: "ok" },
     },
-  }), {}, "hello", { legacyCachePath });
+  }), {}, "hello");
 
   assert.match(block, /OpenViking memory digest:/);
   assert.doesNotMatch(block, /<memory /);
@@ -227,15 +217,12 @@ test("buildRecallBlock injects nothing when server compression finds no relevant
       entries: [{ uri: "viking://a" }],
       stats: { rewrite: "no_relevant" },
     },
-  }), { recallRewrite: "server" }, "hello", {
-    legacyCachePath: await tempPath("context-face.json"),
-  });
+  }), { recallRewrite: "server" }, "hello");
 
   assert.equal(block, null);
 });
 
 test("buildRecallBlock uses local compression when configured", async () => {
-  const legacyCachePath = await tempPath("context-face.json");
   const digestCachePath = await tempPath("recall-digest.json");
   const block = await buildRecallBlock(async () => ({
     ok: true,
@@ -245,7 +232,6 @@ test("buildRecallBlock uses local compression when configured", async () => {
       stats: {},
     },
   }), { recallRewrite: "client" }, "hello", {
-    legacyCachePath,
     digestCachePath,
     runCompressor: async () => "- local fact 来源：viking://a",
   });
@@ -255,7 +241,6 @@ test("buildRecallBlock uses local compression when configured", async () => {
 });
 
 test("buildRecallBlock injects nothing when local compression finds no relevant memory", async () => {
-  const legacyCachePath = await tempPath("context-face.json");
   const digestCachePath = await tempPath("recall-digest.json");
   const block = await buildRecallBlock(async () => ({
     ok: true,
@@ -265,7 +250,6 @@ test("buildRecallBlock injects nothing when local compression finds no relevant 
       stats: {},
     },
   }), { recallRewrite: "client" }, "hello", {
-    legacyCachePath,
     digestCachePath,
     runCompressor: async () => "NO_RELEVANT_MEMORY",
   });
@@ -273,43 +257,26 @@ test("buildRecallBlock injects nothing when local compression finds no relevant 
   assert.equal(block, null);
 });
 
-test("buildRecallBlock remembers a server that only supports v1 recall", async () => {
-  const legacyCachePath = await tempPath("context-face.json");
-  const paths = [];
-  const fetchJSON = async (path) => {
-    paths.push(path);
-    if (path === "/api/v1/search/search") {
-      return { ok: false, status: 400, error: { message: "Extra inputs: mode" } };
-    }
-    if (path === "/api/v1/search/recall") {
-      return { ok: true, result: { rendered: '<memory uri="viking://a" />' } };
-    }
-    return { ok: false, status: 404 };
-  };
+test("context search does not fall back when the server rejects the mode parameter", async () => {
+  const result = await buildRecallBlockDetailed(async (path) => {
+    assert.equal(path, "/api/v1/search/search");
+    return { ok: false, status: 400, error: { message: "Extra inputs: mode" } };
+  }, {}, "hello");
 
-  await buildRecallBlock(fetchJSON, {}, "hello", { legacyCachePath });
-  assert.deepEqual(paths, ["/api/v1/search/search", "/api/v1/search/recall"]);
-  assert.equal(await isContextFaceLegacy(legacyCachePath), true);
-
-  paths.length = 0;
-  await buildRecallBlock(fetchJSON, {}, "hello again", { legacyCachePath });
-  assert.deepEqual(paths, ["/api/v1/search/recall"]);
+  assert.equal(result.stage, "request_rejected");
 });
 
-test("unrelated request errors do not mark the server as legacy", async () => {
-  const legacyCachePath = await tempPath("context-face.json");
+test("context search reports a 422 without retrying", async () => {
   const result = await buildRecallBlockDetailed(async (path) => {
     assert.equal(path, "/api/v1/search/search");
     return { ok: false, status: 422, error: "bad query" };
-  }, {}, "hello", { legacyCachePath });
+  }, {}, "hello");
 
   assert.equal(result.stage, "request_rejected");
-  assert.equal(await isContextFaceLegacy(legacyCachePath), false);
 });
 
 test("buildRecallBlock falls back to find when neither context endpoint works", async () => {
   const calls = [];
-  const legacyCachePath = await tempPath("context-face.json");
   const fetchJSON = async (path) => {
     calls.push(path);
     if (path === "/api/v1/search/search") return { ok: false, status: 503 };
@@ -340,7 +307,7 @@ test("buildRecallBlock falls back to find when neither context endpoint works", 
     recallTokenBudget: 20,
     scoreThreshold: 0.35,
     recallPreferAbstract: true,
-  }, "what happened yesterday", { legacyCachePath });
+  }, "what happened yesterday");
 
   assert.ok(calls.includes("/api/v1/search/find"));
   assert.match(block, /^<openviking-context>/);
@@ -432,7 +399,6 @@ test("under actor scope, recall also asks the peer this workspace used before", 
   const block = await buildRecallBlock(fetchJSON, { recallPeerScope: "actor" }, "hello", {
     actorPeerId: "github.com-o-r",
     legacyPeerId: "-Users-x-src-r",
-    legacyCachePath: await tempPath("context-face.json"),
   });
 
   assert.deepEqual(asked, ["github.com-o-r", "-Users-x-src-r"]);
@@ -450,7 +416,6 @@ test("under the default scope the server's own sweep covers it, so nothing extra
   await buildRecallBlock(fetchJSON, { recallPeerScope: "all" }, "hello", {
     actorPeerId: "github.com-o-r",
     legacyPeerId: "-Users-x-src-r",
-    legacyCachePath: await tempPath("context-face.json"),
   });
 
   assert.deepEqual(asked, ["github.com-o-r"]);
@@ -466,7 +431,6 @@ test("a legacy id equal to the effective one is not asked twice", async () => {
   await buildRecallBlock(fetchJSON, { recallPeerScope: "actor" }, "hello", {
     actorPeerId: "same",
     legacyPeerId: "same",
-    legacyCachePath: await tempPath("context-face.json"),
   });
 
   assert.deepEqual(asked, ["same"]);
@@ -485,7 +449,7 @@ test("a server-assembled block reports itself as one budgeted unit", async () =>
   const detailed = await buildRecallBlockDetailed(async () => ({
     ok: true,
     result: { rendered: "- viking://a/b.md — body", entries: [{ uri: "viking://a/b.md" }], stats: {} },
-  }), {}, "hello", { legacyCachePath: await tempPath("context-face.json") });
+  }), {}, "hello");
 
   assert.equal(detailed.stage, "server_assembled");
   assert.equal(detailed.contentCount, 1);
@@ -501,7 +465,7 @@ test("the ranked fallback reports what fitted the budget and what degraded", asy
     recallTokenBudget: 200,
     recallMaxContentChars: 500,
     recallPreferAbstract: true,
-  }, "what happened", { legacyCachePath: await tempPath("context-face.json") });
+  }, "what happened");
 
   assert.equal(detailed.stage, "ranked");
   const visibleContent = ["x".repeat(500), "y".repeat(500)].filter((text) => detailed.block.includes(text));
@@ -513,16 +477,15 @@ test("the ranked fallback reports what fitted the budget and what degraded", asy
 });
 
 test("an empty recall says whether the server had nothing or the threshold took it", async () => {
-  const legacyCachePath = await tempPath("context-face.json");
-  const nothing = await buildRecallBlockDetailed(fallbackFetch([]), {}, "hello", { legacyCachePath });
+  const nothing = await buildRecallBlockDetailed(fallbackFetch([]), {}, "hello");
   const belowThreshold = await buildRecallBlockDetailed(fallbackFetch([
     { uri: "viking://user/default/memories/entities/a.md", score: 0.1, abstract: "barely related", level: 1 },
-  ]), {}, "hello", { legacyCachePath: await tempPath("context-face.json") });
+  ]), {}, "hello");
 
   assert.equal(nothing.stage, "no_results");
   assert.equal(nothing.block, "");
   assert.equal(belowThreshold.stage, "filtered_out");
-  assert.equal(await buildRecallBlock(fallbackFetch([]), {}, "hello", { legacyCachePath }), null);
+  assert.equal(await buildRecallBlock(fallbackFetch([]), {}, "hello"), null);
 });
 
 for (const source of ["context", "legacy"]) {
@@ -539,7 +502,6 @@ for (const source of ["context", "legacy"]) {
         stats: { rewrite: "ok" },
       } };
     }, { recallRewrite: "client", recallCompressMinInputChars: 0 }, "remember fact", {
-      legacyCachePath: await tempPath("context-face.json"),
       digestCachePath: await tempPath("digest.json"),
       localCompressorAvailable: true,
       runCompressor: async () => { compressorCalls++; return "- unwanted local rewrite"; },
@@ -562,7 +524,6 @@ for (const source of ["context", "legacy"]) {
         stats: { rewrite: "no_relevant" },
       } };
     }, { recallRewrite: "client", recallCompressMinInputChars: 0 }, "unrelated question", {
-      legacyCachePath: await tempPath("context-face.json"),
       localCompressorAvailable: true,
       runCompressor: async () => { compressorCalls++; return "- unwanted local rewrite"; },
     });
@@ -583,7 +544,6 @@ test("legacy recall feeds normalized entries to the shared local compressor", as
       entries: [{ uri, type: "preferences", mode: "summary", summary: "Vim" }],
     } };
   }, { recallRewrite: "client", recallCompressMinInputChars: 0 }, "preferred editor", {
-    legacyCachePath: await tempPath("context-face.json"),
     digestCachePath: await tempPath("digest.json"),
     localCompressorAvailable: true,
     runCompressor: async (prompt) => { prompts.push(prompt); return `- Choose Vim ${uri}`; },
@@ -611,7 +571,6 @@ test("raw fallback compresses bounded full content before injection truncation",
     recallRewrite: "client", recallCompressMinInputChars: 0,
     recallMaxContentChars: 80, recallCompressMaxInputChars: 1200, recallTokenBudget: 200,
   }, "use the full detail", {
-    legacyCachePath: await tempPath("context-face.json"),
     digestCachePath: await tempPath("digest.json"),
     localCompressorAvailable: true,
     runCompressor: async (prompt) => { prompts.push(prompt); return `- retained detail ${uri}`; },
@@ -635,7 +594,7 @@ for (const user of ["zeus", "default"]) {
       return { ok: true, result: { memories: hit
         ? [{ uri, score: 0.9, level: 1, abstract: "recovered memory" }] : [], skills: [] } };
     }, { user, recallPreferAbstract: true }, "recover the fact", {
-      sessionId: "cx-shared-session", legacyCachePath: await tempPath("context-face.json"),
+      sessionId: "cx-shared-session",
     });
     const memoryRequests = requests.filter((body) => body.target_uri.endsWith("/memories"));
     assert.deepEqual(memoryRequests.map((body) => [body.target_uri, body.session_id || ""]), [
@@ -660,7 +619,7 @@ test("raw session recall uses find when the search endpoint is unsupported", asy
       ? [{ uri: "viking://user/default/memories/a.md", score: 0.9, level: 1, abstract: "old server fact" }]
       : [], skills: [] } };
   }, { recallPreferAbstract: true }, "old server fact", {
-    sessionId: "cx-old-server", legacyCachePath: await tempPath("context-face.json"),
+    sessionId: "cx-old-server",
   });
   assert.ok(requests.some(({ path, body }) => path.endsWith("/search") && body.session_id === "cx-old-server"));
   assert.ok(requests.some(({ path }) => path.endsWith("/find")));
@@ -679,7 +638,7 @@ for (const textLength of [20, 500]) {
     const recalled = await buildRecallBlockDetailed(fallbackFetch(items), {
       recallTokenBudget: 200, recallLimit: 10, recallMaxContentChars: 1000,
       recallPreferAbstract: true,
-    }, "use remembered details", { legacyCachePath: await tempPath("context-face.json") });
+    }, "use remembered details");
     assert.ok(recalled.block, "at least one complete URI fits the budget");
     assert.ok(estimateTokens(recalled.block) <= 200, "URI-only hints cannot bypass the budget");
     assert.equal(recalled.budgetUsed, estimateTokens(recalled.block));
