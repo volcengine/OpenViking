@@ -451,7 +451,8 @@ class OpenVikingConfig(BaseModel):
             )
         coordination = self.storage.agfs.coordination
         uses_cache = self.watch_leader_provider == "cache" or (
-            self.watch_leader_provider == "auto" and self.storage.watch_store.provider != "file"
+            self.watch_leader_provider == "auto"
+            and self.storage.watch_store.provider in {"mysql", "postgres"}
         )
         if uses_cache and "provider" not in coordination.model_fields_set:
             self.storage.agfs.coordination = coordination.model_copy(update={"provider": "cache"})
@@ -557,10 +558,10 @@ class OpenVikingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_watch_store(self) -> "OpenVikingConfig":
-        if self.storage.watch_store.provider == "mysql":
+        if self.storage.watch_store.provider in {"mysql", "sqlite"}:
             if not self.storage.watch_store.params.get("credential_encryption_key"):
                 raise ValueError(
-                    "storage.watch_store.provider='mysql' requires "
+                    f"storage.watch_store.provider='{self.storage.watch_store.provider}' requires "
                     "storage.watch_store.params.credential_encryption_key"
                 )
         return self

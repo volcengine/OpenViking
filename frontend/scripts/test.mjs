@@ -179,6 +179,8 @@ try {
     {
       cwd: root,
       env: { ...process.env, NODE_ENV: 'test', OV_UI_TEST_HOOKS: output },
+      // Full-suite runs need room for slower hosted runners; keep the watchdog.
+      timeout: 600_000,
     },
   );
   process.exitCode = await completed;

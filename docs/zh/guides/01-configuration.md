@@ -1405,7 +1405,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
-| `watch_store` | object | Watch 存储：`file`（单节点）、`mysql` 或 `postgres`（多节点共享） | `{"provider":"file"}` |
+| `watch_store` | object | Watch 存储：`file`（单进程）、`sqlite`（同机）或 `mysql` / `postgres`（多节点共享） | `{"provider":"file"}` |
 
 
 ```json
@@ -1505,6 +1505,36 @@ Task/Work/Event 更新使用 READ COMMITTED 事务，先锁 Task 行，再修改
 已有任务；生产部署切换前需安排数据迁移。
 
 #### watch_store
+
+需要本地持久化 Watch 元数据时，安装 `openviking[sqlite]` 并选择 `sqlite`。
+数据库和表会自动创建，默认路径为
+`{storage.workspace}/_system/watch/watch.db`。可通过 `params.path` 指定本地磁盘上的
+绝对路径；`params.table` 默认为 `ov_watch_tasks`，
+`params.busy_timeout_ms` 默认为 `5000`，必须为正整数。
+SQLite 在读取事务状态前获取写锁。事务（包括读取）串行执行，
+适用于 Watch 流量较低的本地部署。同一主机的多个进程可以共享数据库及
+`service_name`，不同 service name 的数据互相隔离。数据库不能放在 NFS/EFS 上，
+也不能跨主机共享。选择 SQLite 不会更改 Task store 或 PathLock 后端；
+多进程运行调度器时仍需单独配置共享协调和目标锁。SQLite 不会自动启用 Redis 协调。
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "sqlite",
+      "params": {
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+与 MySQL 一样，SQLite 必须配置 `params.credential_encryption_key`（base64 编码的
+32 字节密钥），以 AES-GCM 加密私有 `auth_state` 和 `connector_states`。
+重启时须保留密钥，共享数据的进程须使用相同密钥。运行占用、Task 关联、
+已删除但仍运行的 Watch 和 checkpoint 版本均在重启后保留，沿用缺失 Task 的宽限期。
+已有 file provider 的 Watch 不会自动导入。
 
 默认的 `file` provider 与旧版本一样，把 Watch 任务保存在内部控制文件
 `viking://resources/.watch_tasks.json` 中，只供单个 OpenViking 进程使用。任务启动时
