@@ -2,6 +2,8 @@ import { useId, useImperativeHandle, useRef } from 'react';
 import type { Ref, RefObject } from 'react';
 
 import { getCommandConsoleInlineCompletion } from './command-completion.js';
+import type { pickCommandConsoleCommands } from './command-console-empty.js';
+import { CommandConsoleQuickActions } from './command-console-quick-actions.js';
 import { useCommandConsoleComposerKeyboard } from './use-command-console-composer-keyboard.js';
 import { CommandConsoleInputMirror } from './command-console-input-mirror.js';
 import type { ResolvedCommandConsoleLabels } from './command-console-labels.js';
@@ -15,6 +17,8 @@ export interface CommandConsoleComposerProps {
   onDismiss: (value: string) => void;
   onRequestPalette: () => void;
   value: string;
+  quickCommands?: ReturnType<typeof pickCommandConsoleCommands>;
+  onPickQuickCommand: (value: string) => void;
   history: readonly string[];
   labels: ResolvedCommandConsoleLabels;
   completion: CommandConsoleCompletion;
@@ -38,6 +42,8 @@ export function CommandConsoleComposer({
   onDismiss,
   onRequestPalette,
   value,
+  quickCommands,
+  onPickQuickCommand,
   history,
   labels,
   completion,
@@ -94,6 +100,14 @@ export function CommandConsoleComposer({
       data-disabled={inputDisabled || undefined}
       aria-busy={busy || undefined}
     >
+      {quickCommands?.length ? (
+        <CommandConsoleQuickActions
+          commands={quickCommands}
+          label={labels.quickStart}
+          disabled={inputDisabled || readOnly}
+          onPick={onPickQuickCommand}
+        />
+      ) : null}
       <div className="ov-command-console__input-row" data-value={`${value}\n`}>
         <label className="ov-command-console__input-label" htmlFor={inputId}>
           {labels.placeholder}

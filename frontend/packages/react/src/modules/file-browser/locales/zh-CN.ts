@@ -2,6 +2,7 @@ import type { renderErrors as EnglishRenderErrors } from './en-US.js';
 import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
+  previewAiGenerated: 'AI 生成',
   formatCharacterCount: (count) => `${count.toLocaleString('zh-CN')} 字符数`,
   formatPreviewUpdatedAt: (time) => `更新于 ${time}`,
   previewModelNotice: '内容解析由 内容理解大模型 提供',
@@ -74,7 +75,7 @@ const messages = {
   deleteConfirm: '删除',
   deleteCancel: '取消',
   viewSwitch: '切换视图',
-  resizeTree: '调整目录树宽度',
+  resizeTree: '调整目录树大小',
   l0Summary: 'L0 摘要',
   l1Overview: 'L1 总览',
   emptyL0Summary: '暂无 L0 摘要',

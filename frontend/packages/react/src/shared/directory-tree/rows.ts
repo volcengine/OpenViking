@@ -94,19 +94,28 @@ export function flattenTree(
   depth: number,
   dirs: Record<string, DirState>,
   expanded: ReadonlySet<string>,
+  ancestors = new Set<string>(),
 ): DirectoryRow[] {
   const dir = dirs[uri];
   if (!dir) return [];
   const rows: DirectoryRow[] = [];
 
+  ancestors.add(uri);
   for (const entry of dir.entries) {
+    if (ancestors.has(entry.uri)) continue;
     const isOpen = expanded.has(entry.uri);
     // 该目录的子节点正在加载：展开态但还没有结果。
     // The directory's children are loading: expanded, but no result yet.
     const loadingChildren = isOpen && dirs[entry.uri]?.loading === true;
     rows.push(toEntryRow(entry, depth, isOpen, undefined, loadingChildren));
     if (isOpen) {
-      const children = flattenTree(entry.uri, depth + 1, dirs, expanded);
+      const children = flattenTree(
+        entry.uri,
+        depth + 1,
+        dirs,
+        expanded,
+        ancestors,
+      );
       if (children.length > 0) {
         rows.push(...children);
       } else if (loadingChildren) {
@@ -153,5 +162,6 @@ export function flattenTree(
       loading: dir.loading,
     });
   }
+  ancestors.delete(uri);
   return rows;
 }

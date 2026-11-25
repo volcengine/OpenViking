@@ -109,6 +109,17 @@
   letter-spacing: 0.04px;
   cursor: pointer;
 }
+.ov-viking-bot__quick-input-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.ov-viking-bot__quick-input-label {
+  line-height: 20px;
+}
 .ov-viking-bot__quick-inputs svg {
   display: block;
   width: 14px;

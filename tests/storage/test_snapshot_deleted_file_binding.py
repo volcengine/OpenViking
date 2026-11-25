@@ -14,9 +14,11 @@ import uuid
 
 import pytest
 
+from openviking.privacy.global_policy import UserGlobalPolicyService
 from openviking.pyagfs import get_binding_client
 from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.identity import RequestContext, Role
+from openviking.service.fs_service import FSService
 from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
@@ -183,3 +185,21 @@ async def test_missing_target_tree_lock_blocks_recreation(
     assert not target.exists()
     lease = await peer.pathlock_acquire_exact(path)
     await peer.pathlock_release(lease)
+
+
+async def test_global_snapshot_shows_only_shared_changes(snapshot_env):
+    vfs, fs_root = snapshot_env
+    ctx = _ctx(Role.GLOBAL)
+    uri = "viking://user/bob/resources"
+    home = fs_root / "test/user/bob"
+    (home / "resources").mkdir(parents=True)
+    for name in ("shared.md", "private.md"):
+        (home / "resources" / name).write_text(name)
+    (home / "GLOBAL_POLICY.md").write_text(
+        "---\ntype: global-access-policy\nschema_version: 1\ndefault: deny\nrules:\n"
+        "  - effect: allow\n    path: resources/shared.md\n    recursive: false\n---\n"
+    )
+    vfs.set_global_policy_service(UserGlobalPolicyService(vfs))
+    assert (await vfs.commit(message="snapshot", paths=[uri], ctx=ctx))["changed"] == 2
+    page = await FSService(viking_fs=vfs).diff_paths([uri], from_ref=None, to_ref="main", ctx=ctx)
+    assert page["changes"] == [{"uri": f"{uri}/shared.md", "change_type": "added"}]

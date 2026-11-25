@@ -196,7 +196,7 @@ class ResponsesProtocol(ToolProtocol):
 
     def accumulate(self, value):
         kind = value.get("type")
-        if kind in {"response.completed", "response.incomplete"}:
+        if kind in {"response.completed", "response.incomplete", "response.failed"}:
             self.envelope = copy.deepcopy(value["response"])
             self.finish = self.envelope.get("status")
             self.usage = self.envelope.get("usage") or {}

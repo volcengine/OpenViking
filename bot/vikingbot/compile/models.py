@@ -207,11 +207,13 @@ class CompileResult(BaseModel):
     created: list[str] = Field(default_factory=list)
     updated: list[str] = Field(default_factory=list)
     unchanged: list[str] = Field(default_factory=list)
-    # Skipped target-state conflicts, each containing uri, code and message; never delivered.
+    # Skipped target-state conflicts, each containing uri, code and message; never published.
     conflicts: list[dict[str, str]] = Field(default_factory=list)
     page_count: int = 0
     link_count: int = 0
     warnings: list[str] = Field(default_factory=list)
+    completion_status: Literal["partial"] | None = None
+    recovery_proof: str | None = None
 
 
 class CompileTask(BaseModel):
@@ -236,10 +238,14 @@ class CompileTask(BaseModel):
     result: CompileResult | None = None
     error: CompileErrorInfo | None = None
 
-    def public_dict(self) -> dict[str, Any]:
+    def public_dict(self, *, include_recovery_proof: bool = False) -> dict[str, Any]:
         data = self.model_dump(exclude={"principal_scope", "sanitized_request"}, exclude_none=True)
         if self.result is not None:
-            data["result"] = self.result.model_dump(by_alias=True)
+            data["result"] = self.result.model_dump(
+                by_alias=True,
+                exclude_none=True,
+                exclude=None if include_recovery_proof else {"recovery_proof"},
+            )
         return data
 
 

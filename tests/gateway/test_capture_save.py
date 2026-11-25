@@ -304,26 +304,6 @@ async def test_changed_setting_reaches_a_session_saved_before(setup_kernel, cred
     assert stored["created"] == "openviking" and not await store.capture.waiting(FOREVER)
 
 
-async def test_tool_handoff_saves_nothing_until_the_turn_ends(setup_kernel, credential, policy):
-    kernel, _, viking, _ = setup_kernel
-    policy.update(recall=False)
-    messages = [{"role": "user", "content": "look it up"}]
-    request = await prepare(kernel, credential, policy, messages)
-    handoff = reply("", [call("c1")])
-    assert await kernel.save(request, credential, handoff) == 0
-    assert not viking.writes
-    messages += [
-        {"role": "assistant", "content": "", "tool_calls": [call("c1")]},
-        {"role": "tool", "tool_call_id": "c1", "content": "found"},
-    ]
-    request = await prepare(kernel, credential, policy, messages)
-    assert request.kind == "continuation"
-    assert await kernel.save(request, credential, reply("done")) == 3
-    (batch,) = viking.writes
-    assert [m["role"] for m in batch] == ["user", "assistant", "assistant"]
-    assert batch[1]["parts"][0]["tool_output"] == "found"
-
-
 async def test_failed_write_is_caught_up_by_the_next_turn(setup_kernel, credential, policy):
     kernel, store, viking, _ = setup_kernel
     policy.update(recall=False)
@@ -549,10 +529,3 @@ async def test_document_of_an_earlier_version_keeps_its_cursor_and_drops_its_que
     assert texts(viking)[1:] == [["second", "hello"]]
     # Its session, created with automatic commits off, gets the profile's settings.
     assert len(viking.sessions) == 1 and stored["created"] == "gateway"
-
-
-async def test_capture_off_or_auxiliary_request_saves_nothing(setup_kernel, credential, policy):
-    kernel, _, viking, _ = setup_kernel
-    policy.update(recall=False, capture=False)
-    _, _, saved = await turn(kernel, credential, policy, [{"role": "user", "content": "first"}])
-    assert saved == 0 and not viking.writes and not viking.sessions

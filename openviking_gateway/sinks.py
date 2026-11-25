@@ -11,9 +11,11 @@ import time
 from collections import Counter
 from importlib.metadata import PackageNotFoundError, version
 from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
+from pathlib import Path
 
 import orjson
 
+from openviking.usage_reporter.file_log_sink import ProcessSafeTimedRotatingFileHandler
 from openviking_cli.utils.logger import CommonLogFormatter, TraceContextFilter
 
 from .client import CALL
@@ -42,6 +44,16 @@ def rotating_file(path, max_bytes, formatter):
     return handler
 
 
+class _RequestLogFile(ProcessSafeTimedRotatingFileHandler):
+    def emit(self, record):
+        # The rollover lock is taken outside the handler's own error handling. An error
+        # there must lose this line only, not end the writer thread and fill the queue.
+        try:
+            super().emit(record)
+        except Exception:
+            self.handleError(record)
+
+
 class DroppingQueueHandler(QueueHandler):
     """Hand records to a listener thread; a full queue drops the record and counts it."""
 
@@ -60,18 +72,30 @@ class DroppingQueueHandler(QueueHandler):
 
 
 class FileSink:
-    """Request records as JSON lines in a rotating file, written by a background thread."""
+    """Request records as JSON lines in a timed rotating file, written by a background thread.
 
-    def __init__(self, path, max_bytes, stats=None):
+    Rotation matches the server's usage log: UTC hours, old files named ``<path>.%Y-%m-%d_%H``.
+    """
+
+    def __init__(self, path, rotation_interval_hours=1, backup_count=168, stats=None):
         self.queue = queue.Queue(maxsize=QUEUE_SIZE)
         self.handler = DroppingQueueHandler(self.queue, stats)
         # Not registered with logging: nothing else can reach or reconfigure it.
         self.logger = logging.Logger("openviking_gateway.requests", logging.INFO)
         self.logger.propagate = False
         self.logger.addHandler(self.handler)
-        self.listener = _Listener(
-            self.queue, rotating_file(path, max_bytes, logging.Formatter("%(message)s"))
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        output = _RequestLogFile(
+            path,
+            when="H",
+            interval=rotation_interval_hours,
+            backupCount=backup_count,
+            encoding="utf-8",
+            utc=True,
         )
+        output.setFormatter(logging.Formatter("%(message)s"))
+        self.listener = _Listener(self.queue, output)
         self.listener.start()
 
     @property
@@ -205,7 +229,11 @@ class JsonQueueHandler(DroppingQueueHandler):
 
 
 def configure_logging(path=None, max_bytes=LOG_MAX_BYTES):
-    """Own standalone application output; request-record sinks retain their schema."""
+    """Own standalone application output; request-record sinks retain their schema.
+
+    Logging policy:
+    https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md
+    """
     channel = queue.Queue(maxsize=QUEUE_SIZE)
     handler = JsonQueueHandler(channel)
     handler.setLevel(logging.INFO)

@@ -109,6 +109,26 @@ test("a tool result is labelled with the name of the call it answers", () => {
   assert.equal(toolPart(parts).tool_name, "Read")
 })
 
+test("a tool result given as content blocks keeps its text and line breaks", () => {
+  const result = {
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "read",
+    content: [
+      { type: "text", text: "line one\nline two" },
+      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+      { type: "text", text: "line three" },
+    ],
+  }
+  assert.equal(toolPart(extractPartsFromPayload(result)).tool_output, "line one\nline two\n[image]\nline three")
+})
+
+test("a tool result with an unknown content block is kept as JSON", () => {
+  const content = [{ type: "text", text: "a" }, { type: "resource", uri: "file:///x" }]
+  const result = { role: "toolResult", toolCallId: "call-2", toolName: "read", content }
+  assert.equal(toolPart(extractPartsFromPayload(result)).tool_output, JSON.stringify(content))
+})
+
 test("a host system reminder is not part of the conversation", () => {
   assert.equal(
     sanitizeCapturedText("before\n<system-reminder>never store this</system-reminder>\nafter"),
@@ -180,7 +200,7 @@ test("the Claude Code adapter is the extractCaptureTurns its callers import", as
   assert.notEqual(cc.extractCaptureTurns, vendored.extractCaptureTurns)
   assert.equal(cc.sanitizeCapturedText, vendored.sanitizeCapturedText)
 
-  // Claude nests a tool result in a content array; only the adapter flattens it.
+  // Claude nests a tool result in a content array; both flatten it to text.
   const anthropic = [{
     type: "user",
     message: {
@@ -191,7 +211,7 @@ test("the Claude Code adapter is the extractCaptureTurns its callers import", as
   assert.equal(cc.extractCaptureTurns(anthropic, CAPTURE_CONFIG)[0].parts[0].tool_output, "tool output")
   assert.equal(
     vendored.extractCaptureTurns(anthropic, CAPTURE_CONFIG)[0].parts[0].tool_output,
-    JSON.stringify([{ type: "text", text: "tool output" }]),
+    "tool output",
   )
 })
 

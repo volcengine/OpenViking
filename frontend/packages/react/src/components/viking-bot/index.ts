@@ -12,9 +12,15 @@ export { VikingBotComposer } from './lazy-composer.js';
 export { VikingBotMessageList } from './viking-bot-message-list.js';
 export {
   VikingBotInteraction,
+  VikingBotConfirmation,
   DEFAULT_INTERACTION_LABELS,
 } from './interaction/index.js';
 export type { InteractionLabels } from './interaction/index.js';
+export type {
+  VikingBotConfirmationProps,
+  VikingBotConfirmationRow,
+  VikingBotConfirmationLabels,
+} from './confirmation/types.js';
 export { DEFAULT_LABELS } from './labels.js';
 export type { VikingBotDebugContext } from './message-debug.js';
 export {

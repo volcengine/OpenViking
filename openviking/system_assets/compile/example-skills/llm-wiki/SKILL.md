@@ -43,12 +43,16 @@ Default to `entity` and `concept`; use other types only when their requirements 
 | `analysis` | A cross-source question with evidence scope, assumptions, reasoning, counterevidence, uncertainty, and conclusions. | `analysis/<title>.md` |
 | `summary` | Only when the task explicitly requests source-level digests. Preserve that source's claims, perspective, evidence, and limits; do not present them as consensus. | `summary/<title>.md` |
 
+For a new knowledge page, name the subject in the output language. Use that title
+for the filename, H1, and index link text. Drop source-folder sort prefixes such
+as `06_`. Keep identifiers that belong to the subject, such as `API` or `v2`.
+
 For each source, update the existing pages it informs. Create a linked page for
 an important subject the Wiki does not yet cover. Keep passing mentions in context.
 
 Always include the root `index.md`, with `type: index`, in the update. Briefly state the
 Wiki's scope, group all active knowledge pages by useful topics or types, and give each
-its canonical link and a one-line retrieval summary. Preserve valid unchanged entries;
+its canonical link followed by its exact frontmatter `description`. Preserve valid unchanged entries;
 remove or revise entries only after checking their targets. Use known final paths/URIs.
 Use the index for navigation. Any knowledge page may draw on multiple sources.
 Use `analysis` when the page develops a conclusion from the evidence.
@@ -62,30 +66,35 @@ begin with the actual values in this shape:
 ---
 type: concept
 title: Canonical page title
-description: One factual sentence describing the page's retrieval purpose.
-tags: [useful, tags]
+description: One sentence naming the subject and one concrete detail covered on the page.
+tags: [topic-tag]
 ---
 ```
 
-- Require non-empty `type`, `title`, and single-line `description`; tags are optional.
+- Require non-empty `type`, `title`, and single-line `description`. Do not mention
+  conflicts in the description or index entry.
   Follow frontmatter with one H1 matching the title. Use `type: index` for the root index.
+- Give each knowledge page at least one short English topic tag, such as
+  `api-versioning`. Reuse an existing tag when it means the same thing.
+  Tags are optional for the root index.
 - Open with one or two sentences defining the subject, its scope, and retrieval purpose.
   Put canonical terms and important aliases near the top. Keep pages self-contained,
   concise, and scannable; use prose for explanation and tables for naturally tabular facts.
-- Cite exact supplied links, source URIs, or repository-relative paths near material
-  claims, using known section/line/symbol locators. Give links readable source titles
-  while preserving their exact targets. Never fabricate locators or hide attribution.
-- Collect page-level sources under one level-2 heading in the output language, such as
-  `## Sources`. Merge and deduplicate links by target; do not duplicate this section,
-  singleton headings, frontmatter keys, or identical list items. Avoid repeating the
-  same citation inline and in the source list or using an unheaded `Source:` line.
+- Organize the body by topic. Read the source files for each topic and explain
+  their concrete claims and where they apply. A directory summary or a list
+  of links alone is insufficient.
+  Use a separate section for each source only when the task requests source summaries.
+- Put cited sources under `## 来源` in Chinese or `## Sources` in English.
+  Use one bullet per unique target. Each bullet contains only a Markdown link to the exact source URI.
+  For files, use the filename without its extension as the link text.
 - Read an existing page fully before editing. Preserve accurate unique information,
   manual context, aliases, and useful relationships. Integrate complementary evidence,
   revise superseded claims, qualify periods/versions, and leave unrelated pages alone.
   Protected human resolutions below take precedence over automatic rewriting.
-- Link related pages when evidence supports the relationship. Add a small diagram only
-  when it clarifies a multi-part relationship, sequence, state, or data model; every
-  node and edge must be supported. Use actual paths, symbols, keys, and commands only.
+- When drafting or updating a page, identify evidence-supported relationships to
+  existing Wiki pages and pages planned for this compile. Link the first relevant
+  mention in the body as `[page title](relative/path.md)`, resolving the target's
+  final path relative to the current page.
 - Narrow or skip unsupported content. Do not turn source text into assumed consensus
   or add general knowledge to fill gaps.
 
@@ -111,10 +120,11 @@ exit as a failed write.
 
 ### Compare sources before drafting
 
-Compare material claims **between input sources**, within each source, against related
-existing Wiki pages, and across this compile's output. This applies on the first compile
-even when no Wiki exists. Align subject, attribute, scope, conditions, version, period,
-environment, units, and measurement definitions before judging incompatibility.
+On every compile, including the first, compare what the source files say about
+the same question under the same conditions. Check the existing Wiki and draft
+for claims about that question as well. If sources prescribe different rules
+for the same case and none establishes which rule applies, state what remains
+unclear in the page body and record one `unfixed` conflict about which rule to use.
 
 Check values, dates, negation, states, responsibilities, procedures, relationships,
 identity/unit mistakes, unsupported citations, overgeneralized scope, opinions or
@@ -132,8 +142,10 @@ Attribution alone does not remove a contradiction between requirements for the s
 Style preferences are not conflicts. Comments and repair history are metadata, not
 evidence that an old problem still exists.
 
-For each material source disagreement, write a record on the page that carries the
-affected claim, even if the prose accurately attributes both sides.
+Record each material disagreement once on the page that states it, even when both
+claims are attributed. If the sources only name different rules for the same case,
+record one disagreement about which rule applies. Record a separate disagreement
+for an item only when the sources give conflicting requirements for that item.
 In `reason`, identify the conflicting claims and their known locations, which may
 be in the same source. State any gaps in the evidence.
 Do not silently choose a side, omit a relevant opposing claim, or replace the record
@@ -184,9 +196,9 @@ Preserve unrelated content and protected human conclusions.
 
 - fact: If the supplied evidence establishes which claim applies, update the Wiki
   and set `state` to `fixed`. Explain the supporting evidence in `resolution_basis`.
-  Otherwise, set `state` to `unfixed`. On a new page, present both claims and explain
-  that the evidence is insufficient to determine which claim applies. On an existing
-  page, preserve the affected sentence.
+  Otherwise, set `state` to `unfixed`. On a new page, state the specific uncertainty
+  in the relevant section of the body. On an existing page, preserve the affected
+  sentence. Summarize what each source requires in `problem_description`.
 
 ### Current results and human resolutions
 
@@ -207,8 +219,9 @@ Preserve unrelated content and protected human conclusions.
 - The two Chinese human-resolution values stay exact in every output language.
   If a human record cannot be parsed or its protected text cannot be located,
   report the issue and leave that page unchanged; do not discard it or invent an anchor.
-- Merge current ordinary records and retained human resolutions into one trailing
-  block, deduplicated by affected claim, issue, and evidence. Preserve distinct issues.
+- Use one record per disputed question and scope on each affected page. Combine
+  its source locations in `reason`. Keep all records in one trailing block
+  and preserve retained human resolutions verbatim.
 
 ## Conflict record format
 
@@ -218,33 +231,34 @@ Keep keys and enum values unchanged;
 Write descriptive values in the output language, except for the exact Chinese strings required in `fix_plan` and `resolution_basis`
 for recorded human repairs.
 
-| Field | Type and meaning |
-| --- | --- |
+| Field | Type and meaning                                                                                                                                                                                 |
+| --- |--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `match_text` | One complete sentence copied verbatim from the final Wiki page body that identifies the affected claim. Exclude frontmatter and HTML comments. For a repaired claim, use the corrected sentence. |
-| `problem_description` | Describe the specific issue. When sources conflict, state what each source says and where their claims disagree. For a repaired Wiki claim, quote the original wording and explain what was wrong. |
-| `reason` | Non-empty explanation of the conflicting claims or evidence gap, actual source locations, and why their scopes conflict. |
-| `severity` | Exactly `high`, `medium`, or `low`. |
-| `state` | Exactly `fixed` for a verified automatic repair or a recorded human repair, or `unfixed` while the conflict remains open. Determine the state independently of severity. |
-| `begin_time` | Integer Unix seconds when the issue is first detected, not a source date or estimated origin time. |
-| `fix_plan` | For an automatic repair, provide a non-empty description of the actual correction and scope. Use exactly `用户手动解决内容冲突，修正后的内容如正文所示` for a human repair and `""` for `unfixed`. |
-| `fix_time` | For `fixed`, integer Unix seconds after repair and verification, no earlier than `begin_time`; for `unfixed`, `null`. Retained human times do not change. |
-| `resolution_basis` | For an automatic repair, provide a non-empty explanation of the evidence location, supporting content, and applicability. Use exactly `人工修复` for a human repair and `""` for `unfixed`. |
-| `conflict_type` | Exactly human_conclusion, opinion, or fact, as defined above. |
-| `resolved_by` | Use `"compile_agent"` for an automatic repair and `""` for `unfixed`. For a retained human resolution, preserve its existing value. |
+| `problem_description` | Say exactly what differs in one plain sentence. For a repaired Wiki claim, quote the original wording and explain the error.                                                                     |
+| `reason` | Explain why the claims conflict in the same case. Cite each claim’s source and quote the relevant wording where available, including who made the claim and when, if known. If the conflict remains unresolved, say what evidence or decision would resolve it.                                                                            |
+| `severity` | Exactly `high`, `medium`, or `low`.                                                                                                                                                              |
+| `state` | Exactly `fixed` for a verified automatic repair or a recorded human repair, or `unfixed` while the conflict remains open. Determine the state independently of severity.                         |
+| `begin_time` | Integer Unix seconds when the issue is first detected, not a source date or estimated origin time.                                                                                               |
+| `fix_plan` | For an automatic repair, provide a non-empty description of the actual correction and scope. Use exactly `用户手动解决内容冲突，修正后的内容如正文所示` for a human repair and `""` for `unfixed`.                     |
+| `fix_time` | For `fixed`, integer Unix seconds after repair and verification, no earlier than `begin_time`; for `unfixed`, `null`. Retained human times do not change.                                        |
+| `resolution_basis` | For an automatic repair, provide a non-empty explanation of the evidence location, supporting content, and applicability. Use exactly `人工修复` for a human repair and `""` for `unfixed`.          |
+| `conflict_type` | Exactly human_conclusion, opinion, or fact, as defined above.                                                                                                                                    |
+| `resolved_by` | Use `"compile_agent"` for an automatic repair and `""` for `unfixed`. For a retained human resolution, preserve its existing value.                                                              |
 
 Read real time from the execution environment at detection and after verification
 (for example, `date +%s`); never estimate, copy example timestamps, use milliseconds,
 or serialize times as strings.
 
-After finalizing the Wiki page body, copy the complete sentence that addresses
-the affected claim verbatim into `match_text`, including its punctuation.
+Choose a complete sentence in the final Wiki body that states what the reader
+needs to know about the disputed point. If the rule is unclear, state exactly
+what is unclear. Copy the sentence verbatim into `match_text`, including punctuation.
 Exclude frontmatter and HTML comments. For a repaired claim, use the corrected
 sentence. If the claim appears only in a table, code block, or frontmatter,
 explain it in a body sentence and use that sentence as `match_text`. For automatic factual repairs,
 also correct any affected frontmatter. Preserve the
 original `match_text` of retained human resolutions verbatim.
 
-End every new/updated file, including `index.md`, after its body and Sources section with
+End every new/updated file, including `index.md`, after its body and localized source section with
 **exactly one** `<!-- CONFLICTS_CONTENT ... -->` comment. Do not create a conflict page or
 visible conflict section. Its payload is comma-separated JSON objects **without an
 outer array or wrapper** and without a final trailing comma.
@@ -258,22 +272,43 @@ When there are no current records or retained human resolutions, output:
 -->
 ```
 
-For a first compile, the following fictional same-version sources disagree about access
-control. The final body contains this complete, attributed sentence:
+### Example of a readable conflict record
+
+Use this fictional example as a model. The source paths and timestamp are illustrative.
+
+- [Access Guide](viking://resources/export-guide/access-guide.md) describes v2 production
+  reports. **Report contents** gives the period dates and completed and failed job totals.
+  **Export access** allows downloading the selected period's totals as a CSV without signing in.
+- [Security Policy](viking://resources/export-guide/security-policy.md) requires sign-in
+  in **Export authentication** for the same v2 production reports.
 
 ```markdown
-The access guide permits anonymous exports, but the security policy requires authentication for the same production endpoint, and the sources do not establish which rule applies.
-```
+# V2 production reports
 
-Its `unfixed` record is below. Paths and times are illustrative; actual output uses
-real evidence and event times.
+V2 production reports summarize how production jobs ran during a selected period.
 
-```markdown
+## Report contents
+
+Each report shows the start and end dates of the reporting period. It lists
+separate totals for completed and failed production jobs.
+
+## Export access
+
+It is unclear whether users must sign in to export v2 production reports.
+
+Select the reporting period, then download the report as a CSV file. The file
+contains the completed and failed job totals for that period.
+
+## Sources
+
+- [access-guide](viking://resources/export-guide/access-guide.md)
+- [security-policy](viking://resources/export-guide/security-policy.md)
+
 <!-- CONFLICTS_CONTENT
 {
-  "match_text": "The access guide permits anonymous exports, but the security policy requires authentication for the same production endpoint, and the sources do not establish which rule applies.",
-  "problem_description": "The access guide allows anonymous exports from the production endpoint, while the security policy requires users to authenticate before exporting from it.",
-  "reason": "The Export access section of sources/access.md permits anonymous production exports in v2; the same-version Export authentication section of sources/security.md requires authentication. Scope and effective period coincide, with no established precedence.",
+  "match_text": "It is unclear whether users must sign in to export v2 production reports.",
+  "problem_description": "The access guide allows exports without signing in, while the security policy requires sign-in.",
+  "reason": "See Export access in viking://resources/export-guide/access-guide.md and Export authentication in viking://resources/export-guide/security-policy.md. Both sections cover v2 production exports, and neither document says which rule takes precedence.",
   "severity": "high",
   "state": "unfixed",
   "begin_time": 1792500000,
@@ -292,11 +327,13 @@ real evidence and event times.
   uses the appropriate page type, and has valid frontmatter with an H1 matching
   its title.
 - Index coverage: Verify that `index.md` lists every active knowledge page with
-  its canonical link and a one-line description of what readers can find there.
+  its canonical link and its exact frontmatter `description`.
 - Conflict records: Check all eleven fields in newly generated records against the
   schema and verify the cited evidence. Confirm that each `state` is exactly `fixed`
-  or `unfixed`. Check that the decoded `match_text` exactly matches one complete
-  sentence about the affected claim in the final Wiki page body, excluding
-  frontmatter and HTML comments. When sources disagree, verify that
-  `problem_description` identifies the specific point of disagreement. On updates,
-  preserve existing human resolutions and their protected text verbatim.
+  or `unfixed`.
+- Check that each `match_text` appears verbatim in the prose body, excluding
+  frontmatter and HTML comments. A repeated sentence still counts as a match.
+  For the same `match_text`, keep one record, preferring `unfixed` over `fixed`.
+  Always keep every human resolution verbatim. If the same text also has an
+  open conflict, keep one `unfixed` record alongside it.
+  Verify that each `problem_description` identifies the disagreement.

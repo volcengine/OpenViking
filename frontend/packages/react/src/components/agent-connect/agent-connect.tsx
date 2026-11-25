@@ -2,12 +2,15 @@ import { withMonitoring } from '../../shared/monitoring/with-monitoring.js';
 import { useTrack } from '../../shared/analytics/use-track.js';
 import { useExposure } from '../../shared/analytics/use-exposure.js';
 import { useLocale } from '../../shared/locale-context.js';
-import { useId, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 
 import { AgentConnectDetailView } from './agent-connect-detail.js';
 import { getAgentConnectDesign } from './agent-connect-design.js';
 import { resolveAgentConnectLabels } from './agent-connect-copy.js';
-import { DEFAULT_BASE_URL } from './agent-connect-instructions.js';
+import {
+  DEFAULT_BASE_URL,
+  PRELAUNCH_BASE_URL,
+} from './agent-connect-instructions.js';
 import type {
   AgentConnectItem,
   AgentConnectProps,
@@ -25,7 +28,8 @@ export type {
 function AgentConnectView({
   apiKey,
   locale: localeProp,
-  baseUrl = DEFAULT_BASE_URL,
+  baseUrl: baseUrlProp,
+  isPrelaunch = false,
   isEnterprise = false,
   agreementUrl,
   showOverseasTag,
@@ -37,10 +41,44 @@ function AgentConnectView({
   className,
   ...rest
 }: AgentConnectProps) {
+  const baseUrl = isPrelaunch
+    ? PRELAUNCH_BASE_URL
+    : (baseUrlProp ?? DEFAULT_BASE_URL);
   const track = useTrack();
   const exposure = useExposure('agent_connect_show');
   const locale = useLocale(localeProp);
   const id = useId();
+  const listRef = useRef<HTMLUListElement>(null);
+  // Sticky positioning follows the nearest scrolling ancestor. Keep the list
+  // within that scrollport as the host resizes, using 100dvh for page scrolling.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    let host = list.parentElement;
+    while (
+      host &&
+      host !== document.body &&
+      host !== document.documentElement
+    ) {
+      if (
+        /^(auto|scroll|hidden|overlay)$/.test(getComputedStyle(host).overflowY)
+      ) {
+        const scrollHost = host;
+        const property = '--ov-ui-agent-connect-scroll-height';
+        const updateHeight = () => {
+          list.style.setProperty(property, `${scrollHost.clientHeight}px`);
+        };
+        updateHeight();
+        const observer = new ResizeObserver(updateHeight);
+        observer.observe(scrollHost);
+        return () => {
+          observer.disconnect();
+          list.style.removeProperty(property);
+        };
+      }
+      host = host.parentElement;
+    }
+  }, []);
   const [localTabId, setLocalTabId] = useState<AgentConnectTabId>('mainstream');
   const [localSelection, setLocalSelection] = useState({
     mainstream: 'codex',
@@ -132,7 +170,7 @@ function AgentConnectView({
           role="tabpanel"
           aria-labelledby={`${id}-tab-${activeIndex}`}
         >
-          <ul className="ov-agent-connect__list">
+          <ul ref={listRef} className="ov-agent-connect__list">
             {items.map((item) => (
               <li key={item.id}>
                 <button

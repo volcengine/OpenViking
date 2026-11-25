@@ -10,7 +10,7 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Mapping
 
-from openviking.concurrency import bounded_map
+from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
 from openviking.observability.log_safety import safe_path_for_log
 from openviking.storage.abstract_overview import parse_overview_file_summaries
 from openviking.storage.index_action import FieldPatch, IndexAction
@@ -1369,7 +1369,6 @@ async def execute_content_tree_actions(
     store: Any,
     artifact_ref: Any,
     target: Any,
-    concurrency: int | None = None,
 ) -> None:
     """Commit planned content mutations before any asynchronous work."""
 
@@ -1408,12 +1407,6 @@ async def execute_content_tree_actions(
     file_actions = [action for action in actions if action.new_kind == "file"]
     if not file_actions:
         return
-    if concurrency is None:
-        from openviking_cli.utils.config import get_openviking_config
-
-        concurrency = int(
-            get_openviking_config().queue_workers.add_resource.file_operation_concurrency
-        )
 
     async def write(action: ContentTreeAction) -> None:
         async def read_and_write() -> None:
@@ -1422,7 +1415,7 @@ async def execute_content_tree_actions(
 
         await run_action(action, read_and_write())
 
-    await bounded_map(file_actions, write, concurrency=max(1, concurrency))
+    await bounded_map(file_actions, write, concurrency=FILE_TASK_CONCURRENCY)
 
 
 __all__ = [

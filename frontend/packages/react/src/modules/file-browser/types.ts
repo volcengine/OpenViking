@@ -54,6 +54,10 @@ export interface FileBrowserDashboardLabels {
   openExperience?: string;
   openWiki?: string;
   wikiConflicts?: string;
+  /** Number of unresolved conflict records in a file. */
+  wikiConflictCount?: (count: number) => string;
+  /** Number of files with unresolved conflicts in a directory. */
+  wikiConflictFileCount?: (count: number) => string;
   failed?: string;
 }
 
@@ -70,6 +74,8 @@ export interface FileBrowserLabels {
   formatPreviewUpdatedAt?: (time: string) => string;
   /** 资源预览的模型提示。空字符串可隐藏。Model notice for resources; pass an empty string to hide it. */
   previewModelNotice?: string;
+  /** AI 生成标识。AI-generated content label. */
+  previewAiGenerated?: string;
   /** 未选中资源时的提示。Message shown when no resource is selected. */
   empty?: string;
   /** 加载失败提示。Load failure message. */
@@ -232,6 +238,8 @@ export interface FileBrowserProps extends Omit<
   acl?: boolean | FileBrowserAclOptions;
   /** 禁用预览编辑、导入与文件删除。Disables preview editing, import and file deletion. */
   readOnly?: boolean;
+  /** 隐藏目录树中无权访问的节点，保留可穿透目录；默认关闭。Hides denied tree entries while retaining traversal-only directories; off by default. */
+  hideDeniedEntries?: boolean;
   /** 内置预览操作的显隐开关，默认按资源能力显示。Visibility flags for native preview operations. */
   previewActions?: FileBrowserPreviewActions;
   /** 可选文案语言；继承上层，最终默认英文。Optional locale; inherits or defaults to en-US. */

@@ -32,7 +32,7 @@ function MessageActions({
           type="default"
           key={`${messageId}:${action.key}`}
           htmlType="button"
-          className={`ov-viking-bot__message-action${action.appearance === 'pill' ? ' ov-viking-bot__message-action--pill' : ''}`}
+          className={`ov-viking-bot__message-action${action.status === 'success' ? ' ov-viking-bot__message-action--success' : ''}${action.appearance === 'pill' ? ' ov-viking-bot__message-action--pill' : ''}`}
           icon={action.icon}
           loading={action.loading}
           disabled={

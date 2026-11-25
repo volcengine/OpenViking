@@ -113,7 +113,7 @@ test('Enabling describes the start request and Checking describes its readiness 
   });
   try {
     await tick();
-    await host.press('Enable VikingBot');
+    await host.press('Start using VikingBot');
     await announceFrame();
     assert.equal(starts, 1);
     assert.match(

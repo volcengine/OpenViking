@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -111,6 +112,7 @@ class TrajectoryRolloutAnalyzer:
             case_candidates=context.case_candidates,
             # Only feedback present in the extraction input changes trajectory identity.
             extraction_scope=extraction_messages[-1].content if feedback_injected else "",
+            evaluation_passed=evaluation.passed if evaluation is not None else None,
         )
         contexts = list((result or {}).get("contexts", []))
         skill_gradients = list((result or {}).get("skill_gradients", []))
@@ -162,6 +164,7 @@ class TrajectoryRolloutAnalyzer:
         source_archive_uri: str = "",
         case_candidates: list[dict[str, Any]] | None = None,
         extraction_scope: str = "",
+        evaluation_passed: bool | None = None,
     ) -> dict[str, list[Any]]:
         """Extract trajectory and/or reusable skill operations from rollout messages.
 
@@ -176,6 +179,9 @@ class TrajectoryRolloutAnalyzer:
         empty_result: dict[str, list[Any]] = {"contexts": [], "skill_gradients": []}
         if not messages or ctx is None:
             return empty_result
+
+        if evaluation_passed is None:
+            evaluation_passed = _commit_evaluation_passed(messages)
 
         vlm_config = None
         if self.vlm is None:
@@ -206,6 +212,7 @@ class TrajectoryRolloutAnalyzer:
             case_name=case_name,
             source_archive_uri=source_archive_uri,
             consumed_experience_uris=consumed_experience_uris,
+            evaluation_passed=evaluation_passed,
         )
         if phase_result is None:
             return empty_result
@@ -225,6 +232,7 @@ class TrajectoryRolloutAnalyzer:
         case_name: str = "",
         source_archive_uri: str = "",
         consumed_experience_uris: list[str] | None = None,
+        evaluation_passed: bool | None = None,
     ) -> tuple[list[str], list[str], list[Context], list[PatchSemanticGradient]] | None:
         if self.vlm is None:
             vlm_config = provider._vlm_config
@@ -301,6 +309,16 @@ class TrajectoryRolloutAnalyzer:
                 for uri in op.uris
                 for case_uri in op.memory_fields.get("case_uris", [])
             )
+
+            # A session-wide grade must not label unrelated tasks.
+            if (
+                evaluation_passed is not None
+                and len(traj_ops.upsert_operations) == 1
+                and len(provider.case_candidates) <= 1
+            ):
+                fields = traj_ops.upsert_operations[0].memory_fields
+                if fields.get("case_uris") != []:
+                    fields["outcome"] = "success" if evaluation_passed else "failure"
 
             memory_result = MemoryUpdateResult()
             if include_trajectories:
@@ -539,6 +557,23 @@ def _trajectory_search_tags_by_uri(
             if uri:
                 result[uri] = list(tags)
     return result
+
+
+def _commit_evaluation_passed(messages: list[Message]) -> bool | None:
+    for message in reversed(messages):
+        if message.role != "user" or not message.content.startswith(
+            "# OpenViking OutcomeEvaluation\n"
+        ):
+            continue
+        try:
+            payload = json.loads(message.content.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+        except (IndexError, ValueError):
+            logger.warning("Cannot read commit OutcomeEvaluation JSON")
+            return None
+        evaluation = payload.get("evaluation") if isinstance(payload, dict) else None
+        passed = evaluation.get("passed") if isinstance(evaluation, dict) else None
+        return passed if isinstance(passed, bool) else None
+    return None
 
 
 def _messages_with_evaluation_feedback(

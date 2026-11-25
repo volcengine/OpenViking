@@ -41,7 +41,7 @@ function assertCancelled(host) {
   assert.notEqual(card.getAttribute('aria-busy'), 'true');
   assert.equal(card.querySelector('[aria-busy="true"]'), null);
   assert.equal(card.querySelector('button'), null);
-  assert.equal(host.button('Enable VikingBot'), undefined);
+  assert.equal(host.button('Start using VikingBot'), undefined);
   assert.equal(host.button('Retry'), undefined);
 }
 const unexpectedRequest = async () =>

@@ -34,6 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ccache \
     cmake \
     git \
+    libssl-dev \
+    pkg-config \
  && rm -rf /var/lib/apt/lists/*
 
 # Route gcc/g++/cc through ccache so cmake (which asks shutil.which("gcc")) picks
@@ -84,19 +86,18 @@ RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     fi; \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry --extra mysql --extra redis-mysql --extra reporting \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry --extra mysql --extra redis-mysql --extra reporting \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
             exit 2 \
             ;; \
-    esac
+    esac; \
+    uv sync --locked --no-editable --reinstall-package openviking --extra bot --extra gemini --extra opengauss --extra expiry --extra mysql --extra reporting
 
 # Preload every tree-sitter grammar at build time. The build network can reach
 # GitHub, while production usually cannot, so the populated cache is copied into

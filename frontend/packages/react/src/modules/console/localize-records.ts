@@ -13,9 +13,15 @@ export function localizeConsoleRecords(
   locale: Locale,
   commandOptions?: ConsoleCommandOptions,
 ) {
-  const { telemetryResult } = resolveConsoleLocale(locale);
+  const messages = resolveConsoleLocale(locale);
   return records.map(
-    ({ localMessage, taskKeys: _taskKeys, telemetry, ...record }) => {
+    ({
+      localMessage,
+      resultNotice,
+      taskKeys: _taskKeys,
+      telemetry,
+      ...record
+    }) => {
       if (localMessage) {
         return {
           ...record,
@@ -24,6 +30,14 @@ export function localizeConsoleRecords(
             text: formatConsoleMessage(localMessage, locale),
           },
         };
+      }
+      if (resultNotice) {
+        const message = messages[resultNotice];
+        const content =
+          record.content?.variant === 'search-list'
+            ? { ...record.content, summary: message }
+            : { variant: 'text' as const, text: message };
+        return { ...record, content };
       }
       if (record.content?.variant === 'command-help') {
         return {
@@ -38,7 +52,7 @@ export function localizeConsoleRecords(
             ...record.content,
             lines: [
               ...record.content.lines,
-              telemetryResult(JSON.stringify(telemetry, null, 2)),
+              messages.telemetryResult(JSON.stringify(telemetry, null, 2)),
             ],
           },
         };

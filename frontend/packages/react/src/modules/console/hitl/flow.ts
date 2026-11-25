@@ -98,7 +98,7 @@ export function outputDirectories(
       ? '/' + stem + (stem.endsWith(suffix) ? '' : suffix)
       : '';
   const personal = userId
-    ? `viking://user/${encodeURIComponent(userId)}/resources`
+    ? `viking://user/${userId}/resources`
     : 'viking://~/resources';
   const suggested = parseCompileUri(card.request.initialValue ?? '');
   const existing =
@@ -106,9 +106,7 @@ export function outputDirectories(
   const generated = path
     ? [`viking://resources${path}`, `${personal}${path}`]
     : [];
-  const personalAlias = userId
-    ? `viking://user/${encodeURIComponent(userId)}/`
-    : undefined;
+  const personalAlias = userId ? `viking://user/${userId}/` : undefined;
   const comparisonLabel = (uri: string) =>
     formatCompileUriLabel(
       personalAlias && uri.startsWith('viking://~/')

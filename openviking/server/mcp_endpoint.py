@@ -1520,10 +1520,10 @@ async def ls(
         Field(description=_INCLUDE_TAGS_DESCRIPTION),
     ] = False,
 ) -> str:
-    """List one sorted page under a viking:// directory URI.
+    """List one sorted directory page or return the requested file itself.
 
     Args:
-        uri: Directory URI to list; defaults to "viking://" like tree and glob.
+        uri: File or directory URI; defaults to "viking://" like tree and glob.
         recursive: Whether to recursively list descendants.
         offset: Number of visible entries to skip.
         limit: Optional maximum number of entries.
@@ -1619,10 +1619,10 @@ async def tree(
     offset: int = 0,
     limit: int | None = None,
 ) -> str:
-    """Show one visible page from a recursive directory tree.
+    """Show one directory-tree page or a file as a single-node tree.
 
     Args:
-        uri: Directory URI to traverse.
+        uri: File or directory URI to traverse.
         level_limit: Maximum traversal depth.
         node_limit: Existing default result limit.
         include_abstract: Whether to include directory summaries (a skill directory's

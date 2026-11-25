@@ -337,6 +337,7 @@ def _has_initial_user_config(user_config: UserConfig | None) -> bool:
             or user_config.memory_policy
             or user_config.ttl is not None
             or user_config.privacy.model_dump(exclude_none=True)
+            or "team_compile_status" in user_config.model_fields_set
         )
     )
 
@@ -460,6 +461,7 @@ def _user_settings_result(
     return {
         "account_id": ctx.account_id,
         "user_id": ctx.user.user_id,
+        "team_compile_status": user_config.team_compile_status,
         "add_targets": {
             "resource_uri": add_targets.resource_uri,
             "skill_uri": add_targets.skill_uri,

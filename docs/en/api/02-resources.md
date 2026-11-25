@@ -225,7 +225,7 @@ This endpoint is the core entry point for resource management. It supports vario
 - Native HTTPS Git credentials in `args.auth_config` remain request-local when `watch_interval <= 0`. When `watch_interval > 0`, OpenViking stores the repository-bound username/token in private watch state and restores it only for later Git fetches. The credentials are excluded from ordinary queue payloads and watch API/MCP/CLI responses. Git PATs have no generic refresh flow; rotate an expired or revoked token by recreating the watch. Legacy URL-embedded credentials such as `https://user:token@host/repo.git` remain accepted and are passed through unchanged; because that URL is also the source identifier, it may be recorded in process arguments, logs, queues, resource metadata, and watch state. Prefer `args.auth_config` for new integrations. Plaintext HTTP authentication and authenticated redirects for `args.auth_config` remain rejected.
 - The token travels in the HTTPS request body. Keep diagnostic request-body dumping disabled in production because explicitly enabling it can record secrets.
 - Memory generated from `reason` is extracted through the same pipeline as `session.commit`. It uses `reason`, the resource URI, available source name, and available directory abstract; it does not inspect or expand the full resource content. OpenViking writes to existing memory types such as `entities`, `events`, or `preferences`, not a dedicated resource memory directory.
-- When deleting a resource, OpenViking scans the self or peer memories targeted by the current context before deletion, removes the matching resource URI and content introduced by that `reason`, and refreshes the semantic index for the affected memories.
+- Deleting a resource leaves existing memory content and its resource references in place.
 - Other sources with `wait=false` finish source parsing, target resolution, and AGFS writes before returning. Only semantic and embedding queues continue asynchronously.
 - `processing_mode=vectors_only` does not call the VLM semantic-understanding stage and does not generate or refresh `.abstract.md` / `.overview.md`. For existing targets, it preserves existing semantic artifacts and existing semantic vectors. It still updates the resource tree, vectorizes current non-hidden files when `build_index=true`, and removes detail vectors for files deleted during refresh.
 - `processing_mode` belongs to `add_resource`. The admin `reindex` API/CLI continues to use `mode` (`vectors_only`, `semantic_and_vectors`) for maintenance operations on already-ingested data.
@@ -871,6 +871,9 @@ Delete a child of `viking://resources/`. This operation requires MANAGE access,
 removes associated vector records, refreshes parent semantic metadata, and
 synchronizes affected watches.
 
+Existing memories retain their content and `resource_refs`, including memories
+generated from `reason` during import.
+
 **HTTP**
 
 ```http
@@ -881,7 +884,7 @@ DELETE /api/v1/resources?uri={uri}
 |-----------------|------|----------|---------|-------------|
 | `uri` | string | Yes | - | Shared resource URI to delete; the shared root is not allowed |
 | `recursive` | boolean | No | `false` | Delete a directory recursively |
-| `wait` | boolean | No | `true` | Wait for semantic cleanup and refresh |
+| `wait` | boolean | No | `true` | Wait for parent semantic refresh |
 
 ```bash
 curl -X DELETE "http://localhost:1933/api/v1/resources" \

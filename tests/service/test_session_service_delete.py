@@ -52,22 +52,10 @@ def session_storage(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("filename", ["messages.jsonl", ".meta.json"])
-async def test_delete_does_not_read_or_parse_session_contents(session_storage, filename):
-    state = session_storage
-    state.agfs.write(f"{state.path}/{filename}", "malformed JSON")
-
-    assert await state.service.delete(state.session_id, state.ctx) is True
-
-    assert not state.agfs.exists(state.path)
-    state.agfs.read.assert_not_called()
-    state.vector.count.assert_not_awaited()
-    state.vector.delete_uris.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_delete_unregisters_expiry_only_after_removing_session(session_storage):
     state = session_storage
+    state.agfs.write(f"{state.path}/messages.jsonl", "malformed messages")
+    state.agfs.write(f"{state.path}/.meta.json", "malformed metadata")
 
     async def unregister(identity):
         assert not state.agfs.exists(state.path)
@@ -76,6 +64,10 @@ async def test_delete_unregisters_expiry_only_after_removing_session(session_sto
 
     assert await state.service.delete(state.session_id, state.ctx) is True
 
+    assert not state.agfs.exists(state.path)
+    state.agfs.read.assert_not_called()
+    state.vector.count.assert_not_awaited()
+    state.vector.delete_uris.assert_not_awaited()
     state.agfs.rm.assert_called_once()
     state.expiry.unregister_after_delete.assert_awaited_once_with(
         ItemIdentity(SESSION_ITEM_TYPE, "acme", "alice", state.session_id)

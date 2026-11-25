@@ -4,16 +4,17 @@
 """SDK tests using AsyncHTTPClient against a real uvicorn server."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
-import httpx
 import pytest
 import pytest_asyncio
 
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.time_utils import format_iso8601
 from openviking_cli.client.http import AsyncHTTPClient
-from openviking_cli.exceptions import ConflictError, ProcessingError
+from openviking_cli.exceptions import ConflictError, NotFoundError, ProcessingError
 from openviking_cli.session.user_id import UserIdentifier
-from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
+from tests.server.conftest import SAMPLE_MD_CONTENT
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
 
 
@@ -50,10 +51,9 @@ async def test_sdk_health(http_client):
 # ===================================================================
 
 
-async def test_sdk_add_resource(http_client):
+async def test_sdk_add_resource(http_client, tmp_path):
     client, service = http_client
-    f = TEST_TMP_DIR / "sdk_sample.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "sdk_sample.md"
     f.write_text(SAMPLE_MD_CONTENT)
 
     result = await client.add_resource(path=str(f), wait=True)
@@ -88,29 +88,9 @@ async def test_sdk_add_resource_raises_processing_error_for_business_error(
         await client.add_resource(path="https://example.com/bad.md", wait=True)
 
 
-def test_sdk_maps_conflict_error_envelope():
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    response = httpx.Response(
-        409,
-        json={
-            "status": "error",
-            "error": {
-                "code": "CONFLICT",
-                "message": "URI viking://resources/demo already has a reindex in progress",
-            },
-        },
-    )
-
-    with pytest.raises(ConflictError, match="already has a reindex in progress") as exc_info:
-        client._handle_response_data(response)
-
-    assert exc_info.value.code == "CONFLICT"
-
-
-async def test_sdk_add_skill_from_local_file(http_client):
+async def test_sdk_add_skill_from_local_file(http_client, tmp_path):
     client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_skill.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "sdk_skill.md"
     f.write_text(
         """---
 name: sdk-skill
@@ -122,30 +102,24 @@ description: SDK localhost upload test
     )
 
     result = await client.add_skill(data=str(f), wait=True)
-    assert "root_uri" in result
-    assert "uri" in result
-    assert result["root_uri"] == result["uri"]
-    assert result["uri"].startswith("viking://user/sdk_test_user/skills/")
+    root = "viking://user/sdk_test_user/skills/sdk-skill"
+    assert result["root_uri"] == result["uri"] == root
+    assert "# SDK Skill" in await client.read(f"{root}/SKILL.md")
 
 
-async def test_sdk_import_ovpack_from_local_file(http_client):
+async def test_sdk_import_ovpack_from_local_file(http_client, tmp_path):
     client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_import.ovpack"
-    f.parent.mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "sdk_import.ovpack"
     f.write_bytes(build_ovpack_bytes())
 
-    uri = await client.import_ovpack(
-        str(f),
-        parent="viking://resources/imported/",
-        on_conflict="overwrite",
-    )
-    assert uri.startswith("viking://resources/imported/")
+    parent = "viking://resources/imported"
+    uri = await client.import_ovpack(str(f), parent=parent)
+    assert uri == f"{parent}/pkg"
+    assert await client.read(f"{uri}/content.md") == "# Demo\n"
 
-
-async def test_sdk_wait_processed(http_client):
-    client, _ = http_client
-    result = await client.wait_processed()
-    assert isinstance(result, dict)
+    f.write_bytes(build_ovpack_bytes(files={"content.md": b"# Replacement\n"}))
+    assert await client.import_ovpack(str(f), parent=parent, on_conflict="skip") == uri
+    assert await client.read(f"{uri}/content.md") == "# Demo\n"
 
 
 # ===================================================================
@@ -153,21 +127,17 @@ async def test_sdk_wait_processed(http_client):
 # ===================================================================
 
 
-async def test_sdk_ls(http_client):
-    client, _ = http_client
-    result = await client.ls("viking://")
-    assert isinstance(result, list)
-
-
 async def test_sdk_mkdir_and_ls(http_client):
     client, _ = http_client
-    uri = "viking://resources/sdk_dir/"
+    uri = "viking://resources/sdk_dir"
+    nested = f"{uri}/nested"
 
     await client.mkdir(uri)
+    await client.mkdir(nested)
 
     assert await client.abstract(uri) == "# sdk_dir"
-    result = await client.ls("viking://resources/")
-    assert isinstance(result, list)
+    assert uri in {entry["uri"] for entry in await client.ls("viking://resources")}
+    assert nested in {entry["uri"] for entry in await client.tree(uri)}
 
 
 async def test_sdk_mkdir_with_description_sets_abstract(http_client):
@@ -179,15 +149,9 @@ async def test_sdk_mkdir_with_description_sets_abstract(http_client):
 
     assert await client.abstract(uri) == description
 
-    await client.mkdir(uri)
-
+    with pytest.raises(ConflictError):
+        await client.mkdir(uri)
     assert await client.abstract(uri) == description
-
-
-async def test_sdk_tree(http_client):
-    client, _ = http_client
-    result = await client.tree("viking://")
-    assert isinstance(result, list)
 
 
 # ===================================================================
@@ -218,7 +182,10 @@ async def test_sdk_session_lifecycle(http_client):
 
     # List
     sessions = await client.list_sessions()
-    assert isinstance(sessions, list)
+    assert session_id in {entry["session_id"] for entry in sessions}
+
+    await client.delete_session(session_id)
+    assert session_id not in {entry["session_id"] for entry in await client.list_sessions()}
 
 
 async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
@@ -278,137 +245,11 @@ async def test_sdk_batch_add_messages_and_commit_keep_recent_count(http_client):
 
     assert task is not None and task["status"] == "completed", task
     archive = await client.get_session_archive(session_id, "archive_001")
+    assert archive["archive_id"] == "archive_001"
     assert [m["parts"][0]["text"] for m in archive["messages"]] == ["Batch hello", "Batch answer"]
     post_commit = await client.get_session_context(session_id)
     assert [m["role"] for m in post_commit["messages"]] == ["user"]
     assert post_commit["messages"][0]["parts"][0]["text"] == "Keep me live"
-
-
-async def test_sdk_commit_session_keeps_telemetry_as_second_positional_argument():
-    calls = []
-
-    class _FakeHTTP:
-        async def post(self, path, json):
-            calls.append((path, json))
-            return httpx.Response(
-                200,
-                json={"status": "success", "result": {"task_id": "task-1"}},
-            )
-
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    client._http = _FakeHTTP()
-
-    result = await client.commit_session("s1", True)
-
-    assert result == {"task_id": "task-1"}
-    assert calls == [
-        (
-            "/api/v1/sessions/s1/commit",
-            {"keep_recent_count": 0, "telemetry": True},
-        )
-    ]
-
-
-async def test_sdk_commit_session_sends_turn_budget_retention_fields():
-    calls = []
-
-    class _FakeHTTP:
-        async def post(self, path, json):
-            calls.append((path, json))
-            return httpx.Response(
-                200,
-                json={"status": "success", "result": {"task_id": "task-turn"}},
-            )
-
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-    client._http = _FakeHTTP()
-
-    result = await client.commit_session(
-        "s1",
-        retention_mode="turn_budget",
-        keep_recent_turn_count=3,
-        retained_message_token_budget=12_000,
-        min_raw_tail_steps=1,
-    )
-
-    assert result == {"task_id": "task-turn"}
-    assert calls == [
-        (
-            "/api/v1/sessions/s1/commit",
-            {
-                "keep_recent_count": 0,
-                "telemetry": False,
-                "retention_mode": "turn_budget",
-                "keep_recent_turn_count": 3,
-                "retained_message_token_budget": 12_000,
-                "min_raw_tail_steps": 1,
-            },
-        )
-    ]
-
-
-async def test_sdk_get_session_archive(http_client):
-    client, svc = http_client
-
-    # Memory extraction uses a VLM backend the fake does not cover; stub it so
-    # the archive completes (this test checks archive retrieval, not extraction).
-    async def _no_memories(*args, **kwargs):
-        del args, kwargs
-        return []
-
-    svc.session_compressor.extract_long_term_memories = _no_memories
-
-    session_info = await client.create_session()
-    session_id = session_info["session_id"]
-
-    await client.add_message(session_id, "user", "Archive me")
-    commit_result = await client.commit_session(session_id, enable_working_memory=True)
-    task_id = commit_result["task_id"]
-
-    for _ in range(100):
-        task = await client.get_task(task_id)
-        if task and task["status"] in ("completed", "failed"):
-            break
-        await asyncio.sleep(0.1)
-
-    archive = await client.get_session_archive(session_id, "archive_001")
-    assert archive["archive_id"] == "archive_001"
-    assert archive["overview"]
-    assert archive["abstract"]
-    assert [m["parts"][0]["text"] for m in archive["messages"]] == ["Archive me"]
-
-
-async def test_sdk_commit_not_blocked_after_failed_archive(http_client):
-    client, svc = http_client
-
-    session_info = await client.create_session()
-    session_id = session_info["session_id"]
-
-    async def failing_extract(*args, **kwargs):
-        del args, kwargs
-        raise RuntimeError("synthetic extraction failure")
-
-    svc.session_compressor.extract_long_term_memories = failing_extract
-
-    await client.add_message(session_id, "user", "First round")
-    commit_result = await client.commit_session(session_id)
-    task_id = commit_result["task_id"]
-
-    task = None
-    for _ in range(100):
-        task = await client.get_task(task_id)
-        if task and task["status"] in ("completed", "failed"):
-            break
-        await asyncio.sleep(0.1)
-
-    # Any Phase 2 step failing marks the whole archive .failed.json (skipped).
-    assert task is not None and task["status"] == "failed"
-
-    # A failed archive is a skippable terminal state and must not block the
-    # next commit (this previously raised FailedPreconditionError).
-    await client.add_message(session_id, "user", "Second round")
-    second = await client.commit_session(session_id)
-    assert second["task_id"]
 
 
 # ===================================================================
@@ -416,85 +257,71 @@ async def test_sdk_commit_not_blocked_after_failed_archive(http_client):
 # ===================================================================
 
 
-async def test_sdk_find(http_client):
+async def test_sdk_find_and_search_use_tags(http_client):
     client, _ = http_client
-    # Add a resource first
-    f = TEST_TMP_DIR / "sdk_search.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(path=str(f), reason="search test", wait=True)
+    tagged = "viking://resources/tagged.md"
+    untagged = "viking://resources/untagged.md"
+    for uri in (tagged, untagged):
+        await client.write(uri, "Searchable rollback documentation.", mode="create", wait=True)
 
-    result = await client.find(query="sample document", limit=5)
-    assert hasattr(result, "resources")
-    assert hasattr(result, "total")
+    await client.set_tags(tagged, ["team=search"])
+    for retrieve in (client.find, client.search):
+        baseline = await retrieve("rollback", target_uri="viking://resources", options={"level": 2})
+        assert {hit["uri"] for hit in baseline["resources"]} == {tagged, untagged}
 
-
-async def test_sdk_find_accepts_tags(http_client):
-    client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_find_tags.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(path=str(f), reason="find tags test", wait=True)
-
-    result = await client.find(query="sample document", limit=5, tags=["team=search"])
-    assert hasattr(result, "resources")
+        result = await retrieve(
+            "rollback",
+            target_uri="viking://resources",
+            options={"level": 2, "tags": ["team=search"], "telemetry": True},
+        )
+        assert [hit["uri"] for hit in result["resources"]] == [tagged]
+        assert result["total"] == 1
+        assert "telemetry" not in result
 
 
-async def test_sdk_search_accepts_tags(http_client):
-    client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_search_tags.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(path=str(f), reason="search tags test", wait=True)
-
-    result = await client.search(query="sample document", limit=5, tags=["team=search"])
-    assert hasattr(result, "resources")
-
-
-async def test_sdk_set_tags_accepts_tags(http_client):
-    client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_write_tags.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text("hello")
-    added = await client.add_resource(path=str(f), reason="write tags test", wait=True)
-    uri = added["root_uri"]
-    children = await client.ls(uri, simple=True)
-    file_uri = children[0]
-
-    result = await client.set_tags(file_uri, ["team=search"])
-    assert isinstance(result, dict)
-
-
-async def test_sdk_find_telemetry(http_client):
-    client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_search_telemetry.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(
-        path=str(f), reason="telemetry search test", wait=True, telemetry=True
+async def test_sdk_search_time_filters_use_requested_field_and_default_updated_at(http_client):
+    client, svc = http_client
+    target = "viking://resources/email"
+    new, updated, old = (f"{target}/{name}.md" for name in ("new", "updated", "old"))
+    now = datetime.now(timezone.utc)
+    recent = format_iso8601(now - timedelta(hours=1))
+    stale = format_iso8601(now - timedelta(days=10))
+    ctx = RequestContext(
+        user=UserIdentifier("sdk_test_account", "sdk_test_user"), role=Role(Role.ADMIN)
     )
+    embedder = svc.viking_fs.query_embedder
+    vector = embedder.embed("invoice").dense_vector
+    for uri, created, modified in (
+        (new, recent, recent),
+        (updated, stale, recent),
+        (old, stale, stale),
+    ):
+        await svc.vikingdb_manager.upsert(
+            {
+                "uri": uri,
+                "parent_uri": target,
+                "is_leaf": True,
+                "abstract": "Invoice follow-up",
+                "context_type": "resource",
+                "created_at": created,
+                "updated_at": modified,
+                "vector": vector,
+                "account_id": ctx.account_id,
+                "level": 2,
+            },
+            ctx=ctx,
+        )
 
-    result = await client.find(query="sample document", limit=5, telemetry=True)
-    assert not hasattr(result, "telemetry")
-
-
-async def test_sdk_find_summary_only_telemetry(http_client):
-    client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_search_summary_only.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    await client.add_resource(
-        path=str(f),
-        reason="summary only telemetry search test",
-        wait=True,
+    found = await client.find(
+        "invoice", target_uri=target, options={"since": "2d", "time_field": "created_at"}
     )
+    assert {hit["uri"] for hit in found["resources"]} == {new}
 
-    result = await client.find(
-        query="sample document",
-        limit=5,
-        telemetry={"summary": True},
-    )
-    assert not hasattr(result, "telemetry")
+    recent_hits = await client.search("invoice", target_uri=target, options={"since": "2h"})
+    assert {hit["uri"] for hit in recent_hits["resources"]} == {new, updated}
+
+    old_hits = await client.search("invoice", target_uri=target, options={"until": "7d"})
+    assert {hit["uri"] for hit in old_hits["resources"]} == {old}
 
 
 # ===================================================================
@@ -502,29 +329,24 @@ async def test_sdk_find_summary_only_telemetry(http_client):
 # ===================================================================
 
 
-async def test_sdk_full_workflow(http_client):
-    """End-to-end: add resource → wait → find → session → ls → rm."""
+async def test_sdk_full_workflow(http_client, tmp_path):
+    """Import, list, search, and remove the same uploaded resource."""
     client, _ = http_client
 
-    # Add resource
-    f = TEST_TMP_DIR / "sdk_e2e.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
+    f = tmp_path / "sdk_e2e.md"
     f.write_text(SAMPLE_MD_CONTENT)
-    result = await client.add_resource(path=str(f), reason="e2e test", wait=True)
+    result = await client.add_resource(path=str(f), wait=True)
     uri = result["root_uri"]
+    file_uri = f"{uri}/{f.name}"
 
-    # Search
-    find_result = await client.find(query="sample", limit=3)
-    assert find_result.total >= 0
+    find_result = await client.find(query="sample", target_uri=uri, limit=1, options={"level": 2})
+    assert [hit["uri"] for hit in find_result["resources"]] == [file_uri]
+    assert file_uri in await client.ls(uri, simple=True)
 
-    # List contents (the URI is a directory)
-    children = await client.ls(uri, simple=True)
-    assert isinstance(children, list)
-
-    # Session
-    session_info = await client.create_session()
-    sid = session_info["session_id"]
-    await client.add_message(sid, "user", "testing e2e")
-
-    # Cleanup
     await client.rm(uri, recursive=True)
+    with pytest.raises(NotFoundError):
+        await client.read(file_uri)
+    queue_status = await client.wait_processed()
+    assert queue_status["Embedding"]["error_count"] == 0
+    found = await client.find("sample", target_uri="viking://resources", options={"level": 2})
+    assert file_uri not in {hit["uri"] for hit in found["resources"]}

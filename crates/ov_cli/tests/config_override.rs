@@ -134,28 +134,149 @@ fn empty_override_is_rejected() {
 }
 
 #[test]
-fn connected_status_uses_the_same_profile_as_the_request() {
-    use std::io::{Read, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
-        let mut request = [0; 4096];
-        let len = stream.read(&mut request).unwrap();
-        assert!(String::from_utf8_lossy(&request[..len]).contains("GET /api/v1/observer/system"));
-        let body = r#"{"status":"ok","result":{}}"#;
-        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
-    });
+fn connected_status_uses_the_selected_config_and_command_identity() {
+    use std::collections::HashMap;
+    use std::io::{BufRead, BufReader, Write};
+
     let dir = tempfile::tempdir().unwrap();
     seed(dir.path(), "ovcli.conf", "http://default.invalid");
-    seed(dir.path(), "ovcli.conf.selected", &url);
-    let result = run(dir.path(), "ovcli.conf.selected", &["status"]);
-    server.join().unwrap();
-    assert!(result.status.success(), "{result:?}");
-    let text = String::from_utf8_lossy(&result.stdout);
-    assert!(text.contains("selected") && text.contains(&url), "{text}");
-    assert!(!text.contains("Unreachable"), "{text}");
+    let selected = "ovcli.conf.selected";
+    let cases: [(Value, &[&str], [Option<&str>; 4]); 5] = [
+        (
+            json!({
+                "api_key": "user-key", "root_api_key": "root-key", "account": "acme",
+                "user": "alice", "actor_peer_id": "peer-a", "profile": true,
+                "extra_headers": {"X-Custom-Header": "custom", "Authorization": "Bearer token"},
+            }),
+            &["status"],
+            [
+                Some("user-key"),
+                Some("acme"),
+                Some("alice"),
+                Some("peer-a"),
+            ],
+        ),
+        (
+            json!({
+                "api_key": "user-key", "root_api_key": "root-key", "account": "old",
+                "user": "old", "actor_peer_id": "old",
+                "extra_header": {"X-Custom-Header": "custom", "Authorization": "Bearer token"},
+            }),
+            &[
+                "system",
+                "status",
+                "-o",
+                "json",
+                "--sudo",
+                "--account",
+                "acme",
+                "--user",
+                "alice",
+                "--actor-peer-id",
+                "peer-b",
+            ],
+            [
+                Some("root-key"),
+                Some("acme"),
+                Some("alice"),
+                Some("peer-b"),
+            ],
+        ),
+        (
+            json!({"root_api_key": "root-key", "account": "acme", "user": "alice", "agent_id": "legacy"}),
+            &["status"],
+            [
+                Some("root-key"),
+                Some("acme"),
+                Some("alice"),
+                Some("legacy"),
+            ],
+        ),
+        (
+            json!({"account": "acme", "user": "alice"}),
+            &["status"],
+            [None, Some("acme"), Some("alice"), None],
+        ),
+        (
+            json!({"api_key": "root-key", "gateway_token": "gateway-secret"}),
+            &["status"],
+            [Some("root-key"), None, None, None],
+        ),
+    ];
+
+    for (mut config, args, identity) in cases {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        config["url"] = json!(url);
+        fs::write(dir.path().join(selected), config.to_string()).unwrap();
+
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            let mut request = String::new();
+            let mut reader = BufReader::new(&mut stream);
+            loop {
+                let start = request.len();
+                assert!(reader.read_line(&mut request).unwrap() > 0);
+                if &request[start..] == "\r\n" {
+                    break;
+                }
+            }
+            let body = r#"{"status":"ok","result":{}}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            request
+        });
+
+        let result = run(dir.path(), selected, args);
+        assert!(result.status.success(), "{result:?}");
+        let sudo = args.contains(&"--sudo");
+        if sudo {
+            let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+            assert_eq!(output["ok"], true);
+        } else {
+            let text = String::from_utf8_lossy(&result.stdout);
+            assert!(text.contains("selected") && text.contains(&url), "{text}");
+            assert!(!text.contains("Unreachable"), "{text}");
+        }
+        let request = server.join().unwrap();
+        let mut lines = request.lines();
+        let expected_path = if sudo {
+            "GET /api/v1/system/status HTTP/1.1"
+        } else if config["profile"] == true {
+            "GET /api/v1/observer/system?profile=1 HTTP/1.1"
+        } else {
+            "GET /api/v1/observer/system HTTP/1.1"
+        };
+        assert_eq!(lines.next(), Some(expected_path));
+        let headers: HashMap<_, _> = lines
+            .filter_map(|line| line.split_once(": "))
+            .map(|(name, value)| (name.to_ascii_lowercase(), value))
+            .collect();
+        for (name, expected) in [
+            "x-api-key",
+            "x-openviking-account",
+            "x-openviking-user",
+            "x-openviking-actor-peer",
+        ]
+        .into_iter()
+        .zip(identity)
+        {
+            assert_eq!(headers.get(name).copied(), expected, "{name}: {config}");
+        }
+        let has_extra = config
+            .get("extra_headers")
+            .or_else(|| config.get("extra_header"))
+            .is_some();
+        assert_eq!(
+            headers.get("x-custom-header").copied(),
+            has_extra.then_some("custom")
+        );
+        assert_eq!(
+            headers.get("authorization").copied(),
+            has_extra.then_some("Bearer token")
+        );
+        assert!(!headers.contains_key("x-gateway-token"));
+    }
 }

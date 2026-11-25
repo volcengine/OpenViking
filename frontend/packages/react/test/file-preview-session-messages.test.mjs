@@ -160,8 +160,8 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
     assert.match(messages[3].textContent, /"detail": "high"/);
     assert.equal(transcript('inline').querySelector('img'), null);
 
-    const viewSwitch = (label) =>
-      [...document.querySelectorAll('#inline button')].find(
+    const viewSwitch = (label, id = 'inline') =>
+      [...document.querySelectorAll(`#${id} button`)].find(
         (button) => button.textContent === label,
       );
     await waitFor(() => viewSwitch('Source'));
@@ -174,14 +174,31 @@ test('public preview renders session bubbles and retains JSONL source/fallbacks'
     assert.match(document.querySelector('#inline').textContent, /"parts"/);
     viewSwitch('Preview').click();
     await waitFor(() => transcript('inline'));
-    await waitFor(() =>
-      document.querySelector('#ordinary').textContent.includes('msg-user'),
-    );
-    await waitFor(() =>
-      document
-        .querySelector('#unsupported')
-        .textContent.includes('Keep generic JSON'),
-    );
-    assert.equal(transcript('ordinary'), null);
-    assert.equal(transcript('unsupported'), null);
+    const jsonPreview = (id) =>
+      document.querySelector(`#${id} [data-file-viewer-json]`);
+    await waitFor(() => jsonPreview('ordinary') && jsonPreview('unsupported'));
+    assert.match(jsonPreview('ordinary').textContent, /1 \/ 4/);
+    for (const [id, expected] of [
+      ['ordinary', 'msg-user'],
+      ['unsupported', 'Keep generic JSON'],
+    ]) {
+      await waitFor(() =>
+        document.querySelector(`#${id} [data-file-viewer-json]`),
+      );
+      assert.equal(transcript(id), null);
+      await waitFor(() => viewSwitch('Source', id));
+      viewSwitch('Source', id).click();
+      await waitFor(() =>
+        document
+          .querySelector(`#${id} [data-file-viewer-code]`)
+          ?.textContent.includes(expected),
+      );
+      const source = document.querySelector(`#${id}`).textContent;
+      assert.match(source, /"parts"/);
+      assert.ok(source.includes(expected));
+      if (id === 'unsupported') {
+        assert.match(source, /future_part/);
+        assert.match(source, /Unsupported future content/);
+      }
+    }
   }));

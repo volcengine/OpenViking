@@ -12,7 +12,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Collection, Dict, Iterable, Optional
 
-from sqlalchemy import and_, delete, exists, or_, select, update
+from sqlalchemy import and_, delete, exists, func, or_, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import (
@@ -45,6 +45,7 @@ from openviking.service.task_domain import (
 from openviking.service.task_events import TaskEventHistory, append_task_event
 from openviking.service.task_store import (
     DeleteTasksResult,
+    QueueWorkCounts,
     StoreOperationCode,
     StoreOperationResult,
     TaskAlreadyActive,
@@ -135,6 +136,12 @@ class SQLTaskWorkStore(TaskWorkStore):
     def work_recovery_mode(self) -> WorkRecoveryMode:
         return WorkRecoveryMode.DURABLE_STORE
 
+    def _configure_engine(self, engine: AsyncEngine) -> None:
+        """Apply provider-specific connection settings."""
+
+    async def _initialize_schema(self, engine: AsyncEngine) -> None:
+        """Initialize provider-managed schemas before checking their mappings."""
+
     async def load(self) -> None:
         """Connect and verify that the manually provisioned schema is usable."""
         if self._engine is not None:
@@ -152,6 +159,8 @@ class SQLTaskWorkStore(TaskWorkStore):
 
         try:
             engine = create_async_engine(self._url, **self._engine_options)
+            self._configure_engine(engine)
+            await self._initialize_schema(engine)
             sessions: async_sessionmaker[AsyncSession] = async_sessionmaker(
                 engine, class_=SQLAsyncSession, expire_on_commit=False
             )
@@ -806,16 +815,16 @@ class SQLTaskWorkStore(TaskWorkStore):
                 )
             ).all()
             allowed = set(allow_active_types)
-            task_ids = [row.task_id for row in rows]
+            scoped_task_ids = select(Task.task_id).where(*predicates)
             open_task_ids = set()
-            if task_ids:
+            if rows:
                 Work = self._models.Work
                 open_task_ids = set(
                     await session.scalars(
                         select(Work.task_id)
                         .where(
                             Work.service_name == self._service_name,
-                            Work.task_id.in_(task_ids),
+                            Work.task_id.in_(scoped_task_ids),
                             Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]),
                         )
                         .distinct()
@@ -864,7 +873,20 @@ class SQLTaskWorkStore(TaskWorkStore):
                 DeletedTask(row.task_id, row.account_id, row.user_id)
                 for row in sorted(rows, key=lambda row: (row.account_id, row.user_id, row.task_id))
             )
-            await self._delete_task_records(session, task_ids)
+            if rows:
+                # Delete dependents before Tasks so the scope subquery remains usable.
+                for model in (self._models.Work, self._models.Event):
+                    await session.execute(
+                        delete(model)
+                        .where(
+                            model.service_name == self._service_name,
+                            model.task_id.in_(scoped_task_ids),
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                await session.execute(
+                    delete(Task).where(*predicates).execution_options(synchronize_session=False)
+                )
             return DeleteTasksResult(deleted)
 
     async def delete_expired(
@@ -1915,19 +1937,53 @@ class SQLTaskWorkStore(TaskWorkStore):
 
     async def has_open_work(
         self,
-        task_id: str,
+        task_id: Optional[str],
         *,
         exclude_work_id: Optional[str],
         account_id: Optional[str],
         user_id: Optional[str],
+        exclude_inline: bool = False,
     ) -> bool:
         Work = self._models.Work
         async with self._session_factory() as session:
-            predicates = list(self._work_query(Work, task_id, None, account_id, user_id))
+            if task_id is None:
+                if not account_id:
+                    raise ValueError("Account Work query requires account_id")
+                predicates = [
+                    Work.service_name == self._service_name,
+                    Work.account_id == account_id,
+                ]
+                if user_id is not None:
+                    predicates.append(Work.user_id == user_id)
+            else:
+                predicates = list(self._work_query(Work, task_id, None, account_id, user_id))
             predicates.append(Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]))
             if exclude_work_id is not None:
                 predicates.append(Work.work_id != exclude_work_id)
+            if exclude_inline:
+                predicates.append(Work.queue_name != "Inline")
             return bool(await session.scalar(select(exists().where(*predicates))))
+
+    async def get_queue_work_counts(self, *, account_id: str) -> QueueWorkCounts:
+        if not account_id:
+            raise ValueError("Queue Work query requires account_id")
+        Work = self._models.Work
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(Work.queue_name, Work.state, func.count())
+                .where(
+                    Work.service_name == self._service_name,
+                    Work.account_id == account_id,
+                    Work.state.in_([WorkState.PENDING.value, WorkState.RUNNING.value]),
+                    Work.queue_name != "Inline",
+                )
+                .group_by(Work.queue_name, Work.state)
+            )
+            counts: QueueWorkCounts = {}
+            for queue_name, state, count in rows:
+                bucket = counts.setdefault(queue_name, {"pending": 0, "running": 0})
+                bucket[state] = count
+            return counts
 
     async def summarize_works(
         self,

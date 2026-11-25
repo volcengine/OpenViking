@@ -725,15 +725,6 @@
     var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
   font-size: 12px;
 }
-.ov-file-history__snapshot {
-  flex: none;
-  padding: 12px 24px;
-}
-.ov-file-history__snapshot-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-}
 @media (max-width: 760px) {
   .ov-file-history__directory {
     padding-inline: 12px;
