@@ -149,6 +149,55 @@ peer_enabled: true
 - 目录规则是否符合预期检索范围
 - 合并策略是否适合该类记忆
 
+#### 记忆 Schema 模板变量
+
+每个位置使用对应渲染阶段的数据。例如路径可以引用 `user_space`，字段描述可以引用 `language`。要确认 `events`、`entities`、`preferences` 等类型有哪些业务字段，请查看生效 Schema 的 `fields[].name`。部署覆盖可从对应的[内置记忆 Schema](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/memory/memory_templates/builtin)开始修改。
+
+| 位置 | 渲染时机 | 可用变量 |
+|------|----------|----------|
+| `description` 和 `fields[].description` | 调用模型前，构建抽取 Schema 时 | 系统只提供 `language`。未设置语言时，可用 <code v-pre>{{ language or '中文' }}</code> 提供默认值。 |
+| `directory` | 查找已有文件、初始化记忆文件和生成写入 URI 时 | 查询和初始化都要使用的目录应依赖 `user_space`。生成写入 URI 时还会传入当前记忆的业务字段。Peer 记忆的 `user_space` 可以包含该 Peer 的路径。 |
+| `filename_template` | 生成写入 URI 时 | 当前记忆的业务字段和 `user_space`。路径模板引用的字段参与确定记忆的身份。例如 `entities` 使用 `category` 和 `name` 定位文件。 |
+| `content_template` | 写入 Markdown 正文时 | 部署级模板接收合并后的字段、`content`、`links`、`backlinks`、`source_uri`，以及 `uri_basename(uri)` 和 `link_target(uri)`。初始化时，各字段取 `fields[].init_value` 或空字符串。 |
+| `embedding_template` | 准备向量索引的输入文本时 | 记忆文件的附加字段和 `content`。这里的 `content` 是从正文生成的纯文本摘要。 |
+| `overview_template` | 生成目录的 `.overview.md` 时 | `memory_type`、`directory_name` 和 `items`。每个 item 包含 `file_name`，以及存有文件字段和正文的 `file_content`。 |
+
+建议让 `directory` 避免依赖只有抽取完成后才有的业务字段。比如预读要从实体目录开始时，可把分类写进文件名模板。初始化文件时，路径只接收 `user_space`，文件名含占位符的 Schema 会被跳过。下例引用了 Entities Schema 的 `category`、`name` 和 `content` 字段。
+
+```yaml
+description: "使用 {{ language or '中文' }} 描述第三方实体。"
+directory: "viking://user/{{ user_space }}/memories/entities"
+filename_template: "{{ category|lower }}/{{ name|lower }}.md"
+content_template: |-
+  # {{ name }}
+  {{ content }}
+embedding_template: |-
+  {{ category }}
+  {{ name }}
+  {{ content }}
+overview_template: |-
+  # {{ directory_name }}
+  {% for item in items %}
+  - [{{ item.file_content.name|default(item.file_name, true) }}](./{{ item.file_name }})
+  {% endfor %}
+```
+
+**抽取上下文。** 抽取过程中，路径、正文、向量化和概览渲染器可以接收调用方提供的 `extract_context`。文件初始化没有抽取上下文。调用辅助函数前先确认当前渲染阶段，用当前记忆的 `ranges` 指定来源消息。
+
+| 辅助函数 | 返回值 |
+|----------|--------|
+| `read_message_ranges(ranges)` | 部署级模板可用的结构化来源消息选集。范围为空时不读取消息。 |
+| `get_first_message_time_from_ranges(ranges)`、`get_first_message_time_with_weekday_from_ranges(ranges)` | 第一条来源消息的日期，后者带星期。缺少来源日期时可以返回空值。 |
+| `get_year(ranges)`、`get_month(ranges)`、`get_day(ranges)`、`get_timestamp_from_ranges(ranges)` | 来源消息的日期分量或紧凑时间戳。取不到来源时间时回退到当前时间。 |
+| `get_session_timestamp()`、`get_source_archive_suffix()` | 会话时间戳，以及根据来源归档和抽取范围生成的稳定后缀。时间戳可回退到当前时间。未提供归档和抽取范围时，后缀为空。 |
+| `get_event_content(ranges, summary[, ratio_threshold])`、`get_resource_event_content(ranges, summary)` | 按来源消息或摘要生成事件正文，或生成资源添加事件文案。资源函数可以返回空字符串。 |
+
+内置 Events Schema 会在文件名里使用来源日期，例如 <code v-pre>filename_template: "{{ extract_context.get_year(ranges) }}/{{ event_name }}.md"</code>。
+
+**账号级覆盖。** 自定义 Events 正文可用 `event_name`、`goal`、`summary`、`ranges` 和白名单里的只读辅助函数。账号模板 API 会在应用变更前校验描述和自定义正文。完整白名单和继承部署模板规则见[账号级记忆模板](../api/08-admin.md)。
+
+**缺变量和渲染失败。** 描述使用未声明变量时，构建 Schema 会抛出 `unknown_variable`，可能中止当批抽取。错误中的行号从描述首行算起。如果报错只有行号，请检查类型描述和 `fields[].description`。生成写入 URI 时，简单占位符对应的值缺失或为 null 会被拒绝。向量化模板缺输入或渲染失败时使用纯文本摘要。部署级正文渲染遇到异常时回退到原正文，概览渲染失败时保留原概览。通用渲染器可能保留未定义的简单占位符，修改后应使用样例数据检查生成的文件内容和路径。
+
 ## 当前 Prompt 模板说明
 
 下面按类别说明模板用途、输入和相关处理环节。模板文件存在不代表当前请求会调用它；调用路径、模型配置与功能开关共同决定是否生效。
