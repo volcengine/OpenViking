@@ -14,7 +14,7 @@ fn setting(name: &str, default: usize) -> usize {
     value
 }
 
-fn clock_variant(script: &'static str, now: u128) -> &'static str {
+fn clock_variant(script: &'static str, now: u128) -> String {
     let start = script.find("local function server_now_ns()").unwrap();
     let end = start + script[start..].find("\nend").unwrap() + "\nend".len();
     let mut variant = script.to_string();
@@ -23,8 +23,7 @@ fn clock_variant(script: &'static str, now: u128) -> &'static str {
         &format!("local function server_now_ns()\n    return \"{now}\"\nend"),
     );
     assert!(!variant.contains("redis.call(\"TIME\")"));
-    // ScriptDefinition owns static references; register only two test variants.
-    Box::leak(variant.into_boxed_str())
+    variant
 }
 
 #[derive(Default)]
@@ -132,10 +131,7 @@ async fn perf_server_clock() {
         (FIXED_REFRESH, REFRESH_BATCH_SCRIPT),
     ] {
         runtime
-            .register_script(ScriptDefinition {
-                id,
-                redis_lua: clock_variant(script, now),
-            })
+            .register_script(id.to_string(), clock_variant(script, now))
             .unwrap();
     }
     let mut output = std::env::var("PATHLOCK_CLOCK_PERF_OUTPUT")

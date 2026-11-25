@@ -38,7 +38,11 @@ async def expand_queries(
     try:
         session_info = await session.get_context_for_search(query)
     except Exception as exc:
-        logger.info("Session context unavailable; using original query: %s", exc)
+        logger.info(
+            "session context unavailable; using original query error_type=%s",
+            type(exc).__name__,
+            extra={"degraded": True, "error_type": type(exc).__name__},
+        )
         return [query], "off"
 
     summary = str(session_info.get("latest_archive_overview") or "")
@@ -63,7 +67,11 @@ async def expand_queries(
             timeout=timeout,
         )
     except Exception as exc:
-        logger.warning("Query expansion failed; using original query: %s", exc)
+        logger.info(
+            "query expansion failed; using original query error_type=%s",
+            type(exc).__name__,
+            extra={"degraded": True, "error_type": type(exc).__name__},
+        )
         return [query], "failed"
 
     queries = [query]

@@ -1,29 +1,29 @@
+import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
-import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
+import { useDashboardTab } from './use-dashboard-tab.js';
 import type { FileBrowserDashboardLabels } from './types.js';
 import { readCompileTargets } from './dashboard-data.js';
-import { type ReactNode, createElement, useCallback, useState } from 'react';
+import { isMemoryUri } from './fs-memory-fields.js';
+import { type ReactNode, useCallback, useState } from 'react';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import { isOvClientError } from '../../client/errors.js';
 import type { FileTreeRow } from '../../components/file-tree/index.js';
-import type { FilePreviewTab } from '../../components/file-preview/index.js';
 import { useDashboardQuery } from './use-dashboard-query.js';
+import { useWikiConflictIndicators } from './wiki-conflict-indicators.js';
 import {
   useWikiConflictIndex,
   useDashboardHint,
+  usePreviewDashboardHint,
 } from './use-dashboard-metadata.js';
-import { ExperienceDashboardPane } from './experience-dashboard-pane.js';
-import { WikiDashboardPane } from './wiki-dashboard-pane.js';
-import { ExperienceBoardIcon, WikiBoardIcon } from '../../icons/index.js';
 import {
   type FileBrowserDashboard,
   resolveDashboard,
-  dashboardKey,
 } from './dashboard-model.js';
 
 export function useBrowserDashboards({
   rows,
   metadataRows,
+  resourceType,
   uri,
   rootUri,
   identifyUri,
@@ -33,11 +33,13 @@ export function useBrowserDashboards({
   onOpenUri,
   dashboardKinds,
   experienceDataSource,
+  experienceDashboardSlots,
   renderDashboard,
   dashboardLabels,
 }: {
   rows: readonly FileTreeRow[];
   metadataRows: readonly FileTreeRow[];
+  resourceType: 'directory' | 'file' | 'unknown';
   uri: string | null;
   rootUri: string;
   identifyUri: (uri: string) => string;
@@ -45,12 +47,18 @@ export function useBrowserDashboards({
   dashboardLabels?: FileBrowserDashboardLabels;
   dashboardKinds?: readonly FileBrowserDashboard['kind'][];
   experienceDataSource?: FileBrowserExperienceDataSource;
+  experienceDashboardSlots?: ExperienceDashboardProps['slots'];
   renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
   locale?: 'en-US' | 'zh-CN';
   requestOptions?: OvRequestOptions;
   onOpenUri: (uri: string) => Promise<void>;
 }) {
   const [opened, setOpened] = useState<string | null>(null);
+  const [conflictRevision, setConflictRevision] = useState(0);
+  const refreshConflicts = useCallback(
+    () => setConflictRevision((value) => value + 1),
+    [],
+  );
   const [previousUri, setPreviousUri] = useState(uri);
   if (previousUri !== uri) {
     setPreviousUri(uri);
@@ -65,8 +73,9 @@ export function useBrowserDashboards({
     dashboardKinds === undefined || dashboardKinds.includes('wiki');
   const { hint, canonicalUri, knownRows, isFile } = useDashboardHint({
     uri,
-    rows: metadataRows,
-    enabled: wikiEnabled,
+    rows: metadataRows.filter((row) => row.kind !== 'entry' || !row.disabled),
+    enabled:
+      wikiEnabled && !(uri && resourceType !== 'directory' && isMemoryUri(uri)),
     generation,
     requestOptions,
   });
@@ -87,21 +96,12 @@ export function useBrowserDashboards({
   const unsupported =
     isOvClientError(catalog.error) && catalog.error.statusCode === 404;
   const targets = catalog.data ?? [];
-  const conflicts = useWikiConflictIndex({
-    rows: knownRows,
-    targets,
-    rootUri,
-    identifyUri,
-    enabled: wikiEnabled,
-    generation,
-    requestOptions,
-  });
-  const resolve = (target: string) => {
+  const resolve = (target: string, indexedConflict?: boolean) => {
     const match = resolveDashboard(
       target === uri ? (canonicalUri ?? target) : target,
       knownRows,
       targets,
-      conflicts.presence(identifyUri(target)),
+      indexedConflict,
     );
     return match ? { ...match, uri: target } : undefined;
   };
@@ -124,6 +124,39 @@ export function useBrowserDashboards({
     (dashboardKinds === undefined || dashboardKinds.includes(resolved.kind))
       ? resolved
       : undefined;
+  const searchConflicts = useWikiConflictIndicators({
+    rows,
+    knownRows,
+    dashboardRows: dashboards,
+    current,
+    targets,
+    rootUri,
+    identifyUri,
+    generation: generation + conflictRevision,
+    requestOptions,
+    enabled: wikiEnabled,
+  });
+  const conflicts = useWikiConflictIndex({
+    rows: [],
+    targets: searchConflicts.listingRoots.map((to) => ({ to })),
+    rootUri,
+    identifyUri,
+    enabled: wikiEnabled,
+    generation: generation + conflictRevision,
+    requestOptions,
+  });
+  const markConflicts = (dashboard: FileBrowserDashboard) => {
+    if (dashboard.kind !== 'wiki') return;
+    const presence = searchConflicts.presence(dashboard.uri);
+    const indexed = conflicts.presence(identifyUri(dashboard.uri));
+    dashboard.pendingConflicts =
+      presence ??
+      (indexed === undefined
+        ? dashboard.pendingConflicts
+        : resolve(dashboard.uri, indexed)?.pendingConflicts);
+  };
+  for (const dashboard of dashboards.values()) markConflicts(dashboard);
+  if (current) markConflicts(current);
   const open = useCallback(
     (target: string) => {
       setOpened(target);
@@ -132,62 +165,36 @@ export function useBrowserDashboards({
     [onOpenUri],
   );
   const close = useCallback(() => setOpened(null), []);
-  const text = resolveDashboardLabels(locale, dashboardLabels);
-  const title =
-    current?.kind === 'experience' ? text.experienceTitle : text.wikiTitle;
-  const tab: FilePreviewTab | undefined =
-    current && uri
-      ? {
-          key: dashboardKey(uri),
-          title,
-          icon: createElement(
-            current.kind === 'experience' ? ExperienceBoardIcon : WikiBoardIcon,
-            { width: 14, height: 14 },
-          ),
-          kind: 'content',
-          content:
-            renderDashboard?.(current) ??
-            (current.kind === 'experience'
-              ? createElement(ExperienceDashboardPane, {
-                  dataSource: experienceDataSource,
-                  uri,
-                  locale,
-                  requestOptions,
-                  refreshGeneration: generation,
-                  onOpenUri: (target: string) => {
-                    setOpened(null);
-                    void onOpenUri(target);
-                  },
-                })
-              : createElement(WikiDashboardPane, {
-                  uri,
-                  kind: isFile ? 'file' : 'directory',
-                  locale,
-                  requestOptions,
-                  refreshGeneration: generation,
-                  onOpenUri: (target: string) => {
-                    setOpened(null);
-                    void onOpenUri(target);
-                  },
-                  onOpenDashboard: open,
-                })),
-        }
-      : undefined;
+  const tab = useDashboardTab(current, {
+    locale,
+    labels: dashboardLabels,
+    requestOptions,
+    generation,
+    conflictRevision,
+    isFile,
+    experienceDataSource,
+    experienceDashboardSlots,
+    renderDashboard,
+    onOpenUri: (target) => {
+      close();
+      void onOpenUri(target);
+    },
+    onOpenDashboard: open,
+  });
+  const readPreviewHint = usePreviewDashboardHint(uri, resolved?.kind, hint);
   return {
-    isWiki: resolved?.kind === 'wiki',
-    contentPending: Boolean(
-      uri && /\.md$/i.test(uri) && !resolved && hint.loading,
-    ),
+    previewOptions: { readDashboardHint: readPreviewHint },
     dashboards,
     current,
     tab,
     isOpen: uri !== null && opened === uri && Boolean(current),
     open,
     close,
+    refreshConflicts,
     error: (unsupported ? null : catalog.error) ?? conflicts.error,
     retry: () => {
       catalog.retry();
-      conflicts.retry();
+      refreshConflicts();
     },
   };
 }

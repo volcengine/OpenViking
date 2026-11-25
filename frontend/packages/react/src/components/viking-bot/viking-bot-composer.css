@@ -135,6 +135,15 @@
 .ov-viking-bot__submit {
   flex-shrink: 0;
 }
+.ov-viking-bot__attach-trigger {
+  display: inline-flex;
+}
+.ov-viking-bot__attach-trigger > .ov-button:disabled {
+  pointer-events: none;
+}
+.ov-viking-bot__submit.ov-button {
+  border-radius: 8px;
+}
 .ov-viking-bot__composer .ov-viking-bot__attach.ov-button {
   --ov-ui-button-height: 32px;
   border-radius: 6px;
@@ -142,8 +151,14 @@
   font-size: 16px;
   font-weight: 400;
 }
-.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled) {
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled),
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled):hover,
+.ov-viking-bot__composer
+  .ov-viking-bot__attach.ov-button:not(:disabled):active {
   color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-viking-bot__composer .ov-viking-bot__attach.ov-button:disabled {
+  color: var(--ov-ui-color-text-disabled, var(--ov-ui-text-disabled-default));
 }
 .ov-viking-bot__composer .ov-viking-bot__attach.ov-button:not(:disabled):hover {
   background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));

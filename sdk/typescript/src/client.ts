@@ -570,6 +570,7 @@ export class OpenVikingClient {
       tags: options.tags,
       include_provenance: options.includeProvenance,
       read_content: options.readContent,
+      args: kind === "search" ? (options as SearchOptions).args : undefined,
     });
     return this.request("POST", `/api/v1/search/${kind}`, {
       body: mergeExtra(body, options.extra),
@@ -1391,10 +1392,10 @@ export class OpenVikingClient {
       },
     );
   }
-  /** Return snapshot history from newest to oldest. */
-  gitLog(branch = "main", limit = 20, paths?: string[]): Promise<JsonObject[]> {
+  /** Return up to limit commits for branch/paths, newest first, skipping offset matches. */
+  gitLog(branch = "main", limit = 20, paths?: string[], offset = 0): Promise<JsonObject[]> {
     return this.request("GET", "/api/v1/snapshot/log", {
-      query: { branch, limit, paths },
+      query: { branch, limit, offset, paths },
     });
   }
   /** Compare one file between two snapshot refs. */

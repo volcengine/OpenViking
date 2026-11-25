@@ -587,6 +587,7 @@
                 params,
                 backups: Some(BackendsConfig {
                     service_name: "mw-test".to_string(),
+                    instance: "default".to_string(),
                     initial_partitions: 16,
                     checkpoint_interval_secs: 86_400,
                     reconcile_existing_data: false,

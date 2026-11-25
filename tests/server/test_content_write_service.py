@@ -16,7 +16,6 @@ from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking_cli.exceptions import (
     InvalidArgumentError,
-    NotFoundError,
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
@@ -26,12 +25,19 @@ from openviking_cli.session.user_id import UserIdentifier
 async def test_write_updates_memory_file_and_parent_overview(service, monkeypatch):
     from openviking.observability.events import get_event_bus
     from openviking.observability.reporting import runtime
+    from openviking.service.task_store import TaskStatus
+    from openviking.service.task_tracker import get_task_tracker
 
     ctx = RequestContext(user=service.user, role=Role.USER)
     memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/preferences"
     memory_uri = f"{memory_dir}/theme.md"
 
     await service.viking_fs.write_file(memory_uri, "Original preference", ctx=ctx)
+
+    overview_uri = f"{memory_dir}/.overview.md"
+    abstract_uri = f"{memory_dir}/.abstract.md"
+    initial_overview = await service.viking_fs.read_file(overview_uri, ctx=ctx)
+    initial_abstract = await service.viking_fs.read_file(abstract_uri, ctx=ctx)
 
     monkeypatch.setattr(runtime, "_reporter", object())
     events = []
@@ -52,7 +58,12 @@ async def test_write_updates_memory_file_and_parent_overview(service, monkeypatc
         e for e in events if e.event_name == "file_mutation" and e.payload["uri"] == memory_uri
     ]
     assert len(writes) == 1
-    assert writes[0].payload["task_id"] == result["task_id"]
+    task = await get_task_tracker().get(
+        writes[0].payload["task_id"], ctx.account_id, ctx.user.user_id
+    )
+    assert task is not None
+    assert task.status == TaskStatus.COMPLETED
+    assert task.resource_id == memory_uri
     assert writes[0].payload["memory_type"] == "preferences"
     assert writes[0].payload["change_type"] == "modified"
 
@@ -63,9 +74,9 @@ async def test_write_updates_memory_file_and_parent_overview(service, monkeypatc
     assert result["queue_status"]["Embedding"]["processed"] >= 1
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
     assert visible_content(stored, uri=memory_uri) == "Updated preference"
-    assert await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
-    with pytest.raises(NotFoundError):
-        await service.viking_fs.read_file(f"{memory_dir}/.abstract.md", ctx=ctx)
+    overview = await service.viking_fs.read_file(overview_uri, ctx=ctx)
+    assert overview and overview != initial_overview
+    assert await service.viking_fs.read_file(abstract_uri, ctx=ctx) == initial_abstract
 
 
 @pytest.mark.asyncio

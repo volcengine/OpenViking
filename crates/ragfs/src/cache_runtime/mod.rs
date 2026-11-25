@@ -24,7 +24,8 @@ use bytes::Bytes;
 use executor::RuntimeExecutor;
 pub(crate) use provider::CacheOperation;
 use provider::CacheProvider;
-pub(crate) use script::{ScriptDefinition, ScriptRegistry, ScriptValue};
+pub use script::ScriptValue;
+pub(crate) use script::ScriptRegistry;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -180,8 +181,10 @@ impl CacheRuntime {
         self.provider.validate_operations(operations)
     }
 
-    pub(crate) fn register_script(&self, definition: ScriptDefinition) -> CacheResult<()> {
-        self.scripts.register(definition)
+    /// Register one named script with owned identifier and Redis Lua source.
+    pub fn register_script(&self, script_id: String, redis_lua: String) -> CacheResult<()> {
+        self.ensure_open()?;
+        self.scripts.register(script_id, redis_lua)
     }
 
     /// Read one value.
@@ -574,6 +577,20 @@ impl SyncCacheRuntimeFacade {
             .run(async move { runtime.zscan_match(&key, &pattern, count).await })
     }
 
+    /// Return sorted-set members within one score range.
+    pub fn zrangebyscore(
+        &self,
+        key: &str,
+        min: f64,
+        max: f64,
+        limit: u32,
+    ) -> CacheResult<Vec<String>> {
+        let runtime = Arc::clone(&self.runtime);
+        let key = key.to_string();
+        self.executor
+            .run(async move { runtime.zrangebyscore(&key, min, max, limit).await })
+    }
+
     /// Remove sorted-set members and return the number removed.
     pub fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {
         let runtime = Arc::clone(&self.runtime);
@@ -681,6 +698,11 @@ impl SyncCacheRuntimeFacade {
         let runtime = Arc::clone(&self.runtime);
         self.executor
             .run(async move { runtime.execute_script(request).await })
+    }
+
+    /// Register one named script with owned identifier and Redis Lua source.
+    pub fn register_script(&self, script_id: String, redis_lua: String) -> CacheResult<()> {
+        self.runtime.register_script(script_id, redis_lua)
     }
 
     /// Check whether the provider is healthy.

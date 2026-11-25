@@ -67,9 +67,11 @@ def create_redis_client(config: ExpiryRedisConfig, *, retry=None):
     if config.mode == "standalone":
         return redis_async.Redis.from_url(endpoint, **kwargs)
     else:
-        from redis.asyncio.cluster import ClusterNode, RedisCluster
+        from redis.asyncio.cluster import ClusterNode
         from redis.backoff import NoBackoff
         from redis.retry import Retry
+
+        from ..redis_cluster import SeededRedisCluster
 
         nodes = []
         use_tls = config.tls
@@ -84,7 +86,7 @@ def create_redis_client(config: ExpiryRedisConfig, *, retry=None):
         # commands: a lost CAS/SET NX response cannot safely be replayed.
         # These instance-local flags leave MOVED/ASK routing intact.
         kwargs.setdefault("retry", Retry(NoBackoff(), 0))
-        return RedisCluster(
+        return SeededRedisCluster(
             startup_nodes=nodes,
             ssl=use_tls,
             cluster_error_retry_attempts=0,

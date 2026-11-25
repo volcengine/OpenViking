@@ -8,7 +8,10 @@ import { VikingBotSubmitActions } from './composer-controls.js';
 import { composerEvents } from './composer-events.js';
 import { ComposerHeader } from './composer-header.js';
 import { attachmentsAreReady } from './composer-attachments.js';
-import { composerMention } from './composer-references.js';
+import {
+  ComposerReferenceContext,
+  composerMention,
+} from './composer-references.js';
 import { ComposerFooter } from './composer-footer.js';
 import { QuickInputs } from './quick-inputs.js';
 import { useQuickInput } from './use-quick-input.js';
@@ -142,63 +145,69 @@ export const VikingBotComposerView = forwardRef<
           senderRef.current?.getEditor()?.commands.focus('end');
         }}
       />
-      <Sender
-        ref={senderRef}
-        className="ov-viking-bot__sender"
-        defaultContent={toRichText(value)}
-        sending={isSending && !canSendWhileStreaming}
-        sendDisabled={isSubmitMode ? locked || !canSubmit || !onSend : false}
-        onContentChange={(content) => {
-          if (!onValueChange || writing.current) return;
-          const next = toPlainText(content);
-          shortcuts.tracker.edit(next, composerCaret(senderRef.current));
-          onValueChange?.(next);
-        }}
-        onSend={submit}
-        onStop={() => onCancel?.()}
-        renderHeader={() => (
-          <ComposerHeader
-            references={references}
-            labels={labels}
-            onOpenUri={onOpenUri}
-            attachments={attachments}
-            onAttachmentRemove={onAttachmentRemove}
-            disabled={locked}
-          />
-        )}
-        renderSubmit={(props) => (
-          <VikingBotSubmitActions
-            props={props}
-            streaming={isSending}
-            canSteer={canSendWhileStreaming}
-            onCancel={onCancel}
-            labels={labels}
-          />
-        )}
-        richTextAreaProps={{
-          mentionConfig: composerMention(references, locked, labels, locale),
-          placeholder: labels.placeholder,
-          disabled,
-          minRows: 1,
-          maxRows: 6,
-          lineHeight: 22,
-          style: { minHeight: 44 },
-        }}
-        renderFooter={({ components }) => (
-          <ComposerFooter
-            locale={locale}
-            references={references}
-            senderRef={senderRef}
-            labels={labels}
-            disabled={locked}
-            filesDisabled={Boolean(locked || remaining === 0)}
-            accept={accept}
-            onFiles={onFilesAdded ? reportFiles : undefined}
-            actions={actions}
-            submit={components.sendBtnComponent}
-          />
-        )}
-      />
+      <ComposerReferenceContext.Provider
+        value={{ config: references, disabled: locked, labels, locale }}
+      >
+        <Sender
+          ref={senderRef}
+          className="ov-viking-bot__sender"
+          defaultContent={toRichText(value)}
+          sending={isSending && !canSendWhileStreaming}
+          sendDisabled={isSubmitMode ? locked || !canSubmit || !onSend : false}
+          onContentChange={(content) => {
+            if (!onValueChange || writing.current) return;
+            const next = toPlainText(content);
+            shortcuts.tracker.edit(next, composerCaret(senderRef.current));
+            onValueChange?.(next);
+          }}
+          onSend={submit}
+          onStop={() => onCancel?.()}
+          renderHeader={() => (
+            <ComposerHeader
+              references={references}
+              labels={labels}
+              onOpenUri={onOpenUri}
+              attachments={attachments}
+              onAttachmentRemove={onAttachmentRemove}
+              disabled={locked}
+              referenceRemovalDisabled={disabled}
+            />
+          )}
+          renderSubmit={(props) => (
+            <VikingBotSubmitActions
+              props={props}
+              streaming={isSending}
+              canSteer={canSendWhileStreaming}
+              onCancel={onCancel}
+              labels={labels}
+            />
+          )}
+          richTextAreaProps={{
+            mentionConfig: composerMention(references, locked),
+            placeholder: labels.placeholder,
+            disabled,
+            minRows: 1,
+            maxRows: 6,
+            lineHeight: 22,
+            style: { minHeight: 44 },
+          }}
+          renderFooter={({ components }) => (
+            <ComposerFooter
+              locale={locale}
+              references={references}
+              senderRef={senderRef}
+              labels={labels}
+              disabled={locked}
+              filesDisabled={Boolean(locked || remaining === 0)}
+              attachmentLimit={remaining === 0 ? maxAttachments : undefined}
+              accept={accept}
+              onFiles={onFilesAdded ? reportFiles : undefined}
+              actions={actions}
+              submit={components.sendBtnComponent}
+            />
+          )}
+        />
+      </ComposerReferenceContext.Provider>
     </div>
   );
 });

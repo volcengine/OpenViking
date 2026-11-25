@@ -1,8 +1,11 @@
 """Merge grouped Markdown and resolve output path collisions with isolated file workers."""
 
+from collections import Counter
+
 from openviking.core.namespace import relative_uri_path
 from vikingbot.compile.hashing import digest
 from vikingbot.compile.pipeline_io import MAX_JOB_ATTEMPTS, bounded_jobs
+from vikingbot.compile.renderer import output_path_key
 
 
 async def run(runtime, node, groups):
@@ -56,10 +59,11 @@ async def resolve_files(runtime, documents):
     """
     candidates = {}
     for document in documents:
-        candidates.setdefault(document.path, []).append(document)
+        candidates.setdefault(output_path_key(document.path), []).append(document)
     if len(candidates) == len(documents):
         return documents
     reserved = {path: path for path in candidates}
+    display_paths = {path: items[0].path for path, items in candidates.items()}
     unique = [items[0] for items in candidates.values() if len(items) == 1]
 
     async def resolve(item):
@@ -75,12 +79,13 @@ async def resolve_files(runtime, documents):
                     "content, or rename independent pages. Preserve unique facts, source citations, "
                     "conditions, applicability and conflicting claims. Write only the resolved "
                     "candidate files; do not generate extra indexes or unrelated pages. "
-                    "reserved_paths belong to other outputs and must not be written.",
+                    "reserved_paths belong to other outputs and must not be written. "
+                    "Output paths must be unique under Unicode NFC normalization and case folding.",
                     {
-                        "path": path,
+                        "path": items[0].path,
                         "documents": [vars(doc) for doc in items],
                         "reserved_paths": sorted(
-                            p for p, owner in reserved.items() if owner != path
+                            display_paths[p] for p, owner in reserved.items() if owner != path
                         ),
                         "inputs": [{"payload": {"source_ranges": refs}}],
                     },
@@ -88,11 +93,18 @@ async def resolve_files(runtime, documents):
                 )
                 if not outputs:
                     raise ValueError(f"No Markdown outputs resolve {path}")
-                blocked = {doc.path for doc in outputs if reserved.get(doc.path, path) != path}
+                keys = [output_path_key(doc.path) for doc in outputs]
+                counts = Counter(keys)
+                blocked = {
+                    doc.path
+                    for doc, key in zip(outputs, keys, strict=True)
+                    if counts[key] > 1 or reserved.get(key, path) != path
+                }
                 if not blocked:
-                    reserved.update((doc.path, path) for doc in outputs)
+                    reserved.update((output_path_key(doc.path), path) for doc in outputs)
+                    display_paths.update((output_path_key(doc.path), doc.path) for doc in outputs)
                     return outputs
-            raise ValueError(f"Output paths are reserved by other jobs: {sorted(blocked)}")
+            raise ValueError(f"Output paths conflict within or across jobs: {sorted(blocked)}")
         except BaseException:
             for ref in refs:
                 runtime.status[ref] = "failed"

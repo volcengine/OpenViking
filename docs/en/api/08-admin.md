@@ -617,8 +617,8 @@ version, text source and input token limit are create-only. Provider fields outs
 fusion/video settings and metadata override are not on the Account API surface.
 Every change validates the effective Embedding/VectorDB pair before persistence.
 
-An explicit `embedding: {}` is valid and declares no Account model mode or runtime
-policy. As a PATCH, `{}` merges with existing settings and does not clear them.
+An explicit `embedding: {}` declares no Account model mode or runtime policy.
+As a PATCH, `{}` merges with existing settings and does not clear them.
 When no Account model mode is configured, Cluster model bindings are used.
 An explicit Account VectorDB connection replaces Cluster connection and
 authentication fields even when the backend type is unchanged; only remote
@@ -645,6 +645,7 @@ Account section or their Feishu defaults; only `domain` remains Cluster-owned.
 GitHub and ACL have no Cluster fallback.
 
 VLM business resolution uses Cluster VLM when an Account has no VLM section.
+Removing the Account VLM section requires a valid Cluster VLM.
 Once the Account section exists, its model-service identity fields come
 exclusively from Account settings, while selected runtime behavior is composed
 with Cluster settings. Account `timeout` overrides Cluster `timeout` when set;
@@ -1099,7 +1100,7 @@ compatibility.
 ROOT can read and update any User's settings. ADMIN can read and update non-GLOBAL
 Users in its own account. USER callers can read and update only their own settings:
 both `account_id` and `user_id` in the URL must match the authenticated identity.
-The endpoint accepts `add_targets`, `memory_policy`, and `ttl`. The shared top-level
+The endpoint accepts `add_targets`, `memory_policy`, `ttl`, and `privacy`. The shared top-level
 `memory_types` filter controls which memory schemas may be extracted.
 User memories are routed to Self or Peer according to each message's `peer_id`;
 Agent memory types remain Self-only.
@@ -1156,6 +1157,17 @@ DELETE /api/v1/user-settings/add-locations
 
 `ttl` still returns explicit User values without filling defaults from other layers.
 
+GET/PATCH responses return the effective `privacy` settings:
+
+| Field | Description | Built-in default |
+|---|---|---|
+| `privacy.mode` | `off`, `registered`, `auto`, or `auto_strict`; see [Privacy Configs](../concepts/13-privacy.md#usage) | `off` |
+| `privacy.restore` | Restore placeholders on `raw=true` reads of Skills and Sessions | `true` |
+| `privacy.custom_rules` | Custom rules; each provides a unique `id` and either `prefix` + `min_length` or `regex` | `[]` |
+| `privacy.never_mask` | Exact string values excluded from automatic discovery and matching | `[]` |
+
+For example, PATCH `{"privacy":{"mode":"auto"}}` to enable automatic discovery and protection for Skills and Sessions. `min_length` counts characters required after the prefix; `regex` uses Rust regular-expression syntax. Omitted fields remain unchanged, `null` resumes inheritance, and arrays are replaced as a whole (`[]` clears the list). `{"privacy":null}` clears all User privacy overrides.
+
 ---
 
 ### create_account
@@ -1186,14 +1198,14 @@ Create a new workspace with its first admin user.
 | account_id | str | Yes | - | Workspace ID; at most 255 UTF-8 bytes for new file-backed accounts |
 | admin_user_id | str | Yes | - | First admin user ID |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
+| user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, `memory_policy`, and `privacy` |
 | settings | object | No | `null` | Initial Account runtime configuration. ROOT-only; supports `feishu`, `github`, `acl`, `agent_evolution`, `vlm`, `query_planner`, `embedding`, and `vectordb`. `vectordb` and Embedding create-only fields can only be set here |
 
 **Notes:**
 - File-backed account creation rejects an `account_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the account registry. Newly persisted user IDs are limited to 255 characters across account-store providers. Trusted mode rejects an oversized new user or a new oversized account before enqueueing auto-registration, so invalid identities cannot block other identities from registering. Existing oversized File users and accounts remain readable.
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
-- `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
+- Creation requires valid effective VLM, Embedding, and VectorDB settings, using Account values or Cluster fallback. Validation checks configuration without model requests or remote provisioning; failure leaves no Account, user, or configuration file.
 - Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
 - `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
@@ -1586,7 +1598,7 @@ Register a new user in a workspace.
 | user_id | str | Yes | - | User ID |
 | role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`; only `ROOT` may register `"global"`. ROOT identity comes only from `server.root_api_key`. |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
+| user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, `memory_policy`, and `privacy` |
 
 **Notes:**
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.

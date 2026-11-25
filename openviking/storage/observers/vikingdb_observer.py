@@ -8,6 +8,7 @@ Provides methods to observe and report VikingDB collection status.
 
 from typing import Dict, Optional
 
+from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.vikingdb_manager import VikingDBManager
@@ -33,14 +34,13 @@ class VikingDBObserver(BaseObserver):
 
         backend = (
             await self._vikingdb_manager.get_account_backend(ctx.account_id)
-            if ctx is not None else self._vikingdb_manager
+            if ctx is not None
+            else self._vikingdb_manager
         )
         if not await backend.collection_exists():
             return "No collections found."
 
-        statuses = await self._get_collection_statuses(
-            [backend.collection_name], ctx=ctx
-        )
+        statuses = await self._get_collection_statuses([backend.collection_name], ctx=ctx)
         return self._format_status_as_table(statuses)
 
     async def get_status_json_async(self, ctx: Optional[RequestContext] = None) -> dict:
@@ -54,7 +54,11 @@ class VikingDBObserver(BaseObserver):
                 },
             }
 
-        if not await self._vikingdb_manager.collection_exists():
+        backend = (
+            await self._vikingdb_manager.get_account_backend(ctx.account_id)
+            if ctx is not None else self._vikingdb_manager
+        )
+        if not await backend.collection_exists():
             return {
                 "collections": [],
                 "summary": {
@@ -65,7 +69,7 @@ class VikingDBObserver(BaseObserver):
             }
 
         statuses = await self._get_collection_statuses(
-            [self._vikingdb_manager.collection_name], ctx=ctx
+            [backend.collection_name], ctx=ctx
         )
         collections = []
         total_indexes = 0
@@ -107,7 +111,8 @@ class VikingDBObserver(BaseObserver):
         statuses = {}
         backend = (
             await self._vikingdb_manager.get_account_backend(ctx.account_id)
-            if ctx is not None else self._vikingdb_manager
+            if ctx is not None
+            else self._vikingdb_manager
         )
 
         for name in collection_names:
@@ -124,7 +129,11 @@ class VikingDBObserver(BaseObserver):
                     "vector_count": vector_count,
                 }
             except Exception as e:
-                logger.error(f"Error getting status for collection '{name}': {e}")
+                logger.error(
+                    "Error getting status for collection '%s': %s",
+                    short_hash(str(name)),
+                    type(e).__name__,
+                )
                 statuses[name] = {
                     "index_count": 0,
                     "vector_count": 0,
@@ -193,5 +202,5 @@ class VikingDBObserver(BaseObserver):
             run_async(self._vikingdb_manager.health_check())
             return False
         except Exception as e:
-            logger.error(f"VikingDB health check failed: {e}")
+            logger.error("VikingDB health check failed: %s", type(e).__name__)
             return True

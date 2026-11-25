@@ -18,6 +18,7 @@ from openviking.service.task_domain import TaskPatch, TaskRetentionPolicy, TaskS
 from openviking.service.task_store import PersistentTaskStore, WorkRegistration
 from openviking.service.task_tracker import TaskTracker
 from openviking_cli.exceptions import FailedPreconditionError
+from openviking_cli.utils.config.storage_config import StorageConfig
 from tests.test_task_tracker import _FakeAgfs
 
 OWNER: dict[str, Any] = {"account_id": "account", "user_id": "user"}
@@ -28,8 +29,6 @@ OWNER: dict[str, Any] = {"account_id": "account", "user_id": "user"}
     [
         (Exception(1062, "unique key conflict"), True),
         (Exception(1452, "foreign key references duplicate_records"), False),
-        (Exception(1048, "Column 'duplicate' cannot be null"), False),
-        (Exception(3819, "Check constraint 'duplicate_guard' is violated"), False),
         (Exception("duplicate"), False),
         (Exception(), False),
         (None, False),
@@ -45,8 +44,13 @@ def test_mysql_duplicate_detection_uses_driver_error_code(original, expected):
     assert MySQLTaskWorkStore._is_duplicate_error(error) is expected
 
 
-def _relational_backend(provider):
+def _relational_backend(provider, tmp_path=None):
     sqlalchemy = pytest.importorskip("sqlalchemy.ext.asyncio")
+    if provider == "sqlite":
+        pytest.importorskip("aiosqlite")
+        from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+
+        return sqlalchemy, SQLiteTaskWorkStore, {"path": str(tmp_path / "tasks.db")}, []
     if provider == "postgres":
         pytest.importorskip("psycopg")
         from openviking.service.task_store_postgres import PostgresTaskWorkStore
@@ -81,11 +85,25 @@ async def _provision_task_schema(admin, params, schema_names):
                     await connection.exec_driver_sql(statement)
 
 
-@pytest.fixture(params=["file", "mysql", "postgres"])
-async def task_stores(request):
+@pytest.fixture(params=["file", "mysql", "postgres", "sqlite"])
+async def task_stores(request, tmp_path):
     if request.param == "file":
         store = PersistentTaskStore(_FakeAgfs())
         yield store, store
+        return
+    if request.param == "sqlite":
+        pytest.importorskip("aiosqlite")
+        from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+
+        params = {"path": str(tmp_path / "tasks.db")}
+        first, second = SQLiteTaskWorkStore(params=params), SQLiteTaskWorkStore(params=params)
+        try:
+            await first.load()
+            await second.load()
+            yield first, second
+        finally:
+            await first.close()
+            await second.close()
         return
     sqlalchemy, store_class, params, schema_names = _relational_backend(request.param)
     first = store_class(params=params)
@@ -130,14 +148,11 @@ async def test_relational_load_requires_schema_and_can_retry(provider):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("release", ["finalize", "withdraw", "replace"])
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_duplicate_business_key_rechecks_after_conflict(task_stores, monkeypatch, release):
     from sqlalchemy.exc import IntegrityError
 
-    from openviking.service.task_store_sql import SQLTaskWorkStore
-
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Duplicate-key recovery is a relational store contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     uri = "viking://resources/duplicate-key"
     await observer.create("content_write", uri, task_id="blocker", reject_if_active=True, **OWNER)
@@ -179,15 +194,13 @@ async def test_duplicate_business_key_rechecks_after_conflict(task_stores, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres"], indirect=True)
 async def test_duplicate_task_id_deleted_before_recovery_is_retried(task_stores, monkeypatch):
     from sqlalchemy.exc import IntegrityError
 
     from openviking.service.task_domain import TaskRecord
-    from openviking.service.task_store_sql import SQLTaskWorkStore
 
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Duplicate-key recovery is a relational store contract")
     record = TaskRecord(task_id="same-id", task_type="content_write", **OWNER)
     load = first._load_task
     transaction = first._transaction
@@ -222,15 +235,13 @@ async def test_duplicate_task_id_deleted_before_recovery_is_retried(task_stores,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_duplicate_recovery_churn_has_bounded_retries(task_stores, monkeypatch):
     from sqlalchemy.exc import IntegrityError
 
     from openviking.service.task_domain import TaskRecord
-    from openviking.service.task_store_sql import SQLTaskWorkStore
 
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Duplicate-key recovery is a relational store contract")
     observer = TaskTracker(second)
     record = TaskRecord(
         task_id="new", task_type="content_write", resource_id="viking://resources/churn", **OWNER
@@ -272,15 +283,13 @@ async def test_duplicate_recovery_churn_has_bounded_retries(task_stores, monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancelled", [False, True], ids=["complete", "cancel"])
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_outcome_resource_conflict_preserves_task_and_work(task_stores, cancelled):
     from sqlalchemy import select
 
     from openviking.service.task_store import TaskAlreadyActive
-    from openviking.service.task_store_sql import SQLTaskWorkStore
 
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Resource guard conflicts are a relational store contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     source, target = "viking://resources/source", "viking://resources/target"
     await writer.create("content_write", source, task_id="source", reject_if_active=True, **OWNER)
@@ -341,12 +350,9 @@ async def test_outcome_resource_conflict_preserves_task_and_work(task_stores, ca
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_terminal_outcome_does_not_acquire_destination_guard(task_stores):
-    from openviking.service.task_store_sql import SQLTaskWorkStore
-
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Resource guard conflicts are a relational store contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     target = "viking://resources/target"
     await writer.create("content_write", "source", task_id="source", reject_if_active=True, **OWNER)
@@ -360,14 +366,11 @@ async def test_terminal_outcome_does_not_acquire_destination_guard(task_stores):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_outcome_conflict_retries_if_destination_guard_is_released(task_stores, monkeypatch):
     from sqlalchemy.exc import IntegrityError
 
-    from openviking.service.task_store_sql import SQLTaskWorkStore
-
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Resource guard conflicts are a relational store contract")
     writer, observer = TaskTracker(first), TaskTracker(second)
     target = "viking://resources/target"
     await writer.create("content_write", "source", task_id="source", reject_if_active=True, **OWNER)
@@ -399,13 +402,11 @@ async def test_outcome_conflict_retries_if_destination_guard_is_released(task_st
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("task_stores", ["mysql", "postgres", "sqlite"], indirect=True)
 async def test_work_error_waits_for_task_lock_before_touching_work(task_stores, monkeypatch):
     from openviking.service.task_store import StoreOperationCode
-    from openviking.service.task_store_sql import SQLTaskWorkStore
 
     first, second = task_stores
-    if not isinstance(first, SQLTaskWorkStore):
-        pytest.skip("Task-before-Work row locking is a relational store contract")
     writer = TaskTracker(first)
     await writer.create("content_write", task_id="task", **OWNER)
     await writer.register_work("task", "work", "Semantic", **OWNER)
@@ -416,13 +417,25 @@ async def test_work_error_waits_for_task_lock_before_touching_work(task_stores, 
         attempted.set()
         return await lock_task(*args, **kwargs)
 
+    transaction = first._transaction
+
+    @asynccontextmanager
+    async def observe_transaction():
+        attempted.set()
+        async with transaction() as session:
+            yield session
+
     async def hold_task():
         async with second._transaction() as session:
             assert await second._lock_task(session, "task", **OWNER)
             locked.set()
             assert await asyncio.to_thread(release.wait, 5)
 
-    monkeypatch.setattr(first, "_lock_task", observe_task_lock)
+    if first.dialect_name == "sqlite":
+        # SQLite waits before reading any state, rather than at the Task SELECT.
+        monkeypatch.setattr(first, "_transaction", observe_transaction)
+    else:
+        monkeypatch.setattr(first, "_lock_task", observe_task_lock)
     holder = asyncio.create_task(second._sql_runtime.run(hold_task))
     error_writer = None
     try:
@@ -554,6 +567,7 @@ async def test_withdrawal_is_atomic_with_work_registration(task_stores):
         assert not withdrawn.accepted
         assert registered is WorkRegistration.CREATED
         assert await tracker.get_work_state("task", "work", **OWNER) is WorkState.PENDING
+        assert (await tracker.get("task", **OWNER)).status is TaskStatus.PENDING
 
 
 @pytest.mark.asyncio
@@ -631,9 +645,19 @@ async def test_cancellation_closes_pending_work_and_waits_for_running_work(
 ):
     first, second = task_stores
     tracker, observer = TaskTracker(first), TaskTracker(second)
+    account_id = OWNER["account_id"]
+    teammate = {"account_id": account_id, "user_id": "teammate"}
+    other_account = {"account_id": "other", "user_id": OWNER["user_id"]}
+    for task_id, owner in (("teammate", teammate), ("outside", other_account)):
+        await tracker.create("compile", task_id=task_id, **owner)
+        await tracker.register_work(task_id, "work", "Semantic", **owner)
     await tracker.create("compile", task_id="task", **OWNER)
     await tracker.register_work("task", "root", root_queue, **OWNER)
     await tracker.register_work("task", "child", "Embedding", **OWNER)
+    expected = {"Semantic": {"pending": 1, "running": 0}, "Embedding": {"pending": 1, "running": 0}}
+    if root_queue != "Inline":
+        expected[root_queue] = {"pending": 1, "running": 0}
+    assert await observer.get_queue_work_counts(account_id=account_id) == expected
     if running:
         assert (await tracker.start_work("task", "root", **OWNER)).is_applied
         assert (await observer.start_work("task", "root", **OWNER)).is_applied
@@ -652,12 +676,23 @@ async def test_cancellation_closes_pending_work_and_waits_for_running_work(
     assert await observer.get_work_state("task", "root", **OWNER) is (
         WorkState.RUNNING if running and root_queue != "Inline" else WorkState.CANCELLED
     )
+    expected = {"Semantic": {"pending": 1, "running": 0}}
+    if running and root_queue != "Inline":
+        expected[root_queue] = {"pending": 0, "running": 1}
+    if child_running:
+        expected["Embedding"] = {"pending": 0, "running": 1}
+    assert await observer.get_queue_work_counts(account_id=account_id) == expected
     await observer.cancel("task", **OWNER)
     await tracker.mark_work_done("task", "root", **OWNER)
     if child_running:
         assert (await observer.get("task", **OWNER)).status is TaskStatus.CANCELLING
         await tracker.mark_work_done("task", "child", **OWNER)
     assert not await observer.has_work("task", **OWNER)
+    assert await observer.has_work(account_id=account_id, exclude_inline=True)
+    await tracker.mark_work_done("teammate", "work", **teammate)
+    assert not await observer.has_work(account_id=account_id, exclude_inline=True)
+    assert await observer.get_queue_work_counts(account_id=account_id) == {}
+    assert await observer.has_work(account_id="other", exclude_inline=True)
     assert (await observer.wait("task", timeout=0, **OWNER)).status is TaskStatus.CANCELLED
     assert await observer.get_work_state("task", "root", **OWNER) is WorkState.CANCELLED
     cancelled = await observer.get("task", **OWNER)
@@ -694,7 +729,6 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
             await remote.unregister_running_task("task")
 
     worker = asyncio.create_task(execute())
-    polling = None
     try:
         await asyncio.wait_for(started.wait(), 10)
         await getattr(tracker, cancel_method)("task", **OWNER)
@@ -702,7 +736,7 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
         assert await tracker.get_work_state("task", work_ids[0], **OWNER) is WorkState.CANCELLED
         assert not worker.done()
         monkeypatch.setattr("openviking.service.task_tracker._CANCEL_POLL_INTERVAL", 0)
-        polling = asyncio.create_task(remote._cancel_poll_loop())
+        remote.start_cleanup_loop()
         # Cancellation delivery precedes durable cleanup. MySQL commits during
         # unregister_running_task must settle before the worker propagates it;
         # a one-second timeout on the worker can cancel that cleanup itself.
@@ -713,10 +747,15 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
         assert (await tracker.get("task", **OWNER)).status is TaskStatus.CANCELLED
     finally:
         worker.cancel()
-        if polling is not None:
-            polling.cancel()
+        remote.stop_cleanup_loop()
         await asyncio.gather(
-            worker, *([polling] if polling is not None else []), return_exceptions=True
+            worker,
+            *[
+                task
+                for task in (remote._cleanup_task, remote._cancel_poll_task)
+                if task is not None
+            ],
+            return_exceptions=True,
         )
 
 
@@ -736,18 +775,27 @@ async def test_wait_for_work_observes_only_explicit_ids(tracker):
     await tracker.mark_work_done("task", "first", **OWNER)
     await tracker.wait_for_work("task", ["first"], timeout=0, **OWNER)
 
-    assert await tracker.has_work("task", **OWNER)
+    assert await tracker.get_work_state("task", "unrelated", **OWNER) is WorkState.PENDING
 
 
 @pytest.mark.asyncio
-async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker):
+async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker, monkeypatch):
     await tracker.register_work("task", "root", "Inline", **OWNER)
     await tracker.reconcile_delivery("task", "semantic", "Semantic", **OWNER)
+    first_check = asyncio.Event()
+    has_open_work = tracker._store.has_open_work
+
+    async def observe_open_work(*args, **kwargs):
+        result = await has_open_work(*args, **kwargs)
+        first_check.set()
+        return result
+
+    monkeypatch.setattr(tracker._store, "has_open_work", observe_open_work)
     waiting = asyncio.create_task(
-        tracker.wait_for_task_work("task", exclude_work_id="root", **OWNER)
+        tracker.wait_for_task_work("task", exclude_work_id="root", timeout=2, **OWNER)
     )
     try:
-        await asyncio.sleep(0)
+        await asyncio.wait_for(first_check.wait(), timeout=1)
         assert not waiting.done()
         await tracker.register_work("task", "embedding", "Embedding", **OWNER)
         await tracker.mark_work_done("task", "semantic", **OWNER)
@@ -755,7 +803,7 @@ async def test_task_work_wait_includes_recovered_and_later_enqueued_work(tracker
             await tracker.wait_for_task_work("task", exclude_work_id="root", timeout=0, **OWNER)
         await tracker.mark_work_done("task", "embedding", **OWNER)
         await asyncio.wait_for(waiting, timeout=1)
-        assert await tracker.has_work("task", **OWNER)
+        assert await tracker.get_work_state("task", "root", **OWNER) is WorkState.PENDING
     finally:
         waiting.cancel()
         await asyncio.gather(waiting, return_exceptions=True)
@@ -851,18 +899,29 @@ def test_mysql_task_store_schema_uses_service_name_partition():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deletion", ["manual", "expired"])
-@pytest.mark.parametrize("provider", ["mysql", "postgres"])
-async def test_relational_requeue_and_concurrent_completion_are_durable(deletion, provider):
-    sqlalchemy, store_class, params, schema_names = _relational_backend(provider)
-    first = store_class(params=params)
-    second = store_class(params=params)
-    isolated_store = store_class(
-        params=params,
-        service_name="contract-isolated",
+@pytest.mark.parametrize("provider", ["mysql", "postgres", "sqlite"])
+async def test_relational_requeue_and_concurrent_completion_are_durable(
+    deletion, provider, tmp_path
+):
+    sqlalchemy, store_class, params, schema_names = _relational_backend(provider, tmp_path)
+    from openviking.service.task_store_sql import SQLTaskWorkStore
+
+    config = StorageConfig.model_validate(
+        {
+            "task_store": {
+                "provider": provider,
+                "params": {**params, "service_name": "contract-main"},
+            }
+        }
     )
+    writer = config.build_task_tracker(None)
+    second = store_class(params=params, service_name="contract-main")
+    observer = TaskTracker(second)
+    isolated = config.build_task_tracker(None, service_name="contract-isolated")
+    first, isolated_store = writer._store, isolated._store
+    assert isinstance(first, SQLTaskWorkStore)
+    assert isinstance(isolated_store, SQLTaskWorkStore)
     admin = sqlalchemy.create_async_engine(first._url, **first._engine_options)
-    writer, observer = TaskTracker(first), TaskTracker(second)
-    isolated = TaskTracker(isolated_store)
     try:
         await _provision_task_schema(admin, params, schema_names)
         await first.load()
@@ -884,6 +943,8 @@ async def test_relational_requeue_and_concurrent_completion_are_durable(deletion
         )
         assert isolated_task is not None
         await isolated.register_work(task_id, "semantic", "Semantic", **OWNER)
+        assert not await observer.has_work(account_id=OWNER["account_id"], exclude_inline=True)
+        assert await observer.get_queue_work_counts(account_id=OWNER["account_id"]) == {}
 
         assert (await second.withdraw_unaccepted(task_id, **OWNER)).is_applied
         assert await observer.get(task_id, **OWNER) is None

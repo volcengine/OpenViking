@@ -23,6 +23,9 @@ export function builtinRequest(
     const values = options.map((item) => ({
       label: item!.label as string,
       value: item![skill ? 'uri' : 'value'] as string,
+      ...(skill && typeof item!.description === 'string'
+        ? { description: item!.description }
+        : {}),
     }));
     if (new Set(values.map((item) => item.value)).size !== values.length)
       return;
@@ -58,6 +61,7 @@ export function builtinRequest(
     return {
       kind: 'text',
       question,
+      required: cardType !== 'compile_instruction',
       initialValue:
         cardType === 'compile_instruction'
           ? p.current_value
@@ -70,10 +74,14 @@ export function builtinRequest(
     };
   }
   if (cardType !== 'compile_schedule') return;
-  const initial =
-    p.initial_value === undefined
-      ? { frequency: 'disabled' }
-      : object(p.initial_value);
+  if (p.initial_value === undefined)
+    return {
+      kind: 'schedule',
+      question,
+      initialValue: { mode: 'none' },
+      timezone: 'Asia/Shanghai',
+    };
+  const initial = object(p.initial_value);
   if (
     !initial ||
     !['disabled', 'daily', 'weekly'].includes(String(initial.frequency))

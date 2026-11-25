@@ -8,7 +8,7 @@ import pytest
 from aiohttp import web
 from test_app import enable_tools
 
-from openviking_gateway.protocols import SSEDecoder
+from openviking_gateway.protocols import SSEDecoder, heartbeat
 from openviking_gateway.tool_loop import HiddenToolLoop
 from openviking_gateway.tool_protocols import ResponseCapture
 from openviking_gateway.tool_protocols.common import ToolLoopError, ToolRound, sse
@@ -498,7 +498,7 @@ def check_notice_events(protocol, response, notices):
 @pytest.mark.parametrize("mixed", [False, True])
 @pytest.mark.parametrize("show", [True, False])
 async def test_native_hidden_rounds_exact_replay(running_gateway, protocol, streaming, mixed, show):
-    app, client, admin, key, _, _ = running_gateway
+    app, client, admin, key, _, writes = running_gateway
     await enable_tools(client, admin, show_tool_calls=show)
     requests, calls, upstream = [], [], []
 
@@ -534,6 +534,10 @@ async def test_native_hidden_rounds_exact_replay(running_gateway, protocol, stre
     response = await client.post(PATHS[protocol], headers=headers, json=body)
     assert response.status_code == 200, response.text
     assert "openviking_search" not in response.text and "gateway-" not in response.text
+    if mixed:
+        assert not writes
+    else:
+        assert len(writes) == 1 and "answer-3" in str(writes[0]["messages"])
     visible = visible_response(protocol, response, streaming)
     rounds = 1 if mixed else 3
     assert len(requests) == rounds and len(calls) == (1 if mixed else 2)
@@ -690,85 +694,110 @@ async def test_subagent_resending_tool_history_replays_it_but_cannot_call(
     assert "gateway-3" not in response.text
 
 
-@pytest.mark.parametrize("protocol", ["responses", "anthropic"])
-@pytest.mark.parametrize("failure", ["truncated", "error", "incomplete_call", "continuation"])
+@pytest.mark.parametrize(
+    ("failure", "protocol"),
+    [
+        (failure, protocol)
+        for failure in ("truncated", "error", "incomplete_call", "continuation")
+        for protocol in ("responses", "anthropic")
+    ]
+    + [("early_error", protocol) for protocol in ("chat", "responses", "anthropic")],
+)
 async def test_native_stream_failure_uses_protocol_terminal(running_gateway, protocol, failure):
     app, client, admin, key, _, _ = running_gateway
     await enable_tools(client, admin)
+    path = "/v1/chat/completions" if protocol == "chat" else PATHS[protocol]
     calls = []
+    error_event = {
+        "type": "error",
+        "error": {
+            "type": "upstream_overloaded",
+            "code": "upstream_rate_limit",
+            "message": "upstream failure",
+            "request_id": "private-request-id",
+        },
+        "provider_metadata": {"endpoint": "http://internal.example"},
+    }
 
     async def backend(request):
         if request.path == "/mcp":
-            calls.append(await request.json())
+            payload = await request.json()
+            if payload["method"] == "tools/list":
+                return None
+            calls.append(payload)
             return web.json_response({"id": 1, "result": {"content": []}})
-        if request.path != PATHS[protocol]:
+        if request.path != path:
             return None
         if failure == "continuation" and calls:
             return web.json_response({"error": "unavailable"}, status=503)
-        value = native_response(protocol, 1, owned=True)
-        events = native_events(protocol, value)
-        if failure == "truncated":
-            events.pop()
-        elif failure == "error":
-            events[-1] = {
-                "type": "error",
-                "error": {
-                    "type": "upstream_overloaded",
-                    "code": "upstream_rate_limit",
-                    "message": "upstream failure",
-                    "request_id": "private-request-id",
-                },
-                "provider_metadata": {"endpoint": "http://internal.example"},
-            }
-        elif failure == "incomplete_call" and protocol == "responses":
-            events[-1]["type"] = "response.incomplete"
-            events[-1]["response"]["status"] = "incomplete"
-        elif failure == "incomplete_call":
-            events[-2]["delta"]["stop_reason"] = "max_tokens"
+        if failure == "early_error":
+            events = [error_event]
+        else:
+            events = native_events(protocol, native_response(protocol, 1, owned=True))
+            if failure == "truncated":
+                events.pop()
+            elif failure == "error":
+                events[-1] = error_event
+            elif failure == "incomplete_call" and protocol == "responses":
+                events[-1]["type"] = "response.incomplete"
+                events[-1]["response"]["status"] = "incomplete"
+            elif failure == "incomplete_call":
+                events[-2]["delta"]["stop_reason"] = "max_tokens"
         return web.Response(body=b"".join(sse(e) for e in events), content_type="text/event-stream")
 
     app.state.test_backend["handler"] = backend
     response = await client.post(
-        PATHS[protocol],
+        path,
         headers={"Authorization": "Bearer " + key["key"]},
         json=request_body(protocol, True),
     )
     assert response.status_code == 200
-    events = [SSEDecoder.data(f) for f in SSEDecoder().feed(response.content)]
-    if failure == "error" and protocol == "anthropic":
-        assert events[-1]["type"] == "error"
-        assert events[-1]["error"] == {
-            "type": "upstream_overloaded",
-            "code": "upstream_rate_limit",
-            "message": "upstream failure",
+    events = []
+    for frame in SSEDecoder().feed(response.content):
+        if b"[DONE]" not in frame:
+            event = SSEDecoder.data(frame)
+            assert event is not None
+            events.append(event)
+    assert len(calls) == (1 if failure == "continuation" else 0)
+    assert not any(e.get("type") in ("response.completed", "message_stop") for e in events)
+    if protocol == "chat":
+        assert response.content.endswith(b"data: [DONE]\n\n")
+    else:
+        assert b"[DONE]" not in response.content
+    if failure in {"error", "early_error"} and protocol != "responses":
+        assert events[-1] == {
+            "type": "error",
+            "error": {
+                "type": "upstream_overloaded",
+                "code": "upstream_rate_limit",
+                "message": "upstream failure",
+            },
         }
-        return
-    if protocol == "responses":
+    elif protocol == "responses":
         assert events[-1]["type"] == "response.failed"
         failed = events[-1]["response"]
         assert failed["status"] == "failed"
-        if failure == "error":
-            assert failed["error"] == {
-                "code": "rate_limit_exceeded",
-                "message": "upstream failure",
-            }
+        if failure in {"error", "early_error"}:
+            assert failed["error"] == {"code": "rate_limit_exceeded", "message": "upstream failure"}
         else:
             assert failed["error"]["code"] == "server_error"
             assert failed["error"]["message"]
-        assert failed["id"] == events[0]["response"]["id"]
+        if failure == "early_error":
+            assert len(events) == 1 and failed["id"]
+            assert failed["object"] == "response" and failed["model"] == "model"
+            assert failed["incomplete_details"] is None and failed["output"] == []
+        else:
+            assert failed["id"] == events[0]["response"]["id"]
+            assert not any(item["type"] == "function_call" for item in failed["output"])
         assert [e["sequence_number"] for e in events] == list(range(len(events)))
-        assert not any(item["type"] == "function_call" for item in failed["output"])
     else:
         assert events[-1]["type"] == "error"
         assert events[-1]["error"]["type"] == "gateway_tool_error"
-    assert len(calls) == (1 if failure == "continuation" else 0)
-    assert not any(e["type"] in {"response.completed", "message_stop"} for e in events)
-    assert b"[DONE]" not in response.content
 
 
 @pytest.mark.parametrize("streaming", [False, True])
 async def test_responses_custom_tool_mixed_handoff(running_gateway, streaming):
-    app, client, admin, key, _, _ = running_gateway
+    app, client, admin, key, _, writes = running_gateway
     await enable_tools(client, admin)
     requests = []
 
@@ -778,24 +807,47 @@ async def test_responses_custom_tool_mixed_handoff(running_gateway, streaming):
         if request.path != "/v1/responses":
             return None
         requests.append(await request.json())
-        return await wire_response(
-            request,
-            "responses",
-            native_response("responses", len(requests), owned=True, mixed=True, custom=True),
-            streaming,
-        )
+        first = len(requests) == 1
+        value = native_response("responses", len(requests), owned=first, mixed=first, custom=True)
+        return await wire_response(request, "responses", value, streaming)
 
     app.state.test_backend["handler"] = backend
     body = request_body("responses", streaming)
     body["tools"] = [{"type": "custom", "name": "shell", "format": {"type": "text"}}]
-    response = await client.post(
-        "/v1/responses", headers={"Authorization": "Bearer " + key["key"]}, json=body
-    )
+    headers = {"Authorization": "Bearer " + key["key"]}
+    response = await client.post("/v1/responses", headers=headers, json=body)
+    assert response.status_code == 200
     value = visible_response("responses", response, streaming)
     assert len(requests) == 1
     assert value["output"][-1]["type"] == "custom_tool_call"
     assert value["output"][-1]["input"] == "pwd"
     assert "openviking_search" not in response.text
+
+    assert not writes
+    call_id = value["output"][-1]["call_id"]
+    body["input"].extend(
+        [
+            *value["output"],
+            {"type": "custom_tool_call_output", "call_id": call_id, "output": "/work/project"},
+        ]
+    )
+    response = await client.post("/v1/responses", headers=headers, json=body)
+    assert response.status_code == 200
+    (batch,) = writes
+    (part,) = [
+        part
+        for message in batch["messages"]
+        for part in message["parts"]
+        if part["type"] == "tool" and part["tool_id"] == call_id
+    ]
+    assert part == {
+        "type": "tool",
+        "tool_id": call_id,
+        "tool_name": "shell",
+        "tool_input": {"raw": "pwd"},
+        "tool_status": "completed",
+        "tool_output": "/work/project",
+    }
 
 
 @pytest.mark.parametrize("streaming", [False, True])
@@ -905,18 +957,17 @@ async def test_hosted_responses_history_remains_passthrough(running_gateway, ext
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
 async def test_native_text_streams_before_round_finishes_and_cancel_closes(protocol):
     import asyncio
-    from types import SimpleNamespace
-
-    from openviking_gateway.tool_loop import HiddenToolLoop
-    from openviking_gateway.tool_protocols import ResponseCapture
 
     value = native_response(protocol, 1, owned=True)
     events = native_events(protocol, value)
-    closed = []
+    closed, tasks = [], []
     pending = asyncio.Event()
 
     class Content:
         async def iter_any(self):
+            task = asyncio.current_task()
+            assert task is not None
+            tasks.append(task)
             for event in events:
                 yield sse(event)
                 if event["type"] in {"response.output_text.delta", "content_block_delta"}:
@@ -932,7 +983,7 @@ async def test_native_text_streams_before_round_finishes_and_cancel_closes(proto
     prepared = SimpleNamespace(
         body=request_body(protocol, True),
         protocol=protocol,
-        root={"policy": {}},
+        root={"policy": {"tool_total_seconds": 1}},
         metrics={},
         tools_active=True,
         reply_lead="",
@@ -940,13 +991,13 @@ async def test_native_text_streams_before_round_finishes_and_cancel_closes(proto
     loop = HiddenToolLoop(
         prepared, SimpleNamespace(allowed={"openviking_search"}), None, ResponseCapture(protocol)
     )
-    stream = loop.run(response, None)
+    stream = heartbeat(loop.run(response, None), 0.01)
     while True:
         chunk = await asyncio.wait_for(stream.__anext__(), 0.5)
-        if b'"delta"' in chunk:
+        if chunk is not None and b'"delta"' in chunk:
             break
     await stream.aclose()
-    assert closed and not loop.capture.complete
+    assert closed and tasks[0].done() and not loop.capture.complete
 
 
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
@@ -1010,73 +1061,6 @@ async def test_native_events_arriving_together_leave_together(protocol):
             "type": "overloaded_error",
             "message": "Model stream failed",
         }
-
-
-@pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
-def test_upstream_stream_error_uses_protocol_terminator(protocol):
-    from types import SimpleNamespace
-
-    prepared = SimpleNamespace(
-        body=request_body(protocol, True),
-        protocol=protocol,
-        root={"policy": {}},
-        metrics={},
-        tools_active=True,
-        reply_lead="",
-    )
-    loop = HiddenToolLoop(
-        prepared,
-        SimpleNamespace(allowed={"openviking_search"}),
-        None,
-        ResponseCapture(protocol),
-    )
-    upstream = {
-        "type": "error",
-        "error": {
-            "type": "upstream_overloaded",
-            "code": "upstream_rate_limit",
-            "message": "request to http://internal.example failed",
-            "request_id": "private-request-id",
-        },
-        "provider_metadata": {"region": "private-region"},
-    }
-    loop.adapter.begin()
-    with pytest.raises(ToolLoopError, match="Model stream failed") as caught:
-        list(loop.decode(SSEDecoder(), sse(upstream)))
-
-    wire = loop.error(caught.value)
-    values = [
-        SSEDecoder.data(frame)
-        for frame in SSEDecoder().feed(wire)
-        if b"[DONE]" not in frame
-    ]
-    expected = {
-        "type": "error",
-        "error": {
-            "type": "upstream_overloaded",
-            "code": "upstream_rate_limit",
-            "message": "request to http://internal.example failed",
-        },
-    }
-    if protocol == "responses":
-        expected = {
-            "type": "response.failed",
-            "response": {
-                "id": loop.adapter.identifier,
-                "object": "response",
-                "model": "model",
-                "status": "failed",
-                "error": {
-                    "code": "rate_limit_exceeded",
-                    "message": "request to http://internal.example failed",
-                },
-                "incomplete_details": None,
-                "output": [],
-            },
-            "sequence_number": 0,
-        }
-    assert values == [expected]
-    assert wire.endswith(b"data: [DONE]\n\n") == (protocol == "chat")
 
 
 def test_streamed_text_append_keeps_the_text_on_a_bad_delta():
@@ -1147,34 +1131,6 @@ async def test_native_replay_survives_restart_edits_and_archive_boundary(
     finally:
         reopened.close()
         kernel.store = store
-
-
-def test_custom_responses_tools_are_captured_as_complete_pairs():
-    from openviking_gateway.capture import capture_messages
-    from openviking_gateway.protocols import prefix_chain
-
-    messages = [
-        {"role": "user", "content": "check the directory"},
-        {
-            "type": "custom_tool_call",
-            "id": "ct-1",
-            "call_id": "c-1",
-            "name": "shell",
-            "input": "pwd",
-        },
-        {"type": "custom_tool_call_output", "call_id": "c-1", "output": "/work/project"},
-    ]
-    captured = capture_messages(messages, prefix_chain(messages))
-    assert captured[1]["parts"] == [
-        {
-            "type": "tool",
-            "tool_id": "c-1",
-            "tool_name": "shell",
-            "tool_input": {"raw": "pwd"},
-            "tool_status": "completed",
-            "tool_output": "/work/project",
-        }
-    ]
 
 
 @pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
@@ -1284,34 +1240,6 @@ async def test_hidden_round_with_no_visible_anchor_does_not_write_a_root_record(
     await loop.persist()
     assert ("hidden", "") not in await store.replay.read(prepared.scope, prepared.session, [""])
     assert prepared.metrics["degradation"] == "hidden_reply_without_anchor"
-
-
-@pytest.mark.parametrize("mixed", [False, True])
-@pytest.mark.parametrize("protocol", ["chat", "responses", "anthropic"])
-async def test_tool_loop_reply_reads_like_a_relayed_one(
-    setup_kernel, credential, policy, protocol, mixed
-):
-    """Calls left for the client hand the turn off; only a final answer completes it."""
-    from types import SimpleNamespace
-
-    from openviking_gateway.tool_loop import HiddenToolLoop
-    from openviking_gateway.tool_protocols import ResponseCapture
-
-    kernel, store, _, _ = setup_kernel
-    policy.update(gateway_tools=True, recall=False)
-    prepared = await kernel.prepare(
-        request_body(protocol, False), protocol, {}, credential, {"id": "u"}, policy
-    )
-    loop = HiddenToolLoop(
-        prepared, SimpleNamespace(allowed={"openviking_search"}), store, ResponseCapture(protocol)
-    )
-    loop.adapter.begin()
-    loop.adapter.load(native_response(protocol, 1, mixed=mixed))
-    loop.round = loop.adapter.end()
-    loop.adapter.publish_calls(loop.round.calls)
-    await loop.persist()
-    assert loop.capture.finished
-    assert (loop.capture.handoff, loop.capture.complete) == (mixed, not mixed)
 
 
 @pytest.mark.parametrize("protocol", ["responses", "anthropic"])
@@ -1643,3 +1571,50 @@ async def test_tool_loop_logs_rounds_read_one_by_one(setup_kernel, credential, p
     assert loop.capture.usage["cached_tokens"] == 1700
     assert prepared.metrics["first_upstream_cached_tokens"] == 800
     assert prepared.metrics["hidden_upstream_cached_tokens"] == 900
+
+
+@pytest.mark.parametrize(
+    ("protocol", "streaming"),
+    [("responses", False), ("responses", True), ("chat", True), ("anthropic", True)],
+)
+async def test_tool_continuation_transport_failure_has_fixed_detail(
+    running_gateway, protocol, streaming
+):
+    from test_recall_notice import reply
+    from test_upstream_timeout import CHAT, stream_failure
+
+    app, client, admin, key, _, _ = running_gateway
+    await enable_tools(client, admin, show_tool_calls=False)
+    path, calls = {**PATHS, "chat": CHAT}[protocol], []
+
+    async def backend(request):
+        if request.path == "/mcp":
+            return web.json_response({"id": 1, "result": {"content": []}})
+        if request.path != path:
+            return None
+        calls.append(await request.json())
+        if len(calls) > 1:
+            # The provider drops the continuation without answering.
+            request.transport.close()
+            return web.Response()
+        value = native_response(protocol, 1, owned=True)
+        return await reply(request, protocol, value, streaming)
+
+    app.state.test_backend["handler"] = backend
+    response = await client.post(
+        path,
+        headers={"Authorization": "Bearer " + key["key"]},
+        json=request_body(protocol, streaming),
+    )
+    assert len(calls) == 2
+    detail = "Model upstream closed the connection"
+    # aiohttp's own text names the peer; the client sees only the fixed detail.
+    assert b"Server disconnected" not in response.content
+    if not streaming:
+        assert response.status_code == 502
+        assert response.json()["reason"] == "upstream_disconnected"
+        assert response.json()["detail"] == detail
+        return
+    assert response.status_code == 200
+    kind = "server_error" if protocol == "responses" else "upstream_disconnected"
+    assert stream_failure(protocol, response.content) == (kind, detail)

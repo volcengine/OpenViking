@@ -35,6 +35,7 @@ test('FileBrowser opens metadata-backed Wiki despite a missing registry; permiss
       return Promise.resolve(new Response('', { status: 404 }));
     if (path.endsWith('/attrs')) return ok({ attrs: { tags: [] } });
     if (path.endsWith('/stat')) return ok({ isDir: true });
+    if (path.endsWith('/search/find')) return ok({ resources: [] });
     if (path.endsWith('/ls'))
       return uri === root
         ? ok([
@@ -86,16 +87,21 @@ for (const kind of ['wiki', 'experience']) {
     let hold = false;
     const delayed = deferred();
     const fetch = recordingFetch(({ path, uri }) => {
-      if (path.endsWith('/configs')) return ok({ targets: [] });
+      if (path.endsWith('/configs')) return ok({ configs: [] });
       if (path.endsWith('/attrs')) return ok({ attrs: { tags: [] } });
       if (path.endsWith('/stat')) return ok({ isDir: kind === 'wiki' });
+      if (path.endsWith('/search/find'))
+        return ok({
+          resources: Array.from({ length: value }, (_, i) => ({
+            uri: `${wiki}/${i}.md`,
+            level: 2,
+          })),
+        });
       if (path.endsWith('/ls'))
         return ok(
           uri === root
             ? [{ uri: wiki, isDir: true, tags: ['compile_target=true'] }]
-            : Array.from({ length: value }, (_, i) => ({
-                uri: `${wiki}/${i}.md`,
-              })),
+            : [],
         );
       if (path.endsWith('/outcomes'))
         return hold
@@ -118,6 +124,7 @@ for (const kind of ['wiki', 'experience']) {
         fetch.countOf('/api/v1/compile/configs'),
         kind === 'wiki' ? 1 : 0,
       );
+      assert.equal(browser.dashboardError, null);
       assert.match(
         view.container.textContent,
         kind === 'wiki' ? /1/ : /Task success1/,

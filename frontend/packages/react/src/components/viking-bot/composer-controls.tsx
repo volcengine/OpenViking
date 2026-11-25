@@ -61,9 +61,8 @@ export function VikingBotSubmit({
     <Tooltip content={tip ?? label}>
       <Button
         {...props}
-        size="default"
+        size="small"
         type="primary"
-        shape="circle"
         iconOnly
         htmlType="button"
         className={['ov-viking-bot__submit', className]
@@ -86,21 +85,36 @@ export function VikingBotSubmit({
 
 export function VikingBotAttach({
   label,
+  tip,
   ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; tip?: string }) {
+  const hasDisabledHint = Boolean(props.disabled && tip !== undefined);
+  const button = (
+    <Button
+      {...props}
+      size="mini"
+      type="text"
+      iconOnly
+      htmlType="button"
+      className="ov-viking-bot__attach"
+      aria-label={label}
+      aria-hidden={hasDisabledHint || undefined}
+    >
+      <AttachSvg aria-hidden="true" focusable="false" />
+    </Button>
+  );
+  // Keep the tooltip anchor mounted while attachment capacity changes.
   return (
-    <Tooltip content={label}>
-      <Button
-        {...props}
-        size="mini"
-        type="text"
-        iconOnly
-        htmlType="button"
-        className="ov-viking-bot__attach"
-        aria-label={label}
+    <Tooltip content={tip ?? label}>
+      <span
+        className="ov-viking-bot__attach-trigger"
+        role={hasDisabledHint ? 'button' : undefined}
+        aria-disabled={hasDisabledHint || undefined}
+        aria-label={hasDisabledHint ? label : undefined}
+        tabIndex={hasDisabledHint ? 0 : undefined}
       >
-        <AttachSvg aria-hidden="true" focusable="false" />
-      </Button>
+        {button}
+      </span>
     </Tooltip>
   );
 }

@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -71,22 +72,14 @@ def redis_url(redis_server):
 
 @pytest.fixture(params=["memory", "sqlite", "cache"])
 def coordination_config(request, tmp_path):
+    if request.param == "cache":
+        return cache_config(request.getfixturevalue("redis_url"), deadline=2000)
     config = {
         "service_name": f"coordination-{uuid4().hex}",
         "coordination": {"provider": request.param},
     }
     if request.param == "sqlite":
         config["coordination"]["sqlite_path"] = str(tmp_path / "local-disk" / "coordination.db")
-    if request.param == "cache":
-        config["cache"] = {
-            "runtime_enabled": True,
-            "provider": "redis",
-            "redis": {
-                "endpoints": [request.getfixturevalue("redis_url")],
-                "pool_size": 2,
-                "command_timeout_ms": 2000,
-            },
-        }
     return config
 
 
@@ -167,7 +160,8 @@ async def test_revision_ttl_refresh_expiry_and_counter_continuity(coordination_c
     cache = None
     if provider == "cache":
         redis = pytest.importorskip("redis.asyncio")
-        cache = redis.Redis.from_url(coordination_config["cache"]["redis"]["endpoints"][0])
+        endpoint = coordination_config["cache"]["instances"]["default"]["redis"]["endpoints"][0]
+        cache = redis.Redis.from_url(endpoint)
     else:
         database = coordination_config["coordination"]["sqlite_path"]
 
@@ -286,6 +280,8 @@ async def test_cache_revision_integers_remain_exact_above_lua_precision(redis_ur
 
 _CHILD = """
 import asyncio, json, sys
+protocol_output = sys.stdout
+sys.stdout = sys.stderr
 from openviking.pyagfs import get_binding_client
 async def main():
     cls, _ = get_binding_client()
@@ -293,7 +289,7 @@ async def main():
     lease = await client.leader_try_acquire_async("process-watch", "child", 0.8)
     revision = await client.revision_allocate_async("process-work")
     await client.revision_publish_async("process-work", revision)
-    print(json.dumps({"lease": lease, "revision": revision}), flush=True)
+    print(json.dumps({"lease": lease, "revision": revision}), file=protocol_output, flush=True)
     await asyncio.Event().wait()
 asyncio.run(main())
 """
@@ -342,10 +338,8 @@ async def test_default_memory_does_not_follow_cache_configuration(
     redis_url, clients, tmp_path, monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
-    config = {
-        "service_name": uuid4().hex,
-        "cache": {"runtime_enabled": True, "redis": {"endpoints": [redis_url], "pool_size": 2}},
-    }
+    config = cache_config(redis_url)
+    del config["coordination"]
     first = clients(config)
     second = clients({"service_name": config["service_name"]})
     lease = await first.leader_try_acquire_async("watch", "first", 1)
@@ -450,8 +444,15 @@ def cache_config(endpoint, *, deadline=100):
         "service_name": uuid4().hex,
         "coordination": {"provider": "cache", "operation_timeout_ms": deadline},
         "cache": {
+            "enabled": False,
             "runtime_enabled": True,
-            "redis": {"endpoints": [endpoint], "pool_size": 1, "command_timeout_ms": 0},
+            "cachefs": {"enabled": False},
+            "instances": {
+                "default": {
+                    "provider": "redis",
+                    "redis": {"endpoints": [endpoint], "pool_size": 2, "command_timeout_ms": 0},
+                }
+            },
         },
     }
 
@@ -559,10 +560,19 @@ async def test_canonical_config_loads_explicit_sqlite_path(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", [None, "memory", "sqlite"])
-@pytest.mark.parametrize("leader_provider", ["cache", "auto", None])
+@pytest.mark.parametrize(
+    ("provider", "leader_provider", "watch_store", "expected_provider"),
+    [
+        pytest.param(None, "cache", None, "cache", id="legacy-explicit-cache"),
+        pytest.param(None, "auto", "mysql", "cache", id="legacy-auto-external-watch-store"),
+        pytest.param(None, None, "mysql", "cache", id="legacy-default-auto"),
+        pytest.param(None, None, None, "memory", id="legacy-default-file-store"),
+        pytest.param("memory", "cache", None, "memory", id="explicit-memory-wins"),
+        pytest.param("sqlite", "auto", "mysql", "sqlite", id="explicit-sqlite-wins"),
+    ],
+)
 async def test_canonical_legacy_watch_cache_and_explicit_provider_priority(
-    tmp_path, redis_url, clients, provider, leader_provider
+    tmp_path, redis_url, clients, provider, leader_provider, watch_store, expected_provider
 ):
     namespace = uuid4().hex
     coordination = {}
@@ -571,27 +581,22 @@ async def test_canonical_legacy_watch_cache_and_explicit_provider_priority(
     if provider == "sqlite":
         coordination["sqlite_path"] = str(tmp_path / "coordination.db")
     config_path = tmp_path / "ov.conf"
-    data = {
-        "cache": {"provider": "redis", "params": {"endpoints": [redis_url]}},
+    data: dict[str, Any] = {
+        "cache": {
+            "instances": {"default": {"provider": "redis", "params": {"endpoints": [redis_url]}}}
+        },
         "storage": {"agfs": {"coordination": coordination}},
     }
     if leader_provider is not None:
         data["watch_leader_provider"] = leader_provider
-    if leader_provider != "cache":
-        data["storage"]["watch_store"] = {"provider": "mysql"}
+    if watch_store is not None:
+        data["storage"]["watch_store"] = {"provider": watch_store}
     config_path.write_text(json.dumps(data))
     first = clients({"service_name": namespace}, config_path=str(config_path))
-    expected = {**coordination, "provider": provider or "cache"}
-    second = clients(
-        {
-            "service_name": namespace,
-            "coordination": expected,
-            "cache": {
-                "provider": "redis",
-                "redis": {"endpoints": [redis_url]},
-            },
-        }
-    )
+    expected = cache_config(redis_url, deadline=2000)
+    expected["service_name"] = namespace
+    expected["coordination"] = {**coordination, "provider": expected_provider}
+    second = clients(expected)
     async with AsyncAGFSClient(first).leader_candidate(
         "watch", "first", ttl_secs=1, renew_interval_secs=0.2, retry_interval_secs=0.01
     ) as candidate:

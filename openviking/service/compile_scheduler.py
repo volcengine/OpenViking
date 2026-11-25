@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from openviking.core.identifiers import validate_user_id
 from openviking.crypto.encryptor import build_credential_encryptor as build_credential_encryptor
+from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext, Role
 from openviking.service.compile_targets import CompileStore, validate_compile_name
 from openviking_cli.exceptions import (
@@ -145,7 +146,9 @@ class CompileScheduler:
             try:
                 await self.scan_once()
             except Exception:
-                logger.exception("Compile scheduler scan failed")
+                logger.info(
+                    "compile scheduler scan failed; retrying next scan", extra={"degraded": True}
+                )
             try:
                 await asyncio.wait_for(self._stop.wait(), COMPENSATION_SCAN_SECONDS)
             except asyncio.TimeoutError:
@@ -164,7 +167,9 @@ class CompileScheduler:
                     elif record["auto_update"]:
                         await self.reschedule(account_id, owner_user_id, compile_name, record)
                 except Exception:
-                    logger.exception("Compile schedule check failed for %s", compile_name)
+                    logger.debug(
+                        "compile schedule check failed name_hash=%s", short_hash(str(compile_name))
+                    )
 
     async def reschedule(
         self,
@@ -199,7 +204,12 @@ class CompileScheduler:
             else:
                 await self._expiry.unregister(identity)
         except Exception as exc:
-            logger.warning("Compile reschedule failed for %s", compile_name, exc_info=True)
+            (logger.debug if raise_on_error else logger.info)(
+                "compile reschedule failed name_hash=%s error_type=%s",
+                short_hash(str(compile_name)),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
+            )
             if raise_on_error:
                 raise UnavailableError(
                     "compile scheduler", "Cannot register scheduled Compile"
@@ -212,11 +222,10 @@ class CompileScheduler:
         compile_name: str,
         now: Optional[datetime] = None,
     ) -> str:
-        """Accept the latest due slot once through the same execution entry point as manual runs.
+        """Submit the latest due slot and advance its schedule under the configuration lock.
 
-        The state lock covers submission and slot advancement. A failed submission leaves the
-        slot pending. Durable task metadata recovers an interrupted accepted task even if
-        the configuration's saved executor changes before the next delivery.
+        A failed submission leaves the slot due. Retries by the same executor reuse its
+        slot-specific idempotency key; a different executor has a separate task namespace.
         """
         from openviking.service.compile_service import CompileRequest
 
@@ -229,58 +238,20 @@ class CompileScheduler:
                 return "not_due"
             slot = current_slot(record["update_schedule"], now)
             slot_iso = slot.isoformat()
-            if not await self._recover_slot(
-                account_id, owner_user_id, compile_name, slot_iso, record
-            ):
-                ctx, connection = await self._executor(record)
-                await self._compile.create(
-                    CompileRequest(compile_name=compile_name),
-                    ctx=ctx,
-                    connection=connection,
-                    idempotency_key=f"compile-schedule:{owner_user_id}:{compile_name}:{slot_iso}",
-                    trigger="scheduled",
-                    locked_record=record,
-                    scheduled_slot=slot_iso,
-                )
+            ctx, connection = await self._executor(record)
+            await self._compile.create(
+                CompileRequest(compile_name=compile_name),
+                ctx=ctx,
+                connection=connection,
+                idempotency_key=f"compile-schedule:{owner_user_id}:{compile_name}:{slot_iso}",
+                trigger="scheduled",
+                locked_record=record,
+                scheduled_slot=slot_iso,
+            )
             record["last_triggered_slot"] = slot_iso
             record["next_triggered_slot"] = next_slot(record["update_schedule"], now).isoformat()
         await self.reschedule(account_id, owner_user_id, compile_name, record, raise_on_error=True)
         return "submitted"
-
-    async def _recover_slot(
-        self,
-        account_id: str,
-        owner_user_id: str,
-        compile_name: str,
-        slot: str,
-        record: Dict[str, Any],
-    ) -> bool:
-        """Repair an accepted slot's history and dispatch under its original task owner.
-
-        The caller holds the configuration lock. Shared task storage, rather than the
-        current executor's idempotency namespace, identifies an accepted slot. Read or
-        dispatch failures propagate so the caller cannot advance the slot or submit twice.
-        """
-        from openviking.service.task_tracker import get_task_tracker
-
-        tasks = await get_task_tracker()._store.list_durable(account_id, task_type="compile")
-        for task in tasks:
-            control = task.meta.get("request", {}).get("compile") or {}
-            if (
-                control.get("compile_name") != compile_name
-                or control.get("owner_user_id") != owner_user_id
-                or control.get("scheduled_slot") != slot
-                or control.get("trigger") != "scheduled"
-            ):
-                continue
-            await self._compile.lifecycle.record_queued(task, locked_record=record)
-            task.auth = await self._compile._tasks._task_auth(
-                task.task_id, task.account_id, task.user_id
-            )
-            actor = await self._compile.lifecycle.task_ctx(task)
-            await self._compile._tasks._resume_submission(task, actor)
-            return True
-        return False
 
     async def _executor(self, record: Dict[str, Any]) -> tuple[RequestContext, Dict[str, Any]]:
         """Verify the saved key and load the executor's current account groups.
@@ -362,6 +333,6 @@ class _ExpiryHandler:
                 identity.account_id, identity.user_id, compile_name
             )
         except Exception:
-            logger.warning("Compile schedule callback failed", exc_info=True)
+            logger.info("compile schedule callback failed; retrying", extra={"degraded": True})
             return CallbackResult(CallbackStatus.RETRY, "trigger_failed")
         return CallbackResult(CallbackStatus.COMPLETED, outcome)

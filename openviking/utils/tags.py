@@ -54,13 +54,10 @@ def normalize_search_tags(
         key, raw_value = value.split("=", 1)
         values_by_key[key] = raw_value
     if invalid_tags:
-        logger.warning(
-            "Discarded invalid search tags: %s",
-            invalid_tags,
-            extra={
-                "invalid_tags": invalid_tags,
-                "invalid_tag_count": len(invalid_tags),
-            },
+        logger.info(
+            "invalid search tags discarded skipped=%d",
+            len(invalid_tags),
+            extra={"skipped": len(invalid_tags), "degraded": True},
         )
     return [f"{key}={value}" for key, value in values_by_key.items()]
 
@@ -122,13 +119,10 @@ def merge_search_tags(existing: Iterable[str] | None, incoming: Iterable[str] | 
         ordered[key] = str(result)
 
     if invalid_tags:
-        logger.warning(
-            "Discarded invalid search tags: %s",
-            invalid_tags,
-            extra={
-                "invalid_tags": invalid_tags,
-                "invalid_tag_count": len(invalid_tags),
-            },
+        logger.info(
+            "invalid search tags discarded skipped=%d",
+            len(invalid_tags),
+            extra={"skipped": len(invalid_tags), "degraded": True},
         )
 
     return [f"{key}={value}" for key, value in ordered.items()]

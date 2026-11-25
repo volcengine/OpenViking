@@ -505,6 +505,9 @@ describe('profile editor', () => {
     fireEvent.click(
       screen.getByRole('switch', { name: 'profiles.recall.profile.label' }),
     )
+    fireEvent.click(
+      screen.getByRole('switch', { name: 'profiles.recall.soul.label' }),
+    )
     fireEvent.change(
       screen.getByLabelText('profiles.recall.profileMaxTokens.label'),
       {
@@ -516,6 +519,7 @@ describe('profile editor', () => {
     expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
       recall: false,
       profile: false,
+      soul: false,
       profile_max_tokens: 0,
     })
   })

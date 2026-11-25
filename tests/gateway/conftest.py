@@ -58,9 +58,11 @@ class FakeViking:
         self.recall_peers = []
         self.writes = []
         self.write_sessions = []
-        self.archive_status = "pending"
+        # Session ID -> the profile it was created with, and whether OpenViking commits it.
+        self.sessions, self.auto_commit = {}, {}
+        # Set write_failure to fail writes.
+        self.write_failure = None
         self.live = {}
-        self.archived = {}
         self.commits = []
         self.entries = [
             {
@@ -72,9 +74,11 @@ class FakeViking:
         self.rendered = None
         self.profile_requests = []
         self.profile = ""
+        self.soul = ""
         self.preferences = []
         self.entities = []
         self.skills = []
+        self.unavailable_reason = ""
 
     async def tools(self, key):
         self.tool_keys.append(key)
@@ -102,7 +106,7 @@ class FakeViking:
         if parsed.path == "/api/v1/skills":
             return {"skills": self.skills}
         if parsed.path == "/api/v1/content/read":
-            return self.profile
+            return self.soul if uri.endswith("/soul.md") else self.profile
         if uri == "viking://user":
             return [{"name": "alice", "isDir": True}]
         return self.preferences if uri.endswith("/preferences") else self.entities
@@ -113,31 +117,25 @@ class FakeViking:
     async def health(self, key="", require_identity=True):
         return {"version": "0.4.16", "role": "user", "account_id": "tenant", "user_id": "alice"}
 
-    async def create_session(self, key, session, memory_types=None):
-        return {}
+    async def create_session(self, key, session, policy, auto_commit=False):
+        self.sessions[session], self.auto_commit[session] = policy, auto_commit
 
     async def write(self, key, session, messages):
+        if self.write_failure:
+            raise self.write_failure
         self.writes.append(copy.deepcopy(messages))
         self.write_sessions.append(session)
-        self.live.setdefault(session, []).extend(copy.deepcopy(messages))
+        live = self.live.setdefault(session, [])
+        live.extend(copy.deepcopy(messages))
         return {
-            "pending_tokens": sum(len(orjson.dumps(m["parts"])) // 3 for m in self.live[session])
+            "message_count": len(live),
+            "pending_tokens": sum(len(orjson.dumps(m["parts"])) // 3 for m in live),
         }
-
-    async def pending_tokens(self, key, session):
-        return sum(len(orjson.dumps(m["parts"])) // 3 for m in self.live.get(session, []))
 
     async def commit(self, key, session, keep=0):
         self.commits.append((session, keep))
-        index = sum(1 for a in self.archived if f"/{session}/" in a) + 1
-        uri = f"viking://user/alice/sessions/{session}/history/archive_{index:03d}"
-        messages = self.live.get(session, [])
-        self.archived[uri] = messages[:-keep] if keep else messages
-        self.live[session] = messages[-keep:] if keep else []
-        return {"archive_uri": uri}
-
-    async def archive_state(self, key, uri=""):
-        return self.archive_status
+        self.live[session] = self.live.get(session, [])[-keep:] if keep else []
+        return {}
 
 
 @pytest.fixture
@@ -176,29 +174,10 @@ async def replay_records(store, request, kind):
 
 
 async def update_capture(store, request, **changes):
-    from openviking_gateway.capture import ready_at
-
     old = await store.capture.get(request.scope, request.session)
     value = {**old.value, **changes}
-    assert await store.capture.swap(request.scope, request.session, old, value, ready_at(value))
+    assert await store.capture.swap(request.scope, request.session, old, value)
     return value
-
-
-async def make_due(store):
-    from openviking_gateway.capture import ready_at
-
-    with store.connect() as c:
-        keys = list(c.execute("SELECT scope,session FROM capture"))
-    for scope, session in keys:
-        old = await store.capture.get(scope, session)
-        value = copy.deepcopy(old.value)
-        for turn in value.get("pending", []):
-            turn["ready"] = 0
-        if value.get("error"):
-            value["error"]["retry_at"] = 0
-        if value.get("archive"):
-            value["archive"]["next_check"] = 0
-        assert await store.capture.swap(scope, session, old, value, ready_at(value))
 
 
 @pytest_asyncio.fixture
@@ -285,16 +264,19 @@ async def gateway_backend():
             result = await viking.request("GET", str(request.rel_url), "synthetic")
             return web.json_response({"status": "ok", "result": result})
         if request.path == "/api/v1/sessions":
+            # The bodies the gateway created its OpenViking sessions with.
+            override.setdefault("sessions", []).append(body)
             return web.json_response({"status": "ok", "result": {}})
         if request.path.startswith("/api/v1/sessions/"):
             session = request.path.split("/")[4]
+            result = {}
             if request.path.endswith("/messages/batch"):
                 writes.append(body)
                 result = await viking.write("synthetic", session, body["messages"])
             elif request.path.endswith("/commit"):
+                # The commits the gateway asked for, as (session, body).
+                override.setdefault("commits", []).append((session, body))
                 result = await viking.commit("synthetic", session, body["keep_recent_count"])
-            else:
-                result = {"pending_tokens": await viking.pending_tokens("synthetic", session)}
             return web.json_response({"status": "ok", "result": result})
         if request.path == "/api/v1/content/read":
             return web.json_response({"status": "error"}, status=404)

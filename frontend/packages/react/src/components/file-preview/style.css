@@ -5,9 +5,11 @@
 @import '../../shared/primitives/popover/popover.css';
 @import '../../shared/primitives/dropdown/dropdown.css';
 @import '../../shared/primitives/tooltip/tooltip.css';
+@import '../../shared/path-copy-button/path-copy-button.css';
 @import '../../shared/primitives/tabs/tabs.css';
 @import './file-preview.css';
 @import './file-preview-editor.css';
+@import './file-preview-editor-syntax.css';
 @import '@ark-design/ui/file-viewer/style/index.css';
 @import '@ark-design/ui/markdown-renderer/style/index.css';
 @import './file-preview-console.css';
@@ -15,3 +17,5 @@
 @import './file-preview-menu.css';
 @import '../../shared/primitives/modal/modal.css';
 @import './file-preview-version-note.css';
+@import './session-messages.css';
+@import './json-preview.css';

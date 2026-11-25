@@ -8,9 +8,9 @@ All queues are managed through NamedQueue.
 import asyncio
 import atexit
 import threading
-import traceback
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Set, Union
 
+from openviking.observability.log_safety import safe_path_for_log, short_hash
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import get_logger
 
@@ -149,7 +149,9 @@ class QueueManager:
 
         atexit.register(self.stop)
         logger.info(
-            f"[QueueManager] Initialized with agfs={type(agfs).__name__}, mount_point={mount_point}"
+            "Initialized with agfs=%s, mount_point=%s",
+            type(agfs).__name__,
+            safe_path_for_log(str(mount_point)),
         )
 
     def start(self) -> None:
@@ -165,7 +167,7 @@ class QueueManager:
         for queue in list(self._queues.values()):
             self._start_queue_worker(queue)
 
-        logger.info(f"[QueueManager] mount_point={self.mount_point} Started")
+        logger.info("mount_point=%s Started", safe_path_for_log(str(self.mount_point)))
 
     async def prepare_task_tracking(self, tracker: Any) -> list[Any]:
         """Bootstrap Work only for stores that reconstruct it from QueueFS."""
@@ -356,7 +358,9 @@ class QueueManager:
                         if queue.has_dequeue_handler() and queue_size > 0:
                             data = loop.run_until_complete(queue.dequeue())
                             if data is not None:
-                                logger.debug("[QueueManager] Dequeued message from %s", queue.name)
+                                logger.debug(
+                                    "Dequeued message from %s", short_hash(str(queue.name))
+                                )
                             if queue.name in {self.SESSION_COMMIT, self.EXTERNAL_TASK}:
                                 stop_event.wait(poll_interval)
                         else:
@@ -366,8 +370,9 @@ class QueueManager:
                             raise
                         break
                     except Exception as e:
-                        logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
-                        traceback.print_exc()
+                        logger.info(
+                            "Worker error for %s: %s", short_hash(str(queue.name)), type(e).__name__
+                        )
                         stop_event.wait(poll_interval)
         finally:
             # Consumers may own timers and async generators in addition to
@@ -381,11 +386,11 @@ class QueueManager:
             loop.run_until_complete(loop.shutdown_default_executor())
             try:
                 loop.run_until_complete(LoopScopedAsyncClientCache.close_current_loop_clients())
-            except Exception:
-                logger.warning(
-                    "[QueueManager] Failed to close async clients for %s",
-                    queue.name,
-                    exc_info=True,
+            except Exception as _log_error:
+                logger.info(
+                    "Failed to close async clients for %s error_type=%s",
+                    short_hash(str(queue.name)),
+                    type(_log_error).__name__,
                 )
             loop.close()
             if queue.name == self.EMBEDDING:
@@ -415,7 +420,11 @@ class QueueManager:
                     await queue.settle_dequeued(data, result)
                 except Exception as e:
                     # The message remains in processing and will be recovered.
-                    logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
+                    logger.info(
+                        "Concurrent worker error for %s: %s",
+                        short_hash(str(queue.name)),
+                        type(e).__name__,
+                    )
 
         while not stop_event.is_set():
             # Prune completed tasks
@@ -431,8 +440,9 @@ class QueueManager:
                 task = asyncio.create_task(process_one(data))
                 active_tasks.add(task)
                 logger.debug(
-                    f"[QueueManager] Dispatched concurrent task for {queue.name} "
-                    f"(active={len(active_tasks)})"
+                    "Dispatched concurrent task for %s (active=%s)",
+                    short_hash(str(queue.name)),
+                    len(active_tasks),
                 )
 
             await asyncio.sleep(poll_interval)
@@ -444,21 +454,19 @@ class QueueManager:
                     asyncio.gather(*active_tasks, return_exceptions=True),
                     timeout=5.0,
                 )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"[QueueManager] Drain timeout for {queue.name}, "
-                    f"cancelling {len(active_tasks)} in-flight task(s)"
+            except asyncio.TimeoutError as _log_error:
+                logger.info(
+                    "Drain timeout for %s, cancelling %s in-flight task(s) error_type=%s",
+                    short_hash(str(queue.name)),
+                    len(active_tasks),
+                    type(_log_error).__name__,
                 )
                 for t in active_tasks:
                     t.cancel()
                 await asyncio.gather(*active_tasks, return_exceptions=True)
 
-    def stop(self) -> None:
-        """Stop QueueManager and release resources."""
-        global _instance
-        if not self._started:
-            return
-
+    def stop_workers(self) -> None:
+        """Drain consumers while retaining queue clients and handlers for reuse."""
         # Stop queue workers
         for stop_event in self._queue_stop_events.values():
             stop_event.set()
@@ -468,7 +476,7 @@ class QueueManager:
         for name, thread in self._queue_threads.items():
             thread.join(timeout=10.0)
             if thread.is_alive():
-                logger.warning(f"[QueueManager] Worker thread {name} did not exit in time")
+                logger.info("Worker thread %s did not exit in time", short_hash(str(name)))
                 alive_workers.append(name)
         if alive_workers:
             # Keep queues and dependencies available for pending finalizers and
@@ -476,15 +484,20 @@ class QueueManager:
             raise RuntimeError(f"Queue workers did not stop: {', '.join(alive_workers)}")
         self._queue_threads.clear()
         self._queue_stop_events.clear()
+        self._started = False
+        logger.info("[QueueManager] Workers stopped")
 
+    def stop(self) -> None:
+        """Stop QueueManager and release resources."""
+        global _instance
+        self.stop_workers()
         self._agfs = None
         self._queues.clear()
-        self._started = False
 
         if _instance is self:
             _instance = None
 
-        logger.info("[QueueManager] Stopped")
+        logger.info("Stopped")
 
     def is_running(self) -> bool:
         """Check if QueueManager is running."""
@@ -569,13 +582,26 @@ class QueueManager:
 
     # ========== Status check interface ==========
 
-    async def check_status(self, queue_name: Optional[str] = None) -> Dict[str, QueueStatus]:
+    async def check_status(
+        self, queue_name: Optional[str] = None, *, account_id: str | None = None
+    ) -> Dict[str, QueueStatus]:
         """Check queue status."""
         if queue_name:
             if queue_name not in self._queues:
                 return {}
-            return {queue_name: await self._queues[queue_name].get_status()}
-        return {name: await q.get_status() for name, q in self._queues.items()}
+            queues = {queue_name: self._queues[queue_name]}
+        else:
+            queues = self._queues
+        statuses = {name: await q.get_status(account_id) for name, q in queues.items()}
+        if account_id is not None and statuses:
+            from openviking.service.task_tracker import get_task_tracker
+
+            counts = await get_task_tracker().get_queue_work_counts(account_id=account_id)
+            for name, status in statuses.items():
+                bucket = counts.get(name, {})
+                status.pending = bucket.get("pending", 0)
+                status.in_progress = bucket.get("running", 0)
+        return statuses
 
     def has_errors(self, queue_name: Optional[str] = None) -> bool:
         """Check if there are errors."""

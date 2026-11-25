@@ -4,6 +4,7 @@ import { within } from './dashboard-model.js';
 import {
   resolveDashboardUri,
   findCompileTarget,
+  type ReadDashboardHint,
 } from './dashboard-resource.js';
 
 export interface CompileTarget {
@@ -27,8 +28,8 @@ export async function readCompileCatalog(
   const seen = new Set<string>();
   do {
     const result = await client.request<{
-      targets?: CompileTarget[];
       configs?: CompileTarget[];
+      targets?: CompileTarget[];
       next_cursor?: string | null;
     }>({
       method: 'GET',
@@ -36,12 +37,12 @@ export async function readCompileCatalog(
       query: { limit: 100, cursor },
       options,
     });
-    const items = result.configs ?? result.targets;
-    named ||= Array.isArray(result.configs);
-    if (!Array.isArray(items))
+    const page = result?.configs ?? result?.targets;
+    named ||= Array.isArray(result?.configs);
+    if (!Array.isArray(page))
       throw new TypeError('Invalid Compile target registry');
     targets.push(
-      ...items.filter(
+      ...page.filter(
         (item) =>
           typeof item.to === 'string' &&
           item.compile_type !== 'memory' &&
@@ -68,4 +69,34 @@ export async function readCompileTargets(
   if (!catalog.named) return catalog.targets;
   const target = await findCompileTarget(client, rootUri, options);
   return target ? [{ to: target.uri }] : [];
+}
+
+export async function isCompileOwnedFile(
+  client: OvClient,
+  uri: string,
+  options: OvRequestOptions,
+  readHint?: ReadDashboardHint,
+) {
+  const namespace = compileNamespaceOwnership(uri);
+  if (namespace !== undefined) return namespace;
+  const hint = await readHint?.();
+  const scope = hint?.uri ?? (await resolveDashboardUri(client, uri, options));
+  const canonicalNamespace = compileNamespaceOwnership(scope);
+  if (canonicalNamespace !== undefined) return canonicalNamespace;
+  if (await findCompileTarget(client, scope, options, hint)) return true;
+  const catalog = await readCompileCatalog(client, scope, options);
+  return (
+    !catalog.named && catalog.targets.some((target) => within(scope, target.to))
+  );
+}
+
+// Namespace ownership still requires a file-level Wiki trailer for the label.
+function compileNamespaceOwnership(uri: string) {
+  if (
+    !/^viking:\/\/(?:system|user\/[^/]+|~)(?:\/peers\/[^/]+)?\/compile\/.+/i.test(
+      uri,
+    )
+  )
+    return undefined;
+  return !/^viking:\/\/system\/compile\/example-skills(?:\/|$)/i.test(uri);
 }

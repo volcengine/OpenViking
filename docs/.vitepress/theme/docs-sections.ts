@@ -249,6 +249,7 @@ export const sections: DocSection[] = [
       g('Storage and performance', '存储与性能', [
         p('guides/13-multi-write-storage'),
         p('guides/14-ragfs-cache'),
+        p('guides/15-postgres-queuefs'),
         p('guides/16-cuvs'),
         p('guides/25-pgvector'),
         p('guides/26-pgvector-directory-filtering')
@@ -264,6 +265,7 @@ export const sections: DocSection[] = [
         p('reference/01-overview'),
         p('api/01-overview'),
         p('configuration/01-server'),
+        p('configuration/03-server-roles'),
         p('configuration/02-client'),
         p('guides/06-mcp-integration')
       ]),

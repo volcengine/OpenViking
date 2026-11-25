@@ -7,12 +7,21 @@ import sys
 from collections.abc import Mapping
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, BeforeValidator, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
-# Import auth plugin registry for config validation
 from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.oidc_config import OIDCConfig
-from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
@@ -124,12 +133,46 @@ class DeprecatedUserAgentEvolutionConfig(BaseModel):
     enabled: Optional[bool] = None
 
 
+class PrivacyRuleConfig(BaseModel):
+    """A credential prefix or a Rust regular expression."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: StrictStr
+    prefix: Optional[StrictStr] = None
+    min_length: Optional[StrictInt] = None
+    regex: Optional[StrictStr] = None
+
+
+class PrivacyConfig(BaseModel):
+    """Sparse privacy overrides; unset fields inherit deployment defaults."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Optional[Literal["off", "registered", "auto", "auto_strict"]] = None
+    restore: Optional[StrictBool] = None
+    custom_rules: Optional[list[PrivacyRuleConfig]] = None
+    never_mask: Optional[list[StrictStr]] = Field(default=None, max_length=1024)
+
+    @field_validator("custom_rules")
+    @classmethod
+    def validate_custom_rules(
+        cls, value: Optional[list[PrivacyRuleConfig]]
+    ) -> Optional[list[PrivacyRuleConfig]]:
+        if value is not None:
+            from openviking.privacy.rules import validate_custom_rules
+
+            validate_custom_rules([rule.model_dump(exclude_none=True) for rule in value])
+        return value
+
+
 class UserConfig(BaseModel):
     """User configuration values that can be defaulted or initialized."""
 
     add_targets: AddTargetsConfig = Field(default_factory=AddTargetsConfig)
     memory_policy: Optional[UserMemoryPolicy] = None
     ttl: Optional[TTLConfig] = None
+    privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
@@ -142,6 +185,11 @@ class UserConfig(BaseModel):
         config.add_targets = AddTargetsConfig.model_construct(**payload.get("add_targets", {}))
         if config.ttl is not None:
             config.ttl = TTLConfig.model_construct(**payload["ttl"])
+        config.privacy = PrivacyConfig.model_construct(**payload.get("privacy", {}))
+        if config.privacy.custom_rules is not None:
+            config.privacy.custom_rules = [
+                PrivacyRuleConfig.model_construct(**rule) for rule in config.privacy.custom_rules
+            ]
         return config
 
 
@@ -153,6 +201,7 @@ class UserSettingsPatch(BaseModel):
     add_targets: Optional[AddTargetsConfig] = None
     memory_policy: Optional[UserMemoryPolicy] = None
     ttl: Optional[TTLConfig] = None
+    privacy: Optional[PrivacyConfig] = None
 
 
 def validate_config_input(
@@ -267,8 +316,9 @@ class UsageAuditConfig(BaseModel):
     """Product usage and audit projection configuration."""
 
     enabled: bool = True
-    backend: Literal["sqlite"] = "sqlite"
+    backend: Literal["sqlite", "postgres"] = "sqlite"
     sqlite_path: Optional[str] = None
+    postgres: Dict[str, object] = Field(default_factory=dict)
     queue_size: int = Field(10_000, gt=0)
     batch_size: int = Field(500, gt=0)
     flush_interval_seconds: float = Field(1.0, gt=0)
@@ -278,6 +328,29 @@ class UsageAuditConfig(BaseModel):
     audit_retention_per_account: int = Field(1000, ge=0)
     timezone: str = "local"
     inventory_ttl_seconds: float = Field(10.0, ge=0)
+
+    @field_validator("postgres")
+    @classmethod
+    def validate_postgres(cls, value: Dict[str, object]) -> Dict[str, object]:
+        if value:
+            from openviking.observability.usage_audit.postgres_schema import (
+                DEFAULT_SCHEMA,
+                validate_lock_timeout,
+                validate_schema,
+            )
+            from openviking.storage.postgres_config import postgres_connection_options
+
+            values = dict(value)
+            validate_schema(values.pop("schema", DEFAULT_SCHEMA))
+            validate_lock_timeout(values.pop("lock_timeout_ms", 1000))
+            postgres_connection_options(values, context="usage/audit")
+        return value
+
+    @model_validator(mode="after")
+    def require_postgres_connection(self) -> "UsageAuditConfig":
+        if self.enabled and self.backend == "postgres" and not self.postgres:
+            raise ValueError("PostgreSQL usage/audit requires postgres connection settings")
+        return self
 
 
 class UsageReporterSinkConfig(BaseModel):
@@ -390,9 +463,12 @@ class AccountStoreConfig(BaseModel):
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
-    workers: int = 1
+    workers: int = Field(default=1, ge=1)
+    roles: List[Literal["api", "queue_worker", "scheduler"]] = Field(
+        default_factory=lambda: ["api", "queue_worker", "scheduler"], min_length=1
+    )
     executor_threads: int = Field(
-        default=0,
+        default=64,
         ge=0,
         description=(
             "Maximum number of threads in each server process's default asyncio "
@@ -458,6 +534,11 @@ class ServerConfig(BaseModel):
     @classmethod
     def normalize_user_config_defaults(cls, value: Any) -> Any:
         return value.model_dump() if isinstance(value, UserConfig) else value
+
+    @field_validator("roles")
+    @classmethod
+    def unique_roles(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
 
     def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.
@@ -635,14 +716,6 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     )
 
 
-_LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-def _is_localhost(host: str) -> bool:
-    """Return True if *host* resolves to a loopback address."""
-    return host in _LOCALHOST_HOSTS
-
-
 def load_bot_gateway_token(config_path: Optional[str] = None) -> str:
     """Load bot gateway token from ov.conf bot.gateway.token."""
     path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
@@ -675,11 +748,13 @@ def validate_server_config(config: ServerConfig) -> None:
     """
     # Check for empty root_api_key
     if config.root_api_key == "":
-        logger.error(
+        print(
             "Invalid server.root_api_key: empty string is not allowed. "
             "Set a non-empty server.root_api_key in ov.conf and restart. "
             "Only remove this setting if the selected auth mode does not require a root key; "
-            "trusted and api_key modes require it even on localhost."
+            "trusted and api_key modes require it even on localhost.",
+            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 
@@ -689,6 +764,7 @@ def validate_server_config(config: ServerConfig) -> None:
     # If a non-built-in plugin has already claimed a built-in mode name,
     # log a security warning and forcefully override it.
     from openviking.server.auth.plugins import ApiKeyAuthPlugin, DevAuthPlugin, TrustedAuthPlugin
+    from openviking.server.auth.registry import get_registry
 
     registry = get_registry()
     _BUILTIN_PLUGINS = {
@@ -712,10 +788,11 @@ def validate_server_config(config: ServerConfig) -> None:
 
     plugin_cls = registry.get(effective_auth_mode)
     if plugin_cls is None:
-        logger.error(
-            "Unknown auth_mode: %r. No auth plugin registered for this mode. Registered modes: %s.",
-            effective_auth_mode,
-            ", ".join(registry.list_modes()),
+        print(
+            "No auth plugin registered for the configured auth mode. "
+            "Check server.auth_mode and the installed authentication plugins.",
+            file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 

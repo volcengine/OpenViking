@@ -123,7 +123,11 @@ export function useCommandConsoleComposerKeyboard({
           spaceCommand
         ) {
           event.preventDefault();
-          const picked = spaceCommand ?? options[activeIndex];
+          const picked =
+            spaceCommand ??
+            options[activeIndex] ??
+            matchCommandConsoleCommandInput(value, options)?.command ??
+            (completion.query.keyword ? options[0] : undefined);
           if (picked) {
             accept(`${getCommandConsoleCommandInputText(picked)} `);
           } else if (event.key === 'Tab' && inline) {

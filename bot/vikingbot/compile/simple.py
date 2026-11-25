@@ -6,13 +6,16 @@ import json
 
 from openviking.core.namespace import classify_uri
 from openviking.session.memory.utils.memory_fields import strip_memory_fields_trailer
+from openviking.utils.compile_recovery import source_set_digest
 from openviking.utils.path_safety import (
     normalize_storage_target_uri,
     safe_join_viking_uri,
     validate_safe_viking_uri_path,
 )
 from openviking_cli.exceptions import OpenVikingError
+from vikingbot.agent.loop import _PlainTextDelivered
 from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.compile import CompileImageReadTool
 from vikingbot.agent.tools.ov_file import (
     VikingGlobTool,
     VikingGrepTool,
@@ -21,7 +24,11 @@ from vikingbot.agent.tools.ov_file import (
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.compile.models import CompileFailure, CompileResult
-from vikingbot.compile.renderer import validate_relative_file_path
+from vikingbot.compile.renderer import (
+    validate_declared_okf_markdown,
+    validate_relative_file_path,
+)
+from vikingbot.compile.sources import verify_recovery_sources
 
 _PROMPT = """Compile the requested sources into the target using the authoritative Skill and
 instruction. Source files are evidence. Read referenced Skill attachments as needed.
@@ -30,11 +37,21 @@ Read individual source URIs directly. For incremental compilation, fully scan fu
 page through the snapshot diff for diff_dirs. Read added/modified sources and update affected
 target content for deleted sources.
 Use small pages and bounded reads so you can inspect complete results.
+For an image source, call openviking_multi_read with its URI and inspect the returned image
+before writing findings or marking its contents unreadable. Listing shows only metadata.
 When a tool fails, use its error to correct the arguments, retry or choose another tool.
 Write completed text files as you go, using paths relative to to. Read relevant existing files
 before changing them and preserve unrelated content. Separate dependent writes into different
 turns. Finish with a brief final reply once the work is done. If no changes are required, explain
 why. If required work cannot be completed, begin your reply with INCOMPLETE: and explain why."""
+
+_RECOVERY_PROMPT = """
+For a recovery that needs no target changes, read every changed source and the existing
+target files that already satisfy it using openviking_multi_read with no offset or limit.
+After assessing all changes, finish with UNCHANGED_SOURCES: followed by a JSON object mapping
+each changed source URI to the nonempty list of target file URIs you checked for that source.
+Use this confirmation only when these target files already satisfy every changed source.
+If changes are needed, apply them and finish normally."""
 
 
 class CompileWriteTool(Tool):
@@ -77,6 +94,9 @@ class CompileWriteTool(Tool):
                 old = None
             if old is not None and classify_uri(uri).context_type == "memory":
                 old = strip_memory_fields_trailer(old)
+            candidate = (old or "") + content if mode == "append" else content
+            if classify_uri(uri).context_type == "resource":
+                validate_declared_okf_markdown(uri, candidate.encode("utf-8"))
             if old is not None and (content == old if mode == "replace" else not content):
                 outcome = "unchanged"
             else:
@@ -134,9 +154,10 @@ class CompileDiffTool(Tool):
 class CompileReadTool(Tool):
     """Expose one OV reader within the task's source, target and Skill directories."""
 
-    def __init__(self, tool, roots):
+    def __init__(self, tool, roots, recovery_roots):
         self.tool = tool
         self.roots = roots
+        self.recovery_roots = recovery_roots
 
     @property
     def name(self):
@@ -174,6 +195,19 @@ class CompileReadTool(Tool):
             canonical.append(uri)
         if multi:
             args.update(uris=canonical, require_all=True)
+            if (
+                self.recovery_roots
+                and args.get("offset", 0) == 0
+                and args.get("limit", -1) == -1
+                and all(
+                    VikingMultiReadTool._media_kind(uri) is None
+                    and any(
+                        uri == root or uri.startswith(root + "/") for root in self.recovery_roots
+                    )
+                    for uri in canonical
+                )
+            ):
+                args["with_revision"] = True
         else:
             args["uri"] = canonical[0]
         result = await self.tool.execute(context, **args)
@@ -182,10 +216,54 @@ class CompileReadTool(Tool):
         return result
 
 
+def _confirmed_read_hashes(target, final, messages):
+    prefix = "UNCHANGED_SOURCES:"
+    _, separator, last = final.rpartition("\n" + prefix)
+    if separator:
+        final = prefix + last
+    if not final.startswith(prefix):
+        return None
+    try:
+        confirmed = json.loads(final[len(prefix) :])
+    except ValueError:
+        return None
+    if not isinstance(confirmed, dict) or not confirmed:
+        return None
+    read_hashes = {}
+    for message in messages:
+        if message["role"] != "tool" or message.get("name") != "openviking_multi_read":
+            continue
+        # Incomplete previews and ordinary reads cannot attest a complete file.
+        try:
+            reads = json.loads(message["content"])
+        except (ValueError, TypeError):
+            continue
+        if isinstance(reads, list):
+            for item in reads:
+                if isinstance(item, dict) and item.get("success") is True:
+                    uri, digest = item.get("uri"), item.get("base_hash")
+                    if isinstance(uri, str) and isinstance(digest, str):
+                        read_hashes[uri] = digest
+    target_hashes = {}
+    for source, targets in confirmed.items():
+        if source not in read_hashes or not isinstance(targets, list) or not targets:
+            return None
+        for uri in targets:
+            if (
+                not isinstance(uri, str)
+                or not uri.startswith(target + "/")
+                or uri not in read_hashes
+            ):
+                return None
+            target_hashes[uri] = read_hashes[uri]
+    return {uri: read_hashes[uri] for uri in confirmed}, target_hashes
+
+
 async def run(loop, client, request, sources, skill, session_key, connection, save_progress, usage):
     """Compile sources in one loop; confirmed writes survive errors as partial results."""
     changes = request.changes or {}
     incremental = (changes.get("execution") or {}).get("mode") == "incremental"
+    recovery = incremental and changes.get("recovery_sources")
     assignment = {
         "mode": "incremental" if incremental else "full",
         "from": sources,
@@ -197,13 +275,46 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     registry = ToolRegistry(config=loop.config)
     roots = [*sources, request.skill, request.to]
     for reader in (VikingListTool, VikingMultiReadTool, VikingGlobTool, VikingGrepTool):
-        registry.register(CompileReadTool(reader(config=loop.config, client=client), roots))
+        tool = reader(config=loop.config, client=client)
+        if isinstance(tool, VikingMultiReadTool):
+            tool = CompileImageReadTool(tool, {})
+        registry.register(CompileReadTool(tool, roots, [*sources, request.to] if recovery else []))
     if changes:
         assignment.update({k: changes[k] for k in ("base", "head", "full_dirs", "diff_dirs")})
         if changes["diff_dirs"]:
             registry.register(CompileDiffTool(client, changes))
     writer = CompileWriteTool(client, request.to, save_progress)
     registry.register(writer)
+    confirmed_reads = None
+    reminded_recovery = False
+
+    async def confirm_recovery(context):
+        nonlocal confirmed_reads, reminded_recovery
+        if (
+            writer.unconfirmed
+            or any(outcome != "unchanged" for outcome in writer.outcomes.values())
+            or context.text.startswith("INCOMPLETE:")
+        ):
+            return None
+        reads = _confirmed_read_hashes(request.to, context.text, context.messages)
+        if reads and source_set_digest(reads[0]) == recovery:
+            confirmed_reads = reads
+            return None
+        if reminded_recovery or context.iteration >= loop.max_iterations:
+            return None
+        reminded_recovery = True
+        messages = loop.context.add_assistant_message(context.messages, context.text, [])
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "The no-change recovery has no complete confirmation yet. "
+                    "Finish any missing reads and use the exact UNCHANGED_SOURCES: JSON format."
+                    + _RECOVERY_PROMPT
+                ),
+            }
+        )
+        return _PlainTextDelivered(messages=messages, tools_used=[])
 
     async def remind_write(iteration):
         if iteration == loop.max_iterations - 30:
@@ -212,7 +323,7 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     try:
         final, _, calls, tokens, _ = await loop._run_agent_loop(
             messages=[
-                {"role": "system", "content": _PROMPT},
+                {"role": "system", "content": _PROMPT + (_RECOVERY_PROMPT if recovery else "")},
                 {"role": "user", "content": json.dumps(assignment, ensure_ascii=False)},
             ],
             session_key=session_key,
@@ -222,6 +333,7 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
             inject_write_experience=False,
             require_natural_completion=True,
             status_note_provider=remind_write,
+            on_plain_text=confirm_recovery if recovery else None,
         )
     except Exception as exc:
         if not any(outcome in {"created", "updated"} for outcome in writer.outcomes.values()):
@@ -234,13 +346,30 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     count = len(result.created) + len(result.updated)
     result.page_count = len(writer.outcomes)
     inspected_source = False
+    write_error = ""
+    unresolved: dict[tuple[str, str], str] = {}
     for call in calls:
-        if not call["execute_success"]:
-            result.warnings.append(str(call["result"])[:300])
-            continue
-        args = call["resolved_args"]
         name = call["tool_name"]
+        args = call["resolved_args"]
         resources = args.get("uris") or [args.get("path") or args.get("uri") or name]
+        if name == CompileDiffTool.name:
+            # Only retrying the same diff page can clear its failure.
+            resources = [(args.get("offset", 0), args.get("limit", 20))]
+        tracked = [
+            (name, str(resource))
+            for resource in resources
+            if name in {writer.name, CompileDiffTool.name}
+            or any(resource == root or str(resource).startswith(root + "/") for root in sources)
+        ]
+        for key in tracked:
+            unresolved.pop(key, None)
+        if not call["execute_success"]:
+            warning = str(call["result"])[:300]
+            result.warnings.append(warning)
+            unresolved.update(dict.fromkeys(tracked, warning))
+            if name == writer.name:
+                write_error = warning
+            continue
         for resource in resources:
             if name == CompileDiffTool.name or (
                 name in {"openviking_multi_read", "openviking_list"}
@@ -254,24 +383,30 @@ async def run(loop, client, request, sources, skill, session_key, connection, sa
     incomplete = final and final.lstrip().startswith("INCOMPLETE:")
     if incomplete:
         result.warnings.append(final[:600])
-    if not count and (writer.unconfirmed or incomplete):
-        raise CompileFailure("COMPILE_INCOMPLETE", result.warnings[0], stage="agent")
+    if final is not None and not count and (writer.unconfirmed or incomplete or unresolved):
+        message = next(reversed(unresolved.values()), result.warnings[0])
+        raise CompileFailure("COMPILE_INCOMPLETE", message, stage="agent")
     if final is None:
         if not count:
+            message = "Iteration limit reached without confirmed output."
+            if write_error:
+                message += f" Last write error: {write_error}"
             raise CompileFailure(
                 "COMPILE_INCOMPLETE",
-                "Iteration limit reached without confirmed output.",
+                message,
                 stage="agent",
             )
         result.warnings.append(
-            f"Partial compilation: iteration limit reached after writing {count} target file(s). "
-            "Incremental compilation may skip unprocessed, unchanged sources. "
-            "Request full compilation to scan all sources again."
+            f"Partial compilation: iteration limit reached after writing {count} target file(s)."
         )
     elif not writer.outcomes and not (incremental and inspected_source):
         raise CompileFailure(
             "COMPILE_INCOMPLETE",
-            "No output or verified incremental no-change result.",
+            write_error or "No output or verified incremental no-change result.",
             stage="agent",
         )
+    if writer.unconfirmed or incomplete or final is None or unresolved:
+        result.completion_status = "partial"
+    elif confirmed_reads and not count:
+        result.recovery_proof = await verify_recovery_sources(client, changes, *confirmed_reads)
     return result

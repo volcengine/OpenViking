@@ -151,24 +151,31 @@ async def test_all_recovery_contention_uses_persisted_bounded_retries(agfs, payl
 
 @pytest.mark.asyncio
 async def test_cancelled_native_reacquisition_releases_fresh_holder(agfs):
-    foreign = await agfs.pathlock_acquire_tree(PATH)
+    holder = {"account_id": "holder"}
+    waiter = {"account_id": CTX.account_id}
+    foreign = await agfs.pathlock_acquire_tree(PATH, fs_ctx=holder)
     task = asyncio.create_task(
-        agfs.pathlock_reacquire_batch(REQUESTS, "durable-owner", timeout_secs=2)
+        agfs.pathlock_reacquire_batch(REQUESTS, "durable-owner", timeout_secs=2, fs_ctx=waiter)
     )
     foreign_released = False
     try:
         async with asyncio.timeout(2):
-            while not (await agfs.pathlock_observe())["waiting_locks"]:
+            while not (await agfs.pathlock_observe(fs_ctx=waiter))["waiting_locks"]:
                 await asyncio.sleep(0.01)
+        assert (await agfs.pathlock_observe())["waiting_locks"] == 1
+        assert (await agfs.pathlock_observe(fs_ctx=holder))["active_locks"] == 1
+        assert (await agfs.pathlock_observe(fs_ctx=holder))["waiting_locks"] == 0
+        assert (await agfs.pathlock_observe(fs_ctx=waiter))["active_locks"] == 0
         task.cancel()
-        await agfs.pathlock_release(foreign)
+        await agfs.pathlock_release(foreign, fs_ctx=holder)
         foreign_released = True
         with pytest.raises(asyncio.CancelledError):
             await task
+        assert (await agfs.pathlock_observe(fs_ctx=waiter))["waiting_locks"] == 0
         assert not await agfs.pathlock_is_locked(PATH)
     finally:
         if not foreign_released:
-            await agfs.pathlock_release(foreign)
+            await agfs.pathlock_release(foreign, fs_ctx=holder)
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

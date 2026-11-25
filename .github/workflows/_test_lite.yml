@@ -9,7 +9,7 @@ on:
         type: string
         default: '["ubuntu-24.04"]'
       linux_container:
-        description: 'Disposable Linux test container; empty keeps hosted execution'
+        description: 'Linux test image override; empty uses the configured CI image'
         required: false
         type: string
         default: ''
@@ -44,12 +44,12 @@ jobs:
     name: Lite Test (${{ matrix.os }}, ${{ matrix.python-version }})
     runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(inputs.linux_runner_json || '["ubuntu-24.04"]') || matrix.os }}
     container:
-      image: ${{ matrix.os == 'ubuntu-24.04' && inputs.linux_container || '' }}
+      image: ${{ matrix.os == 'ubuntu-24.04' && (inputs.linux_container || vars.CI_UBUNTU24_IMAGE || 'ubuntu:24.04') || '' }}
       options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
     timeout-minutes: 30
     defaults:
       run:
-        shell: ${{ matrix.os == 'windows-latest' && 'pwsh' || 'bash' }}
+        shell: ${{ startsWith(matrix.os, 'windows-') && 'pwsh' || 'bash' }}
     strategy:
       fail-fast: false
       matrix:
@@ -57,10 +57,10 @@ jobs:
         python-version: ${{ fromJson(inputs.python_json) }}
 
     steps:
-    - name: Bootstrap self-hosted Ubuntu test container
-      if: runner.environment == 'self-hosted'
+    - name: Bootstrap Ubuntu test container
+      if: matrix.os == 'ubuntu-24.04'
       env:
-        UBUNTU_MIRROR: ${{ vars.CI_UBUNTU_MIRROR }}
+        UBUNTU_MIRROR: ${{ runner.environment == 'self-hosted' && vars.CI_UBUNTU_MIRROR || '' }}
         DEBIAN_FRONTEND: noninteractive
       run: |
         packages=(git ca-certificates curl python3 cmake build-essential)
@@ -92,7 +92,7 @@ jobs:
       with:
         submodules: recursive
     - uses: ./.github/actions/linux-test-env
-      if: runner.environment == 'self-hosted'
+      if: matrix.os == 'ubuntu-24.04'
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v6
@@ -103,12 +103,6 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-
-    - name: Install system dependencies (Ubuntu)
-      if: runner.os == 'Linux' && runner.environment != 'self-hosted'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'

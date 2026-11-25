@@ -35,7 +35,7 @@ async fn fixture() -> Option<(Arc<CacheRuntime>, RedisPathLockProvider)> {
         (MATH_ID, MATH_SCRIPT),
     ] {
         runtime
-            .register_script(ScriptDefinition { id, redis_lua })
+            .register_script(id.to_string(), redis_lua.to_string())
             .unwrap();
     }
     let provider = RedisPathLockProvider::new(
@@ -66,10 +66,10 @@ fn token(owner: &str, time_ns: u128, kind: PathLockKind) -> LockToken {
 pub(super) async fn now(provider: &RedisPathLockProvider) -> u128 {
     provider
         .runtime
-        .register_script(ScriptDefinition {
-            id: TIME_ID,
-            redis_lua: "return redis.call('TIME')",
-        })
+        .register_script(
+            TIME_ID.to_string(),
+            "return redis.call('TIME')".to_string(),
+        )
         .unwrap();
     let time = provider
         .execute_array(TIME_ID, provider.tokens_key_for_path("/").unwrap(), vec![])
@@ -89,10 +89,10 @@ pub(super) async fn now(provider: &RedisPathLockProvider) -> u128 {
 pub(super) async fn seed(provider: &RedisPathLockProvider, path: &str, token: &LockToken) {
     provider
         .runtime
-        .register_script(ScriptDefinition {
-            id: SEED_ID,
-            redis_lua: "return redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])",
-        })
+        .register_script(
+            SEED_ID.to_string(),
+            "return redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])".to_string(),
+        )
         .unwrap();
     provider
         .execute_integer(

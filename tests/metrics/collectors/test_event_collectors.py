@@ -5,57 +5,53 @@ from __future__ import annotations
 
 import re
 
-from openviking.metrics.collectors.base import EventMetricCollector
-from openviking.metrics.collectors.cache import CacheCollector
-from openviking.metrics.collectors.embedding import EmbeddingCollector
+import pytest
+from prometheus_client.parser import text_string_to_metric_families
+
 from openviking.metrics.collectors.queue import QueueDurationCollector
-from openviking.metrics.collectors.rerank import RerankCollector
-from openviking.metrics.collectors.resource import ResourceIngestionCollector
-from openviking.metrics.collectors.retrieval import RetrievalCollector
-from openviking.metrics.collectors.session import SessionCollector
-from openviking.metrics.collectors.telemetry_bridge import TelemetryBridgeCollector
-from openviking.metrics.collectors.vlm import VLMCollector
+from openviking.metrics.datasources.cache import CacheEventDataSource
+from openviking.metrics.datasources.encryption import EncryptionEventDataSource
+from openviking.metrics.datasources.model_usage import (
+    EmbeddingEventDataSource,
+    RerankEventDataSource,
+    VLMEventDataSource,
+)
+from openviking.metrics.datasources.retrieval import RetrievalStatsDataSource
+from openviking.metrics.datasources.session import SessionLifecycleDataSource
+from openviking.metrics.global_api import init_metrics_from_server_config, shutdown_metrics
+from openviking.server.config import ServerConfig
 
 
-class _DummyEventCollector(EventMetricCollector):
-    SUPPORTED_EVENTS = frozenset({"demo.hit"})
+@pytest.fixture
+def samples(registry, render_prometheus):
+    init_metrics_from_server_config(
+        ServerConfig.model_validate({"observability": {"metrics": {"enabled": True}}}),
+        app=None,
+        registry=registry,
+    )
 
-    def __init__(self) -> None:
-        self.seen: list[tuple[str, str]] = []
+    def read(name, **labels):
+        matches = [
+            sample.value
+            for family in text_string_to_metric_families(render_prometheus(registry))
+            for sample in family.samples
+            if sample.name == "openviking_" + name
+            and {k: v for k, v in sample.labels.items() if k != "bucket_schema"} == labels
+        ]
+        assert len(matches) <= 1
+        return matches[0] if matches else None
 
-    def receive_hook(self, event_name: str, payload: dict, registry) -> None:
-        self.seen.append(
-            (
-                str(event_name),
-                str(payload["value"]),
-                registry.collector_name() if hasattr(registry, "collector_name") else "registry",
-            )
-        )
-
-
-def test_event_metric_collector_uses_supported_events_and_receive_hook(registry):
-    collector = _DummyEventCollector()
-
-    collector.receive("demo.hit", {"value": "ok"}, registry)
-    collector.receive("demo.unknown", {"value": "skip"}, registry)
-
-    assert collector.SUPPORTED_EVENTS == frozenset({"demo.hit"})
-    assert collector.seen == [("demo.hit", "ok", "registry")]
+    try:
+        yield read
+    finally:
+        shutdown_metrics()
 
 
-def test_cache_collector_uses_supported_events_and_receive_hook_routing(
-    registry, render_prometheus
-):
-    collector = CacheCollector()
-
-    collector.receive("cache.hit", {"level": "L0"}, registry)
-    collector.receive("cache.miss", {"level": "L1"}, registry)
-
-    text = render_prometheus(registry)
-
-    assert collector.SUPPORTED_EVENTS == frozenset({"cache.hit", "cache.miss"})
-    assert 'openviking_cache_hits_total{level="L0"} 1' in text
-    assert 'openviking_cache_misses_total{level="L1"} 1' in text
+def test_cache_events_reach_prometheus(samples):
+    CacheEventDataSource.record_hit("L1")
+    CacheEventDataSource.record_miss("L2")
+    assert samples("cache_hits_total", level="L1") == 1
+    assert samples("cache_misses_total", level="L2") == 1
 
 
 def test_queue_duration_collector_records_processing_and_end_to_end_histograms(
@@ -130,394 +126,102 @@ def test_queue_duration_collector_allows_processing_only_and_ignores_bad_payload
     assert 'outcome="unknown"' not in text
 
 
-def test_resource_collector_records_connector_imports(registry, render_prometheus):
-    ResourceIngestionCollector().receive(
-        "resource.import",
-        {
-            "pipeline": "connector",
-            "source_type": "repository",
-            "account_id": "acct-code",
-        },
-        registry,
-    )
-
-    text = render_prometheus(registry)
+def test_session_collector_records_lifecycle_and_archive(samples):
+    SessionLifecycleDataSource.record_lifecycle(action="create", status="ok")
+    SessionLifecycleDataSource.record_archive(status="ok")
     assert (
-        'openviking_resource_imports_total{account_id="__unknown__",'
-        'pipeline="connector",source_type="repository"} 1'
-    ) in text
-
-
-def test_session_collector_records_lifecycle_and_archive(registry, render_prometheus):
-    c = SessionCollector()
-    c.receive("session.lifecycle", {"action": "create", "status": "ok"}, registry)
-    c.receive("session.archive", {"status": "ok"}, registry)
-
-    text = render_prometheus(registry)
-    assert (
-        'openviking_session_lifecycle_total{account_id="__unknown__",action="create",status="ok"} 1'
-        in text
+        samples("session_lifecycle_total", account_id="__unknown__", action="create", status="ok")
+        == 1
     )
-    assert 'openviking_session_archive_total{account_id="__unknown__",status="ok"} 1' in text
+    assert samples("session_archive_total", account_id="__unknown__", status="ok") == 1
 
 
-def test_session_collector_ignores_malformed_payloads_instead_of_raising(
-    registry, render_prometheus
+def test_encryption_event_datasource_emits_operation_event(samples):
+    EncryptionEventDataSource.record_operation(
+        operation="encrypt", status="ok", duration_seconds=0.25
+    )
+    for size in (12, 0, -1):
+        EncryptionEventDataSource.record_bytes(operation="encrypt", size_bytes=size)
+    assert samples("encryption_operations_total", operation="encrypt", status="ok") == 1
+    assert samples("encryption_duration_seconds_sum", operation="encrypt", status="ok") == 0.25
+    assert samples("encryption_bytes_total", operation="encrypt") == 12
+
+
+@pytest.mark.parametrize(
+    ("model_type", "source", "provider", "model", "ingestion", "failure", "tokens"),
+    [
+        (
+            "embedding",
+            EmbeddingEventDataSource,
+            "openai",
+            "text-embedding-3-large",
+            "repository",
+            "429",
+            (3, 2),
+        ),
+        ("vlm", VLMEventDataSource, "volcengine", "doubao-vlm", "document", "timeout", (5, 2)),
+        ("rerank", RerankEventDataSource, "cohere", "rerank-v3.5", None, None, (9, 0)),
+    ],
+    ids=["embedding", "vlm", "rerank"],
+)
+def test_model_calls_report_metrics_and_tokens(
+    samples, model_type, source, provider, model, ingestion, failure, tokens
 ):
-    c = SessionCollector()
+    call = {"provider": provider, "model_name": model, "duration_seconds": 0.12}
+    model_labels = {"provider": provider, "model_name": model, "account_id": "__unknown__"}
+    call_labels = {**model_labels, "error_code": "OK"} if failure else model_labels
+    extra = {"source_type": ingestion} if failure else {}
+    input_tokens, output_tokens = tokens
+    source.record_call(**call, **extra, prompt_tokens=input_tokens, completion_tokens=output_tokens)
+    assert samples(f"{model_type}_calls_total", **call_labels) == 1
+    assert samples(f"{model_type}_call_duration_seconds_count", **call_labels) == 1
+    assert samples(f"{model_type}_tokens_input_total", **model_labels) == input_tokens
+    if output_tokens:
+        assert samples(f"{model_type}_tokens_output_total", **model_labels) == output_tokens
+    assert samples(f"{model_type}_tokens_total", **model_labels) == sum(tokens)
 
-    c.receive("session.lifecycle", "not-a-dict", registry)
-    c.receive("session.lifecycle", {"action": "create"}, registry)
-    c.receive("session.archive", {}, registry)
+    if failure:
+        assert samples(
+            f"{model_type}_ingestion_tokens_total",
+            account_id="__unknown__",
+            source_type=ingestion,
+        ) == sum(tokens)
 
-    text = render_prometheus(registry)
-    assert "openviking_session_lifecycle_total" not in text
-    assert "openviking_session_archive_total" not in text
-
-
-def test_rerank_collector_maps_calls_duration_and_tokens():
-    from openviking.metrics.core.registry import MetricRegistry
-    from openviking.metrics.exporters.prometheus import PrometheusExporter
-
-    registry = MetricRegistry()
-    RerankCollector().receive(
-        "rerank.call",
-        {
-            "provider": "cohere",
-            "model_name": "rerank-v3.5",
-            "duration_seconds": 0.3,
-            "prompt_tokens": 9,
-            "completion_tokens": 0,
-        },
-        registry,
-    )
-    text = PrometheusExporter(registry=registry).render()
-
-    assert re.search(
-        r'openviking_rerank_calls_total\{(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_rerank_call_duration_seconds_count\{(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_rerank_tokens_input_total\{(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 9(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_rerank_tokens_total\{(?=[^}]*model_name="rerank-v3.5")(?=[^}]*provider="cohere")[^}]*\} 9(?:\.0)?',
-        text,
-    )
+        source.record_call(**call, prompt_tokens=0, completion_tokens=0, error_code=failure)
+        failed_labels = {**model_labels, "error_code": failure}
+        assert samples(f"{model_type}_calls_total", **failed_labels) == 1
+        assert samples(f"{model_type}_call_duration_seconds_count", **failed_labels) == 1
+        assert samples(f"{model_type}_tokens_total", **model_labels) == sum(tokens)
+        assert samples(f"{model_type}_tokens_total", **failed_labels) is None
 
 
-def test_telemetry_bridge_collector_records_basic_operation_metrics(registry, render_prometheus):
-    c = TelemetryBridgeCollector()
-    c.receive(
-        "telemetry.summary",
-        {
-            "summary": {
-                "operation": "resource.process",
-                "status": "ok",
-                "duration_ms": 250.0,
-                "tokens": {
-                    "total": 10,
-                    "llm": {"input": 3, "output": 2},
-                    "embedding": {"total": 5},
-                    "rerank": {"total": 4},
-                    "stages": {
-                        "embed_query": {"embedding": {"total": 5}},
-                        "rerank": {"rerank": {"total": 4}},
-                        "vlm": {"llm": {"input": 3, "output": 2, "total": 5}},
-                    },
-                },
-            }
-        },
-        registry,
-    )
-
-    text = render_prometheus(registry)
-    assert (
-        'openviking_operation_requests_total{account_id="__unknown__",operation="resource.process",status="ok"} 1'
-        in text
-    )
-    assert (
-        'openviking_operation_tokens_total{account_id="__unknown__",operation="resource.process",stage="vlm",token_type="llm_input"} 3'
-        in text
-    )
-    assert (
-        'openviking_operation_tokens_total{account_id="__unknown__",operation="resource.process",stage="vlm",token_type="llm_output"} 2'
-        in text
-    )
-    assert (
-        'openviking_operation_tokens_total{account_id="__unknown__",operation="resource.process",stage="embed_query",token_type="embedding"} 5'
-        in text
-    )
-    assert (
-        'openviking_operation_tokens_total{account_id="__unknown__",operation="resource.process",stage="rerank",token_type="rerank"} 4'
-        in text
-    )
+def test_embedding_collector_records_success_volume_and_latency(samples):
+    EmbeddingEventDataSource.record_success(latency_seconds=0.2)
+    EmbeddingEventDataSource.record_error(error_code="rate_limit")
+    labels = {"account_id": "__unknown__"}
+    assert samples("embedding_requests_total", **labels, status="ok") == 1
+    assert samples("embedding_requests_total", **labels, status="error") == 1
+    assert samples("embedding_latency_seconds_sum", **labels, status="ok") == 0.2
+    assert samples("embedding_errors_total", **labels, error_code="rate_limit") == 1
 
 
-def test_telemetry_bridge_collector_ignores_malformed_payloads_instead_of_raising(
-    registry, render_prometheus
-):
-    c = TelemetryBridgeCollector()
+def test_retrieval_collector_zero_result_records_downstream_without_raising(samples):
+    source = RetrievalStatsDataSource()
+    labels = {"account_id": "__unknown__"}
+    source.record_retrieval(
+        context_type="search", result_count=3, latency_seconds=0.05, rerank_used=True
+    )
+    assert samples("retrieval_results_total", **labels, context_type="search") == 3
+    assert samples("retrieval_zero_result_total", **labels, context_type="search") is None
 
-    c.receive("telemetry.summary", {}, registry)
-    c.receive("telemetry.summary", {"summary": "not-a-mapping"}, registry)
-
-    text = render_prometheus(registry)
-    assert "openviking_operation_requests_total" not in text
-
-
-def test_embedding_collector_maps_call_metrics_and_tokens(registry, render_prometheus):
-    """`embedding.call` must produce calls/duration/tokens metrics keyed by provider+model."""
-    EmbeddingCollector().receive(
-        "embedding.call",
-        {
-            "provider": "openai",
-            "model_name": "text-embedding-3-large",
-            "duration_seconds": 0.12,
-            "prompt_tokens": 3,
-            "completion_tokens": 2,
-        },
-        registry,
-    )
-    text = render_prometheus(registry)
-
-    # Account dimension is supported for embedding families; default runtime resolves to __unknown__.
-    assert re.search(
-        r'openviking_embedding_calls_total\{(?=[^}]*account_id="__unknown__")(?=[^}]*error_code="OK")(?=[^}]*model_name="text-embedding-3-large")(?=[^}]*provider="openai")[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_embedding_call_duration_seconds_count\{(?=[^}]*account_id="__unknown__")(?=[^}]*error_code="OK")(?=[^}]*model_name="text-embedding-3-large")(?=[^}]*provider="openai")[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_embedding_tokens_input_total\{(?=[^}]*account_id="__unknown__")(?=[^}]*model_name="text-embedding-3-large")(?=[^}]*provider="openai")[^}]*\} 3(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_embedding_tokens_output_total\{(?=[^}]*account_id="__unknown__")(?=[^}]*model_name="text-embedding-3-large")(?=[^}]*provider="openai")[^}]*\} 2(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_embedding_tokens_total\{(?=[^}]*account_id="__unknown__")(?=[^}]*model_name="text-embedding-3-large")(?=[^}]*provider="openai")[^}]*\} 5(?:\.0)?',
-        text,
-    )
-
-
-def test_model_collectors_attribute_ingestion_tokens(registry, render_prometheus):
-    EmbeddingCollector().receive(
-        "embedding.call",
-        {
-            "provider": "openai",
-            "model_name": "text-embedding-3-large",
-            "duration_seconds": 0.12,
-            "prompt_tokens": 3,
-            "completion_tokens": 0,
-            "source_type": "repository",
-        },
-        registry,
-    )
-    VLMCollector().receive(
-        "vlm.call",
-        {
-            "provider": "volcengine",
-            "model_name": "doubao-vlm",
-            "duration_seconds": 0.2,
-            "prompt_tokens": 5,
-            "completion_tokens": 2,
-            "source_type": "document",
-        },
-        registry,
-    )
-
-    text = render_prometheus(registry)
-    assert re.search(
-        r'openviking_embedding_ingestion_tokens_total\{[^}]*source_type="repository"[^}]*\} 3(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_vlm_ingestion_tokens_total\{[^}]*source_type="document"[^}]*\} 7(?:\.0)?',
-        text,
-    )
-
-
-def test_embedding_collector_records_failed_call_duration_with_error_code(
-    registry, render_prometheus
-):
-    EmbeddingCollector().receive(
-        "embedding.call",
-        {
-            "provider": "volcengine",
-            "model_name": "doubao-embedding",
-            "duration_seconds": 0.12,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "error_code": "429",
-        },
-        registry,
-    )
-    text = render_prometheus(registry)
-
-    assert re.search(
-        r'openviking_embedding_calls_total\{(?=[^}]*error_code="429")(?=[^}]*model_name="doubao-embedding")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_embedding_call_duration_seconds_count\{(?=[^}]*error_code="429")(?=[^}]*model_name="doubao-embedding")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    assert "openviking_embedding_tokens_total" not in text
-
-
-def test_vlm_collector_records_error_code_on_calls_and_duration_only(registry, render_prometheus):
-    VLMCollector().receive(
-        "vlm.call",
-        {
-            "provider": "volcengine",
-            "model_name": "doubao-vlm",
-            "duration_seconds": 0.12,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "error_code": "timeout",
-        },
-        registry,
-    )
-    text = render_prometheus(registry)
-
-    assert re.search(
-        r'openviking_vlm_calls_total\{(?=[^}]*error_code="timeout")(?=[^}]*model_name="doubao-vlm")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    assert re.search(
-        r'openviking_vlm_call_duration_seconds_count\{(?=[^}]*error_code="timeout")(?=[^}]*model_name="doubao-vlm")(?=[^}]*provider="volcengine")[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    assert "openviking_vlm_tokens_total" not in text
-
-
-def test_embedding_collector_records_success_volume_and_latency(registry, render_prometheus):
-    """`embedding.success` must increment request volume and observe latency."""
-    EmbeddingCollector().receive(
-        "embedding.success",
-        {"latency_seconds": 0.2},
-        registry,
-    )
-    text = render_prometheus(registry)
-    assert (
-        'openviking_embedding_requests_total{account_id="__unknown__",status="ok"} 1' in text
-        or 'openviking_embedding_requests_total{account_id="__unknown__",status="ok"} 1.0' in text
-    )
-    assert re.search(
-        r'openviking_embedding_latency_seconds_count\{account_id="__unknown__",'
-        r'bucket_schema="[0-9a-f]{16}",status="ok"\} 1',
-        text,
-    )
-
-
-def test_embedding_collector_records_error_volume_and_error_code_counter(
-    registry, render_prometheus
-):
-    """`embedding.error` must track request errors and normalize error_code labels."""
-    EmbeddingCollector().receive(
-        "embedding.error",
-        {"error_code": "rate_limit"},
-        registry,
-    )
-    text = render_prometheus(registry)
-    assert (
-        'openviking_embedding_requests_total{account_id="__unknown__",status="error"} 1' in text
-        or 'openviking_embedding_requests_total{account_id="__unknown__",status="error"} 1.0'
-        in text
-    )
-    assert (
-        'openviking_embedding_errors_total{account_id="__unknown__",error_code="rate_limit"} 1'
-        in text
-        or 'openviking_embedding_errors_total{account_id="__unknown__",error_code="rate_limit"} 1.0'
-        in text
-    )
-
-
-def _emit_retrieval(registry, *, result_count, context_type="search", rerank_used=False):
-    RetrievalCollector().receive(
-        "retrieval.completed",
-        {
-            "context_type": context_type,
-            "result_count": result_count,
-            "latency_seconds": 0.05,
-            "rerank_used": rerank_used,
-            "rerank_fallback": False,
-        },
-        registry,
-    )
-
-
-def test_retrieval_collector_zero_result_records_downstream_without_raising(
-    registry, render_prometheus
-):
-    """Regression for #2922: a zero-result retrieval is a normal outcome, not an error.
-
-    Previously ``record_completed`` incremented RESULTS_TOTAL by ``max(0, result_count)``,
-    so an empty retrieval passed ``amount=0`` and the registry raised
-    "counter can only be increased by a positive amount". As the 2nd registry call this
-    aborted the rest of the method: ZERO_RESULT_TOTAL, the latency histogram and the
-    rerank counters were silently dropped and a WARNING was logged on every empty retrieval.
-    """
-    _emit_retrieval(registry, result_count=0)
-    text = render_prometheus(registry)
-
-    assert re.search(
-        r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
-    )
-    assert re.search(
-        r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
-    )
-    # Latency histogram still observed one sample (proving the method did not abort early).
-    assert re.search(
-        r'openviking_retrieval_latency_seconds_count\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    # No positive results -> RESULTS_TOTAL has no series for this context.
-    assert not re.search(r'openviking_retrieval_results_total\{[^}]*context_type="search"', text)
-
-
-def test_retrieval_collector_positive_result_increments_results_total(registry, render_prometheus):
-    """A non-empty retrieval increments RESULTS_TOTAL by the result count and does not
-    touch the zero-result counter."""
-    _emit_retrieval(registry, result_count=3, rerank_used=True)
-    text = render_prometheus(registry)
-
-    assert re.search(
-        r'openviking_retrieval_results_total\{[^}]*context_type="search"[^}]*\} 3(?:\.0)?', text
-    )
-    assert re.search(
-        r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
-    )
-    assert not re.search(
-        r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"', text
-    )
-
-
-def test_retrieval_collector_negative_result_count_is_bucketed_as_zero_result(
-    registry, render_prometheus
-):
-    """A malformed negative result_count must not raise or drop metrics; it is classified
-    as an empty retrieval (no positive results) so telemetry stays internally consistent."""
-    _emit_retrieval(registry, result_count=-1)
-    text = render_prometheus(registry)
-
-    assert re.search(
-        r'openviking_retrieval_requests_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
-    )
-    assert re.search(
-        r'openviking_retrieval_zero_result_total\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?', text
-    )
-    assert re.search(
-        r'openviking_retrieval_latency_seconds_count\{[^}]*context_type="search"[^}]*\} 1(?:\.0)?',
-        text,
-    )
-    assert not re.search(r'openviking_retrieval_results_total\{[^}]*context_type="search"', text)
+    source.record_retrieval(context_type="search", result_count=0, latency_seconds=0.1)
+    source.record_retrieval(context_type="", result_count=-1, latency_seconds=0.15)
+    assert samples("retrieval_requests_total", **labels, context_type="search") == 2
+    assert samples("retrieval_zero_result_total", **labels, context_type="search") == 1
+    assert samples("retrieval_latency_seconds_count", **labels, context_type="search") == 2
+    assert samples("retrieval_results_total", **labels, context_type="search") == 3
+    assert samples("retrieval_results_total", **labels, context_type="unknown") is None
+    assert samples("retrieval_requests_total", **labels, context_type="unknown") == 1
+    assert samples("retrieval_zero_result_total", **labels, context_type="unknown") == 1
+    assert samples("retrieval_latency_seconds_count", **labels, context_type="unknown") == 1
+    assert samples("retrieval_rerank_used_total", **labels) == 1

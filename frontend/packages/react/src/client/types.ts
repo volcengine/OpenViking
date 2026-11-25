@@ -141,16 +141,16 @@ export interface OvRequestSpec {
 export type OvResponseType = 'json' | 'blob';
 
 /**
- * 一次 JSON 请求的外壳与 `result`。列表接口把 `has_more` 放在 `result` 之外，
- * 需要分页时用 {@link OvClient.requestEnvelope} 才能读到它。
- * The envelope and `result` of one JSON request. A listing puts `has_more`
- * outside `result`, so paging reads it through {@link OvClient.requestEnvelope}.
+ * 一次 JSON 请求的 `result` 和外壳元数据。
+ * The `result` and envelope metadata of one JSON request.
  */
 export interface OvResponseEnvelope<TResult = unknown> {
   /** 原生响应的 `result`。The native response's `result`. */
   result: TResult;
   /** 是否还有下一页；接口不返回该字段时为 `false`。 */
   hasMore: boolean;
+  /** 服务端返回的遥测数据。Telemetry returned by the server. */
+  telemetry?: Record<string, unknown>;
 }
 
 /** 查询参数可接受的值；`undefined` 与 `null` 表示不发送。 */
@@ -259,12 +259,11 @@ export interface OvClient {
    */
   request<TResult>(spec: OvRequestSpec): Promise<TResult>;
   /**
-   * 与 `request` 相同，但同时返回 `result` 之外的分页标记。列表接口用它判断
-   * 是否还有下一页；`responseType: 'blob'` 不适用。
+   * 与 `request` 相同，同时返回 `result` 之外的分页标记和遥测数据。
+   * `responseType: 'blob'` 不适用。
    *
-   * Same as `request`, but also returns the pagination flag that sits outside
-   * `result`. A listing uses it to decide whether a next page exists; not
-   * applicable to `responseType: 'blob'`.
+   * Same as `request`, with pagination and telemetry from outside `result`.
+   * Supports JSON responses.
    */
   requestEnvelope<TResult>(
     spec: OvRequestSpec,

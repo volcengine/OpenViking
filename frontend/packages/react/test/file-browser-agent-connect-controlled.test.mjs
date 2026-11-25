@@ -42,6 +42,11 @@ test('FileBrowser lets an external entry open the same drawer and handle close r
     await host.render(render(true));
     assert.equal(trigger.getAttribute('aria-expanded'), 'true');
     assert.ok(drawer());
+    assert.ok(
+      drawer()
+        .querySelector('.ov-agent-connect__copy')
+        .classList.contains('ov-button--primary'),
+    );
     assert.deepEqual(requests, [true], 'prop updates do not echo events');
 
     await click(drawer().querySelector('.ov-drawer__close'));

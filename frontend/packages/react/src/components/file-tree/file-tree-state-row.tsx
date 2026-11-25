@@ -93,7 +93,9 @@ export function FileTreeStateRow({
       return shell(
         <>
           <span className="ov-file-tree__toggle-spacer" />
-          <span className="ov-file-tree__muted">{text.empty}</span>
+          <span className="ov-file-tree__muted ov-file-tree__empty-directory">
+            {text.emptyDirectory}
+          </span>
         </>,
       );
     default:
