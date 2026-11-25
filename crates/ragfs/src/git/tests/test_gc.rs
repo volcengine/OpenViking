@@ -24,15 +24,8 @@ async fn gc_reclaims_only_expired_unreachable_objects() {
     assert!(objects.exists("acct", &shared).await.unwrap());
     assert!(!objects.exists("acct", &ids[1]).await.unwrap());
     assert_eq!(delete_log(&svc).await, vec![ids[2], ids[0]]);
-    assert_eq!(
-        svc.overlay("acct")
-            .await
-            .unwrap()
-            .deleted_at(&ids[1])
-            .await
-            .unwrap(),
-        None
-    );
+    let overlay = svc.overlay("acct").await.unwrap();
+    assert_eq!(overlay.deleted_at(&ids[1]).await.unwrap(), None);
 }
 
 #[tokio::test]
@@ -74,23 +67,12 @@ async fn commit_freshens_reverted_blob_but_skips_unchanged_blob() {
             .set_modified(old)
             .unwrap();
     }
-    let stable_before = std::fs::metadata(path(b"stable"))
-        .unwrap()
-        .modified()
-        .unwrap();
+    let modified = |body: &[u8]| std::fs::metadata(path(body)).unwrap().modified().unwrap();
+    let stable_before = modified(b"stable");
     vfs.put("a", b"one");
     make_commit(&svc, "acct", "main", "revert").await;
-    assert!(
-        std::fs::metadata(path(b"one")).unwrap().modified().unwrap()
-            > SystemTime::now() - Duration::from_secs(5)
-    );
-    assert_eq!(
-        std::fs::metadata(path(b"stable"))
-            .unwrap()
-            .modified()
-            .unwrap(),
-        stable_before
-    );
+    assert!(modified(b"one") > SystemTime::now() - Duration::from_secs(5));
+    assert_eq!(modified(b"stable"), stable_before);
 }
 
 #[tokio::test]
@@ -154,17 +136,9 @@ async fn gc_rejects_inconsistent_index_and_walks() {
     use crate::git::CommitIndexStore;
     use std::time::{Duration, SystemTime};
     let (dir, vfs, _, _, svc) = make_service("acct");
-    let db = dir.path().join("history.db");
-    let index = Arc::new(
-        SqliteSnapshotLogStore::connect(db.to_str().unwrap())
-            .await
-            .unwrap(),
-    );
+    let (index, pool) = open_test_commit_index(dir.path()).await;
     let svc = svc.with_commit_index(Some(index.clone()));
     let ids = delete_chain(&svc, &vfs, 3).await;
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", db.display()))
-        .await
-        .unwrap();
     sqlx::query("UPDATE snapshot_commit SET parent_oid = NULL WHERE commit_oid = ?")
         .bind(ids[2].to_string())
         .execute(&pool)
