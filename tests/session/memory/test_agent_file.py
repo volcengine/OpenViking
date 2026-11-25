@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
+from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.extraction_output_protocol import (
     ExtractionOutputContext,
@@ -18,6 +19,20 @@ from openviking.session.memory.session_extract_context_provider import SessionEx
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 from tests.utils.mock_agfs import MockLocalAGFS
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        ("viking://user/alice/SOUL.md", True),
+        ("viking://~/SOUL.md", True),
+        ("viking://user/alice/memories/soul.md", True),
+        ("viking://user/alice/memories/identity.md", True),
+        ("viking://user/alice/resources/SOUL.md", False),
+    ],
+)
+def test_static_agent_file_paths(uri, expected):
+    assert is_static_agent_memory(uri) is expected
 
 
 @pytest.mark.asyncio

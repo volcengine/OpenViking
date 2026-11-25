@@ -237,15 +237,16 @@ viking://user/{user_id}/sessions/{session_id}/
 └── tools/
     └── {tool_id}/tool.json
 
-viking://~/memories/
-├── profile.md
-├── soul.md
-├── preferences/
-├── entities/
-├── events/
-├── cases/
-├── trajectories/
-└── experiences/
+viking://~/
+├── SOUL.md
+└── memories/
+    ├── profile.md
+    ├── preferences/
+    ├── entities/
+    ├── events/
+    ├── cases/
+    ├── trajectories/
+    └── experiences/
 ```
 
 `viking://~/sessions/{session_id}` uses the home alias and is expanded to

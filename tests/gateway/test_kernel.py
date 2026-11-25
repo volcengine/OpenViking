@@ -284,9 +284,9 @@ async def test_soul_opens_the_session_as_instructions(setup_kernel, credential, 
     one = await prepare(kernel, body, credential, policy)
     [opening] = context_blocks(one.body["messages"][0])
     soul = (
-        '<agent-soul uri="viking://user/alice/memories/soul.md">\nAnswer in haiku.\n</agent-soul>'
+        '<agent-soul uri="viking://user/alice/SOUL.md">\nAnswer in haiku.\n</agent-soul>'
     )
-    note = "- The <agent-soul> section below is the soul.md file"
+    note = "- The <agent-soul> section below is the SOUL.md file"
     assert (soul in opening) == (note in opening) == enabled
     assert opening.startswith(
         '<openviking-context source="gateway-session-start">\n'

@@ -18,6 +18,7 @@ SKILL_USAGE = (
     "read <dir>/<name>/SKILL.md with the openviking_read tool."
 )
 SKILL_MORE = "search OpenViking skills to find the rest"
+SOUL_PATHS = ("SOUL.md", "memories/soul.md")
 
 
 def estimate_tokens(text):
@@ -213,6 +214,15 @@ async def ls_dir(fetch, uri):
     return sorted(entries, key=lambda entry: entry["name"])
 
 
+async def read_soul(fetch, user_root):
+    for path in SOUL_PATHS:
+        uri = f"{user_root}/{path}"
+        content = await read_file(fetch, uri)
+        if content:
+            return uri, content
+    return f"{user_root}/{SOUL_PATHS[0]}", ""
+
+
 async def build_profile(viking, key, policy, tools):
     names = {tool["function"]["name"] for tool in tools}
     # The budget covers the profile and the catalogs; the soul is added whole.
@@ -258,12 +268,17 @@ async def build_profile(viking, key, policy, tools):
 
     async def memories():
         space = await resolve_user_space(fetch)
-        root = f"viking://user/{space}/memories"
+        user_root = f"viking://user/{space}"
+        root = f"{user_root}/memories"
         paths, requests = [], []
-        for path, wanted in (("soul.md", policy.soul), ("profile.md", profiled)):
+        for path, wanted in (("soul", policy.soul), ("profile.md", profiled)):
             if wanted:
                 paths.append(path)
-                requests.append(read_file(fetch, root + "/" + path))
+                requests.append(
+                    read_soul(fetch, user_root)
+                    if path == "soul"
+                    else read_file(fetch, root + "/" + path)
+                )
         if catalog:
             for path in ("preferences", "entities"):
                 paths.append(path)
@@ -278,9 +293,9 @@ async def build_profile(viking, key, policy, tools):
         return format_skill_catalog(skill_groups(result), budget // 4)
 
     (root, values), skill_text = await asyncio.gather(memories(), skills())
-    soul = values.get("soul.md", "")
+    soul_uri, soul = values.get("soul", (root.removesuffix("/memories") + "/SOUL.md", ""))
     soul_text = (
-        f'<agent-soul uri="{html.escape(root + "/soul.md", quote=True)}">\n{soul}\n</agent-soul>'
+        f'<agent-soul uri="{html.escape(soul_uri, quote=True)}">\n{soul}\n</agent-soul>'
         if soul
         else ""
     )

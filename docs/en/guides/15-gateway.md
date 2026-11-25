@@ -59,7 +59,7 @@ Every gateway page uses these terms in exactly this sense. Users in an OpenVikin
 What you get:
 
 - relevant memory on every new message;
-- your soul (the instructions in `soul.md`) and user profile at the start of a new conversation;
+- your soul (the instructions in `SOUL.md`, with a historical lowercase fallback) and user profile at the start of a new conversation;
 - conversations saved to OpenViking and turned into new memories;
 - automatic compaction of long conversations;
 - with OpenViking tools on, a model that searches, reads and writes memory itself (see [Agentic memory for any client](../gateway/04-openviking-tools.md#agentic-memory-for-any-client)).

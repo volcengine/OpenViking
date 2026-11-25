@@ -61,6 +61,14 @@ test('resolves memory children only at the fourth segment', () => {
   );
 });
 
+test('resolves the root soul and its historical memory path', () => {
+  assert.equal(resolveFileTreeInfoKey('viking://user/alice/SOUL.md'), 'soul');
+  assert.equal(
+    resolveFileTreeInfoKey('viking://user/alice/memories/soul.md'),
+    'soul',
+  );
+});
+
 test('does not apply memory rules under other user directories', () => {
   assert.equal(
     resolveFileTreeInfoKey('viking://user/alice/resources/profile.md'),
