@@ -21,7 +21,10 @@ _JAPANESE_KANA_MIN_CHARS = 3
 _STRONG_DOMINANT_MIN_CHARS = 10
 _STRONG_DOMINANT_RATIO = 0.95
 _PRIMARY_LANGUAGES = {"zh-CN", "en"}
-_LATIN_WORD_RE = re.compile(r"\b[A-Za-z\u00c0-\u024f]+\b")
+_LATIN_WORD_RE = re.compile(
+    r"(?<![A-Za-z\u00c0-\u024f\d_])[A-Za-z\u00c0-\u024f]+"
+    r"(?![A-Za-z\u00c0-\u024f\d_])"
+)
 # Bare import paths are machine tokens too: repeated .com domains otherwise
 # count as the Portuguese stopword "com" in code skeletons.
 _URI_LANGUAGE_NOISE_RE = re.compile(

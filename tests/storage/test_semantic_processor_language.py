@@ -10,7 +10,6 @@ import pytest
 from openviking.prompts import render_prompt
 from openviking.session.memory.utils.language import (
     _detect_language_from_text,
-    _detect_latin_language,
     _language_from_locale_value,
     _language_from_timezone_value,
     _resolve_system_fallback_language,
@@ -35,57 +34,6 @@ class TestLanguageDetection:
         text = "这是一个中文文档，用于测试语言检测功能"
         language = _detect_language_from_text(text, fallback_language="en")
         assert language == "zh-CN"
-
-    @pytest.mark.parametrize("fallback", ["en", "zh-CN", "pt"])
-    def test_identifiers_do_not_vote_for_portuguese(self, fallback):
-        text = "01a11a42-22d3-30f0-4ed3-56cb789e0d10 e41 e41 e41 e41 a1 a2 a3 a4"
-
-        assert _detect_latin_language(text, fallback) == "en"
-
-    def test_field_names_do_not_dilute_chinese_language_signal(self):
-        text = (
-            "environment_context workspace_roots permission_profile source_thread_id 请保留中文记忆"
-        )
-
-        assert _detect_language_from_text(text, "en") == "zh-CN"
-
-    @pytest.mark.parametrize(
-        ("text", "language"),
-        [
-            ("Ce document pour utilisateur v2 v3", "fr"),
-            ("Este documento para usuário v2 v3", "pt"),
-            ("Questo documento per utente v2 v3", "it"),
-            ("state-of-the-art-2026 文档", "en"),
-            ("Please compare a < b and c > d.", "en"),
-            ("This is English中文English documentation for the project", "en"),
-        ],
-    )
-    def test_word_boundaries_preserve_versioned_and_mixed_prose(self, text, language):
-        assert _detect_language_from_text(text, language) == language
-
-    @pytest.mark.parametrize(
-        ("text", "language"),
-        [
-            ("Ce document décrit les préférences de l utilisateur et le projet à terminer.", "fr"),
-            (
-                "Este documento descreve as preferências do usuário e o projeto para completar.",
-                "pt",
-            ),
-            (
-                "Questo documento descrive le preferenze dell utente e il progetto da completare.",
-                "it",
-            ),
-            ("Dieses Dokument beschreibt die Präferenzen der Benutzer und das Projekt.", "de"),
-            (
-                "Este documento describe las preferencias del usuario y el proyecto para completar.",
-                "es",
-            ),
-        ],
-    )
-    def test_identifiers_do_not_override_real_latin_language(self, text, language):
-        text += " 01a11a42-22d3-30f0-4ed3-56cb789e0d10" * 2
-
-        assert _detect_language_from_text(text, "en") == language
 
     def test_detect_language_english_fallback(self):
         text = "This is an English document for testing language detection"

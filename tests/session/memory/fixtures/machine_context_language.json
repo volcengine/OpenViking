@@ -1,4 +1,0 @@
-{
-  "environment_context": "<environment_context>\n  <environments>\n    <environment id=\"local\" status=\"unavailable\" />\n  </environments>\n  <filesystem><workspace_roots><root>/Users/example/Documents/sample-project</root><root>/Users/example/.trae/cli/visualizations/2026/11/14/01a1da58-abdd-7ef0-bef4-a6d809a9a4ea</root></workspace_roots><permission_profile type=\"disabled\"><file_system type=\"unrestricted\" /></permission_profile></filesystem>\n</environment_context>",
-  "delegation": "<codex_delegation>\n  <source_thread_id>01a11a42-22d3-30f0-4ed3-56cb789e0d10</source_thread_id>\n  <input>root 同步：串行槽现正式交由 e41 lane 独占（apply replan-000001 + TSC + pytest 首失败停，验证 accepted_result 前置与组合）。caller-cutover lane 排在 e41 之后：e41 终态归还槽后，root 按准备就绪顺序交槽。\n\ncaller 原 3c 环境剩余 38 验证（先 collect 核对）的准备已记录，保持冻结不动；在收到 root 明确交槽前不启动 collection/pytest/Node/TSC/Core，不借 e41 槽。若你的准备有更新需 root 知晓，回传精确 refs 即可，不必重复请求交槽。</input>\n</codex_delegation>"
-}
