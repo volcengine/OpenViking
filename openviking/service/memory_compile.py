@@ -20,7 +20,7 @@ from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.service.compile_targets import commit_snapshot
 from openviking.service.fs_service import FSService
-from openviking.service.task_domain import TaskPatch, raise_for_queue_model_rate_limit
+from openviking.service.task_domain import TaskPatch, raise_for_queue_model_limit
 from openviking.service.task_tracker import TaskRecord, get_task_tracker
 from openviking.service.task_work_index import bind_task_context
 from openviking.session.memory.consolidation_context_provider import (
@@ -37,7 +37,7 @@ from openviking.session.memory.streaming_memory_updater import (
 from openviking.session.memory.utils.uri import render_template
 from openviking.telemetry import tracer
 from openviking.telemetry.span_models import create_root_span_attributes
-from openviking.utils.exceptions import model_rate_limit_error
+from openviking.utils.exceptions import model_limit_error
 from openviking.utils.path_safety import normalize_storage_target_uri
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, OpenVikingError
 from openviking_cli.utils import get_logger
@@ -307,7 +307,7 @@ class MemoryCompileRunner:
                     task_id, account_id=ctx.account_id, user_id=ctx.user.user_id
                 )
                 if (queue_status.get("Embedding") or {}).get("error_count", 0):
-                    raise_for_queue_model_rate_limit(queue_status)
+                    raise_for_queue_model_limit(queue_status)
                     raise OpenVikingError(
                         "Memory compile embedding failed", code="PROCESSING_ERROR"
                     )
@@ -328,7 +328,7 @@ class MemoryCompileRunner:
             return
         except Exception as exc:  # noqa: BLE001 - surface any failure as task error
             tracer.error(f"Memory-mode compile failed: {exc}")
-            limited = model_rate_limit_error(exc)
+            limited = model_limit_error(exc)
             await tracker.fail(
                 task_id,
                 limited.message if limited else f"MEMORY_CONSOLIDATION_FAILED: {exc}",

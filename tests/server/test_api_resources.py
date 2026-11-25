@@ -147,15 +147,22 @@ async def test_add_resource_with_wait(
     assert response.json()["result"].strip() == expected_content
 
 
+@pytest.mark.parametrize(
+    ("kind", "code"),
+    [
+        (ModelErrorKind.RATE_LIMIT_ERROR, "AccountRateLimitExceeded"),
+        (ModelErrorKind.QUOTA_EXHAUSTED, "AccountQuotaExceeded"),
+    ],
+)
 async def test_add_resource_wait_reports_embedding_rate_limit(
-    client, sample_markdown_file, upload_temp_dir, monkeypatch
+    client, sample_markdown_file, upload_temp_dir, monkeypatch, kind, code
 ):
     async def throttled(*args, **kwargs):
         raise ModelError(
-            ModelErrorKind.RATE_LIMIT_ERROR,
-            "Slow down",
+            kind,
+            "Model limit reached",
             status_code=429,
-            code="AccountRateLimitExceeded",
+            code=code,
         )
 
     monkeypatch.setattr(AccountEmbeddingProvider, "embed", throttled)
@@ -172,9 +179,9 @@ async def test_add_resource_wait_reports_embedding_rate_limit(
     assert error["code"] == "RESOURCE_EXHAUSTED"
     assert "model" in error["message"].lower()
     detail = error["details"]["errors"][0]
-    assert detail["model_error_kind"] == "rate_limit_error"
+    assert detail["model_error_kind"] == kind.value
     assert detail["upstream_status_code"] == 429
-    assert detail["upstream_error_code"] == "AccountRateLimitExceeded"
+    assert detail["upstream_error_code"] == code
 
 
 @pytest.mark.usefixtures("public_resource_dns")

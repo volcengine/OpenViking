@@ -4,6 +4,7 @@
 
 from openviking.models.model_error import (
     ACCOUNT_RATE_LIMIT_CODE,
+    MODEL_LIMIT_KINDS,
     MODEL_RATE_LIMIT_MESSAGE,
     ModelError,
     ModelErrorKind,
@@ -99,29 +100,40 @@ def reported_model_error_kind(exc: Exception) -> ModelErrorKind | None:
     return model_error_kind(exc)
 
 
-class ModelRateLimitError(ResourceExhaustedError):
+class ModelLimitError(ResourceExhaustedError):
     """A public RESOURCE_EXHAUSTED error originating at the model provider."""
 
-    def __init__(self, details: dict | None = None) -> None:
-        details = {**(details or {}), "model_error_kind": ModelErrorKind.RATE_LIMIT_ERROR.value}
-        message = MODEL_RATE_LIMIT_MESSAGE
-        if details.get("upstream_error_code") == ACCOUNT_RATE_LIMIT_CODE:
+    def __init__(self, details: dict) -> None:
+        kind = details.get("model_error_kind")
+        if kind == ModelErrorKind.QUOTA_EXHAUSTED:
+            message = "The upstream model provider's usage quota has been exhausted."
+        elif details.get("upstream_error_code") == ACCOUNT_RATE_LIMIT_CODE:
             message = "The upstream model provider's account rate limit was exceeded. Please try again later."
+        elif kind == ModelErrorKind.RATE_LIMIT_ERROR:
+            message = MODEL_RATE_LIMIT_MESSAGE
+        else:
+            message = "Upstream model requests exceeded rate and usage quota limits."
         super().__init__(message, details=details)
 
 
-def model_rate_limit_error(exc: Exception) -> ModelRateLimitError | None:
+def model_limit_error(exc: Exception) -> ModelLimitError | None:
     """Classify a provider failure before an HTTP response or task serializes it."""
     for cause in exception_chain(exc):
-        if isinstance(cause, ModelRateLimitError):
+        if isinstance(cause, ModelLimitError):
             return cause
         if isinstance(cause, OpenVikingError):
             return None
         if isinstance(cause, AllCredentialsFailedError):
             # The retry policy's aggregate kind can represent just one credential.
-            if cause.common_kind is ModelErrorKind.RATE_LIMIT_ERROR:
-                return ModelRateLimitError({"upstream_error_type": type(cause).__name__})
-            return None
+            kinds = {kind for _, kind, _, _ in cause.errors}
+            if not kinds or not kinds.issubset(MODEL_LIMIT_KINDS):
+                return None
+            aggregate: dict = {"upstream_error_type": type(cause).__name__}
+            if len(kinds) == 1:
+                aggregate["model_error_kind"] = kinds.pop().value
+            else:
+                aggregate["model_error_kinds"] = sorted(kind.value for kind in kinds)
+            return ModelLimitError(aggregate)
         if isinstance(cause, ModelError):
             model_error = cause
             break
@@ -132,13 +144,16 @@ def model_rate_limit_error(exc: Exception) -> ModelRateLimitError | None:
             return None
         cause = exc
 
-    if model_error.kind is not ModelErrorKind.RATE_LIMIT_ERROR:
+    if model_error.kind not in MODEL_LIMIT_KINDS:
         return None
-    details: dict = {"upstream_error_type": type(cause).__name__}
+    details: dict = {
+        "model_error_kind": model_error.kind.value,
+        "upstream_error_type": type(cause).__name__,
+    }
     if model_error.provider:
         details["provider"] = model_error.provider
     if model_error.code:
         details["upstream_error_code"] = model_error.code
     if model_error.status_code is not None:
         details["upstream_status_code"] = model_error.status_code
-    return ModelRateLimitError(details)
+    return ModelLimitError(details)

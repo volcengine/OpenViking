@@ -25,7 +25,7 @@ from openviking.telemetry import (
     resolve_telemetry,
     unregister_telemetry,
 )
-from openviking.utils.exceptions import model_rate_limit_error
+from openviking.utils.exceptions import model_limit_error
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -167,7 +167,7 @@ class ReindexProcessor(DequeueHandlerBase):
             )
             return ProcessResult.success()
         except Exception as exc:
-            exc = model_rate_limit_error(exc) or exc
+            exc = model_limit_error(exc) or exc
             await tracker.fail(
                 msg.task_id,
                 str(exc),

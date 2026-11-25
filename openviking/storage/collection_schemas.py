@@ -47,8 +47,8 @@ from openviking.storage.viking_vector_index_backend import (
 from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, resolve_telemetry
 from openviking.utils.circuit_breaker import CircuitBreakerOpen
 from openviking.utils.exceptions import (
-    ModelRateLimitError,
-    model_rate_limit_error,
+    ModelLimitError,
+    model_limit_error,
     reported_model_error_kind,
 )
 from openviking.utils.log_correlation import log_correlation
@@ -596,7 +596,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         message: str,
         *,
         kind: Optional[ModelErrorKind] = None,
-        rate_limit: Optional[ModelRateLimitError] = None,
+        model_limit: Optional[ModelLimitError] = None,
     ) -> ProcessResult:
         """Fail with one structured per-resource error (uri + user brief).
 
@@ -610,7 +610,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             uri=cls._embedding_uri(embedding_msg),
             err_brief=err_brief,
             model_error_kind=kind,
-            rate_limit=rate_limit,
+            model_limit=model_limit,
         )
         return ProcessResult.failed(message, errors=(detail,))
 
@@ -824,7 +824,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             embedding_msg,
                             request_failed_message,
                             kind=reported_model_error_kind(embed_err),
-                            rate_limit=model_rate_limit_error(embed_err),
+                            model_limit=model_limit_error(embed_err),
                         )
                     except Exception as embed_err:
                         error_msg = self._embedding_error_msg(
@@ -892,7 +892,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             embedding_msg,
                             error_msg,
                             kind=kind,
-                            rate_limit=model_rate_limit_error(embed_err),
+                            model_limit=model_limit_error(embed_err),
                         )
 
                     # Add dense vector

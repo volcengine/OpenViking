@@ -331,6 +331,22 @@ def test_credential_failover_only_reports_rate_limit_for_matching_failures(
         assert mapped.details["model_error_kind"] == "rate_limit_error"
 
 
+def test_credential_failover_with_rate_and_quota_limits():
+    failures = [
+        (kind.value, kind, ModelError(kind, kind.value), i)
+        for i, kind in enumerate((ModelErrorKind.QUOTA_EXHAUSTED, ModelErrorKind.RATE_LIMIT_ERROR))
+    ]
+    aggregate = AllCredentialsFailedError(failures)
+    breaker = CircuitBreaker(failure_threshold=1)
+    breaker.record_failure(aggregate)
+    with pytest.raises(CircuitBreakerOpen) as blocked:
+        breaker.check()
+    for error in (aggregate, blocked.value):
+        mapped = map_exception(error)
+        assert mapped.code == "RESOURCE_EXHAUSTED"
+        assert mapped.details["model_error_kinds"] == ["quota_exhausted", "rate_limit_error"]
+
+
 def test_ark_account_rate_limit_code_without_http_status():
     ark = pytest.importorskip("volcenginesdkarkruntime._exceptions")
     mapped = map_exception(

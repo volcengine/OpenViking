@@ -17,15 +17,23 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.vectordb.collection.vikingdb_clients import VikingDBClient
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
+from openviking.utils.circuit_breaker import CircuitBreakerOpen
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VikingDBConfig
 
 
-async def test_find_reports_upstream_model_rate_limit(client, monkeypatch):
+@pytest.mark.parametrize(
+    ("kind", "code", "message"),
+    [
+        (ModelErrorKind.RATE_LIMIT_ERROR, "AccountRateLimitExceeded", "Slow down"),
+        (ModelErrorKind.QUOTA_EXHAUSTED, "AccountQuotaExceeded", "Quota resets at 19:43"),
+    ],
+)
+async def test_find_reports_upstream_model_rate_limit(client, monkeypatch, kind, code, message):
     async def throttled(*args, **kwargs):
-        raise ModelError(ModelErrorKind.RATE_LIMIT_ERROR, "Slow down", provider="test-provider")
+        raise ModelError(kind, message, provider="test-provider", status_code=429, code=code)
 
     monkeypatch.setattr(AccountEmbeddingProvider, "embed", throttled)
     response = await client.post("/api/v1/search/find", json={"query": "test"})
@@ -34,7 +42,24 @@ async def test_find_reports_upstream_model_rate_limit(client, monkeypatch):
     error = response.json()["error"]
     assert error["code"] == "RESOURCE_EXHAUSTED"
     assert "model" in error["message"].lower()
-    assert error["details"]["model_error_kind"] == "rate_limit_error"
+    assert error["details"]["model_error_kind"] == kind.value
+    assert error["details"]["upstream_error_code"] == code
+    assert message in error["message"]
+
+
+async def test_find_reports_open_model_circuit_without_provider_cause(client, monkeypatch):
+    async def blocked(*args, **kwargs):
+        raise CircuitBreakerOpen("Circuit breaker is OPEN, retry after 46s")
+
+    monkeypatch.setattr(AccountEmbeddingProvider, "embed", blocked)
+    response = await client.post("/api/v1/search/find", json={"query": "test"})
+
+    assert response.status_code == 503
+    error = response.json()["error"]
+    assert error["code"] == "UNAVAILABLE"
+    assert "model" in error["message"].lower()
+    assert "46s" in error["message"]
+    assert "upstream_status_code" not in error["details"]
 
 
 async def test_keyword_search_sends_args_to_vikingdb(

@@ -41,7 +41,7 @@ from openviking.storage.index_action import FieldPatch
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import bind_ingestion_source_type, bind_telemetry, get_current_telemetry
 from openviking.utils.content_hash import content_md5
-from openviking.utils.exceptions import model_rate_limit_error
+from openviking.utils.exceptions import model_limit_error
 from openviking.utils.ingest_options import IngestOptions
 from openviking.utils.log_correlation import log_correlation
 from openviking_cli.utils import VikingURI
@@ -384,14 +384,14 @@ class SemanticTreeExecutor:
     def _record_skill_failure(self, uri: str, error: Exception) -> None:
         if self._context_type == "skill":
             message = f"{uri}: {error}"
-            throttled = model_rate_limit_error(error)
+            limited = model_limit_error(error)
             self._stats.failures.append(
                 make_work_error(
                     message,
                     uri,
-                    rate_limit=throttled,
+                    model_limit=limited,
                 )
-                if throttled
+                if limited
                 else message
             )
 

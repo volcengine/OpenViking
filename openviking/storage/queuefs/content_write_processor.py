@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext, Role
-from openviking.service.task_domain import TaskPatch, TaskStatus, raise_for_queue_model_rate_limit
+from openviking.service.task_domain import TaskPatch, TaskStatus, raise_for_queue_model_limit
 from openviking.service.task_tracker import get_task_tracker
 from openviking.service.task_work_index import (
     bind_task_context_from_message,
@@ -25,7 +25,7 @@ from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.telemetry import bind_telemetry, resolve_telemetry, unregister_telemetry
-from openviking.utils.exceptions import model_rate_limit_error
+from openviking.utils.exceptions import model_limit_error
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
@@ -290,7 +290,7 @@ class ContentWriteProcessor(DequeueHandlerBase):
                     )
                 expected = set(msg.refresh["indexed_levels"])
                 if (queue_status.get("Embedding") or {}).get("error_count", 0):
-                    raise_for_queue_model_rate_limit(queue_status)
+                    raise_for_queue_model_limit(queue_status)
                     raise OpenVikingError(
                         f"Directory index processing failed: {msg.resource_id}",
                         code="PROCESSING_ERROR",
@@ -331,7 +331,7 @@ class ContentWriteProcessor(DequeueHandlerBase):
             )
             return ProcessResult.success()
         except Exception as exc:
-            exc = model_rate_limit_error(exc) or exc
+            exc = model_limit_error(exc) or exc
             await tracker.fail(
                 msg.task_id,
                 str(exc),

@@ -30,7 +30,7 @@ from openviking.telemetry import (
     unregister_telemetry,
 )
 from openviking.telemetry.resource_summary import record_resource_queue_metrics
-from openviking.utils.exceptions import model_rate_limit_error
+from openviking.utils.exceptions import model_limit_error
 from openviking.utils.log_correlation import log_correlation
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
@@ -420,7 +420,7 @@ class AddResourceProcessor(DequeueHandlerBase):
                     short_hash(str(current_stage)),
                     type(exc).__name__,
                 )
-                exc = model_rate_limit_error(exc) or exc
+                exc = model_limit_error(exc) or exc
                 failure_result = (
                     {"code": exc.code} if isinstance(exc, OpenVikingError) and exc.code else {}
                 )

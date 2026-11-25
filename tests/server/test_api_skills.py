@@ -111,6 +111,35 @@ async def test_skill_wait_reports_legacy_volcengine_account_rate_limit(client, m
     assert error["details"]["queue_status"] == status
 
 
+@pytest.mark.parametrize("structured", [False, True], ids=["legacy", "typed"])
+async def test_skill_update_wait_reports_upstream_quota(client, monkeypatch, structured):
+    from openviking.service.task_tracker import get_task_tracker
+
+    await _add_skill(client, "quota-test")
+    message = (
+        "Error code: 429 - {'error': {'code': 'AccountQuotaExceeded', "
+        "'message': '5-hour usage quota exceeded. It will reset at 19:43.'}}"
+    )
+    entry = {"message": message}
+    if structured:
+        entry = {"model_error_kind": "quota_exhausted", "message": "Usage quota exhausted"}
+    stage = {"error_count": 1, "errors": [entry]}
+    status = {"Semantic": stage, "Embedding": stage}
+    monkeypatch.setattr(get_task_tracker(), "build_queue_status", AsyncMock(return_value=status))
+
+    response = await client.put(
+        "/api/v1/skills/quota-test", json={"data": _skill_md("quota-test", "Updated"), "wait": True}
+    )
+    assert response.status_code == 429, response.text
+    error = response.json()["error"]
+    assert error["code"] == "RESOURCE_EXHAUSTED"
+    assert "quota" in error["message"].lower()
+    assert error["details"]["model_error_kind"] == "quota_exhausted"
+    assert error["details"]["queue_status"] == status
+    if not structured:
+        assert error["details"]["upstream_error_code"] == "AccountQuotaExceeded"
+
+
 async def test_skills_api_list_honors_node_limit(client):
     await _add_skill(client, "limit-skill-a", "First skill")
     await _add_skill(client, "limit-skill-b", "Second skill")

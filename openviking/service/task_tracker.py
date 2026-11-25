@@ -43,7 +43,7 @@ from openviking.service.task_domain import (
     WorkState,
     WorkSummary,
     queue_result,
-    raise_for_task_model_rate_limit,
+    raise_for_task_model_limit,
     sanitize_error,
     sanitize_task_result,
 )
@@ -295,7 +295,7 @@ async def run_tracked_operation(
                 if terminal.status == TaskStatus.FAILED and not (
                     accept_failed_result is not None and accept_failed_result(result)
                 ):
-                    raise_for_task_model_rate_limit(terminal.result, task_id=task.task_id)
+                    raise_for_task_model_limit(terminal.result, task_id=task.task_id)
                     raise OpenVikingError(
                         terminal.error or "Task processing failed",
                         code="PROCESSING_ERROR",

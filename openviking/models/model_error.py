@@ -58,6 +58,8 @@ def chat_finish_error(finish_reason: str | None, provider: str) -> ModelError | 
 
 
 ACCOUNT_RATE_LIMIT_CODE = "AccountRateLimitExceeded"
+ACCOUNT_QUOTA_CODE = "AccountQuotaExceeded"
+MODEL_LIMIT_KINDS = (ModelErrorKind.RATE_LIMIT_ERROR, ModelErrorKind.QUOTA_EXHAUSTED)
 
 _CODE_KINDS = {
     # Authentication and authorization.
@@ -70,7 +72,7 @@ _CODE_KINDS = {
     # Quota and billing exhaustion.
     "INSUFFICIENTQUOTA": ModelErrorKind.QUOTA_EXHAUSTED,
     "CREDITBALANCEEXHAUSTED": ModelErrorKind.QUOTA_EXHAUSTED,
-    "ACCOUNTQUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
+    ACCOUNT_QUOTA_CODE.upper(): ModelErrorKind.QUOTA_EXHAUSTED,
     "MODELQUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
     "QUOTAEXCEEDED": ModelErrorKind.QUOTA_EXHAUSTED,
     "BILLINGHARDLIMITREACHED": ModelErrorKind.QUOTA_EXHAUSTED,

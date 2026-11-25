@@ -15,9 +15,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Iterable, Optional
 
-from openviking.models.model_error import ACCOUNT_RATE_LIMIT_CODE, ModelErrorKind
+from openviking.models.model_error import (
+    ACCOUNT_QUOTA_CODE,
+    ACCOUNT_RATE_LIMIT_CODE,
+    MODEL_LIMIT_KINDS,
+    ModelErrorKind,
+)
 from openviking.service.task_events import append_task_event
-from openviking.utils.exceptions import ModelRateLimitError
+from openviking.utils.exceptions import ModelLimitError
 
 
 class TaskStatus(str, Enum):
@@ -159,9 +164,13 @@ _SENSITIVE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 _MAX_ERROR_LEN = 500
-# Match a complete field in a truncated SDK body. Its nesting is verified by parsing below.
+_ACCOUNT_LIMIT_KINDS = {
+    ACCOUNT_RATE_LIMIT_CODE: ModelErrorKind.RATE_LIMIT_ERROR,
+    ACCOUNT_QUOTA_CODE: ModelErrorKind.QUOTA_EXHAUSTED,
+}
+# Match a complete field in a truncated SDK body. Parsing below verifies its nesting.
 _ARK_ACCOUNT_LIMIT_FIELD = re.compile(
-    r"""(?:'code'|"code")\s*:\s*(?:'AccountRateLimitExceeded'|"AccountRateLimitExceeded")"""
+    r"""(?:'code'|"code")\s*:\s*['"]Account(?:RateLimit|Quota)Exceeded['"]"""
 )
 
 
@@ -178,7 +187,7 @@ def make_work_error(
     err_brief: Optional[str] = None,
     *,
     model_error_kind: Optional[ModelErrorKind] = None,
-    rate_limit: Optional[ModelRateLimitError] = None,
+    model_limit: Optional[ModelLimitError] = None,
 ) -> Dict[str, Any]:
     """Build one per-resource work error dict (the persisted/public shape).
 
@@ -186,37 +195,44 @@ def make_work_error(
     omitted when empty so legacy ``{message}`` records stay byte-stable.
     """
     entry: Dict[str, Any] = {"message": message}
-    if rate_limit is not None:
-        model_error_kind = ModelErrorKind.RATE_LIMIT_ERROR
-        err_brief = rate_limit.message
-        for key in ("upstream_status_code", "upstream_error_code"):
-            if key in rate_limit.details:
-                entry[key] = rate_limit.details[key]
+    if model_error_kind is not None:
+        entry["model_error_kind"] = model_error_kind.value
+    if model_limit is not None:
+        err_brief = model_limit.message
+        if "model_error_kinds" in model_limit.details:
+            entry.pop("model_error_kind", None)
+        for key in (
+            "model_error_kind",
+            "model_error_kinds",
+            "upstream_status_code",
+            "upstream_error_code",
+        ):
+            if key in model_limit.details:
+                entry[key] = model_limit.details[key]
     if uri:
         entry["uri"] = uri
     if err_brief:
         entry["err_brief"] = err_brief
-    if model_error_kind is not None:
-        entry["model_error_kind"] = model_error_kind.value
     return entry
 
 
-def _has_account_limit_code(body: str) -> bool:
+def _account_limit_code(body: str) -> str | None:
     try:
         parsed = ast.literal_eval(body)
     except (ValueError, SyntaxError):
         try:
             parsed = json.loads(body)
         except ValueError:
-            return False
+            return None
     error = parsed.get("error") if isinstance(parsed, dict) else None
-    return isinstance(error, dict) and error.get("code") == ACCOUNT_RATE_LIMIT_CODE
+    code = error.get("code") if isinstance(error, dict) else None
+    return code if isinstance(code, str) and code in _ACCOUNT_LIMIT_KINDS else None
 
 
-def _legacy_account_rate_limit(queue_name: str | None, message: str) -> bool:
+def _legacy_account_limit_code(queue_name: str | None, message: str) -> str | None:
     """Recognize an Ark SDK error in a single persisted model work item."""
     if queue_name not in ("Semantic", "Embedding") or "\n" in message:
-        return False
+        return None
     if queue_name == "Semantic" and message.startswith("viking://"):
         _, _, message = message.partition(": ")
     elif queue_name == "Embedding":
@@ -226,7 +242,7 @@ def _legacy_account_rate_limit(queue_name: str | None, message: str) -> bool:
 
     prefix = "Error code: 429 - "
     if not message.startswith(prefix):
-        return False
+        return None
     payload = message[len(prefix) :]
     # A complete SDK body can be followed by a request ID or the embedding URI.
     body, brace, suffix = payload.rpartition("}")
@@ -235,16 +251,16 @@ def _legacy_account_rate_limit(queue_name: str | None, message: str) -> bool:
         brace
         and sdk_suffix
         and len(body) < _MAX_ERROR_LEN
-        and _has_account_limit_code(body + brace)
+        and (code := _account_limit_code(body + brace))
     ):
-        return True
+        return code
     if message.endswith("...[truncated]") or (brace and sdk_suffix and len(body) >= _MAX_ERROR_LEN):
         # Reconstruct just the dictionary through error.code. This also works if
         # code follows message; text quoted inside message cannot supply the field.
         for match in _ARK_ACCOUNT_LIMIT_FIELD.finditer(payload, 0, _MAX_ERROR_LEN):
-            if _has_account_limit_code(payload[: match.end()] + "}}"):
-                return True
-    return False
+            if code := _account_limit_code(payload[: match.end()] + "}}"):
+                return code
+    return None
 
 
 def project_work_error(raw: Any, *, queue_name: str | None = None) -> Dict[str, Any]:
@@ -257,18 +273,21 @@ def project_work_error(raw: Any, *, queue_name: str | None = None) -> Dict[str, 
     for key in ("uri", "err_brief", "model_error_kind", "upstream_error_code"):
         if isinstance(raw.get(key), str) and raw[key]:
             entry[key] = raw[key]
+    if raw.get("model_error_kinds") == sorted(MODEL_LIMIT_KINDS):
+        entry["model_error_kinds"] = raw["model_error_kinds"]
     if type(raw.get("upstream_status_code")) is int:
         entry["upstream_status_code"] = raw["upstream_status_code"]
     if (
         "model_error_kind" not in raw
+        and "model_error_kinds" not in raw
         and "upstream_status_code" not in raw
         and "upstream_error_code" not in raw
-        and _legacy_account_rate_limit(queue_name, entry["message"])
+        and (code := _legacy_account_limit_code(queue_name, entry["message"]))
     ):
         entry.update(
-            model_error_kind=ModelErrorKind.RATE_LIMIT_ERROR.value,
+            model_error_kind=_ACCOUNT_LIMIT_KINDS[code].value,
             upstream_status_code=429,
-            upstream_error_code=ACCOUNT_RATE_LIMIT_CODE,
+            upstream_error_code=code,
         )
     return entry
 
@@ -482,28 +501,37 @@ def append_task_events(task: TaskRecord, previous: Optional[TaskRecord]) -> None
         )
 
 
-def _common_rate_limit(details: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-    """Return only the rate-limit attribution shared by every failure."""
-    common = {}
-    account_limited = True
+def _common_model_limit(details: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    """Classify a group only when every failure is a known model limit."""
+    kinds = set()
+    codes = set()
     for entry in details:
-        if entry.get("model_error_kind") != ModelErrorKind.RATE_LIMIT_ERROR:
+        kind = entry.get("model_error_kind")
+        if kind in MODEL_LIMIT_KINDS:
+            kinds.add(kind)
+        elif entry.get("model_error_kinds") == sorted(MODEL_LIMIT_KINDS):
+            kinds.update(MODEL_LIMIT_KINDS)
+        else:
             return {}
-        common["model_error_kind"] = ModelErrorKind.RATE_LIMIT_ERROR.value
-        account_limited = (
-            account_limited and entry.get("upstream_error_code") == ACCOUNT_RATE_LIMIT_CODE
-        )
-    if common and account_limited:
-        common["upstream_error_code"] = ACCOUNT_RATE_LIMIT_CODE
+        code = entry.get("upstream_error_code")
+        codes.add(code if isinstance(code, str) else None)
+    if not kinds:
+        return {}
+    if len(kinds) > 1:
+        return {"model_error_kinds": sorted(kinds)}
+    common = {"model_error_kind": kinds.pop()}
+    code = codes.pop() if len(codes) == 1 else None
+    if _ACCOUNT_LIMIT_KINDS.get(code) == common["model_error_kind"]:
+        common["upstream_error_code"] = code
     return common
 
 
-def _queue_rate_limit(
+def _queue_model_limit(
     queue_name: str | None, errors: Any, error_count: int | None
 ) -> Dict[str, Any]:
     if not isinstance(errors, (list, tuple)) or len(errors) != error_count:
         return {}
-    return _common_rate_limit(project_work_error(error, queue_name=queue_name) for error in errors)
+    return _common_model_limit(project_work_error(error, queue_name=queue_name) for error in errors)
 
 
 def queue_result(
@@ -521,32 +549,29 @@ def queue_result(
         ],
     }
     # Compute the group classification from the full persisted list.
-    result.update(_queue_rate_limit(queue_name, summary.errors, summary.error_count))
+    result.update(_queue_model_limit(queue_name, summary.errors, summary.error_count))
     return result
 
 
-def raise_for_queue_model_rate_limit(status: Dict[str, Any]) -> None:
+def raise_for_queue_model_limit(status: Dict[str, Any]) -> None:
     if not isinstance(status, dict):
         return
     failed = (
         group
-        if "model_error_kind" in group
-        else _queue_rate_limit(name, group.get("errors"), group.get("error_count"))
+        if "model_error_kind" in group or "model_error_kinds" in group
+        else _queue_model_limit(name, group.get("errors"), group.get("error_count"))
         for name, group in status.items()
         if isinstance(group, dict) and (group.get("error_count") or group.get("errors"))
     )
-    if details := _common_rate_limit(failed):
-        raise ModelRateLimitError({**details, "queue_status": status})
+    if details := _common_model_limit(failed):
+        raise ModelLimitError({**details, "queue_status": status})
 
 
-def raise_for_task_model_rate_limit(result: Optional[Dict[str, Any]], **context: Any) -> None:
+def raise_for_task_model_limit(result: Optional[Dict[str, Any]], **context: Any) -> None:
     if result and result.get("code") == "RESOURCE_EXHAUSTED":
         details = result.get("details")
-        if (
-            isinstance(details, dict)
-            and details.get("model_error_kind") == ModelErrorKind.RATE_LIMIT_ERROR
-        ):
-            raise ModelRateLimitError({**details, **context})
+        if isinstance(details, dict) and _common_model_limit([details]):
+            raise ModelLimitError({**details, **context})
 
 
 def collect_queue_work_errors(result: Optional[Dict[str, Any]]) -> list[Dict[str, Any]]:
@@ -592,11 +617,11 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
     else:
         work_error = first_work_error(works)
         if work_error and task.error is None:
-            rate_limit = _common_rate_limit(
+            model_limit = _common_model_limit(
                 queue for queue in queues.values() if queue["error_count"]
             )
-            if rate_limit:
-                limited = ModelRateLimitError(rate_limit)
+            if model_limit:
+                limited = ModelLimitError(model_limit)
                 task.error = limited.message
                 if task.result is None:
                     task.result = {}

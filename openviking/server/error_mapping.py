@@ -32,10 +32,11 @@ from openviking.pyagfs.exceptions import (
     GitConcurrentCommitError,
 )
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.utils.circuit_breaker import CircuitBreakerOpen
 from openviking.utils.exceptions import (
     AllCredentialsFailedError,
     error_code_from_http_status,
-    model_rate_limit_error,
+    model_limit_error,
 )
 from openviking_cli.exceptions import (
     ConflictError,
@@ -338,16 +339,16 @@ def _build_upstream_error(
 
 
 def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
-    throttled = model_rate_limit_error(exc)
-    if throttled is not None:
+    limited = model_limit_error(exc)
+    if limited is not None:
         mapped = _build_upstream_error(
-            code=throttled.code,
+            code=limited.code,
             message=_upstream_detail_message(exc),
-            status=throttled.details.get("upstream_status_code"),
+            status=limited.details.get("upstream_status_code"),
             vlm_context=exc,
-            label=throttled.message.rstrip("."),
+            label=limited.message.rstrip("."),
         )
-        mapped.details.update(throttled.details)
+        mapped.details.update(limited.details)
         return mapped
 
     for item in _iter_exception_chain(exc):
@@ -392,6 +393,16 @@ def _map_upstream_api_error(exc: Exception) -> OpenVikingError | None:
             message=_upstream_detail_message(exc),
             vlm_context=exc,
         )
+
+    for item in _iter_exception_chain(exc):
+        if (
+            isinstance(item, CircuitBreakerOpen)
+            and item.__cause__ is None
+            and item.__context__ is None
+        ):
+            return _build_upstream_error(
+                code="UNAVAILABLE", message=str(item), source=item, vlm_context=exc
+            )
 
     if _is_model_api_key_configuration_error(exc):
         return FailedPreconditionError(
@@ -519,7 +530,7 @@ def map_exception(
     if isinstance(exc, FileNotFoundError):
         return _not_found_error(resource, resource_type)
     if isinstance(exc, ValueError):
-        if model_rate_limit_error(exc) is not None or _is_model_api_key_configuration_error(exc):
+        if model_limit_error(exc) is not None or _is_model_api_key_configuration_error(exc):
             return _map_upstream_api_error(exc)
         message = str(exc)
         if is_invalid_uri_error(exc):

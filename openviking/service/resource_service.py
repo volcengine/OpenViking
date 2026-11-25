@@ -70,7 +70,7 @@ from openviking.server.user_config import (
 from openviking.service.task_domain import (
     TaskPatch,
     collect_queue_work_errors,
-    raise_for_queue_model_rate_limit,
+    raise_for_queue_model_limit,
 )
 from openviking.storage.acl import AclAction, AclSpec
 from openviking.storage.expr import And, Eq, In, Or, PathScope
@@ -2627,7 +2627,7 @@ class ResourceService:
             and (int(group.get("error_count", 0) or 0) > 0 or bool(group.get("errors")))
         }
         if failed:
-            raise_for_queue_model_rate_limit(failed)
+            raise_for_queue_model_limit(failed)
             raise InternalError(f"queue processing failed: {failed}")
 
     # ── Connector routing ──

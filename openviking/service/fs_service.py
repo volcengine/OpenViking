@@ -47,7 +47,7 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
-from openviking.service.task_domain import raise_for_queue_model_rate_limit
+from openviking.service.task_domain import raise_for_queue_model_limit
 from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
@@ -2309,7 +2309,7 @@ class FSService:
                     if missing and wait:
                         queue_status = await self._wait_for_refresh()
                         if (queue_status.get("Embedding") or {}).get("error_count", 0):
-                            raise_for_queue_model_rate_limit(queue_status)
+                            raise_for_queue_model_limit(queue_status)
                             raise OpenVikingError(
                                 f"Directory index processing failed: {uri}", code="PROCESSING_ERROR"
                             )
