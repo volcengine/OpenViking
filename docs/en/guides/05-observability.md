@@ -576,17 +576,32 @@ The most common labels you will use while investigating dashboards are:
 
 Enable `server.observability.reporting.enabled` and
 `server.observability.reporting.telemetry.enabled` in `ov.conf`.
-For Kafka output, install `openviking[reporting]` and specify the broker, topic,
-and authentication settings under `reporting.kafka`. Set `reporting.file_log`
-to select local JSONL output. Reporting is disabled by default, and export
-failures do not interrupt business requests.
+Set `reporting.file_log.path` for local JSONL output. A non-empty
+`reporting.kafka` selects Kafka as the sole output, including when `file_log`
+is also configured. With `kafka` omitted or set to `{}`, the exporter uses the
+configured file output. If both outputs are missing, the exporter logs a
+configuration error and stays off. For Kafka output, install
+`openviking[reporting]` and specify the broker, topic, and required authentication
+settings. Reporting is disabled by default.
 
-The exporter uses an in-memory queue; `telemetry.queue_capacity` must be a positive
-integer (default `1024`). Full queues, exhausted delivery retries and process
-termination can lose events. Delivery failures and dropped events produce sampled
-warnings containing counts only. This exporter is suitable for best-effort analytics;
-it does not provide a durable audit or billing ledger. Allow a graceful shutdown to
-drain the queue before stopping the process.
+The exporter uses an in-memory queue. `telemetry.queue_capacity` must be a positive
+integer (default `1024`). Space and member changes enter the same queue as other
+events. The file worker handles JSONL writes and rotation in the background.
+The Kafka worker submits a batch to the producer before waiting for individual
+acknowledgments. It retries failures to enqueue a send with the producer and
+counts failed or timed-out acknowledgments as delivery failures. Full queues,
+write failures, and process termination can lose events. Business requests can
+continue. The exporter records failed and dropped event counts and surfaces known
+delivery failures on flush and shutdown. Allow a graceful shutdown to drain the
+queue before stopping the process. Use this exporter for best-effort analytics.
+
+For `space_change` and `membership_change`, `change_type=deleted` marks the first
+recorded deletion. Background cleanup and its retries reuse this deletion state,
+so the event is generated once. A VLM call that returns a result without usage
+still reports `call_count=1` and leaves the unknown token fields as `null`.
+Sum known usage values and keep the aggregate `null` when all values are unknown.
+New files in the `resources` and `agent` scopes record the creating user as
+`first_contributor_user_id`.
 
 Deployments may set `account_id`, `resource_id` and `region` in `reporting.telemetry.deployment`.
 `OV_METRICS_ACCOUNT_ID`, `OV_RESOURCE_ID` and `OV_REGION` remain fallback values.

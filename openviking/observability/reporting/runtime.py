@@ -149,8 +149,6 @@ def make_subscriber(reporter, config):
                     ).hexdigest()
                 )
                 reporter.report({**payload, **task, "event_id": task_event_id})
-        elif name in _REGISTRY_EVENTS and isinstance(reporter, FileEventReporter):
-            reporter.report_committed(payload)
         else:
             reporter.report(payload)
 
@@ -192,7 +190,13 @@ async def start_reporting(settings):
         config = await asyncio.to_thread(load_configuration, settings)
         if not config.get("telemetry", {}).get("enabled", False):
             return None
-        reporter_class = FileEventReporter if config.get("file_log") else KafkaEventReporter
+        if config.get("kafka"):
+            reporter_class = KafkaEventReporter
+        elif config.get("file_log"):
+            reporter_class = FileEventReporter
+        else:
+            logger.error("Event reporting is enabled but no output is configured")
+            return None
         reporter = await asyncio.to_thread(reporter_class, config)
         register_event_subscriber(_SUBSCRIBER, make_subscriber(reporter, config))
         _reporter = reporter

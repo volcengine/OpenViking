@@ -87,24 +87,16 @@ class FileEventReporter:
         finally:
             self._handler.close()
 
-    def report_committed(self, event: dict) -> None:
-        """Write low-volume registry changes before returning to the mutation caller."""
-        payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-        with self._lock:
-            if self._closed:
-                raise ValueError("file reporter is closed")
-            record = logging.LogRecord(__name__, logging.INFO, "", 0, payload, (), None)
-            self._handler.handle(record)
-            self.sent += 1
-
     def flush(self, timeout=5.0):
         deadline = time.monotonic() + timeout
         while self.queue.unfinished_tasks:
             if time.monotonic() >= deadline:
                 raise TimeoutError("file event exporter flush timed out")
             time.sleep(0.01)
-        if self.failed:
-            raise RuntimeError("file event exporter encountered write failures")
+        with self._lock:
+            incomplete = self.failed or self.dropped
+        if incomplete:
+            raise RuntimeError("file event exporter delivery incomplete; inspect exporter counters")
 
     def close(self, timeout=5.0):
         with self._lock:
@@ -112,5 +104,7 @@ class FileEventReporter:
         self._thread.join(timeout)
         if self._thread.is_alive():
             raise TimeoutError("file event exporter shutdown still draining")
-        if self.failed:
-            raise RuntimeError("file event exporter closed with write failures")
+        with self._lock:
+            incomplete = self.failed or self.dropped
+        if incomplete:
+            raise RuntimeError("file event exporter closed with lost events")

@@ -1,6 +1,9 @@
-"""Dashboard events retain their schema when exported through local files."""
+"""Select the configured event export and verify local delivery."""
 
+import asyncio
 import json
+from queue import Full
+from threading import Event
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -40,6 +43,29 @@ async def test_file_reporting_preserves_events_without_kafka(tmp_path, monkeypat
     assert isinstance(rows[0]["timestamp"], int)
     assert rows[0]["event_id"]
     kafka_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explicit_kafka_takes_precedence_over_file_reporting(tmp_path, monkeypatch):
+    kafka_reporter = Mock()
+    kafka_factory = Mock(return_value=kafka_reporter)
+    file_factory = Mock(side_effect=AssertionError("configured Kafka is the only output"))
+    monkeypatch.setattr(runtime, "KafkaEventReporter", kafka_factory)
+    monkeypatch.setattr(runtime, "FileEventReporter", file_factory)
+    settings = EventReportingConfig(
+        enabled=True,
+        kafka={"bootstrap_servers": "broker:9092", "topic": "metric-log"},
+        file_log={"path": str(tmp_path / "metric.log")},
+        telemetry={"enabled": True},
+    )
+    try:
+        assert await runtime.start_reporting(settings) is kafka_reporter
+        try_publish_event("http.request", {"method": "GET", "route": "/health", "status": 200})
+        kafka_reporter.report.assert_called_once()
+    finally:
+        await runtime.stop_reporting()
+    kafka_factory.assert_called_once()
+    file_factory.assert_not_called()
 
 
 def test_file_reporting_keeps_json_types_and_escapes_newlines(tmp_path):
@@ -84,10 +110,60 @@ def test_file_reporting_exposes_write_failure(tmp_path, monkeypatch):
 
     monkeypatch.setattr(reporter._handler, "handle", fail)
     assert reporter.report({"event_id": "write_failure"})
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="delivery incomplete"):
+        reporter.flush()
+    with pytest.raises(RuntimeError, match="lost events"):
         reporter.close()
     assert reporter.failed == 1
     assert reporter.sent == 0
+
+
+def test_file_reporting_exposes_queue_overflow(tmp_path, monkeypatch):
+    reporter = FileEventReporter({"file_log": {"path": str(tmp_path / "metric.log")}})
+    monkeypatch.setattr(reporter.queue, "put_nowait", Mock(side_effect=Full))
+
+    assert not reporter.report({"event_id": "overflow"})
+    with pytest.raises(RuntimeError, match="delivery incomplete"):
+        reporter.flush()
+    with pytest.raises(RuntimeError, match="lost events"):
+        reporter.close()
+    assert reporter.dropped == 1
+    assert reporter.failed == 0
+
+
+@pytest.mark.asyncio
+async def test_registry_change_returns_while_file_writer_is_blocked(tmp_path, monkeypatch):
+    path = tmp_path / "metric.log"
+    settings = EventReportingConfig(
+        enabled=True, file_log={"path": str(path)}, telemetry={"enabled": True}
+    )
+    write_started = Event()
+    release_write = Event()
+    reporter = await runtime.start_reporting(settings)
+    assert isinstance(reporter, FileEventReporter)
+    handle_record = reporter._handler.handle
+
+    def wait_to_write(record):
+        write_started.set()
+        if not release_write.wait(10):
+            raise TimeoutError("test writer was not released")
+        handle_record(record)
+
+    monkeypatch.setattr(reporter._handler, "handle", wait_to_write)
+    manager = APIKeyManager("root", AsyncMock(), issue_user_keys=False)
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(asyncio.run, manager.create_account("space", "admin")), timeout=5
+        )
+        assert await asyncio.to_thread(write_started.wait, 5)
+        assert reporter.sent == 0
+    finally:
+        release_write.set()
+        await runtime.stop_reporting()
+    assert [json.loads(line)["event_name"] for line in path.read_text().splitlines()] == [
+        "space_change",
+        "membership_change",
+    ]
 
 
 @pytest.mark.asyncio
@@ -102,7 +178,10 @@ async def test_dashboard_lifecycle_and_usage_are_written_with_source_identity(tm
         },
     )
     store = AsyncMock()
-    store.begin_deletion.return_value = ({"task_id": "delete"}, True)
+    store.begin_deletion.side_effect = [
+        ({"task_id": "delete"}, True),
+        ({"task_id": "delete"}, False),
+    ]
     manager = APIKeyManager("root", store, issue_user_keys=False)
     try:
         await runtime.start_reporting(settings)
@@ -110,6 +189,7 @@ async def test_dashboard_lifecycle_and_usage_are_written_with_source_identity(tm
         await manager.register_user("space", "alice")
         await manager.set_role("space", "alice", "admin")
         await manager.begin_deletion("space", "alice", task_id="delete")
+        await manager.begin_deletion("space", "alice", task_id="retry")
         try_publish_event(
             "embedding.call",
             {
@@ -122,6 +202,7 @@ async def test_dashboard_lifecycle_and_usage_are_written_with_source_identity(tm
     finally:
         await runtime.stop_reporting()
     events = [json.loads(line) for line in target.read_text().splitlines()]
+    assert len(events) == 6
     assert [(row["event_name"], row["change_type"]) for row in events[:5]] == [
         ("space_change", "created"),
         ("membership_change", "created"),
