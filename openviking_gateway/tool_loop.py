@@ -3,6 +3,7 @@
 """One hidden-tool lifecycle shared by native model protocol adapters."""
 
 import asyncio
+import sys
 import time
 
 import async_timeout
@@ -71,8 +72,25 @@ class HiddenToolLoop:
         self.final, self.hidden, self.window = None, False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
         self.round = ToolRound([], [], {}, False)
+        self.observe_upstream = None
+        self.failed_response = None
+        self.upstream_failed = False
 
     async def read(self, response):
+        error = None
+        try:
+            async for event in self.read_round(response):
+                yield event
+        except BaseException as failure:
+            error = failure
+            self.failed_response = response
+            self.upstream_failed = True
+            raise
+        finally:
+            if self.observe_upstream and error is None:
+                self.observe_upstream(self.adapter, response, None)
+
+    async def read_round(self, response):
         adapter = self.adapter
         adapter.begin()
         if response.status >= 300:
@@ -118,6 +136,7 @@ class HiddenToolLoop:
             if value is None:
                 continue
             if "error" in value or value.get("type") == "error":
+                self.adapter.accumulate(value)
                 raise ToolLoopError(
                     STREAM_ERROR_MESSAGE,
                     event=public_stream_error(value),
@@ -322,7 +341,13 @@ class HiddenToolLoop:
                                 yield self.adapter.encode(event)
                         return
                     remaining = self.deadline and max(0.01, self.deadline - time.monotonic())
-                    response = await send(self.body, remaining)
+                    try:
+                        response = await send(self.body, remaining)
+                    except BaseException:
+                        self.upstream_failed = True
+                        self.failed_response = None
+                        self.adapter.begin()
+                        raise
         except (ValueError, TypeError, KeyError, IndexError) as error:
             raise ToolLoopError("Invalid model tool response") from error
         except asyncio.TimeoutError as error:
@@ -338,4 +363,8 @@ class HiddenToolLoop:
                 "Hidden tool request timed out", 504, code="tool_loop_timeout"
             ) from error
         finally:
+            if self.observe_upstream and self.upstream_failed:
+                self.observe_upstream(self.adapter, self.failed_response, sys.exc_info()[1])
+                self.failed_response = None
+                self.upstream_failed = False
             response.close()

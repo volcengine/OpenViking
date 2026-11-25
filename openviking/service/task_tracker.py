@@ -421,6 +421,14 @@ class TaskTracker:
             if task is not None and not task.done():
                 task.cancel()
 
+    async def stop_background_loops(self) -> None:
+        """Wait for history cleanup and local cancellation polling to finish."""
+        self.stop_cleanup_loop()
+        tasks = [task for task in (self._cleanup_task, self._cancel_poll_task) if task is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_task = self._cancel_poll_task = None
+
     async def _cleanup_loop(self) -> None:
         while True:
             try:

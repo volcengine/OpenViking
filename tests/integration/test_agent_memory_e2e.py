@@ -248,6 +248,8 @@ def _build_service(
     user = UserIdentifier(str(env["account_id"]), user_id)
     service = OpenVikingService(path=str(env["path"]), user=user)
     run_async(service.initialize())
+    run_async(service.recover())
+    run_async(service.start_background())
     return service, RequestContext(user=user, role=Role.USER)
 
 

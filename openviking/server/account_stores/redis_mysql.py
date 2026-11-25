@@ -159,6 +159,7 @@ class RedisMySQLAccountStore(AccountStore):
         params: dict[str, object] | None = None,
         mysql_store: MySQLAccountStore | None = None,
         cache_runtime: CacheRuntimeHandleProtocol | None = None,
+        bootstrap_default_account: bool = True,
     ) -> None:
         try:
             normalized_service_name = normalize_service_name(service_name)
@@ -176,6 +177,7 @@ class RedisMySQLAccountStore(AccountStore):
             mysql_store = MySQLAccountStore(
                 service_name=normalized_service_name,
                 params=mysql_params,
+                bootstrap_default_account=bootstrap_default_account,
             )
         elif mysql_store._service_name != normalized_service_name:
             raise InvalidArgumentError(

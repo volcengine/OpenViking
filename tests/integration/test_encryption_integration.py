@@ -170,6 +170,8 @@ async def openviking_service_with_encryption(tmp_path, encryption_config, monkey
     manager = None
     try:
         await service.initialize()
+        await service.recover()
+        await service.start_background()
         manager = build_api_key_manager(root_key=root_key, viking_fs=service.viking_fs)
         await manager.load()
         yield {"service": service, "api_key_manager": manager, "test_data_dir": tmp_path}

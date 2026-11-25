@@ -50,10 +50,12 @@ class ObserverStateDataSource(DomainStatsMetricDataSource):
                 self.normalize_str("lock"): observer.lock,
                 self.normalize_str("retrieval"): observer.retrieval,
             }
-            try:
-                components[self.normalize_str("vikingdb")] = observer.vikingdb(ctx=None)
-            except Exception:
-                components[self.normalize_str("vikingdb")] = None
+            config = getattr(self._service, "_config", None)
+            if config is None or config.storage.vectordb is not None:
+                try:
+                    components[self.normalize_str("vikingdb")] = observer.vikingdb(ctx=None)
+                except Exception:
+                    components[self.normalize_str("vikingdb")] = None
             return self.as_dict(components)
 
         return self.safe_read(_read, default={})

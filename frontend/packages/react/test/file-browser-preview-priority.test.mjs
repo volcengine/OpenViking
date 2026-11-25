@@ -174,14 +174,13 @@ test('a listed Markdown file reads its body while Wiki attrs are pending', async
   }
   const view = await mount(h(OpenVikingProvider, { fetch }, h(Probe)));
   const body = () => browser.previewTabs?.[0]?.source?.content;
-  const previewReads = () =>
-    fetch.calls.filter(
-      (call) =>
-        call.path.endsWith('/content/read') && call.query.limit === '2000',
-    ).length;
+  const readLimits = () =>
+    fetch.calls
+      .filter(({ path }) => path === '/api/v1/content/read')
+      .map(({ query }) => query.limit);
   try {
     assert.equal(fetch.countOf('/api/v1/fs/attrs'), 1);
-    assert.equal(previewReads(), 1);
+    assert.deepEqual(readLimits(), ['2000']);
     assert.equal(body(), 'Chapter text');
     assert.equal(browser.previewUpdatedAt, fileTime);
     assert.equal(fetch.countOf('/api/v1/fs/stat'), 1);
@@ -191,7 +190,7 @@ test('a listed Markdown file reads its body while Wiki attrs are pending', async
       ),
     );
     await settle();
-    assert.equal(previewReads(), 1);
+    assert.deepEqual(readLimits(), ['2000', '-1']);
     assert.equal(body(), 'Chapter text');
   } finally {
     await view.unmount();

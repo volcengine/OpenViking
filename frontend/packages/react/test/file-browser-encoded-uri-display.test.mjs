@@ -28,7 +28,7 @@ const tabTitle = (view, uri = file) =>
   )?.textContent;
 
 for (const status of [200, 503]) {
-  test(`an unknown preview uses the resolved type for stat status ${status}`, async () => {
+  test(`an unknown preview shows a loading icon only when stat confirms the type (${status})`, async () => {
     const stat = deferred();
     const body = deferred();
     const fetch = recordingFetch(({ path, uri }) => {
@@ -59,7 +59,7 @@ for (const status of [200, 503]) {
       );
       await settle();
       assert.equal(tabTitle(view), fileLabel);
-      assert.ok(icon());
+      assert.equal(Boolean(icon()), status === 200);
       assert.equal(
         fetch.calls.find(({ path }) => path === '/api/v1/content/read')?.uri,
         file,

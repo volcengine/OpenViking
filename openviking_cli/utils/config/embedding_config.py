@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, model_validator
 
 from openviking_cli.utils.logger import get_logger
 
@@ -689,12 +689,14 @@ class EmbeddingConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def apply_default_local_dense(cls, data: Any) -> Any:
+    def apply_default_local_dense(cls, data: Any, info: ValidationInfo) -> Any:
         if data is None:
             data = {}
         if not isinstance(data, dict):
             return data
 
+        if (info.context or {}).get("enable_default_resources") is False:
+            return data
         if not data.get("dense") and not data.get("sparse") and not data.get("hybrid"):
             data = dict(data)
             data["dense"] = {
@@ -706,10 +708,6 @@ class EmbeddingConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if not self.dense and not self.sparse and not self.hybrid:
-            raise ValueError(
-                "At least one embedding configuration (dense, sparse, or hybrid) is required"
-            )
         if self.text_source == "summary_only":
             logger.info(
                 "embedding.text_source=summary_only is deprecated; use summary_first instead. Files without a summary still fall back to content for vectorization."
@@ -1150,7 +1148,7 @@ class EmbeddingConfig(BaseModel):
             return self.dense.get_effective_dimension()
         if self.sparse:
             return self.sparse.get_effective_dimension()
-        return 2048
+        return 0
 
     @staticmethod
     def _require_provider(provider: Optional[str]) -> str:

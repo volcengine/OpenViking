@@ -257,7 +257,30 @@ for (const excludeUris of ["", "viking://user/default/skills, viking://agent/ski
     () => contextRecallCase(excludeUris));
 }
 
-test("auto-recall prefers the server recall endpoint when available", async () => {
+test("auto-recall displays the server validation error with debug disabled", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-rejected-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const requests = [];
+  const message = "Invalid request parameters: events_time_decay_protection: Extra inputs are not permitted";
+
+  const result = await withMockOpenViking(async (req, res) => {
+    if (req.url === "/health") {
+      writeJson(res, { status: "ok" });
+      return;
+    }
+    requests.push({ url: req.url, body: await readRequestBody(req) });
+    writeStatusJson(res, 400, { status: "error", error: { code: "INVALID_ARGUMENT", message } });
+  }, (baseUrl) => runAutoRecall(
+    { prompt: "How did we handle the last incident?", cwd: stateDir },
+    recallEnv(stateDir, baseUrl, { OPENVIKING_DEBUG: "0" }),
+  ));
+
+  assert.deepEqual(JSON.parse(result.stdout), { systemMessage: `OpenViking auto recall failed (HTTP 400): ${message}` });
+  assert.deepEqual(requests.map(({ url }) => url), ["/api/v1/search/search"]);
+  assert.equal(requests[0].body.events_time_decay_protection, "30d");
+});
+
+test("auto-recall uses the server recall endpoint when Context search is unavailable", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-"));
   const requests = [];
 
@@ -289,11 +312,7 @@ test("auto-recall prefers the server recall endpoint when available", async () =
       }
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         requests.push({ path: url.pathname, body: await readRequestBody(req) });
-        // Pre-context-face deployment: extra fields are rejected outright.
-        writeStatusJson(res, 400, {
-          status: "error",
-          error: "Extra inputs are not permitted: mode",
-        });
+        writeStatusJson(res, 404, { status: "error", error: "Context search unavailable" });
         return;
       }
       res.writeHead(404, { "Content-Type": "application/json" });
@@ -409,10 +428,7 @@ test("auto-recall gives the compressor full content from the raw-search fallback
           if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
             const body = await readRequestBody(req);
             if (body.mode === "context") {
-              writeStatusJson(res, 400, {
-                status: "error",
-                error: "Extra inputs are not permitted: mode",
-              });
+              writeStatusJson(res, 404, { status: "error", error: "Context search unavailable" });
               return;
             }
             const isMemoryScope = body.target_uri === "viking://user/zeus/memories";
@@ -578,7 +594,7 @@ for (const user of ["zeus", "default"]) {
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         const body = await readRequestBody(req);
         if (body.mode === "context") {
-          return writeJson(res, { status: "error", error: "Extra inputs are not permitted: mode" }, 400);
+          return writeJson(res, { status: "error", error: "Context search unavailable" }, 404);
         }
         searches.push(body);
         const memories = body.target_uri === target
