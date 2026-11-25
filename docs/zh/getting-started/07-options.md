@@ -26,7 +26,7 @@
 
 BytePlus 在亚太地区（柔佛）托管 OpenViking。已有 BytePlus 实例时，可使用其服务地址和 API Key [连接客户端](../guides/27-byteplus-setup.md)。
 
-火山引擎的 OpenViking Context 是基于开源 OpenViking 内核的托管服务。开通后，在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)获取 API Key，在 `ov config` 中选择 **OpenViking Service** 并保存连接，无需在本机启动数据服务。
+火山引擎的 OpenViking Context 是基于开源 OpenViking 内核的托管服务。开通后，在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)获取 API Key，在 `ov config` 中选择 **OpenViking 托管服务 → Volcengine** 并保存连接，无需在本机启动数据服务。
 
 火山引擎的套餐、额度、可用区域与支持范围见[官方服务说明](https://docs.volcengine.com/docs/84313/2374478)。VikingBot 和 Compile Runtime 的可用性取决于所选服务的配置；如需使用，可以向服务提供方了解支持情况。数据服务也支持通过自己的 Agent 接入。
 

@@ -217,7 +217,7 @@ Before you send it, replace `<SERVER_URL>` with your server's address and `<API_
 <details>
 <summary><strong>Install it yourself</strong></summary>
 
-Run the installer, then pick the tools and a server when asked: Self-hosted / local for a server on this machine, Volcengine OpenViking Cloud for the Volcengine service, or Custom URL for BytePlus or another server. If auth is on, enter a user key, not the root key.
+Run the installer, then pick the tools and a server. Choose **OpenViking Managed Service**, then **BytePlus** or **Volcengine**, for a managed instance. Use **Self-hosted / local** for a server on this machine or **Custom URL** for another server. Older installers use **Custom URL** for BytePlus. If auth is on, enter a user key, not the root key.
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash

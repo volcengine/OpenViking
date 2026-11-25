@@ -141,8 +141,8 @@ ov config
 
 | 运行方式 | 连接类型 | 填写内容 |
 | --- | --- | --- |
-| BytePlus 云服务 | **自定义（Custom）** | 输入 BytePlus OpenViking 服务地址和 API Key |
-| 火山引擎云服务 | **OpenViking Service** | 按向导使用服务地址，输入控制台取得的 API Key |
+| BytePlus 云服务 | OpenViking 托管服务 → BytePlus | 输入 BytePlus OpenViking 服务地址和 API Key |
+| 火山引擎云服务 | OpenViking 托管服务 → Volcengine | 按向导使用服务地址，输入控制台取得的 API Key |
 | 本地服务 | **自定义（Custom）** | URL 填写 `http://127.0.0.1:1933`；默认本机模式的密钥留空 |
 
 如果本地服务已有认证配置，使用对应的 User/Admin Key；配置方式见[身份认证](../guides/04-authentication.md)。

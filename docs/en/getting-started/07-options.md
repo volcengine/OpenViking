@@ -26,7 +26,7 @@ Before sharing a service, configure authentication, persistence, backup, and ope
 
 BytePlus hosts OpenViking in Asia Pacific (Johor). If you have a BytePlus instance, use its service URL and API key to [connect a client](../guides/27-byteplus-setup.md).
 
-Volcengine's OpenViking Context is a managed service built on the open-source core. After activation, obtain an API key from the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing). Choose **OpenViking Service** in `ov config` and save the connection. You do not need to start the data service locally.
+Volcengine's OpenViking Context is a managed service built on the open-source core. After activation, obtain an API key from the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing). Choose **OpenViking Managed Service → Volcengine** in `ov config` and save the connection. You do not need to start the data service locally.
 
 For Volcengine, see the [official service documentation](https://docs.volcengine.com/docs/84313/2374478) for plans, quotas, regions, and support. VikingBot and Compile Runtime availability depends on the service configuration; your provider can help confirm support for these capabilities. You can also connect your own agent to the data service.
 

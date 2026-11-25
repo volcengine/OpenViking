@@ -10,7 +10,7 @@
    ```
 
 2. 安装器会依次询问以下信息：要安装的 harness（勾选 **Claude Code**）、OpenViking 凭据、是否开启 Statusline 状态栏。
-3. 在 OpenViking 凭据配置中，选择连接至「火山引擎 OpenViking 云服务 [api.vikingdb.cn-beijing.volces.com]」，并填入 API KEY：
+3. 在 OpenViking 凭据配置中，选择连接至「OpenViking 托管服务 → Volcengine」，并填入 API KEY：
 
    ```text
    {{OPENVIKING_API_KEY}}

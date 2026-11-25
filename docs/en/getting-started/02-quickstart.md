@@ -141,8 +141,8 @@ Add a connection using the settings for your chosen path, then save and activate
 
 | Option | Connection type | Settings |
 | --- | --- | --- |
-| BytePlus cloud service | **Custom** | Enter your BytePlus OpenViking service URL and API key |
-| Volcengine cloud service | **OpenViking Service** | Use the service address provided by the wizard and enter the API key from the console |
+| BytePlus cloud service | OpenViking Managed Service → BytePlus | Enter your BytePlus OpenViking service URL and API key |
+| Volcengine cloud service | OpenViking Managed Service → Volcengine | Use the service address provided by the wizard and enter the API key from the console |
 | Local service | **Custom** | Set the URL to `http://127.0.0.1:1933`; leave the key empty for default local mode |
 
 If your local service already has authentication configured, use its User/Admin key. See [Authentication](../guides/04-authentication.md) for setup details.

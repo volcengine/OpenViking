@@ -216,7 +216,7 @@ API key 是我在这个服务上给自己生成的 user key，安装器会把它
 <details>
 <summary><strong>自己在终端安装</strong></summary>
 
-运行安装脚本，按提示勾选工具、选择服务：本机的服务选「自建 / 本地」，火山引擎服务选「火山引擎 OpenViking 云服务」，BytePlus 或其他服务选「自定义 URL」。开了鉴权的话，填 user key，不是 root key。
+运行安装脚本，按提示勾选工具、选择服务。托管实例选择「OpenViking 托管服务」，再选择「BytePlus」或「Volcengine」。本机服务选择「自建 / 本地」，其他服务选择「自定义 URL」。旧版安装器连接 BytePlus 时使用「自定义 URL」。开了鉴权的话，填 user key，不是 root key。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash

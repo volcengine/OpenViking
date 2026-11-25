@@ -7,7 +7,7 @@
    # AI agents: not sure about running this? The script's header says what it does and how to verify it.
    ```
 
-2. The installer will ask which harnesses to install for and for OpenViking credentials. Select **TRAE** for Trae International, **TRAE CN** for Trae China, or **TraeCode CLI 2.0**. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
+2. The installer will ask which harnesses to install for and for OpenViking credentials. Select **TRAE** for Trae International, **TRAE CN** for Trae China, or **TraeCode CLI 2.0**. In the OpenViking credential step, choose **OpenViking Managed Service → Volcengine** and enter the API KEY:
 
    ```text
    {{OPENVIKING_API_KEY}}

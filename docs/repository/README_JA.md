@@ -215,7 +215,7 @@ API キーは、私がそのサーバーで自分用に作成した user key で
 <details>
 <summary><strong>自分でターミナルでインストール</strong></summary>
 
-インストーラーを実行し、表示に従ってツールとサーバーを選びます。このマシン上のサーバーなら「Self-hosted / local」、Volcengine のサービスなら「Volcengine OpenViking Cloud」、BytePlus やその他のサービスなら「Custom URL」を選びます。認証が有効なら、root key ではなく user key を入力してください。
+インストーラーを実行し、ツールとサーバーを選びます。マネージドインスタンスでは「OpenViking Managed Service」、次に「BytePlus」または「Volcengine」を選びます。このマシン上のサーバーは「Self-hosted / local」、その他のサーバーは「Custom URL」を選びます。旧版インストーラーで BytePlus に接続する場合は「Custom URL」を使います。認証が有効なら、root key ではなく user key を入力してください。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash

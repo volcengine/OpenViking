@@ -10,7 +10,7 @@ Because Claude Code may block installation scripts from unknown sources, automat
    ```
 
 2. The installer will ask which harnesses to install for (select **Claude Code**), your OpenViking credentials, and whether to enable the Statusline.
-3. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
+3. In the OpenViking credential step, choose **OpenViking Managed Service → Volcengine** and enter the API KEY:
 
    ```text
    {{OPENVIKING_API_KEY}}

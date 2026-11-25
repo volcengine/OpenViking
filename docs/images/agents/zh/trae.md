@@ -7,7 +7,7 @@
    # AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
    ```
 
-2. 安装器会依次询问以下信息：要安装的 harness（Trae 国际版勾选 **TRAE**，Trae 中国版勾选 **TRAE CN**，或勾选 **TraeCode CLI 2.0**）、OpenViking 凭据。在 OpenViking 凭据配置中，选择连接至「火山引擎 OpenViking 云服务 [api.vikingdb.cn-beijing.volces.com]」，并填入 API KEY：
+2. 安装器会依次询问以下信息：要安装的 harness（Trae 国际版勾选 **TRAE**，Trae 中国版勾选 **TRAE CN**，或勾选 **TraeCode CLI 2.0**）、OpenViking 凭据。在 OpenViking 凭据配置中，选择连接至「OpenViking 托管服务 → Volcengine」，并填入 API KEY：
 
    ```text
    {{OPENVIKING_API_KEY}}

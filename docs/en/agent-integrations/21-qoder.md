@@ -6,7 +6,7 @@ Give Qoder CLI long-term memory across projects and sessions. After installation
 
 Prerequisites: macOS or Linux, Node.js 18+, and Qoder CLI with `qodercli` on `PATH` (or the CN build `qoderclicn`). The installer guides you through the OpenViking connection settings; select **Qoder CLI** when it asks which agents to set up.
 
-When prompted for the connection, Volcengine Cloud users should select **Volcengine OpenViking Cloud** and enter their API key. Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`); for a remote self-hosted server, select **Custom URL / keep current** and enter its URL.
+When prompted for the connection, Volcengine Cloud users should select **OpenViking Managed Service → Volcengine** and enter their API key. Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`); for a remote self-hosted server, select **Custom URL / keep current** and enter its URL.
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash

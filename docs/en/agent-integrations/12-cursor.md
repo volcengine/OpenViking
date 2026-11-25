@@ -6,7 +6,7 @@ Give Cursor long-term memory across projects and sessions. After installation, O
 
 Prerequisites: macOS or Linux, Node.js 18+, and preferably the latest stable Cursor release. The installer guides you through the OpenViking connection settings.
 
-When prompted for the connection, Volcengine Cloud users should select **Volcengine OpenViking Cloud** and enter their API key. Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`); for a remote self-hosted server, select **Custom URL / keep current** and enter its URL.
+When prompted for the connection, Volcengine Cloud users should select **OpenViking Managed Service → Volcengine** and enter their API key. Select **Self-hosted / local** for a server on this machine (`http://127.0.0.1:1933`); for a remote self-hosted server, select **Custom URL / keep current** and enter its URL.
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
