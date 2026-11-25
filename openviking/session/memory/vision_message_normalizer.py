@@ -10,9 +10,13 @@ from openviking.message.part import ImagePart, TextPart
 from openviking.observability.log_safety import short_hash
 
 IMAGE_DESCRIPTION_PROMPT = (
-    "Describe this image for later memory extraction. Focus on durable, user-relevant "
-    "details such as visible people, objects, places, actions, text, dates, and other "
-    "facts that may matter in future conversations. Return only the description."
+    "Describe the supplied images for later memory extraction, using the "
+    "accompanying text to connect visual details to the entities being discussed. "
+    "Preserve specific facts about people, objects, places, activities, and other "
+    "entities. Capture membership, grouping, order, relative position, associations, "
+    "and changes shown in the images. Keep related facts together so the description "
+    "is understandable on its own. For multiple images, describe each in input order "
+    "and preserve relationships between them. Return only the description."
 )
 
 
