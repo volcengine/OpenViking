@@ -1997,6 +1997,8 @@ async function setupFlow({
     };
     // Setup pins the address: new instances take the uppercase default, while
     // an old manifest that omitted it keeps the lowercase address it used.
+    // TODO(2027-03-31): Remove this implicit legacy pin no later than this date;
+    // explicit soulUri values remain untouched as user configuration.
     agent.soulUri = current?.soulUri ?? (current ? LEGACY_OV_SOUL_URI : OV_SOUL_URI);
     if (state.runtime?.id === 'dsh') {
       agent.dshHomeMode = state.dshHomeMode;

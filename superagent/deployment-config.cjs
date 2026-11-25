@@ -137,7 +137,8 @@ const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
 // agents[].soulUri: where the instance's soul is kept (a viking:// address or an
 // absolute local file path). Setup pins it for each instance; manifests made
 // from before the uppercase default may omit it and use the former
-// viking://~/memories/soul.md.
+// viking://~/memories/soul.md. Automatic legacy selection is temporary and
+// will be removed no later than 2027-03-31; explicit soulUri stays configurable.
 const SOUL_URI = /^viking:\/\/[^\s%\\?#]+$/;
 // How inputs reach the model (agents[].scheduler). legacy: every input goes
 // into the running turn as soon as it arrives. inbox: while the model works,

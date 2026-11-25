@@ -48,6 +48,8 @@ export function policyHashOf(text, ...parts) {
 // (agents[].soulUri): its own OV user's memories. The lowercase address was
 // the former default and remains a read fallback for old manifests.
 export const OV_SOUL_URI = 'viking://~/SOUL.md';
+// TODO(2027-03-31): Remove automatic legacy fallback no later than this date.
+// Explicit agents[].soulUri values remain configurable Viking addresses.
 export const LEGACY_OV_SOUL_URI = 'viking://~/memories/soul.md';
 
 // agents[].soulUri may also name a local file (an absolute path), so the soul
