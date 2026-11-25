@@ -177,7 +177,10 @@ fn build_snapshot_log_store(cfg: &GitConfig) -> PyResult<SnapshotStores> {
                 postgres.connect_timeout_ms,
                 postgres.operation_timeout_ms,
             )) {
-                Ok(store) => Ok((Some(Arc::new(store)), None)),
+                Ok(store) => {
+                    let store = Arc::new(store);
+                    Ok((Some(store.clone()), Some(store)))
+                }
                 Err(err) => snapshot_log_init_fallback("postgres", err),
             }
         }
@@ -940,10 +943,9 @@ mod tests {
         });
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _enter = runtime.enter();
-        let store = build_snapshot_log_store(&cfg)
-            .unwrap()
-            .0
-            .expect("PG index enabled");
+        let (store, commit_index) = build_snapshot_log_store(&cfg).unwrap();
+        let store = store.expect("PG path index enabled");
+        assert!(commit_index.is_some(), "PG commit index enabled");
         runtime.block_on(async {
             let account = uuid::Uuid::new_v4().simple().to_string();
             let oid = "1234567890123456789012345678901234567890";

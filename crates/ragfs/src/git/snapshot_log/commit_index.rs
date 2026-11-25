@@ -152,10 +152,9 @@ pub trait CommitIndexStore: Send + Sync {
     async fn clear_branch(&self, account: &str, branch: &str) -> Result<(), SnapshotLogError>;
 }
 
-// Both providers use the same parameter syntax. Instantiate the SQL against their concrete
-// connection types so decoding and transaction handling stay checked by sqlx.
+// Bind markers and transaction syntax vary by backend. Keep the queries and row checks shared.
 macro_rules! impl_commit_index {
-    ($store:ty, $select:literal, $begin:literal, $lock:literal) => {
+    ($store:ty, $select:literal, $begin:literal, $lock:literal, $p1:literal, $p2:literal, $p3:literal, $values:literal) => {
         #[async_trait]
         impl super::CommitIndexStore for $store {
             async fn append_with_raw_parent(
@@ -170,13 +169,12 @@ macro_rules! impl_commit_index {
             ) -> Result<i64, SnapshotLogError> {
                 let mut tx = self.pool.begin_with($begin).await?;
                 let latest = sqlx::query_as::<_, (i64, String)>(concat!(
-                            "SELECT seq, commit_oid FROM snapshot_commit WHERE account=? AND branch=? ORDER BY seq DESC LIMIT 1", $lock))
+                            "SELECT seq, commit_oid FROM snapshot_commit WHERE account=", $p1, " AND branch=", $p2, " ORDER BY seq DESC LIMIT 1", $lock))
                             .bind(account).bind(branch).fetch_optional(&mut *tx).await?;
                 ensure_latest_matches(previous, latest.as_ref().map(|(_, oid)| oid.as_str()))?;
                 let seq = latest.map_or(1, |(seq, _)| seq + 1);
                 let integrity = super::commit_index::row_integrity(account, branch, seq, commit, raw_parent, tree, time);
-                sqlx::query("INSERT INTO snapshot_commit(account, branch, seq, commit_oid, parent_oid, tree_oid, committed_at, integrity)
-                            VALUES(?,?,?,?,?,?,?,?)")
+                sqlx::query(concat!("INSERT INTO snapshot_commit(account, branch, seq, commit_oid, parent_oid, tree_oid, committed_at, integrity) VALUES ", $values))
                     .bind(account).bind(branch).bind(seq).bind(commit).bind(raw_parent)
                     .bind(tree).bind(time).bind(integrity).execute(&mut *tx).await?;
                 tx.commit().await?;
@@ -190,7 +188,7 @@ macro_rules! impl_commit_index {
             ) -> Result<Option<super::CommitIndexRow>, SnapshotLogError> {
                 let row = sqlx::query_as::<_, super::commit_index::StoredCommitRow>(concat!(
                     $select,
-                    " WHERE account=? AND branch=? ORDER BY seq DESC LIMIT 1"
+                    " WHERE account=", $p1, " AND branch=", $p2, " ORDER BY seq DESC LIMIT 1"
                 ))
                 .bind(account)
                 .bind(branch)
@@ -206,7 +204,7 @@ macro_rules! impl_commit_index {
             ) -> Result<Option<super::CommitIndexRow>, SnapshotLogError> {
                 let row = sqlx::query_as::<_, super::commit_index::StoredCommitRow>(concat!(
                     $select,
-                    " WHERE account=? AND commit_oid=?"
+                    " WHERE account=", $p1, " AND commit_oid=", $p2
                 ))
                 .bind(account)
                 .bind(oid)
@@ -223,7 +221,7 @@ macro_rules! impl_commit_index {
             ) -> Result<Option<super::CommitIndexRow>, SnapshotLogError> {
                 let row = sqlx::query_as::<_, super::commit_index::StoredCommitRow>(concat!(
                     $select,
-                    " WHERE account=? AND branch=? AND seq<? AND deleted_at IS NULL ORDER BY seq DESC LIMIT 1"
+                    " WHERE account=", $p1, " AND branch=", $p2, " AND seq<", $p3, " AND deleted_at IS NULL ORDER BY seq DESC LIMIT 1"
                 ))
                 .bind(account)
                 .bind(branch)
@@ -241,7 +239,7 @@ macro_rules! impl_commit_index {
             ) -> Result<Option<super::CommitIndexRow>, SnapshotLogError> {
                 let row = sqlx::query_as::<_, super::commit_index::StoredCommitRow>(concat!(
                     $select,
-                    " WHERE account=? AND branch=? AND seq>? AND deleted_at IS NULL ORDER BY seq LIMIT 1"
+                    " WHERE account=", $p1, " AND branch=", $p2, " AND seq>", $p3, " AND deleted_at IS NULL ORDER BY seq LIMIT 1"
                 ))
                 .bind(account)
                 .bind(branch)
@@ -257,7 +255,7 @@ macro_rules! impl_commit_index {
                 branch: &str,
             ) -> Result<Vec<super::CommitIndexRow>, SnapshotLogError> {
                 let rows = sqlx::query_as::<_, super::commit_index::StoredCommitRow>(concat!(
-                    $select, " WHERE account=? AND branch=? ORDER BY seq"
+                    $select, " WHERE account=", $p1, " AND branch=", $p2, " ORDER BY seq"
                 )).bind(account).bind(branch).fetch_all(&self.pool).await?;
                 rows.into_iter().map(|row| row.verify(account)).collect()
             }
@@ -270,7 +268,7 @@ macro_rules! impl_commit_index {
             ) -> Result<(), SnapshotLogError> {
                 let mut tx = self.pool.begin().await?;
                 for oid in oids {
-                    sqlx::query("UPDATE snapshot_commit SET deleted_at=? WHERE account=? AND commit_oid=?")
+                    sqlx::query(concat!("UPDATE snapshot_commit SET deleted_at=", $p1, " WHERE account=", $p2, " AND commit_oid=", $p3))
                         .bind(at)
                         .bind(account)
                         .bind(oid)
@@ -283,14 +281,14 @@ macro_rules! impl_commit_index {
             async fn purge_commits(&self, account: &str, oids: &[String]) -> Result<(), SnapshotLogError> {
                 let mut tx = self.pool.begin().await?;
                 for oid in oids {
-                    sqlx::query("DELETE FROM snapshot_commit WHERE account=? AND commit_oid=?")
+                    sqlx::query(concat!("DELETE FROM snapshot_commit WHERE account=", $p1, " AND commit_oid=", $p2))
                                 .bind(account).bind(oid).execute(&mut *tx).await?;
                 }
                 Ok(tx.commit().await?)
             }
 
             async fn clear_branch(&self, account: &str, branch: &str) -> Result<(), SnapshotLogError> {
-                sqlx::query("DELETE FROM snapshot_commit WHERE account=? AND branch=?")
+                sqlx::query(concat!("DELETE FROM snapshot_commit WHERE account=", $p1, " AND branch=", $p2))
                     .bind(account)
                     .bind(branch)
                     .execute(&self.pool)

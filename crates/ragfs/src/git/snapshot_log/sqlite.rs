@@ -196,7 +196,7 @@ super::commit_index::impl_commit_index!(
     SqliteSnapshotLogStore,
     "SELECT branch, seq, commit_oid, parent_oid, tree_oid, committed_at, deleted_at, integrity FROM snapshot_commit",
     "BEGIN IMMEDIATE",
-    ""
+    "", "?", "?", "?", "(?,?,?,?,?,?,?,?)"
 );
 
 super::repair::impl_path_history_repair!(

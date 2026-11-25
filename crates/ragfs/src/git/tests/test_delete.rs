@@ -153,29 +153,49 @@ async fn delete_preserves_sibling_branch_children_and_tag_tips() {
 }
 
 #[tokio::test]
-#[ignore = "100k local objects and SQLite index"]
+#[ignore = "100k local objects and SQL commit index"]
 async fn delete_oldest_in_100k_history_reads_constant_objects() {
-    let (dir, vfs, objects, refs, svc) = make_service("acct");
-    let index = Arc::new(
-        SqliteSnapshotLogStore::connect(dir.path().join("history.db").to_str().unwrap())
-            .await
-            .unwrap(),
-    );
+    let account = uuid::Uuid::new_v4().simple().to_string();
+    let (dir, vfs, objects, refs, svc) = make_service(&account);
+    let sqlite = || async {
+        Arc::new(
+            SqliteSnapshotLogStore::connect(dir.path().join("history.db").to_str().unwrap())
+                .await
+                .unwrap(),
+        )
+    };
+    let index: Arc<dyn crate::git::CommitIndexStore> = {
+        #[cfg(feature = "postgres")]
+        if let Ok(dsn) = std::env::var("SNAPSHOT_LOG_TEST_PG_DSN") {
+            Arc::new(
+                crate::git::PostgresSnapshotLogStore::connect(&dsn, 4, 5000)
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            sqlite().await
+        }
+        #[cfg(not(feature = "postgres"))]
+        sqlite().await
+    };
     let svc = svc.with_commit_index(Some(index.clone()));
     let started = std::time::Instant::now();
     let mut ids = Vec::with_capacity(100_000);
     for i in 0..100_000 {
         vfs.put("file", if i % 2 == 0 { b"a" } else { b"b" });
-        ids.push(make_commit(&svc, "acct", "main", &i.to_string()).await);
+        ids.push(make_commit(&svc, &account, "main", &i.to_string()).await);
     }
     let spy = Arc::new(GetSpyObjectStore {
         inner: LocalObjectStore::new(dir.path()),
         gets: Default::default(),
     });
-    let reader = GitService::new(vfs, spy.clone(), refs).with_commit_index(Some(index));
+    let reader = GitService::new(vfs, spy.clone(), refs).with_commit_index(Some(index.clone()));
     let tick = std::time::Instant::now();
     reader
-        .delete_commits(deletion(&ids[..10], false))
+        .delete_commits(DeleteRequest {
+            account: account.clone(),
+            ..deletion(&ids[..10], false)
+        })
         .await
         .unwrap();
     let commits: HashSet<_> = ids.iter().copied().collect();
@@ -192,14 +212,26 @@ async fn delete_oldest_in_100k_history_reads_constant_objects() {
     );
     assert!(count <= 2, "{count} commit reads");
     let grace = std::time::Duration::from_secs(600);
-    svc.gc_at("acct", std::time::SystemTime::now() + 2 * grace, grace)
+    svc.gc_at(&account, std::time::SystemTime::now() + 2 * grace, grace)
         .await
         .unwrap();
-    assert!(!objects.exists("acct", &ids[0]).await.unwrap());
+    assert!(!objects.exists(&account, &ids[0]).await.unwrap());
     assert_eq!(
-        &delete_log(&svc).await[..5],
-        &ids.iter().rev().take(5).copied().collect::<Vec<_>>()
+        svc.log(LogRequest {
+            account: account.clone(),
+            branch: "main".into(),
+            limit: 5,
+            offset: 0,
+            paths: None,
+        })
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.oid)
+        .collect::<Vec<_>>(),
+        ids.iter().rev().take(5).copied().collect::<Vec<_>>()
     );
+    index.clear_branch(&account, "main").await.unwrap();
     eprintln!("100k fixture, delete and GC took {:?}", started.elapsed());
 }
 

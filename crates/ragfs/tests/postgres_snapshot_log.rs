@@ -326,7 +326,7 @@ async fn postgres_snapshot_log_bounds_startup_and_read_table_lock_waits() {
         .execute(&pool)
         .await
         .unwrap();
-    for table in ["snapshot_log", "snapshot_log_generation"] {
+    for table in ["snapshot_log", "snapshot_log_generation", "snapshot_commit"] {
         sqlx::query(&format!(
             "CREATE TABLE {schema}.{table} (LIKE {table} INCLUDING ALL)"
         ))
@@ -422,7 +422,7 @@ async fn postgres_snapshot_log_deadline_covers_all_batches_and_rolls_back() {
         .execute(&pool)
         .await
         .unwrap();
-    for table in ["snapshot_log", "snapshot_log_generation"] {
+    for table in ["snapshot_log", "snapshot_log_generation", "snapshot_commit"] {
         sqlx::query(&format!(
             "CREATE TABLE {schema}.{table} (LIKE {table} INCLUDING ALL)"
         ))

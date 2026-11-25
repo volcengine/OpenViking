@@ -232,7 +232,7 @@ super::commit_index::impl_commit_index!(
     MySqlSnapshotLogStore,
     "SELECT CONVERT(branch USING utf8mb4) AS branch, seq, commit_oid, parent_oid, tree_oid, committed_at, deleted_at, integrity FROM snapshot_commit",
     "START TRANSACTION",
-    " FOR UPDATE"
+    " FOR UPDATE", "?", "?", "?", "(?,?,?,?,?,?,?,?)"
 );
 
 super::repair::impl_path_history_repair!(MySqlSnapshotLogStore, MySql, "START TRANSACTION",

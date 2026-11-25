@@ -209,8 +209,8 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 }
 ```
 
-运行时不会创建或迁移 PostgreSQL 表。运行账号需要 `snapshot_log` 的
-`SELECT`、`INSERT`、`UPDATE`、`DELETE` 权限，identity sequence 的 `USAGE` 权限，
+运行时不会创建或迁移 PostgreSQL 表。运行账号需要 `snapshot_log` 和 `snapshot_commit` 的
+`SELECT`、`INSERT`、`UPDATE`、`DELETE` 权限，`snapshot_log` 的 identity sequence 的 `USAGE` 权限，
 以及 `snapshot_log_generation` 的 `SELECT`、`INSERT`、`UPDATE` 权限。升级时请重新执行建表脚本。
 不同 OV 部署应使用独立数据库或 schema；同一索引内按账号、分支隔离。
 自定义 schema 可通过连接 URL 的 `options` 参数指定

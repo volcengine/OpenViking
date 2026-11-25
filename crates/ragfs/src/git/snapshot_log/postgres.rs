@@ -95,6 +95,9 @@ impl PostgresSnapshotLogStore {
             sqlx::query("SELECT account, branch, root FROM snapshot_log_generation LIMIT 0")
                 .execute(&pool)
                 .await?;
+            sqlx::query("SELECT seq, integrity FROM snapshot_commit LIMIT 0")
+                .execute(&pool)
+                .await?;
             Ok(Self {
                 pool,
                 limits: SnapshotLogLimits::default(),
@@ -229,6 +232,13 @@ impl SnapshotLogStore for PostgresSnapshotLogStore {
         .await
     }
 }
+
+super::commit_index::impl_commit_index!(
+    PostgresSnapshotLogStore,
+    "SELECT branch, seq, commit_oid, parent_oid, tree_oid, committed_at, deleted_at, integrity FROM snapshot_commit",
+    "BEGIN ISOLATION LEVEL READ COMMITTED",
+    " FOR UPDATE", "$1", "$2", "$3", "($1,$2,$3,$4,$5,$6,$7,$8)"
+);
 
 super::repair::impl_path_history_repair!(
     PostgresSnapshotLogStore, Postgres, "BEGIN ISOLATION LEVEL READ COMMITTED",

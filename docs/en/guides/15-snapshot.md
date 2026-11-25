@@ -213,7 +213,7 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 ```
 
 Runtime startup does not create or migrate PostgreSQL tables. The runtime role
-needs `SELECT`, `INSERT`, `UPDATE` and `DELETE` on `snapshot_log`, `USAGE` on its identity sequence,
+needs `SELECT`, `INSERT`, `UPDATE` and `DELETE` on both `snapshot_log` and `snapshot_commit`, `USAGE` on the `snapshot_log` identity sequence,
 and `SELECT`, `INSERT` and `UPDATE` on `snapshot_log_generation`. Reapply the provisioning SQL when upgrading.
 Use a dedicated database or schema per OV deployment; accounts and branches
 are isolated within that index. When using a custom schema, set the URL's
