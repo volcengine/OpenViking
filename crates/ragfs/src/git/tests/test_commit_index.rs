@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn commit_index_append_and_delete_lifecycle() {
     use crate::git::snapshot_log::CommitIndexStore;
-    let store = make_snapshot_log_store().await;
+    let store = make_sqlite_snapshot_log_store().await;
     let oids: Vec<_> = (1..=4).map(|n| format!("{n:040x}")).collect();
     let [a, b, c, d] = &oids[..] else {
         unreachable!()
@@ -81,7 +81,7 @@ async fn commit_index_append_and_delete_lifecycle() {
 async fn commit_and_restore_append_commit_index_rows() {
     use crate::git::CommitIndexStore;
     let (_dir, vfs, objects, _, svc) = make_service("acct_index");
-    let store = make_snapshot_log_store().await;
+    let store = make_sqlite_snapshot_log_store().await;
     let svc = svc.with_commit_index(Some(store.clone()));
     vfs.put("a", b"one");
     let a = make_commit(&svc, "acct_index", "main", "first").await;
@@ -125,7 +125,7 @@ async fn commit_and_restore_append_commit_index_rows() {
 async fn commit_index_backfill_skips_grafted_commits() {
     use crate::git::{CommitIndexStore, DeleteRequest};
     let (_dir, vfs, _, _, svc) = make_service("acct_index");
-    let store = make_snapshot_log_store().await;
+    let store = make_sqlite_snapshot_log_store().await;
     let svc = svc.with_commit_index(Some(store.clone()));
     let mut history = Vec::new();
     for i in 0..4 {

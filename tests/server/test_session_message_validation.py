@@ -46,6 +46,7 @@ async def test_add_message_validates_parts_before_opening_the_session(monkeypatc
         )
 
     assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "image_url part requires a non-empty URL"
     assert service.sessions.open_calls == []
 
 
@@ -63,4 +64,5 @@ async def test_batch_add_messages_validates_all_parts_before_opening_the_session
         await sessions_module.batch_add_messages(request, "missing-session", _ctx())
 
     assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "image_url part requires a non-empty URL"
     assert service.sessions.open_calls == []

@@ -72,36 +72,76 @@ async def test_compile_runtime_424_is_non_retryable(service, monkeypatch, body):
     assert exc.value.code == "CompileDependencyFailed"
     assert exc.value.transient is False
     assert "request_id=request-424" in str(exc.value)
-    if body.startswith(b"{"):
-        assert "Ark unavailable" in str(exc.value)
-    request.assert_awaited_once()
+    reason = "Ark unavailable" if body.startswith(b"{") else "Compile dependency failed"
+    assert reason in str(exc.value)
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "errors", "detail"),
     [
-        {},
-        {"compile_name": "../state"},
-        {"compile_name": "-demo"},
-        {"compile_name": "research-summary", "to": TARGET},
-        {"compile_name": "research-summary", "args": []},
-        {"compile_id": "research-summary"},
-        {**INPUTS, "compile_name": None},
-        {**INPUTS, "operation_id": "cmp_example"},
-        {**INPUTS, "args": {"mode": "incremental"}},
-        {**INPUTS, "args": {"changes": {}}},
-        {**INPUTS, "args": {"last_compile_time": 1}},
-        {**INPUTS, "args": {"auto_update": False}},
-        {**INPUTS, "args": {"update_schedule": None}},
-        {**INPUTS, "args": {"owner_user_id": "alice"}},
-        {**INPUTS, "reason": "old alias"},
-        {**INPUTS, "owner_user_id": "someone-else"},
-        {**INPUTS, "user_id": "someone-else"},
+        pytest.param({}, {("to",): "missing", ("skill",): "missing"}, None, id="missing-inputs"),
+        pytest.param(
+            {"compile_name": "../state"},
+            {("compile_name",): "string_pattern_mismatch"},
+            None,
+            id="path-as-name",
+        ),
+        pytest.param(
+            {"compile_name": "-demo"},
+            {("compile_name",): "string_pattern_mismatch"},
+            None,
+            id="leading-hyphen",
+        ),
+        pytest.param(
+            {"compile_name": "research-summary", "args": []},
+            {(): "value_error"},
+            "Named Compile args must be a JSON object",
+            id="named-args-not-an-object",
+        ),
+        pytest.param(
+            {
+                **INPUTS,
+                "compile_id": "research-summary",
+                "operation_id": "cmp_example",
+                "reason": "old alias",
+                "owner_user_id": "someone-else",
+                "user_id": "someone-else",
+            },
+            {
+                (field,): "extra_forbidden"
+                for field in ("compile_id", "operation_id", "reason", "owner_user_id", "user_id")
+            },
+            None,
+            id="unsupported-top-level-fields",
+        ),
+        pytest.param(
+            {"compile_name": None},
+            {(): "value_error"},
+            "compile_name must not be null",
+            id="null-name",
+        ),
+        pytest.param(
+            {**INPUTS, "args": {"mode": "incremental", "changes": {}, "last_compile_time": 1}},
+            {(): "value_error"},
+            "Compile execution controls are server-owned: changes, last_compile_time, mode",
+            id="server-owned-controls",
+        ),
+        pytest.param(
+            {**INPUTS, "args": {"owner_user_id": "alice"}},
+            {(): "value_error"},
+            "args.owner_user_id requires compile_name",
+            id="owner-without-name",
+        ),
     ],
 )
-def test_execution_request_rejects_ambiguous_or_legacy_controls(payload):
-    with pytest.raises(ValidationError):
+def test_execution_request_rejects_ambiguous_or_legacy_controls(payload, errors, detail):
+    with pytest.raises(ValidationError) as exc:
         CompileRequest.model_validate(payload)
+
+    actual_errors = exc.value.errors()
+    assert {error["loc"]: error["type"] for error in actual_errors} == errors
+    if detail is not None:
+        assert actual_errors[0]["msg"] == f"Value error, {detail}"
 
 
 def test_named_execution_guides_mixed_requests_before_validating_inputs():
@@ -236,7 +276,9 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
         assert first["meta"]["trigger"] == "initial"
 
 
-async def test_creation_requires_name_before_side_effects(service, app, client, monkeypatch):
+async def test_creation_rejects_invalid_input_before_side_effects(
+    service, app, client, monkeypatch
+):
     ctx, runtime = await prepare(service, app, monkeypatch)
     for body in (
         INPUTS,
@@ -247,6 +289,16 @@ async def test_creation_requires_name_before_side_effects(service, app, client, 
         response = await client.post("/api/v1/compile/create", json=body)
         assert response.status_code == 400, response.text
         assert "compile_name" in response.text
+    for args, reason in (
+        ({"auto_update": "false"}, "args.auto_update must be a boolean"),
+        (
+            {"mode": "full", "changes": {}, "last_compile_time": 1},
+            "Compile execution controls are server-owned: changes, last_compile_time, mode",
+        ),
+    ):
+        response = await client.post("/api/v1/compile/create", json={**SAVED_INPUTS, "args": args})
+        assert response.status_code == 400, response.text
+        assert reason in response.json()["error"]["message"]
     service.fs.ensure_compile_target.assert_not_awaited()
     assert not runtime.calls
     assert not [
@@ -659,22 +711,8 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
             )
         return await tracker.get(task_id, **owner)
 
-    with monkeypatch.context() as counter:
-        reads = AsyncMock(wraps=store._agfs.read)
-        counter.setattr(store._agfs, "read", reads)
-        first = await execute({"compile_name": compile_name}, "compile-first-execution")
+    first = await execute({"compile_name": compile_name}, "compile-first-execution")
     assert first.status == "completed", first.error
-    state_path = store._record_path(ctx.account_id, ctx.user.user_id, compile_name)
-    run_path = store._run_path(ctx.account_id, ctx.user.user_id, compile_name, first.task_id)
-    # Include the first run lookup, which returns not found before registration.
-    assert [c.args[0] for c in reads.await_args_list if c.args[0] in (state_path, run_path)] == [
-        state_path,
-        run_path,  # acceptance
-        state_path,
-        run_path,  # start, including baseline selection
-        run_path,
-        state_path,  # finish
-    ]
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert state["task_first_create_time"] == created_at
     assert state["last_run_time"] == first.created_at

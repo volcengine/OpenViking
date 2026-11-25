@@ -236,4 +236,5 @@ super::commit_index::impl_commit_index!(
 );
 
 super::repair::impl_path_history_repair!(MySqlSnapshotLogStore, MySql, "START TRANSACTION",
-    "INSERT INTO snapshot_log_generation(account,branch,root) VALUES(?,?,'') ON DUPLICATE KEY UPDATE root=root", " FOR UPDATE", "path");
+    "INSERT INTO snapshot_log_generation(account,branch,root) VALUES(?,?,'') ON DUPLICATE KEY UPDATE root=root", " FOR UPDATE", "path", "?", "?", "?"
+);

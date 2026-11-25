@@ -45,7 +45,8 @@ pub mod util;
 
 pub use config::{
     GitConfig, GitGcConfig, GitLocalConfig, GitS3ConfigPy, GitSnapshotConfig, GitSnapshotLogConfig,
-    GitSnapshotLogMySqlConfig, GitSnapshotLogSqliteConfig, GitTuningConfig,
+    GitSnapshotLogMySqlConfig, GitSnapshotLogPostgresConfig, GitSnapshotLogSqliteConfig,
+    GitTuningConfig,
 };
 pub use error::{GitError, ObjectStoreError, RefStoreError};
 pub use ignore::{should_track_path, IgnoreMatcher, OVGITIGNORE_MAX_BYTES, OVGITIGNORE_PATH};
@@ -53,6 +54,8 @@ pub use index_store::{CommitIndex, IndexStore, IndexStoreError};
 pub use object_store::{ObjectMeta, ObjectStore};
 pub use ref_store::RefStore;
 pub use service::GitService;
+#[cfg(feature = "postgres")]
+pub use snapshot_log::PostgresSnapshotLogStore;
 pub use snapshot_log::{
     CommitIndexRow, CommitIndexStore, MySqlSnapshotLogStore, SnapshotLogError, SnapshotLogHit,
     SnapshotLogRow, SnapshotLogStore, SqliteSnapshotLogStore,

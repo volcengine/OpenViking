@@ -124,21 +124,41 @@ async def test_list_cursor_pagination(client: httpx.AsyncClient, watch_manager):
 
 
 @pytest.mark.parametrize(
-    "params",
+    ("params", "validation_type", "message"),
     [
-        {"limit": 0},
-        {"limit": 201},
-        {"limit": "invalid"},
-        {"cursor": "invalid"},
-        {"cursor": ""},
-        {"cursor": "x" * 2049},
-        {"to_uri": "viking://resources/test/foo", "limit": 1},
-        {"to_uri": "viking://resources/test/foo", "cursor": "invalid"},
+        pytest.param({"limit": 0}, "greater_than_equal", None, id="limit-too-small"),
+        pytest.param({"limit": 201}, "less_than_equal", None, id="limit-too-large"),
+        pytest.param({"limit": "invalid"}, "int_parsing", None, id="limit-not-an-integer"),
+        pytest.param({"cursor": "invalid"}, None, "Invalid watch cursor", id="cursor-malformed"),
+        pytest.param({"cursor": ""}, None, "Invalid watch cursor", id="cursor-empty"),
+        pytest.param({"cursor": "x" * 2049}, "string_too_long", None, id="cursor-too-long"),
+        pytest.param(
+            {"to_uri": "viking://resources/test/foo", "limit": 1},
+            None,
+            "Pagination cannot be combined with to_uri lookup",
+            id="lookup-with-limit",
+        ),
+        pytest.param(
+            {"to_uri": "viking://resources/test/foo", "cursor": "invalid"},
+            None,
+            "Pagination cannot be combined with to_uri lookup",
+            id="lookup-with-cursor",
+        ),
     ],
 )
-async def test_list_rejects_invalid_pagination(client: httpx.AsyncClient, params):
+async def test_list_rejects_invalid_pagination(
+    client: httpx.AsyncClient, params, validation_type, message
+):
     response = await client.get("/api/v1/watches", params=params)
-    assert response.status_code == 400
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    if validation_type:
+        (detail,) = error["details"]["validation_errors"]
+        assert detail["loc"] == ["query", next(iter(params))]
+        assert detail["type"] == validation_type
+    else:
+        assert message in error["message"]
 
 
 async def test_list_cursor_rejects_filter_or_identity_change(
@@ -168,16 +188,16 @@ async def test_list_cursor_rejects_filter_or_identity_change(
 
 
 @pytest.mark.parametrize(
-    "change",
+    ("change", "error_type"),
     [
-        {"version": 0},
-        {"version": True},
-        {"authorized": "false"},
-        {"ov_account_id": ""},
-        {"unexpected": "value"},
+        ({"version": 0}, "greater_than"),
+        ({"version": True}, "int_type"),
+        ({"authorized": "false"}, "bool_type"),
+        ({"ov_account_id": ""}, "string_too_short"),
+        ({"unexpected": "value"}, "extra_forbidden"),
     ],
 )
-def test_credential_state_contract_rejects_invalid_fields(change):
+def test_credential_state_contract_rejects_invalid_fields(change, error_type):
     state = {
         "account_id": "account",
         "resource_id": "ov-resource",
@@ -190,8 +210,11 @@ def test_credential_state_contract_rejects_invalid_fields(change):
         "authorized": False,
         **change,
     }
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc:
         UpdateWatchRequest(credential_state=state)
+    (error,) = exc.value.errors()
+    assert error["loc"] == ("credential_state", next(iter(change)))
+    assert error["type"] == error_type
 
 
 async def test_patch_credential_state(client: httpx.AsyncClient, watch_manager):
@@ -242,6 +265,8 @@ async def test_patch_credential_state(client: httpx.AsyncClient, watch_manager):
         },
     )
     assert response.status_code == 400
+    assert "credential_state must be updated separately" in response.json()["error"]["message"]
+    assert (await watch_manager.get_task(task.task_id)).is_active is True
 
 
 async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, watch_tracker, watch_vfs):
@@ -289,6 +314,10 @@ async def test_full_lifecycle(client: httpx.AsyncClient, watch_manager, watch_tr
 
     active = await client.get("/api/v1/watches", params={"active_only": True})
     assert active.json()["result"]["tasks"] == []
+    paused_by_uri = await client.get(
+        "/api/v1/watches", params={"active_only": True, "to_uri": task.to_uri}
+    )
+    assert paused_by_uri.status_code == 404, paused_by_uri.text
     all_watches = await client.get("/api/v1/watches", params={"active_only": False})
     assert [item["task_id"] for item in all_watches.json()["result"]["tasks"]] == [task.task_id]
 
@@ -399,6 +428,10 @@ async def test_patch_rejects_unknown_field(client: httpx.AsyncClient, watch_mana
         json={"to_uri": "viking://resources/test/other"},
     )
     assert resp.status_code == 400
+    (error,) = resp.json()["error"]["details"]["validation_errors"]
+    assert error["loc"] == ["body", "to_uri"]
+    assert error["type"] == "extra_forbidden"
+    assert (await watch_manager.get_task(task.task_id)).to_uri == task.to_uri
 
 
 async def test_home_alias_to_uri_resolves_to_canonically_keyed_task(

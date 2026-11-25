@@ -19,7 +19,7 @@ pub(super) fn decode_path(bytes: Vec<u8>) -> Result<String, SnapshotLogError> {
 }
 
 macro_rules! impl_path_history_repair {
-    ($store:ty, $db:ty, $begin:literal, $insert:literal, $lock:literal, $path:literal) => {
+    ($store:ty, $db:ty, $begin:literal, $insert:literal, $lock:literal, $path:literal, $p1:literal, $p2:literal, $p3:literal) => {
         impl $store {
             async fn lock_generation<'a>(
                 &self,
@@ -33,7 +33,12 @@ macro_rules! impl_path_history_repair {
                     .execute(&mut **tx)
                     .await?;
                 Ok(sqlx::query_scalar(concat!(
-                    "SELECT root FROM snapshot_log_generation WHERE account=? AND branch=?",
+                    concat!(
+                        "SELECT root FROM snapshot_log_generation WHERE account=",
+                        $p1,
+                        " AND branch=",
+                        $p2
+                    ),
                     $lock
                 ))
                 .bind(account)
@@ -54,7 +59,14 @@ macro_rules! impl_path_history_repair {
                 let rows = sqlx::query_as::<_, (i64, Vec<u8>)>(concat!(
                     "SELECT id, ",
                     $path,
-                    " FROM snapshot_log WHERE account=? AND branch=? AND commit_oid=?"
+                    concat!(
+                        " FROM snapshot_log WHERE account=",
+                        $p1,
+                        " AND branch=",
+                        $p2,
+                        " AND commit_oid=",
+                        $p3
+                    )
                 ))
                 .bind(account)
                 .bind(branch)
@@ -66,7 +78,7 @@ macro_rules! impl_path_history_repair {
                 }
                 for (id, path) in rows {
                     if !missing.remove(super::repair::decode_path(path)?.as_str()) {
-                        sqlx::query("DELETE FROM snapshot_log WHERE id=?")
+                        sqlx::query(concat!("DELETE FROM snapshot_log WHERE id=", $p1))
                             .bind(id)
                             .execute(&mut **tx)
                             .await?;
@@ -77,7 +89,14 @@ macro_rules! impl_path_history_repair {
                     let rows = sqlx::query_as::<_, (i64, Vec<u8>)>(concat!(
                         "SELECT id, ",
                         $path,
-                        " FROM snapshot_log WHERE account=? AND branch=? AND commit_oid=?"
+                        concat!(
+                            " FROM snapshot_log WHERE account=",
+                            $p1,
+                            " AND branch=",
+                            $p2,
+                            " AND commit_oid=",
+                            $p3
+                        )
                     ))
                     .bind(account)
                     .bind(branch)
@@ -96,16 +115,26 @@ macro_rules! impl_path_history_repair {
                     return Ok(false);
                 }
                 for id in reusable.into_values() {
-                    sqlx::query("UPDATE snapshot_log SET commit_oid=? WHERE id=?")
-                        .bind(&run.child)
-                        .bind(id)
-                        .execute(&mut **tx)
-                        .await?;
+                    sqlx::query(concat!(
+                        "UPDATE snapshot_log SET commit_oid=",
+                        $p1,
+                        " WHERE id=",
+                        $p2
+                    ))
+                    .bind(&run.child)
+                    .bind(id)
+                    .execute(&mut **tx)
+                    .await?;
                 }
                 for oid in &run.deleted {
-                    sqlx::query(
-                        "DELETE FROM snapshot_log WHERE account=? AND branch=? AND commit_oid=?",
-                    )
+                    sqlx::query(concat!(
+                        "DELETE FROM snapshot_log WHERE account=",
+                        $p1,
+                        " AND branch=",
+                        $p2,
+                        " AND commit_oid=",
+                        $p3
+                    ))
                     .bind(account)
                     .bind(branch)
                     .bind(oid)
@@ -125,11 +154,16 @@ macro_rules! impl_path_history_repair {
             ) -> Result<(), SnapshotLogError> {
                 let mut tx = self.pool.begin_with($begin).await?;
                 self.lock_generation(&mut tx, account, branch).await?;
-                sqlx::query("DELETE FROM snapshot_log WHERE account=? AND branch=?")
-                    .bind(account)
-                    .bind(branch)
-                    .execute(&mut *tx)
-                    .await?;
+                sqlx::query(concat!(
+                    "DELETE FROM snapshot_log WHERE account=",
+                    $p1,
+                    " AND branch=",
+                    $p2
+                ))
+                .bind(account)
+                .bind(branch)
+                .execute(&mut *tx)
+                .await?;
                 Ok(tx.commit().await?)
             }
 
@@ -160,9 +194,12 @@ macro_rules! impl_path_history_repair {
                 account: &str,
                 branch: &str,
             ) -> Result<String, SnapshotLogError> {
-                Ok(sqlx::query_scalar(
-                    "SELECT root FROM snapshot_log_generation WHERE account=? AND branch=?",
-                )
+                Ok(sqlx::query_scalar(concat!(
+                    "SELECT root FROM snapshot_log_generation WHERE account=",
+                    $p1,
+                    " AND branch=",
+                    $p2
+                ))
                 .bind(account)
                 .bind(branch)
                 .fetch_optional(&self.pool)
@@ -178,14 +215,24 @@ macro_rules! impl_path_history_repair {
             ) -> Result<(), SnapshotLogError> {
                 let mut tx = self.pool.begin_with($begin).await?;
                 if self.lock_generation(&mut tx, account, branch).await? != root {
-                    sqlx::query("DELETE FROM snapshot_log WHERE account=? AND branch=?")
-                        .bind(account)
-                        .bind(branch)
-                        .execute(&mut *tx)
-                        .await?;
-                    sqlx::query(
-                        "UPDATE snapshot_log_generation SET root=? WHERE account=? AND branch=?",
-                    )
+                    sqlx::query(concat!(
+                        "DELETE FROM snapshot_log WHERE account=",
+                        $p1,
+                        " AND branch=",
+                        $p2
+                    ))
+                    .bind(account)
+                    .bind(branch)
+                    .execute(&mut *tx)
+                    .await?;
+                    sqlx::query(concat!(
+                        "UPDATE snapshot_log_generation SET root=",
+                        $p1,
+                        " WHERE account=",
+                        $p2,
+                        " AND branch=",
+                        $p3
+                    ))
                     .bind(root)
                     .bind(account)
                     .bind(branch)
@@ -212,9 +259,14 @@ macro_rules! impl_path_history_repair {
                         return Ok(false);
                     }
                 }
-                sqlx::query(
-                    "UPDATE snapshot_log_generation SET root=? WHERE account=? AND branch=?",
-                )
+                sqlx::query(concat!(
+                    "UPDATE snapshot_log_generation SET root=",
+                    $p1,
+                    " WHERE account=",
+                    $p2,
+                    " AND branch=",
+                    $p3
+                ))
                 .bind(root)
                 .bind(account)
                 .bind(branch)

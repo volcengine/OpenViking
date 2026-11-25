@@ -102,7 +102,7 @@ async fn delete_unknown_or_deleted_is_not_found_atomically() {
 #[tokio::test]
 async fn delete_concurrent_with_commit_keeps_chain_consistent() {
     let (_dir, vfs, _, _, svc) = make_service("acct");
-    let index = make_snapshot_log_store().await;
+    let index = make_sqlite_snapshot_log_store().await;
     let svc = svc.with_commit_index(Some(index.clone()));
     let ids = delete_chain(&svc, &vfs, 3).await;
     let mut req = deletion(&ids[1..2], true);
@@ -322,7 +322,7 @@ async fn delete_peer_stale_child_falls_back_to_live_history() {
         let (_dir, vfs, _, _, peer) = make_service("acct");
         let reader = peer
             .clone()
-            .with_commit_index(Some(make_snapshot_log_store().await));
+            .with_commit_index(Some(make_sqlite_snapshot_log_store().await));
         let ids = delete_chain(&reader, &vfs, 3).await;
         peer.delete_commits(deletion(&ids[1..2], false))
             .await
@@ -354,7 +354,7 @@ async fn delete_peer_lag_triggers_backfill_even_when_preview_succeeds() {
             inner: LocalObjectStore::new(dir.path()),
             gets: Default::default(),
         });
-        let index = make_snapshot_log_store().await;
+        let index = make_sqlite_snapshot_log_store().await;
         let reader =
             GitService::new(vfs.clone(), spy.clone(), refs).with_commit_index(Some(index.clone()));
         let mut ids = delete_chain(if empty { &writer } else { &reader }, &vfs, 3).await;

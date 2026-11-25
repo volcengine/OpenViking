@@ -94,7 +94,7 @@ memory 仅协调同一个客户端内的操作。租约有效期间，共享同�
 | `git.local.base_dir` | `""` | Git 对象/引用的存放目录。**留空时默认使用 `{storage.workspace}/.ovgit`** |
 | `git.snapshot.gc.enabled` | `true` | 删除快照后在后台回收对象。使用 S3 时，存储桶须从未启用版本控制。已启用或暂停版本控制的存储桶会禁用物理回收。 |
 | `git.snapshot.gc.grace_seconds` | `3600` | 物理回收的宽限期（秒），最小值为 600。 |
-| `git.snapshot.log.provider` | `sqlite` | `snapshot/log?paths=...` 的路径历史索引 provider：`sqlite`、`mysql` 或 `none` |
+| `git.snapshot.log.provider` | `sqlite` | `snapshot/log?paths=...` 的路径历史索引 provider：`sqlite`、`mysql`、`postgres` 或 `none` |
 | `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | 可选 SQLite 数据库绝对路径。留空时每个 workspace 使用自己的索引库 |
 
 写入节点复用超过 300 秒的旧对象时会刷新其修改时间，使配置滚动更新期间采用最短宽限期的其他节点也能安全回收。已开启版本控制的 S3 存储桶在刷新旧对象时可能产生新版本，即使本节点已停用物理回收。
@@ -153,10 +153,14 @@ memory 仅协调同一个客户端内的操作。租约有效期间，共享同�
 | `git.s3.access_key` / `git.s3.secret_key` | 继承 `storage.agfs.s3` 对应字段，否则 `null` | 直接读取的凭据；留空则走 SDK 默认凭据链 |
 | `git.s3.use_path_style` | `true` | `true` 用 path-style 寻址（MinIO 等）；`false` 用 virtual-host 寻址（TOS 等） |
 | `git.s3.cas_mode` | `native` | 引用 CAS 模式。`native` 使用 S3 条件写（If-Match） |
-| `git.snapshot.log.provider` | `sqlite` | `snapshot/log?paths=...` 的路径历史索引 provider。多实例部署建议使用 `mysql` |
+| `git.snapshot.log.provider` | `sqlite` | `snapshot/log?paths=...` 的路径历史索引 provider。多实例部署可使用 `mysql` 或 `postgres` |
 | `git.snapshot.log.mysql.dsn_env` | `OPENVIKING_SNAPSHOT_LOG_DSN` | 保存 MySQL DSN 的环境变量名 |
 | `git.snapshot.log.mysql.max_connections` | `16` | MySQL 连接池最大连接数 |
 | `git.snapshot.log.mysql.connect_timeout_ms` | `3000` | MySQL 连接超时时间，单位毫秒 |
+| `git.snapshot.log.postgres.dsn_env` | `OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN` | 保存 PostgreSQL 连接 URL 的环境变量名，可包含 TLS 参数 |
+| `git.snapshot.log.postgres.max_connections` | `16` | PostgreSQL 连接池最大连接数 |
+| `git.snapshot.log.postgres.connect_timeout_ms` | `3000` | PostgreSQL 连接池获取连接的超时时间，单位毫秒 |
+| `git.snapshot.log.postgres.operation_timeout_ms` | `3000` | 初始化及每次完整索引操作的执行期限，包含获取连接、等锁和全部写入批次，单位毫秒 |
 
 ### 按路径查询的日志索引
 
@@ -170,6 +174,7 @@ provider 取值：
 | --- | --- |
 | `sqlite` | 单机部署。默认数据库位于 `{storage.workspace}/_system/snapshot/log/snapshot_log.db`；如需覆盖，设置绝对路径 `git.snapshot.log.sqlite.path` |
 | `mysql` | 多实例部署。DSN 从 `git.snapshot.log.mysql.dsn_env` 指定的环境变量读取 |
+| `postgres` | 多实例部署。先建表，再配置 `git.snapshot.log.postgres.dsn_env` |
 | `none` | 关闭索引，保留原有历史扫描逻辑 |
 
 MySQL 示例：
@@ -177,6 +182,55 @@ MySQL 示例：
 ```bash
 export OPENVIKING_SNAPSHOT_LOG_DSN='mysql://user:password@host:3306/openviking'
 ```
+
+PostgreSQL（14+）部署时，由管理员或 migration role 一次性建表：
+
+```bash
+psql "$OV_POSTGRES_ADMIN_DSN" -v ON_ERROR_STOP=1 \
+  -f openviking/service/sql/snapshot_log_postgres_init.sql
+export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:5432/openviking?sslmode=verify-full&sslrootcert=/etc/ssl/pg-ca.pem'
+```
+
+```json
+{
+  "git": {
+    "snapshot": {
+      "log": {
+        "provider": "postgres",
+        "postgres": {
+          "dsn_env": "OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN",
+          "max_connections": 16,
+          "connect_timeout_ms": 3000,
+          "operation_timeout_ms": 3000
+        }
+      }
+    }
+  }
+}
+```
+
+运行时不会创建或迁移 PostgreSQL 表。运行账号需要 `snapshot_log` 的
+`SELECT`、`INSERT`、`UPDATE`、`DELETE` 权限，identity sequence 的 `USAGE` 权限，
+以及 `snapshot_log_generation` 的 `SELECT`、`INSERT`、`UPDATE` 权限。升级时请重新执行建表脚本。
+不同 OV 部署应使用独立数据库或 schema；同一索引内按账号、分支隔离。
+自定义 schema 可通过连接 URL 的 `options` 参数指定
+`-c search_path=your_schema`，参数值需要 URL 编码。
+
+PostgreSQL 索引操作有执行期限，连接同时设置 `statement_timeout` 和
+`lock_timeout`。初始化超时后，启动继续使用 Git 历史扫描；写索引超时后，
+提交或恢复继续，并触发后台尽力回填；索引不可用时查询回退到 Git。
+提交前超时的写事务会回滚。如果正常索引操作超过默认期限，可增大 `operation_timeout_ms`。
+
+无需安装 PostgreSQL 扩展或 Python 数据库 extra，驱动由 Rust binding 提供；
+独立 Rust 接入需启用 `ragfs/postgres` feature。
+
+同一账号、分支的索引追加使用事务 advisory lock 串行化，包括空索引的首次写入。
+仅当最新索引提交等于预期父提交时，整批路径记录才会原子提交。
+路径索引使用 `md5(path)` 避免超过 PostgreSQL B-tree 键宽限制，
+查询同时校验原始路径；同一提交发生摘要冲突时会拒绝整批追加，不会静默丢失路径。
+切换 provider 不会复制旧索引，按路径查询会在需要时触发从 Git 历史后台回填。
+启动时数据库不可用或缺少表，会为该实例关闭索引并回退到历史扫描；
+恢复后需重启实例。回退扫描仍受 1000 个候选提交上限约束。
 
 修改服务端配置后，重启 OpenViking 服务。重新初始化 HTTP SDK 客户端不会重新加载服务端配置。
 

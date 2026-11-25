@@ -205,5 +205,5 @@ super::repair::impl_path_history_repair!(
     "BEGIN IMMEDIATE",
     "INSERT OR IGNORE INTO snapshot_log_generation(account,branch,root) VALUES(?,?,'')",
     "",
-    "CAST(path AS BLOB)"
+    "CAST(path AS BLOB)", "?", "?", "?"
 );

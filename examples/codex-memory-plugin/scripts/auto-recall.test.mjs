@@ -277,7 +277,37 @@ for (const excludeUris of ["", "viking://user/default/skills, viking://agent/ski
     () => contextRecallCase(excludeUris));
 }
 
-test("auto-recall prefers the server recall endpoint when available", async () => {
+test("auto-recall displays the server validation error with debug disabled", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-rejected-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const requests = [];
+  const message = "Invalid request parameters: events_time_decay_protection: Extra inputs are not permitted";
+
+  const result = await withMockOpenViking(async (req, res) => {
+    if (req.url === "/health") {
+      writeJson(res, { status: "ok" });
+      return;
+    }
+    requests.push({ url: req.url, body: await readRequestBody(req) });
+    writeStatusJson(res, 400, { status: "error", error: { code: "INVALID_ARGUMENT", message } });
+  }, (baseUrl) => runAutoRecall({ prompt: "How did we handle the last incident?", cwd: stateDir }, {
+    OPENVIKING_AUTO_RECALL: "1",
+    OPENVIKING_CODEX_STATE_DIR: stateDir,
+    OPENVIKING_STATE_DIR: stateDir,
+    OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+    OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+    OPENVIKING_CREDENTIAL_SOURCE: "env",
+    OPENVIKING_DEBUG: "0",
+    OPENVIKING_RECALL_COMPRESS: "off",
+    OPENVIKING_URL: baseUrl,
+  }));
+
+  assert.deepEqual(JSON.parse(result.stdout), { systemMessage: `OpenViking auto recall failed (HTTP 400): ${message}` });
+  assert.deepEqual(requests.map(({ url }) => url), ["/api/v1/search/search"]);
+  assert.equal(requests[0].body.events_time_decay_protection, "30d");
+});
+
+test("auto-recall uses the server recall endpoint when Context search is unavailable", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-recall-endpoint-"));
   const requests = [];
 
@@ -309,10 +339,9 @@ test("auto-recall prefers the server recall endpoint when available", async () =
       }
       if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
         requests.push({ path: url.pathname, body: await readRequestBody(req) });
-        // Pre-context-face deployment: extra fields are rejected outright.
-        writeStatusJson(res, 400, {
+        writeStatusJson(res, 404, {
           status: "error",
-          error: "Extra inputs are not permitted: mode",
+          error: "Context search unavailable",
         });
         return;
       }
@@ -441,9 +470,9 @@ test("auto-recall gives the compressor full content from the raw-search fallback
           if (req.method === "POST" && url.pathname === "/api/v1/search/search") {
             const body = await readRequestBody(req);
             if (body.mode === "context") {
-              writeStatusJson(res, 400, {
+              writeStatusJson(res, 404, {
                 status: "error",
-                error: "Extra inputs are not permitted: mode",
+                error: "Context search unavailable",
               });
               return;
             }
@@ -620,9 +649,9 @@ test("auto-recall expands configured user in memory search target", async () => 
         const body = await readRequestBody(req);
         if (body.mode === "context") {
           // Exercise the legacy per-scope sweep below.
-          writeStatusJson(res, 400, {
+          writeStatusJson(res, 404, {
             status: "error",
-            error: "Extra inputs are not permitted: mode",
+            error: "Context search unavailable",
           });
           return;
         }
@@ -707,9 +736,9 @@ test("auto-recall preserves explicit default user memory target", async () => {
         const body = await readRequestBody(req);
         if (body.mode === "context") {
           // Exercise the legacy per-scope sweep below.
-          writeStatusJson(res, 400, {
+          writeStatusJson(res, 404, {
             status: "error",
-            error: "Extra inputs are not permitted: mode",
+            error: "Context search unavailable",
           });
           return;
         }

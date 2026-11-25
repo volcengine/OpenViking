@@ -1,6 +1,20 @@
 use crate::git::snapshot_log::{SnapshotLogRow, SnapshotLogStore, SqliteSnapshotLogStore};
 
-async fn make_snapshot_log_store() -> Arc<SqliteSnapshotLogStore> {
+async fn make_snapshot_log_store() -> Arc<dyn SnapshotLogStore> {
+    // The same commit/restore/tail-backfill regressions run against PostgreSQL
+    // in the database CI job; absent an explicit DSN, retain SQLite coverage.
+    #[cfg(feature = "postgres")]
+    if let Ok(dsn) = std::env::var("SNAPSHOT_LOG_TEST_PG_DSN") {
+        return Arc::new(
+            crate::git::PostgresSnapshotLogStore::connect(&dsn, 4, 5_000)
+                .await
+                .expect("PostgreSQL SnapshotLog schema must be provisioned"),
+        );
+    }
+    make_sqlite_snapshot_log_store().await
+}
+
+async fn make_sqlite_snapshot_log_store() -> Arc<SqliteSnapshotLogStore> {
     let dir = tempfile::tempdir().unwrap().keep();
     let db_path = dir.join("snapshot-log.db");
     Arc::new(
@@ -196,6 +210,102 @@ async fn test_snapshot_log_restore_indexes_project_dir_relative_paths() {
     assert_eq!(oids, vec![c3, c2, c1]);
 }
 
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn test_snapshot_log_postgres_restore_completes_with_locked_index_and_backfills() {
+    let Ok(dsn) = std::env::var("SNAPSHOT_LOG_TEST_PG_DSN") else {
+        return;
+    };
+    let account = uuid::Uuid::new_v4().simple().to_string();
+    let (_dir, vfs, _object_store, _ref_store, svc) = make_service(&account);
+    let store = Arc::new(
+        crate::git::PostgresSnapshotLogStore::connect_with_timeout(&dsn, 2, 5_000, 200)
+            .await
+            .unwrap(),
+    );
+    let svc = svc.with_snapshot_log(Some(store.clone()));
+    vfs.put("proj/a.md", b"v1");
+    let c1 = make_commit(&svc, &account, "main", "first").await;
+    vfs.put("proj/a.md", b"v2");
+    let c2 = make_commit(&svc, &account, "main", "second").await;
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&dsn)
+        .await
+        .unwrap();
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("{}:{}main", account.len(), account))
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        svc.restore(RestoreRequest {
+            account: account.clone(),
+            branch: "main".into(),
+            project_dir: Some("proj".into()),
+            source_commit: c1.to_hex().to_string(),
+            allow_missing_source: false,
+            dry_run: false,
+            message: None,
+            author_name: "tester".into(),
+            author_email: "tester@example.com".into(),
+        }),
+    )
+    .await
+    .expect("restore must complete without releasing the index lock")
+    .unwrap();
+    let c3 = match response {
+        RestoreResponse::Applied { new_commit_oid, .. } => new_commit_oid,
+        other => panic!("expected Applied, got {other:?}"),
+    };
+    assert_eq!(
+        vfs.read(&format!("/local/{account}/proj/a.md"), 0, u64::MAX)
+            .await
+            .unwrap(),
+        b"v1",
+    );
+    let request = LogRequest {
+        account: account.clone(),
+        branch: "main".into(),
+        limit: 10,
+        offset: 0,
+        paths: Some(vec!["proj/a.md".into()]),
+    };
+    // Missing index rows do not hide the restored commit: the Git tail scan wins.
+    let log = svc.log(request.clone()).await.unwrap();
+    assert_eq!(
+        log.into_iter().map(|entry| entry.oid).collect::<Vec<_>>(),
+        vec![c3, c2, c1]
+    );
+    lock.rollback().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if store
+                .load_latest_indexed_commit(&account, "main")
+                .await
+                .unwrap()
+                .is_some_and(|(_, oid)| oid == c3.to_hex().to_string())
+            {
+                break;
+            }
+            // Also retries backfill if the first background attempt timed out.
+            svc.log(request.clone()).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("index must catch up after the conflicting lock is released");
+    sqlx::query("DELETE FROM snapshot_log WHERE account = $1")
+        .bind(&account)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}
+
 #[tokio::test]
 async fn test_snapshot_log_store_rejects_non_root_commit_when_empty() {
     let store = make_snapshot_log_store().await;
@@ -327,7 +437,6 @@ async fn snapshot_log_rebuilds_when_another_node_deletes() {
 
 #[tokio::test]
 async fn reparent_incomplete_rolls_back_partial_repairs() {
-    use crate::git::snapshot_log::PathHistoryGeneration;
     let store = make_snapshot_log_store().await;
     let a = format!("{:040x}", 1);
     let b = format!("{:040x}", 2);
@@ -341,25 +450,25 @@ async fn reparent_incomplete_rolls_back_partial_repairs() {
             .collect()
     };
     store
-        .append_rows_if_latest("acct", "main", None, &rows(&a, &["/", "old"]))
+        .append_rows_if_latest("acct_repair_rollback", "main", None, &rows(&a, &["/", "old"]))
         .await
         .unwrap();
     store
-        .append_rows_if_latest("acct", "main", Some(&a), &rows(&b, &["/", "keep", "drop"]))
+        .append_rows_if_latest("acct_repair_rollback", "main", Some(&a), &rows(&b, &["/", "keep", "drop"]))
         .await
         .unwrap();
     let keep_paths = ["/", "old", "keep", "missing"].map(str::to_string);
     assert!(!store
-        .reparent_after_delete("acct", "main", std::slice::from_ref(&a), &b, &keep_paths)
+        .reparent_after_delete("acct_repair_rollback", "main", std::slice::from_ref(&a), &b, &keep_paths)
         .await
         .unwrap());
     let hits = store
-        .query_path_commits("acct", "main", &["drop".into()], i64::MAX, 0, 10)
+        .query_path_commits("acct_repair_rollback", "main", &["drop".into()], i64::MAX, 0, 10)
         .await
         .unwrap();
     assert_eq!(hits[0].commit_oid, b);
     let hits = store
-        .query_path_commits("acct", "main", &["old".into()], i64::MAX, 0, 10)
+        .query_path_commits("acct_repair_rollback", "main", &["old".into()], i64::MAX, 0, 10)
         .await
         .unwrap();
     assert_eq!(hits[0].commit_oid, a);
@@ -367,7 +476,6 @@ async fn reparent_incomplete_rolls_back_partial_repairs() {
 
 #[tokio::test]
 async fn snapshot_log_stays_current_across_gc_and_subsequent_delete() {
-    use crate::git::snapshot_log::PathHistoryGeneration;
     use std::time::{Duration, SystemTime};
     let account = "acct";
     let (_dir, vfs, _, _, svc) = make_service(account);

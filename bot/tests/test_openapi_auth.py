@@ -77,7 +77,7 @@ class TestOpenAPIAuth:
                     to=request.to,
                 )
 
-            async def get_task(self, task_id, *, principal_scope):
+            async def get_task(self, task_id, *, principal_scope, include_recovery_proof=False):
                 if task_id != "cmp_test" or principal_scope != self.scope:
                     return None
                 return self.task
@@ -173,7 +173,7 @@ class TestOpenAPIAuth:
                     to=request.to,
                 )
 
-            async def get_task(self, task_id, *, principal_scope):
+            async def get_task(self, task_id, *, principal_scope, include_recovery_proof=False):
                 if task_id != "cmp_dev" or principal_scope != self.scope:
                     return None
                 return {

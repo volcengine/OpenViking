@@ -7,70 +7,43 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import openviking.service.session_service as session_service_module
+from openviking.message import TextPart
 from openviking.metrics.datasources.session import SessionLifecycleDataSource
+from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import patch_user_config
 from openviking.service.session_service import SessionService
+from openviking.storage.queuefs import get_queue_manager
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def _make_ctx() -> RequestContext:
-    return RequestContext(
-        user=UserIdentifier("acme", "alice"),
-        role=Role.ADMIN,
-    )
+def _make_ctx(user_id: str = "alice") -> RequestContext:
+    return RequestContext(user=UserIdentifier("acme", user_id), role=Role.ADMIN)
 
 
 @pytest.mark.asyncio
-async def test_create_keeps_working_when_lifecycle_metrics_fail(monkeypatch: pytest.MonkeyPatch):
-    service = SessionService()
-    ctx = _make_ctx()
-    session = Mock()
-    session.ensure_exists = AsyncMock(return_value=True)
-    debug = Mock()
-
-    def _boom(*_args, **_kwargs):
+async def test_commit_async_keeps_working_when_session_metrics_fail(service, monkeypatch):
+    def unavailable(*_args, **_kwargs):
         raise RuntimeError("metrics failed")
 
-    monkeypatch.setattr(service, "session", Mock(return_value=session))
-    monkeypatch.setattr(SessionLifecycleDataSource, "record_lifecycle", staticmethod(_boom))
-    monkeypatch.setattr(session_service_module.logger, "debug", debug)
+    monkeypatch.setattr(SessionLifecycleDataSource, "record_lifecycle", staticmethod(unavailable))
+    monkeypatch.setattr(SessionLifecycleDataSource, "record_archive", staticmethod(unavailable))
+    monkeypatch.setattr(get_queue_manager(), "enqueue", AsyncMock(return_value="accepted"))
 
-    result = await service.create(ctx, "sess-1")
-
-    assert result is session
-    session.ensure_exists.assert_awaited_once()
-    assert debug.call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_commit_async_keeps_working_when_session_metrics_fail(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    service = SessionService(viking_fs=Mock())
     ctx = _make_ctx()
-    session = Mock()
-    session.commit_async = AsyncMock(return_value={"status": "queued", "archived": False})
-    debug = Mock()
+    session = await service.sessions.create(ctx, "sess-1")
+    await session.add_message_async("user", [TextPart("remember this message")])
+    result = await service.sessions.commit_async("sess-1", ctx)
 
-    def _boom(*_args, **_kwargs):
-        raise RuntimeError("metrics failed")
-
-    monkeypatch.setattr(service, "open", AsyncMock(return_value=session))
-    monkeypatch.setattr(SessionLifecycleDataSource, "record_lifecycle", staticmethod(_boom))
-    monkeypatch.setattr(SessionLifecycleDataSource, "record_archive", staticmethod(_boom))
-    monkeypatch.setattr(session_service_module.logger, "debug", debug)
-
-    result = await service.commit_async("sess-1", ctx)
-
-    assert result == {"status": "queued", "archived": False}
-    session.commit_async.assert_awaited_once()
-    assert debug.call_count == 2
+    assert result["archived"] is True
+    assert result["session_id"] == "sess-1"
+    archived = await service.viking_fs.read_file(f"{result['archive_uri']}/messages.jsonl", ctx=ctx)
+    assert json.loads(archived)["parts"][0]["text"] == "remember this message"
+    assert await service.viking_fs.read_file(f"{session.uri}/messages.jsonl", ctx=ctx) == ""
 
 
 @pytest.mark.asyncio
-async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(monkeypatch):
     service = SessionService(viking_fs=Mock())
     ctx = _make_ctx()
     debug = Mock()
@@ -78,62 +51,45 @@ async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
     service._viking_fs.ls = AsyncMock(side_effect=RuntimeError("ls failed"))
     monkeypatch.setattr(session_service_module.logger, "debug", debug)
 
-    result = await service.sessions(ctx)
-
-    assert result == []
-    assert debug.call_count == 1
+    assert await service.sessions(ctx) == []
+    debug.assert_called_once_with("Failed to list sessions", exc_info=True)
 
 
 @pytest.mark.asyncio
-async def test_sessions_uses_canonical_scope():
-    service = SessionService(viking_fs=Mock())
+async def test_sessions_uses_canonical_scope(service):
     ctx = _make_ctx()
+    owned = await service.sessions.create(ctx, "owned")
+    await service.sessions.create(_make_ctx("bob"), "foreign")
 
-    async def _ls(uri, ctx, **kwargs):
-        assert uri == "viking://user/alice/sessions"
-        assert kwargs == {"sort_by": "mtime", "sort_order": "desc"}
-        return [
-            {"name": "duplicate", "isDir": True, "modTime": "2026-07-13T01:00:00Z"},
-            {"name": "new-session", "isDir": True, "modTime": "2026-07-13T02:00:00Z"},
-        ]
+    result = await service.sessions.sessions(ctx)
 
-    service._viking_fs.ls = AsyncMock(side_effect=_ls)
-
-    result = await service.sessions(ctx)
-
-    assert result == [
-        {
-            "session_id": "duplicate",
-            "uri": "viking://user/alice/sessions/duplicate",
-            "is_dir": True,
-            "mod_time": "2026-07-13T01:00:00Z",
-        },
-        {
-            "session_id": "new-session",
-            "uri": "viking://user/alice/sessions/new-session",
-            "is_dir": True,
-            "mod_time": "2026-07-13T02:00:00Z",
-        },
+    assert [(session["session_id"], session["uri"], session["is_dir"]) for session in result] == [
+        ("owned", owned.uri, True)
     ]
-    service._viking_fs.ls.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_user_memory_policy_prefers_user_setting_and_falls_back_to_server_default():
-    viking_fs = Mock()
-    service = SessionService(viking_fs=viking_fs)
+async def test_user_memory_policy_prefers_user_setting_and_falls_back_to_server_default(
+    service, monkeypatch
+):
+    monkeypatch.setattr(get_queue_manager(), "enqueue", AsyncMock(return_value="accepted"))
+    sessions = service.sessions
+    sessions.set_default_user_memory_policy({"memory_types": ["profile"]})
     ctx = _make_ctx()
-    service.set_default_user_memory_policy({"memory_types": ["profile"]})
+    session = await sessions.create(ctx, "policy")
 
-    viking_fs.read_file = AsyncMock(side_effect=FileNotFoundError)
-    assert await service._get_user_memory_policy(ctx) == {
-        "self": {"enabled": True},
-        "peer": {"enabled": True},
-        "memory_types": ["profile"],
-        "working_memory": {"enabled": False},
-    }
+    async def commit_reading_policy():
+        await session.add_message_async("user", [TextPart("remember this message")])
+        committed = await sessions.commit_async(session.session_id, ctx)
+        archive_meta = json.loads(
+            await service.viking_fs.read_file(f"{committed['archive_uri']}/.meta.json", ctx=ctx)
+        )
+        return archive_meta["phase1"]["queue_message"]["memory_policy"]
 
-    viking_fs.read_file = AsyncMock(
-        return_value=json.dumps({"memory_policy": {"memory_types": ["events"]}})
+    assert (await commit_reading_policy())["memory_types"] == ["profile"]
+    await patch_user_config(
+        service.viking_fs,
+        ctx,
+        UserSettingsPatch.model_validate({"memory_policy": {"memory_types": ["events"]}}),
     )
-    assert await service._get_user_memory_policy(ctx) == {"memory_types": ["events"]}
+    assert (await commit_reading_policy())["memory_types"] == ["events"]

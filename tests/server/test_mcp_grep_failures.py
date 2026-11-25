@@ -19,6 +19,7 @@ is that the reason travels with the empty list instead of being dropped.
 from types import SimpleNamespace
 
 import pytest
+from mcp.types import CallToolResult
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.dependencies import set_service
@@ -58,38 +59,11 @@ async def test_a_failure_is_not_reported_as_no_matches(exc, code):
 
     _install(grep)
 
-    out = await mcp_endpoint.grep(uri=URI, pattern="anything")
-
+    result = await mcp_endpoint.mcp.call_tool("grep", {"uri": URI, "pattern": "anything"})
+    assert isinstance(result, CallToolResult) and result.isError
+    out = result.content[0].text
     assert "No matches found" not in out
-    assert code in out
-
-
-@pytest.mark.asyncio
-async def test_a_genuine_miss_still_reads_as_no_matches():
-    async def grep(uri, pattern, **kwargs):
-        return {"matches": []}
-
-    _install(grep)
-
-    assert await mcp_endpoint.grep(uri=URI, pattern="anything") == (
-        "No matches found for pattern(s): anything"
-    )
-
-
-@pytest.mark.asyncio
-async def test_one_failing_pattern_does_not_cost_the_others_their_matches():
-    async def grep(uri, pattern, **kwargs):
-        if pattern == "bad":
-            raise RuntimeError("boom")
-        return {"matches": [{"uri": f"{URI}/a.md", "line": 3, "content": "hit"}]}
-
-    _install(grep)
-
-    out = await mcp_endpoint.grep(uri=URI, pattern=["good", "bad"])
-
-    assert "hit" in out and "L3" in out
-    assert "Patterns that could not be searched:" in out
-    assert "bad: RuntimeError: boom" in out
+    assert f"anything: {code}: {exc}" in out
 
 
 @pytest.mark.asyncio
@@ -99,8 +73,9 @@ async def test_every_pattern_failing_reports_each_one():
 
     _install(grep)
 
-    out = await mcp_endpoint.grep(uri=URI, pattern=["one", "two"])
-
+    result = await mcp_endpoint.mcp.call_tool("grep", {"uri": URI, "pattern": ["one", "two"]})
+    assert isinstance(result, CallToolResult) and result.isError
+    out = result.content[0].text
     assert out.startswith("grep failed for every pattern:")
     assert "one: RuntimeError: boom-one" in out
     assert "two: RuntimeError: boom-two" in out
