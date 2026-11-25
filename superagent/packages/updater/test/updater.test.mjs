@@ -17,14 +17,19 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import nodeTest from 'node:test';
-// The Windows preview does not ship the updater (docs/windows.md), so its
-// suite has no Windows behavior to measure. Keep the same cases for POSIX.
+// The updater runs on Windows too, through the PowerShell installer a Windows
+// release ships, so this suite runs there. Only the cases that need a socket
+// file, a POSIX shell or the deploy-directory lock stay POSIX-only, and they say
+// so with `skip: process.platform === 'win32'`.
 const test = (name, ...rest) => {
   const fn = rest.pop();
   const options = typeof rest[0] === 'object' && rest[0] !== null ? rest[0] : {};
-  const skip = process.platform === 'win32' ? 'the Windows preview does not ship the updater' : false;
-  return nodeTest(name, { ...options, ...(skip ? { skip } : {}) }, fn);
+  return nodeTest(name, options, fn);
 };
+
+// Windows makes a directory link a junction (no privilege needed), which is what
+// the installer writes for current/rollback; POSIX uses a plain directory symlink.
+const linkDir = (target, at) => symlink(target, at, process.platform === 'win32' ? 'junction' : 'dir');
 import { fileURLToPath } from 'node:url';
 
 process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON = JSON.stringify({
@@ -57,7 +62,7 @@ async function fixtureRelease() {
   const release = path.join(base, 'releases', '0.4.0-test');
   await mkdir(release, { recursive: true });
   await writeFile(path.join(release, 'ecosystem.config.cjs'), 'module.exports = {};\n');
-  await symlink(release, path.join(base, 'current'));
+  await linkDir(release, path.join(base, 'current'));
   return { root, release, releaseLink: path.join(base, 'current') };
 }
 
@@ -516,7 +521,7 @@ test('upgradeTarget rejects inherited object property names as targets', async (
   await assert.rejects(upgradeTarget('toString'), /target must be one of/);
 });
 
-test('upgradeTarget rechecks the target after acquiring the deploy lock', async () => {
+test('upgradeTarget rechecks the target after acquiring the deploy lock', { skip: process.platform === 'win32' }, async () => {
   const fixture = await fixtureRelease();
   const original = process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON;
   let published = false;
@@ -537,7 +542,7 @@ test('upgradeTarget rechecks the target after acquiring the deploy lock', async 
   }
 });
 
-test('upgradeTarget shares the deploy lock with the installer', async () => {
+test('upgradeTarget shares the deploy lock with the installer', { skip: process.platform === 'win32' }, async () => {
   const fixture = await fixtureRelease();
   await mkdir(path.join(path.dirname(fixture.releaseLink), 'deploy.lock'));
   let called = false;
@@ -617,7 +622,7 @@ test('the updater replaces itself after an upgrade that moved it to another rele
   assert.equal(restarts.length, 1);
 });
 
-test('the replacement shell outlives the updater and starts it from the new release', () => {
+test('the replacement shell outlives the updater and starts it from the new release', { skip: process.platform === 'win32' }, () => {
   const calls = [];
   scheduleUpdaterRestart({
     release: '/superagent/releases/0.5.0',
@@ -684,7 +689,6 @@ test('the updater serves and closes a Windows named pipe', { skip: process.platf
     socketPath,
     upgrade: async (target) => ({ target, status: 'ready' }),
   });
-  t.after(() => first.close());
   await assert.rejects(createUpdaterServer({ socketPath, upgrade: async () => ({}) }), { code: 'EADDRINUSE' });
   const response = await post(socketPath, { target: 'beta' });
   assert.equal(response.status, 200);
@@ -693,7 +697,7 @@ test('the updater serves and closes a Windows named pipe', { skip: process.platf
   await again.close();
 });
 
-test('server accepts one allowlisted upgrade over its private socket', async (t) => {
+test('server accepts one allowlisted upgrade over its private socket', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-socket-test-');
   const socketPath = path.join(root, 'updater.sock');
   const calls = [];
@@ -712,7 +716,7 @@ test('server accepts one allowlisted upgrade over its private socket', async (t)
   assert.equal(response.body.status, 'ready');
 });
 
-test('request body timeout does not abort a long-running upgrade response', async (t) => {
+test('request body timeout does not abort a long-running upgrade response', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-socket-test-');
   const socketPath = path.join(root, 'updater.sock');
   const updater = await createUpdaterServer({
@@ -730,7 +734,7 @@ test('request body timeout does not abort a long-running upgrade response', asyn
   assert.equal(response.body.status, 'ready');
 });
 
-test('client disconnect does not cancel an upgrade already owned by the updater', async (t) => {
+test('client disconnect does not cancel an upgrade already owned by the updater', { skip: process.platform === 'win32' }, async (t) => {
   // Keep the Unix socket path below macOS's sockaddr_un limit. os.tmpdir()
   // already expands to a long /private/var/folders path on developer Macs.
   const root = await fixtureTempRoot('lud-');
@@ -768,7 +772,7 @@ test('client disconnect does not cancel an upgrade already owned by the updater'
   assert.equal(await completed, 'alpha');
 });
 
-test('server rejects a non-allowlisted target without calling upgrade', async (t) => {
+test('server rejects a non-allowlisted target without calling upgrade', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-reject-test-');
   const socketPath = path.join(root, 'updater.sock');
   let called = false;
@@ -784,7 +788,7 @@ test('server rejects a non-allowlisted target without calling upgrade', async (t
   assert.equal(called, false);
 });
 
-test('server serializes upgrade requests', async (t) => {
+test('server serializes upgrade requests', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-busy-test-');
   const socketPath = path.join(root, 'updater.sock');
   let releaseFirst;
@@ -806,14 +810,13 @@ test('server serializes upgrade requests', async (t) => {
   assert.equal((await first).status, 200);
 });
 
-test('a second updater cannot unlink the live updater socket', async (t) => {
+test('a second updater cannot unlink the live updater socket', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-owner-test-');
   const socketPath = path.join(root, 'updater.sock');
   const first = await createUpdaterServer({
     socketPath,
     upgrade: async (target) => ({ target, status: 'ready' }),
   });
-  t.after(() => first.close());
 
   await assert.rejects(
     createUpdaterServer({ socketPath, upgrade: async () => ({}) }),
@@ -823,7 +826,7 @@ test('a second updater cannot unlink the live updater socket', async (t) => {
   assert.equal(response.status, 200);
 });
 
-test('CLI upgrade reaches the updater only on artifact-supported platforms', async (t) => {
+test('CLI upgrade reaches the updater only on artifact-supported platforms', { skip: process.platform === 'win32' }, async (t) => {
   const { capabilities } = await import('../../daemon/src/capabilities.mjs');
   const root = await fixtureTempRoot('superagent-updater-cli-test-');
   const socketPath = path.join(root, 'updater.sock');
@@ -976,7 +979,7 @@ test('a Windows release that cannot start rolls the publication and the started 
     mode: 'installer',
     publishReleaseImpl: async () => {
       await rm(fixture.releaseLink);
-      await symlink(newer.release, fixture.releaseLink);
+      await linkDir(newer.release, fixture.releaseLink);
       return {
         release: newer.release,
         commit: 'd',
@@ -989,7 +992,7 @@ test('a Windows release that cannot start rolls the publication and the started 
     republishPreviousImpl: async (options) => {
       republished.push(options.previousVersion);
       await rm(fixture.releaseLink);
-      await symlink(fixture.release, fixture.releaseLink);
+      await linkDir(fixture.release, fixture.releaseLink);
       return { release: fixture.release, version: '0.4.0', published: true };
     },
     execFileImpl: harness.execFileImpl,
@@ -1019,7 +1022,7 @@ test('a failed Windows rollback keeps the original failure and says so', async (
     mode: 'installer',
     publishReleaseImpl: async () => {
       await rm(fixture.releaseLink);
-      await symlink(newer.release, fixture.releaseLink);
+      await linkDir(newer.release, fixture.releaseLink);
       return { release: newer.release, commit: 'd', version: '0.5.0', published: true,
         previousRelease: fixture.release, previousVersion: '0.4.0' };
     },
