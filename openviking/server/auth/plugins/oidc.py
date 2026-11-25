@@ -310,19 +310,41 @@ class OIDCAuthPlugin(AuthPlugin):
             )
             raise UnauthenticatedError("Failed to fetch JWKS") from e
 
-        # Process keys and cache them
+        # Process keys and cache them. A JWK's "alg" member is OPTIONAL
+        # (RFC 7517 section 4.4): when the provider omits it, infer the
+        # algorithm from the key type and keep the key as long as the inferred
+        # algorithm is one this plugin can verify with. A key that declares an
+        # unsupported algorithm is still skipped.
         failed_keys = 0
         for key_dict in jwks.get("keys", []):
             key_kid = key_dict.get("kid")
-            if key_kid and key_dict.get("alg") in _SUPPORTED_ALGORITHMS:
-                try:
-                    self._jwks[key_kid] = jwt.PyJWK.from_dict(key_dict)
-                except Exception as e:  # noqa: BLE001
-                    failed_keys += 1
-                    logger.debug(
-                        "OIDC signing key skipped",
-                        extra={"error_type": type(e).__name__},
-                    )
+            if not key_kid:
+                continue
+            declared_alg = key_dict.get("alg")
+            if declared_alg is not None and declared_alg not in _SUPPORTED_ALGORITHMS:
+                failed_keys += 1
+                logger.debug(
+                    "OIDC signing key skipped",
+                    extra={"error_type": "UnsupportedAlgorithm"},
+                )
+                continue
+            try:
+                key = jwt.PyJWK.from_dict(key_dict)
+            except Exception as e:  # noqa: BLE001
+                failed_keys += 1
+                logger.debug(
+                    "OIDC signing key skipped",
+                    extra={"error_type": type(e).__name__},
+                )
+                continue
+            if key.algorithm_name not in _SUPPORTED_ALGORITHMS:
+                failed_keys += 1
+                logger.debug(
+                    "OIDC signing key skipped",
+                    extra={"error_type": "UnsupportedAlgorithm"},
+                )
+                continue
+            self._jwks[key_kid] = key
 
         if failed_keys:
             logger.info("OIDC invalid signing keys skipped", extra={"skipped": failed_keys})
