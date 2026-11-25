@@ -135,14 +135,14 @@ class PDFConfig(ParserConfig):
     Supports three strategies:
     - "local": Use pdfplumber for local PDF→Markdown conversion
     - "mineru": Use MinerU API for remote PDF→Markdown conversion
-    - "auto": Use the configured remote parser if there is one, else local
+    - "auto": Try MinerU if configured, then fall back to local
 
     Attributes:
         strategy: Parsing strategy ("local" | "mineru" | "auto")
         mineru_endpoint: MinerU API endpoint URL
         mineru_timeout: MinerU request timeout in seconds
-        mineru_bodys: Additional MinerU API multipart form fields
-        mineru_token: Optional bearer token for the hosted MinerU service
+        mineru_bodys: Additional MinerU API request fields
+        mineru_token: Optional bearer token for the hosted MinerU v4 API
     """
 
     strategy: str = "auto"  # "local" | "mineru" | "auto"
@@ -150,8 +150,8 @@ class PDFConfig(ParserConfig):
     # MinerU API configuration
     mineru_endpoint: Optional[str] = None  # API endpoint URL
     mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
-    mineru_bodys: Optional[dict] = None  # Additional API multipart form fields
-    mineru_token: Optional[str] = None  # Bearer token for the hosted MinerU service
+    mineru_bodys: Optional[dict] = None
+    mineru_token: Optional[str] = None
 
     # Heading detection configuration
     heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"
@@ -160,36 +160,6 @@ class PDFConfig(ParserConfig):
 
     # Image extraction configuration
     image_resolution: int = 300  # Rendering DPI for extracted image regions
-
-    @property
-    def mineru_enabled(self) -> bool:
-        """Whether the MinerU provider is configured.
-
-        This is only the MinerU provider's own eligibility check. Use
-        :attr:`remote_enabled` when asking whether *any* remote parser is in play.
-        """
-        return bool(self.mineru_endpoint)
-
-    @property
-    def remote_enabled(self) -> bool:
-        """Whether at least one remote parser provider is configured.
-
-        Written in terms of providers rather than any single service, so adding a
-        new remote parser does not require revisiting the ``auto`` dispatch, the
-        startup preflight, or the documentation. Keep this in step with the
-        provider list built by ``PDFParser._remote_converters``.
-        """
-        # Each entry is one provider's configured endpoint. A default ``None``
-        # must stay a member of a real collection: ``any(None)`` raises TypeError,
-        # which would break startup for deployments that never configured MinerU.
-        return any(
-            endpoint
-            for endpoint in (
-                self.mineru_endpoint,  # MinerU provider
-                # future providers register their own config here
-            )
-            if endpoint
-        )
 
     def validate(self) -> None:
         """

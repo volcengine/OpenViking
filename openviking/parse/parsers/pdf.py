@@ -20,15 +20,16 @@ import re
 import tempfile
 import threading
 import time
+import zipfile
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 from pdfminer.pdfparser import PDFSyntaxError
 from pdfminer.pdftypes import resolve1
 from pdfminer.psparser import LIT, PSEOF
 
-from openviking.observability.log_safety import safe_path_for_log
+from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.base import (
     NodeType,
     ParseResult,
@@ -37,17 +38,13 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.utils.time_utils import parse_iso_datetime
+from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
 
 logger = get_logger(__name__)
-
-# Per-file states a self-hosted ``/file_parse`` reply uses to report that the
-# conversion did not complete.
-_MINERU_FAILED_STATES = frozenset(
-    {"failed", "failure", "error", "aborted", "cancelled", "canceled", "timeout", "rejected"}
-)
 
 # PDFium is not thread-safe, even when rendering different documents.
 _PDFIUM_LOCK = threading.Lock()
@@ -65,7 +62,7 @@ class PDFParser(BaseParser):
     Strategies:
     - "local": Use pdfplumber for text and table extraction
     - "mineru": Use MinerU API for advanced PDF processing
-    - "auto": Use the configured remote parser if there is one, else local
+    - "auto": Try MinerU if configured, then fall back to local
 
     Examples:
         >>> # Local parsing
@@ -168,12 +165,7 @@ class PDFParser(BaseParser):
             result.parse_time = time.time() - start_time
             result.meta.update(conversion_meta)
             result.meta["pdf_strategy"] = self.config.strategy
-            # Under auto the requested strategy and the path actually taken can differ
-            # (the remote parser may be skipped or fail over to local), so record
-            # the effective one for operators.
-            effective = conversion_meta.get("strategy")
-            if effective:
-                result.meta["pdf_strategy_effective"] = effective
+            result.meta["pdf_strategy_effective"] = conversion_meta["strategy"]
             result.meta["intermediate_markdown_length"] = len(markdown_content)
             result.meta["intermediate_markdown_preview"] = markdown_content[:500]
 
@@ -221,45 +213,22 @@ class PDFParser(BaseParser):
         Raises:
             ValueError: If the configured strategy is unknown
         """
-        if self.config.strategy == "local":
-            return await self._convert_local(pdf_path, resource_name=resource_name)
-
-        elif self.config.strategy == "mineru":
-            # Strict: a MinerU failure is the result, not a reason to try something else.
+        strategy = self.config.strategy
+        if strategy == "mineru":
             return await self._convert_mineru(pdf_path, resource_name=resource_name)
 
-        elif self.config.strategy == "auto":
-            # Remote services that are configured get tried first, in priority order,
-            # and the local parser is always the last resort. Adding a new external
-            # parser should mean adding a provider entry, not a new strategy value.
-            for name, convert in self._remote_converters():
-                try:
-                    return await convert(pdf_path, resource_name=resource_name)
-                except Exception as e:
-                    # A remote failure degrades this one document to local rather
-                    # than failing the import.
-                    logger.info(
-                        "%s conversion failed; using local error_type=%s degraded=true",
-                        name,
-                        type(e).__name__,
-                    )
+        if strategy == "auto" and self.config.mineru_endpoint:
+            try:
+                return await self._convert_mineru(pdf_path, resource_name=resource_name)
+            except Exception as exc:
+                logger.info(
+                    "MinerU conversion failed; using local error_type=%s degraded=true",
+                    type(exc).__name__,
+                )
+
+        if strategy in ("local", "auto"):
             return await self._convert_local(pdf_path, resource_name=resource_name)
-
-        else:
-            raise ValueError(f"Unknown strategy: {self.config.strategy}")
-
-    def _remote_converters(self) -> List[Tuple[str, Any]]:
-        """External converters this config enables, in the order they should be tried.
-
-        Only services that are actually configured participate: an unset endpoint
-        means the service is not in play, so ``auto`` degrades to local on its own
-        without needing a separate strategy value. Registering another provider here
-        is the only change a new remote parser requires.
-        """
-        providers: List[Tuple[str, Any]] = []
-        if self.config.mineru_enabled:
-            providers.append(("MinerU", self._convert_mineru))
-        return providers
+        raise ValueError(f"Unknown strategy: {strategy}")
 
     async def _convert_local(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
@@ -756,524 +725,202 @@ class PDFParser(BaseParser):
             logger.debug("PDF image extraction failed error_type=%s", type(e).__name__)
             return None
 
-    def _mineru_headers(self) -> Dict[str, str]:
-        """Auth headers for the MinerU request.
-
-        The hosted service authenticates with a bearer token; a self-hosted
-        deployment usually needs none, so an unset token yields no headers.
-        """
-        if self.config.mineru_token:
-            return {"Authorization": f"Bearer {self.config.mineru_token}"}
-        return {}
-
-    def _mineru_base_url(self) -> str:
-        return self.config.mineru_endpoint.rstrip("/")
-
-    def _http_status(exc: Exception) -> Optional[int]:
-        response = getattr(exc, "response", None)
-        return getattr(response, "status_code", None)
-
-    async def _mineru_post_json(self, client, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """POST a JSON body (the hosted MinerU v4 API takes no multipart at all)."""
-        response = await client.post(url, json=payload, headers=self._mineru_headers())
-        response.raise_for_status()
-        result = response.json()
-        code = result.get("code")
-        # The hosted API answers HTTP 200 with a non-zero business code on failure.
-        if isinstance(code, int) and code != 0:
-            raise RuntimeError(f"MinerU API {url} returned code={code}: {result.get('msg')!r}")
-        return result
-
-    async def _mineru_upload_file(self, client, file_url: str, pdf_path: Path) -> None:
-        """PUT the raw PDF to the pre-signed OSS url.
-
-        MinerU's docs are explicit: no Content-Type header on this request.
-        """
-        with open(pdf_path, "rb") as f:
-            payload = f.read()
-        response = await client.put(file_url, content=payload, headers={"Content-Type": ""})
-        response.raise_for_status()
-        logger.info(f"Uploaded {pdf_path.name} to MinerU staging ({len(payload)} bytes)")
-
-    async def _mineru_submit_file_batch(self, client, base: str, pdf_path: Path) -> Dict[str, Any]:
-        """Hosted v4 upload handshake: reserve an OSS url, then PUT the file.
-
-        ``POST /file-urls/batch`` (JSON) -> ``data.batch_id`` + ``data.file_urls``;
-        the parse task is submitted automatically once the upload lands, so the
-        returned body can be driven by the regular online-batch poller.
-        """
-        payload: Dict[str, Any] = {"model_version": "vlm"}
-        payload.update(self.config.mineru_bodys or {})
-        payload["files"] = [{"name": pdf_path.name}]
-        result = await self._mineru_post_json(client, f"{base}/file-urls/batch", payload)
-        data = self._mineru_payload_data(result)
-        urls = data.get("file_urls")
-        if not isinstance(urls, list) or not urls:
-            raise ValueError(f"MinerU {base}/file-urls/batch returned no file_urls: {result!r}")
-        await self._mineru_upload_file(client, urls[0], pdf_path)
-        return result
-
-    @staticmethod
-    def _mineru_online_result_entry(body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        data = PDFParser._mineru_payload_data(body)
-        entries = data.get("extract_result")
-        if isinstance(entries, list) and entries and isinstance(entries[0], dict):
-            return entries[0]
-        return None
-
-    @classmethod
-    def _mineru_online_done(cls, body: Dict[str, Any]) -> bool:
-        entry = cls._mineru_online_result_entry(body)
-        return bool(entry) and entry.get("state") == "done"
-
-    @classmethod
-    def _mineru_online_busy(cls, body: Dict[str, Any]) -> bool:
-        entry = cls._mineru_online_result_entry(body)
-        # "waiting-file" is the documented state for the file-urls/batch upload
-        # handshake (scanning the freshly PUT object). "converting" is the format
-        # export step that follows "done" parsing. Both are still in flight.
-        return bool(entry) and entry.get("state") in (
-            "waiting",
-            "waiting-file",
-            "uploading",
-            "pending",
-            "running",
-            "converting",
-        )
-
-    @classmethod
-    def _mineru_online_failure_detail(cls, body: Dict[str, Any]) -> str:
-        entry = cls._mineru_online_result_entry(body) or {}
-        for key in ("err_msg", "err_no", "state", "message", "msg"):
-            if entry.get(key):
-                return f"{key}={entry[key]}"
-        # The batch envelope can carry the reason even when the entry is silent.
-        data = cls._mineru_payload_data(body)
-        if isinstance(data, dict):
-            for key in ("err_msg", "err_no", "message", "msg"):
-                if data.get(key):
-                    return f"{key}={data[key]}"
-        return "no failure detail reported"
-
-    @classmethod
-    def _mineru_online_zip_url(cls, body: Dict[str, Any]) -> Optional[str]:
-        entry = cls._mineru_online_result_entry(body) or {}
-        for key in ("full_zip_url", "zip_url", "result_url"):
-            value = entry.get(key)
-            if isinstance(value, str) and value.startswith(("http://", "https://")):
-                return value
-        return None
-
-    async def _mineru_download_zip(self, client, zip_url: str) -> bytes:
-        """Download the result archive.
-
-        The url is pre-signed by the storage backend and points at a different host,
-        so the MinerU bearer token must not be attached: it would leak the credential
-        to that host, and the signature does not need it.
-        """
-        response = await client.get(
-            zip_url,
-            follow_redirects=True,
-        )
-        response.raise_for_status()
-        return response.content
-
-    def _mineru_unpack_zip(
-        self,
-        zip_bytes: bytes,
-        pdf_path: Path,
-        meta: Dict[str, Any],
-        storage=None,
-        resource_name: Optional[str] = None,
-    ) -> tuple[str, Dict[str, Any]]:
-        """Unpack the zip result: locate the markdown and persist images."""
-        import zipfile
-
-        from openviking.utils.zip_safe import normalize_zip_filenames, safe_extract_zip
-
-        with tempfile.TemporaryDirectory(prefix="mineru-") as tmp:
-            tmp_dir = Path(tmp)
-            zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
-            normalize_zip_filenames(zf)
-            safe_extract_zip(zf, tmp_dir)
-            zf.close()
-
-            md_path = self._mineru_pick_markdown(tmp_dir)
-            if md_path is None:
-                raise ValueError(
-                    f"No markdown file found in MinerU zip result extracted to {tmp_dir}"
-                )
-            markdown_content = md_path.read_text(encoding="utf-8", errors="replace")
-            root_dir = md_path.parent
-
-            meta["api_version"] = "task-zip"
-
-            if not markdown_content:
-                logger.info(
-                    "MinerU returned empty content path=%s degraded=true",
-                    safe_path_for_log(str(pdf_path)),
-                )
-                return markdown_content, meta
-
-            if storage is None:
-                from openviking_cli.utils.storage import get_storage
-
-                storage = get_storage()
-
-            if resource_name is None:
-                resource_name = pdf_path.stem
-
-            # Persist every shipped image and rewrite the markdown references
-            repl: Dict[str, str] = {}
-            media_dir = storage.media_dir
-            images_dir = root_dir / "images"
-            failed_images = 0
-            if images_dir.is_dir():
-                for img in sorted(images_dir.iterdir()):
-                    if not img.is_file():
-                        continue
-                    try:
-                        image_path = storage.save_image(
-                            resource_name,
-                            img.read_bytes(),
-                            filename=img.stem,
-                            extension=img.suffix or ".png",
-                        )
-                        repl[f"images/{img.name}"] = image_path.relative_to(media_dir).as_posix()
-                    except Exception as img_err:
-                        failed_images += 1
-                        logger.debug(
-                            "MinerU image save failed path=%s error_type=%s",
-                            safe_path_for_log(img.name),
-                            type(img_err).__name__,
-                        )
-            if failed_images:
-                logger.info(
-                    "MinerU image extraction incomplete failed=%d degraded=true", failed_images
-                )
-
-            if repl:
-                ref_pattern = re.compile(
-                    "|".join(re.escape(ref) for ref in sorted(repl, key=len, reverse=True))
-                )
-                markdown_content = ref_pattern.sub(lambda m: repl[m.group(0)], markdown_content)
-                meta["images_saved"] = len(repl)
-
-            logger.debug("MinerU conversion completed markdown_chars=%d", len(markdown_content))
-
-        return markdown_content, meta
-
-    @staticmethod
-    def _mineru_pick_markdown(root_dir: Path) -> Optional[Path]:
-        """Pick the document markdown from an extracted MinerU zip."""
-        candidates = [p for p in root_dir.rglob("*.md") if p.is_file()]
-        if not candidates:
-            return None
-        for p in candidates:
-            if p.name == "full.md":
-                return p
-        if len(candidates) == 1:
-            return candidates[0]
-        return min(candidates, key=lambda p: (len(p.parts), -p.stat().st_size))
-
-    def _mineru_file_parse_url(self) -> str:
-        """Upload URL for the self-hosted contract: ``<endpoint>/file_parse``."""
-        base = self._mineru_base_url()
-        return base if base.endswith("/file_parse") else f"{base}/file_parse"
-
-    async def _mineru_post(
-        self, client, url: str, pdf_path: Path, data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """POST the PDF as multipart and return the decoded JSON body."""
-        with open(pdf_path, "rb") as f:
-            files = {"files": (pdf_path.name, f, "application/pdf")}
-            response = await client.post(
-                url, files=files, data=data, headers=self._mineru_headers()
-            )
-        response.raise_for_status()
-        return response.json()
-
-    async def _mineru_get_json(self, client, url: str) -> Dict[str, Any]:
-        response = await client.get(url, headers=self._mineru_headers())
-        response.raise_for_status()
-        return response.json()
-
-    @staticmethod
-    def _mineru_payload_data(result: Dict[str, Any]) -> Dict[str, Any]:
-        """Unwrap the ``data`` envelope the hosted API uses, if present."""
-        if isinstance(result, dict) and isinstance(result.get("data"), dict):
-            return result["data"]
-        return result
-
-    @staticmethod
-    def _mineru_entry_failed(entry: Dict[str, Any]) -> bool:
-        """Whether a per-file entry reports that the conversion did not complete.
-
-        A failed conversion can still carry a partial ``md_content``. Returning that
-        as a success hands back a silently truncated document: strict mode would not
-        raise and ``auto`` would never fall back to the local parser.
-        """
-        status = entry.get("status") or entry.get("state")
-        if isinstance(status, str) and status.strip().lower() in _MINERU_FAILED_STATES:
-            return True
-        return any(entry.get(key) for key in ("err_msg", "err_no", "error"))
-
-    @staticmethod
-    def _mineru_failure_message(entry: Dict[str, Any], pdf_path: Path) -> str:
-        """A readable reason for a failed per-file entry."""
-        for key in ("err_msg", "err_no", "error", "message", "msg", "status", "state"):
-            value = entry.get(key)
-            if value:
-                return f"MinerU failed to convert {pdf_path.name}: {key}={value}"
-        return f"MinerU failed to convert {pdf_path.name}"
-
-    @staticmethod
-    def _mineru_sync_entry(payload: Dict[str, Any], pdf_path: Path) -> Optional[Dict[str, Any]]:
-        """Pull this PDF's entry out of a ``/file_parse`` response."""
-        results = payload.get("results") or {}
-        if not isinstance(results, dict):
-            return None
-        entry = results.get(pdf_path.name) or next(iter(results.values()), None)
-        if not isinstance(entry, dict):
-            return None
-        if PDFParser._mineru_entry_failed(entry):
-            raise ValueError(PDFParser._mineru_failure_message(entry, pdf_path))
-        return entry
-
-    @staticmethod
-    def _mineru_apply_image_refs(text: str, repl: Dict[str, str]) -> str:
-        """Point markdown references at the images that were actually saved.
-
-        The provider's image key and the reference written in the body can disagree
-        about the directory: a key may be a bare ``figure.png`` while the body writes
-        ``images/figure.png``. Substituting the key literally would then yield
-        ``images/doc/figure.png`` and leave a broken link, so match the file name in
-        whatever directory position it appears and replace the whole reference.
-        """
-        for key in sorted(repl, key=len, reverse=True):
-            stored = repl[key]
-            name = key.replace("\\", "/").rsplit("/", 1)[-1]
-            if not name:
-                continue
-            # Only whole directory segments may precede the name: a bare prefix
-            # would swallow "my" in "myfigure.png" and rewrite the wrong file.
-            pattern = re.compile(r"(?<![\w/.-])(?:[\w.-]+/)*" + re.escape(name) + r"(?![\w.-])")
-            text = pattern.sub(lambda _m, s=stored: s, text)
-        return text
-
-    def _mineru_extract_markdown(self, markdown: Path, root: Path) -> tuple[str, Dict[str, bytes]]:
-        """Read markdown from an unpacked archive and collect its images."""
-        text = markdown.read_text(encoding="utf-8", errors="replace")
-        images: Dict[str, bytes] = {}
-        for candidate in sorted(root.rglob("*")):
-            if candidate.is_file() and candidate.suffix.lower() in (
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".gif",
-                ".webp",
-                ".bmp",
-            ):
-                images[candidate.relative_to(root).as_posix()] = candidate.read_bytes()
-        return text, images
-
-    @staticmethod
-    def _mineru_decode_inline_images(images: Dict[str, Any]) -> Dict[str, bytes]:
-        """Decode the base64 data-URL images a self-hosted reply embeds."""
-        out: Dict[str, bytes] = {}
-        for name, value in (images or {}).items():
-            try:
-                out[name] = base64.b64decode(str(value).split(",", 1)[-1])
-            except Exception:
-                continue
-        return out
-
-    async def _mineru_save_images(
-        self,
-        images: Dict[str, bytes],
-        storage,
-        resource_name: Optional[str],
-    ) -> Dict[str, str]:
-        """Persist images into the media store.
-
-        Returns the original-name -> stored-relative-path mapping so the caller can
-        rewrite the markdown references; a saved image whose reference is left
-        pointing at the provider's path is a broken link in the parsed document.
-        """
-        if not images:
-            return {}
-
-        if storage is None:
-            from openviking_cli.utils.storage import get_storage
-
-            storage = get_storage()
-
-        repl: Dict[str, str] = {}
-        media_dir = storage.media_dir
-        for name, blob in images.items():
-            try:
-                img_path = Path(name)
-                # The storage layer needs a real directory name; handing it None
-                # loses the image to a swallowed error.
-                target = resource_name or img_path.stem
-                stored = storage.save_image(
-                    target,
-                    blob,
-                    filename=img_path.stem,
-                    extension=img_path.suffix or ".png",
-                )
-                repl[name] = stored.relative_to(media_dir).as_posix()
-            except Exception as img_err:
-                logger.warning(f"Failed to save MinerU image {name}: {img_err}")
-
-        return repl
-
     async def _convert_mineru(
         self,
         pdf_path: Path,
         storage=None,
         resource_name: Optional[str] = None,
     ) -> tuple[str, Dict[str, Any]]:
-        """Convert a PDF to Markdown with the configured MinerU endpoint.
-
-        A ``mineru_token`` is the signal that the endpoint is the hosted service:
-        that API has no synchronous ``/file_parse`` route and only speaks the
-        asynchronous batch contract, so we go straight to it rather than probing a
-        route that cannot exist. Without a token the endpoint is treated as
-        self-hosted and keeps using ``/file_parse``, unchanged.
-
-        Either path raises on failure; ``strategy="auto"`` decides whether a failure
-        is tolerated.
-        """
+        """Convert a PDF with MinerU and persist images referenced by its Markdown."""
         httpx = lazy_import("httpx")
-
         if not self.config.mineru_endpoint:
             raise ValueError("MinerU endpoint not configured")
 
-        meta: Dict[str, Any] = {
+        base = self.config.mineru_endpoint.rstrip("/")
+        url = base if base.endswith("/file_parse") else f"{base}/file_parse"
+        meta = {
             "strategy": "mineru",
             "endpoint": self.config.mineru_endpoint,
+            "api_version": None,
         }
-
+        token = self.config.mineru_token
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
         async with httpx.AsyncClient(timeout=self.config.mineru_timeout) as client:
-            if self.config.mineru_token:
-                return await self._mineru_hosted_batch(
-                    client,
-                    meta,
-                    pdf_path,
-                    storage=storage,
-                    resource_name=resource_name,
-                )
-            return await self._mineru_selfhosted(
-                client,
-                meta,
-                pdf_path,
-                storage=storage,
-                resource_name=resource_name,
-            )
-
-    async def _mineru_hosted_batch(
-        self,
-        client,
-        meta: Dict[str, Any],
-        pdf_path: Path,
-        storage=None,
-        resource_name: Optional[str] = None,
-    ) -> tuple[str, Dict[str, Any]]:
-        """Hosted, token-authenticated MinerU: reserve url, upload, poll, unpack.
-
-        ``POST /file-urls/batch`` -> ``PUT`` the PDF at the signed url ->
-        ``GET /extract-results/batch/{batch_id}`` until the state settles ->
-        download ``full_zip_url`` and take the markdown plus its images.
-        """
-        base = self._mineru_base_url()
-        meta["api_mode"] = "v4-batch"
-
-        try:
-            submitted = await self._mineru_submit_file_batch(client, base, pdf_path)
-        except Exception:
-            # A rejected or expired token can still sit in front of a working
-            # self-hosted endpoint, so give the legacy route one chance first.
-            logger.info(
-                "MinerU %s/file-urls/batch unavailable; trying the self-hosted route",
-                base,
-            )
-            return await self._mineru_selfhosted(
-                client,
-                meta,
-                pdf_path,
-                storage=storage,
-                resource_name=resource_name,
-            )
-
-        batch_id = self._mineru_payload_data(submitted).get("batch_id")
-        meta["batch_id"] = batch_id
-
-        waited = 0.0
-        interval = 5.0
-        zip_url = None
-        while waited < self.config.mineru_timeout:
-            body = await self._mineru_get_json(client, f"{base}/extract-results/batch/{batch_id}")
-            data = self._mineru_payload_data(body)
-            if self._mineru_online_done(data):
-                zip_url = self._mineru_online_zip_url(data)
-                if not zip_url:
-                    raise ValueError(
-                        f"MinerU batch {batch_id} finished without a result zip: "
-                        f"{self._mineru_online_failure_detail(data)}"
+            batch_id = None
+            if token:
+                try:
+                    batch_id = await self._mineru_upload_batch(client, base, headers, pdf_path)
+                except Exception as exc:
+                    # An authenticated self-hosted endpoint can still serve /file_parse.
+                    logger.info(
+                        "MinerU batch submission failed; trying /file_parse error_type=%s",
+                        type(exc).__name__,
                     )
-                break
-            if not self._mineru_online_busy(data):
-                raise ValueError(
-                    f"MinerU batch {batch_id} failed: {self._mineru_online_failure_detail(data)}"
+            if batch_id is not None:
+                markdown, images = await self._mineru_batch_result(client, base, headers, batch_id)
+                meta.update(api_version="v4", task_id=batch_id)
+            else:
+                data = dict(self.config.mineru_bodys or {}, return_images=True)
+                logger.debug("Calling MinerU API endpoint=%s", safe_uri_for_log(url))
+                with pdf_path.open("rb") as pdf:
+                    response = await client.post(
+                        url,
+                        files={"files": (pdf_path.name, pdf, "application/pdf")},
+                        data=data,
+                        headers=headers,
+                    )
+                response.raise_for_status()
+                result = response.json()
+                if result.get("status") != "completed":
+                    raise ValueError(f"MinerU task not completed: {result.get('status')}")
+                results = result.get("results") or {}
+                file_result = results.get(pdf_path.name) or next(iter(results.values()), {})
+                status = (file_result.get("status") or file_result.get("state") or "").lower()
+                error = (
+                    file_result.get("err_msg")
+                    or file_result.get("err_no")
+                    or file_result.get("error")
                 )
-            await asyncio.sleep(interval)
-            waited += interval
+                if error or status in (
+                    "failed",
+                    "failure",
+                    "error",
+                    "aborted",
+                    "cancelled",
+                    "canceled",
+                    "timeout",
+                    "rejected",
+                ):
+                    raise ValueError(f"MinerU failed to convert {pdf_path.name}: {error or status}")
+                markdown = file_result.get("md_content") or ""
+                images = file_result.get("images") or {}
+                meta.update(
+                    api_version=result.get("version"),
+                    backend=result.get("backend"),
+                    task_id=result.get("task_id"),
+                )
+                started_at, completed_at = result.get("started_at"), result.get("completed_at")
+                if started_at and completed_at:
+                    meta["processing_time"] = (
+                        parse_iso_datetime(completed_at) - parse_iso_datetime(started_at)
+                    ).total_seconds()
 
-        if not zip_url:
-            raise TimeoutError(
-                f"MinerU batch {batch_id} did not finish within {self.config.mineru_timeout}s"
+        if not markdown:
+            logger.info(
+                "MinerU returned empty content path=%s degraded=true",
+                safe_path_for_log(str(pdf_path)),
             )
+        elif images:
+            markdown, images_saved = self._store_mineru_images(
+                markdown, images, storage, resource_name or pdf_path.stem
+            )
+            if images_saved:
+                meta["images_saved"] = images_saved
+        logger.debug("MinerU conversion completed markdown_chars=%d", len(markdown))
+        return markdown, meta
 
-        meta["result_url"] = zip_url
-        blob = await self._mineru_download_zip(client, zip_url)
-        text, meta = self._mineru_unpack_zip(
-            blob, pdf_path, meta, storage=storage, resource_name=resource_name
+    async def _mineru_upload_batch(
+        self, client, base: str, headers: dict[str, str], pdf_path: Path
+    ) -> str:
+        payload = {"model_version": "vlm", **(self.config.mineru_bodys or {})}
+        payload["files"] = [{"name": pdf_path.name}]
+        response = await client.post(f"{base}/file-urls/batch", json=payload, headers=headers)
+        data = self._mineru_batch_data(response)
+        batch_id = data.get("batch_id")
+        file_urls = data.get("file_urls")
+        if not batch_id or not file_urls:
+            raise ValueError("MinerU did not return a batch ID and upload URL")
+        # Signed storage URLs are independent of the MinerU bearer credential.
+        upload = await client.put(
+            file_urls[0], content=await asyncio.to_thread(pdf_path.read_bytes)
         )
-        logger.info(f"MinerU conversion: {len(text)} chars")
-        return text, meta
+        upload.raise_for_status()
+        return batch_id
 
-    async def _mineru_selfhosted(
-        self,
-        client,
-        meta: Dict[str, Any],
-        pdf_path: Path,
-        storage=None,
-        resource_name: Optional[str] = None,
-    ) -> tuple[str, Dict[str, Any]]:
-        """Self-hosted MinerU: the single-shot ``/file_parse`` contract."""
-        url = self._mineru_file_parse_url()
-        data: Dict[str, Any] = dict(self.config.mineru_bodys or {})
-        # MinerU must return extracted images for the markdown refs to resolve.
-        data["return_images"] = True
-        meta["api_mode"] = "file-parse"
+    async def _mineru_batch_result(
+        self, client, base: str, headers: dict[str, str], batch_id: str
+    ) -> tuple[str, dict[str, bytes]]:
+        url = f"{base}/extract-results/batch/{batch_id}"
+        deadline = time.monotonic() + self.config.mineru_timeout
+        while (remaining := deadline - time.monotonic()) > 0:
+            response = await client.get(url, headers=headers, timeout=remaining)
+            result = self._mineru_batch_data(response)["extract_result"][0]
+            state = result["state"]
+            if state == "done":
+                archive = await client.get(result["full_zip_url"], follow_redirects=True)
+                archive.raise_for_status()
+                return await asyncio.to_thread(self._read_mineru_archive, archive.content)
+            if state not in ("waiting-file", "pending", "running", "converting"):
+                raise ValueError(
+                    f"MinerU batch {batch_id} failed: {result.get('err_msg') or state}"
+                )
+            await asyncio.sleep(min(5.0, max(0.0, deadline - time.monotonic())))
+        raise TimeoutError(f"MinerU batch {batch_id} did not finish in time")
 
-        result = await self._mineru_post(client, url, pdf_path, data)
-        entry = self._mineru_sync_entry(self._mineru_payload_data(result), pdf_path)
-        if entry is None:
-            raise ValueError(f"MinerU {url} returned no markdown for {pdf_path.name}")
+    @staticmethod
+    def _mineru_batch_data(response) -> dict[str, Any]:
+        response.raise_for_status()
+        payload = response.json()
+        if payload["code"] != 0:
+            raise ValueError(f"MinerU returned code {payload['code']}: {payload.get('msg')}")
+        return payload["data"]
 
-        text = entry.get("md_content") or ""
-        images = self._mineru_decode_inline_images(entry.get("images") or {})
-        # Fall back to the PDF's own stem, matching the zip path. Falling back to the
-        # image name would put every document's images under one directory, so two
-        # PDFs carrying a file with the same name would overwrite each other.
-        image_dir = resource_name or pdf_path.stem
-        repl = await self._mineru_save_images(images, storage, image_dir)
-        meta["images_saved"] = len(repl)
-        text = self._mineru_apply_image_refs(text, repl)
-        logger.info(f"MinerU conversion: {len(text)} chars, {len(repl)} images")
-        return text, meta
+    @staticmethod
+    def _read_mineru_archive(content: bytes) -> tuple[str, dict[str, bytes]]:
+        with (
+            tempfile.TemporaryDirectory(prefix="mineru-") as tmp,
+            zipfile.ZipFile(io.BytesIO(content)) as archive,
+        ):
+            root = Path(tmp)
+            safe_extract_zip(archive, root)
+            markdown = next((path for path in root.rglob("full.md") if path.is_file()), None)
+            if markdown is None:
+                raise ValueError("MinerU result archive has no Markdown file")
+            images = {
+                path.name: path.read_bytes()
+                for path in (markdown.parent / "images").glob("*")
+                if path.is_file()
+            }
+            return markdown.read_text(encoding="utf-8", errors="replace"), images
+
+    @staticmethod
+    def _store_mineru_images(
+        markdown: str, images: dict[str, str | bytes], storage, resource_name: str
+    ) -> tuple[str, int]:
+        if storage is None:
+            from openviking_cli.utils.storage import get_storage
+
+            storage = get_storage()
+
+        refs = {}
+        failed = 0
+        for name, image in images.items():
+            try:
+                # /file_parse embeds base64 data URLs, while v4 returns raw image files.
+                data = (
+                    base64.b64decode(image.split(",", 1)[-1]) if isinstance(image, str) else image
+                )
+                path = Path(name.replace("\\", "/"))
+                if not path.name:
+                    raise ValueError("MinerU image has no file name")
+                target = storage.save_image(
+                    resource_name, data, filename=path.stem, extension=path.suffix or ".png"
+                )
+                refs[path.name] = target.relative_to(storage.media_dir).as_posix()
+            except Exception as exc:
+                failed += 1
+                logger.debug(
+                    "MinerU image save failed path=%s error_type=%s",
+                    safe_path_for_log(name),
+                    type(exc).__name__,
+                )
+        if failed:
+            logger.info("MinerU image extraction incomplete failed=%d degraded=true", failed)
+        if refs:
+            filenames = "|".join(re.escape(name) for name in sorted(refs, key=len, reverse=True))
+            pattern = re.compile(r"(?<![\w/.-])(?:[\w.-]+/)*(" + filenames + r")(?![\w.-])")
+            markdown = pattern.sub(lambda match: refs[match[1]], markdown)
+        return markdown, len(refs)
 
     def _format_table_markdown(self, table: List[List[Optional[str]]]) -> str:
         """

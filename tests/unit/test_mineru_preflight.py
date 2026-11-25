@@ -34,8 +34,7 @@ def _make_fake_client(get_handler):
         async def __aexit__(self, *exc):
             return False
 
-        async def get(self, url, headers=None):
-            self.headers = headers
+        async def get(self, url, **kwargs):
             return get_handler(url)
 
     return _FakeClient
@@ -102,15 +101,16 @@ async def test_network_error_raises(patch_httpx):
 
 
 @pytest.mark.asyncio
-async def test_empty_error_message_falls_back_to_class_name(patch_httpx):
+async def test_hosted_preflight_accepts_missing_batch_and_rejects_expired_token(patch_httpx):
+    code = -60012
+
     def handler(url):
-        raise httpx.ConnectTimeout("")
+        assert url.startswith(f"{ENDPOINT}/extract-results/batch/")
+        return _FakeResponse(payload={"code": code})
 
     patch_httpx(handler)
 
-    with pytest.raises(RuntimeError) as exc_info:
-        await wait_for_mineru_ready(ENDPOINT, timeout=0.05)
-
-    message = str(exc_info.value)
-    assert HEALTH_URL in message
-    assert "ConnectTimeout" in message
+    await wait_for_mineru_ready(ENDPOINT, token="test-token")
+    code = "A0211"
+    with pytest.raises(RuntimeError, match="A0211"):
+        await wait_for_mineru_ready(ENDPOINT, timeout=0.05, token="test-token")
