@@ -72,22 +72,22 @@ ov admin unfreeze-file acme agent-a skills/example/SKILL.md
 
 All three CLI commands also accept a full user URI such as `viking://user/agent-a/skills/example/SKILL.md` and convert it to a relative path. The URI user must match the command's `user-id`, otherwise the CLI reports an error. Conversion preserves the literal path without decoding escapes or resolving `..`; the server still validates the relative path.
 
-ROOT can manage a specified account with `--sudo`. USER and GLOBAL cannot manage these rules; freezing requires a USER target. Server-side paths are relative to that user's root and use GLOBAL's strict literal path syntax: no globs, URIs, encoded escapes, traversal or storage-internal filenames, and at most 255 bytes per component. Matching and unfreezing conservatively ignore case to prevent localfs alias bypasses; case variants on case-sensitive backends are protected too.
+ROOT can manage a specified account with `--sudo`. USER and GLOBAL cannot manage these rules; freezing requires a USER target. Server-side paths are relative to that user's root and use GLOBAL's strict literal path syntax: no globs, URIs, encoded escapes, traversal or storage-internal filenames, and at most 255 bytes per component. Matching, status and unfreezing are case-sensitive: `a.md` and `A.md` are separate entries.
 
 The file need not exist. Status only reports membership in the account frozen file list, without existence, content, size or summaries. Repeated freeze/unfreeze operations are idempotent; old rules can still be removed after the target user is deleted or changes role.
 
-Protection applies to writes, appends, deletes, moves, replacements, background writes and version restore. Removing/moving an ancestor or copying into a target subtree intersecting a blocked path is denied. Reads retain existing permissions; unfreezing grants no permissions. Business leases, `bypass_acl` and disabling automatic PathLock do not bypass protection.
+Protection applies to writes, appends, deletes, moves, replacements, background writes and version restore. Removing/moving an ancestor or copying into a target subtree intersecting a blocked path is denied. Reads retain existing permissions; unfreezing grants no permissions. Business leases, `bypass_acl` and disabling automatic PathLock do not bypass protection. Authorized identity deletion removes all user data, including frozen files, through its dedicated cleanup task.
 
-Changes follow existing account-store cache refresh/invalidation, with no immediate-effect guarantee: FileStore uses its watcher (or persisted account reads when disabled), Redis/MySQL uses account generations and TTL, and SQL reads directly. In-flight requests/executions retain their authorization snapshot; queued tasks load account rules when executing. Failed reads or invalid rules are never treated as an empty account frozen file list.
+Rules load on the first write check and are reused within that request or background execution; ordinary reads and authentication do not load them. Changes follow existing account-store cache refresh/invalidation, with no immediate-effect guarantee: FileStore uses its watcher (or persisted account reads when disabled), Redis/MySQL uses account generations and TTL, and SQL reads directly. In-flight executions retain their loaded snapshot. Failed rule reads or invalid rules stop writes and are never treated as an empty account frozen file list.
 
 | Method | Path | Parameters |
 |--------|------|------------|
-| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | query: `path` |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file?path={path}` | Required query: `path` |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | JSON: `{"path":"skills/example/SKILL.md","frozen":true}` |
 
 The result contains `account_id`, `user_id`, `path`, and `frozen`. This is independent of the temporary lease reported by `stat.isLocked`. Rejected changes return `PERMISSION_DENIED` with `details.reason=admin_file_frozen`.
 
-Existing MySQL/PostgreSQL deployments must apply `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql` before upgrading. Initial schemas already include the column. External account-store providers must implement this metadata capability to support the management commands.
+MySQL/PostgreSQL deployments must apply `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql` once before starting the upgraded runtime. New MySQL databases execute `sql/init.sql` followed by the ordered `sql/changes/` migrations; new PostgreSQL databases execute `sql/postgres/init.sql` followed by `0002_account_frozen_files.sql` (the earlier list indexes are already in the PostgreSQL initial schema). Existing databases apply only unapplied migrations. Open-source and commercial deployments should record this migration in their existing DBA/deployment process; the runtime never adds columns. External account-store providers must implement this metadata capability to support the management commands.
 
 ## Groups
 

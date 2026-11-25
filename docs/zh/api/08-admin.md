@@ -72,22 +72,22 @@ ov admin unfreeze-file acme agent-a skills/example/SKILL.md
 
 这三个 CLI 命令也接受 `viking://user/agent-a/skills/example/SKILL.md` 这样的完整 user URI，自动转换为相对路径。URI 中的 user 必须与命令的 `user-id` 一致，否则 CLI 会报错。转换保留原始路径，不解码转义或消除 `..`；服务端继续校验相对路径。
 
-ROOT 可以使用 `--sudo` 管理指定 account。普通 USER 和 GLOBAL 无权管理账号内冻结列表；新增冻结只允许 USER 目标。服务端接收的路径相对于目标 user 根目录，采用 GLOBAL 的严格字面路径语法：不支持通配符、URI、编码转义、`..` 或内部存储文件名，单段不得超过 255 字节。为防止 localfs 大小写别名绕过，冻结匹配及解冻保守地忽略大小写；大小写敏感后端上的同名大小写变体也会受保护。
+ROOT 可以使用 `--sudo` 管理指定 account。普通 USER 和 GLOBAL 无权管理账号内冻结列表；新增冻结只允许 USER 目标。服务端接收的路径相对于目标 user 根目录，采用 GLOBAL 的严格字面路径语法：不支持通配符、URI、编码转义、`..` 或内部存储文件名，单段不得超过 255 字节。匹配、状态查询和解冻均区分大小写：`a.md` 和 `A.md` 是独立条目。
 
 冻结路径可以尚不存在。状态仅表示路径是否在账号内冻结列表中，不暴露文件存在性、内容、大小或摘要。重复冻结、解冻是幂等的；目标 user 已删除或变更角色后仍可清除旧规则。
 
-写入、追加、删除、移动、覆盖、后台写入和版本恢复会检查账号内冻结列表。删除或移动包含冻结路径的目录、向与冻结路径相交的目标子树复制也会拒绝。读取权限保持原样；解冻不会授予原本没有的权限。业务租约、`bypass_acl` 和关闭自动 PathLock 都不能解除这层保护。
+写入、追加、删除、移动、覆盖、后台写入和版本恢复会检查账号内冻结列表。删除或移动包含冻结路径的目录、向与冻结路径相交的目标子树复制也会拒绝。读取权限保持原样；解冻不会授予原本没有的权限。业务租约、`bypass_acl` 和关闭自动 PathLock 都不能解除这层保护。经授权的身份注销通过专用清理任务删除该 user 的全部数据，包括冻结文件。
 
-规则沿用账号存储缓存的刷新/失效机制，不保证立即生效：FileStore 使用既有 watcher 刷新（关闭 watcher 时读取持久账号记录），Redis/MySQL 使用既有账号缓存版本和 TTL，SQL 直接读取。请求或后台执行已取得的规则快照允许继续使用；排队任务执行时加载账号规则。规则读取或解析失败不会被解释为账号内冻结列表为空。
+规则在首次写入检查时加载，并在同一个请求或后台执行中复用；普通读取和鉴权不加载规则。规则沿用账号存储缓存的刷新/失效机制，不保证立即生效：FileStore 使用既有 watcher 刷新（关闭 watcher 时读取持久账号记录），Redis/MySQL 使用既有账号缓存版本和 TTL，SQL 直接读取。执行中已加载的规则快照允许继续使用。规则读取或解析失败会阻止写入，不会被解释为账号内冻结列表为空。
 
 | 方法 | 路径 | 参数 |
 |------|------|------|
-| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | query: `path` |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file?path={path}` | 必填 query: `path` |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | JSON: `{"path":"skills/example/SKILL.md","frozen":true}` |
 
 响应 `result` 包含 `account_id`、`user_id`、`path`、`frozen`。该状态与 `stat.isLocked` 的短期并发租约状态独立。变更被拒绝时返回 `PERMISSION_DENIED`，`details.reason` 为 `admin_file_frozen`。
 
-已有 MySQL/PostgreSQL 部署需先执行 `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql`。新部署的初始化 SQL 已包含该列。外部账号存储 provider 需要实现对应元信息能力后才能使用管理命令。
+MySQL/PostgreSQL 部署需在升级运行时启动前执行一次 `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql`。新建 MySQL 库先执行 `sql/init.sql`，再按顺序执行 `sql/changes/` 中的迁移；新建 PostgreSQL 库先执行 `sql/postgres/init.sql`，再执行 `0002_account_frozen_files.sql`（之前的列表索引已在 PostgreSQL 初始化 SQL 中）。已有库只执行尚未应用的迁移。开源与商业部署均需在现有 DBA/部署流程中记录该迁移，运行时不自动加列。外部账号存储 provider 需要实现对应元信息能力后才能使用管理命令。
 
 ## 用户组
 

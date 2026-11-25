@@ -112,7 +112,7 @@ class _SnapshotMixin:
     ) -> None:
         """Authorize every VFS mutation reported by a restore dry-run."""
         diff = plan["diff"]
-        # ACL creation checks may use parents; administrator locks always check
+        # ACL creation checks may use parents; administrator freezes always check
         # the actual restored files, including currently missing destinations.
         changed_uris = [
             self._tree_path_to_uri(f"{tree_dir}/{item['path']}".strip("/"))
@@ -459,6 +459,7 @@ class _SnapshotMixin:
             else f"/local/{account}"
         )
         partial_exc: Optional[GitRestoreWritebackPartialError] = None
+        await self._load_frozen_files(real_ctx)
         try:
             lock_options = {"owner_lease_ref": lease_ref} if lease_ref is not None else {}
             lease = await self._async_agfs.pathlock_acquire_tree(lock_path, **lock_options)
@@ -469,11 +470,7 @@ class _SnapshotMixin:
             )
 
         try:
-            if (
-                acl_project_dir is not None
-                or getattr(self, "_frozen_file_reader", None) is not None
-                or real_ctx.frozen_files
-            ):
+            if acl_project_dir is not None or real_ctx.frozen_files:
                 if acl_project_dir is not None:
                     await self._ensure_access(acl_project_dir, real_ctx)
                 plan = await self._async_agfs.run(

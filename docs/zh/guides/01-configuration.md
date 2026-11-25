@@ -2417,8 +2417,9 @@ Account Store 表的 `service_name` 列，并在多个 OpenViking 集群共用�
 充当隔离边界。修改 `service_name` 会选择另一组逻辑 Account Store 分区。
 
 Provider 不会创建或迁移数据库表。启动服务前，应通过现有 DBA 或部署流程手工创建
-`openviking/server/account_stores/sql/init.sql` 中定义的规范化表。后续经评审的
-schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`。
+`openviking/server/account_stores/sql/init.sql` 中定义的规范化表，再按顺序执行
+`openviking/server/account_stores/sql/changes/` 中的迁移。已有数据库只执行部署流程中
+尚未记录为已完成的迁移。
 五张 `ov_accounts*` 表的名称固定；多个 OpenViking 集群共用数据库时，通过不同的
 顶层 `service_name` 隔离部署，不使用不同表前缀。
 
@@ -2444,7 +2445,9 @@ schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`�
 PostgreSQL Account Store 使用 `postgres` provider，安装 `pip install 'openviking[postgres]'`。
 它直接通过 psycopg 3 和 SQLAlchemy 连接 PostgreSQL，无需 Redis 或 pgvector。
 先由迁移账号执行
-`openviking/server/account_stores/sql/postgres/init.sql`，启动不会创建或迁移表。
+`openviking/server/account_stores/sql/postgres/init.sql`，再执行
+`openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql`。
+已有数据库只需执行一次该迁移，启动不会创建或迁移表。
 运行账号需要目标 schema 的 `USAGE`、五张 `ov_accounts*` 表的
 `SELECT, INSERT, UPDATE, DELETE` 和三个主键序列的 `USAGE, SELECT`，
 无需表所有权或 schema `CREATE` 权限。新部署首次启动会创建 `default` 账号。

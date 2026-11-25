@@ -45,12 +45,10 @@ def validate_frozen_files(value: object) -> tuple[str, ...]:
 def update_frozen_files(value: object, uri: str, frozen: bool) -> tuple[str, ...]:
     """Apply an idempotent change to a persisted snapshot under its storage guard."""
     paths = set(validate_frozen_files(value))
-    aliases = {path for path in paths if path.casefold() == uri.casefold()}
     if frozen:
-        if not aliases:
-            paths.add(uri)
+        paths.add(uri)
     else:
-        paths.difference_update(aliases)
+        paths.discard(uri)
     return validate_frozen_files(tuple(paths))
 
 

@@ -258,6 +258,10 @@ async def test_admin_frozen_files_reach_native_fs_and_background(
     )
     assert status.json()["result"]["frozen"] is True
     assert set(status.json()["result"]) == {"account_id", "user_id", "path", "frozen"}
+    status = await admin_client.get(
+        url, headers={"X-API-Key": admin_key}, params={"path": "skills/example/skill.md"}
+    )
+    assert status.json()["result"]["frozen"] is False
     for key in (user_key, other_key):
         denied = await admin_client.put(
             url,
@@ -3577,11 +3581,12 @@ async def test_remove_user(
     monkeypatch.setattr(gateway_module, "delete_data", delete_gateway_data)
     monkeypatch.setattr(admin_app.state.deletion_service, "_gateway_app", gateway)
     acct = _uid()
-    await admin_client.post(
+    created = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
     resp = await admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
@@ -3591,6 +3596,8 @@ async def test_remove_user(
     bob_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
     private_uri = "viking://user/bob/memories/private.md"
     await admin_service.viking_fs.write_file(private_uri, "private", ctx=bob_ctx)
+    admin_service.viking_fs.set_frozen_file_reader(admin_app.state.api_key_manager.get_frozen_files)
+    await admin_app.state.api_key_manager.set_frozen_file(acct, "bob", "memories/private.md", True)
     alice_upload_uri = "viking://upload/1800000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     bob_upload_uri = "viking://upload/1800000000000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     upload_ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ROOT)
@@ -3607,7 +3614,7 @@ async def test_remove_user(
         user_id="bob",
     )
     resp = await admin_client.delete(
-        f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
+        f"/api/v1/admin/accounts/{acct}/users/bob", headers=admin_headers
     )
     assert resp.status_code == 202
     task_id = resp.json()["result"]["task_id"]

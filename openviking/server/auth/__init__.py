@@ -144,8 +144,6 @@ async def _build_request_context(
     )
     manager = getattr(request.app.state, "api_key_manager", None)
     deletion = None
-    if manager is not None and hasattr(manager, "get_frozen_files"):
-        ctx.bind_frozen_files(await manager.get_frozen_files(ctx.account_id))
     if (
         not has_auth_groups
         and _uses_local_account_store(plugin)
@@ -265,9 +263,6 @@ async def _context_from_signed_token(
             # auto-ingest keeps the caller's peer scope for reason-memory routing.
             actor_peer_id=consumed.actor_peer_id or None,
         )
-        manager = getattr(request.app.state, "api_key_manager", None)
-        if manager is not None and hasattr(manager, "get_frozen_files"):
-            ctx.bind_frozen_files(await manager.get_frozen_files(ctx.account_id))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"invalid identity in token: {exc}") from exc
     update_root_span_identity(

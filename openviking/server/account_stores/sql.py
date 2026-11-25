@@ -524,6 +524,7 @@ class SQLAccountStore(AccountStore):
                 self._require_active(user)
                 if user.role != Role.USER:
                     raise PermissionDeniedError("Frozen files require a USER target")
+            await session.refresh(account, ["frozen_files"])
             paths = update_frozen_files(
                 json.loads(account.frozen_files) if account.frozen_files is not None else [],
                 uri,

@@ -72,11 +72,11 @@ async def test_frozen_files_persist_merge_and_enforce_limit(manager, manager_ser
     try:
         await asyncio.gather(
             manager.set_frozen_file("frozen-files", "agent", "skills/a.md", True),
-            peer.set_frozen_file("frozen-files", "agent", "skills/b.md", True),
+            peer.set_frozen_file("frozen-files", "agent", "skills/A.md", True),
         )
         assert await manager.get_frozen_files("frozen-files") == (
+            "viking://user/agent/skills/A.md",
             "viking://user/agent/skills/a.md",
-            "viking://user/agent/skills/b.md",
         )
         for i in range(8):
             await manager.set_frozen_file("frozen-files", "agent", f"memories/{i}.md", True)

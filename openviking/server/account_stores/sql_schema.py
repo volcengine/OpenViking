@@ -71,7 +71,7 @@ class Account(Base):
     account_pk: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     service_name: Mapped[str] = mapped_column(_identifier(255))
     account_id: Mapped[str] = mapped_column(_identifier(255))
-    frozen_files: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    frozen_files: Mapped[Optional[str]] = mapped_column(Text, nullable=True, deferred=True)
     created_at: Mapped[object] = mapped_column(
         _timestamp, server_default=text("CURRENT_TIMESTAMP(6)")
     )

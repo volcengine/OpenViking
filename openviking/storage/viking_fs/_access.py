@@ -102,23 +102,24 @@ class _AccessMixin:
     def set_frozen_file_reader(
         self, reader: Callable[[str], Awaitable[tuple[str, ...]]] | None
     ) -> None:
-        """Share account authorization with background contexts lacking HTTP auth."""
+        """Load account write restrictions on demand for requests and background work."""
         self._frozen_file_reader = reader
+
+    async def _load_frozen_files(self, ctx: RequestContext) -> None:
+        reader = getattr(self, "_frozen_file_reader", None)
+        if ctx.frozen_files is None and reader is not None:
+            ctx.bind_frozen_files(await reader(ctx.account_id))
 
     async def _ensure_file_changes_allowed(
         self, uris: Sequence[str], ctx: Optional[RequestContext], *, recursive: bool = False
     ) -> None:
         """Reject intersecting changes, independently of roles, ACL and task leases."""
         real_ctx = self._ctx_or_default(ctx)
-        reader = getattr(self, "_frozen_file_reader", None)
-        if real_ctx.frozen_files is None and reader is not None:
-            real_ctx.bind_frozen_files(await reader(real_ctx.account_id))
+        await self._load_frozen_files(real_ctx)
         if not real_ctx.frozen_files:
             return
-        # Match backend-normalized paths. Case-fold conservatively so localfs
-        # aliases cannot bypass a lock; case-sensitive backends may deny aliases too.
         for uri in dict.fromkeys(uris):
-            scope = PolicyPathScope(self._uri_to_path(uri, ctx=real_ctx).casefold(), recursive)
+            scope = PolicyPathScope(self._uri_to_path(uri, ctx=real_ctx), recursive)
             if any(scope.intersection(frozen) is not None for frozen in real_ctx.frozen_files):
                 error = PermissionDeniedError(
                     "File changes are blocked by an account administrator",

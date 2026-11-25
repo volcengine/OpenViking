@@ -315,13 +315,13 @@ class RequestContext:
     # the triggering user's resource ACL. Tenant and namespace checks still apply.
     bypass_acl: bool = False
     data_access: DataAccessScope | None = field(default=None, repr=False)
-    # None means a background context has not loaded account authorization yet.
+    # None means this request/execution has not loaded the write restrictions yet.
     frozen_files: tuple[PolicyPathScope, ...] | None = field(default=None, repr=False)
 
     def bind_frozen_files(self, uris: Iterable[str]) -> None:
         """Compile server-validated metadata once for this request/execution."""
         self.frozen_files = tuple(
-            PolicyPathScope(f"/local/{self.account_id}/{uri[len('viking://') :]}".casefold(), False)
+            PolicyPathScope(f"/local/{self.account_id}/{uri[len('viking://') :]}", False)
             for uri in uris
         )
 

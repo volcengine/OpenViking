@@ -6,7 +6,6 @@ CREATE TABLE `ov_accounts` (
     account_pk BIGINT NOT NULL AUTO_INCREMENT,
     service_name VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
     account_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
-    frozen_files TEXT NULL,
     created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     deletion_task_id VARCHAR(64) NULL,
     deletion_owner_account_id VARCHAR(255) COLLATE utf8mb4_bin NULL,

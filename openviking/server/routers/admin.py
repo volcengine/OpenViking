@@ -1328,7 +1328,7 @@ async def get_frozen_file(
             "account_id": account_id,
             "user_id": user_id,
             "path": path,
-            "frozen": any(candidate.casefold() == uri.casefold() for candidate in paths),
+            "frozen": uri in paths,
         },
     )
 
