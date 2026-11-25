@@ -112,12 +112,15 @@ class IngestOrchestrator:
             messages, new_cursor = source.read_messages(ref, cursor, DEFAULT_READ_LIMIT)
             if not messages:
                 from_value = (cursor or Cursor.zero(source.cursor_kind)).value
-                if not dry_run and new_cursor.value != from_value:
+                if new_cursor.value == from_value:
+                    break
+                if not dry_run:
                     sid = self.replayer.ov_session_id(name, ref.native_session_id)
                     self.store.advance_cursor(
                         name, ref.native_session_id, sid, new_cursor, locator=ref.locator
                     )
-                break
+                cursor = new_cursor
+                continue
             if dry_run:
                 total += sum(1 for m in messages if (m.text or "").strip() or m.parts)
             else:

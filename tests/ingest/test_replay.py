@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Replay driver: SDK-client chunking/ensure, batch append, commit, and crash reconcile."""
 
+import sqlite3
 from contextlib import closing
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from openviking import AsyncHTTPClient
 from openviking.ingest.cursor_store import CursorStore
@@ -11,7 +14,9 @@ from openviking.ingest.models import BYTE_OFFSET, Cursor, NormalizedMessage, Ses
 from openviking.ingest.orchestrator import IngestOrchestrator
 from openviking.ingest.poller import IngestPoller
 from openviking.ingest.replay import ConversationReplayClient, SessionReplayer
+from openviking.ingest.sources.base import DEFAULT_READ_LIMIT
 from openviking.ingest.sources.hermes import HermesSource
+from openviking.ingest.sources.opencode import OpenCodeSource
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils.config.ingest_config import IngestConfig, IngestHarnessConfig
 
@@ -227,6 +232,72 @@ async def test_reconcile_drops_unlanded_batch(tmp_path):
         assert confirmed is not None
         assert confirmed.cursor.offset == log.stat().st_size
         assert confirmed.pending_count == 0
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+async def test_backfill_reads_past_an_empty_sqlite_page(tmp_path, dry_run):
+    database = tmp_path / "opencode.db"
+    with closing(sqlite3.connect(database)) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE session (id TEXT, title TEXT, directory TEXT, model TEXT, time_created INT);
+            CREATE TABLE message (id TEXT, session_id TEXT, time_created INT, data TEXT);
+            CREATE TABLE part (id TEXT, message_id TEXT, time_created INT, data TEXT);
+            INSERT INTO session VALUES ('s1', 'demo', '', 'model', 1);
+            """
+        )
+        conn.executemany(
+            "INSERT INTO message VALUES (?, 's1', ?, ?)",
+            (
+                (f"skipped-{i}", i + 1, '{"role":"assistant","finish":"stop"}')
+                for i in range(DEFAULT_READ_LIMIT)
+            ),
+        )
+        conn.executescript(
+            """
+            INSERT INTO part SELECT id, id, time_created, '{"type":"step-start"}' FROM message;
+            """
+        )
+        conn.execute(
+            "INSERT INTO message VALUES ('valid', 's1', ?, ?)",
+            (DEFAULT_READ_LIMIT + 1, '{"role":"user"}'),
+        )
+        conn.execute(
+            "INSERT INTO part VALUES ('text', 'valid', 1, ?)", ('{"type":"text","text":"hello"}',)
+        )
+        conn.execute(
+            "INSERT INTO message VALUES ('incomplete', 's1', ?, ?)",
+            (DEFAULT_READ_LIMIT + 2, '{"role":"assistant"}'),
+        )
+        conn.commit()
+
+    config = IngestHarnessConfig(enabled=True, paths=[str(database)])
+    source = OpenCodeSource(config, fallback_user="test")
+    sdk = _FakeSDK()
+    with closing(CursorStore(tmp_path / "state")) as store:
+        replayer = SessionReplayer(ConversationReplayClient(sdk), store)
+        orchestrator = IngestOrchestrator(IngestConfig(), replayer)
+        stats = await orchestrator.backfill_source("opencode", config, source, dry_run=dry_run)
+        assert (stats.sessions, stats.messages, stats.committed, stats.errors) == (
+            1,
+            1,
+            int(not dry_run),
+            [],
+        )
+
+        record = store.get("opencode", "s1")
+        if dry_run:
+            assert record is None
+            assert sdk.batches == sdk.commits == []
+        else:
+            assert record is not None
+            assert record.cursor.value == {"time": DEFAULT_READ_LIMIT + 1, "id": "valid"}
+            [(session_id, messages)] = sdk.batches
+            assert [message["content"] for message in messages] == ["hello"]
+            repeated = await orchestrator.backfill_source("opencode", config, source)
+            assert (repeated.messages, repeated.committed, repeated.errors) == (0, 0, [])
+            assert len(sdk.batches) == 1
+            assert sdk.commits == [(session_id, 0)]
 
 
 async def test_threshold_commit(tmp_path):
