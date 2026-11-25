@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
     from openviking.scheduling.expiry import ExpiryScheduler
     from openviking.service.session_expiry import SessionExpiryAdapter
+    from openviking.service.session_idle_sqlite import SQLiteSessionIdleIndex
     from openviking.session.compressor_v3 import SessionCompressorV3
     from openviking.usage_reporter import UsageReporter
 
@@ -96,6 +97,10 @@ class SessionService:
         # Strong refs so spawned tasks aren't GC'd mid-await.
         self._auto_commit_tasks: set[asyncio.Task] = set()
         self._session_expiry_adapter: Optional["SessionExpiryAdapter"] = None
+        self._session_idle_index: Optional["SQLiteSessionIdleIndex"] = None
+
+    def set_session_idle_index(self, index: Optional["SQLiteSessionIdleIndex"]) -> None:
+        self._session_idle_index = index
 
     def configure_expiry(
         self,
@@ -257,7 +262,7 @@ class SessionService:
             usage_reporter=self._usage_reporter,
             vlm_resolver=self._vlm_resolver,
             runtime_config_manager=self._runtime_config_manager,
-            expiry_reporter=self._session_expiry_adapter,
+            expiry_reporter=self._session_idle_index or self._session_expiry_adapter,
             privacy_config_service=self._privacy_config_service,
             privacy_sanitizer=self._privacy_sanitizer,
         )

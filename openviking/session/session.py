@@ -888,6 +888,13 @@ class Session:
                     self._meta.auto_commit_policy = AutoCommitPolicy.from_dict(existing).to_dict()
             await self._save_meta(lease_ref=lease)
 
+            policy_report = getattr(self._expiry_reporter, "report_after_policy_update", None)
+            if update_auto_commit_policy and policy_report and self._meta.last_message_at:
+                try:
+                    await policy_report(self._build_expiry_snapshot_locked())
+                except Exception as exc:
+                    self._expiry_reporter.record_report_failure("policy_report_failed", exc)
+
     async def update_event_search_tags(self, event_search_tags: List[str]) -> None:
         """Update event-memory default tags."""
         await self.update_config(event_search_tags=event_search_tags)
@@ -947,7 +954,16 @@ class Session:
                     snapshot = self._build_expiry_snapshot_locked()
                 except Exception as exc:
                     snapshot_error = exc
-        if self._expiry_reporter is not None:
+                if getattr(self._expiry_reporter, "report_under_lock", False):
+                    if snapshot is not None:
+                        await self._expiry_reporter.report_after_append(snapshot)
+                    else:
+                        self._expiry_reporter.record_report_failure(
+                            "snapshot_build_failed", snapshot_error
+                        )
+        if self._expiry_reporter is not None and not getattr(
+            self._expiry_reporter, "report_under_lock", False
+        ):
             if snapshot is not None:
                 await self._expiry_reporter.report_after_append(snapshot)
             else:
