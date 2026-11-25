@@ -4,7 +4,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -129,9 +129,12 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
             events.append("resource_tasks")
 
     class QueueManager:
-        def stop(self) -> None:
+        def stop_workers(self) -> None:
             assert wiring.get_ttl_adapter() is adapter
             events.append("queue_manager")
+
+        def stop(self) -> None:
+            pass
 
     class RagfsClient:
         def close(self) -> None:
@@ -146,7 +149,9 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
         stop_roles=AsyncMock(side_effect=lambda **_: events.append("expiry_roles")),
         close=AsyncMock(side_effect=lambda: events.append("expiry_storage")),
     )
-    service._session_service = SimpleNamespace(set_session_expiry_adapter=lambda _: None)
+    service._session_service = SimpleNamespace(
+        set_session_expiry_adapter=lambda _: None, set_usage_reporter=Mock()
+    )
     service._runtime_config_manager = None
     service._watch_runtime = None
     service._watch_manager = None
@@ -154,7 +159,7 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
     service._queue_manager = QueueManager()
     service._vikingdb_manager = None
     service._agfs_client = RagfsClient()
-    service._viking_fs = object()
+    service._viking_fs = SimpleNamespace(set_post_write_hook=Mock())
     service._resource_processor = object()
     service._skill_processor = object()
     service._session_compressor = object()

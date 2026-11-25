@@ -149,6 +149,7 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         worker_env.delenv(app_module.WORKER_PORT_ENV, raising=False)
         worker_env.delenv(app_module.WORKER_WITH_BOT_ENV, raising=False)
         worker_env.delenv(app_module.WORKER_BOT_API_URL_ENV, raising=False)
+        worker_env.delenv(app_module.WORKER_ROLES_ENV, raising=False)
 
         bootstrap.main()
 
@@ -158,6 +159,7 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         assert os.environ[app_module.WORKER_PORT_ENV] == str(config.port)
         assert os.environ[app_module.WORKER_WITH_BOT_ENV] == "1"
         assert os.environ[app_module.WORKER_BOT_API_URL_ENV] == "http://127.0.0.1:19000"
+        assert os.environ[app_module.WORKER_ROLES_ENV] == "api,queue_worker,scheduler"
 
 
 def test_main_prints_safe_config_diagnostics_on_validation_error(monkeypatch, capsys):
@@ -210,6 +212,7 @@ def test_worker_factory_replays_bot_overrides(monkeypatch):
     monkeypatch.setenv(app_module.WORKER_PORT_ENV, "1999")
     monkeypatch.setenv(app_module.WORKER_WITH_BOT_ENV, "1")
     monkeypatch.setenv(app_module.WORKER_BOT_API_URL_ENV, "http://127.0.0.1:19000")
+    monkeypatch.setenv(app_module.WORKER_ROLES_ENV, "api,scheduler")
     monkeypatch.setattr(
         app_module,
         "resolve_config_path",
@@ -240,6 +243,7 @@ def test_worker_factory_replays_bot_overrides(monkeypatch):
     assert worker_config.port == 1999
     assert worker_config.with_bot is True
     assert worker_config.bot_api_url == "http://127.0.0.1:19000"
+    assert worker_config.roles == ["api", "scheduler"]
     assert captured == {
         "load_path": "/tmp/worker-ov.conf",
         "app_config": config,
