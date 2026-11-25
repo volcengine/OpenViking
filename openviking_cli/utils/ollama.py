@@ -111,14 +111,24 @@ def get_ollama_models(
 
 
 def is_model_available(model_name: str, available: list[str]) -> bool:
-    """Check if *model_name* is available locally (prefix match for tag variants)."""
-    for m in available:
-        if m == model_name or m.startswith(model_name + "-"):
-            return True
-        # model_name without tag matches model with ":latest"
-        if ":" not in model_name and m.split(":")[0] == model_name:
-            return True
-    return False
+    """Check if the requested Ollama model and tag are available locally."""
+
+    def canonical_name(name: str) -> tuple[str, str, str, str]:
+        # Ollama defaults the registry, namespace, and tag when omitted.
+        parts = name.rsplit("/", 2)
+        if len(parts) == 1:
+            registry, namespace, model = "registry.ollama.ai", "library", parts[0]
+        elif len(parts) == 2:
+            registry, namespace, model = "registry.ollama.ai", parts[0], parts[1]
+        else:
+            registry, namespace, model = parts
+            registry = registry.split("://", 1)[-1]
+        model, separator, tag = model.partition(":")
+        tag = tag if separator else "latest"
+        return registry.casefold(), namespace.casefold(), model.casefold(), tag.casefold()
+
+    requested = canonical_name(model_name)
+    return any(canonical_name(name) == requested for name in available)
 
 
 # ---------------------------------------------------------------------------

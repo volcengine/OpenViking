@@ -111,16 +111,54 @@ class TestModelAvailability:
         assert is_model_available("qwen3-embedding:0.6b", available) is True
 
     def test_no_match(self):
-        available = ["qwen3-embedding:0.6b"]
-        assert is_model_available("nomic-embed-text", available) is False
+        assert is_model_available("nomic-embed-text", ["qwen3-embedding:0.6b"]) is False
 
     def test_tagless_matches_latest(self):
-        available = ["gemma:300m"]
-        assert is_model_available("gemma", available) is True
+        assert is_model_available("gemma", ["gemma:latest"]) is True
 
-    def test_prefix_variant(self):
-        available = ["qwen3-embedding:0.6b-fp16"]
-        assert is_model_available("qwen3-embedding:0.6b", available) is True
+    def test_tagless_does_not_match_another_tag(self):
+        assert is_model_available("gemma", ["gemma:300m"]) is False
+
+    def test_explicit_latest_matches_tagless_entry(self):
+        assert is_model_available("gemma:latest", ["gemma"]) is True
+
+    def test_tag_prefix_variant_is_distinct(self):
+        assert is_model_available("qwen3-embedding:0.6b", ["qwen3-embedding:0.6b-fp16"]) is False
+
+    def test_model_name_prefix_variant_is_distinct(self):
+        assert is_model_available("gemma", ["gemma-other:latest"]) is False
+
+    def test_registry_port_is_not_a_tag(self):
+        model = "localhost:5000/team/gemma"
+        assert is_model_available(model, [model + ":latest"]) is True
+        assert is_model_available(model, [model + ":300m"]) is False
+
+    def test_explicit_tags_on_registry_are_compared_exactly(self):
+        model = "localhost:5000/team/gemma:300m"
+        assert is_model_available(model, [model]) is True
+        assert is_model_available(model, [model + "-fp16"]) is False
+
+    def test_case_insensitive_names_and_tags(self):
+        assert is_model_available("gemma", ["Gemma:LATEST"]) is True
+        assert is_model_available("qwen3-embedding:0.6b", ["Qwen3-Embedding:0.6B"]) is True
+
+    def test_default_namespace_and_registry(self):
+        assert is_model_available("library/gemma:latest", ["gemma:latest"]) is True
+        assert is_model_available("registry.ollama.ai/library/gemma", ["gemma:latest"]) is True
+        assert is_model_available("registry.ollama.ai/team/gemma", ["team/gemma:latest"]) is True
+
+    def test_nondefault_namespace_is_distinct(self):
+        assert is_model_available("team/gemma", ["gemma:latest"]) is False
+        assert is_model_available("team/gemma", ["other/gemma:latest"]) is False
+
+    def test_different_registry_hosts_and_ports_are_distinct(self):
+        model = "localhost:5000/team/gemma"
+        assert is_model_available(model, ["localhost:5001/team/gemma:latest"]) is False
+        assert is_model_available("other.example/team/gemma", ["team/gemma:latest"]) is False
+
+    def test_registry_case_and_scheme_do_not_change_identity(self):
+        model = "http://LOCALHOST:5000/Team/Gemma:Latest"
+        assert is_model_available(model, ["localhost:5000/team/gemma:latest"]) is True
 
 
 # ---------------------------------------------------------------------------
