@@ -830,7 +830,9 @@ class SessionCompressorV3:
         update_result = await updater.submit(
             MemoryUpdateRequest(
                 operations=operations,
-                messages=list(messages),
+                # ranges index the image-normalized extraction messages. Rebuild
+                # the writer context from that same list, not the raw image parts.
+                messages=list(context_provider.messages),
                 ctx=ctx,
                 strict_extract_errors=strict_extract_errors,
                 memory_registry=registry,
