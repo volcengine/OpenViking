@@ -228,6 +228,24 @@ fn show_admin(value: Value, output_format: OutputFormat, compact: bool) -> Resul
     Ok(())
 }
 
+pub async fn frozen_file(
+    client: &HttpClient,
+    account_id: &str,
+    user_id: &str,
+    path: &str,
+    frozen: Option<bool>,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    show_admin(
+        client
+            .admin_frozen_file(account_id, user_id, path, frozen)
+            .await?,
+        output_format,
+        compact,
+    )
+}
+
 pub async fn set_role(
     client: &HttpClient,
     account_id: &str,

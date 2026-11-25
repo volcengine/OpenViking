@@ -8,6 +8,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import json
 import secrets
 from contextlib import asynccontextmanager
 from datetime import timezone
@@ -36,6 +37,9 @@ from openviking.server.account_stores.models import (
     GroupSummary,
     UsersPage,
     UserSummary,
+    frozen_file_uri,
+    update_frozen_files,
+    validate_frozen_files,
 )
 from openviking.server.account_stores.sql_schema import (
     Account,
@@ -498,6 +502,35 @@ class SQLAccountStore(AccountStore):
                 )
             ).one_or_none()
         return self._account_summary(*row) if row else None
+
+    async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        async with self._session_factory() as session:
+            value = await session.scalar(
+                select(Account.frozen_files).where(
+                    Account.service_name == self._service_name, Account.account_id == account_id
+                )
+            )
+        return validate_frozen_files(json.loads(value) if value is not None else [])
+
+    async def set_frozen_file(
+        self, account_id: str, user_id: str, path: str, frozen: bool
+    ) -> tuple[str, ...]:
+        uri = frozen_file_uri(user_id, path)
+        async with self._transaction() as session:
+            account = await self._lock_account(session, account_id)
+            self._require_active(account)
+            if frozen:
+                user = await self._lock_user(session, account, user_id)
+                self._require_active(user)
+                if user.role != Role.USER:
+                    raise PermissionDeniedError("Frozen files require a USER target")
+            paths = update_frozen_files(
+                json.loads(account.frozen_files) if account.frozen_files is not None else [],
+                uri,
+                frozen,
+            )
+            account.frozen_files = json.dumps(paths)
+        return paths
 
     async def get_user(self, account_id: str, user_id: str) -> UserSummary | None:
         async with self._session_factory() as session:

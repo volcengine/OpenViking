@@ -60,6 +60,33 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 - `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
 
+## Account frozen file list
+
+An ADMIN can maintain a persistent frozen file list within its own account, containing up to ten file paths for ordinary USER identities (including agents). Operations only access account authorization metadata; they neither read the target file nor grant access to the user's data.
+
+```bash
+ov admin freeze-file acme agent-a skills/example/SKILL.md
+ov admin frozen-file-status acme agent-a skills/example/SKILL.md
+ov admin unfreeze-file acme agent-a skills/example/SKILL.md
+```
+
+ROOT can manage a specified account with `--sudo`. USER and GLOBAL cannot manage these rules; freezing requires a USER target. Paths are relative to that user's root and use GLOBAL's strict literal path syntax: no globs, URIs, encoded escapes, traversal or storage-internal filenames, and at most 255 bytes per component. Matching and unfreezing conservatively ignore case to prevent localfs alias bypasses; case variants on case-sensitive backends are protected too.
+
+The file need not exist. Status only reports membership in the account frozen file list, without existence, content, size or summaries. Repeated freeze/unfreeze operations are idempotent; old rules can still be removed after the target user is deleted or changes role.
+
+Protection applies to writes, appends, deletes, moves, replacements, background writes and version restore. Removing/moving an ancestor or copying into a target subtree intersecting a blocked path is denied. Reads retain existing permissions; unfreezing grants no permissions. Business leases, `bypass_acl` and disabling automatic PathLock do not bypass protection.
+
+Changes follow existing account-store cache refresh/invalidation, with no immediate-effect guarantee: FileStore uses its watcher (or persisted account reads when disabled), Redis/MySQL uses account generations and TTL, and SQL reads directly. In-flight requests/executions retain their authorization snapshot; queued tasks load account rules when executing. Failed reads or invalid rules are never treated as an empty account frozen file list.
+
+| Method | Path | Parameters |
+|--------|------|------------|
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | query: `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | JSON: `{"path":"skills/example/SKILL.md","frozen":true}` |
+
+The result contains `account_id`, `user_id`, `path`, and `frozen`. This is independent of the temporary lease reported by `stat.isLocked`. Rejected changes return `PERMISSION_DENIED` with `details.reason=admin_file_frozen`.
+
+Existing MySQL/PostgreSQL deployments must apply `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql` before upgrading. Initial schemas already include the column. External account-store providers must implement this metadata capability to support the management commands.
+
 ## Groups
 
 A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.

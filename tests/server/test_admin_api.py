@@ -231,6 +231,66 @@ async def lightweight_admin_client(lightweight_admin_app):
         yield c
 
 
+async def test_admin_frozen_files_reach_native_fs_and_background(
+    admin_app, admin_service, admin_client
+):
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    account_id = _uid()
+    manager = admin_app.state.api_key_manager
+    admin_key = await manager.create_account(account_id, "admin")
+    user_key = await manager.register_user(account_id, "agent")
+    other_key = await manager.create_account(_uid(), "admin")
+    fs = admin_service.viking_fs
+    fs.set_frozen_file_reader(manager.get_frozen_files)
+    user = UserIdentifier(account_id, "agent")
+    uri = "viking://user/agent/skills/example/SKILL.md"
+    await fs.write_file(uri, "original", ctx=RequestContext(user, Role.USER))
+    url = f"/api/v1/admin/accounts/{account_id}/users/agent/frozen-file"
+    result = await admin_client.put(
+        url,
+        headers={"X-API-Key": admin_key},
+        json={"path": "skills/example/SKILL.md", "frozen": True},
+    )
+    assert result.status_code == 200, result.text
+    status = await admin_client.get(
+        url, headers={"X-API-Key": admin_key}, params={"path": "skills/example/SKILL.md"}
+    )
+    assert status.json()["result"]["frozen"] is True
+    assert set(status.json()["result"]) == {"account_id", "user_id", "path", "frozen"}
+    for key in (user_key, other_key):
+        denied = await admin_client.put(
+            url,
+            headers={"X-API-Key": key},
+            json={"path": "skills/example/SKILL.md", "frozen": False},
+        )
+        assert denied.status_code == 403
+    for role in (Role.USER, Role.ROOT):
+        with pytest.raises(PermissionDeniedError):
+            await fs.write_file(uri, "replacement", ctx=RequestContext(user, role))
+    with pytest.raises(PermissionDeniedError):
+        await fs.rm(
+            "viking://user/agent/skills", recursive=True, ctx=RequestContext(user, Role.USER)
+        )
+    with pytest.raises(PermissionDeniedError):
+        await fs.mv(
+            "viking://user/agent/skills/example",
+            "viking://user/agent/skills/moved",
+            ctx=RequestContext(user, Role.USER),
+        )
+    assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "original"
+    with pytest.raises(PermissionDeniedError):
+        await fs.read_file(uri, ctx=RequestContext(UserIdentifier(account_id, "admin"), Role.ADMIN))
+    result = await admin_client.put(
+        url,
+        headers={"X-API-Key": admin_key},
+        json={"path": "skills/example/SKILL.md", "frozen": False},
+    )
+    assert result.status_code == 200, result.text
+    await fs.write_file(uri, "updated", ctx=RequestContext(user, Role.USER))
+    assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "updated"
+
+
 @pytest_asyncio.fixture(scope="function")
 async def admin_service(service):
     """Use the shared service fixture with local fake models."""

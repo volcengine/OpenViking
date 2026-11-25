@@ -60,6 +60,33 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
 
+## 账号内冻结列表
+
+管理员可以维护账号内冻结列表，登记本 account 普通 USER（包括以 USER 身份运行的 agent）的文件路径。列表持久保存，最多包含十条。操作只读写账号授权元信息，不读取目标文件，也不授予管理员读取该 user 数据的权限。
+
+```bash
+ov admin freeze-file acme agent-a skills/example/SKILL.md
+ov admin frozen-file-status acme agent-a skills/example/SKILL.md
+ov admin unfreeze-file acme agent-a skills/example/SKILL.md
+```
+
+ROOT 可以使用 `--sudo` 管理指定 account。普通 USER 和 GLOBAL 无权管理账号内冻结列表；新增冻结只允许 USER 目标。路径相对于目标 user 根目录，采用 GLOBAL 的严格字面路径语法：不支持通配符、URI、编码转义、`..` 或内部存储文件名，单段不得超过 255 字节。为防止 localfs 大小写别名绕过，冻结匹配及解冻保守地忽略大小写；大小写敏感后端上的同名大小写变体也会受保护。
+
+冻结路径可以尚不存在。状态仅表示路径是否在账号内冻结列表中，不暴露文件存在性、内容、大小或摘要。重复冻结、解冻是幂等的；目标 user 已删除或变更角色后仍可清除旧规则。
+
+写入、追加、删除、移动、覆盖、后台写入和版本恢复会检查账号内冻结列表。删除或移动包含冻结路径的目录、向与冻结路径相交的目标子树复制也会拒绝。读取权限保持原样；解冻不会授予原本没有的权限。业务租约、`bypass_acl` 和关闭自动 PathLock 都不能解除这层保护。
+
+规则沿用账号存储缓存的刷新/失效机制，不保证立即生效：FileStore 使用既有 watcher 刷新（关闭 watcher 时读取持久账号记录），Redis/MySQL 使用既有账号缓存版本和 TTL，SQL 直接读取。请求或后台执行已取得的规则快照允许继续使用；排队任务执行时加载账号规则。规则读取或解析失败不会被解释为账号内冻结列表为空。
+
+| 方法 | 路径 | 参数 |
+|------|------|------|
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | query: `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | JSON: `{"path":"skills/example/SKILL.md","frozen":true}` |
+
+响应 `result` 包含 `account_id`、`user_id`、`path`、`frozen`。该状态与 `stat.isLocked` 的短期并发租约状态独立。变更被拒绝时返回 `PERMISSION_DENIED`，`details.reason` 为 `admin_file_frozen`。
+
+已有 MySQL/PostgreSQL 部署需先执行 `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql`。新部署的初始化 SQL 已包含该列。外部账号存储 provider 需要实现对应元信息能力后才能使用管理命令。
+
 ## 用户组
 
 用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。`group_id` 由调用者创建时指定，使用与 `user_id` 相同的标识符规则，是 account 内唯一且稳定的标识；不存在单独的组名。组内只能加入当前 account 已存在的用户，不支持嵌套组。

@@ -26,6 +26,9 @@ from openviking.server.account_stores.models import (
     GroupSummary,
     UsersPage,
     UserSummary,
+    frozen_file_uri,
+    update_frozen_files,
+    validate_frozen_files,
 )
 from openviking.server.api_keys.models import (
     AccountInfo,
@@ -316,10 +319,12 @@ class FileStore(AccountStore):
                     created_at=created_at,
                     groups_loaded=False,
                     deletion=info.get("deletion"),
+                    frozen_files=validate_frozen_files(info.get("frozen_files", [])),
                 )
             else:
                 account.created_at = created_at
                 account.deletion = info.get("deletion")
+                account.frozen_files = validate_frozen_files(info.get("frozen_files", []))
 
     async def _refresh_account_users_from_store_unlocked(self, account_id: str) -> None:
         users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
@@ -364,6 +369,7 @@ class FileStore(AccountStore):
                 users=users,
                 groups=groups,
                 deletion=info.get("deletion"),
+                frozen_files=validate_frozen_files(info.get("frozen_files", [])),
             )
             user_group_ids.update(
                 {
@@ -1321,6 +1327,7 @@ class FileStore(AccountStore):
         updated_account_ids: set[str] | None = None,
         delete_account_ids: set[str] | None = None,
         reject_existing_account_ids: set[str] | None = None,
+        frozen_file_update: tuple[str, str, bool] | None = None,
     ) -> set[str]:
         """Merge local account changes into the latest locked registry snapshot."""
         try:
@@ -1344,12 +1351,40 @@ class FileStore(AccountStore):
                     continue
                 if account_id not in accounts:
                     created_account_ids.add(account_id)
-                accounts[account_id] = {"created_at": info.created_at}
+                accounts.setdefault(account_id, {})["created_at"] = info.created_at
                 if info.deletion is not None:
                     accounts[account_id]["deletion"] = dict(info.deletion)
+                else:
+                    accounts[account_id].pop("deletion", None)
+            frozen_files = None
+            if frozen_file_update is not None:
+                account_id, uri, frozen = frozen_file_update
+                account_data = accounts.get(account_id)
+                if account_data is None:
+                    raise NotFoundError(account_id, "account")
+                if account_data.get("deletion"):
+                    raise FailedPreconditionError("Account deletion is in progress")
+                user_id = uri[len("viking://user/") :].split("/", 1)[0]
+                if frozen:
+                    users_data = await self._read_json(
+                        USERS_PATH_TEMPLATE.format(account_id=account_id)
+                    )
+                    user = (users_data or {}).get("users", {}).get(user_id)
+                    if user is None:
+                        raise NotFoundError(user_id, "user")
+                    if user.get("deletion"):
+                        raise FailedPreconditionError("User deletion is in progress")
+                    if user.get("role", "user") != Role.USER:
+                        raise PermissionDeniedError("Frozen files require a USER target")
+                frozen_files = update_frozen_files(
+                    account_data.get("frozen_files", []), uri, frozen
+                )
+                account_data["frozen_files"] = list(frozen_files)
             for account_id in delete_account_ids or set():
                 accounts.pop(account_id, None)
             await self._write_json(ACCOUNTS_PATH, data, lease_ref=lease)
+            if frozen_file_update is not None and frozen_files is not None:
+                self._accounts[account_id].frozen_files = frozen_files
             return created_account_ids
         finally:
             await self._async_agfs.pathlock_release(lease)
@@ -1455,6 +1490,21 @@ class FileStore(AccountStore):
         if info is None:
             return None
         return self._account_summary(account_id, info)
+
+    async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        await self._refresh_accounts_for_management_read()
+        info = self._accounts.get(account_id)
+        return info.frozen_files if info is not None else ()
+
+    async def set_frozen_file(
+        self, account_id: str, user_id: str, path: str, frozen: bool
+    ) -> tuple[str, ...]:
+        self._require_writable()
+        uri = frozen_file_uri(user_id, path)
+        async with self._mutation_lock:
+            await self._refresh_accounts_for_management_read_unlocked()
+            await self._save_accounts_json(frozen_file_update=(account_id, uri, frozen))
+            return self._accounts[account_id].frozen_files
 
     def _account_summary(self, account_id: str, info: AccountInfo) -> AccountSummary:
         """Credential-free metadata for one in-memory account (O(1))."""

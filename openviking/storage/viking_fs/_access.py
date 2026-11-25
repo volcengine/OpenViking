@@ -5,11 +5,13 @@
 import hashlib
 import inspect
 import re
+from collections.abc import Awaitable
 from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 from openviking.core.context import ContextLevel
+from openviking.core.global_policy import PolicyPathScope
 from openviking.core.namespace import (
     is_accessible as namespace_is_accessible,
 )
@@ -96,6 +98,34 @@ class _AccessMixin:
 
     def set_deletion_guard(self, guard: Optional[Callable[[str, str], bool]]) -> None:
         self._deletion_guard = guard
+
+    def set_frozen_file_reader(
+        self, reader: Callable[[str], Awaitable[tuple[str, ...]]] | None
+    ) -> None:
+        """Share account authorization with background contexts lacking HTTP auth."""
+        self._frozen_file_reader = reader
+
+    async def _ensure_file_changes_allowed(
+        self, uris: Sequence[str], ctx: Optional[RequestContext], *, recursive: bool = False
+    ) -> None:
+        """Reject intersecting changes, independently of roles, ACL and task leases."""
+        real_ctx = self._ctx_or_default(ctx)
+        reader = getattr(self, "_frozen_file_reader", None)
+        if real_ctx.frozen_files is None and reader is not None:
+            real_ctx.bind_frozen_files(await reader(real_ctx.account_id))
+        if not real_ctx.frozen_files:
+            return
+        # Match backend-normalized paths. Case-fold conservatively so localfs
+        # aliases cannot bypass a lock; case-sensitive backends may deny aliases too.
+        for uri in dict.fromkeys(uris):
+            scope = PolicyPathScope(self._uri_to_path(uri, ctx=real_ctx).casefold(), recursive)
+            if any(scope.intersection(frozen) is not None for frozen in real_ctx.frozen_files):
+                error = PermissionDeniedError(
+                    "File changes are blocked by an account administrator",
+                    resource=uri,
+                )
+                error.details["reason"] = "admin_file_frozen"
+                raise error
 
     @staticmethod
     def _default_ctx() -> RequestContext:
@@ -375,6 +405,7 @@ class _AccessMixin:
 
     async def _ensure_destination_access(self, uri: str, ctx: Optional[RequestContext]) -> bool:
         """Authorize copy/move/import destinations and return whether the target exists."""
+        await self._ensure_file_changes_allowed([uri], ctx)
         try:
             stat = await self._async_agfs.stat(self._uri_to_path(uri, ctx=ctx))
         except Exception as exc:
@@ -423,6 +454,7 @@ class _AccessMixin:
             return
 
         await self._ensure_identity_not_deleting(real_ctx)
+        await self._ensure_file_changes_allowed(uris, real_ctx)
         for uri in uris:
             self._safe_uri_parts(uri)
             if uri == "viking://" and real_ctx.role == Role.USER:

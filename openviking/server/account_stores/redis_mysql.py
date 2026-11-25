@@ -740,6 +740,24 @@ class RedisMySQLAccountStore(AccountStore):
     async def get_account(self, account_id: str) -> AccountSummary | None:
         return await self._read_mysql(lambda: self._mysql.get_account(account_id))
 
+    async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        value = await self._read_through(
+            account_id,
+            self._key(account_id, "frozen_files"),
+            lambda: self._mysql.get_frozen_files(account_id),
+        )
+        from openviking.server.account_stores.models import validate_frozen_files
+
+        return validate_frozen_files(value)
+
+    async def set_frozen_file(
+        self, account_id: str, user_id: str, path: str, frozen: bool
+    ) -> tuple[str, ...]:
+        return await self._mutate_account(
+            account_id,
+            lambda: self._mysql.set_frozen_file(account_id, user_id, path, frozen),
+        )
+
     async def create_account(
         self,
         account_id: str,

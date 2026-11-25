@@ -112,6 +112,13 @@ class _SnapshotMixin:
     ) -> None:
         """Authorize every VFS mutation reported by a restore dry-run."""
         diff = plan["diff"]
+        # ACL creation checks may use parents; administrator locks always check
+        # the actual restored files, including currently missing destinations.
+        changed_uris = [
+            self._tree_path_to_uri(f"{tree_dir}/{item['path']}".strip("/"))
+            for item in diff["to_write"]
+        ] + [self._tree_path_to_uri(f"{tree_dir}/{path}".strip("/")) for path in diff["to_delete"]]
+        await self._ensure_file_changes_allowed(changed_uris, ctx, recursive=True)
         write_targets: List[str] = []
         for item in diff["to_write"]:
             tree_path = f"{tree_dir}/{item['path']}".strip("/")
@@ -462,8 +469,13 @@ class _SnapshotMixin:
             )
 
         try:
-            if acl_project_dir is not None:
-                await self._ensure_access(acl_project_dir, real_ctx)
+            if (
+                acl_project_dir is not None
+                or getattr(self, "_frozen_file_reader", None) is not None
+                or real_ctx.frozen_files
+            ):
+                if acl_project_dir is not None:
+                    await self._ensure_access(acl_project_dir, real_ctx)
                 plan = await self._async_agfs.run(
                     "git_restore",
                     **{**kwargs, "dry_run": True},

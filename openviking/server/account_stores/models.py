@@ -4,6 +4,55 @@
 
 from typing import TypedDict
 
+from openviking.core.global_policy import GlobalPolicyError, validate_global_policy_path
+from openviking.core.identifiers import validate_user_id
+from openviking.storage.internal_names import is_storage_internal_name
+from openviking_cli.exceptions import InvalidArgumentError
+
+MAX_FROZEN_FILES = 10
+
+
+def frozen_file_uri(user_id: str, path: str) -> str:
+    """Validate one literal user-relative file path without inspecting user data."""
+    if error := validate_user_id(user_id):
+        raise InvalidArgumentError(error)
+    try:
+        validate_global_policy_path(path)
+        if any(len(part.encode("utf-8")) > 255 for part in path.split("/")):
+            raise InvalidArgumentError("Frozen file path components must not exceed 255 bytes")
+        if any(is_storage_internal_name(part.casefold()) for part in path.split("/")):
+            raise InvalidArgumentError("Frozen files cannot target storage-internal paths")
+    except GlobalPolicyError as exc:
+        raise InvalidArgumentError(str(exc)) from exc
+    return f"viking://user/{user_id}/{path}"
+
+
+def validate_frozen_files(value: object) -> tuple[str, ...]:
+    """Reject corrupt authorization metadata instead of treating it as empty."""
+    if not isinstance(value, (list, tuple)) or len(value) > MAX_FROZEN_FILES:
+        raise InvalidArgumentError(
+            f"Account frozen files must contain at most {MAX_FROZEN_FILES} paths"
+        )
+    for uri in value:
+        if not isinstance(uri, str) or not uri.startswith("viking://user/"):
+            raise InvalidArgumentError("Account frozen files require canonical user file URIs")
+        user_id, separator, path = uri[len("viking://user/") :].partition("/")
+        if not separator or frozen_file_uri(user_id, path) != uri:
+            raise InvalidArgumentError("Account frozen files require canonical user file URIs")
+    return tuple(sorted(set(value)))
+
+
+def update_frozen_files(value: object, uri: str, frozen: bool) -> tuple[str, ...]:
+    """Apply an idempotent change to a persisted snapshot under its storage guard."""
+    paths = set(validate_frozen_files(value))
+    aliases = {path for path in paths if path.casefold() == uri.casefold()}
+    if frozen:
+        if not aliases:
+            paths.add(uri)
+    else:
+        paths.difference_update(aliases)
+    return validate_frozen_files(tuple(paths))
+
 
 class DeletionRecord(TypedDict, total=False):
     task_id: str

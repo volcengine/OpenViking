@@ -4,6 +4,34 @@ use clap::{ArgAction, Subcommand};
 
 #[derive(Subcommand)]
 pub(crate) enum AdminCommands {
+    /// Freeze one user file (at most 10 paths per account)
+    FreezeFile {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+        /// Literal path relative to the user's root
+        #[arg(value_name = "path")]
+        path: String,
+    },
+    /// Unfreeze one user file
+    UnfreezeFile {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+        #[arg(value_name = "path")]
+        path: String,
+    },
+    /// Inspect file freeze status without reading the file
+    FrozenFileStatus {
+        #[arg(value_name = "account-id")]
+        account_id: String,
+        #[arg(value_name = "user-id")]
+        user_id: String,
+        #[arg(value_name = "path")]
+        path: String,
+    },
     /// Create a new account with its first admin user
     CreateAccount {
         /// Account ID to create

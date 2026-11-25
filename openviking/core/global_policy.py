@@ -41,22 +41,30 @@ class PolicyPathScope:
     path: str | None
     recursive: bool
 
+    def contains(self, path: str | None) -> bool:
+        """Compare literal paths at segment boundaries; callers validate inputs."""
+        return self.path == path or (
+            self.recursive
+            and (self.path is None or (path is not None and path.startswith(self.path + "/")))
+        )
+
+    def intersection(self, other: PolicyPathScope) -> PolicyPathScope | None:
+        """Return the overlap of two already validated literal path scopes."""
+        if self.path == other.path:
+            return PolicyPathScope(self.path, self.recursive and other.recursive)
+        if self.recursive and self.contains(other.path):
+            return other
+        if other.recursive and other.contains(self.path):
+            return self
+        return None
+
 
 def _scope_contains(scope: PolicyPathScope, path: str | None) -> bool:
-    return scope.path == path or (
-        scope.recursive
-        and (scope.path is None or (path is not None and path.startswith(scope.path + "/")))
-    )
+    return scope.contains(path)
 
 
 def _scope_intersection(a: PolicyPathScope, b: PolicyPathScope) -> PolicyPathScope | None:
-    if a.path == b.path:
-        return PolicyPathScope(a.path, a.recursive and b.recursive)
-    if a.recursive and _scope_contains(a, b.path):
-        return b
-    if b.recursive and _scope_contains(b, a.path):
-        return a
-    return None
+    return a.intersection(b)
 
 
 def _finish_scopes(

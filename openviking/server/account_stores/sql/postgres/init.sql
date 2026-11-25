@@ -9,6 +9,7 @@ CREATE TABLE ov_accounts (
     account_pk BIGSERIAL PRIMARY KEY,
     service_name VARCHAR(255) COLLATE "C" NOT NULL,
     account_id VARCHAR(255) COLLATE "C" NOT NULL,
+    frozen_files TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP(6) NOT NULL,
     deletion_task_id VARCHAR(64),
     deletion_owner_account_id VARCHAR(255) COLLATE "C",

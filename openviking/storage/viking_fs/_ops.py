@@ -292,6 +292,7 @@ class _OpsMixin:
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+        await self._ensure_file_changes_allowed([target_uri], ctx, recursive=recursive)
 
         async def _delete_vectors() -> int:
             """Delete the target scope without enumerating filesystem entries."""
@@ -470,6 +471,7 @@ class _OpsMixin:
             )
 
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="cp")
+        await self._ensure_file_changes_allowed([new_uri], ctx, recursive=is_dir)
         await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
         lock_requests = (
             self._directory_transfer_lock_requests(old_path, new_path)
@@ -802,6 +804,7 @@ class _OpsMixin:
 
         if is_dir:
             await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
+        await self._ensure_file_changes_allowed([old_uri, new_uri], ctx, recursive=is_dir)
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="mv")
         await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
 
