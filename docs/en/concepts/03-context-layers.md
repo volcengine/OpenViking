@@ -108,6 +108,7 @@ The initial metadata fields are:
 | `source` | Optional import source, normally stored only on the import root |
 | `generated_by` | Generator component and coarse trigger |
 | `freshness` | Direct-child coverage and known pending changes |
+| `wm_template_descriptions` | Fixed template lines copied into a session archive's L1, keyed by section heading |
 
 Known fields are schema-validated. Unknown top-level fields and unknown nested keys inside known objects are silently dropped; they do not enter previews, embeddings, canonical writeback, or metadata-protection comparisons. Existing sidecars without frontmatter remain valid legacy Markdown. Malformed YAML, a missing required `directory`, or an invalid known-field type still fails explicitly.
 

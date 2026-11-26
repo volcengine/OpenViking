@@ -70,7 +70,6 @@ from openviking.session.memory.constants import (
     AGENT_EVOLUTION_MEMORY_TYPES,
 )
 from openviking.session.memory.memory_updater import MemoryUpdateError
-from openviking.session.memory.utils.language import resolve_output_language_from_conversation
 from openviking.session.memory_policy import MemoryPolicy
 from openviking.session.retention import (
     RETENTION_MODE_TURN_BUDGET,
@@ -86,7 +85,10 @@ from openviking.session.working_memory import (
     WM_SEVEN_SECTIONS,
     WM_UPDATE_TOOL,
 )
-from openviking.storage.abstract_overview import render_abstract_overview
+from openviking.storage.abstract_overview import (
+    WM_TEMPLATE_DESCRIPTIONS_KEY,
+    render_abstract_overview,
+)
 from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.model_retry import is_retryable_api_error, retry_async
 from openviking.utils.time_utils import get_current_timestamp
@@ -159,7 +161,7 @@ def _estimate_summary_template_tokens(
     if is_update:
         variables["wm_section_reminders"] = wm.build_wm_section_reminders(latest_archive_overview)
     prompt = render_prompt(
-        "compression.ov_wm_v2_update" if is_update else "compression.ov_wm_v2",
+        "compression.ov_wm_v2_update" if is_update else wm.WM_CREATE_PROMPT_ID,
         variables,
     )
     return max(0, estimate_text_tokens(prompt) - estimate_text_tokens(latest_archive_overview))
@@ -304,10 +306,17 @@ def _resolve_memory_extraction_scope(
 
 @dataclass(frozen=True)
 class _ArchiveSummaryResult:
-    """The two products emitted by the existing Working-Memory model call."""
+    """The generated Working Memory, any checkpoints, and template directions."""
 
     overview: str
     checkpoint_summaries: tuple[str, ...] = ()
+    template_descriptions: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_generated(cls, generated: "str | _ArchiveSummaryResult") -> "_ArchiveSummaryResult":
+        if isinstance(generated, cls):
+            return generated
+        return cls(overview=str(generated or ""))
 
 
 @dataclass
@@ -2701,13 +2710,13 @@ class Session:
                         if enable_working_memory
                         else []
                     )
-                    latest_archive_overview = (
+                    latest_archive_overview, previous_descriptions = (
                         await self._archives.latest_completed_overview(
                             exclude_archive_uri=archive_uri,
                             before_archive_index=archive_index,
                         )
                         if enable_working_memory
-                        else ""
+                        else ("", {})
                     )
                     extraction_messages = await self._tool_outputs.hydrate_for_extraction(messages)
                     usage_events_extracted = len(
@@ -2724,11 +2733,15 @@ class Session:
                                 "working Memory summary skipped (memory_policy.working_memory.enabled=false)"
                             )
                             return
+                        output_language_override = await get_output_language_override(
+                            self._runtime_config_manager, self.ctx.account_id
+                        )
                         summary_kwargs: Dict[str, Any] = {
                             "latest_archive_overview": latest_archive_overview,
                             "session_window_context": session_window_context,
                             "summary_token_ratio": summary_token_ratio,
                             "reasoning_effort": reasoning_effort,
+                            "output_language_override": output_language_override,
                         }
                         if checkpoint_requests:
                             summary_kwargs["checkpoint_requests"] = checkpoint_requests
@@ -2752,11 +2765,7 @@ class Session:
                                 extraction_messages,
                                 **summary_kwargs,
                             )
-                        summary_result = (
-                            generated
-                            if isinstance(generated, _ArchiveSummaryResult)
-                            else _ArchiveSummaryResult(overview=str(generated or ""))
-                        )
+                        summary_result = _ArchiveSummaryResult.from_generated(generated)
                         checkpoint_records = self._checkpoints.build_records(
                             checkpoint_requests,
                             summary_result.checkpoint_summaries,
@@ -2767,7 +2776,12 @@ class Session:
                                 "Working Memory output is empty for a required checkpoint"
                             )
                         if self._viking_fs and summary:
-                            abstract = extract_abstract_from_summary(summary)
+                            descriptions = wm.match_wm_template_descriptions(
+                                summary,
+                                previous_descriptions,
+                                summary_result.template_descriptions,
+                            )
+                            abstract = extract_abstract_from_summary(summary, descriptions)
                             await self._viking_fs.write_file(
                                 uri=f"{archive_uri}/.abstract.md",
                                 content=render_abstract_overview(
@@ -2790,10 +2804,11 @@ class Session:
                                     archive_uri,
                                     summary,
                                     {
+                                        WM_TEMPLATE_DESCRIPTIONS_KEY: descriptions,
                                         "generated_by": {
                                             "component": "Session",
                                             "trigger": "archive_summary",
-                                        }
+                                        },
                                     },
                                 ),
                                 ctx=self.ctx,
@@ -3332,11 +3347,12 @@ class Session:
             raise NotFoundError(archive_id, "session archive")
         overview = abstract = ""
         if state.state == "completed":
-            overview = await self._archives.read_overview(state.archive_uri)
+            overview_document = await self._archives.read_overview_document(state.archive_uri)
+            overview = overview_document.preview_body
             if not overview and state.done.get("enable_working_memory") is not False:
                 raise NotFoundError(archive_id, "session archive")
             if overview:
-                abstract = await self._archives.read_abstract(state.archive_uri, overview)
+                abstract = await self._archives.read_abstract(state.archive_uri, overview_document)
         result: Dict[str, Any] = {
             "archive_id": archive_id,
             "status": state.state,
@@ -3631,7 +3647,7 @@ class Session:
         reasoning_effort: Optional[str] = None,
         checkpoint_requests: Optional[List[_CheckpointRequest]] = None,
         output_language_override: str | None = None,
-    ) -> str | _ArchiveSummaryResult:
+    ) -> _ArchiveSummaryResult:
         if output_language_override is None:
             output_language_override = await get_output_language_override(
                 self._runtime_config_manager, self.ctx.account_id
@@ -3667,6 +3683,7 @@ class Session:
             material_limit,
         )
         current_overview = latest_archive_overview
+        descriptions: dict[str, str] = {}
         remaining = deque(messages)
         if (
             estimate_text_tokens(current_overview)
@@ -3733,33 +3750,32 @@ class Session:
                 summary_token_ratio=summary_token_ratio,
                 reasoning_effort=reasoning_effort,
             )
-            current_overview = (
-                generated.overview
-                if isinstance(generated, _ArchiveSummaryResult)
-                else str(generated or "")
+            summary_result = _ArchiveSummaryResult.from_generated(generated)
+            current_overview = summary_result.overview
+            descriptions = wm.match_wm_template_descriptions(
+                current_overview, descriptions, summary_result.template_descriptions
             )
+        checkpoint_summaries = []
         if checkpoint_requests:
-            checkpoint_summaries = []
             for request in checkpoint_requests:
                 source_ids = set(request.source_message_ids)
-                checkpoint_summaries.append(
-                    await self._generate_archive_summary_with_batching(
-                        [message for message in messages if message.id in source_ids],
-                        latest_archive_overview=request.previous_checkpoint_abstract,
-                        output_language_override=output_language_override,
-                        session_window_context=session_window_context,
-                        summary_token_ratio=min(
-                            summary_token_ratio,
-                            request.retained_message_token_budget / session_window_context,
-                        ),
-                        reasoning_effort=reasoning_effort,
-                    )
+                checkpoint_summary = await self._generate_archive_summary_with_batching(
+                    [message for message in messages if message.id in source_ids],
+                    latest_archive_overview=request.previous_checkpoint_abstract,
+                    output_language_override=output_language_override,
+                    session_window_context=session_window_context,
+                    summary_token_ratio=min(
+                        summary_token_ratio,
+                        request.retained_message_token_budget / session_window_context,
+                    ),
+                    reasoning_effort=reasoning_effort,
                 )
-            return _ArchiveSummaryResult(
-                overview=current_overview,
-                checkpoint_summaries=tuple(checkpoint_summaries),
-            )
-        return current_overview
+                checkpoint_summaries.append(checkpoint_summary.overview)
+        return _ArchiveSummaryResult(
+            overview=current_overview,
+            checkpoint_summaries=tuple(checkpoint_summaries),
+            template_descriptions=descriptions,
+        )
 
     async def _generate_archive_summary_async(
         self,
@@ -3770,7 +3786,7 @@ class Session:
         summary_token_ratio: float = 0.25,
         reasoning_effort: Optional[str] = None,
         output_language_override: str | None = None,
-    ) -> str | _ArchiveSummaryResult:
+    ) -> _ArchiveSummaryResult:
         """Generate Working Memory document for the current archive (async).
 
         Two paths:
@@ -3791,24 +3807,14 @@ class Session:
         if not messages:
             if checkpoint_requests:
                 raise ValueError("Cannot generate checkpoints without archive messages")
-            return ""
+            return _ArchiveSummaryResult(overview="")
 
         formatted = wm.format_messages_for_wm(messages, checkpoint_requests)
-        language_conversation = "\n".join(
-            f"[{message.role}]: {line}"
-            for message in messages
-            for part in message.parts
-            if isinstance(part, TextPart)
-            for line in part.text.splitlines()
-            if line.strip()
-        )
         if output_language_override is None:
             output_language_override = await get_output_language_override(
                 self._runtime_config_manager, self.ctx.account_id
             )
-        output_language = resolve_output_language_from_conversation(
-            language_conversation, output_language_override=output_language_override
-        )
+        output_language = wm.wm_output_language(messages, output_language_override)
         checkpoint_instructions = wm.checkpoint_prompt_instructions(len(checkpoint_requests))
         session_window_context = max(1, int(session_window_context or 128_000))
         summary_budget_tokens = max(1, int(session_window_context * float(summary_token_ratio)))
@@ -3821,8 +3827,8 @@ class Session:
             if checkpoint_requests:
                 raise ValueError("A configured VLM is required to generate checkpoint summaries")
             turn_count = len([m for m in messages if is_user_query(m)])
-            return (
-                f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
+            return _ArchiveSummaryResult(
+                overview=f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
 
         try:
@@ -3836,8 +3842,8 @@ class Session:
                 extra={"degraded": True, "error_type": type(e).__name__},
             )
             turn_count = len([m for m in messages if is_user_query(m)])
-            return (
-                f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
+            return _ArchiveSummaryResult(
+                overview=f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
             )
 
         async def _complete(*, prompt="", messages=None, tools=None, **kwargs):
@@ -3996,7 +4002,7 @@ class Session:
                 f"{len(latest_archive_overview or '')}B)"
             )
             prompt = render_prompt(
-                "compression.ov_wm_v2",
+                wm.WM_CREATE_PROMPT_ID,
                 {
                     "messages": formatted,
                     "latest_archive_overview": latest_archive_overview or "",
@@ -4004,6 +4010,8 @@ class Session:
                     "output_language": output_language,
                 },
             )
+            checkpoint_summaries = ()
+            input_material = formatted
             if checkpoint_requests:
                 response = await _complete(
                     prompt=prompt,
@@ -4029,25 +4037,40 @@ class Session:
                 working_memory = args.get("working_memory")
                 if not isinstance(working_memory, str) or not working_memory.strip():
                     raise ValueError("create_working_memory.working_memory is empty")
-                return _ArchiveSummaryResult(
-                    overview=await _fit_summary(
-                        first_overview=working_memory,
-                        input_material=f"{latest_archive_overview}\n\n{formatted}",
-                    ),
-                    checkpoint_summaries=wm.parse_required_checkpoint_summaries(
-                        args,
-                        len(checkpoint_requests),
-                    ),
+                checkpoint_summaries = wm.parse_required_checkpoint_summaries(
+                    args, len(checkpoint_requests)
                 )
-            first = await _complete(
-                prompt=prompt,
+                input_material = f"{latest_archive_overview}\n\n{formatted}"
+            else:
+                working_memory = str(await _complete(prompt=prompt) or "")
+            overview = await _fit_summary(
+                first_overview=working_memory,
+                input_material=input_material,
             )
-            return await _fit_summary(
-                first_overview=str(first or ""),
-                input_material=formatted,
+            return _ArchiveSummaryResult(
+                overview=overview,
+                checkpoint_summaries=checkpoint_summaries,
+                template_descriptions=wm.rendered_wm_template_descriptions(prompt, overview),
             )
 
         # -------- Branch 2: has prior WM v2 -> tool_call incremental update --------
+        input_material = f"{latest_archive_overview}\n\n{formatted}"
+
+        async def _regenerate() -> _ArchiveSummaryResult:
+            fallback, prompt = await self._fallback_generate_wm_creation(
+                formatted,
+                messages,
+                latest_archive_overview,
+                output_language,
+                session_window_context=session_window_context,
+                reasoning_effort=reasoning_effort,
+            )
+            overview = await _fit_summary(first_overview=fallback, input_material=input_material)
+            return _ArchiveSummaryResult(
+                overview=overview,
+                template_descriptions=wm.rendered_wm_template_descriptions(prompt, overview),
+            )
+
         wm.wm_debug(f"branch=UPDATE (prior WM={len(latest_archive_overview)}B)")
         reminders = wm.build_wm_section_reminders(latest_archive_overview)
         if reminders:
@@ -4085,18 +4108,7 @@ class Session:
             if checkpoint_requests:
                 raise ValueError("Working Memory update returned no tool call for checkpoints")
             logger.info("wM update: LLM returned no tool_call; falling back to creation prompt")
-            fallback = await self._fallback_generate_wm_creation(
-                formatted,
-                messages,
-                latest_archive_overview,
-                output_language,
-                session_window_context=session_window_context,
-                reasoning_effort=reasoning_effort,
-            )
-            return await _fit_summary(
-                first_overview=fallback,
-                input_material=f"{latest_archive_overview}\n\n{formatted}",
-            )
+            return await _regenerate()
 
         checkpoint_summaries: tuple[str, ...] = ()
         try:
@@ -4187,9 +4199,11 @@ class Session:
                     len(salvaged),
                     len(WM_SEVEN_SECTIONS),
                 )
-                return await _fit_summary(
-                    first_overview=wm.merge_wm_sections(latest_archive_overview, salvaged),
-                    input_material=f"{latest_archive_overview}\n\n{formatted}",
+                return _ArchiveSummaryResult(
+                    overview=await _fit_summary(
+                        first_overview=wm.merge_wm_sections(latest_archive_overview, salvaged),
+                        input_material=input_material,
+                    ),
                 )
             wm.wm_debug("regex recovery salvaged 0 sections; falling back to creation prompt")
             logger.info(
@@ -4197,18 +4211,7 @@ class Session:
                 type(e).__name__,
                 extra={"error_type": type(e).__name__},
             )
-            fallback = await self._fallback_generate_wm_creation(
-                formatted,
-                messages,
-                latest_archive_overview,
-                output_language,
-                session_window_context=session_window_context,
-                reasoning_effort=reasoning_effort,
-            )
-            return await _fit_summary(
-                first_overview=fallback,
-                input_material=f"{latest_archive_overview}\n\n{formatted}",
-            )
+            return await _regenerate()
 
         wm.wm_debug(
             f"ops keys={list(ops.keys())[:7]} "
@@ -4217,14 +4220,9 @@ class Session:
         overview = wm.merge_wm_sections(latest_archive_overview, ops)
         overview = await _fit_summary(
             first_overview=overview,
-            input_material=f"{latest_archive_overview}\n\n{formatted}",
+            input_material=input_material,
         )
-        if checkpoint_requests:
-            return _ArchiveSummaryResult(
-                overview=overview,
-                checkpoint_summaries=checkpoint_summaries,
-            )
-        return overview
+        return _ArchiveSummaryResult(overview=overview, checkpoint_summaries=checkpoint_summaries)
 
     async def _fallback_generate_wm_creation(
         self,
@@ -4234,7 +4232,7 @@ class Session:
         output_language: str = "en",
         session_window_context: int = 128_000,
         reasoning_effort: Optional[str] = None,
-    ) -> str:
+    ) -> tuple[str, str]:
         """Regenerate WM when a successful update response cannot be parsed.
 
         Passes ``prior_overview`` so the creation prompt can incorporate
@@ -4247,7 +4245,7 @@ class Session:
         from openviking.prompts import render_prompt
 
         prompt = render_prompt(
-            "compression.ov_wm_v2",
+            wm.WM_CREATE_PROMPT_ID,
             {
                 "messages": formatted_messages,
                 "latest_archive_overview": prior_overview,
@@ -4266,7 +4264,8 @@ class Session:
         }
         if reasoning_effort is not None:
             kwargs["reasoning_effort"] = reasoning_effort
-        return await vlm.get_completion_async(**kwargs)
+        overview = await vlm.get_completion_async(**kwargs)
+        return str(overview or ""), prompt
 
     async def _write_to_agfs_async(
         self,

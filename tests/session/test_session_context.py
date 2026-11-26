@@ -11,13 +11,27 @@ import pytest
 import pytest_asyncio
 
 from openviking.message import Message, TextPart
+from openviking.models.vlm.base import ToolCall, VLMResponse
+from openviking.privacy.reference import build_privacy_field_reference
+from openviking.prompts import manager as prompt_manager
+from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext
+from openviking.server.user_config import patch_user_config
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
-from openviking.storage.abstract_overview import body_for_preview
+from openviking.session import working_memory as wm
+from openviking.session.extraction_batch import estimate_extraction_message_tokens
+from openviking.session.session import _estimate_summary_template_tokens
+from openviking.storage.abstract_overview import (
+    WM_TEMPLATE_DESCRIPTIONS_KEY,
+    body_for_preview,
+    parse_abstract_overview,
+    render_abstract_overview,
+)
 from openviking.storage.queuefs import QueueManager, SessionCommitMsg, get_queue_manager
-from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.exceptions import NotFoundError
+from openviking_cli.utils.config import OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, get_openviking_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -94,6 +108,22 @@ async def client(
 
 def _estimate_tokens(text: str) -> int:
     return -(-len(text) // 4)
+
+
+def _override_wm_state_template(monkeypatch, tmp_path, template_line, *, suffix=""):
+    relative_path = "compression/ov_wm_v2.yaml"
+    bundled = prompt_manager.PromptManager._get_bundled_templates_dir() / relative_path
+    override = tmp_path / relative_path
+    override.parent.mkdir(exist_ok=True)
+    before, state_section = bundled.read_text(encoding="utf-8").split("  ## Current State\n", 1)
+    _, remaining = state_section.split("\n", 1)
+    if suffix:
+        remaining = remaining.replace("\nllm_config:", f"\n{suffix}\n\nllm_config:")
+    override.write_text(
+        f"{before}  ## Current State\n  {template_line}\n{remaining}", encoding="utf-8"
+    )
+    monkeypatch.setenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(prompt_manager, "_default_manager", None)
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -747,41 +777,584 @@ class TestGetSessionContext:
 class TestGetSessionArchive:
     """Test get_session_archive"""
 
-    async def test_get_session_archive_returns_messages_and_summary(
-        self, client: partial, monkeypatch
+    @pytest.mark.parametrize(
+        "summary_format",
+        [
+            "structured",
+            "compact",
+            "wrapped",
+            "custom",
+            "plain-description",
+            "description-only",
+            "repeated-title",
+            "trailing-partial-example",
+            "jinja",
+            "example",
+            "italic-example",
+            "first-line-example",
+            "first-line-italic-example",
+            "marked-example",
+        ],
+    )
+    async def test_get_session_archive_returns_messages_and_working_memory(
+        self, client: partial, monkeypatch, tmp_path, summary_format
     ):
         session = client(session_id="session_archive_expand_test")
         await session.ensure_exists()
-        summaries = [
-            "# Session Summary\n\narchive one",
-            "# Session Summary\n\narchive two",
-        ]
+        template = (
+            "# Working Memory\n\n## Session Title\nSign-off review\n\n## Current State\n{state}"
+        )
+        copies_description = summary_format in {
+            "custom",
+            "plain-description",
+            "description-only",
+            "jinja",
+            "repeated-title",
+            "trailing-partial-example",
+        }
+        unmarked_example = summary_format in {"first-line-example", "first-line-italic-example"}
+        if summary_format == "compact":
+            template = "# Working Memory\n\n**Status**: {state}"
+        elif summary_format == "wrapped":
+            template = template.replace("{state}", "**Status**:\n{state}")
+        elif (
+            copies_description
+            or unmarked_example
+            or summary_format in {"example", "italic-example", "marked-example"}
+        ):
+            description = "_Record the latest sign-off outcome here._"
+            template_line = description
+            if summary_format == "jinja":
+                template_line = "_Record the latest sign-off outcome in {{ output_language }}._"
+                description = "_Record the latest sign-off outcome in en._"
+            elif summary_format == "plain-description":
+                template_line = description = "Capture the latest release status in one sentence."
+            elif summary_format == "example":
+                template_line += "\n  Sign-off complete."
+            elif summary_format == "italic-example":
+                template_line += "\n  _Sign-off complete._"
+            elif summary_format == "first-line-example":
+                template_line = description = "Sign-off complete."
+            elif summary_format == "first-line-italic-example":
+                template_line = description = "_Sign-off complete._"
+            elif summary_format == "marked-example":
+                description = "Record the current release decision."
+                template_line = f"<!-- wm-example -->\n  {description}"
+                template = template.replace("{state}", "{state}\nThe rollout is pending.")
+            if copies_description:
+                template_line = f"<!-- wm-description -->\n  {template_line}"
+            suffix = {
+                "repeated-title": "  # Working Memory\n  {# End of prompt #}",
+                "trailing-partial-example": (
+                    "  For reference, here is an example of just one section.\n\n"
+                    "  # Working Memory\n\n"
+                    "  ## Current State\n"
+                    "  <!-- wm-example -->\n"
+                    "  Follow-up is scheduled."
+                ),
+            }.get(summary_format, "")
+            _override_wm_state_template(monkeypatch, tmp_path, template_line, suffix=suffix)
+            prompt = prompt_manager.render_prompt(
+                "compression.ov_wm_v2", {"messages": "", "output_language": "en"}
+            )
+            assert description in prompt
+            if summary_format == "repeated-title":
+                assert prompt.endswith("# Working Memory\n")
+            elif summary_format == "trailing-partial-example":
+                assert prompt.endswith(
+                    "## Current State\n<!-- wm-example -->\nFollow-up is scheduled."
+                )
+            if copies_description:
+                template = template.replace("{state}", description + "\n{state}")
+            if unmarked_example:
+                template = template.replace("{state}", "{state}\nTracker updated.")
 
-        async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
-            del self, latest_archive_overview, kwargs
-            return summaries.pop(0)
+        states = ("Sign-off pending.", "Sign-off complete.")
+        if summary_format in {"italic-example", "first-line-italic-example"}:
+            states = tuple(f"_{state}_" for state in states)
+        if summary_format == "marked-example":
+            states = (states[0], description)
+        if summary_format == "description-only":
+            template = template.replace("Sign-off review", "{state}").removesuffix("\n{state}")
+        overviews = iter(template.format(state=state) for state in states)
 
-        monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_generate)
+        async def complete(self, prompt, **kwargs):
+            if kwargs.get("tools"):
+                return "Regenerate Working Memory."
+            return next(overviews)
 
-        session.add_message("user", [TextPart("turn one")])
-        session.add_message("assistant", [TextPart("reply one")])
+        monkeypatch.setattr(VLMConfig, "get_completion_async", complete)
+
+        messages_by_turn = {}
+        for turn in ("one", "two"):
+            user = session.add_message("user", [TextPart(f"turn {turn}")])
+            assistant = session.add_message("assistant", [TextPart(f"reply {turn}")])
+            messages_by_turn[turn] = [user.to_dict(), assistant.to_dict()]
+            result = await session.commit_async()
+            task = await _wait_for_task(result["task_id"])
+            assert task["status"] == "completed", task
+
+        for index, (turn, expected) in enumerate(zip(messages_by_turn, states, strict=True), 1):
+            archive_id = f"archive_{index:03d}"
+            archive_uri = f"{session.uri}/history/{archive_id}"
+            abstract_uri = f"{archive_uri}/.abstract.md"
+            stored = await session._viking_fs.read_file(abstract_uri, ctx=session.ctx)
+            assert body_for_preview(stored) == expected
+
+            archive = await session.get_session_archive(archive_id)
+            assert archive["archive_id"] == archive_id
+            assert archive["abstract"] == expected
+            assert archive["overview"] == template.format(state=expected)
+            assert archive["messages"] == messages_by_turn[turn]
+
+            await session._viking_fs.write_file(abstract_uri, "# Working Memory", ctx=session.ctx)
+            historical = await session.get_session_archive(archive_id)
+            assert historical["abstract"] == expected
+            if unmarked_example:
+                await session._viking_fs.rm(abstract_uri, ctx=session.ctx)
+                assert (await session.get_session_archive(archive_id))["abstract"] == expected
+
+        if copies_description:
+            vfs = session._viking_fs
+            first_archive = f"{session.uri}/history/archive_001"
+            second_archive = f"{session.uri}/history/archive_002"
+            first_abstract = f"{first_archive}/.abstract.md"
+            second_abstract = f"{second_archive}/.abstract.md"
+            await vfs.write_file(first_abstract, description, ctx=session.ctx)
+            await vfs.rm(second_abstract, ctx=session.ctx)
+            for archive_uri in (first_archive, second_archive):
+                await vfs.rm(f"{archive_uri}/.meta.json", ctx=session.ctx)
+
+            # A different template and missing archive metadata should not affect L1 provenance.
+            _override_wm_state_template(monkeypatch, tmp_path, "_Describe the acceptance result._")
+            for index, expected in enumerate(states, 1):
+                historical = await session.get_session_archive(f"archive_{index:03d}")
+                assert historical["abstract"] == expected
+                assert historical["overview"] == template.format(state=expected)
+            assert await vfs.read_file(first_abstract, ctx=session.ctx) == description
+            assert not await vfs.exists(second_abstract, ctx=session.ctx)
+
+    async def test_archive_template_description_is_protected_with_overview(
+        self, client, service, monkeypatch, tmp_path
+    ):
+        session = client(session_id="private_wm_description")
+        await session.ensure_exists()
+        vfs = session._viking_fs
+        await patch_user_config(vfs, session.ctx, UserSettingsPatch(privacy={"mode": "auto"}))
+        secret = "synthetic-wm-template-value"
+        await service.privacy_configs.upsert(
+            session.ctx, "credential", "wm-release", {"token": secret, "label": "archive_summary"}
+        )
+        description = f"Record the latest release status for {secret}."
+        _override_wm_state_template(
+            monkeypatch, tmp_path, f"<!-- wm-description -->\n  {description}"
+        )
+        state = "Sign-off complete."
+
+        async def complete(self, prompt, **kwargs):
+            assert description in prompt
+            return f"# Working Memory\n\n## Current State\n{description}\n{state}"
+
+        monkeypatch.setattr(VLMConfig, "get_completion_async", complete)
+        await session.add_message_async("user", [TextPart("Check the release status.")])
         result = await session.commit_async()
-        await _wait_for_task(result["task_id"])
+        task = await _wait_for_task(result["task_id"])
+        assert task["status"] == "completed", task
 
-        session.add_message("user", [TextPart("turn two")])
+        archive_uri = result["archive_uri"]
+        abstract_uri = f"{archive_uri}/.abstract.md"
+        raw = await vfs.read_file(f"{archive_uri}/.overview.md", ctx=session.ctx)
+        overview = parse_abstract_overview(raw)
+        reference = build_privacy_field_reference(
+            session.ctx.user.user_id, "credential", "wm-release", "token"
+        )
+        protected_description = description.replace(secret, reference)
+        assert protected_description in overview.preview_body
+        assert secret not in raw
+        assert overview.metadata[WM_TEMPLATE_DESCRIPTIONS_KEY] == {
+            "## Current State": protected_description
+        }
+        assert overview.metadata["generated_by"]["trigger"] == "archive_summary"
+        assert body_for_preview(await vfs.read_file(abstract_uri, ctx=session.ctx)) == state
+        await vfs.rm(abstract_uri, ctx=session.ctx)
+        assert (await session.get_session_archive("archive_001"))["abstract"] == state
+
+    async def test_archive_abstract_uses_last_batch_rendered_description(
+        self, client, monkeypatch, tmp_path
+    ):
+        session = client(session_id="multilingual_wm_batches")
+        await session.ensure_exists()
+        _override_wm_state_template(
+            monkeypatch,
+            tmp_path,
+            "<!-- wm-description -->\n  _Record the latest sign-off outcome in {{ output_language }}._",
+        )
+        chinese = "请继续核对最新验收结果并记录检查进度。" * 180
+        english = "The final sign-off is complete."
+        languages = []
+
+        async def complete(self, prompt, **kwargs):
+            if chinese[:20] in prompt and english not in prompt:
+                assert "_Record the latest sign-off outcome in zh-CN._" in prompt
+                languages.append("zh-CN")
+                return "# Interim summary\n\nThe first batch was reviewed."
+            assert english in prompt
+            description = "_Record the latest sign-off outcome in en._"
+            assert description in prompt
+            languages.append("en")
+            return f"# Working Memory\n\n## Current State\n{description}\n{english}"
+
+        monkeypatch.setattr(VLMConfig, "get_completion_async", complete)
+        first_message = session.add_message("user", [TextPart(chinese)])
+        session.add_message("user", [TextPart(english)])
+        first_batch_tokens = estimate_extraction_message_tokens([first_message])
+        first_batch_tokens += _estimate_summary_template_tokens("")
+        window = (first_batch_tokens * 10 + 6) // 7
+        result = await session.commit_async(session_window_context=window)
+        task = await _wait_for_task(result["task_id"])
+        assert task["status"] == "completed", task
+        assert languages == ["zh-CN", "en"]
+        abstract_uri = f"{result['archive_uri']}/.abstract.md"
+        vfs = session._viking_fs
+        assert body_for_preview(await vfs.read_file(abstract_uri, ctx=session.ctx)) == english
+        raw_overview = await vfs.read_file(f"{result['archive_uri']}/.overview.md", ctx=session.ctx)
+        assert parse_abstract_overview(raw_overview).metadata[WM_TEMPLATE_DESCRIPTIONS_KEY] == {
+            "## Current State": "_Record the latest sign-off outcome in en._"
+        }
+        await vfs.rm(abstract_uri, ctx=session.ctx)
+        assert (await session.get_session_archive("archive_001"))["abstract"] == english
+
+    async def test_archive_abstract_keeps_italic_state_after_wm_update(self, client, monkeypatch):
+        session = client(session_id="italic_wm_update")
+        await session.ensure_exists()
+        title = "# Working Memory\n\n## Session Title\nSign-off review\n\n## Current State\n"
+        states = ("*Sign-off pending.*", "_Sign-off complete._")
+        updates = iter(states)
+
+        async def complete(self, prompt, **kwargs):
+            if not kwargs.get("tools"):
+                return title + "Waiting for the review."
+            assert kwargs["tools"][0]["function"]["name"] == "update_working_memory"
+            return VLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="update",
+                        name="update_working_memory",
+                        arguments={
+                            "sections": {
+                                "Current State": {
+                                    "op": "UPDATE",
+                                    "content": f"{next(updates)}\nTracker updated.",
+                                },
+                            },
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+
+        monkeypatch.setattr(VLMConfig, "get_completion_async", complete)
+
+        for index in range(1, 4):
+            session.add_message("user", [TextPart(f"Check the sign-off status, turn {index}.")])
+            session.add_message("assistant", [TextPart("I checked the tracker.")])
+            result = await session.commit_async()
+            task = await _wait_for_task(result["task_id"])
+            assert task["status"] == "completed", task
+
+        for index, expected in enumerate(states, 2):
+            archive_id = f"archive_{index:03d}"
+            abstract_uri = f"{session.uri}/history/{archive_id}/.abstract.md"
+            vfs = session._viking_fs
+            stored = await vfs.read_file(abstract_uri, ctx=session.ctx)
+            assert body_for_preview(stored) == expected
+            await vfs.rm(abstract_uri, ctx=session.ctx)
+            historical = await session.get_session_archive(archive_id)
+            assert f"## Current State\n{expected}\nTracker updated.\n" in historical["overview"]
+            assert historical["abstract"] == expected
+
+    @pytest_asyncio.fixture
+    async def historical_archive(self, client: partial):
+        session = client(session_id="historical_session_archive_test")
+        await session.ensure_exists()
+        archive_uri = f"{session.uri}/history/archive_001"
+        vfs = session._viking_fs
+        await vfs.write_file(f"{archive_uri}/messages.jsonl", "", ctx=session.ctx)
+        await vfs.write_file(
+            f"{archive_uri}/.done", '{"enable_working_memory": true}', ctx=session.ctx
+        )
+        return session, archive_uri
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            "Sign-off complete.",
+            "Record the current release decision.",
+            "Capture the latest release status in one sentence.",
+        ],
+    )
+    async def test_historical_archive_keeps_saved_state(
+        self, historical_archive, monkeypatch, tmp_path, state
+    ):
+        session, archive_uri = historical_archive
+        _override_wm_state_template(monkeypatch, tmp_path, state)
+        overview = (
+            f"# Working Memory\n\n## Session Title\nSign-off review\n\n## Current State\n{state}"
+            "\nThe rollout is pending."
+        )
+        vfs = session._viking_fs
+        await vfs.write_file(f"{archive_uri}/.overview.md", overview, ctx=session.ctx)
+        await vfs.write_file(f"{archive_uri}/.abstract.md", state, ctx=session.ctx)
+        assert (await session.get_session_archive("archive_001"))["abstract"] == state
+        await vfs.write_file(
+            f"{archive_uri}/.meta.json",
+            json.dumps(
+                {
+                    "wm_template_descriptions": {"## Current State": state},
+                    "wm_rendered_template_descriptions": {"## Current State": state},
+                }
+            ),
+            ctx=session.ctx,
+        )
+        assert (await session.get_session_archive("archive_001"))["abstract"] == state
+        assert await vfs.read_file(f"{archive_uri}/.abstract.md", ctx=session.ctx) == state
+
+    async def test_next_commit_reads_previous_overview_with_unreadable_messages(
+        self, historical_archive, monkeypatch
+    ):
+        session, archive_uri = historical_archive
+        vfs = session._viking_fs
+        description = (
+            "_2-5 sentences MAX: What is the latest status? What is unresolved or pending? "
+            "Immediate next steps. NOT a fact dump._"
+        )
+        overview = f"# Working Memory\n\n## Current State\n{description}\nSign-off pending."
+        await vfs.write_file(f"{archive_uri}/.overview.md", overview, ctx=session.ctx)
+        await vfs.write_file(f"{archive_uri}/.abstract.md", description, ctx=session.ctx)
+        messages_uri = f"{archive_uri}/messages.jsonl"
+        await vfs.rm(messages_uri, ctx=session.ctx)
+        await vfs.mkdir(messages_uri, ctx=session.ctx)
+
+        async def complete(self, prompt, **kwargs):
+            assert overview in prompt
+            return VLMResponse(
+                tool_calls=[
+                    ToolCall(
+                        id="update",
+                        name="update_working_memory",
+                        arguments={
+                            "sections": {
+                                "Current State": {"op": "UPDATE", "content": "Sign-off complete."}
+                            }
+                        },
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+
+        monkeypatch.setattr(VLMConfig, "get_completion_async", complete)
+        session.add_message("user", [TextPart("The review passed.")])
         result = await session.commit_async()
-        await _wait_for_task(result["task_id"])
+        task = await _wait_for_task(result["task_id"])
+        assert task["status"] == "completed", task
+        assert await session._archives.read_abstract(archive_uri) == "Sign-off pending."
+        assert (await session.get_session_archive("archive_002"))[
+            "abstract"
+        ] == "Sign-off complete."
+
+    async def test_unreadable_bundled_prompt_allows_historical_read_and_next_commit(
+        self, historical_archive, monkeypatch, tmp_path
+    ):
+        session, archive_uri = historical_archive
+        manager = prompt_manager.PromptManager
+        relative_path = "compression/ov_wm_v2.yaml"
+        bundled_dir = manager._get_bundled_templates_dir()
+        override = tmp_path / "overrides" / relative_path
+        override.parent.mkdir(parents=True)
+        override.write_bytes((bundled_dir / relative_path).read_bytes())
+        load_template = manager.load_template
+
+        def load_with_missing_bundled_prompt(self, prompt_id):
+            if prompt_id == "compression.ov_wm_v2" and self.templates_dir == bundled_dir:
+                raise FileNotFoundError(bundled_dir / relative_path)
+            return load_template(self, prompt_id)
+
+        monkeypatch.setattr(manager, "load_template", load_with_missing_bundled_prompt)
+        monkeypatch.setenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, str(override.parent.parent))
+        monkeypatch.setattr(prompt_manager, "_default_manager", None)
+        wm._bundled_wm_template_descriptions.cache_clear()
+
+        overview = "# Working Memory\n\n## Current State\n_Pending sign-off._"
+        vfs = session._viking_fs
+        await vfs.write_file(f"{archive_uri}/.overview.md", overview, ctx=session.ctx)
 
         archive = await session.get_session_archive("archive_001")
+        assert archive["status"] == "completed"
+        assert archive["abstract"] == "_Pending sign-off._"
 
-        assert archive["archive_id"] == "archive_001"
-        assert archive["abstract"] == "# Session Summary"
-        assert archive["overview"] == "# Session Summary\n\narchive one"
-        assert [m["parts"][0]["text"] for m in archive["messages"]] == ["turn one", "reply one"]
+        async def fake_generate(self, _messages, latest_archive_overview="", **kwargs):
+            assert latest_archive_overview == overview
+            return "# Working Memory\n\n## Current State\nSign-off complete."
+
+        monkeypatch.setattr(Session, "_generate_archive_summary_async", fake_generate)
+        session.add_message("user", [TextPart("The review passed.")])
+        session.add_message("assistant", [TextPart("I recorded the result.")])
+        result = await session.commit_async()
+        task = await _wait_for_task(result["task_id"])
+        assert task["status"] == "completed", task
+        archive = await session.get_session_archive("archive_002")
+        assert archive["abstract"] == "Sign-off complete."
+
+    @pytest.mark.parametrize(
+        ("stored_body", "legacy", "expected"),
+        [
+            pytest.param("# Working Memory", False, "等待验收。", id="stale-heading"),
+            pytest.param("# Working Memory\n", True, "等待验收。", id="legacy-stale-heading"),
+            pytest.param(None, False, "等待验收。", id="missing"),
+            pytest.param("", False, "等待验收。", id="empty-body"),
+            pytest.param("已有摘要。", False, "已有摘要。", id="valid"),
+            pytest.param(
+                "# Working Memory\n已有摘要。",
+                False,
+                "# Working Memory\n已有摘要。",
+                id="heading-with-body",
+            ),
+            pytest.param(
+                "    # Working Memory\n",
+                True,
+                "    # Working Memory\n",
+                id="legacy-indented-code",
+            ),
+        ],
+    )
+    async def test_get_session_archive_reads_historical_abstract(
+        self, historical_archive, stored_body, legacy, expected
+    ):
+        session, archive_uri = historical_archive
+        vfs = session._viking_fs
+        abstract_uri = f"{archive_uri}/.abstract.md"
+        overview = "# Working Memory\n\n## Current State\n等待验收。"
+        await vfs.write_file(f"{archive_uri}/.overview.md", overview, ctx=session.ctx)
+
+        if stored_body is None:
+            assert not await vfs.exists(abstract_uri, ctx=session.ctx)
+        else:
+            stored = (
+                stored_body if legacy else render_abstract_overview(0, archive_uri, stored_body)
+            )
+            await vfs.write_file(abstract_uri, stored, ctx=session.ctx)
+            assert await vfs.read_file(abstract_uri, ctx=session.ctx) == stored
+
+        archive = await session.get_session_archive("archive_001")
+        assert archive["abstract"] == expected
+        assert archive["overview"] == overview
+
+        if stored_body is None:
+            assert not await vfs.exists(abstract_uri, ctx=session.ctx)
+        else:
+            assert await vfs.read_file(abstract_uri, ctx=session.ctx) == stored
+
+    async def test_get_session_archive_falls_back_when_abstract_read_fails(
+        self, historical_archive, monkeypatch
+    ):
+        session, archive_uri = historical_archive
+        vfs = session._viking_fs
+        abstract_uri = f"{archive_uri}/.abstract.md"
+        await vfs.write_file(
+            f"{archive_uri}/.overview.md",
+            "# Working Memory\n\n## Current State\n等待验收。",
+            ctx=session.ctx,
+        )
+        await vfs.write_file(abstract_uri, "已有摘要。", ctx=session.ctx)
+
+        original_read_file = vfs.read_file
+
+        async def read_file(uri, *args, **kwargs):
+            if uri == abstract_uri:
+                raise OSError("abstract read failed")
+            return await original_read_file(uri, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(vfs, "read_file", read_file)
+            archive = await session.get_session_archive("archive_001")
+
+        assert archive["abstract"] == "等待验收。"
+        assert await vfs.read_file(abstract_uri, ctx=session.ctx) == "已有摘要。"
+
+    @pytest.mark.parametrize(
+        ("overview", "expected"),
+        [
+            pytest.param(
+                "\n \n# Working Memory\n\n## Current State\n\n### Status\n- - -\n等待验收。\n后续信息。",
+                "等待验收。",
+                id="state-only",
+            ),
+            pytest.param(
+                "# Working Memory\n\n## Session Title\n_验收流程_",
+                "_验收流程_",
+                id="title-only",
+            ),
+            pytest.param(
+                "# Working Memory\n\n"
+                "## Current State\n"
+                "_2-5 sentences MAX: What is the latest status? What is unresolved or pending? "
+                "Immediate next steps. NOT a fact dump._\n"
+                "***\n\n"
+                "## Session Title\n"
+                "_A short and distinctive 5-10 word descriptive title for the session. "
+                "Info-dense, no filler._",
+                "",
+                id="template-only",
+            ),
+            pytest.param(
+                "# Working Memory\n\n## Current State\n## Key Facts & Decisions\n"
+                "**Owner**: Review team",
+                "Review team",
+                id="other-section",
+            ),
+            pytest.param("# Working Memory", "", id="fixed-title-only"),
+            pytest.param(
+                "# Working Memory\n\nSign-off complete.",
+                "Sign-off complete.",
+                id="compact-prose",
+            ),
+            pytest.param(
+                "# Session Summary\n\n**Status**: Review pending.",
+                "Review pending.",
+                id="legacy-bold-field",
+            ),
+            pytest.param(
+                "# Session Summary\n\nArchived conversation.",
+                "# Session Summary",
+                id="legacy-first-line",
+            ),
+        ],
+    )
+    async def test_get_session_archive_extracts_abstract_from_overview(
+        self, historical_archive, overview, expected
+    ):
+        session, archive_uri = historical_archive
+        await session._viking_fs.write_file(
+            f"{archive_uri}/.overview.md", overview, ctx=session.ctx
+        )
+
+        archive = await session.get_session_archive("archive_001")
+        assert archive["abstract"] == expected
+
+    async def test_get_session_archive_reports_missing_required_overview(self, historical_archive):
+        session, archive_uri = historical_archive
+        archive = await session.get_session_archive("archive_001")
+        assert archive["status"] == "failed"
+        assert archive["failure"]["stage"] == "archive_overview"
+        assert archive["abstract"] == archive["overview"] == ""
+
+        await session._viking_fs.write_file(f"{archive_uri}/.done", "{}", ctx=session.ctx)
+        with pytest.raises(NotFoundError, match="Session archive not found: archive_001"):
+            await session.get_session_archive("archive_001")
 
     async def test_get_session_archive_raises_for_missing_archive(self, client: partial):
         session = client(session_id="missing_session_archive_test")
         await session.ensure_exists()
 
-        with pytest.raises(Exception, match="Session archive not found: archive_999"):
+        with pytest.raises(NotFoundError, match="Session archive not found: archive_999"):
             await session.get_session_archive("archive_999")

@@ -283,7 +283,7 @@ async def test_update_fallback_and_checkpoint_check_final_summary_budget(monkeyp
         if checkpoint
         else None,
     )
-    assert (result.overview if checkpoint else result) == "compact"
+    assert result.overview == "compact"
     for call in completion.await_args_list:
         kwargs = call.kwargs
         input_tokens = estimate_text_tokens(kwargs.get("prompt")) + sum(
@@ -350,7 +350,7 @@ async def test_update_budget_retry_uses_complete_merged_summary(monkeypatch):
         session_window_context=10000,
     )
 
-    assert result == "compact"
+    assert result.overview == "compact"
     assert completion.await_count == 2
     retry = completion.await_args_list[-1].kwargs
     assert retry["messages"][1]["content"] == merged
@@ -472,7 +472,7 @@ async def test_working_memory_batches_carry_the_previous_summary_forward(monkeyp
         session_window_context=50,
     )
 
-    assert result == "previous|u1|u2|u3"
+    assert result.overview == "previous|u1|u2|u3"
     assert [(ids, previous) for ids, previous, _ in calls] == [
         (["u1"], "previous"),
         (["u2"], "previous|u1"),
@@ -519,7 +519,7 @@ async def test_working_memory_batches_reserve_room_for_rolling_summary(monkeypat
         session_window_context=100,
     )
 
-    assert result == "summary3"
+    assert result.overview == "summary3"
     assert calls == [
         (["u1"], ""),
         (["u2"], "summary1"),
@@ -546,7 +546,7 @@ async def test_working_memory_no_vlm_fallback_uses_all_messages(monkeypatch):
         latest_archive_overview="",
     )
 
-    assert result == "# Session Summary\n\n**Overview**: 3 turns, 3 messages"
+    assert result.overview == "# Session Summary\n\n**Overview**: 3 turns, 3 messages"
 
 
 @pytest.mark.asyncio

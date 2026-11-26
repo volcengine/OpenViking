@@ -39,7 +39,8 @@ logger = get_logger(__name__)
 
 ABSTRACT_OVERVIEW_FILENAMES = frozenset({".abstract.md", ".overview.md"})
 EMBEDDING_METADATA_FIELDS = ("directory",)
-_METADATA_ORDER = ("directory", "source", "generated_by", "freshness")
+WM_TEMPLATE_DESCRIPTIONS_KEY = "wm_template_descriptions"
+_METADATA_ORDER = ("directory", "source", "generated_by", "freshness", WM_TEMPLATE_DESCRIPTIONS_KEY)
 _MARKDOWN_URI_SAFE_ASCII = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/:"
 )
@@ -65,6 +66,11 @@ class AbstractOverviewDocument:
     metadata: Dict[str, Any]
     body: str
     legacy: bool = False
+
+    @property
+    def preview_body(self) -> str:
+        # Rendering adds a terminal newline as a serialization detail.
+        return self.body if self.legacy else self.body.rstrip("\r\n")
 
 
 @dataclass(frozen=True)
@@ -186,6 +192,17 @@ def _normalize_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
                 "abstract overview freshness sampled + unsampled must equal total"
             )
         normalized["freshness"] = counters
+
+    descriptions = metadata.get(WM_TEMPLATE_DESCRIPTIONS_KEY)
+    if descriptions is not None:
+        if not isinstance(descriptions, Mapping) or not all(
+            isinstance(header, str) and isinstance(line, str)
+            for header, line in descriptions.items()
+        ):
+            raise AbstractOverviewFormatError(
+                "working memory descriptions must map headings to text"
+            )
+        normalized[WM_TEMPLATE_DESCRIPTIONS_KEY] = dict(descriptions)
 
     return {field: normalized[field] for field in _METADATA_ORDER if field in normalized}
 
@@ -400,12 +417,7 @@ def prepare_abstract_overview_write(
 def body_for_preview(raw: str | bytes) -> str:
     """Return only user-visible Markdown from an abstract overview."""
 
-    document = parse_abstract_overview(raw)
-    if document.legacy:
-        return document.body
-    # Rendering adds one canonical terminal newline to the stored document.
-    # It is a serialization detail, not part of semantic accessor output.
-    return document.body.rstrip("\r\n")
+    return parse_abstract_overview(raw).preview_body
 
 
 def parse_overview_file_summaries(overview_content: str | bytes) -> Dict[str, str]:

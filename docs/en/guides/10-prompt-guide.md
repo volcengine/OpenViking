@@ -532,6 +532,21 @@ Recommended approach:
 3. Only modify the prompt body or output requirements
 4. Avoid changing variable names that callers already depend on
 
+When overriding `compression.ov_wm_v2`, keep the canonical Working Memory headings
+in the output example. Put `<!-- wm-description -->` on the first nonblank line
+under a section heading, followed by the fixed description on its own line.
+Plain text and Markdown are both supported. Put sample content after the
+description. The bundled descriptions are also recognized by exact match.
+Unmarked custom lines are treated as potential session content. For an
+example-only section, you can add `<!-- wm-example -->` before the sample.
+Ask the model to omit these comments from its response.
+
+New archives record matched descriptions in the L1 frontmatter so abstract
+recovery works after a template change or loss of `.meta.json`. Earlier archives
+without generation-time evidence can identify built-in descriptions by exact
+match. Their saved abstract is preserved when a custom line could be either a
+description or session content.
+
 Example directory:
 
 ```text
