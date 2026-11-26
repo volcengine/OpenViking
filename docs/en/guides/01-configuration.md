@@ -2194,7 +2194,7 @@ When config files are at the default path, OpenViking loads them automatically �
 
 ### Task history cleanup on read replicas {#task-history-cleanup}
 
-The top-level startup option `enable_task_history_cleanup` defaults to `true`.
+The startup option `server.enable_task_history_cleanup` defaults to `true`.
 When enabled, the node cleans up expired Task and Compile history every five minutes.
 On a read replica, set it to `false` in `ov.conf` and restart the service.
 Running tasks can still receive cancellation signals.
@@ -2442,6 +2442,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `account_store.provider` | str | Complete Account store provider. Built-in values are `"file"`, `"mysql"`, `"postgres"`, and `"redis_mysql"`; it owns account, user, group, and API-key records. `"file"` preserves the existing AGFS JSON registry and owns its process-local lookup indexes. `"postgres"` uses PostgreSQL directly. `"redis_mysql"` keeps MySQL authoritative and adds a shared Redis cache for authentication and request identity reads. | `"file"` |
 | `account_store.params` | object | Provider-specific startup parameters. Framework-owned filesystem and File-provider API-key hashing dependencies cannot be overridden here. | `{}` |
 | `account_store.params.read_only` | bool | File provider only. Load an existing writer-created registry without locks, bootstrap, or credential migrations, and reject identity mutations. Keep the replica's data mount read-only and set `reconcile_system_assets_on_startup=false`; enable `api_key_watch_enabled` to observe writer changes. A missing registry prevents startup. Configure [task history cleanup](#task-history-cleanup) separately. | `false` |
+| `enable_task_history_cleanup` | bool | Periodically delete expired Task and Compile history on this node. | `true` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 | `public_base_url` | str | Public-facing base URL emitted in MCP-issued upload instructions. Resolution order: env var `OPENVIKING_PUBLIC_BASE_URL` → this field → `X-Forwarded-Host`/`X-Forwarded-Proto` request headers → `Host` request header → listen-address fallback. Set this (or the env var) when the server runs behind a reverse proxy that does not forward `X-Forwarded-*` headers. | `null` |

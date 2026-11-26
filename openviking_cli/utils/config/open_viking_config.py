@@ -393,11 +393,6 @@ class OpenVikingConfig(BaseModel):
 
     gateway: EmbeddedGatewayConfig = Field(default_factory=EmbeddedGatewayConfig)
 
-    enable_task_history_cleanup: bool = Field(
-        default=True,
-        description="Periodically delete expired Task and Compile history on this node.",
-    )
-
     enable_watch_scheduler: bool = Field(
         default=True,
         description=(

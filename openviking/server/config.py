@@ -469,6 +469,10 @@ class ServerConfig(BaseModel):
     roles: List[Literal["api", "queue_worker", "scheduler"]] = Field(
         default_factory=lambda: ["api", "queue_worker", "scheduler"], min_length=1
     )
+    enable_task_history_cleanup: bool = Field(
+        default=True,
+        description="Periodically delete expired Task and Compile history on this node.",
+    )
     executor_threads: int = Field(
         default=64,
         ge=0,
