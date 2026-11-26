@@ -131,10 +131,12 @@ class GitAccessor(DataAccessor):
         """
         source_str = str(source)
         temp_local_dir = None
-        branch = kwargs.get("branch") or kwargs.get("ref")
-        commit = _normalize_commit(kwargs.get("commit"))
-        if commit:
-            branch = None
+        repo_url = None
+        if source_str.startswith(("http://", "https://", "git://", "ssh://")):
+            repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
+        else:
+            commit = _normalize_commit(kwargs.get("commit"))
+            branch = None if commit else kwargs.get("branch") or kwargs.get("ref")
         auth_config = parse_git_http_auth_config(kwargs.get("auth_config"), source_str)
         git_env = None
         request_validator = kwargs.get("request_validator")
@@ -169,8 +171,7 @@ class GitAccessor(DataAccessor):
                     request_validator=request_validator,
                 )
                 used_git_clone = True
-            elif source_str.startswith(("http://", "https://", "git://", "ssh://")):
-                repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
+            elif repo_url is not None:
                 github_token = None
                 if auth_config is not None:
                     git_env = build_git_http_auth_env(auth_config, repo_url)
@@ -574,8 +575,7 @@ class GitAccessor(DataAccessor):
         env: Optional[dict[str, str]] = None,
         request_validator: Optional[RequestValidator] = None,
     ) -> str:
-        """Clone a git repository into target_dir; return the repo name."""
-        commit = _normalize_commit(commit)
+        """Clone a repository using a validated commit pin; return the repo name."""
         name = self._get_repo_name(url)
         logger.debug(
             "Cloning repository source=%s target=%s",

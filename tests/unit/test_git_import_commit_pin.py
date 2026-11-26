@@ -36,17 +36,13 @@ def test_normalize_commit_rejects_non_sha_values(value):
 
 
 @pytest.mark.asyncio
-async def test_invalid_commit_is_rejected_before_git_runs(monkeypatch, tmp_path):
+async def test_invalid_commit_is_rejected_before_git_runs(monkeypatch):
     accessor = GitAccessor()
     run_git = AsyncMock()
     monkeypatch.setattr(accessor, "_run_git", run_git)
 
     with pytest.raises(InvalidArgumentError):
-        await accessor._git_clone(
-            "https://github.com/org/repo.git",
-            str(tmp_path / "clone"),
-            commit="--upload-pack=evil",
-        )
+        await accessor.access("https://github.com/org/repo.git", commit="12345")
 
     run_git.assert_not_awaited()
 
