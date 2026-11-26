@@ -12,6 +12,7 @@ import asyncio
 import inspect
 import os
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
@@ -266,12 +267,32 @@ class OpenVikingService:
         elif config_file is not None:
             server = load_json_config(config_file).get("server")
             account_store = server.get("account_store") if isinstance(server, dict) else None
-            if isinstance(server, dict) and server.get("ttl_adapter") is not None:
-                from openviking.server.config import TTLAdapterConfig
-
-                ttl_adapter = TTLAdapterConfig.model_validate(server["ttl_adapter"])
-            else:
+            raw_ttl_adapter = server.get("ttl_adapter") if isinstance(server, dict) else None
+            if raw_ttl_adapter is None:
                 ttl_adapter = None
+            elif not isinstance(raw_ttl_adapter, dict):
+                raise ValueError("server.ttl_adapter must be an object")
+            else:
+                from pydantic import TypeAdapter
+
+                from openviking.scheduling.expiry.config import ExpiryCacheConfig
+
+                ttl_config = raw_ttl_adapter.get("config", {})
+                if not isinstance(ttl_config, dict):
+                    raise ValueError("server.ttl_adapter.config must be an object")
+                if "redis" in ttl_config:
+                    raise ValueError(
+                        "ttl_adapter.config.redis is not supported; configure "
+                        "cache.instances.<name>.params and ttl_adapter.cache.instance"
+                    )
+                ttl_adapter = SimpleNamespace(
+                    enabled=TypeAdapter(bool).validate_python(
+                        raw_ttl_adapter.get("enabled", False)
+                    ),
+                    cache=ExpiryCacheConfig.model_validate(
+                        raw_ttl_adapter.get("cache", {"instance": "default"})
+                    ),
+                )
         else:
             account_store = None
             ttl_adapter = None
