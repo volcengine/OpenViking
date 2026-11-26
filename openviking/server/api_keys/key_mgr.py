@@ -280,6 +280,15 @@ class APIKeyManager:
     async def get_account(self, account_id):
         return await self._store.get_account(account_id)
 
+    async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        return await self._store.get_frozen_files(account_id)
+
+    async def set_frozen_file(
+        self, account_id: str, user_id: str, path: str, frozen: bool
+    ) -> tuple[str, ...]:
+        self.require_writable()
+        return await self._store.set_frozen_file(account_id, user_id, path, frozen)
+
     async def get_user(self, account_id, user_id):
         return await self._store.get_user(account_id, user_id)
 

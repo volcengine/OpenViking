@@ -7,6 +7,10 @@ import type {
 } from '../../../client/types.js';
 import type { VikingBotSession } from '../../../components/viking-bot/capabilities.js';
 import { isOvClientError } from '../../../client/errors.js';
+import {
+  readSessionCommitTask,
+  submitSessionCommit,
+} from './native-memory-commit.js';
 import { nativeChatEvents } from './native-events.js';
 import { readNativeMessages, writeNativeParts } from './native-messages.js';
 import { nativeChatInput } from './native-input.js';
@@ -26,7 +30,10 @@ const sessionView = (item: SessionDTO): VikingBotSession => ({
 export function createNativeBotService(
   client: OvClient,
   options: OvRequestOptions,
-): VikingBotChatService & VikingBotSessionService {
+): VikingBotChatService &
+  VikingBotSessionService & {
+    patchSessionTitle: NonNullable<VikingBotSessionService['renameSession']>;
+  } {
   const request = <T>(spec: OvRequestSpec, signal: AbortSignal) =>
     client.request<T>({ ...spec, options: { ...options, signal } });
   return nativeService(
@@ -56,6 +63,16 @@ export function createNativeBotService(
         return items
           .map(sessionView)
           .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''));
+      },
+      async patchSessionTitle(id, title, signal) {
+        await request(
+          {
+            method: 'PATCH',
+            path: OV_PATH_BUILDERS.session(id),
+            body: { title },
+          },
+          signal,
+        );
       },
       async removeSession(id, signal) {
         await request(
@@ -131,6 +148,8 @@ export function createNativeBotService(
               parts,
               turn_id: message.turnId,
               created_at: message.createdAt,
+              ...(message.role === 'assistant' &&
+                message.interrupted && { interrupted: true }),
               message_kind:
                 message.role === 'user' ? 'user_query' : 'assistant_step',
             },
@@ -138,6 +157,9 @@ export function createNativeBotService(
           signal,
         );
       },
+      getSessionCommitTask: (id, signal) =>
+        readSessionCommitTask(request, id, signal),
+      commitSession: (id, signal) => submitSessionCommit(request, id, signal),
       interrupt: (id, signal) =>
         request(
           {

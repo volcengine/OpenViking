@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from openviking.core.namespace import context_type_for_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
-from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.ingest_options import IngestOptions
@@ -69,18 +69,8 @@ class Summarizer:
         file_abstract: str = "",
         file_vector_action: str = "",
         generation_trigger: str = "semantic_refresh",
-        force_refresh: bool | None = None,
     ) -> Dict[str, Any]:
-        """Summarize one flat file and refresh its parent directory semantics.
-
-        ``force_refresh`` controls parent-directory aggregation. ``None`` (the
-        default used by resource ingest) always aggregates immediately. A boolean
-        opts into the freshness gate: the changed file is still summarized and
-        vectorized, but parent L0/L1 aggregation is deferred by the freshness
-        policy unless ``force_refresh`` is ``True``. The returned
-        ``semantic_action`` reports the gate decision so callers can surface a
-        ``deferred``/``skipped`` status.
-        """
+        """Queue file semantics and any subsequent directory maintenance."""
         parent = VikingURI(file_uri).parent
         if parent is None:
             return {"status": "error", "message": f"file has no parent URI: {file_uri}"}
@@ -100,13 +90,8 @@ class Summarizer:
             skip_vectorization=skip_vectorization,
             ingest_options=ingest_options,
             generation_trigger=generation_trigger,
-            force_refresh=force_refresh,
         )
-        return {
-            "status": "success",
-            "enqueued_count": result["enqueued_count"],
-            "semantic_action": result["parent_actions"][parent.uri.rstrip("/")],
-        }
+        return result
 
     async def refresh_file_parents(
         self,
@@ -117,19 +102,8 @@ class Summarizer:
         skip_vectorization: bool = False,
         ingest_options: IngestOptions | None = None,
         generation_trigger: str = "semantic_refresh",
-        force_refresh: bool | None = None,
     ) -> Dict[str, Any]:
-        """Queue flat-file semantic maintenance grouped by each direct parent.
-
-        A file remains the RNFV planning unit, while this execution helper owns
-        the batch-only concern: one freshness decision and at most one
-        ``SemanticMsg`` for every direct parent directory.
-        """
-        from openviking.storage.abstract_overview import plan_abstract_overview_refresh
-        from openviking.storage.errors import LockAcquisitionError
-        from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
-        from openviking_cli.utils.config import get_openviking_config
-
+        """Queue file semantics in one message per direct parent."""
         grouped: dict[str, list[FileRefreshRequest]] = defaultdict(list)
         for change in changes:
             parent = VikingURI(change.file_uri).parent
@@ -138,14 +112,13 @@ class Summarizer:
             grouped[parent.uri.rstrip("/")].append(change)
 
         if not grouped:
-            return {"status": "success", "enqueued_count": 0, "parent_actions": {}}
+            return {"status": "success", "enqueued_count": 0}
         if lock_handoff is not None and len(grouped) != 1:
             raise ValueError("one semantic lock handoff requires exactly one parent refresh")
 
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
         telemetry_id = get_current_telemetry().telemetry_id
-        parent_actions: dict[str, str] = {}
         enqueued_count = 0
         for parent_uri, parent_changes in sorted(grouped.items()):
             context_types = {context_type_for_uri(change.file_uri) for change in parent_changes}
@@ -154,27 +127,6 @@ class Summarizer:
             context_type = context_types.pop()
             added = sorted(change.file_uri for change in parent_changes if change.created)
             modified = sorted(change.file_uri for change in parent_changes if not change.created)
-
-            semantic_action = FreshnessAction.REFRESH_NOW
-            if force_refresh is not None:
-                semantic_config = get_openviking_config().semantic
-                try:
-                    decision = await plan_abstract_overview_refresh(
-                        viking_fs=get_viking_fs(),
-                        dir_uri=parent_uri,
-                        changed_entries=len(parent_changes),
-                        ctx=ctx,
-                        overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-                        refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-                        force_refresh=force_refresh,
-                    )
-                    semantic_action = decision.action
-                except LockAcquisitionError:
-                    # Parent aggregation is best-effort; changed-file work still runs.
-                    logger.info("Skipping busy parent semantic refresh: %s", parent_uri)
-                    semantic_action = FreshnessAction.NOOP
-            parent_actions[parent_uri] = semantic_action.value
-            aggregate_directory = semantic_action is FreshnessAction.REFRESH_NOW
 
             msg = SemanticMsg(
                 uri=parent_uri,
@@ -192,21 +144,7 @@ class Summarizer:
                     for change_type, uris in (("added", added), ("modified", modified))
                     if uris
                 },
-                coalesce_key=(
-                    build_semantic_coalesce_key(
-                        context_type=context_type,
-                        uri=parent_uri,
-                        account_id=ctx.account_id,
-                        user_id=ctx.user.user_id,
-                        peer_id=ctx.user.user_id,
-                    )
-                    if aggregate_directory
-                    and lock_handoff is None
-                    and not (generation_trigger == "content_write" and context_type == "resource")
-                    else ""
-                ),
                 generation_trigger=generation_trigger,
-                aggregate_directory=aggregate_directory,
                 ingest_options=ingest_options,
                 file_md5s={change.file_uri: change.md5 for change in parent_changes if change.md5}
                 or None,
@@ -225,16 +163,9 @@ class Summarizer:
                     if change.ingest_options != IngestOptions()
                 },
             )
-            enqueue_id = await semantic_queue.enqueue(msg)
-            if enqueue_id == "deduplicated":
-                continue
-            else:
-                enqueued_count += 1
-        return {
-            "status": "success",
-            "enqueued_count": enqueued_count,
-            "parent_actions": parent_actions,
-        }
+            await semantic_queue.enqueue(msg)
+            enqueued_count += 1
+        return {"status": "success", "enqueued_count": enqueued_count}
 
     async def summarize(
         self,
@@ -269,8 +200,10 @@ class Summarizer:
         if not temp_uris:
             temp_uris = resource_uris
         if len(temp_uris) != len(resource_uris):
-            logger.error(
-                f"temp_uris length ({len(temp_uris)}) must match resource_uris length ({len(resource_uris)})"
+            logger.info(
+                "semantic generation rejected; mismatched URI counts source_count=%d target_count=%d",
+                len(temp_uris),
+                len(resource_uris),
             )
             return {
                 "status": "error",
@@ -285,7 +218,9 @@ class Summarizer:
         lock_guard = (
             lock
             if isinstance(lock, PathLockGuard)
-            else PathLockGuard(agfs, lock) if lock is not None else None
+            else PathLockGuard(agfs, lock)
+            if lock is not None
+            else None
         )
         lock_handoff: Optional[Dict[str, Any]] = None
         if lock_guard is not None:
@@ -352,12 +287,10 @@ class Summarizer:
                 )
                 try:
                     if lock_guard is None:
-                        enqueue_id = await semantic_queue.enqueue(msg)
+                        await semantic_queue.enqueue(msg)
                     else:
-                        enqueue_id = await lock_guard.handoff_and_dispatch(
-                            lock_handoff,
-                            lambda msg=msg: semantic_queue.enqueue(msg),
-                            accepted=lambda result: result != "deduplicated",
+                        await lock_guard.handoff_and_dispatch(
+                            lock_handoff, lambda msg=msg: semantic_queue.enqueue(msg)
                         )
                 except BaseException:
                     if (
@@ -369,12 +302,11 @@ class Summarizer:
                         lock.clear()
                         lock.update(lock_guard.lease)
                     raise
-                if enqueue_id == "deduplicated":
-                    logger.info("Semantic generation already queued for: %s", target_uri)
-                    continue
                 enqueued_count += 1
-                logger.info(
-                    f"Enqueued semantic generation for: {target_uri} (skip_vectorization={skip_vectorization})"
+                logger.debug(
+                    "semantic generation enqueued uri=%s skip_vectorization=%s",
+                    safe_uri_for_log(target_uri),
+                    skip_vectorization,
                 )
 
         return {

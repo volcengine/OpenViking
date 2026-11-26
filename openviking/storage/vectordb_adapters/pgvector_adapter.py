@@ -10,10 +10,12 @@ remain full precision; flat search supports dimensions above the HNSW limit.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import threading
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import SearchItemResult, SearchResult
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
@@ -174,6 +176,48 @@ class PgvectorCollection(OpenGaussCollection):
             raise NotImplementedError("pgvector TTL writes are not supported")
         return super().upsert_data(data_list, ttl=0)
 
+    def _dense_vector_guard(self, op):
+        # pgvector does not index cosine zero vectors. Exact fallback must use
+        # the same eligible set and avoid propagating their NaN distances.
+        guard = super()._dense_vector_guard(op)
+        return f"{guard} AND vector_norm(vector) > 0" if op == "<=>" else guard
+
+    def _dense_filter_clause(self, op, where, filter_params):
+        if op != "<=>" or not where:
+            return super()._dense_filter_clause(op, where, filter_params)
+        # SQL AND does not guarantee evaluation order. Keep the scalar predicate
+        # visible to indexes, but fence the TOAST-reading norm behind CASE.
+        return (
+            f'({where}) AND "vector" IS NOT NULL AND '
+            f"CASE WHEN ({where}) THEN vector_norm(vector) > 0 ELSE FALSE END",
+            [*filter_params, *filter_params],
+        )
+
+    def _dense_candidate_query(self, index_name, where, filter_params, vector_text, op, budget):
+        if op != "<=>":
+            return super()._dense_candidate_query(
+                index_name, where, filter_params, vector_text, op, budget
+            )
+        # PostgreSQL sorts NaN after finite distances in ascending order. Cosine
+        # zero vectors therefore cannot displace any eligible top-budget row.
+        # Filter after LIMIT to avoid norm/TOAST reads on scalar-rejected rows
+        # and a second vector read on scalar exact plans. HNSW itself omits zeros.
+        condition = f"({where}) AND " if where else ""
+        # PostgreSQL 16 cannot match a second sort key to the HNSW ordering.
+        # Keep candidate recall distance-only for ANN; final ranking sorts ties.
+        order = "_ov_distance"
+        if self._indexes[index_name]["_pg_index_type"] == "flat":
+            order += ", _ov_candidate_id"
+        return (
+            'SELECT _ov_candidate_id FROM (SELECT "id" AS _ov_candidate_id, '
+            f'"vector" {op} %s::vector AS _ov_distance '
+            f"FROM public.{_quote_identifier(self._name)} "
+            f'WHERE {condition}"vector" IS NOT NULL '
+            f"ORDER BY {order} LIMIT %s) _ov_native_candidates "
+            "WHERE _ov_distance <> 'NaN'::double precision",
+            [vector_text, *filter_params, budget],
+        )
+
     def search_by_vector(
         self,
         index_name,
@@ -206,6 +250,7 @@ class PgvectorCollection(OpenGaussCollection):
             return SearchResult(data=[])
         vector = _validate_vector(dense_vector, self._dim)
         metric, op = self._resolve_distance_and_op(index_name)
+        vector_text = str(vector)
         where, params = _build_where_clause(
             self._normalize_filter_date_times(filters), self._array_fields
         )
@@ -214,13 +259,17 @@ class PgvectorCollection(OpenGaussCollection):
             f"SELECT {self._select_output_columns(output_fields)}, "
             f"vector {op} %s::vector AS _ov_distance "
             f"FROM {_quote_identifier(self._name)} "
-            f"WHERE {condition}vector IS NOT NULL "
+            f'WHERE {condition}"vector" IS NOT NULL '
             f"ORDER BY vector {op} %s::vector, id LIMIT %s OFFSET %s",
-            [str(vector), *params, str(vector), limit, offset],
+            [vector_text, *params, vector_text, limit, offset],
             index_name,
         )
         items = []
         for row in rows:
+            # NaN zero-vector distances sort last, so removing them after native
+            # pagination cannot drop an otherwise eligible result at this offset.
+            if metric == "cosine" and math.isnan(float(row[-1])):
+                continue
             record = self._row_to_dict(row[:-1], columns[:-1])
             items.append(
                 SearchItemResult(
@@ -441,10 +490,11 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             if table_created:
                 try:
                     self._execute_cleanup()
-                except Exception:
-                    logger.exception(
-                        "pgvector_adapter: failed to clean up partially created collection %s",
-                        self._collection_name,
+                except Exception as _log_error:
+                    logger.info(
+                        "pgvector_adapter: failed to clean up partially created collection %s error_type=%s",
+                        short_hash(str(self._collection_name)),
+                        type(_log_error).__name__,
                     )
             raise
 

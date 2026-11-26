@@ -1,5 +1,8 @@
 import type { CommandConsoleWriteResultContent } from './types.js';
-import { CommandConsoleUriText } from './command-console-uri-text.js';
+import {
+  CommandConsoleUriLink,
+  CommandConsoleUriText,
+} from './command-console-uri-text.js';
 
 export interface CommandConsoleWriteResultProps {
   content: CommandConsoleWriteResultContent;
@@ -32,6 +35,16 @@ export function CommandConsoleWriteResult({
                 mode="prose"
                 onOpenUri={onOpenUri}
               />
+            ) : line &&
+              typeof line === 'object' &&
+              'uri' in line &&
+              'label' in line ? (
+              <>
+                {line.label}:{' '}
+                <CommandConsoleUriLink uri={line.uri} onOpenUri={onOpenUri}>
+                  {line.uri}
+                </CommandConsoleUriLink>
+              </>
             ) : (
               line
             )}

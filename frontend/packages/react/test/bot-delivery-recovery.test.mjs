@@ -7,6 +7,40 @@ const { createChatController } = await import(
 );
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+test('an event received before cancellation prevents replay without notifying the UI', async () => {
+  const inputs = [];
+  let notifications = 0;
+  const controller = createChatController(
+    {
+      createSession: async () => ({ id: 'session', title: 'Session' }),
+      loadMessages: async () => [],
+      async *stream(input) {
+        inputs.push(input);
+        if (inputs.length === 1) {
+          queueMicrotask(() => void controller.abort());
+          yield { type: 'text', text: 'Accepted', delta: true };
+          return;
+        }
+        yield { type: 'complete', text: 'Answer' };
+      },
+    },
+    { persist: false },
+  );
+  const stop = controller.start();
+  try {
+    assert.equal(
+      await controller.send('First message', () => notifications++),
+      false,
+    );
+    assert.equal(notifications, 0);
+    assert.equal(await controller.send('Second message'), true);
+    assert.equal(inputs[0].sessionId, inputs[1].sessionId);
+    assert.equal(inputs[1].text, 'Second message');
+  } finally {
+    stop();
+  }
+});
+
 for (const generationStarted of [false, true]) {
   test(`recovered input survives pre-delivery failures but is not replayed after generation starts (started=${generationStarted})`, async () => {
     const inputs = [];

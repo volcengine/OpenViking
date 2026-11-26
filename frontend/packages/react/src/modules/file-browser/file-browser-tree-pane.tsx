@@ -1,8 +1,13 @@
+import {
+  displayNameFromUri,
+  nameFromUri,
+} from '../../shared/directory-tree/rows.js';
+import { tagData } from '../../shared/monitoring/data.js';
 import { MonitoringFlow } from '../../shared/monitoring/flow-context.js';
 import { useRenderErrors } from './file-browser-labels.js';
 import { ErrorBoundary } from '../../shared/error-boundary/error-boundary.js';
 import { Button } from '../../shared/primitives/button/button.js';
-import type { Ref } from 'react';
+import { useMemo, type Ref } from 'react';
 import type { Locale } from '../../shared/locale.js';
 import { dashboardLabels as resolveDashboardLabels } from './dashboard-labels.js';
 
@@ -18,7 +23,8 @@ import { FileBrowserToolbar } from './file-browser-toolbar.js';
 import { WikiBookIcon } from '../../icons/index.js';
 import { DashboardIndicator } from './dashboard-indicator.js';
 import { fileTypeIcon } from './fs-icon.js';
-import type { FileBrowserApi, FileBrowserDashboardLabels } from './types.js';
+import type { FileBrowserApi } from './file-browser-state-types.js';
+import type { FileBrowserDashboardLabels } from './types.js';
 
 /**
  * 左栏：内置操作栏、搜索行与目录树。
@@ -76,6 +82,15 @@ function FileBrowserTreePaneContent({
   refreshLabel,
   retryLabel,
 }: FileBrowserTreePaneProps) {
+  const rows = useMemo(
+    () =>
+      browser.rows.map((row) =>
+        row.kind === 'entry' ? { ...row, name: nameFromUri(row.uri) } : row,
+      ),
+    [browser.rows],
+  );
+  const spans = browser.treeMonitoring.map((operation) => operation.span);
+  tagData(spans[0]?.binding, rows, spans);
   return (
     <>
       <FileBrowserActionBar
@@ -120,7 +135,7 @@ function FileBrowserTreePaneContent({
           search={false}
           refresh={false}
           locale={locale}
-          rows={browser.rows}
+          rows={rows}
           rootOrder={rootUri === 'viking://' ? 'context' : 'input'}
           selectedId={browser.selectedId}
           isReady={browser.isReady}
@@ -129,7 +144,7 @@ function FileBrowserTreePaneContent({
             browser.dashboards.get(row.uri)?.isRoot ? (
               <WikiBookIcon width={14} height={14} />
             ) : (
-              fileTypeIcon(row.name)
+              fileTypeIcon(displayNameFromUri(row.uri))
             )
           }
           renderRowTrailing={(row) => {
@@ -143,9 +158,9 @@ function FileBrowserTreePaneContent({
               />
             ) : null;
           }}
+          onToggleExpand={(row) => void browser.actions.toggleExpand(row)}
           operations={{
             select: browser.actions.select,
-            toggleExpand: browser.actions.toggleExpand,
             loadMore: browser.actions.loadMore,
             retry: browser.actions.retry,
           }}

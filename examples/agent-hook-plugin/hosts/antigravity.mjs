@@ -6,17 +6,24 @@
  * background task, subagent message, or Stop continuation (`invocationNum` 0
  * with a higher `initialNumSteps`). Recall runs only when `invocationNum` is 0
  * and no `MODEL` step has run since the latest `USER_INPUT` step in
- * `transcriptPath`, keyed by that user step so a turn injects once. Injected
+ * `transcriptPath`, keyed by that user step so a turn injects once. When the
+ * new turn's user step is not in the transcript yet, `lastUserInput` differing
+ * from the last recorded request marks it as a new turn. Injected
  * context goes back as a `systemMessage` step, which stays in the conversation.
  * Stop carries no message text: capture reads the finished steps of
  * `transcriptPath` after the last captured step.
+ *
+ * PreToolUse hands over `toolCall.name` (`read_file`, `run_command`, …) and
+ * `toolCall.args`, whose keys are PascalCase (`Path`, `CommandLine`).
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 
 import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 
 // The host wraps a typed request as `<USER_REQUEST>…</USER_REQUEST>` followed by
 // metadata blocks. Only that record is unwrapped, and only an envelope that
@@ -34,15 +41,33 @@ function userRequestText(text) {
   return cleanAntigravityText(raw.match(USER_REQUEST)?.[1] ?? raw);
 }
 
+const sameText = (text) => userRequestText(text).replace(/\s+/g, " ");
+
+/**
+ * The host may hand over `transcript.jsonl`, whose step contents are cut short;
+ * the untruncated `transcript_full.jsonl` beside it is read instead when present.
+ */
+export function antigravityTranscriptPath(transcriptPath) {
+  if (!transcriptPath) return "";
+  if (basename(transcriptPath) !== "transcript.jsonl") return transcriptPath;
+  const full = join(dirname(transcriptPath), "transcript_full.jsonl");
+  return existsSync(full) ? full : transcriptPath;
+}
+
 /**
  * Return `step_index + 1` of the unanswered `USER_INPUT` step before
  * `initialNumSteps`, `null` when a `MODEL` step has already run since the last
  * user step (a background-task, subagent, or Stop wakeup), or `undefined` when
  * the transcript has no parsed steps yet.
+ *
+ * With `lastUserInput`, a `null` becomes `undefined` when that input differs
+ * from the last user step's text: the host has not written the new turn's
+ * `USER_INPUT` step yet, so this is a new turn, not a wakeup.
  */
-export function resolveAntigravityTurnStep(jsonl, initialNumSteps) {
+export function resolveAntigravityTurnStep(jsonl, initialNumSteps, lastUserInput) {
   const limit = Number.isInteger(initialNumSteps) && initialNumSteps > 0 ? initialNumSteps : Infinity;
   let lastUserStep = -1;
+  let lastUserText = "";
   let modelRanSinceUser = false;
   let sawStep = false;
   for (const line of String(jsonl || "").split("\n")) {
@@ -55,14 +80,39 @@ export function resolveAntigravityTurnStep(jsonl, initialNumSteps) {
     sawStep = true;
     if (step.type === "USER_INPUT" && step.source === "USER_EXPLICIT") {
       lastUserStep = index;
+      // A truncated record (transcript.jsonl keeps only the head and tail) can
+      // not be compared, so it never marks a new turn.
+      lastUserText = Array.isArray(step.truncated_fields) && step.truncated_fields.includes("content")
+        ? null
+        : sameText(step.content);
       modelRanSinceUser = false;
     } else if (lastUserStep >= 0 && step.source === "MODEL") {
       modelRanSinceUser = true;
     }
   }
   if (!sawStep) return undefined;
-  if (lastUserStep < 0 || modelRanSinceUser) return null;
+  if (lastUserStep < 0 || modelRanSinceUser) {
+    const pending = sameText(lastUserInput);
+    return pending && lastUserText !== null && pending !== lastUserText ? undefined : null;
+  }
   return lastUserStep + 1;
+}
+
+/**
+ * The step index of the latest compaction. Antigravity has no compaction hook;
+ * each compaction writes a `CHECKPOINT` step, and the context before it, the
+ * session-start profile included, is gone.
+ */
+export function latestAntigravityCheckpoint(jsonl) {
+  let latest;
+  for (const line of String(jsonl || "").split("\n")) {
+    if (!line.includes('"CHECKPOINT"')) continue;
+    try {
+      const step = JSON.parse(line);
+      if (step.type === "CHECKPOINT" && step.source === "SYSTEM") latest = step.step_index;
+    } catch { /* a partial last line */ }
+  }
+  return latest;
 }
 
 /** The user requests and text replies of finished steps after `afterStep`. */
@@ -97,6 +147,12 @@ export function buildAntigravityTurns(jsonl, afterStep = -1) {
   return { turns, lastStep };
 }
 
+// File tools name their location in an argument ending in Path, File or
+// Directory (`Path`, `AbsolutePath`, `TargetFile`, `DirectoryPath`). A file body
+// or a command line that mentions a viking:// URI is not a location.
+const LOCATION_ARG = /(?:Path|File|Directory)$/;
+const GUARD_KINDS = [[/write/, "write"], [/replace|edit/, "edit"], [/grep|search/, "grep"], [/list|find/, "glob"]];
+
 export const antigravity = {
   prefix: "ag-",
   capturesOnlyWhenEnabled: true,
@@ -110,6 +166,18 @@ export const antigravity = {
     ...input,
     session_id: input.conversationId,
   }),
+  guard(input = {}) {
+    const { name = "", args } = input.toolCall || {};
+    const location = Object.entries(args || {}).find(([key, value]) => (
+      LOCATION_ARG.test(key) && typeof value === "string" && /^\s*viking:\/\//i.test(value)
+    ))?.[1];
+    if (!location) return {};
+    const kind = GUARD_KINDS.find(([pattern]) => pattern.test(name))?.[1] || "read";
+    const denied = evaluateUriGuard(kind, { path: location.trim() });
+    // No decision at all when the call may proceed: "allow" would skip the
+    // user's own permission prompt.
+    return denied ? { decision: "deny", reason: denied.reason } : {};
+  },
   prompt(input) {
     if (Number(input.invocationNum || 0) !== 0) return "";
     const text = cleanAntigravityText(input.lastUserInput);
@@ -117,7 +185,9 @@ export const antigravity = {
     let turnStep;
     if (input.transcriptPath) {
       try {
-        turnStep = resolveAntigravityTurnStep(readFileSync(input.transcriptPath, "utf8"), input.initialNumSteps);
+        const jsonl = readFileSync(antigravityTranscriptPath(input.transcriptPath), "utf8");
+        turnStep = resolveAntigravityTurnStep(jsonl, input.initialNumSteps, text);
+        input.latestCompaction = latestAntigravityCheckpoint(jsonl);
       } catch {
         turnStep = undefined;
       }
@@ -129,7 +199,8 @@ export const antigravity = {
   },
   async capture(ctx, state) {
     const afterStep = Number.isInteger(state.lastStep) ? state.lastStep : -1;
-    const jsonl = ctx.input.transcriptPath ? await readFile(ctx.input.transcriptPath, "utf8").catch(() => "") : "";
+    const path = antigravityTranscriptPath(ctx.input.transcriptPath);
+    const jsonl = path ? await readFile(path, "utf8").catch(() => "") : "";
     const { turns, lastStep } = buildAntigravityTurns(jsonl, afterStep);
     const { kept, dropped } = filterCaptureTurns(turns, ctx.cfg);
     for (const item of dropped) ctx.log("capture_skip", item);

@@ -10,8 +10,8 @@ from enum import Enum
 from pathlib import PurePosixPath
 from typing import Any, Mapping
 
-from openviking.concurrency import bounded_map
-from openviking.storage.abstract_overview import parse_overview_file_summaries
+from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.storage.index_action import FieldPatch, IndexAction
 from openviking.storage.resource_diff import ContentState, IndexState
 from openviking.storage.resource_rnfv import (
@@ -583,37 +583,6 @@ def _field_patch(request: RequestIntent, record: VectorRecordSnapshot | None) ->
     return FieldPatch(values, modes) if values else None
 
 
-def _rfv_file_summary(
-    snapshot: Any,
-    relative_path: str,
-    record: VectorRecordSnapshot | None,
-    overview_summaries: dict[str, Mapping[str, str]],
-) -> str:
-    file_name = relative_path.rsplit("/", 1)[-1]
-    if not relative_path and not snapshot.formal.entries[""].is_dir:
-        file_uri = snapshot.request.target_uri.rstrip("/")
-        parent_uri = file_uri.rsplit("/", 1)[0]
-        file_name = file_uri.rsplit("/", 1)[-1]
-    else:
-        parent_uri = _uri(snapshot.request.target_uri, _parent(relative_path))
-    # RFV keeps both the parsed sidecar body and its raw frontmatter-bearing
-    # source. ``parse_overview_file_summaries`` needs the latter; parsing the
-    # already-stripped body again misinterprets a skill body that begins with
-    # its own YAML frontmatter as the sidecar envelope.
-    overview = snapshot.source_raw_contents.get((parent_uri, 1))
-    if overview is None:
-        overview = snapshot.source_contents.get((parent_uri, 1))
-    if isinstance(overview, (str, bytes)):
-        summaries = overview_summaries.get(parent_uri)
-        if summaries is None:
-            summaries = parse_overview_file_summaries(overview)
-            overview_summaries[parent_uri] = summaries
-        summary = summaries.get(file_name)
-        if summary:
-            return summary
-    return str(record.fields.get("abstract") or "") if record else ""
-
-
 def _semantic_closure(
     diff: Any,
     new_kinds: Mapping[str, str],
@@ -1167,7 +1136,6 @@ def build_rfv_context_update_plan(
             raise ValueError("RFV maintenance plan must not mutate formal content")
         return diff, plan
     records_by_path, duplicate_records = _records_by_path(snapshot.vectors.records_by_id)
-    overview_summaries: dict[str, Mapping[str, str]] = {}
     direct_actions: list[DirectIndexAction] = [
         DirectIndexAction(IndexAction.DELETE, record.uri, record.level, record.record_id)
         for record in duplicate_records
@@ -1216,7 +1184,7 @@ def build_rfv_context_update_plan(
                         ),
                         field_patch=field_patch,
                         md5=entry.level_md5s.get(level),
-                        summary=_rfv_file_summary(snapshot, path, record, overview_summaries),
+                        summary=str(record.fields.get("abstract") or "") if record else "",
                     )
                 )
             elif field_patch is not None and record is not None:
@@ -1368,22 +1336,21 @@ async def execute_content_tree_actions(
     store: Any,
     artifact_ref: Any,
     target: Any,
-    concurrency: int | None = None,
 ) -> None:
     """Commit planned content mutations before any asynchronous work."""
 
     async def run_action(action: ContentTreeAction, operation: Any) -> None:
         try:
             await operation
-        except Exception:
-            logger.exception(
-                "[ContentTreeActionFailed] %s operation=%s relative_path=%s "
-                "old_kind=%s new_kind=%s",
+        except Exception as _log_error:
+            logger.debug(
+                "Content tree action failed %s operation=%s relative_path=%s old_kind=%s new_kind=%s error_type=%s",
                 log_correlation(),
                 action.operation.value,
-                action.relative_path,
+                safe_path_for_log(str(action.relative_path)),
                 action.old_kind or "-",
                 action.new_kind or "-",
+                type(_log_error).__name__,
             )
             raise
 
@@ -1407,12 +1374,6 @@ async def execute_content_tree_actions(
     file_actions = [action for action in actions if action.new_kind == "file"]
     if not file_actions:
         return
-    if concurrency is None:
-        from openviking_cli.utils.config import get_openviking_config
-
-        concurrency = int(
-            get_openviking_config().queue_workers.add_resource.file_operation_concurrency
-        )
 
     async def write(action: ContentTreeAction) -> None:
         async def read_and_write() -> None:
@@ -1421,7 +1382,7 @@ async def execute_content_tree_actions(
 
         await run_action(action, read_and_write())
 
-    await bounded_map(file_actions, write, concurrency=max(1, concurrency))
+    await bounded_map(file_actions, write, concurrency=FILE_TASK_CONCURRENCY)
 
 
 __all__ = [

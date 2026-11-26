@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 
 import openviking.service.reindex_executor as reindex_mod
+from openviking.pyagfs.exceptions import AGFSNotFoundError
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context
 from openviking.server.config import ServerConfig
@@ -22,6 +23,7 @@ from openviking_cli.exceptions import (
     PermissionDeniedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from tests.server.test_api_resources import _wait_task_terminal
 
 pytestmark = pytest.mark.asyncio
 
@@ -57,31 +59,41 @@ async def snapshot_router_client():
         yield client
 
 
-async def test_commit_creates_snapshot(client_with_resource):
-    client, _root_uri = client_with_resource
-    resp = await client.post(
+async def test_log_returns_recent_commits(client, service):
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    uri = "viking://resources/new-snapshot.md"
+    message = "new file snapshot"
+    await service.viking_fs.write_file(uri, "new content", ctx=ctx)
+    committed = await client.post(
         "/api/v1/snapshot/commit",
-        json={"message": "first snapshot"},
+        json={
+            "message": message,
+            "paths": [uri],
+            "author_name": "Snapshot Writer",
+            "author_email": "writer@example.com",
+        },
     )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "ok"
-    result = body["result"]
-    assert result["result"] in ("created", "noop")
-    assert isinstance(result["commit_oid"], str) and len(result["commit_oid"]) == 40
+    assert committed.status_code == 200, committed.text
+    result = committed.json()["result"]
+    assert result["result"] == "created"
+    oid = result["commit_oid"]
 
+    logged = await client.get(
+        "/api/v1/snapshot/log", params={"branch": "main", "paths": uri, "limit": 1}
+    )
+    assert logged.status_code == 200, logged.text
+    [entry] = logged.json()["result"]
+    assert entry["oid"] == oid
+    assert entry["message"] == message
 
-async def test_log_returns_recent_commits(client_with_resource):
-    client, _ = client_with_resource
-    await client.post("/api/v1/snapshot/commit", json={"message": "for log"})
-
-    resp = await client.get("/api/v1/snapshot/log", params={"branch": "main", "limit": 5})
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "ok"
-    log = body["result"]
-    assert isinstance(log, list) and len(log) >= 1
-    assert "oid" in log[0] and "message" in log[0]
+    shown = await client.get("/api/v1/snapshot/show", params={"target_ref": oid})
+    assert shown.status_code == 200, shown.text
+    meta = shown.json()["result"]
+    assert meta["oid"] == oid
+    assert meta["message"] == message
+    assert len(meta["tree"]) == 40
+    assert meta["author"]["name"] == "Snapshot Writer"
+    assert meta["author"]["email"] == "writer@example.com"
 
 
 @pytest.mark.parametrize("guarded", [False, True])
@@ -153,24 +165,6 @@ async def test_log_value_error_is_mapped(monkeypatch):
         await snapshot.log(branch="main", limit=5, paths=["viking://"], _ctx=ctx)
 
 
-async def test_log_rejects_more_than_32_raw_path_parameters(snapshot_router_client, monkeypatch):
-    from openviking.server.routers import snapshot
-
-    log_mock = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        snapshot,
-        "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(log=log_mock)),
-    )
-    params = [("paths", "viking://resources/a.md")] * 33
-
-    response = await snapshot_router_client.get("/api/v1/snapshot/log", params=params)
-
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
-    log_mock.assert_not_awaited()
-
-
 async def test_log_accepts_32_raw_path_parameters(snapshot_router_client, monkeypatch):
     from openviking.server.routers import snapshot
 
@@ -180,13 +174,17 @@ async def test_log_accepts_32_raw_path_parameters(snapshot_router_client, monkey
         "get_service",
         lambda: SimpleNamespace(fs=SimpleNamespace(log=log_mock)),
     )
-    params = [("paths", f"viking://resources/{index}.md") for index in range(32)]
-
-    response = await snapshot_router_client.get("/api/v1/snapshot/log", params=params)
-
+    paths = [f"viking://resources/{index}.md" for index in range(32)]
+    response = await snapshot_router_client.get("/api/v1/snapshot/log", params={"paths": paths})
     assert response.status_code == 200
-    forwarded_paths = log_mock.await_args.kwargs["paths"]
-    assert len(forwarded_paths) == 32
+    assert log_mock.await_args.kwargs["paths"] == paths
+
+    rejected = await snapshot_router_client.get(
+        "/api/v1/snapshot/log", params={"paths": [*paths, paths[0]]}
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["error"]["code"] == "INVALID_ARGUMENT"
+    log_mock.assert_awaited_once()
 
 
 async def test_log_scan_limit_error_maps_to_invalid_argument(monkeypatch):
@@ -351,23 +349,6 @@ async def test_restore_acl_and_reindex_identity(client_with_resource, service, m
         await service.fs.commit(message="unreadable descendant", paths=[root], ctx=reader)
 
 
-async def test_show_commit_metadata(client_with_resource):
-    client, _ = client_with_resource
-    commit = (await client.post("/api/v1/snapshot/commit", json={"message": "meta"})).json()[
-        "result"
-    ]
-    resp = await client.get(
-        "/api/v1/snapshot/show",
-        params={"target_ref": commit["commit_oid"]},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    meta = body["result"]
-    assert meta["oid"] == commit["commit_oid"]
-    assert "tree" in meta and "message" in meta
-
-
 @pytest.mark.parametrize("use_branch", [False, True])
 async def test_show_blob_returns_binary_with_headers(client_with_resource_and_blob, use_branch):
     """show?path=<file> must return raw bytes + X-Snapshot-* headers."""
@@ -433,7 +414,71 @@ async def test_show_path_not_found_returns_404(client_with_resource):
         },
     )
     assert resp.status_code == 404
-    assert resp.json()["status"] == "error"
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "NOT_FOUND"
+    assert body["error"]["details"] == {
+        "type": "git_blob",
+        "resource": "viking://resources/does_not_exist.txt",
+        "reason": "path_not_found",
+        "deleted_file": False,
+    }
+
+
+@pytest.mark.parametrize("was_directory", [False, True], ids=["large-file", "directory"])
+async def test_show_deleted_path_reports_whether_first_parent_had_a_file(
+    client_with_resource, service, was_directory
+):
+    client, _ = client_with_resource
+    path = "viking://resources/recreated_wiki.md"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    vfs = service.viking_fs
+    if was_directory:
+        await vfs.mkdir(path, ctx=ctx)
+        await vfs.write_file(f"{path}/page.md", b"a directory child\n", ctx=ctx)
+    else:
+        await vfs.write_file(path, b"large Markdown file\n" * 100_001, ctx=ctx)
+    await vfs.commit(message="original path", paths=[path], ctx=ctx)
+
+    await vfs.rm(path, recursive=was_directory, ctx=ctx)
+    deletion = await vfs.commit(message="removed path", paths=[path], ctx=ctx)
+    await vfs.write_file(path, b"recreated as file\n", ctx=ctx)
+    await vfs.commit(message="recreated file", paths=[path], ctx=ctx)
+
+    response = await client.get(
+        "/api/v1/snapshot/show",
+        params={"target_ref": deletion["commit_oid"], "path": path, "raw": "false"},
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["details"] == {
+        "type": "git_blob",
+        "resource": path,
+        "reason": "path_not_found",
+        "deleted_file": not was_directory,
+    }
+
+
+async def test_show_missing_snapshot_object_does_not_report_missing_tree_path(
+    snapshot_router_client, monkeypatch
+):
+    from openviking.server.routers import snapshot
+
+    path = "viking://resources/tracked.txt"
+    show_mock = AsyncMock(side_effect=AGFSNotFoundError("object not found"))
+    monkeypatch.setattr(
+        snapshot,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(show_blob_raw=show_mock)),
+    )
+
+    response = await snapshot_router_client.get(
+        "/api/v1/snapshot/show",
+        params={"target_ref": "b" * 40, "path": path},
+    )
+    assert response.status_code == 404
+    error = response.json()["error"]
+    assert error["code"] == "NOT_FOUND"
+    assert error["details"] == {"type": "git_blob", "resource": path}
 
 
 async def test_diff_returns_unified_diff_for_path(client_with_resource, service):
@@ -639,6 +684,9 @@ async def test_restore_apply_advances_head_with_forward_commit(
         json={
             "project_dir": "viking://resources",
             "source_commit": c1_oid,
+            "message": "Restore earlier contents",
+            "author_name": "Snapshot Restorer",
+            "author_email": "restorer@example.com",
         },
     )
     assert restore_resp.status_code == 200, restore_resp.text
@@ -657,6 +705,9 @@ async def test_restore_apply_advances_head_with_forward_commit(
     head = head_resp.json()["result"]
     assert head["oid"] == new_oid
     assert head["parents"] == [c2_oid]
+    assert head["message"] == "Restore earlier contents"
+    assert head["author"]["name"] == "Snapshot Restorer"
+    assert head["author"]["email"] == "restorer@example.com"
 
     # The blob in the restored commit must equal v1.
     show_resp = await client.get(
@@ -668,7 +719,7 @@ async def test_restore_apply_advances_head_with_forward_commit(
 
 
 async def test_restore_without_project_dir_restores_full_account_tree(
-    client_with_resource_and_blob, service
+    client_with_resource_and_blob, service, monkeypatch
 ):
     from openviking.server.identity import RequestContext, Role
     from openviking_cli.session.user_id import UserIdentifier
@@ -685,11 +736,15 @@ async def test_restore_without_project_dir_restores_full_account_tree(
     assert c2_resp.status_code == 200, c2_resp.text
     c2_oid = c2_resp.json()["result"]["commit_oid"]
 
+    service.viking_fs.set_frozen_file_reader(AsyncMock(return_value=()))
+    preflight = AsyncMock(wraps=service.viking_fs._ensure_restore_plan_access)
+    monkeypatch.setattr(service.viking_fs, "_ensure_restore_plan_access", preflight)
     restore_resp = await client.post(
         "/api/v1/snapshot/restore",
         json={"source_commit": c1_oid},
     )
     assert restore_resp.status_code == 200, restore_resp.text
+    preflight.assert_not_awaited()
     result = restore_resp.json()["result"]
     assert result["result"] == "applied"
     assert result["source_commit"] == c1_oid
@@ -711,112 +766,56 @@ async def test_restore_without_project_dir_restores_full_account_tree(
     assert missing_resp.status_code == 404
 
 
-async def test_restore_apply_triggers_reindex_hook(
-    client_with_resource_and_blob, service, monkeypatch
-):
-    """Verify the HTTP restore path actually invokes the vector-reindex
-    scheduler — protects the chain router -> viking_fs.restore -> _schedule_vector_rebuild.
-    """
-    client, c1_oid, blob_uri, _v1 = client_with_resource_and_blob
+async def test_restore_delete_removes_orphaned_vectors(client, service):
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    root = "viking://resources/snapshot-vectors"
+    restored_uri = f"{root}/restored.md"
+    deleted_uri = f"{root}/deleted.md"
 
-    calls: list[str] = []
+    async def write(uri, text):
+        response = await client.post(
+            "/api/v1/content/write",
+            json={"uri": uri, "content": text, "mode": "create", "wait": True},
+        )
+        assert response.status_code == 200, response.text
 
-    class _SpyExecutor:
-        async def execute(self, *, uri, mode, wait, ctx):
-            calls.append(uri)
-            return {"ok": True}
+    async def vectors():
+        return await service.viking_fs.vector_store.get_l2_diff_records_by_uris(
+            [restored_uri, deleted_uri], ctx=ctx
+        )
 
-        async def execute_in_current_task(self, *, uri, mode, ctx):
-            calls.append(uri)
-            return {"ok": True}
-
-    def factory():
-        return _SpyExecutor()
-
-    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
-
-    # Mutate, commit v2, then restore back to c1 — must produce a reindex call.
-    await service.viking_fs.write_file(blob_uri, b"v2-bytes\n", ctx=ctx)
-    await client.post("/api/v1/snapshot/commit", json={"message": "v2"})
-
-    restore_resp = await client.post(
-        "/api/v1/snapshot/restore",
-        json={"project_dir": "viking://resources", "source_commit": c1_oid},
+    await write(restored_uri, "Initial snapshot body.")
+    initial_vectors = await vectors()
+    assert set(initial_vectors) == {restored_uri}
+    assert initial_vectors[restored_uri]["md5"]
+    original = await client.post(
+        "/api/v1/snapshot/commit", json={"paths": [root], "message": "initial"}
     )
-    assert restore_resp.status_code == 200, restore_resp.text
-    assert restore_resp.json()["result"]["result"] == "applied"
+    assert original.status_code == 200, original.text
+    oid = original.json()["result"]["commit_oid"]
 
-    # The restore reindex now runs in a tracked background task; poll a little
-    # to let start() + the gathered rebuild coroutines flush.
-    import asyncio
+    await write(restored_uri, "Later snapshot body.")
+    await write(deleted_uri, "File created after the initial snapshot.")
+    later = await client.post("/api/v1/snapshot/commit", json={"paths": [root], "message": "later"})
+    assert later.status_code == 200, later.text
+    later_vectors = await vectors()
+    assert set(later_vectors) == {restored_uri, deleted_uri}
+    assert later_vectors[restored_uri]["md5"] != initial_vectors[restored_uri]["md5"]
 
-    for _ in range(100):
-        if calls:
-            break
-        await asyncio.sleep(0.02)
-
-    assert calls, "expected at least one reindex call after restore apply"
-
-
-async def test_restore_delete_removes_orphaned_vectors(
-    client_with_resource_and_blob, service, monkeypatch
-):
-    """Restoring to a revision that predates a file must purge that file's
-    vectors, not merely skip them.
-
-    ReindexExecutor only upserts from on-disk content and never deletes, so a
-    file removed by the restore would otherwise leave orphaned vectors behind.
-    viking_fs.restore must route deleted source paths to the executor's
-    level-precise delete (DETAIL).
-    """
-    client, c1_oid, _blob_uri, _v1 = client_with_resource_and_blob
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-
-    deleted_calls: list[tuple] = []
-
-    class _SpyExecutor:
-        async def execute(self, *, uri, mode, wait, ctx):
-            return {"ok": True}
-
-        async def execute_in_current_task(self, *, uri, mode, ctx):
-            return {"ok": True}
-
-        async def reindex_directory_marker(self, *, dir_uri, level, ctx):
-            return None
-
-        async def delete_uri_level(self, *, uri, level, ctx):
-            deleted_calls.append((uri, int(level)))
-            return 0
-
-    def factory():
-        return _SpyExecutor()
-
-    monkeypatch.setattr(reindex_mod, "ReindexExecutor", factory)
-
-    # Add a brand-new file that does not exist at c1, then commit v2.
-    new_uri = "viking://resources/restore_delete_fixture.txt"
-    await service.viking_fs.write_file(new_uri, b"only-exists-at-v2\n", ctx=ctx)
-    await client.post("/api/v1/snapshot/commit", json={"message": "v2 add file"})
-
-    # Restore back to c1: the new file must be deleted, and its vectors purged.
-    restore_resp = await client.post(
-        "/api/v1/snapshot/restore",
-        json={"project_dir": "viking://resources", "source_commit": c1_oid},
+    response = await client.post(
+        "/api/v1/snapshot/restore", json={"project_dir": root, "source_commit": oid}
     )
-    assert restore_resp.status_code == 200, restore_resp.text
-    assert restore_resp.json()["result"]["result"] == "applied"
-
-    import asyncio
-
-    for _ in range(100):
-        if (new_uri, 2) in deleted_calls:
-            break
-        await asyncio.sleep(0.02)
-
-    assert (new_uri, 2) in deleted_calls, (
-        f"deleted file's DETAIL vector must be purged; got {deleted_calls!r}"
-    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["result"] == "applied"
+    task = await _wait_task_terminal(client, result["task_id"])
+    assert task["status"] == "completed", task
+    assert task["resource_id"] == root
+    assert await service.viking_fs.read_file(restored_uri, ctx=ctx) == "Initial snapshot body."
+    assert not await service.viking_fs.exists(deleted_uri, ctx=ctx)
+    restored_vectors = await vectors()
+    assert set(restored_vectors) == {restored_uri}
+    assert restored_vectors[restored_uri]["md5"] == initial_vectors[restored_uri]["md5"]
 
 
 async def test_restore_concurrent_commit_returns_409(

@@ -31,6 +31,7 @@ description: 让模型通过 OpenViking 网关代为执行的工具检索、读�
 | 用途 | 工具 | 模型拿来做什么 |
 | --- | --- | --- |
 | 检索 | `find`、`search`、`grep`、`glob` | 语义检索记忆和资料；按正则或文件名精确查找。 |
+| 对话历史 | `session_history` | 查找这段对话里被摘要替换掉的确切细节，见[查找被压缩的内容](05-long-conversations.md#finding-what-was-cut)。 |
 | 浏览和读取 | `list`、`tree`、`read` | 按 URI 展开召回条目的原文，浏览记忆和技能目录。 |
 | 写入 | `remember`、`write`、`edit` | 存一条长期记忆，写入或局部修改记忆文件。 |
 | 导入 | `add_resource`、`add_skill` | 按 URL 导入网页或代码仓库，导入对话附件，用一段文本新建技能，都不需要客户端有 shell。 |
@@ -123,12 +124,12 @@ description: 让模型通过 OpenViking 网关代为执行的工具检索、读�
 | **客户端指定了必须调用的工具**（`tools_forced_choice`） | `tool_choice` 不是 `auto` 或 `none`：例如 `required`、Anthropic 的 `any` 或 `tool`、指定某个函数，或者 Responses 的 `allowed_tools` 这类对象形式。 |
 | **DeepSeek 开启了思考模式，但之前回复的推理内容补不回来**（`deepseek_reasoning_history_required`） | 上游是 DeepSeek，开启了思考模式（标准 Responses 请求没有 `thinking` 字段，按开启处理），而之前的回复发到 DeepSeek 时会缺推理内容。在上游的**路由**部分开启**补全推理内容回传**（[说明及补不回的情况](07-upstreams.md#restore-reasoning)），或者发送 `"thinking": {"type": "disabled"}`。 |
 | **客户端已接入 OpenViking 工具**（`tool_name_collision`） | 网关在这段对话剩下的部分不再提供自己的工具（回传的历史里模型已经调用过网关工具的请求仍保留工具）。判断条件见[客户端自己接了 OpenViking 工具时](#client-has-openviking-tools)。 |
-| **这段对话首次需要工具时无法加载 OpenViking 工具清单**（`tools_unavailable`） | 无法从 OpenViking 加载工具清单，也没有之前加载成功的清单。连接恢复后开始新对话。 |
+| **这段对话首次需要工具时无法加载 OpenViking 工具清单**（`tools_unavailable`） | 无法从 OpenViking 加载工具清单，也没有之前加载成功的清单。这段对话下一个能用工具的请求会重新加载；进程还没成功加载过清单时，网关最多每 30 秒尝试一次。工具在对话第一轮之后才加载成功时，下一个用户轮次开头会告诉模型有这些工具。 |
 | **这段对话没有 OpenViking 工具**（`tools_not_selected_at_session_start`） | 上下文配置开启了工具，但这段对话的工具列表为空：配置里一个工具都没选，或者对话在网关升级前就已开始。开始新对话即可。 |
 
 ### 何时决定是否提供 {#when-the-decision-is-made}
 
-对话是否带工具，由它第一个能用工具的请求决定（生成标题这类辅助请求不算），之后保持不变，所以修改上下文配置只影响新对话。唯一的例外是关闭：模型还没调用过网关工具时，客户端出现了自己的 OpenViking 工具，例如 MCP 服务器在第一轮之后才连上。
+对话是否带工具，由它第一个能用工具的请求决定（生成标题这类辅助请求不算，加载不到工具清单的请求也不算），之后保持不变，所以修改上下文配置只影响新对话。唯一的例外是关闭：模型还没调用过网关工具时，客户端出现了自己的 OpenViking 工具，例如 MCP 服务器在第一轮之后才连上。
 
 辅助请求、子 Agent 请求和检测到 OpenViking 插件的对话都不带 OpenViking 工具。这类请求如果回传了模型用过这些工具的历史，网关仍附上工具定义，让这段历史保持有效，但拒绝新的 OpenViking 调用。客户端自己的工具在每个请求里都照常可用。
 
@@ -187,16 +188,17 @@ Token 预算只计算模型使用 OpenViking 工具时新增的调用、结果�
 
 - 服务商拒绝了后续的模型请求。
 - 模型调用了这段对话里没有提供的 OpenViking 工具，或者 OpenViking 调用被拒绝后仍坚持调用。
-- **Hidden tool request timed out**：OpenViking 工具的往返超过了上下文配置中工具的**总时长**；没有设置总时长时，是往返中某次模型请求超过了 `upstream_timeout_seconds`。
+- **Hidden tool request timed out**：OpenViking 工具的往返超过了上下文配置中工具的**总时长**。持续有数据的模型回复只受**总时长**限制。
+- **Model upstream did not answer in time**：在往返中，服务商超过 `upstream_timeout_seconds` 还没开始回复，或在回复中途这么久没有发送任何数据。
 
 这时客户端收到错误，请求日志显示 **OpenViking 工具调用失败**（`hidden_tool_loop_failed`）。错误的形式取决于请求类型：
 
 | 请求 | 客户端收到什么 |
 | --- | --- |
-| 流式 | 流以错误事件结束：Responses 是 `response.failed`，Chat Completions 和 Anthropic Messages 是类型为 `gateway_tool_error` 的 `error`。此时 HTTP 状态码已经是 200。 |
+| 流式 | 流以错误事件结束：Responses 是 `response.failed`，Chat Completions 和 Anthropic Messages 是 `error`：模型服务没有及时应答或断开连接时，其类型为 `upstream_timeout`、`upstream_disconnected` 或 `upstream_unreachable`，其余情况为 `gateway_tool_error`。此时 HTTP 状态码已经是 200。 |
 | 非流式，服务商拒绝了后续请求 | 原样返回服务商的错误内容和状态码。 |
-| 非流式，超时 | 504（`gateway_http_504`）。 |
-| 非流式，其他失败 | 502，响应体为 `{"reason": "gateway_http_502", "detail": "..."}`。 |
+| 非流式，超时 | 用完**总时长**时为 504 `tool_loop_timeout`，服务商没有及时回复时为 504 `upstream_timeout`。 |
+| 非流式，其他失败 | 502，响应体为 `{"reason": "...", "detail": "...", "request_id": "..."}`；原因为 `tool_upstream_invalid`、`tool_upstream_incomplete`、`tool_upstream_stream_error`、`tool_call_invalid`、`tool_loop_limit`、`upstream_unreachable` 或 `upstream_disconnected`（见[模型路由的错误](../api/25-gateway.md#model-route-errors)）。 |
 
 另外两种情况：
 

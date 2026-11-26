@@ -15,27 +15,11 @@ class QueueWorkerConfig(BaseModel):
     )
 
 
-class AddResourceQueueWorkerConfig(QueueWorkerConfig):
-    """Runtime limits for add-resource queue workers."""
-
-    file_operation_concurrency: int = Field(
-        default=16,
-        gt=0,
-        description="Maximum concurrent file-level commit and comparison operations within one add-resource job",
-    )
-
-    file_vectorization_concurrency: int = Field(
-        default=8,
-        gt=0,
-        description="Maximum number of files read, prepared, and enqueued concurrently within one vectors-only job",
-    )
-
-
 class QueueWorkersConfig(BaseModel):
     """Runtime limits for QueueFS consumers."""
 
     external_parse: QueueWorkerConfig = Field(default_factory=QueueWorkerConfig)
-    add_resource: AddResourceQueueWorkerConfig = Field(default_factory=AddResourceQueueWorkerConfig)
+    add_resource: QueueWorkerConfig = Field(default_factory=QueueWorkerConfig)
     reindex: QueueWorkerConfig = Field(default_factory=QueueWorkerConfig)
     session_commit: QueueWorkerConfig = Field(
         default_factory=lambda: QueueWorkerConfig(max_concurrent=8)

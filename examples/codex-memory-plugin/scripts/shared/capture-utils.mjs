@@ -19,6 +19,9 @@ const TOOL_RESULT_TYPES = new Set([
   "functioncalloutput",
 ]);
 
+const CONTENT_TEXT_TYPES = new Set(["text", "inputtext", "outputtext"]);
+const CONTENT_IMAGE_TYPES = new Set(["image", "inputimage", "outputimage"]);
+
 // Tool output is reported verbatim; the server owns truncation via
 // tool_output_externalization (threshold_chars, default 20000). This cap only
 // guards against pathological payloads.
@@ -125,7 +128,7 @@ function toolPayload(block, kind) {
       block.call?.arguments ??
       "";
   }
-  return block.output ??
+  const output = block.output ??
     block.state?.output ??
     block.result ??
     block.error ??
@@ -134,6 +137,21 @@ function toolPayload(block, kind) {
     block.content ??
     block.text ??
     "";
+  return contentBlocksText(output) ?? output;
+}
+
+// pi, dsh and Codex dynamic tools return a list of content blocks. Keep their
+// text as text: stringified JSON turns line breaks into literal "\n".
+function contentBlocksText(value) {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const chunks = [];
+  for (const block of value) {
+    const type = normalizeType(block?.type).replace(/_/g, "");
+    if (CONTENT_TEXT_TYPES.has(type) && typeof block.text === "string") chunks.push(block.text);
+    else if (CONTENT_IMAGE_TYPES.has(type)) chunks.push("[image]");
+    else return null;
+  }
+  return chunks.join("\n");
 }
 
 function toolId(block) {

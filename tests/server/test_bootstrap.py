@@ -19,110 +19,44 @@ from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingl
 from openviking_cli.utils.config.storage_config import StorageConfig
 
 
-def test_main_keeps_config_host_when_cli_host_is_omitted(monkeypatch):
-    config = ServerConfig(host="127.0.0.1", port=1933)
+@pytest.mark.parametrize(
+    ("cli_args", "expected_host"),
+    [([], "127.0.0.1"), (["--host", "all"], None)],
+    ids=["config-host", "all-interfaces"],
+)
+def test_main_resolves_cli_host_and_preserves_config_port(
+    monkeypatch, capsys, cli_args, expected_host
+):
+    import sys
+
+    from openviking.server.config import validate_server_config
+
+    config = ServerConfig(host="127.0.0.1", port=1933, root_api_key="configured-test-key")
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        bootstrap,
-        "load_server_config",
-        lambda config_path: config,
-    )
-    monkeypatch.setattr(
-        bootstrap,
-        "create_app",
-        lambda config, **kwargs: "app",
-    )
-    monkeypatch.setattr(
-        bootstrap,
-        "configure_uvicorn_logging",
-        lambda: None,
-    )
+    def create_validated_app(config, **_kwargs):
+        validate_server_config(config)
+        return "app"
+
+    monkeypatch.setattr(sys, "argv", ["openviking-server", *cli_args])
+    monkeypatch.setattr(bootstrap, "load_server_config", lambda config_path: config)
+    monkeypatch.setattr(bootstrap, "create_app", create_validated_app)
+    monkeypatch.setattr(bootstrap, "configure_uvicorn_logging", lambda: None)
     monkeypatch.setattr(
         OpenVikingConfigSingleton,
         "initialize",
         classmethod(lambda cls, config_path: None),
     )
     monkeypatch.setattr(
-        bootstrap.argparse.ArgumentParser,
-        "parse_args",
-        lambda self: SimpleNamespace(
-            host=None,
-            port=None,
-            config=None,
-            workers=None,
-            bot=False,
-            with_bot=False,
-            bot_url="http://localhost:18790",
-            enable_bot_logging=None,
-            bot_log_dir="/tmp/bot-logs",
-        ),
-    )
-    monkeypatch.setattr(
         bootstrap,
         "_run_restartable_server",
-        lambda app, host, port, log_config=None, **kwargs: captured.update(
-            {"app": app, "host": host, "port": port, "log_config": log_config, **kwargs}
-        ),
+        lambda app, *, host, port, **_kwargs: captured.update({"host": host, "port": port}),
     )
 
     bootstrap.main()
 
-    assert captured["host"] == "127.0.0.1"
-    assert captured["port"] == 1933
-
-
-def test_main_coerces_cli_host_all_to_none(monkeypatch):
-    config = ServerConfig(host="127.0.0.1", port=1933)
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(
-        bootstrap,
-        "load_server_config",
-        lambda config_path: config,
-    )
-    monkeypatch.setattr(
-        bootstrap,
-        "create_app",
-        lambda config, **kwargs: "app",
-    )
-    monkeypatch.setattr(
-        bootstrap,
-        "configure_uvicorn_logging",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        OpenVikingConfigSingleton,
-        "initialize",
-        classmethod(lambda cls, config_path: None),
-    )
-    monkeypatch.setattr(
-        bootstrap.argparse.ArgumentParser,
-        "parse_args",
-        lambda self: SimpleNamespace(
-            host="all",
-            port=None,
-            config=None,
-            workers=None,
-            bot=False,
-            with_bot=False,
-            bot_url="http://localhost:18790",
-            enable_bot_logging=None,
-            bot_log_dir="/tmp/bot-logs",
-        ),
-    )
-    monkeypatch.setattr(
-        bootstrap,
-        "_run_restartable_server",
-        lambda app, host, port, log_config=None, **kwargs: captured.update(
-            {"app": app, "host": host, "port": port, "log_config": log_config, **kwargs}
-        ),
-    )
-
-    bootstrap.main()
-
-    assert captured["host"] is None
-    assert captured["port"] == 1933
+    assert captured == {"host": expected_host, "port": 1933}
+    assert f"OpenViking HTTP Server is running on {expected_host}:1933" in capsys.readouterr().out
 
 
 def test_main_enables_bot_logging_when_with_bot_comes_from_config(monkeypatch):
@@ -215,6 +149,7 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         worker_env.delenv(app_module.WORKER_PORT_ENV, raising=False)
         worker_env.delenv(app_module.WORKER_WITH_BOT_ENV, raising=False)
         worker_env.delenv(app_module.WORKER_BOT_API_URL_ENV, raising=False)
+        worker_env.delenv(app_module.WORKER_ROLES_ENV, raising=False)
 
         bootstrap.main()
 
@@ -224,9 +159,10 @@ def test_bot_alias_propagates_resolved_config_to_workers(monkeypatch):
         assert os.environ[app_module.WORKER_PORT_ENV] == str(config.port)
         assert os.environ[app_module.WORKER_WITH_BOT_ENV] == "1"
         assert os.environ[app_module.WORKER_BOT_API_URL_ENV] == "http://127.0.0.1:19000"
+        assert os.environ[app_module.WORKER_ROLES_ENV] == "api,queue_worker,scheduler"
 
 
-def test_main_prints_config_diagnostics_on_validation_error(monkeypatch, capsys):
+def test_main_prints_safe_config_diagnostics_on_validation_error(monkeypatch, capsys):
     """An unknown top-level config field must exit 1 with actionable diagnostics."""
     config = ServerConfig(host="127.0.0.1", port=1933)
 
@@ -262,8 +198,9 @@ def test_main_prints_config_diagnostics_on_validation_error(monkeypatch, capsys)
 
     assert exc.value.code == 1
     err = capsys.readouterr().err
-    assert "/tmp/ov.conf" in err
-    assert "Unknown config field 'claude_code'" in err
+    assert "Failed to load OpenViking server configuration (ValueError)." in err
+    assert "/tmp/ov.conf" not in err
+    assert "Unknown config field 'claude_code'" not in err
     assert "openviking-server doctor" in err
     assert "examples/ov.conf.example" in err
 
@@ -275,6 +212,7 @@ def test_worker_factory_replays_bot_overrides(monkeypatch):
     monkeypatch.setenv(app_module.WORKER_PORT_ENV, "1999")
     monkeypatch.setenv(app_module.WORKER_WITH_BOT_ENV, "1")
     monkeypatch.setenv(app_module.WORKER_BOT_API_URL_ENV, "http://127.0.0.1:19000")
+    monkeypatch.setenv(app_module.WORKER_ROLES_ENV, "api,scheduler")
     monkeypatch.setattr(
         app_module,
         "resolve_config_path",
@@ -288,13 +226,15 @@ def test_worker_factory_replays_bot_overrides(monkeypatch):
     monkeypatch.setattr(
         app_module,
         "create_app",
-        lambda worker_config, config_path: captured.update(
-            {
-                "app_config": worker_config,
-                "app_config_path": config_path,
-            }
-        )
-        or worker_config,
+        lambda worker_config, config_path: (
+            captured.update(
+                {
+                    "app_config": worker_config,
+                    "app_config_path": config_path,
+                }
+            )
+            or worker_config
+        ),
     )
 
     worker_config = app_module.create_worker_app()
@@ -303,6 +243,7 @@ def test_worker_factory_replays_bot_overrides(monkeypatch):
     assert worker_config.port == 1999
     assert worker_config.with_bot is True
     assert worker_config.bot_api_url == "http://127.0.0.1:19000"
+    assert worker_config.roles == ["api", "scheduler"]
     assert captured == {
         "load_path": "/tmp/worker-ov.conf",
         "app_config": config,
@@ -352,21 +293,14 @@ def test_configure_default_executor_uses_configured_size(monkeypatch):
     monkeypatch.setattr(app_module, "ThreadPoolExecutor", _Executor)
     monkeypatch.setattr(app_module.asyncio, "get_running_loop", lambda: _Loop())
 
+    app_module._configure_default_executor(ServerConfig(executor_threads=0))
+    assert created == {}
+
     app_module._configure_default_executor(ServerConfig(executor_threads=48))
 
     assert created["max_workers"] == 48
     assert created["thread_name_prefix"] == "openviking-asyncio"
     assert created["executor"].__class__ is _Executor
-
-
-def test_configure_default_executor_keeps_python_default_when_zero(monkeypatch):
-    monkeypatch.setattr(
-        app_module.asyncio,
-        "get_running_loop",
-        lambda: pytest.fail("event loop should not be touched when the setting is zero"),
-    )
-
-    app_module._configure_default_executor(ServerConfig())
 
 
 def test_restartable_server_drains_uvicorn_before_returning(monkeypatch):
@@ -430,7 +364,6 @@ def test_main_restart_cleans_up_managed_children_and_preserves_launch_command(
     monkeypatch.setattr(bootstrap, "create_app", create_app)
     monkeypatch.setattr(bootstrap, "_abort_if_port_in_use", lambda *a: None)
     monkeypatch.setattr(bootstrap, "_start_vikingbot_gateway", lambda *a, **kw: "bot")
-    monkeypatch.setattr(bootstrap, "_start_expiry_publisher", lambda *a, **kw: None)
     monkeypatch.setattr(
         bootstrap, "_stop_vikingbot_gateway", lambda bot: steps.append(("stop", bot))
     )
@@ -525,7 +458,8 @@ def test_restart_recovery_through_real_exec(tmp_path, monkeypatch, failure):
             env=os.environ.copy(),
             capture_output=True,
             text=True,
-            timeout=40,
+            # Rollback can exec another interpreter and import the application again.
+            timeout=90,
         )
     if failure == "retry_failure":
         assert result.returncode != 0

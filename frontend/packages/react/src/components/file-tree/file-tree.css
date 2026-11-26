@@ -76,6 +76,8 @@
   min-height: 0;
   height: 100%;
   max-width: 100%;
+  /* Share the opaque surface with sticky trailing cells during horizontal scroll. */
+  background-color: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
   color: var(--ov-ui-file-tree-text);
   font-family: inherit;
   font-size: 13px;
@@ -196,6 +198,10 @@ html.dark .ov-file-tree__body {
 
 .ov-file-tree__row {
   transition: background-color 120ms;
+}
+
+.ov-file-tree__empty-directory {
+  font-size: 12px;
 }
 
 /* Keep the anchor out of row layout so it cannot share metadata's auto margins. */
@@ -345,6 +351,17 @@ html.dark .ov-file-tree__body {
  */
 .ov-file-tree__label {
   flex: none;
+  white-space: nowrap;
+}
+
+.ov-file-tree__shared {
+  flex: none;
+  padding-inline: 4px;
+  border: 1px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 4px;
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 10px;
+  line-height: 14px;
   white-space: nowrap;
 }
 

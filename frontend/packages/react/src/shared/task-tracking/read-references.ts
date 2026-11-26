@@ -1,11 +1,12 @@
+import { readTaskResourceUri } from './resource-uri.js';
 import { taskStatuses, type TaskReference, type TaskStatus } from './types.js';
 
 const kinds: Record<string, TaskReference['kind']> = {
   'add-resource': 'resource',
   'add-skill': 'skill',
   'add-memory': 'memory',
+  'session commit': 'memory',
   compile: 'compile',
-  'compile create': 'compile',
   openviking_add_resource: 'resource',
   openviking_add_skill: 'skill',
   openviking_memory_commit: 'memory',
@@ -39,11 +40,11 @@ export function readTaskReferences(
     const id = data.task_id;
     if (typeof id === 'string' && id.trim()) {
       const status = data.task_status ?? data.status;
-      const uri = data.root_uri ?? data.archive_uri ?? data.to;
+      const uri = readTaskResourceUri(data);
       found.set(id, {
         id,
         kind: kinds[operation],
-        ...(typeof uri === 'string' ? { uri } : {}),
+        ...(uri && { uri }),
         ...(typeof status === 'string' && taskStatuses.includes(status)
           ? { status: status as TaskStatus }
           : {}),

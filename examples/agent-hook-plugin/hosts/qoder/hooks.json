@@ -24,11 +24,21 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Read|Write|Edit|Glob|Grep",
+        "matcher": "Read|Write|Edit|Glob|Grep|Bash",
         "hooks": [
           {
             "type": "command",
             "command": "node \"${QODER_PLUGIN_ROOT}/agent-integrations/qoder/scripts/uri-guard.mjs\" qoder",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp_call|mcp__openviking__session_history",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${QODER_PLUGIN_ROOT}/agent-integrations/qoder/scripts/hook.mjs\" pre-tool-use qoder",
             "timeout": 5
           }
         ]

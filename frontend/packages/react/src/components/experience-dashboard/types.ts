@@ -1,5 +1,5 @@
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
-import type { HTMLAttributes } from 'react';
+import type { HTMLAttributes, ReactNode } from 'react';
 import type { DashboardStatus } from '../../shared/dashboard/dashboard-state.js';
 
 export interface ExperienceItem {
@@ -34,6 +34,28 @@ export interface ExperienceTrajectory {
 export type ExperienceOutcome =
   'success' | 'partial' | 'unfinished' | 'failure' | 'unknown';
 
+export interface ExperienceSourceGroup {
+  id: string;
+  updatedAt: string;
+  trajectories: readonly ExperienceTrajectory[];
+}
+
+export interface ExperienceTrajectoryMessages {
+  archiveUri?: string;
+  items: readonly {
+    role: string;
+    content: string;
+    createdAt?: string;
+    tools?: readonly {
+      id: string;
+      name: string;
+      status: string;
+      input?: unknown;
+      output?: string;
+    }[];
+  }[];
+}
+
 export interface ExperienceDashboardData {
   experiences?: readonly ExperienceItem[];
   total?: number;
@@ -46,6 +68,7 @@ export interface ExperienceDashboardData {
   trajectories?: readonly ExperienceTrajectory[];
   trajectoryTotal?: number;
   sources?: readonly ExperienceTrajectory[];
+  sourceGroups?: readonly ExperienceSourceGroup[];
   testMaterials?: readonly {
     id: string;
     title: string;
@@ -117,6 +140,38 @@ export interface ExperienceDashboardLabels {
   open: string;
 }
 
+export type ExperienceDashboardSection =
+  'list' | 'effect' | 'outcomes' | 'trajectories' | 'sources' | 'tests';
+
+export interface ExperienceDashboardSectionContext extends Pick<
+  ExperienceDashboardProps,
+  | 'uri'
+  | 'page'
+  | 'pageSize'
+  | 'startIndex'
+  | 'hasMore'
+  | 'loadingMore'
+  | 'onPageChange'
+  | 'onLoadMore'
+  | 'onOpenUri'
+  | 'onOpenTrajectory'
+> {
+  data: ExperienceDashboardData;
+  state?: ExperienceDashboardState;
+  days: number;
+  locale: NonNullable<ExperienceDashboardProps['locale']>;
+}
+
+export type ExperienceDashboardSections = Partial<
+  Record<
+    ExperienceDashboardSection,
+    (
+      context: ExperienceDashboardSectionContext,
+      defaultContent: ReactNode,
+    ) => ReactNode
+  >
+>;
+
 export interface ExperienceDashboardProps extends Omit<
   HTMLAttributes<HTMLDivElement>,
   'onChange'
@@ -133,10 +188,7 @@ export interface ExperienceDashboardProps extends Omit<
   loadingMore?: boolean;
   startIndex?: number;
   states?: Partial<
-    Record<
-      'list' | 'effect' | 'outcomes' | 'trajectories' | 'sources' | 'tests',
-      ExperienceDashboardState
-    >
+    Record<ExperienceDashboardSection, ExperienceDashboardState>
   >;
   locale?: 'en-US' | 'zh-CN';
   onTabChange?: (tab: ExperienceDashboardTab) => void;
@@ -148,8 +200,16 @@ export interface ExperienceDashboardProps extends Omit<
    */
   onLoadMore?: () => void;
   onOpenUri?: (uri: string) => void;
+  onOpenTrajectory?: (
+    trajectory: ExperienceTrajectory,
+    trigger: HTMLButtonElement,
+  ) => void;
   /** 渲染异常时的替代内容，省略时继承外层或使用内置展示。Render-failure content; inherits or uses the default when omitted. */
-  slots?: { errorFallback?: ErrorFallback };
+  slots?: {
+    errorFallback?: ErrorFallback;
+    /** Replaces individual sections while keeping their data and controls available. */
+    sections?: ExperienceDashboardSections;
+  };
   labels?: Partial<ExperienceDashboardLabels>;
 }
 

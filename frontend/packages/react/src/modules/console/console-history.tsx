@@ -3,15 +3,14 @@ import { Empty } from '../../shared/primitives/empty/empty.js';
 import type { Locale } from '../../shared/locale.js';
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { CommandConsoleRecord } from '../../components/command-console/index.js';
+import type { ConsoleHistoryEntry } from './types.js';
 import { ConsoleIcon } from '../../icons/console-icons.js';
 import { Tooltip } from '../../shared/primitives/tooltip/index.js';
 import { useOverlayPosition } from '../../shared/primitives/overlay/use-overlay-position.js';
 import type { consoleLabels } from './labels.js';
 
-function historyTime(record: CommandConsoleRecord, locale: Locale) {
-  const date = new Date(record.createdAtMs ?? NaN);
-  if (!Number.isFinite(date.getTime())) return record.createdAt ?? '';
+function historyTime(entry: ConsoleHistoryEntry, locale: Locale) {
+  const date = new Date(entry.createdAtMs);
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat(locale, {
       year: 'numeric',
@@ -28,13 +27,13 @@ function historyTime(record: CommandConsoleRecord, locale: Locale) {
 }
 
 export function ConsoleHistory({
-  records,
+  history,
   isExecuting,
   locale,
   labels,
   onRecall,
 }: {
-  records: readonly CommandConsoleRecord[];
+  history: readonly ConsoleHistoryEntry[];
   isExecuting: boolean;
   locale: Locale;
   labels: ReturnType<typeof consoleLabels>;
@@ -119,23 +118,23 @@ export function ConsoleHistory({
           className="ov-tooltip ov-console__history-content"
           style={{ top: position.top, left: position.left }}
         >
-          {records.length ? (
+          {history.length ? (
             <ul>
-              {[...records].reverse().map((record) => (
-                <li key={record.id}>
+              {[...history].reverse().map((entry) => (
+                <li key={entry.id}>
                   <button
                     type="button"
                     disabled={isExecuting}
                     onClick={() => {
                       close();
-                      onRecall(record.command);
+                      onRecall(entry.command);
                     }}
                   >
                     <span className="ov-console__history-command">
-                      {record.command}
+                      {entry.command}
                     </span>
                     <span className="ov-console__history-time">
-                      {historyTime(record, locale)}
+                      {historyTime(entry, locale)}
                     </span>
                   </button>
                 </li>

@@ -36,6 +36,7 @@ pub fn validate_ref_name(ref_name: &str) -> Result<(), RefStoreError> {
         || ref_name.contains('?')
         || ref_name.contains('[')
         || ref_name.contains('*')
+        || ref_name.contains('\\')
     {
         return Err(RefStoreError::InvalidName(
             "ref name contains invalid characters".to_string(),
@@ -204,6 +205,7 @@ mod tests {
     fn test_validate_ref_name() {
         assert!(validate_ref_name("refs/heads/main").is_ok());
         assert!(validate_ref_name("refs/tags/v1.0").is_ok());
+        assert!(validate_ref_name("feature/topic").is_ok());
         assert!(validate_ref_name("HEAD").is_ok());
 
         assert!(validate_ref_name("").is_err());
@@ -217,6 +219,7 @@ mod tests {
         assert!(validate_ref_name("refs?head").is_err());
         assert!(validate_ref_name("refs[head]").is_err());
         assert!(validate_ref_name("refs*head").is_err());
+        assert!(validate_ref_name(r"feature\topic").is_err());
     }
 
     #[test]

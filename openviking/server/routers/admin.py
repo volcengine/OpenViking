@@ -4,6 +4,7 @@
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import asdict
 from typing import Annotated, Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Path, Query, Request
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from openviking.config.scope import ConfigScope
 from openviking.config.validate import ConfigPatchError
+from openviking.server.account_stores.models import frozen_file_uri
 from openviking.server.api_keys.models import validate_account_user_creation_role
 from openviking.server.auth import (
     get_api_key_manager_or_raise,
@@ -39,6 +41,7 @@ from openviking.server.user_config import (
     read_user_config,
     resolve_add_targets,
     resolve_user_add_targets,
+    resolve_user_privacy,
     write_user_config,
 )
 from openviking.session.memory.account_templates import (
@@ -84,6 +87,13 @@ class RegisterUserRequest(BaseModel):
 
 class SetRoleRequest(BaseModel):
     role: str
+
+
+class FrozenFileRequest(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+
+    path: str
+    frozen: bool
 
 
 class RegenerateKeyRequest(BaseModel):
@@ -334,6 +344,8 @@ def _has_initial_user_config(user_config: UserConfig | None) -> bool:
             or user_config.add_targets.skill_uri
             or user_config.memory_policy
             or user_config.ttl is not None
+            or user_config.privacy.model_dump(exclude_none=True)
+            or "team_compile_status" in user_config.model_fields_set
         )
     )
 
@@ -373,10 +385,10 @@ async def _rollback_account_creation(
         try:
             await deletion_service.delete_now(account_id, actor=actor)
             return
-        except Exception:
-            logger.exception(
-                "Synchronous account cleanup failed for %s; durable deletion remains queued",
-                account_id,
+        except Exception as exc:
+            logger.info(
+                "Synchronous account cleanup failed; durable deletion remains queued",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
             )
             return
 
@@ -385,13 +397,19 @@ async def _rollback_account_creation(
         await service.release_account_vector_resources(account_id)
     except Exception as exc:
         rollback_errors.append(exc)
-        logger.exception("Failed to release vector resources for account %s", account_id)
+        logger.debug(
+            "Account rollback vector resource release failed",
+            extra={"account_id": account_id, "error_type": type(exc).__name__},
+        )
     if runtime_config is not None:
         try:
             await runtime_config.delete_account(account_id)
         except Exception as exc:
             rollback_errors.append(exc)
-            logger.exception("Failed to roll back runtime config for account %s", account_id)
+            logger.debug(
+                "Account rollback runtime config cleanup failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     viking_fs = getattr(service, "viking_fs", None)
     agfs = getattr(viking_fs, "_async_agfs", None)
@@ -400,19 +418,28 @@ async def _rollback_account_creation(
             await agfs.rm(f"/local/{account_id}", recursive=True)
         except Exception as exc:
             rollback_errors.append(exc)
-            logger.exception("Failed to roll back workspace for account %s", account_id)
+            logger.debug(
+                "Account rollback workspace cleanup failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     try:
         await manager.delete_account(account_id)
     except Exception as exc:
         rollback_errors.append(exc)
-        logger.exception("Failed to roll back account registry entry for %s", account_id)
+        logger.debug(
+            "Account rollback registry cleanup failed",
+            extra={"account_id": account_id, "error_type": type(exc).__name__},
+        )
 
     if rollback_errors:
         logger.error(
-            "Account creation rollback for %s completed with %d error(s)",
-            account_id,
-            len(rollback_errors),
+            "Account creation rollback incomplete",
+            extra={
+                "account_id": account_id,
+                "failed": len(rollback_errors),
+                "error_type": type(rollback_errors[0]).__name__,
+            },
         )
 
 
@@ -442,6 +469,7 @@ def _user_settings_result(
     return {
         "account_id": ctx.account_id,
         "user_id": ctx.user.user_id,
+        "team_compile_status": user_config.team_compile_status,
         "add_targets": {
             "resource_uri": add_targets.resource_uri,
             "skill_uri": add_targets.skill_uri,
@@ -450,6 +478,9 @@ def _user_settings_result(
         "ttl": user_config.ttl.model_dump(by_alias=True, exclude_none=True)
         if user_config.ttl is not None
         else None,
+        "privacy": asdict(
+            resolve_user_privacy(user_config.privacy, server_config.user_config_defaults.privacy)
+        ),
     }
 
 
@@ -1130,7 +1161,7 @@ async def get_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Return effective add targets and memory policy, plus explicit User TTL."""
+    """Return effective User settings and explicit TTL."""
     _check_account_access(ctx, account_id)
     if ctx.role == Role.USER and user_id != ctx.user.user_id:
         raise PermissionDeniedError("USER can only access their own settings")
@@ -1164,7 +1195,7 @@ async def patch_user_settings(
     user_id: str = Path(..., description="User ID"),
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Patch User add targets, memory policy and TTL without restarting."""
+    """Patch User settings without restarting."""
     _check_account_access(ctx, account_id)
     if ctx.role == Role.USER and user_id != ctx.user.user_id:
         raise PermissionDeniedError("USER can only access their own settings")
@@ -1273,6 +1304,66 @@ async def regenerate_key(
 
 
 # ---- Group endpoints ----
+
+
+@router.get("/accounts/{account_id}/users/{user_id}/frozen-file")
+@require_auth_root_or_admin
+async def get_frozen_file(
+    request: Request,
+    account_id: str,
+    user_id: str,
+    path: str = Query(..., description="Literal path relative to the user root"),
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Inspect only account authorization metadata, never the target file."""
+    _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
+    uri = frozen_file_uri(user_id, path)
+    manager = _get_api_key_manager(request)
+    await _check_account_exists(request, account_id)
+    paths = await manager.get_frozen_files(account_id)
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "user_id": user_id,
+            "path": path,
+            "frozen": uri in paths,
+        },
+    )
+
+
+@router.put("/accounts/{account_id}/users/{user_id}/frozen-file")
+@require_auth_root_or_admin
+async def set_frozen_file(
+    request: Request,
+    body: FrozenFileRequest,
+    account_id: str,
+    user_id: str,
+    ctx: RequestContext = Depends(get_request_context),
+):
+    """Set persistent write protection without obtaining the user's data identity."""
+    _check_account_access(ctx, account_id)
+    await _reject_non_root_global_target(request, ctx, account_id, user_id)
+    manager = _get_api_key_manager(request, for_write=True)
+    await manager.set_frozen_file(account_id, user_id, body.path, body.frozen)
+    logger.info(
+        "Admin frozen file changed account=%s user=%s path=%s frozen=%s actor=%s",
+        account_id,
+        user_id,
+        body.path,
+        body.frozen,
+        ctx.user.user_id,
+    )
+    return Response(
+        status="ok",
+        result={
+            "account_id": account_id,
+            "user_id": user_id,
+            "path": body.path,
+            "frozen": body.frozen,
+        },
+    )
 
 
 @router.post("/accounts/{account_id}/groups")

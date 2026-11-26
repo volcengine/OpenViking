@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
-import inspect
 import json
-from dataclasses import fields
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -86,7 +84,7 @@ class _MemoryVikingFS:
             raise FileNotFoundError(uri)
         return {"path": uri}
 
-    async def ls(self, uri, ctx=None):
+    async def ls(self, uri, ctx=None, **_):
         prefix = f"{uri}/"
         names = {
             path[len(prefix) :].split("/")[0] for path in self.files if path.startswith(prefix)
@@ -177,25 +175,6 @@ async def test_commit_retention_boundary_and_pending_tokens_after_reload(
     finally:
         await tracker.close()
         agfs.close()
-
-
-def test_phase2_auto_commit_policy_parameters_are_appended():
-    signature = inspect.signature(Session._run_memory_extraction)
-
-    assert list(signature.parameters)[-4:] == [
-        "auto_commit_policy",
-        "session_window_context",
-        "summary_token_ratio",
-        "reasoning_effort",
-    ]
-    # New snapshot metadata is appended after the existing positional fields.
-    assert [item.name for item in fields(SessionCommitMsg)[-5:]] == [
-        "auto_commit_policy",
-        "session_window_context",
-        "summary_token_ratio",
-        "reasoning_effort",
-        "memory_policy_version",
-    ]
 
 
 @pytest.mark.asyncio

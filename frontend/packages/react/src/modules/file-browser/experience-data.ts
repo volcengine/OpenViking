@@ -1,4 +1,4 @@
-import { normalizeResourceUri } from './fs-uri.js';
+import { normalizeResourceUri } from '../../shared/resource-uri.js';
 import { toApiDate } from '../../shared/primitives/date-picker/api-date.js';
 import { experienceDateBounds } from './experience-date-range.js';
 import { OV_PATHS } from '../../client/paths.js';

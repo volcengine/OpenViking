@@ -12,7 +12,7 @@ import { previewPolicy } from './preview-policy.js';
 import { defaultPreviewActions } from './preview-default-actions.js';
 import { downloadPreview } from './preview-native.js';
 import { isBinaryFile } from './fs-file-kind.js';
-import { scopeKeyOf } from './fs-scope.js';
+import { scopeKeyOf } from '../../shared/request/fs-scope.js';
 import type { FileBrowserDashboard } from './dashboard-model.js';
 import type { ResolvedLabels } from './file-browser-labels.js';
 import type { FileBrowserPreviewActions } from './preview-types.js';
@@ -152,13 +152,10 @@ export function useFileBrowserPreviewActions({
             kind={kind}
             uri={opened?.uri ?? uri}
             canWrite={canWrite}
-            canSaveSnapshot={
-              enabled &&
-              policy.edit &&
-              policy.fileHistory &&
-              !policy.versionedFile
+            versioned={
+              policy.versionedFile || (!isFile && dashboard?.kind === 'wiki')
             }
-            versioned={policy.versionedFile}
+            directory={!isFile && dashboard?.kind === 'wiki'}
             showContent={isFile && !isBinaryFile(uri)}
             text={text}
             locale={locale}

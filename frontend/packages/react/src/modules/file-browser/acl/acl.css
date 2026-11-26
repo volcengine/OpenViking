@@ -273,6 +273,35 @@
 .ov-file-browser-acl__confirmation li {
   overflow-wrap: anywhere;
 }
+.ov-file-browser-acl-stop {
+  --ov-ui-modal-width: 400px;
+}
+.ov-file-browser-acl-stop .ov-modal__panel {
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 16px;
+}
+.ov-file-browser-acl-stop .ov-modal__body {
+  padding: 20px 24px;
+}
+.ov-file-browser-acl-stop .ov-modal__close {
+  top: 12px;
+  right: 16px;
+}
+.ov-file-browser-acl-stop .ov-file-browser-acl__confirmation {
+  margin: 0;
+}
+.ov-file-browser-acl-stop .ov-file-browser-acl__confirmation h3 {
+  margin: 0 32px 20px 0;
+  line-height: 24px;
+}
+.ov-file-browser-acl-stop .ov-file-browser-acl__confirmation p {
+  margin: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-file-browser-acl-stop .ov-file-browser-acl__buttons {
+  gap: 13px;
+  margin-top: 20px;
+}
 .ov-file-browser-acl__tag {
   padding: 0 6px;
   font-size: 10px;

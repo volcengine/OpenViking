@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from openviking_cli.utils.logger import get_logger
 
+from .cache_config import validate_cache_instance_name
+
 logger = get_logger(__name__)
 
 
@@ -118,7 +120,11 @@ class QueueFSConfig(BaseModel):
 
     backend: str = Field(
         default="sqlite",
-        description="QueueFS backend: 'memory' | 'sqlite' | 'sqlite3' | 'cache'",
+        description="QueueFS backend: 'memory' | 'sqlite' | 'sqlite3' | 'cache' | 'postgres'",
+    )
+    instance: str = Field(
+        default="default",
+        description="Named cache runtime selected when backend is 'cache'.",
     )
 
     db_path: Optional[str] = Field(
@@ -136,6 +142,15 @@ class QueueFSConfig(BaseModel):
         description="SQLite busy timeout for QueueFS in milliseconds.",
     )
 
+    postgres_dsn_env: Optional[str] = Field(
+        default=None,
+        description="Environment variable holding the PostgreSQL QueueFS DSN.",
+    )
+    postgres_lease_seconds: int = Field(
+        default=60,
+        description="PostgreSQL consumer lease duration in seconds (10..=86400).",
+    )
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate QueueFS mode and backend choices."""
@@ -143,16 +158,29 @@ class QueueFSConfig(BaseModel):
         if self.mode not in valid_modes:
             raise ValueError("queuefs mode must be one of: 'shared', 'worker'")
 
-        valid_backends = {"memory", "sqlite", "sqlite3", "cache"}
+        valid_backends = {"memory", "sqlite", "sqlite3", "cache", "postgres"}
         if self.backend not in valid_backends:
             raise ValueError(
-                "queuefs backend must be one of: 'memory', 'sqlite', 'sqlite3', 'cache'; "
-                "backend='redis' was removed, use backend='cache' with top-level cache.provider/cache.params"
+                "queuefs backend must be one of: 'memory', 'sqlite', 'sqlite3', 'cache', 'postgres'; "
+                "backend='redis' was removed, use backend='cache' with cache.instances"
             )
+        if self.backend != "cache" and "instance" in self.model_fields_set:
+            raise ValueError("queuefs.instance requires backend='cache'")
+        if self.backend == "cache":
+            validate_cache_instance_name(self.instance, "queuefs.instance")
         if self.recover_stale_sec < 0:
             raise ValueError("queuefs recover_stale_sec must be >= 0")
         if self.busy_timeout_ms < 0:
             raise ValueError("queuefs busy_timeout_ms must be >= 0")
+        if not 10 <= self.postgres_lease_seconds <= 86400:
+            raise ValueError("queuefs postgres_lease_seconds must be 10..=86400")
+        if self.backend == "postgres":
+            name = self.postgres_dsn_env or ""
+            if not name or not name.isascii() or not (
+                (name[0].isalpha() or name[0] == "_")
+                and all(c.isalnum() or c == "_" for c in name)
+            ):
+                raise ValueError("queuefs postgres_dsn_env must be an environment variable name")
         return self
 
 
@@ -163,6 +191,10 @@ class AGFSCacheFSConfig(BaseModel):
         default="local",
         description="CacheFS backend: 'local' | 'cache'",
     )
+    instance: str = Field(
+        default="default",
+        description="Named cache runtime selected when backend is 'cache'.",
+    )
     shared_redis_ttl_seconds: int = Field(
         default=0,
         description="TTL override for cache query buckets on a shared Redis service; 0 keeps the provider default",
@@ -171,6 +203,10 @@ class AGFSCacheFSConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate CacheFS query-cache settings."""
+        if self.backend != "cache" and "instance" in self.model_fields_set:
+            raise ValueError("cachefs.instance requires backend='cache'")
+        if self.backend == "cache":
+            validate_cache_instance_name(self.instance, "cachefs.instance")
         if self.shared_redis_ttl_seconds < 0:
             raise ValueError("cachefs shared_redis_ttl_seconds must be >= 0")
         return self
@@ -204,7 +240,9 @@ class RedisCacheConfig(BaseModel):
     db: int = Field(default=0, description="Redis database number")
     pool_size: int = Field(default=32, description="Redis command concurrency")
     connect_timeout_ms: int = Field(default=10000, description="Redis connect timeout")
-    command_timeout_ms: int = Field(default=0, description="Redis command timeout; 0 disables command timeout")
+    command_timeout_ms: int = Field(
+        default=0, description="Redis command timeout; 0 disables command timeout"
+    )
     default_ttl_seconds: int = Field(default=300, description="Redis default cache TTL")
     tls_insecure_skip_verify: bool = Field(
         default=False, description="Skip Redis TLS certificate verification"
@@ -275,9 +313,9 @@ class AGFSPathLockConfig(BaseModel):
     def ignore_deprecated_lock_timeout(self):
         """Warn and force the deprecated timeout back to the fixed runtime value."""
         if "lock_timeout_secs" in self.model_fields_set:
-            logger.warning(
-                "AGFSPathLockConfig: 'storage.agfs.pathlock.lock_timeout_secs' is deprecated "
-                "and ignored; the runtime wait timeout is fixed at 0.0 seconds."
+            logger.info(
+                "'storage.agfs.pathlock.lock_timeout_secs' is deprecated and ignored; the runtime wait timeout is fixed at 0.0 seconds.",
+                extra={"degraded": True},
             )
             self.lock_timeout_secs = 0.0
         return self
@@ -285,6 +323,10 @@ class AGFSPathLockConfig(BaseModel):
     provider: str = Field(
         default="filesystem",
         description="PathLock provider: 'filesystem' | 'memory' | 'sqlite' | 'postgres' | 'cache'",
+    )
+    instance: str = Field(
+        default="default",
+        description="Named cache runtime selected when provider is 'cache'.",
     )
     postgres_dsn_env: Optional[str] = Field(
         default=None,
@@ -311,6 +353,10 @@ class AGFSPathLockConfig(BaseModel):
             raise ValueError(
                 "pathlock provider must be one of: 'filesystem', 'memory', 'sqlite', 'postgres', 'cache'"
             )
+        if self.provider != "cache" and "instance" in self.model_fields_set:
+            raise ValueError("pathlock.instance requires provider='cache'")
+        if self.provider == "cache":
+            validate_cache_instance_name(self.instance, "pathlock.instance")
         if self.postgres_dsn_env is not None and not self.postgres_dsn_env.strip():
             raise ValueError("pathlock postgres_dsn_env must be nonempty")
         if self.provider == "postgres" and self.postgres_dsn_env is None:
@@ -333,6 +379,10 @@ class AGFSCoordinationConfig(BaseModel):
         default="memory",
         description="memory: process-wide; sqlite: local cross-process; cache: distributed.",
     )
+    instance: str = Field(
+        default="default",
+        description="Named cache runtime selected when provider is 'cache'.",
+    )
     sqlite_path: Optional[str] = Field(
         default=None,
         description="Absolute local SQLite file shared by participating processes. Required "
@@ -347,6 +397,7 @@ class AGFSCoordinationConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_config(self):
+        """Validate the selected coordination provider and cache instance."""
         if self.provider == "sqlite":
             if not self.sqlite_path or not os.path.isabs(self.sqlite_path):
                 raise ValueError("coordination.sqlite_path must be an absolute local file path")
@@ -354,6 +405,10 @@ class AGFSCoordinationConfig(BaseModel):
             raise ValueError("coordination.sqlite_path requires provider='sqlite'")
         if self.provider != "cache" and self.operation_timeout_ms is not None:
             raise ValueError("coordination.operation_timeout_ms requires provider='cache'")
+        if self.provider != "cache" and "instance" in self.model_fields_set:
+            raise ValueError("coordination.instance requires provider='cache'")
+        if self.provider == "cache":
+            validate_cache_instance_name(self.instance, "coordination.instance")
         return self
 
 
@@ -479,9 +534,10 @@ class AGFSConfig(BaseModel):
         )
         for field_name in deprecated_fields:
             if field_name in self.model_fields_set:
-                logger.warning(
-                    "AGFSConfig: 'storage.agfs.%s' is deprecated and ignored after the RAGFS migration.",
+                logger.info(
+                    "deprecated AGFS configuration field ignored field=%s",
                     field_name,
+                    extra={"degraded": True},
                 )
 
         if self.backend not in ["local", "s3", "memory"]:
@@ -497,16 +553,15 @@ class AGFSConfig(BaseModel):
             self.s3.validate_config()
 
         if self.queue_db_path is not None and self.queuefs.db_path is None:
-            logger.warning(
-                "AGFSConfig: 'storage.agfs.queue_db_path' is deprecated; "
-                "prefer 'storage.agfs.queuefs.db_path'."
+            logger.info(
+                "'storage.agfs.queue_db_path' is deprecated; prefer 'storage.agfs.queuefs.db_path'."
             )
 
         if self.queuefs.backend == "memory":
             if self.queuefs.db_path is not None or self.queue_db_path is not None:
-                logger.warning(
-                    "AGFSConfig: QueueFS backend is 'memory'; "
-                    "db_path/queue_db_path will be ignored."
+                logger.info(
+                    "queueFS backend is 'memory'; db_path/queue_db_path will be ignored.",
+                    extra={"degraded": True},
                 )
 
         if self.backups is not None:
@@ -526,8 +581,16 @@ class AGFSConfig(BaseModel):
             ):
                 raise ValueError("backups checkpoint_interval_secs must be at least 60")
 
-            if self.backups.get("provider", "filesystem") not in {"filesystem", "cache"}:
+            backups_provider = self.backups.get("provider", "filesystem")
+            if backups_provider not in {"filesystem", "cache"}:
                 raise ValueError("backups provider must be 'filesystem' or 'cache'")
+            if backups_provider != "cache" and "instance" in self.backups:
+                raise ValueError("backups.instance requires provider='cache'")
+            if backups_provider == "cache":
+                instance = self.backups.get("instance", "default")
+                if not isinstance(instance, str):
+                    raise ValueError("backups.instance must be a string")
+                validate_cache_instance_name(instance, "backups.instance")
 
             names = set()
             for item in self.backups.get("items", []):

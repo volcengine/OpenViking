@@ -85,7 +85,7 @@ async def move_resource(
 async def delete_resource(
     uri: str = Query(..., description="URI below viking://resources/"),
     recursive: bool = Query(False, description="Remove a directory recursively"),
-    wait: bool = Query(True, description="Wait for semantic index cleanup"),
+    wait: bool = Query(True, description="Confirm that the deletion task has completed"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Delete one shared resource without exposing general filesystem deletion."""
@@ -170,6 +170,7 @@ async def temp_upload(
                 names=signed.skill_names,
                 list_only=signed.list_only,
                 source_type="mcp",
+                request_id=getattr(request.state, "request_id", None),
             )
         return await ingest_temp_upload(
             store,
@@ -295,6 +296,7 @@ async def add_skill(
                 allow_local_path_resolution=allow_local_path_resolution,
                 source_path_hint=source_path_hint,
                 telemetry=request.telemetry,
+                request_id=getattr(http_request.state, "request_id", None),
             )
         finally:
             if resolved:

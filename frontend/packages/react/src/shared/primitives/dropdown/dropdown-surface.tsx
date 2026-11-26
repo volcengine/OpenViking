@@ -14,6 +14,7 @@ export function DropdownSurface({
   style,
   matchAnchorWidth,
   surfaceRef: externalSurface,
+  portalContainer = document.body,
   children,
 }: Pick<DropdownProps, 'placement' | 'alignment' | 'className' | 'children'> & {
   anchor: RefObject<HTMLElement | null>;
@@ -21,6 +22,7 @@ export function DropdownSurface({
   style?: CSSProperties;
   matchAnchorWidth?: boolean;
   surfaceRef?: RefObject<HTMLDivElement | null>;
+  portalContainer?: HTMLElement;
 }) {
   const [surface, setSurface] = useState<HTMLDivElement | null>(null);
   const focusShard = useRef<HTMLDivElement | null>(null);
@@ -69,6 +71,6 @@ export function DropdownSurface({
     >
       {children}
     </div>,
-    document.body,
+    portalContainer,
   );
 }

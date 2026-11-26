@@ -146,7 +146,10 @@ test('only known submissions with structured IDs create task references', () => 
     [],
   );
   assert.deepEqual(
-    readTaskReferences('compile create', { configured: true }),
+    readTaskReferences('compile create', {
+      compile_name: 'wiki',
+      task_id: 'test',
+    }),
     [],
   );
   assert.deepEqual(

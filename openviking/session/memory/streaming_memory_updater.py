@@ -22,10 +22,12 @@ from openviking.config.generation import get_output_language_override
 from openviking.config.vlm import VLMResolver
 from openviking.core.peer_id import safe_peer_id
 from openviking.message import Message
+from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session.memory.dataclass import (
     MemoryFile,
+    MemoryOperationSkipCode,
     MemoryOperationSource,
     MemoryTypeSchema,
     ResolvedOperation,
@@ -253,9 +255,21 @@ class StreamingMemoryUpdater:
         links = merge_link_lists(list(getattr(request.operations, "resolved_links", []) or []))
         if not links:
             return
+        skipped_uris = {
+            op.uri
+            for op in result.apply_result.skipped_operations
+            if op.reason_code == MemoryOperationSkipCode.PARSE_ERROR
+        }
         links = remap_stored_links(
             links, dict(getattr(result.operations, "delete_replacements", {}) or {})
         )
+        links = [
+            link
+            for link in links
+            if link.from_uri not in skipped_uris and link.to_uri not in skipped_uris
+        ]
+        if not links:
+            return
         viking_fs = safe_get_viking_fs()
         lock_paths = _uri_lock_paths(_link_endpoint_uri_set(links), viking_fs, request.ctx)
         async with self._apply_lock:
@@ -483,11 +497,28 @@ class StreamingMemoryUpdater:
         _check_template_batch_conflicts(batches, merged_batches)
         results = []
         for batch, merged_operations in zip(batches, merged_batches, strict=True):
-            apply_result = await self._apply_operations(
-                operations=merged_operations,
-                request=batch[0],
-                messages=_combined_request_messages(batch),
-            )
+            if merged_operations is None:
+                merged_operations = ResolvedOperations(
+                    upsert_operations=[], delete_file_contents=[], errors=[]
+                )
+                apply_result = MemoryUpdateResult()
+                for request in batch:
+                    for uri in sorted(_request_uri_set(request)):
+                        apply_result.add_skipped(
+                            SkippedMemoryOperation(
+                                uri=uri,
+                                memory_type=group_key.memory_type,
+                                reason_code=MemoryOperationSkipCode.PARSE_ERROR,
+                                reason="Memory merge response could not be parsed after format retries",
+                                source=memory_operation_source_from_request(request),
+                            )
+                        )
+            else:
+                apply_result = await self._apply_operations(
+                    operations=merged_operations,
+                    request=batch[0],
+                    messages=_combined_request_messages(batch),
+                )
             results.append(
                 StreamingMemoryUpdateResult(
                     operations=merged_operations,
@@ -547,8 +578,10 @@ class StreamingMemoryUpdater:
                 if lease is not None:
                     await viking_fs._async_agfs.pathlock_release(lease)
 
-    async def _merge_requests(self, requests: list[MemoryUpdateRequest]) -> ResolvedOperations:
-        """Plan cross-session proposals together within one peer, type and template batch."""
+    async def _merge_requests(
+        self, requests: list[MemoryUpdateRequest]
+    ) -> ResolvedOperations | None:
+        """Reconcile one peer/type/template batch, returning None for an unparseable plan."""
         operations = _combine_resolved_operations(request.operations for request in requests)
         if operations.has_errors():
             return operations
@@ -569,7 +602,21 @@ class StreamingMemoryUpdater:
         }
         contested = replacements.keys() & (new_targets | edit_targets)
         cross_session = _requests_span_sessions(requests)
-        if cross_session:
+        mixed_edits = set() if cross_session else edit_targets & (new_targets | contested)
+        if mixed_edits and len(operations.upsert_operations) == 1:
+            registry = requests[0].memory_registry or self.registry or get_default_registry()
+            edit = operations.upsert_operations[0]
+            direct_apply, _ = await classify_memory_merge_mode(
+                [edit], schema=registry.get(edit.memory_type)
+            )
+            if direct_apply:
+                # An unchanged edit supersedes a pure delete. Link migrations still need a plan.
+                mixed_edits.intersection_update(
+                    disputed
+                    | operations.delete_replacements.keys()
+                    | detect_split_replacements(operations).keys()
+                )
+        if cross_session or mixed_edits:
             # A dict can only express agreed replacements. Pass every alternative to the planner.
             for uri in disputed:
                 operations.delete_replacements.pop(uri, None)
@@ -590,26 +637,36 @@ class StreamingMemoryUpdater:
                 ),
             )
 
-            if operations.has_errors():
+            if operations is None or operations.has_errors():
                 return operations
 
         # Independent patches on the same old file require a single final write.
         # Same-session sequential updates retain their existing order.
         writes = Counter(uri for op in operations.upsert_operations for uri in op.uris)
-        conflicts = set(writes).intersection(file.uri for file in operations.delete_file_contents)
+        splits = detect_split_replacements(operations)
         if not cross_session:
-            conflicts.update(new_targets & edit_targets)
-        elif not operations.upsert_operations and not operations.delete_file_contents:
-            conflicts.update(contested | disputed)
+            # A same-session write supersedes a pure delete of its own target.
+            # Replacements and splits also migrate links, so retain those for validation.
+            operations.delete_file_contents = [
+                file
+                for file in operations.delete_file_contents
+                if file.uri not in writes
+                or file.uri in operations.delete_replacements
+                or file.uri in splits
+                or file.uri in disputed
+            ]
+
+        conflicts = set(writes).intersection(file.uri for file in operations.delete_file_contents)
+        if not operations.upsert_operations and not operations.delete_file_contents:
+            conflicts.update(contested | disputed | mixed_edits)
         if cross_session:
             conflicts.update(uri for uri, count in writes.items() if count > 1)
-        splits = detect_split_replacements(operations)
         for file in operations.delete_file_contents:
             if (
-                cross_session
+                (cross_session or mixed_edits)
                 and not operations.delete_replacements.get(file.uri)
                 and file.uri not in splits
-                and (file.uri in contested or file.uri not in replacements)
+                and (file.uri not in replacements or (cross_session and file.uri in contested))
             ):
                 conflicts.add(file.uri)
             if file.uri in disputed and (
@@ -632,7 +689,7 @@ class StreamingMemoryUpdater:
 
 def _check_template_batch_conflicts(
     batches: list[list[MemoryUpdateRequest]],
-    merged_batches: list[ResolvedOperations] | None = None,
+    merged_batches: list[ResolvedOperations | None] | None = None,
 ) -> None:
     """Reject cross-template file conflicts before any batch writes.
 
@@ -766,8 +823,8 @@ async def merge_memory_operations(
     force_merge: bool = False,
     vlm_resolver: VLMResolver | None = None,
     output_language_override: str | None = None,
-) -> ResolvedOperations:
-    """Merge resolved memory operations by memory type/URI using patch context."""
+) -> ResolvedOperations | None:
+    """Merge operations by memory type and URI. None denotes an exhausted parse retry."""
 
     if operations.has_errors():
         tracer.info(
@@ -844,6 +901,8 @@ async def merge_memory_operations(
         ops_list = upsert_groups.get(group_key, [])
         if not isinstance(merge_result, Exception):
             merged = merge_result
+            if merged is None:
+                return None
             if merged.has_errors():
                 return ResolvedOperations(
                     upsert_operations=[], delete_file_contents=[], errors=merged.errors
@@ -875,14 +934,24 @@ async def merge_memory_operations(
             f"target_count={len(_unique_operation_uris(ops_list))} error={merge_result}",
             console=trace_console,
         )
-        logger.warning(
-            "[streaming_memory_updater] merge failed for %s (%s): %s",
-            memory_type,
-            peer_label,
-            merge_result,
+        logger.debug(
+            "memory merge failed type_hash=%s error_type=%s",
+            short_hash(str(memory_type)),
+            type(merge_result).__name__,
+            extra={"error_type": type(merge_result).__name__},
         )
         if strict_extract_errors or is_cross_extraction_group(ops_list):
             raise merge_result
+        logger.info(
+            "memory merge failed; keeping original operations total=%d error_type=%s",
+            len(ops_list),
+            type(merge_result).__name__,
+            extra={
+                "degraded": True,
+                "total": len(ops_list),
+                "error_type": type(merge_result).__name__,
+            },
+        )
         # Fallback: keep original operations and delete files for this group
         merged_upserts.extend(ops_list)
         fallback_deletes = delete_groups.get(group_key, [])
@@ -931,7 +1000,8 @@ async def merge_one_memory_type_operations(
     force_merge: bool = False,
     vlm_resolver: VLMResolver | None = None,
     output_language_override: str | None = None,
-) -> ResolvedOperations:
+) -> ResolvedOperations | None:
+    """Resolve one memory type using its patches, returning None for an unparseable plan."""
     registry = registry or get_default_registry()
     schema = registry.get(memory_type)
     delete_files = list(delete_files or [])
@@ -981,7 +1051,7 @@ async def merge_one_memory_type_operations(
         )
 
     if force_merge:
-        fast_path, fast_path_reason = False, "cross_session_batch"
+        fast_path, fast_path_reason = False, "forced_merge"
     else:
         fast_path, fast_path_reason = await classify_memory_merge_mode(operations, schema=schema)
     if fast_path:
@@ -1120,7 +1190,8 @@ async def merge_one_memory_type_operations(
         max_iterations=1,
     )
     merged, _ = await orchestrator.run()
-    merged = merged or ResolvedOperations(upsert_operations=[], delete_file_contents=[], errors=[])
+    if merged is None:
+        return None
     tracer.info(
         "[streaming_memory_updater] llm merge output "
         f"memory_type={memory_type} upserts={len(merged.upsert_operations)} "
@@ -1242,10 +1313,11 @@ async def render_operation_after_file_content(
             )
         except Exception as exc:
             logger.debug(
-                "Failed to preview memory patch field: memory_type=%s field=%s",
-                op.memory_type,
-                field_def.name,
-                exc_info=True,
+                "memory patch field preview failed type_hash=%s field_hash=%s error_type=%s",
+                short_hash(str(op.memory_type)),
+                short_hash(str(field_def.name)),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
             )
             tracer.info(
                 "[streaming_memory_updater] skipping preview field update after merge_op failure "
@@ -1322,10 +1394,10 @@ async def classify_memory_merge_mode(
                 return True, "single_existing_content_unchanged"
         except Exception as exc:
             logger.debug(
-                "Failed to render memory patch preview for merge-mode classification: "
-                "memory_type=%s",
-                getattr(op, "memory_type", None),
-                exc_info=True,
+                "memory patch merge preview failed type_hash=%s error_type=%s",
+                short_hash(str(getattr(op, "memory_type", None) or "")),
+                type(exc).__name__,
+                extra={"error_type": type(exc).__name__},
             )
             tracer.info(
                 "[streaming_memory_updater] merge-mode preview failed; falling back to "
@@ -2171,13 +2243,7 @@ def _operation_lock_paths(
     viking_fs: Any | None,
     ctx: RequestContext,
 ) -> list[str]:
-    operation_uris = _operation_uri_set(operations)
-    uris = set(operation_uris)
-    for uri in operation_uris:
-        normalized_uri = str(uri).rstrip("/")
-        directory, separator, _ = normalized_uri.rpartition("/")
-        if separator and directory:
-            uris.add(f"{directory}/.overview.md")
+    uris = _operation_uri_set(operations)
     uris.update(_link_endpoint_uri_set(list(operations.resolved_links or [])))
     for deleted_uri, replacement_uri in dict(operations.delete_replacements or {}).items():
         if deleted_uri:
@@ -2197,49 +2263,6 @@ def _operation_lock_paths(
             if to_uri:
                 uris.add(str(to_uri))
     return _uri_lock_paths(uris, viking_fs, ctx)
-
-
-def _operation_tree_lock_paths(
-    operations: ResolvedOperations,
-    viking_fs: Any | None,
-    ctx: RequestContext,
-) -> list[str]:
-    """Tree-lock parent directories that may be emptied by this batch.
-
-    `generate_overview` follows any batch whose last file in a directory is removed with
-    a recursive rm of that directory, so the lease has to cover the parent. A same-dir
-    rename does not empty the parent (the target replaces the source in place), so those
-    can stay on exact locks.
-    """
-    replacements = dict(operations.delete_replacements or {})
-    directories: set[str] = set()
-    for source_uri, target_uri in replacements.items():
-        source_directory = str(source_uri).rstrip("/").rpartition("/")[0]
-        target_directory = str(target_uri).rstrip("/").rpartition("/")[0]
-        if source_directory and source_directory != target_directory:
-            directories.add(source_directory)
-    for memory_file in operations.delete_file_contents or []:
-        uri = getattr(memory_file, "uri", None)
-        if not uri:
-            continue
-        source_directory = str(uri).rstrip("/").rpartition("/")[0]
-        if not source_directory:
-            continue
-        replacement = replacements.get(str(uri))
-        if replacement:
-            replacement_directory = str(replacement).rstrip("/").rpartition("/")[0]
-            if replacement_directory == source_directory:
-                continue
-        directories.add(source_directory)
-    return _uri_lock_paths(directories, viking_fs, ctx)
-
-
-def _exclude_tree_covered_paths(exact_paths: set[str], tree_paths: set[str]) -> set[str]:
-    return {
-        path
-        for path in exact_paths
-        if not any(path == tree or path.startswith(f"{tree.rstrip('/')}/") for tree in tree_paths)
-    }
 
 
 async def _persisted_delete_relation_uris(
@@ -2281,25 +2304,15 @@ async def acquire_memory_operation_lease(
     # this before second-stage patch merging would present the same rename as
     # both an update patch and a delete patch.
     MemoryUpdater._materialize_uri_migrations(operations)
-    exact_paths = set(_operation_lock_paths(operations, viking_fs, ctx))
-    tree_paths = set(_operation_tree_lock_paths(operations, viking_fs, ctx))
-    exact_paths = _exclude_tree_covered_paths(exact_paths, tree_paths)
-    if not exact_paths and not tree_paths:
+    required_exact_paths = set(_operation_lock_paths(operations, viking_fs, ctx))
+    if not required_exact_paths:
         return None
 
-    required_exact_paths = set(exact_paths)
     for acquisition in range(1, _MEMORY_APPLY_LOCK_MAX_ACQUISITIONS + 1):
-        if tree_paths:
-            lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
-                sorted(required_exact_paths),
-                sorted(tree_paths),
-                timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
-            )
-        else:
-            lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
-                sorted(required_exact_paths),
-                timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
-            )
+        lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+            sorted(required_exact_paths),
+            timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+        )
         try:
             relation_uris = await _persisted_delete_relation_uris(
                 operations,
@@ -2309,7 +2322,6 @@ async def acquire_memory_operation_lease(
             expanded_exact_paths = required_exact_paths | set(
                 _uri_lock_paths(relation_uris, viking_fs, ctx)
             )
-            expanded_exact_paths = _exclude_tree_covered_paths(expanded_exact_paths, tree_paths)
         except BaseException:
             await viking_fs._async_agfs.pathlock_release(lease)
             raise

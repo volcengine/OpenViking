@@ -3,7 +3,7 @@
     use std::time::{Duration, Instant};
 
     use crate::cache_runtime::{
-        CacheRuntime, RedisProviderConfig, ScriptDefinition, ScriptRequest, ScriptValue,
+        CacheRuntime, RedisProviderConfig, ScriptRequest, ScriptValue,
     };
     use crate::core::FileSystem;
     use crate::plugins::memfs::MemFileSystem;
@@ -176,6 +176,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
         let service_name = format!("pathlock-manager-test-{}-{test_name}", std::process::id());
         let config = PathLockConfig {
             provider: "cache".to_string(),
+            instance: "default".to_string(),
             service_name: Some(service_name.clone()),
             sqlite_path: None,
             postgres_dsn_env: None,
@@ -270,10 +271,7 @@ return redis.call("HGET", KEYS[1], ARGV[2])
     async fn seed_token(provider: &RedisPathLockProvider, path: &str, token: &LockToken) {
         provider
             .runtime
-            .register_script(ScriptDefinition {
-                id: TEST_HASH_ID,
-                redis_lua: TEST_HASH_SCRIPT,
-            })
+            .register_script(TEST_HASH_ID.to_string(), TEST_HASH_SCRIPT.to_string())
             .unwrap();
         provider
             .execute(

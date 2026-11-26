@@ -1273,7 +1273,7 @@ class TestPageIdInstruction:
     async def test_run_always_includes_page_id_rules_when_links_disabled(self):
         context_provider = Mock()
         context_provider.get_memory_schemas.return_value = [
-            SimpleNamespace(memory_type="experiences")
+            MemoryTypeSchema(memory_type="experiences")
         ]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []
@@ -1350,7 +1350,7 @@ class TestPageIdInstruction:
     async def test_run_includes_link_page_id_rule_when_links_enabled(self):
         context_provider = Mock()
         context_provider.get_memory_schemas.return_value = [
-            SimpleNamespace(memory_type="experiences")
+            MemoryTypeSchema(memory_type="experiences")
         ]
         context_provider.get_output_language.return_value = "zh-CN"
         context_provider.get_tools.return_value = []

@@ -53,6 +53,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 |---|---|---|---|
 | `default_account` | string | `"default"` | Default account for the service context |
 | `default_user` | string | `"default"` | Default user for the service context |
+| `enable_default_resources` | boolean | `true` | Supply omitted local Embedding/VectorDB and preset default Account directories; see [resource configuration](../guides/01-configuration.md) |
 | `embedding` | object | built-in local dense model | Dense, sparse, and hybrid embedding; defaults to `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Model for retrieval intent analysis and recall rewriting. Falls back to `vlm` when omitted or empty; recall rewrite in `auto` mode requires a configured cluster `query_planner` or an account-level `query_planner` or `vlm` override |
@@ -196,7 +197,7 @@ filtering and Rule applicability. It does not configure retrieval reranking.
 | `model` | string / `null` | provider default | Model name or endpoint ID; required for `custom` |
 | `timeout` | number | `30` | HTTP request timeout in seconds |
 | `extra_headers` | object / `null` | `null` | Additional HTTP request headers |
-| `log_payloads` | boolean | `false` | Log complete requests and responses; these may contain task and Rule content |
+| `log_payloads` | boolean | `false` | Log safe request and response summaries when `log.level=DEBUG`; task, Rule and response content are omitted |
 
 | Provider | Default request URL | Default model | Notes |
 |---|---|---|---|
@@ -248,7 +249,7 @@ discard source restrictions. Empty does not mean unknown or inapplicable.
 | `mode` | `noul`, `choice`, or `null` | `noul` | Jev rerank mode; `null` also uses `noul` |
 | `threshold` | number | `0.1` | Minimum rerank score considered relevant; filters only model rerank scores, never vector scores, and a request `score_threshold` overrides it |
 | `max_input_tokens` | integer; `0` or `>= 128` | `0` | Maximum estimated tokens per query-document pair; `0` disables truncation |
-| `log_payloads` | boolean | `false` | Log complete rerank request and response payloads; may expose query and document content |
+| `log_payloads` | boolean | `false` | Jev only: log safe request and response summaries when `log.level=DEBUG`; query, document and response content are omitted |
 
 Rerank has no separate `enabled` field. It becomes available when the required provider credentials are configured.
 
@@ -303,7 +304,11 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking workspace |
 | `agfs.backend` | `local`, `memory`, `s3` | `local` | File and metadata backend |
+| `cache.instances` | object | required when a cache consumer is enabled | Named CacheRuntime providers; must include `default` |
+| `agfs.cachefs.instance` | instance name | `"default"` | Runtime used when `cachefs.backend="cache"` |
+| `agfs.queuefs.instance` | instance name | `"default"` | Runtime used when `queuefs.backend="cache"` |
 | `agfs.pathlock.provider` | `filesystem`, `memory`, `sqlite`, `postgres`, `cache` | `filesystem` | Path lock storage; `postgres` uses PostgreSQL directly, `cache` uses Redis |
+| `agfs.pathlock.instance` | instance name | `"default"` | Runtime used when `pathlock.provider="cache"`; it must use Redis |
 | `agfs.pathlock.sqlite_path` | absolute local file path | `{workspace}/_system/pathlock/pathlock.db` for `sqlite` | Shared SQLite lock database; optional override |
 | `agfs.pathlock.postgres_dsn_env` | environment variable name / `null` | `null` | Required for `postgres`; names the server environment variable containing the PostgreSQL DSN |
 | `vectordb.backend` | `local`, `cuvs`, `http`, `volcengine`, `vikingdb`, `opengauss`, `pgvector` | `local` | Vector database backend; see [pgvector setup](../guides/25-pgvector.md) |
@@ -311,6 +316,15 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
 | `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
+| `watch_store.provider` | `file`, `mysql`, `postgres` | `file` | Watch metadata and run occupancy; relational providers share persistent rows |
+
+PostgreSQL Watch storage requires `openviking[postgres]` and the provisioned
+`openviking/service/sql/001_watch_tasks_postgres.sql` schema. Configure
+`storage.watch_store.params` with connection fields and a shared
+`credential_encryption_key` (base64-encoded 32 bytes). It is independent of
+Task/Work, Account, PathLock and vector storage. See
+[Watch store configuration](../guides/01-configuration.md#watch-store) for the
+complete example, TLS settings and deployment requirements.
 
 For same-machine path locking on a local disk without recursive business-directory scans, set
 `storage.agfs.pathlock` to `{"provider":"sqlite"}`. The database defaults to
@@ -435,7 +449,8 @@ requirement, local vector storage's process lock, or other backend concurrency l
 #### Redis PathLock
 
 For Redis coordination,
-set `storage.agfs.pathlock.provider="cache"` and top-level `cache.provider="redis"`.
+set `storage.agfs.pathlock.provider="cache"` and select a Redis entry from
+`cache.instances` with `storage.agfs.pathlock.instance`.
 All replicas must use the same Redis deployment, top-level `service_name`, and
 lock expiry setting. See the [shared Redis configuration example](../guides/01-configuration.md).
 With either PathLock provider, shared QueueFS must also use a backend suitable for that deployment, such as
@@ -495,10 +510,8 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
-| `file_operation_concurrency` | integer | `16` | Maximum concurrent file-level commit and fallback comparison operations within one AddResource job; must be greater than `0`; requires a server restart after changes |
-| `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, prepared, and enqueued within one directory AddResource job when `processing_mode="vectors_only"`; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
-`max_concurrent` controls independent AddResource jobs. `file_operation_concurrency` controls file commit and fallback comparison work within one AddResource job, while `file_vectorization_concurrency` controls files within one vectors-only directory job.
+`max_concurrent` controls independent AddResource jobs. File-level work within each job uses an internal bounded concurrency limit.
 
 ### `queue_workers.reindex`
 
@@ -520,6 +533,98 @@ This setting limits independent asynchronous reindex requests. URI-overlapping r
 |---|---|---:|---|
 | `max_concurrent` | integer | `10` | Number of external asynchronous tasks consumed concurrently; must be greater than `0`; requires a server restart after changes |
 
+## Logging configuration
+
+`log` controls Python, Rust, and C++ output in the standalone server. The default
+level is `INFO` so fallbacks and retries remain visible; business progress uses
+`DEBUG`. Third-party logs retain their original level semantics. Bootstrap startup
+results and failure diagnostics print directly to stdout/stderr and remain visible
+even with a high log threshold or file output.
+
+| Field | Type / values | Default | Purpose |
+| --- | --- | --- | --- |
+| `level` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` | `INFO` | Output threshold; case-insensitive, with `WARN` and `FATAL` aliases |
+| `format` | Common format string | See below | The same header across Python, Rust, and C++ |
+| `output` | `stdout`, `stderr`, `file`, or a file path | `stdout` | `file` writes to `storage.workspace/log/openviking.log` |
+| `rotation` | boolean | `true` | Rotate Python file output and ask Rust to reopen the file |
+| `rotation_days` | integer | `3` | Number of rotated files retained by Python |
+| `rotation_interval` | `midnight`, `H`, `D`, `W0`–`W6` | `midnight` | Python rotation interval; the C++ file sink does not participate in rotation |
+
+The exact common `format` value is:
+
+```text
+%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s
+```
+
+Timestamps use UTC milliseconds. Messages and appended strings use JSON escaping,
+one event occupies one line, and output has no terminal colors. Missing correlation
+fields appear as `-`. The former built-in format,
+`%(asctime)s - %(name)s - %(levelname)s - %(message)s`, is normalized on load;
+other custom formats and unknown levels fail configuration validation.
+
+Native output changes require a server restart; reconfiguring Python does not update
+native components. Rust has no `CRITICAL` level, so that threshold still maps to
+`ERROR` and emitted events remain `ERROR`. The existing
+`server.observability.usage_audit` settings manage usage and HTTP request records;
+security-operation audit persistence remains a separate feature backlog. SDK imports do not take ownership of
+the host root logger. See the [logging policy](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md) for content rules.
+
+## Usage/Audit PostgreSQL Settings
+
+`server.observability.usage_audit.backend` accepts `sqlite` (default) and `postgres`.
+PostgreSQL shares Token, retrieval, context-write and HTTP audit projections across
+server instances, preserving the Console API and viewer timezone behavior.
+
+```json
+{
+  "server": {
+    "observability": {
+      "usage_audit": {
+        "backend": "postgres",
+        "postgres": {
+          "host": "localhost",
+          "port": 5432,
+          "user": "openviking_runtime",
+          "password": "<password>",
+          "database": "openviking",
+          "schema": "openviking_usage_audit",
+          "maxsize": 10,
+          "connect_timeout": 10,
+          "lock_timeout_ms": 1000,
+          "sslmode": "prefer"
+        }
+      }
+    }
+  }
+}
+```
+
+Install `openviking[postgres]`. An administrator must provision
+`openviking/observability/usage_audit/sql/001_usage_audit_postgres.sql` once.
+Startup validates the schema; it never creates or migrates tables. For a custom
+schema, replace the schema name throughout the SQL script. Names must be lowercase
+SQL identifiers of 1–63 characters. The runtime role needs schema `USAGE`,
+table `SELECT/INSERT/UPDATE/DELETE`, and sequence `USAGE/SELECT`.
+Connection settings also accept `sslrootcert`, `sslcert`, and `sslkey`; DSNs are
+not accepted. Set `verify-ca` or `verify-full` according to production TLS requirements.
+
+The schema is now v2. For a preview v1 schema, stop all writers, have an administrator
+run `openviking/observability/usage_audit/sql/002_usage_audit_deletion_fence.sql`,
+then restart all instances with the new code; do not mix old writers.
+`lock_timeout_ms` defaults to `1000` (range `1..60000`) and bounds each database lock
+wait in write/delete transactions. Timeout rolls back the batch; the best-effort
+worker drops that batch. Deletion persists account/user generation fences to reject
+older events queued on other instances. Events admitted for that scope before a
+remote writer refreshes its generation are also conservatively dropped. Each write
+refreshes the generation; subsequently admitted events, including recreated identity
+IDs, can be stored normally. This decision does not depend on machine clocks.
+
+Retention settings match SQLite; `0` disables the corresponding limit. Changing
+backends does not migrate historical data. Events still use an in-process queue,
+without restart recovery or exactly-once delivery. This setting only shares
+Usage/Audit projections; configure other storage and distributed locks separately.
+See the [module guide](https://github.com/volcengine/OpenViking/blob/main/openviking/observability/usage_audit/README.md).
+
 ## Compile API Settings
 
 | Field | Type | Default | Description |
@@ -531,14 +636,6 @@ This setting limits independent asynchronous reindex requests. URI-overlapping r
 
 When `base_url` is configured, OV sends the current user's OV API key in `X-API-Key`. It sends `X-Gateway-Token` only when `gateway_token` is configured.
 
-## Reindex Settings
-
-### `reindex`
-
-| Field | Type | Default | Description |
-|---|---|---:|---|
-| `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, fingerprinted, and prepared by one resource/skill reindex task; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
-
 ## HTTP Server Settings
 
 ```json
@@ -547,7 +644,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
     "host": "127.0.0.1",
     "port": 1933,
     "workers": 1,
-    "executor_threads": 0,
+    "executor_threads": 64,
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -565,7 +662,7 @@ When `base_url` is configured, OV sends the current user's OV API key in `X-API-
 | `host` | IP / hostname | `"127.0.0.1"` | Listen address |
 | `port` | integer | `1933` | Listen port |
 | `workers` | integer | `1` | Worker process count |
-| `executor_threads` | non-negative integer | `0` | Maximum threads in each worker process's default asyncio executor; `0` uses Python's default sizing policy |
+| `executor_threads` | non-negative integer | `64` | Maximum threads in each worker process's default asyncio executor; `0` uses Python's default sizing policy |
 | `timeout_keep_alive` | integer (seconds) | `5` | Idle HTTP keep-alive timeout; raise it above the upstream's idle-connection lifetime |
 | `auth_mode` | `dev`, `api_key`, `trusted` / `null` | `null` | Auth mode; null is inferred from `root_api_key` |
 | `root_api_key` | string / `null` | `null` | Root key; setting it defaults auth to `api_key` |

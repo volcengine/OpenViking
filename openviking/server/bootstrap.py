@@ -26,10 +26,16 @@ from openviking.server.app import (
     WORKER_BOT_API_URL_ENV,
     WORKER_HOST_ENV,
     WORKER_PORT_ENV,
+    WORKER_ROLES_ENV,
     WORKER_WITH_BOT_ENV,
     create_app,
 )
-from openviking.server.config import get_server_url_from_server_data, load_server_config
+from openviking.server.config import (
+    ServerConfig,
+    get_server_url_from_server_data,
+    load_server_config,
+    validate_server_config,
+)
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.config_loader import expand_config_environment, resolve_config_path
 from openviking_cli.utils.config.consts import (
@@ -38,7 +44,7 @@ from openviking_cli.utils.config.consts import (
     DEFAULT_OVCLI_CONF,
     OPENVIKING_CLI_CONFIG_ENV,
 )
-from openviking_cli.utils.logger import configure_uvicorn_logging
+from openviking_cli.utils.logger import configure_server_logging, configure_uvicorn_logging
 
 
 @dataclass
@@ -105,6 +111,7 @@ def _abort_if_port_in_use(port: int, label: str) -> None:
             f"  Identify it:  lsof -nP -iTCP:{port} -sTCP:LISTEN\n"
             f"  Kill it, then retry.",
             file=sys.stderr,
+            flush=True,
         )
         sys.exit(1)
 
@@ -190,6 +197,7 @@ def _monitor_expiry_publisher(managed: ExpiryPublisherProcess) -> None:
         f"Error: managed expiry publisher exited unexpectedly (code {returncode}); "
         "stopping OpenViking server.",
         file=sys.stderr,
+        flush=True,
     )
     os.kill(os.getpid(), signal.SIGTERM)
 
@@ -224,7 +232,7 @@ def _start_expiry_publisher(config_path: Path) -> ExpiryPublisherProcess:
             daemon=True,
         )
         managed.monitor_thread.start()
-        print(f"Expiry publisher started (PID: {process.pid})")
+        print(f"Expiry publisher started (PID: {process.pid})", flush=True)
         return managed
     except BaseException:
         if process is not None and process.poll() is None:
@@ -302,6 +310,12 @@ def _main(recovery):
         help="Number of uvicorn worker processes (default: 1, or server.workers in ov.conf)",
     )
     parser.add_argument(
+        "--roles",
+        type=str,
+        default=None,
+        help="Comma-separated roles: api,queue_worker,scheduler (default: all roles)",
+    )
+    parser.add_argument(
         "--bot",
         "--with-bot",
         action="store_true",
@@ -358,20 +372,27 @@ def _main(recovery):
     except (FileNotFoundError, ValueError) as e:
         if isinstance(e, ValueError):
             print(
-                f"Failed to load OpenViking server configuration from {resolved_config_path}:\n{e}",
+                f"Failed to load OpenViking server configuration ({type(e).__name__}).",
                 file=sys.stderr,
+                flush=True,
             )
             print(
                 "\nValidate the configuration with:\n"
                 "  openviking-server doctor\n\n"
                 "See examples/ov.conf.example for supported fields.",
                 file=sys.stderr,
+                flush=True,
             )
         else:
-            print(e, file=sys.stderr)
+            print(
+                f"OpenViking server configuration is missing ({type(e).__name__}).",
+                file=sys.stderr,
+                flush=True,
+            )
         sys.exit(1)
 
     # Configure logging early so that all subsequent steps have proper logging
+    configure_server_logging()
     configure_uvicorn_logging()
 
     # 🔍 Authentication health check - CRITICAL: will exit if check fails
@@ -381,8 +402,12 @@ def _main(recovery):
         asyncio.run(run_startup_health_check_or_exit(config))
     except Exception as e:
         # Don't fail startup if health check itself has issues
-        print(f"Warning: Authentication health check failed to run: {e}", file=sys.stderr)
-        print("Continuing startup anyway...", file=sys.stderr)
+        print(
+            f"Warning: Authentication health check failed to run ({type(e).__name__}).",
+            file=sys.stderr,
+            flush=True,
+        )
+        print("Continuing startup anyway...", file=sys.stderr, flush=True)
 
     # Ensure Ollama is running if configured
     try:
@@ -394,17 +419,22 @@ def _main(recovery):
         if uses_ollama:
             result = ensure_ollama_for_server(ollama_host, ollama_port)
             if result.success:
-                print(f"Ollama is running at {ollama_host}:{ollama_port}")
+                print(f"Ollama is running at {ollama_host}:{ollama_port}", flush=True)
             else:
                 print(
                     f"Warning: Ollama not available at {ollama_host}:{ollama_port}. "
-                    f"Embedding/VLM may fail. ({result.message})",
+                    "Embedding/VLM may fail.",
                     file=sys.stderr,
+                    flush=True,
                 )
                 if result.stderr_output:
-                    print(f"  Ollama stderr: {result.stderr_output}", file=sys.stderr)
+                    print("  Ollama diagnostic output omitted.", file=sys.stderr, flush=True)
     except Exception as e:
-        print(f"Warning: Ollama pre-flight check failed: {e}", file=sys.stderr)
+        print(
+            f"Warning: Ollama pre-flight check failed ({type(e).__name__}).",
+            file=sys.stderr,
+            flush=True,
+        )
 
     # Override with command line arguments
     if args.host is not None:
@@ -415,6 +445,13 @@ def _main(recovery):
         config.workers = args.workers
     if args.with_bot:
         config.with_bot = True
+    if getattr(args, "roles", None) is not None:
+        config.roles = ServerConfig(roles=[role.strip() for role in args.roles.split(",")]).roles
+    if config.workers < 1:
+        raise ValueError("--workers must be at least 1")
+    if config.with_bot and "api" not in config.roles:
+        raise ValueError("--with-bot requires the api role")
+    validate_server_config(config)
 
     if recovery.pending and config.workers > 1:
         raise ValueError("Remote restart recovery requires a single worker")
@@ -428,7 +465,7 @@ def _main(recovery):
         bot_port = args.bot_port
         config.bot_api_url = f"http://{VIKINGBOT_DEFAULT_HOST}:{bot_port}"
         _abort_if_port_in_use(bot_port, "vikingbot gateway")
-        print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
+        print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}", flush=True)
         # Determine if bot logging should be enabled
         enable_bot_logging = args.enable_bot_logging
         if enable_bot_logging is None:
@@ -451,6 +488,7 @@ def _main(recovery):
             print(
                 "Error: --with-bot was requested, but VikingBot could not be started.",
                 file=sys.stderr,
+                flush=True,
             )
             sys.exit(1)
 
@@ -466,27 +504,17 @@ def _main(recovery):
                 or (compile_api is not None and compile_api.scheduler_enabled)
                 or (config.ttl_adapter is not None and config.ttl_adapter.writer_enabled)
             )
-            if uses_redis and expiry is not None and expiry.publisher_separate_process:
+            if (
+                "scheduler" in config.roles
+                and uses_redis
+                and expiry is not None
+                and expiry.publisher_separate_process
+            ):
                 if resolved_config_path is None:
                     raise RuntimeError(
                         "Cannot start expiry publisher without a resolved ov.conf path"
                     )
                 expiry_publisher_process = _start_expiry_publisher(resolved_config_path)
-
-            # Create and run server app only after managed dependencies are ready.
-            app = create_app(
-                config,
-                server_overrides={
-                    key: getattr(config, key)
-                    for key in ("host", "port", "workers", "with_bot")
-                    if getattr(args, key) is not None and (key != "with_bot" or args.with_bot)
-                },
-                config_path=(
-                    str(resolved_config_path) if resolved_config_path is not None else args.config
-                ),
-            )
-            workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
-            print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
 
             workers = config.workers
             if workers > 1:
@@ -498,6 +526,7 @@ def _main(recovery):
                 os.environ[WORKER_PORT_ENV] = str(config.port)
                 os.environ[WORKER_WITH_BOT_ENV] = "1" if config.with_bot else "0"
                 os.environ[WORKER_BOT_API_URL_ENV] = config.bot_api_url
+                os.environ[WORKER_ROLES_ENV] = ",".join(config.roles)
                 uvicorn.run(
                     "openviking.server.app:create_worker_app",
                     factory=True,
@@ -506,8 +535,24 @@ def _main(recovery):
                     workers=workers,
                     timeout_keep_alive=config.timeout_keep_alive,
                     log_config=None,
+                    access_log=False,
                 )
             else:
+                app = create_app(
+                    config,
+                    server_overrides={
+                        key: getattr(config, key)
+                        for key in ("host", "port", "workers", "with_bot", "roles")
+                        if getattr(args, key, None) is not None
+                        and (key != "with_bot" or args.with_bot)
+                    },
+                    config_path=(
+                        str(resolved_config_path)
+                        if resolved_config_path is not None
+                        else args.config
+                    ),
+                )
+                print(f"OpenViking HTTP Server is running on {config.host}:{config.port}", flush=True)
                 restart_requested = _run_restartable_server(
                     app,
                     recovery=recovery,
@@ -515,6 +560,7 @@ def _main(recovery):
                     port=config.port,
                     timeout_keep_alive=config.timeout_keep_alive,
                     log_config=None,
+                    access_log=False,
                 )
     finally:
         if expiry_publisher_process is not None:
@@ -532,6 +578,8 @@ def _main(recovery):
 def _run_restartable_server(app, recovery=None, **kwargs) -> bool:
     from openviking.server.restart import RestartController
 
+    # RequestIdMiddleware owns request-completion logging.
+    kwargs.setdefault("access_log", False)
     server = uvicorn.Server(uvicorn.Config(app, **kwargs))
     controller = RestartController(lambda: setattr(server, "should_exit", True), recovery)
     app.state.restart_controller = controller
@@ -552,21 +600,24 @@ def _run_restartable_server(app, recovery=None, **kwargs) -> bool:
 
 def _handle_vikingbot_failure(output: str, returncode: int) -> None:
     """Handle vikingbot startup failure and provide helpful error messages."""
-    print(f"\nError: vikingbot gateway exited early (code {returncode})", file=sys.stderr)
+    print(
+        f"\nError: vikingbot gateway exited early (code {returncode})", file=sys.stderr, flush=True
+    )
 
     # Check for common dependency errors
     if "ModuleNotFoundError" in output:
-        print("\nMissing dependencies detected!", file=sys.stderr)
+        print("\nMissing dependencies detected!", file=sys.stderr, flush=True)
         print(
             "\nTo use --with-bot, you need to install openviking with bot dependencies:",
             file=sys.stderr,
+            flush=True,
         )
-        print('  pip install "openviking[bot]"', file=sys.stderr)
-        print("  # Or for development:", file=sys.stderr)
-        print('  uv pip install -e ".[bot,dev]"', file=sys.stderr)
+        print('  pip install "openviking[bot]"', file=sys.stderr, flush=True)
+        print("  # Or for development:", file=sys.stderr, flush=True)
+        print('  uv pip install -e ".[bot,dev]"', file=sys.stderr, flush=True)
 
     if output:
-        print(f"\nDetailed error:\n{output}", file=sys.stderr)
+        print("VikingBot diagnostic output omitted.", file=sys.stderr, flush=True)
 
 
 def _wait_for_bot_ready(process, status_path: Path) -> None:
@@ -601,7 +652,7 @@ def _start_vikingbot_gateway(
     managed_server_url: Optional[str] = None,
 ) -> Optional[BotProcess]:
     """Start vikingbot gateway as a subprocess."""
-    print("Starting vikingbot gateway...")
+    print("Starting vikingbot gateway...", flush=True)
 
     # Check if vikingbot is available
     vikingbot_cmd = None
@@ -620,8 +671,8 @@ def _start_vikingbot_gateway(
             pass
 
     if vikingbot_cmd is None:
-        print("Warning: vikingbot not found. Please install vikingbot first.")
-        print("  uv pip install -e '.[bot,dev]'")
+        print("Warning: vikingbot not found. Please install vikingbot first.", flush=True)
+        print("  uv pip install -e '.[bot,dev]'", flush=True)
         return None
 
     vikingbot_cmd.extend(["--host", VIKINGBOT_DEFAULT_HOST, "--port", str(port)])
@@ -643,9 +694,9 @@ def _start_vikingbot_gateway(
             log_file = open(log_file_path, "a")
             stdout_handler = log_file
             stderr_handler = log_file
-            print(f"Vikingbot logs will be written to: {log_file_path}")
+            print(f"Vikingbot logs will be written to: {log_file_path}", flush=True)
         except Exception as e:
-            print(f"Warning: Failed to setup bot logging: {e}")
+            print(f"Warning: Failed to setup bot logging ({type(e).__name__}).", flush=True)
             if log_file:
                 log_file.close()
                 log_file = None
@@ -682,7 +733,7 @@ def _start_vikingbot_gateway(
 
         _wait_for_bot_ready(process, status_path)
 
-        print(f"Vikingbot gateway started (PID: {process.pid})")
+        print(f"Vikingbot gateway started (PID: {process.pid})", flush=True)
 
         return BotProcess(process=process, log_file=log_file)
 
@@ -696,9 +747,9 @@ def _start_vikingbot_gateway(
                 process.wait()
         if log_file:
             log_file.close()
-        print(f"Failed to start vikingbot gateway: {e}")
+        print(f"Failed to start vikingbot gateway ({type(e).__name__}).", flush=True)
         if log_file_path:
-            print(f"VikingBot startup details: {log_file_path}")
+            print(f"VikingBot startup details: {log_file_path}", flush=True)
         if isinstance(e, (KeyboardInterrupt, SystemExit)):
             raise
         return None
@@ -711,28 +762,28 @@ def _stop_vikingbot_gateway(bot_process: BotProcess) -> None:
     if bot_process is None:
         return
 
-    print(f"\nStopping vikingbot gateway (PID: {bot_process.process.pid})...")
+    print(f"\nStopping vikingbot gateway (PID: {bot_process.process.pid})...", flush=True)
 
     try:
         # Try graceful termination first
         bot_process.process.terminate()
         try:
             bot_process.process.wait(timeout=30)
-            print("Vikingbot gateway stopped gracefully.")
+            print("Vikingbot gateway stopped gracefully.", flush=True)
         except subprocess.TimeoutExpired:
             # Force kill if it doesn't stop in time
             bot_process.process.kill()
             bot_process.process.wait()
-            print("Vikingbot gateway force killed.")
+            print("Vikingbot gateway force killed.", flush=True)
     except Exception as e:
-        print(f"Error stopping vikingbot gateway: {e}")
+        print(f"Error stopping vikingbot gateway ({type(e).__name__}).", flush=True)
     finally:
         # Close the log file if it exists
         if bot_process.log_file is not None:
             try:
                 bot_process.log_file.close()
             except Exception as e:
-                print(f"Error closing bot log file: {e}")
+                print(f"Error closing bot log file ({type(e).__name__}).", flush=True)
 
 
 if __name__ == "__main__":

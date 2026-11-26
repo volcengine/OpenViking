@@ -336,6 +336,12 @@ test("hooks.json registers SessionEnd within Codex's clamped budget", () => {
   assert.ok(entries[0].timeout <= 3, `SessionEnd timeout must be <= 3, got ${entries[0].timeout}`);
 });
 
+test("hooks.json runs SessionStart after a compaction, for the session-history pointer", () => {
+  const parsed = JSON.parse(readFileSync(join(pluginDir, "hooks", "hooks.json"), "utf-8"));
+  const matchers = (parsed.hooks?.SessionStart || []).map((group) => group.matcher);
+  assert.deepEqual(matchers, ["clear|startup|resume|compact"]);
+});
+
 test("hooks.json registers no PreToolUse hook", () => {
   // Codex records PreToolUse additionalContext as a developer message before the
   // tool runs, i.e. between the function_call and its function_call_output.
@@ -375,6 +381,13 @@ test("Codex MCP entrypoint forwards only native OpenViking tools", () => {
   assert.doesNotMatch(entrypoint, /localToolProvider/);
   assert.match(entrypoint, /toMcpProxyConfig\(/);
   assert.doesNotMatch(entrypoint, /resolveEffectivePeerId|process\.cwd\(\)/);
+});
+
+test("Codex MCP proxy fills session_history's session from the call's _meta.sessionId", async () => {
+  const { historySessionFromMeta } = await import("../servers/mcp-proxy.mjs");
+  assert.equal(historySessionFromMeta({ name: "session_history", _meta: { sessionId: "019a-thread" } }), "cx-019a-thread");
+  assert.equal(historySessionFromMeta({ name: "session_history", _meta: { threadId: "019a-thread" } }), "");
+  assert.equal(historySessionFromMeta({ name: "session_history" }), "");
 });
 
 test("plugin.json declares the skills directory so Codex loads bundled skills", () => {

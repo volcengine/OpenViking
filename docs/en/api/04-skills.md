@@ -495,12 +495,13 @@ Error codes depend on the failure stage: invalid names/targets use `INVALID_ARGU
 The Python HTTP SDK and Go SDK expose dedicated skill management methods:
 `list_skills`, `find_skills`, `validate_skill`, `get_skill`, `update_skill`,
 and `delete_skill` in Python; `ListSkills`, `FindSkills`, `ValidateSkill`,
-`GetSkill`, `UpdateSkill`, and `DeleteSkill` in Go. The general
-filesystem/content/retrieval methods still work for URI-level access.
+`GetSkill`, `UpdateSkill`, and `DeleteSkill` in Go. General filesystem and
+retrieval methods support URI-level reads. Generic content writes, filesystem
+mutations, and snapshot restores cannot bypass the Skill API to modify packages.
 
 ### List Skills
 
-`GET /api/v1/skills` accepts query parameters `node_limit=1000` and optional `target_uri`. Without a target it merges private and shared roots, retaining same-name Skills distinguished by `root_uri`. The current server fixes directory scanning at `node_limit=1000` per root and does not forward the requested `node_limit` to that scan; do not rely on it as a global result limit or pagination parameter.
+`GET /api/v1/skills` accepts query parameters `node_limit=1000` and optional `target_uri`. Without a target it merges private and shared roots, retaining same-name Skills distinguished by `root_uri`. Each item includes `owner_user_id`, `created_by/created_at`, `updated_by/updated_at`, and `current_revision` for upload ownership and the latest modification. These fields are `null` for legacy Skills without history.
 
 **Python SDK**
 
@@ -585,6 +586,18 @@ fmt.Println(skill)
 curl -X GET "http://localhost:1933/api/v1/skills/search-web?include_content=true&include_files=true" \
   -H "X-API-Key: your-key"
 ```
+
+### Ownership and Change Timeline
+
+On first creation, the server sets `owner_user_id=created_by` from the authenticated context. Later updates preserve the original uploader and creation time. Every create, update, and delete appends `{actor_user_id, occurred_at, operation, before_hash, after_hash, request_id}`. Content hashes exclude generated abstract/overview files. Delete records remain available with `after_hash=null`.
+
+Skill details include current ownership and the complete `history`. A separate timeline is also available, including for deleted Skills:
+
+```http
+GET /api/v1/skills/{skill_name}/audit?target_uri=viking://agent/skills&limit=50
+```
+
+`limit` ranges from 1 to 1000 and defaults to 50. Without `target_uri`, the private root is checked before the shared root.
 
 ### Integrity Manifests and Remote Use
 
@@ -913,7 +926,7 @@ A successful update returns the same processing result as `add_skill` with an ad
 }
 ```
 
-`estimated_deleted_count` appears only when the filesystem can estimate the number of deleted entries.
+When present, `estimated_deleted_count` reports vector records submitted for deletion, rather than physical file or directory counts. It does not guarantee immediate vector-index visibility.
 
 ## Best Practices
 

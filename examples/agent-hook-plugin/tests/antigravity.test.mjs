@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { expectExit, runHookScript } from "../../memory-plugin-shared/testing/support.mjs";
+import { antigravityTranscriptPath, resolveAntigravityTurnStep } from "../hosts/antigravity.mjs";
+import { evaluateHostUriGuard } from "../scripts/uri-guard.mjs";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const hookEntry = join(pluginRoot, "scripts", "hook.mjs");
@@ -31,8 +33,27 @@ async function runHook(event, input, env) {
 test("Antigravity hooks.json uses named hooks with the dispatcher's event names", () => {
   const hooks = JSON.parse(readFileSync(join(pluginRoot, "hosts", "antigravity", "hooks.json"), "utf8"));
   const handlers = hooks["openviking-memory"];
-  assert.deepEqual(Object.keys(handlers), ["SessionStart", "PreInvocation", "Stop"]);
+  assert.deepEqual(Object.keys(handlers), ["SessionStart", "PreInvocation", "PreToolUse", "Stop"]);
   assert.match(handlers.PreInvocation[0].command, /hook\.mjs pre-invocation __OPENVIKING_CLIENT_ID__$/);
+  assert.match(handlers.PreToolUse[0].hooks[0].command, /uri-guard\.mjs __OPENVIKING_CLIENT_ID__$/);
+});
+
+test("Antigravity denies a file tool whose location is a viking:// URI", () => {
+  const guard = (name, args) => evaluateHostUriGuard("antigravity", { toolCall: { name, args } });
+  const uri = "viking://user/default/memories/profile.md";
+
+  const read = guard("read_file", { Path: uri });
+  assert.equal(read.decision, "deny");
+  assert.match(read.reason, /read\(uri="viking:\/\/user\/default\/memories\/profile\.md"\)/);
+  assert.match(guard("write_to_file", { TargetFile: uri, CodeContent: "x" }).reason, /OpenViking MCP write/);
+  assert.match(guard("list_dir", { DirectoryPath: "viking://resources/" }).reason, /glob or list/);
+
+  // A body or a command line that mentions a URI is data, and no decision is
+  // returned for a call that may proceed.
+  assert.deepEqual(guard("write_to_file", { TargetFile: "/tmp/a.md", CodeContent: `see ${uri}` }), {});
+  assert.deepEqual(guard("run_command", { CommandLine: `echo ${uri}` }), {});
+  assert.deepEqual(guard("read_file", { Path: "/tmp/notes.txt" }), {});
+  assert.deepEqual(evaluateHostUriGuard("antigravity", {}), {});
 });
 
 test("Antigravity recalls once per turn and captures only new transcript text", async () => {
@@ -179,6 +200,44 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     assert.match(noTranscript.injectSteps?.[0]?.systemMessage?.systemMessage || "", /antigravity memory/);
   } finally {
     server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity treats an input the transcript has not recorded yet as a new turn", () => {
+  // The previous turn is answered; the new turn's USER_INPUT step is not on disk.
+  assert.equal(resolveAntigravityTurnStep(firstTurn, 5, "What is the retry budget?"), null);
+  assert.equal(resolveAntigravityTurnStep(firstTurn, 5, "  What is the\nretry budget?  "), null);
+  assert.equal(resolveAntigravityTurnStep(firstTurn, 5, "And the timeout?"), undefined);
+  assert.equal(resolveAntigravityTurnStep(firstTurn, 5), null);
+
+  // transcript.jsonl keeps only the head and tail of a long record, which can
+  // not be compared with the input, so it stays a wakeup.
+  const truncated = step(0, {
+    source: "USER_EXPLICIT",
+    type: "USER_INPUT",
+    content: "<USER_REQUEST>\nWhat is the …",
+    truncated_fields: ["content"],
+  }) + step(1, { source: "MODEL", type: "PLANNER_RESPONSE", content: "Three." });
+  assert.equal(resolveAntigravityTurnStep(truncated, 2, "What is the retry budget?"), null);
+
+  // Only the SessionStart steps are on disk before the first turn is written.
+  const startOnly = step(0, { source: "SYSTEM_SDK", type: "SYSTEM_MESSAGE", content: "<openviking-context>start</openviking-context>" });
+  assert.equal(resolveAntigravityTurnStep(startOnly, 1, "First prompt"), undefined);
+});
+
+test("Antigravity reads transcript_full.jsonl in place of the truncated transcript", () => {
+  const root = mkdtempSync(join(tmpdir(), "openviking-antigravity-transcript-"));
+  try {
+    const short = join(root, "transcript.jsonl");
+    writeFileSync(short, "");
+    assert.equal(antigravityTranscriptPath(short), short);
+    writeFileSync(join(root, "transcript_full.jsonl"), "");
+    assert.equal(antigravityTranscriptPath(short), join(root, "transcript_full.jsonl"));
+    const other = join(root, "late_transcript.jsonl");
+    assert.equal(antigravityTranscriptPath(other), other);
+    assert.equal(antigravityTranscriptPath(undefined), "");
+  } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });

@@ -77,32 +77,31 @@ class _PackedBackend(_CurrentBackend):
         }
 
 
-def test_routed_filter_uses_additive_abi_without_changing_generic_calls():
+def test_current_abi_routes_filters_without_changing_generic_results():
     backend = _CurrentBackend()
     index_engine = build_abi3_exports(backend)["IndexEngine"]("config")
 
     routed = index_engine.evaluate_filter_for_routing("dsl", native_threshold=5)
+    assert (routed.eligible_count, routed.bitset_words, routed.native_filter_token) == (1, [], 11)
+
+    routed_as_bitmap = index_engine.evaluate_filter_for_routing("dsl", native_threshold=0)
+    assert (
+        routed_as_bitmap.eligible_count,
+        routed_as_bitmap.bitset_words,
+        routed_as_bitmap.native_filter_token,
+    ) == (1, [1], 0)
+
     generic = index_engine.evaluate_filter("dsl", max_cached_candidates=5)
-
-    assert routed.eligible_count == 1
-    assert routed.bitset_words == []
-    assert routed.native_filter_token == 11
-    assert generic.bitset_words == [1]
-    assert generic.native_filter_token == 7
-    assert ("routed", "engine-handle", "dsl", 5) in backend.calls
-    assert ("cached", "engine-handle", "dsl", 5) in backend.calls
-
-
-def test_routed_filter_threshold_zero_reaches_new_abi():
-    backend = _CurrentBackend()
-    index_engine = build_abi3_exports(backend)["IndexEngine"]("config")
-
-    result = index_engine.evaluate_filter_for_routing("dsl", native_threshold=0)
-
-    assert result.eligible_count == 1
-    assert result.bitset_words == [1]
-    assert result.native_filter_token == 0
-    assert ("routed", "engine-handle", "dsl", 0) in backend.calls
+    assert (generic.eligible_count, generic.bitset_words, generic.native_filter_token) == (
+        1,
+        [1],
+        7,
+    )
+    assert backend.calls[1:] == [
+        ("routed", "engine-handle", "dsl", 5),
+        ("routed", "engine-handle", "dsl", 0),
+        ("cached", "engine-handle", "dsl", 5),
+    ]
 
 
 def test_routed_filter_falls_back_with_a_legacy_extension():
@@ -165,26 +164,23 @@ def test_packed_filter_methods_fall_back_to_legacy_backend_results():
     ]
 
 
-def test_packed_filter_abi_rejects_a_non_bytes_payload():
+@pytest.mark.parametrize(
+    ("bitset", "exception", "message"),
+    [
+        pytest.param(
+            {"bitset_words_le": [1]}, TypeError, "bitset_words_le as bytes", id="wrong-type"
+        ),
+        pytest.param({}, KeyError, "missing bitset_words_le", id="missing-field"),
+    ],
+)
+def test_packed_filter_abi_rejects_invalid_payload(bitset, exception, message):
     backend = _PackedBackend()
     backend._index_engine_evaluate_filter_packed = lambda _handle, _dsl: {
         "eligible_count": 1,
-        "bitset_words_le": [1],
         "native_filter_token": 0,
+        **bitset,
     }
     index_engine = build_abi3_exports(backend)["IndexEngine"]("config")
 
-    with pytest.raises(TypeError, match="bitset_words_le as bytes"):
-        index_engine.evaluate_filter_packed("dsl")
-
-
-def test_packed_filter_abi_rejects_a_missing_payload():
-    backend = _PackedBackend()
-    backend._index_engine_evaluate_filter_packed = lambda _handle, _dsl: {
-        "eligible_count": 0,
-        "native_filter_token": 0,
-    }
-    index_engine = build_abi3_exports(backend)["IndexEngine"]("config")
-
-    with pytest.raises(KeyError, match="missing bitset_words_le"):
+    with pytest.raises(exception, match=message):
         index_engine.evaluate_filter_packed("dsl")

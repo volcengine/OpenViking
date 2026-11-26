@@ -59,6 +59,7 @@ class WriteContentRequest(BaseModel):
     acl: AclSpec | None = None
     # Mark this edit as conflict resolution.
     resolve_conflicts: bool = False
+    defer_processing: bool = False
 
 
 class BatchWriteOperation(BaseModel):
@@ -72,6 +73,7 @@ class BatchWriteOperation(BaseModel):
     expected_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     # Atomically create only when the target does not exist.
     if_absent: bool = False
+    resolve_conflicts: bool = False
     tags: list[str] | None = None
     tag_mode: Literal["replace", "append", "clear"] = "replace"
     acl: AclSpec | None = None
@@ -176,7 +178,7 @@ def _authorize_reindex_uri(uri: str, ctx: RequestContext) -> str:
     return uri
 
 
-@router.get("/read")
+@router.get("/read", response_model=Response)
 async def read(
     uri: str = Query(..., description="Viking URI"),
     offset: int = Query(0, description="Starting line number (0-indexed)"),
@@ -319,6 +321,7 @@ async def write(
             acl=request.acl,
             resolve_conflicts=request.resolve_conflicts,
             use_snapshot=request.use_snapshot,
+            defer_processing=request.defer_processing,
         ),
     )
     return Response(

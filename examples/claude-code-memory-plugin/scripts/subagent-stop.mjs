@@ -35,6 +35,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { enqueueCommitAfterWrites } from "./lib/pending-queue.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
@@ -93,6 +94,8 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   let enqueueFailed = 0;
   const payloads = [];
   for (const turn of turns) {
+    // Counted by the cursor, never sent.
+    if (turn.hostAuthored) continue;
     // Send structured parts: tool calls/results are dedicated `tool` parts, not
     // inlined into content, so the server can process them separately.
     // Sanitize injected context before applying the configured filters.
@@ -124,7 +127,7 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   let commitTraceId = "";
   if (ok + queued > 0) {
     const commitRes = enqueueOnly
-      ? await enqueuePendingDirectly("commitSession", ovSessionId, {})
+      ? await enqueueCommitAfterWrites(ovSessionId)
       : await commitSession(fetchJSON, ovSessionId);
     committed = !enqueueOnly && commitRes.ok;
     commitQueued = enqueueOnly ? Boolean(commitRes.ok) : Boolean(commitRes.pendingQueued);

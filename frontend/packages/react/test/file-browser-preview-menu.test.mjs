@@ -77,7 +77,7 @@ test('menu keyboard navigation skips disabled commands and Escape restores the t
     await key(document.activeElement, 'End');
     assert.equal(document.activeElement, menuItem('Delete document'));
     await key(document.activeElement, 'ArrowUp');
-    assert.equal(document.activeElement, menuItem('Export .ovpack'));
+    assert.equal(document.activeElement, menuItem('Download'));
     await key(document.activeElement, 'Escape');
     assert.equal(document.querySelector('[role="menu"]'), null);
     assert.equal(document.activeElement, trigger);

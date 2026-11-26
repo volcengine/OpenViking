@@ -59,7 +59,7 @@ const BATCH_LIMIT = 100;
 
 // The id the live plugin gives a session, so `classify` can tell one it
 // already captured. The hook hosts (Cursor, TRAE, ZCode, Kimi Code, CodeBuddy
-// Code, Qoder CLI) take the host's id through safePart (lib/agent-hook-runtime.mjs);
+// Code, Qoder CLI, Antigravity) take the host's id through safePart (lib/agent-hook-runtime.mjs);
 // OpenCode and pi use it as is (deriveHarnessSessionId in lib/session-model.mjs).
 const hookLiveId = (prefix) => (id) => `${prefix}${String(id || "unknown").replace(/[^A-Za-z0-9._-]/g, "-")}`;
 const codexLiveId = (id) => `cx-${String(id || "unknown").replace(/[^A-Za-z0-9._-]/g, "_")}`;

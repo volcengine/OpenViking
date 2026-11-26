@@ -49,7 +49,9 @@ test('a system listing omits include_tags and still renders its children', async
   const fetch = recordingFetch((call) => {
     if (call.path !== '/api/v1/fs/ls') return ok({});
     if (call.uri === ROOT) return listing([{ uri: SYSTEM, isDir: true }]);
-    return listing([{ uri: `${SYSTEM}/compile`, isDir: true }]);
+    if (call.uri === SYSTEM)
+      return listing([{ uri: `${SYSTEM}/compile`, isDir: true }]);
+    return listing([]);
   });
 
   const api = { current: undefined };

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_types import WatchRunResult
 from openviking.server.identity import RequestContext, Role
@@ -27,7 +28,7 @@ class _ResourceProcessor:
         self.calls.append(kwargs)
         return {
             "status": "success",
-            "root_uri": "viking://resources/test",
+            "root_uri": kwargs.get("to") or "viking://resources/test",
             "_post_process": {"root_is_file": self.root_is_file},
         }
 
@@ -50,12 +51,12 @@ def ctx() -> RequestContext:
 
 
 @pytest.fixture
-def service(monkeypatch: pytest.MonkeyPatch, watch_tracker) -> ResourceService:
+def service(monkeypatch: pytest.MonkeyPatch, watch_tracker, watch_vfs) -> ResourceService:
     monkeypatch.setattr(resource_service_module, "is_git_repo_url", lambda _path: False)
 
     instance = ResourceService(
         vikingdb=object(),
-        viking_fs=object(),
+        viking_fs=watch_vfs,
         resource_processor=_ResourceProcessor(),
         skill_processor=object(),
     )
@@ -76,12 +77,15 @@ def service(monkeypatch: pytest.MonkeyPatch, watch_tracker) -> ResourceService:
     monkeypatch.setattr(
         instance,
         "_plan_source_job_target",
-        AsyncMock(return_value=("viking://resources/test", None, False, False)),
+        AsyncMock(
+            side_effect=lambda *, to, **_: (to or "viking://resources/test", None, False, False)
+        ),
     )
     return instance
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_no_split_watch_replay_preserves_auto_bound_file_target(
     watch_store,
     watch_vfs,
@@ -200,18 +204,23 @@ async def test_accepts_parse_mode_inside_args_without_mutating_input(
     ctx: RequestContext,
 ):
     args = {"parse_mode": "no_split", "site": False}
+    target = "viking://resources/0803_shendiao_01"
 
     await service.add_resource(
-        path="/test/path",
+        path="/test/神雕.md",
         ctx=ctx,
-        to="viking://resources/test",
+        to=target,
         args=args,
+        preserve_structure=False,
     )
 
     assert args == {"parse_mode": "no_split", "site": False}
     processor = service._resource_processor
     assert processor.calls[-1]["parse_mode"] == "no_split"
     assert processor.calls[-1]["site"] is False
+    assert processor.calls[-1]["preserve_structure"] is False
+    assert processor.calls[-1]["to"] == target
+    assert processor.calls[-1]["to_is_directory"] is True
 
 
 @pytest.mark.asyncio
@@ -262,12 +271,22 @@ async def test_tos_auth_args_are_mutually_exclusive(
 async def test_tos_auth_args_are_snapshotted_and_omitted_from_queue(
     service: ResourceService,
     ctx: RequestContext,
+    tmp_path,
+    watch_vfs,
 ):
-    prepare_durable_source = AsyncMock(return_value=None)
+    url = "https://tos.example.com/object.txt"
+    snapshot = tmp_path / "object.txt"
+    snapshot.write_bytes(b"content fetched using the signed request")
+    prepare_durable_source = AsyncMock(
+        return_value=LocalResource(
+            path=snapshot, source_type=SourceType.HTTP, original_source=url, is_temporary=False
+        )
+    )
     service._resource_processor.prepare_durable_source = prepare_durable_source
+    service._resource_processor.should_use_understanding_api = lambda _prepared: False
 
     await service.add_resource(
-        path="https://tos.example.com/object",
+        path=url,
         ctx=ctx,
         to="viking://resources/test",
         args={"tos_signature": "signed-value"},
@@ -277,43 +296,14 @@ async def test_tos_auth_args_are_snapshotted_and_omitted_from_queue(
     assert prepare_durable_source.await_args.kwargs["snapshot_required"] is True
     assert prepare_durable_source.await_args.kwargs["tos_signature"] == "signed-value"
     message = service._enqueue_add_resource_job.await_args.args[0]
+    assert message.staged_source["original_source"] == url
+    assert (
+        await watch_vfs.read_file_bytes(message.staged_source["source_uri"], ctx=ctx)
+        == snapshot.read_bytes()
+    )
     assert "tos_signature" not in message.args
     assert "tos_access" not in message.args
-
-
-@pytest.mark.asyncio
-async def test_no_split_allows_directory_flattening(
-    service: ResourceService,
-    ctx: RequestContext,
-):
-    await service.add_resource(
-        path="/test/path",
-        ctx=ctx,
-        to="viking://resources/test",
-        args={"parse_mode": "no_split"},
-        preserve_structure=False,
-    )
-
-    processor = service._resource_processor
-    assert processor.calls[-1]["parse_mode"] == "no_split"
-    assert processor.calls[-1]["preserve_structure"] is False
-
-
-@pytest.mark.asyncio
-async def test_no_split_treats_explicit_to_as_directory_target(
-    service: ResourceService,
-    ctx: RequestContext,
-):
-    await service.add_resource(
-        path="/test/神雕.md",
-        ctx=ctx,
-        to="viking://resources/0803_shendiao_01",
-        args={"parse_mode": "no_split"},
-    )
-
-    processor = service._resource_processor
-    assert processor.calls[-1]["to"] == "viking://resources/0803_shendiao_01"
-    assert processor.calls[-1]["to_is_directory"] is True
+    assert "signed-value" not in str(message.to_dict())
 
 
 @pytest.mark.asyncio
@@ -349,7 +339,7 @@ async def test_no_split_bypasses_understanding_shortcut(
         allow_local_path_resolution=False,
     )
 
-    assert result["root_uri"] == "viking://resources/test"
+    assert result["root_uri"] == "viking://resources/manual"
     direct_probe.assert_not_called()
     api_probe.assert_not_called()
 
@@ -382,7 +372,8 @@ async def test_native_git_enqueue_persists_internal_no_split_mode(
     )
 
     assert result["task_id"] == "task-git"
-    message = service._enqueue_add_resource_job.await_args.args[0]
-    assert isinstance(message, AddResourceMsg)
+    message = AddResourceMsg.from_dict(
+        service._enqueue_add_resource_job.await_args.args[0].to_dict()
+    )
     assert message.parse_mode == "no_split"
     assert "parser_backend" not in message.args

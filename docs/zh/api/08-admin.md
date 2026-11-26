@@ -60,6 +60,35 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
 
+## 账号内冻结列表
+
+管理员可以维护账号内冻结列表，登记本 account 普通 USER（包括以 USER 身份运行的 agent）的文件路径。列表持久保存，最多包含十条。操作只读写账号授权元信息，不读取目标文件，也不授予管理员读取该 user 数据的权限。
+
+```bash
+ov admin freeze-file acme agent-a skills/example/SKILL.md
+ov admin frozen-file-status acme agent-a skills/example/SKILL.md
+ov admin unfreeze-file acme agent-a skills/example/SKILL.md
+```
+
+这三个 CLI 命令也接受 `viking://user/agent-a/skills/example/SKILL.md` 这样的完整 user URI，自动转换为相对路径。URI 中的 user 必须与命令的 `user-id` 一致，否则 CLI 会报错。转换保留原始路径，不解码转义或消除 `..`；服务端继续校验相对路径。
+
+ROOT 可以使用 `--sudo` 管理指定 account。普通 USER 和 GLOBAL 无权管理账号内冻结列表；新增冻结只允许 USER 目标。服务端接收的路径相对于目标 user 根目录，采用 GLOBAL 的严格字面路径语法：不支持通配符、URI、编码转义、`..` 或内部存储文件名，单段不得超过 255 字节。匹配、状态查询和解冻均区分大小写：`a.md` 和 `A.md` 是独立条目。
+
+冻结路径可以尚不存在。状态仅表示路径是否在账号内冻结列表中，不暴露文件存在性、内容、大小或摘要。重复冻结、解冻是幂等的；目标 user 已删除或变更角色后仍可清除旧规则。
+
+写入、追加、删除、移动、覆盖、后台写入和版本恢复会检查账号内冻结列表。删除或移动包含冻结路径的目录、向与冻结路径相交的目标子树复制也会拒绝。读取权限保持原样；解冻不会授予原本没有的权限。业务租约、`bypass_acl` 和关闭自动 PathLock 都不能解除这层保护。经授权的身份注销通过专用清理任务删除该 user 的全部数据，包括冻结文件。
+
+规则在首次写入检查时加载，并在同一个请求或后台执行中复用；普通读取和鉴权不加载规则。FileStore 的 watcher 正常运行时直接读取内存列表，不等待变更锁；否则 FileStore 和直接 SQL provider 将成功读取的空快照缓存 60 秒，Redis/MySQL 则使用配置的缓存 TTL，缓存经 SQL 确认的本地空快照。空快照命中时不做存储 IO 或路径匹配，命中不会延长有效期。每个 provider 最多保留 1,024 个账号的空快照，当前实例的冻结/解冻操作尝试会清除目标账号快照。非空列表沿用既有刷新/缓存机制。执行中已加载的规则快照允许继续使用。空快照过期后，规则读取或解析失败会阻止写入，不会被解释为空列表；缓存传播延迟是预期行为。
+
+| 方法 | 路径 | 参数 |
+|------|------|------|
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file?path={path}` | 必填 query: `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | JSON: `{"path":"skills/example/SKILL.md","frozen":true}` |
+
+响应 `result` 包含 `account_id`、`user_id`、`path`、`frozen`。该状态与 `stat.isLocked` 的短期并发租约状态独立。变更被拒绝时返回 `PERMISSION_DENIED`，`details.reason` 为 `admin_file_frozen`。
+
+MySQL/PostgreSQL 部署需在升级运行时启动前执行一次 `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql`。新建 MySQL 库先执行 `sql/init.sql`，再按顺序执行 `sql/changes/` 中的迁移；新建 PostgreSQL 库先执行 `sql/postgres/init.sql`，再执行 `0002_account_frozen_files.sql`（之前的列表索引已在 PostgreSQL 初始化 SQL 中）。已有库只执行尚未应用的迁移。开源与商业部署均需在现有 DBA/部署流程中记录该迁移，运行时不自动加列。外部账号存储 provider 需要实现对应元信息能力后才能使用管理命令。
+
 ## 用户组
 
 用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。`group_id` 由调用者创建时指定，使用与 `user_id` 相同的标识符规则，是 account 内唯一且稳定的标识；不存在单独的组名。组内只能加入当前 account 已存在的用户，不支持嵌套组。
@@ -514,7 +543,7 @@ cuVS 调优和自定义适配器参数。
 本地模型路径、融合/视频参数和 `allow_metadata_override` 不在 Account API 范围内。
 每次更新都在持久化前联合校验有效 Embedding 和 VectorDB，失败保留原配置。
 
-显式 `embedding: {}` 是合法配置，表示未声明 Account 模型模式或运行策略。
+显式 `embedding: {}` 表示未声明 Account 模型模式或运行策略。
 作为 PATCH 提交时，`{}` 会与现有配置合并，不会清空已有值。未配置 Account
 模型模式时使用 Cluster 模型绑定。显式 Account VectorDB 配置会替换 Cluster
 的连接与鉴权字段，即使后端类型相同也不会拼接；仅支持 `http`、`volcengine`、
@@ -536,10 +565,11 @@ Feishu 时使用完整 Cluster 配置；一旦设置，`app_id`、`app_secret`�
 `request_timeout` 来自 Account 配置或 Feishu 默认值，只有 `domain` 仍由
 Cluster 管理。GitHub 和 ACL 不回退到 Cluster。
 
-VLM 业务解析器在 Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
+Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
 模型身份、服务端点和凭证仅来自 Account，部分运行参数按业务规则使用 Cluster
 配置。Account 设置 `timeout` 时覆盖 Cluster 的值，未设置或重置后使用 Cluster
-的值。Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
+的值。清除 Account VLM 时，Cluster VLM 必须有效。
+Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
 Cluster `query_planner`、Cluster `vlm`；这是 VLM 业务规则，不是配置框架的隐式继承。
 
 PATCH 会先做结构校验，再构造合并后的配置：未知路径和运行时配置面之外的字段会被拒绝。
@@ -944,7 +974,7 @@ Account 路由，ROOT 代表某个 Account 执行业务时也遵守这一规则�
 
 ROOT 可读写任意 User 的配置，ADMIN 可读写所属 account 内非 GLOBAL User 的配置，
 USER 仅可读写自己的配置：URL 中的 `account_id` 和 `user_id` 必须同时匹配认证身份。
-User 配置接口支持 `add_targets`、`memory_policy` 和 `ttl`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
+User 配置接口支持 `add_targets`、`memory_policy`、`ttl` 和 `privacy`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
 用户记忆根据每条 Message 的 `peer_id` 自动写入 Self 或 Peer；Agent 记忆始终只写入
 Self。
 
@@ -994,6 +1024,17 @@ DELETE /api/v1/user-settings/add-locations
 
 `ttl` 仍返回用户显式设置的值，不在此接口补全其他层级的 TTL。
 
+`privacy` 在 GET/PATCH 响应中返回生效配置：
+
+| 字段 | 说明 | 内置默认值 |
+|---|---|---|
+| `privacy.mode` | `off`、`registered`、`auto` 或 `auto_strict`，详见[隐私配置](../concepts/13-privacy.md#使用方法) | `off` |
+| `privacy.restore` | 是否在 `raw=true` 读取 Skill、Session 时还原占位符 | `true` |
+| `privacy.custom_rules` | 自定义规则数组；每项提供唯一的 `id`，以及 `prefix` + `min_length` 或 `regex` | `[]` |
+| `privacy.never_mask` | 不参与自动发现和按值匹配的精确字符串值 | `[]` |
+
+例如 PATCH `{"privacy":{"mode":"auto"}}` 开启 Skill、Session 的自动发现与保护。规则中的 `min_length` 是前缀后至少需要的字符数，`regex` 使用 Rust 正则语法。省略字段表示保留，`null` 恢复继承，数组整体替换（`[]` 表示清空）；`{"privacy":null}` 清除所有用户隐私设置。
+
 ---
 
 ### create_account
@@ -1024,14 +1065,14 @@ DELETE /api/v1/user-settings/add-locations
 | account_id | str | 是 | - | 工作区 ID；新建文件存储账户不超过 255 个 UTF-8 字节 |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 | settings | object | 否 | `null` | Account 运行时初始配置。仅 ROOT 可提交；支持 `feishu`、`github`、`acl`、`agent_evolution`、`vlm`、`query_planner`、`embedding` 和 `vectordb`。其中 `vectordb` 及 Embedding 创建期字段只能在这里设置 |
 
 **说明：**
 - 文件存储账户创建时，超过 255 个 UTF-8 字节的 `account_id` 会在写入账户注册表前返回 `INVALID_ARGUMENT`。新持久化的 user ID 在所有账户存储 Provider 中最多 255 个字符。trusted 模式会在加入自动注册队列前拒绝超长的新 user ID 和新建的超长账户，避免无效身份阻塞其他身份注册；已有的超长 File user 和 account 仍可读取。
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
-- `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
+- 创建要求 Account 配置或 Cluster 回退后有效的 VLM、Embedding、VectorDB。校验不发送模型请求或申请远端资源，失败不会留下 Account、用户或配置文件。
 - Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
 - `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。
@@ -1422,7 +1463,7 @@ ov --sudo task status <task_id>
 | user_id | str | 是 | - | 用户 ID |
 | role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`；只有 `ROOT` 可以注册 `"global"`。ROOT 身份只来自 `server.root_api_key`。 |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 
 **说明：**
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。

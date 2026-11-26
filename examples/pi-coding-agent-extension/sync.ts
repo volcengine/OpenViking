@@ -5,7 +5,15 @@ import { join } from "node:path";
 import { createLogger } from "./shared/debug-log.mjs";
 import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId } from "./shared/session-model.mjs";
-import { claimForReplay, dequeue, enqueue, incrementRetry, listPending, replayPending } from "./shared/pending-queue.mjs";
+import {
+  claimForReplay,
+  deferCommitBehindPendingWrites,
+  dequeue,
+  enqueue,
+  incrementRetry,
+  listPending,
+  replayPending,
+} from "./shared/pending-queue.mjs";
 import { BATCH_LIMIT, sendSessionMessages } from "./shared/batch-send.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
 import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
@@ -357,6 +365,20 @@ export class SyncManager {
     if (!this.ovSessionId) {
       this.lastCommitFailure = "no OpenViking session yet";
       return null;
+    }
+    // Takeover commits only once its flush barrier has drained this session.
+    if (!this.config.takeoverEnabled) {
+      const deferred = await deferCommitBehindPendingWrites(
+        (path: string, init?: any) => this.client.fetchJSON(path, init, opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : undefined),
+        this.ovSessionId,
+        { keep_recent_count: opts.keepRecentCount ?? 0 },
+        (stage: string, data: unknown) => this.logger.log(stage, data),
+      );
+      if (deferred) {
+        this.lastCommitFailure = "messages are still queued; the commit will follow them";
+        this.logger.log("commit", { session: this.ovSessionId, ok: false, queued: deferred.ok, reason: "pending_writes" });
+        return null;
+      }
     }
     const response = await this.client.commitSessionResponse(
       this.ovSessionId,

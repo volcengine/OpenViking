@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.acl import AclUpdate
 from openviking.storage.context_update_plan import ContextUpdatePlan, execute_content_tree_actions
@@ -40,13 +41,10 @@ class PlanWork:
 
     The caller finalizes ``semantic_status`` / ``vector_status`` after it waits,
     because only the caller knows the queue status once its lock is released.
-    ``semantic_action`` carries the parent-refresh freshness decision so a
-    single-file caller can surface a ``deferred``/``skipped`` status.
     """
 
     semantic_requested: bool = False
     vector_requested: bool = False
-    semantic_action: Optional[str] = None
 
 
 async def enqueue_direct_index_actions(
@@ -159,9 +157,9 @@ async def enqueue_direct_index_actions(
             or enqueued_any
         )
     logger.debug(
-        "[DirectIndexActions] %s root=%s action_counts=%s action_count=%d",
+        "%s root=%s action_counts=%s action_count=%d",
         log_correlation(),
-        actions[0].uri if actions else "",
+        safe_uri_for_log(str(actions[0].uri if actions else "")),
         dict(action_counts),
         len(actions),
     )
@@ -225,7 +223,6 @@ async def commit_and_enqueue_plan(
     target: Any = None,
     ingest_options: IngestOptions | None = None,
     file_created: bool = False,
-    force_refresh: bool | None = None,
     generation_trigger: str = "content_write",
     summarizer: Any = None,
 ) -> PlanWork:
@@ -237,10 +234,6 @@ async def commit_and_enqueue_plan(
     before calling, wait/finalize after); this helper only performs the plan's
     own work and reports which downstream work it requested.
 
-    ``force_refresh`` selects the parent-aggregation policy for ``file_refresh``:
-    ``None`` always aggregates (resource ingest), while a boolean opts into the
-    freshness gate so an asynchronous single-file write can defer parent L0/L1
-    aggregation without dropping the changed file's own vector maintenance.
     """
     if plan.content_tree_actions:
         if target is None:
@@ -262,7 +255,6 @@ async def commit_and_enqueue_plan(
         )
 
     semantic_requested = False
-    semantic_action: Optional[str] = None
     if plan.file_refresh is not None:
         if summarizer is None:
             from openviking.utils.summarizer import Summarizer
@@ -278,16 +270,13 @@ async def commit_and_enqueue_plan(
             file_abstract="",
             file_vector_action="upsert" if file_created else "",
             generation_trigger=generation_trigger,
-            force_refresh=force_refresh,
         )
         semantic_requested = refresh_result.get("enqueued_count", 0) > 0
-        semantic_action = refresh_result.get("semantic_action")
         vector_requested = True
 
     return PlanWork(
         semantic_requested=semantic_requested,
         vector_requested=vector_requested,
-        semantic_action=semantic_action,
     )
 
 

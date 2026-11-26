@@ -418,6 +418,10 @@ export interface FileTreeLabels {
    * Empty tree message.
    */
   empty?: string;
+  /** 展开空目录后的提示。Message inside an expanded empty directory. */
+  emptyDirectory?: string;
+  /** 共享资源根目录的标签。Label on the shared resources root. */
+  shared?: string;
   /**
    * 加载失败提示。
    * Load failure message.

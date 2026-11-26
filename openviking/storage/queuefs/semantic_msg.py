@@ -19,8 +19,10 @@ def build_semantic_coalesce_key(
     account_id: str = "default",
     user_id: str = "default",
     peer_id: str = "default",
+    directory_only: bool = False,
 ) -> str:
-    return "|".join([context_type, account_id, user_id, peer_id, uri.rstrip("/")])
+    key = "|".join([context_type, account_id, user_id, peer_id, uri.rstrip("/")])
+    return f"directory|{key}" if directory_only else key
 
 
 @dataclass
@@ -37,9 +39,6 @@ class SemanticMsg:
                    When True, the processor will collect all subdirectory info and
                    enqueue them for processing (bottom-up order).
                    When False, only the specified directory will be processed.
-        use_hierarchical_aggregation: Route memory directories through the
-                   shared semantic tree instead of the specialized flat memory
-                   update path.
         propagate_to_parent: Whether a completed directory refresh may enqueue
                    a freshness refresh for its parent.
     """
@@ -75,7 +74,6 @@ class SemanticMsg:
     source: Optional[Dict[str, str]] = None
     generation_trigger: str = "semantic_refresh"
     aggregate_directory: bool = True
-    use_hierarchical_aggregation: bool = False
     propagate_to_parent: bool = True
     copy_source_uri: str = ""
     # Per-file md5 of final stored bytes, keyed by target URI. Supplied by the
@@ -88,6 +86,7 @@ class SemanticMsg:
     file_vector_actions: Dict[str, str] = field(default_factory=dict)
     file_ingest_options: Dict[str, IngestOptions] = field(default_factory=dict)
     plan: Optional[SemanticPlan] = None
+    dashboard_source_type: str = ""
 
     def __init__(
         self,
@@ -113,7 +112,6 @@ class SemanticMsg:
         source: Optional[Dict[str, str]] = None,
         generation_trigger: str = "semantic_refresh",
         aggregate_directory: bool = True,
-        use_hierarchical_aggregation: bool = False,
         propagate_to_parent: bool = True,
         copy_source_uri: str = "",
         file_md5s: Optional[Dict[str, str]] = None,
@@ -126,6 +124,7 @@ class SemanticMsg:
         queue_enqueued_at: float = 0.0,
         failure_requeue_count: int = 0,
         lock_handoff_retry: int = 0,
+        dashboard_source_type: str = "",
     ):
         self.id = str(uuid4())
         self.timestamp = int(datetime.now().timestamp())
@@ -156,8 +155,8 @@ class SemanticMsg:
         self.changes = changes
         self.source = dict(source) if source else None
         self.generation_trigger = generation_trigger
+        self.dashboard_source_type = str(dashboard_source_type or "")
         self.aggregate_directory = bool(aggregate_directory)
-        self.use_hierarchical_aggregation = bool(use_hierarchical_aggregation)
         self.propagate_to_parent = bool(propagate_to_parent)
         self.copy_source_uri = copy_source_uri
         self.file_md5s = dict(file_md5s or {})
@@ -191,6 +190,8 @@ class SemanticMsg:
         }
         if self.plan is not None:
             data["plan"] = self.plan.to_dict()
+        if not self.dashboard_source_type:
+            data.pop("dashboard_source_type")
         return data
 
     def to_json(self) -> str:
@@ -246,8 +247,8 @@ class SemanticMsg:
             changes=data.get("changes"),
             source=data.get("source"),
             generation_trigger=data.get("generation_trigger", "semantic_refresh"),
+            dashboard_source_type=data.get("dashboard_source_type", ""),
             aggregate_directory=data.get("aggregate_directory", True),
-            use_hierarchical_aggregation=data.get("use_hierarchical_aggregation", False),
             propagate_to_parent=data.get("propagate_to_parent", True),
             copy_source_uri=data.get("copy_source_uri", ""),
             file_md5s=(data.get("file_md5s") if isinstance(data.get("file_md5s"), dict) else None),

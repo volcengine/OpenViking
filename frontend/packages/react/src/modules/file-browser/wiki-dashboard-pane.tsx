@@ -2,8 +2,12 @@ import {
   WikiDashboard,
   type WikiDashboardProps,
 } from '../../components/wiki-dashboard/index.js';
+import { useContext } from 'react';
+import { FilePreviewEditContext } from '../../components/file-preview/file-preview-edit-context.js';
 import type { OvRequestOptions } from '../../client/types.js';
 import { useWikiDashboard } from './use-wiki-dashboard.js';
+import type { WikiDashboardResult } from './use-wiki-dashboard.js';
+import type { DashboardQuery } from './use-dashboard-query.js';
 
 type Props = Pick<
   WikiDashboardProps,
@@ -17,15 +21,30 @@ type Props = Pick<
   refreshGeneration?: number;
 };
 export function WikiDashboardPane({
-  uri,
-  kind,
   requestOptions,
   refreshGeneration,
-  onOpenUri,
-  onOpenDashboard,
   ...props
 }: Props) {
-  const query = useWikiDashboard({ uri, requestOptions, refreshGeneration });
+  const query = useWikiDashboard({
+    uri: props.uri,
+    requestOptions,
+    refreshGeneration,
+  });
+  return <WikiDashboardView {...props} query={query} />;
+}
+
+/** Shares the query owned by FileBrowser with its tab badge. */
+export function WikiDashboardView({
+  uri,
+  kind,
+  onOpenUri,
+  onOpenDashboard,
+  query,
+  ...props
+}: Omit<Props, 'requestOptions' | 'refreshGeneration'> & {
+  query: DashboardQuery<WikiDashboardResult>;
+}) {
+  const editConflict = useContext(FilePreviewEditContext)?.editFile;
   const common = {
     ...props,
     loading: query.loading,
@@ -40,6 +59,9 @@ export function WikiDashboardPane({
         kind="file"
         data={query.data?.kind === 'file' ? query.data.data : undefined}
         onOpenUri={onOpenUri && (() => onOpenUri(uri))}
+        onEditConflict={
+          editConflict && (({ matchText }) => editConflict(matchText))
+        }
       />
     );
   return (

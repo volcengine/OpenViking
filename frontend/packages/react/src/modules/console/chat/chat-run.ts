@@ -19,6 +19,7 @@ export async function runChat({
   monitoring,
   state,
   draft,
+  onDelivered,
   undelivered,
   signal,
   current,
@@ -34,6 +35,7 @@ export async function runChat({
   >;
   state: VikingBotChatState;
   draft: VikingBotDraft;
+  onDelivered?: () => void;
   undelivered: VikingBotDraft[];
   signal: AbortSignal;
   current: () => boolean;
@@ -65,6 +67,12 @@ export async function runChat({
   let complete = false;
   let interrupted = false;
   let delivered = false;
+  const accept = () => {
+    if (delivered || !current()) return;
+    delivered = true;
+    undelivered.length = 0;
+    if (!signal.aborted) onDelivered?.();
+  };
   let renderer = false;
   let stage:
     | import('../../../shared/monitoring/trace/span.js').MonitoringSpan
@@ -81,11 +89,11 @@ export async function runChat({
     for await (const event of service.stream(
       { sessionId, ...recoveredDraft },
       signal,
+      accept,
     )) {
       if (!current()) return false;
       // A stream event acknowledges delivery; creating a session does not.
-      delivered = true;
-      undelivered.length = 0;
+      accept();
       signal.throwIfAborted();
       if (
         !started &&
@@ -125,7 +133,7 @@ export async function runChat({
       });
     renderer = true;
     stage = monitoring?.span.child('view-commit');
-    const finished = await timeline.finish();
+    const finished = await timeline.finish({ interrupted });
     if (!current()) return false;
     update({
       messages: finished.messages,
@@ -157,7 +165,10 @@ export async function runChat({
         }));
     }
     if (!delivered) undelivered.push(draft);
-    const finished = await timeline.finish(signal.aborted);
+    const finished = await timeline.finish({
+      persistPartial: signal.aborted,
+      interrupted: signal.aborted,
+    });
     if (!current()) return false;
     const failure = error instanceof Error ? error : new Error(String(error));
     const messages = signal.aborted

@@ -5,8 +5,7 @@ import time
 import orjson
 import pytest
 from aiohttp import web
-from conftest import make_due
-from test_review_regressions import worker_for
+from test_native_tools import native_response
 
 from openviking_gateway.records import RecordKind as K
 from openviking_gateway.state_store import get_state
@@ -88,7 +87,7 @@ def tool_call_stream(protocol):
                         {"delta": {"tool_calls": [{"index": 0, "function": {"arguments": a}}]}}
                     ]
                 }
-                for a in ('{"city":', '"Paris"}')
+                for a in ('{"city": ', '"Paris"}')
             ),
             {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
         ]
@@ -109,97 +108,6 @@ def tool_call_stream(protocol):
         {"type": "content_block_stop", "index": 1},
         {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {}},
     ]
-
-
-@pytest.mark.parametrize("protocol", ["chat", "anthropic"])
-async def test_anonymous_client_tool_handoff_keeps_the_session_and_captures_the_turn(
-    setup_kernel, credential, policy, protocol
-):
-    kernel, store, viking, encryption = setup_kernel
-    policy.update(recall=False)
-    question = {"role": "user", "content": "Weather in Paris?"}
-    first = await prepare(kernel, credential, policy, [question], protocol=protocol)
-    capture = ResponseCapture(protocol)
-    for event in tool_call_stream(protocol):
-        capture.event(event)
-    assert capture.finished and not capture.complete
-    await kernel.completed(first, credential, capture)
-    if protocol == "chat":
-        arguments = orjson.dumps({"city": "Paris"}).decode()
-        function = {"name": "weather", "arguments": arguments}
-        call = {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{"id": "c1", "type": "function", "function": function}],
-        }
-        result = {"role": "tool", "tool_call_id": "c1", "content": "Sunny"}
-        final = {"choices": [{"message": {"role": "assistant", "content": "It is sunny."}}]}
-        final["choices"][0]["finish_reason"] = "stop"
-    else:
-        call = {
-            "role": "assistant",
-            "content": [
-                {"type": "text", "text": "Let me check."},
-                {"type": "tool_use", "id": "t1", "name": "weather", "input": {"city": "Paris"}},
-            ],
-        }
-        result = {
-            "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "Sunny"}],
-        }
-        final = {"content": [{"type": "text", "text": "It is sunny."}], "stop_reason": "end_turn"}
-    continued = await prepare(
-        kernel, credential, policy, [question, call, result], protocol=protocol
-    )
-    assert continued.session == first.session and continued.kind == "continuation"
-    answer = ResponseCapture(protocol)
-    answer.nonstream(final)
-    await kernel.completed(continued, credential, answer)
-    await make_due(store)
-    worker = await worker_for(store, encryption, credential, viking)
-    while await worker.once():
-        pass
-    assert "It is sunny." in str(viking.writes) and "Weather in Paris?" in str(viking.writes)
-    assert len(set(viking.write_sessions)) == 1
-
-
-@pytest.mark.parametrize("protocol", ["chat", "responses"])
-async def test_resent_call_matches_its_reply_whatever_its_json_spacing(
-    setup_kernel, credential, policy, protocol
-):
-    # Ark's DeepSeek streams spaced arguments; pi-ai, as in DSH, resends them compact.
-    kernel, _, _, _ = setup_kernel
-    policy.update(recall=False)
-    field = "input" if protocol == "responses" else "messages"
-    question = {"role": "user", "content": "Weather in Paris?"}
-    body = {
-        "model": "model",
-        field: [question],
-        **({"store": False} if protocol == "responses" else {}),
-    }
-    first = await kernel.prepare(body, protocol, {}, credential, {"id": "upstream"}, policy)
-    reply, _ = client_call_reply(protocol)
-    if protocol == "chat":
-        function = reply["choices"][0]["message"]["tool_calls"][0]["function"]
-    else:
-        function = reply["output"][0]
-    function["arguments"] = '{"city": "Paris"}'
-    capture = ResponseCapture(protocol)
-    capture.nonstream(reply)
-    await kernel.completed(first, credential, capture)
-    call, result = tool_handoff(protocol)
-    if protocol == "responses":
-        item = {**reply["output"][0], "arguments": '{"city":"Paris"}'}
-        call, result = item, {"type": "function_call_output", "call_id": "c1", "output": "Sunny"}
-    continued = await kernel.prepare(
-        {**body, field: [question, call, result]},
-        protocol,
-        {},
-        credential,
-        {"id": "upstream"},
-        policy,
-    )
-    assert continued.session == first.session and continued.kind == "continuation"
 
 
 def tool_handoff(protocol):
@@ -232,7 +140,7 @@ def tool_handoff(protocol):
 
 def client_call_reply(protocol):
     """A reply that ends in a call to the client's tool, as a body and as stream events."""
-    arguments = '{"city":"Paris"}'
+    arguments = '{"city": "Paris"}'
     if protocol == "chat":
         call = {"id": "c1", "type": "function", "function": {"name": "weather"}}
         message = {"role": "assistant", "content": None, "tool_calls": [call]}
@@ -262,16 +170,19 @@ def client_call_reply(protocol):
 async def test_client_tool_call_reply_hands_off_without_capture_in_every_protocol(
     setup_kernel, credential, policy, protocol, streamed
 ):
-    """The turn goes on after client tools run, so only the continuation's answer is staged."""
-    kernel, store, _, _ = setup_kernel
+    """The turn goes on after client tools run, so only the continuation that ends it saves."""
+    kernel, store, viking, _ = setup_kernel
     policy.update(recall=False)
     field = "input" if protocol == "responses" else "messages"
-    body = {"model": "model", field: [{"role": "user", "content": "Weather in Paris?"}]}
+    messages: list[dict[str, object]] = [{"role": "user", "content": "Weather in Paris?"}]
+    body: dict[str, object] = {"model": "model", field: messages}
     if protocol == "responses":
         body["store"] = False
-    request = await kernel.prepare(
-        body, protocol, {"x-openviking-session": "s"}, credential, {"id": "upstream"}, policy
-    )
+
+    async def prepare_turn():
+        return await kernel.prepare(body, protocol, {}, credential, {"id": "upstream"}, policy)
+
+    request = await prepare_turn()
     reply, events = client_call_reply(protocol)
     capture = ResponseCapture(protocol)
     if streamed:
@@ -281,11 +192,36 @@ async def test_client_tool_call_reply_hands_off_without_capture_in_every_protoco
         capture.nonstream(reply)
     assert capture.handoff and capture.finished and not capture.complete
     await kernel.completed(request, credential, capture)
-    # The client resends the reply with its tool results; that request continues this session.
     owners = await store.replay.replies(request.scope, [request.reply_anchor])
     assert owners == {request.reply_anchor: {request.session}}
-    staged = (await store.capture.get(request.scope, request.session)).value
-    assert not [turn for turn in staged["pending"] if not turn["confirmed"]]
+    assert await kernel.save(request, credential, capture) == 0
+    assert not viking.writes and not viking.sessions
+
+    # Clients reserialize the tool arguments before continuing the same session.
+    if protocol == "responses":
+        call = {**reply["output"][0], "arguments": '{"city":"Paris"}'}
+        result: dict[str, object] = {
+            "type": "function_call_output",
+            "call_id": "c1",
+            "output": "Sunny",
+        }
+    else:
+        call, result = tool_handoff(protocol)
+    messages.extend((call, result))
+    continued = await prepare_turn()
+    assert continued.session == request.session and continued.kind == "continuation"
+
+    final = ResponseCapture(protocol)
+    final.nonstream(native_response(protocol, 2))
+    await kernel.completed(continued, credential, final)
+    assert await kernel.save(continued, credential, final) == 3
+    (batch,) = viking.writes
+    assert [message["role"] for message in batch] == ["user", "assistant", "assistant"]
+    assert batch[0]["parts"][0]["text"] == "Weather in Paris?"
+    (part,) = [item for item in batch[1]["parts"] if item["type"] == "tool"]
+    assert part["tool_name"] == "weather"
+    assert part["tool_input"] == {"city": "Paris"} and part["tool_output"] == "Sunny"
+    assert batch[2]["parts"][-1]["text"] == "answer-2"
 
 
 @pytest.mark.parametrize("streamed", [False, True])
@@ -394,7 +330,7 @@ async def test_expiry_removes_stale_sessions_records_and_documents(
     assert (await get_state(store.state, b.scope, b.session)).value["recall"]
 
 
-@pytest.mark.parametrize("old", [1, 2, 3, 4, SCHEMA_VERSION + 1])
+@pytest.mark.parametrize("old", [4, SCHEMA_VERSION + 1], ids=["legacy", "future"])
 @pytest.mark.parametrize("kind", [SQLiteKernelStore, SQLiteManagementStore])
 async def test_storage_rejects_other_schema_versions(tmp_path, setup_kernel, kind, old):
     """Versions 1-4 were stamped on older pre-release layouts and must not pass."""

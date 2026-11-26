@@ -15,6 +15,12 @@ jobs:
   effect-tests:
     name: API Effect Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    container:
+      image: ${{ matrix.os == 'ubuntu-24.04' && (vars.CI_UBUNTU24_IMAGE || 'ubuntu:24.04') || '' }}
+      options: --volume /etc/ssl/certs/ca-certificates.crt:/tmp/runner-ca-certificates.crt:ro
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 120
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -27,10 +33,36 @@ jobs:
         os: [ubuntu-24.04]
 
     steps:
+      - name: Bootstrap Ubuntu test container
+        if: runner.os == 'Linux'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          packages=(git ca-certificates curl python3 cmake build-essential pkg-config libssl-dev unzip xz-utils ffmpeg lsof procps)
+          ready=true
+          for package in "${packages[@]}"; do
+            if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -qx 'install ok installed'; then
+              ready=false
+              break
+            fi
+          done
+          if "$ready"; then
+            echo "System dependencies are already installed in the CI image."
+            exit 0
+          fi
+          sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+            -o APT::Update::Error-Mode=any update
+          apt-get -o Acquire::https::CaInfo=/tmp/runner-ca-certificates.crt \
+            -o Acquire::Retries=2 -o Acquire::https::Timeout=20 \
+            install -y --no-install-recommends "${packages[@]}"
       - uses: actions/checkout@v6
         with:
           submodules: recursive
           fetch-depth: 100
+      - uses: ./.github/actions/linux-test-env
+        if: runner.os == 'Linux'
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6
@@ -45,10 +77,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-effect-
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -y && sudo apt-get install -y cmake build-essential ffmpeg --no-install-recommends
-
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
@@ -60,7 +88,8 @@ jobs:
           pip install "setuptools>=70.1" setuptools_scm cmake wheel
 
       - name: Install dependencies using uv sync
-        run: uv sync --frozen
+        # Native toolchains are installed below; do not build the project yet.
+        run: uv sync --frozen --no-install-project
 
       - name: Install build dependencies (uv pip)
         run: uv pip install setuptools setuptools_scm cmake wheel maturin
@@ -74,14 +103,12 @@ jobs:
         shell: bash
         run: |
           export OV_SKIP_OV_BUILD=1
-          mkdir -p openviking/bin
-          touch openviking/bin/ov
-          chmod +x openviking/bin/ov
           if [ -z "$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" ]; then
-            PRETEND_VERSION=$(git describe --tags --always 2>/dev/null | sed -E 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1.dev0/' || echo "0.0.0.dev0")
-            echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$PRETEND_VERSION" >> $GITHUB_ENV
+            PRETEND_VERSION=$(git describe --tags --always 2>/dev/null | sed -nE 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1.dev0/p' || true)
+            export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="${PRETEND_VERSION:-0.0.0.dev0}"
+            echo "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING" >> "$GITHUB_ENV"
           fi
-          uv run python setup.py build_ext --inplace
+          uv run --no-sync python setup.py build_ext --inplace
 
       - name: Build ragfs-python native extension
         shell: bash
@@ -98,7 +125,7 @@ jobs:
           mkdir -p "$RAGFS_LIB_DIR"
           WHL_FILE_PY=$(echo "$WHL_FILE" | sed 's/\\/\\\\/g')
           RAGFS_LIB_DIR_PY=$(echo "$RAGFS_LIB_DIR" | sed 's/\\/\\\\/g')
-          uv run python -c "
+          uv run --no-sync python -c "
           import zipfile, os, sys
           with zipfile.ZipFile('${WHL_FILE_PY}') as zf:
               for name in zf.namelist():
@@ -112,6 +139,17 @@ jobs:
           sys.exit(1)
           "
           rm -rf "$TMPDIR_RAGFS"
+
+      - name: Verify native runtime and install Python entry points
+        env:
+          OV_SKIP_CPP_BUILD: '1'
+          OV_SKIP_RAGFS_BUILD: '1'
+          OV_SKIP_OV_BUILD: '1'
+          OV_SKIP_STUDIO_BUILD: '1'
+          OV_REQUIRE_RAGFS_BUILD: '0'
+        run: |
+          uv run --no-sync python -c "import openviking.lib.ragfs_python; import openviking.storage.vectordb.engine as engine; assert engine.ENGINE_VARIANT != 'unavailable', 'Native engine was not loaded'"
+          uv pip install --no-deps --no-build-isolation --editable .
 
       - name: Install API test dependencies
         run: |
@@ -137,6 +175,7 @@ jobs:
               "temperature": 0.1, "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "$EMBEDDING_API_KEY",
@@ -160,6 +199,7 @@ jobs:
               "temperature": 0.1, "max_retries": 3
             },
             "embedding": {
+              "max_concurrent": 5,
               "dense": {
                 "provider": "volcengine",
                 "api_key": "dummy-embedding-api-key",
@@ -178,7 +218,7 @@ jobs:
           echo "SERVER_PORT=$SERVER_PORT" >> $GITHUB_ENV
           export ROOT_API_KEY=test-root-api-key
           export SERVER_PORT=$SERVER_PORT
-          nohup uv run python -m openviking.server.bootstrap > openviking-server.log 2>&1 &
+          nohup uv run --no-sync python -m openviking.server.bootstrap > openviking-server.log 2>&1 &
           echo $! > openviking-server.pid
           echo "Waiting for server to start..."
           for i in {1..30}; do
@@ -202,12 +242,12 @@ jobs:
           export OPENVIKING_API_KEY=test-root-api-key
           export SERVER_URL=http://127.0.0.1:${{ env.SERVER_PORT }}
           echo "Running lightweight slow tests (parallel with reduced workers)..."
-          uv run python -m pytest \
+          uv run --no-sync python -m pytest \
             common/slow/ tasks/slow/ skills/slow/ retrieval/slow/ \
             -v -n 2 --tb=short --durations=0 \
             --html=api-effect-light-report.html --self-contained-html || true
           echo "Running heavy slow tests (serial to avoid resource conflicts)..."
-          uv run python -m pytest \
+          uv run --no-sync python -m pytest \
             content/slow/ resources/slow/ sessions/slow/ \
             scenarios/slow/ scenarios/stability_error/slow/ \
             scenarios/resources_retrieval_slow/ \

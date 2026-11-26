@@ -17,6 +17,8 @@ openviking-server --config /path/to/ov.conf
 
 服务端启动时读取配置。修改模型、检索、存储或 `server` 配置后，需要重启服务；重启后建议运行 `openviking-server doctor`。
 
+`server.roles` 控制业务接口和后台执行职责，配置、路由边界和停止顺序见[服务角色与启停](03-server-roles.md)。
+
 通过单 worker 的 `openviking-server` 启动时，Studio 的「服务端配置」页面提供「保存并重启」。重启能力和实例标识复用现有 ROOT 配置读取接口（`GET /api/v1/admin/configuration?source=file`）返回；只有 ROOT 可以请求重启（`POST /api/v1/admin/restart`，请求体为 `{"revision":"<已保存文件的版本>"}`）。服务校验当前文件和版本后返回 HTTP 202，等待现有请求结束，停止其管理的 Bot，再使用原解释器、启动参数、环境变量和工作目录替换当前进程。页面确认新的服务实例恢复后才显示成功。单独点击「保存配置」仍只保存文件。
 
 多 worker 或嵌入式 ASGI 启动不支持页面重启，需要通过部署平台重启。配置通过校验后，外部依赖仍可能导致启动失败。如果修改了地址、端口或 ROOT 凭证，请更新 Studio 连接设置。账号和集群覆盖配置仍优先于文件默认配置。
@@ -53,6 +55,7 @@ openviking-server --config /path/to/ov.conf
 |---|---|---|---|
 | `default_account` | string | `"default"` | Service context 使用的默认账号 |
 | `default_user` | string | `"default"` | Service context 使用的默认用户 |
+| `enable_default_resources` | boolean | `true` | 补齐缺省本地 Embedding/VectorDB 并预置默认 Account 目录，见[资源配置](../guides/01-configuration.md) |
 | `embedding` | object | 内置本地 Dense 模型 | 向量化模型和稀疏/混合检索配置；默认使用 `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
 | `query_planner` | object / `null` | `null` | 检索意图分析和召回改写使用的模型。未配置或为空时回退到 `vlm`；`auto` 模式的召回改写要求配置集群级 `query_planner`，或账户级 `query_planner` / `vlm` 覆盖项 |
@@ -194,7 +197,7 @@ Rule 编译始终以 `thinking=true` 调用专用 Compiler 或回退的账户默
 | `model` | string / `null` | provider 默认值 | 模型名或 Endpoint ID；`custom` 必填 |
 | `timeout` | number | `30` | HTTP 请求超时秒数 |
 | `extra_headers` | object / `null` | `null` | 附加 HTTP 请求头 |
-| `log_payloads` | boolean | `false` | 是否记录完整请求和响应；日志可能包含任务与 Rule 内容 |
+| `log_payloads` | boolean | `false` | 在 `log.level=DEBUG` 时记录安全的请求和响应摘要；不记录任务、Rule 和响应正文 |
 
 | Provider | 默认请求 URL | 默认 model | 说明 |
 |---|---|---|---|
@@ -240,7 +243,7 @@ Compiler 会优先忠实提炼原文中的对象、操作、前提和场景，�
 | `mode` | `noul`、`choice` 或 `null` | `noul` | Jev Rerank 模式；`null` 同样使用 `noul` |
 | `threshold` | number | `0.1` | 判定结果相关的最低 Rerank 分数；只过滤模型产出的 Rerank 分数，不过滤向量分数；请求中的 `score_threshold` 优先 |
 | `max_input_tokens` | integer；`0` 或 `>= 128` | `0` | 每个 query-document pair 的最大估算 token；`0` 表示不截断 |
-| `log_payloads` | boolean | `false` | 记录完整 rerank 请求和响应；日志可能包含 query 和文档内容 |
+| `log_payloads` | boolean | `false` | 仅用于 Jev：在 `log.level=DEBUG` 时记录安全的请求和响应摘要；不记录 query、文档和响应正文 |
 
 Rerank 没有单独的 `enabled` 字段；配置了对应 provider 所需的凭证后才会启用。
 
@@ -295,7 +298,11 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 |---|---|---|---|
 | `workspace` | path | `"./data"` | OpenViking 工作目录 |
 | `agfs.backend` | `local`、`memory`、`s3` | `local` | 文件与元数据存储后端 |
+| `cache.instances` | object | 启用 cache consumer 时必填 | 命名 CacheRuntime Provider，必须包含 `default` |
+| `agfs.cachefs.instance` | 实例名 | `"default"` | `cachefs.backend="cache"` 时使用的 Runtime |
+| `agfs.queuefs.instance` | 实例名 | `"default"` | `queuefs.backend="cache"` 时使用的 Runtime |
 | `agfs.pathlock.provider` | `filesystem`、`memory`、`sqlite`、`postgres`、`cache` | `filesystem` | 路径锁存储；`postgres` 直连 PostgreSQL，`cache` 使用 Redis |
+| `agfs.pathlock.instance` | 实例名 | `"default"` | `pathlock.provider="cache"` 时使用的 Runtime，必须是 Redis |
 | `agfs.pathlock.sqlite_path` | 本地文件绝对路径 | 使用 `sqlite` 时为 `{workspace}/_system/pathlock/pathlock.db` | SQLite 共享锁数据库，可显式覆盖 |
 | `agfs.pathlock.postgres_dsn_env` | 环境变量名 / `null` | `null` | `postgres` 必填；指定服务进程中保存 PostgreSQL DSN 的环境变量名 |
 | `vectordb.backend` | `local`、`cuvs`、`http`、`volcengine`、`vikingdb`、`opengauss`、`pgvector` | `local` | 向量数据库后端；参见 [pgvector 配置](../guides/25-pgvector.md) |
@@ -303,6 +310,14 @@ Search 和 Find 请求的默认 `limit` 为 `10`，可以在每次 API 或 SDK �
 | `parse_output.mode` | `agfs`、`local` | `agfs` | parser 中间产物的存储后端 |
 | `parse_output.local_root` | 路径或 `null` | 系统临时目录 | local parser artifact 的根目录 |
 | `skip_process_lock` | boolean | `false` | 是否跳过 workspace 进程锁；仅在明确接受并发写风险时启用 |
+| `watch_store.provider` | `file`、`mysql`、`postgres` | `file` | Watch 元数据和运行占用；关系型 provider 共享持久化记录 |
+
+PostgreSQL Watch 存储需要安装 `openviking[postgres]`，并执行
+`openviking/service/sql/001_watch_tasks_postgres.sql` 建表。在
+`storage.watch_store.params` 中配置连接字段和所有节点共用的
+`credential_encryption_key`（base64 编码的 32 字节密钥）。
+它独立于 Task/Work、Account、PathLock 和向量存储。
+完整示例、TLS 参数与部署要求见[Watch 存储配置](../guides/01-configuration.md#watch-store)。
 
 同机本地磁盘上的路径锁可通过 SQLite 避免递归扫描业务目录。将 `storage.agfs.pathlock` 设置为
 `{"provider":"sqlite"}`。数据库默认位于
@@ -417,7 +432,8 @@ PathLock 不提供租约失效后的存储侧 fencing，也不改变 CachedFileS
 #### Redis PathLock
 
 使用 Redis 协调时，
-设置 `storage.agfs.pathlock.provider="cache"` 和顶层 `cache.provider="redis"`。
+设置 `storage.agfs.pathlock.provider="cache"`，并通过
+`storage.agfs.pathlock.instance` 选择 `cache.instances` 中的 Redis 实例。
 所有副本必须连接同一个 Redis 部署，并使用相同的顶层 `service_name` 和锁过期配置。
 参见[共享 Redis 配置示例](../guides/01-configuration.md)。
 无论选择哪种 PathLock，共享 QueueFS 都需选择适合该部署的后端，例如 `storage.agfs.queuefs.backend="cache"`；
@@ -471,10 +487,8 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | 同时消费的完整 AddResource 作业数，必须大于 `0`；修改后需重启服务 |
-| `file_operation_concurrency` | integer | `16` | 单个 AddResource 作业内文件级提交和 fallback 比较操作的最大并发数，必须大于 `0`；修改后需重启服务 |
-| `file_vectorization_concurrency` | integer | `8` | 当目录 AddResource 使用 `processing_mode="vectors_only"` 时，单个作业内并发读取、准备并入队的文件数，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
 
-`max_concurrent` 控制相互独立的 AddResource 作业并发，`file_operation_concurrency` 控制单个 AddResource 作业内文件提交和 fallback 比较操作的并发，`file_vectorization_concurrency` 控制单个 vectors-only 目录作业内的文件并发。
+`max_concurrent` 控制相互独立的 AddResource 作业并发。每个作业内的文件级工作使用内部固定的有界并发。
 
 ### `queue_workers.reindex`
 
@@ -496,6 +510,90 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 |---|---|---:|---|
 | `max_concurrent` | integer | `10` | 同时消费的外部异步任务数，必须大于 `0`；修改后需重启服务 |
 
+## 日志配置
+
+`log` 统一控制独立服务器的 Python、Rust 和 C++ 输出。默认级别为 `INFO`，
+便于看到兜底和重试；业务过程使用 `DEBUG`。第三方日志保留原级别语义。
+Bootstrap 启动结果和失败提示直接打印到 stdout/stderr，即使设置高日志阈值
+或文件输出也会显示。
+
+| 字段 | 类型 / 可选值 | 默认值 | 作用 |
+| --- | --- | --- | --- |
+| `level` | `DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` | `INFO` | 输出阈值；大小写不敏感，兼容 `WARN` 和 `FATAL` |
+| `format` | 公共格式字符串 | 见下文 | Python、Rust、C++ 使用同一日志头 |
+| `output` | `stdout`、`stderr`、`file` 或文件路径 | `stdout` | `file` 写入 `storage.workspace/log/openviking.log` |
+| `rotation` | boolean | `true` | Python 文件输出轮转，并通知 Rust 重开文件 |
+| `rotation_days` | integer | `3` | Python 保留的轮转文件数量 |
+| `rotation_interval` | `midnight`、`H`、`D`、`W0`–`W6` | `midnight` | Python 文件轮转周期；C++ 文件 sink 不参与轮转 |
+
+公共 `format` 的精确值：
+
+```text
+%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s
+```
+
+输出时间为 UTC 毫秒，消息及附加字符串按 JSON 规则转义，每条事件占一行，
+不含终端颜色。缺失的关联字段显示 `-`。升级时，旧内建格式
+`%(asctime)s - %(name)s - %(levelname)s - %(message)s` 自动转为公共格式；
+其他自定义格式和未知级别会导致配置校验失败。
+
+原生输出配置改变后需要重启服务；Python 重配不能代表原生组件已经更新。
+Rust 没有 `CRITICAL`，该阈值仍映射到 `ERROR`，输出仍标为 `ERROR`。
+已有 `server.observability.usage_audit` 配置管理用量及 HTTP 请求记录；
+安全操作审计落库记为独立功能待办。
+SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING_CN.md)。
+
+## Usage/Audit PostgreSQL 配置
+
+`server.observability.usage_audit.backend` 支持 `sqlite`（默认）和 `postgres`。
+共享 PostgreSQL 用于多实例的 Token、检索、上下文写入及 HTTP 请求审计投影，
+Console API 和读端时区口径保持一致。
+
+```json
+{
+  "server": {
+    "observability": {
+      "usage_audit": {
+        "backend": "postgres",
+        "postgres": {
+          "host": "localhost",
+          "port": 5432,
+          "user": "openviking_runtime",
+          "password": "<password>",
+          "database": "openviking",
+          "schema": "openviking_usage_audit",
+          "maxsize": 10,
+          "connect_timeout": 10,
+          "lock_timeout_ms": 1000,
+          "sslmode": "prefer"
+        }
+      }
+    }
+  }
+}
+```
+
+安装 `openviking[postgres]`，由管理员一次性执行
+`openviking/observability/usage_audit/sql/001_usage_audit_postgres.sql`；
+runtime 只验证 schema，不创建或迁移表。自定义 schema 时替换脚本中的 schema 名，
+只接受 1–63 字符的小写 SQL 标识符。runtime role 需要 schema `USAGE`、
+表 `SELECT/INSERT/UPDATE/DELETE`、sequence `USAGE/SELECT`。
+连接参数支持 `sslrootcert`、`sslcert`、`sslkey`，不接受 DSN；
+生产环境应按数据库要求设置 `verify-ca` 或 `verify-full`。
+
+schema 当前为 v2。已有预览版 v1 时，先停止全部 writer，由管理员执行
+`openviking/observability/usage_audit/sql/002_usage_audit_deletion_fence.sql`，
+再重启全部实例；不混跑旧 writer。`lock_timeout_ms` 默认 `1000`，范围 `1..60000`，
+限制写入和删除事务的单次数据库锁等待；超时回滚，worker 按 best-effort 语义丢弃该批。
+删除会持久化账号/用户删除版本，拒绝其他实例队列中的旧版本事件。
+远端 writer 刷新版本前接收的同范围新事件也会保守丢弃；每次写入刷新版本后，
+新接收事件（包括重新创建的同名身份）正常写入。版本判断不依赖机器时钟。
+
+保留配置与 SQLite 相同，`0` 关闭对应裁剪。切换后端不会迁移历史数据；
+事件仍经进程内队列异步写入，不保证重启恢复或 exactly-once。
+这只共享 Usage/Audit 数据，其他业务存储和分布式锁需单独配置。
+完整口径见[模块说明](https://github.com/volcengine/OpenViking/blob/main/openviking/observability/usage_audit/README.md)。
+
 ## Compile API 配置
 
 | 字段 | 类型 | 默认值 | 说明 |
@@ -507,14 +605,6 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 
 配置 `base_url` 后，OV 通过 `X-API-Key` 传递当前用户的 OV API Key；仅在配置 `gateway_token` 时发送 `X-Gateway-Token`。
 
-## Reindex 配置
-
-### `reindex`
-
-| 字段 | 类型 | 默认值 | 说明 |
-|---|---|---:|---|
-| `file_vectorization_concurrency` | integer | `8` | 单个 resource/skill reindex 任务内并发读取、计算指纹和准备文件的数量，必须大于 `0`；超过内部安全上限 `64` 的值会被截断；修改后需重启服务 |
-
 ## HTTP 服务配置
 
 ```json
@@ -523,7 +613,7 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
     "host": "127.0.0.1",
     "port": 1933,
     "workers": 1,
-    "executor_threads": 0,
+    "executor_threads": 64,
     "auth_mode": "dev",
     "cors_origins": ["http://localhost:5173"],
     "profile_enabled": false,
@@ -541,7 +631,7 @@ namespace 中混跑新旧版本；保留已有持久化队列 handoff。
 | `host` | IP / hostname | `"127.0.0.1"` | HTTP 监听地址 |
 | `port` | integer | `1933` | HTTP 监听端口 |
 | `workers` | integer | `1` | 服务进程数量 |
-| `executor_threads` | 非负整数 | `0` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
+| `executor_threads` | 非负整数 | `64` | 每个服务进程的 asyncio 默认 executor 最大线程数；`0` 表示沿用 Python 默认策略 |
 | `timeout_keep_alive` | integer（秒） | `5` | 空闲 HTTP keep-alive 超时；应调大到超过上游空闲连接寿命 |
 | `auth_mode` | `dev`、`api_key`、`trusted` / `null` | `null` | 鉴权模式；空值根据 `root_api_key` 自动判断 |
 | `root_api_key` | string / `null` | `null` | Root API Key；配置后默认启用 `api_key` 模式 |

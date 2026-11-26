@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Dict, Optional
 
 from argon2 import PasswordHasher
@@ -23,9 +24,13 @@ from openviking.server.account_stores.base import AccountStore
 from openviking.server.account_stores.models import (
     AccountSummary,
     DeletionRecord,
+    EmptyFrozenFileCache,
     GroupSummary,
     UsersPage,
     UserSummary,
+    frozen_file_uri,
+    update_frozen_files,
+    validate_frozen_files,
 )
 from openviking.server.api_keys.models import (
     AccountInfo,
@@ -99,11 +104,13 @@ class FileStore(AccountStore):
         api_key_hashing_enabled: bool = False,
         watch_enabled: bool = False,
         watch_interval_seconds: float = 30.0,
+        bootstrap_default_account: bool = True,
     ):
         params = dict(params or {})
         reserved = {
             "viking_fs",
             "api_key_hashing_enabled",
+            "bootstrap_default_account",
         }
         if overridden := reserved.intersection(params):
             names = ", ".join(sorted(overridden))
@@ -127,6 +134,7 @@ class FileStore(AccountStore):
         self._viking_fs = viking_fs
         self._async_agfs = AsyncAGFSClient(viking_fs.agfs)
         self._api_key_hashing_enabled = api_key_hashing_enabled
+        self._bootstrap_default_account = bootstrap_default_account
         self._read_only = configured_read_only
         self._watch_enabled = configured_watch_enabled
         self._watch_interval_seconds = (
@@ -143,6 +151,7 @@ class FileStore(AccountStore):
         # File locks remain responsible for inter-instance coordination.
         self._mutation_lock = AsyncSemaphore(1)
         self._deletion_lock = AsyncSemaphore(1)
+        self._empty_frozen_files = EmptyFrozenFileCache()
 
     @property
     def read_only(self) -> bool:
@@ -161,14 +170,25 @@ class FileStore(AccountStore):
             return
         try:
             await self._save_accounts_json(delete_account_ids={account_id})
-        except Exception:
-            logger.exception("Failed to persist rollback for account %s", account_id)
+        except Exception as exc:
+            logger.error(
+                "Account creation rollback persistence failed",
+                extra={"account_id": account_id, "error_type": type(exc).__name__},
+            )
 
     async def load(self) -> None:
         """Load persisted identities; only writers bootstrap and migrate the store."""
-        if self._read_only:
-            await self._reload()
-            if not self._accounts:
+        # Ordinary watched loads are non-mutating; writable hashing upgrades
+        # must retain their initial migration.
+        if self._read_only or (
+            self._watch_enabled
+            and not self._api_key_hashing_enabled
+            and await self._read_json(ACCOUNTS_PATH) is not None
+        ):
+            initialized = await self._reload()
+            if self._read_only and (
+                not initialized or (self._bootstrap_default_account and not self._accounts)
+            ):
                 raise FailedPreconditionError(
                     "Read-only account store requires an initialized registry."
                 )
@@ -177,9 +197,10 @@ class FileStore(AccountStore):
         async with self._mutation_lock:
             accounts_data = await self._read_json(ACCOUNTS_PATH)
             if accounts_data is None:
-                # First run: create default account
-                now = datetime.now(timezone.utc).isoformat()
-                accounts_data = {"accounts": {"default": {"created_at": now}}}
+                accounts_data = {"accounts": {}}
+                if self._bootstrap_default_account:
+                    now = datetime.now(timezone.utc).isoformat()
+                    accounts_data["accounts"]["default"] = {"created_at": now}
                 await self._write_json(ACCOUNTS_PATH, accounts_data)
 
             accounts, account_key_indexes, user_group_ids = await self._build_state(
@@ -209,6 +230,7 @@ class FileStore(AccountStore):
         )
 
     async def close(self) -> None:
+        self._empty_frozen_files.clear()
         if self._watch_task is None:
             return
         self._watch_task.cancel()
@@ -226,9 +248,10 @@ class FileStore(AccountStore):
             # become the baseline for an older in-memory snapshot.
             if self._read_only:
                 await self._reload()
-        except Exception:
-            logger.warning(
-                "Initial account store signature failed; watcher will retry", exc_info=True
+        except Exception as exc:
+            logger.info(
+                "Initial account store signature failed; watcher will retry",
+                extra={"error_type": type(exc).__name__},
             )
             last_signature = None
 
@@ -236,8 +259,11 @@ class FileStore(AccountStore):
             await asyncio.sleep(self._watch_interval_seconds)
             try:
                 signature = await self._compute_store_signature()
-            except Exception:
-                logger.debug("Account store signature check failed", exc_info=True)
+            except Exception as exc:
+                logger.info(
+                    "Account store signature check failed; watcher will retry",
+                    extra={"error_type": type(exc).__name__},
+                )
                 continue
             if signature == last_signature:
                 continue
@@ -245,21 +271,24 @@ class FileStore(AccountStore):
                 await self._reload()
                 last_signature = signature
                 logger.info("Account store change detected; provider cache reloaded")
-            except Exception:
-                logger.warning("Account store reload failed; will retry", exc_info=True)
+            except Exception as exc:
+                logger.info(
+                    "Account store reload failed; will retry",
+                    extra={"error_type": type(exc).__name__},
+                )
 
-    async def _reload(self) -> None:
-        """Read-only refresh: re-read store and atomically swap state (never writes/migrates)."""
+    async def _reload(self) -> bool:
+        """Refresh without writes or migration; return whether the registry exists."""
         async with self._mutation_lock:
-            await self._reload_unlocked()
+            return await self._reload_unlocked()
 
-    async def _reload_unlocked(self) -> None:
+    async def _reload_unlocked(self) -> bool:
         """Reload while holding ``_mutation_lock``."""
         async with self._reload_lock:
             accounts_data = await self._read_json(ACCOUNTS_PATH)
             if accounts_data is None:
                 # Store not initialized yet (reader started before writer): keep state.
-                return
+                return False
 
             accounts, account_key_indexes, user_group_ids = await self._build_state(
                 accounts_data, allow_migration=False
@@ -273,6 +302,7 @@ class FileStore(AccountStore):
                 len(self._accounts),
                 sum(len(info.users) for info in self._accounts.values()),
             )
+            return True
 
     async def _refresh_accounts_from_store_unlocked(self) -> None:
         accounts_data = await self._read_json(ACCOUNTS_PATH)
@@ -293,10 +323,12 @@ class FileStore(AccountStore):
                     created_at=created_at,
                     groups_loaded=False,
                     deletion=info.get("deletion"),
+                    frozen_files=validate_frozen_files(info.get("frozen_files", [])),
                 )
             else:
                 account.created_at = created_at
                 account.deletion = info.get("deletion")
+                account.frozen_files = validate_frozen_files(info.get("frozen_files", []))
 
     async def _refresh_account_users_from_store_unlocked(self, account_id: str) -> None:
         users_path = USERS_PATH_TEMPLATE.format(account_id=account_id)
@@ -341,6 +373,7 @@ class FileStore(AccountStore):
                 users=users,
                 groups=groups,
                 deletion=info.get("deletion"),
+                frozen_files=validate_frozen_files(info.get("frozen_files", [])),
             )
             user_group_ids.update(
                 {
@@ -350,6 +383,7 @@ class FileStore(AccountStore):
             )
 
             if self._api_key_hashing_enabled and allow_migration:
+                migrated_keys = 0
                 for user_id, user_info in users.items():
                     key_or_hash = user_info.get("key", "")
                     if not key_or_hash or key_or_hash.startswith("$argon2"):
@@ -360,7 +394,12 @@ class FileStore(AccountStore):
                     user_info["key"] = stored_key
                     user_info["key_prefix"] = key_prefix
                     await self._save_users_json(account_id, {user_id: user_info})
-                    logger.info("Migrated API key for user %s in account %s", user_id, account_id)
+                    migrated_keys += 1
+                if migrated_keys:
+                    logger.info(
+                        "Account API key hashing migration completed",
+                        extra={"account_id": account_id, "total": migrated_keys},
+                    )
             account_key_indexes[account_id] = self._build_account_key_index(account_id, users)
 
         return accounts, account_key_indexes, user_group_ids
@@ -389,8 +428,11 @@ class FileStore(AccountStore):
             info = await self._async_agfs.stat(path, bypass_cache=True)
         except AGFSNotFoundError:
             return (path, None, None)
-        except Exception:
-            logger.debug("Failed to stat %s for key-store signature", path, exc_info=True)
+        except Exception as exc:
+            logger.info(
+                "Account store stat failed; using unavailable signature",
+                extra={"error_type": type(exc).__name__},
+            )
             return (path, None, None)
 
         if not isinstance(info, dict):
@@ -652,9 +694,8 @@ class FileStore(AccountStore):
                     await self._write_json(path, users_data, lease_ref=users_lease)
                     created_users += len(new_users)
                     logger.info(
-                        "Persisted trusted identities for account %s: %s",
-                        account_id,
-                        new_users,
+                        "Trusted identities persisted",
+                        extra={"account_id": account_id, "total": len(new_users)},
                     )
 
                 account = self._accounts.get(account_id)
@@ -870,6 +911,7 @@ class FileStore(AccountStore):
                 "GLOBAL identities cannot change roles; delete and recreate instead."
             )
 
+        old_user_info = copy.deepcopy(account.users[user_id])
         account.users[user_id]["role"] = resolved_role
 
         # Update role in prefix index
@@ -886,7 +928,14 @@ class FileStore(AccountStore):
                     entry.role = resolved_role
                     break
 
-        await self._save_users_json(account_id, {user_id: account.users[user_id]})
+        try:
+            await self._save_users_json(account_id, {user_id: account.users[user_id]})
+        except Exception:
+            account.users[user_id] = old_user_info
+            self._account_key_indexes[account_id] = self._build_account_key_index(
+                account_id, account.users
+            )
+            raise
 
     def _get_accounts(
         self,
@@ -1282,6 +1331,7 @@ class FileStore(AccountStore):
         updated_account_ids: set[str] | None = None,
         delete_account_ids: set[str] | None = None,
         reject_existing_account_ids: set[str] | None = None,
+        frozen_file_update: tuple[str, str, bool] | None = None,
     ) -> set[str]:
         """Merge local account changes into the latest locked registry snapshot."""
         try:
@@ -1305,12 +1355,40 @@ class FileStore(AccountStore):
                     continue
                 if account_id not in accounts:
                     created_account_ids.add(account_id)
-                accounts[account_id] = {"created_at": info.created_at}
+                accounts.setdefault(account_id, {})["created_at"] = info.created_at
                 if info.deletion is not None:
                     accounts[account_id]["deletion"] = dict(info.deletion)
+                else:
+                    accounts[account_id].pop("deletion", None)
+            frozen_files = None
+            if frozen_file_update is not None:
+                account_id, uri, frozen = frozen_file_update
+                account_data = accounts.get(account_id)
+                if account_data is None:
+                    raise NotFoundError(account_id, "account")
+                if account_data.get("deletion"):
+                    raise FailedPreconditionError("Account deletion is in progress")
+                user_id = uri[len("viking://user/") :].split("/", 1)[0]
+                if frozen:
+                    users_data = await self._read_json(
+                        USERS_PATH_TEMPLATE.format(account_id=account_id)
+                    )
+                    user = (users_data or {}).get("users", {}).get(user_id)
+                    if user is None:
+                        raise NotFoundError(user_id, "user")
+                    if user.get("deletion"):
+                        raise FailedPreconditionError("User deletion is in progress")
+                    if user.get("role", "user") != Role.USER:
+                        raise PermissionDeniedError("Frozen files require a USER target")
+                frozen_files = update_frozen_files(
+                    account_data.get("frozen_files", []), uri, frozen
+                )
+                account_data["frozen_files"] = list(frozen_files)
             for account_id in delete_account_ids or set():
                 accounts.pop(account_id, None)
             await self._write_json(ACCOUNTS_PATH, data, lease_ref=lease)
+            if frozen_file_update is not None and frozen_files is not None:
+                self._accounts[account_id].frozen_files = frozen_files
             return created_account_ids
         finally:
             await self._async_agfs.pathlock_release(lease)
@@ -1416,6 +1494,34 @@ class FileStore(AccountStore):
         if info is None:
             return None
         return self._account_summary(account_id, info)
+
+    async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        if self._watcher_running():
+            info = self._accounts.get(account_id)
+            return info.frozen_files if info is not None else ()
+        if self._empty_frozen_files.contains(account_id):
+            return ()
+        started_at, revision = monotonic(), self._empty_frozen_files.revision
+        await self._refresh_accounts_for_management_read()
+        info = self._accounts.get(account_id)
+        paths = info.frozen_files if info is not None else ()
+        if not paths:
+            self._empty_frozen_files.remember(account_id, started_at, revision)
+        return paths
+
+    async def set_frozen_file(
+        self, account_id: str, user_id: str, path: str, frozen: bool
+    ) -> tuple[str, ...]:
+        self._require_writable()
+        uri = frozen_file_uri(user_id, path)
+        self._empty_frozen_files.invalidate(account_id)
+        try:
+            async with self._mutation_lock:
+                await self._refresh_accounts_for_management_read_unlocked()
+                await self._save_accounts_json(frozen_file_update=(account_id, uri, frozen))
+                return self._accounts[account_id].frozen_files
+        finally:
+            self._empty_frozen_files.invalidate(account_id)
 
     def _account_summary(self, account_id: str, info: AccountInfo) -> AccountSummary:
         """Credential-free metadata for one in-memory account (O(1))."""

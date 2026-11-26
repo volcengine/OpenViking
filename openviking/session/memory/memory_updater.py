@@ -15,10 +15,11 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from openviking.observability.log_safety import safe_uri_for_log
+
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
-from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
 from openviking.message import Message
 from openviking.message.part import TextPart
@@ -47,7 +48,6 @@ from openviking.session.memory.utils.resource_refs import (
 )
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
-from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
@@ -150,10 +150,15 @@ async def write_stored_links(
                 try:
                     content = await viking_fs.read_file(uri, ctx=ctx)
                 except (NotFoundError, FileNotFoundError) as exc:
-                    logger.warning("Skipping links to missing memory %s: %s", uri, exc)
+                    logger.debug(
+                        "memory links skipped; target missing uri=%s error_type=%s",
+                        safe_uri_for_log(uri),
+                        type(exc).__name__,
+                        extra={"error_type": type(exc).__name__},
+                    )
                     continue
                 if not content:
-                    logger.warning("Skipping links to empty memory %s", uri)
+                    logger.debug("memory links skipped; target empty uri=%s", safe_uri_for_log(uri))
                     continue
                 mf = MemoryFileUtils.read(content, uri=uri)
             if link_groups["links"]:
@@ -174,7 +179,12 @@ async def write_stored_links(
             )
             updated_uris.append(uri)
         except Exception as e:
-            tracer.error(f"Failed to apply links to {uri}: {e}")
+            logger.debug(
+                "memory operation failed stage=%s error_type=%s",
+                "write_stored_links",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__},
+            )
             if errors is not None:
                 errors.append((uri, e))
     return updated_uris
@@ -918,34 +928,6 @@ class MemoryUpdater:
         return self._viking_fs
 
     @classmethod
-    async def refresh_schema_overview(
-        cls,
-        *,
-        viking_fs: Any,
-        directory_uri: str,
-        ctx: RequestContext,
-        strict: bool = False,
-    ) -> bool:
-        memory_type = cls.memory_type_from_uri(directory_uri)
-        if not memory_type:
-            return False
-        try:
-            from openviking.session.memory.memory_type_registry import get_default_registry
-
-            updater = cls(registry=get_default_registry())
-            updater._viking_fs = viking_fs
-            return await updater.generate_overview(memory_type, directory_uri, ctx)
-        except Exception:
-            logger.warning(
-                "Failed to refresh memory overview for %s",
-                directory_uri,
-                exc_info=True,
-            )
-            if strict:
-                raise
-            return False
-
-    @classmethod
     async def refresh_file_embedding(
         cls,
         *,
@@ -975,7 +957,11 @@ class MemoryUpdater:
             )
             return attempted > 0
         except Exception:
-            logger.warning("Failed to refresh memory embedding for %s", uri, exc_info=True)
+            logger.info(
+                "memory embedding refresh failed uri=%s",
+                safe_uri_for_log(uri),
+                extra={"degraded": True},
+            )
             if strict:
                 raise
             return False
@@ -1004,7 +990,7 @@ class MemoryUpdater:
         viking_fs = self._get_viking_fs()
 
         if not viking_fs:
-            tracer.error("VikingFS not available, skipping memory operations")
+            logger.debug("memory operation failed stage=%s", "apply_operations")
             return result
 
         # Use provided registry or fall back to self._registry
@@ -1071,15 +1057,16 @@ class MemoryUpdater:
                     MemoryOperationSkipCode.INVALID_RANGES,
                     MemoryOperationSkipCode.PAGE_ID_TYPE_MISMATCH,
                 }:
-                    logger.warning(message)
+                    logger.debug(
+                        "memory operation skipped by resolution policy error_code=%s",
+                        resolution_skip.reason_code.value,
+                    )
                 else:
                     tracer.info(message)
                 continue
             resolution_error = ValueError("Missing resolved URI")
             result.add_error(error_target, resolution_error)
-            tracer.error(
-                f"Skipping unresolved memory operation: {error_target}: {resolution_error}"
-            )
+            logger.debug("memory operation failed stage=%s", "apply_operations")
 
         uri_remap = dict(getattr(operations, "delete_replacements", {}) or {})
         split_replacements = detect_split_replacements(operations)
@@ -1124,7 +1111,7 @@ class MemoryUpdater:
             except Exception as exc:
                 result.add_error(uri, exc)
             unavailable_link_uris.add(uri)
-            logger.warning("Skipping links to unavailable memory %s", uri)
+            logger.debug("memory links skipped; target unavailable uri=%s", safe_uri_for_log(uri))
         original_links = [
             link
             for link in original_links
@@ -1146,39 +1133,38 @@ class MemoryUpdater:
         # Distribute resolved_links to corresponding upsert operations
         self._distribute_links_to_operations(operations)
 
-        # Apply unified operations - _apply_edit returns True if edited, False if written
+        from openviking.observability.reporting.facts import bind_memory_type
+
         uri_memory_type_map = {}
         for resolved_op in applicable_upserts:
-            try:
-                from openviking.observability.reporting.facts import bind_memory_type
-
-                with bind_memory_type(
-                    resolved_op.memory_type,
-                    task_id=getattr(resolved_op.source, "task_id", None),
-                    source_task_ids=getattr(resolved_op.source, "task_ids", None),
-                ):
-                    await self._apply_upsert(
-                        resolved_op,
-                        ctx,
-                        extract_context=extract_context,
-                        lease_ref=self._transaction_handle,
-                        uri_remap=uri_remap,
-                    )
-                # Add all uris to result (uris is List[str])
-                add_result = (
-                    result.add_edited
-                    if resolved_op.is_edit() and not self._is_uri_migration(resolved_op)
-                    else result.add_written
-                )
-                for uri in resolved_op.uris:
+            add_result = (
+                result.add_edited
+                if resolved_op.is_edit() and not self._is_uri_migration(resolved_op)
+                else result.add_written
+            )
+            for uri in resolved_op.uris:
+                try:
+                    with bind_memory_type(
+                        resolved_op.memory_type,
+                        task_id=getattr(resolved_op.source, "task_id", None),
+                        source_task_ids=getattr(resolved_op.source, "task_ids", None),
+                    ):
+                        await self._apply_upsert(
+                            resolved_op.model_copy(update={"uris": [uri]}),
+                            ctx,
+                            extract_context=extract_context,
+                            lease_ref=self._transaction_handle,
+                            uri_remap=uri_remap,
+                        )
                     add_result(uri)
                     uri_memory_type_map[uri] = resolved_op.memory_type
-            except Exception as e:
-                tracer.error(
-                    f"Failed to apply operation: op_type={type(resolved_op).__name__}, uris={resolved_op.uris}",
-                    e,
-                )
-                for uri in resolved_op.uris:
+                except Exception as e:
+                    logger.debug(
+                        "memory operation failed stage=%s error_type=%s",
+                        "apply_operations",
+                        type(e).__name__,
+                        extra={"error_type": type(e).__name__},
+                    )
                     result.add_error(uri, e)
 
         failed_upsert_uris = {uri for uri, _error in result.errors}
@@ -1255,7 +1241,7 @@ class MemoryUpdater:
                     "Skipped delete because batch contains unresolved upsert URIs"
                 )
                 result.add_error(delete_uri, delete_error)
-                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                logger.debug("memory operation failed stage=%s", "apply_operations")
                 continue
             if delete_uri in failed_upsert_uris:
                 continue
@@ -1264,7 +1250,7 @@ class MemoryUpdater:
             if delete_uri in failed_link_migration_sources:
                 delete_error = ValueError("Skipped delete because link migration did not complete")
                 result.add_error(delete_uri, delete_error)
-                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                logger.debug("memory operation failed stage=%s", "apply_operations")
                 continue
             replacement_uri = uri_remap.get(delete_uri)
             if replacement_uri in failed_upsert_uris:
@@ -1272,7 +1258,7 @@ class MemoryUpdater:
                     f"Skipped delete because replacement write failed: {replacement_uri}"
                 )
                 result.add_error(delete_uri, delete_error)
-                tracer.error(f"Skipping delete for {delete_uri}: {delete_error}")
+                logger.debug("memory operation failed stage=%s", "apply_operations")
                 continue
             if delete_uri in upserted_uris:
                 tracer.info(
@@ -1290,7 +1276,12 @@ class MemoryUpdater:
                 await self._apply_delete(delete_uri, ctx, lease_ref=self._transaction_handle)
                 result.add_deleted(delete_uri)
             except Exception as e:
-                tracer.error(f"Failed to delete memory {delete_uri}", e)
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "apply_operations",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
                 result.add_error(delete_uri, e)
 
         await self._sync_resource_refs_for_result(result, ctx, lease_ref=self._transaction_handle)
@@ -1360,33 +1351,36 @@ class MemoryUpdater:
                 ),
             )
 
-        tracer.info(f"Memory operations applied: {result.summary()}")
+        (logger.info if result.errors or result.skipped_operations else logger.debug)(
+            "memory operations applied written=%d edited=%d deleted=%d failed=%d skipped=%d",
+            len(result.written_uris),
+            len(result.edited_uris),
+            len(result.deleted_uris),
+            len(result.errors),
+            len(result.skipped_operations),
+            extra={
+                "failed": len(result.errors),
+                "skipped": len(result.skipped_operations),
+                "degraded": bool(result.errors or result.skipped_operations),
+            },
+        )
 
-        # Collect directories that need overview generation
-        # uri is now a string, so extract directory using os.path
-        dirs = {}
-        for operation in operations.upsert_operations:
-            for uri_str in operation.uris:
-                dir_path = "/".join(uri_str.split("/")[:-1])
-                dirs[dir_path] = operation.memory_type
-        for file_content in operations.delete_file_contents:
-            dir_path = "/".join(file_content.uri.split("/")[:-1])
-            dirs[dir_path] = (
-                file_content.extra_fields.get("memory_type")
-                or file_content.memory_type
-                or "unknown"
-            )
-
-        for dir, memory_type in dirs.items():
-            await self.generate_overview(
-                memory_type,
-                dir,
-                ctx,
-                extract_context,
-                lease_ref=self._transaction_handle,
-            )
-
+        changed_uris = uri_memory_type_map.keys() | deleted_uris
+        if changed_uris:
+            await self._submit_directory_changes(changed_uris, ctx)
         return result
+
+    async def _submit_directory_changes(self, changed_uris: set[str], ctx: RequestContext) -> None:
+        from openviking.storage.queuefs.semantic_ops.directory_refresh import (
+            enqueue_directory_refresh,
+        )
+
+        directories = {}
+        for uri in changed_uris:
+            directory = uri.rsplit("/", 1)[0]
+            directories[directory] = directories.get(directory, 0) + 1
+        for directory, count in directories.items():
+            await enqueue_directory_refresh(directory, count, ctx=ctx)
 
     async def _invalid_replacement_sources(
         self,
@@ -1623,7 +1617,12 @@ class MemoryUpdater:
                         lease_ref=lease_ref,
                     )
             except Exception as exc:
-                logger.warning("Failed to sync resource refs for %s: %s", uri, exc)
+                logger.info(
+                    "resource reference synchronization failed uri=%s error_type=%s",
+                    safe_uri_for_log(uri),
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
+                )
 
     async def _apply_upsert(
         self,
@@ -1748,6 +1747,7 @@ class MemoryUpdater:
                         metadata[key] = val
 
             metadata["version"] = next_memory_version(old_content)
+            metadata["memory_type"] = memory_type
 
             # Handle links/backlinks fields: merge with existing
             incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
@@ -1962,12 +1962,20 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(deleted_uri, ctx=ctx)
             except (NotFoundError, FileNotFoundError) as e:
                 # Benign: the source may already be gone in an idempotent replay.
-                logger.warning(
-                    f"Skipping link inheritance; could not read deleted memory {deleted_uri}: {e}"
+                logger.info(
+                    "deleted memory link inheritance skipped; source missing uri=%s error_type=%s",
+                    safe_uri_for_log(deleted_uri),
+                    type(e).__name__,
+                    extra={"degraded": True, "error_type": type(e).__name__},
                 )
                 continue
             except Exception as e:
-                tracer.error(f"Failed to read deleted memory links for {deleted_uri}: {e}")
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "_inherit_deleted_link_relations",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
                 result.add_error(deleted_uri, e)
                 completed = False
                 continue
@@ -2067,9 +2075,19 @@ class MemoryUpdater:
             except (NotFoundError, FileNotFoundError) as e:
                 # Benign: a linked neighbor may have been deleted in the same
                 # batch. Link inheritance is best-effort, so warn and skip.
-                logger.warning(f"Skipping link inheritance; could not read memory {uri}: {e}")
+                logger.info(
+                    "memory link inheritance skipped; target missing uri=%s error_type=%s",
+                    safe_uri_for_log(uri),
+                    type(e).__name__,
+                    extra={"degraded": True, "error_type": type(e).__name__},
+                )
             except Exception as e:
-                tracer.error(f"Failed to inherit deleted memory links for {uri}: {e}")
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "_inherit_deleted_link_relations",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
                 result.add_error(uri, e)
                 completed = False
         return completed
@@ -2088,7 +2106,7 @@ class MemoryUpdater:
         try:
             await viking_fs.rm(uri, recursive=False, ctx=ctx, lease_ref=lease_ref)
         except NotFoundError:
-            tracer.error(f"Memory not found for delete: {uri}")
+            logger.debug("memory operation failed stage=%s", "_apply_delete")
             # Idempotent - deleting non-existent file succeeds
 
     async def _vectorize_memories(
@@ -2113,7 +2131,7 @@ class MemoryUpdater:
         """
         ingest_options = IngestOptions.from_value(ingest_options)
         if not self._vikingdb:
-            logger.debug("VikingDB not available, skipping vectorization")
+            logger.debug("vikingDB not available, skipping vectorization")
             return 0
 
         uri_memory_type_map = uri_memory_type_map or {}
@@ -2132,7 +2150,7 @@ class MemoryUpdater:
                 uris_to_vectorize.append(uri)
 
         if not uris_to_vectorize:
-            logger.debug("No memory files to vectorize")
+            logger.debug("no memory files to vectorize")
             return 0
 
         for uri in uris_to_vectorize:
@@ -2158,8 +2176,10 @@ class MemoryUpdater:
                             template_vars,
                         )
                         if missing_vars:
-                            logger.warning(
-                                f"Missing embedding template variables for {uri}, falling back to plain content: {sorted(missing_vars)}"
+                            logger.info(
+                                "embedding template variables missing; using plain content uri=%s missing=%d",
+                                safe_uri_for_log(uri),
+                                len(missing_vars),
                             )
                         else:
                             try:
@@ -2169,8 +2189,11 @@ class MemoryUpdater:
                                     extract_context=extract_context,
                                 )
                             except Exception as e:
-                                logger.warning(
-                                    f"Failed to render embedding template for {uri}, falling back to plain content: {e}"
+                                logger.info(
+                                    "embedding template render failed; using plain content uri=%s error_type=%s",
+                                    safe_uri_for_log(uri),
+                                    type(e).__name__,
+                                    extra={"degraded": True, "error_type": type(e).__name__},
                                 )
 
                 # Get parent URI
@@ -2220,15 +2243,31 @@ class MemoryUpdater:
                         message = f"Failed to enqueue memory for vectorization: {uri}"
                         if raise_on_enqueue_failure:
                             raise RuntimeError(message)
-                        tracer.error(message)
+                        logger.debug("memory operation failed stage=%s", "_vectorize_memories")
                         continue
                     attempted_count += 1
-                    logger.debug(f"Enqueued memory for vectorization: {uri}")
+                    logger.debug("memory vectorization enqueued uri=%s", safe_uri_for_log(uri))
 
             except Exception as e:
-                tracer.error(f"Failed to vectorize memory {uri}: {e}")
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "_vectorize_memories",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
                 if raise_on_enqueue_failure:
                     raise
+        if attempted_count < len(uris_to_vectorize):
+            logger.info(
+                "memory vectorization partial; skipping unavailable entries total=%d skipped=%d",
+                len(uris_to_vectorize),
+                len(uris_to_vectorize) - attempted_count,
+                extra={
+                    "degraded": True,
+                    "total": len(uris_to_vectorize),
+                    "skipped": len(uris_to_vectorize) - attempted_count,
+                },
+            )
         return attempted_count
 
     @staticmethod
@@ -2238,172 +2277,3 @@ class MemoryUpdater:
         if len(encoded) <= _MEMORY_ABSTRACT_MAX_BYTES:
             return abstract or ""
         return encoded[:_MEMORY_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
-
-    async def generate_overview(
-        self,
-        memory_type: str,
-        directory: str,
-        ctx: RequestContext,
-        extract_context: Any = None,
-        lease_ref: Any = None,
-    ) -> bool:
-        """
-        Generate .overview.md file for a directory based on overview_template.
-
-        Args:
-            memory_type: Memory type name (e.g., 'events')
-            directory: Directory path containing memory files
-            ctx: Request context
-        """
-        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-        # Get the schema for this memory type
-        registry = self._registry
-        schema = registry.get(memory_type)
-
-        if not schema or not schema.overview_template:
-            logger.debug(f"No overview_template for memory type: {memory_type}")
-            return False
-
-        viking_fs = self._get_viking_fs()
-
-        # List direct .md files in the directory (excluding .overview.md and .abstract.md)
-        try:
-            # Use ls to list direct children
-            entries = await viking_fs.ls(directory, show_all_hidden=True, ctx=ctx)
-
-            # Extract file paths from ls entries
-            md_files = []
-            base_uri = directory.rstrip("/")
-            for entry in entries:
-                name = entry.get("name", "")
-                if (
-                    name.endswith(".md")
-                    and not name.endswith(".overview.md")
-                    and not name.endswith(".abstract.md")
-                ):
-                    md_files.append(f"{base_uri}/{name}")
-
-        except (NotFoundError, FileNotFoundError):
-            logger.debug("Skip overview generation for deleted directory: %s", directory)
-            return False
-        except Exception as e:
-            tracer.error(f"Failed to list files in {directory}: {e}")
-            return False
-
-        # If no memory files, delete the .overview.md and the directory if empty
-        if not md_files:
-            overview_path = f"{directory.rstrip('/')}/.overview.md"
-            can_delete_directory = all(
-                entry.get("name", "") in {"", ".overview.md"} for entry in entries
-            )
-            try:
-                await viking_fs.rm(
-                    overview_path,
-                    recursive=False,
-                    ctx=ctx,
-                    lease_ref=lease_ref,
-                )
-            except (NotFoundError, FileNotFoundError):
-                pass
-            except Exception:
-                logger.warning(
-                    "Failed to delete empty memory overview %s",
-                    overview_path,
-                    exc_info=True,
-                )
-            # Try to delete empty directory
-            if can_delete_directory:
-                try:
-                    await viking_fs.rm(
-                        directory,
-                        recursive=True,
-                        ctx=ctx,
-                        lease_ref=lease_ref,
-                    )
-                except (NotFoundError, FileNotFoundError):
-                    pass
-                except Exception:
-                    logger.warning(
-                        "Failed to delete empty memory directory %s",
-                        directory,
-                        exc_info=True,
-                    )
-            return True
-
-        # Parse each file and collect items
-        items = []
-        for file_path in md_files:
-            try:
-                content = await viking_fs.read_file(file_path, ctx=ctx)
-                mf = MemoryFileUtils.read(content, uri=file_path)
-
-                # Extract filename from path
-                filename = file_path.split("/")[-1]
-                metadata = mf.to_metadata()
-
-                items.append(
-                    {
-                        "file_name": filename,
-                        "file_content": metadata,
-                    }
-                )
-            except Exception as e:
-                tracer.error(f"Failed to parse {file_path}: {e}")
-                continue
-
-        if not items:
-            logger.debug(f"No valid memory files parsed in {directory}")
-            return False
-
-        overview_context = {
-            "memory_type": memory_type,
-            "directory_name": directory.rstrip("/").split("/")[-1],
-            "items": items,
-        }
-
-        # Render the template
-        try:
-            rendered = render_template(
-                schema.overview_template,
-                overview_context,
-                extract_context=extract_context,
-            )
-        except Exception as e:
-            tracer.error(f"Failed to render overview template for {memory_type}: {e}")
-            return False
-
-        # Write .overview.md to the directory
-        overview_path = f"{directory.rstrip('/')}/.overview.md"
-        try:
-            await viking_fs.write_file(
-                overview_path,
-                render_abstract_overview(
-                    ContextLevel.OVERVIEW,
-                    directory,
-                    rendered,
-                    {
-                        "generated_by": {
-                            "component": "MemoryUpdater",
-                            "trigger": "memory_update",
-                        },
-                        "freshness": freshness_metadata(len(md_files), len(items)),
-                    },
-                ),
-                ctx=ctx,
-                lease_ref=lease_ref,
-            )
-            from openviking.utils.embedding_utils import vectorize_directory_meta
-
-            await vectorize_directory_meta(
-                uri=directory,
-                abstract="",
-                overview=rendered,
-                context_type="memory",
-                ctx=ctx,
-                include_abstract=False,
-            )
-            return True
-        except Exception as e:
-            tracer.error(f"Failed to write overview {overview_path}: {e}")
-            return False

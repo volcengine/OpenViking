@@ -8,6 +8,7 @@ from functools import partial
 from typing import Any, Optional
 
 from openviking.concurrency import AsyncSemaphore
+from openviking.observability.log_safety import safe_log_fields, short_hash
 from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_types import WatchRun, WatchRunning, WatchRunResult
 from openviking.service.task_domain import TERMINAL_TASK_STATUSES
@@ -132,8 +133,11 @@ class WatchRuntime:
                                 await self._dispatch_due(leadership.stop_event)
                             except asyncio.CancelledError:
                                 raise
-                            except Exception:
-                                logger.exception("Watch Runtime round failed")
+                            except Exception as _log_error:
+                                logger.info(
+                                    "Watch Runtime round failed error_type=%s",
+                                    type(_log_error).__name__,
+                                )
                             try:
                                 await asyncio.wait_for(
                                     leadership.stop_event.wait(), self._poll_interval
@@ -144,8 +148,8 @@ class WatchRuntime:
                         self._is_leader = False
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("Watch leader candidate failed")
+        except Exception as _log_error:
+            logger.error("Watch leader candidate failed error_type=%s", type(_log_error).__name__)
 
     def _continue(self, stop_event: Optional[asyncio.Event]) -> bool:
         return self._running and (stop_event is None or not stop_event.is_set())
@@ -208,7 +212,11 @@ class WatchRuntime:
             # admitting another submission rather than guessing its state.
             self._active_runs.add(task_id)
             self._occupancy_initialized = False
-            logger.error("Watch trigger %s failed", task_id, exc_info=task.exception())
+            logger.info(
+                "Watch trigger failed; retaining run for recovery error_type=%s",
+                type(task.exception()).__name__,
+                extra=safe_log_fields({"task_id": task_id}),
+            )
         elif task.result() is not None:
             self._active_runs.add(task_id)
 
@@ -237,8 +245,12 @@ class WatchRuntime:
                         self._active_runs.discard(task_id)
                 except asyncio.CancelledError:
                     raise
-                except Exception:
-                    logger.exception("Watch sweep failed for %s", state.task_id)
+                except Exception as _log_error:
+                    logger.info(
+                        "Watch sweep failed for %s error_type=%s",
+                        short_hash(str(state.task_id)),
+                        type(_log_error).__name__,
+                    )
             if len(page) < self.DUE_BATCH:
                 # Preserve submission receipts arriving during this scan, and
                 # drop old runs already settled by another API/process.
@@ -268,8 +280,7 @@ class WatchRuntime:
             timeout_error = f"Watch run Task timed out after {self._run_timeout:g}s"
             timed_out_record = await tracker.get(run_id, **owner)
             if state.connector or (
-                timed_out_record is not None
-                and timed_out_record.task_type == "connector_import"
+                timed_out_record is not None and timed_out_record.task_type == "connector_import"
             ):
                 try:
                     await tracker.cancel(run_id, **owner)
@@ -293,7 +304,11 @@ class WatchRuntime:
                 try:
                     await tracker.cancel(run_id, **owner)
                 except ValueError as exc:
-                    logger.warning("Failed to cancel timed-out Watch Task %s: %s", run_id, exc)
+                    logger.info(
+                        "Failed to cancel timed-out Watch Task %s: %s",
+                        short_hash(str(run_id)),
+                        type(exc).__name__,
+                    )
                 status = await tracker.get_task_status(run_id, **owner)
                 if status not in TERMINAL_TASK_STATUSES:
                     await tracker.fail(

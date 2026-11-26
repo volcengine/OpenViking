@@ -66,20 +66,24 @@ async def test_probe_timeout_closes_model(vlm):
 
 async def test_probe_deadline_cancels_request_and_closes(vlm, monkeypatch):
     wait_for = asyncio.wait_for
-    monkeypatch.delattr(asyncio, "timeout", raising=False)
+    stopped = asyncio.Event()
 
     async def short_deadline(request, timeout):
         assert timeout == 25
-        return await wait_for(request, timeout=0.001)
+        return await wait_for(request, timeout=0.02)
 
     async def pending(**kwargs):
-        await asyncio.Event().wait()
+        try:
+            await asyncio.Future()
+        finally:
+            stopped.set()
 
     monkeypatch.setattr(asyncio, "wait_for", short_deadline)
     vlm.get_completion_async.side_effect = pending
     assert await probe_model(
         "vlm", {"provider": "openai", "api_key": "draft"}, {"model": "o3"}
     ) == {"ok": False, "code": "timeout"}
+    assert stopped.is_set()
     vlm.close.assert_called_once()
 
 
@@ -133,12 +137,16 @@ async def test_keyless_embedding_uses_single_server_adapter(monkeypatch):
     instance.close.assert_called_once()
 
 
-async def test_unknown_provider_does_not_initialize_model(vlm):
+async def test_unknown_provider_does_not_initialize_model(monkeypatch):
+    factory = Mock(side_effect=AssertionError("an unsupported provider must not create a model"))
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.vlm_config.VLMConfig.get_vlm_instance", factory
+    )
     assert await probe_model("vlm", {"provider": "unknown"}, {}) == {
         "ok": False,
         "code": "unsupported",
     }
-    vlm.get_completion_async.assert_not_awaited()
+    factory.assert_not_called()
 
 
 async def test_empty_completion_is_not_reported_as_connected(vlm):
@@ -183,7 +191,7 @@ async def test_minimax_dimension_discovery_does_not_block_event_loop(monkeypatch
         assert not task.done()
     finally:
         release.set()
-    assert (await task)["ok"]
+    assert (await asyncio.wait_for(task, 2))["ok"]
     embedding.assert_awaited_once_with("connection test", is_query=False)
 
 

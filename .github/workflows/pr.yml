@@ -23,6 +23,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  security-scan:
+    uses: ./.github/workflows/_codeql.yml
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
   plugin-tests:
     needs: check-deps
     if: needs.check-deps.outputs.plugins_changed == 'true'
@@ -112,17 +119,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Run the OpenClaw plugin Vitest suite
-        # The suite is otherwise never exercised by CI, so regressions in
-        # examples/openclaw-plugin only surface in user installs.
-        # tests/ut/architecture-boundaries.test.ts is excluded until its 2
-        # pre-existing failures are resolved (see #4720 / #4731 / #4732);
-        # every other file passes (42 files / 675 tests).
-        # The node_modules exclude restores vitest's default filters, which a
-        # custom --exclude replaces.
-        run: >
-          npm test --
-          --exclude "tests/ut/architecture-boundaries.test.ts"
-          --exclude "**/node_modules/**"
+        run: npm test
 
   plugin-versions:
     needs: check-deps
@@ -172,7 +169,10 @@ jobs:
           python3 -m pytest --noconftest -q -o addopts='' \
             tests/misc/test_abi3_packaging_config.py \
             tests/misc/test_release_tag_selection.py \
-            tests/misc/test_linux_runner.py
+            tests/misc/test_linux_runner.py \
+            tests/misc/test_macos_wheel_cache.py \
+            tests/misc/test_cli_model_query_retry.py \
+            tests/misc/test_cache_maintenance.py
 
   build:
     needs: check-deps

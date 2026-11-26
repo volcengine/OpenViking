@@ -1,5 +1,7 @@
 # Hermes
 
+> **推荐通过 [OpenViking 网关](../guides/15-gateway.md) 接入。** 关掉下面的插件，把模型的 Base URL 指向网关、API Key 换成网关密钥，网关会为新用户消息召回记忆并保存对话。[上游](../gateway/07-upstreams.md#upstreams)要自带服务商 API Key，订阅登录无法走网关。配置见[把客户端接入 OpenViking 网关](../gateway/03-connect-clients.md#openclaw-and-hermes)，从零开始见[网关快速上手](../gateway/02-quickstart.md)，两种方式的取舍见[网关还是插件](../guides/15-gateway.md#gateway-or-plugin)，官网介绍见 [openviking.ai/gateway](https://openviking.ai/gateway)。
+
 为 [Hermes Agent](https://hermes-agent.nousresearch.com/) 配置 OpenViking 长期记忆。
 
 ## 开始使用
@@ -22,14 +24,19 @@ hermes
 选择 **Shared Agent** 可在每个群组或话题内共享对话历史，并召回同一 OpenViking 用户
 下所有发送者的记忆。Shared Agent 会要求确认。
 
-然后选择连接方式：
+然后在 **Hermes 自己的配置菜单**中选择连接方式：
 
+- **OpenViking Managed Service** 提供 **Volcengine** 和 **BytePlus** 两个选项。
+  Volcengine 使用固定的服务地址和
+  [托管服务](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)的 API Key。
+  BytePlus 用户输入 OpenViking API Key。
+  详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+- **Custom** 使用服务地址和凭据连接 OpenViking，也可以复用已保存的 `ovcli.conf`。
 - **Quick Local** 安装本地服务和 embedding 模型，复用受支持的 Hermes LLM 抽取记忆。
   LLM 仍可使用远程 API。
-- **OpenViking Service (VolcEngine Cloud)** 通过服务 API Key 连接火山引擎的
-  [OpenViking 托管云服务](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)，
-  无需安装服务端或配置本地模型。
-- **Custom** 使用 URL 和凭据连接自己的服务，也可以复用已保存的 `ovcli.conf`。
+
+旧版插件连接 Volcengine 时使用 **OpenViking Service (VolcEngine Cloud)**，
+连接 BytePlus 时使用 **Custom**。
 
 配置后正常聊天即可。插件默认在待提交内容达到 20,000 tokens、会话结束或切换时
 请求提交。OpenViking 完成抽取后，记忆才能被召回。已有服务端数据会保留。

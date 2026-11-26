@@ -14,7 +14,6 @@ from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 
 from openviking.metrics.datasources import HttpRequestLifecycleDataSource
 from openviking.observability.context import get_root_observability_context
@@ -39,13 +38,6 @@ def _make_test_app() -> FastAPI:
     app = FastAPI()
     app.add_middleware(HTTPObservabilityMiddleware)
     app.add_middleware(RequestIdMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=[REQUEST_ID_HEADER],
-    )
     return app
 
 
@@ -92,15 +84,10 @@ async def test_request_context_is_reused_and_released_after_response() -> None:
     assert response.json()["observability_request_id"] == "resource-import-20260728-001"
 
 
-async def test_missing_request_id_generates_uuid_for_health_and_cors_exposes_it() -> None:
-    app = _make_test_app()
-
-    @app.get("/health")
-    async def health():
-        return {"status": "ok"}
-
-    response = await _request(
-        app,
+async def test_missing_request_id_generates_uuid_for_health_and_cors_exposes_it(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get(
         "/health",
         headers={"Origin": "https://example.test"},
     )
@@ -116,6 +103,9 @@ async def test_invalid_request_ids_are_replaced_without_logging_raw_values() -> 
     server_logger = logging.getLogger("openviking")
 
     handler = _CaptureHandler(records)
+    completion_logger = logging.getLogger("openviking.observability.http")
+    level = completion_logger.level
+    completion_logger.setLevel(logging.INFO)
     server_logger.addHandler(handler)
     try:
         cases = [
@@ -127,14 +117,15 @@ async def test_invalid_request_ids_are_replaced_without_logging_raw_values() -> 
         responses = [await _request(app, "/items", headers=headers) for headers in cases]
     finally:
         server_logger.removeHandler(handler)
+        completion_logger.setLevel(level)
 
     assert all(response.status_code == 404 for response in responses)
     for response in responses:
         _assert_generated_request_id(response.headers[REQUEST_ID_HEADER])
-    completion_records = [
-        record for record in records if record.name == "openviking.observability.http"
+    completion_records = [record for record in records if hasattr(record, "http_status_code")]
+    assert [record.request_id for record in completion_records] == [
+        response.headers[REQUEST_ID_HEADER] for response in responses
     ]
-    assert all(record.request_id for record in completion_records)
     rendered = "\n".join(record.getMessage() for record in records)
     assert all(raw not in rendered for raw in ("contains spaces", "x" * 129, "first", "second"))
 
@@ -192,7 +183,7 @@ async def test_unhandled_500_keeps_request_id_for_log_and_response(monkeypatch) 
     ]
     assert len(error_records) == 1
     assert error_records[0].request_id == "failed-request-001"
-    assert error_records[0].getMessage().startswith("[request_id=failed-request-001] ")
+    assert "request_id=" not in error_records[0].getMessage()
     assert len(completed_requests) == 1
     assert completed_requests[0]["error_code"] == "INTERNAL"
     assert completed_requests[0]["error_message"] == "Internal server error"
@@ -248,9 +239,12 @@ async def test_concurrent_requests_do_not_mix_or_leak_request_ids() -> None:
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            first, second = await asyncio.gather(
-                client.get("/work/first", headers={REQUEST_ID_HEADER: "request-first"}),
-                client.get("/work/second", headers={REQUEST_ID_HEADER: "request-second"}),
+            first, second = await asyncio.wait_for(
+                asyncio.gather(
+                    client.get("/work/first", headers={REQUEST_ID_HEADER: "request-first"}),
+                    client.get("/work/second", headers={REQUEST_ID_HEADER: "request-second"}),
+                ),
+                timeout=2,
             )
     finally:
         server_logger.removeHandler(handler)

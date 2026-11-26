@@ -37,13 +37,14 @@ export function createChatTimeline(
       messages: [...messages, ...pending],
       streaming: { ...accumulator.snapshot(), insertIndex: messages.length },
     });
-  const commit = () => {
+  const commit = (interrupted = false) => {
     const parts = accumulator.finish();
     if (parts.length)
       messages.push({
         id: id(),
         turnId,
         role: 'assistant',
+        ...(interrupted && { interrupted: true }),
         createdAt: new Date().toISOString(),
         parts,
       });
@@ -72,10 +73,13 @@ export function createChatTimeline(
       accumulator.apply(event);
       publish();
     },
-    finish: async (persistPartial = true) => {
+    finish: async ({
+      persistPartial = true,
+      interrupted = false,
+    }: { persistPartial?: boolean; interrupted?: boolean } = {}) => {
       await decisions;
       const completed = [...messages, ...pending];
-      commit();
+      commit(interrupted);
       return {
         messages: [...messages],
         added: (persistPartial ? messages : completed).slice(base.length),

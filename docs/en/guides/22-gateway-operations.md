@@ -26,6 +26,7 @@ This page is for the people who run OpenViking Gateway as a service: deploy it i
 | Installation | The gateway is part of the OpenViking core package. The optional `gateway-fast` extra (`pip install "openviking[gateway-fast]"`) adds a faster event loop and HTTP parser. |
 | Sign-in | Remote deployments need an OpenViking API key; users, account admins and root can all sign in to the gateway pages in Studio. Local dev mode needs no key and always uses the `default/default` identity. |
 | Storage | SQLite on a local disk for one host, or shared Redis for multiple replicas. Redis requires `pip install "openviking[expiry]"`; the official image includes it. |
+| Session auto-commit | Only with `openviking_auto_commit: true`, which leaves commits to OpenViking: the OpenViking server needs `memory.session_auto_commit.enabled: true` (`idle_enabled` on 0.4.x) for the idle commit. By default the gateway commits and works with any server; see [Save conversations](../gateway/08-context-profiles.md#save-conversations). |
 
 ## Choose a deployment form {#deployment-options}
 
@@ -130,7 +131,7 @@ helm upgrade --install gateway ./deploy/helm/openviking-gateway \
 
 The default is one SQLite replica with a persistent volume and `Recreate` updates. A default StorageClass, or `persistence.storageClass`/`persistence.existingClaim`, must be available. Setting `persistence.enabled: false` loses SQLite state when a Pod is replaced; Helm NOTES warns about this. PVCs are retained on uninstall. Use both Redis providers before scaling; see [Scaling](#scaling).
 
-The chart sets `session_ttl_seconds: 604800` and `response_ttl_seconds: 604800`, shorter than the gateway's 30-day defaults; override `config.*` to change them. Each Pod requests 500m CPU and 1Gi of memory, with limits of 2 CPUs and 4Gi; set `resources` for your load.
+The chart sets `response_ttl_seconds: 604800`, shorter than the gateway's 30-day default, and leaves `session_ttl_seconds` at its one-day default; override `config.*` to change them. Each Pod requests 500m CPU and 1Gi of memory, with limits of 2 CPUs and 4Gi; set `resources` for your load.
 
 The standalone chart's `existingSecret` accepts `management-key`, `redis-password` and `root-key`. The first two become `OPENVIKING_GATEWAY_MANAGEMENT_KEY` and `OPENVIKING_GATEWAY_REDIS_PASSWORD`; `config.storage.redis.password_env` names the latter. Local and KMS encryption mount `root-key` read-only at `/etc/openviking-gateway/keys/root-key` and set the provider's `key_file` to it. Generate the key before installing, as described under [Encryption](#encryption). For upstream credentials and KMS AK/SK, use `$VAR` in `config` and `extraEnv` with `secretKeyRef`; never put plaintext credentials in a ConfigMap.
 
@@ -166,7 +167,7 @@ Without an OpenViking address from either source, the gateway exits and asks you
 
 ### Startup checks {#startup-checks}
 
-When a Redis port is selected, startup PING must succeed. Wrong addresses or credentials, or an unavailable Redis service, fail startup; Kubernetes restarts the container. Use `maxUnavailable: 0` when rolling out. Runtime Redis failures do not change `/health`; failures during authentication return a plain-text HTTP 500 and a traceback in stderr.
+When a Redis port is selected, startup PING must succeed. Wrong addresses or credentials, or an unavailable Redis service, fail startup; Kubernetes restarts the container. Use `maxUnavailable: 0` when rolling out. Runtime Redis failures do not change `/health`; failures during authentication or routing return a JSON `503 store_unavailable` with `Retry-After: 1`, and the gateway log has one warning that names the error type.
 
 Before it starts listening, a standalone gateway checks OpenViking's authentication mode:
 
@@ -345,7 +346,6 @@ For multiple standalone replicas, set **both** `storage.kernel` and `storage.man
 replicaCount: 2
 existingSecret: gateway-credentials
 config:
-  capture_concurrency: 4
   storage:
     kernel: redis
     management: redis
@@ -361,13 +361,15 @@ config:
 
 For a headless per-key deployment, add `management_api: false`, `openviking_keys: true`, `tenancy: key`, `default_upstreams` and `request_log_sink: stdout`; see [Use an OpenViking API key directly](../gateway/09-gateway-keys.md#openviking-keys) and [Deployment default upstreams](../gateway/07-upstreams.md#deployment-default-upstreams). Without the management API, deleting a user in OpenViking does not reach the gateway; that user's gateway data expires through [retention](../gateway/11-security-and-data.md#retention). A service in front of such a deployment follows the [host integration contract](#host-integration-contract).
 
-Redis `mode: standalone` covers a single endpoint, including a managed proxy; `mode: cluster` uses Redis Cluster endpoints and database 0. Use `rediss://` for TLS and never embed credentials in endpoint URLs. `pool_size` caps the Redis commands in flight per process; further commands wait for a free connection. Keep `pool_size >= capture_concurrency + 8`. Redis is in the authentication path: a total outage returns HTTP 500. Use replication and automatic failover for availability, and configure memory and persistence as described in [Redis memory policy](#redis-memory-policy).
+Redis `mode: standalone` covers a single endpoint, including a managed proxy; `mode: cluster` uses Redis Cluster endpoints and database 0. Use `rediss://` for TLS and never embed credentials in endpoint URLs. `pool_size` caps the Redis commands in flight per process; further commands wait for a free connection. Each command, that wait included, has at most `connect_timeout_ms + command_timeout_ms` (no limit when `command_timeout_ms` is `0`). Redis is in the authentication path: during a total outage requests get `503 store_unavailable` (JSON) with `Retry-After: 1` and `X-OpenViking-Upstream-Attempted: 0`, within `connect_timeout_ms + command_timeout_ms`. A turn that cannot be saved while the store fails is written by the conversation's next finished turn. Use replication and automatic failover for availability, and configure memory and persistence as described in [Redis memory policy](#redis-memory-policy).
 
 Redis deployments use `RollingUpdate` with `maxUnavailable: 0`, `maxSurge: 1`, and a PDB with `maxUnavailable: 1` when there are multiple replicas. Use `affinity` to spread replicas across nodes. Management changes and issued-key revocations can take up to **2 seconds** to reach another replica because each process caches management records.
 
+`max_inflight_requests` caps the model requests one process serves at once; `0`, the default, sets no limit. A request above the cap gets HTTP 503 `gateway_overloaded` with `Retry-After: 1` at once, before the gateway reads its store or calls OpenViking, and never reaches the provider (`X-OpenViking-Upstream-Attempted: 0`), so a client or a fronting service may send it again elsewhere. A streamed reply keeps its place until its body ends. `.../models` is not limited. Pick the value from a load test: the [status line](#status-line) shows requests in flight as `inflight_requests` and refusals as `rejected_overload`.
+
 All probes call `/health` without credentials; it reports local state without calling OpenViking or Redis. Startup has a 300-second probe budget (`2 × 150`). After startup, an OpenViking outage does not remove Pods from service.
 
-The shutdown budget is `15s preStop + upstream_timeout_seconds + up to 100s capture drain`. The chart's default `terminationGracePeriodSeconds: 660` covers preStop and a stream that runs to the default 600-second upstream timeout; if Kubernetes stops capture delivery before it drains, another replica picks it up after its lease expires. To let captures finish draining before the Pod is killed, raise it to `15 + upstream_timeout_seconds + 100` (715 with the default timeout).
+The shutdown budget is `15s preStop + the longest request still in flight`. A request that ends a turn stays in flight for up to 30 seconds after its reply while it saves the turn. Shutdown runs no commits and waits for none: the conversation state records when each idle commit is due, and every gateway process looks once a minute for idle commits that have been due for a minute and makes them, so a commit whose Pod was replaced, crashed or killed, or that came due while no gateway process was running, is made a minute or two late by another process or by one that starts. `upstream_timeout_seconds` limits how long a request waits on a provider that sends nothing, not how long a reply that keeps arriving may run, so apart from the OpenViking tools **Total time**, when set, the gateway puts no upper limit on how long a request runs. A client that stops reading without disconnecting also holds its request open; rely on the ingress or load balancer idle timeout to close such connections. The chart's default `terminationGracePeriodSeconds: 660` gives in-flight requests 645 seconds after preStop; a reply still streaming when the grace period ends is cut off when the Pod is killed, and the client sees the connection close. A save cut off this way is written by the conversation's next finished turn. To let requests of up to N seconds finish and save their turns before the Pod is killed, set it to `15 + N + 30` (645 for N = 600).
 
 ### Host integration contract {#host-integration-contract}
 
@@ -378,9 +380,25 @@ A service in front of a headless gateway, such as one that picks the model endpo
 | `X-API-Key` or `Authorization: Bearer` | The client's OpenViking API key, passed through unchanged |
 | `X-OpenViking-Upstream-URL` | The chosen endpoint. It must equal the `base_url` of a `default_upstreams` entry; any other value returns 403 and nothing is sent. See [Pick the upstream per request](../gateway/07-upstreams.md#upstream-url-header) |
 | `X-OpenViking-Upstream-Key` | The provider API key, for an upstream with `auth_mode: passthrough` |
+| `X-OpenViking-Request-Id` | Optional: the host's own ID for the request, matching `[A-Za-z0-9._:/-]{1,128}`. The gateway uses it as its `request_id`, so the host's log and the gateway's record share one key. A missing value gets a generated ID; an invalid one is replaced and the record gets `request_id_rejected: true` |
+| `X-OpenViking-Resource-Id` | Optional: an ID the host wants on the record (`[A-Za-z0-9._:-]{1,128}`), recorded as `resource_id` only with `trusted_host_headers: true` |
+| `X-OpenViking-Request-Source` | Optional: the kind of caller (`[a-z0-9_-]{1,32}`), recorded as `request_source` only with `trusted_host_headers: true` |
 | Other headers | The client's own headers, such as `X-OpenViking-Session` and `X-OpenViking-Context`, passed through |
 
-The gateway removes every `X-OpenViking-*` header, the client's credentials and hop-by-hop headers before it forwards the request to the provider.
+Set the three optional headers so that they replace any value the client sent. The gateway removes every `X-OpenViking-*` header, the client's credentials and hop-by-hop headers before it forwards the request to the provider, and removes every `X-OpenViking-*` header from the provider's response, so a provider cannot set the headers below.
+
+Every response on a model route carries these headers back to the host:
+
+| Header | When | Value |
+| --- | --- | --- |
+| `X-OpenViking-Request-Id` | Every response: success, relayed provider error, gateway error, stream | The gateway's `request_id` |
+| `X-OpenViking-Error-Reason` | Only when the gateway produced the status and body itself | A reason from [Model route errors](../api/25-gateway.md#model-route-errors) |
+| `X-OpenViking-Error-Origin` | Same responses | `gateway`, `openviking` or `upstream` |
+| `X-OpenViking-Upstream-Attempted` | Same responses | `1` when the gateway had started a request to the provider, a compaction summary call included; else `0` |
+| `X-OpenViking-Degraded` | When the request was degraded by the time the response headers were sent | The issue codes joined with `,`, for example `revocation_check_unavailable,recall_failed` |
+| `Retry-After` | `store_unavailable` and `gateway_overloaded` responses | `1` |
+
+A non-2xx response without `X-OpenViking-Error-Reason` is the provider's own error, relayed unchanged. A host may retry a request elsewhere only when it carries `X-OpenViking-Upstream-Attempted: 0`; with `1`, the provider may already have received it. OpenViking calls the gateway makes while serving a request carry the same ID in `X-Request-ID`.
 
 ## Redis memory policy {#redis-memory-policy}
 
@@ -393,35 +411,69 @@ appendonly yes
 appendfsync everysec
 ```
 
-`volatile-lru` evicts only data that expires anyway: conversation state, replay, pending capture and OpenViking key records. What each loss costs is listed under [Redis conversation state](../gateway/11-security-and-data.md#redis-conversation-state). Do not use `allkeys-*`: it can also evict data with no TTL, so issued keys, upstreams and profiles disappear, deleted conversation state can come back, and pending capture is no longer scheduled. `noeviction` also works, but once memory is full, writes fail and requests lose memory enhancement.
+`volatile-lru` evicts only data that expires anyway: conversation state, replay, capture documents and OpenViking key records. What each loss costs is listed under [Redis conversation state](../gateway/11-security-and-data.md#redis-conversation-state). Do not use `allkeys-*`: it can also evict data with no TTL, so issued keys, upstreams and profiles disappear, and deleted conversation state can come back. `noeviction` also works, but once memory is full, writes fail and requests lose memory enhancement.
 
-Monitor the rate of `evicted_keys` and memory usage; with enough capacity, nothing is evicted. The gateway does not check the eviction policy or any other Redis setting. To watch the capture backlog, `ZCARD <key_prefix>v1:k:{cap}:ready` counts scheduled or in-progress captures, including a few stale entries that are removed later. In Redis Cluster all capture data lives on one shard, so size that shard for the backlog an OpenViking outage builds up. Capture leases use the Redis clock, but scheduling times come from the gateway hosts; keep them synchronized with NTP.
+Monitor the rate of `evicted_keys` and memory usage; with enough capacity, nothing is evicted. The gateway does not check the eviction policy or any other Redis setting. In Redis Cluster all capture documents live on one shard; each holds an OpenViking session ID, the last message saved and the peer hashes of the conversation's user messages, not conversation text.
 
-Without persistence, a Redis restart deletes all gateway management data: issued gateway keys stop working, and upstreams and profiles must be set up again. AOF keeps this data, pending capture and deletions across restarts. On Redis 7.2, keep command permissions on a disabled `default` user (for example `user default off ~* &* +@all`): AOF replay checks them for transactions, and without them the replayed writes fail with `NOPERM`. `appendfsync everysec` can still lose about one second of writes, and asynchronous failover can lose the latest ones. Allow extra memory for copy-on-write during AOF rewrites and snapshots. Backups may retain data deleted after they were taken.
+Without persistence, a Redis restart deletes all gateway management data: issued gateway keys stop working, and upstreams and profiles must be set up again. AOF keeps this data, conversation state and deletions across restarts. On Redis 7.2, keep command permissions on a disabled `default` user (for example `user default off ~* &* +@all`): AOF replay checks them for transactions, and without them the replayed writes fail with `NOPERM`. `appendfsync everysec` can still lose about one second of writes, and asynchronous failover can lose the latest ones. Allow extra memory for copy-on-write during AOF rewrites and snapshots. Backups may retain data deleted after they were taken.
 
 ## Monitoring and routine checks {#monitoring}
 
 The gateway exports no metrics such as Prometheus. By default, request logs are stored and available on Studio's [Overview and Requests](../gateway/10-overview-and-requests.md#overview) tabs, or through the management API's `/gateway/admin/overview` and `/gateway/admin/logs`.
 
-Set `request_log_sink: "stdout"` in the gateway configuration, or `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`, and restart to send new records only to stdout. Each finished model request and background saving status change produces one JSON line, flushed immediately even when stdout is a pipe. Each record includes `time` (Unix seconds when written), `account`, `user_id` (possibly `null` for older saving state), and the existing request metrics at the top level, such as `kind`, `status`, `input_tokens` and `cached_tokens`. Credentials, prompts and replies are not included. The collector controls retention and access to these records; `log_retention_days` applies only to stored logs.
+Set `request_log_sink: "stdout"` in the gateway configuration, or `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`, and restart to send new records only to stdout. Each model request, failed ones included, produces one JSON line, flushed immediately even when stdout is a pipe. Each record includes `time` (Unix seconds when written), `account` and `user_id` (`null` for a request that failed before its key was confirmed), and the existing request metrics at the top level, such as `kind`, `status`, `input_tokens` and `cached_tokens`. Credentials, prompts and replies are not included. The collector controls retention and access to these records; `log_retention_days` applies only to stored logs.
+
+Set `request_log_sink: "file"` and `request_log_path` to write the same lines to a file instead. A background thread writes them, so a slow disk never holds up a request; when its queue of 10,000 lines is full, new lines are dropped and counted in the status line's `records_dropped`. Like the server's usage log, the file rotates every `request_log_rotation_interval_hours` hours (default 1) and `request_log_backup_count` old files are kept (default 168, one week of hourly files); each old file is named after the UTC hour it started, such as `requests.jsonl.2026-01-31_13`. Old files are kept by count, not size, so disk use grows with traffic; lower `request_log_backup_count` to bound it. An empty hidden `.<file name>.lock`, such as `.requests.jsonl.lock`, sits beside the file; leave it out of collector patterns. After upgrading from size rotation, delete the old `requests.jsonl.1` … `.4` files: they are not removed automatically. This sink needs one worker process: `workers: 1` standalone, one server worker embedded; run more replicas instead. On Kubernetes, put the file on a volume your collector reads, for example with the chart's `extraVolumes` and `extraVolumeMounts`:
+
+```yaml
+config:
+  request_log_sink: file
+  request_log_path: /var/log/openviking-gateway/$HOSTNAME.jsonl
+extraVolumes:
+  - name: gateway-logs
+    hostPath:
+      path: /var/log/openviking-gateway
+      type: DirectoryOrCreate
+extraVolumeMounts:
+  - name: gateway-logs
+    mountPath: /var/log/openviking-gateway
+```
+
+`$HOSTNAME` resolves from the environment to the pod name, so each pod writes its own file, rotated to `<pod name>.jsonl.<YYYY-MM-DD_HH>`: replicas must never share a log file. The gateway prunes only its own pod's files, so the files of pods that no longer exist stay on the node until the node or the collector removes them.
+
+Standalone application logs use the common UTC text format on stderr or, with `log_path`, in a rotating file. Each record carries `ts`, `level`, `logger`, `pid`, `request_id`, `trace_id`, and a quoted message. Context is captured before asynchronous writing; unavailable IDs use `-`. This application format also applies to Uvicorn. Request and capture records retain their separate JSON schema described above.
 
 When `management_api: false` disables Studio and the management endpoints, configure the stdout sink and collect process or container logs for monitoring. The same workflow applies with the stdout sink when management is enabled: the Requests page and Overview's request figures have no new records. Previously stored records remain visible until they expire.
 
-Aggregate reasons and first-call cache results from the request log's top-level fields. Alert on capture pauses (`kind: capture`), capture queue growth, `openviking_http_429`, Redis memory/evictions and HTTP error rates. Identify rejection happens before a proxy request is logged, so count its 401/402/403 responses and Redis-related 500s in proxy access logs; use gateway stderr for their traceback. Proxy concurrent connections can approximate active streams. Confirm your platform collects stdout; a mounted directory alone does not redirect it to files.
+Aggregate reasons and first-call cache results from the request log's top-level fields. Alert on `capture_status: failed`, `openviking_http_429`, Redis memory/evictions and HTTP error rates. Gateway errors are records too: count them by `error_reason` and `error_origin` (see [Log records](../api/25-gateway.md#log-records)). The store sink keeps no record for a request refused before its key was confirmed, so with that sink count those 401/402/403 responses in proxy access logs; use the gateway application log for a safe error-type summary of an `internal_error`. Confirm your platform collects stdout; a mounted directory alone does not redirect it to files.
+
+Conversation write failures appear at ERROR as `gateway finished turn save failed` or `gateway history save before compaction failed`: the model response can still succeed, but the history may be lost. Commit failures appear at INFO as `gateway session commit failed`; inspect `error_code` to distinguish failures such as `openviking_http_429` and `openviking_unavailable`. These background commit failures do not appear in request records. The compaction history-save failure log also includes `error_code`.
+
+### Status line {#status-line}
+
+Set `snapshot_interval_seconds` (for example `60`) to have each gateway process write one status line at that interval. It goes where request records go with the `stdout` and `file` sinks; with `store` it is logged at INFO by the `openviking_gateway.snapshot` logger, and goes to stderr when the host has configured no log handler. It carries no account, user, session, model or request ID; the fields are listed in [Status line](../api/25-gateway.md#status-line). Each line covers the interval since the previous one. The interval counters (`capture.delivered` and `capture.failed` among them) and `inflight_*` are per process and can be summed across processes. Useful alerts:
+
+- `errors.store_unavailable` or `store_errors` above zero: the state store (SQLite or Redis) is failing.
+- `errors.upstream_timeout`, `upstream_unreachable` or `upstream_disconnected` rising: a provider is slow or unreachable.
+- `openviking.state` other than `ok`, or `degradations.recall_failed` rising: OpenViking is not answering.
+- `inflight_requests` close to your capacity, `inflight_streams` for long-running streams, `rejected_overload` above zero: the process is at `max_inflight_requests`.
+- `records_dropped` or `records_failed` above zero: request records are being lost.
+- `capture.failed` above zero, especially while `capture.delivered` stays at zero: finished turns are not being saved to OpenViking.
 
 ### Routine checks {#day-to-day-operations}
 
 - **Liveness:** `/health`, which is the server's health check in an embedded deployment and the gateway's own in a standalone one.
 - **Gateway health:** the **First-call cache hit rate** on the Overview tab ([what it means](../gateway/10-overview-and-requests.md#overview)), or calculate it from stdout metrics: within an account and time window, select `kind: "user"` records and divide the sum of `first_upstream_cached_tokens` by the sum of `first_upstream_input_tokens`. For each missing field, use that record's `cached_tokens` or `input_tokens` instead (missing usage counts as 0). A zero denominator means no reported input usage. These are top-level fields, not a nested `metrics` object. If the rate drops noticeably, see [The first-call cache hit rate dropped](../gateway/12-troubleshooting.md#the-first-call-cache-hit-rate-dropped).
-- **A single request:** expand its row on the Requests tab, or find its stdout record by `account`, `user_id` and `request_id`; see [Requests](../gateway/10-overview-and-requests.md#requests). Background saving events use `kind: "capture"` and identify the conversation with its hashed `session`.
+- **A single request:** expand its row on the Requests tab, or find its stdout record by `account`, `user_id` and `request_id`; see [Requests](../gateway/10-overview-and-requests.md#requests).
 - **Public address:** `public_url` still matches the address clients use; see [Public address](#public-address).
 - **Backups:** the SQLite directory or Redis persistence/backup, and, with encryption on, the encryption root key; see [Backups and recovery](../gateway/11-security-and-data.md#backups).
 
 ## Upgrades {#upgrades}
 
 - Read the release notes before you upgrade. If a new gateway version cannot read the old storage format, it stops at startup with `Unsupported gateway schema`; see [The gateway does not start](../gateway/12-troubleshooting.md#the-gateway-does-not-start).
-- A standalone gateway needs OpenViking Server `min_server_version` (0.4.16) or later. With an older server, no keys can be issued and saving retries fail with `openviking_version_mismatch`; memory search may also fail, shown as `openviking_http_<status>`. When you upgrade the two separately, upgrade OpenViking first, then the gateway. An embedded gateway ships with its server and skips this check.
+- A standalone gateway needs OpenViking Server `min_server_version` (0.4.16) or later. With an older server, no keys can be issued and saving fails with `openviking_version_mismatch`; memory search may also fail, shown as `openviking_http_<status>`. When you upgrade the two separately, upgrade OpenViking first, then the gateway. An embedded gateway ships with its server and skips this check.
 - To move from the sidecar or an older standalone gateway, see [Migration](#migration).
+- Before you set `openviking_auto_commit: true`, set `memory.session_auto_commit.enabled: true` (`idle_enabled` on 0.4.x) on the OpenViking server the gateway uses. Without it OpenViking never runs the idle commit, so conversations that stay below **Commit after** are saved but no memories are extracted from them; see [Save conversations](../gateway/08-context-profiles.md#save-conversations).
 
 - Switching SQLite to Redis starts a fresh conversation cache. Re-create issued `ovgw_` keys, upstreams and profiles in management storage; no migration command is provided. Deployment defaults can supply upstreams and profiles for OpenViking-key access.
 - Redis keys include the layout version (`<storage.key_prefix>v1:`). A rollback with the same layout can read existing state. A future layout-version change starts fresh: conversation state expires as cache data, OpenViking key records rebuild on access, and deployments with issued keys must reconfigure them. Do not assume cross-version data migration.
@@ -432,7 +484,7 @@ Aggregate reasons and first-call cache results from the request log's top-level 
 These steps apply when you move from the sidecar or standalone gateway of earlier releases to the embedded gateway. Steps 4 and 7 are detailed in the tables after the list.
 
 1. **Back up first.** Back up `storage_path` (both databases and `encryption.key`, if it is there). Stop the old gateway process or sidecar before you enable the embedded gateway.
-2. **Remove old fields.** Delete `host`, `port`, `workers`, `url`, `openviking_url`, `admin_token_env` and `encryption_key_env` from the `gateway` section of `ov.conf`. The server ignores them and logs a warning at startup, so an old `ov.conf` still starts, but clean them up; `openviking-server init` → **Update gateway** removes them for you.
+2. **Remove old fields.** Delete `host`, `port`, `workers`, `url`, `openviking_url`, `admin_token_env` and `encryption_key_env` from the `gateway` section of `ov.conf`. The server ignores them and logs a warning at startup, so an old `ov.conf` still starts, but clean them up; `openviking-server init` → **Update gateway** removes them for you. `capture_concurrency` and `capture_delivery_records` are ignored with the same warning, in `ov.conf` and in `gateway.conf`: the request that ends a turn saves it, and saving writes no records of its own; delete them too.
 
    To keep running the gateway on its own instead, run `openviking-gateway init`, or move its settings to a separate `gateway.conf`, without the `gateway` wrapper and `enabled`. The standalone command no longer takes `--openviking-url`, `--host`, `--port`, `--workers` or `--storage-path`; set them in `gateway.conf` or as environment variables.
 3. **Fix the public address.** Point `public_url` at the server's public address, without `/gateway`, or remove it. The old quick start set it to `http://127.0.0.1:1935`, which the embedded gateway no longer listens on, so setup guides and upload links would point at nothing. When `public_url` points at another port, `openviking-server init` → **Update gateway** offers to clear it.

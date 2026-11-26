@@ -39,15 +39,16 @@ test('standalone Console Hook translates existing help and errors without changi
     assert.equal(state.records[0].content.sections[0].label, '核心流程');
     assert.match(state.records[1].content.text, /未知命令/);
     assert.match(state.records[2].content.text, /缺少参数 uri/);
-    assert.equal(state.records[3].content.text, 'DENIED: Host reason 原文');
+    assert.equal(state.records[3].content.text, 'Host reason 原文');
     const serverError = state.error;
     assert.equal(serverError.message, 'Host reason 原文');
+    assert.equal(serverError.code, 'DENIED');
     const ids = state.records.map((record) => record.id);
     await view.render(element('en-US'));
     assert.equal(state.records[0].content.sections[0].label, 'Core workflow');
     assert.match(state.records[1].content.text, /Unknown command/);
     assert.match(state.records[2].content.text, /Missing uri/);
-    assert.equal(state.records[3].content.text, 'DENIED: Host reason 原文');
+    assert.equal(state.records[3].content.text, 'Host reason 原文');
     assert.equal(state.error, serverError);
     assert.equal(state.command, 'ov read draft');
     assert.equal(state.conversationDraft, 'Conversation 草稿');
@@ -97,6 +98,55 @@ test('standalone Console Hook localizes exposed generated errors without mutatin
     assert.match(englishError.message, /Missing uri/);
     assert.equal(state.records[0].id, id);
     assert.equal(state.failedCommand, 'ov read');
+  } finally {
+    await view.unmount();
+  }
+});
+
+test('Console relocalizes existing session telemetry without repeating the command', async () => {
+  let state;
+  let calls = 0;
+  const telemetry = {
+    id: 'session-telemetry',
+    summary: { duration_ms: 7 },
+  };
+  const fetch = async () => {
+    calls++;
+    return Response.json({
+      status: 'ok',
+      result: { session_id: 'review' },
+      telemetry,
+    });
+  };
+  function Demo() {
+    state = useConsole();
+    return null;
+  }
+  const element = (locale) =>
+    h(
+      OpenVikingProvider,
+      { locale, baseURL: 'https://demo.invalid', fetch },
+      h(Demo),
+    );
+  const view = await mount(element('zh-CN'));
+  try {
+    await act(() => state.execute('ov session new --telemetry'));
+    const payload = JSON.stringify(telemetry, null, 2);
+    const original = state.records[0];
+    assert.deepEqual(original.content.lines, [
+      'Session id: review',
+      `遥测：${payload}`,
+    ]);
+    assert.equal(Object.hasOwn(original, 'telemetry'), false);
+
+    await view.render(element('en-US'));
+    assert.deepEqual(state.records[0].content.lines, [
+      'Session id: review',
+      `Telemetry: ${payload}`,
+    ]);
+    assert.equal(state.records[0].id, original.id);
+    assert.equal(calls, 1);
+    assert.equal(original.content.lines.at(-1), `遥测：${payload}`);
   } finally {
     await view.unmount();
   }

@@ -33,7 +33,6 @@ _CUVS_ROUTE_BUCKETS = {
     "native_memory_budget",
     "native_rebuild_pending",
     "native_sparse_hybrid",
-    "native_unsupported_filter",
     "unsupported_sparse_hybrid",
 }
 _CUVS_FILTER_BUCKETS = {"none", "scalar", "path"}

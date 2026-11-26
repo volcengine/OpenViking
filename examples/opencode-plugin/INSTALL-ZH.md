@@ -182,7 +182,13 @@ OpenCode 的 `mcp.openviking` 配置。
 - `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`、`openviking_add_skill`
 - `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
 
-如果行为异常，先查看运行时文件：
+如果行为异常，先运行诊断。它检查插件安装、客户端配置和服务端连接，并为发现的每个问题给出修复方法；npm 包在 `scripts/` 下带有同一个脚本，会话中也可以用 `ov-memory-doctor` skill 运行它：
+
+```bash
+node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs
+```
+
+运行时文件记录插件日志和 session 状态：
 
 ```bash
 ls ~/.config/opencode/openviking/
