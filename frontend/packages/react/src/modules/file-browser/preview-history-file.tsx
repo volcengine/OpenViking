@@ -9,7 +9,6 @@ import {
 } from './preview-history-controls.js';
 import { PreviewHistoryList } from './preview-history-list.js';
 import { PreviewHistoryRevision } from './preview-history-revision.js';
-import { PreviewHistorySnapshot } from './preview-history-snapshot.js';
 import { PreviewHistoryRestore } from './preview-history-restore.js';
 import { usePreviewMutation } from './use-preview-mutation.js';
 import { usePreviewHistory } from './use-preview-history.js';
@@ -42,14 +41,6 @@ export function PreviewHistoryFile(props: PreviewHistoryProps) {
   return (
     <>
       {toastHolder}
-      {props.canSaveSnapshot ? (
-        <PreviewHistorySnapshot
-          uri={props.uri}
-          text={text}
-          requestOptions={props.requestOptions}
-          onSaved={history.query.retry}
-        />
-      ) : null}
       <div
         className={`ov-file-history__body${props.directory ? ' ov-file-history__single-pane ov-file-history__directory' : ''}`}
       >

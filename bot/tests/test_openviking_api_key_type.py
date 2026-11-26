@@ -2830,12 +2830,17 @@ async def test_openviking_request_connection_client_is_closed_after_tool_call(mo
 @pytest.mark.asyncio
 async def test_experience_reminder_follows_direct_case_experience_links(monkeypatch, tmp_path):
     from openviking.session.memory.dataclass import MemoryFile, StoredLink
-    from openviking.session.memory.memory_type_registry import get_default_registry
+    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
     from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+    from openviking.system_assets import builtin_memory_templates_dir
 
     case_uri = "viking://user/admin/memories/cases/case1.md"
     exp_uri = "viking://user/admin/memories/experiences/exp 10%#(1).md"
     direct_exp_uri = "viking://user/admin/memories/experiences/direct.md"
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.load_from_yaml(str(builtin_memory_templates_dir() / "cases.yaml"))
+    case_schema = registry.get("cases")
+    assert case_schema is not None
     case_content = MemoryFileUtils.write(
         MemoryFile(
             uri=case_uri,
@@ -2859,7 +2864,7 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
                 ).model_dump()
             ],
         ),
-        content_template=get_default_registry().get("cases").content_template,
+        content_template=case_schema.content_template,
     )
 
     class _FakeClient:

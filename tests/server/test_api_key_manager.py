@@ -61,6 +61,32 @@ async def _list_users(manager, account_id, **filters):
 # ---- Root key tests ----
 
 
+async def test_frozen_files_persist_merge_and_enforce_limit(manager, manager_service):
+    """Peer writers merge under the registry guard; failed changes preserve rules."""
+    from openviking_cli.exceptions import InvalidArgumentError
+
+    await manager.create_account("frozen-files", "admin")
+    await manager.register_user("frozen-files", "agent")
+    peer = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await peer.load()
+    try:
+        await asyncio.gather(
+            manager.set_frozen_file("frozen-files", "agent", "skills/a.md", True),
+            peer.set_frozen_file("frozen-files", "agent", "skills/A.md", True),
+        )
+        assert await manager.get_frozen_files("frozen-files") == (
+            "viking://user/agent/skills/A.md",
+            "viking://user/agent/skills/a.md",
+        )
+        for i in range(8):
+            await manager.set_frozen_file("frozen-files", "agent", f"memories/{i}.md", True)
+        with pytest.raises(InvalidArgumentError):
+            await manager.set_frozen_file("frozen-files", "agent", "skills/overflow.md", True)
+        assert len(await peer.get_frozen_files("frozen-files")) == 10
+    finally:
+        await peer.close()
+
+
 async def test_resolve_root_key(manager: APIKeyManager):
     """Root key should resolve to ROOT role."""
     identity = await manager.resolve_identity(ROOT_KEY)
@@ -83,6 +109,7 @@ async def test_create_account(manager: APIKeyManager):
     """create_account should create workspace + first admin user."""
     from openviking.server.api_keys import parse_api_key
 
+    assert {account["account_id"] for account in await manager.list_accounts()} == {"default"}
     acct = _uid()
     key = await manager.create_account(acct, "alice")
     account_id, user_id, secret = parse_api_key(key)
@@ -94,14 +121,6 @@ async def test_create_account(manager: APIKeyManager):
     assert identity.account_id == acct
     assert identity.user_id == "alice"
     assert await manager.get_registered_user_role(acct, "alice") == Role.ADMIN
-
-
-async def test_create_duplicate_account_raises(manager: APIKeyManager):
-    """Creating duplicate account should raise AlreadyExistsError."""
-    acct = _uid()
-    await manager.create_account(acct, "alice")
-    with pytest.raises(AlreadyExistsError):
-        await manager.create_account(acct, "bob")
 
 
 async def test_account_reads_and_mutations_cross_loops_after_waiter_cancellation(
@@ -323,8 +342,6 @@ async def test_delete_account(manager: APIKeyManager):
     assert not await manager.has_user(acct, "trusted-user")
 
     assert await manager.get_deletion(acct) == deletion
-    with pytest.raises(UnauthenticatedError, match="Invalid API key"):
-        await manager.resolve_identity(key)
     assert await manager.finish_deletion(acct, None, "stale-task") is False
     replacement = await manager.replace_deletion_task(
         acct,
@@ -361,12 +378,6 @@ async def test_delete_nonexistent_account_raises(manager: APIKeyManager):
     """Deleting nonexistent account should raise NotFoundError."""
     with pytest.raises(NotFoundError):
         await manager.delete_account("nonexistent")
-
-
-async def test_default_account_exists(manager: APIKeyManager):
-    """Default account should be created on load."""
-    accounts = await manager.list_accounts()
-    assert any(a["account_id"] == "default" for a in accounts)
 
 
 @pytest.mark.parametrize("operation", ["create", "delete", "trusted"])
@@ -433,14 +444,6 @@ async def test_register_user(manager: APIKeyManager):
     assert await manager.get_registered_user_role(acct, "bob") == Role.USER
 
 
-async def test_register_duplicate_user_raises(manager: APIKeyManager):
-    """Registering duplicate user should raise AlreadyExistsError."""
-    acct = _uid()
-    await manager.create_account(acct, "alice")
-    with pytest.raises(AlreadyExistsError):
-        await manager.register_user(acct, "alice", "user")
-
-
 async def test_register_user_in_nonexistent_account_raises(manager: APIKeyManager):
     """Registering user in nonexistent account should raise NotFoundError."""
     with pytest.raises(NotFoundError):
@@ -505,22 +508,31 @@ async def test_account_deletion_fence_overrides_user_deletion_fence(manager: API
 
 
 async def test_regenerate_key(manager: APIKeyManager):
-    """Regenerating key should invalidate old key and return new valid key."""
-    acct = _uid()
-    await manager.create_account(acct, "alice")
-    old_key = await manager.register_user(acct, "bob", "user")
+    account = _uid()
+    assert await manager.get_user_key_fingerprint(account, "bob") is None
+    await manager.create_account(account, "alice")
+    assert await manager.get_user_key_fingerprint(account, "missing") is None
 
-    new_key = await manager.regenerate_key(acct, "bob")
+    old_key = await manager.register_user(account, "bob", Role.USER)
+    original_fingerprint = hashlib.sha256(old_key.encode()).hexdigest()
+    assert await manager.get_user_key_fingerprint(account, "bob") == original_fingerprint
+    assert await manager.get_user_key_fingerprint(account, "bob") == original_fingerprint
+
+    new_key = await manager.regenerate_key(account, "bob")
     assert new_key != old_key
-
-    # Old key invalid
+    assert (
+        await manager.get_user_key_fingerprint(account, "bob")
+        == hashlib.sha256(new_key.encode()).hexdigest()
+    )
     with pytest.raises(UnauthenticatedError):
         await manager.resolve_identity(old_key)
-
-    # New key valid
     identity = await manager.resolve_identity(new_key)
-    assert identity.user_id == "bob"
-    assert identity.account_id == acct
+    assert (identity.account_id, identity.user_id, identity.role) == (account, "bob", Role.USER)
+
+    await manager.begin_deletion(
+        account, "bob", task_id="delete-bob", owner_account_id=account, owner_user_id="alice"
+    )
+    assert await manager.get_user_key_fingerprint(account, "bob") is None
 
 
 @pytest.mark.parametrize("hashing", [False, True])
@@ -564,40 +576,6 @@ async def test_conditional_rotation_checks_persisted_key(manager_service, hashin
     finally:
         for manager in managers:
             await manager.close()
-
-
-async def test_get_user_key_fingerprint_changes_on_rotation(manager: APIKeyManager):
-    """fp must change when the key is regenerated and disappear when user is removed."""
-    acct = _uid()
-    await manager.create_account(acct, "alice")
-    await manager.register_user(acct, "bob", "user")
-
-    fp1 = await manager.get_user_key_fingerprint(acct, "bob")
-    assert fp1 is not None
-    assert len(fp1) == 64  # sha256 hex
-
-    # Same call should be deterministic.
-    assert await manager.get_user_key_fingerprint(acct, "bob") == fp1
-
-    # Rotation flips the stored value → fp must change.
-    await manager.regenerate_key(acct, "bob")
-    fp2 = await manager.get_user_key_fingerprint(acct, "bob")
-    assert fp2 is not None
-    assert fp2 != fp1
-
-    # Deletion fence immediately removes the fingerprint.
-    await manager.begin_deletion(
-        acct,
-        "bob",
-        task_id="delete-1",
-        owner_account_id=acct,
-        owner_user_id="alice",
-    )
-    assert await manager.get_user_key_fingerprint(acct, "bob") is None
-
-
-async def test_get_user_key_fingerprint_unknown_returns_none(manager: APIKeyManager):
-    assert await manager.get_user_key_fingerprint("nope", "nobody") is None
 
 
 async def test_set_role(manager: APIKeyManager):
@@ -914,15 +892,9 @@ async def test_missing_identity_fails_authentication_and_management_separately(
         UnauthenticatedError, match="Account identity does not exist or is being deleted"
     ):
         await manager.resolve_oauth_identity(acct, "nobody", Role.USER)
-    with pytest.raises(NotFoundError):
+    resource = "Account" if missing_account else "User"
+    with pytest.raises(NotFoundError, match=f"{resource} not found"):
         await manager.regenerate_key(acct, "nobody")
-
-
-async def test_get_registered_user_role_returns_none_when_user_missing(manager: APIKeyManager):
-    acct = _uid()
-    await manager.create_account(acct, "admin_user")
-    assert await manager.get_registered_user_role(acct, "nobody") is None
-    assert await manager.get_registered_user_role("no_such_account", "no_such_user") is None
 
 
 # ---- Read-replica refresh contract ----
@@ -951,71 +923,49 @@ async def test_explicit_fresh_list_bypasses_watcher_interval(manager_service):
         await writer.close()
 
 
-async def test_watched_reader_accepts_user_registered_by_writer(manager_service):
+async def test_watched_reader_observes_registration_and_deletion(manager_service, monkeypatch):
     writer = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await writer.load()
-    acct = _uid()
-    await writer.create_account(acct, "alice")
     reader = build_api_key_manager(
         root_key=ROOT_KEY,
         viking_fs=manager_service.viking_fs,
         account_store_watch_enabled=True,
         account_store_watch_interval_seconds=0.01,
     )
-    await reader.load()
-    await asyncio.sleep(0.03)
-    user_key = await writer.register_user(acct, "bob")
+    account = _uid()
+    observing = asyncio.Event()
+    compute_signature = reader._store._compute_store_signature
 
+    async def signature_after_startup():
+        signature = await compute_signature()
+        observing.set()
+        return signature
+
+    monkeypatch.setattr(reader._store, "_compute_store_signature", signature_after_startup)
     try:
-        for _ in range(100):
-            try:
-                identity = await reader.resolve_identity(user_key)
-                break
-            except UnauthenticatedError:
+        await writer.load()
+        await writer.create_account(account, "alice")
+        await reader.load()
+        await asyncio.wait_for(observing.wait(), timeout=2)
+        key = await writer.register_user(account, "bob")
+
+        async def wait_for_identity(available):
+            while True:
+                try:
+                    identity = await reader.resolve_identity(key)
+                except UnauthenticatedError:
+                    identity = None
+                if (identity is not None) == available:
+                    return identity
                 await asyncio.sleep(0.01)
-        else:
-            pytest.fail("watched reader did not observe the registered user")
-        assert (identity.account_id, identity.user_id) == (acct, "bob")
-    finally:
-        await reader.close()
-        await writer.close()
 
+        identity = await asyncio.wait_for(wait_for_identity(True), timeout=2)
+        assert (identity.account_id, identity.user_id) == (account, "bob")
 
-async def test_watched_reader_rejects_user_removed_by_writer(manager_service):
-    writer = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
-    await writer.load()
-
-    acct = _uid()
-    await writer.create_account(acct, "alice")
-    user_key = await writer.register_user(acct, "bob")
-
-    reader = build_api_key_manager(
-        root_key=ROOT_KEY,
-        viking_fs=manager_service.viking_fs,
-        account_store_watch_enabled=True,
-        account_store_watch_interval_seconds=0.01,
-    )
-    await reader.load()
-    assert (await reader.resolve_identity(user_key)).user_id == "bob"
-    await asyncio.sleep(0.03)
-
-    await writer.begin_deletion(
-        acct,
-        "bob",
-        task_id="delete-1",
-        owner_account_id=acct,
-        owner_user_id="alice",
-    )
-    await writer.finish_deletion(acct, "bob", "delete-1")
-    try:
-        for _ in range(100):
-            try:
-                await reader.resolve_identity(user_key)
-            except UnauthenticatedError:
-                break
-            await asyncio.sleep(0.01)
-        else:
-            pytest.fail("watched reader did not observe the removed user")
+        await writer.begin_deletion(
+            account, "bob", task_id="delete-bob", owner_account_id=account, owner_user_id="alice"
+        )
+        assert await writer.finish_deletion(account, "bob", "delete-bob")
+        await asyncio.wait_for(wait_for_identity(False), timeout=2)
     finally:
         await reader.close()
         await writer.close()

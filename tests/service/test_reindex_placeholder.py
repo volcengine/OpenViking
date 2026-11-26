@@ -1,53 +1,67 @@
-"""Regression tests for directory-meta placeholder filtering in reindex (issue #2434).
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 
-VikingFS.abstract()/overview() render a ``# <uri>`` header followed only by a
-``[Directory ... is not ready]`` marker for directories without a generated
-``.abstract.md``/``.overview.md``. Before this fix the reindex executor embedded those
-placeholders as real ABSTRACT (L0) / OVERVIEW (L1) vectors, so they surfaced in
-search/memory-prefetch and displaced genuine memories. Detection is uri-agnostic and
-shape-anchored so legitimate directory content is never dropped.
-"""
+"""Directory marker reindexing preserves authored summaries and filters placeholders."""
 
-from openviking.service.reindex_executor import (
-    _ABSTRACT_NOT_READY_SUFFIX,
-    _OVERVIEW_NOT_READY_SUFFIX,
-    _is_not_ready_sentinel,
+import pytest
+
+from openviking.core.context import ContextLevel
+from openviking.core.namespace import context_type_for_uri
+from openviking.server.identity import RequestContext, Role
+from openviking.service.reindex_executor import ReindexExecutor
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "marker", "uri"),
+    [
+        pytest.param(
+            ContextLevel.ABSTRACT, "abstract", "viking://resources/reindex-notes", id="abstract"
+        ),
+        pytest.param(
+            ContextLevel.OVERVIEW,
+            "overview",
+            "viking://user/default/memories/reindex-notes",
+            id="overview",
+        ),
+    ],
 )
-
-
-def test_real_abstract_sentinel_is_detected():
-    rendered = "# viking://memory/projects/foo [Directory abstract is not ready]"
-    assert _is_not_ready_sentinel(rendered, _ABSTRACT_NOT_READY_SUFFIX)
-
-
-def test_real_overview_sentinel_is_detected():
-    rendered = "# viking://memory/projects/foo\n\n[Directory overview is not ready]"
-    assert _is_not_ready_sentinel(rendered, _OVERVIEW_NOT_READY_SUFFIX)
-
-
-def test_sentinel_detection_is_uri_agnostic():
-    for uri in ("viking://a/b/", "viking://x%20y/z", "viking://"):
-        assert _is_not_ready_sentinel(
-            f"# {uri} [Directory abstract is not ready]", _ABSTRACT_NOT_READY_SUFFIX
-        )
-
-
-def test_content_mentioning_phrase_mid_body_is_preserved():
-    real = "# Notes\n\nWe used to show '[Directory abstract is not ready]' here, but now it has content."
-    assert not _is_not_ready_sentinel(real, _ABSTRACT_NOT_READY_SUFFIX)
-
-
-def test_authored_content_ending_with_marker_is_preserved():
-    # multi-line authored body that ends with the exact user-facing marker must survive
-    real = "# Project notes\n\nCurrent CLI output: [Directory abstract is not ready]"
-    assert not _is_not_ready_sentinel(real, _ABSTRACT_NOT_READY_SUFFIX)
-
-
-def test_real_content_preserved():
-    assert not _is_not_ready_sentinel(
-        "# Project\n\nReal abstract body.", _ABSTRACT_NOT_READY_SUFFIX
+async def test_reindex_directory_marker_removes_placeholder_and_preserves_authored_content(
+    service, monkeypatch, level, marker, uri
+):
+    monkeypatch.setattr("openviking.service.reindex_executor.get_service", lambda: service)
+    fs = service.viking_fs
+    db = service.vikingdb_manager
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    await fs.mkdir(uri, ctx=ctx)
+    backend = await db.get_account_backend(ctx.account_id)
+    await db.upsert(
+        {
+            "uri": uri,
+            "level": int(level),
+            "context_type": context_type_for_uri(uri),
+            "abstract": "stale summary",
+            "vector": [0.1] * backend.vector_dim,
+        },
+        ctx=ctx,
     )
+    enqueue = []
 
+    async def capture_embedding(message):
+        enqueue.append(message)
+        return True
 
-def test_empty_is_not_a_sentinel():
-    assert not _is_not_ready_sentinel("", _ABSTRACT_NOT_READY_SUFFIX)
+    monkeypatch.setattr(db, "enqueue_embedding_msg", capture_embedding)
+    reindex = ReindexExecutor()
+
+    assert await db.get_context_by_uri(uri=uri, level=int(level), ctx=ctx)
+    await reindex.reindex_directory_marker(dir_uri=uri, level=level, ctx=ctx)
+    assert await db.get_context_by_uri(uri=uri, level=int(level), ctx=ctx) == []
+    assert enqueue == []
+
+    summary = f"# Project notes\n\nCurrent CLI output: [Directory {marker} is not ready]"
+    await fs.write_file(f"{uri}/.{marker}.md", summary, ctx=ctx)
+    await reindex.reindex_directory_marker(dir_uri=uri, level=level, ctx=ctx)
+    assert [(message.context_data["uri"], message.message) for message in enqueue] == [
+        (uri, summary)
+    ]

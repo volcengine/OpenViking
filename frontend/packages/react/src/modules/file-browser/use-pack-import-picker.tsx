@@ -107,7 +107,6 @@ export function usePackImportPicker(
           kind="importPack"
           uri={selection.uri}
           canWrite
-          canSaveSnapshot={false}
           versioned={false}
           directory
           showContent={false}

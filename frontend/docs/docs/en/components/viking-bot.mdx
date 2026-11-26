@@ -74,6 +74,14 @@ Demonstrates output-directory, text, schedule and repair forms. The directory fl
 
 ```
 
+### Configuration confirmation
+
+Pass explicit rows to `VikingBotConfirmation`. Edit opens the host’s prefilled form; Confirm waits for its callback, locks both actions while pending and preserves the summary after failure. The example uses fixed data and simulated submission.
+
+```tsx file="../../_demos/viking-bot-confirmation.tsx" preview
+
+```
+
 ### Host-controlled directory selection
 
 Use `allowCustomInput.onOpen` to own the picker. Render [ContextPicker](./context-picker), then call `select` to return the answer.
@@ -449,6 +457,43 @@ The remaining labels are listed in `DEFAULT_LABELS`.
 | onCopy    | Takes over copying the session ID; the clipboard is used when omitted                                 | `(text: string) => void` | -                              |
 | labels    | Overrides interface text; all keys are listed in `DEFAULT_LABELS`                                     | `VikingBotLabels`        | -                              |
 | locale    | Interface language, see [Internationalization](../guide/i18n)                                         | `'zh-CN' \| 'en-US'`     | Inherited, otherwise `'en-US'` |
+
+### VikingBotConfirmationProps
+
+Import `VikingBotConfirmation` from `@openviking/react/components/viking-bot` or its `interaction` subpath. Use the matching VikingBot or interaction style entry.
+
+| Property   | Description                                                                                                     | Type                                   | Default                        |
+| ---------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------ |
+| rows       | Summary rows in display order; values support long URIs, multiple lines and custom content                      | `readonly VikingBotConfirmationRow[]`  | Required                       |
+| title      | Heading above the summary                                                                                       | `ReactNode`                            | Confirm the configuration      |
+| onEdit     | Opens the host’s editing flow with its existing values; omitted hides Edit                                      | `() => void`                           | -                              |
+| onConfirm  | Validates and submits the host’s configuration; rejected promises show retry feedback; omitted disables Confirm | `() => void \| Promise<void>`          | -                              |
+| disabled   | Disables both actions                                                                                           | `boolean`                              | `false`                        |
+| submitting | Adds host-controlled submission state                                                                           | `boolean`                              | `false`                        |
+| error      | Host-controlled submission error                                                                                | `ReactNode`                            | -                              |
+| requestKey | Change this identity to reset submission feedback for a different configuration                                 | `string`                               | -                              |
+| className  | Additional root class                                                                                           | `string`                               | -                              |
+| locale     | Interface language                                                                                              | `'zh-CN' \| 'en-US'`                   | Inherited, otherwise `'en-US'` |
+| labels     | Overrides title, edit, confirm and submitFailed copy                                                            | `Partial<VikingBotConfirmationLabels>` | Current locale                 |
+| slots      | Render-failure fallback                                                                                         | `{ errorFallback?: ErrorFallback }`    | Inherited or built-in          |
+
+### VikingBotConfirmationRow
+
+| Property | Description | Type        | Default  |
+| -------- | ----------- | ----------- | -------- |
+| label    | Row label   | `ReactNode` | Required |
+| value    | Row content | `ReactNode` | Required |
+
+### VikingBotConfirmationLabels
+
+| Property     | Description              | Type     | Default                              |
+| ------------ | ------------------------ | -------- | ------------------------------------ |
+| title        | Default heading          | `string` | Confirm the configuration            |
+| edit         | Edit action              | `string` | Edit                                 |
+| confirm      | Confirm action           | `string` | Confirm and submit                   |
+| submitFailed | Submission error heading | `string` | Submission failed. Please try again. |
+
+The component displays the supplied rows and reports actions. The caller decides when to show it, retains all configuration values, maps backend types, validates permissions and opens its editing flow. It does not infer configuration completeness from Bot messages or change Console’s question protocol. Successful confirmation remains visible until the caller updates or removes it.
 
 ### VikingBotInteraction
 

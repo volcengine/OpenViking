@@ -15,7 +15,7 @@ from openviking_gateway.client import VikingError
 from openviking_gateway.models import Policy
 from openviking_gateway.notices import RECALL_NOTICE, recall_notice
 from openviking_gateway.protocols import SSEDecoder
-from openviking_gateway.tool_protocols import ResponseCapture, tool_protocol
+from openviking_gateway.tool_protocols import tool_protocol
 from openviking_gateway.tool_protocols.common import merge_delta, sse
 
 PATHS = {"chat": "/v1/chat/completions", "anthropic": "/v1/messages", "responses": "/v1/responses"}
@@ -199,31 +199,6 @@ def test_responses_strip_drops_the_first_item_of_each_reply():
         messages[7],
         message("Merged."),
     ]
-
-
-@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
-def test_recorded_reply_goes_without_the_notice(protocol):
-    """Bookkeeping reads a reply the way the next request strips it."""
-    body = {"model": "model", "stream": False}
-    adapter = tool_protocol(protocol)(body)
-    adapter.lead_with(NOTICE)
-    adapter.begin()
-    value = native_response(protocol, 1)
-    adapter.load(value)
-    adapter.end()
-    final = adapter.final({})
-    capture = ResponseCapture(protocol)
-    capture.nonstream(final)
-    plain = ResponseCapture(protocol)
-    plain.nonstream(value)
-    assert capture.output == plain.output
-    if protocol == "anthropic":
-        assert final["content"] == [{"type": "text", "text": NOTICE}, *value["content"]]
-    elif protocol == "responses":
-        assert final["output"][0]["content"][0]["text"] == NOTICE
-        assert final["output"][1:] == value["output"]
-    else:
-        assert final["choices"][0]["message"]["content"] == NOTICE + "answer-1"
 
 
 def test_capture_drops_recall_lines_from_assistant_text():
@@ -426,7 +401,7 @@ def model_backend(app, protocol, streaming, requests, upstream, respond):
 async def test_notice_leads_the_reply_and_never_reaches_the_model(
     running_gateway, protocol, streaming, tools
 ):
-    app, client, admin, key, _, _ = running_gateway
+    app, client, admin, key, _, writes = running_gateway
     await show_recall(client, admin, tools)
     requests, upstream = [], []
     # With tools, the first turn runs one hidden round before it answers.
@@ -481,6 +456,16 @@ async def test_notice_leads_the_reply_and_never_reaches_the_model(
         assert "gateway-1" in orjson.dumps(results).decode()
     # No model request ever carries a notice, recall or tool.
     assert not any("> OpenViking" in orjson.dumps(r).decode() for r in requests)
+    saved_text = [
+        part["text"]
+        for write in writes
+        for message in write["messages"]
+        if message["role"] == "assistant"
+        for part in message["parts"]
+        if part["type"] == "text"
+    ]
+    assert any(f"answer-{2 if tools else 1}" in text for text in saved_text)
+    assert all("> OpenViking" not in text for text in saved_text)
     logs = (await client.get("/admin/logs", headers=admin)).json()
     assert len({log["session"] for log in logs}) == 1
 

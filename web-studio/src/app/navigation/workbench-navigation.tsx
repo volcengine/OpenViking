@@ -20,7 +20,6 @@ import {
   HomeIcon,
   ListChecksIcon,
   MessagesSquareIcon,
-  NetworkIcon,
   PanelsTopLeftIcon,
   ScrollTextIcon,
   SearchIcon,
@@ -60,13 +59,6 @@ export const NAV_ITEMS: readonly NavItem[] = [
     section: 'workspace',
     titleKey: 'navigation.filesystem.title',
     to: '/filesystem',
-  },
-  {
-    icon: NetworkIcon,
-    id: 'arranger',
-    section: 'workspace',
-    titleKey: 'navigation.arranger.title',
-    to: '/arranger',
   },
   {
     icon: BotIcon,

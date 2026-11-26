@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
-from pydantic import BaseModel, Field, StrictBool, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, StrictBool, field_validator, model_validator
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.peer_id import normalize_peer_id
@@ -17,6 +17,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.responses import error_response
 from openviking.server.telemetry import run_operation
+from openviking.session import history
 from openviking.session.auto_commit_policy import validate_idle_timeout_input
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.image_search import is_viking_uri
@@ -350,6 +351,56 @@ async def list_sessions(
     service = get_service()
     result = await service.sessions.sessions(_ctx)
     return Response(status="ok", result=result)
+
+
+_HistoryText = Annotated[str, BeforeValidator(history.argument_text)]
+
+
+class SessionHistoryRequest(BaseModel):
+    """The arguments of the MCP tool ``session_history``, read the same way.
+
+    Any JSON value is accepted and names the tool does not declare are ignored.
+    """
+
+    action: _HistoryText = Field("", description='"search", "read" or "overview"')
+    session: _HistoryText = Field("", description="Session id(s), comma-separated, newest first")
+    query: _HistoryText = ""
+    role: _HistoryText = ""
+    from_id: _HistoryText = ""
+    to_id: _HistoryText = ""
+    id: _HistoryText = ""
+    before: Any = None
+    after: Any = None
+    offset: Any = None
+    limit: Any = None
+
+
+@router.post("/history")
+async def session_history(
+    request: SessionHistoryRequest,
+    _ctx: RequestContext = Depends(get_session_request_context),
+):
+    """Read-only lookup over saved session history (archives, live tail, tool outputs).
+
+    Answers exactly as the MCP tool ``session_history``; problems such as a missing or
+    unknown session or a bad id are answered in ``text``.
+    """
+    result = await history.session_history(
+        get_service(),
+        _ctx,
+        action=request.action,
+        sessions=request.session,
+        query=request.query,
+        role=request.role,
+        from_id=request.from_id,
+        to_id=request.to_id,
+        id=request.id,
+        before=request.before,
+        after=request.after,
+        offset=request.offset,
+        limit=request.limit,
+    )
+    return Response(status="ok", result=result.to_dict())
 
 
 @router.get("/{session_id}")

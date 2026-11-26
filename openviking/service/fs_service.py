@@ -135,7 +135,6 @@ def _visible_grep_content(content: str, uri: str) -> str:
 
 if TYPE_CHECKING:
     from openviking.resource.watch_manager import WatchManager
-    from openviking.service.resource_memory_link_service import ResourceMemoryLinkService
     from openviking.storage import VikingDBManager
 
 
@@ -147,7 +146,6 @@ class FSService:
         viking_fs: Optional[VikingFS] = None,
         vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
-        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
         watch_manager: Optional["WatchManager"] = None,
     ):
@@ -157,7 +155,6 @@ class FSService:
         self._privacy_sanitizer = privacy_sanitizer or (
             PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
         )
-        self._resource_memory_link_service = resource_memory_link_service
         self._watch_manager = watch_manager
 
     def set_dependencies(
@@ -165,7 +162,6 @@ class FSService:
         viking_fs: VikingFS,
         vikingdb: Optional["VikingDBManager"] = None,
         privacy_config_service: Optional[UserPrivacyConfigService] = None,
-        resource_memory_link_service: Optional["ResourceMemoryLinkService"] = None,
         privacy_sanitizer: Optional[PrivacySanitizer] = None,
         watch_manager: Optional["WatchManager"] = None,
     ) -> None:
@@ -176,7 +172,6 @@ class FSService:
         self._privacy_sanitizer = privacy_sanitizer or (
             PrivacySanitizer(privacy_config_service) if privacy_config_service is not None else None
         )
-        self._resource_memory_link_service = resource_memory_link_service
         self._watch_manager = watch_manager
 
     def _ensure_initialized(self) -> VikingFS:
@@ -731,7 +726,6 @@ class FSService:
                 result["vector_status"] = "skipped"
             return result
 
-        cleanup_result: Optional[Dict[str, Any]] = None
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
         memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
@@ -767,24 +761,10 @@ class FSService:
                     ctx=ctx,
                     force_refresh=wait,
                 )
-            if self._resource_memory_link_service and context_type == "resource":
-                cleanup_result = await self._resource_memory_link_service.before_resource_delete(
-                    ctx=ctx,
-                    resource_uri=uri,
-                    recursive=recursive,
-                )
             if memory_overview_uri:
                 await MemoryUpdater.refresh_schema_overview(
                     viking_fs=viking_fs,
                     directory_uri=memory_overview_uri,
-                    ctx=ctx,
-                )
-            for cleanup_overview_uri in self._memory_overview_parent_uris_from_cleanup(
-                cleanup_result
-            ):
-                await MemoryUpdater.refresh_schema_overview(
-                    viking_fs=viking_fs,
-                    directory_uri=cleanup_overview_uri,
                     ctx=ctx,
                 )
             if (
@@ -795,8 +775,6 @@ class FSService:
                 queue_status = await self._wait_for_refresh()
         finally:
             pass
-        if cleanup_result is not None and isinstance(result, dict):
-            result["memory_cleanup"] = cleanup_result
         if refresh_parent_uri and isinstance(result, dict):
             result["semantic_root_uri"] = refresh_parent_uri
             if refresh_action is FreshnessAction.NOOP:
@@ -866,30 +844,6 @@ class FSService:
         if not MemoryUpdater.memory_type_from_uri(parent.uri):
             return None
         return parent.uri
-
-    @classmethod
-    def _memory_overview_parent_uris_from_cleanup(
-        cls,
-        cleanup_result: Optional[Dict[str, Any]],
-    ) -> List[str]:
-        if not isinstance(cleanup_result, dict):
-            return []
-
-        overview_uris: List[str] = []
-        for field in ("memory_uris", "deleted_memory_uris"):
-            values = cleanup_result.get(field)
-            if not isinstance(values, list):
-                continue
-            for memory_uri in values:
-                if not isinstance(memory_uri, str):
-                    continue
-                overview_uri = cls._memory_overview_parent_uri(
-                    memory_uri,
-                    context_type_for_uri(memory_uri),
-                )
-                if overview_uri:
-                    overview_uris.append(overview_uri)
-        return list(dict.fromkeys(overview_uris))
 
     async def _enqueue_delete_refresh(
         self,
@@ -1734,11 +1688,7 @@ class FSService:
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
         ctx = self._ensure_initialized().authorize_read(ctx, [resolved_uri])
-        settings = (
-            await self._privacy_sanitizer.settings_for_uri(resolved_uri, ctx)
-            if self._privacy_sanitizer is not None and ctx.data_access is None
-            else None
-        )
+        settings = await self._visible_read_settings(resolved_uri, ctx)
         max_bytes = (
             self._privacy_sanitizer.max_content_bytes
             if self._privacy_sanitizer is not None and settings is not None
@@ -1759,6 +1709,23 @@ class FSService:
         lines = content.splitlines(keepends=True)
         sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
         return "".join(sliced)
+
+    async def _visible_read_settings(
+        self, uri: str, ctx: RequestContext
+    ) -> ResolvedPrivacyConfig | None:
+        if self._privacy_sanitizer is None or ctx.data_access is not None:
+            return None
+        return await self._privacy_sanitizer.settings_for_uri(uri, ctx)
+
+    async def make_visible(self, uri: str, content: str, ctx: RequestContext) -> str:
+        """Apply ``read_visible``'s read-time visibility step to text already read from uri.
+
+        Raises ``ResourceExhaustedError`` when privacy matching applies and the
+        text exceeds the sanitizer's size or replacement limit.
+        """
+        ctx = self._ensure_initialized().authorize_read(ctx, [uri])
+        settings = await self._visible_read_settings(uri, ctx)
+        return await self._make_content_visible(uri, content, ctx, settings=settings)
 
     async def _make_content_visible(
         self,
@@ -2875,10 +2842,8 @@ class FSService:
         offset: int = 0,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        """Page changed source URIs between snapshots; a null base means an empty tree.
-
-        Every changed path requires current read permission, including deleted paths.
-        Any denied descendant rejects the whole query without exposing its URI.
+        """
+        Page changed source URIs between snapshots; a null base means an empty tree.
         """
         viking_fs = self._ensure_initialized()
         if not paths or not to_ref.strip() or (from_ref is not None and not from_ref.strip()):
@@ -2890,8 +2855,9 @@ class FSService:
         )
         changes_by_uri = {change["uri"]: change for change in changes}
         uris = sorted(changes_by_uri)
-        access = await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
-        if any(not access.get(uri, False) for uri in uris):
+        read_uris = viking_fs._snapshot_read_check_uris(uris, ctx)
+        access = await viking_fs._can_access_many(read_uris, ctx, action=AclAction.READ)
+        if any(not access.get(uri, False) for uri in read_uris):
             raise PermissionDeniedError("Snapshot changes include inaccessible paths")
         page = [changes_by_uri[uri] for uri in uris[offset : offset + limit]]
         next_offset = offset + len(page)

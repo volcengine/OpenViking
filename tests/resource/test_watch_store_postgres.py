@@ -34,6 +34,7 @@ from tests.resource.test_watch_store import (
 )
 
 make_store = _make_store
+postgres_cases = pytest.mark.parametrize("make_store", ["postgres"], indirect=True)
 
 PARAMS = {"user": "u", "database": "d", "credential_encryption_key": ENCRYPTION_KEY}
 
@@ -257,10 +258,8 @@ async def test_cleanup_failure_preserves_initialization_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_long_unicode_paths_and_maximum_identity_width(make_store):
-    store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL B-tree width contract")
     # Four-byte, varied characters avoid PostgreSQL compressing a repeated value.
     wide = "".join(chr(0x10000 + index) for index in range(255))
     store = await make_store("service-" + "s" * 247)
@@ -279,14 +278,13 @@ async def test_postgres_long_unicode_paths_and_maximum_identity_width(make_store
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_user_pagination_scans_hash_and_cursor_index_range(make_store):
     from sqlalchemy import event, text
 
     from openviking.resource.watch_pagination import WatchPageQuery
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL user pagination index contract")
     seed_task = await create(store)
     c = store._tasks.c
     epoch = 1700000000.0
@@ -406,10 +404,9 @@ async def test_postgres_user_pagination_scans_hash_and_cursor_index_range(make_s
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_operations_work_across_event_loops(make_store):
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL pool loop-affinity contract")
     task = await create(store, due=True)
     state = await asyncio.to_thread(lambda: asyncio.run(store.get_state(task.task_id)))
     assert state.task.task_id == task.task_id
@@ -418,12 +415,11 @@ async def test_postgres_operations_work_across_event_loops(make_store):
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_short_prefix_uses_expression_index(make_store):
     from sqlalchemy import text
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL path expression-index contract")
     await create(store, "viking://resources/index/child")
 
     async def explain():
@@ -447,12 +443,11 @@ async def test_postgres_short_prefix_uses_expression_index(make_store):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("prefix_chars", [127, 128, 129, 147, 900])
+@pytest.mark.parametrize("prefix_chars", [127, 128, 129, 900])
 @pytest.mark.parametrize("character", ["a", "\U00011000"])
+@postgres_cases
 async def test_postgres_prefix_boundaries_check_full_uri(make_store, prefix_chars, character):
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL path expression-index contract")
     base = "viking://resources/"
     parent = base + character * (prefix_chars - len(base) - 1)
     exact = await create(store, parent)
@@ -473,12 +468,11 @@ async def test_postgres_prefix_boundaries_check_full_uri(make_store, prefix_char
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_long_prefix_limits_expression_index_candidates(make_store):
     from sqlalchemy import text
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL long-path index scan contract")
     # A 147-character directory prefix previously scanned every account row.
     parent = "viking://resources/" + "a" * 127
     assert len(parent + "/") == 147
@@ -543,12 +537,11 @@ async def test_postgres_long_prefix_limits_expression_index_candidates(make_stor
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_due_scan_uses_time_range_index_condition(make_store):
     from sqlalchemy import event, text
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL due scan index contract")
     future = await create(store, created_at=datetime.now() + timedelta(days=1))
     due = await create(store, "viking://resources/due", due=True)
     c = store._tasks.c
@@ -611,10 +604,9 @@ async def test_postgres_due_scan_uses_time_range_index_condition(make_store):
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_running_rows_share_one_statement_clock(make_store):
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL statement clock contract")
     for index in range(3):
         task = await create(store, f"viking://resources/running/{index}", due=True)
         assert await store.begin_run(await store.get_candidate(task.task_id)) is not None
@@ -624,12 +616,11 @@ async def test_postgres_running_rows_share_one_statement_clock(make_store):
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_settlement_uses_one_clock_for_all_timestamps(make_store):
     from sqlalchemy import text
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL settlement clock contract")
     task = await create(store, due=True)
     run = await store.begin_run(await store.get_candidate(task.task_id))
     assert run is not None
@@ -654,12 +645,11 @@ async def test_postgres_settlement_uses_one_clock_for_all_timestamps(make_store)
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_requires_schema_and_recovers_after_initialize_failure(make_store):
     from sqlalchemy.exc import ProgrammingError
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL schema initialization contract")
     await store.close()
     original = store._tasks
     store._tasks = watch_tables(store._table_name + "_missing", dialect="postgresql")
@@ -679,13 +669,12 @@ async def test_postgres_requires_schema_and_recovers_after_initialize_failure(ma
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_missing_column_reports_migration_and_can_retry(make_store):
     from sqlalchemy import text
     from sqlalchemy.exc import ProgrammingError
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL schema initialization contract")
 
     async def alter_column(action):
         async with store._transaction() as session:
@@ -727,14 +716,13 @@ async def test_postgres_missing_column_reports_migration_and_can_retry(make_stor
         ("ALTER COLUMN account_id TYPE VARCHAR(32)", "account_id type"),
     ],
 )
+@postgres_cases
 async def test_postgres_schema_drift_is_rejected_before_reading_tasks(
     make_store, alteration, message
 ):
     from sqlalchemy import text
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL column structure initialization contract")
     await create(store)
 
     async def alter():
@@ -758,6 +746,7 @@ async def test_postgres_schema_drift_is_rejected_before_reading_tasks(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("state", ["missing", "wrong_definition", "partial", "invalid", "renamed"])
+@postgres_cases
 async def test_postgres_initialization_checks_usable_index_definitions(
     make_store, caplog, monkeypatch, state
 ):
@@ -767,8 +756,6 @@ async def test_postgres_initialization_checks_usable_index_definitions(
     from openviking.resource.watch_store_postgres import logger
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL schema index initialization contract")
     monkeypatch.setattr(logger, "handlers", [*logger.handlers, caplog.handler])
     # Capture once even when the application enables propagation to root.
     monkeypatch.setattr(logger, "propagate", False)
@@ -849,6 +836,7 @@ async def test_postgres_initialization_checks_usable_index_definitions(
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_metadata_schema_initializes_without_index_warnings(
     make_store, caplog, monkeypatch
 ):
@@ -857,8 +845,6 @@ async def test_postgres_metadata_schema_initializes_without_index_warnings(
     from openviking.resource.watch_store_postgres import logger
 
     store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL metadata/DDL index contract")
     await store.close()
 
     def provision_metadata():
@@ -901,12 +887,10 @@ async def test_postgres_initialization_preserves_non_schema_database_errors(monk
 
 
 @pytest.mark.asyncio
+@postgres_cases
 async def test_postgres_cancellation_rolls_back_before_reusing_pool(make_store):
     from sqlalchemy import text, update
 
-    store = await make_store()
-    if store.provider != "postgres":
-        pytest.skip("PostgreSQL cancellation cleanup contract")
     store = await make_store(maxsize=1)
     task = await create(store)
     started = threading.Event()

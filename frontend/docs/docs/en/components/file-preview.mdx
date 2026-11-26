@@ -108,16 +108,17 @@ Supply host content and styles through the component-level `slots.errorFallback`
 
 Fields shared by all three tabs. Content tabs have no header row, so `toolbar`, `onOpenParent`, `onCopyPath` and `labels` have no effect on them.
 
-| Property     | Description                                                                                                                    | Type                         | Default                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------- | --------------------------------------------------------- |
-| key          | Unique identifier of the tab                                                                                                   | `string`                     | Required                                                  |
-| title        | What the tab row shows, plain text or a styled node                                                                            | `ReactNode`                  | `source.fileName` for file tabs, `key` for directory tabs |
-| icon         | Tab icon; omit it and the tab takes no icon space. For a per-format icon use `getFileTypeIcon` from `@openviking/react/icons`  | `ReactNode`                  | -                                                         |
-| disabled     | Disables the tab so it cannot be selected                                                                                      | `boolean`                    | `false`                                                   |
-| toolbar      | Hides built-in controls for this tab; it cannot turn on a control the top-level `toolbar` switched off                         | `FilePreviewToolbarOptions`  | -                                                         |
-| onOpenParent | File tabs: called after `operations.openParent` resolves, with the full URI of the clicked level; directory tabs never call it | `(uri: string) => void`      | -                                                         |
-| onCopyPath   | Called after the path is copied, with the same formatted path written to the clipboard                                         | `(path: string) => void`     | -                                                         |
-| labels       | Overrides text for this tab, taking precedence over the top-level `labels`                                                     | `Partial<FilePreviewLabels>` | -                                                         |
+| Property     | Description                                                                                                                    | Type                               | Default                                                   |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | --------------------------------------------------------- |
+| key          | Unique identifier of the tab                                                                                                   | `string`                           | Required                                                  |
+| title        | What the tab row shows, plain text or a styled node                                                                            | `ReactNode`                        | `source.fileName` for file tabs, `key` for directory tabs |
+| badge        | Positive count beside the title, capped at `99+`; `label` provides its tooltip and accessible description                      | `{ count: number; label: string }` | -                                                         |
+| icon         | Tab icon; omit it and the tab takes no icon space. For a per-format icon use `getFileTypeIcon` from `@openviking/react/icons`  | `ReactNode`                        | -                                                         |
+| disabled     | Disables the tab so it cannot be selected                                                                                      | `boolean`                          | `false`                                                   |
+| toolbar      | Hides built-in controls for this tab; it cannot turn on a control the top-level `toolbar` switched off                         | `FilePreviewToolbarOptions`        | -                                                         |
+| onOpenParent | File tabs: called after `operations.openParent` resolves, with the full URI of the clicked level; directory tabs never call it | `(uri: string) => void`            | -                                                         |
+| onCopyPath   | Called after the path is copied, with the same formatted path written to the clipboard                                         | `(path: string) => void`           | -                                                         |
+| labels       | Overrides text for this tab, taking precedence over the top-level `labels`                                                     | `Partial<FilePreviewLabels>`       | -                                                         |
 
 ### FilePreviewFileTab
 
@@ -436,7 +437,7 @@ Obtained through `ref`, to switch tabs and reach FileViewer imperatively.
 
 ### Path and breadcrumb
 
-- Levels: `source.path` is split on `/`, a scheme such as `viking://` appears on the first level, and the last level is the current file name.
+- Levels: `source.path` is split on `/`, a scheme such as `viking://` appears on the first level, and the last level is the current file name. A first-level directory has no ancestor, so the scheme appears on the trailing level instead and `viking://user` reads `viking://user`.
 - URI names: each segment of a URI path is decoded once for display. Encoded slashes stay within their original level, and malformed escapes remain unchanged. Navigation uses the original path. Ordinary filesystem paths and explicit titles or file names remain literal.
 - No path: without `source.path` the breadcrumb shows only the file name and there is no copy-path button.
 - Navigation: every ancestor is a button that passes its full URI (for example `viking://a/b`) to `operations.openParent`, not only the direct parent; the buttons are disabled without `operations.openParent`.

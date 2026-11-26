@@ -4,7 +4,6 @@
 
 Set OV_TEST_MYSQL to connection JSON for an isolated, pre-provisioned database.
 OV_TEST_MYSQL_ACCOUNT_RUNTIME optionally selects a DML-only runtime account.
-These tests also run against the implementation before relational extraction.
 """
 
 import asyncio
@@ -74,17 +73,19 @@ async def mysql_accounts(mysql_params):
                     cursor.execute("DELETE FROM ov_accounts WHERE service_name=%s", (name,))
 
 
-def _runtime(store):
-    return getattr(store, "_sql_runtime", None) or store._mysql_runtime
-
-
 async def test_mysql_preprovisioned_low_privilege_startup_and_reload(mysql_accounts, mysql_params):
     manager = await mysql_accounts()
-    peer = await mysql_accounts()
-    assert [a["account_id"] for a in await manager.list_accounts()] == ["default"]
+    accounts = await manager.list_accounts()
+    assert [account["account_id"] for account in accounts] == ["default"]
+    assert accounts[0]["user_count"] == 0
     key = await manager.create_account("acme", "admin")
     await manager.close()
-    await asyncio.gather(manager.load(), manager.load(), peer.load())
+    await asyncio.gather(manager.load(), manager.load())
+    assert [account["account_id"] for account in await manager.list_accounts()] == [
+        "default",
+        "acme",
+    ]
+    peer = await mysql_accounts()
     assert (await peer.resolve_identity(key)).user_id == "admin"
     assert (await manager.get_account("acme"))["user_count"] == 1
     raw_runtime = os.environ.get("OV_TEST_MYSQL_ACCOUNT_RUNTIME")
@@ -105,8 +106,16 @@ async def test_mysql_credentials_groups_conditional_rotation_and_service_isolati
     writer = await mysql_accounts(mode=mode)
     peer = await mysql_accounts(mode=mode)
     other = await mysql_accounts(mode=mode, service_name="other-" + uuid4().hex)
-    await writer.create_account("acme", "admin")
+    admin_key = await writer.create_account("acme", "admin")
     key = await writer.register_user("acme", "alice")
+    assert await peer._store.get_auth_snapshot(
+        key, account_id_hint="acme", user_id_hint="alice"
+    ) == {
+        "account_id": "acme",
+        "user_id": "alice",
+        "role": "user",
+        "group_ids": (),
+    }
     await other.create_account("acme", "admin")
     with pytest.raises(UnauthenticatedError):
         await other.resolve_identity(key)
@@ -128,7 +137,6 @@ async def test_mysql_credentials_groups_conditional_rotation_and_service_isolati
         assert snapshot["group_ids"] == ("team",)
         assert await other._store.get_auth_snapshot(key, **hints) is None
         assert await peer._store.get_auth_snapshot("unknown-key", **hints) is None
-        assert await peer._store.get_auth_snapshot(key, **hints) == snapshot
     for hints in (
         {"account_id_hint": "missing"},
         {"user_id_hint": "missing"},
@@ -143,7 +151,10 @@ async def test_mysql_credentials_groups_conditional_rotation_and_service_isolati
         2,
         2,
     )
-    assert ("api_key" in page["users"][0]) == (mode == "encrypted")
+    if mode == "encrypted":
+        assert page["users"][0]["api_key"] == key
+    else:
+        assert "api_key" not in page["users"][0]
     import pymysql
 
     with pymysql.connect(**mysql_params, autocommit=True) as connection:
@@ -152,7 +163,11 @@ async def test_mysql_credentials_groups_conditional_rotation_and_service_isolati
                 "SELECT material FROM ov_accounts_credentials WHERE service_name=%s",
                 (writer._store._service_name,),
             )
-            assert all(key not in material for (material,) in cursor.fetchall())
+            materials = cursor.fetchall()
+            assert len(materials) == 2
+            assert all(
+                key not in material and admin_key not in material for (material,) in materials
+            )
     new_key = await writer.regenerate_key("acme", "alice", expected_api_key=key)
     with pytest.raises(UnauthenticatedError):
         await peer.resolve_identity(key)
@@ -279,7 +294,7 @@ async def test_mysql_cancelled_transaction_rolls_back_before_pool_reuse(mysql_ac
             started.set()
             await session.execute(text("SELECT SLEEP(30)"))
 
-    task = asyncio.create_task(_runtime(store).run(write))
+    task = asyncio.create_task(store._sql_runtime.run(write))
     assert await asyncio.to_thread(started.wait, 5)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

@@ -17,6 +17,8 @@ openviking-server --config /path/to/ov.conf
 
 服务端启动时读取配置。修改模型、检索、存储或 `server` 配置后，需要重启服务；重启后建议运行 `openviking-server doctor`。
 
+`server.roles` 控制业务接口和后台执行职责，配置、路由边界和停止顺序见[服务角色与启停](03-server-roles.md)。
+
 通过单 worker 的 `openviking-server` 启动时，Studio 的「服务端配置」页面提供「保存并重启」。重启能力和实例标识复用现有 ROOT 配置读取接口（`GET /api/v1/admin/configuration?source=file`）返回；只有 ROOT 可以请求重启（`POST /api/v1/admin/restart`，请求体为 `{"revision":"<已保存文件的版本>"}`）。服务校验当前文件和版本后返回 HTTP 202，等待现有请求结束，停止其管理的 Bot，再使用原解释器、启动参数、环境变量和工作目录替换当前进程。页面确认新的服务实例恢复后才显示成功。单独点击「保存配置」仍只保存文件。
 
 多 worker 或嵌入式 ASGI 启动不支持页面重启，需要通过部署平台重启。配置通过校验后，外部依赖仍可能导致启动失败。如果修改了地址、端口或 ROOT 凭证，请更新 Studio 连接设置。账号和集群覆盖配置仍优先于文件默认配置。
@@ -53,6 +55,7 @@ openviking-server --config /path/to/ov.conf
 |---|---|---|---|
 | `default_account` | string | `"default"` | Service context 使用的默认账号 |
 | `default_user` | string | `"default"` | Service context 使用的默认用户 |
+| `enable_default_resources` | boolean | `true` | 补齐缺省本地 Embedding/VectorDB 并预置默认 Account 目录，见[资源配置](../guides/01-configuration.md) |
 | `embedding` | object | 内置本地 Dense 模型 | 向量化模型和稀疏/混合检索配置；默认使用 `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
 | `query_planner` | object / `null` | `null` | 检索意图分析和召回改写使用的模型。未配置或为空时回退到 `vlm`；`auto` 模式的召回改写要求配置集群级 `query_planner`，或账户级 `query_planner` / `vlm` 覆盖项 |
@@ -539,6 +542,57 @@ Rust 没有 `CRITICAL`，该阈值仍映射到 `ERROR`，输出仍标为 `ERROR`
 已有 `server.observability.usage_audit` 配置管理用量及 HTTP 请求记录；
 安全操作审计落库记为独立功能待办。
 SDK 导入不会接管宿主 root logger。日志内容边界见[日志规范](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING_CN.md)。
+
+## Usage/Audit PostgreSQL 配置
+
+`server.observability.usage_audit.backend` 支持 `sqlite`（默认）和 `postgres`。
+共享 PostgreSQL 用于多实例的 Token、检索、上下文写入及 HTTP 请求审计投影，
+Console API 和读端时区口径保持一致。
+
+```json
+{
+  "server": {
+    "observability": {
+      "usage_audit": {
+        "backend": "postgres",
+        "postgres": {
+          "host": "localhost",
+          "port": 5432,
+          "user": "openviking_runtime",
+          "password": "<password>",
+          "database": "openviking",
+          "schema": "openviking_usage_audit",
+          "maxsize": 10,
+          "connect_timeout": 10,
+          "lock_timeout_ms": 1000,
+          "sslmode": "prefer"
+        }
+      }
+    }
+  }
+}
+```
+
+安装 `openviking[postgres]`，由管理员一次性执行
+`openviking/observability/usage_audit/sql/001_usage_audit_postgres.sql`；
+runtime 只验证 schema，不创建或迁移表。自定义 schema 时替换脚本中的 schema 名，
+只接受 1–63 字符的小写 SQL 标识符。runtime role 需要 schema `USAGE`、
+表 `SELECT/INSERT/UPDATE/DELETE`、sequence `USAGE/SELECT`。
+连接参数支持 `sslrootcert`、`sslcert`、`sslkey`，不接受 DSN；
+生产环境应按数据库要求设置 `verify-ca` 或 `verify-full`。
+
+schema 当前为 v2。已有预览版 v1 时，先停止全部 writer，由管理员执行
+`openviking/observability/usage_audit/sql/002_usage_audit_deletion_fence.sql`，
+再重启全部实例；不混跑旧 writer。`lock_timeout_ms` 默认 `1000`，范围 `1..60000`，
+限制写入和删除事务的单次数据库锁等待；超时回滚，worker 按 best-effort 语义丢弃该批。
+删除会持久化账号/用户删除版本，拒绝其他实例队列中的旧版本事件。
+远端 writer 刷新版本前接收的同范围新事件也会保守丢弃；每次写入刷新版本后，
+新接收事件（包括重新创建的同名身份）正常写入。版本判断不依赖机器时钟。
+
+保留配置与 SQLite 相同，`0` 关闭对应裁剪。切换后端不会迁移历史数据；
+事件仍经进程内队列异步写入，不保证重启恢复或 exactly-once。
+这只共享 Usage/Audit 数据，其他业务存储和分布式锁需单独配置。
+完整口径见[模块说明](https://github.com/volcengine/OpenViking/blob/main/openviking/observability/usage_audit/README.md)。
 
 ## Compile API 配置
 

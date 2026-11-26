@@ -298,7 +298,7 @@ def _manifest_signature(result: Mapping[str, Any]) -> str:
     payload = {
         "root_uri": result.get("root_uri") or result.get("uri"),
         "revision": result.get("revision"),
-        "content_sha256": result.get("content_sha256"),
+        "visible_content_sha256": result.get("visible_content_sha256"),
         "files": sorted(files, key=lambda item: str(item.get("path") or "")),
     }
     return hashlib.sha256(
@@ -445,7 +445,18 @@ class SkillRuntimeContext:
         return _normalize_uri(uri).endswith("/SKILL.md")
 
     def is_activation_call(self, tool_name: str, params: Mapping[str, Any]) -> bool:
-        if tool_name != "openviking_multi_read":
+        if tool_name != "openviking_multi_read" or params.get("with_revision"):
+            return False
+        offset = params.get("offset", 0)
+        limit = params.get("limit", -1)
+        if (
+            not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or offset != 0
+            or limit != -1
+        ):
             return False
         return any(self.is_skill_definition_uri(str(uri)) for uri in params.get("uris") or [])
 
@@ -467,26 +478,24 @@ class SkillRuntimeContext:
         if not self.is_skill_definition_uri(uri):
             self.note_remote_read(uri)
             return None
+        if not content:
+            raise SkillRuntimeError("SKILL_INVALID", "OpenViking returned an empty SKILL.md read")
 
         name, target_uri, root_uri, skill_md_uri = _skill_identity_from_uri(uri)
         lock = self._activation_locks.setdefault(root_uri, asyncio.Lock())
         async with lock:
             existing = self.active_skills.get(root_uri)
             if existing is not None:
+                if existing.content != content:
+                    raise SkillRuntimeError(
+                        "SKILL_REVISION_CHANGED",
+                        "Remote SKILL.md changed after activation; read it again in a new turn",
+                    )
                 return existing
-            if len(content.encode("utf-8")) > self.settings.max_file_bytes:
+            definition_bytes = content.encode("utf-8")
+            if len(definition_bytes) > self.settings.max_file_bytes:
                 raise SkillRuntimeError(
                     "SKILL_PACKAGE_TOO_LARGE", "Remote SKILL.md exceeds the file limit"
-                )
-            try:
-                parsed = SkillLoader.parse(content, source_path=skill_md_uri)
-            except Exception as exc:
-                raise SkillRuntimeError("SKILL_INVALID", str(exc)) from exc
-            parsed_name = str(parsed.get("name") or "").strip()
-            if parsed_name != name:
-                raise SkillRuntimeError(
-                    "SKILL_INVALID",
-                    f"Skill name {parsed_name!r} does not match URI name {name!r}",
                 )
 
             client = await self._get_client()
@@ -513,18 +522,15 @@ class SkillRuntimeContext:
                     "SKILL_INTEGRITY_UNAVAILABLE",
                     "OpenViking did not return the canonical SKILL.md content",
                 )
-            if canonical_content != content:
-                raise SkillRuntimeError(
-                    "SKILL_REVISION_CHANGED",
-                    "Remote SKILL.md changed between read and activation",
-                )
+            canonical_bytes = canonical_content.encode("utf-8")
+            content_differs_from_read = canonical_content != content
             content_checksum = str(result.get("content_sha256") or "").strip()
             if not content_checksum:
                 raise SkillRuntimeError(
                     "SKILL_INTEGRITY_UNAVAILABLE",
                     "OpenViking did not return a SKILL.md content checksum",
                 )
-            if hashlib.sha256(canonical_content.encode("utf-8")).hexdigest() != content_checksum:
+            if hashlib.sha256(canonical_bytes).hexdigest() != content_checksum:
                 raise SkillRuntimeError(
                     "SKILL_REVISION_CHANGED",
                     "OpenViking returned inconsistent SKILL.md integrity metadata",
@@ -587,20 +593,69 @@ class SkillRuntimeContext:
                 raise SkillRuntimeError(
                     "SKILL_INVALID", "OpenViking Skill manifest is missing SKILL.md"
                 )
-            definition_bytes = canonical_content.encode("utf-8")
-            if definition.size != len(definition_bytes) or definition.sha256 != content_checksum:
-                raise SkillRuntimeError(
-                    "SKILL_REVISION_CHANGED",
-                    "SKILL.md content does not match its manifest integrity metadata",
+            definition_content = content
+            if content_differs_from_read or "visible_content_sha256" in result:
+                visible_content_checksum = str(result.get("visible_content_sha256") or "").strip()
+                if re.fullmatch(r"[0-9a-f]{64}", visible_content_checksum) is None:
+                    raise SkillRuntimeError(
+                        "SKILL_INTEGRITY_UNAVAILABLE",
+                        "OpenViking did not return a visible SKILL.md content checksum",
+                    )
+                read_checksum = (
+                    hashlib.sha256(definition_bytes).hexdigest()
+                    if content_differs_from_read
+                    else content_checksum
                 )
+                if read_checksum != visible_content_checksum:
+                    raise SkillRuntimeError(
+                        "SKILL_REVISION_CHANGED",
+                        "Initial SKILL.md read does not match the current visible content",
+                    )
 
+            if content_differs_from_read:
+                stored_content_checksum = str(result.get("stored_content_sha256") or "").strip()
+                if re.fullmatch(r"[0-9a-f]{64}", stored_content_checksum) is None:
+                    raise SkillRuntimeError(
+                        "SKILL_INTEGRITY_UNAVAILABLE",
+                        "OpenViking did not return a stored SKILL.md content checksum",
+                    )
+                try:
+                    stored_bytes = await client.download_bytes(skill_md_uri)
+                except Exception as exc:
+                    raise SkillRuntimeError(
+                        "SKILL_INTEGRITY_UNAVAILABLE",
+                        f"Could not download stored SKILL.md for integrity verification: {exc}",
+                    ) from exc
+                self._validate_downloaded_file(definition, stored_bytes)
+                downloaded_checksum = hashlib.sha256(stored_bytes).hexdigest()
+                if (
+                    stored_content_checksum != downloaded_checksum
+                    or stored_content_checksum != definition.sha256
+                ):
+                    raise SkillRuntimeError(
+                        "SKILL_REVISION_CHANGED",
+                        "Stored SKILL.md does not match the snapshot integrity metadata",
+                    )
+            else:
+                self._validate_downloaded_file(definition, canonical_bytes)
+
+            try:
+                parsed = SkillLoader.parse(definition_content, source_path=skill_md_uri)
+            except Exception as exc:
+                raise SkillRuntimeError("SKILL_INVALID", str(exc)) from exc
+            parsed_name = str(parsed.get("name") or "").strip()
+            if parsed_name != name:
+                raise SkillRuntimeError(
+                    "SKILL_INVALID",
+                    f"Skill name {parsed_name!r} does not match URI name {name!r}",
+                )
             metadata = _parse_vikingbot_metadata(parsed.get("metadata"))
             active = ActiveRemoteSkill(
                 name=name,
                 description=str(parsed.get("description") or ""),
                 root_uri=root_uri,
                 skill_md_uri=skill_md_uri,
-                content=canonical_content,
+                content=definition_content,
                 source=_source_for_uri(root_uri),
                 files=files,
                 allowed_tools=tuple(str(value) for value in parsed.get("allowed_tools") or []),

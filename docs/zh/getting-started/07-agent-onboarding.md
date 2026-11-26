@@ -13,7 +13,13 @@ Agent 按一份简短的指南执行。指南以纯 Markdown 发布，任何 Age
 
 两份也都可以从 `docs.openviking.net` 访问，中国大陆访问通常更快。
 
-## 提示词
+## BytePlus
+
+按 [BytePlus 接入指南](../guides/27-byteplus-setup.md#连接-agent)配置你的 Agent。如果使用通用安装器，选择 **OpenViking 托管服务 → BytePlus**，输入实例的 HTTPS 服务地址和 API Key。旧版安装器使用**自定义 URL**。下方提示词使用火山引擎的服务地址。
+
+## 火山引擎提示词
+
+<a id="提示词"></a>
 
 先在提示词标题栏选版本：自己一个人用选**个人版**；你是团队里的一名成员，和同事共用一个 OpenViking 账号下的共享目录，选**团队版**。复制提示词，发送前把 `<API_KEY>` 换成你的 key：个人版和团队管理员在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_07-agent-onboarding)的**用户管理 → API Key** 中获取，团队成员在团队分发给你的 OpenViking 工作台中获取。
 

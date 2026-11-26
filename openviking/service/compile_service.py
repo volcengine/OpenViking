@@ -1242,6 +1242,11 @@ class CompileService:
             raise InvalidArgumentError(
                 "Compile target must not be inside the user memories/experiences subtree"
             )
+        if {"viking://resources", "viking://user"}.intersection(request.from_):
+            raise InvalidArgumentError(
+                "Compile --from rejects viking://resources and viking://user. Use a "
+                "subdirectory such as viking://resources/test or viking://user/default/resources."
+            )
         for uri in request.from_:
             try:
                 stat = await self._fs.stat(uri, ctx, skip_count=True)

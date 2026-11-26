@@ -2,20 +2,6 @@ import { OV_PATHS } from '../../client/paths.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
 import type { CompileConfig } from './preview-workflow-types.js';
 
-export function savePreviewSnapshot(
-  client: OvClient,
-  uri: string,
-  message: string,
-  options: OvRequestOptions,
-) {
-  return client.request<{ result: 'created' | 'noop' }>({
-    method: 'POST',
-    path: OV_PATHS.snapshotCommit,
-    body: { message, paths: [uri], branch: 'main' },
-    options,
-  });
-}
-
 export function readCompileConfig(
   client: OvClient,
   uri: string,

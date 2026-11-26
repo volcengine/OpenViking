@@ -96,6 +96,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -118,6 +119,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -148,6 +150,7 @@ add_detected_traecode_cli_alias
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 tui_reset_bin_selection
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
@@ -590,7 +593,7 @@ test("a non-interactive run with no server says so and how to re-run", (t) => {
   assert.ok(result.stdout.indexOf("Review") < result.stdout.search(notice));
   assert.match(result.stdout, /curl -fsSL https:\/\/openviking\.ai\/install \| bash -s -- --yes --harness dsh --url <server-url> --api-key <api-key>/);
   assert.match(result.stdout, /\[4\/4\] Validation/);
-  assert.match(result.stdout, /DeepSeek Harness\n {4}Next: start a new dsh session: dsh --profile web\n {4}Updates: re-run this installer\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
+  assert.match(result.stdout, /DeepSeek Harness\n {4}Next: start a new dsh session: dsh --profile web\n {4}Updates: re-run this installer\n {4}Verify: node ~\/\.dsh\/profiles\/web\/node_modules\/@openviking\/dsh-memory-plugin\/scripts\/ov-memory-doctor\.mjs\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
   assert.equal(JSON.parse(readFileSync(join(home, ".openviking", "ovcli.conf"), "utf8")).url, "http://127.0.0.1:1933");
   // The unreachable server is repeated at the end, then where the agent goes next.
   assert.match(result.stdout, /!! {2}Not done:\n {6}- Cannot reach http:\/\/127\.0\.0\.1:1933\. If the server is not running yet, start it before using the plugin\.\n==> Onboarding guide \(for your agent\): https:\/\/docs\.openviking\.ai\/agents\/en\/onboarding\.md\n==> Using another edition of the guide \(such as the team edition\)\? Follow the link in your prompt instead\.\n$/);
@@ -602,9 +605,14 @@ test("a non-interactive run with no server says so and how to re-run", (t) => {
 });
 
 test("what was asked for but not installed is listed again just before the onboarding link", (t) => {
-  const { run } = detachedInstaller(t);
+  const { home, run: runWithPath } = detachedInstaller(t);
+  // pi is selected but not on PATH; dsh is. The directory node itself sits in
+  // may hold a real pi, so node is reached through a directory of its own.
+  const nodeBin = join(home, "node-bin");
+  mkdirSync(nodeBin);
+  symlinkSync(process.execPath, join(nodeBin, "node"));
+  const run = (args) => runWithPath(args, { PATH: `${join(home, "bin")}:${nodeBin}:/usr/bin:/bin` });
 
-  // pi is selected but not on PATH; dsh is.
   const result = run(["--harness", "dsh,pi", "--lang", "en", "--yes"]);
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -696,6 +704,8 @@ test("macOS detects DeepSeek Harness Desktop under ~/Applications and selects it
 
   const result = runInstallerPrelude(`
 HAVE_CURSOR=0
+HAVE_TRAE=0
+HAVE_TRAE_CN=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -743,6 +753,8 @@ test("Linux never offers DeepSeek Harness Desktop", (t) => {
 
   const result = runInstallerPrelude(`
 HAVE_CURSOR=0
+HAVE_TRAE=0
+HAVE_TRAE_CN=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
