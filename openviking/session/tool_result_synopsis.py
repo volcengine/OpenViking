@@ -483,13 +483,13 @@ def render_tool_result_stub(
     if ref:
         body.append("")
         body.append("Explore:")
+        body.append(f"- The full output is stored at {ref}/output.txt.")
         body.append(
-            f"- Use openviking_tool_result_search with ref={ref} to find relevant raw snippets."
+            '- If a session_history tool is offered: action="search" for a distinctive '
+            'string from this preview, then action="read" on the hit, paging with offset.'
         )
         body.append(
-            f"- Use openviking_tool_result_read with ref={ref} and offset/limit to inspect raw output."
-        )
-        body.append(
-            "- Use openviking_tool_result_list to discover other externalized outputs in this session."
+            f"- Only where offered: openviking_tool_result_search or openviking_tool_result_read "
+            f"with ref={ref}, and openviking_tool_result_list for other stored outputs."
         )
     return "\n".join(header) + "\n\n" + "\n".join(body)

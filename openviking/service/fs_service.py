@@ -58,14 +58,11 @@ from openviking.service.task_work_index import (
 from openviking.session.memory.account_templates import (
     validate_account_memory_template_transfer,
 )
-from openviking.session.memory.memory_updater import MemoryUpdater
 from openviking.session.memory.utils.content_visibility import visible_content
 from openviking.storage.abstract_overview import (
     AbstractOverviewFormatError,
     body_for_preview,
     is_abstract_overview_uri,
-    mark_abstract_overview_pending,
-    plan_abstract_overview_refresh,
     render_abstract_overview,
 )
 from openviking.storage.acl import AclAction, AclMode, AclSpec
@@ -79,6 +76,7 @@ from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.content_write_msg import ContentWriteMsg
 from openviking.storage.queuefs.semantic_msg import build_semantic_coalesce_key
+from openviking.storage.queuefs.semantic_ops.directory_refresh import enqueue_directory_refresh
 from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.vector_ids import is_vector_record_id, vector_record_id
 from openviking.storage.viking_fs import VikingFS
@@ -99,7 +97,6 @@ from openviking_cli.exceptions import (
     ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI, get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 _COMPILE_TARGET_LOCK_OWNER_PREFIX = "compile-target-"
@@ -694,7 +691,6 @@ class FSService:
                 uri,
                 ctx,
                 recursive=recursive,
-                wait=wait,
             )
 
         result, _task_id = await run_tracked_operation(
@@ -712,7 +708,6 @@ class FSService:
         uri: str,
         ctx: RequestContext,
         recursive: bool = False,
-        wait: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Remove content and refresh derived data without changing Compile metadata."""
         viking_fs = self._ensure_initialized()
@@ -728,7 +723,6 @@ class FSService:
 
         context_type = context_type_for_uri(uri)
         refresh_parent_uri = self._semantic_refresh_parent_uri(uri, context_type)
-        memory_overview_uri = self._memory_overview_parent_uri(uri, context_type)
         parent_uri = VikingURI(uri).parent
         if parent_uri is not None and await viking_fs.exists(parent_uri.uri, ctx=ctx):
             async with self._hold_watch_scope(
@@ -745,80 +739,34 @@ class FSService:
             await self._sync_watch_after_rm(
                 uri, account_id=ctx.account_id, context_type=context_type
             )
-        # A refresh on a parent that no longer exists would lock its sidecar
-        # paths and thereby recreate the deleted directory. Nothing to
-        # summarize there; skip it.
-        if refresh_parent_uri and not await viking_fs.exists(refresh_parent_uri, ctx=ctx):
-            refresh_parent_uri = None
-        queue_status = None
-        refresh_action: Optional[FreshnessAction] = None
-        try:
-            if refresh_parent_uri:
-                refresh_action = await self._enqueue_delete_refresh(
-                    root_uri=refresh_parent_uri,
-                    deleted_uri=uri,
-                    context_type=context_type,
-                    ctx=ctx,
-                    force_refresh=wait,
-                )
-            if memory_overview_uri:
-                await MemoryUpdater.refresh_schema_overview(
-                    viking_fs=viking_fs,
-                    directory_uri=memory_overview_uri,
-                    ctx=ctx,
-                )
-            if (
-                refresh_parent_uri
-                and wait
-                and refresh_action not in (FreshnessAction.NOOP, FreshnessAction.MARK_PENDING)
-            ):
-                queue_status = await self._wait_for_refresh()
-        finally:
-            pass
-        if refresh_parent_uri and isinstance(result, dict):
-            result["semantic_root_uri"] = refresh_parent_uri
-            if refresh_action is FreshnessAction.NOOP:
-                result["semantic_status"] = "skipped"
-            elif refresh_action is FreshnessAction.MARK_PENDING:
-                result["semantic_status"] = "deferred"
-            else:
-                result["semantic_status"] = self._semantic_refresh_status(
-                    wait=wait, queue_status=queue_status
-                )
-            if queue_status is not None:
-                result["queue_status"] = queue_status
+        if refresh_parent_uri and await viking_fs.exists(refresh_parent_uri, ctx=ctx):
+            action, error = await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
+            if isinstance(result, dict):
+                result["semantic_root_uri"] = refresh_parent_uri
+                if error:
+                    result["semantic_status"] = "failed"
+                    result["semantic_error"] = error
+                elif action is FreshnessAction.REFRESH_NOW:
+                    result["semantic_status"] = "queued"
+                elif action is FreshnessAction.MARK_PENDING:
+                    result["semantic_status"] = "deferred"
+                else:
+                    result["semantic_status"] = "skipped"
         return result
-
-    @staticmethod
-    def _semantic_refresh_status(
-        *,
-        wait: bool,
-        queue_status: Optional[Dict[str, Any]],
-    ) -> str:
-        if not wait:
-            return "queued"
-        if not isinstance(queue_status, dict):
-            return "complete"
-        semantic = queue_status.get("Semantic", {})
-        if not isinstance(semantic, dict):
-            return "complete"
-        try:
-            if int(semantic.get("error_count", 0) or 0) > 0:
-                return "failed"
-        except (TypeError, ValueError):
-            if semantic.get("errors"):
-                return "failed"
-        if semantic.get("errors"):
-            return "failed"
-        return "complete"
 
     @staticmethod
     def _semantic_refresh_parent_uri(uri: str, context_type: str) -> Optional[str]:
         if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
             return None
-        if context_type not in {"resource", "skill"}:
+        if context_type not in {"resource", "skill", "memory"}:
             return None
         parent = VikingURI(uri).parent
+        if context_type == "memory" and (
+            parent is None
+            or classify_uri(parent.uri).is_memory_root
+            or uri.rsplit("/", 1)[-1] in {".abstract.md", ".overview.md", ".relations.json"}
+        ):
+            return None
         if context_type == "skill":
             if parent is None:
                 return None
@@ -831,137 +779,6 @@ class FSService:
                 return None
         return parent.uri if parent and parent.scope else None
 
-    @staticmethod
-    def _memory_overview_parent_uri(uri: str, context_type: str) -> Optional[str]:
-        if context_type != "memory":
-            return None
-        leaf = uri.rstrip("/").rsplit("/", 1)[-1]
-        if leaf in {".abstract.md", ".overview.md", ".relations.json"}:
-            return None
-        parent = VikingURI(uri).parent
-        if parent is None:
-            return None
-        if not MemoryUpdater.memory_type_from_uri(parent.uri):
-            return None
-        return parent.uri
-
-    async def _enqueue_delete_refresh(
-        self,
-        *,
-        root_uri: str,
-        deleted_uri: str,
-        context_type: str,
-        ctx: RequestContext,
-        force_refresh: bool = False,
-    ) -> FreshnessAction:
-        semantic_config = get_openviking_config().semantic
-        try:
-            decision = await plan_abstract_overview_refresh(
-                viking_fs=self._viking_fs,
-                dir_uri=root_uri,
-                changed_entries=1,
-                ctx=ctx,
-                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-                force_refresh=force_refresh,
-            )
-        except LockAcquisitionError:
-            # Content deletion already succeeded. Parent freshness bookkeeping
-            # is best effort, as in content writes.
-            logger.info(
-                "Skipping best-effort delete parent freshness update because sidecars are busy",
-                extra={"uri": safe_uri_for_log(root_uri), "degraded": True},
-            )
-            return FreshnessAction.NOOP
-
-        if decision.action is not FreshnessAction.REFRESH_NOW:
-            return decision.action
-        try:
-            queue_manager = get_queue_manager()
-        except RuntimeError as exc:
-            logger.info(
-                "QueueManager not available; skipping delete refresh",
-                extra={"error_type": type(exc).__name__, "degraded": True},
-            )
-            return FreshnessAction.NOOP
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        telemetry_id = get_current_telemetry().telemetry_id
-        msg = SemanticMsg(
-            uri=root_uri,
-            context_type=context_type,
-            recursive=False,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            group_ids=ctx.group_ids,
-            peer_id=ctx.user.user_id,
-            role=str(ctx.role),
-            skip_vectorization=False,
-            telemetry_id=telemetry_id,
-            coalesce_key=build_semantic_coalesce_key(
-                context_type=context_type,
-                uri=root_uri,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                peer_id=ctx.user.user_id,
-            ),
-            changes={"deleted": [deleted_uri]},
-            generation_trigger="content_delete",
-        )
-        await semantic_queue.enqueue(msg)
-        return decision.action
-
-    async def _enqueue_copy_refresh(
-        self,
-        *,
-        root_uri: str,
-        source_uri: str,
-        copied_uri: str,
-        context_type: str,
-        ctx: RequestContext,
-        change_kind: Literal["added", "deleted"] = "added",
-    ) -> str:
-        """Queue a parent-only semantic refresh after a committed transfer."""
-        await mark_abstract_overview_pending(
-            viking_fs=self._viking_fs,
-            dir_uri=root_uri,
-            changed_entries=1,
-            ctx=ctx,
-        )
-        try:
-            queue_manager = get_queue_manager()
-        except RuntimeError as exc:
-            logger.info(
-                "QueueManager not available; skipping copy refresh",
-                extra={"error_type": type(exc).__name__, "degraded": True},
-            )
-            return "skipped"
-
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        telemetry_id = get_current_telemetry().telemetry_id
-        msg = SemanticMsg(
-            uri=root_uri,
-            context_type=context_type,
-            recursive=False,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            peer_id=ctx.user.user_id,
-            role=str(ctx.role),
-            skip_vectorization=False,
-            telemetry_id=telemetry_id,
-            coalesce_key=build_semantic_coalesce_key(
-                context_type=context_type,
-                uri=root_uri,
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                peer_id=ctx.user.user_id,
-            ),
-            changes={change_kind: [copied_uri]},
-            generation_trigger="content_copy",
-            copy_source_uri=source_uri,
-        )
-        await semantic_queue.enqueue(msg)
-        return "queued"
-
     async def _enqueue_transfer_rebuild(
         self,
         *,
@@ -972,13 +789,6 @@ class FSService:
         ctx: RequestContext,
     ) -> str:
         """Queue fresh semantic processing when the source has no index artifacts."""
-        if not recursive:
-            await mark_abstract_overview_pending(
-                viking_fs=self._viking_fs,
-                dir_uri=root_uri,
-                changed_entries=1,
-                ctx=ctx,
-            )
         try:
             queue_manager = get_queue_manager()
         except RuntimeError as exc:
@@ -1127,25 +937,14 @@ class FSService:
             return result
 
         result["semantic_root_uri"] = refresh_parent_uri
-        try:
-            result["semantic_status"] = await self._enqueue_copy_refresh(
-                root_uri=refresh_parent_uri,
-                source_uri=from_uri,
-                copied_uri=to_uri,
-                context_type=context_type,
-                ctx=ctx,
-            )
-        except Exception as exc:
-            logger.info(
-                "Copy committed with failed parent semantic refresh",
-                extra={
-                    "target_id": safe_uri_for_log(to_uri),
-                    "error_type": type(exc).__name__,
-                    "degraded": True,
-                },
-            )
+        action, error = await enqueue_directory_refresh(refresh_parent_uri, 1, ctx=ctx)
+        if error:
             result["semantic_status"] = "failed"
-            result["semantic_error"] = str(exc)
+            result["semantic_error"] = error
+        else:
+            result["semantic_status"] = (
+                "queued" if action is FreshnessAction.REFRESH_NOW else "skipped"
+            )
         return result
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
@@ -1374,39 +1173,14 @@ class FSService:
         source_parent_uri = self._semantic_refresh_parent_uri(from_uri, source_context_type)
         target_parent_uri = self._semantic_refresh_parent_uri(to_uri, target_context_type)
 
-        refreshes: List[tuple[str, str, Literal["added", "deleted"], str]] = []
+        changed_parents = set()
         if source_parent_uri and source_parent_uri != target_parent_uri:
-            refreshes.append((source_parent_uri, from_uri, "deleted", source_context_type))
+            changed_parents.add(source_parent_uri)
         if target_parent_uri and refresh_target:
-            refreshes.append((target_parent_uri, to_uri, "added", target_context_type))
+            changed_parents.add(target_parent_uri)
 
-        failed_refreshes = 0
-        for parent_uri, changed_uri, change_kind, context_type in refreshes:
-            try:
-                await self._enqueue_copy_refresh(
-                    root_uri=parent_uri,
-                    source_uri=from_uri,
-                    copied_uri=changed_uri,
-                    change_kind=change_kind,
-                    context_type=context_type,
-                    ctx=ctx,
-                )
-            except Exception as exc:
-                failed_refreshes += 1
-                logger.debug(
-                    "Move parent semantic refresh failed change=%s",
-                    change_kind,
-                    extra={
-                        "target_id": safe_uri_for_log(parent_uri),
-                        "error_type": type(exc).__name__,
-                    },
-                )
-
-        if failed_refreshes:
-            logger.info(
-                "Move committed with incomplete parent semantic refresh",
-                extra={"total": len(refreshes), "failed": failed_refreshes, "degraded": True},
-            )
+        for parent_uri in sorted(changed_parents):
+            await enqueue_directory_refresh(parent_uri, 1, ctx=ctx)
 
     async def _sync_watch_after_rm(self, uri: str, *, account_id: str, context_type: str) -> None:
         if context_type != "resource":
@@ -1688,11 +1462,7 @@ class FSService:
         # a real viking:// URI.
         resolved_uri = await self._resolve_uri(uri, ctx)
         ctx = self._ensure_initialized().authorize_read(ctx, [resolved_uri])
-        settings = (
-            await self._privacy_sanitizer.settings_for_uri(resolved_uri, ctx)
-            if self._privacy_sanitizer is not None and ctx.data_access is None
-            else None
-        )
+        settings = await self._visible_read_settings(resolved_uri, ctx)
         max_bytes = (
             self._privacy_sanitizer.max_content_bytes
             if self._privacy_sanitizer is not None and settings is not None
@@ -1713,6 +1483,23 @@ class FSService:
         lines = content.splitlines(keepends=True)
         sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
         return "".join(sliced)
+
+    async def _visible_read_settings(
+        self, uri: str, ctx: RequestContext
+    ) -> ResolvedPrivacyConfig | None:
+        if self._privacy_sanitizer is None or ctx.data_access is not None:
+            return None
+        return await self._privacy_sanitizer.settings_for_uri(uri, ctx)
+
+    async def make_visible(self, uri: str, content: str, ctx: RequestContext) -> str:
+        """Apply ``read_visible``'s read-time visibility step to text already read from uri.
+
+        Raises ``ResourceExhaustedError`` when privacy matching applies and the
+        text exceeds the sanitizer's size or replacement limit.
+        """
+        ctx = self._ensure_initialized().authorize_read(ctx, [uri])
+        settings = await self._visible_read_settings(uri, ctx)
+        return await self._make_content_visible(uri, content, ctx, settings=settings)
 
     async def _make_content_visible(
         self,
@@ -2829,10 +2616,8 @@ class FSService:
         offset: int = 0,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        """Page changed source URIs between snapshots; a null base means an empty tree.
-
-        Every changed path requires current read permission, including deleted paths.
-        Any denied descendant rejects the whole query without exposing its URI.
+        """
+        Page changed source URIs between snapshots; a null base means an empty tree.
         """
         viking_fs = self._ensure_initialized()
         if not paths or not to_ref.strip() or (from_ref is not None and not from_ref.strip()):
@@ -2844,8 +2629,9 @@ class FSService:
         )
         changes_by_uri = {change["uri"]: change for change in changes}
         uris = sorted(changes_by_uri)
-        access = await viking_fs._can_access_many(uris, ctx, action=AclAction.READ)
-        if any(not access.get(uri, False) for uri in uris):
+        read_uris = viking_fs._snapshot_read_check_uris(uris, ctx)
+        access = await viking_fs._can_access_many(read_uris, ctx, action=AclAction.READ)
+        if any(not access.get(uri, False) for uri in read_uris):
             raise PermissionDeniedError("Snapshot changes include inaccessible paths")
         page = [changes_by_uri[uri] for uri in uris[offset : offset + limit]]
         next_offset = offset + len(page)

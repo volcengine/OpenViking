@@ -13,6 +13,7 @@ from openviking.core.namespace_policy import (
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.viking_fs import VikingFS
+from openviking.system_assets import BUILTIN_SEMANTIC_TEMPLATES_DIR
 from openviking.system_assets.sync import SYSTEM_ASSET_MANIFEST_PATH, SystemAssetSynchronizer
 from openviking_cli.session.user_id import UserIdentifier
 from scripts.build_support.system_assets_manifest import write_system_assets_manifest
@@ -72,11 +73,23 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
     compile_source.write_bytes(b"same skill")
     reference_source.write_bytes(b"\x00guide")
     memory_source.write_bytes(b"new profile")
+    semantic_source = tmp_path / "semantic/templates/builtin"
+    semantic_source.mkdir(parents=True)
+    semantic_assets = {
+        name: (BUILTIN_SEMANTIC_TEMPLATES_DIR / name).read_bytes()
+        for name in ("abstract_generation.yaml", "directory_overview.md.j2")
+    }
+    for name, content in semantic_assets.items():
+        (semantic_source / name).write_bytes(content)
     write_system_assets_manifest(tmp_path)
 
     compile_target = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/demo/SKILL.md"
     reference_target = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/demo/references/guide.bin"
     memory_target = f"{SYSTEM_MEMORY_BUILTIN_ROOT}/profile.yaml"
+    semantic_targets = {
+        f"viking://system/semantic/templates/builtin/{name}": content
+        for name, content in semantic_assets.items()
+    }
     stale_target = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/retired/SKILL.md"
     custom_target = f"{SYSTEM_MEMORY_CUSTOM_ROOT}/profile.yaml"
     agfs = _FakeAGFS(
@@ -98,20 +111,24 @@ async def test_system_asset_sync_converges_managed_roots_without_touching_custom
             compile_target,
             reference_target,
             memory_target,
+            *semantic_targets,
             stale_target,
             custom_target,
         )
     }
 
-    assert await synchronizer.sync(ctx, lease_ref={"lease_ref": "account-init"}) == 2
+    assert await synchronizer.sync(ctx, lease_ref={"lease_ref": "account-init"}) == 4
     assert agfs.sync_locks == 0
     assert all(
         viking_fs._uri_to_path(uri, ctx=ctx) in agfs.directories for uri in SYSTEM_FIXED_DIRECTORIES
     )
     assert viking_fs._uri_to_path(SYSTEM_COMPILE_GLOBAL_ROOT, ctx=ctx) not in agfs.directories
-    assert sorted(agfs.writes) == sorted([paths[reference_target], paths[memory_target]])
+    assert sorted(agfs.writes) == sorted(
+        paths[uri] for uri in (reference_target, memory_target, *semantic_targets)
+    )
     assert agfs.files[paths[reference_target]] == b"\x00guide"
     assert agfs.files[paths[memory_target]] == b"new profile"
+    assert {uri: agfs.files[paths[uri]] for uri in semantic_targets} == semantic_targets
     assert agfs.files[paths[stale_target]] == b"keep"
     assert agfs.files[paths[custom_target]] == b"custom"
 
@@ -137,6 +154,7 @@ def concurrent_asset_sync(tmp_path):
     source = tmp_path / "compile/example-skills/demo"
     source.mkdir(parents=True)
     (tmp_path / "memory/memory_templates/builtin").mkdir(parents=True)
+    (tmp_path / "semantic/templates/builtin").mkdir(parents=True)
     for index in range(9):
         (source / f"{index}.md").write_bytes(b"packaged")
     agfs = _FakeAGFS({f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/demo/0.md": b"packaged"})

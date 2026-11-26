@@ -22,7 +22,7 @@ def _chat_response(content: str = "ok"):
     "agent_options, vlm_options, expected_timeout",
     [
         pytest.param({}, {"timeout": 180.0}, 180.0, id="inherit"),
-        pytest.param({}, {}, 60.0, id="default"),
+        pytest.param({}, {}, 600.0, id="default"),
         pytest.param({"timeout": 45.0}, {"timeout": 180.0}, 45.0, id="override"),
     ],
 )

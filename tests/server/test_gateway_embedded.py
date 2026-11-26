@@ -2,7 +2,7 @@
 
 import sqlite3
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -18,6 +18,7 @@ def openviking_config(gateway, encryption=None, workspace="./data"):
     return SimpleNamespace(
         gateway=gateway,
         service_name="openviking",
+        enable_default_resources=True,
         storage=SimpleNamespace(workspace=workspace),
         encryption=encryption or EncryptionConfig(),
         oauth=SimpleNamespace(enabled=False),
@@ -165,8 +166,10 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
     from openviking.metrics import global_api
     from openviking.observability import usage_audit
     from openviking.server import app as server_module
+    from openviking.server import runtime as runtime_module
     from openviking.server.config import ServerConfig
     from openviking.server.mcp_endpoint import mcp
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
     from openviking_cli.utils.config.vlm_config import VLMConfig
     from openviking_gateway.client import VikingClient
 
@@ -179,6 +182,8 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
         "get_openviking_config",
         lambda: openviking_config(gateway_config, encryption),
     )
+    cluster = OpenVikingConfig(vlm=VLMConfig(model="gpt", provider="openai", api_key="secret"))
+    monkeypatch.setattr("openviking_cli.utils.config.get_openviking_config", lambda: cluster)
     monkeypatch.setattr(global_api, "init_metrics_from_server_config", lambda *args, **kwargs: None)
     monkeypatch.setattr(global_api, "shutdown_metrics_async", AsyncMock())
     monkeypatch.setattr(usage_audit, "init_usage_audit_from_server_config", AsyncMock())
@@ -191,28 +196,35 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
         AsyncMock(return_value={"status": "ok", "auth_mode": "dev", "version": "0.1.dev1"}),
     )
     service = SimpleNamespace(
+        _initialized=False,
+        _config=SimpleNamespace(
+            reconcile_system_assets_on_startup=False, enable_default_resources=True
+        ),
+        configure_runtime=Mock(),
+        initialize=AsyncMock(),
+        recover=AsyncMock(),
+        start_background=AsyncMock(),
+        detach_runtime=Mock(),
+        release_runtime=AsyncMock(),
+        stop_background=AsyncMock(),
         vlm_resolver=SimpleNamespace(
             effective_vlm_config=AsyncMock(
                 return_value=VLMConfig(
                     model="gpt", provider="openai", api_key="secret", api_base=model_server.url
                 )
             )
-        )
+        ),
     )
     initialized = []
-    monkeypatch.setattr(
-        server_module,
-        "get_task_tracker",
-        lambda: SimpleNamespace(start_cleanup_loop=lambda: None, stop_cleanup_loop=lambda: None),
-    )
 
-    async def initialize(app, _service, config):
+    async def wire(runtime):
+        app, config = runtime.app, runtime.config
         # The gateway is running before deletion setup receives it.
         assert await app.state.gateway_app.state.management.list("default", "upstreams") == []
         initialized.append(True)
-        await server_module._initialize_auth_plugin(app, service, config)
+        await runtime_module.initialize_auth_plugin(app, service, config)
 
-    monkeypatch.setattr(server_module, "_initialize_runtime_state", initialize)
+    monkeypatch.setattr(runtime_module.ServerRuntime, "wire", wire)
     from openviking.server import body_dump_middleware
 
     dumped = []

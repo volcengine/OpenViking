@@ -11,9 +11,9 @@ import os
 import time
 from collections import ChainMap, Counter
 from collections.abc import Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal, NamedTuple
 
 from openviking.core.namespace import (
     canonical_user_root,
@@ -27,7 +27,7 @@ from openviking.privacy.content import PrivacyContent
 from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import PrivacyFieldReference
 from openviking.pyagfs import get_privacy_matcher_class
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.utils import get_logger
@@ -89,6 +89,19 @@ class _PreparedMatcher:
     native: Any
     ambiguous: Mapping[str, tuple[str, ...]]
     has_values: bool
+    # References into the ``auto`` category, i.e. not yet saved under a name (seal only).
+    temporary: frozenset[str] = frozenset()
+    # The Credential revision read before the catalog was (seal only).
+    revision: str = ""
+
+
+class SealMatcher(NamedTuple):
+    find: Callable[[str], list[PrivacyReplacement]]
+    # References that point into ``auto``.
+    temporary: frozenset[str]
+    # Read before the catalog, so a concurrent write can only make it older
+    # than what ``find`` matches, never newer.
+    revision: str
 
 
 class PrivacySanitizer:
@@ -117,7 +130,7 @@ class PrivacySanitizer:
         matcher_class: Any = get_privacy_matcher_class()
         self._matcher_class = matcher_class
         self._cache: dict[
-            tuple[str, str, int, str, tuple[str, str] | None, int, str],
+            tuple[str, str, str, str, tuple[str, str] | None, int, str],
             tuple[float, _PreparedMatcher],
         ] = {}
         self._cache_lock = asyncio.Lock()
@@ -139,6 +152,13 @@ class PrivacySanitizer:
         """Number of ambiguous occurrences observed by this sanitizer instance."""
         return self._ambiguous_matches
 
+    @staticmethod
+    def _privacy_read_context(ctx: RequestContext) -> RequestContext:
+        """Return the actor's context without GLOBAL resource bypass for private catalog reads."""
+        if ctx.role == Role.GLOBAL and ctx.bypass_acl:
+            return replace(ctx, bypass_acl=False)
+        return ctx
+
     async def prepare_matcher(
         self,
         ctx: RequestContext,
@@ -155,12 +175,32 @@ class PrivacySanitizer:
         A snapshot may be supplied under the target lock; version zero denotes
         a target without a persisted configuration.
         """
+        ctx = self._privacy_read_context(ctx)
         if settings is None:
             settings = await self._privacy.get_settings(ctx)
         if settings.mode == "off":
             return lambda _: []
         matcher = await self._matcher(ctx, scope=scope, settings=settings, snapshot=snapshot)
+        return self._finder(matcher, uri)
 
+    async def prepare_seal_matcher(
+        self, ctx: RequestContext, *, settings: ResolvedPrivacyConfig
+    ) -> SealMatcher:
+        """Prepare the seal endpoint's matcher, its temporary references and revision.
+
+        Unlike the storage paths, it matches the ``auto`` category as well as
+        ``credential``, and the values of earlier stored versions of each
+        ``credential`` target, mapped to the field's reference. On conflict a
+        current ``credential`` value beats an earlier one, which beats an
+        ``auto`` one. References into ``auto`` are temporary. The matcher and
+        the temporary set are built together and cached per revision.
+        """
+        matcher = await self._matcher(ctx, settings=settings, seal=True)
+        return SealMatcher(self._finder(matcher, ""), matcher.temporary, matcher.revision)
+
+    def _finder(
+        self, matcher: _PreparedMatcher, uri: str
+    ) -> Callable[[str], list[PrivacyReplacement]]:
         def find(content: str) -> list[PrivacyReplacement]:
             try:
                 replacements, _, exceeded = matcher.native.find_limited(
@@ -197,6 +237,7 @@ class PrivacySanitizer:
             or PrivacyContent.is_skill_metadata(uri)
         ):
             return PrivacySanitizationResult(content=content)
+        ctx = self._privacy_read_context(ctx)
         if settings is None:
             settings = await self._privacy.get_settings(ctx)
         if settings.mode == "off":
@@ -276,7 +317,7 @@ class PrivacySanitizer:
         owner = owner_space_for_uri(uri)
         if owner and owner != ctx.user.user_id:
             return None
-        settings = await self._privacy.get_settings(ctx)
+        settings = await self._privacy.get_settings(self._privacy_read_context(ctx))
         if settings.mode == "off":
             return None
         if settings.mode != "auto_strict" and self.scope_from_uri(uri, ctx) is None:
@@ -326,10 +367,15 @@ class PrivacySanitizer:
         scope: tuple[str, str] | None = None,
         settings: ResolvedPrivacyConfig,
         snapshot: UserPrivacyConfigVersion | None = None,
+        seal: bool = False,
     ) -> _PreparedMatcher:
         settings_hash = hashlib.sha256(
             json.dumps(asdict(settings), sort_keys=True).encode("utf-8")
         ).hexdigest()
+        if seal:
+            # A separate cache entry: the storage paths must keep matching
+            # current Credential values only.
+            settings_hash += ":seal"
         cache_key, current = await self._matcher_state(ctx, scope, settings_hash, snapshot)
         now = self._monotonic_clock()
         cached = self._cache.get(cache_key)
@@ -346,7 +392,16 @@ class PrivacySanitizer:
             if shared is None or now - shared[0] >= self._cache_ttl_seconds:
                 shared = (
                     now,
-                    await self._build_matcher(ctx, scope=None, current=None, settings=settings),
+                    replace(
+                        await self._build_matcher(
+                            ctx,
+                            scope=None,
+                            current=None,
+                            settings=settings,
+                            seal=seal,
+                        ),
+                        revision=cache_key[2],
+                    ),
                 )
             matcher = shared[1]
             if cache_key[4] is not None:
@@ -358,7 +413,11 @@ class PrivacySanitizer:
                 key: item
                 for key, item in self._cache.items()
                 if now - item[0] < self._cache_ttl_seconds
-                and (key[:2] != owner_key or (key[2:4] == cache_key[2:4] and key[4] != scope))
+                # Keep other settings (the seal matcher, other modes) of the same
+                # revision so alternating callers do not rebuild each other's.
+                and (
+                    key[:2] != owner_key or (key[2] == cache_key[2] and key[3:5] != cache_key[3:5])
+                )
             }
             self._cache[shared_key] = shared
             if matcher is not shared[1]:
@@ -372,7 +431,7 @@ class PrivacySanitizer:
         settings_hash: str,
         snapshot: UserPrivacyConfigVersion | None,
     ) -> tuple[
-        tuple[str, str, int, str, tuple[str, str] | None, int, str],
+        tuple[str, str, str, str, tuple[str, str] | None, int, str],
         UserPrivacyConfigVersion | None,
     ]:
         current = snapshot
@@ -384,7 +443,9 @@ class PrivacySanitizer:
             (
                 ctx.account_id,
                 ctx.user.user_id,
-                self._privacy.credential_revision(ctx),
+                # Persisted and shared by workers, so another worker's write
+                # invalidates this cache on the next call; the TTL is a backstop.
+                await self._privacy.credential_revision(ctx),
                 settings_hash,
                 scope,
                 current.version if current else 0,
@@ -401,40 +462,68 @@ class PrivacySanitizer:
         current: UserPrivacyConfigVersion | None,
         settings: ResolvedPrivacyConfig,
         preferred: _PreparedMatcher | None = None,
+        seal: bool = False,
     ) -> _PreparedMatcher:
         from openviking.privacy.rules import prepare_privacy_extractor
+        from openviking.privacy.service import AUTO_CATEGORY, SEALED_CATEGORIES
 
         discover = prepare_privacy_extractor(settings=settings)
         never_mask = set(settings.never_mask)
         references: dict[str, list[PrivacyFieldReference]] = {}
+        # Lower-priority candidates, in priority order: earlier Credential
+        # values, then current ``auto`` values (seal only).
+        fallbacks: list[dict[str, list[PrivacyFieldReference]]] = [{}, {}]
+        temporary: set[str] = set()
+        categories = SEALED_CATEGORIES if seal else ("credential",)
         configs = (
             [(*scope, current)]
             if scope
             else [
-                ("credential", target, await self._privacy.get_current(ctx, "credential", target))
-                for target in await self._privacy.list_targets(ctx, "credential")
+                (category, target, await self._privacy.get_current(ctx, category, target))
+                for category in categories
+                for target in await self._privacy.list_targets(ctx, category)
             ]
         )
+
+        def protected(value: Any) -> bool:
+            return (
+                isinstance(value, str)
+                and len(value) >= MIN_PROTECTED_VALUE_CHARS
+                and value not in never_mask
+            )
+
         for category, target_key, config in configs:
             if config is None:
                 continue
+            if category == AUTO_CATEGORY:
+                temporary.update(
+                    PrivacyFieldReference(ctx.user.user_id, category, target_key, name).render()
+                    for name in config.values
+                )
+            if seal and category == "credential":
+                # An ``auto`` target never has a second version.
+                await self._collect_earlier_values(
+                    ctx, category, target_key, config, protected, fallbacks[0]
+                )
+            current_values = references if category != AUTO_CATEGORY else fallbacks[1]
             for field_name, value in config.values.items():
-                if (
-                    not isinstance(value, str)
-                    or len(value) < MIN_PROTECTED_VALUE_CHARS
-                    or value in never_mask
-                ):
+                if not protected(value):
                     continue
-                if category != "credential":
+                if category not in SEALED_CATEGORIES:
                     try:
                         matches = discover(value)
                     except InvalidArgumentError:
                         continue
                     if len(matches) != 1 or matches[0].start != 0 or matches[0].end != len(value):
                         continue
-                references.setdefault(value, []).append(
+                current_values.setdefault(value, []).append(
                     PrivacyFieldReference(ctx.user.user_id, category, target_key, field_name)
                 )
+
+        for fallback in fallbacks:
+            for secret, candidates in fallback.items():
+                # A higher-priority holder of the same value decides its reference.
+                references.setdefault(secret, candidates)
 
         targets: dict[str, list[str]] = {}
         ambiguous = {}
@@ -455,8 +544,34 @@ class PrivacySanitizer:
             )
             return _PreparedMatcher(native, ChainMap(ambiguous, preferred.ambiguous), True)
         return _PreparedMatcher(
-            self._matcher_class(targets, _AMBIGUOUS_PLACEHOLDER), ambiguous, bool(targets)
+            self._matcher_class(targets, _AMBIGUOUS_PLACEHOLDER),
+            ambiguous,
+            bool(targets),
+            frozenset(temporary),
         )
+
+    async def _collect_earlier_values(
+        self,
+        ctx: RequestContext,
+        category: str,
+        target_key: str,
+        config: UserPrivacyConfigVersion,
+        protected: Callable[[Any], bool],
+        earlier: dict[str, list[PrivacyFieldReference]],
+    ) -> None:
+        """Collect a target's earlier values, each mapped to its field's reference."""
+        owner = ctx.user.user_id
+        for number in await self._privacy.list_versions(ctx, category, target_key):
+            if number == config.version:
+                continue
+            version = await self._privacy.get_version(ctx, category, target_key, number)
+            if version is None:
+                continue
+            for field_name, value in version.values.items():
+                if protected(value):
+                    earlier.setdefault(value, []).append(
+                        PrivacyFieldReference(owner, category, target_key, field_name)
+                    )
 
     def _check_ambiguity(
         self,

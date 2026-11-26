@@ -104,9 +104,9 @@ test('a known Wiki keeps the truncation hint when its full read fails', async ()
   const f = await metadataFixture({
     uri,
     content,
+    kinds: [],
     taggedTarget: uri,
     fullRead: full.promise,
-    kinds: [],
   });
   try {
     assert.equal(f.tab.source.truncated, true);

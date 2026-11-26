@@ -7,16 +7,33 @@ import test from "node:test";
 // Imported, not re-declared: the copies kept here had drifted from sync.mjs
 // (dsh, opencode and agent-plugins were all missing modules the sync actually
 // ships), so a stale vendored file went unnoticed by this very test.
-import { GENERATED_HEADER, ROOT, SHARED_DIR, SKILLS_DIR, SKILL_TARGETS, assembledClosure, resolveTargets } from "./sync.mjs";
+import {
+  DATA_EXTENSION,
+  DATA_TARGETS,
+  GENERATED_HEADER,
+  ROOT,
+  SHARED_DIR,
+  SKILLS_DIR,
+  SKILL_TARGETS,
+  assembledClosure,
+  importSpecifiers,
+  resolveTargets,
+} from "./sync.mjs";
+
+const SYNC = join(ROOT, "examples", "memory-plugin-shared", "sync.mjs");
 
 test("vendored shared modules are synchronized", async () => {
-  const files = (await readdir(SHARED_DIR)).filter((file) => file.endsWith(".mjs")).sort();
+  const files = (await readdir(SHARED_DIR))
+    .filter((file) => file.endsWith(".mjs") || file.endsWith(DATA_EXTENSION))
+    .sort();
   assert.ok(files.length > 0, "expected shared modules");
 
   for (const target of await resolveTargets()) {
     for (const file of target.files) {
       assert.ok(files.includes(file), `${file} is in ${relative(ROOT, target.dir)}'s closure but missing from lib/`);
-      const expected = `${GENERATED_HEADER}${await readFile(join(SHARED_DIR, file), "utf-8")}`;
+      // A data file cannot carry the header; its copy is the file itself.
+      const header = file.endsWith(DATA_EXTENSION) ? "" : GENERATED_HEADER;
+      const expected = `${header}${await readFile(join(SHARED_DIR, file), "utf-8")}`;
       const actual = await readFile(join(target.dir, file), "utf-8");
       assert.equal(
         actual,
@@ -35,7 +52,13 @@ test("vendored shared modules are synchronized", async () => {
 test("what each plugin ships equals the closure of what it imports", async () => {
   for (const target of await resolveTargets()) {
     const onDisk = [];
-    for (const name of (await readdir(target.dir)).filter((file) => file.endsWith(".mjs")).sort()) {
+    for (const name of (await readdir(target.dir)).sort()) {
+      // A data file has no banner: one named after a lib/ data file is a copy.
+      if (name.endsWith(DATA_EXTENSION)) {
+        if ((await readdir(SHARED_DIR)).includes(name)) onDisk.push(name);
+        continue;
+      }
+      if (!name.endsWith(".mjs")) continue;
       // A target dir may also hold plugin-local modules; only a file carrying
       // the banner is a generated copy this sync owns.
       const body = await readFile(join(target.dir, name), "utf-8");
@@ -45,6 +68,35 @@ test("what each plugin ships equals the closure of what it imports", async () =>
       onDisk,
       target.files,
       `${relative(ROOT, target.dir)} does not hold the closure of its imports; run node examples/memory-plugin-shared/sync.mjs`,
+    );
+  }
+});
+
+// A module's data file travels with it: the reader of the feature table would
+// throw at import in a plugin that shipped the module without the table.
+test("a data file a module reads beside itself is part of its closure", () => {
+  assert.deepEqual(
+    importSpecifiers('const T = JSON.parse(readFileSync(new URL("./server-features.json", import.meta.url), "utf-8"));'),
+    ["./server-features.json"],
+  );
+  // Only a sibling file is a closure member; a URL elsewhere is not lib/'s.
+  assert.deepEqual(importSpecifiers('new URL("../package.json", import.meta.url)'), []);
+});
+
+// The gateway answers "does this server support X" from the same table as the
+// plugins; a stale package copy would let the two disagree about one server.
+// The copy is committed (the gateway is installed from its Python package,
+// which cannot run this generator), so the bytes in git are what must match.
+test("copies of lib/ data files outside the plugins are committed and byte-identical", async () => {
+  assert.ok(DATA_TARGETS.length > 0, "expected the gateway's copy of the feature table");
+  for (const { file, dir } of DATA_TARGETS) {
+    const path = relative(ROOT, join(dir, file));
+    const source = relative(ROOT, join(SHARED_DIR, file));
+    const tracked = execFileSync("git", ["ls-files", "--", path], { cwd: ROOT, encoding: "utf-8" });
+    assert.equal(tracked.trim(), path, `${path} must be committed`);
+    assert.ok(
+      (await readFile(join(dir, file))).equals(await readFile(join(SHARED_DIR, file))),
+      `${path} differs from ${source}; run node examples/memory-plugin-shared/sync.mjs`,
     );
   }
 });
@@ -99,6 +151,11 @@ test("every shared module is reachable from some plugin", async () => {
   // cursor, trae and zcode vendor nothing: the installer assembles their
   // runtime instead, so they claim through the manifest it reads.
   for (const entry of await assembledClosure()) claimed.add(entry);
+  // The plugin reader of the server feature table: the gateway reads the same
+  // table today. Its first consumer is the privacy seal change, whose plugins
+  // import server-features.mjs for featureStatus and healthVersion; that change
+  // removes this entry.
+  claimed.add("server-features.mjs");
   const files = (await readdir(SHARED_DIR)).filter((file) => file.endsWith(".mjs")).sort();
   assert.deepEqual(
     files.filter((file) => !claimed.has(file)),

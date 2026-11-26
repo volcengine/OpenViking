@@ -79,7 +79,7 @@ pub struct GitSnapshotConfig {
 /// Snapshot path history index configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitSnapshotLogConfig {
-    /// SnapshotLog provider: `none`, `sqlite`, or `mysql`.
+    /// SnapshotLog provider: `none`, `sqlite`, `mysql`, or `postgres`.
     #[serde(default = "default_snapshot_log_provider")]
     pub provider: String,
     /// SQLite provider settings.
@@ -88,6 +88,9 @@ pub struct GitSnapshotLogConfig {
     /// MySQL provider settings.
     #[serde(default)]
     pub mysql: Option<GitSnapshotLogMySqlConfig>,
+    /// PostgreSQL provider settings.
+    #[serde(default)]
+    pub postgres: Option<GitSnapshotLogPostgresConfig>,
 }
 
 /// SQLite SnapshotLog provider configuration.
@@ -111,6 +114,22 @@ pub struct GitSnapshotLogMySqlConfig {
     pub connect_timeout_ms: u64,
 }
 
+/// PostgreSQL SnapshotLog provider configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GitSnapshotLogPostgresConfig {
+    /// Environment variable that contains a PostgreSQL URL, including TLS settings.
+    pub dsn_env: String,
+    /// Maximum PostgreSQL pool connections.
+    #[serde(default = "default_mysql_max_connections")]
+    pub max_connections: u32,
+    /// Pool connection acquisition timeout in milliseconds.
+    #[serde(default = "default_mysql_connect_timeout_ms")]
+    pub connect_timeout_ms: u64,
+    /// Deadline for initialization and each complete index operation.
+    #[serde(default = "default_mysql_connect_timeout_ms")]
+    pub operation_timeout_ms: u64,
+}
+
 impl Default for GitTuningConfig {
     fn default() -> Self {
         Self {
@@ -126,6 +145,7 @@ impl Default for GitSnapshotLogConfig {
             provider: default_snapshot_log_provider(),
             sqlite: GitSnapshotLogSqliteConfig::default(),
             mysql: None,
+            postgres: None,
         }
     }
 }
@@ -256,5 +276,23 @@ mod tests {
         assert_eq!(mysql.dsn_env, "SNAPSHOT_DSN");
         assert_eq!(mysql.max_connections, 4);
         assert_eq!(mysql.connect_timeout_ms, 1000);
+    }
+
+    #[test]
+    fn parses_postgres_snapshot_log_config() {
+        let cfg: GitConfig = toml::from_str(
+            r#"
+            [snapshot.log]
+            provider = "postgres"
+            [snapshot.log.postgres]
+            dsn_env = "SNAPSHOT_PG_DSN"
+        "#,
+        )
+        .unwrap();
+        let postgres = cfg.snapshot.log.postgres.unwrap();
+        assert_eq!(postgres.dsn_env, "SNAPSHOT_PG_DSN");
+        assert_eq!(postgres.max_connections, 16);
+        assert_eq!(postgres.connect_timeout_ms, 3000);
+        assert_eq!(postgres.operation_timeout_ms, 3000);
     }
 }

@@ -128,9 +128,9 @@ test('FileBrowser marks only shared resources and labels an expanded empty folde
   try {
     await expand(user);
     await expand(agent);
-    assert.ok(row(`${endpoints}::empty`));
-    assert.match(row(`${endpoints}::empty`).textContent, /该文件夹为空/);
-    assert.doesNotMatch(row(`${endpoints}::empty`).textContent, /暂无文件/);
+    const empty = row(`${endpoints}::empty`)?.textContent ?? '';
+    assert.match(empty, /该文件夹为空/);
+    assert.doesNotMatch(empty, /暂无文件/);
     assert.equal(
       row(shared).querySelector('.ov-file-tree__shared')?.textContent,
       '共享',

@@ -71,6 +71,16 @@ const profiles = {
     description:
       'Clients can change any setting below for a new conversation with the X-OpenViking-Context header, including budgets; for tools, it can only withhold more. Turn this off for a profile that must stay as saved.',
   },
+  sealSecrets: {
+    label: 'Seal secrets',
+    description:
+      'Registered credentials reach the model only as references, new tokens the user types are stored in Privacy, and references in tool-call arguments are replaced with their values for the client. Needs OpenViking Server 0.5.7 or later. When sealing cannot be done (an older or unreachable server, a failed seal call, a request it cannot handle), the request is refused instead of going to the model unsealed; a reply whose tool calls cannot be unsealed fails. Clients cannot turn this off.',
+  },
+  enrollToolSecrets: {
+    label: 'Also store secrets found in tool output',
+    description:
+      'New tokens in tool results and in files or reminders the client attaches are stored in Privacy too, in every turn, and reach the model only as references. They accumulate in the auto category. Needs Seal secrets. Clients cannot change this.',
+  },
   recall: {
     title: 'Recall memory',
     description:

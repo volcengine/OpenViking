@@ -31,6 +31,7 @@ The tool list comes straight from the MCP tools your OpenViking server provides,
 | Purpose | Tools | What the model uses them for |
 | --- | --- | --- |
 | Search | `find`, `search`, `grep`, `glob` | Semantic search over memory and resources; exact lookups by regular expression or file name. |
+| Conversation history | `session_history` | Looking up exact details of this conversation that a summary replaced; see [Finding what was cut](05-long-conversations.md#finding-what-was-cut). |
 | Browse and read | `list`, `tree`, `read` | Expanding a recalled entry to its original text by URI; browsing memory and skill directories. |
 | Write | `remember`, `write`, `edit` | Storing a long-term memory; writing or editing memory files. |
 | Import | `add_resource`, `add_skill` | Importing a web page or repository by URL, importing a chat attachment, creating a skill from text, all without a shell on the client. |

@@ -101,7 +101,7 @@ test("session filtering skips subagents without changing main-session recall", a
   assert.deepEqual(seen, ["downstream replacement"]);
 });
 
-function mountPlugin() {
+function mountPlugin(tools = { register() {} }, sessions) {
   const handlers = new Map();
   let runtime;
   const ctx = {
@@ -113,7 +113,8 @@ function mountPlugin() {
       execute();
       return async () => {};
     },
-    tools: { register() {} },
+    tools,
+    sessions,
     plugin() {},
     on(name, handler) {
       handlers.set(name, handler);
@@ -137,10 +138,12 @@ function startupAgent(id = "dsh-startup") {
   const agent = {
     status: "idle",
     session: { id, header: { cwd: "/workspace" } },
+    inbox: { nextTurn: [], nextStep: [] },
     injected: [],
     effects: [],
     inject(message) {
       this.injected.push(message);
+      this.inbox.nextStep.push(message);
     },
     ctx: {
       effect(execute, label) {
@@ -261,6 +264,49 @@ test("agent/created returns on abort and never rejects on startup failure", asyn
     undefined,
   );
   assert.deepEqual(failing.injected, []);
+});
+
+test("the session-history note comes on the next step after a compaction or a resume", async () => {
+  const { handlers } = mountPlugin();
+  const stepNotes = async agent => {
+    const input = [message("next prompt")];
+    const decision = await handlers.get("agent/pre-step")({
+      agent,
+      messages: input,
+      signal: new AbortController().signal,
+    }, async () => ({ kind: "enter", messages: input }));
+    return decision.messages.map(m => m.content?.[0]?.text || "").filter(t => t.includes('source="session-history"'));
+  };
+  const compacted = startupAgent("compacted");
+  const resumed = startupAgent("resumed");
+  await withQuietFetch(async () => {
+    assert.deepEqual(await stepNotes(compacted), []);
+    handlers.get("session/event")(compacted.session, { type: "compaction/end", data: { turn: 1 } });
+    const notes = await stepNotes(compacted);
+    assert.equal(notes.length, 1);
+    assert.match(notes[0], /as dsh-compacted, including what the compaction summary replaced/);
+    assert.deepEqual(await stepNotes(compacted), []);
+
+    await handlers.get("agent/created")({ agent: resumed, source: "resume" });
+    assert.match((await stepNotes(resumed))[0], /as dsh-resumed, including anything an earlier compaction summarized/);
+  });
+});
+
+test("a session_history call without a session gets the caller's id and its parent chain", async () => {
+  const calls = [];
+  const tools = { register() {}, get: () => ({ execute: async args => (calls.push(args), "hit") }) };
+  const sessions = new Map([
+    ["fork", { header: { parentSession: "main", isSeeded: true } }],
+    ["main", { header: { isSeeded: false } }],
+  ]);
+  const { handlers } = mountPlugin(tools, sessions);
+  const agent = { session: { id: "sub", header: { parentSession: "fork", isSeeded: true, origin: "subagent" } } };
+  const call = (args, next) => handlers.get("tools/execute")({ name: "mcp__openviking__session_history", arguments: args, agent }, next);
+  const result = await call(Object.freeze({ action: "overview" }), async () => assert.fail("a call without session must be filled"));
+  assert.deepEqual(calls, [{ action: "overview", session: "dsh-sub,dsh-fork,dsh-main" }]);
+  assert.equal(result.value, "hit");
+  assert.equal(await call({ session: "dsh-other" }, async () => "untouched"), "untouched");
+  assert.equal(calls.length, 1);
 });
 
 function message(text) {

@@ -350,6 +350,9 @@ OpenViking 返回的其他 HTTP 错误记为 `openviking_http_<status>`；网关
 | 502 | `tool_upstream_invalid`、`tool_upstream_incomplete`、`tool_upstream_stream_error`、`tool_call_invalid` | upstream | OpenViking 工具轮次中，服务商的回复无法使用、不完整或是错误，或者模型调用了不允许的工具。 |
 | 502 | `tool_loop_limit` | gateway | OpenViking 工具轮次达到上限。 |
 | 504 | `tool_loop_timeout` | gateway | OpenViking 工具轮次超时。 |
+| 503 | `secret_seal_failed` | openviking | 打开了**封存密钥**，而 OpenViking 没能封存这个请求，或者版本过低无法封存；见[无法封存时](../gateway/14-seal-secrets.md#when-sealing-cannot-be-done)。 |
+| 400 | `secret_seal_invalid_request` | gateway | 打开了**封存密钥**，而请求本身无法封存，detail 写明原因。见[无法封存时](../gateway/14-seal-secrets.md#when-sealing-cannot-be-done)。 |
+| 502 | `secret_unseal_failed` | openviking | 打开了**封存密钥**，而回复中的工具调用无法启封；已经开始流式输出的回复以它作为错误事件结束。见[无法封存时](../gateway/14-seal-secrets.md#when-sealing-cannot-be-done)。 |
 
 对 Responses 路由发起的 WebSocket 请求仍然收到空的 426，记录里写 `websocket_unsupported`。模型路由上出现 `gateway_http_<status>` 原因，表示网关还没有归类的错误。
 

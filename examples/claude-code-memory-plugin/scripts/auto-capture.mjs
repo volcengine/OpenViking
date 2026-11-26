@@ -37,7 +37,7 @@ import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { replayPending } from "./lib/pending-queue.mjs";
 import { readJsonState, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
-import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { runHookStage, withAgentHookLock } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
 import { shapeCaptureParts } from "./shared/capture-utils.mjs";
 
@@ -76,10 +76,19 @@ async function loadState(sessionId) {
   }
 }
 
-async function saveState(sessionId, state) {
+// The cursor only moves forward unless a caller rewinds it on purpose: a
+// capture that started from an older snapshot must not undo a newer one's.
+async function saveState(sessionId, state, { rewind = false } = {}) {
   try {
     await mkdir(STATE_DIR, { recursive: true });
-    await writeFile(stateFilePath(sessionId), JSON.stringify(state));
+    let next = state;
+    if (!rewind) {
+      const current = await loadState(sessionId);
+      if (current.capturedTurnCount > state.capturedTurnCount) {
+        next = { ...state, capturedTurnCount: current.capturedTurnCount };
+      }
+    }
+    await writeFile(stateFilePath(sessionId), JSON.stringify(next));
   } catch { /* best effort */ }
 }
 
@@ -125,7 +134,7 @@ async function reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state) {
       status: res.status || 200,
     });
     state.capturedTurnCount = 0;
-    await saveState(sessionId, state);
+    await saveState(sessionId, state, { rewind: true });
   }
 }
 
@@ -266,9 +275,10 @@ async function main({ cfg, input, cwd }) {
   if (finalAnswer && !holdsAnswer(allTurns, finalAnswer)) {
     newTurns.push({ role: "assistant", text: finalAnswer, parts: [{ type: "text", text: finalAnswer }] });
   }
-  const captureTurns = cfg.captureAssistantTurns
-    ? newTurns
-    : newTurns.filter(turn => turn.role === "user");
+  // The cursor counts host-authored turns; only the conversation is sent.
+  const captureTurns = newTurns.filter(
+    (turn) => !turn.hostAuthored && (cfg.captureAssistantTurns || turn.role === "user"),
+  );
   log("transcript_parse", {
     totalTurns: allTurns.length,
     previouslyCaptured: state.capturedTurnCount,
@@ -484,6 +494,26 @@ async function main({ cfg, input, cwd }) {
       : "");
 }
 
+// One capture per CC session at a time, from reading the transcript to the
+// last cursor write: the Stop worker and the PreCompact catch-up read the same
+// cursor and would push the same turns. The wait covers one capture in flight
+// at its request timeouts; the holder keeps the lock fresh, so only a crashed
+// one goes stale. A capture that cannot get it leaves the turns to the next.
+async function captureLocked(stage) {
+  const sessionId = stage.input.session_id;
+  if (!sessionId) return main(stage);
+  const ran = await withAgentHookLock("claude-code", sessionId, async () => ({ value: await main(stage) }), {
+    waitMs: 2 * stage.cfg.captureTimeoutMs,
+    staleMs: 60_000,
+    heartbeatMs: 10_000,
+  });
+  if (!ran) {
+    log("skip", { stage: "lock", reason: "another capture of this session is still running", sessionId });
+    return undefined;
+  }
+  return ran.value;
+}
+
 async function start() {
   // Write-path hook: gated by autoCapture so that disabling capture also stops
   // the transcript push. This runs against the hook's own directory, before the
@@ -503,7 +533,7 @@ async function start() {
     gates: { enabled: (cfg) => cfg.autoCapture },
     envelope: approve,
     onSkip: (reason) => log("skip", { stage: "init", reason }),
-  }, main);
+  }, captureLocked);
 }
 
 start().catch((err) => { logError("uncaught", err); approve(); });

@@ -42,6 +42,13 @@ TOOL_OVERRIDES = {
             "and the returned signed instructions. The gateway cannot read local paths."
         ),
     },
+    "session_history": {
+        "notice": ("query", "id"),
+        "description": (
+            " session defaults to this conversation's saved sessions; leave it out unless you "
+            "need another session."
+        ),
+    },
 }
 
 
@@ -90,7 +97,8 @@ def select_tools(catalog, policy):
     selected = []
     for tool in catalog:
         name = tool["name"]
-        if name in disabled:
+        # Without capture there is no saved session for session_history to default to.
+        if name in disabled or (name == "session_history" and not policy.get("capture", True)):
             continue
         override = TOOL_OVERRIDES.get(name, {})
         schema = copy.deepcopy(tool["inputSchema"])

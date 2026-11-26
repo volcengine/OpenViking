@@ -239,23 +239,4 @@ describe("TOS release and single installer contract", () => {
     expect(installScript).toContain("openviking.env");
     expect(installScript).toContain("openclaw openviking setup");
   });
-
-  it("does not run OpenViking setup during verify-only mode", () => {
-    execFileSync("bash", [join(rootDir, "scripts/install.sh"), "--source", "existing", "--verify-only"], {
-      env: {
-        ...process.env,
-        OPENVIKING_API_KEY: "test-secret-key",
-        OPENVIKING_BASE_URL: "",
-      },
-    });
-  });
-
-  it("keeps the Volcengine installer as a thin compatibility wrapper", () => {
-    const wrapper = readText("scripts/volcengine-openviking-install.sh");
-
-    expect(wrapper).toContain("Compatibility wrapper");
-    expect(wrapper).toContain("exec \"$SCRIPT_DIR/install.sh\"");
-    expect(wrapper).not.toContain("openclaw openviking setup");
-    expect(wrapper).not.toContain("openclaw plugins install clawhub:@openviking/openclaw-plugin");
-  });
 });

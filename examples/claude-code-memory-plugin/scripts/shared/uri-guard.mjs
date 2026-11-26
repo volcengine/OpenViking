@@ -47,9 +47,16 @@ export function findVikingUri(args = {}, keys = DEFAULT_URI_KEYS, contentKeys = 
   return findVikingUriInValue(args, new Set(contentKeys));
 }
 
+// A privacy reference, {{ov_privacy:<owner>:viking://~/privacy/...#/values/<field>}},
+// names a sealed value and is meant to sit in a command line (`ov privacy run
+// --env TOKEN='{{ov_privacy:...}}' -- ...`). Its viking:// URI is not a path, so
+// the sweep blanks each reference out before it looks; a bare URI in the same
+// string is still found.
+const PRIVACY_REFERENCE_RE = /\{\{ov_privacy:[^\s{}]*\}\}/gi;
+
 export function findVikingUriInValue(value, skipKeys) {
   if (typeof value === "string") {
-    const match = value.match(/\bviking:\/\/[^\s"'`<>)]*/i);
+    const match = value.replace(PRIVACY_REFERENCE_RE, " ").match(/\bviking:\/\/[^\s"'`<>)]*/i);
     return match?.[0] || null;
   }
   if (Array.isArray(value)) {

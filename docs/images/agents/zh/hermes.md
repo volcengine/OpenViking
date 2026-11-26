@@ -1,9 +1,12 @@
-# 为 Hermes 配置 OpenViking Service
+# 为 Hermes 配置 OpenViking Managed Service
 
-[OpenViking Service](https://www.volcengine.com/product/openviking-service) 是
-火山引擎托管和运营的 OpenViking 云服务，无需安装服务端或配置本地模型。
-在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)
-开通服务，然后从**用户管理**的 **API Key** 中创建密钥。
+连接 Volcengine 或 BytePlus 托管的 OpenViking，无需安装服务端或配置本地模型。
+
+Volcengine 用户在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)
+开通[托管服务](https://www.volcengine.com/product/openviking-service)，然后从**用户管理**的 **API Key** 中创建密钥。
+
+BytePlus 用户请准备好 OpenViking API Key。
+详见 [BytePlus 接入指南](https://docs.openviking.ai/zh/guides/27-byteplus-setup)。
 
 ## 安装和配置
 
@@ -23,13 +26,17 @@ hermes memory setup openviking
    下所有发送者的记忆。Shared Agent 会要求确认。
 2. 若出现配置来源选项，选择 **Create new OpenViking profile**。也可以复用已保存的
    `ovcli.conf`。
-3. 选择 **OpenViking Service (VolcEngine Cloud)**。
-4. 输入服务 API Key。
+3. 选择 **OpenViking Managed Service**，再选择 **Volcengine** 或 **BytePlus**。
+4. BytePlus 用户输入 API Key。Volcengine 用户只需
+   输入 API Key，向导会提供服务地址。
 5. 选择保存位置。**Keep in Hermes only** 保存到 Hermes 的 `.env`。
    **Mirror to OpenViking store** 保存到本地 `ovcli.conf.<name>` 并关联到 Hermes。
    两种方式都会将凭据保存在当前电脑。
 6. 保存 OpenViking profile 时，填写名称，例如 `hermes`。这只是本地配置名称，
    不会创建用户或改变访问权限。
+
+旧版插件连接 Volcengine 时使用 **OpenViking Service (VolcEngine Cloud)**，
+连接 BytePlus 时使用 **Custom**。
 
 然后启动新的 Hermes 会话：
 
