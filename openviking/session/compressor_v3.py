@@ -10,6 +10,7 @@ to the process-global StreamingPolicyTrainer.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass, field, replace
@@ -19,9 +20,11 @@ from uuid import uuid4
 
 from openviking.config.generation import get_output_language_override
 from openviking.core.context import Context
+from openviking.core.namespace import canonical_user_root
 from openviking.message import Message
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.observability.reporting.facts import event_context
+from openviking.pyagfs.exceptions import AGFSClientError
 from openviking.server.identity import RequestContext
 from openviking.session.extraction_batch import (
     ExtractionBatchLimits,
@@ -96,6 +99,7 @@ from openviking.session.train import (
 from openviking.session.train.components.trajectory_analyzer import _evaluation_feedback_message
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry, tracer
+from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -883,6 +887,12 @@ class SessionCompressorV3:
                 archive_uri=archive_uri,
             )
 
+        chatlog_proofs = {}
+        if archive_source_selection_enabled and operations.archive_source_ranges:
+            chatlog_proofs = await _written_chatlog_proofs(
+                viking_fs, ctx, extract_context, extraction_id, patch_operations, result
+            )
+
         contexts = _contexts_from_update_result(result)
         canonical_cases = await _canonical_cases_from_update_result(
             operations=patch_operations,
@@ -900,7 +910,7 @@ class SessionCompressorV3:
             ),
             archive_source_candidates=(
                 extract_context.archive_source_candidates(
-                    operations.archive_source_ranges, messages
+                    operations.archive_source_ranges, messages, chatlog_proofs
                 )
                 if archive_source_selection_enabled
                 else []
@@ -2200,6 +2210,48 @@ def _same_memory_file(before: Optional[MemoryFile], after: Optional[MemoryFile])
     return before.model_dump(exclude={"uri", "memory_type"}) == after.model_dump(
         exclude={"uri", "memory_type"}
     )
+
+
+
+async def _written_chatlog_proofs(
+    fs: Any,
+    ctx: RequestContext,
+    extract_context: ExtractContext,
+    extraction_id: str,
+    operations: ResolvedOperations,
+    result: MemoryUpdateResult,
+) -> dict[int, tuple[str, str]]:
+    if fs is None:
+        return {}
+    successful = set(result.written_uris + result.edited_uris)
+    successful.difference_update(result.deleted_uris, (uri for uri, _ in result.errors))
+    event_root = f"{canonical_user_root(ctx)}/memories/events/"
+    uris = {
+        uri
+        for op in operations.upsert_operations
+        if op.memory_type == EVENT_MEMORY_TYPE
+        and op.source is not None
+        and op.source.extraction_id == extraction_id
+        for uri in op.uris
+        if uri in successful and uri.startswith(event_root)
+    }
+    proofs = {}
+    for uri in sorted(uris):
+        try:
+            raw = await fs.read_file(uri, ctx=ctx)
+            event = MemoryFileUtils.read(raw, uri=uri)
+            if (
+                event.memory_type != EVENT_MEMORY_TYPE
+                or event.extra_fields.get("source_extraction_id") != extraction_id
+            ):
+                continue
+            covered = extract_context.covered_chatlog_messages(event)
+        except (AGFSClientError, OSError, ValueError, OpenVikingError):
+            continue
+        if covered:
+            proof = (uri, hashlib.sha256(raw.encode("utf-8")).hexdigest())
+            proofs.update({id(message): proof for message in covered})
+    return proofs
 
 
 def _serialize_skipped_operations(items: Any) -> list[dict[str, Any]]:

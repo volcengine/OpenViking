@@ -6,6 +6,7 @@ import hashlib
 import json
 from typing import TYPE_CHECKING, Any
 
+from openviking.core.namespace import canonical_user_root
 from openviking.models.embedder.base import embed_compat
 from openviking.pyagfs.exceptions import AGFSClientError
 from openviking.server.identity import RequestContext
@@ -14,6 +15,7 @@ from openviking.storage.archive_source import archive_source_hit, is_archive_sou
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
+    OpenVikingError,
     PermissionDeniedError,
     ResourceExhaustedError,
 )
@@ -26,6 +28,39 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 ARCHIVE_SOURCE_CANDIDATES = "archive_source_candidates"
+ARCHIVE_SOURCE_CHATLOG_PROOFS = "archive_source_chatlog_proofs"
+
+
+async def uncovered_archive_source_excerpts(
+    fs: "VikingFS", metadata: dict[str, Any], ctx: RequestContext
+) -> list[str]:
+    """Recheck coverage at enqueue time, after all extraction batches have written."""
+    candidates = metadata.get(ARCHIVE_SOURCE_CANDIDATES)
+    if not isinstance(candidates, list):
+        return []
+    proofs = metadata.get(ARCHIVE_SOURCE_CHATLOG_PROOFS)
+    if not isinstance(proofs, dict):
+        proofs = {}
+    uncovered = []
+    verified: dict[str, str] = {}
+    event_root = f"{canonical_user_root(ctx)}/memories/events/"
+    for excerpt in candidates:
+        if not isinstance(excerpt, str):
+            continue
+        proof = proofs.get(excerpt)
+        if isinstance(proof, dict):
+            uri, digest = proof.get("uri"), proof.get("sha256")
+            if isinstance(uri, str) and uri.startswith(event_root) and isinstance(digest, str):
+                if uri not in verified:
+                    try:
+                        raw = await fs.read_file(uri, ctx=ctx)
+                        verified[uri] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+                    except (AGFSClientError, OSError, ValueError, OpenVikingError):
+                        verified[uri] = ""
+                if digest and verified[uri] == digest:
+                    continue
+        uncovered.append(excerpt)
+    return uncovered
 
 
 async def enqueue_archive_sources(

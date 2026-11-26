@@ -2649,7 +2649,9 @@ class Session:
         from openviking.service.task_work_index import get_task_context
         from openviking.session.archive_source_recall import (
             ARCHIVE_SOURCE_CANDIDATES,
+            ARCHIVE_SOURCE_CHATLOG_PROOFS,
             enqueue_archive_sources,
+            uncovered_archive_source_excerpts,
         )
         from openviking.telemetry import OperationTelemetry, bind_telemetry
         from openviking.telemetry.registry import register_telemetry, unregister_telemetry
@@ -2852,17 +2854,29 @@ class Session:
                         }
                         if source_candidates:
                             meta = await self._archives.read_meta(archive_uri)
-                            saved = [
+                            saved = dict.fromkeys(
                                 excerpt
                                 for excerpt in meta.get(ARCHIVE_SOURCE_CANDIDATES) or []
                                 if isinstance(excerpt, str)
-                            ]
-                            saved.extend(
-                                candidate["excerpt"]
-                                for candidate in source_candidates
-                                if candidate["message_id"] in archived_message_ids
                             )
-                            updates[ARCHIVE_SOURCE_CANDIDATES] = list(dict.fromkeys(saved))
+                            existing_proofs = meta.get(ARCHIVE_SOURCE_CHATLOG_PROOFS)
+                            proofs = dict(existing_proofs) if isinstance(existing_proofs, dict) else {}
+                            for candidate in source_candidates:
+                                if candidate["message_id"] not in archived_message_ids:
+                                    continue
+                                excerpt = candidate["excerpt"]
+                                if excerpt in saved:
+                                    # An identical excerpt at another position may be uncovered.
+                                    proofs.pop(excerpt, None)
+                                elif candidate.get("chatlog_uri") and candidate.get("chatlog_sha256"):
+                                    proofs[excerpt] = {
+                                        "uri": candidate["chatlog_uri"],
+                                        "sha256": candidate["chatlog_sha256"],
+                                    }
+                                saved[excerpt] = None
+                            updates[ARCHIVE_SOURCE_CANDIDATES] = list(saved)
+                            if proofs or existing_proofs:
+                                updates[ARCHIVE_SOURCE_CHATLOG_PROOFS] = proofs
                         await self._merge_archive_meta(archive_uri, updates)
 
                     async def _run_recorded_memory_step(
@@ -3043,7 +3057,7 @@ class Session:
                         await enqueue_archive_sources(
                             self._viking_fs,
                             archive_uri,
-                            meta.get(ARCHIVE_SOURCE_CANDIDATES) or [],
+                            await uncovered_archive_source_excerpts(self._viking_fs, meta, self.ctx),
                             self.ctx,
                         )
 

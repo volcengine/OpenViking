@@ -395,7 +395,10 @@ class ExtractContext:
         return chunk_messages
 
     def archive_source_candidates(
-        self, ranges: list[str], original_messages: list[Message]
+        self,
+        ranges: list[str],
+        original_messages: list[Message],
+        chatlog_proofs: dict[int, tuple[str, str]],
     ) -> list[ArchiveSourceExcerpt]:
         indexes = selected_archive_source_indexes(ranges, len(self.messages))
         if not indexes:
@@ -415,8 +418,30 @@ class ExtractContext:
             if plain_archive_text(original)[start:end] == text:
                 excerpt = text[:MAX_ARCHIVE_SOURCE_CHARS]
                 if excerpt.strip():
-                    candidates.append(ArchiveSourceExcerpt(message_id, excerpt))
+                    uri, digest = chatlog_proofs.get(id(message), ("", ""))
+                    candidates.append(ArchiveSourceExcerpt(message_id, excerpt, uri, digest))
         return candidates
+
+    def covered_chatlog_messages(self, event: MemoryFile) -> list[Message]:
+        """Identify messages fully present in the persisted canonical Events ChatLog."""
+        ranges = event.extra_fields.get("ranges")
+        summary = event.extra_fields.get("summary")
+        if not isinstance(ranges, str) or not ranges or not isinstance(summary, str):
+            return []
+        message_range = self.read_message_ranges(ranges)
+        chatlog = message_range.pretty_print()
+        if not chatlog or self.get_resource_event_content(ranges, summary):
+            return []
+        timestamp = message_range._first_message_time_with_weekday() or "N/A"
+        expected = f"# Summary\n{summary}\n# {timestamp} ChatLog:\n{chatlog}"
+        if event.content.strip() != expected.strip():
+            return []
+        return [
+            message
+            for group in message_range.elements
+            for message in group
+            if (text := plain_archive_text(message)) and text in chatlog
+        ]
 
     @classmethod
     def _split_text_for_extraction(cls, text: str) -> List[str]:

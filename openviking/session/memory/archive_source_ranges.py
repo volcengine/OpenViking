@@ -15,8 +15,9 @@ ARCHIVE_SOURCE_RANGE_INSTRUCTION = (
     'Use strings such as "3" or "7-9". Select passages worth looking up verbatim later because '
     "they contain precise details, constraints, decisions, or work results. Use at most 16 "
     "message or chunk positions. Omit routine conversation. Only select text from user or "
-    "assistant messages. Prefer passages with useful details that the memory operations "
-    "do not preserve. "
+    "assistant messages. Keep candidates for useful details even if a proposed Event "
+    "references them. The service removes candidates fully covered by a successfully "
+    "written Events ChatLog. "
     "Use an empty list when there are no useful sources. Do not quote or summarize the text."
 )
 _INDEX_RANGE = re.compile(r"([0-9]{1,9})(?:-([0-9]{1,9}))?")
@@ -28,6 +29,8 @@ class ArchiveSourceExcerpt:
 
     message_id: str
     excerpt: str
+    chatlog_uri: str = ""
+    chatlog_sha256: str = ""
 
 
 def plain_archive_text(message: Message) -> str:
