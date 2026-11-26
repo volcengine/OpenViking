@@ -7,7 +7,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
-import psycopg2
 import pytest
 
 from openviking.storage.expr import And, Contains, Eq, Or, PathScope, Range, RawDSL
@@ -15,6 +14,8 @@ from openviking.storage.vectordb_adapters import pgvector_adapter
 from openviking.storage.vectordb_adapters.factory import create_collection_adapter
 from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.utils.config.vectordb_config import PgvectorConfig, VectorDBBackendConfig
+
+psycopg2 = pytest.importorskip("psycopg2")
 
 SCHEMA = {
     "Fields": [
