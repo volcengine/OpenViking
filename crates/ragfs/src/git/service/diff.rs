@@ -18,10 +18,12 @@ impl GitService {
             validate_relative_path(path)?;
         }
         let store = self.object_store.as_ref();
+        let overlay = self.overlay(account).await?;
         let mut roots = Vec::new();
         for target in base.into_iter().chain([head]) {
-            let oid = resolve_ref(self.ref_store.as_ref(), store, account, target).await?;
-            roots.push(load_commit_meta(store, account, &oid).await?.tree);
+            let oid =
+                resolve_ref(self.ref_store.as_ref(), store, &overlay, account, target).await?;
+            roots.push(load_commit_meta(store, &overlay, account, &oid).await?.tree);
         }
         let head_tree = roots.pop();
         let base_tree = roots.pop();

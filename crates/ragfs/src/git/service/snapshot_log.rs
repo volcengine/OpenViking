@@ -5,6 +5,39 @@ use crate::git::snapshot_log::{
 };
 
 impl GitService {
+    pub(super) async fn fix_snapshot_log_after_delete(
+        &self,
+        account: &str,
+        branch: &str,
+        base_root: Option<ObjectId>,
+        new_root: ObjectId,
+        runs: &[(Vec<ObjectId>, ObjectId, Vec<String>)],
+    ) {
+        let Some(store) = &self.snapshot_log_store else {
+            return;
+        };
+        let runs: Vec<_> = runs
+            .iter()
+            .map(
+                |(deleted, child, paths)| crate::git::snapshot_log::PathHistoryRepair {
+                    deleted: deleted.iter().map(ToString::to_string).collect(),
+                    child: child.to_string(),
+                    keep_paths: paths.clone(),
+                },
+            )
+            .collect();
+        let base = base_root.map(|oid| oid.to_string()).unwrap_or_default();
+        match store
+            .repair_generation(account, branch, &base, &new_root.to_string(), &runs)
+            .await
+        {
+            Ok(true) => return,
+            Ok(false) => warn!("snapshot log repair incomplete for {account}/{branch}"),
+            Err(err) => warn!("snapshot log repair failed for {account}/{branch}: {err}"),
+        }
+        self.trigger_snapshot_log_backfill(account, branch);
+    }
+
     /// Best-effort append of SnapshotLog rows after a branch ref advances.
     pub(super) async fn try_append_snapshot_log(
         &self,
@@ -57,15 +90,27 @@ impl GitService {
             }
         }
 
-        let object_store = self.object_store.clone();
-        let ref_store = self.ref_store.clone();
+        let svc = self.clone();
         let active = self.snapshot_log_backfills.clone();
         tokio::spawn(async move {
-            if let Err(err) =
-                run_snapshot_log_backfill(object_store, ref_store, store, key.0.clone(), key.1.clone())
-                    .await
-            {
-                warn!("snapshot log backfill failed for {}/{}: {}", key.0, key.1, err);
+            let result = async {
+                let overlay = svc.overlay(&key.0).await.map_err(|e| e.to_string())?;
+                run_snapshot_log_backfill(
+                    svc.object_store.clone(),
+                    svc.ref_store.clone(),
+                    store,
+                    key.0.clone(),
+                    key.1.clone(),
+                    overlay,
+                )
+                .await
+            }
+            .await;
+            if let Err(err) = result {
+                warn!(
+                    "snapshot log backfill failed for {}/{}: {err}",
+                    key.0, key.1
+                );
             }
             active.lock().unwrap().remove(&key);
         });
@@ -127,7 +172,16 @@ async fn run_snapshot_log_backfill(
     store: Arc<dyn SnapshotLogStore>,
     account: String,
     branch: String,
+    overlay: OverlayView,
 ) -> Result<(), String> {
+    let generation = overlay
+        .path_history_root
+        .map(|oid| oid.to_string())
+        .unwrap_or_default();
+    store
+        .prepare_generation(&account, &branch, &generation)
+        .await
+        .map_err(|err| err.to_string())?;
     let ref_name = format!("refs/heads/{branch}");
     let head = match ref_store.read(&account, &ref_name).await {
         Ok(head) => head,
@@ -144,7 +198,7 @@ async fn run_snapshot_log_backfill(
     let mut found_latest = latest_oid.is_none();
     let mut next = Some(head);
     while let Some(commit_oid) = next {
-        let meta = load_commit_meta(object_store.as_ref(), &account, &commit_oid)
+        let meta = load_commit_meta(object_store.as_ref(), &overlay, &account, &commit_oid)
             .await
             .map_err(|err| err.to_string())?;
         if latest_oid.as_deref() == Some(commit_oid.to_hex().to_string().as_str()) {
@@ -170,18 +224,17 @@ async fn run_snapshot_log_backfill(
 
     for (commit_oid, meta) in chain {
         let parent_oid = meta.parents.first().copied();
-        let changed_paths: Vec<String> =
-            crate::git::tree_builder::diff_trees(
-                object_store.as_ref(),
-                &account,
-                parent_tree,
-                Some(meta.tree),
-            )
-            .await
-            .map_err(|err| err.to_string())?
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect();
+        let changed_paths: Vec<String> = crate::git::tree_builder::diff_trees(
+            object_store.as_ref(),
+            &account,
+            parent_tree,
+            Some(meta.tree),
+        )
+        .await
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
         let rows = match snapshot_log_rows_for_paths(store.limits(), commit_oid, &changed_paths) {
             Ok(rows) => rows,
             Err(err) => {
@@ -191,7 +244,13 @@ async fn run_snapshot_log_backfill(
         };
         let parent_hex = parent_oid.map(|oid| oid.to_hex().to_string());
         match store
-            .append_rows_if_latest(&account, &branch, parent_hex.as_deref(), &rows)
+            .append_rows_at_generation(
+                &account,
+                &branch,
+                parent_hex.as_deref(),
+                &rows,
+                Some(&generation),
+            )
             .await
         {
             Ok(()) => {}

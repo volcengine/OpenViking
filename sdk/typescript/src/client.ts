@@ -1352,6 +1352,15 @@ export class OpenVikingClient {
       }),
     });
   }
+  /** Delete historical snapshots or preview their deletion. */
+  gitDelete(options: {
+    commitIds: string[];
+    dryRun?: boolean;
+  }): Promise<JsonObject> {
+    return this.request("POST", "/api/v1/snapshot/delete", {
+      body: { commit_ids: options.commitIds, dry_run: options.dryRun ?? false },
+    });
+  }
   /** Restore filesystem content from a previous snapshot. */
   gitRestore(options: GitRestoreOptions): Promise<JsonObject> {
     return this.request("POST", "/api/v1/snapshot/restore", {

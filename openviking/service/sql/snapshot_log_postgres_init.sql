@@ -1,5 +1,7 @@
 -- Provision once with a deployment/migration role before starting OV.
--- Runtime needs SELECT and INSERT on snapshot_log and USAGE on its sequence.
+-- Runtime needs SELECT, INSERT, UPDATE and DELETE on snapshot_log, USAGE on its
+-- sequence, SELECT, INSERT and UPDATE on snapshot_log_generation, and
+-- SELECT, INSERT, UPDATE and DELETE on snapshot_commit.
 -- No extensions are required. Use a dedicated database/schema per OV deployment.
 CREATE TABLE IF NOT EXISTS snapshot_log (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -19,3 +21,24 @@ CREATE INDEX IF NOT EXISTS idx_snapshot_log_lookup
     ON snapshot_log (account, branch, md5(path), id DESC);
 CREATE INDEX IF NOT EXISTS idx_snapshot_log_latest
     ON snapshot_log (account, branch, id DESC);
+
+CREATE TABLE IF NOT EXISTS snapshot_log_generation (
+    account TEXT COLLATE "C" NOT NULL,
+    branch TEXT COLLATE "C" NOT NULL,
+    root TEXT NOT NULL,
+    PRIMARY KEY (account, branch)
+);
+
+CREATE TABLE IF NOT EXISTS snapshot_commit (
+    account TEXT COLLATE "C" NOT NULL,
+    branch TEXT COLLATE "C" NOT NULL,
+    seq BIGINT NOT NULL,
+    commit_oid TEXT COLLATE "C" NOT NULL,
+    parent_oid TEXT COLLATE "C",
+    tree_oid TEXT COLLATE "C" NOT NULL,
+    committed_at BIGINT NOT NULL,
+    deleted_at BIGINT,
+    integrity BYTEA NOT NULL,
+    PRIMARY KEY (account, branch, seq),
+    UNIQUE (account, commit_oid)
+);

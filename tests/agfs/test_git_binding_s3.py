@@ -330,3 +330,25 @@ def test_restore_leaves_unversioned_derived_file_on_s3(client):
     assert restored["deleted"] == 0
     assert client.read(f"/local/{account}/resources/proj/a.md") == b"A v1"
     assert client.read(f"/local/{account}/resources/proj/.abstract.md") == b"derived summary"
+
+
+def test_s3_delete_and_gc_roundtrip(client):
+    account = _acct()
+    path = "resources/a.md"
+    ids = []
+    for version in ("first", "middle", "tip"):
+        _write(client, account, path, version.encode())
+        ids.append(
+            client.git_commit(
+                account=account,
+                branch="main",
+                message=version,
+                paths=[path],
+                author_name="test",
+                author_email="test@example.com",
+            )["commit_oid"]
+        )
+    result = client.git_delete(account=account, commit_ids=[ids[1]])
+    assert result["deleted"] == [ids[1]]
+    assert result["reparented"] == [{"commit": ids[2], "parents": [ids[0]]}]
+    assert {"scanned", "deleted", "bytes_freed"} <= client.git_gc(account=account).keys()

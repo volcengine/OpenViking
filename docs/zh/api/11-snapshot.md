@@ -14,6 +14,7 @@
 | `diff` | 以 unified diff 格式对比某个文件在两个快照中的内容 |
 | `diff-paths` | 分页列出指定目录内发生变化的源文件 |
 | `restore` | 把目录（或整棵账号树）恢复到某个历史快照的状态 |
+| `delete` | 原子删除指定的历史快照 |
 
 此外还提供账号级 `.ovgitignore` 排除规则的管理命令（`get`/`set`/`delete`），用于在 `commit` 时按规则排除匹配的文件。详见 [ignore 管理](#ignore-管理)。
 
@@ -655,6 +656,49 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
 
 ---
 
+### delete()
+
+从账号历史中原子删除指定的提交。保留的提交保持原 ID 和内容，父链接跳过已删除的提交。分支和标签顶端受保护。业务记录（例如 Compile 运行）引用的提交仍可删除，此后通过该引用读取或回滚会返回 `NOT_FOUND`。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `commit_ids` | string[] | 完整的 40 位十六进制提交 ID，忽略大小写，去重后 1–100 个 |
+| `dry_run` | bool | 默认 `false`。`true` 返回删除计划和每个提交涉及的路径数 |
+
+ROOT 和 ADMIN 可跨用户空间删除。USER 对每个改动路径都需要写权限，其他用户空间的改动会导致整批被拒绝。路径已不存在时，检查最近的现存父目录。所有角色都不能通过该接口删除涉及 Skill 路径的提交，GLOBAL 和自定义角色不能使用该接口。
+
+删除后，后台 GC 可在 `git.snapshot.gc.grace_seconds`（默认 3600 秒）后回收独占对象。`reclaim_after` 是最早可回收时间（Unix 秒）。S3 存储桶须从未启用版本控制才能物理回收。
+
+```python
+preview = client.snapshot.delete([commit_id], dry_run=True)
+result = client.snapshot.delete([commit_id])
+```
+
+```typescript
+await client.gitDelete({ commitIds: [commitId], dryRun: true });
+```
+
+```http
+POST /api/v1/snapshot/delete
+Content-Type: application/json
+
+{"commit_ids":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"dry_run":true}
+```
+
+```sh
+ov snapshot delete "$COMMIT_ID" --dry-run -o json
+```
+
+预览和执行响应分别如下。
+
+```json
+{"status":"ok","result":{"result":"dry_run","deleted":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"reparented":[{"commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","parents":[]}],"reclaim_after":1764003600,"changed_paths":{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":1}}}
+```
+
+```json
+{"status":"ok","result":{"result":"deleted","deleted":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"reparented":[{"commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","parents":[]}],"reclaim_after":1764003600}}
+```
+
 ## ignore 管理
 
 账号根目录下的 `.ovgitignore` 是账号级排除规则文件。在 `commit` 时，匹配规则的文件被排除出快照；规则文件本身不会被 `.ovgitignore` 规则忽略（即使规则匹配 `.ovgitignore` 也不会被排除），且不进入向量索引。规则只影响 `commit`，不影响 `restore`/`show`/`log`。
@@ -850,6 +894,10 @@ client.close()
 | 恢复期间分支被并发提交改写（CAS 冲突） | 409 | `CONFLICT` |
 | `.ovgitignore` 过大、非 UTF-8，或包含不支持的 `!` 取反/反斜杠转义语法（`commit` 时校验） | 400 | `INVALID_ARGUMENT` |
 | 请求体包含未知字段（请求模型为 `extra="forbid"`） | 400 | `INVALID_ARGUMENT` |
+| `delete` — ID 或数量无效、分支或标签顶端、Skill 路径 | 400 | `INVALID_ARGUMENT` |
+| `delete` — 提交不存在或已删除 | 404 | `NOT_FOUND` |
+| `delete` — 角色无权删除、其他用户空间、缺少写权限 | 403 | `PERMISSION_DENIED` |
+| `delete` — 并发修改或超出索引回退遍历上限 | 409 | `CONFLICT` |
 
 ## 相关文档
 

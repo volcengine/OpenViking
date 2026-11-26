@@ -14,6 +14,7 @@ The core commands:
 | `diff` | Compare one file between two snapshots as a unified diff |
 | `diff-paths` | Page changed source files under selected directories |
 | `restore` | Restore a directory (or the whole account tree) to a past snapshot |
+| `delete` | Atomically delete selected historical snapshots |
 
 In addition, account-level `.ovgitignore` exclusion rules can be managed (`get`/`set`/`delete`) to exclude matching files from `commit`. See [Ignore management](#ignore-management).
 
@@ -651,6 +652,49 @@ When `current_commit_id` is supplied, the last file commit is checked before rea
 
 ---
 
+### delete()
+
+Delete the selected commits atomically from the account history. Retained commits keep their IDs and contents, and their parent links skip deleted commits. Branch and tag tips are protected. Business records such as Compile runs do not protect their referenced commits. Reading or rolling back to a deleted ID returns `NOT_FOUND`.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `commit_ids` | string[] | Full 40-character hexadecimal commit IDs, case-insensitive. Supply 1–100 distinct IDs. |
+| `dry_run` | bool | Defaults to `false`. Set to `true` to preview the deletion and path count per commit. |
+
+ROOT and ADMIN can delete across user spaces. USER requires write access to each changed path or its nearest existing parent if the path is gone. A change in another user's space rejects the entire request. Skill paths are protected for all roles. GLOBAL and custom roles cannot delete snapshots.
+
+Background GC can reclaim objects unique to deleted commits after `git.snapshot.gc.grace_seconds` (default 3600 seconds). The response field `reclaim_after` is the earliest eligible Unix timestamp. Physical reclamation on S3 requires a bucket that has never had versioning enabled.
+
+```python
+preview = client.snapshot.delete([commit_id], dry_run=True)
+result = client.snapshot.delete([commit_id])
+```
+
+```typescript
+await client.gitDelete({ commitIds: [commitId], dryRun: true });
+```
+
+```http
+POST /api/v1/snapshot/delete
+Content-Type: application/json
+
+{"commit_ids":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"dry_run":true}
+```
+
+```sh
+ov snapshot delete "$COMMIT_ID" --dry-run -o json
+```
+
+Preview and applied responses for deleting a root commit appear below.
+
+```json
+{"status":"ok","result":{"result":"dry_run","deleted":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"reparented":[{"commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","parents":[]}],"reclaim_after":1764003600,"changed_paths":{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":1}}}
+```
+
+```json
+{"status":"ok","result":{"result":"deleted","deleted":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"reparented":[{"commit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","parents":[]}],"reclaim_after":1764003600}}
+```
+
 ## Ignore management
 
 The `.ovgitignore` file at the account root is an account-level exclusion file. At `commit` time, files matching the rules are excluded from the snapshot; the rules file itself is never ignored by `.ovgitignore` rules (a rule matching `.ovgitignore` does not exclude it) and never enters vector indexing. Rules affect only `commit`, not `restore`/`show`/`log`.
@@ -846,6 +890,10 @@ For more end-to-end examples, see the [examples/snapshot/](https://github.com/vo
 | Branch concurrently advanced during restore (CAS conflict) | 409 | `CONFLICT` |
 | `.ovgitignore` too large, non-UTF-8, or containing unsupported `!` negation/backslash escaping (validated at `commit` time) | 400 | `INVALID_ARGUMENT` |
 | Request body contains an unknown field (request model is `extra="forbid"`) | 400 | `INVALID_ARGUMENT` |
+| `delete` — Invalid ID or count, ref tip, or Skill path | 400 | `INVALID_ARGUMENT` |
+| `delete` — Commit missing or already deleted | 404 | `NOT_FOUND` |
+| `delete` — Role denied, other user space, or missing write access | 403 | `PERMISSION_DENIED` |
+| `delete` — Concurrent changes or commit index fallback limit reached | 409 | `CONFLICT` |
 
 ## Related Documentation
 

@@ -11,6 +11,10 @@ async fn make_snapshot_log_store() -> Arc<dyn SnapshotLogStore> {
                 .expect("PostgreSQL SnapshotLog schema must be provisioned"),
         );
     }
+    make_sqlite_snapshot_log_store().await
+}
+
+async fn make_sqlite_snapshot_log_store() -> Arc<SqliteSnapshotLogStore> {
     let dir = tempfile::tempdir().unwrap().keep();
     let db_path = dir.join("snapshot-log.db");
     Arc::new(
@@ -324,4 +328,67 @@ async fn test_snapshot_log_store_rejects_non_root_commit_when_empty() {
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn log_index_matches_scan_after_middle_and_root_delete() {
+    use crate::git::DeleteRequest;
+    let account = "acct_log_delete";
+    let (_dir, vfs, _, _, svc) = make_service(account);
+    let store = make_snapshot_log_store().await;
+    let svc = svc.with_snapshot_log(Some(store.clone()));
+    vfs.put("dir/root-only", b"constant");
+    vfs.put("dir/reverted", b"0");
+    let a = make_commit(&svc, account, "main", "first").await;
+    vfs.put("dir/reverted", b"1");
+    vfs.put("dir/b-only", b"1");
+    let b = make_commit(&svc, account, "main", "second").await;
+    vfs.put("dir/reverted", b"0");
+    let c = make_commit(&svc, account, "main", "third").await;
+    vfs.put("other", b"1");
+    let _d = make_commit(&svc, account, "main", "fourth").await;
+
+    for target in [b, a] {
+        svc.delete_commits(DeleteRequest {
+            account: account.into(),
+            commit_ids: vec![target.to_string()],
+            dry_run: false,
+            expected_overlay_root: None,
+        })
+        .await
+        .unwrap();
+        let overlay = svc.overlay(account).await.unwrap();
+        for path in [
+            "dir/root-only",
+            "dir/b-only",
+            "dir/reverted",
+            "dir",
+            "other",
+        ] {
+            let req = LogRequest {
+                account: account.into(),
+                branch: "main".into(),
+                limit: 10,
+                offset: 0,
+                paths: Some(vec![path.into()]),
+            };
+            let indexed = svc
+                .log_with_snapshot_log(&req, &overlay)
+                .await
+                .unwrap()
+                .expect("repaired SQL fast path");
+            let indexed: Vec<_> = indexed.into_iter().map(|e| e.oid).collect();
+            let scanned: Vec<_> = svc
+                .log_with_scan_limit(req, 1000)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|e| e.oid)
+                .collect();
+            assert_eq!(indexed, scanned, "{path} after deleting {target}");
+            if target == a && path == "dir/root-only" {
+                assert_eq!(indexed, vec![c]);
+            }
+        }
+    }
 }

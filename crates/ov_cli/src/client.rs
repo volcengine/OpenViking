@@ -2276,6 +2276,16 @@ impl HttpClient {
         self.post("/api/v1/snapshot/commit", req).await
     }
 
+    pub async fn snapshot_delete(&self, commit_ids: &[String], dry_run: bool) -> Result<Value> {
+        self.post(
+            "/api/v1/snapshot/delete",
+            &serde_json::json!({
+                "commit_ids": commit_ids, "dry_run": dry_run,
+            }),
+        )
+        .await
+    }
+
     pub async fn snapshot_restore(&self, req: &SnapshotRestoreReq) -> Result<Value> {
         self.post("/api/v1/snapshot/restore", req).await
     }

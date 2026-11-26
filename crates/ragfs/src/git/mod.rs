@@ -31,9 +31,11 @@ pub mod commit;
 pub mod config;
 pub mod enumerate;
 pub mod error;
+pub mod freshen;
 pub mod ignore;
 pub mod index_store;
 pub mod object_store;
+pub mod overlay;
 pub mod ref_store;
 pub mod service;
 pub mod snapshot_log;
@@ -42,26 +44,28 @@ pub mod types;
 pub mod util;
 
 pub use config::{
-    GitConfig, GitLocalConfig, GitS3ConfigPy, GitSnapshotConfig, GitSnapshotLogConfig,
+    GitConfig, GitGcConfig, GitLocalConfig, GitS3ConfigPy, GitSnapshotConfig, GitSnapshotLogConfig,
     GitSnapshotLogMySqlConfig, GitSnapshotLogPostgresConfig, GitSnapshotLogSqliteConfig,
     GitTuningConfig,
 };
 pub use error::{GitError, ObjectStoreError, RefStoreError};
 pub use ignore::{should_track_path, IgnoreMatcher, OVGITIGNORE_MAX_BYTES, OVGITIGNORE_PATH};
 pub use index_store::{CommitIndex, IndexStore, IndexStoreError};
-pub use object_store::ObjectStore;
+pub use object_store::{ObjectMeta, ObjectStore};
 pub use ref_store::RefStore;
 pub use service::GitService;
 #[cfg(feature = "postgres")]
 pub use snapshot_log::PostgresSnapshotLogStore;
 pub use snapshot_log::{
-    MySqlSnapshotLogStore, SnapshotLogError, SnapshotLogHit, SnapshotLogRow, SnapshotLogStore,
-    SqliteSnapshotLogStore,
+    CommitIndexRow, CommitIndexStore, MySqlSnapshotLogStore, SnapshotLogError, SnapshotLogHit,
+    SnapshotLogRow, SnapshotLogStore, SqliteSnapshotLogStore,
 };
 pub use tree_builder::{flatten, lookup, TreeEditor};
 pub use types::{
-    Actor, CommitRequest, CommitResponse, IndexEntry, LogEntry, LogRequest, RestoreDiff,
-    RestoreRequest, RestoreResponse, RestoreWritebackPartial, ShowRequest, ShowResponse,
+    GcReport,
+    Actor, CommitRequest, CommitResponse, DeletePlanEntry, DeleteRequest, DeleteResponse,
+    IndexEntry, LogEntry, LogRequest, RestoreDiff, RestoreRequest, RestoreResponse,
+    RestoreWritebackPartial, ShowRequest, ShowResponse,
 };
 
 // Re-exports from backends

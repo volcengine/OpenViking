@@ -136,3 +136,16 @@ async def test_git_diff_gets_with_refs_and_path(snapshot_transport):
         ("GET", "/api/v1/snapshot/diff", {"path": uri, "from": "old", "to": "new"}),
         ("GET", "/api/v1/snapshot/diff", {"path": uri, "to": "new"}),
     ]
+
+
+async def test_snapshot_delete_posts_body(snapshot_transport):
+    client, connect, requests = snapshot_transport
+    ids = ["a" * 40]
+    result = {"result": "dry_run", "deleted": ids}
+    client._http = connect(httpx.Response(200, json={"status": "ok", "result": result}))
+    actual = await client.snapshot.delete(ids, dry_run=True)
+    assert actual == result
+
+    (request,) = requests
+    assert (request.method, request.url.path) == ("POST", "/api/v1/snapshot/delete")
+    assert json.loads(request.content) == {"commit_ids": ids, "dry_run": True}

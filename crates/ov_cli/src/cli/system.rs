@@ -49,6 +49,14 @@ pub(crate) enum SnapshotCmd {
         #[arg(long)]
         author_email: Option<String>,
     },
+    /// Delete historical snapshots by full commit ID
+    Delete {
+        #[arg(required = true, num_args = 1.., value_name = "COMMIT_ID")]
+        commit_ids: Vec<String>,
+        /// Preview the deletion and resulting changes to history
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Restore a file, project directory, or full account tree to a past snapshot
     Restore {
         /// Source commit (full 40-character ID for --file); directories also accept a branch or tag

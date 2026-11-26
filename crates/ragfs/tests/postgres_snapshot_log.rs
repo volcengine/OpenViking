@@ -62,6 +62,11 @@ async fn cleanup(account: &str) {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("DELETE FROM snapshot_log_generation WHERE account = $1")
+        .bind(account)
+        .execute(&pool)
+        .await
+        .unwrap();
     pool.close().await;
 }
 
@@ -321,12 +326,14 @@ async fn postgres_snapshot_log_bounds_startup_and_read_table_lock_waits() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query(&format!(
-        "CREATE TABLE {schema}.snapshot_log (LIKE snapshot_log INCLUDING ALL)"
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
+    for table in ["snapshot_log", "snapshot_log_generation", "snapshot_commit"] {
+        sqlx::query(&format!(
+            "CREATE TABLE {schema}.{table} (LIKE {table} INCLUDING ALL)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
     let mut url = url::Url::parse(&dsn()).unwrap();
     url.query_pairs_mut()
         .append_pair("options", &format!("-c search_path={schema}"));
@@ -415,12 +422,14 @@ async fn postgres_snapshot_log_deadline_covers_all_batches_and_rolls_back() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query(&format!(
-        "CREATE TABLE {schema}.snapshot_log (LIKE snapshot_log INCLUDING ALL)"
-    ))
-    .execute(&pool)
-    .await
-    .unwrap();
+    for table in ["snapshot_log", "snapshot_log_generation", "snapshot_commit"] {
+        sqlx::query(&format!(
+            "CREATE TABLE {schema}.{table} (LIKE {table} INCLUDING ALL)"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
     sqlx::query(&format!(
         "CREATE FUNCTION {schema}.slow_batch() RETURNS trigger LANGUAGE plpgsql AS \
          $$ BEGIN PERFORM pg_sleep(0.3); RETURN NULL; END $$"

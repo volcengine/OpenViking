@@ -26,6 +26,25 @@ const ok = (result: unknown) =>
   });
 
 describe("OpenVikingClient", () => {
+  it("gitDelete posts commit ids", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(ok({ result: "deleted" }));
+    const client = new OpenVikingClient({
+      baseUrl: "https://example.com",
+      fetch: fetcher,
+    });
+    const commitIds = ["a".repeat(40)];
+    await client.gitDelete({ commitIds });
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(String(url)).toBe("https://example.com/api/v1/snapshot/delete");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      commit_ids: commitIds,
+      dry_run: false,
+    });
+  });
+
   it("normalizes URIs", () => {
     expect(normalizeURI("resources/docs")).toBe("viking://resources/docs");
     expect(normalizeURI("viking://resources/docs")).toBe(

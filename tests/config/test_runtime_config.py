@@ -1452,3 +1452,14 @@ def test_runtime_config_settings_ignores_unknown_field():
     settings = RuntimeConfigSettings(bogus=1)
 
     assert settings == RuntimeConfigSettings()
+
+
+def test_git_gc_config_defaults_and_minimum():
+    from pydantic import ValidationError
+
+    from openviking_cli.utils.config.git_config import GitSnapshotConfig, GitSnapshotGcConfig
+
+    assert GitSnapshotConfig().gc.enabled
+    assert GitSnapshotConfig().gc.grace_seconds == 3600
+    with pytest.raises(ValidationError):
+        GitSnapshotGcConfig(grace_seconds=599)

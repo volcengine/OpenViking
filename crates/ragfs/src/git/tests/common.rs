@@ -254,7 +254,7 @@
     }
 
     async fn commit_tree(store: &dyn ObjectStore, account: &str, commit_oid: ObjectId) -> ObjectId {
-        load_commit_meta(store, account, &commit_oid)
+        load_commit_meta(store, &OverlayView::empty(), account, &commit_oid)
             .await
             .unwrap()
             .tree

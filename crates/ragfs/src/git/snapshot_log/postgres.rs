@@ -92,6 +92,12 @@ impl PostgresSnapshotLogStore {
             sqlx::query("SELECT id, account, branch, path, commit_oid FROM snapshot_log LIMIT 0")
                 .execute(&pool)
                 .await?;
+            sqlx::query("SELECT account, branch, root FROM snapshot_log_generation LIMIT 0")
+                .execute(&pool)
+                .await?;
+            sqlx::query("SELECT seq, integrity FROM snapshot_commit LIMIT 0")
+                .execute(&pool)
+                .await?;
             Ok(Self {
                 pool,
                 limits: SnapshotLogLimits::default(),
@@ -126,12 +132,13 @@ impl SnapshotLogStore for PostgresSnapshotLogStore {
         .await
     }
 
-    async fn append_rows_if_latest(
+    async fn append_rows_at_generation(
         &self,
         account: &str,
         branch: &str,
         parent_commit_oid: Option<&str>,
         rows: &[SnapshotLogRow],
+        generation: Option<&str>,
     ) -> Result<(), SnapshotLogError> {
         validate_append(self.limits, account, branch, rows)?;
         with_timeout(self.operation_timeout, async {
@@ -150,6 +157,10 @@ impl SnapshotLogStore for PostgresSnapshotLogStore {
                 .bind(lock_key)
                 .execute(&mut *tx)
                 .await?;
+            let actual = self.lock_generation(&mut tx, account, branch).await?;
+            if let Some(expected) = generation {
+                ensure_latest_matches(Some(expected), Some(&actual))?;
+            }
             let latest = sqlx::query_as::<_, (i64, String)>(
                 "SELECT id, commit_oid FROM snapshot_log \
              WHERE account = $1 AND branch = $2 ORDER BY id DESC LIMIT 1",
@@ -221,6 +232,19 @@ impl SnapshotLogStore for PostgresSnapshotLogStore {
         .await
     }
 }
+
+super::commit_index::impl_commit_index!(
+    PostgresSnapshotLogStore,
+    "SELECT branch, seq, commit_oid, parent_oid, tree_oid, committed_at, deleted_at, integrity FROM snapshot_commit",
+    "BEGIN ISOLATION LEVEL READ COMMITTED",
+    " FOR UPDATE", "$1", "$2", "$3", "($1,$2,$3,$4,$5,$6,$7,$8)"
+);
+
+super::repair::impl_path_history_repair!(
+    PostgresSnapshotLogStore, Postgres, "BEGIN ISOLATION LEVEL READ COMMITTED",
+    "INSERT INTO snapshot_log_generation(account,branch,root) VALUES($1,$2,'') ON CONFLICT (account,branch) DO NOTHING",
+    " FOR UPDATE", "convert_to(path, 'UTF8')", "$1", "$2", "$3"
+);
 
 #[cfg(test)]
 mod tests {

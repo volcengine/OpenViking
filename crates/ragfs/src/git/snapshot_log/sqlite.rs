@@ -14,6 +14,13 @@ use super::store::{
 const SQLITE_INSERT_BATCH_ROWS: usize = 200;
 
 const SQLITE_SCHEMA: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS snapshot_log_generation (
+        account TEXT NOT NULL, branch TEXT NOT NULL, root TEXT NOT NULL, PRIMARY KEY(account, branch))",
+    "CREATE TABLE IF NOT EXISTS snapshot_commit (
+        account TEXT NOT NULL, branch TEXT NOT NULL, seq INTEGER NOT NULL,
+        commit_oid TEXT NOT NULL, parent_oid TEXT, tree_oid TEXT NOT NULL,
+        committed_at INTEGER NOT NULL, deleted_at INTEGER, integrity BLOB NOT NULL,
+        PRIMARY KEY(account, branch, seq), UNIQUE(account, commit_oid))",
     r#"CREATE TABLE IF NOT EXISTS snapshot_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account TEXT NOT NULL,
@@ -26,6 +33,7 @@ const SQLITE_SCHEMA: &[&str] = &[
 ON snapshot_log (account, branch, path, commit_oid)"#,
     r#"CREATE INDEX IF NOT EXISTS idx_snapshot_log_lookup
 ON snapshot_log (account, branch, path, id DESC)"#,
+    "CREATE INDEX IF NOT EXISTS idx_snapshot_log_commit ON snapshot_log(account, branch, commit_oid)",
     r#"CREATE INDEX IF NOT EXISTS idx_snapshot_log_latest
 ON snapshot_log (account, branch, id DESC)"#,
 ];
@@ -91,57 +99,48 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
     }
 
     /// Append rows after checking latest in a `BEGIN IMMEDIATE` transaction.
-    async fn append_rows_if_latest(
+    async fn append_rows_at_generation(
         &self,
         account: &str,
         branch: &str,
         parent_commit_oid: Option<&str>,
         rows: &[SnapshotLogRow],
+        generation: Option<&str>,
     ) -> Result<(), SnapshotLogError> {
         validate_append(self.limits, account, branch, rows)?;
 
-        let mut conn = self.pool.acquire().await?;
-        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-
-        let result = async {
-            let latest = sqlx::query_as::<_, (i64, String)>(
-                "SELECT id, commit_oid FROM snapshot_log \
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if let Some(expected) = generation {
+            let actual = self.lock_generation(&mut tx, account, branch).await?;
+            ensure_latest_matches(Some(expected), Some(&actual))?;
+        }
+        let latest = sqlx::query_as::<_, (i64, String)>(
+            "SELECT id, commit_oid FROM snapshot_log \
                  WHERE account = ? AND branch = ? ORDER BY id DESC LIMIT 1",
-            )
-            .bind(account)
-            .bind(branch)
-            .fetch_optional(&mut *conn)
-            .await?;
-            ensure_latest_matches(
-                parent_commit_oid,
-                latest.as_ref().map(|(_, oid)| oid.as_str()),
-            )?;
-            for chunk in rows.chunks(SQLITE_INSERT_BATCH_ROWS) {
-                let mut builder =
-                    QueryBuilder::<Sqlite>::new("INSERT INTO snapshot_log (account, branch, path, commit_oid) ");
-                builder.push_values(chunk, |mut row_builder, row| {
-                    row_builder
-                        .push_bind(account)
-                        .push_bind(branch)
-                        .push_bind(&row.path)
-                        .push_bind(&row.commit_oid);
-                });
-                builder.build().execute(&mut *conn).await?;
-            }
-            Ok::<(), SnapshotLogError>(())
+        )
+        .bind(account)
+        .bind(branch)
+        .fetch_optional(&mut *tx)
+        .await?;
+        ensure_latest_matches(
+            parent_commit_oid,
+            latest.as_ref().map(|(_, oid)| oid.as_str()),
+        )?;
+        for chunk in rows.chunks(SQLITE_INSERT_BATCH_ROWS) {
+            let mut builder = QueryBuilder::<Sqlite>::new(
+                "INSERT INTO snapshot_log (account, branch, path, commit_oid) ",
+            );
+            builder.push_values(chunk, |mut row_builder, row| {
+                row_builder
+                    .push_bind(account)
+                    .push_bind(branch)
+                    .push_bind(&row.path)
+                    .push_bind(&row.commit_oid);
+            });
+            builder.build().execute(&mut *tx).await?;
         }
-        .await;
-
-        match result {
-            Ok(()) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await?;
-                Ok(())
-            }
-            Err(err) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                Err(err)
-            }
-        }
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Query path hits using bound dynamic `IN` parameters.
@@ -157,8 +156,7 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
         if limit == 0 || paths.is_empty() {
             return Ok(Vec::new());
         }
-        let offset =
-            i64::try_from(offset).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
+        let offset = i64::try_from(offset).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
         let mut builder = QueryBuilder::<Sqlite>::new(
             "SELECT commit_oid, MAX(id) AS last_id FROM snapshot_log \
              WHERE account = ",
@@ -192,3 +190,19 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
             .collect())
     }
 }
+
+super::commit_index::impl_commit_index!(
+    SqliteSnapshotLogStore,
+    "SELECT branch, seq, commit_oid, parent_oid, tree_oid, committed_at, deleted_at, integrity FROM snapshot_commit",
+    "BEGIN IMMEDIATE",
+    "", "?", "?", "?", "(?,?,?,?,?,?,?,?)"
+);
+
+super::repair::impl_path_history_repair!(
+    SqliteSnapshotLogStore,
+    Sqlite,
+    "BEGIN IMMEDIATE",
+    "INSERT OR IGNORE INTO snapshot_log_generation(account,branch,root) VALUES(?,?,'')",
+    "",
+    "CAST(path AS BLOB)", "?", "?", "?"
+);

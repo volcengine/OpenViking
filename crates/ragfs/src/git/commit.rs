@@ -19,6 +19,30 @@ pub async fn write_commit(
     author_email: &str,
     message: &str,
 ) -> Result<ObjectId, ObjectStoreError> {
+    Ok(write_commit_with_time(
+        store,
+        account,
+        None,
+        tree,
+        parents,
+        author_name,
+        author_email,
+        message,
+    )
+    .await?
+    .0)
+}
+
+pub(super) async fn write_commit_with_time(
+    store: &dyn ObjectStore,
+    account: &str,
+    branch: Option<&str>,
+    tree: ObjectId,
+    parents: Vec<ObjectId>,
+    author_name: &str,
+    author_email: &str,
+    message: &str,
+) -> Result<(ObjectId, i64), ObjectStoreError> {
     let now = gix_date::Time::now_local_or_utc();
     let actor = gix_actor::Signature {
         name: author_name.into(),
@@ -32,13 +56,19 @@ pub async fn write_commit(
         committer: actor,
         encoding: None,
         message: BString::from(message),
-        extra_headers: Vec::new(),
+        // Distinguish same-second, byte-identical snapshots on independent
+        // branches. Otherwise a new ref can resurrect a tombstoned ID.
+        extra_headers: branch
+            .into_iter()
+            .map(|name| ("ov-branch".into(), name.into()))
+            .collect(),
     };
     let mut buf = Vec::with_capacity(256);
     commit
         .write_to(&mut buf)
         .map_err(|e| ObjectStoreError::Backend(format!("commit encode: {e}")))?;
-    write_object(store, account, gix_object::Kind::Commit, &buf).await
+    let oid = write_object(store, account, gix_object::Kind::Commit, &buf).await?;
+    Ok((oid, now.seconds))
 }
 
 #[cfg(test)]

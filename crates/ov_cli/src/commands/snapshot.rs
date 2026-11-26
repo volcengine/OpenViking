@@ -33,6 +33,14 @@ pub async fn dispatch(
             print_commit(&value, output_format, compact);
             Ok(())
         }
+        SnapshotCmd::Delete {
+            commit_ids,
+            dry_run,
+        } => {
+            let value = client.snapshot_delete(&commit_ids, dry_run).await?;
+            print_delete(&value, output_format, compact);
+            Ok(())
+        }
         SnapshotCmd::Restore {
             project_dir,
             file,
@@ -171,6 +179,20 @@ fn print_commit(value: &Value, output_format: OutputFormat, compact: bool) {
     // The server returns the inner result dict (BaseClient unwraps the envelope).
     // It is already a flat object, so hand it to the shared table renderer.
     output_success(value, OutputFormat::Table, compact);
+}
+
+fn print_delete(value: &Value, output_format: OutputFormat, compact: bool) {
+    if matches!(output_format, OutputFormat::Json) {
+        output_success(value, output_format, compact);
+        return;
+    }
+    let display = json!({
+        "result": value["result"],
+        "deleted": value["deleted"],
+        "reparented": value["reparented"].as_array().map(Vec::len),
+        "reclaim_after": value["reclaim_after"],
+    });
+    output_success(&display, OutputFormat::Table, compact);
 }
 
 fn print_restore(value: &Value, output_format: OutputFormat, compact: bool) {

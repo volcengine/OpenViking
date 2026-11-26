@@ -19,6 +19,7 @@ const MYSQL_SCHEMA: &str = r#"CREATE TABLE IF NOT EXISTS snapshot_log (
   commit_oid CHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uniq_snapshot_log_path_commit (account, branch, path, commit_oid),
+  KEY idx_snapshot_log_commit (account, branch, commit_oid),
   KEY idx_snapshot_log_latest (account, branch, id DESC),
   KEY idx_snapshot_log_lookup (account, branch, path, id DESC)
 )"#;
@@ -47,6 +48,34 @@ impl MySqlSnapshotLogStore {
             .connect(dsn)
             .await?;
         sqlx::query(MYSQL_SCHEMA).execute(&pool).await?;
+        // Existing path indexes all start with path or id after the branch. Repair looks
+        // up every path for a commit, including installations predating snapshot deletion.
+        let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM information_schema.statistics
+            WHERE table_schema = DATABASE() AND table_name = 'snapshot_log' AND index_name = 'idx_snapshot_log_commit' LIMIT 1")
+            .fetch_optional(&pool).await?;
+        if exists.is_none() {
+            if let Err(err) = sqlx::query(
+                "CREATE INDEX idx_snapshot_log_commit ON snapshot_log(account, branch, commit_oid)",
+            )
+            .execute(&pool)
+            .await
+            {
+                // Another server may have run this migration concurrently.
+                if !matches!(&err, sqlx::Error::Database(db) if db.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>().is_some_and(|err| err.number() == 1061))
+                {
+                    return Err(err.into());
+                }
+            }
+        }
+
+        sqlx::query("CREATE TABLE IF NOT EXISTS snapshot_log_generation (
+            account VARBINARY(255) NOT NULL, branch VARBINARY(512) NOT NULL, root VARCHAR(40) CHARACTER SET ascii NOT NULL,
+            PRIMARY KEY(account, branch))").execute(&pool).await?;
+        sqlx::query("CREATE TABLE IF NOT EXISTS snapshot_commit (
+            account VARBINARY(255) NOT NULL, branch VARBINARY(512) NOT NULL, seq BIGINT NOT NULL,
+            commit_oid CHAR(40) CHARACTER SET ascii NOT NULL, parent_oid CHAR(40) CHARACTER SET ascii,
+            tree_oid CHAR(40) CHARACTER SET ascii NOT NULL, committed_at BIGINT NOT NULL, deleted_at BIGINT, integrity BINARY(32) NOT NULL,
+            PRIMARY KEY(account, branch, seq), UNIQUE KEY(account, commit_oid))").execute(&pool).await?;
         Ok(Self {
             pool,
             limits: SnapshotLogLimits::default(),
@@ -80,16 +109,21 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
     }
 
     /// Append rows after checking latest under `SELECT ... FOR UPDATE`.
-    async fn append_rows_if_latest(
+    async fn append_rows_at_generation(
         &self,
         account: &str,
         branch: &str,
         parent_commit_oid: Option<&str>,
         rows: &[SnapshotLogRow],
+        generation: Option<&str>,
     ) -> Result<(), SnapshotLogError> {
         validate_append(self.limits, account, branch, rows)?;
 
         let mut tx = self.pool.begin().await?;
+        if let Some(expected) = generation {
+            let actual = self.lock_generation(&mut tx, account, branch).await?;
+            ensure_latest_matches(Some(expected), Some(&actual))?;
+        }
         let latest = sqlx::query_as::<_, (i64, Vec<u8>)>(
             "SELECT id, commit_oid FROM snapshot_log \
              WHERE account = ? AND branch = ? ORDER BY id DESC LIMIT 1 FOR UPDATE",
@@ -136,8 +170,7 @@ impl SnapshotLogStore for MySqlSnapshotLogStore {
         if limit == 0 || paths.is_empty() {
             return Ok(Vec::new());
         }
-        let offset =
-            i64::try_from(offset).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
+        let offset = i64::try_from(offset).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
         let mut builder = QueryBuilder::<MySql>::new(
             "SELECT commit_oid, MAX(id) AS last_id FROM snapshot_log \
              WHERE account = ",
@@ -193,3 +226,14 @@ mod tests {
         assert_eq!(decoded, "0123456789abcdef0123456789abcdef01234567");
     }
 }
+
+super::commit_index::impl_commit_index!(
+    MySqlSnapshotLogStore,
+    "SELECT CONVERT(branch USING utf8mb4) AS branch, seq, commit_oid, parent_oid, tree_oid, committed_at, deleted_at, integrity FROM snapshot_commit",
+    "START TRANSACTION",
+    " FOR UPDATE", "?", "?", "?", "(?,?,?,?,?,?,?,?)"
+);
+
+super::repair::impl_path_history_repair!(MySqlSnapshotLogStore, MySql, "START TRANSACTION",
+    "INSERT INTO snapshot_log_generation(account,branch,root) VALUES(?,?,'') ON DUPLICATE KEY UPDATE root=root", " FOR UPDATE", "path", "?", "?", "?"
+);

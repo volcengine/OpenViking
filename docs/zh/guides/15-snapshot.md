@@ -92,8 +92,12 @@ memory 仅协调同一个客户端内的操作。租约有效期间，共享同�
 | `git.author_name` | `viking-bot` | 调用方未传 `author_name` 时使用的默认提交者名字 |
 | `git.author_email` | `bot@viking.local` | 默认提交者邮箱 |
 | `git.local.base_dir` | `""` | Git 对象/引用的存放目录。**留空时默认使用 `{storage.workspace}/.ovgit`** |
+| `git.snapshot.gc.enabled` | `true` | 删除快照后在后台回收对象。使用 S3 时，存储桶须从未启用版本控制。已启用或暂停版本控制的存储桶会禁用物理回收。 |
+| `git.snapshot.gc.grace_seconds` | `3600` | 物理回收的宽限期（秒），最小值为 600。 |
 | `git.snapshot.log.provider` | `sqlite` | `snapshot/log?paths=...` 的路径历史索引 provider：`sqlite`、`mysql`、`postgres` 或 `none` |
 | `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | 可选 SQLite 数据库绝对路径。留空时每个 workspace 使用自己的索引库 |
+
+写入节点复用超过 300 秒的旧对象时会刷新其修改时间，使配置滚动更新期间采用最短宽限期的其他节点也能安全回收。已开启版本控制的 S3 存储桶在刷新旧对象时可能产生新版本，即使本节点已停用物理回收。
 
 > 通常把 `git.local.base_dir` 留空即可，让快照数据自动落在工作区下的 `.ovgit` 目录，便于和资源数据一起备份与迁移。
 
@@ -205,8 +209,9 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 }
 ```
 
-运行时不会创建或迁移 PostgreSQL 表。运行账号只需 `snapshot_log` 的
-`SELECT`、`INSERT` 权限，以及 identity sequence 的 `USAGE` 权限。
+运行时不会创建或迁移 PostgreSQL 表。运行账号需要 `snapshot_log` 和 `snapshot_commit` 的
+`SELECT`、`INSERT`、`UPDATE`、`DELETE` 权限，`snapshot_log` 的 identity sequence 的 `USAGE` 权限，
+以及 `snapshot_log_generation` 的 `SELECT`、`INSERT`、`UPDATE` 权限。升级时请重新执行建表脚本。
 不同 OV 部署应使用独立数据库或 schema；同一索引内按账号、分支隔离。
 自定义 schema 可通过连接 URL 的 `options` 参数指定
 `-c search_path=your_schema`，参数值需要 URL 编码。
@@ -371,6 +376,17 @@ curl -X POST "http://localhost:1933/api/v1/snapshot/restore" \
 - 新提交的父提交是恢复操作发生前的 HEAD，**不是** `source_commit`。
 - 所选范围内的来源快照与 HEAD 文件树存在差异时，恢复会追加提交，不改写历史。两棵树相同时返回 `result: "noop"`，不创建提交，即使工作区文件已有变化。快照存储本身仍需要备份。
 - `restore` 只影响 `project_dir`（省略时为整棵账号树）范围内的文件，范围之外的文件保持不变。
+
+## 删除历史快照
+
+从 `ov snapshot log -o json` 复制历史提交的完整 ID。可在同一请求中删除多个提交；先用 `--dry-run` 查看父链接变化和各提交涉及的路径数，再执行删除。
+
+```sh
+ov snapshot delete "$COMMIT_ID" --dry-run -o json
+ov snapshot delete "$COMMIT_ID" -o json
+```
+
+删除立即对历史查询生效，保留快照的 ID 不变。GC 会在宽限期后回收独占存储。删除前请确认 Compile 等业务流程是否还需要该提交。权限、分支顶端保护和 GC 配置见[快照 API](../api/11-snapshot.md#delete)。
 
 ## 使用 `.ovgitignore` 排除文件
 

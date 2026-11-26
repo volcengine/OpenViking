@@ -12,6 +12,7 @@ import shutil
 import tempfile
 from pathlib import Path
 from typing import Tuple
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -1070,3 +1071,76 @@ async def test_restore_dry_run_for_user_does_not_take_tree_lock(vfs, monkeypatch
     )
     assert applied["result"] == "applied"
     assert tree_locks == ["/local/acct_dry_user/resources/proj"]
+
+
+@pytest.fixture
+def delete_vfs():
+    return VikingFS(agfs=Mock())
+
+
+@pytest.fixture
+def delete_plan(monkeypatch, delete_vfs):
+    def install(paths):
+        oid = "1" * 40
+        response = {
+            "result": "dry_run",
+            "plan": [{"commit": oid, "changed_paths": paths}],
+            "overlay_root": None,
+            "reparented": [],
+            "deleted": [oid],
+            "reclaim_after": 3610,
+        }
+        binding = AsyncMock(side_effect=[response, {**response, "result": "deleted"}])
+        monkeypatch.setattr(delete_vfs._async_agfs, "run", binding)
+        return oid, response, binding
+
+    return install
+
+
+@pytest.mark.parametrize("path", ["user/other/a", "user/other/skills/private/SKILL.md"])
+async def test_delete_snapshots_user_rejects_other_user_space(delete_vfs, delete_plan, path):
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    oid, _, binding = delete_plan([path])
+    ctx = RequestContext(user=_make_ctx().user, role=Role.USER)
+    with pytest.raises(PermissionDeniedError) as error:
+        await delete_vfs.delete_snapshots(commit_ids=[oid], ctx=ctx, dry_run=True)
+    assert "other" not in (str(error.value) + str(error.value.details))
+    assert binding.await_count == 1
+
+
+async def test_delete_snapshots_reauthorizes_changed_plan(delete_vfs, delete_plan):
+    from openviking.pyagfs.exceptions import GitConcurrentCommitError
+    from openviking_cli.exceptions import InvalidArgumentError
+
+    oid, response, binding = delete_plan(["resources/a"])
+    changed = {**response, "plan": [{"commit": oid, "changed_paths": ["agent/skills/s1/SKILL.md"]}]}
+    binding.side_effect = [response, GitConcurrentCommitError("CAS conflict"), changed]
+    with pytest.raises(InvalidArgumentError):
+        await delete_vfs.delete_snapshots(commit_ids=[oid], ctx=_make_ctx())
+    assert binding.await_count == 3
+
+
+@pytest.mark.parametrize("ancestor_is_file", [False, True])
+async def test_delete_checks_write_on_nearest_directory(
+    delete_vfs, delete_plan, monkeypatch, ancestor_is_file
+):
+    from openviking.pyagfs.exceptions import AGFSNotADirectoryError
+    from openviking.storage.acl import AclAction
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    oid, _, binding = delete_plan(["resources/old/file"])
+    missing = AGFSNotFoundError("absent")
+    responses = (
+        [AGFSNotADirectoryError(), {"isDir": False}] if ancestor_is_file else [missing, missing]
+    )
+    monkeypatch.setattr(
+        delete_vfs._async_agfs, "stat", AsyncMock(side_effect=[*responses, {"isDir": True}])
+    )
+    check = AsyncMock(side_effect=PermissionDeniedError("write denied"))
+    monkeypatch.setattr(delete_vfs, "_ensure_access_many", check)
+    ctx = RequestContext(user=_make_ctx().user, role=Role.USER)
+    with pytest.raises(PermissionDeniedError):
+        await delete_vfs.delete_snapshots(commit_ids=[oid], ctx=ctx)
+    check.assert_awaited_once_with(["viking://resources"], ctx, action=AclAction.WRITE)
+    assert binding.await_count == 1

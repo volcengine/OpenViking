@@ -47,10 +47,11 @@ pub fn build_git_service(
         return Ok(None);
     }
 
-    let (object_store, ref_store, index_store): (
+    let (object_store, ref_store, index_store, gc_enabled): (
         Arc<dyn ObjectStore>,
         Arc<dyn RefStore>,
         Option<Arc<dyn IndexStore>>,
+        bool,
     ) = match cfg.backend.as_str() {
         "local" => {
             let lc = cfg
@@ -64,7 +65,7 @@ pub fn build_git_service(
             } else {
                 None
             };
-            (os, rs, is)
+            (os, rs, is, cfg.snapshot.gc.enabled)
         }
         #[cfg(feature = "s3")]
         "s3" => build_s3_service(cfg)?,
@@ -82,20 +83,26 @@ pub fn build_git_service(
         }
     };
 
-    let snapshot_log_store = build_snapshot_log_store(cfg)?;
+    let (snapshot_log_store, commit_index) = build_snapshot_log_store(cfg)?;
 
     let svc = GitService::with_index(vfs, object_store, ref_store, index_store)
+        .with_gc(gc_enabled, std::time::Duration::from_secs(cfg.snapshot.gc.grace_seconds))
         .with_blob_exists_precheck(cfg.tuning.blob_exists_precheck_enabled);
-    let svc = svc.with_snapshot_log(snapshot_log_store);
+    let svc = svc
+        .with_snapshot_log(snapshot_log_store)
+        .with_commit_index(commit_index);
 
     Ok(Some(Arc::new(svc)))
 }
 
-fn build_snapshot_log_store(
-    cfg: &GitConfig,
-) -> PyResult<Option<Arc<dyn ragfs::git::SnapshotLogStore>>> {
+type SnapshotStores = (
+    Option<Arc<dyn ragfs::git::SnapshotLogStore>>,
+    Option<Arc<dyn ragfs::git::CommitIndexStore>>,
+);
+
+fn build_snapshot_log_store(cfg: &GitConfig) -> PyResult<SnapshotStores> {
     match cfg.snapshot.log.provider.as_str() {
-        "none" => Ok(None),
+        "none" => Ok((None, None)),
         "sqlite" => {
             let handle = tokio::runtime::Handle::try_current().map_err(|_| {
                 PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
@@ -108,9 +115,10 @@ fn build_snapshot_log_store(
             match handle
                 .block_on(async move { ragfs::git::SqliteSnapshotLogStore::connect(&path).await })
             {
-                Ok(store) => Ok(Some(
-                    Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
-                )),
+                Ok(store) => {
+                    let store = Arc::new(store);
+                    Ok((Some(store.clone()), Some(store)))
+                }
                 Err(err) => snapshot_log_init_fallback("sqlite", err),
             }
         }
@@ -140,9 +148,10 @@ fn build_snapshot_log_store(
                 )
                 .await
             }) {
-                Ok(store) => Ok(Some(
-                    Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
-                )),
+                Ok(store) => {
+                    let store = Arc::new(store);
+                    Ok((Some(store.clone()), Some(store)))
+                }
                 Err(err) => snapshot_log_init_fallback("mysql", err),
             }
         }
@@ -168,9 +177,10 @@ fn build_snapshot_log_store(
                 postgres.connect_timeout_ms,
                 postgres.operation_timeout_ms,
             )) {
-                Ok(store) => Ok(Some(
-                    Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
-                )),
+                Ok(store) => {
+                    let store = Arc::new(store);
+                    Ok((Some(store.clone()), Some(store)))
+                }
                 Err(err) => snapshot_log_init_fallback("postgres", err),
             }
         }
@@ -181,10 +191,7 @@ fn build_snapshot_log_store(
     }
 }
 
-fn snapshot_log_init_fallback(
-    provider: &str,
-    err: SnapshotLogError,
-) -> PyResult<Option<Arc<dyn ragfs::git::SnapshotLogStore>>> {
+fn snapshot_log_init_fallback(provider: &str, err: SnapshotLogError) -> PyResult<SnapshotStores> {
     if let SnapshotLogError::Config(message) = err {
         return Err(PyValueError::new_err(format!(
             "{provider} snapshot log config error: {message}"
@@ -195,7 +202,7 @@ fn snapshot_log_init_fallback(
         error_kind = snapshot_log_error_kind(&err),
         "snapshot log store unavailable; falling back to git scan"
     );
-    Ok(None)
+    Ok((None, None))
 }
 
 fn snapshot_log_error_kind(err: &SnapshotLogError) -> &'static str {
@@ -217,6 +224,7 @@ fn build_s3_service(
     Arc<dyn ObjectStore>,
     Arc<dyn RefStore>,
     Option<Arc<dyn IndexStore>>,
+    bool,
 )> {
     let sc = cfg
         .s3
@@ -261,10 +269,19 @@ fn build_s3_service(
     let rt = tokio::runtime::Handle::try_current()
         .map_err(|_| PyRuntimeError::new_err("build_s3_service must run inside a tokio runtime"))?;
     let os_cfg = s3_config.clone();
-    let object_store = Arc::new(
-        rt.block_on(async move { S3ObjectStore::from_config(os_cfg).await })
-            .map_err(|e| PyRuntimeError::new_err(format!("S3ObjectStore: {}", e)))?,
-    ) as Arc<dyn ObjectStore>;
+    let object_store = rt.block_on(S3ObjectStore::from_config(os_cfg))
+        .map_err(|e| PyRuntimeError::new_err(format!("S3ObjectStore: {}", e)))?;
+    let gc_enabled = match rt.block_on(object_store.bucket_versioning_status()) {
+        Ok(Some(status)) if matches!(status.as_str(), "Enabled" | "Suspended") => {
+            tracing::error!(%status, "S3 bucket versioning disables physical snapshot GC");
+            false
+        }
+        Err(error) => {
+            warn!(%error, "could not verify S3 bucket versioning for snapshot GC");
+            cfg.snapshot.gc.enabled
+        }
+        _ => cfg.snapshot.gc.enabled,
+    };
 
     let rs_cfg = s3_config.clone();
     let ref_store = Arc::new(
@@ -282,7 +299,7 @@ fn build_s3_service(
         None
     };
 
-    Ok((object_store, ref_store, index_store))
+    Ok((Arc::new(object_store), ref_store, index_store, gc_enabled))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -296,6 +313,13 @@ fn classify_git_error(e: &ragfs::git::GitError) -> GitErrorMapping {
     use ragfs::git::{GitError, ObjectStoreError, RefStoreError};
 
     match e {
+        GitError::CommitNotFound(_) => GitErrorMapping::PythonException("AGFSNotFoundError"),
+        GitError::InvalidCommitId(_) | GitError::CommitIsRefTip { .. } => {
+            GitErrorMapping::PythonException("AGFSInvalidOperationError")
+        }
+        GitError::OverlayConflict | GitError::CommitIndexUnavailable { .. } => {
+            GitErrorMapping::PythonException("GitConcurrentCommitError")
+        }
         GitError::FeatureDisabled => GitErrorMapping::PythonException("AGFSNotSupportedError"),
         GitError::ConcurrentCommit { .. } => {
             GitErrorMapping::PythonException("GitConcurrentCommitError")
@@ -573,6 +597,83 @@ pub fn parse_commit_request(kwargs: &Bound<PyDict>) -> PyResult<CommitRequest> {
     })
 }
 
+pub fn parse_delete_request(kwargs: &Bound<PyDict>) -> PyResult<ragfs::git::DeleteRequest> {
+    let expected_overlay_root = if kwargs.contains("expected_overlay_root")? {
+        let oid = optional_str(kwargs, "expected_overlay_root")?
+            .map(|s| {
+                gix_hash::ObjectId::from_hex(s.as_bytes()).map_err(|_| {
+                    PyValueError::new_err("expected_overlay_root must be a full commit OID")
+                })
+            })
+            .transpose()?;
+        Some(oid)
+    } else {
+        None
+    };
+    Ok(ragfs::git::DeleteRequest {
+        account: require_str(kwargs, "account")?,
+        commit_ids: optional_string_list(kwargs, "commit_ids")?
+            .ok_or_else(|| PyValueError::new_err("commit_ids must be a list of strings"))?,
+        dry_run: optional_bool(kwargs, "dry_run", false)?,
+        expected_overlay_root,
+    })
+}
+
+pub fn delete_response_to_pydict(
+    py: Python<'_>,
+    resp: ragfs::git::DeleteResponse,
+) -> PyResult<Py<PyAny>> {
+    let result = PyDict::new(py);
+    result.set_item("result", if resp.dry_run { "dry_run" } else { "deleted" })?;
+    result.set_item(
+        "deleted",
+        resp.deleted
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+    )?;
+    let reparented = PyList::empty(py);
+    for (commit, parents) in resp.reparented {
+        let row = PyDict::new(py);
+        row.set_item("commit", commit.to_string())?;
+        row.set_item(
+            "parents",
+            parents.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        )?;
+        reparented.append(row)?;
+    }
+    let plan = PyList::empty(py);
+    for entry in resp.plan {
+        let row = PyDict::new(py);
+        row.set_item("commit", entry.commit.to_string())?;
+        row.set_item("branch", entry.branch)?;
+        row.set_item("changed_paths", entry.changed_paths)?;
+        plan.append(row)?;
+    }
+    result.set_item("reparented", reparented)?;
+    result.set_item("plan", plan)?;
+    result.set_item("overlay_root", resp.overlay_root.map(|id| id.to_string()))?;
+    result.set_item("deleted_at", resp.deleted_at)?;
+    result.set_item("reclaim_after", resp.reclaim_after)?;
+    Ok(result.into_any().unbind())
+}
+
+pub fn gc_report_to_pydict(
+    py: Python<'_>,
+    report: ragfs::git::types::GcReport,
+) -> PyResult<Py<PyAny>> {
+    let result = PyDict::new(py);
+    result.set_item("skipped", report.skipped)?;
+    result.set_item("scanned", report.scanned)?;
+    result.set_item("deleted", report.deleted)?;
+    result.set_item("bytes_freed", report.bytes_freed)?;
+    result.set_item("tombstones_purged", report.tombstones_purged)?;
+    result.set_item("remarked", report.remarked)?;
+    result.set_item("used_commit_index", report.used_commit_index)?;
+    result.set_item("duration_ms", report.duration_ms)?;
+    Ok(result.into_any().unbind())
+}
+
 pub fn parse_restore_request(kwargs: &Bound<PyDict>) -> PyResult<RestoreRequest> {
     Ok(RestoreRequest {
         account: require_str(kwargs, "account")?,
@@ -793,6 +894,7 @@ mod tests {
             s3: None,
             tuning: Default::default(),
             snapshot: ragfs::git::GitSnapshotConfig {
+                gc: Default::default(),
                 log: ragfs::git::GitSnapshotLogConfig {
                     provider: "none".into(),
                     ..Default::default()
@@ -841,9 +943,9 @@ mod tests {
         });
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _enter = runtime.enter();
-        let store = build_snapshot_log_store(&cfg)
-            .unwrap()
-            .expect("PG index enabled");
+        let (store, commit_index) = build_snapshot_log_store(&cfg).unwrap();
+        let store = store.expect("PG path index enabled");
+        assert!(commit_index.is_some(), "PG commit index enabled");
         runtime.block_on(async {
             let account = uuid::Uuid::new_v4().simple().to_string();
             let oid = "1234567890123456789012345678901234567890";

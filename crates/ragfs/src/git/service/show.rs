@@ -11,7 +11,8 @@ impl GitService {
         validate_account_id(account)?;
         validate_relative_path(path)?;
         let store = self.object_store.as_ref();
-        let commit = load_commit_meta(store, account, commit_oid).await?;
+        let overlay = self.overlay(account).await?;
+        let commit = load_commit_meta(store, &overlay, account, commit_oid).await?;
         Ok(
             crate::git::tree_builder::lookup(store, account, commit.tree, path)
                 .await?
@@ -52,14 +53,17 @@ impl GitService {
             validate_relative_path(p)?;
         }
 
+        let overlay = self.overlay(&account).await?;
         let commit_oid = resolve_ref(
             self.ref_store.as_ref(),
             self.object_store.as_ref(),
+            &overlay,
             &account,
             &target_ref,
         )
         .await?;
-        let meta = load_commit_meta(self.object_store.as_ref(), &account, &commit_oid).await?;
+        let meta =
+            load_commit_meta(self.object_store.as_ref(), &overlay, &account, &commit_oid).await?;
 
         match path {
             None => Ok(ShowResponse::Commit {
@@ -97,12 +101,14 @@ impl GitService {
                         }
                         other => GitError::ObjectStore(other),
                     })?,
-                    None => crate::git::util::read_object(
-                        self.object_store.as_ref(),
-                        &account,
-                        &blob_oid,
-                    )
-                    .await?,
+                    None => {
+                        crate::git::util::read_object(
+                            self.object_store.as_ref(),
+                            &account,
+                            &blob_oid,
+                        )
+                        .await?
+                    }
                 };
                 let (kind, payload_size, hdr) = crate::git::util::parse_object_header(&raw)?;
                 if kind != gix_object::Kind::Blob {
