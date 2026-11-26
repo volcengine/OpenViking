@@ -474,6 +474,7 @@ async def test_concurrent_events_preserve_history_and_lifecycle(task_stores):
     await writer.start("task", stage="parsing", **OWNER)
     initial = await observer.get_with_events("task", **OWNER)
     assert initial is not None and initial.execution_events is not None
+    assert initial.started_at is not None and initial.finished_at is None
     before = initial.execution_events
     await asyncio.gather(
         *[
@@ -505,6 +506,8 @@ async def test_concurrent_events_preserve_history_and_lifecycle(task_stores):
     assert history["dropped_count"] == 0
     assert history["started_mid_task"] is False
     assert task.updated_at > task.created_at
+    assert task.started_at == initial.started_at
+    assert task.started_at <= task.finished_at <= task.updated_at
 
 
 @pytest.mark.asyncio
@@ -660,8 +663,10 @@ async def test_cancellation_closes_pending_work_and_waits_for_running_work(
     assert await observer.get_queue_work_counts(account_id=account_id) == expected
     if running:
         assert (await tracker.start_work("task", "root", **OWNER)).is_applied
+        started_at = (await observer.get("task", **OWNER)).started_at
         assert (await observer.start_work("task", "root", **OWNER)).is_applied
-        assert (await observer.get("task", **OWNER)).status is TaskStatus.RUNNING
+        current = await observer.get("task", **OWNER)
+        assert current.status is TaskStatus.RUNNING and current.started_at == started_at
     if child_running:
         assert (await tracker.start_work("task", "child", **OWNER)).is_applied
     await tracker.cancel("task", **OWNER)
@@ -696,6 +701,8 @@ async def test_cancellation_closes_pending_work_and_waits_for_running_work(
     assert (await observer.wait("task", timeout=0, **OWNER)).status is TaskStatus.CANCELLED
     assert await observer.get_work_state("task", "root", **OWNER) is WorkState.CANCELLED
     cancelled = await observer.get("task", **OWNER)
+    assert (cancelled.started_at is not None) == (running or child_running)
+    assert cancelled.finished_at is not None
     await tracker.complete("task", {"late": True}, **OWNER)
     await tracker.fail("task", "late failure", **OWNER)
     await tracker.patch_task("task", TaskPatch(result={"late": True}), **OWNER)
@@ -703,6 +710,7 @@ async def test_cancellation_closes_pending_work_and_waits_for_running_work(
     assert terminal.status is TaskStatus.CANCELLED
     assert terminal.result == cancelled.result
     assert terminal.error == cancelled.error
+    assert terminal.finished_at == cancelled.finished_at
 
 
 @pytest.mark.asyncio
@@ -956,6 +964,7 @@ async def test_relational_requeue_and_concurrent_completion_are_durable(
         )
 
         await writer.start(task_id, **OWNER)
+        first_started_at = (await observer.get(task_id, **OWNER)).started_at
         await writer.register_work(task_id, "semantic", "Semantic", **OWNER)
         await observer.register_work(task_id, "embedding", "Embedding", **OWNER)
         assert (
@@ -977,6 +986,8 @@ async def test_relational_requeue_and_concurrent_completion_are_durable(
         )
         completed = await observer.wait(task_id, timeout=0, **OWNER)
         assert completed.status is TaskStatus.COMPLETED
+        assert completed.started_at == first_started_at
+        assert first_started_at <= completed.finished_at <= completed.updated_at
         assert completed.resource_id == uri
         assert completed.result["queue_status"]["Semantic"] == {
             "processed": 1,
@@ -997,6 +1008,8 @@ async def test_relational_requeue_and_concurrent_completion_are_durable(
         restored = await observer.get_with_events(task_id, **OWNER)
         assert restored.status is TaskStatus.COMPLETED
         assert restored.result == completed.result
+        assert restored.started_at == completed.started_at
+        assert restored.finished_at == completed.finished_at
         assert restored.execution_events["items"][-1]["status"] == "completed"
         assert (
             await observer.build_queue_status(task_id, **OWNER) == completed.result["queue_status"]
@@ -1004,9 +1017,19 @@ async def test_relational_requeue_and_concurrent_completion_are_durable(
         if deletion == "manual":
             assert await observer.delete_tasks(**OWNER) == 1
         else:
+            compile_task = await observer.create("compile", task_id="retained-compile", **OWNER)
+            await observer.complete(compile_task.task_id, {"done": True}, **OWNER)
+            assert (
+                await second.delete_expired(
+                    TaskRetentionPolicy(completed_seconds=0, failed_seconds=0),
+                    now=completed.updated_at + 2 * 24 * 3600,
+                    limit=10,
+                )
+            ).deleted_count == 1
+            assert await observer.get(compile_task.task_id, **OWNER) is not None
             expired = await second.delete_expired(
                 TaskRetentionPolicy(completed_seconds=0, failed_seconds=0),
-                now=completed.updated_at + 1,
+                now=completed.updated_at + 8 * 24 * 3600,
                 limit=1,
             )
             assert expired.deleted_count == 1

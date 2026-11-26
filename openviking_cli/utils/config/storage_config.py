@@ -72,7 +72,7 @@ class WatchStoreConfig(BaseModel):
 
 
 class CompileStoreConfig(BaseModel):
-    """Persistent Compile configuration and run history backend."""
+    """Persistent Compile configuration backend."""
 
     provider: str = "file"
     params: Dict[str, Any] = Field(default_factory=dict)

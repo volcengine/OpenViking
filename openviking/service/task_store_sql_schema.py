@@ -169,6 +169,8 @@ def make_task_store_models(
         status: Mapped[str] = mapped_column(String(16, collation="ascii_bin"))
         created_at: Mapped[float] = mapped_column(DOUBLE(asdecimal=False))
         updated_at: Mapped[float] = mapped_column(DOUBLE(asdecimal=False))
+        started_at: Mapped[Optional[float]] = mapped_column(DOUBLE(asdecimal=False), nullable=True)
+        finished_at: Mapped[Optional[float]] = mapped_column(DOUBLE(asdecimal=False), nullable=True)
         resource_id: Mapped[Optional[str]] = mapped_column(
             Text(collation="utf8mb4_bin"), nullable=True
         )

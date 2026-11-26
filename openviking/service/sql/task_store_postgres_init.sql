@@ -9,6 +9,8 @@ CREATE TABLE ov_tasks (
     status VARCHAR(16) COLLATE "C" NOT NULL,
     created_at DOUBLE PRECISION NOT NULL,
     updated_at DOUBLE PRECISION NOT NULL,
+    started_at DOUBLE PRECISION NULL,
+    finished_at DOUBLE PRECISION NULL,
     resource_id TEXT COLLATE "C",
     resource_id_hash VARCHAR(64) COLLATE "C",
     account_id VARCHAR(255) COLLATE "C" NOT NULL,

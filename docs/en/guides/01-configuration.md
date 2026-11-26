@@ -1407,7 +1407,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
 | `watch_store` | object | Watch store: `file` (single process), `sqlite` (one host), or `mysql` / `postgres` (shared) | `{"provider":"file"}` |
-| `compile_store` | object | Compile configuration and run history storage | `{"provider":"file"}` |
+| `compile_store` | object | Compile configuration storage | `{"provider":"file"}` |
 
 
 ```json
@@ -1514,7 +1514,8 @@ tasks; plan the data migration before switching a deployed store.
 #### Compile store
 
 Configure `storage.compile_store` in `ov.conf`. This setting controls saved
-Compile configurations and their run history; Task/Work storage is configured separately.
+Compile configurations. Execution history uses `storage.task_store`; all terminal
+Compile tasks are retained for seven days and cleaned up by the hourly Task cleanup.
 
 | `provider` | Setup |
 |------------|-------|
@@ -1531,7 +1532,7 @@ must start with an ASCII letter, contain only ASCII letters, digits, or
 underscores, and fit within 51 characters on MySQL or 47 on PostgreSQL. Instances
 sharing Compile data must use the same database, table prefix, and `service_name`.
 
-Changing providers does not migrate existing configurations or history. Stop
+Changing providers does not migrate existing configurations. Stop
 Compile writes and migrate existing data before switching a deployment. The
 initialization scripts and SQLite startup do not upgrade pre-existing SQL tables.
 

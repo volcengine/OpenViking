@@ -24,6 +24,7 @@ from openviking.service.compile_service import (
 )
 from openviking.service.compile_targets import new_record, parse_schedule
 from openviking.service.external_task_service import CompileDependencyFailure
+from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus
 from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.errors import ResourceBusyError
 from openviking.storage.queuefs import get_queue_manager
@@ -268,8 +269,8 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
         await write_json(path, value, lease)
 
     monkeypatch.setattr(store, "write_json", write)
-    scan = AsyncMock(wraps=store.list_runs)
-    monkeypatch.setattr(store, "list_runs", scan)
+    scan = AsyncMock(wraps=get_task_tracker().list_tasks)
+    monkeypatch.setattr(get_task_tracker(), "list_tasks", scan)
     client.headers["Idempotency-Key"] = "test-lost-state-lease"
     for _ in range(2 if failure == "enqueue" else 1):
         response = await client.post("/api/v1/compile", json={"compile_name": name})
@@ -277,20 +278,21 @@ async def test_compile_submission_with_lost_state_lease(service, app, client, mo
     if failure == "expired":
         first_id = response.json()["result"]["task_id"]
         assert first_id == queue.enqueue.await_args.args[1]["task_id"]
-        first = await store.get_run(*scope, first_id)
+        first = await service.compile.lifecycle.get_run(*scope, first_id)
         for index in range(3):
             if index == 1:
                 monkeypatch.setattr(store, "write_json", write_json)
             client.headers["Idempotency-Key"] = f"test-next-submission-{index}"
             response = await client.post("/api/v1/compile", json={"compile_name": name})
             assert response.status_code == 202, response.text
-            run = await store.get_run(*scope, response.json()["result"]["task_id"])
-            assert run["meta"]["trigger"] == "manual"
+            run = await service.compile.lifecycle.get_run(
+                *scope, response.json()["result"]["task_id"]
+            )
+            assert run["meta"]["trigger"] == ("initial" if index < 2 else "manual")
             state = await store.get(*scope)
             assert state["task_first_create_time"] == created_at
             assert state["last_run_time"] == (None if index == 0 else run["created_at"])
-        assert sum("task_id" not in call.kwargs for call in scan.await_args_list) == 3
-        assert all(call.args == scope for call in scan.await_args_list)
+        assert all("task_id" in call.kwargs for call in scan.await_args_list)
         assert first["meta"]["trigger"] == "initial"
 
 
@@ -433,7 +435,8 @@ async def test_same_name_configuration_and_runs_are_user_scoped(service, app, cl
         task = cancelled.json()["result"]
         run = await service.compile.get_run(name, task_ids[-1], actor)
         assert task["status"] == run["status"] == "cancelled"
-        assert run["finished_at"] == task["updated_at"]
+        assert run["finished_at"] == task["finished_at"]
+        assert run["started_at"] is None
         assert (await client.post(cancel_path)).status_code == 200
         assert await service.compile.get_run(name, task_ids[-1], actor) == run
     assert task_ids[0] != task_ids[1]
@@ -456,7 +459,6 @@ async def test_delegated_execution_owner_actor_and_retries(service, app, client,
         user=UserIdentifier(ctx.account_id, "executor"), role=Role.USER, api_key="executor-key"
     )
     app.dependency_overrides[get_request_context] = lambda: actor
-    store = service.compile.lifecycle.store
     name = SAVED_INPUTS["compile_name"]
     for owner in ("alice", "bob", "executor"):
         created = await client.post(
@@ -478,7 +480,7 @@ async def test_delegated_execution_owner_actor_and_retries(service, app, client,
     assert response.status_code == 202, response.text
     task_id = response.json()["result"]["task_id"]
     await service.compile._tasks.execute(task_id, account_id=ctx.account_id, user_id="executor")
-    run = await store.get_run(ctx.account_id, "alice", name, task_id)
+    run = await service.compile.lifecycle.get_run(ctx.account_id, "alice", name, task_id)
     assert run["status"] == "completed", run["error"]
     assert run["actor"] == "executor" and run["params"]["instruction"] == "alice"
     assert runtime.calls[0]["args"]["model_name"] == "saved"
@@ -537,10 +539,21 @@ async def test_run_pages_split_tied_creation_times(service, app, client, monkeyp
     owner = ctx.account_id, ctx.user.user_id
     name = await store.create(*owner, new_record(INPUTS), compile_name="wiki")
     ids = [f"cmp_{i:032x}" for i in range(5)]
+    record = await store.get(*owner, name)
     for i, created_at in ((2, 100), (0, 200), (4, 50), (1, 100), (3, 100)):
         status = "failed" if i == 0 else "completed"
-        run = {"task_id": ids[i], "created_at": created_at, "status": status}
-        await store.put_run(*owner, name, run)
+        await get_task_tracker()._store.create(
+            TaskRecord(
+                task_id=ids[i],
+                task_type="compile",
+                account_id=owner[0],
+                user_id=owner[1],
+                created_at=created_at,
+                status=TaskStatus(status),
+                resource_id=str(record["config_id"]),
+                meta={"request": INPUTS, "compile": {"trigger": "manual"}},
+            )
+        )
 
     params = {"compile_name": name, "limit": 2}
     for expected, next_cursor in (([0, 3], ids[3]), ([2, 1], ids[1]), ([4], None)):
@@ -680,7 +693,9 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     created_at = state["task_first_create_time"]
     assert create_started_at <= created_at <= create_finished_at
     assert state["last_run_time"] is None
-    assert await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name) == []
+    assert (await service.compile.list_runs(compile_name, ctx, limit=100, cursor=None))[
+        "runs"
+    ] == []
     assert runtime.calls == []
     service.fs.ensure_compile_target.assert_awaited_once_with(TARGET, ctx)
     assert "conflict_num" not in state
@@ -734,7 +749,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     state = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert state["task_first_create_time"] == created_at
     assert state["last_run_time"] == first.created_at
-    run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, first.task_id)
+    run = await service.compile.get_run(compile_name, first.task_id, ctx)
     assert run["meta"]["mode"] == "full"
     assert run["actor"] == ctx.user.user_id
     assert state["execution_context"]["owner_user_id"] == ctx.user.user_id
@@ -780,14 +795,17 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
 
     state_before_full = await store.get(ctx.account_id, ctx.user.user_id, compile_name)
     assert state_before_full["progress"]["model_name"] == "model-a"
-    runs_before_full = await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name)
+    runs_before_full = await service.compile.list_runs(compile_name, ctx, limit=100, cursor=None)
     full = await execute({**INPUTS, "to": inputs["to"]}, "compile-full-execution")
     assert full.status == "completed", full.error
     assert runtime.calls[-1]["to"] == TARGET
     assert runtime.calls[-1]["args"]["changes"]["head"] is None
     assert runtime.calls[-1]["args"]["changes"]["execution"]["mode"] == "full"
     assert await store.get(ctx.account_id, ctx.user.user_id, compile_name) == state_before_full
-    assert await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name) == runs_before_full
+    assert (
+        await service.compile.list_runs(compile_name, ctx, limit=100, cursor=None)
+        == runs_before_full
+    )
 
     preserved = await service.fs.read(f"{TARGET}/page.md", ctx)
     await service.viking_fs.write_file(f"{SOURCE}/source.md", "another update", ctx=ctx)
@@ -799,7 +817,7 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
     assert after_failure["last_run_time"] == failed.created_at
     assert await service.fs.read(f"{TARGET}/page.md", ctx) == preserved
     assert not await service.viking_fs.exists(f"{TARGET}/partial.md", ctx=ctx)
-    failed_run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, failed.task_id)
+    failed_run = await service.compile.get_run(compile_name, failed.task_id, ctx)
     assert failed_run["meta"]["finish_snapshot"] is not None
 
     if runtime_failure:
@@ -903,7 +921,7 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     assert after["task_first_create_time"] == before["task_first_create_time"]
     assert after["last_triggered_slot"] == due.isoformat()
     assert after["next_triggered_slot"] == (due + timedelta(days=1)).isoformat()
-    runs = await store.list_runs(ctx.account_id, ctx.user.user_id, compile_name)
+    runs = (await service.compile.list_runs(compile_name, ctx, limit=100, cursor=None))["runs"]
     assert len(runs) == 1 and runs[0]["meta"]["trigger"] == "initial"
     assert after["last_run_time"] == runs[0]["created_at"]
     assert runs[0]["actor"] == executor.user.user_id
@@ -940,7 +958,10 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
         await scheduler.trigger_if_due(ctx.account_id, other_owner, compile_name, due)
         == "submitted"
     )
-    other_runs = await store.list_runs(ctx.account_id, other_owner, compile_name)
+    other_ctx = RequestContext(user=UserIdentifier(ctx.account_id, other_owner), role=Role.USER)
+    other_runs = (await service.compile.list_runs(compile_name, other_ctx, limit=100, cursor=None))[
+        "runs"
+    ]
     assert len(other_runs) == 1 and other_runs[0]["task_id"] != runs[0]["task_id"]
     assert other_runs[0]["actor"] == executor.user.user_id
     with monkeypatch.context() as patch:
@@ -1022,7 +1043,7 @@ async def test_configuration_update_preserves_times_and_retry_payload(service, a
         request, ctx=ctx, connection={}, idempotency_key="compile-frozen-config"
     )
     assert recovered.task_id == task.task_id
-    run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, task.task_id)
+    run = await service.compile.get_run(compile_name, task.task_id, ctx)
     assert run["params"]["instruction"] is None
 
 
@@ -1078,7 +1099,7 @@ async def test_configuration_private_args_round_trip_and_update(
         service.compile._merge_args(task.meta["request"], auth["external_request_private"])
         == private_args
     )
-    run = await store.get_run(ctx.account_id, ctx.user.user_id, compile_name, task.task_id)
+    run = await service.compile.get_run(compile_name, task.task_id, ctx)
     assert "private-secret" not in json.dumps(run)
     if "provider" in private_args:
         with pytest.raises(InvalidArgumentError, match="resubmitting"):
@@ -1108,14 +1129,19 @@ async def test_owned_run_metadata_and_output_permissions(service, app, client, m
     reads = AsyncMock(wraps=store._agfs.read)
     monkeypatch.setattr(store._agfs, "read", reads)
     run = await compiler.get_run(name, task.task_id, ctx)
-    assert run == await store.get_run(ctx.account_id, ctx.user.user_id, name, task.task_id)
+    assert run["task_id"] == task.task_id and run["status"] == "queued"
     history = await compiler.list_runs(name, ctx, limit=20, cursor=None)
     assert config["to"] == TARGET
     assert history["runs"] == [run]
 
     for start, finish in ((None, "head"), ("base", None), ("base", "head")):
         run["meta"].update(start_snapshot=start, finish_snapshot=finish)
-        await compiler.lifecycle.store.put_run(ctx.account_id, ctx.user.user_id, name, run)
+        await get_task_tracker().patch_task(
+            task.task_id,
+            TaskPatch(meta={"compile": run["meta"]}),
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
+        )
         response = await client.get(
             f"/api/v1/compile/runs/{task.task_id}/outputs", params={"compile_name": name}
         )
@@ -1123,7 +1149,7 @@ async def test_owned_run_metadata_and_output_permissions(service, app, client, m
             assert response.status_code == 403
         else:
             assert response.json()["result"] == {"outputs": [], "next_cursor": None}
-    assert all(not call.args[0].endswith("/state.json") for call in reads.await_args_list)
+    assert all(call.args[0].endswith("/state.json") for call in reads.await_args_list)
 
 
 @pytest.mark.parametrize(

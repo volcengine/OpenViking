@@ -270,6 +270,7 @@ class ExternalTaskService:
         submission_payload: Mapping[str, Any] | None = None,
         submission_private_payload: Mapping[str, Any] | None = None,
         task_id: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
         on_task_created: Callable[[TaskRecord], Awaitable[None]] | None = None,
         retry_enqueue: bool = False,
     ) -> TaskRecord:
@@ -293,6 +294,7 @@ class ExternalTaskService:
                 submission_payload=submission_payload,
                 submission_private_payload=submission_private_payload,
                 task_id=task_id,
+                metadata=metadata,
                 on_task_created=on_task_created,
                 retry_enqueue=retry_enqueue,
             )
@@ -320,6 +322,7 @@ class ExternalTaskService:
         submission_payload: Mapping[str, Any] | None = None,
         submission_private_payload: Mapping[str, Any] | None = None,
         task_id: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
         on_task_created: Callable[[TaskRecord], Awaitable[None]] | None = None,
         retry_enqueue: bool = False,
     ) -> TaskRecord:
@@ -345,6 +348,7 @@ class ExternalTaskService:
             user_id=ctx.user.user_id,
             task_id=task_id,
             meta={
+                **dict(metadata or {}),
                 "request": dict(payload),
                 **(
                     {"submission_hash": request_hash, "submission_token": token}

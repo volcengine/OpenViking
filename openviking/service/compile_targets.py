@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Compile configurations, execution history, and snapshot-backed execution.
 
-Only registered configurations and their runs live in ``_system/compile/tasks``.
-Transient executions keep recovery checkpoints in the ordinary Task private state.
+Only registered configurations live in ``_system/compile/tasks``.
+Execution history and recovery checkpoints belong to the ordinary Task.
 The external task queue groups Compile runs by account and output target for serialization.
 """
 
@@ -12,14 +12,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import heapq
 import json
-import math
 import random
 import re
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager, nullcontext
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import (
     Annotated,
@@ -34,6 +32,7 @@ from typing import (
     Union,
 )
 from urllib.parse import quote
+from uuid import uuid4
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, WithJsonSchema, with_config
 from typing_extensions import NotRequired, TypedDict
@@ -51,7 +50,7 @@ from openviking.pyagfs.exceptions import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.external_task_service import SUBMIT_EXHAUSTED, ExternalTaskSnapshot
-from openviking.service.task_domain import TaskPatch, TaskRecord, TaskStatus, sanitize_error
+from openviking.service.task_domain import TaskPatch, TaskStatus, sanitize_error
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.pathlock_recovery import (
@@ -98,10 +97,8 @@ CompileName = Annotated[
     ),
 ]
 _COMPILE_NAME = TypeAdapter(CompileName)
-HISTORY_RETENTION_SECONDS = 7 * 24 * 3600
 GIT_RETRIES = 3
 SNAPSHOT_BUSY_SECONDS = 30.0
-TERMINAL = frozenset({"completed", "failed", "cancelled"})
 _NULL_OID = "0" * 40
 _RESULT_KEYS = {"added": "created", "modified": "updated", "deleted": "deleted"}
 _INPUT_FIELDS = ("from", "to", "skill", "instruction", "args")
@@ -227,32 +224,8 @@ def split_control_args(args: Optional[Mapping[str, Any]]) -> tuple[dict, dict]:
     return control, runtime
 
 
-RUN_FIELDS = frozenset(
-    (
-        "task_id",
-        "actor",
-        "status",
-        "created_at",
-        "started_at",
-        "finished_at",
-        "params",
-        "result",
-        "error",
-        "meta",
-    )
-)
-
-
 class CompileStore(Protocol):
-    """Persistence for creator-scoped configs and runs.
-
-    Config creation raises ConflictError for an existing key. Run creation
-    returns False for an existing key. Conditional writes compare expected
-    fields against persisted values within one atomic operation.
-    Run replacement requires a complete snapshot. It retains the same existence
-    and expected-field checks as partial updates; callers serialize the sequence
-    from reading that snapshot to writing it back.
-    """
+    """Creator-scoped configurations with atomic creation and conditional updates."""
 
     async def create_config(
         self, account_id: str, owner_user_id: str, compile_name: str, record: dict
@@ -274,44 +247,10 @@ class CompileStore(Protocol):
         limit: Optional[int] = None,
         fresh: bool = False,
     ) -> AsyncIterator[tuple[str, str, dict]]: ...
-    async def list_runs(
-        self,
-        account_id: str | None = None,
-        owner_user_id: str | None = None,
-        compile_name: str | None = None,
-        task_id: Optional[str] = None,
-        limit: Optional[int] = None,
-        cursor: Optional[str] = None,
-        keys_only: bool = False,
-        finished_before: float | None = None,
-        statuses: frozenset[str] | None = None,
-        after_key: tuple[float, int, str] | None = None,
-    ) -> list[dict]: ...
-    async def create_run(
-        self, account_id: str, owner_user_id: str, compile_name: str, run: dict
-    ) -> bool: ...
-    async def update_run(
-        self,
-        account_id: str,
-        owner_user_id: str,
-        compile_name: str,
-        task_id: str,
-        changes: dict,
-        expected: Optional[Mapping[str, Any]] = None,
-        replace: bool = False,
-    ) -> bool: ...
-    async def delete_run(
-        self,
-        account_id: str,
-        owner_user_id: str,
-        compile_name: str,
-        task_id: str,
-        expected: Mapping[str, Any],
-    ) -> bool: ...
 
 
 class CompileStateStore:
-    """Persist creator-scoped names and run records under AGFS path locks."""
+    """Persist creator-scoped configurations under AGFS path locks."""
 
     def __init__(self, agfs: Any) -> None:
         self._agfs = agfs if isinstance(agfs, AsyncAGFSClient) else AsyncAGFSClient(agfs)
@@ -335,16 +274,6 @@ class CompileStateStore:
             ):
                 return False
             record.update(deepcopy(changes))
-        return True
-
-    async def _delete_file(self, path: str, lease: Any) -> bool:
-        try:
-            await self._agfs.rm(
-                path,
-                fs_ctx={**fs_ctx_from_agfs_path(path), "lease_ref": lease["lease_ref"]},
-            )
-        except (AGFSNotFoundError, FileNotFoundError):
-            return False
         return True
 
     async def list_configs(
@@ -380,66 +309,6 @@ class CompileStateStore:
                     limit -= 1
                     if limit == 0:
                         return
-
-    async def create_run(
-        self, account_id: str, owner_user_id: str, compile_name: str, run: dict
-    ) -> bool:
-        path = self._run_path(account_id, owner_user_id, compile_name, run["task_id"])
-        async with self.locked(path) as lease:
-            if await self.read_json(path) is not None:
-                return False
-            await self.write_json(path, run, lease)
-        return True
-
-    async def update_run(
-        self,
-        account_id: str,
-        owner_user_id: str,
-        compile_name: str,
-        task_id: str,
-        changes: dict,
-        expected: Optional[Mapping[str, Any]] = None,
-        replace: bool = False,
-    ) -> bool:
-        if replace and RUN_FIELDS - changes.keys():
-            raise InvalidArgumentError("Compile run replacement requires a complete record")
-        path = self._run_path(account_id, owner_user_id, compile_name, task_id)
-        async with self.locked(path) as lease:
-            if replace and expected is None:
-                try:
-                    await self._agfs.stat(path, bypass_cache=True)
-                except (AGFSNotFoundError, FileNotFoundError):
-                    return False
-                run = changes
-            else:
-                run = await self.read_json(path)
-                if run is None or (
-                    expected is not None and any(run.get(k) != v for k, v in expected.items())
-                ):
-                    return False
-                if replace:
-                    run = changes
-                else:
-                    run.update(changes)
-            if changes.get("task_id", task_id) != task_id:
-                raise InvalidArgumentError("Compile run task ID cannot change")
-            await self.write_json(path, run, lease)
-        return True
-
-    async def delete_run(
-        self,
-        account_id: str,
-        owner_user_id: str,
-        compile_name: str,
-        task_id: str,
-        expected: Mapping[str, Any],
-    ) -> bool:
-        path = self._run_path(account_id, owner_user_id, compile_name, task_id)
-        async with self.locked(path) as lease:
-            run = await self.read_json(path)
-            if run is None or any(run.get(k) != v for k, v in expected.items()):
-                return False
-            return await self._delete_file(path, lease)
 
     @staticmethod
     def root(account_id: str, owner_user_id: Optional[str] = None) -> str:
@@ -481,16 +350,6 @@ class CompileStateStore:
         return (
             f"{self.root(account_id, owner_user_id)}/{self._name_segment(compile_name)}/state.json"
         )
-
-    def _runs_dir(self, account_id: str, owner_user_id: str, compile_name: str) -> str:
-        if owner_user_id is None:
-            raise InvalidArgumentError("user_id must be a string.")
-        return f"{self.root(account_id, owner_user_id)}/{self._name_segment(compile_name)}/runs"
-
-    def _run_path(
-        self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
-    ) -> str:
-        return f"{self._runs_dir(account_id, owner_user_id, compile_name)}/{validate_task_id(task_id)}.json"
 
     async def read_json(self, path: str) -> Any:
         try:
@@ -541,18 +400,27 @@ class CompileStateStore:
                 raise ConflictError("Compile configuration already exists")
             if before_publish is not None:
                 await before_publish()
+            record["config_id"] = str(uuid4())
             record["task_first_create_time"] = time.time()
             await self.write_json(path, record, lease)
         return compile_name
 
-    def lock_run(self, account_id: str, owner_user_id: str, compile_name: str, task_id: str) -> Any:
-        # Keep the finalization mutex compatible with existing File workers.
-        return self.locked(
-            self._run_path(account_id, owner_user_id, compile_name, task_id) + ".finish"
-        )
-
     async def get(self, account_id: str, owner_user_id: str, compile_name: str) -> Optional[dict]:
-        return await self.read_json(self._record_path(account_id, owner_user_id, compile_name))
+        path = self._record_path(account_id, owner_user_id, compile_name)
+        record = await self.read_json(path)
+        if record is None or "config_id" in record:
+            return record
+        async with self.locked(path) as lease:
+            record = await self.read_json(path)
+            if record is not None:
+                await self._ensure_config_id(path, record, lease)
+            return record
+
+    async def _ensure_config_id(self, path: str, record: dict, lease: Any) -> None:
+        """Backfill legacy configuration identity under its existing state lock."""
+        if "config_id" not in record:
+            record["config_id"] = str(uuid4())
+            await self.write_json(path, record, lease)
 
     @asynccontextmanager
     async def edit(
@@ -564,12 +432,16 @@ class CompileStateStore:
             record = await self.read_json(path)
             if record is None:
                 raise NotFoundError(compile_name, "compile configuration")
+            await self._ensure_config_id(path, record, lease)
+            config_id = record["config_id"]
             original_json = json.dumps(record, ensure_ascii=False, sort_keys=True)
             yield record
-            if set(record) != STATE_FIELDS:
+            if set(record) != STATE_FIELDS | {"config_id"}:
                 raise InvalidArgumentError(
                     "Compile state fields do not match the configuration schema"
                 )
+            if record["config_id"] != config_id:
+                raise InvalidArgumentError("Compile configuration ID cannot change")
             if record["execution_context"].get("owner_user_id") != owner_user_id:
                 raise InvalidArgumentError("Compile configuration owner cannot change")
             if json.dumps(record, ensure_ascii=False, sort_keys=True) != original_json:
@@ -644,93 +516,6 @@ class CompileStateStore:
             if e.get("name") and e["name"] != "_system" and e.get("isDir", e.get("is_dir", False))
         ]
 
-    async def get_run(
-        self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
-    ) -> Optional[dict]:
-        return await self.read_json(
-            self._run_path(account_id, owner_user_id, compile_name, task_id)
-        )
-
-    async def put_run(
-        self, account_id: str, owner_user_id: str, compile_name: str, run: dict
-    ) -> None:
-        path = self._run_path(account_id, owner_user_id, compile_name, run["task_id"])
-        async with self.locked(path) as lease:
-            await self.write_json(path, run, lease)
-
-    async def list_runs(
-        self,
-        account_id: str | None = None,
-        owner_user_id: str | None = None,
-        compile_name: str | None = None,
-        task_id: Optional[str] = None,
-        limit: Optional[int] = None,
-        cursor: Optional[str] = None,
-        keys_only: bool = False,
-        finished_before: float | None = None,
-        statuses: frozenset[str] | None = None,
-        after_key: tuple[float, int, str] | None = None,
-    ) -> list[dict]:
-        """List history in descending (created_at, task_id) order."""
-        if account_id is None or owner_user_id is None or compile_name is None:
-            raise InvalidArgumentError("A Compile configuration is required for File run queries")
-        if finished_before is not None or statuses is not None or after_key is not None:
-            raise InvalidArgumentError("File runs do not support cross-configuration query filters")
-        if limit is not None and limit <= 0:
-            return []
-        if task_id is not None:
-            run = await self.get_run(account_id, owner_user_id, compile_name, task_id)
-            return [run] if run is not None else []
-        directory = self._runs_dir(account_id, owner_user_id, compile_name)
-        try:
-            entries = await self._agfs.ls(directory)
-        except (AGFSNotFoundError, FileNotFoundError):
-            return []
-        if keys_only:
-            keys = []
-            for entry in entries:
-                filename = str(entry.get("name") or "")
-                if not filename.endswith(".json") or entry.get("isDir", entry.get("is_dir", False)):
-                    continue
-                try:
-                    candidate = validate_task_id(filename[:-5])
-                except InvalidArgumentError:
-                    continue
-                keys.append({"task_id": candidate})
-            return keys[:limit]
-        before = None
-        cursor_name = None
-        if cursor:
-            run = await self.get_run(account_id, owner_user_id, compile_name, cursor)
-            if run is None:
-                raise InvalidArgumentError("Run cursor does not exist")
-            before = run["created_at"], run["task_id"]
-            cursor_name = f"{cursor}.json"
-            del run
-        if limit is not None and limit <= 0:
-            return []
-
-        candidates: list[tuple[float, str, dict]] = []
-        for entry in entries:
-            name = str(entry.get("name") or "")
-            if name == cursor_name or not name.endswith(".json"):
-                continue
-            run = await self.read_json(f"{directory}/{name}")
-            if run is None:
-                continue
-            key = run["created_at"], run["task_id"]
-            if before is not None and key >= before:
-                continue
-            candidate = (*key, run)
-            if limit is None:
-                candidates.append(candidate)
-            elif len(candidates) < limit:
-                heapq.heappush(candidates, candidate)
-            else:
-                heapq.heappushpop(candidates, candidate)
-        candidates.sort(reverse=True)
-        return [run for _, _, run in candidates]
-
 
 def overlaps(a: str, b: str) -> bool:
     return a == b or a.startswith(f"{b}/") or b.startswith(f"{a}/")
@@ -746,25 +531,36 @@ def _params(request: Mapping[str, Any]) -> dict:
     }
 
 
-def new_run(task: Any) -> dict:
-    """Freeze public inputs and execution identity; private checkpoints stay on the Task."""
+def run_view(task: Any) -> dict:
+    """Project the public Compile execution history from a Task."""
+    status = task.status.value
+    if status == "pending":
+        status = "queued"
+    elif status == "running" and task.stage == "committing":
+        status = "committing"
+    meta = task.meta.get("compile") or {}
     return {
         "task_id": task.task_id,
         "actor": task.user_id,
-        "status": "queued",
+        "status": status,
         "created_at": task.created_at,
-        "started_at": None,
-        "finished_at": None,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
         "params": _params(task.meta["request"]),
-        "result": None,
-        "error": None,
+        "result": deepcopy(task.result),
+        "error": task.error or ("cancelled" if status == "cancelled" else None),
         "meta": {
-            "trigger": (task.meta["request"].get("compile") or {}).get("trigger", "manual"),
-            "mode": None,
-            "base_snapshot": None,
-            "start_snapshot": None,
-            "finish_snapshot": None,
-            "skill_snapshot_id": None,
+            "trigger": meta.get("trigger", "manual"),
+            **{
+                key: meta.get(key)
+                for key in (
+                    "mode",
+                    "base_snapshot",
+                    "start_snapshot",
+                    "finish_snapshot",
+                    "skill_snapshot_id",
+                )
+            },
         },
     }
 
@@ -777,8 +573,6 @@ class CompileLifecycle:
         self._fs = viking_fs
         self.resolve_groups = None
         self.creation_guard: Callable[[str, str], Awaitable[bool]] | None = None
-        self._cleanup_scan: Optional[AsyncIterator[tuple[str, str, str, str]]] = None
-        self._cleanup_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def _lock_operation(self, path: str) -> AsyncIterator[None]:
@@ -797,17 +591,6 @@ class CompileLifecycle:
         return self._lock_operation(
             f"/local/{account_id}/_system/task_locks/compile_config/"
             f"{owner_user_id}/{hashlib.sha256(compile_name.encode()).hexdigest()}"
-        )
-
-    def _lock_run(
-        self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
-    ) -> Any:
-        if isinstance(self._store, CompileStateStore):
-            return self._store.lock_run(account_id, owner_user_id, compile_name, task_id)
-        return self._lock_operation(
-            f"/local/{account_id}/_system/task_locks/compile_run/"
-            f"{owner_user_id}/{hashlib.sha256(compile_name.encode()).hexdigest()}/"
-            f"{validate_task_id(task_id)}"
         )
 
     async def create_config(
@@ -865,6 +648,8 @@ class CompileLifecycle:
                 raise InvalidArgumentError(
                     "Compile state fields do not match the configuration schema"
                 )
+            if not same_json_value(record["config_id"], original["config_id"]):
+                raise InvalidArgumentError("Compile configuration ID cannot change")
             changes = {
                 key: value
                 for key, value in record.items()
@@ -876,7 +661,8 @@ class CompileLifecycle:
                 compile_name,
                 changes,
                 expected={
-                    key: original[key] for key in changes.keys() | {"task_first_create_time"}
+                    key: original[key]
+                    for key in changes.keys() | {"config_id", "task_first_create_time"}
                 },
             ):
                 raise ConflictError("Compile configuration changed during update")
@@ -884,91 +670,19 @@ class CompileLifecycle:
     async def get_run(
         self, account_id: str, owner_user_id: str, compile_name: str, task_id: str
     ) -> Optional[dict]:
-        runs = await self._store.list_runs(account_id, owner_user_id, compile_name, task_id=task_id)
-        return runs[0] if runs else None
-
-    async def cancel_queued_run(self, task: TaskRecord) -> None:
-        meta = (task.meta.get("request") or {}).get("compile") or {}
-        name, owner = meta.get("compile_name"), meta.get("owner_user_id")
-        if not name or not owner or task.account_id is None:
-            return
-        await self._store.update_run(
-            task.account_id,
-            owner,
-            name,
-            task.task_id,
-            {"status": "cancelled", "finished_at": task.updated_at},
-            expected={"status": "queued", "started_at": None},
-        )
-
-    async def _history_candidates(
-        self, cutoff: float, page_size: int
-    ) -> AsyncIterator[tuple[str, str, str, str]]:
-        if isinstance(self._store, CompileStateStore):
-            # AGFS lists the whole directory; retain that listing across cleanup ticks.
-            async for account, name, record in self._store.list_configs():
-                owner = record["execution_context"]["owner_user_id"]
-                for row in await self._store.list_runs(account, owner, name, keys_only=True):
-                    yield account, owner, name, row["task_id"]
-            return
-        after_key = None
-        while True:
-            rows = await self._store.list_runs(
-                keys_only=True,
-                finished_before=cutoff,
-                statuses=TERMINAL,
-                limit=page_size,
-                after_key=after_key,
-            )
-            for row in rows:
-                yield row["account_id"], row["owner_user_id"], row["compile_name"], row["task_id"]
-            if len(rows) < page_size:
-                return
-            last = rows[-1]
-            after_key = (last["finished_at"], last["config_id"], last["task_id"])
-
-    async def delete_expired(self, now: float, limit: int) -> int:
-        """Check at most limit runs and retain those still needed by a durable Task."""
         from openviking.service.task_tracker import get_task_tracker
 
-        if limit <= 0:
-            return 0
-        removed = 0
-        cutoff = now - HISTORY_RETENTION_SECONDS
-        async with self._cleanup_lock:
-            if self._cleanup_scan is None:
-                self._cleanup_scan = self._history_candidates(cutoff=cutoff, page_size=limit)
-            for _ in range(limit):
-                try:
-                    scope = await anext(self._cleanup_scan)
-                except StopAsyncIteration:
-                    self._cleanup_scan = None
-                    break
-                async with self._lock_run(*scope):
-                    run = await self.get_run(*scope)
-                    if run is None:
-                        continue
-                    finished = run.get("finished_at")
-                    if (
-                        run["status"] not in TERMINAL
-                        or isinstance(finished, bool)
-                        or not isinstance(finished, (int, float))
-                        or not math.isfinite(finished)
-                        or finished < 0
-                        or finished >= cutoff
-                    ):
-                        continue
-                    task = await get_task_tracker().get_durable_task(
-                        scope[3], account_id=scope[0], user_id=run["actor"]
-                    )
-                    if task is not None and task.task_type == "compile" and not task.is_terminal():
-                        continue
-                    if await self._store.delete_run(
-                        *scope,
-                        expected={key: run[key] for key in ("status", "finished_at", "actor")},
-                    ):
-                        removed += 1
-        return removed
+        record = await self.get_config(account_id, owner_user_id, compile_name)
+        if record is None:
+            return None
+        tasks = await get_task_tracker().list_tasks(
+            account_id=account_id,
+            task_type="compile",
+            resource_id=str(record["config_id"]),
+            task_id=validate_task_id(task_id),
+            limit=1,
+        )
+        return run_view(tasks[0]) if tasks else None
 
     async def task_ctx(self, task: Any) -> RequestContext:
         """Restore the accepted executor with current groups and normal ACL checks.
@@ -1030,53 +744,23 @@ class CompileLifecycle:
         task.auth = {**(task.auth or {}), "compile_execution": checkpoint}
 
     async def _read_run(self, task: Any) -> dict:
-        compile_name = self._compile_name(task)
-        if compile_name:
-            run = await self.get_run(
-                task.account_id, self._owner_user_id(task), compile_name, task.task_id
-            )
-            if run is None:
-                raise NotFoundError(task.task_id, "compile run")
-            return run
-        run = new_run(task)
-        checkpoint = self._checkpoint(task)
-        run.update(checkpoint.get("outcome") or {})
-        run["meta"].update(checkpoint.get("snapshots") or {})
-        run["meta"]["mode"] = "full"
+        run = run_view(task)
+        run.update(self._checkpoint(task).get("outcome") or {})
         return run
 
     async def _save_run(self, task: Any, run: dict) -> None:
+        """Persist public snapshots; defer the final Task outcome until cleanup settles."""
         if run.get("error"):
             run["error"] = sanitize_error(run["error"])
-        compile_name = self._compile_name(task)
-        if compile_name:
-            if not await self._store.update_run(
-                task.account_id,
-                self._owner_user_id(task),
-                compile_name,
-                task.task_id,
-                run,
-                replace=True,
-            ):
-                raise NotFoundError(task.task_id, "compile run")
-        else:
-            # Full executions retain only target recovery facts outside compile storage.
-            await self._save_checkpoint(
-                task,
-                {
-                    "snapshots": {
-                        key: run["meta"][key]
-                        for key in ("start_snapshot", "finish_snapshot", "skill_snapshot_id")
-                    },
-                    "outcome": {
-                        key: run[key]
-                        for key in ("status", "started_at", "finished_at", "result", "error")
-                    },
-                },
-            )
+        meta = deepcopy(run["meta"])
+        stage = "committing" if run["status"] == "committing" else None
+        await self._patch_task(task, TaskPatch(meta={"compile": meta}, stage=stage))
+        task.meta["compile"] = meta
+        if stage:
+            task.stage = stage
 
     async def record_queued(self, task: Any, locked_record: Optional[dict] = None) -> None:
-        """Record acceptance idempotently before dispatch, marking the first run as initial."""
+        """Advance the configuration's invocation time idempotently under its lock."""
         compile_name = self._compile_name(task)
         if not compile_name:
             return
@@ -1084,43 +768,15 @@ class CompileLifecycle:
             async with self.edit_config(
                 task.account_id, self._owner_user_id(task), compile_name
             ) as record:
-                await self._ensure_queued_run(task, compile_name, record)
+                self._record_invocation(task, record)
             return
-        await self._ensure_queued_run(task, compile_name, locked_record)
+        self._record_invocation(task, locked_record)
 
-    async def _ensure_queued_run(self, task: Any, compile_name: str, locked_record: dict) -> dict:
-        """Return the persisted run, repairing missing registration under the caller's config lock."""
-        run = await self.get_run(
-            task.account_id, self._owner_user_id(task), compile_name, task.task_id
-        )
-        if locked_record["last_run_time"] is None:
-            # A persisted initial run survives a failed state.json acceptance write.
-            history = await self._store.list_runs(
-                task.account_id, self._owner_user_id(task), compile_name
-            )
-            initial = next(
-                (item for item in reversed(history) if item["meta"]["trigger"] == "initial"),
-                None,
-            )
-            if initial is not None:
-                locked_record["last_run_time"] = initial["created_at"]
-        if run is None:
-            run = new_run(task)
-            if locked_record["last_run_time"] is None:
-                run["meta"]["trigger"] = "initial"
-            if not await self._store.create_run(
-                task.account_id, self._owner_user_id(task), compile_name, run
-            ):
-                existing = await self.get_run(
-                    task.account_id, self._owner_user_id(task), compile_name, task.task_id
-                )
-                if existing is None:
-                    raise NotFoundError(task.task_id, "compile run")
-                run = existing
+    @staticmethod
+    def _record_invocation(task: Any, locked_record: dict) -> None:
         locked_record["last_run_time"] = max(
             locked_record["last_run_time"] or task.created_at, task.created_at
         )
-        return run
 
     @asynccontextmanager
     async def _admission(self, task: Any) -> AsyncIterator[None]:
@@ -1136,13 +792,14 @@ class CompileLifecycle:
             await self._fs._async_agfs.pathlock_release(lease)
 
     async def _refresh_checkpoint(self, task: Any) -> None:
-        """Read the latest private checkpoint without trusting another worker's cache."""
+        """Refresh durable public snapshots and private recovery decisions."""
         from openviking.service.task_tracker import get_task_tracker
 
         current = await get_task_tracker().get_durable_task(
             task.task_id, account_id=task.account_id, user_id=task.user_id
         )
         if current is not None and current.task_type == "compile":
+            task.meta["compile"] = deepcopy(current.meta.get("compile") or {})
             task.auth = {
                 **(task.auth or {}),
                 "compile_execution": deepcopy(self._checkpoint(current)),
@@ -1175,10 +832,9 @@ class CompileLifecycle:
                     async with self.edit_config(
                         task.account_id, self._owner_user_id(task), compile_name
                     ) as record:
-                        run = await self._ensure_queued_run(task, compile_name, record)
-                else:
-                    run = await self._read_run(task)
-                if run["status"] in TERMINAL and run["finished_at"] is not None:
+                        self._record_invocation(task, record)
+                run = await self._read_run(task)
+                if self._checkpoint(task).get("outcome"):
                     return self._finished_snapshot(run)
                 checkpoint = self._checkpoint(task)
                 if checkpoint.get("phase") == "committing":
@@ -1226,9 +882,6 @@ class CompileLifecycle:
             )
         progress = self._checkpoint(task).get("baseline") or {}
         run["status"] = "running"
-        run["started_at"] = run["started_at"] or time.time()
-        # Snapshot failures must retain the start time for terminal run publication.
-        await self._save_run(task, run)
         if (
             compile_name
             and not classify_uri(request["skill"]).is_system
@@ -1335,29 +988,16 @@ class CompileLifecycle:
 
     async def on_finish(self, task: Any, snapshot: ExternalTaskSnapshot) -> ExternalTaskSnapshot:
         """Finalize the run, allowing submit failures to settle after lock retries."""
-        name = self._compile_name(task)
-        scope = (task.account_id, self._owner_user_id(task), name, task.task_id) if name else ()
         skip_rollback = snapshot.stage == SUBMIT_EXHAUSTED and "external_task_id" not in task.auth
         retries = task.meta.get("rollback_lock_retries", 0)
-        if (
-            not skip_rollback
-            and scope
-            and isinstance(retries, int)
-            and retries >= ROLLBACK_LOCK_MAX_RETRIES
-        ):
-            await self._refresh_checkpoint(task)
-            if self._checkpoint(task).get("phase") == "rollback_exhausted":
-                return await self._fail_blocked_rollback(task, snapshot, scope)
+        if not skip_rollback and isinstance(retries, int) and retries >= ROLLBACK_LOCK_MAX_RETRIES:
+            return await self._fail_blocked_rollback(task, snapshot)
         submission_retry_delays = iter((1, 3))
         while True:
             try:
                 async with self._admission(task):
                     await self._refresh_checkpoint(task)
-                    # Early cancellation can skip run registration.
-                    if "baseline" not in self._checkpoint(task):
-                        await self.record_queued(task)
-                    async with self._lock_run(*scope) if scope else nullcontext():
-                        return await self._finish(task, snapshot, skip_rollback=skip_rollback)
+                    return await self._finish(task, snapshot, skip_rollback=skip_rollback)
             except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:
                 if not is_compile_lock_conflict(exc):
                     raise
@@ -1381,10 +1021,7 @@ class CompileLifecycle:
                     return ExternalTaskSnapshot(status="running", stage="committing")
                 delay = lock_retry_delay(retries, ROLLBACK_LOCK_MAX_RETRIES)
                 if delay is None:
-                    await self._refresh_checkpoint(task)
-                    if scope:
-                        await self._save_checkpoint(task, {"phase": "rollback_exhausted"})
-                    return await self._fail_blocked_rollback(task, snapshot, scope)
+                    return await self._fail_blocked_rollback(task, snapshot)
                 update = {"rollback_lock_retries": retries + 1}
                 await self._patch_task(task, TaskPatch(meta=update))
                 task.meta.update(update)
@@ -1392,16 +1029,14 @@ class CompileLifecycle:
                 return ExternalTaskSnapshot(status="cancelling", stage="cancelling")
 
     async def _fail_blocked_rollback(
-        self, task: Any, snapshot: ExternalTaskSnapshot, scope: tuple
+        self, task: Any, snapshot: ExternalTaskSnapshot
     ) -> ExternalTaskSnapshot:
         """Persist the exhausted rollback outcome before allowing the Task to fail."""
 
         async def save_outcome() -> ExternalTaskSnapshot:
-            run = await self.get_run(*scope) if scope else await self._read_run(task)
-            missing = run is None
-            if run is None:
-                run = new_run(task)
-            if run["finished_at"] is not None:
+            await self._refresh_checkpoint(task)
+            run = await self._read_run(task)
+            if self._checkpoint(task).get("outcome"):
                 return self._finished_snapshot(run, snapshot.error_code)
             message = f"Compile rollback incomplete after {ROLLBACK_LOCK_MAX_RETRIES} lock retries"
             if snapshot.error_message:
@@ -1410,10 +1045,15 @@ class CompileLifecycle:
                 "rollback_incomplete": True,
                 "start_snapshot": run["meta"]["start_snapshot"],
             }
-            run.update(status="failed", result=result, error=message, finished_at=time.time())
+            run.update(status="failed", result=result, error=message)
             run["error"] = sanitize_error(message)
-            if not missing or not await self._store.create_run(*scope[:3], run):
-                await self._save_run(task, run)
+            await self._save_checkpoint(
+                task,
+                {
+                    "phase": "rollback_exhausted",
+                    "outcome": {key: run[key] for key in ("status", "result", "error")},
+                },
+            )
             return ExternalTaskSnapshot(
                 status="failed",
                 error_code=_ROLLBACK_LOCK_EXHAUSTED,
@@ -1421,10 +1061,8 @@ class CompileLifecycle:
                 result=result,
             )
 
-        if not scope:
-            return await save_outcome()
         try:
-            async with self._lock_run(*scope):
+            async with self._admission(task):
                 return await save_outcome()
         except (LockAcquisitionError, ResourceBusyError, ValueError) as exc:
             if not is_compile_lock_conflict(exc):
@@ -1454,8 +1092,7 @@ class CompileLifecycle:
         from openviking.service.task_tracker import get_task_tracker
 
         run = await self._read_run(task)
-        if run["finished_at"] is not None:
-            await self._finish_progress(task, run)
+        if self._checkpoint(task).get("outcome"):
             return self._finished_snapshot(run, snapshot.error_code)
         target = task.meta["request"]["to"]
         meta = run["meta"]
@@ -1562,9 +1199,14 @@ class CompileLifecycle:
                 raise
             return ExternalTaskSnapshot(status="running", stage="committing")
         run["status"] = snapshot.status
-        run["finished_at"] = time.time()
         await self._save_run(task, run)
         await self._finish_progress(task, run)
+        await self._save_checkpoint(
+            task,
+            {
+                "outcome": {key: run[key] for key in ("status", "result", "error")},
+            },
+        )
         return ExternalTaskSnapshot(
             status=run["status"],
             result=run.get("result") or snapshot.result,
@@ -1576,7 +1218,7 @@ class CompileLifecycle:
         try:
             await self._advance_progress(task, run)
         except NotFoundError as exc:
-            # A saved Run can still settle if there is no config to update.
+            # An accepted Task can still settle if there is no config to update.
             if exc.details.get("type") != "compile configuration" or exc.details.get(
                 "resource"
             ) != self._compile_name(task):

@@ -1,6 +1,6 @@
--- Provision both tables before selecting storage.compile_store.provider=mysql.
+-- Provision this table before selecting storage.compile_store.provider=mysql.
 -- MySQL 5.7.44: use InnoDB DYNAMIC and large prefixes (16 KiB pages).
--- For storage.compile_store.params.table, replace the ov_compile prefix on both tables.
+-- For storage.compile_store.params.table, replace the ov_compile prefix.
 -- The prefix must be an ASCII SQL identifier of at most 51 characters.
 CREATE TABLE `ov_compile_configs` (
     config_id BIGINT NOT NULL AUTO_INCREMENT,
@@ -27,26 +27,4 @@ CREATE TABLE `ov_compile_configs` (
     execution_context JSON NOT NULL,
     PRIMARY KEY (config_id),
     UNIQUE KEY uq_compile_configs_name (service_name, account_id, compile_name, owner_user_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC;
-
-CREATE TABLE `ov_compile_runs` (
-    config_id BIGINT NOT NULL,
-    task_id VARCHAR(68) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    actor_user_id VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
-    status VARCHAR(16) NOT NULL,
-    created_at DOUBLE NOT NULL,
-    started_at DOUBLE NULL,
-    finished_at DOUBLE NULL,
-    `trigger` VARCHAR(16) NOT NULL,
-    mode VARCHAR(16) NULL,
-    base_snapshot VARCHAR(255) NULL,
-    start_snapshot VARCHAR(255) NULL,
-    finish_snapshot VARCHAR(255) NULL,
-    skill_snapshot_id VARCHAR(255) NULL,
-    params JSON NOT NULL,
-    result JSON NULL,
-    error TEXT NULL,
-    PRIMARY KEY (config_id, task_id),
-    KEY ix_compile_runs_history (config_id, created_at, task_id),
-    KEY ix_compile_runs_expiry (finished_at, config_id, task_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC;

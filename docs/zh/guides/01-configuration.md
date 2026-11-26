@@ -1411,7 +1411,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
 | `watch_store` | object | Watch 存储：`file`（单进程）、`sqlite`（同机）或 `mysql` / `postgres`（多节点共享） | `{"provider":"file"}` |
-| `compile_store` | object | Compile 配置和运行历史的存储后端 | `{"provider":"file"}` |
+| `compile_store` | object | Compile 配置的存储后端 | `{"provider":"file"}` |
 
 
 ```json
@@ -1513,7 +1513,8 @@ Task/Work/Event 更新使用 READ COMMITTED 事务，先锁 Task 行，再修改
 #### Compile store
 
 在 `ov.conf` 中设置 `storage.compile_store`。这项配置只影响已保存的 Compile
-配置和运行历史；Task/Work 存储独立配置。
+配置。执行历史使用 `storage.task_store`，所有终态 Compile 任务保留七天，
+由每小时运行的 Task 清理统一回收。
 
 | `provider` | 部署方式 |
 |------------|----------|
@@ -1528,7 +1529,7 @@ MySQL 和 PostgreSQL 按需配置 `params.host`、`params.port`、`params.user`�
 ASCII 字母开头，只含 ASCII 字母、数字或下划线；MySQL 最多 51 个字符，
 PostgreSQL 最多 47 个字符。共享 Compile 数据的实例须使用相同的数据库、表前缀和 `service_name`。
 
-切换后端不会自动迁移已有配置或历史。已有部署切换前应先停止 Compile 写入并迁移数据。
+切换后端不会自动迁移已有配置。已有部署切换前应先停止 Compile 写入并迁移配置数据。
 初始化脚本和 SQLite 自动建表均不会升级已有 SQL 表。
 
 #### watch_store

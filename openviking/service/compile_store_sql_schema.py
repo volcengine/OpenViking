@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Relational Config and Run tables shared by the SQL providers."""
+"""Relational configuration table shared by the SQL providers."""
 
 import re
 
@@ -12,7 +12,6 @@ from sqlalchemy import (
     Column,
     Double,
     Identity,
-    Index,
     Integer,
     MetaData,
     SmallInteger,
@@ -26,9 +25,7 @@ from sqlalchemy.dialects import mysql, postgresql
 from openviking.core.identifiers import MAX_IDENTIFIER_LENGTH
 
 
-def make_compile_tables(
-    prefix: object = "ov_compile", dialect: str = "mysql"
-) -> tuple[Table, Table]:
+def make_compile_table(prefix: object = "ov_compile", dialect: str = "mysql") -> Table:
     if dialect not in {"mysql", "postgresql", "sqlite"}:
         raise ValueError(f"Unsupported Compile SQL dialect: {dialect}")
     # Keep the provider-specific limits for generated SQL identifiers.
@@ -117,39 +114,4 @@ def make_compile_tables(
         ),
         **(options if is_mysql else {}),
     )
-    runs = Table(
-        f"{prefix}_runs",
-        metadata,
-        Column("config_id", config_id_type, primary_key=True),
-        Column("task_id", ascii_text(68), primary_key=True),
-        Column("actor_user_id", ascii_text(MAX_IDENTIFIER_LENGTH), nullable=False),
-        Column("status", unicode_text(16), nullable=False),
-        Column("created_at", timestamp, nullable=False),
-        Column("started_at", timestamp),
-        Column("finished_at", timestamp),
-        Column("trigger", unicode_text(16), nullable=False, quote=True),
-        Column("mode", unicode_text(16)),
-        Column("base_snapshot", unicode_text(255)),
-        Column("start_snapshot", unicode_text(255)),
-        Column("finish_snapshot", unicode_text(255)),
-        Column("skill_snapshot_id", unicode_text(255)),
-        Column("params", json_type, nullable=False),
-        Column("result", json_type(none_as_null=True)),
-        Column("error", Text),
-        *identifier_check("actor_user_id"),
-        # MySQL 5.7 can scan this ascending index backward for the history order.
-        Index(
-            "ix_compile_runs_history" if is_mysql else f"ix_{prefix}_runs_history",
-            "config_id",
-            "created_at",
-            "task_id",
-        ),
-        Index(
-            "ix_compile_runs_expiry" if is_mysql else f"ix_{prefix}_runs_expiry",
-            "finished_at",
-            "config_id",
-            "task_id",
-        ),
-        **(options if is_mysql else {}),
-    )
-    return configs, runs
+    return configs
