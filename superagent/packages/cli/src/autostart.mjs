@@ -112,6 +112,29 @@ export function autostartEnabled({ env = process.env, homeDir = defaultPlatform.
   return capabilitiesFor(platform).autostart && fs.existsSync(targets(homeDir, platform, env).file);
 }
 
+// Roll back this attempt without deleting an already installed startup file.
+function writeAutostartFile(file, contents) {
+  let previous = null;
+  try {
+    previous = fs.readFileSync(file);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  fs.writeFileSync(file, contents);
+  const written = fs.statSync(file, { bigint: true });
+  return () => {
+    const current = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+    // Another invocation may have disabled or updated autostart while we waited.
+    if (!current || current.ino !== written.ino || current.ctimeNs !== written.ctimeNs) return false;
+    if (previous === null) {
+      fs.rmSync(file, { force: true });
+      return false;
+    }
+    fs.writeFileSync(file, previous);
+    return true;
+  };
+}
+
 export async function autostartCommand([action, ...extra], {
   env = process.env,
   homeDir = defaultPlatform.homeDir(env) || os.homedir(),
@@ -147,9 +170,17 @@ export async function autostartCommand([action, ...extra], {
   if (platform.loginService === 'launchd') {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.mkdirSync(path.join(homeDir, '.ov-superagent', 'logs'), { recursive: true });
-    fs.writeFileSync(file, launchAgent({ homeDir, pathValue }));
-    await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
-    await execFileImpl('launchctl', ['bootstrap', `gui/${uid}`, file]);
+    const restore = writeAutostartFile(file, launchAgent({ homeDir, pathValue }));
+    const domain = `gui/${uid}`;
+    const unloaded = await execFileImpl('launchctl', ['bootout', domain, file]).then(() => true, () => false);
+    try {
+      await execFileImpl('launchctl', ['bootstrap', domain, file]);
+    } catch (error) {
+      if (restore() && unloaded) {
+        await execFileImpl('launchctl', ['bootstrap', domain, file]).catch(() => {});
+      }
+      throw error;
+    }
     output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
     return 0;
   }
@@ -171,9 +202,15 @@ export async function autostartCommand([action, ...extra], {
     return 1;
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, systemdUnit({ homeDir, pathValue }));
-  await execFileImpl('systemctl', ['--user', 'daemon-reload']);
-  await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
+  const restore = writeAutostartFile(file, systemdUnit({ homeDir, pathValue }));
+  try {
+    await execFileImpl('systemctl', ['--user', 'daemon-reload']);
+    await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
+  } catch (error) {
+    restore();
+    await execFileImpl('systemctl', ['--user', 'daemon-reload']).catch(() => {});
+    throw error;
+  }
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
   return 0;
 }
