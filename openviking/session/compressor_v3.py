@@ -777,9 +777,6 @@ class SessionCompressorV3:
         output_language_override = await get_output_language_override(
             self.runtime_config_manager, ctx.account_id
         )
-        directory_maintenance_enabled = (
-            bool(archive_uri) and get_openviking_config().memory.directory_maintenance_enabled
-        )
         context_provider = SessionExtractContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
@@ -790,7 +787,7 @@ class SessionCompressorV3:
             memory_registry=registry,
             vlm_config=vlm_config,
             output_language_override=output_language_override,
-            directory_maintenance_enabled=directory_maintenance_enabled,
+            is_session_commit=bool(archive_uri),
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()

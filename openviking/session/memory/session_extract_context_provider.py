@@ -82,7 +82,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         source_archive_uri: str = "",
         extraction_scope: str = "",
         output_language_override: str | None = None,
-        directory_maintenance_enabled: bool = False,
+        is_session_commit: bool = False,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
@@ -110,7 +110,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._link_enabled = config.memory.link_enabled if config.memory else False
         self._vision_messages_prepared = False
         self._vision_vlm = None
-        self._directory_maintenance_enabled = directory_maintenance_enabled
+        self._is_session_commit = is_session_commit
         self._directory_roots: dict[str, str] = {}
         self._directory_inventory: dict[str, dict[str, Any]] = {}
         self.directory_merge_plans: list["DirectoryMergePlan"] = []
@@ -550,7 +550,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
     def _register_directory_root(self, uri: str, memory_type: str) -> None:
         if (
-            not self._directory_maintenance_enabled
+            not self._is_session_commit
             or self._isolation_handler is None
             or memory_type not in _DIRECTORY_MEMORY_TYPES
         ):
@@ -831,7 +831,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return None
 
     def _directory_maintenance_available(self) -> bool:
-        return self._directory_maintenance_enabled and any(
+        return self._is_session_commit and any(
             schema.memory_type in _DIRECTORY_MEMORY_TYPES
             and schema.operation_mode != "add_only"
             and schema.filename_has_variables()

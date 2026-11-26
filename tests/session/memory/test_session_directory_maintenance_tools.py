@@ -63,7 +63,7 @@ def _provider(fs, *, enabled=True, peer_memory_enabled=False):
         viking_fs=fs,
         memory_registry=registry,
         output_language_override="en",
-        directory_maintenance_enabled=enabled,
+        is_session_commit=enabled,
     )
     provider._isolation_handler = MemoryIsolationHandler(
         ctx,

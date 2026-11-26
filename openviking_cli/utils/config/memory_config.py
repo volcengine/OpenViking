@@ -79,13 +79,6 @@ class MemoryConfig(BaseModel):
             "When multiple directories are searched, results are merged and top-N are read."
         ),
     )
-    directory_maintenance_enabled: bool = Field(
-        default=True,
-        description=(
-            "Give session memory extraction a directory inventory and tools for proposing "
-            "entity and preference directory merges. Disable for models without function calling."
-        ),
-    )
     maintenance_review_tokens: int = Field(
         default=1000,
         gt=0,
