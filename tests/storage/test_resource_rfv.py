@@ -649,7 +649,7 @@ async def test_vectors_only_force_plan_preserves_existing_file_summary():
     )
 
 
-def test_vectors_only_missing_file_uses_parent_overview_summary():
+def test_vectors_only_missing_file_does_not_parse_generated_navigation():
     from openviking.storage.context_update_plan import IndexAction, build_rfv_context_update_plan
     from openviking.storage.resource_rfv import RFVEntry, RFVFormalSnapshot, RFVSnapshot
 
@@ -687,49 +687,7 @@ def test_vectors_only_missing_file_uses_parent_overview_summary():
     action = plan.direct_index_actions[0]
     assert action.action is IndexAction.MERGE
     assert action.uri == file_uri
-    assert action.summary == "Current overview summary."
-
-
-def test_vectors_only_reuses_one_overview_parse_per_parent(monkeypatch):
-    from openviking.storage import context_update_plan
-    from openviking.storage.context_update_plan import build_rfv_context_update_plan
-    from openviking.storage.resource_rfv import RFVEntry, RFVFormalSnapshot, RFVSnapshot
-
-    root = "viking://resources/demo"
-    snapshot = RFVSnapshot(
-        request=RequestIntent(root, "vectors_only"),
-        formal=RFVFormalSnapshot(
-            {
-                "": RFVEntry(root, "", True, {0: "root-l0", 1: "root-l1"}),
-                "a.md": RFVEntry(f"{root}/a.md", "a.md", False, {2: "a-md5"}),
-                "b.md": RFVEntry(f"{root}/b.md", "b.md", False, {2: "b-md5"}),
-            }
-        ),
-        vectors=VectorIndexSnapshot(
-            {
-                "root-l0": VectorRecordSnapshot("root-l0", root, "", 0, {"md5": "root-l0"}),
-                "root-l1": VectorRecordSnapshot("root-l1", root, "", 1, {"md5": "root-l1"}),
-            },
-            frozenset({"id", "uri", "level", "md5"}),
-        ),
-        source_contents={(root, 1): "already loaded overview"},
-    )
-    calls = []
-
-    def parse(overview):
-        calls.append(overview)
-        return {"a.md": "a summary", "b.md": "b summary"}
-
-    monkeypatch.setattr(context_update_plan, "parse_overview_file_summaries", parse)
-
-    _, plan = build_rfv_context_update_plan(
-        snapshot=snapshot,
-        context_type="resource",
-        account_id="acc",
-    )
-
-    assert [action.summary for action in plan.direct_index_actions] == ["a summary", "b summary"]
-    assert calls == ["already loaded overview"]
+    assert action.summary == ""
 
 
 @pytest.mark.asyncio

@@ -61,11 +61,22 @@ async def exercise(handle):
             pass
         else:
             raise AssertionError('unrepresentable TTL was accepted')
-    assert await handle.hset('hash', 'field', b'value') == 1
+    assert await handle.hset('hash', {'field': b'value', 'state': b'ready'}) == 2
+    assert await handle.hget('hash', 'field') == b'value'
+    assert await handle.hgetall('hash') == {'field': b'value', 'state': b'ready'}
+    assert await handle.hsetnx('hash', {'field': b'ignored', 'checkpoint': b'first'}) == 1
     assert await handle.hget('hash', 'field') == b'value'
     assert await handle.sismember('members', b'member')
-    assert await handle.zadd('scores', 1.0, 'member') == 1
-    assert await handle.zrangebyscore('scores', 0.0, 2.0, 10) == ['member']
+    assert await handle.zadd('scores', [(1.0, 'member'), (2.0, 'later')]) == 2
+    assert await handle.zadd('scores', [(0.0, 'member')], only_if_greater=True) == 0
+    assert await handle.zadd('scores', [(3.0, 'member')], only_if_not_exists=True) == 0
+    assert await handle.zmscore('scores', ['member', 'missing']) == [1.0, None]
+    assert await handle.zrangebyscore(
+        'scores', 0.0, 2.0, 10, max_exclusive=True
+    ) == [('member', 1.0)]
+    assert await handle.zrangebyscore('scores', 0.0, 2.0, 0) == []
+    assert await handle.zcard('scores') == 2
+    assert isinstance(await handle.server_time_for_key('scores'), int)
     assert await handle.rpush('list', [b'first', b'second']) == 2
     assert await handle.lrange('list', 0, -1) == [b'first', b'second']
     handle.register_script('test.script.v1', 'return ARGV[1]')

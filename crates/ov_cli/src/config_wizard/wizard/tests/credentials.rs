@@ -11,7 +11,8 @@ use super::{
 };
 use crate::config::Config;
 use crate::config_wizard::store::{
-    ApiKeyRole, ConfigDraft, ConfigKind, validate_account_id_value, validate_user_id_value,
+    ApiKeyRole, BYTEPLUS_SERVICE_URL, ConfigDraft, ConfigKind, OPENVIKING_SERVICE_URL,
+    validate_account_id_value, validate_user_id_value,
 };
 use crate::i18n::Language;
 use crate::theme;
@@ -33,7 +34,18 @@ fn connection_menu_groups_managed_services_and_keeps_custom() {
 
 #[test]
 fn provider_helper_copy_is_minimal_and_custom_is_clear() {
-    let cloud = openviking_service_api_key_helper_lines();
+    let cloud = openviking_service_api_key_helper_lines(OPENVIKING_SERVICE_URL);
+    let byteplus = openviking_service_api_key_helper_lines(BYTEPLUS_SERVICE_URL);
+    assert!(
+        byteplus
+            .iter()
+            .any(|line| line.contains(BYTEPLUS_SERVICE_URL))
+    );
+    assert!(
+        byteplus
+            .iter()
+            .all(|line| !line.contains("console.volcengine.com"))
+    );
     let local_custom = custom_api_key_helper_lines(true);
     let remote_custom = custom_api_key_helper_lines(false);
     let local_custom_plain: Vec<String> =

@@ -21,8 +21,8 @@ use super::prompts::{
     InputValueLabel, LiveRegion, PromptResult, print_cancelled, prompt_select, prompt_text,
 };
 use crate::config_wizard::store::{
-    ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, IdentityField, OPENVIKING_SERVICE_URL,
-    byteplus_service_url, custom_allows_empty_api_key, normalize_byteplus_service_url,
+    ApiKeyRole, BYTEPLUS_SERVICE_URL, ConfigDraft, ConfigKind, ConfigStore, IdentityField,
+    OPENVIKING_SERVICE_URL, custom_allows_empty_api_key,
 };
 use crate::error::Result;
 use crate::i18n::{Language, copy};
@@ -61,7 +61,6 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
     let mut key_mode: Option<CustomKeyMode> = None;
 
     loop {
-        let is_byteplus = managed_provider == Some(ManagedProvider::BytePlus);
         match stage {
             Stage::Kind => match prompt_select(
                 ui,
@@ -119,16 +118,12 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                             ManagedProvider::BytePlus
                         };
                         managed_provider = Some(provider);
-                        kind = if provider == ManagedProvider::Volcengine {
-                            ConfigKind::OpenVikingService
-                        } else {
-                            ConfigKind::Custom
-                        };
-                        url = if provider == ManagedProvider::Volcengine {
-                            OPENVIKING_SERVICE_URL.to_string()
-                        } else {
-                            byteplus_service_url().unwrap_or_default().to_string()
-                        };
+                        kind = ConfigKind::OpenVikingService;
+                        url = match provider {
+                            ManagedProvider::Volcengine => OPENVIKING_SERVICE_URL,
+                            ManagedProvider::BytePlus => BYTEPLUS_SERVICE_URL,
+                        }
+                        .to_string();
                         name = None;
                         api_key = None;
                         root_api_key = None;
@@ -179,66 +174,26 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                     }
                 }
             }
-            Stage::Url => {
-                let mut helper_lines = Vec::new();
-                if is_byteplus {
-                    helper_lines.push(
-                        theme::muted(copy(
-                            Language::current(),
-                            "Enter the full HTTPS service URL for your BytePlus instance.",
-                            "请输入 BytePlus 实例的完整 HTTPS 服务地址。",
-                        ))
-                        .to_string(),
-                    );
-                    if !url.is_empty() && normalize_byteplus_service_url(&url).is_none() {
-                        helper_lines.push(theme::error(copy(
-                            Language::current(),
-                            "Use a valid HTTPS service URL without login credentials, a query or a fragment.",
-                            "请使用有效的 HTTPS 服务地址，不要包含登录凭据、查询参数或片段。",
-                        )).to_string());
-                    }
+            Stage::Url => match prompt_text(
+                ui,
+                section_add(),
+                copy(Language::current(), "Server URL", "服务器 URL"),
+                Some(&url),
+                Some(InputValueLabel::Default),
+                false,
+                false,
+                &[],
+            )? {
+                PromptResult::Value(value) => {
+                    url = value;
+                    stage = Stage::KeyMode;
                 }
-                match prompt_text(
-                    ui,
-                    section_add(),
-                    if is_byteplus {
-                        copy(
-                            Language::current(),
-                            "BytePlus service URL",
-                            "BytePlus 服务地址",
-                        )
-                    } else {
-                        copy(Language::current(), "Server URL", "服务器 URL")
-                    },
-                    Some(&url),
-                    Some(InputValueLabel::Default),
-                    false,
-                    false,
-                    &helper_lines,
-                )? {
-                    PromptResult::Value(value) => {
-                        url = value;
-                        if is_byteplus {
-                            if let Some(valid_url) = normalize_byteplus_service_url(&url) {
-                                url = valid_url;
-                                api_key = None;
-                                root_api_key = None;
-                                account = None;
-                                user = None;
-                                key_mode = Some(CustomKeyMode::UserKey);
-                                stage = Stage::ApiKey;
-                            }
-                        } else {
-                            stage = Stage::KeyMode;
-                        }
-                    }
-                    PromptResult::Back => stage = Stage::Name,
-                    PromptResult::Quit => {
-                        print_cancelled(ui)?;
-                        return Ok(true);
-                    }
+                PromptResult::Back => stage = Stage::Name,
+                PromptResult::Quit => {
+                    print_cancelled(ui)?;
+                    return Ok(true);
                 }
-            }
+            },
             Stage::KeyMode => {
                 let allow_empty_api_key = custom_allows_empty_api_key(&url);
                 let labels =
@@ -277,32 +232,17 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                 }
             }
             Stage::ApiKey => {
-                let helper_lines = if is_byteplus {
-                    vec![
-                        theme::muted(format!(
-                            "{}: {url}",
-                            copy(Language::current(), "Server", "服务器")
-                        ))
-                        .to_string(),
-                        theme::muted(copy(
-                            Language::current(),
-                            "Use the API key for this BytePlus instance.",
-                            "请使用此 BytePlus 实例的 API Key。",
-                        ))
-                        .to_string(),
-                    ]
-                } else if kind == ConfigKind::OpenVikingService {
-                    openviking_service_api_key_helper_lines()
+                let (label, helper_lines) = if kind == ConfigKind::OpenVikingService {
+                    (
+                        api_key_label(false),
+                        openviking_service_api_key_helper_lines(&url),
+                    )
                 } else {
-                    custom_api_key_input_helper_lines(key_mode.unwrap_or(CustomKeyMode::UserKey))
-                };
-
-                let label = if is_byteplus {
-                    copy(Language::current(), "BytePlus API key", "BytePlus API Key")
-                } else if kind == ConfigKind::Custom && !is_byteplus {
-                    custom_api_key_input_label(key_mode.unwrap_or(CustomKeyMode::UserKey))
-                } else {
-                    api_key_label(false)
+                    let mode = key_mode.unwrap_or(CustomKeyMode::UserKey);
+                    (
+                        custom_api_key_input_label(mode),
+                        custom_api_key_input_helper_lines(mode),
+                    )
                 };
                 match prompt_text(
                     ui,
@@ -329,9 +269,7 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                         stage = Stage::Validate;
                     }
                     PromptResult::Back => {
-                        stage = if is_byteplus {
-                            Stage::Url
-                        } else if kind == ConfigKind::OpenVikingService {
+                        stage = if kind == ConfigKind::OpenVikingService {
                             Stage::Name
                         } else {
                             Stage::KeyMode
@@ -429,7 +367,7 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                                     api_key_role = Some(ApiKeyRole::Regular);
                                 }
                                 PromptResult::Back => {
-                                    stage = if kind == ConfigKind::Custom && !is_byteplus {
+                                    stage = if kind == ConfigKind::Custom {
                                         Stage::KeyMode
                                     } else {
                                         Stage::ApiKey
@@ -533,7 +471,7 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                                 PromptResult::Back => {
                                     stage = if identity_mode.is_some() {
                                         Stage::User
-                                    } else if kind == ConfigKind::Custom && !is_byteplus {
+                                    } else if kind == ConfigKind::Custom {
                                         Stage::KeyMode
                                     } else {
                                         Stage::ApiKey
@@ -572,7 +510,7 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                             PromptResult::Back => {
                                 stage = if identity_mode.is_some() {
                                     Stage::User
-                                } else if kind == ConfigKind::Custom && !is_byteplus {
+                                } else if kind == ConfigKind::Custom {
                                     Stage::KeyMode
                                 } else {
                                     Stage::ApiKey
@@ -620,8 +558,6 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                                 stage = if kind == ConfigKind::OpenVikingService {
                                     print_cancelled(ui)?;
                                     return Ok(true);
-                                } else if is_byteplus {
-                                    Stage::ApiKey
                                 } else {
                                     Stage::KeyMode
                                 };
@@ -631,7 +567,7 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                                 return Ok(true);
                             }
                             PromptResult::Back => {
-                                stage = if kind == ConfigKind::Custom && !is_byteplus {
+                                stage = if kind == ConfigKind::Custom {
                                     Stage::KeyMode
                                 } else {
                                     Stage::ApiKey

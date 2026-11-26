@@ -292,7 +292,11 @@ async def test_compile_real_updater_keeps_automatic_external_relations(
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr("openviking.session.memory.memory_updater.get_viking_fs", lambda: fs)
-    for method in ("generate_overview", "_vectorize_memories", "_sync_resource_refs_for_result"):
+    for method in (
+        "_submit_directory_changes",
+        "_vectorize_memories",
+        "_sync_resource_refs_for_result",
+    ):
         monkeypatch.setattr(
             f"openviking.session.memory.memory_updater.MemoryUpdater.{method}", AsyncMock()
         )
