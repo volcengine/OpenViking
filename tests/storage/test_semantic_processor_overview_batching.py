@@ -86,3 +86,56 @@ async def test_single_oversized_file_summary_is_truncated_before_summarizing():
     assert "y" * 800 not in prompt
     assert result.abstract == "Guide to local setup."
     assert "[guide.md]" in result.overview
+
+
+_MATERIAL_HEADER = "Node summaries (or partial summaries being merged):\n"
+_MATERIAL_FOOTER = "\nTreat child directories as parts of the same repository"
+
+def _prompt_material(prompt: str) -> str:
+    start = prompt.index(_MATERIAL_HEADER) + len(_MATERIAL_HEADER)
+    end = prompt.index(_MATERIAL_FOOTER, start)
+    return prompt[start:end]
+
+
+@pytest.mark.asyncio
+async def test_directory_merge_keeps_each_prompt_within_budget():
+    budget = 2_000
+    prompts: list[str] = []
+    merge_count = 0
+
+    def _is_batch_material(material: str) -> bool:
+        return '"kind": "file"' in material and 'PARTIAL-' not in material and 'MERGED-' not in material
+
+    async def complete(prompt: str) -> str:
+        nonlocal merge_count
+        material = _prompt_material(prompt)
+        if len(material) > budget:
+            raise RuntimeError(f"material {len(material)} exceeds budget {budget}")
+        prompts.append(prompt)
+        if _is_batch_material(material):
+            return f"PARTIAL-{len(prompts)} " + ("x" * 700)
+        merge_count += 1
+        return f"MERGED-{merge_count}"
+
+    result = await generate_directory_semantics(
+        "viking://resources/root",
+        {f"child-{i}": {"kind": "file", "summary": str(i) * 400} for i in range(6)},
+        previous=None,
+        total_entries=6,
+        config=SemanticConfig(max_overview_prompt_chars=budget, overview_batch_size=1),
+        language="en",
+        complete=complete,
+        max_concurrent_llm=2,
+    )
+
+    materials = [_prompt_material(prompt) for prompt in prompts]
+    batch_materials = [material for material in materials if _is_batch_material(material)]
+    merge_materials = [material for material in materials if not _is_batch_material(material)]
+    assert len(batch_materials) == 6
+    assert merge_materials, "expected at least one merge prompt"
+    assert all(len(material) <= budget for material in materials)
+    # Six 700-char partials would overflow a single merge; they must be grouped.
+    assert all(material.count("PARTIAL-") < 6 for material in merge_materials)
+    assert len(merge_materials) > 1
+    assert result.abstract == "MERGED-" + str(merge_count)
+    assert result.abstract in result.overview
