@@ -551,16 +551,18 @@ void CatalogEngine::Impl::group_candidates(
     return left.label < right.label;
   };
   std::map<std::string, Group> grouped;
+  // Union mode credits every declared ancestor of the candidate. Shadow mode
+  // credits its nearest declaration.
   source([&](const Candidate& candidate) {
     for (const auto& item : resolve_items(scope, candidate.uri)) {
-      auto [it, inserted] = grouped.emplace(
+      const auto entry = grouped.emplace(
           item.item_uuid,
           Group{item.item_uuid,
                 aggregation == "max" ? -std::numeric_limits<double>::infinity()
                                      : 0.0,
                 0,
                 {}});
-      auto& group = it->second;
+      auto& group = entry.first->second;
       group.score = aggregation == "max" ? std::max(group.score, candidate.score)
                                          : group.score + candidate.score;
       ++group.count;
@@ -576,6 +578,7 @@ void CatalogEngine::Impl::group_candidates(
       }
     }
   });
+  // Apply the threshold after all members have contributed to the Item score.
   std::vector<Group> groups;
   for (auto& pair : grouped) {
     auto& group = pair.second;
@@ -584,11 +587,13 @@ void CatalogEngine::Impl::group_candidates(
       groups.push_back(std::move(group));
     }
   }
+  // Break ties by UUID so filter-only Items with zero scores have stable order.
   std::sort(groups.begin(), groups.end(),
             [](const Group& left, const Group& right) {
               if (left.score != right.score) return left.score > right.score;
               return left.uuid < right.uuid;
             });
+  // Report the number of eligible Items before enforcing the response limit.
   const auto group_count = groups.size();
   if (groups.size() > static_cast<size_t>(max_groups)) groups.resize(max_groups);
 
@@ -814,6 +819,8 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
   const auto req = parse(request_json);
   const auto op = required_string(req, "op");
   const auto scope = required_string(req, "scope");
+  // Hold the lock across persistence and index updates so concurrent calls
+  // see a consistent Catalog state and revision.
   std::lock_guard<std::mutex> guard(mutex_);
   JsonDoc result(rapidjson::kObjectType);
   auto& allocator = result.GetAllocator();
@@ -1041,6 +1048,9 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
           "Catalog move source and target subtrees must not overlap");
     }
 
+    // Capture source nodes and overwritten targets before committing the move.
+    // If the transfer later fails, these snapshots and the list of created
+    // targets allow the caller to restore the original trees.
     const std::string prefix = scope + '\0' + '/';
     std::vector<std::string> source_keys;
     std::map<std::string, std::string> updates;
@@ -1152,6 +1162,8 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       }
       deletes.push_back(key(scope, uri));
     }
+    // Restore saved nodes and remove move-created targets in one store
+    // transaction before advancing the account revision.
     commit(updates, deletes);
     if (!updates.empty() || !deletes.empty()) {
       scope_revisions_[scope] = ++revision_;
@@ -1189,6 +1201,9 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     throw std::invalid_argument("Unknown Catalog operation: " + op);
   }
 
+  // Report the newer of the account's identity revision and the collection's
+  // inheritance-mode revision. A mode change invalidates every account's
+  // Item snapshot because it changes how membership is resolved.
   put_string(result, "revision", identity_revision(scope),
              allocator);
   return encode(result);
