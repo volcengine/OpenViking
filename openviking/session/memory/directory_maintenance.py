@@ -255,10 +255,14 @@ async def _is_discardable_sidecar(fs, uri: str, name: str, ctx: RequestContext) 
     if name == ".relations.json":
         return json.loads(raw) in ([], {})
     document = parse_abstract_overview(raw)
+    generated_by = document.metadata.get("generated_by", {})
     return (
         not document.legacy
         and not document.is_manual_abstract
-        and document.metadata.get("generated_by", {}).get("component") == "SemanticProcessor"
+        and (
+            generated_by.get("component") == "SemanticProcessor"
+            or generated_by == {"component": "MemoryUpdater", "trigger": "memory_update"}
+        )
     )
 
 

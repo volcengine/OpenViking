@@ -12,6 +12,7 @@ from openviking.session.memory.directory_maintenance import (
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.storage.abstract_overview import render_abstract_overview
 from openviking.storage.viking_fs import VikingFS
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
@@ -128,6 +129,13 @@ async def test_preferences_require_verified_owner_before_any_write(directory_mer
     assert not report.result.deleted_uris
 
     await fs.rm(f"{dst}/wrong.md", ctx=ctx)
+    overview = render_abstract_overview(
+        1,
+        src,
+        "Generated overview",
+        metadata={"generated_by": {"component": "MemoryUpdater", "trigger": "memory_update"}},
+    )
+    await fs.write_file(f"{src}/.overview.md", overview, ctx=ctx)
     report = await merge_memory_directories(plan, registry=registry, vikingdb=None, ctx=ctx)
     assert report.status == "merged"
     assert report.pruned
