@@ -73,10 +73,12 @@ class SessionExtractContextProvider(ExtractContextProvider):
         source_archive_uri: str = "",
         extraction_scope: str = "",
         output_language_override: str | None = None,
+        archive_source_selection_enabled: bool = False,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
         self._source_archive_uri = source_archive_uri
+        self.archive_source_selection_enabled = archive_source_selection_enabled
         self._extraction_scope = extraction_scope
         self._output_language_override = (
             get_openviking_config().output_language_override

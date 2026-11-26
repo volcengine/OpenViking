@@ -386,6 +386,7 @@ class ResolvedOperations(BaseModel):
     errors: List[str]
     resolved_links: List[StoredLink] = Field(default_factory=list)
     delete_replacements: Dict[str, str] = Field(default_factory=dict)
+    archive_source_ranges: List[str] = Field(default_factory=list, exclude=True)
 
     def has_errors(self) -> bool:
         return len(self.errors) > 0

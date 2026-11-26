@@ -111,6 +111,25 @@ Hermes also sends `User-Agent: openviking-memory-hermes/<version>` on
 OpenViking requests. This header contains the Hermes version. It does not
 contain a user identifier or require an extra request.
 
+### Archive-source recall
+
+To expose archive-source search and read tools, enable
+`memory.archive_source_selection_enabled` in the OpenViking server's `ov.conf` and
+add this setting to the Hermes profile's `config.yaml`.
+
+```yaml
+memory:
+  provider: openviking
+  openviking:
+    archive_source_recall_enabled: true
+```
+
+The Hermes setting defaults to `false`. The profile environment variable
+`OPENVIKING_ARCHIVE_SOURCE_RECALL_ENABLED` can override it. The
+`viking_archive_source_search` tool returns original excerpts with a
+`source_ref` that `viking_archive_source_read` accepts to read the archived
+message in context.
+
 ### Extra HTTP headers (authenticating gateways)
 
 A server published behind an authenticating gateway (Cloudflare Access,

@@ -26,6 +26,11 @@ from openviking.message.part import TextPart
 from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFSTimeoutError
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
+from openviking.session.memory.archive_source_ranges import (
+    ArchiveSourceSpan,
+    plain_archive_text,
+    selected_archive_source_indexes,
+)
 from openviking.session.memory.dataclass import (
     MemoryFile,
     MemoryOperationSkipCode,
@@ -80,6 +85,7 @@ class ChunkMeta:
     source_message_id: str
     chunk_index: int
     chunk_count: int
+    start_char: int = 0
 
 
 def _collect_search_tags_by_uri(
@@ -364,6 +370,7 @@ class ExtractContext:
             return [(message, None)]
 
         chunk_messages = []
+        start_char = 0
         for idx, chunk in enumerate(chunks):
             chunk_message = Message(
                 id=f"{message.id}#chunk_{idx}",
@@ -379,10 +386,34 @@ class ExtractContext:
                         source_message_id=message.id,
                         chunk_index=idx,
                         chunk_count=len(chunks),
+                        start_char=start_char,
                     ),
                 )
             )
+            start_char += len(chunk)
         return chunk_messages
+
+    def archive_source_candidates(
+        self, ranges: list[str], original_messages: list[Message]
+    ) -> list[ArchiveSourceSpan]:
+        indexes = selected_archive_source_indexes(ranges, len(self.messages))
+        if not indexes:
+            return []
+        original_by_id = {message.id: message for message in original_messages}
+        candidates = []
+        for index in indexes:
+            message = self.messages[index]
+            text = plain_archive_text(message)
+            chunk = self.chunk_meta.get(id(message))
+            message_id = chunk.source_message_id if chunk else message.id
+            original = original_by_id.get(message_id)
+            if original is None or not text.strip():
+                continue
+            start = chunk.start_char if chunk else 0
+            end = start + len(text)
+            if plain_archive_text(original)[start:end] == text:
+                candidates.append(ArchiveSourceSpan(message_id, start, end))
+        return candidates
 
     @classmethod
     def _split_text_for_extraction(cls, text: str) -> List[str]:
