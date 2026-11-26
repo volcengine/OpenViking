@@ -141,8 +141,8 @@ def _credential_digest(api_key: str) -> str:
     appropriate for these keys and must stay stable for existing credentials,
     including encrypted credentials whose lookup index uses the same digest.
     """
-    # CodeQL classifies API keys as passwords; suppress only this token-hashing false positive.
-    # codeql[py/weak-sensitive-data-hashing]
+    # This token-digest exception is checked by .github/scripts/codeql_token_digest.py.
+    # CodeQL token-digest exception: py/weak-sensitive-data-hashing
     return hashlib.sha256(api_key.encode()).hexdigest()
 
 

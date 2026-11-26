@@ -18,7 +18,9 @@ jobs:
         fetch-depth: 0
 
     - name: Test CodeQL language selection
-      run: python3 -m unittest discover -s tests/misc -p test_codeql_selection.py
+      run: |
+        python3 -m unittest discover -s tests/misc -p test_codeql_selection.py
+        python3 -m unittest discover -s tests/misc -p test_codeql_token_digest.py
 
     - name: Select changed languages
       id: select
@@ -118,4 +120,28 @@ jobs:
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
       with:
+        category: "/language:${{ matrix.language }}"
+        output: codeql-results
+        # Successful Python results are source-checked before upload.
+        upload: ${{ matrix.language == 'python' && 'failure-only' || 'always' }}
+
+    - name: Preserve original Python CodeQL results
+      if: always() && matrix.language == 'python'
+      uses: actions/upload-artifact@v4
+      with:
+        name: codeql-original-python-${{ github.run_id }}-${{ github.run_attempt }}
+        path: codeql-results/*.sarif
+        retention-days: 14
+
+    - name: Apply reviewed API-token digest exception
+      if: matrix.language == 'python'
+      run: |
+        python3 .github/scripts/codeql_token_digest.py \
+          --input codeql-results --output codeql-upload
+
+    - name: Upload Python CodeQL results
+      if: matrix.language == 'python'
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: codeql-upload
         category: "/language:${{ matrix.language }}"
