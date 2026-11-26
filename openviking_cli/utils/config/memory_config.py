@@ -21,11 +21,11 @@ class SessionAutoCommitConfig(BaseModel):
             "started. When disabled, neither happens."
         ),
     )
-    idle_backend: Literal["local", "redis"] = Field(
+    idle_backend: Literal["local", "sqlite", "redis"] = Field(
         default="local",
         description=(
             "Idle timeout discovery backend. 'local' scans session metadata; "
-            "'redis' uses distributed expiry scheduling."
+            "'sqlite' indexes idle candidates locally; 'redis' uses distributed expiry scheduling."
         ),
     )
     check_interval_seconds: float = Field(default=600.0, gt=0)

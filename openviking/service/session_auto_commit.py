@@ -9,7 +9,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.observability.log_safety import safe_path_for_log, short_hash
 from openviking.pyagfs import AsyncAGFSClient
@@ -21,6 +21,9 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from openviking.service.session_idle_sqlite import SQLiteSessionIdleIndex
 
 SESSION_META_SUFFIX = "/.meta.json"
 AGFS_SESSION_SCAN_ROOT = "/local"
@@ -36,6 +39,7 @@ class SessionAutoCommitScheduler:
         *,
         check_interval: Optional[float] = None,
         sleep: Any = asyncio.sleep,
+        idle_index: Optional["SQLiteSessionIdleIndex"] = None,
     ):
         self._session_service = session_service
         self._config = config
@@ -53,10 +57,17 @@ class SessionAutoCommitScheduler:
         self._task: Optional[asyncio.Task] = None
         self._agfs_client: Optional[AsyncAGFSClient] = None
         self._scan_failures = 0
+        self._idle_index = idle_index
+
+    async def open(self) -> None:
+        """Open the idle index for every host role, including writer-only processes."""
+        if self._idle_index is not None:
+            await self._idle_index.start()
 
     async def start(self) -> None:
         if self._running:
             return
+        await self.open()
         self._running = True
         logger.info(
             "session auto-commit scheduler started check_interval_seconds=%.3f",
@@ -73,6 +84,12 @@ class SessionAutoCommitScheduler:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+    async def close(self) -> None:
+        """Stop the loop and release the idle index."""
+        await self.stop()
+        if self._idle_index is not None:
+            await self._idle_index.close()
 
     async def _run_loop(self) -> None:
         while self._running:
@@ -102,6 +119,9 @@ class SessionAutoCommitScheduler:
                     break
 
     async def _scan_once(self) -> None:
+        if self._idle_index is not None:
+            await self._scan_index_once()
+            return
         self._scan_failures = 0
         now = datetime.now(timezone.utc)
         scanned = 0
@@ -143,6 +163,49 @@ class SessionAutoCommitScheduler:
                 due,
                 scheduled,
             )
+
+    async def _scan_index_once(self) -> None:
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        retry_at_ms = now_ms + max(1, int(self._check_interval * 1000))
+        # Defer every examined row so busy sessions cannot starve later pages.
+        while registrations := await self._idle_index.due(now_ms):
+            for registration in registrations:
+                ctx = RequestContext(
+                    user=UserIdentifier(
+                        account_id=registration.account_id, user_id=registration.user_id
+                    ),
+                    role=Role.USER,
+                )
+                try:
+                    await self._pace_scan_read()
+                    session = await self._session_service.get(registration.session_id, ctx)
+                    meta = session.meta.to_dict()
+                    timeout = get_idle_timeout_seconds(meta.get("auto_commit_policy"))
+                    if timeout is None or not has_idle_uncommitted_content(meta):
+                        await self._idle_index.remove(registration)
+                        continue
+                    next_check = compute_next_check_at(meta.get("last_message_at", ""), timeout)
+                    next_ms = (
+                        int(parse_iso_datetime(next_check).timestamp() * 1000)
+                        if next_check
+                        else retry_at_ms
+                    )
+                    await self._session_service.maybe_schedule_auto_commit(
+                        registration.session_id, ctx, reason_hint="idle_timeout", session=session
+                    )
+                    # Scheduling may skip or the task may fail after reloading.
+                    # Retain the hint until a scan observes empty/disabled/deleted state.
+                    await self._idle_index.defer(registration, max(retry_at_ms, next_ms))
+                except Exception as exc:
+                    if is_not_found_error(exc):
+                        await self._idle_index.remove(registration)
+                    else:
+                        logger.warning(
+                            "session idle candidate check failed error_type=%s",
+                            type(exc).__name__,
+                            extra={"degraded": True},
+                        )
+                        await self._idle_index.defer(registration, retry_at_ms)
 
     async def _pace_scan_read(self) -> None:
         if self._min_read_interval <= 0:

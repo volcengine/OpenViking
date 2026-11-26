@@ -12,6 +12,7 @@ import asyncio
 import inspect
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
@@ -85,6 +86,7 @@ if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
     from openviking.scheduling.expiry.runtime import ExpiryRuntime
     from openviking.server.config import ServerConfig, UserConfigDefaults
+    from openviking.service.session_idle_sqlite import SQLiteSessionIdleIndex
     from openviking.session.compressor_v3 import SessionCompressorV3
     from openviking.ttl.adapter import TTLAdapter
 
@@ -772,12 +774,24 @@ class OpenVikingService:
         self._session_service.set_session_auto_commit_config(session_auto_commit_config)
         if (
             session_auto_commit_config.enabled
-            and getattr(session_auto_commit_config, "idle_backend", "local") == "local"
+            and getattr(session_auto_commit_config, "idle_backend", "local") in {"local", "sqlite"}
         ):
+            idle_index: Optional["SQLiteSessionIdleIndex"] = None
+            if session_auto_commit_config.idle_backend == "sqlite":
+                from openviking.service.session_idle_sqlite import (
+                    SQLiteIdleReporter,
+                    SQLiteSessionIdleIndex,
+                )
+
+                idle_index = SQLiteSessionIdleIndex(
+                    str(Path(self._config.storage.workspace) / "_system" / "session_idle.db"),
+                )
+                self._session_service.set_session_idle_reporter(SQLiteIdleReporter(idle_index))
             self._session_auto_commit_scheduler = SessionAutoCommitScheduler(
                 self._session_service,
                 session_auto_commit_config,
                 check_interval=session_auto_commit_config.check_interval_seconds,
+                idle_index=idle_index,
             )
         else:
             self._session_auto_commit_scheduler = None
@@ -900,6 +914,8 @@ class OpenVikingService:
         config = get_openviking_config()
         expiry_config = config.expiry
         idle = config.memory.session_auto_commit
+        if self._session_auto_commit_scheduler is not None:
+            await self._session_auto_commit_scheduler.open()
         session_expiry_enabled = idle.enabled and idle.idle_backend == "redis"
         compile_expiry_enabled = self._compile_scheduler is not None
         ttl_expiry_enabled = self._ttl_adapter is not None and self._ttl_adapter.supports_config()
@@ -1109,6 +1125,9 @@ class OpenVikingService:
         """Release core storage after execution and host dependencies have closed."""
         if self._initialized or self._background_prepared:
             raise RuntimeError("Drain execution before releasing service storage")
+        if self._session_auto_commit_scheduler is not None:
+            self._session_service.set_session_idle_reporter(None)
+            await self._session_auto_commit_scheduler.close()
         vlm_resolver = getattr(self, "_vlm_resolver", None)
         self._compile_scheduler = None
         self._watch_runtime = None

@@ -62,7 +62,9 @@ if TYPE_CHECKING:
     from openviking.config.vlm import VLMResolver
     from openviking.scheduling.expiry import ExpiryScheduler
     from openviking.service.session_expiry import SessionExpiryAdapter
+    from openviking.service.session_idle_sqlite import SQLiteIdleReporter
     from openviking.session.compressor_v3 import SessionCompressorV3
+    from openviking.session.session import SessionExpiryReporter
     from openviking.usage_reporter import UsageReporter
 
 
@@ -96,6 +98,15 @@ class SessionService:
         # Strong refs so spawned tasks aren't GC'd mid-await.
         self._auto_commit_tasks: set[asyncio.Task] = set()
         self._session_expiry_adapter: Optional["SessionExpiryAdapter"] = None
+        self._session_idle_reporter: Optional["SQLiteIdleReporter"] = None
+
+    def set_session_idle_reporter(self, reporter: Optional["SQLiteIdleReporter"]) -> None:
+        self._session_idle_reporter = reporter
+
+    @property
+    def _idle_reporter(self) -> Optional["SessionExpiryReporter"]:
+        """The SQLite idle reporter, or the expiry adapter when the redis backend is active."""
+        return self._session_idle_reporter or self._session_expiry_adapter
 
     def configure_expiry(
         self,
@@ -257,7 +268,7 @@ class SessionService:
             usage_reporter=self._usage_reporter,
             vlm_resolver=self._vlm_resolver,
             runtime_config_manager=self._runtime_config_manager,
-            expiry_reporter=self._session_expiry_adapter,
+            expiry_reporter=self._idle_reporter,
             privacy_config_service=self._privacy_config_service,
             privacy_sanitizer=self._privacy_sanitizer,
         )
