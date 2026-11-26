@@ -117,7 +117,10 @@ export function CompileScheduleTarget({
     ? `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`
     : ''
   const nextRun = parseTime(target.next_triggered_slot)
-  const lastRun = parseTime(target.last_run_time)
+  const lastRun =
+    target.last_run_time == null
+      ? null
+      : new Date(target.last_run_time * 1000)
   const formatTime = (value: Date) =>
     value.toLocaleString(i18n.language, { timeZone: SCHEDULE_TIME_ZONE })
 

@@ -29,8 +29,9 @@ export type CompileConfig = {
   args: Record<string, unknown> | null
   auto_update: boolean
   update_schedule: UpdateSchedule | null
-  task_first_create_time: string | null
-  last_run_time: string | null
+  // Unix seconds, as stored on the task records.
+  task_first_create_time: number | null
+  last_run_time: number | null
   last_triggered_slot: string | null
   next_triggered_slot: string | null
 }
