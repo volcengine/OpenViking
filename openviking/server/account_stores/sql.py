@@ -134,7 +134,15 @@ def _substring_pattern(value: str) -> str:
 
 
 def _credential_digest(api_key: str) -> str:
-    """Return the lookup digest for a high-entropy API key."""
+    """Return the persisted lookup digest for a high-entropy API key.
+
+    Server-issued keys contain a 256-bit random secret; seeded issuance requires
+    a high-entropy seed. This is a token digest, not a password hash. SHA-256 is
+    appropriate for these keys and must stay stable for existing credentials,
+    including encrypted credentials whose lookup index uses the same digest.
+    """
+    # CodeQL classifies API keys as passwords; suppress only this token-hashing false positive.
+    # codeql[py/weak-sensitive-data-hashing]
     return hashlib.sha256(api_key.encode()).hexdigest()
 
 
