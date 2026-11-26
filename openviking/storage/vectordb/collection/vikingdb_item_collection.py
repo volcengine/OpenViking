@@ -5,6 +5,7 @@
 from typing import Any, Dict, List, Optional
 
 from .vikingdb_catalog import CATALOG_LEVEL, VikingDBCatalog, catalog_mode, is_account_sharded
+from .vikingdb_query_scope import is_search_or_agg, with_account_partition
 
 
 class VikingDBItemCollectionMixin:
@@ -23,23 +24,13 @@ class VikingDBItemCollectionMixin:
     def _prepare_data_request(
         self, path: str, data: Dict[str, Any], *, include_catalog: bool = False
     ) -> Dict[str, Any]:
-        is_search = path.startswith("/api/vikingdb/data/search/")
-        is_query = is_search or path == "/api/vikingdb/data/agg"
+        is_query = is_search_or_agg(path)
         meta = self._item_metadata()
-        if meta is None or is_account_sharded(meta):
-            if is_query:
-                from .vikingdb_item_search import _partition_values
-
-                scopes = _partition_values(data.get("filter"))
-                scope = scopes.pop() if len(scopes) == 1 else None
-                partition_key = "partition"
-                if (scope is None and meta is not None) or (
-                    scope is not None and data.get(partition_key, scope) != scope
-                ):
-                    raise ValueError("VikingDB partitioned queries require one account_id scope")
-                if scope is not None:
-                    data = {**data, partition_key: scope}
-            elif (
+        account_sharded = meta is not None and is_account_sharded(meta)
+        if is_query:
+            data = with_account_partition(data, require_scope=account_sharded)
+        elif meta is None or account_sharded:
+            if (
                 meta is not None
                 and ("ids" in data or path.endswith("/update"))
                 and not data.get("partition_by")

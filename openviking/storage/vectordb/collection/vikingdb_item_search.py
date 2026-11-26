@@ -9,25 +9,7 @@ from typing import Any
 
 from openviking.storage.errors import VikingDBException
 from openviking.storage.vectordb.collection.vikingdb_catalog import catalog_mode
-
-
-def _partition_values(condition: Any) -> set[str]:
-    """Only unconditional equality predicates can establish the account scope."""
-    if not isinstance(condition, dict):
-        return set()
-    if condition.get("op") == "and":
-        return set().union(*(_partition_values(c) for c in condition.get("conds", [])))
-    values = condition.get("conds")
-    if (
-        condition.get("op") == "must"
-        and condition.get("field") == "account_id"
-        and isinstance(values, list)
-        and len(values) == 1
-        and isinstance(values[0], str)
-        and values[0]
-    ):
-        return {values[0]}
-    return set()
+from openviking.storage.vectordb.collection.vikingdb_query_scope import account_partition_values
 
 
 def build_item_group_request(
@@ -62,7 +44,7 @@ def build_item_group_request(
             raise NotImplementedError(
                 "The VikingDB group_by protocol currently requires union inheritance"
             )
-    partitions = _partition_values(filters)
+    partitions = account_partition_values(filters)
     if len(partitions) != 1:
         raise ValueError("VikingDB Item search requires one unconditional account_id equality")
     request = {

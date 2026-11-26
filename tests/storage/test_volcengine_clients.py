@@ -6,6 +6,10 @@ from volcengine.base.Request import Request
 
 from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
+from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+    VolcengineApiKeyCollection,
+)
 from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForConsoleApi,
     ClientForDataApi,
@@ -22,6 +26,68 @@ from openviking_cli.utils.config.vectordb_config import (
     VectorDBBackendConfig,
     VolcengineConfig,
 )
+
+
+@pytest.mark.parametrize("backend", ["private", "private_legacy", "api_key", "signed"])
+def test_vikingdb_searches_and_aggregation_preserve_account_filter_and_add_partition(backend):
+    meta = {"CollectionName": "context"}
+    if backend == "private":
+        meta["ShardBy"] = "account_id"
+    if backend.startswith("private"):
+        collection = VikingDBCollection("https://unused.invalid", meta_data=meta)
+    elif backend == "api_key":
+        collection = VolcengineApiKeyCollection("test-key", host="unused.invalid", meta_data=meta)
+    else:
+        collection = VolcengineCollection("test-ak", "test-sk", "cn-beijing", meta_data=meta)
+
+    calls = []
+
+    def record(method, path, *, req_body):
+        calls.append((method, path, req_body))
+        return SimpleNamespace(status_code=200, json=lambda: {"result": {}})
+
+    if backend.startswith("private"):
+        collection.client = SimpleNamespace(do_req=record)
+    else:
+        collection.data_client = SimpleNamespace(do_req=record)
+
+    account = {"op": "must", "field": "account_id", "conds": ["tenant-a"]}
+    other_filter = {"op": "must_not", "field": "level", "conds": [0]}
+    filters = {"op": "and", "conds": [account, other_filter]}
+    collection.search_by_vector("index", dense_vector=[1.0], filters=filters)
+    collection.search_by_id("index", id="record", filters=filters)
+    collection.search_by_multimodal("index", text="match", filters=filters)
+    collection.search_by_random("index", filters=filters)
+    collection.search_by_keywords("index", query="match", filters=filters)
+    collection.search_by_scalar("index", field="level", filters=filters)
+    collection.aggregate_data("index", filters=filters)
+
+    assert [path.rsplit("/", 1)[-1] for _, path, _ in calls] == [
+        "vector",
+        "id",
+        "multi_modal",
+        "random",
+        "keywords",
+        "scalar",
+        "agg",
+    ]
+    for _, _, body in calls:
+        assert body["partition"] == "tenant-a"
+        assert "partition_by" not in body
+        if backend == "api_key":
+            # The API-key client already adds the Catalog exclusion.
+            assert body["filter"]["conds"][0] == filters
+        else:
+            assert body["filter"] == filters
+
+    if backend != "private":
+        cross_account = {
+            "op": "or",
+            "conds": [account, {"op": "must", "field": "account_id", "conds": ["tenant-b"]}],
+        }
+        collection.aggregate_data("index", filters=cross_account)
+        assert calls[-1][2]["filter"] == cross_account
+        assert "partition" not in calls[-1][2]
 
 
 def test_console_client_prepare_request_includes_session_token():
