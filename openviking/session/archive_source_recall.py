@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext
 from openviking.session.archive_store import ArchiveStore
-from openviking.storage.archive_source import is_archive_source_uri
+from openviking.storage.archive_source import archive_source_hit, is_archive_source_uri
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
@@ -97,24 +97,37 @@ async def search_archive_sources(
         limit=limit,
         ctx=ctx,
     )
-    sources = []
+    visible = await visible_archive_source_hits(fs, hits, ctx)
+    return {"sources": [archive_source_hit(hit) for hit in visible]}
+
+
+async def visible_archive_source_hits(
+    fs: "VikingFS", hits: list[dict[str, Any]], ctx: RequestContext
+) -> list[dict[str, Any]]:
+    """Validate the archived bytes and apply read-time visibility to recalled excerpts."""
     selected_by_uri: dict[str, set[str]] = {}
-    seen = set()
+    sources = []
     for hit in hits:
-        source_uri, excerpt = hit["source_uri"], hit["excerpt"]
+        source_uri, excerpt = hit.get("uri"), hit.get("abstract")
         if not isinstance(source_uri, str) or not isinstance(excerpt, str):
             continue
-        key = (source_uri, excerpt)
-        if key in seen:
-            continue
-        seen.add(key)
         try:
             if source_uri not in selected_by_uri:
                 selected_by_uri[source_uri] = await _selected_excerpts(fs, source_uri, ctx)
             if excerpt not in selected_by_uri[source_uri]:
                 continue
-            visible = await fs_service.make_visible(source_uri, excerpt, ctx)
+
+            read_ctx = fs.authorize_read(ctx, [source_uri])
+            sanitizer = fs._privacy_sanitizer
+            if sanitizer is not None and read_ctx.data_access is None:
+                settings = await sanitizer.settings_for_uri(source_uri, read_ctx)
+                if settings is not None:
+                    excerpt = (
+                        await sanitizer.sanitize(
+                            excerpt, ctx=read_ctx, uri=source_uri, settings=settings
+                        )
+                    ).content
         except (InvalidArgumentError, NotFoundError, PermissionDeniedError, ResourceExhaustedError):
             continue
-        sources.append({"excerpt": visible, "source_uri": source_uri, "score": hit["score"]})
-    return {"sources": sources}
+        sources.append({**hit, "abstract": excerpt})
+    return sources

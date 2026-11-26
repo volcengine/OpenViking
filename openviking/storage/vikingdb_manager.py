@@ -444,6 +444,7 @@ class VikingDBManagerProxy:
         offset: int = 0,
         events_time_decay_protection: Optional[str] = None,
         request_now: Optional[datetime] = None,
+        include_archive_sources: bool = False,
     ) -> List[Dict[str, Any]]:
         kwargs: Dict[str, Any] = {
             "query_vector": query_vector,
@@ -460,6 +461,8 @@ class VikingDBManagerProxy:
                 events_time_decay_protection=events_time_decay_protection,
                 request_now=request_now,
             )
+        if include_archive_sources:
+            kwargs["include_archive_sources"] = True
         return await self._manager.search_in_tenant(self._ctx, **kwargs)
 
     async def search_by_keywords_in_tenant(

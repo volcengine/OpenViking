@@ -50,7 +50,6 @@ from openviking.storage.acl import (
 from openviking.storage.archive_source import (
     ARCHIVE_SOURCE_RECORD_TYPE,
     archive_source_exclusion,
-    archive_source_hit,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, Range, RawDSL
 from openviking.storage.scope_filter import build_scope_filter, merge_filters
@@ -84,6 +83,7 @@ _LOCAL_PURE_DENSE_SCORE_SCALES = {
 
 RETRIEVAL_OUTPUT_FIELDS = [
     "uri",
+    "type",
     "level",
     "context_type",
     "abstract",
@@ -2077,7 +2077,7 @@ class VikingVectorIndexBackend:
             limit=limit,
             output_fields=["uri", "abstract"],
         )
-        return [archive_source_hit(record) for record in records]
+        return records
 
     async def search_in_tenant(
         self,
@@ -2092,6 +2092,7 @@ class VikingVectorIndexBackend:
         offset: int = 0,
         events_time_decay_protection: Optional[str] = None,
         request_now: Optional[datetime] = None,
+        include_archive_sources: bool = False,
     ) -> List[Dict[str, Any]]:
         acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
@@ -2102,7 +2103,22 @@ class VikingVectorIndexBackend:
             level=level,
             acl_enabled=acl_enabled,
         )
-        scope_filter = merge_filters(scope_filter, archive_source_exclusion(context_type))
+        source_filter = archive_source_exclusion(context_type)
+        if source_filter is not None and include_archive_sources:
+            source_filter = Or(
+                [
+                    source_filter,
+                    And(
+                        [
+                            Eq("type", ARCHIVE_SOURCE_RECORD_TYPE),
+                            Eq("account_id", ctx.account_id),
+                            Eq("owner_user_id", ctx.user.user_id),
+                            PathScope("uri", canonical_session_root(ctx), depth=-1),
+                        ]
+                    ),
+                ]
+            )
+        scope_filter = merge_filters(scope_filter, source_filter)
         if events_time_decay_protection is not None:
             parse_duration_ms(
                 events_time_decay_protection, parameter_name="events_time_decay_protection"

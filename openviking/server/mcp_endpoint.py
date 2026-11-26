@@ -95,6 +95,7 @@ from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.session import history as _history
 from openviking.session.archive_source_recall import search_archive_sources
 from openviking.storage.acl import AclSpec
+from openviking.storage.archive_source import ARCHIVE_SOURCE_RECORD_TYPE
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking.utils.search_filters import resolve_context_types
 from openviking.utils.skill_processor import SkillProcessor
@@ -1112,7 +1113,7 @@ async def _describe_skills_by_package(items: List[Dict[str, Any]], *, service, c
 
 async def _format_search_result(result, *, service, ctx, read_content: bool = False) -> str:
     items: List[Dict[str, Any]] = []
-    seen: dict[str, int] = {}
+    seen: dict[tuple[str, str | None], int] = {}
     for ctx_type, contexts in [
         ("memory", result.memories),
         ("resource", result.resources),
@@ -1131,12 +1132,18 @@ async def _format_search_result(result, *, service, ctx, read_content: bool = Fa
                 "time_score": getattr(m, "time_score", None),
             }
             # Several files of one skill package can match; keep the best-scored hit.
-            previous = seen.get(uri)
+            excerpt = (
+                item["abstract"]
+                if getattr(m, "category", "") == ARCHIVE_SOURCE_RECORD_TYPE
+                else None
+            )
+            key = (uri, excerpt)
+            previous = seen.get(key)
             if previous is not None:
                 if item["score"] > items[previous]["score"]:
                     items[previous] = item
                 continue
-            seen[uri] = len(items)
+            seen[key] = len(items)
             items.append(item)
 
     if not items:
