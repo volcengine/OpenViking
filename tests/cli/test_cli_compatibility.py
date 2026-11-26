@@ -16,7 +16,8 @@ pytestmark = pytest.mark.cli_remote
 class TestCLIBinaryAvailability:
     def test_binary_exists(self):
         assert CLI_BIN is not None, (
-            "openviking CLI binary should be found. Install via: npm install -g @openviking/cli"
+            "openviking CLI binary should be found. "
+            "Install via: curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash"
         )
 
     def test_binary_is_executable(self):
