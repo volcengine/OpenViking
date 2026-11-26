@@ -26,5 +26,15 @@
   {"feature":"working_memory_opt_in","version":"unknown","supported":false},
   {"feature":"working_memory_opt_in","version":"","supported":false},
   {"feature":"working_memory_opt_in","version":null,"supported":false},
-  {"feature":"working_memory_opt_in","version":57,"supported":false}
+  {"feature":"working_memory_opt_in","version":57,"supported":false},
+  {"feature":"privacy_seal","version":"0.5.7","supported":true},
+  {"feature":"privacy_seal","version":"0.5.7.dev44","supported":true},
+  {"feature":"privacy_seal","version":"0.5.7rc1","supported":true},
+  {"feature":"privacy_seal","version":"0.5.7.post2","supported":true},
+  {"feature":"privacy_seal","version":"0.5.10","supported":true},
+  {"feature":"privacy_seal","version":"1.0","supported":true},
+  {"feature":"privacy_seal","version":"0.5.6","supported":false},
+  {"feature":"privacy_seal","version":"0.5.6.post1","supported":false},
+  {"feature":"privacy_seal","version":"0.5.6.dev99","supported":false},
+  {"feature":"privacy_seal","version":"0.5","supported":false}
 ]

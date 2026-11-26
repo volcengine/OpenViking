@@ -101,8 +101,12 @@ skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV 格式的 sed 风格正则规则，作用于每个被捕获的回合（同一套语法） |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | 强制开启或关闭插件 |
 | `OPENVIKING_DEBUG` | `false` | 将调试日志输出至 `~/.openviking/logs/cc-hooks.log` |
+| `OPENVIKING_SEAL_SECRETS` | `false` | 把密钥从模型看到的内容中封存（`sealSecrets`；需要 OpenViking 服务端 0.5.7 或更新版本） |
+| `OPENVIKING_ENROLL_TOOL_SECRETS` | `false` | 开启 `sealSecrets` 时，工具输出中的新密钥也登记（`enrollToolSecrets`） |
 
 这些配置大多也可以写在 `ovcli.conf` 的 `plugin` 段下——见[插件配置](../configuration/02-client.md#插件配置)。两个过滤器建议使用 JSON 数组，避免环境变量中的逗号被当作分隔符。
+
+密钥封存见[封存密钥](#seal-secrets)。
 
 如果更看重召回响应速度，请参阅[低延迟召回](./01-overview.md#低延迟召回)，其中说明了如何通过环境变量或 `ovcli.conf` 关闭查询扩展与结果压缩。
 
@@ -125,6 +129,23 @@ skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 
 插件会在每次回答下方加一行卡片，列出这次回答用到的 OpenViking 来源：自动召回加进提示的内容，以及 Claude 自己搜索、读取的内容。例如 `OV · 8 sources · 4 past events · 3 work memories · 1 team doc · 1 read in full  [Expand]`。用卡片上的按钮展开单张卡片，或用 `/openviking-usage expand`、`/openviking-usage collapse` 展开或折叠全部卡片。卡片默认折叠。
 
 卡片需要 Claude Code 2.1.286 或更高版本，并启用插件 hooks 模块。版本更早或模块未启用时不显示卡片，召回、捕获等 hook 照常工作。详见插件 README 的[来源卡片](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#来源卡片)。
+
+## 封存密钥 {#seal-secrets}
+
+开启 `sealSecrets` 后，插件会把 OpenViking 服务端已知的密钥在 Claude 读到的内容里换成 <code v-pre>{{ov_privacy:…}}</code> 引用，交给工具时再换回真值。默认关闭，需要 OpenViking 服务端 0.5.7 或更新版本。它运行在你的机器上。
+
+| 设置 | 环境变量 | 默认值 | 作用 |
+|------|----------|--------|------|
+| `sealSecrets` | `OPENVIKING_SEAL_SECRETS` | `false` | 开启封存 |
+| `enrollToolSecrets` | `OPENVIKING_ENROLL_TOOL_SECRETS` | `false` | 工具输出中的新密钥也登记 |
+
+这几项写在 `ovcli.conf`（见插件 README）或环境变量里；改动在新 session 中生效。封存由插件的 hooks 模块执行，所以要求与[来源卡片](#来源卡片)相同；没有加载该模块时不会封存任何内容。
+
+- **封存的内容**：你的提示词、工具结果，以及 Claude Code 附带的文件、提醒和 hook 上下文。新密钥从提示词中登记；工具结果中的新密钥只在开启 `enrollToolSecrets` 时登记。Claude 在工具调用里写下的引用，在工具运行前换成真值。本机对话记录里，提示词和工具结果存的是引用；附带的文件和提醒保留 Claude Code 自己的记录，即原文。
+- **无法封存时**（服务端低于 0.5.7，`/health`、封存或解析请求失败）会拦下：提示词不会发出，工具结果被扣下，引用解析不了的工具调用不会运行。提示里会说明原因。升级服务端或恢复连接，或者关闭 `sealSecrets`。
+- **覆盖不到的内容**：系统提示词、斜杠命令参数、skill 正文，以及开启封存之前写下的历史。
+
+详见[插件 README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README_CN.md#封存密钥)。
 
 ## 故障排查
 

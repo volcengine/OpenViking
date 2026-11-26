@@ -151,11 +151,6 @@ test("every shared module is reachable from some plugin", async () => {
   // cursor, trae and zcode vendor nothing: the installer assembles their
   // runtime instead, so they claim through the manifest it reads.
   for (const entry of await assembledClosure()) claimed.add(entry);
-  // The plugin reader of the server feature table: the gateway reads the same
-  // table today. Its first consumer is the privacy seal change, whose plugins
-  // import server-features.mjs for featureStatus and healthVersion; that change
-  // removes this entry.
-  claimed.add("server-features.mjs");
   const files = (await readdir(SHARED_DIR)).filter((file) => file.endsWith(".mjs")).sort();
   assert.deepEqual(
     files.filter((file) => !claimed.has(file)),
