@@ -303,17 +303,21 @@ OV session already holds.
 
 ### Race: concurrent writers of the same state file
 
-The `Stop` worker, `PreCompact`, the `SessionEnd` worker and the sweep all
+The `Stop` worker, `PreCompact`, the `SessionEnd` worker, the sweep and the
+current-session peer initializer in `SessionStart` all
 persist the whole state object, so without serialization the last writer
-wins and can resurrect a committed `ovSessionId` or rewind the cursor. All
-four therefore run under `withSessionLock`, and all four load state *inside*
+wins and can resurrect a committed `ovSessionId` or rewind the cursor. These
+writers therefore run under `withSessionLock`, and load state *inside*
 the lock. The lock is a directory (`mkdir` is atomic on every platform we
 run on); a holder that dies leaves a lock that is abandoned once its mtime
 is `staleMs` (5 min) old, and a live holder refreshes the mtime from the
 batch-send callback so a long catch-up never looks stale. Wait budgets:
 120s for the `Stop` and `SessionEnd` workers, 40s for `PreCompact` (which
 must still answer inside its 60s hook budget, and on timeout emits `{}` and
-touches nothing), and 0 for the sweep.
+touches nothing), and 0 for the sweep and peer initialization. If the current
+session is already locked, `SessionStart` leaves its state and existing peer
+pin untouched; profile injection for the current workspace and the sweep
+still proceed.
 
 Ownership makes the lock safe to abandon. The holder writes an `owner` file
 inside the directory containing `<pid>:<uuid>`, and only releases (or
