@@ -195,6 +195,70 @@ Select **DingTalk (group bot)** and an owner-capable IM in `ov-superagent setup`
 
 Setup prompts for the app's AppKey, AppSecret (hidden input) and optional RobotCode (defaults to AppKey). It validates the credentials and writes `<dataDir>/dingtalk.json` for the daemon's account. For manual provisioning, create that private file with `clientId`, `clientSecret` and an optional `robotCode`, then include `dingtalk` in `connectors`. To rotate credentials, run `ov-superagent login dingtalk [instance]` for the existing instance.
 
+For a DWS pilot, install DingTalk Workspace CLI 1.0.69 in the Connector's
+execution environment and authorize the dedicated user's profile with
+`dws auth login --device`. Put the group policy in
+`<dataDir>/dingtalk-policy.json`. This file contains routes and identity
+identifiers. DWS retains the user credential in its own profile store.
+
+```json
+{
+  "dws": {
+    "cliBin": "dws",
+    "profile": "corpId:userId",
+    "tenantId": "corpId",
+    "robotOpenId": "robot-sender-open-id-as-seen-by-dws"
+  },
+  "groups": {
+    "authorizedOpenConversationId": { "channel": "dws", "strategy": "ambient" },
+    "disabledOpenConversationId": { "channel": "off" }
+  }
+}
+```
+
+Use a group joined by both the DWS user and the robot. `tenantId` should match
+`chatbotCorpId` from the original Stream events to keep the Core conversation
+key when changing routes. `robotOpenId` is the robot's sender identifier in
+the DWS payload, used to suppress its outgoing echoes. Use an executable path
+for `cliBin` when the instance cannot resolve the binary on PATH.
+Copy the exact `corpId:userId` selector from DWS. Display names and
+organization-only selectors may resolve to a different account over time;
+pending messages are scoped to the configured selector.
+
+Unlisted groups keep Stream mention-only reception. Set "defaultChannel": "off" in the policy to apply only explicitly configured group routes in a pilot.
+An explicit DWS route
+opens one targeted group subscription. Change that group's route to
+`{"channel":"stream","strategy":"mention"}` and restart the instance to roll
+it back. `{"channel":"off"}` blocks both inbound processing and robot sends for
+that group. The route is checked again before forwarding persisted messages.
+
+With DWS `ambient`, ordinary messages are staged and released in batches.
+With DWS `mention`, they remain context until an addressed event is released.
+The flattened 1.0.69 schema provides structured quoted-sender identity and no
+structured bot mention list. The current addressed path recognizes replies
+quoting the bot in the same group. Explicit bot mentions require a verified
+provider field before they can trigger immediate release. Both strategies use
+robot OpenAPI by default. In this mode, a reply is a new group message.
+
+For opt-in personal sending, add `"sendAs": "user"` and `"userOpenId"` to
+the `dws` object. Set `userOpenId` to the authenticated account's open
+DingTalk ID as represented in DWS events. Personal sends and quoted replies
+reuse the Core idempotency key and wait for a DWS receipt. Confirmed Agent
+sends are matched to incoming echoes by message ID. Other messages from the
+same account are staged as context. A failed DWS user send stays on the user
+route. Stream groups retain robot sending.
+
+Set `"allGroups": true` under `dws` to subscribe to all group messages visible
+to this profile with one consumer. This setting authorizes the instance to
+process unlisted groups in DWS ambient mode. Explicit `off` and `stream`
+routes still apply. Leave `allGroups` disabled to limit DWS to explicitly
+configured DWS groups. Pending DWS messages belong to the configured profile
+and are discarded when the profile changes. A personal-only configuration
+with zero Stream routes uses the DWS profile and requires no robot credentials
+at runtime. The installation UI still provisions DingTalk as a secondary
+connector. The Core's reply, task and authorization policies continue to apply
+in both modes. DWS reconnect does not establish missed-event replay.
+
 Mention the bot in a group text message to test delivery. Group replies are Markdown, and native timers can send Markdown to the original group. See [DingTalk](connector-protocol.md#dingtalk) for message ids and persistence.
 
 ## Managing instances with setup

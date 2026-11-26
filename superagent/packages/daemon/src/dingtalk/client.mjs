@@ -5,15 +5,20 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DWClient, TOPIC_ROBOT } from 'dingtalk-stream';
 import { safeError } from '../logger.mjs';
-import { chatId, normalizeMessage, parseChatId, parseMessageId } from './events.mjs';
+import { CONTEXT_AGE_MS } from '../onebot/gate.mjs';
+import { chatId, normalizeDwsMessage, messageId, normalizeMessage, parseChatId, parseMessageTarget } from './events.mjs';
+import { requestDingTalk, sendGroup } from './api.mjs';
+import { checkDws, DwsSubscription, sendDws } from './dws.mjs';
+import { DingTalkGate } from './gate.mjs';
+import { classifyDws, loadPolicy, parsePolicy } from './policy.mjs';
 import { DingTalkState } from './state.mjs';
 
-const API = 'https://api.dingtalk.com/v1.0';
 // The SDK reconnects a dropped Stream by itself, every second and silently.
 // One that stays down this long (a reset secret, a disabled app, no network)
-// is reported, and the Core restarts the Connector with its backoff.
+// is reported. The Core restarts the Connector when all receivers are down.
 const DOWN_LIMIT_MS = 60_000;
 const WATCH_MS = 5_000;
+const DWS_RETRY_MS = 60_000;
 
 // The SDK reports through console, and stdout carries the Connector protocol.
 function quietConsole(logger) {
@@ -28,55 +33,46 @@ export class DingTalkClient {
   #token;
   #tokenRequest;
 
-  constructor(config, _registry, logger) {
+  constructor(config, registry, logger) {
     this.config = config;
     this.logger = logger;
+    this.registry = registry;
+    this.policy = parsePolicy({});
     this.timeoutMs = Math.min(config.sendTimeoutMs ?? 30_000, 12_000);
     this.stream = null;
     this.state = null;
     this.watch = null;
+    this.dwsSends = new Map();
+    this.dwsInbound = new Map();
   }
 
   async preflight() {
-    let credentials;
-    try {
-      credentials = JSON.parse(await readFile(path.join(this.config.dataDir, 'dingtalk.json'), 'utf8'));
-    } catch {
-      throw new Error('Configure DingTalk app credentials in the instance data directory (dingtalk.json)');
+    this.policy = await loadPolicy(this.config.dataDir);
+    const mixed = this.policy.stream && this.policy.dws;
+    if (this.policy.stream || this.policy.dws?.sendAs === 'robot') {
+      let credentials;
+      try {
+        credentials = JSON.parse(await readFile(path.join(this.config.dataDir, 'dingtalk.json'), 'utf8'));
+      } catch {
+        throw new Error('Configure DingTalk app credentials in the instance data directory (dingtalk.json)');
+      }
+      const { clientId, clientSecret, robotCode = clientId } = credentials ?? {};
+      if (![clientId, clientSecret, robotCode].every((value) => typeof value === 'string' && value.trim() !== '')) {
+        throw new Error('DingTalk credentials require clientId, clientSecret and a valid robotCode');
+      }
+      this.#credentials = { clientId, clientSecret, robotCode };
+      if (!mixed) await this.#accessToken();
     }
-    const { clientId, clientSecret, robotCode = clientId } = credentials ?? {};
-    if (![clientId, clientSecret, robotCode].every((value) => typeof value === 'string' && value.trim() !== '')) {
-      throw new Error('DingTalk credentials require clientId, clientSecret and a valid robotCode');
-    }
-    this.#credentials = { clientId, clientSecret, robotCode };
-    await this.#accessToken();
-    return { self: { id: robotCode } };
-  }
-
-  async #request(route, body, token) {
-    let response;
-    try {
-      response = await fetch(API + route, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { 'x-acs-dingtalk-access-token': token } : {}) },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
-        redirect: 'error',
-      });
-    } catch {
-      throw new Error(`DingTalk ${route} request failed or timed out`);
-    }
-    if (!response.ok) throw new Error(`DingTalk ${route} rejected the request (HTTP ${response.status})`);
-    const data = await response.json().catch(() => null);
-    if (!data || typeof data !== 'object') throw new Error(`DingTalk ${route} returned an invalid response`);
-    return data;
+    // In mixed mode, configuration remains required and remote authentication
+    // runs in each transport so one remote outage cannot block the other.
+    if (this.policy.dws && !mixed) await checkDws(this.registry, this.policy.dws);
+    return { self: { id: this.#credentials?.robotCode ?? this.policy.dws.selfOpenId } };
   }
 
   async #accessToken() {
     if (this.#token?.expiresAt > Date.now()) return this.#token.value;
-    if (this.#tokenRequest) return this.#tokenRequest;
     const { clientId, clientSecret } = this.#credentials;
-    this.#tokenRequest = this.#request('/oauth2/accessToken', { appKey: clientId, appSecret: clientSecret })
+    this.#tokenRequest ??= requestDingTalk('/oauth2/accessToken', { appKey: clientId, appSecret: clientSecret }, this.timeoutMs)
       .then(({ accessToken, expireIn }) => {
         if (typeof accessToken !== 'string' || !accessToken || !Number.isFinite(expireIn) || expireIn <= 0) {
           throw new Error('DingTalk did not return a valid app access token');
@@ -88,26 +84,78 @@ export class DingTalkClient {
   }
 
   startSubscription(onLine, onUnexpectedExit) {
-    if (this.stream) throw new Error('DingTalk receiver is already started');
-    quietConsole(this.logger);
-    const { clientId, clientSecret } = this.#credentials;
-    this.state = new DingTalkState(this.config.dataDir);
+    this.stopping = null;
+    this.state = new DingTalkState(this.config.dataDir, this.policy.dws?.profile);
     this.onLine = onLine;
-    const stream = new DWClient({ clientId, clientSecret, debug: false, keepAlive: true, subscriptions: [] });
-    stream.registerCallbackListener(TOPIC_ROBOT, (callback) => this.receive(callback));
-    this.stream = stream;
-    // Staged messages from before a restart go first.
+    this.onUnexpectedExit = onUnexpectedExit;
+    this.streamDown = !this.policy.stream;
+    const pendingGroups = new Set(this.state.pendingKinds().map(({ group_id: group }) => group));
+    for (const group of pendingGroups) this.state.reconcileGroup(group, this.policy.route(group));
+    if (this.policy.dws) {
+      const state = this.state;
+      this.gate = new DingTalkGate(state, (group) => this.drainDws(group), (error) => {
+        this.logger.warn('dingtalk_dws_release_failed', { error: safeError(error) });
+        queueMicrotask(() => {
+          if (this.state === state) this.fail({ code: 1, stderr: 'DingTalk DWS release failed' });
+        });
+      });
+      this.gate.resume();
+      this.startDws();
+    }
     this.drain();
+    if (this.policy.stream) {
+      quietConsole(this.logger);
+      this.startStream();
+    }
+  }
+
+  startDws() {
+    const dws = new DwsSubscription(this.registry, this.policy.dws, this.logger,
+      (raw, group) => this.receiveDws(raw, group), (exit, teardownFailed) => {
+        if (this.dws !== dws) return;
+        this.dws = null;
+        if (!teardownFailed && (this.stream?.connected || !this.streamDown)) {
+          this.dwsRetry = setTimeout(() => this.startDws(), DWS_RETRY_MS);
+        } else {
+          this.fail(exit);
+        }
+      });
+    this.dws = dws;
+    dws.start(this.policy.dwsGroups);
+  }
+
+  startStream() {
+    const { clientId, clientSecret } = this.#credentials;
+    const stream = new DWClient({ clientId, clientSecret, debug: false, keepAlive: true, subscriptions: [] });
+    stream.registerCallbackListener(TOPIC_ROBOT, (callback) => {
+      if (this.stream === stream) this.receive(callback);
+    });
+    this.stream = stream;
     void stream.connect();
     let downSince = Date.now();
     this.watch = setInterval(() => {
-      if (stream.connected) { downSince = null; return; }
+      if (stream.connected) { downSince = null; this.streamDown = false; return; }
       downSince ??= Date.now();
-      if (Date.now() - downSince < DOWN_LIMIT_MS) return;
-      this.stop();
-      onUnexpectedExit({ code: 1, signal: null, stderr: `DingTalk Stream was disconnected for ${DOWN_LIMIT_MS / 1_000} seconds` });
+      if (this.streamDown || Date.now() - downSince < DOWN_LIMIT_MS) return;
+      this.streamDown = true;
+      const reason = `DingTalk Stream was disconnected for ${DOWN_LIMIT_MS / 1_000} seconds`;
+      if (this.dws) {
+        // The SDK already owns Stream reconnection. Keep that socket lifecycle
+        // in place while DWS continues receiving.
+        this.logger.warn('dingtalk_stream_disconnected', { reason });
+      } else {
+        this.fail({ code: 1, signal: null, stderr: reason });
+      }
     }, WATCH_MS);
     this.watch.unref?.();
+  }
+
+  fail(exit) {
+    const notify = this.onUnexpectedExit;
+    void this.stop().then(
+      () => notify(exit),
+      (error) => notify({ ...exit, stderr: `${exit.stderr}; ${safeError(error)}` }),
+    );
   }
 
   // A message is committed before DingTalk is acknowledged; one left
@@ -121,6 +169,7 @@ export class DingTalkClient {
       this.logger.warn('dingtalk_message_rejected');
     }
     try {
+      if (event && this.policy.route(parseChatId(event.conversation.id)).channel !== 'stream') event = null;
       if (event) this.state.stage(event);
     } catch (error) {
       this.logger.warn('dingtalk_stage_failed', { error: safeError(error) });
@@ -134,40 +183,125 @@ export class DingTalkClient {
   drain() {
     for (let rows; (rows = this.state.pending()).length;) {
       for (const { seq, envelope } of rows) {
-        this.onLine(envelope);
+        const group = parseChatId(JSON.parse(envelope).conversation.id);
+        if (this.policy.route(group).channel === 'stream') this.onLine(envelope);
         this.state.delivered(seq);
       }
     }
   }
 
-  sendMessage({ chat_id: chat, content }) {
-    return this.#sendToGroup(chat, parseChatId(chat), content.text);
+  sendMessage({ chat_id: chat, content, idempotency_key: key }) {
+    return this.#sendToGroup(chat, parseChatId(chat), content.text, key);
   }
 
-  // DingTalk has no quoted reply: the answer is a new message in the group.
-  replyMessage({ message_id: id, content }) {
-    const conversationId = parseMessageId(id);
-    return this.#sendToGroup(chatId(conversationId), conversationId, content.text);
+  replyMessage({ message_id: id, content, idempotency_key: key }) {
+    const { group, message } = parseMessageTarget(id);
+    return this.#sendToGroup(chatId(group), group, content.text, key, message);
   }
 
-  async #sendToGroup(chat, openConversationId, text) {
+  receiveDws(raw, group) {
+    if (!group) return;
+    const route = this.policy.route(group);
+    if (route.channel !== 'dws') return;
+    const state = this.state;
+    const previous = this.dwsInbound.get(group);
+    const stage = () => this.stageDws(raw, group, route, state);
+    const next = (previous ? previous.then(stage) : stage()).catch((error) => {
+      this.logger.warn('dingtalk_dws_stage_failed', { error: safeError(error) });
+    });
+    this.dwsInbound.set(group, next);
+    return next.then(() => {
+      if (this.dwsInbound.get(group) === next) this.dwsInbound.delete(group);
+    });
+  }
+
+  async stageDws(raw, group, route, state) {
+    if (this.state !== state) return;
+    const event = normalizeDwsMessage(raw, { group, tenantId: this.policy.dws.tenantId });
+    if (!event) return;
+    if (event.actor.id === this.policy.dws.selfOpenId) {
+      if (this.policy.dws.sendAs === 'robot') return;
+      // A personal send can echo before the CLI returns its message ID.
+      await Promise.allSettled([...this.dwsSends].filter(([, chat]) => chat === group).map(([send]) => send));
+      if (this.state !== state || state.isDwsSent(event.message.id, Date.now() - CONTEXT_AGE_MS)) return;
+      this.gate.stage(event, group, 'context');
+      return;
+    }
+    this.gate.stage(event, group, classifyDws(event, route.strategy, this.policy.dws.selfOpenId));
+  }
+
+  drainDws(group) {
+    for (let rows; (rows = this.state.pendingGroup(group)).length;) {
+      for (const { seq, envelope } of rows) {
+        if (this.policy.route(group).channel === 'dws') this.onLine(envelope);
+        this.state.delivered(seq);
+      }
+    }
+  }
+
+  async #sendToGroup(chat, group, text, key, message) {
+    const route = this.policy.route(group);
+    if (route.channel === 'off') throw new Error('DingTalk group is disabled');
     if (this.config.dryRun) return { dry_run: true, chat_id: chat };
-    const title = Array.from(text.trim().split(/\r?\n/, 1)[0]).slice(0, 20).join('');
-    const { processQueryKey } = await this.#request('/robot/groupMessages/send', {
-      robotCode: this.#credentials.robotCode,
-      openConversationId,
-      msgKey: 'sampleMarkdown',
-      msgParam: JSON.stringify({ title, text }),
-    }, await this.#accessToken());
-    if (!processQueryKey) throw new Error('DingTalk did not return a group delivery receipt');
-    return { chat_id: chat, process_query_key: processQueryKey };
+    // The action's start identifies which release the reply answers.
+    const startedAt = performance.now();
+    const gate = this.gate;
+    let result;
+    if (route.channel === 'dws' && this.policy.dws.sendAs === 'user') {
+      const state = this.state;
+      const sending = sendDws(this.registry, this.policy.dws, {
+        group, message, text, key, cwd: this.config.projectDir, timeoutMs: this.config.sendTimeoutMs ?? 30_000,
+      }).then((id) => {
+        const encoded = messageId(group, id);
+        if (state && this.state === state) {
+          try {
+            state.recordDwsSent(encoded, Date.now() - CONTEXT_AGE_MS);
+          } catch (error) {
+            this.logger.warn('dingtalk_dws_record_send_failed', { error: safeError(error) });
+          }
+        }
+        return encoded;
+      });
+      this.dwsSends.set(sending, group);
+      try {
+        result = { chat_id: chat, message_id: await sending };
+      } finally {
+        this.dwsSends.delete(sending);
+      }
+    } else {
+      const processQueryKey = await sendGroup({ group, robotCode: this.#credentials.robotCode,
+        text, timeoutMs: this.timeoutMs, token: await this.#accessToken() });
+      result = { chat_id: chat, process_query_key: processQueryKey };
+    }
+    if (route.channel === 'dws' && this.gate === gate) {
+      try {
+        gate?.sent(group, startedAt);
+      } catch (error) {
+        this.logger.warn('dingtalk_dws_gate_sent_failed', { error: safeError(error) });
+      }
+    }
+    return result;
   }
 
   stop() {
+    return this.stopping ??= this.close();
+  }
+
+  async close() {
+    clearTimeout(this.dwsRetry);
     clearInterval(this.watch);
-    this.stream?.disconnect();
-    this.state?.close();
+    const { stream, gate, state, dws } = this;
     this.stream = null;
     this.state = null;
+    this.gate = null;
+    this.dws = null;
+    this.dwsInbound.clear();
+    const [subscription, ...cleanup] = await Promise.allSettled([
+      () => dws?.stop(), () => stream?.disconnect(), () => gate?.stop(), () => state?.close(),
+    ].map(async (stop) => stop()));
+    for (const result of cleanup) {
+      if (result.status === 'rejected') this.logger.warn('dingtalk_stop_failed', { error: safeError(result.reason) });
+    }
+    if (subscription.status === 'rejected') throw subscription.reason;
   }
 }
