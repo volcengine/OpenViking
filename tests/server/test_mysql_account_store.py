@@ -362,3 +362,30 @@ async def test_mysql_auth_admission_unlimited_pool(mysql_accounts):
         assert store._auth_admission is None
     finally:
         await store.close()
+
+
+@pytest.mark.parametrize(
+    "stage", ["admission", "connection", "shared", "pool_timeout", "connect", "query"]
+)
+async def test_mysql_auth_wait_budget_and_http_status(mysql_accounts, stage, monkeypatch):
+    from openviking.storage.sql_runtime import SQLRuntime
+    from tests.server.auth_admission_test_helpers import assert_auth_wait_budget
+
+    manager = await mysql_accounts()
+    await manager.close()
+    store = manager._store
+    store._engine_options["pool_size"] = 1
+    store._auth_wait_timeout = 1.5
+    store._sql_runtime = SQLRuntime()
+    await assert_auth_wait_budget(store, stage, monkeypatch)
+
+
+async def test_mysql_unlimited_pool_auth_connect_budget(mysql_accounts, monkeypatch):
+    from tests.server.auth_admission_test_helpers import assert_auth_wait_budget
+
+    manager = await mysql_accounts()
+    await manager.close()
+    store = manager._store
+    store._engine_options["pool_size"] = 0
+    store._auth_wait_timeout = 1.5
+    await assert_auth_wait_budget(store, "connect", monkeypatch)

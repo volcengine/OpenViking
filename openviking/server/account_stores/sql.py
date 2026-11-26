@@ -10,11 +10,11 @@ import binascii
 import hashlib
 import hmac
 import json
+import math
 import secrets
-from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import timezone
-from functools import lru_cache, wraps
+from functools import lru_cache
 from time import monotonic
 from typing import AsyncGenerator, cast
 from uuid import uuid4
@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from sqlalchemy import and_, bindparam, case, delete, func, select, update
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import TimeoutError as SQLPoolTimeoutError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -71,6 +72,7 @@ from openviking_cli.exceptions import (
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
+    UnavailableError,
 )
 from openviking_cli.session.user_id import (
     validate_account_id,
@@ -138,17 +140,6 @@ def _substring_pattern(value: str) -> str:
 def _credential_digest(api_key: str) -> str:
     """Return the lookup digest for a high-entropy API key."""
     return hashlib.sha256(api_key.encode()).hexdigest()
-
-
-def _admit_auth_reads(
-    method: Callable[..., Awaitable[AuthSnapshot | None]],
-) -> Callable[..., Awaitable[AuthSnapshot | None]]:
-    @wraps(method)
-    async def admitted(self: SQLAccountStore, *args, **kwargs) -> AuthSnapshot | None:
-        async with self._auth_read_slot():
-            return await method(self, *args, **kwargs)
-
-    return admitted
 
 
 _DIGEST_CREDENTIAL_PREFIX = "sha256:v1:"
@@ -245,6 +236,15 @@ class SQLAccountStore(AccountStore):
         bootstrap_default_account: bool = True,
     ) -> None:
         values = dict(params or {})
+        auth_wait_timeout = values.pop("auth_wait_timeout", 5.0)
+        if (
+            isinstance(auth_wait_timeout, bool)
+            or not isinstance(auth_wait_timeout, (int, float))
+            or not math.isfinite(auth_wait_timeout)
+            or auth_wait_timeout <= 0
+        ):
+            raise InvalidArgumentError("auth_wait_timeout must be a finite positive number")
+        self._auth_wait_timeout = float(auth_wait_timeout)
         self._bootstrap_default_account = bootstrap_default_account
         try:
             self._service_name = normalize_service_name(service_name)
@@ -1384,22 +1384,30 @@ class SQLAccountStore(AccountStore):
                 )
 
     @asynccontextmanager
-    async def _auth_read_slot(self) -> AsyncGenerator[None, None]:
-        """Queue live auth reads before they contend for pooled connections."""
+    async def _auth_read_slot(self) -> AsyncGenerator[float, None]:
+        """Share one wait deadline across auth admission and connection checkout."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._auth_wait_timeout
         capacity = cast(int, self._engine_options["pool_size"])
         # SQLAlchemy treats pool_size=0 as unlimited (accepted by MySQL).
         if capacity <= 0:
-            yield
+            yield deadline
             return
-        loop = asyncio.get_running_loop()
         state = self._auth_admission
         if state is None or state[0] is not loop:
             state = (loop, asyncio.Semaphore(capacity))
             self._auth_admission = state
-        async with state[1]:
-            yield
+        try:
+            await asyncio.wait_for(state[1].acquire(), timeout=max(0, deadline - loop.time()))
+        except asyncio.TimeoutError:
+            raise UnavailableError(
+                "authentication account store", reason="auth admission wait budget exceeded"
+            ) from None
+        try:
+            yield deadline
+        finally:
+            state[1].release()
 
-    @_admit_auth_reads
     async def get_auth_snapshot(
         self,
         api_key: str,
@@ -1408,6 +1416,22 @@ class SQLAccountStore(AccountStore):
         user_id_hint: str | None = None,
     ) -> AuthSnapshot | None:
         """Verify credentials and read current authorization in one unlocked SELECT."""
+        async with self._auth_read_slot() as deadline:
+            return await self._get_auth_snapshot(
+                api_key,
+                deadline=deadline,
+                account_id_hint=account_id_hint,
+                user_id_hint=user_id_hint,
+            )
+
+    async def _get_auth_snapshot(
+        self,
+        api_key: str,
+        *,
+        deadline: float,
+        account_id_hint: str | None,
+        user_id_hint: str | None,
+    ) -> AuthSnapshot | None:
         statement = _auth_snapshot_statement(account_id_hint is not None, user_id_hint is not None)
         parameters = {
             "auth_service_name": self._service_name,
@@ -1418,6 +1442,17 @@ class SQLAccountStore(AccountStore):
         if user_id_hint is not None:
             parameters["auth_user_id"] = user_id_hint
         async with self._session_factory() as session:
+            # Checkout also includes connection establishment/pre-ping. Only
+            # acquisition is timed; SQL execution keeps its existing policy.
+            try:
+                await asyncio.wait_for(
+                    session.connection(),
+                    timeout=max(0, deadline - asyncio.get_running_loop().time()),
+                )
+            except (asyncio.TimeoutError, SQLPoolTimeoutError):
+                raise UnavailableError(
+                    "authentication account store", reason="auth connection wait budget exceeded"
+                ) from None
             candidates = (await session.execute(statement, parameters)).all()
         verified: dict[str, bool] = {}
         snapshot: AuthSnapshot | None = None

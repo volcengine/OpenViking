@@ -46,6 +46,7 @@ def test_postgres_configuration_and_mysql_dialect_compatibility():
     store = PostgresAccountStore(service_name="test", params={"user": "ov", "database": "ov"})
     assert store._url.drivername == "postgresql+psycopg"
     assert store._engine_options["pool_size"] == 10
+    assert store._auth_wait_timeout == 5.0
     for table in Base.metadata.sorted_tables:
         pg_ddl = str(CreateTable(table).compile(dialect=postgresql.dialect()))
         mysql_ddl = str(CreateTable(table).compile(dialect=mysql.dialect()))
@@ -59,6 +60,7 @@ def test_postgres_configuration_and_mysql_dialect_compatibility():
         service_name="test", params={"user": "ov", "password": "", "database": "ov"}
     )
     assert old._url.drivername == "mysql+aiomysql"
+    assert old._auth_wait_timeout == 5.0
     assert "INSERT IGNORE" in str(old._default_account_insert().compile(dialect=mysql.dialect()))
     assert "ON CONFLICT" in str(
         store._default_account_insert().compile(dialect=postgresql.dialect())
@@ -80,6 +82,16 @@ def test_postgres_configuration_and_mysql_dialect_compatibility():
 def test_postgres_invalid_parameters(params):
     with pytest.raises(InvalidArgumentError):
         PostgresAccountStore(service_name="test", params=params)
+
+
+@pytest.mark.parametrize("store_type", [MySQLAccountStore, PostgresAccountStore])
+@pytest.mark.parametrize("timeout", [0, -1, True, None, "5", float("inf"), float("nan")])
+def test_auth_wait_timeout_requires_finite_positive_seconds(store_type, timeout):
+    with pytest.raises(InvalidArgumentError, match="auth_wait_timeout"):
+        store_type(
+            service_name="test",
+            params={"user": "ov", "password": "", "database": "ov", "auth_wait_timeout": timeout},
+        )
 
 
 def test_postgres_provider_does_not_import_mysql_driver_or_redis():
@@ -469,3 +481,18 @@ async def test_pg_auth_admission_cancellation_and_runtime_reload(pg_database):
         runtime=sql_runtime.SQLRuntime(),
     )
     await assert_auth_admission_cancellation_and_reload(store)
+
+
+@pytest.mark.parametrize(
+    "stage", ["admission", "connection", "shared", "pool_timeout", "connect", "query"]
+)
+async def test_pg_auth_wait_budget_and_http_status(pg_database, stage, monkeypatch):
+    from tests.server.auth_admission_test_helpers import assert_auth_wait_budget
+
+    params, _, _, _ = pg_database
+    store = PostgresAccountStore(
+        service_name="wait-" + uuid4().hex,
+        params={**params, "maxsize": 1, "auth_wait_timeout": 1.5},
+        runtime=sql_runtime.SQLRuntime(),
+    )
+    await assert_auth_wait_budget(store, stage, monkeypatch)
