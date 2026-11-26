@@ -171,6 +171,18 @@ def set_task_tracker(tracker: Optional["TaskTracker"]) -> None:
         _instance = tracker
 
 
+async def wait_for_enqueued_work(
+    queue_name: str, *, stop_waiting: Optional[Callable[[], bool]] = None
+) -> None:
+    """Wait for work submitted by the current operation to the given queue."""
+    from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
+
+    context = get_task_context()
+    work_ids = get_enqueued_work_ids(queue_name)
+    if context is not None and work_ids:
+        await get_task_tracker().wait_for_work(context.task_id, work_ids, stop_waiting=stop_waiting)
+
+
 async def run_tracked_operation(
     task_type: str,
     *,
@@ -410,8 +422,9 @@ class TaskTracker:
                 restored.append(task)
         return restored
 
-    def start_cleanup_loop(self) -> None:
-        if self._cleanup_task is None or self._cleanup_task.done():
+    def start_cleanup_loop(self, *, cleanup_history: bool = True) -> None:
+        """Start cancellation polling. Set cleanup_history=False on read-only replicas."""
+        if cleanup_history and (self._cleanup_task is None or self._cleanup_task.done()):
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         if self._cancel_poll_task is None or self._cancel_poll_task.done():
             self._cancel_poll_task = asyncio.create_task(self._cancel_poll_loop())
@@ -420,6 +433,14 @@ class TaskTracker:
         for task in (self._cleanup_task, self._cancel_poll_task):
             if task is not None and not task.done():
                 task.cancel()
+
+    async def stop_background_loops(self) -> None:
+        """Wait for history cleanup and local cancellation polling to finish."""
+        self.stop_cleanup_loop()
+        tasks = [task for task in (self._cleanup_task, self._cancel_poll_task) if task is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_task = self._cancel_poll_task = None
 
     async def _cleanup_loop(self) -> None:
         while True:

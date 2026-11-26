@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Privacy config endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -14,11 +14,13 @@ from openviking.privacy.operations import (
 )
 from openviking.privacy.reference import (
     build_privacy_field_reference,
+    parse_privacy_field_reference,
     parse_privacy_field_selector,
     parse_privacy_target_selector,
 )
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.privacy.scan import PRIVACY_SCAN_MAX_NODES, scan_privacy_content
+from openviking.privacy.seal import SEAL_MAX_TEXTS, SealText, seal_texts
 from openviking.privacy.validation import validate_privacy_field_name
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -37,6 +39,39 @@ async def _require_privacy_target(
 ) -> None:
     if privacy is None or not await privacy.exists(ctx, category, target_key):
         raise NotFoundError(f"{category}/{target_key}", "privacy config")
+
+
+async def _write_payload(
+    privacy,
+    ctx: RequestContext,
+    category: str,
+    target_key: str,
+    submitted: Dict[str, Any],
+    result,
+) -> Optional[Dict[str, Any]]:
+    """Serialize a write, checking stored values so resolved references are judged by value.
+
+    When any submitted value was a reference, every value is returned as its
+    own field's reference, so the caller never sees the secret it copied.
+    """
+    if result is None:
+        return None
+    warnings = []
+    if category == "credential":
+        stored = {field: result.values[field] for field in submitted if field in result.values}
+        warnings = await privacy.credential_warnings(ctx, stored)
+    payload = result.to_dict()
+    if any(
+        isinstance(value, str) and parse_privacy_field_reference(value) is not None
+        for value in submitted.values()
+    ):
+        payload["values"] = {
+            field: build_privacy_field_reference(ctx.user.user_id, category, target_key, field)
+            for field in payload["values"]
+        }
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 class UpsertPrivacyConfigRequest(BaseModel):
@@ -67,6 +102,19 @@ class ScanPrivacyContentRequest(BaseModel):
     uri: str = Field(..., min_length=1, max_length=2048)
     fix: bool = False
     node_limit: int = Field(default=PRIVACY_SCAN_MAX_NODES, ge=1, le=PRIVACY_SCAN_MAX_NODES)
+
+
+class SealTextItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    enroll: bool = False
+
+
+class SealPrivacyTextsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    texts: List[SealTextItem] = Field(..., min_length=1, max_length=SEAL_MAX_TEXTS)
 
 
 class PrivacySelectorRequest(BaseModel):
@@ -101,6 +149,22 @@ async def scan_privacy_configs(
         uri=request.uri,
         fix=request.fix,
         node_limit=request.node_limit,
+    )
+    return Response(status="ok", result=result)
+
+
+@router.post("/seal")
+async def seal_privacy_texts(
+    request: SealPrivacyTextsRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Replace the caller's Credential values in texts with references, enrolling on request."""
+    service = get_service()
+    result = await seal_texts(
+        service.privacy_configs,
+        service.privacy_sanitizer,
+        _ctx,
+        [SealText(text=item.text, enroll=item.enroll) for item in request.texts],
     )
     return Response(status="ok", result=result)
 
@@ -383,11 +447,6 @@ async def upsert_privacy_config(
     service = get_service()
     privacy = service.privacy_configs
     result = None
-    warnings = (
-        await privacy.credential_warnings(_ctx, request.values)
-        if privacy is not None and category == "credential"
-        else []
-    )
     if privacy is not None:
         result = await privacy.upsert(
             ctx=_ctx,
@@ -399,10 +458,10 @@ async def upsert_privacy_config(
             labels=request.labels,
             wait_for_lock=False,
         )
-    payload = None if result is None else result.to_dict()
-    if payload is not None and warnings:
-        payload["warnings"] = warnings
-    return Response(status="ok", result=payload)
+    return Response(
+        status="ok",
+        result=await _write_payload(privacy, _ctx, category, target_key, request.values, result),
+    )
 
 
 @router.patch("/{category}/{target_key}")
@@ -416,11 +475,6 @@ async def patch_privacy_config(
     service = get_service()
     privacy = service.privacy_configs
     result = None
-    warnings = (
-        await privacy.credential_warnings(_ctx, request.values)
-        if privacy is not None and category == "credential"
-        else []
-    )
     if privacy is not None:
         result = await privacy.patch_values(
             ctx=_ctx,
@@ -432,10 +486,10 @@ async def patch_privacy_config(
             labels=request.labels,
             wait_for_lock=False,
         )
-    payload = None if result is None else result.to_dict()
-    if payload is not None and warnings:
-        payload["warnings"] = warnings
-    return Response(status="ok", result=payload)
+    return Response(
+        status="ok",
+        result=await _write_payload(privacy, _ctx, category, target_key, request.values, result),
+    )
 
 
 @router.delete("/{category}/{target_key}")

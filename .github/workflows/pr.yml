@@ -60,8 +60,9 @@ jobs:
       - name: Committed generator output must be up to date
         run: |
           # A module the closure grew reaches the committed lanes as an
-          # untracked file, which `git diff` does not see at all.
-          status=$(git status --porcelain --untracked-files=normal -- examples agent-plugins)
+          # untracked file, which `git diff` does not see at all. The gateway
+          # package holds a committed copy of the server feature table.
+          status=$(git status --porcelain --untracked-files=normal -- examples agent-plugins openviking_gateway)
           if [ -n "$status" ]; then
             printf '%s\n' "$status"
             exit 1
@@ -119,17 +120,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Run the OpenClaw plugin Vitest suite
-        # The suite is otherwise never exercised by CI, so regressions in
-        # examples/openclaw-plugin only surface in user installs.
-        # tests/ut/architecture-boundaries.test.ts is excluded until its 2
-        # pre-existing failures are resolved (see #4720 / #4731 / #4732);
-        # every other file passes (42 files / 675 tests).
-        # The node_modules exclude restores vitest's default filters, which a
-        # custom --exclude replaces.
-        run: >
-          npm test --
-          --exclude "tests/ut/architecture-boundaries.test.ts"
-          --exclude "**/node_modules/**"
+        run: npm test
 
   plugin-versions:
     needs: check-deps

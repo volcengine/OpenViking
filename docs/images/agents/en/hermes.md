@@ -1,10 +1,14 @@
-# OpenViking Service for Hermes
+# OpenViking Managed Service for Hermes
 
-[OpenViking Service](https://www.volcengine.com/product/openviking-service) is
-OpenViking hosted and operated by VolcEngine. You do not need to install a server
-or configure local models. Activate the service and create an API key in the
+Connect Hermes to managed OpenViking on Volcengine or BytePlus. You do not need
+to install a server or configure local models.
+
+For [Volcengine](https://www.volcengine.com/product/openviking-service), activate the service and create an API key in the
 [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing).
 Open **User Management**, then **API Key**.
+
+For BytePlus, have your OpenViking API key ready.
+See [BytePlus setup](https://docs.openviking.ai/en/guides/27-byteplus-setup).
 
 ## Set up
 
@@ -26,14 +30,18 @@ In the wizard:
    the same OpenViking user. Shared Agent asks for confirmation.
 2. If prompted, choose **Create new OpenViking profile**. You can also reuse
    a saved `ovcli.conf`.
-3. Choose **OpenViking Service (VolcEngine Cloud)**.
-4. Enter your service API key.
+3. Choose **OpenViking Managed Service**, then **Volcengine** or **BytePlus**.
+4. For BytePlus, enter your API key. For Volcengine,
+   enter the API key; the wizard supplies the service URL.
 5. Choose where to save the connection. **Keep in Hermes only** saves it in
    the Hermes `.env`. **Mirror to OpenViking store** saves a local
    `ovcli.conf.<name>` and links Hermes to it. Both save credentials on this
    computer.
 6. For a saved OpenViking profile, enter a name such as `hermes`. This is a
    local config name. It does not create a user or change access rights.
+
+Older plugin versions use **OpenViking Service (VolcEngine Cloud)** for
+Volcengine and **Custom** for BytePlus.
 
 Then start a new Hermes session:
 

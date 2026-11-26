@@ -71,6 +71,9 @@ REASONS = {
     "tool_call_invalid": Reason(502, "upstream", "model_error"),
     "tool_loop_limit": Reason(502, "gateway", "gateway_internal"),
     "tool_loop_timeout": Reason(504, "gateway", "timeout"),
+    "secret_seal_failed": Reason(503, "openviking", "openviking_unavailable"),
+    "secret_seal_invalid_request": Reason(400, "gateway", "config_error"),
+    "secret_unseal_failed": Reason(502, "openviking", "openviking_unavailable"),
     # Recorded only: the provider's own error, relayed, and a client that went away.
     "upstream_error": Reason(0, "upstream", "model_error"),
     "client_disconnected": Reason(499, "client", "client_cancelled"),

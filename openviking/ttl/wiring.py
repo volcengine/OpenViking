@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Process-wide registry and service wiring for the TTL adapter.
 
-The adapter is a singleton per server process. ``app.py`` creates the built-in
+The adapter is a singleton per server process. ``OpenVikingService`` creates the built-in
 implementation from ``server.ttl_adapter``, registers it here and installs its
 post-write hook on the VikingFS instance. The admin configuration routes consult
 :func:`ttl_config_supported` to decide whether an explicit TTL section is
@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
+    from openviking.pyagfs.protocols import CacheRuntimeHandleProtocol
     from openviking.server.config import TTLAdapterConfig
     from openviking.server.identity import RequestContext
     from openviking.storage.viking_fs import VikingFS
@@ -27,13 +28,19 @@ logger = get_logger(__name__)
 _adapter: Optional["TTLAdapter"] = None
 
 
-def build_ttl_adapter(config: Optional["TTLAdapterConfig"]) -> Optional["TTLAdapter"]:
-    """Create the built-in Redis TTL implementation only when enabled."""
+def build_ttl_adapter(
+    config: Optional["TTLAdapterConfig"],
+    *,
+    cache_runtime: CacheRuntimeHandleProtocol | None = None,
+) -> Optional["TTLAdapter"]:
+    """Create the built-in CacheRuntime TTL implementation when enabled."""
     if config is None or not config.enabled:
         return None
+    if cache_runtime is None:
+        raise ValueError("TTL requires an initialized RAGFS CacheRuntime")
     from openviking.ttl.runtime import DirectoryTTL
 
-    return DirectoryTTL(**config.config)
+    return DirectoryTTL(cache_runtime=cache_runtime, **config.config)
 
 
 def set_ttl_adapter(adapter: Optional["TTLAdapter"]) -> None:

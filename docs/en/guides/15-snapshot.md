@@ -94,7 +94,7 @@ Configuration reference:
 | `git.author_name` | `viking-bot` | Default author name when callers omit `author_name` |
 | `git.author_email` | `bot@viking.local` | Default author email |
 | `git.local.base_dir` | `""` | Directory holding Git objects/refs. **When empty, defaults to `{storage.workspace}/.ovgit`** |
-| `git.snapshot.log.provider` | `sqlite` | Path history index provider for `snapshot/log?paths=...`: `sqlite`, `mysql`, or `none` |
+| `git.snapshot.log.provider` | `sqlite` | Path history index provider for `snapshot/log?paths=...`: `sqlite`, `mysql`, `postgres`, or `none` |
 | `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | Optional absolute SQLite database path. When omitted, each workspace gets its own index DB |
 
 > Usually leave `git.local.base_dir` empty so snapshot data lands in `.ovgit` under the workspace, making it easy to back up and migrate alongside resource data.
@@ -151,10 +151,14 @@ Configuration reference:
 | `git.s3.access_key` / `git.s3.secret_key` | inherit the matching `storage.agfs.s3` fields, else `null` | Credentials read directly; empty falls back to the SDK default credentials chain |
 | `git.s3.use_path_style` | `true` | `true` uses path-style addressing (MinIO, etc.); `false` uses virtual-host style (TOS, etc.) |
 | `git.s3.cas_mode` | `native` | Ref CAS mode. `native` uses S3 conditional writes (If-Match) |
-| `git.snapshot.log.provider` | `sqlite` | Path history index provider for `snapshot/log?paths=...`. Use `mysql` for multi-instance deployments |
+| `git.snapshot.log.provider` | `sqlite` | Path history index provider for `snapshot/log?paths=...`. Use `mysql` or `postgres` for multi-instance deployments |
 | `git.snapshot.log.mysql.dsn_env` | `OPENVIKING_SNAPSHOT_LOG_DSN` | Environment variable containing the MySQL DSN |
 | `git.snapshot.log.mysql.max_connections` | `16` | Maximum MySQL pool connections |
 | `git.snapshot.log.mysql.connect_timeout_ms` | `3000` | MySQL connect timeout in milliseconds |
+| `git.snapshot.log.postgres.dsn_env` | `OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN` | Environment variable containing a PostgreSQL connection URL, including TLS options |
+| `git.snapshot.log.postgres.max_connections` | `16` | Maximum PostgreSQL pool connections |
+| `git.snapshot.log.postgres.connect_timeout_ms` | `3000` | PostgreSQL pool connection acquisition timeout in milliseconds |
+| `git.snapshot.log.postgres.operation_timeout_ms` | `3000` | Deadline for initialization and each complete index operation (including connection acquisition, lock waits and all write batches), in milliseconds |
 
 ### Path-Filtered Log Index
 
@@ -168,14 +172,77 @@ Provider choices:
 | Provider | Use case |
 | --- | --- |
 | `sqlite` | Single-node deployments. By default the DB is stored at `{storage.workspace}/_system/snapshot/log/snapshot_log.db`; override with an absolute `git.snapshot.log.sqlite.path` if needed |
-| `mysql` | Multi-instance deployments. Set the DSN in the environment variable named by `git.snapshot.log.mysql.dsn_env` |
+| `mysql` | Multi-instance deployments. Provision the table first, then set the DSN in the environment variable named by `git.snapshot.log.mysql.dsn_env` |
+| `postgres` | Multi-instance deployments. Provision the schema first, then configure `git.snapshot.log.postgres.dsn_env` |
 | `none` | Disable the index and keep the original history scan path |
 
-For MySQL:
+For MySQL, provision the table once with a deployment role that has DDL privileges:
 
 ```bash
+mysql "$OPENVIKING_SNAPSHOT_LOG_ADMIN_DSN" \
+  < openviking/service/sql/snapshot_log_mysql_init.sql
 export OPENVIKING_SNAPSHOT_LOG_DSN='mysql://user:password@host:3306/openviking'
 ```
+
+Runtime startup does not create or migrate MySQL tables. The runtime role needs
+only `SELECT` and `INSERT` on `snapshot_log`, so DDL and DML privileges can stay
+separate. Every row carries the top-level `service_name`, and the unique key plus
+all indexes are prefixed with it, so several OV deployments can share one database
+without cross-talk; a dedicated database per deployment still works.
+
+For PostgreSQL (14+), provision the schema once with a deployment role:
+
+```bash
+psql "$OV_POSTGRES_ADMIN_DSN" -v ON_ERROR_STOP=1 \
+  -f openviking/service/sql/snapshot_log_postgres_init.sql
+export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:5432/openviking?sslmode=verify-full&sslrootcert=/etc/ssl/pg-ca.pem'
+```
+
+```json
+{
+  "git": {
+    "snapshot": {
+      "log": {
+        "provider": "postgres",
+        "postgres": {
+          "dsn_env": "OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN",
+          "max_connections": 16,
+          "connect_timeout_ms": 3000,
+          "operation_timeout_ms": 3000
+        }
+      }
+    }
+  }
+}
+```
+
+Runtime startup does not create or migrate PostgreSQL tables. The runtime role
+needs `SELECT` and `INSERT` on `snapshot_log`, and `USAGE` on its identity sequence.
+Use a dedicated database or schema per OV deployment; accounts and branches
+are isolated within that index. When using a custom schema, set the URL's
+`options` parameter to a URL-encoded `-c search_path=your_schema`.
+No PostgreSQL extension or Python database extra is required: the driver is
+part of the Rust binding (`ragfs/postgres` for standalone Rust consumers).
+
+PostgreSQL index operations have a finite execution deadline. The provider also
+sets `statement_timeout` and `lock_timeout` on its connections. If initialization
+times out, startup continues with the Git history scan. If an append times out,
+commit or restore continues and queues best-effort backfill; queries fall back to
+Git when the index is unavailable. A write transaction that times out before
+commit is rolled back.
+Increase `operation_timeout_ms` if normal index operations exceed the default.
+
+Each account/branch append is serialized with a transaction advisory lock,
+including the first append to an empty index. All rows are committed atomically
+only when the latest indexed commit matches the expected parent.
+Path indexes use `md5(path)` to stay within PostgreSQL B-tree width limits;
+queries also check the original path. A digest collision for the same commit
+rejects the append rather than silently dropping a path.
+Switching providers does not copy an existing index. Path queries trigger
+background backfill from Git history when needed. An unavailable database or
+missing schema disables the index for that service instance at startup and
+falls back to history scanning; restart after restoring the backend.
+The fallback still has the 1,000-candidate-commit scan limit.
 
 After editing the server config, restart the OpenViking service. Reinitializing an HTTP SDK client does not reload server configuration.
 

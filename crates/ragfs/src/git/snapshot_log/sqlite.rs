@@ -7,8 +7,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use super::store::{
-    ensure_latest_matches, validate_append, SnapshotLogError, SnapshotLogHit, SnapshotLogLimits,
-    SnapshotLogRow, SnapshotLogStore,
+    ensure_latest_matches, validate_append, validate_service_name, SnapshotLogError,
+    SnapshotLogHit, SnapshotLogLimits, SnapshotLogRow, SnapshotLogStore,
 };
 
 const SQLITE_INSERT_BATCH_ROWS: usize = 200;
@@ -16,6 +16,7 @@ const SQLITE_INSERT_BATCH_ROWS: usize = 200;
 const SQLITE_SCHEMA: &[&str] = &[
     r#"CREATE TABLE IF NOT EXISTS snapshot_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  service_name TEXT NOT NULL,
   account TEXT NOT NULL,
   branch TEXT NOT NULL,
   path TEXT NOT NULL,
@@ -23,22 +24,24 @@ const SQLITE_SCHEMA: &[&str] = &[
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 )"#,
     r#"CREATE UNIQUE INDEX IF NOT EXISTS uniq_snapshot_log_path_commit
-ON snapshot_log (account, branch, path, commit_oid)"#,
+ON snapshot_log (service_name, account, branch, path, commit_oid)"#,
     r#"CREATE INDEX IF NOT EXISTS idx_snapshot_log_lookup
-ON snapshot_log (account, branch, path, id DESC)"#,
+ON snapshot_log (service_name, account, branch, path, id DESC)"#,
     r#"CREATE INDEX IF NOT EXISTS idx_snapshot_log_latest
-ON snapshot_log (account, branch, id DESC)"#,
+ON snapshot_log (service_name, account, branch, id DESC)"#,
 ];
 
 /// SQLite-backed SnapshotLog store.
 pub struct SqliteSnapshotLogStore {
     pool: SqlitePool,
     limits: SnapshotLogLimits,
+    service_name: String,
 }
 
 impl SqliteSnapshotLogStore {
     /// Open a SQLite SnapshotLog store and run idempotent migrations.
-    pub async fn connect(path: &str) -> Result<Self, SnapshotLogError> {
+    pub async fn connect(service_name: &str, path: &str) -> Result<Self, SnapshotLogError> {
+        validate_service_name(service_name)?;
         if !Path::new(path).is_absolute() {
             return Err(SnapshotLogError::Config(
                 "sqlite snapshot_log path must be absolute".to_string(),
@@ -62,6 +65,7 @@ impl SqliteSnapshotLogStore {
         Ok(Self {
             pool,
             limits: SnapshotLogLimits::default(),
+            service_name: service_name.to_string(),
         })
     }
 }
@@ -81,8 +85,9 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
     ) -> Result<Option<(i64, String)>, SnapshotLogError> {
         let row = sqlx::query_as::<_, (i64, String)>(
             "SELECT id, commit_oid FROM snapshot_log \
-             WHERE account = ? AND branch = ? ORDER BY id DESC LIMIT 1",
+             WHERE service_name = ? AND account = ? AND branch = ? ORDER BY id DESC LIMIT 1",
         )
+        .bind(&self.service_name)
         .bind(account)
         .bind(branch)
         .fetch_optional(&self.pool)
@@ -106,8 +111,9 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
         let result = async {
             let latest = sqlx::query_as::<_, (i64, String)>(
                 "SELECT id, commit_oid FROM snapshot_log \
-                 WHERE account = ? AND branch = ? ORDER BY id DESC LIMIT 1",
+                 WHERE service_name = ? AND account = ? AND branch = ? ORDER BY id DESC LIMIT 1",
             )
+            .bind(&self.service_name)
             .bind(account)
             .bind(branch)
             .fetch_optional(&mut *conn)
@@ -118,9 +124,10 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
             )?;
             for chunk in rows.chunks(SQLITE_INSERT_BATCH_ROWS) {
                 let mut builder =
-                    QueryBuilder::<Sqlite>::new("INSERT INTO snapshot_log (account, branch, path, commit_oid) ");
+                    QueryBuilder::<Sqlite>::new("INSERT INTO snapshot_log (service_name, account, branch, path, commit_oid) ");
                 builder.push_values(chunk, |mut row_builder, row| {
                     row_builder
+                        .push_bind(&self.service_name)
                         .push_bind(account)
                         .push_bind(branch)
                         .push_bind(&row.path)
@@ -161,9 +168,11 @@ impl SnapshotLogStore for SqliteSnapshotLogStore {
             i64::try_from(offset).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
         let mut builder = QueryBuilder::<Sqlite>::new(
             "SELECT commit_oid, MAX(id) AS last_id FROM snapshot_log \
-             WHERE account = ",
+             WHERE service_name = ",
         );
         builder
+            .push_bind(&self.service_name)
+            .push(" AND account = ")
             .push_bind(account)
             .push(" AND branch = ")
             .push_bind(branch)

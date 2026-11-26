@@ -90,6 +90,7 @@ Studio 无法为你加载网关时，会用一张设置卡片代替网关标签�
 | 404 `no_matching_upstream` | 密钥绑定的已启用上游中，没有一个使用客户端调用的 API 并提供所请求的模型。检查上游的协议、模型和别名、是否启用，以及密钥绑定了哪些上游。 |
 | 400 `peer_invalid` | 请求的 Peer 不是合法的 Peer ID，例如含有 `/` 或空格。见[按 Peer 区分记忆](03-connect-clients.md#peer)。 |
 | 400 `context_override_invalid`、403 `context_override_not_allowed` | `X-OpenViking-Context` 不是合法的配置覆盖，或者密钥的上下文配置不接受覆盖。`detail` 会说明是哪一种。 |
+| 503 `secret_seal_failed`、400 `secret_seal_invalid_request`、502 `secret_unseal_failed` | 密钥的上下文配置打开了**封存密钥**，而封存无法完成。503：OpenViking 版本过旧或不可达，或者封存调用失败。400：请求本身无法封存（文本过大、请求体经过压缩或无法解析、工具调用无法启封），`detail` 写明是哪一种。502：回复中的工具调用无法启封。未封存的内容没有发给模型。排除原因，或者关闭**封存密钥**，见[无法封存时](14-seal-secrets.md#when-sealing-cannot-be-done)。 |
 | 403 `upstream_url_not_allowed` | `X-OpenViking-Upstream-URL` 与密钥绑定的任何上游的 Base URL 都不相同。见[按请求指定上游](07-upstreams.md#upstream-url-header)。 |
 | 401 `upstream_key_missing` | 上游要求每个客户端在 `X-OpenViking-Upstream-Key` 中自带 API Key，或者由网关保管 API Key 的上游没有填写。见[凭证](07-upstreams.md#credentials)。 |
 | 403 `coding_plan_disabled` | 上游被标记为 [Coding Plan 密钥](07-upstreams.md#coding-plan-keys)。改用模型 API Key，或者有意勾选**允许通过网关使用这个套餐**。 |

@@ -158,8 +158,8 @@ class HierarchicalRetriever:
 
         if not await vector_proxy.collection_exists_bound():
             logger.info(
-                "retrieval collection missing; returning empty results collection_hash=%s",
-                short_hash(vector_proxy.collection_name),
+                "retrieval collection missing; returning empty results account_hash=%s",
+                short_hash(ctx.account_id),
                 extra={"degraded": True},
             )
             return QueryResult(

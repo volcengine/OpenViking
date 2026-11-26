@@ -18,6 +18,8 @@ type ToggleRowProps = {
   docs?: DocsSection
   /** A dependent setting is invalid, so they stay visible while the switch is off. */
   invalid?: boolean
+  /** The switch depends on another one that is off. */
+  disabled?: boolean
   /** Dependent settings, shown below the row while it is on. */
   children?: React.ReactNode
 }
@@ -32,6 +34,7 @@ export function ToggleRow({
   badge,
   docs,
   invalid = false,
+  disabled = false,
   children,
 }: ToggleRowProps) {
   const readOnly = useReadOnly()
@@ -54,7 +57,7 @@ export function ToggleRow({
           </p>
         </div>
         <Switch
-          disabled={readOnly}
+          disabled={readOnly || disabled}
           id={id}
           checked={checked}
           aria-label={label}

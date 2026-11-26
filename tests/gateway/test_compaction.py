@@ -692,14 +692,24 @@ async def test_summary_call_is_limited_by_summary_timeout(configured, total):
         timeouts.append(timeout.total)
         raise aiohttp.ClientConnectionError()
 
-    request = proxy.ProxyRequest.__new__(proxy.ProxyRequest)
-    request.app = SimpleNamespace(state=SimpleNamespace(http=SimpleNamespace(post=post)))
-    request.config = SimpleNamespace(
-        upstream_timeout_seconds=600, summary_timeout_seconds=configured
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            http=SimpleNamespace(post=post),
+            config=SimpleNamespace(
+                upstream_timeout_seconds=600, summary_timeout_seconds=configured
+            ),
+            store=None,
+            management=None,
+        )
     )
-    request.request = SimpleNamespace(headers={}, url=SimpleNamespace(query=""))
-    request.path, request.model, request.store = "/v1/chat/completions", "model", None
-    request.record = proxy.RequestRecord(None, None)
+    request = proxy.ProxyRequest(
+        app,
+        SimpleNamespace(headers={}, url=SimpleNamespace(query="")),
+        "v1/chat/completions",
+        {},
+        proxy.RequestRecord(None, None),
+    )
+    request.model = "model"
     upstream = {"id": "chat", "protocol": "chat", "base_url": "http://u/v1", "api_key": "k"}
     with pytest.raises(SummaryError, match="summary_unavailable"):
         await request.summarize(SimpleNamespace(upstream=upstream), {"model": "model"})

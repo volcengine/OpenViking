@@ -197,7 +197,7 @@ async def test_compile_resolves_cross_type_new_replacement(output_format, name, 
     updater._get_viking_fs = Mock(return_value=fs)
     updater._sync_resource_refs_for_result = AsyncMock()
     updater._vectorize_memories = AsyncMock()
-    updater.generate_overview = AsyncMock()
+    updater._submit_directory_changes = AsyncMock()
     result = await updater.apply_operations(resolved, _ctx(), extract_context, handler)
     assert result.errors == []
     assert result.deleted_uris == [source.uri]

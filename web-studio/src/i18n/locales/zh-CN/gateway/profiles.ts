@@ -67,6 +67,16 @@ const profiles = {
     description:
       '客户端可以用 X-OpenViking-Context 请求头为新对话修改下面的任意设置，包括预算；工具只能再排除，不能多提供。配置需要保持原样时，请关闭此项。',
   },
+  sealSecrets: {
+    label: '封存密钥',
+    description:
+      '已登记的凭据只以引用形式发给模型，用户新输入的 token 自动登记到 Privacy，工具调用参数里的引用在发给客户端时换回真值。需要 OpenViking Server 0.5.7 或更高版本。无法封存时（服务端版本过旧或连不上、封存调用失败、请求无法处理），请求会被拒绝，不会未经封存发给模型；工具调用无法换回真值的回复会失败。客户端无法关闭此项。',
+  },
+  enrollToolSecrets: {
+    label: '同时登记工具输出中的密钥',
+    description:
+      '工具结果以及客户端附带的文件内容、提醒中的新 token 也会登记到 Privacy（每一轮都会），只以引用形式发给模型。它们会在 auto 分类中逐渐累积。需要先打开封存密钥。客户端无法修改此项。',
+  },
   recall: {
     title: '召回记忆',
     description:

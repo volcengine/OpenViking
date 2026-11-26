@@ -8,11 +8,12 @@ fn build_git_from_cfg(
     git_cfg: ragfs::git::GitConfig,
     fs: &Arc<MountableFS>,
     rt: &tokio::runtime::Runtime,
+    service_name: &str,
 ) -> PyResult<(Option<Arc<ragfs::git::GitService>>, Option<String>)> {
     let backend = git_cfg.backend.clone();
     let vfs = fs.clone() as Arc<dyn ragfs::core::FileSystem>;
     let _guard = rt.enter();
-    let svc = git::build_git_service(&git_cfg, vfs)?;
+    let svc = git::build_git_service(&git_cfg, vfs, service_name)?;
     Ok((svc, Some(backend)))
 }
 
@@ -20,13 +21,14 @@ fn load_git_from_config(
     path: &str,
     fs: &Arc<MountableFS>,
     rt: &tokio::runtime::Runtime,
+    service_name: &str,
 ) -> PyResult<(Option<Arc<ragfs::git::GitService>>, Option<String>)> {
     let body = std::fs::read_to_string(path)
         .map_err(|e| PyRuntimeError::new_err(format!("read config_path {}: {}", path, e)))?;
     let cfg: BindingConfig = toml::from_str(&body)
         .map_err(|e| PyRuntimeError::new_err(format!("parse config_path: {}", e)))?;
     match cfg.git {
-        Some(git_cfg) => build_git_from_cfg(git_cfg, fs, rt),
+        Some(git_cfg) => build_git_from_cfg(git_cfg, fs, rt, service_name),
         None => Ok((None, None)),
     }
 }

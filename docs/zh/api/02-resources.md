@@ -871,7 +871,7 @@ DELETE /api/v1/resources?uri={uri}
 |----------|------|------|--------|------|
 | `uri` | string | 是 | - | 要删除的共享资源 URI；不允许删除共享资源根 |
 | `recursive` | boolean | 否 | `false` | 递归删除目录 |
-| `wait` | boolean | 否 | `true` | 等待父目录语义刷新完成 |
+| `wait` | boolean | 否 | `true` | 确认本次删除任务完成 |
 
 ```bash
 curl -X DELETE "http://localhost:1933/api/v1/resources" \
@@ -882,8 +882,7 @@ curl -X DELETE "http://localhost:1933/api/v1/resources" \
   --data-urlencode "wait=true"
 ```
 
-成功响应的 `result` 包含被删除的 `uri`。设置 `wait=false` 时，
-语义处理异步执行；响应中若包含 `task_id`，可通过
+成功响应的 `result` 包含被删除的 `uri`。设置 `wait=false` 时，响应中若包含 `task_id`，可通过
 [Task API](17-tasks.md) 跟踪完成状态。
 
 ---

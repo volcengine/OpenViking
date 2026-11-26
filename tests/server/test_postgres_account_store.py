@@ -125,6 +125,11 @@ def pg_database():
             Path(__file__).parents[2] / "openviking/server/account_stores/sql/postgres/init.sql"
         ).read_text()
         admin.execute(script, prepare=False)
+        migration = (
+            Path(__file__).parents[2]
+            / "openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql"
+        ).read_text()
+        admin.execute(migration, prepare=False)
         admin.execute(
             sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(
                 sql.Identifier(schema), sql.Identifier(role)

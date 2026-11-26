@@ -19,7 +19,7 @@ pub struct SnapshotLogLimits {
 impl Default for SnapshotLogLimits {
     fn default() -> Self {
         Self {
-            account_bytes: 255,
+            account_bytes: 64,
             branch_bytes: 512,
             path_bytes: 2048,
             max_rows_per_commit: SNAPSHOT_LOG_MAX_ROWS_PER_COMMIT,
@@ -120,6 +120,25 @@ pub trait SnapshotLogStore: Send + Sync {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<SnapshotLogHit>, SnapshotLogError>;
+}
+
+/// Maximum service_name length in bytes.
+pub const SNAPSHOT_LOG_SERVICE_NAME_BYTES: usize = 64;
+
+/// Validate the deployment-scoped service_name used for shared-DB isolation.
+pub fn validate_service_name(service_name: &str) -> Result<(), SnapshotLogError> {
+    if service_name.is_empty()
+        || service_name.len() > SNAPSHOT_LOG_SERVICE_NAME_BYTES
+        || !service_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(SnapshotLogError::Config(
+            "snapshot log service_name must be 1..=64 ASCII letters, digits, '.', '_' or '-'"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Return whether an account and branch fit provider index limits.

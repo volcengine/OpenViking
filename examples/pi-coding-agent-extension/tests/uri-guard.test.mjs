@@ -110,3 +110,13 @@ test("pi URI guard leaves other tool results alone", () => {
   assert.equal(noticeVikingUriToolResult({ toolName: "read", input: { path: "viking://resources/file.md" }, content }), null)
   assert.equal(noticeVikingUriToolResult({ toolName: "openviking_read", input: { uris: ["viking://resources/file.md"] }, content }), null)
 })
+
+test("pi URI guard adds no notice for a privacy reference in a bash command", () => {
+  const content = [{ type: "text", text: "ok" }]
+  const ref = "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/token}}"
+  const command = `ov privacy run --env TOKEN='${ref}' -- sh -c 'gh api user'`
+  assert.equal(noticeVikingUriToolResult({ toolName: "bash", input: { command }, content }), null)
+  const mixed = noticeVikingUriToolResult({ toolName: "bash", input: { command: `${command}; cat viking://resources/a.md` }, content })
+  assert.match(mixed?.content[1].text ?? "", /viking:\/\/resources\/a\.md/)
+  assert.doesNotMatch(mixed?.content[1].text ?? "", /privacy\/credential/)
+})

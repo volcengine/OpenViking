@@ -84,7 +84,7 @@ class _MemoryVikingFS:
             raise FileNotFoundError(uri)
         return {"path": uri}
 
-    async def ls(self, uri, ctx=None):
+    async def ls(self, uri, ctx=None, **_):
         prefix = f"{uri}/"
         names = {
             path[len(prefix) :].split("/")[0] for path in self.files if path.startswith(prefix)

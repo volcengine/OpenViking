@@ -60,6 +60,35 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 - `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
 
+## Account frozen file list
+
+An ADMIN can maintain a persistent frozen file list within its own account, containing up to ten file paths for ordinary USER identities (including agents). Operations only access account authorization metadata; they neither read the target file nor grant access to the user's data.
+
+```bash
+ov admin freeze-file acme agent-a skills/example/SKILL.md
+ov admin frozen-file-status acme agent-a skills/example/SKILL.md
+ov admin unfreeze-file acme agent-a skills/example/SKILL.md
+```
+
+All three CLI commands also accept a full user URI such as `viking://user/agent-a/skills/example/SKILL.md` and convert it to a relative path. The URI user must match the command's `user-id`, otherwise the CLI reports an error. Conversion preserves the literal path without decoding escapes or resolving `..`; the server still validates the relative path.
+
+ROOT can manage a specified account with `--sudo`. USER and GLOBAL cannot manage these rules; freezing requires a USER target. Server-side paths are relative to that user's root and use GLOBAL's strict literal path syntax: no globs, URIs, encoded escapes, traversal or storage-internal filenames, and at most 255 bytes per component. Matching, status and unfreezing are case-sensitive: `a.md` and `A.md` are separate entries.
+
+The file need not exist. Status only reports membership in the account frozen file list, without existence, content, size or summaries. Repeated freeze/unfreeze operations are idempotent; old rules can still be removed after the target user is deleted or changes role.
+
+Protection applies to writes, appends, deletes, moves, replacements, background writes and version restore. Removing/moving an ancestor or copying into a target subtree intersecting a blocked path is denied. Reads retain existing permissions; unfreezing grants no permissions. Business leases, `bypass_acl` and disabling automatic PathLock do not bypass protection. Authorized identity deletion removes all user data, including frozen files, through its dedicated cleanup task.
+
+Rules load on the first write check and are reused within that request or background execution; ordinary reads and authentication do not load them. With its watcher running, FileStore reads the in-memory list without a mutation lock. Otherwise FileStore and direct SQL providers cache successful empty snapshots for 60 seconds; Redis/MySQL reuses its configured cache TTL for a local empty snapshot confirmed by SQL. Empty-cache hits perform no storage IO or path matching and do not extend expiry. Each provider retains at most 1,024 empty account snapshots, and local freeze/unfreeze attempts invalidate the target snapshot. Nonempty lists retain the existing provider refresh/cache behavior. In-flight executions retain their loaded snapshot. When the empty snapshot expires, failed rule reads or invalid rules stop writes rather than being treated as an empty list. Cache propagation delay is intentional.
+
+| Method | Path | Parameters |
+|--------|------|------------|
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file?path={path}` | Required query: `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | JSON: `{"path":"skills/example/SKILL.md","frozen":true}` |
+
+The result contains `account_id`, `user_id`, `path`, and `frozen`. This is independent of the temporary lease reported by `stat.isLocked`. Rejected changes return `PERMISSION_DENIED` with `details.reason=admin_file_frozen`.
+
+MySQL/PostgreSQL deployments must apply `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql` once before starting the upgraded runtime. New MySQL databases execute `sql/init.sql` followed by the ordered `sql/changes/` migrations; new PostgreSQL databases execute `sql/postgres/init.sql` followed by `0002_account_frozen_files.sql` (the earlier list indexes are already in the PostgreSQL initial schema). Existing databases apply only unapplied migrations. Open-source and commercial deployments should record this migration in their existing DBA/deployment process; the runtime never adds columns. External account-store providers must implement this metadata capability to support the management commands.
+
 ## Groups
 
 A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
@@ -617,8 +646,8 @@ version, text source and input token limit are create-only. Provider fields outs
 fusion/video settings and metadata override are not on the Account API surface.
 Every change validates the effective Embedding/VectorDB pair before persistence.
 
-An explicit `embedding: {}` is valid and declares no Account model mode or runtime
-policy. As a PATCH, `{}` merges with existing settings and does not clear them.
+An explicit `embedding: {}` declares no Account model mode or runtime policy.
+As a PATCH, `{}` merges with existing settings and does not clear them.
 When no Account model mode is configured, Cluster model bindings are used.
 An explicit Account VectorDB connection replaces Cluster connection and
 authentication fields even when the backend type is unchanged; only remote
@@ -645,6 +674,7 @@ Account section or their Feishu defaults; only `domain` remains Cluster-owned.
 GitHub and ACL have no Cluster fallback.
 
 VLM business resolution uses Cluster VLM when an Account has no VLM section.
+Removing the Account VLM section requires a valid Cluster VLM.
 Once the Account section exists, its model-service identity fields come
 exclusively from Account settings, while selected runtime behavior is composed
 with Cluster settings. Account `timeout` overrides Cluster `timeout` when set;
@@ -1204,7 +1234,7 @@ Create a new workspace with its first admin user.
 - File-backed account creation rejects an `account_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the account registry. Newly persisted user IDs are limited to 255 characters across account-store providers. Trusted mode rejects an oversized new user or a new oversized account before enqueueing auto-registration, so invalid identities cannot block other identities from registering. Existing oversized File users and accounts remain readable.
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
-- `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
+- Creation requires valid effective VLM, Embedding, and VectorDB settings, using Account values or Cluster fallback. Validation checks configuration without model requests or remote provisioning; failure leaves no Account, user, or configuration file.
 - Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
 - `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
