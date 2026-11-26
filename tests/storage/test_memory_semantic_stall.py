@@ -3,21 +3,22 @@
 
 """Tests for memory semantic queue stall fix (issue #864).
 
-Ensures that _process_memory_directory() error paths propagate exceptions
+Ensures that directory generation error paths propagate exceptions
 so that on_dequeue() returns an explicit processing outcome.
 """
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
 
+from openviking.service.task_work_index import bind_task_context
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.queuefs.semantic_ops.directory_generation import DirectoryGeneration
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.utils.circuit_breaker import CircuitBreakerOpen
 
 
@@ -53,14 +54,21 @@ def _build_data(msg: SemanticMsg) -> dict:
 
 @pytest.mark.parametrize("context_type", ["resource", "memory", "skill"])
 async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context_type):
+    from openviking.service.task_store import PersistentTaskStore
+    from openviking.service.task_tracker import TaskTracker
+    from tests.test_task_tracker import _FakeAgfs
+
+    monkeypatch.setattr(
+        "openviking.service.task_tracker._instance", TaskTracker(PersistentTaskStore(_FakeAgfs()))
+    )
     processor = _processor()
-    processor._circuit_breaker = SimpleNamespace(
+    processor._circuit_breakers["acc1"] = SimpleNamespace(
         check=MagicMock(side_effect=CircuitBreakerOpen), retry_after=0
     )
     entered, release = asyncio.Event(), asyncio.Event()
     written = []
 
-    async def enqueue(msg):
+    async def enqueue(msg, *, deduplicate_memory: bool = True):
         entered.set()
         await release.wait()
         written.append(msg.id)
@@ -71,6 +79,9 @@ async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context
         lambda: SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda _: queue),
     )
     msg = _make_msg(context_type=context_type, telemetry_id=str(uuid4()))
+    processor._circuit_breakers[msg.account_id] = SimpleNamespace(
+        check=MagicMock(side_effect=CircuitBreakerOpen), retry_after=0
+    )
     worker = asyncio.create_task(processor.on_dequeue(msg.to_dict()))
     try:
         await asyncio.wait_for(entered.wait(), 1)
@@ -88,7 +99,6 @@ async def test_retry_cancellation_keeps_skill_wait_isolated(monkeypatch, context
         if not worker.done():
             worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
-        get_request_wait_tracker().cleanup(msg.telemetry_id)
 
 
 @pytest.mark.asyncio
@@ -105,160 +115,47 @@ async def test_root_semantic_message_is_acknowledged_without_processing():
 
 
 @pytest.mark.asyncio
-async def test_memory_empty_dir_still_returns_success():
-    """An empty memory directory must return a successful processing result."""
-    processor = _processor()
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        FileNotFoundError("missing directory"),
+        RuntimeError("storage failure"),
+        PermissionError("write denied"),
+    ],
+)
+async def test_memory_directory_completion_reflects_storage_failures(monkeypatch, failure):
+    from tests.storage.test_semantic_executor_incremental import _FakeVikingFS
 
-    fake_fs = MagicMock()
-    fake_fs.exists = AsyncMock(return_value=True)
-    fake_fs.ls = AsyncMock(return_value=[])
-
-    msg = _make_msg()
-    data = _build_data(msg)
-
-    with (
-        patch(
-            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-            return_value=fake_fs,
-        ),
-        patch(
-            "openviking.storage.queuefs.semantic_work.resolve_telemetry",
-            return_value=None,
-        ),
-    ):
-        result = await processor.on_dequeue(data)
-
-    assert result.outcome is ProcessOutcome.SUCCESS
-    assert result.value is None
-    assert result.error is None
-
-
-@pytest.mark.asyncio
-async def test_memory_ls_error_returns_failed():
-    """A permanent filesystem error must return a failed processing result.
-
-    Uses a real classify_api_error (no mock): FileNotFoundError is classified
-    as permanent by the real classifier, so the processor returns FAILED.
-    """
-    processor = _processor()
-
-    fake_fs = MagicMock()
-    fake_fs.exists = AsyncMock(return_value=True)
-    fake_fs.ls = AsyncMock(side_effect=FileNotFoundError("/memories not found"))
-
-    msg = _make_msg()
-    data = _build_data(msg)
-
-    with (
-        patch(
-            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-            return_value=fake_fs,
-        ),
-        patch(
-            "openviking.storage.queuefs.semantic_work.resolve_telemetry",
-            return_value=None,
-        ),
-    ):
-        result = await processor.on_dequeue(data)
-
-    assert result.outcome is ProcessOutcome.FAILED
-    assert result.value is None
-    assert result.error == (f"Failed to list memory directory {msg.uri}: /memories not found")
-
-
-@pytest.mark.asyncio
-async def test_memory_ls_transient_error_requeues():
-    """Transient errors during ls() re-enqueue the msg and increment requeue count.
-
-    A 500-class error wrapped by the processor's `raise RuntimeError(...) from e`
-    is classified as `transient`. The outer on_dequeue() path must call
-    _reenqueue_semantic_msg(), bump requeue_count, and return REQUEUED without
-    a terminal error.
-    """
-    processor = _processor()
-
-    fake_fs = MagicMock()
-    fake_fs.exists = AsyncMock(return_value=True)
-    fake_fs.ls = AsyncMock(side_effect=RuntimeError("500 Internal Server Error"))
-
-    msg = _make_msg(telemetry_id="tel-1")
-    data = _build_data(msg)
-
-    reenqueue_mock = AsyncMock()
-
-    with (
-        patch(
-            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-            return_value=fake_fs,
-        ),
-        patch(
-            "openviking.storage.queuefs.semantic_work.resolve_telemetry",
-            return_value=None,
-        ),
-        patch.object(processor, "_reenqueue_semantic_msg", new=reenqueue_mock),
-    ):
-        result = await processor.on_dequeue(data)
-
-    assert result.outcome is ProcessOutcome.REQUEUED
-    assert result.value is None
-    assert result.error is None
-    reenqueue_mock.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_memory_write_error_returns_failed():
-    """An abstract/overview PermissionError must return a failed processing result.
-
-    Exercises the write failure path with real classify_api_error: PermissionError
-    is classified as permanent, so the processor returns FAILED.
-    """
-    processor = _processor()
-
-    fake_fs = MagicMock()
-    fake_fs.exists = AsyncMock(return_value=True)
-    fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
-    fake_fs.read_file = AsyncMock(return_value="some content")
-    fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))
-    fake_fs._async_agfs.pathlock_acquire_exact_batch = AsyncMock(return_value={"lease_ref": "test"})
-    fake_fs._async_agfs.pathlock_release = AsyncMock()
-    fake_fs._uri_to_path = MagicMock(
-        side_effect=lambda uri, ctx=None: f"/local/acc1/{uri.removeprefix('viking://')}"
+    processor = SemanticProcessor()
+    processor._circuit_breakers["acc1"] = SimpleNamespace(
+        check=MagicMock(side_effect=CircuitBreakerOpen), retry_after=0
     )
-
-    msg = _make_msg(skip_vectorization=True)
-    data = _build_data(msg)
-
-    with (
-        patch(
-            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-            return_value=fake_fs,
-        ),
-        patch(
-            "openviking.storage.queuefs.semantic_work.resolve_telemetry",
-            return_value=None,
-        ),
-        patch(
-            "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-            return_value=SimpleNamespace(
-                semantic=SimpleNamespace(
-                    overview_max_chars=100_000,
-                    abstract_max_chars=10_000,
-                )
-            ),
-        ),
-        patch.object(
-            processor,
-            "_generate_single_file_summary",
-            new=AsyncMock(return_value={"name": "file1.md", "summary": "test summary"}),
-        ),
-        patch.object(
-            processor,
-            "_generate_overview",
-            new=AsyncMock(return_value="# Overview\ntest overview"),
-        ),
-    ):
-        result = await processor.on_dequeue(data)
-
-    assert result.outcome is ProcessOutcome.FAILED
-    assert result.value is None
-    assert result.error == (f"Failed to write abstract/overview for {msg.uri}: Permission denied")
+    root = "viking://user/usr1/memories/events"
+    fs = _FakeVikingFS(
+        {root: [{"name": "event.md", "isDir": False}]}, {f"{root}/event.md": "Event details."}
+    )
+    fs.exists = AsyncMock(return_value=True)
+    if isinstance(failure, PermissionError):
+        fs.write_file = AsyncMock(side_effect=failure)
+    elif failure is not None:
+        fs.ls = AsyncMock(side_effect=failure)
+    monkeypatch.setattr("openviking.storage.viking_fs._base._instance", fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_work.resolve_telemetry", lambda *_: None
+    )
+    processor._generate_directory_semantics = AsyncMock(
+        return_value=DirectoryGeneration(overview="Event directory.", abstract=None)
+    )
+    with bind_task_context("write-task", "acc1", "usr1", task_type="content_write"):
+        result = await processor.on_dequeue(
+            _build_data(
+                _make_msg(uri=root, skip_vectorization=True, generation_trigger="directory_refresh")
+            )
+        )
+    assert result.outcome is (ProcessOutcome.FAILED if failure else ProcessOutcome.SUCCESS)
+    if failure:
+        assert str(failure) in result.error
+    else:
+        assert f"{root}/.overview.md" in fs._file_contents
+        assert f"{root}/.abstract.md" not in fs._file_contents

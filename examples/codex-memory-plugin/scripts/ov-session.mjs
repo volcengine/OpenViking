@@ -11,8 +11,8 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { extractCaptureTurns, findLastHumanTurnIndex } from "./capture-utils.mjs";
-import { resolveOvSessionId, saveState } from "./session-state.mjs";
+import { extractCaptureTranscript, findLastHumanTurnIndex } from "./capture-utils.mjs";
+import { CAPTURE_FORMAT_VERSION, resolveOvSessionId, saveState } from "./session-state.mjs";
 import { makeAgentFetchJSON } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
 
@@ -66,14 +66,14 @@ function parseTranscript(content) {
  * cursor on a transient read error replays the whole session.
  */
 export async function readTranscriptTurns(transcriptPath, cfg, logError) {
-  if (!transcriptPath) return { turns: [], ok: false };
+  if (!transcriptPath) return { turns: [], excludedLegacyTurnIndices: [], ok: false };
   try {
     const raw = await readFile(transcriptPath, "utf-8");
-    if (!raw.trim()) return { turns: [], ok: true };
-    return { turns: extractCaptureTurns(parseTranscript(raw), cfg), ok: true };
+    if (!raw.trim()) return { turns: [], excludedLegacyTurnIndices: [], ok: true };
+    return { ...extractCaptureTranscript(parseTranscript(raw), cfg), ok: true };
   } catch (err) {
     logError?.("transcript_read", err);
-    return { turns: [], ok: false };
+    return { turns: [], excludedLegacyTurnIndices: [], ok: false };
   }
 }
 
@@ -113,7 +113,21 @@ export async function catchUpTurns({
   // a session whose Stop/SessionEnd workers never ran.
   if (transcriptPath) state.transcriptPath = transcriptPath;
 
-  const { turns, ok } = await readTranscriptTurns(transcriptPath, cfg, logError);
+  const { turns, excludedLegacyTurnIndices, ok } = await readTranscriptTurns(transcriptPath, cfg, logError);
+
+  if (ok && state.captureFormatVersion !== CAPTURE_FORMAT_VERSION) {
+    const oldCursor = Math.max(0, Number(state.capturedTurnCount) || 0);
+    state.capturedTurnCount = oldCursor - excludedLegacyTurnIndices.filter((index) => index < oldCursor).length;
+    state.captureFormatVersion = CAPTURE_FORMAT_VERSION;
+    // The caller holds the session lock. Persist the corrected cursor before
+    // any append; a failed send must retry from this new coordinate system.
+    await saveState(state, { touch: false });
+    log?.("capture_format_migrated", {
+      oldCursor,
+      correctedCursor: state.capturedTurnCount,
+      excludedLegacyTurnIndices,
+    });
+  }
 
   if (!ok || turns.length === 0) {
     log?.("transcript_empty", {

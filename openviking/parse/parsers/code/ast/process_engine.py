@@ -2,19 +2,55 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Code skeleton extraction via tree-sitter-language-pack.process()."""
 
+import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
 from tree_sitter_language_pack import (
+    PackConfig,
     ProcessConfig,
     SupportedLanguage,
+    configure,
     detect_language_from_path,
     process,
 )
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _configure_tree_sitter_cache_dir() -> None:
+    """Point tree-sitter-language-pack at the Docker-preloaded grammar cache.
+
+    The Docker image preloads grammars into OPENVIKING_TREE_SITTER_CACHE_DIR
+    (see Dockerfile). Without this, the pack looks under its default
+    ``<cache>/v<version>/libs`` path and misses the preloaded files, which are
+    laid out at the configured directory root. This only selects the directory;
+    a cache miss still downloads on demand, so non-Docker and not-yet-cached
+    language cases keep working.
+    """
+    cache_dir = os.environ.get("OPENVIKING_TREE_SITTER_CACHE_DIR")
+    if not cache_dir:
+        return
+    if not Path(cache_dir).is_dir():
+        logger.info(
+            "Parser cache unavailable; using default cache path=%s",
+            safe_path_for_log(str(cache_dir)),
+        )
+        return
+    try:
+        configure(PackConfig(cache_dir=cache_dir))
+    except Exception as exc:  # pragma: no cover - defensive only
+        logger.info(
+            "Parser cache configuration failed; using default cache path=%s error_type=%s",
+            safe_path_for_log(str(cache_dir)),
+            type(exc).__name__,
+        )
+
 
 _CLASS_KINDS = {"class", "struct", "interface", "enum", "trait", "impl", "namespace"}
 _FUNC_KINDS = {"function", "method"}
@@ -126,7 +162,11 @@ def _detect_process_language(file_name: str) -> Optional[str]:
     try:
         lang = detect_language_from_path(str(path))
     except Exception as exc:
-        logger.warning("process language detection failed for '%s': %s", file_name, exc)
+        logger.debug(
+            "Code language detection failed path=%s error_type=%s",
+            safe_path_for_log(file_name),
+            type(exc).__name__,
+        )
         return None
 
     if (
@@ -139,6 +179,7 @@ def _detect_process_language(file_name: str) -> Optional[str]:
 
 
 def _extract_process_skeleton(file_name: str, content: str, lang: str) -> str:
+    _configure_tree_sitter_cache_dir()
     result = process(
         content,
         ProcessConfig(language=lang, structure=True, imports=True),
@@ -181,10 +222,9 @@ def extract_process_skeleton(
     try:
         return _extract_process_skeleton(file_name, content, lang)
     except Exception as exc:
-        logger.warning(
-            "process extraction failed for '%s' (language: %s): %s",
-            file_name,
-            lang,
-            exc,
+        logger.debug(
+            "Code extraction failed path=%s error_type=%s",
+            safe_path_for_log(file_name),
+            type(exc).__name__,
         )
         return None

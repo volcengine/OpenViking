@@ -92,7 +92,10 @@ class VLMProcessor:
                 )
 
         except Exception as e:
-            logger.error(f"Error understanding image: {e}")
+            logger.info(
+                "Image understanding failed; using default content error_type=%s degraded=true",
+                type(e).__name__,
+            )
 
         return VLMResult(
             abstract="[Image]",
@@ -185,7 +188,10 @@ class VLMProcessor:
                 )
 
         except Exception as e:
-            logger.error(f"Error understanding table: {e}")
+            logger.info(
+                "Table understanding failed; using default content error_type=%s degraded=true",
+                type(e).__name__,
+            )
 
         return VLMResult(
             abstract="[Table]",
@@ -228,7 +234,11 @@ class VLMProcessor:
                 )
 
         except Exception as e:
-            logger.error(f"Error understanding page {page_num}: {e}")
+            logger.info(
+                "Page understanding failed; using default content page=%d error_type=%s degraded=true",
+                page_num,
+                type(e).__name__,
+            )
 
         return VLMResult(
             abstract=f"Page {page_num}",
@@ -426,7 +436,10 @@ class VLMProcessor:
                 return self._parse_batch_result(data, images, tables, sections)
 
         except Exception as e:
-            logger.error(f"Error in batch analysis: {e}")
+            logger.info(
+                "Batch analysis failed; using default content error_type=%s degraded=true",
+                type(e).__name__,
+            )
 
         # Return default result on failure
         return DocumentAnalysisResult(
@@ -510,7 +523,10 @@ Please output in JSON format:
                 )
 
         except Exception as e:
-            logger.error(f"Error in text-only analysis: {e}")
+            logger.info(
+                "Text analysis failed; using default content error_type=%s degraded=true",
+                type(e).__name__,
+            )
 
         return DocumentAnalysisResult(
             document={"abstract": title, "overview": "", "meta_extracted": {}},
@@ -666,7 +682,10 @@ Please output in JSON format:
                 return batch_results
 
         except Exception as e:
-            logger.error(f"Error filtering image batch: {e}")
+            logger.info(
+                "Image batch filtering failed; keeping all images error_type=%s degraded=true",
+                type(e).__name__,
+            )
 
         # On error, keep all images by default
         return [
@@ -707,7 +726,10 @@ Please output in JSON format:
                 ]
 
         except Exception as e:
-            logger.error(f"Error filtering image: {e}")
+            logger.info(
+                "Image filtering failed; keeping image error_type=%s degraded=true",
+                type(e).__name__,
+            )
 
         # On error, keep image by default
         return [{"is_meaningful": True, "reason": "Filtering failed", "image_type": "Unknown"}]

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { expectExit, readRequestBody, runHookScript, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -27,30 +27,13 @@ function writeEndedMarker(dir, id, ts) {
   return writeFile(join(dir, `${id}.ended.${ts}`), String(ts));
 }
 
-function runSessionEnd(input, env) {
-  return new Promise((resolve, reject) => {
-    const cleanEnv = { ...process.env };
-    for (const key of Object.keys(cleanEnv)) {
-      if (key.startsWith("OPENVIKING_") || key === "OV_HOOK_WORKER") delete cleanEnv[key];
-    }
-    const child = spawn(process.execPath, [join(SCRIPT_DIR, "session-end.mjs")], {
-      env: { ...cleanEnv, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`session-end exited ${code}: ${stderr}`));
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-    child.stdin.end(JSON.stringify(input));
-  });
+async function runSessionEnd(input, env) {
+  const result = expectExit(await runHookScript(join(SCRIPT_DIR, "session-end.mjs"), {
+    input,
+    env: { OV_HOOK_WORKER: undefined, ...env },
+    inheritOpenVikingEnv: false,
+  }));
+  return result;
 }
 
 function workerEnv(baseUrl, stateDir, extra = {}) {
@@ -163,6 +146,41 @@ test("session-end catches up the missing turns then commits", async () => {
     assert.equal(state.ovSessionId, null);
     assert.equal(state.capturedTurnCount, 4);
     assert.equal(await endedMarkerExists(stateDir, "s1"), false);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("session-end migrates a startup-inclusive cursor before catch-up and commit", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-startup-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  const startup = {
+    type: "response_item",
+    payload: { type: "message", role: "user", content: [
+      { type: "input_text", text: "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nAnswer in Chinese.\n</INSTRUCTIONS>" },
+      { type: "input_text", text: "<environment_context>\n  <cwd>/tmp/project</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-09-25</current_date>\n  <timezone>Asia/Singapore</timezone>\n</environment_context>" },
+    ] },
+  };
+  try {
+    await writeState(stateDir, "startup-end", { capturedTurnCount: 2 });
+    await writeFile(transcriptPath, [
+      JSON.stringify(startup),
+      JSON.stringify({ type: "turn_context", payload: { turn_id: "first" } }),
+      turn("user", "Previously captured"),
+      turn("user", "New question"),
+    ].join("\n"));
+    await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
+      await runSessionEnd(
+        { session_id: "startup-end", transcript_path: transcriptPath },
+        workerEnv(baseUrl, stateDir),
+      );
+    });
+    assert.deepEqual(sentMessages(calls).map((item) => item.parts?.[0]?.text ?? item.content), ["New question"]);
+    assert.equal(calls.filter((call) => call.path.endsWith("/commit")).length, 1);
+    const state = await readState(stateDir, "startup-end");
+    assert.equal(state.captureFormatVersion, 2);
+    assert.equal(state.capturedTurnCount, 2);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

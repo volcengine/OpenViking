@@ -5,16 +5,11 @@
 
 import pytest
 
-from openviking.core.peer_id import normalize_peer_id
 from openviking.core.retrieval_targets import default_target_directories, resolve_retrieval_targets
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.retrieve import ContextType
 from openviking_cli.session.user_id import UserIdentifier
-
-
-def test_normalize_peer_id_accepts_peer_id():
-    assert normalize_peer_id("web-visitor-alice") == "web-visitor-alice"
 
 
 def _ctx(
@@ -140,16 +135,10 @@ def test_owner_explicit_peer_memory_target_allows_any_peer():
     assert targets == ["viking://user/support_bot/peers/web-visitor-bob/memories"]
 
 
-def test_actor_explicit_own_peer_memory_target_is_allowed():
-    targets = _target_dirs(
-        "viking://user/support_bot/peers/web-visitor-alice/memories",
-        actor_peer_id="web-visitor-alice",
-    )
-
-    assert targets == ["viking://user/support_bot/peers/web-visitor-alice/memories"]
-
-
 def test_actor_explicit_other_peer_memory_target_is_denied():
+    own_target = "viking://user/support_bot/peers/web-visitor-alice/memories"
+    assert _target_dirs(own_target, actor_peer_id="web-visitor-alice") == [own_target]
+
     with pytest.raises(PermissionDeniedError, match="another peer"):
         _target_dirs(
             "viking://user/support_bot/peers/web-visitor-bob/memories",

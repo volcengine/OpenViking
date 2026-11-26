@@ -1,0 +1,307 @@
+@import '../../shared/feedback/style.css';
+@import '../context-picker/style.css';
+@import '../../shared/error-boundary/error-boundary.css';
+@import '../../theme.css';
+@import '../../shared/primitives/input/input.css';
+@import '../../shared/primitives/form-field/form-field.css';
+@import '../../shared/primitives/button/button.css';
+@import '../../shared/primitives/radio/radio.css';
+@import '../../shared/primitives/select/style.css';
+@import '../../shared/primitives/time-picker/style.css';
+@import '../../shared/primitives/popover/popover.css';
+@import './interaction/interaction-fields.css';
+@import '../../shared/primitives/modal/modal.css';
+@import '../file-tree/style.css';
+@import './interaction/directory-picker.css';
+
+.ov-viking-bot__interaction {
+  display: flex;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  overflow-y: auto;
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-viking-bot__interaction-steps {
+  min-width: 0;
+  min-height: 0;
+  flex: 0 1 auto;
+  overflow-y: auto;
+}
+.ov-viking-bot__interaction-card {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 16px 20px 12px;
+  border: 0.5px solid
+    var(--ov-ui-color-primary-disabled, var(--ov-ui-primary-disabled-default));
+  border-radius: 16px;
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  box-shadow: var(
+    --ov-ui-card-hover-shadow,
+    var(--ov-ui-card-hover-shadow-default)
+  );
+}
+.ov-viking-bot__interaction-title {
+  margin: 0;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__interaction-fields {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.ov-viking-bot__interaction-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  padding-block: 4px;
+}
+.ov-viking-bot__interaction-action.ov-button {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 32px;
+  height: 32px;
+  padding-inline: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 22px;
+}
+.ov-viking-bot__confirmation-values {
+  margin: 16px 0 0;
+  padding: 4px 12px;
+  border-radius: 12px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+}
+.ov-viking-bot__confirmation-values > div {
+  display: grid;
+  grid-template-columns: minmax(80px, 30%) minmax(0, 1fr);
+  gap: 12px;
+  padding-block: 12px;
+  border-bottom: 0.5px solid
+    var(--ov-ui-color-border-2, var(--ov-ui-border-2-default));
+}
+.ov-viking-bot__confirmation-values > div:last-child {
+  border-bottom: 0;
+}
+.ov-viking-bot__confirmation-values dt {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__confirmation-values dd {
+  min-width: 0;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__interaction-action.ov-button--outline {
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  background: var(--ov-ui-color-bg-1, var(--ov-ui-bg-1-default));
+  color: var(--ov-ui-color-text-1, var(--ov-ui-text-1-default));
+}
+.ov-viking-bot__interaction-card[aria-busy='true']
+  .ov-button--primary:disabled {
+  background: var(--ov-ui-color-primary, var(--ov-ui-primary-default));
+  color: var(
+    --ov-ui-color-text-on-primary,
+    var(--ov-ui-text-on-primary-default)
+  );
+}
+.ov-viking-bot__interaction-card--options {
+  padding: 0 0 12px;
+}
+.ov-viking-bot__interaction-card--options .ov-viking-bot__interaction-title {
+  padding: 16px 24px;
+}
+.ov-viking-bot__interaction-card--options .ov-viking-bot__interaction-fields {
+  margin-top: 0;
+  padding-inline: 12px;
+}
+.ov-viking-bot__interaction-card--options .ov-viking-bot__interaction-footer {
+  margin-top: 12px;
+  padding: 4px 12px;
+}
+.ov-viking-bot__interaction-progress,
+.ov-viking-bot__interaction-description {
+  margin: 0;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.ov-viking-bot__interaction-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+.ov-viking-bot__answer-summary {
+  display: grid;
+  grid-template-columns: fit-content(40%) minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0;
+}
+.ov-viking-bot__answer-summary dt {
+  overflow-wrap: anywhere;
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-viking-bot__answer-summary dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ov-viking-bot__message--answers {
+  padding-left: 0;
+}
+.ov-viking-bot__user-message-group--answers {
+  width: 100%;
+}
+
+.ov-viking-bot__compile-card .ov-viking-bot__interaction-footer {
+  margin-top: 44px;
+}
+.ov-viking-bot__compile-card--compile_name .ov-form-field__label,
+.ov-viking-bot__compile-card--compile_source .ov-form-field__label,
+.ov-viking-bot__compile-card--compile_target .ov-form-field__label {
+  margin: 0;
+}
+.ov-viking-bot__compile-card--compile_target .ov-viking-bot__interaction-card {
+  padding-inline: 12px;
+}
+.ov-viking-bot__compile-card--compile_target .ov-viking-bot__interaction-title {
+  padding-inline: 12px;
+}
+.ov-viking-bot__compile-card--compile_target
+  .ov-viking-bot__interaction-footer {
+  margin-top: 0;
+}
+.ov-viking-bot__compile-source {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.ov-viking-bot__compile-source:has(.ov-viking-bot__compile-source-tags) {
+  gap: 6px;
+  padding-inline: 8px;
+  border: 0.5px solid var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 6px;
+}
+.ov-viking-bot__compile-source-trigger.ov-button {
+  min-height: 36px;
+  padding-inline: 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.ov-viking-bot__compile-source-trigger > svg:first-child {
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+}
+.ov-viking-bot__compile-source-trigger > svg:last-child {
+  color: var(--ov-ui-color-text-3, var(--ov-ui-text-3-default));
+}
+.ov-viking-bot__compile-source-tags {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-block: 4px;
+}
+.ov-viking-bot__compile-source-tag {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding-inline: 6px 0;
+  border-radius: 4px;
+  background: var(--ov-ui-color-bg-3, var(--ov-ui-bg-3-default));
+  color: var(--ov-ui-color-text-2, var(--ov-ui-text-2-default));
+  font-size: 12px;
+}
+.ov-viking-bot__compile-source-tag > :first-child {
+  min-width: 0;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-viking-bot__compile-source-tag > .ov-button {
+  min-height: 24px;
+  padding-inline: 4px;
+  font-size: inherit;
+}
+.ov-viking-bot__compile-source-tags + .ov-viking-bot__compile-source-trigger {
+  width: 24px;
+  flex: none;
+  padding: 0;
+  justify-content: center;
+  border: 0;
+}
+.ov-viking-bot__compile-source-tags
+  + .ov-viking-bot__compile-source-trigger
+  > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  clip-path: inset(50%);
+}
+.ov-viking-bot__compile-source-tags
+  + .ov-viking-bot__compile-source-trigger
+  > svg:first-child {
+  display: none;
+}
+.ov-viking-bot__compile-skill {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+.ov-viking-bot__compile-skill .ov-viking-bot__interaction-option {
+  padding: 8px 12px;
+}
+.ov-viking-bot__compile-skill .ov-viking-bot__interaction-option-content {
+  gap: 0;
+}
+.ov-viking-bot__compile-skill
+  .ov-viking-bot__interaction-option.ov-radio--checked
+  .ov-viking-bot__interaction-index {
+  background: transparent;
+}
+.ov-viking-bot__compile-skill .ov-viking-bot__interaction-index > svg {
+  display: block;
+}
+
+.ov-viking-bot__compile-skill-upload .ov-modal__panel {
+  inline-size: min(480px, calc(100vw - 32px));
+}
+.ov-viking-bot__compile-skill-drop {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: 1px dashed var(--ov-ui-color-border-3, var(--ov-ui-border-3-default));
+  border-radius: 6px;
+  text-align: center;
+}
+.ov-viking-bot__compile-skill-drop input {
+  min-width: 0;
+  width: 100%;
+}

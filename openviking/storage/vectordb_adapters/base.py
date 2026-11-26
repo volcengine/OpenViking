@@ -13,6 +13,7 @@ from tempfile import TemporaryFile
 from typing import Any, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.expr import (
     And,
@@ -100,6 +101,9 @@ class CollectionAdapter(ABC):
     _DATA_BATCH_SIZE: int | None = None
 
     mode: str
+    # Remote glob can use this adapter's random-search post-processing path.
+    # Used when enable_path_glob is unspecified in VectorDB configuration.
+    enable_path_glob: bool = False
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
     # Only derived fields may be shortened silently. An oversized abstract is
@@ -129,6 +133,10 @@ class CollectionAdapter(ABC):
     @property
     def collection_name(self) -> str:
         return self._collection_name
+
+    @property
+    def supports_event_time_decay(self) -> bool:
+        return True
 
     @property
     def index_name(self) -> str:
@@ -204,18 +212,22 @@ class CollectionAdapter(ABC):
                 try:
                     coll.drop_index(index_name)
                 except Exception as e:
-                    logger.warning("Failed to drop index %s: %s", index_name, e)
+                    logger.info(
+                        "Failed to drop index %s: %s", short_hash(str(index_name)), type(e).__name__
+                    )
         except Exception as e:
-            logger.warning("Failed to list indexes before dropping collection: %s", e)
+            logger.info("Failed to list indexes before dropping collection: %s", type(e).__name__)
 
         try:
             coll.drop()
-        except NotImplementedError:
-            logger.warning("Collection drop is not supported by backend mode=%s", self.mode)
+        except NotImplementedError as _log_error:
+            logger.info(
+                "Collection drop is not supported by backend mode=%s error_type=%s",
+                self.mode,
+                type(_log_error).__name__,
+            )
             return False
-        finally:
-            self._collection = None
-
+        self._collection = None
         return True
 
     def close(self) -> None:
@@ -484,7 +496,37 @@ class CollectionAdapter(ABC):
         output_fields: Optional[list[str]] = None,
         order_by: Optional[str] = None,
         order_desc: bool = False,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
+        decay_request = (advance or {}).get("time_decay")
+        if decay_request is not None and self.mode not in {"opengauss", "pgvector"}:
+            from openviking.utils.time_decay import (
+                build_time_decay_fusion_spec,
+                build_time_decay_post_process_ops,
+            )
+            from openviking.utils.time_utils import parse_iso_datetime
+
+            protection = decay_request["protection"]
+            origin = parse_iso_datetime(decay_request["origin"])
+            if self.mode in {"local", "cuvs", "http"}:
+                spec = build_time_decay_fusion_spec(protection=protection, origin=origin)
+                advance = {
+                    "time_decay": {
+                        "field": spec.field,
+                        "origin_ms": spec.origin_ms,
+                        "offset_ms": spec.offset_ms,
+                        "scale_ms": spec.scale_ms,
+                        "decay": spec.decay,
+                    }
+                }
+            elif self.mode in {"vikingdb", "volcengine"}:
+                advance = {
+                    "post_process_ops": build_time_decay_post_process_ops(
+                        protection=protection, origin=origin
+                    )
+                }
+            else:
+                raise NotImplementedError(f"Time decay is not supported by {self.mode}")
         coll = self.get_collection()
         vectordb_filter = self._compile_filter(filter)
 
@@ -497,6 +539,8 @@ class CollectionAdapter(ABC):
                 offset=offset,
                 filters=vectordb_filter,
                 output_fields=output_fields,
+                advance=advance,
+                return_detail_info=decay_request is not None,
             )
         elif order_by:
             result = coll.search_by_scalar(
@@ -538,6 +582,10 @@ class CollectionAdapter(ABC):
             record = dict(item.fields) if item.fields else {}
             record["id"] = item.id
             record["_score"] = _normalize_result_score(item.score)
+            if item.origin_score is not None:
+                record["_origin_score"] = _normalize_result_score(item.origin_score)
+            if item.addition_score is not None:
+                record["_time_score"] = _normalize_result_score(item.addition_score)
             record = self._normalize_record_for_read(record)
             records.append(record)
         return records
@@ -667,26 +715,36 @@ class CollectionAdapter(ABC):
         offset: int = 0,
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         output_fields: Optional[list[str]] = None,
+        mode: Optional[str] = None,
+        fields: Optional[list[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         compiled_filter = self._compile_filter(filter)
         logger.debug(
-            "search_by_keywords: keywords=%s query=%s limit=%s offset=%s filter=%s output_fields=%s",
-            keywords,
-            query,
+            "Keyword search prepared keyword_count=%d query_length=%d limit=%s offset=%s has_filter=%s",
+            # input params choose either keywords or query
+            len(keywords or ()),
+            len(query or ""),
             limit,
             offset,
-            json.dumps(compiled_filter, ensure_ascii=False),
-            output_fields,
+            bool(compiled_filter),
         )
         result = coll.search_by_keywords(
             index_name=self._index_name,
             keywords=keywords,
             query=query,
+            mode=mode,
+            fields=fields,
             limit=limit,
             offset=offset,
             filters=compiled_filter,
             output_fields=output_fields,
+            bm25_k1=bm25_k1,
+            bm25_b=bm25_b,
+            advance=advance,
         )
         records: list[Dict[str, Any]] = []
         for item in result.data:

@@ -12,7 +12,7 @@ import litellm
 
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.bus.events import OutboundMessage
-from vikingbot.utils import detect_image_format, get_data_path
+from vikingbot.utils import detect_image_format, get_images_path
 
 
 class ImageGenerationTool(Tool):
@@ -292,8 +292,7 @@ class ImageGenerationTool(Tool):
             if not images:
                 return "Error: No images generated"
 
-            images_dir = get_data_path() / "images"
-            images_dir.mkdir(exist_ok=True)
+            images_dir = get_images_path()
             saved_paths = ["生成图片："]
             saved_filenames = []
 

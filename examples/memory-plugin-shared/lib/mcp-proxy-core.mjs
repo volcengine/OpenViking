@@ -11,6 +11,7 @@ import { createInterface } from "node:readline";
 import { buildOvHeaders } from "./ov-http.mjs";
 
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
+const SESSION_HISTORY_TOOL = "session_history";
 const DELETE_TIMEOUT_MS = 2000;
 const MAX_CONCURRENT_REQUESTS = 16;
 
@@ -101,7 +102,7 @@ function parseSseMessages(text) {
     messages.push(JSON.parse(data));
   }
 
-  for (const rawLine of String(text || "").split(/\r?\n/)) {
+  for (const rawLine of String(text || "").split(/\r\n|\r|\n/)) {
     if (rawLine === "") {
       flush();
       continue;
@@ -144,6 +145,9 @@ export function createOpenVikingMcpProxy({
   loggerFactory,
   fetchImpl = globalThis.fetch,
   localToolProvider = null,
+  // (params) => the OV session id of the host session making this tools/call,
+  // or "" when the harness cannot tell; fills `session_history`'s `session`.
+  defaultHistorySession = null,
 } = {}) {
   if (typeof fetchImpl !== "function") {
     throw new Error("global fetch is required; use Node.js 18 or newer");
@@ -216,6 +220,33 @@ export function createOpenVikingMcpProxy({
     if (!localTools().some((tool) => tool?.name === name)) return null;
     reloadIfCredentialFilesChanged("local_tool_call");
     return localToolProvider.callTool(message.params, { config: proxyConfig });
+  }
+
+  // A `session` the model passed is kept as is, even one this proxy would not
+  // have chosen; only a missing or blank one is filled.
+  function withDefaultHistorySession(message) {
+    if (
+      typeof defaultHistorySession !== "function"
+      || message.method !== "tools/call"
+      || message.params?.name !== SESSION_HISTORY_TOOL
+    ) {
+      return message;
+    }
+    const args = message.params.arguments;
+    const given = args && typeof args === "object" ? args.session : undefined;
+    if (given != null && (typeof given !== "string" || given.trim())) return message;
+    let session = "";
+    try {
+      session = String(defaultHistorySession(message.params) || "").trim();
+    } catch (err) {
+      logError("default_history_session", err);
+    }
+    log("default_history_session", { filled: Boolean(session) });
+    if (!session) return message;
+    return {
+      ...message,
+      params: { ...message.params, arguments: { ...(args || {}), session } },
+    };
   }
 
   function reloadConfig(reason) {
@@ -428,6 +459,7 @@ export function createOpenVikingMcpProxy({
       return;
     }
 
+    message = withDefaultHistorySession(message);
     const expectsResponse = isRequest(message);
     if (message.method === "initialize") {
       initializeRequest = cloneMessage(message);

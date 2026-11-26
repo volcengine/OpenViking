@@ -13,8 +13,8 @@ function jsonRpc(id, result = {}) {
   return { jsonrpc: "2.0", id, result };
 }
 
-function sseMessage(obj) {
-  return `event: message\r\ndata: ${JSON.stringify(obj)}\r\n\r\n`;
+function sseMessage(obj, lineEnding = "\r\n") {
+  return `event: message${lineEnding}data: ${JSON.stringify(obj)}${lineEnding}${lineEnding}`;
 }
 
 /**
@@ -45,7 +45,14 @@ async function withServer(handler, fn) {
   }
 }
 
-function makeProxy({ url, fetchImpl, configOverrides = {}, localToolProvider, readConfig } = {}) {
+function makeProxy({
+  url,
+  fetchImpl,
+  configOverrides = {},
+  localToolProvider,
+  readConfig,
+  defaultHistorySession,
+} = {}) {
   const out = [];
   const stdout = new Writable({
     write(chunk, _encoding, callback) {
@@ -74,6 +81,7 @@ function makeProxy({ url, fetchImpl, configOverrides = {}, localToolProvider, re
     })),
     loggerFactory: () => ({ log() {}, logError() {} }),
     localToolProvider,
+    defaultHistorySession,
   });
   return {
     proxy,
@@ -85,33 +93,35 @@ function makeProxy({ url, fetchImpl, configOverrides = {}, localToolProvider, re
   };
 }
 
-test("captures initialize session id and forwards SSE JSON-RPC response", async () => {
-  await withServer((_req, res, entry) => {
-    assert.equal(entry.method, "POST");
-    assert.equal(entry.headers.authorization, "Bearer test-key");
-    assert.equal(entry.headers["x-openviking-account"], "default");
-    assert.equal(entry.headers["x-openviking-user"], "zeus");
-    assert.equal(entry.headers["x-openviking-actor-peer"], "peer-a");
-    assert.equal(entry.headers["user-agent"], "openviking-memory-test/9.9.9");
-    assert.equal(entry.headers["mcp-protocol-version"], "2025-06-18");
-    assert.equal(entry.headers["mcp-session-id"], undefined);
-    res.writeHead(200, {
-      "content-type": "text/event-stream",
-      "mcp-session-id": "sid-1",
+for (const [label, lineEnding] of [["CRLF", "\r\n"], ["LF", "\n"], ["CR", "\r"]]) {
+  test(`captures initialize session id and forwards ${label} SSE JSON-RPC response`, async () => {
+    await withServer((_req, res, entry) => {
+      assert.equal(entry.method, "POST");
+      assert.equal(entry.headers.authorization, "Bearer test-key");
+      assert.equal(entry.headers["x-openviking-account"], "default");
+      assert.equal(entry.headers["x-openviking-user"], "zeus");
+      assert.equal(entry.headers["x-openviking-actor-peer"], "peer-a");
+      assert.equal(entry.headers["user-agent"], "openviking-memory-test/9.9.9");
+      assert.equal(entry.headers["mcp-protocol-version"], "2025-06-18");
+      assert.equal(entry.headers["mcp-session-id"], undefined);
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "mcp-session-id": "sid-1",
+      });
+      res.end(`: keepalive${lineEnding}${sseMessage(jsonRpc(1, { protocolVersion: "2025-06-18" }), lineEnding)}`);
+    }, async ({ url, requests }) => {
+      const { proxy, messages } = makeProxy({ url });
+      await proxy.handleMessage({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18" },
+      });
+      assert.deepEqual(await messages(), [jsonRpc(1, { protocolVersion: "2025-06-18" })]);
+      assert.equal(requests.length, 1);
     });
-    res.end(`: keepalive\r\n${sseMessage(jsonRpc(1, { protocolVersion: "2025-06-18" }))}`);
-  }, async ({ url, requests }) => {
-    const { proxy, messages } = makeProxy({ url });
-    await proxy.handleMessage({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2025-06-18" },
-    });
-    assert.deepEqual(await messages(), [jsonRpc(1, { protocolVersion: "2025-06-18" })]);
-    assert.equal(requests.length, 1);
   });
-});
+}
 
 test("never forwards the client's un-negotiated protocol version header", async () => {
   await withServer((_req, res, entry) => {
@@ -490,4 +500,54 @@ test("a genuine connection failure still maps to -32001", async () => {
   assert.equal(res.id, 8);
   assert.equal(res.error.code, -32001);
   assert.match(res.error.message, /reachable/);
+});
+
+async function forwardedHistoryCalls(calls, defaultHistorySession) {
+  return withServer((_req, res, entry) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(jsonRpc(entry.body.id, { content: [] })));
+  }, async ({ url, requests }) => {
+    const { proxy } = makeProxy({ url, defaultHistorySession });
+    for (const [index, params] of calls.entries()) {
+      await proxy.handleMessage({ jsonrpc: "2.0", id: 100 + index, method: "tools/call", params });
+    }
+    return requests.map((request) => request.body.params);
+  });
+}
+
+test("session_history without a session gets the harness's current session", async () => {
+  const seen = [];
+  const forwarded = await forwardedHistoryCalls([
+    { name: "session_history", arguments: { action: "search", query: "ECONNRESET" } },
+    { name: "session_history", arguments: { action: "overview", session: "  " } },
+    { name: "session_history", _meta: { sessionId: "thread-1" } },
+  ], (params) => {
+    seen.push(params);
+    return "cc-current";
+  });
+
+  assert.deepEqual(forwarded, [
+    { name: "session_history", arguments: { action: "search", query: "ECONNRESET", session: "cc-current" } },
+    { name: "session_history", arguments: { action: "overview", session: "cc-current" } },
+    { name: "session_history", _meta: { sessionId: "thread-1" }, arguments: { session: "cc-current" } },
+  ]);
+  // The harness reads the call itself, e.g. Codex's `_meta.sessionId`.
+  assert.deepEqual(seen[2]._meta, { sessionId: "thread-1" });
+});
+
+test("a session the model passed and other tools are forwarded unchanged", async () => {
+  const calls = [
+    { name: "session_history", arguments: { action: "read", id: "3fa91c#870", session: "cc-other,cc-older" } },
+    { name: "read", arguments: { uri: "viking://resources/a.md" } },
+    { name: "openviking_session_history", arguments: { action: "overview" } },
+  ];
+  const forwarded = await forwardedHistoryCalls(calls, () => "cc-current");
+  assert.deepEqual(forwarded, calls);
+});
+
+test("session stays empty when the harness cannot tell the current session", async () => {
+  const call = { name: "session_history", arguments: { action: "overview" } };
+  assert.deepEqual(await forwardedHistoryCalls([call], () => ""), [call]);
+  assert.deepEqual(await forwardedHistoryCalls([call], () => { throw new Error("no binding"); }), [call]);
+  assert.deepEqual(await forwardedHistoryCalls([call], undefined), [call]);
 });

@@ -16,6 +16,7 @@ from typing import Generator
 
 import httpx
 import pytest
+from model_query_retry import retry_model_query
 
 from openviking_cli.utils.config import OPENVIKING_CONFIG_ENV
 
@@ -298,9 +299,7 @@ def _write_cli_config():
 
 
 CLI_CONFIG_PATH = _write_cli_config()
-ADD_RESOURCE_WAIT_TIMEOUT = "300"
 ADD_RESOURCE_COMMAND_TIMEOUT = 360
-WRITE_WAIT_TIMEOUT = "300"
 WRITE_COMMAND_TIMEOUT = 360
 
 
@@ -338,7 +337,7 @@ def _apply_cli_skip_markers(items):
     if not CLI_COMPATIBLE:
         skip_reason = "openviking CLI not available"
         if CLI_BIN is None:
-            skip_reason = "openviking CLI binary not found. Install via: curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash"
+            skip_reason = "openviking CLI binary not found. Install via: npm install -g @openviking/cli"
         else:
             try:
                 result = subprocess.run(
@@ -444,6 +443,11 @@ def ov(args, timeout=120):
     }
 
 
+def ov_model_query(args, timeout=180):
+    """Retry model TPM/RPM limits only for read-only find/search tests."""
+    return retry_model_query(lambda: ov(args, timeout=timeout))
+
+
 def _is_retryable_api_error(result: dict) -> bool:
     """Check if a CLI error is retryable (resource busy, conflict, network issue)."""
     if is_cli_auth_error(result):
@@ -493,8 +497,6 @@ def ov_add_resource(path, to_uri, *extra_args, attempts=15, interval=10):
         to_uri,
         *extra_args,
         "--wait",
-        "--timeout",
-        ADD_RESOURCE_WAIT_TIMEOUT,
         "-o",
         "json",
     ]
@@ -572,8 +574,6 @@ def ov_write(uri, content, *extra_args):
             content,
             *extra_args,
             "--wait",
-            "--timeout",
-            WRITE_WAIT_TIMEOUT,
             "-o",
             "json",
         ],
@@ -622,6 +622,10 @@ def pytest_collection_modifyitems(items):
 
 @pytest.fixture(scope="session")
 def ensure_resources_dir():
+    existing = ov(["stat", "viking://resources", "-o", "json"])
+    if existing["exit_code"] == 0:
+        return
+    skip_if_auth_error(existing)
     r = ov_mkdir("viking://resources")
     if r["exit_code"] != 0:
         if "already exists" in (r.get("stderr") or "").lower():

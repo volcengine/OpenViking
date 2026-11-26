@@ -4,6 +4,7 @@ OpenViking 记忆演示脚本 — 用户: 小美（日常生活记录）
 """
 
 import argparse
+import asyncio
 import time
 from datetime import datetime
 
@@ -22,9 +23,11 @@ except ModuleNotFoundError:  # pytest/package import path
 # ── 常量 ───────────────────────────────────────────────────────────────────
 
 DISPLAY_NAME = "小美"
-DEFAULT_URL = "http://localhost:1934"
+DEFAULT_URL = "http://localhost:1933"
 PANEL_WIDTH = 78
 DEFAULT_API_KEY = None
+DEFAULT_ACCOUNT = "default"
+DEFAULT_USER = "xiaomei"
 DEFAULT_SESSION_ID = "xiaomei-demo"
 ASSISTANT_PEER_ID = "xiaomei-demo-assistant"
 
@@ -106,12 +109,12 @@ VERIFY_QUERIES = [
 # ── Phase 1: 写入对话并提交 ────────────────────────────────────────────────
 
 
-def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
+async def _run_ingest_async(client, session_id: str, wait_seconds: float):
     console.print()
     console.rule(f"[bold]Phase 1: 写入对话 — {DISPLAY_NAME} ({len(CONVERSATION)} 轮)[/bold]")
 
     # 获取 session；若不存在则由服务端按 session_id 自动创建
-    session = client.create_session()
+    session = await client.create_session()
     session_id = session.get("session_id")
     print(f"session_id={session_id}")
     console.print(f"  Session: [bold cyan]{session_id}[/bold cyan]")
@@ -125,17 +128,17 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     total = len(CONVERSATION)
     for i, turn in enumerate(CONVERSATION, 1):
         console.print(f"  [dim][{i}/{total}][/dim] 添加 user + assistant 消息...")
-        client.add_message(
+        await client.add_message(
             session_id,
             role="user",
             parts=[{"type": "text", "text": turn["user"]}],
-            created_at=session_time_str,
+            options={"created_at": session_time_str},
         )
-        client.add_message(
+        await client.add_message(
             session_id,
             role="assistant",
             parts=[{"type": "text", "text": turn["assistant"]}],
-            created_at=session_time_str,
+            options={"created_at": session_time_str},
             peer_id=ASSISTANT_PEER_ID,
         )
 
@@ -145,7 +148,7 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     # 提交 session — 触发记忆抽取
     console.print()
     console.print("  [yellow]提交 Session（触发记忆抽取）...[/yellow]")
-    commit_result = client.commit_session(session_id)
+    commit_result = await client.commit_session(session_id)
     task_id = commit_result.get("task_id")
     trace_id = commit_result.get("trace_id")
     console.print(f"  [bold cyan]trace_id: {trace_id}[/bold cyan]")
@@ -156,10 +159,10 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
         now = time.time()
         console.print(f"  [yellow]等待记忆提取完成 (task_id={task_id})...[/yellow]")
         while True:
-            task = client.get_task(task_id)
+            task = await client.get_task(task_id)
             if not task or task.get("status") in ("completed", "failed"):
                 break
-            time.sleep(1)
+            await asyncio.sleep(1)
         elapsed = time.time() - now
         status = task.get("status", "unknown") if task else "not found"
         console.print(f"  [green]任务 {status}，耗时 {elapsed:.2f}s[/green]")
@@ -167,13 +170,13 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
 
     # 等待向量化队列处理完成
     console.print("  [yellow]等待向量化完成...[/yellow]")
-    client.wait_processed()
+    await client.wait_processed()
 
     if wait_seconds > 0:
         console.print(f"  [dim]额外等待 {wait_seconds:.0f}s...[/dim]")
-        time.sleep(wait_seconds)
+        await asyncio.sleep(wait_seconds)
 
-    session_info = client.get_session(session_id)
+    session_info = await client.get_session(session_id)
     console.print(f"  Session 详情: {session_info}")
 
     return session_id
@@ -182,7 +185,7 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
 # ── Phase 2: 验证记忆召回 ─────────────────────────────────────────────────
 
 
-def run_verify(client: ov.SyncHTTPClient):
+async def _run_verify_async(client):
     console.print()
     console.rule(
         f"[bold]Phase 2: 验证记忆召回 — {DISPLAY_NAME} ({len(VERIFY_QUERIES)} 条查询)[/bold]"
@@ -208,36 +211,42 @@ def run_verify(client: ov.SyncHTTPClient):
         console.print(f"  [dim]期望关键词: {', '.join(expected)}[/dim]")
 
         try:
-            results = client.find(query, limit=5)
+            results = await client.find(query, limit=5)
 
             # 收集所有召回内容
             recall_texts = []
             count = 0
-            if hasattr(results, "memories") and results.memories:
-                for m in results.memories:
-                    text = getattr(m, "content", "") or getattr(m, "text", "") or str(m)
+            memories = results.get("memories") if isinstance(results, dict) else None
+            if memories:
+                for m in memories:
+                    text = m.get("content") or m.get("text") or str(m)
                     print(f"  [DEBUG] memory text: {repr(text)}")
                     recall_texts.append(text)
-                    uri = getattr(m, "uri", "")
-                    score = getattr(m, "score", 0)
+                    uri = m.get("uri", "")
+                    score = m.get("score", 0) or 0
                     console.print(f"    [green]Memory:[/green] {uri} (score: {score:.4f})")
                     console.print(
                         f"    [dim]{text[:120]}...[/dim]"
                         if len(text) > 120
                         else f"    [dim]{text}[/dim]"
                     )
-                count += len(results.memories)
+                count += len(memories)
 
-            if hasattr(results, "resources") and results.resources:
-                for r in results.resources:
-                    text = getattr(r, "content", "") or getattr(r, "text", "") or str(r)
+            resources = results.get("resources") if isinstance(results, dict) else None
+            if resources:
+                for r in resources:
+                    text = r.get("content") or r.get("text") or str(r)
                     print(f"  [DEBUG] resource text: {repr(text)}")
                     recall_texts.append(text)
-                    console.print(f"    [blue]Resource:[/blue] {r.uri} (score: {r.score:.4f})")
-                count += len(results.resources)
+                    console.print(
+                        f"    [blue]Resource:[/blue] {r.get('uri', '')} "
+                        f"(score: {(r.get('score', 0) or 0):.4f})"
+                    )
+                count += len(resources)
 
-            if hasattr(results, "skills") and results.skills:
-                count += len(results.skills)
+            skills = results.get("skills") if isinstance(results, dict) else None
+            if skills:
+                count += len(skills)
 
             # 检查关键词命中
             all_text = " ".join(recall_texts)
@@ -262,6 +271,12 @@ def main():
     parser.add_argument("--url", default=DEFAULT_URL, help=f"Server URL (默认: {DEFAULT_URL})")
     parser.add_argument("--api-key", default=DEFAULT_API_KEY, help=API_KEY_HELP)
     parser.add_argument(
+        "--account", default=DEFAULT_ACCOUNT, help=f"OpenViking account (默认: {DEFAULT_ACCOUNT})"
+    )
+    parser.add_argument(
+        "--user", default=DEFAULT_USER, help=f"OpenViking user (默认: {DEFAULT_USER})"
+    )
+    parser.add_argument(
         "--phase",
         choices=["all", "ingest", "verify"],
         default="all",
@@ -282,17 +297,27 @@ def main():
         )
     )
 
-    client = ov.SyncHTTPClient(url=args.url, api_key=resolve_api_key(args.api_key), timeout=180)
+    asyncio.run(_main_async(args))
+
+
+async def _main_async(args):
+    client = ov.AsyncHTTPClient(
+        url=args.url,
+        api_key=resolve_api_key(args.api_key),
+        account=args.account,
+        user=args.user,
+        timeout=180,
+    )
 
     try:
-        client.initialize()
+        await client.initialize()
         console.print(f"  [green]已连接[/green] {args.url}")
 
         if args.phase in ("all", "ingest"):
-            run_ingest(client, session_id=args.session_id, wait_seconds=args.wait)
+            await _run_ingest_async(client, session_id=args.session_id, wait_seconds=args.wait)
 
         if args.phase in ("all", "verify"):
-            run_verify(client)
+            await _run_verify_async(client)
 
         console.print(
             Panel(
@@ -309,7 +334,7 @@ def main():
         traceback.print_exc()
 
     finally:
-        client.close()
+        await client.close()
 
 
 if __name__ == "__main__":

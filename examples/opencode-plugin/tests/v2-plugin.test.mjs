@@ -1,7 +1,11 @@
 import test from "node:test"
 import assert from "node:assert/strict"
+import { fileURLToPath } from "node:url"
 import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } from "../lib/v2-plugin.mjs"
 import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
+
+const pluginRoot = fileURLToPath(new URL("..", import.meta.url))
+const BUNDLED_SKILLS = ["openviking-memory", "openviking-rule-search", "openviking-skills", "ov-experience-memory", "ov-memory-doctor"]
 
 function runtimeFixture(overrides = {}) {
   const events = []
@@ -31,10 +35,19 @@ function runtimeFixture(overrides = {}) {
 function contextFixture(messages = []) {
   const hooks = {}
   const registered = []
+  const skillSources = []
   return {
     hooks,
     registered,
+    skillSources,
     ctx: {
+      skill: {
+        transform: async (callback) => callback({
+          list: () => skillSources,
+          get: (id) => skillSources.find((skill) => skill.id === id),
+          add: (skill) => skillSources.push(skill),
+        }),
+      },
       location: { directory: "/tmp/project" },
       mcp: {
         transform: async (callback) => callback({
@@ -54,13 +67,64 @@ function contextFixture(messages = []) {
 
 test("startV2Plugin registers direct MCP tools and all v2 hooks", async () => {
   const { runtime } = runtimeFixture()
-  const { ctx, hooks, registered } = contextFixture()
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" })
+  const { ctx, hooks, registered, skillSources } = contextFixture()
+  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
 
+  assert.deepEqual(skillSources.map((skill) => skill.id).sort(), BUNDLED_SKILLS)
+  for (const skill of skillSources) {
+    assert.ok(skill.description.length > 20 && !skill.description.includes("\n"))
+    assert.match(skill.content, /^\s*# /)
+  }
   assert.equal(registered[0][0], "openviking")
   assert.equal(registered[0][1].type, "local")
   assert.equal(registered[0][1].codemode, false)
   assert.deepEqual(Object.keys(hooks).sort(), ["compaction", "context", "execute.after", "execute.before", "prompt"])
+  await cleanup()
+})
+
+for (const disabled of [false, true]) {
+  test(`bundled skills follow MCP registration when transforms run after setup, disabled=${disabled}`, async () => {
+    const { runtime } = runtimeFixture()
+    const { ctx } = contextFixture()
+    const transforms = []
+    ctx.mcp.transform = async (callback) => { transforms.push(callback) }
+    ctx.skill.transform = async (callback) => { transforms.push(callback) }
+    const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
+    const [mcp, skill] = transforms
+    const skills = new Map()
+    mcp({ get: () => (disabled ? { disabled: true } : undefined), set: () => {} })
+    skill({ list: () => [...skills.values()], get: (id) => skills.get(id), add: (value) => skills.set(value.id, value) })
+    assert.deepEqual([...skills.keys()].sort(), disabled ? [] : BUNDLED_SKILLS)
+    await cleanup()
+  })
+}
+
+test("existing skills override bundled skills by ID or name", async () => {
+  const { runtime } = runtimeFixture()
+  const { ctx, skillSources } = contextFixture()
+  skillSources.push(
+    { id: "project-memory", name: "openviking-memory", path: "/tmp/project/.opencode/skills/project-memory/SKILL.md", content: "" },
+    { id: "openviking-skills", name: "Custom skills", path: "/tmp/project/.opencode/skills/openviking-skills/SKILL.md", content: "" },
+  )
+  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
+  assert.deepEqual(skillSources.map((skill) => skill.id).sort(), [
+    "openviking-rule-search",
+    "openviking-skills",
+    "ov-experience-memory",
+    "ov-memory-doctor",
+    "project-memory",
+  ])
+  assert.equal(skillSources.find((skill) => skill.id === "openviking-skills").name, "Custom skills")
+  await cleanup()
+})
+
+test("a missing skills directory leaves MCP and hooks registered", async () => {
+  const { runtime } = runtimeFixture()
+  const { ctx, hooks, registered, skillSources } = contextFixture()
+  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: "/nonexistent" })
+  assert.deepEqual(skillSources, [])
+  assert.equal(registered[0][0], "openviking")
+  assert.equal(typeof hooks.prompt, "function")
   await cleanup()
 })
 
@@ -117,6 +181,26 @@ test("cleanup waits for background initialization before flushing", async () => 
   completeBackground()
   await cleaning
   assert.equal(flushed, true)
+})
+
+test("prompt starts session context and recall together and keeps block order", async () => {
+  const started = []
+  const pending = {}
+  const call = (name) => new Promise((resolve) => {
+    started.push(name)
+    pending[name] = resolve
+  })
+  const event = { sessionID: "ses_1", messageID: "msg_1", prompt: { text: "query" } }
+  const preparing = prepareV2Prompt(event, {
+    recallEnabled: true,
+    sessionInject: { buildSessionContext: () => call("profile") },
+    recall: { buildRelevantMemories: () => call("recall") },
+  })
+  assert.deepEqual(started, ["profile", "recall"])
+  pending.recall("<recall/>")
+  pending.profile("<profile/>")
+  await preparing
+  assert.deepEqual(event.metadata.openviking.context, ["<profile/>", "<recall/>"])
 })
 
 test("prompt metadata is persisted and context injection is stable across model steps", async () => {
@@ -183,6 +267,23 @@ test("captureV2Context advances a per-session cursor and preserves tool parts", 
   events.length = 0
   await captureV2Context(ctx, manager, cursors, "ses_1")
   assert.deepEqual(events, [])
+})
+
+test("a trailing assistant message can be captured when its content becomes available", async () => {
+  const events = []
+  const assistant = { id: "msg_assistant", type: "assistant", content: [] }
+  const messages = [{ id: "msg_user", type: "user", text: "question" }, assistant]
+  const ctx = { session: { context: async () => messages }, storage: new Map() }
+  const manager = { handleEvent: async (event) => events.push(event) }
+
+  await captureV2Context(ctx, manager, new Map(), "ses_1")
+  assert.deepEqual(events.filter((event) => event.type === "message.updated").map((event) => event.properties.info.id), ["msg_user"])
+
+  events.length = 0
+  assistant.content = [{ type: "text", text: "answer" }]
+  await captureV2Context(ctx, manager, new Map(), "ses_1")
+  assert.deepEqual(events.filter((event) => event.type === "message.updated").map((event) => event.properties.info.id), ["msg_assistant"])
+  assert.equal(events.at(-1).properties.part.text, "answer")
 })
 
 test("v2 prompt, context, after-tool, and event failures are contained", async () => {

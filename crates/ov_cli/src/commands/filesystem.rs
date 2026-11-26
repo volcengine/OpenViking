@@ -13,6 +13,7 @@ use unicode_width::UnicodeWidthStr;
 const ENTRY_TEXT_WIDTH: usize = 96;
 const ENTRY_MIN_TEXT_WIDTH: usize = 32;
 const ENTRY_MAX_ABSTRACT_LINES: usize = 2;
+const ENTRY_MAX_OVERVIEW_LINES: usize = 6;
 const ENTRY_INDENT: &str = "   ";
 const TREE_INDENT: &str = "  ";
 const TREE_NAME_COLUMN_WIDTH: usize = 38;
@@ -45,6 +46,7 @@ static ALL_FIELDS: &[FieldDef] = &[
     FieldDef { name: "count", header: "COUNT", alignment: FieldAlignment::Right },
     FieldDef { name: "tags", header: "TAGS", alignment: FieldAlignment::Left },
     FieldDef { name: "abstract", header: "ABSTRACT", alignment: FieldAlignment::Left },
+    FieldDef { name: "overview", header: "OVERVIEW", alignment: FieldAlignment::Left },
 ];
 
 fn resolve_fields(fields: &[String], is_tree: bool) -> Vec<&'static FieldDef> {
@@ -142,7 +144,16 @@ fn field_value(entry: &Value, field: &FieldDef) -> String {
             .unwrap_or_else(|| "-".to_string()),
         "abstract" => entry_string(obj, "abstract")
             .map(|s| {
-                if is_directory_abstract_placeholder(s) {
+                if is_directory_summary_placeholder(s) {
+                    "-".to_string()
+                } else {
+                    s.chars().take(80).collect::<String>()
+                }
+            })
+            .unwrap_or_else(|| "-".to_string()),
+        "overview" => entry_string(obj, "overview")
+            .map(|s| {
+                if is_directory_summary_placeholder(s) {
                     "-".to_string()
                 } else {
                     s.chars().take(80).collect::<String>()
@@ -169,6 +180,9 @@ pub async fn ls(
     recursive: bool,
     output: &str,
     abs_limit: i32,
+    include_abstract: Option<bool>,
+    include_overview: Option<bool>,
+    overview_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
     offset: i32,
@@ -190,6 +204,9 @@ pub async fn ls(
             recursive,
             output,
             abs_limit,
+            include_abstract,
+            include_overview,
+            overview_limit,
             show_all_hidden,
             node_limit,
             offset,
@@ -210,7 +227,11 @@ pub async fn tree(
     uri: &str,
     output: &str,
     abs_limit: i32,
+    include_abstract: Option<bool>,
+    include_overview: Option<bool>,
+    overview_limit: i32,
     show_all_hidden: bool,
+    directories_only: bool,
     node_limit: i32,
     level_limit: i32,
     offset: i32,
@@ -227,7 +248,11 @@ pub async fn tree(
             uri,
             output,
             abs_limit,
+            include_abstract,
+            include_overview,
+            overview_limit,
             show_all_hidden,
+            directories_only,
             node_limit,
             level_limit,
             offset,
@@ -618,7 +643,14 @@ fn render_ls_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut Ve
         }
     }
 
-    append_entry_abstract(object, ENTRY_INDENT, text_width, lines);
+    append_entry_summary(
+        object,
+        "abstract",
+        ENTRY_INDENT,
+        text_width,
+        ENTRY_MAX_ABSTRACT_LINES,
+        lines,
+    );
 }
 
 fn render_tree_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut Vec<String>) {
@@ -654,6 +686,23 @@ fn render_tree_entry(rank: usize, entry: &Value, text_width: usize, lines: &mut 
         &metadata.join("  "),
         text_width,
     ));
+    let content_indent = format!("{indent}{TREE_INDENT}");
+    append_entry_summary(
+        object,
+        "abstract",
+        &content_indent,
+        text_width,
+        ENTRY_MAX_ABSTRACT_LINES,
+        lines,
+    );
+    append_entry_summary(
+        object,
+        "overview",
+        &content_indent,
+        text_width,
+        ENTRY_MAX_OVERVIEW_LINES,
+        lines,
+    );
 }
 
 fn entry_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String> {
@@ -683,20 +732,22 @@ fn entry_metadata(object: Option<&serde_json::Map<String, Value>>) -> Vec<String
     metadata
 }
 
-fn append_entry_abstract(
+fn append_entry_summary(
     object: Option<&serde_json::Map<String, Value>>,
+    field: &str,
     indent: &str,
     text_width: usize,
+    max_lines: usize,
     lines: &mut Vec<String>,
 ) {
-    let Some(abstract_text) = entry_string(object, "abstract") else {
+    let Some(text) = entry_string(object, field) else {
         return;
     };
-    if abstract_text.trim().is_empty() || is_directory_abstract_placeholder(abstract_text) {
+    if text.trim().is_empty() || is_directory_summary_placeholder(text) {
         return;
     }
 
-    for line in wrap_display_text(abstract_text, text_width, ENTRY_MAX_ABSTRACT_LINES) {
+    for line in wrap_display_text(text, text_width, max_lines) {
         lines.push(format!("{indent}{}", theme::body(line)));
     }
 }
@@ -797,9 +848,11 @@ fn format_mod_time_for_display(value: &str) -> String {
         .unwrap_or_else(|_| value.to_string())
 }
 
-fn is_directory_abstract_placeholder(value: &str) -> bool {
+fn is_directory_summary_placeholder(value: &str) -> bool {
     value.contains("[Directory abstract is not ready]")
         || value.contains("[.abstract.md is not ready]")
+        || value.contains("[Directory overview is not ready]")
+        || value.contains("[.overview.md is not ready]")
 }
 
 fn format_size(bytes: u64) -> String {
@@ -879,11 +932,10 @@ pub async fn rm(
     uri: &str,
     recursive: bool,
     wait: bool,
-    timeout: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.rm(uri, recursive, wait, timeout).await?;
+    let result = client.rm(uri, recursive, wait).await?;
 
     let message = if let Some(count) = result
         .get("estimated_deleted_count")
@@ -1127,7 +1179,8 @@ mod tests {
                 "isDir": true,
                 "modTime": "2026-05-25",
                 "rel_path": "program",
-                "abstract": ""
+                "abstract": "Program summaries",
+                "overview": "Detailed program overview"
             },
             {
                 "uri": "viking://user/haozhe/memories/entities/restricted",
@@ -1143,6 +1196,8 @@ mod tests {
         assert!(rendered.contains("  2026_fifa_world_cup.md"));
         assert!(rendered.contains("1.3 KB  2026-05-25"));
         assert!(rendered.contains("program/"));
+        assert!(rendered.contains("Program summaries"));
+        assert!(rendered.contains("Detailed program overview"));
         assert!(rendered.contains("restricted/"));
         assert!(rendered.contains("permission denied"));
         assert!(!rendered.contains("1. dir"));
@@ -1273,10 +1328,14 @@ mod tests {
 
     #[test]
     fn resolve_fields_prepends_name_when_no_identifier_given_ls() {
-        let fields = vec!["size".to_string(), "mtime".to_string()];
+        let fields = vec![
+            "size".to_string(),
+            "mtime".to_string(),
+            "overview".to_string(),
+        ];
         let defs = super::resolve_fields(&fields, false);
         let names: Vec<&str> = defs.iter().map(|d| d.name).collect();
-        assert_eq!(names, vec!["name", "size", "mtime"]);
+        assert_eq!(names, vec!["name", "size", "mtime", "overview"]);
     }
 
     #[test]

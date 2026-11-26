@@ -9,6 +9,7 @@ from openviking.metrics.core.base import ReadEnvelope
 from openviking_cli.utils import run_async
 
 from .base import DomainStatsMetricDataSource, StateMetricDataSource
+from .vikingdb import VikingDBEventDataSource
 
 
 class ObserverStateDataSource(DomainStatsMetricDataSource):
@@ -49,10 +50,12 @@ class ObserverStateDataSource(DomainStatsMetricDataSource):
                 self.normalize_str("lock"): observer.lock,
                 self.normalize_str("retrieval"): observer.retrieval,
             }
-            try:
-                components[self.normalize_str("vikingdb")] = observer.vikingdb(ctx=None)
-            except Exception:
-                components[self.normalize_str("vikingdb")] = None
+            config = getattr(self._service, "_config", None)
+            if config is None or config.storage.vectordb is not None:
+                try:
+                    components[self.normalize_str("vikingdb")] = observer.vikingdb(ctx=None)
+                except Exception:
+                    components[self.normalize_str("vikingdb")] = None
             return self.as_dict(components)
 
         return self.safe_read(_read, default={})
@@ -94,16 +97,17 @@ class VikingDBStateDataSource(StateMetricDataSource):
         collection = self.normalize_str(
             getattr(vikingdb, "collection_name", "default"), default="default"
         )
-        ok_env = self.safe_read_async(
-            lambda: vikingdb.health_check(),
-            default=False,
-            runner=run_async,
-        )
-        count_env = self.safe_read_async(
-            lambda: vikingdb.count(filter=None, ctx=None),
-            default=0,
-            runner=run_async,
-        )
+        with VikingDBEventDataSource.suppress_operations():
+            ok_env = self.safe_read_async(
+                lambda: vikingdb.health_check(),
+                default=False,
+                runner=run_async,
+            )
+            count_env = self.safe_read_async(
+                lambda: vikingdb.count(filter=None, ctx=None),
+                default=0,
+                runner=run_async,
+            )
         ok = bool(ok_env.value)
         count = self.as_int(count_env.value, default=0)
         envelope_ok = bool(ok_env.ok and count_env.ok)

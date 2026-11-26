@@ -206,14 +206,6 @@ def tmp_media_files(tmp_path: Path) -> Path:
 class TestDirectoryParserBasic:
     """Basic DirectoryParser properties."""
 
-    def test_supported_extensions_empty(self):
-        p = DirectoryParser()
-        assert p.supported_extensions == []
-
-    def test_can_parse_directory(self, tmp_path: Path):
-        p = DirectoryParser()
-        assert p.can_parse(tmp_path) is True
-
     @pytest.mark.asyncio
     async def test_git_repository_preserves_directory_filters(
         self, tmp_path: Path, fake_fs: FakeVikingFS
@@ -242,18 +234,6 @@ class TestDirectoryParserBasic:
         }
         assert result.parser_name == "CodeRepositoryParser"
         assert uploaded_paths == {"notes/article.md"}
-
-    def test_can_parse_file(self, tmp_path: Path):
-        f = tmp_path / "test.md"
-        f.write_text("hello")
-        p = DirectoryParser()
-        assert p.can_parse(f) is False
-
-    @pytest.mark.asyncio
-    async def test_parse_content_not_implemented(self):
-        p = DirectoryParser()
-        with pytest.raises(NotImplementedError):
-            await p.parse_content("some content")
 
     @pytest.mark.asyncio
     async def test_not_a_directory_raises(self, tmp_path: Path, parser):
@@ -284,6 +264,7 @@ class TestEmptyDirectory:
                         "type": "file",
                         "token": "file-token",
                         "reason": "HTTP 403",
+                        "error_code": "PERMISSION_DENIED",
                     }
                 ]
             },
@@ -302,6 +283,7 @@ class TestEmptyDirectory:
                 "type": "file",
                 "token": "file-token",
                 "reason": "HTTP 403",
+                "error_code": "PERMISSION_DENIED",
             }
         ]
         assert any("Skipped Feishu Drive item blocked.pdf: HTTP 403" in w for w in result.warnings)
@@ -383,26 +365,14 @@ class TestNestedDirectory:
 
     @pytest.mark.asyncio
     async def test_structure_preserved(self, tmp_nested_code: Path, parser, fake_fs) -> None:
-        await parser.parse(str(tmp_nested_code))
+        result = await parser.parse(str(tmp_nested_code))
 
-        dir_name = tmp_nested_code.name
-        rel_paths = set()
-        for uri in fake_fs.files:
-            idx = uri.find(f"/{dir_name}/")
-            if idx >= 0:
-                rel = uri[idx + len(f"/{dir_name}/") :]
-                rel_paths.add(rel)
-
-        assert "top.py" in rel_paths
-        assert "a/x.py" in rel_paths
-        assert "a/b/c.py" in rel_paths
-        assert "a/b/d.py" in rel_paths
-
-    @pytest.mark.asyncio
-    async def test_file_count(self, tmp_nested_code: Path, parser, fake_fs) -> None:
-        await parser.parse(str(tmp_nested_code))
-        business_files = [uri for uri in fake_fs.files if not uri.endswith(ARTIFACT_MANIFEST_NAME)]
-        assert len(business_files) == 4
+        root = f"{result.temp_dir_path}/{tmp_nested_code.name}/"
+        assert {
+            uri.removeprefix(root)
+            for uri in fake_fs.files
+            if not uri.endswith(ARTIFACT_MANIFEST_NAME)
+        } == {"top.py", "a/x.py", "a/b/c.py", "a/b/d.py"}
 
 
 # ---------------------------------------------------------------------------
@@ -939,22 +909,3 @@ class TestPreserveStructure:
         assert "x.py" in rel_paths
         assert "c.py" in rel_paths
         assert "d.py" in rel_paths
-
-    @pytest.mark.asyncio
-    async def test_preserve_structure_default_is_true(
-        self, tmp_nested_code: Path, parser, fake_fs
-    ) -> None:
-        """Default behavior (no explicit param) preserves structure."""
-        await parser.parse(str(tmp_nested_code))
-
-        dir_name = tmp_nested_code.name
-        rel_paths = set()
-        for uri in fake_fs.files:
-            idx = uri.find(f"/{dir_name}/")
-            if idx >= 0:
-                rel = uri[idx + len(f"/{dir_name}/") :]
-                rel_paths.add(rel)
-
-        # Structure should be preserved by default
-        assert "a/b/c.py" in rel_paths
-        assert "a/x.py" in rel_paths

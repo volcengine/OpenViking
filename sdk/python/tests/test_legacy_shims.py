@@ -1,70 +1,78 @@
-import sys
-from pathlib import Path
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 
+import httpx
 import pytest
 
-SDK_ROOT = Path(__file__).resolve().parents[1]
-REPO_ROOT = Path(__file__).resolve().parents[3]
-
-if str(SDK_ROOT) not in sys.path:
-    sys.path.insert(0, str(SDK_ROOT))
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+from openviking import AsyncHTTPClient, SyncHTTPClient
+from openviking_cli import exceptions
 
 
-def _purge_legacy_modules() -> None:
-    for name in list(sys.modules):
-        if (
-            name == "openviking_sdk"
-            or name.startswith("openviking_sdk.")
-            or name == "openviking_cli"
-            or name.startswith("openviking_cli.")
-        ):
-            sys.modules.pop(name, None)
-
-
-def test_legacy_async_http_client_shim_points_to_sdk():
-    _purge_legacy_modules()
-    from openviking_cli.client.http import AsyncHTTPClient as LegacyAsyncHTTPClient
-
-    client = LegacyAsyncHTTPClient(url="http://localhost:1933")
-    assert client._url == "http://localhost:1933"
-    try:
-        client._raise_exception({"code": "CONFLICT", "message": "boom"})
-    except Exception as exc:
-        assert getattr(exc, "code", None) == "CONFLICT"
-
-
-def test_legacy_async_http_client_shim_imports_from_repo_checkout(monkeypatch):
-    _purge_legacy_modules()
-    monkeypatch.setattr(
-        sys,
-        "path",
-        [path for path in sys.path if path != str(SDK_ROOT)],
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client_type", "code", "exception", "status"),
+    [
+        (AsyncHTTPClient, "INVALID_ARGUMENT", exceptions.InvalidArgumentError, 400),
+        (AsyncHTTPClient, "INVALID_URI", exceptions.InvalidURIError, 400),
+        (AsyncHTTPClient, "NOT_FOUND", exceptions.NotFoundError, 404),
+        (AsyncHTTPClient, "ALREADY_EXISTS", exceptions.AlreadyExistsError, 409),
+        (AsyncHTTPClient, "CONFLICT", exceptions.ConflictError, 409),
+        (AsyncHTTPClient, "FAILED_PRECONDITION", exceptions.FailedPreconditionError, 412),
+        (AsyncHTTPClient, "ABORTED", exceptions.AbortedError, 409),
+        (AsyncHTTPClient, "UNAUTHENTICATED", exceptions.UnauthenticatedError, 401),
+        (AsyncHTTPClient, "PERMISSION_DENIED", exceptions.PermissionDeniedError, 403),
+        (AsyncHTTPClient, "RESOURCE_EXHAUSTED", exceptions.ResourceExhaustedError, 429),
+        (AsyncHTTPClient, "UNAVAILABLE", exceptions.UnavailableError, 503),
+        (AsyncHTTPClient, "INTERNAL", exceptions.InternalError, 500),
+        (AsyncHTTPClient, "DEADLINE_EXCEEDED", exceptions.DeadlineExceededError, 504),
+        (AsyncHTTPClient, "UNIMPLEMENTED", exceptions.UnimplementedError, 501),
+        (AsyncHTTPClient, "NOT_INITIALIZED", exceptions.NotInitializedError, 503),
+        (AsyncHTTPClient, "PROCESSING_ERROR", exceptions.ProcessingError, 500),
+        (AsyncHTTPClient, "EMBEDDING_FAILED", exceptions.EmbeddingFailedError, 500),
+        (AsyncHTTPClient, "VLM_FAILED", exceptions.VLMFailedError, 500),
+        (AsyncHTTPClient, "SESSION_EXPIRED", exceptions.SessionExpiredError, 410),
+        (AsyncHTTPClient, "UNKNOWN", exceptions.OpenVikingError, 500),
+        (AsyncHTTPClient, "PROVIDER_SPECIFIC", exceptions.OpenVikingError, 502),
+        (SyncHTTPClient, "CONFLICT", exceptions.ConflictError, 409),
+    ],
+)
+async def test_legacy_clients_preserve_server_error_details(
+    sdk_transport, client_type, code, exception, status
+):
+    details = {
+        "resource": "viking://resources/demo",
+        "uri": "viking://resources/demo",
+        "retryable": True,
+        "upstream_status_code": 429,
+        "provider": {"retry_after": 2},
+    }
+    sdk_transport(
+        lambda request: httpx.Response(
+            status,
+            json={
+                "status": "error",
+                "error": {"code": code, "message": "request failed", "details": details},
+            },
+        )
     )
+    client = client_type(url="http://localhost:1933")
+    if client_type is AsyncHTTPClient:
+        await client.initialize()
+        try:
+            with pytest.raises(exception) as raised:
+                await client.stat("viking://resources/demo")
+        finally:
+            await client.close()
+    else:
+        client.initialize()
+        try:
+            with pytest.raises(exception) as raised:
+                client.stat("viking://resources/demo")
+        finally:
+            client.close()
 
-    from openviking_cli.client.http import AsyncHTTPClient as LegacyAsyncHTTPClient
-
-    client = LegacyAsyncHTTPClient(url="http://localhost:1933")
-    assert client._url == "http://localhost:1933"
-
-
-def test_legacy_async_http_client_shim_raises_legacy_exceptions():
-    _purge_legacy_modules()
-    from openviking_cli.client.http import AsyncHTTPClient as LegacyAsyncHTTPClient
-    from openviking_cli.exceptions import ConflictError
-
-    client = LegacyAsyncHTTPClient(url="http://localhost:1933")
-
-    with pytest.raises(ConflictError) as exc_info:
-        client._raise_exception({"code": "CONFLICT", "message": "boom"})
-
-    assert exc_info.value.code == "CONFLICT"
-
-
-def test_legacy_sync_http_client_shim_points_to_sdk():
-    _purge_legacy_modules()
-    from openviking_cli.client.sync_http import SyncHTTPClient as LegacySyncHTTPClient
-
-    client = LegacySyncHTTPClient(url="http://localhost:1933")
-    assert client._async_client._url == "http://localhost:1933"
+    if code == "CONFLICT":
+        assert str(raised.value) == "request failed"
+    assert type(raised.value) is exception
+    assert raised.value.code == code
+    assert {key: raised.value.details[key] for key in details} == details

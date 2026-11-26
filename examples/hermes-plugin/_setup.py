@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from . import quick_local
+
 _SETUP_CANCELLED = object()
 _CANCEL_OPTION = ("Cancel setup", "no changes saved")
 _PERSONAL_PROFILE = "personal"
@@ -144,11 +146,12 @@ def _confirm_replace_existing_profile(path: Path, values: dict, select, cancelle
 
 
 def _prompt_endpoint(prompt, select, cancelled) -> str | object:
-    """Ask for a custom server URL until it normalizes and answers /health."""
+    """Ask for a server URL until it normalizes and answers /health."""
     ov = _ov()
     while True:
         try:
-            endpoint = ov._normalize_openviking_url(prompt("OpenViking server URL", default=ov._DEFAULT_ENDPOINT))
+            value = ov._clean_config_value(prompt("OpenViking server URL", default=ov._DEFAULT_ENDPOINT))
+            endpoint = ov._normalize_openviking_url(value)
         except ov._OpenVikingEndpointError as exc:
             if _retry_or_cancel_manual_setup(select, "  Invalid OpenViking endpoint", str(exc), cancelled) is _SETUP_CANCELLED:
                 return _SETUP_CANCELLED
@@ -179,12 +182,12 @@ class _Cancelled(Exception):
     """Internal unwind for the manual-connection loop (converted to _SETUP_CANCELLED at the boundary)."""
 
 
-def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool = False):
+def _prompt_manual_connection_values(prompt, select, cancelled, *, service: Optional[str] = None):
     """Loop until a validated connection dict is built, or _SETUP_CANCELLED.
     ``continue`` re-enters the loop with ``api_key_type`` / ``prefilled_api_key`` carried over."""
     ov = _ov()
-    if service:
-        endpoint = ov._OPENVIKING_SERVICE_ENDPOINT
+    if service in ("Volcengine", "BytePlus"):
+        endpoint = ov._BYTEPLUS_SERVICE_ENDPOINT if service == "BytePlus" else ov._OPENVIKING_SERVICE_ENDPOINT
         _say(f"OpenViking Service endpoint: {endpoint}")
     else:
         endpoint = _prompt_endpoint(prompt, select, cancelled)
@@ -236,13 +239,13 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
                 api_key_type = "root" if credential_choice == 1 else "user"
 
             values["api_key_type"] = api_key_type
-            api_key_label = "OpenViking API key" if service else f"OpenViking {api_key_type} API key"
+            prompt_label = "OpenViking API key" if service else f"OpenViking {api_key_type} API key"
             if prefilled_api_key:
                 values["api_key"], prefilled_api_key = prefilled_api_key, ""
             else:
-                values["api_key"] = ov._clean_config_value(prompt(api_key_label, secret=True))
+                values["api_key"] = ov._clean_config_value(prompt(prompt_label, secret=True))
             if not values["api_key"]:
-                retry("  OpenViking API key required", f"{api_key_label} is required.")
+                retry("  OpenViking API key required", f"{prompt_label} is required.")
                 continue
 
             if api_key_type == "root":
@@ -267,7 +270,7 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
                     continue
 
             _say("Validating OpenViking API access...")
-            valid, message, role = ov._validate_openviking_setup_values(values, require_api_key=service or not is_local)
+            valid, message, role = ov._validate_openviking_setup_values(values, require_api_key=bool(service) or not is_local)
             if not valid:
                 retry("  OpenViking API access failed", message)
                 continue
@@ -285,6 +288,8 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: bool
 
 def _link_ovcli_profile(*, config: dict, provider_config: dict, env_path: Path, ovcli_path: Path) -> None:
     ov = _ov()
+    _stop_previous_quick_local(provider_config, env_path.parent, ovcli_path=ovcli_path)
+    quick_local.clear_managed_settings(provider_config)
     for key in ("endpoint", "api_key", "root_api_key", "account", "user", "agent", "api_key_type"):
         provider_config.pop(key, None)
     provider_config["use_ovcli_config"] = True
@@ -302,6 +307,8 @@ def _link_ovcli_profile(*, config: dict, provider_config: dict, env_path: Path, 
 
 def _save_hermes_only_config(*, config: dict, provider_config: dict, env_path: Path, values: dict) -> None:
     ov = _ov()
+    _stop_previous_quick_local(provider_config, env_path.parent)
+    quick_local.clear_managed_settings(provider_config)
     provider_config["use_ovcli_config"] = False
     provider_config.pop("ovcli_config_path", None)
     # A newly selected connection must not inherit the previous YAML peer; a
@@ -316,6 +323,21 @@ def _save_hermes_only_config(*, config: dict, provider_config: dict, env_path: P
     os.environ.update(writes)
     for key in set(ov._OPENVIKING_ENV_KEYS) - set(writes):
         os.environ.pop(key, None)
+
+
+def _stop_previous_quick_local(provider_config: dict, home: Path, *, ovcli_path=None) -> None:
+    if provider_config.get("deployment") != quick_local.DEPLOYMENT:
+        return
+    from .local_server import LocalServer
+
+    server = LocalServer(home)
+    if ovcli_path is not None and quick_local._paths_equivalent(ovcli_path, server.paths.ovcli_config):
+        return  # Quick Local setup is relinking its own config.
+    try:
+        if server.paths.server_config.is_file() and server.stop():
+            _say("Stopped this profile's Quick Local server. Its data is retained.")
+    except (quick_local.QuickLocalSetupError, OSError):
+        _say("The previous Quick Local server could not be stopped safely. Check it before removing the plugin.")
 
 
 def _profile_display_name(profile) -> str:
@@ -382,15 +404,93 @@ def _mirror_manual_config_to_openviking_store(*, prompt, select, cancelled, valu
         return path
 
 
+def _run_quick_local_setup(*, config: dict, provider_config: dict, env_path: Path,
+                           select=None, cancelled=None) -> bool:
+    ov = _ov()
+
+    def report_progress(event: quick_local.QuickLocalProgress) -> None:
+        _say(event.message)
+
+    setup = quick_local.QuickLocalSetup(
+        health_check=ov._validate_openviking_reachability,
+        progress=report_progress,
+    )
+    try:
+        preflight = setup.preflight(env_path.parent)
+    except quick_local.QuickLocalSetupError as exc:
+        _say(f"Quick Local preflight failed: {exc}")
+        return False
+
+    try:
+        result = setup.provision(hermes_home=env_path.parent, preflight=preflight)
+    except quick_local.SourceBuildRequired as exc:
+        _say(str(exc))
+        if select is None or select(
+            "  Allow a source build?",
+            [("Cancel", "connect to a separate OpenViking server instead"),
+             ("Build locally", "requires native build tools; can take several minutes")],
+            default=0, cancel_returns=cancelled,
+        ) != 1:
+            return False
+        setup.allow_source_build = True
+        try:
+            result = setup.provision(hermes_home=env_path.parent, preflight=preflight)
+        except quick_local.QuickLocalSetupError as retry_exc:
+            _say(f"Quick Local setup failed: {retry_exc}")
+            return False
+    except quick_local.QuickLocalSetupError as exc:
+        _say(f"Quick Local setup failed: {exc}")
+        return False
+
+    _link_ovcli_profile(
+        config=config,
+        provider_config=provider_config,
+        env_path=env_path,
+        ovcli_path=result.paths.ovcli_config,
+    )
+    provider_config.update(
+        deployment=quick_local.DEPLOYMENT,
+    )
+    action = "Reused" if result.reused else "Configured"
+    _print_openviking_ready(
+        f"{action} Quick Local at {result.endpoint}.",
+        result.paths.ovcli_config,
+    )
+    return True
+
+
 def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provider_config: dict, env_path: Path) -> bool | object:
     source_choice = select("  OpenViking connection",
-                           [("OpenViking Service (VolcEngine Cloud)", "use the managed OpenViking endpoint"),
-                            ("Custom", "use a local, VPS, or self-hosted OpenViking server")],
+                           [("OpenViking Managed Service", "choose Volcengine or BytePlus"),
+                            ("Custom", "use a local, VPS, or self-hosted OpenViking server"),
+                            ("Quick Local", "install local embeddings; use the configured Hermes LLM")],
                            default=0, cancel_returns=cancelled)
     if source_choice == cancelled:
         return _SETUP_CANCELLED
 
-    values = _prompt_manual_connection_values(prompt, select, cancelled, service=(source_choice == 0))
+    if source_choice == 2:
+        return _run_quick_local_setup(config=config, provider_config=provider_config, env_path=env_path,
+                                     select=select, cancelled=cancelled)
+
+    service = None
+    if source_choice == 0:
+        language = (
+            os.environ.get("OPENVIKING_LANG")
+            or os.environ.get("LC_ALL")
+            or os.environ.get("LC_MESSAGES")
+            or os.environ.get("LANG")
+            or "en"
+        )
+        provider_choice = select("  Cloud provider",
+                                 [("Volcengine", "use your Volcengine OpenViking API key"),
+                                  ("BytePlus", "use your BytePlus OpenViking API key")],
+                                 default=0 if language.strip().lower().startswith("zh") else 1,
+                                 cancel_returns=cancelled)
+        if provider_choice == cancelled:
+            return _SETUP_CANCELLED
+        service = "BytePlus" if provider_choice == 1 else "Volcengine"
+
+    values = _prompt_manual_connection_values(prompt, select, cancelled, service=service)
     if values is _SETUP_CANCELLED:
         return _SETUP_CANCELLED
     if values is None:

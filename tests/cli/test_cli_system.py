@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""CLI system endpoint tests (health, status, wait)."""
+"""CLI health and status endpoint tests."""
 
 import pytest
 from conftest import ov
@@ -15,10 +15,10 @@ class TestSystemHealth:
             f"ov health should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        if data is not None:
-            assert data.get("ok") is True or "healthy" in str(data).lower(), (
-                f"health check should indicate healthy, got: {r['stdout'][:200]}"
-            )
+        assert data is not None, f"health should return JSON, got: {r['stdout'][:200]}"
+        assert data["ok"] is True
+        assert data["result"]["healthy"] is True
+        assert data["result"]["status"] == "ok"
 
 
 class TestSystemStatus:
@@ -31,16 +31,3 @@ class TestSystemStatus:
         assert data is not None, f"status should return JSON, got stdout: {r['stdout'][:200]}"
         assert data.get("ok") is True, f"Expected ok=true, got {data.get('ok')}"
         assert "result" in data, "'result' field should exist in status response"
-
-
-class TestSystemWait:
-    @pytest.mark.skip(
-        reason="CLI --timeout passed as query param but server only reads from request body, "
-        "causing infinite wait when queue is not empty. "
-        "Re-enable after CLI/Server timeout parameter mismatch is fixed."
-    )
-    def test_wait_with_timeout(self):
-        r = ov(["wait", "--timeout", "30", "-o", "json"], timeout=120)
-        assert r["exit_code"] == 0, (
-            f"ov wait should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
-        )

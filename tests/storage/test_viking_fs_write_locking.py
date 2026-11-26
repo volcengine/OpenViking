@@ -7,6 +7,24 @@ from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
 
+@pytest.mark.asyncio
+async def test_admin_frozen_file_restore_checks_missing_final_destination():
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    fs = VikingFS(agfs=_FakeAGFS())
+    raw = AsyncMock()
+    fs._async_agfs = raw
+    ctx = RequestContext(user=UserIdentifier("acme", "agent"), role=Role.USER)
+    ctx.bind_frozen_files(["viking://user/agent/skills/a.md"])
+    with pytest.raises(PermissionDeniedError):
+        await fs._ensure_restore_plan_access(
+            {"diff": {"to_write": [{"path": "skills/a.md"}], "to_delete": []}},
+            tree_dir="user/agent",
+            ctx=ctx,
+        )
+    raw.stat.assert_not_awaited()
+
+
 class _FakeAGFS:
     """Minimal synchronous AGFS stub for VikingFS write-path tests."""
 
@@ -182,7 +200,11 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     )
     monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
 
+    # Notification failure cannot undo a committed append or keep its lease held.
+    hook = AsyncMock(side_effect=RuntimeError("registration unavailable"))
+    fs.set_post_write_hook(hook)
     await fs.append_file("viking://a.md", "+new")
+    hook.assert_awaited_once()
 
     assert fake.events[0] == ("ensure_parent", "/local/default/resources/a.md", None)
     assert fake.events[1][0] == "acquire"
@@ -195,6 +217,62 @@ async def test_append_file_holds_exact_lease_across_read_and_write(monkeypatch):
     )
     assert fake.events[3][3]["lease_ref"] == "lease-1"
     assert fake.events[4] == ("release", {"lease_ref": "lease-1"})
+
+
+class _AsyncBusyAppendAGFS:
+    """Async AGFS stub whose exact lock is already held by another writer."""
+
+    def __init__(self):
+        self.released = []
+
+    async def pathlock_acquire_exact(self, path):
+        """Refuse the lease the way the native fail-fast lock layer does."""
+        from openviking.storage.errors import LockAcquisitionError
+
+        raise LockAcquisitionError("lock acquire timed out after 0ms")
+
+    async def pathlock_release(self, lease):
+        """Record any release attempt."""
+        self.released.append(lease)
+
+    async def read(self, path, fs_ctx=None):
+        """Return existing content; the acquire must fail first."""
+        return b"old"
+
+    async def write(self, path, data, fs_ctx=None):
+        """Record a write that must not be reached."""
+        raise AssertionError("write must not run when the lease was refused")
+
+
+@pytest.mark.asyncio
+async def test_append_file_surfaces_lock_conflict_as_conflict(monkeypatch):
+    """A busy exact lock must reach the client as CONFLICT, not as an unmappable IOError.
+
+    ``append_file`` collapses every failure into a bare ``IOError``. ``map_exception``
+    has no branch for ``OSError``, so the server falls through to its 500 handler and
+    the retryable conflict the API otherwise advertises is lost.
+    """
+    from openviking.server.error_mapping import map_exception
+
+    fs = VikingFS(agfs=_FakeAGFS())
+    fs._async_agfs = _AsyncBusyAppendAGFS()  # type: ignore[assignment]
+
+    monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
+    monkeypatch.setattr(fs, "_uri_to_path", lambda _uri, **_kwargs: "/local/default/resources/a.md")
+    monkeypatch.setattr(fs, "_ctx_or_default", lambda _ctx=None: _default_ctx())
+    monkeypatch.setattr(fs, "_ensure_parent_dirs", AsyncMock())
+
+    with pytest.raises(Exception) as caught:
+        await fs.append_file("viking://a.md", "+new")
+
+    mapped = map_exception(caught.value, resource="viking://a.md", resource_type="file")
+    assert mapped is not None, (
+        f"{caught.value!r} is unmappable, so the router answers 500 INTERNAL "
+        "instead of a retryable conflict"
+    )
+    assert mapped.code == "CONFLICT"
+    assert mapped.details["conflict_type"] == "path_busy"
+    assert mapped.details["retryable"] is True
 
 
 @pytest.mark.asyncio
@@ -221,7 +299,6 @@ async def test_mv_extends_outer_lease_with_owned_capability(monkeypatch):
             else "/local/default/resources/target.md"
         ),
     )
-    monkeypatch.setattr(fs, "_collect_uris", AsyncMock(return_value=[]))
     monkeypatch.setattr(fs, "_delete_from_vector_store", AsyncMock())
     monkeypatch.setattr(fs, "_update_vector_store_uris", AsyncMock())
 
@@ -260,7 +337,6 @@ async def test_directory_mv_locks_source_and_destination_subtrees(monkeypatch):
             else "/local/default/resources/target"
         ),
     )
-    monkeypatch.setattr(fs, "_collect_uris", AsyncMock(return_value=[]))
     monkeypatch.setattr(fs, "_delete_from_vector_store", AsyncMock())
     monkeypatch.setattr(fs, "_update_vector_store_uris", AsyncMock())
     monkeypatch.setattr(fs, "_copy_for_mv", AsyncMock())
@@ -283,6 +359,7 @@ async def test_directory_mv_reuses_target_tree_for_vector_failure_cleanup(monkey
     fake = _AsyncMoveAGFS(source_is_dir=True)
     fs = VikingFS(agfs=_FakeAGFS())
     fs._async_agfs = fake  # type: ignore[assignment]
+    monkeypatch.setattr(fs, "_prepare_vector_store_uris", AsyncMock(return_value=object()))
 
     monkeypatch.setattr(fs, "_ensure_access", AsyncMock())
     monkeypatch.setattr(
@@ -294,7 +371,6 @@ async def test_directory_mv_reuses_target_tree_for_vector_failure_cleanup(monkey
             else "/local/default/resources/target"
         ),
     )
-    monkeypatch.setattr(fs, "_collect_uris", AsyncMock(return_value=[]))
     monkeypatch.setattr(fs, "_delete_from_vector_store", AsyncMock())
     monkeypatch.setattr(
         fs,

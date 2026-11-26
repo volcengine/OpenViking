@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import re
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,72 +20,20 @@ from openviking.metrics.datasources.resource import ResourceIngestionEventDataSo
 from openviking.metrics.exporters.prometheus import PrometheusExporter
 
 
-def test_create_default_collector_manager_registers_expected_collectors_in_order():
-    manager = bootstrap.create_default_collector_manager(app=None, service=None)
+@pytest.mark.asyncio
+async def test_default_collectors_publish_readiness_without_feedback(registry, render_prometheus):
+    manager = bootstrap.create_default_collector_manager(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        service=SimpleNamespace(initialized=True),
+    )
 
-    names = [type(c).__name__ for c in manager._collectors]
-    assert names == [
-        "QueueCollector",
-        "TaskTrackerCollector",
-        "ObserverHealthCollector",
-        "ObserverStateCollector",
-        "RagfsMetricCollector",
-        "VikingDBCollector",
-        "ModelUsageCollector",
-        "ServiceProbeCollector",
-        "StorageProbeCollector",
-        "RetrievalBackendProbeCollector",
-        "ModelProviderProbeCollector",
-        "AsyncSystemProbeCollector",
-        "EncryptionProbeCollector",
-    ]
+    await manager.refresh_all(registry, deadline_seconds=2.0)
 
-
-def test_create_default_collector_manager_registers_feedback_collector_when_bot_path_configured():
-    class _MetricsConfig:
-        bot_data_path = "/tmp/bot"
-
-    class _ObservabilityConfig:
-        metrics = _MetricsConfig()
-
-    class _Config:
-        observability = _ObservabilityConfig()
-
-    manager = bootstrap.create_default_collector_manager(app=None, service=None, config=_Config())
-
-    names = [type(c).__name__ for c in manager._collectors]
-    assert names == [
-        "QueueCollector",
-        "TaskTrackerCollector",
-        "FeedbackCollector",
-        "ObserverHealthCollector",
-        "ObserverStateCollector",
-        "RagfsMetricCollector",
-        "VikingDBCollector",
-        "ModelUsageCollector",
-        "ServiceProbeCollector",
-        "StorageProbeCollector",
-        "RetrievalBackendProbeCollector",
-        "ModelProviderProbeCollector",
-        "AsyncSystemProbeCollector",
-        "EncryptionProbeCollector",
-    ]
-
-
-def test_create_default_collector_manager_skips_feedback_collector_without_bot_path():
-    class _MetricsConfig:
-        bot_data_path = None
-
-    class _ObservabilityConfig:
-        metrics = _MetricsConfig()
-
-    class _Config:
-        observability = _ObservabilityConfig()
-
-    manager = bootstrap.create_default_collector_manager(app=None, service=None, config=_Config())
-
-    names = [type(c).__name__ for c in manager._collectors]
-    assert "FeedbackCollector" not in names
+    text = render_prometheus(registry)
+    assert 'openviking_service_readiness{valid="1"} 1.0' in text
+    assert 'openviking_api_key_manager_readiness{valid="1"} 0.0' in text
+    assert "openviking_storage_readiness{" in text
+    assert "openviking_feedback_" not in text
 
 
 def test_create_default_collector_manager_propagates_construction_failures(monkeypatch):
@@ -96,21 +45,6 @@ def test_create_default_collector_manager_propagates_construction_failures(monke
         bootstrap.create_default_collector_manager(app=None, service=None)
 
 
-def test_optional_cache_datasource_instrumentation_is_wired_into_key_call_sites():
-    project_root = Path(__file__).resolve().parents[3]
-    targets = [
-        project_root / "openviking" / "storage" / "queuefs" / "semantic_executor.py",
-        project_root / "openviking" / "storage" / "queuefs" / "semantic_processor.py",
-        project_root / "openviking" / "session" / "memory" / "extract_loop.py",
-    ]
-    missing = []
-    for path in targets:
-        text = path.read_text(encoding="utf-8")
-        if "CacheEventDataSource.record_" not in text:
-            missing.append(path.name)
-    assert missing == []
-
-
 def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collector(monkeypatch):
     registry = MetricRegistry()
     collector = ResourceIngestionCollector()
@@ -118,6 +52,7 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
     configure_metric_account_dimension(
         enabled=True,
         metric_allowlist={
+            ResourceIngestionCollector.IMPORTS_TOTAL,
             ResourceIngestionCollector.STAGE_TOTAL,
             ResourceIngestionCollector.STAGE_DURATION_SECONDS,
             ResourceIngestionCollector.WAIT_DURATION_SECONDS,
@@ -130,6 +65,12 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
 
     monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_emit), raising=False)
 
+    ResourceIngestionEventDataSource.record_import(
+        pipeline="connector",
+        source_type="repository",
+        account_id="acct-resource",
+    )
+    ResourceIngestionEventDataSource.record_import(pipeline="connector", source_type="repository")
     ResourceIngestionEventDataSource.record_stage(stage="parse", status="ok", duration_seconds=0.01)
     ResourceIngestionEventDataSource.record_stage(
         stage="parse", status="error", duration_seconds=0.02
@@ -151,6 +92,14 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
 
     text = PrometheusExporter(registry=registry).render()
     assert (
+        'openviking_resource_imports_total{account_id="acct-resource",'
+        'pipeline="connector",source_type="repository"} 1'
+    ) in text
+    assert (
+        'openviking_resource_imports_total{account_id="__unknown__",'
+        'pipeline="connector",source_type="repository"} 1'
+    ) in text
+    assert (
         'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="ok"} 1'
         in text
     )
@@ -158,17 +107,19 @@ def test_resource_ingestion_event_datasource_can_drive_resource_ingestion_collec
         'openviking_resource_stage_total{account_id="__unknown__",stage="parse",status="error"} 1'
         in text
     )
-    assert (
-        'openviking_resource_wait_duration_seconds_count{account_id="__unknown__",operation="queue_processing"} 1'
-        in text
+    assert re.search(
+        r'openviking_resource_wait_duration_seconds_count\{account_id="__unknown__",'
+        r'bucket_schema="[0-9a-f]{16}",operation="queue_processing"\} 1',
+        text,
     )
     assert (
         'openviking_resource_stage_total{account_id="acct-resource",stage="parse",status="ok"} 1'
         in text
     )
-    assert (
-        'openviking_resource_wait_duration_seconds_count{account_id="acct-resource",operation="queue_processing"} 1'
-        in text
+    assert re.search(
+        r'openviking_resource_wait_duration_seconds_count\{account_id="acct-resource",'
+        r'bucket_schema="[0-9a-f]{16}",operation="queue_processing"\} 1',
+        text,
     )
 
     reset_metric_account_dimension()

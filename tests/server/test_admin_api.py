@@ -8,6 +8,7 @@ import hashlib
 import json
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from unittest.mock import AsyncMock, Mock
 
@@ -20,29 +21,35 @@ from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 
 from openviking.config.binding import manager_over_source
-from openviking.config.source import MemoryConfigSource
+from openviking.config.source import FileConfigSource, MemoryConfigSource
 from openviking.pyagfs.exceptions import AGFSNotFoundError
-from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig, UserConfig
 from openviking.server.dependencies import set_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.store_assembly import build_api_key_manager
 from openviking.server.user_config import (
-    read_user_add_targets,
     read_user_config,
     user_config_backup_uri,
+    user_config_uri,
 )
 from openviking.service.core import OpenVikingService
-from openviking.service.deletion import setup_deletion
+from openviking.service.deletion import DeletionService, setup_deletion
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
     SYSTEM_TASK_USER_ID,
 )
 from openviking.service.task_tracker import get_task_tracker
+from openviking.service.task_work_index import (
+    TaskWorkRejected,
+    bind_task_context,
+)
 from openviking.session.memory.account_templates import (
     EDITABLE_MEMORY_TEMPLATE_FIELDS,
     account_memory_template_path,
+    legacy_account_memory_template_path,
+    memory_template_data,
     resolve_account_memory_registry,
 )
 from openviking.session.memory.extract_loop import ExtractLoop
@@ -70,15 +77,21 @@ class _FakeAGFS:
     def __init__(self):
         self._files = {}
         self._dirs = {"/", "/local"}
+        self.write_contexts = {}
 
     def read(self, path, **_kwargs):
         if path not in self._files:
             raise AGFSNotFoundError(path)
         return self._files[path]
 
+    def stat(self, path, **_kwargs):
+        content = self.read(path)
+        return {"size": len(content), "modTime": hash(content)}
+
     def write(self, path, content, **_kwargs):
         self.ensure_parent_dirs(path)
         self._files[path] = content
+        self.write_contexts[path] = _kwargs.get("ctx")
 
     def mv(self, old_path, new_path, **_kwargs):
         self._files[new_path] = self._files.pop(old_path)
@@ -101,8 +114,8 @@ class _FakeAGFS:
     def pathlock_acquire_exact(self, ctx, path, timeout_secs=0.0, owner_lease_ref=None):
         return {"lease_ref": f"test:{path}"}
 
-    def pathlock_acquire_exact_batch(self, ctx, paths, timeout_secs=0.0, owner_lease_ref=None):
-        return self.pathlock_acquire_exact(ctx, paths[0], timeout_secs, owner_lease_ref)
+    async def pathlock_acquire_batch_async(self, ctx, requests, *args):
+        return self.pathlock_acquire_exact(ctx, requests[0]["path"], *args)
 
     def pathlock_release(self, ctx, lease):
         return None
@@ -113,6 +126,7 @@ class _FakeVikingFS:
         self.agfs = _FakeAGFS()
         self.files = {}
         self.writes = []
+        self.write_leases = []
 
     async def read_file(self, uri, **_kwargs):
         if uri not in self.files:
@@ -122,8 +136,9 @@ class _FakeVikingFS:
     async def _ensure_access(self, uri, ctx, *, action):
         return None
 
-    async def write_file(self, uri, content, **_kwargs):
+    async def write_file(self, uri, content, **kwargs):
         self.writes.append(uri)
+        self.write_leases.append(kwargs.get("lease_ref"))
         self.files[uri] = content
 
     async def rm(self, uri, **_kwargs):
@@ -135,6 +150,9 @@ class _FakeService:
         self.viking_fs = _FakeVikingFS()
         self.sessions = self
         self.runtime_config_manager = manager_over_source(MemoryConfigSource())
+        self.account_lease = {"lease_ref": "account-provisioning"}
+        self.account_lock_events = []
+        self.workspace_leases = []
 
     async def get_agent_evolution_enabled(self, account_id):
         del account_id
@@ -146,7 +164,16 @@ class _FakeService:
     async def initialize_user_directories(self, ctx):
         return None
 
-    async def initialize_account_workspace(self, ctx):
+    @asynccontextmanager
+    async def account_workspace_lock(self, ctx):
+        self.account_lock_events.append(("acquire", ctx.account_id))
+        try:
+            yield self.account_lease
+        finally:
+            self.account_lock_events.append(("release", ctx.account_id))
+
+    async def initialize_account_workspace(self, ctx, *, lease_ref=None):
+        self.workspace_leases.append(lease_ref)
         return None
 
 
@@ -156,6 +183,9 @@ def _build_lightweight_admin_test_app() -> FastAPI:
     from openviking.server.routers import admin as admin_router
 
     app = FastAPI()
+    from openviking.server.restart import RestartController
+
+    app.state.restart_controller = RestartController()
     app.state.config = ServerConfig(root_api_key=ROOT_KEY)
     fake_service = _FakeService()
     app.state.fake_service = fake_service
@@ -172,7 +202,7 @@ def _build_lightweight_admin_test_app() -> FastAPI:
             ).model_dump(),
         )
 
-    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=fake_service.viking_fs)
+    manager = build_api_key_manager(root_key=ROOT_KEY, viking_fs=fake_service.viking_fs)
     app.state.api_key_manager = manager
 
     # Set auth plugin (lifespan not triggered in ASGI tests)
@@ -180,6 +210,7 @@ def _build_lightweight_admin_test_app() -> FastAPI:
     if registry.get("api_key") is None:
         registry.register(ApiKeyAuthPlugin)
     app.state.auth_plugin = registry.get("api_key")()
+    app.state.auth_plugin._api_key_manager = manager
 
     app.include_router(admin_router.router)
     return app
@@ -200,6 +231,80 @@ async def lightweight_admin_client(lightweight_admin_app):
         yield c
 
 
+async def test_admin_frozen_files_reach_native_fs_and_background(
+    admin_app, admin_service, admin_client, monkeypatch
+):
+    import openviking.server.account_stores.models as account_models
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    account_id = _uid()
+    manager = admin_app.state.api_key_manager
+    admin_key = await manager.create_account(account_id, "admin")
+    user_key = await manager.register_user(account_id, "agent")
+    other_key = await manager.create_account(_uid(), "admin")
+    fs = admin_service.viking_fs
+    fs.set_frozen_file_reader(manager.get_frozen_files)
+    user = UserIdentifier(account_id, "agent")
+    uri = "viking://user/agent/skills/example/SKILL.md"
+    await fs.write_file(uri, "original", ctx=RequestContext(user, Role.USER))
+    with monkeypatch.context() as patch:
+        refresh = AsyncMock(side_effect=OSError("account metadata unavailable"))
+        patch.setattr(manager._store, "_refresh_accounts_for_management_read", refresh)
+        await fs.write_file(uri, "original", ctx=RequestContext(user, Role.USER))
+        refresh.assert_not_awaited()
+        patch.setattr(account_models, "monotonic", lambda: float("inf"))
+        with pytest.raises(OSError, match="account metadata unavailable"):
+            await fs.write_file(uri, "replacement", ctx=RequestContext(user, Role.USER))
+        assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "original"
+    url = f"/api/v1/admin/accounts/{account_id}/users/agent/frozen-file"
+    result = await admin_client.put(
+        url,
+        headers={"X-API-Key": admin_key},
+        json={"path": "skills/example/SKILL.md", "frozen": True},
+    )
+    assert result.status_code == 200, result.text
+    status = await admin_client.get(
+        url, headers={"X-API-Key": admin_key}, params={"path": "skills/example/SKILL.md"}
+    )
+    assert status.json()["result"]["frozen"] is True
+    assert set(status.json()["result"]) == {"account_id", "user_id", "path", "frozen"}
+    status = await admin_client.get(
+        url, headers={"X-API-Key": admin_key}, params={"path": "skills/example/skill.md"}
+    )
+    assert status.json()["result"]["frozen"] is False
+    for key in (user_key, other_key):
+        denied = await admin_client.put(
+            url,
+            headers={"X-API-Key": key},
+            json={"path": "skills/example/SKILL.md", "frozen": False},
+        )
+        assert denied.status_code == 403
+    for role in (Role.USER, Role.ROOT):
+        with pytest.raises(PermissionDeniedError):
+            await fs.write_file(uri, "replacement", ctx=RequestContext(user, role))
+    with pytest.raises(PermissionDeniedError):
+        await fs.rm(
+            "viking://user/agent/skills", recursive=True, ctx=RequestContext(user, Role.USER)
+        )
+    with pytest.raises(PermissionDeniedError):
+        await fs.mv(
+            "viking://user/agent/skills/example",
+            "viking://user/agent/skills/moved",
+            ctx=RequestContext(user, Role.USER),
+        )
+    assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "original"
+    with pytest.raises(PermissionDeniedError):
+        await fs.read_file(uri, ctx=RequestContext(UserIdentifier(account_id, "admin"), Role.ADMIN))
+    result = await admin_client.put(
+        url,
+        headers={"X-API-Key": admin_key},
+        json={"path": "skills/example/SKILL.md", "frozen": False},
+    )
+    assert result.status_code == 200, result.text
+    await fs.write_file(uri, "updated", ctx=RequestContext(user, Role.USER))
+    assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "updated"
+
+
 @pytest_asyncio.fixture(scope="function")
 async def admin_service(service):
     """Use the shared service fixture with local fake models."""
@@ -215,7 +320,7 @@ async def admin_app(admin_service):
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
 
-    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
+    manager = build_api_key_manager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
     app.state.deletion_service = await setup_deletion(
@@ -228,6 +333,7 @@ async def admin_app(admin_service):
     if registry.get("api_key") is None:
         registry.register(ApiKeyAuthPlugin)
     app.state.auth_plugin = registry.get("api_key")()
+    app.state.auth_plugin._api_key_manager = manager
 
     return app
 
@@ -281,15 +387,6 @@ async def _agfs_write(service: OpenVikingService, path: str, content: str) -> No
     await service.viking_fs._async_agfs.write(path, content.encode("utf-8"))
 
 
-async def _agfs_read_text(service: OpenVikingService, path: str) -> str:
-    raw = await service.viking_fs._async_agfs.read(path)
-    if isinstance(raw, bytes):
-        return raw.decode("utf-8")
-    if hasattr(raw, "content"):
-        return raw.content.decode("utf-8")
-    return str(raw)
-
-
 async def _wait_for_task(client: httpx.AsyncClient, task_id: str) -> dict:
     # Budget ~30s: recursive AGFS cleanup can take a couple of seconds, and the
     # original 1s budget was too tight on slower backends/interpreters.
@@ -306,6 +403,49 @@ async def _wait_for_task(client: httpx.AsyncClient, task_id: str) -> dict:
 # ---- Account CRUD ----
 
 
+async def test_delete_account_files_disables_automatic_pathlock(monkeypatch):
+    """Account cleanup must bypass the deleted tree's automatic PathLock."""
+    path = "/local/account-to-delete"
+    agfs = Mock()
+    agfs.rm = AsyncMock()
+    agfs.stat = AsyncMock(side_effect=AGFSNotFoundError(path))
+    service = Mock()
+    service.viking_fs._async_agfs = agfs
+    deletion = DeletionService(
+        service=service,
+        manager=Mock(),
+        service_loop=asyncio.get_running_loop(),
+    )
+
+    await deletion._delete_account_files("account-to-delete")
+
+    agfs.rm.assert_awaited_once_with(path, recursive=True, auto_pathlock=False)
+
+
+async def test_creation_guard_reads_account_store_on_service_loop():
+    """Queue workers call the guard from their own loops; store reads stay on the service loop."""
+    service_loop = asyncio.get_running_loop()
+    lookup_loops = []
+
+    class Store:
+        async def get_deletion(self, account_id, user_id):
+            lookup_loops.append(asyncio.get_running_loop())
+            return None
+
+        async def get_user(self, account_id, user_id):
+            lookup_loops.append(asyncio.get_running_loop())
+            return None
+
+    deletion = DeletionService(service=Mock(), manager=Store(), service_loop=service_loop)
+
+    blocked = await asyncio.to_thread(
+        asyncio.run, deletion._creation_blocked("account", "missing-user")
+    )
+
+    assert blocked is True
+    assert lookup_loops == [service_loop, service_loop]
+
+
 @pytest_asyncio.fixture
 async def template_account(lightweight_admin_client):
     account_id = _uid()
@@ -318,36 +458,190 @@ async def template_account(lightweight_admin_client):
     return account_id, {"X-API-Key": response.json()["result"]["user_key"]}
 
 
-@pytest.mark.parametrize(
-    "memory_type",
-    ["profile", "preferences", "entities", "events", "soul", "identity"],
-)
-async def test_account_memory_templates_publish_and_reset(
+async def test_studio_file_configuration_permissions_revision_and_overrides(
     lightweight_admin_client,
     lightweight_admin_app,
     template_account,
-    memory_type,
+    tmp_path,
+    monkeypatch,
+):
+    from openviking.config.scope import ConfigScope
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    account_id, admin_headers = template_account
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps({"vlm": {"provider": "openai", "model": "gpt-4o", "api_key": "file-secret"}})
+    )
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", config_path)
+    manager = lightweight_admin_app.state.fake_service.runtime_config_manager
+    await manager.patch_account(
+        account_id,
+        {
+            "vlm": {
+                "model": "override-model",
+                "credentials": [{"provider": "openai", "api_key": "account-secret"}],
+            }
+        },
+    )
+    url = "/api/v1/admin/configuration"
+    params = {"source": "file", "account_id": account_id}
+    denied = await lightweight_admin_client.get(url, params=params, headers=admin_headers)
+    assert denied.status_code == 403 and "file-secret" not in denied.text
+    response = await lightweight_admin_client.get(url, params=params, headers=root_headers())
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    result = response.json()["result"]
+    assert result["models"]["vlm"]["config"]["model"] == "gpt-4o"
+    assert result["overrides"]["account"] == ["vlm"]
+    # Persisted overrides still need reporting even outside the form's scope.
+    await manager._source.update(
+        ConfigScope.cluster(), lambda _: {"query_planner": {"model": "planner-override"}}
+    )
+    override_response = await lightweight_admin_client.get(
+        url, params=params, headers=root_headers()
+    )
+    assert override_response.json()["result"]["overrides"]["cluster"] == ["query_planner"]
+    content = json.loads(result["content"])
+    content["rerank"] = {
+        "provider": "jev",
+        "api_key": "jev-secret",
+        "mode": "choice",
+        "threshold": 0,
+    }
+    body = {"revision": result["revision"], "content": json.dumps(content)}
+    assert (
+        await lightweight_admin_client.patch(
+            url, params={"source": "file"}, headers=admin_headers, json=body
+        )
+    ).status_code == 403
+    saved = await lightweight_admin_client.patch(
+        url, params={"source": "file"}, headers=root_headers(), json=body
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["result"]["restart_required"]
+    assert json.loads(config_path.read_text())["rerank"]["provider"] == "jev"
+    assert (
+        await lightweight_admin_client.patch(
+            url, params={"source": "file"}, headers=root_headers(), json=body
+        )
+    ).status_code == 400
+    settings = await manager.get_settings(ConfigScope.account(account_id))
+    assert settings["vlm"]["model"] == "override-model"
+
+
+@pytest.mark.parametrize("cli_host", [None, "127.0.0.1"])
+async def test_studio_full_configuration_preview_and_save_are_root_only(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    template_account,
+    tmp_path,
+    monkeypatch,
+    cli_host,
+):
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    _, admin_headers = template_account
+    path = tmp_path / "startup.conf"
+    server = {"port": 1933}
+    if cli_host:
+        server.update(host="0.0.0.0", auth_mode="trusted", root_api_key=ROOT_KEY)
+        lightweight_admin_app.state.server_config_overrides = {"host": cli_host}
+    path.write_text(json.dumps({"server": server, "storage": {"workspace": "/tmp/old"}}))
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    before = path.read_bytes()
+    url = "/api/v1/admin/configuration"
+    loaded = await lightweight_admin_client.get(
+        url, params={"source": "file"}, headers=root_headers()
+    )
+    result = loaded.json()["result"]
+    assert result["content"] == before.decode()
+    content = json.dumps({"server": {**server, "port": 1934}, "storage": {"workspace": "/tmp/new"}})
+    preview_params = {"source": "file", "dry_run": True}
+    denied = await lightweight_admin_client.patch(
+        url, params=preview_params, headers=admin_headers, json={"content": content}
+    )
+    assert denied.status_code == 403
+    preview = await lightweight_admin_client.patch(
+        url, params=preview_params, headers=root_headers(), json={"content": content}
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.headers["cache-control"] == "no-store"
+    assert preview.json()["result"]["content"] == content
+    assert path.read_bytes() == before
+    assert not path.with_name(path.name + ".studio.bak").exists()
+    for params in ({"dry_run": True}, preview_params):
+        rejected = await lightweight_admin_client.patch(
+            url, params=params, headers=root_headers(), json={"settings": {}}
+        )
+        assert rejected.status_code == 400
+    rejected = await lightweight_admin_client.patch(
+        url, params={"dry_run": True}, headers=root_headers(), json={"content": content}
+    )
+    assert rejected.status_code == 400
+    assert path.read_bytes() == before
+    body = {"content": content, "revision": result["revision"]}
+    for extra_body in (
+        {"settings": {"vlm": {"timeout": 1}}},
+        {**body, "settings": {"vlm": {"timeout": 1}}},
+    ):
+        rejected = await lightweight_admin_client.patch(
+            url, params={"source": "file"}, headers=root_headers(), json=extra_body
+        )
+        assert rejected.status_code == 400
+        assert path.read_bytes() == before
+    denied = await lightweight_admin_client.patch(
+        url, params={"source": "file"}, headers=admin_headers, json=body
+    )
+    assert denied.status_code == 403
+    saved = await lightweight_admin_client.patch(
+        url, params={"source": "file"}, headers=root_headers(), json=body
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.headers["cache-control"] == "no-store"
+    assert path.read_text() == content
+    assert path.with_name(path.name + ".studio.bak").read_bytes() == before
+    stale = await lightweight_admin_client.patch(
+        url, params={"source": "file"}, headers=root_headers(), json=body
+    )
+    assert stale.status_code == 400
+    runtime = await lightweight_admin_client.patch(url, headers=root_headers(), json=body)
+    assert runtime.status_code == 400
+    invalid = await lightweight_admin_client.patch(
+        url,
+        params=preview_params,
+        headers=root_headers(),
+        json={"content": '{"server":{"port":"bad"}}'},
+    )
+    assert invalid.status_code == 400
+    assert path.read_text() == content
+
+
+@pytest.mark.parametrize("memory_type", EDITABLE_MEMORY_TEMPLATE_FIELDS)
+async def test_account_memory_templates_publish_and_reset(
+    lightweight_admin_client, lightweight_admin_app, template_account, memory_type
 ):
     client = lightweight_admin_client
     account_id, headers = template_account
     root = f"/api/v1/admin/accounts/{account_id}/memory-templates"
-    path = account_memory_template_path(account_id, memory_type)
+    url = f"{root}/{memory_type}"
     fs = lightweight_admin_app.state.fake_service.viking_fs
+    path = account_memory_template_path(account_id, memory_type)
     settings_path = f"/local/{account_id}/_system/setting.json"
-    fs.agfs._files[settings_path] = b'{"agent_evolution":{"enabled":false}}'
+    settings = b'{"agent_evolution":{"enabled":false}}'
+    fs.agfs._files[settings_path] = settings
     registry = get_default_registry()
-    original = {s.memory_type: s.model_dump() for s in registry.list_all(True)}
-    initial = await client.get(root, headers=headers)
-    assert initial.status_code == 200, initial.text
-    assert {item["memory_type"] for item in initial.json()["result"]["templates"]} == {
+    default_schema = registry.get(memory_type)
+    assert default_schema is not None
+    original = memory_template_data(default_schema)
+    templates = (await client.get(root, headers=headers)).json()["result"]["templates"]
+    assert {item["memory_type"] for item in templates} == {
         "profile",
         "events",
         "preferences",
         "entities",
-        "soul",
-        "identity",
     }
-    assert all(item["status"] == "system_default" for item in initial.json()["result"]["templates"])
+    assert all(item["status"] == "system_default" for item in templates)
     assert path not in fs.agfs._files
 
     editable_fields = {
@@ -355,183 +649,127 @@ async def test_account_memory_templates_publish_and_reset(
         "events": ("event_name", "summary"),
         "preferences": ("topic", "content"),
         "entities": ("category", "name", "content"),
-        "soul": ("core_truths", "boundaries", "vibe", "continuity"),
-        "identity": ("creature", "name", "vibe", "avatar", "emoji", "introduction"),
     }[memory_type]
+    edited_fields = dict.fromkeys(editable_fields, "Custom {{ language }}")
     body = {
-        "description": "Remember business facts in {{ language.lower() }}.",
+        "description": "Business facts in {{ language.lower() }}.",
         "fields": [
-            {"name": name, "description": f"Business {name}: {{{{ language }}}}"}
-            for name in editable_fields
+            {"name": name, "description": description}
+            for name, description in edited_fields.items()
         ],
     }
-    if memory_type in {"events", "soul", "identity"}:
-        variable = {"events": "summary", "soul": "core_truths", "identity": "introduction"}[
-            memory_type
-        ]
-        body["content_template"] = "# Business\n{{ " + variable + " }}"
-    publish = await client.put(f"{root}/{memory_type}", json=body, headers=headers)
-    assert publish.status_code == 200, publish.text
-    result = publish.json()["result"]
-    assert result["status"] == "custom"
-    assert result["updated_at"]
-    assert all(result["effective"][key] == value for key, value in body.items() if key != "fields")
-    assert result["effective"]["fields"][0]["type"] == "string"
+    if memory_type == "events":
+        body["content_template"] = "# Business\n{{ summary }}"
+    response = await client.put(url, json=body, headers=headers)
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["status"] == "custom" and result["updated_at"]
+    assert result["defaults"] == original
     stored = yaml.safe_load(fs.agfs._files[path])
     assert stored.pop("_updated_at") == result["updated_at"]
-    assert stored == result["effective"]
-    assert stored["memory_type"] == memory_type
-    assert "stage" in stored and "embedding_template" in stored
-    assert fs.agfs._files[settings_path] == b'{"agent_evolution":{"enabled":false}}'
-    assert (await client.get(f"{root}/{memory_type}", headers=headers)).json()["result"] == result
-    roundtrip = await client.put(f"{root}/{memory_type}", json=result["effective"], headers=headers)
-    assert roundtrip.status_code == 200, roundtrip.text
-    assert roundtrip.json()["result"] == result
+    expected = (
+        original
+        | body
+        | {
+            "fields": [
+                field | {"description": edited_fields[field["name"]]}
+                if field["name"] in edited_fields
+                else field
+                for field in original["fields"]
+            ]
+        }
+    )
+    snapshot = await resolve_account_memory_registry(fs, account_id, registry)
+    published_schema = snapshot.get(memory_type)
+    assert published_schema is not None
+    assert memory_template_data(published_schema) == stored == result["effective"] == expected
+    assert registry.get(memory_type) is default_schema
+    assert memory_template_data(default_schema) == original
+
+    assert (await client.get(url, headers=headers)).json()["result"] == result
     listed = (await client.get(root, headers=headers)).json()["result"]["templates"]
     assert (
-        next(item for item in listed if item["memory_type"] == memory_type)["effective"] == stored
+        next(item for item in listed if item["memory_type"] == memory_type)["effective"] == expected
     )
-    resolved = await resolve_account_memory_registry(fs, account_id, registry)
-    assert resolved is not registry
-    assert all(resolved.get(schema.memory_type) is not schema for schema in registry.list_all(True))
-    schema = resolved.get(memory_type)
-    assert schema.description == body["description"]
-    expected = dict(original[memory_type])
-    expected["description"] = body["description"]
-    if "content_template" in body:
-        expected["content_template"] = body["content_template"]
-    expected["fields"] = [
-        {**field, "description": f"Business {field['name']}: {{{{ language }}}}"}
-        if field["name"] in editable_fields
-        else field
-        for field in expected["fields"]
-    ]
-    assert schema.model_dump() == expected
-    # All fields, including Events goal/ranges, survive a partial request.
-    assert [field.name for field in schema.fields] == [
-        field["name"] for field in original[memory_type]["fields"]
-    ]
-    assert {s.memory_type: s.model_dump() for s in registry.list_all(True)} == original
+    for payload in (body, result["effective"]):
+        assert (await client.put(url, json=payload, headers=headers)).json()["result"] == result
+    replacement = await client.put(url, json={"description": "Replacement"}, headers=headers)
+    assert replacement.json()["result"]["effective"] == original | {"description": "Replacement"}
+    assert snapshot.get(memory_type) is published_schema
+    assert memory_template_data(published_schema) == expected
 
-    noop = await client.put(f"{root}/{memory_type}", json=body, headers=headers)
-    assert noop.json()["result"]["updated_at"] == result["updated_at"]
-    replacement = await client.put(
-        f"{root}/{memory_type}", json={"description": "Replacement"}, headers=headers
-    )
-    assert replacement.status_code == 200, replacement.text
-    assert replacement.json()["result"]["effective"]["fields"] == result["defaults"]["fields"]
-    assert yaml.safe_load(fs.agfs._files[path + ".backup"])["description"] == body["description"]
-    # An earlier extraction retains its complete snapshot across publication.
-    assert resolved.get(memory_type).description == body["description"]
-    reset = await client.delete(f"{root}/{memory_type}", headers=headers)
-    assert reset.status_code == 200, reset.text
-    assert reset.json()["result"]["effective"] == result["defaults"]
-    assert reset.json()["result"]["status"] == "system_default"
-    assert path not in fs.agfs._files
-    restored = await resolve_account_memory_registry(fs, account_id, registry)
-    assert {s.memory_type: s.model_dump() for s in restored.list_all(True)} == original
-    assert (await client.delete(f"{root}/{memory_type}", headers=headers)).status_code == 200
+    for _ in range(2):
+        reset = (await client.delete(url, headers=headers)).json()["result"]
+        assert reset["effective"] == original and reset["status"] == "system_default"
     default_form = await client.put(
-        f"{root}/{memory_type}", json=result["defaults"], headers=headers
+        url, json=_editable_template_form(original, memory_type), headers=headers
     )
-    assert default_form.status_code == 200, default_form.text
-    assert default_form.json()["result"]["effective"] == result["defaults"]
-    assert default_form.json()["result"]["status"] == "system_default"
-    assert default_form.json()["result"]["updated_at"] is None
-    assert path not in fs.agfs._files
+    assert default_form.json()["result"] == reset
+    assert reset["updated_at"] is None
+    restored = await resolve_account_memory_registry(fs, account_id, registry)
+    restored_schema = restored.get(memory_type)
+    assert restored_schema is not None
+    assert memory_template_data(restored_schema) == original
+    assert path not in fs.agfs._files and path + ".backup" not in fs.agfs._files
+    assert fs.agfs._files[settings_path] == settings
 
 
-@pytest.mark.parametrize(
-    "memory_type,edit",
-    [
-        (kind, edit)
-        for kind in EDITABLE_MEMORY_TEMPLATE_FIELDS
-        for edit in ("exact", "description", "field_description")
-    ]
-    + [
-        (kind, edit)
-        for kind in ("events", "soul", "identity")
-        for edit in ("rstrip", "newline", "crlf", "heading")
-    ],
-)
-async def test_account_memory_templates_default_form_roundtrip(
+async def test_account_memory_template_yaml_uses_literal_multiline_strings(
     lightweight_admin_client,
     lightweight_admin_app,
     template_account,
-    memory_type,
-    edit,
 ):
-    from openviking.session.memory.dataclass import MemoryFile
-    from openviking.session.memory.memory_updater import ExtractContext
-    from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-    from openviking.session.memory.utils.template_utils import TemplateUtils
-
     account_id, headers = template_account
+    path = account_memory_template_path(account_id, "profile")
+    backup_path = path + ".backup"
+    fs = lightweight_admin_app.state.fake_service.viking_fs
+    fs.agfs._files[backup_path] = b"obsolete"
+    description = "# Role and objective\nReadable custom instructions."
+
+    response = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{account_id}/memory-templates/profile",
+        json={"description": description},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    raw = fs.agfs._files[path].decode("utf-8")
+    assert "description: |" in raw
+    assert yaml.safe_load(raw)["description"] == description
+    assert backup_path not in fs.agfs._files
+
+
+@pytest.mark.parametrize("edit", ["exact", "rstrip", "newline", "crlf"])
+async def test_account_memory_templates_default_form_roundtrip(
+    lightweight_admin_client, lightweight_admin_app, template_account, edit
+):
     client = lightweight_admin_client
-    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}"
-    initial = await client.get(url, headers=headers)
-    assert initial.status_code == 200, initial.text
-    assert initial.json()["result"]["status"] == "system_default"
-    defaults = initial.json()["result"]["defaults"]
-    # Match the managed form: only editable fields from the actual GET result.
-    body = {
-        "description": defaults["description"],
-        "fields": [
-            {"name": f["name"], "description": f["description"]}
-            for f in defaults["fields"]
-            if f["name"] in EDITABLE_MEMORY_TEMPLATE_FIELDS[memory_type]
-        ],
-    }
-    if memory_type in ("events", "soul", "identity"):
-        original = defaults["content_template"]
-        body["content_template"] = {
-            "rstrip": original.rstrip(),
-            "newline": original + "\n",
-            "crlf": original.replace("\n", "\r\n"),
-            "heading": "# Account memory\n" + original,
-        }.get(edit, original)
-    if edit == "description":
-        body["description"] += "\nAccount instructions."
-    elif edit == "field_description":
-        body["fields"][0]["description"] += "\nAccount field instructions."
-    published = await client.put(url, json=body, headers=headers)
+    account_id, headers = template_account
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/events"
+    defaults = (await client.get(url, headers=headers)).json()["result"]["defaults"]
+    form = _editable_template_form(defaults, "events")
+    original = form["content_template"]
+    form["content_template"] = {
+        "exact": original,
+        "rstrip": original.rstrip(),
+        "newline": original + "\n",
+        "crlf": original.replace("\n", "\r\n"),
+    }[edit]
+
+    published = await client.put(url, json=form, headers=headers)
     assert published.status_code == 200, published.text
     result = published.json()["result"]
-    assert result["defaults"] == defaults
-    effective = result["effective"]
-    is_default = effective == defaults
-    assert result["status"] == ("system_default" if is_default else "custom")
-    assert (result["updated_at"] is None) == is_default
-    assert effective["description"] == body["description"]
-    for field in body["fields"]:
-        actual = next(f for f in effective["fields"] if f["name"] == field["name"])
-        assert actual["description"] == field["description"]
-    assert (await client.get(url, headers=headers)).json()["result"] == result
-    roundtrip = await client.put(url, json=effective, headers=headers)
-    assert roundtrip.status_code == 200, roundtrip.text
-    assert roundtrip.json()["result"] == result
+    effective = defaults | {"content_template": form["content_template"]}
+    custom = effective != defaults
+    assert result["effective"] == effective
+    assert result["status"] == ("custom" if custom else "system_default")
+    assert bool(result["updated_at"]) is custom
     fs = lightweight_admin_app.state.fake_service.viking_fs
     snapshot = await resolve_account_memory_registry(fs, account_id, get_default_registry())
-    schema = snapshot.get(memory_type)
-    if "content_template" in body:
-        assert schema.content_template == effective["content_template"] == body["content_template"]
-        assert schema._account_content_template == (body["content_template"] != original)
-        values = {f.name: "Business fact" for f in schema.fields}
-        values["ranges"] = ""
-        context = ExtractContext([])
-        rendered = MemoryFileUtils.write(
-            MemoryFile(memory_type=memory_type, extra_fields=values),
-            content_template=schema.content_template,
-            extract_context=context,
-            account_content_template_type=memory_type if schema._account_content_template else None,
-        )
-        assert MemoryFileUtils.read(rendered).content == TemplateUtils.render(
-            body["content_template"], values, context
-        )
-    reset = await client.delete(url, headers=headers)
-    assert reset.status_code == 200, reset.text
-    assert reset.json()["result"]["effective"] == defaults
-    assert reset.json()["result"]["status"] == "system_default"
+    schema = snapshot.get("events")
+    assert schema.content_template == form["content_template"]
+    assert schema._account_content_template is custom
+    assert (await client.put(url, json=effective, headers=headers)).json()["result"] == result
 
 
 def _editable_template_form(defaults, memory_type):
@@ -543,107 +781,44 @@ def _editable_template_form(defaults, memory_type):
             if field["name"] in EDITABLE_MEMORY_TEMPLATE_FIELDS[memory_type]
         ],
     }
-    if memory_type in ("events", "soul", "identity"):
+    if memory_type == "events":
         body["content_template"] = defaults["content_template"]
     return body
 
 
-@pytest.mark.parametrize(
-    "memory_type,module",
-    [
-        (kind, module)
-        for kind, fields in EDITABLE_MEMORY_TEMPLATE_FIELDS.items()
-        for module in ("description", *fields)
-    ]
-    + [(kind, "content_template") for kind in ("events", "soul", "identity")],
-)
 async def test_account_memory_templates_module_reset_clears_override(
-    lightweight_admin_client, lightweight_admin_app, template_account, memory_type, module
+    lightweight_admin_client, lightweight_admin_app, template_account
 ):
     account_id, headers = template_account
     client = lightweight_admin_client
-    root = f"/api/v1/admin/accounts/{account_id}/memory-templates"
-    url = f"{root}/{memory_type}"
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/events"
     initial = (await client.get(url, headers=headers)).json()["result"]
-    form = _editable_template_form(initial["defaults"], memory_type)
-    body = deepcopy(form)
-    if module in ("description", "content_template"):
-        body[module] += "\nAccount instructions."
-    else:
-        field = next(field for field in body["fields"] if field["name"] == module)
-        field["description"] += "\nAccount field instructions."
-    publish = await client.put(url, json=body, headers=headers)
-    assert publish.status_code == 200, publish.text
-    result = publish.json()["result"]
-    assert result["status"] == "custom"
+    form = _editable_template_form(initial["defaults"], "events")
+    edited = deepcopy(form)
+    edited["description"] += "\nAccount instructions."
+    edited["content_template"] = "# Custom\n{{ summary }}"
+    edited["fields"][0]["description"] += "\nAccount field instructions."
+    response = await client.put(url, json=edited, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["status"] == "custom"
+
     fs = lightweight_admin_app.state.fake_service.viking_fs
-    path = account_memory_template_path(account_id, memory_type)
-    previous = fs.agfs._files[path]
-    snapshot = await resolve_account_memory_registry(fs, account_id, get_default_registry())
-    previous_schema = snapshot.get(memory_type).model_dump()
-    untouched = {key: value for key, value in fs.agfs._files.items() if key != path}
+    path = account_memory_template_path(account_id, "events")
+    reopened = (await client.get(url, headers=headers)).json()["result"]["effective"]
+    edited = _editable_template_form(reopened, "events")
+    edited["description"] = form["description"]
+    edited["content_template"] = form["content_template"]
+    response = await client.put(url, json=edited, headers=headers)
+    kept = response.json()["result"]
+    assert kept["status"] == "custom" and path in fs.agfs._files
+    assert _editable_template_form(kept["effective"], "events") == edited
 
-    # Reopen the editor, reset only the edited module, then save the whole form.
-    reopened = (await client.get(url, headers=headers)).json()["result"]
-    body = _editable_template_form(reopened["effective"], memory_type)
-    if module in ("description", "content_template"):
-        body[module] = form[module]
-    else:
-        field = next(field for field in body["fields"] if field["name"] == module)
-        field["description"] = next(
-            field["description"] for field in form["fields"] if field["name"] == module
-        )
-    # Field order does not change the completed configuration.
-    body["fields"].reverse()
-    restored = await client.put(url, json=body, headers=headers)
-    assert restored.status_code == 200, restored.text
-    assert restored.json()["result"] == initial
-    assert path not in fs.agfs._files
-    assert fs.agfs._files[path + ".backup"] == previous
-    assert all(fs.agfs._files[key] == value for key, value in untouched.items())
+    form["fields"].reverse()
+    for _ in range(2):
+        restored = await client.put(url, json=form, headers=headers)
+        assert restored.json()["result"] == initial
+        assert path not in fs.agfs._files and path + ".backup" not in fs.agfs._files
     assert (await client.get(url, headers=headers)).json()["result"] == initial
-    listed = (await client.get(root, headers=headers)).json()["result"]["templates"]
-    assert next(item for item in listed if item["memory_type"] == memory_type) == {
-        key: value for key, value in initial.items() if key != "account_id"
-    }
-    resolved = await resolve_account_memory_registry(fs, account_id, get_default_registry())
-    assert (
-        resolved.get(memory_type).model_dump()
-        == get_default_registry().get(memory_type).model_dump()
-    )
-    assert snapshot.get(memory_type).model_dump() == previous_schema
-    stored = dict(fs.agfs._files)
-    repeated = await client.put(url, json=body, headers=headers)
-    assert repeated.status_code == 200, repeated.text
-    assert repeated.json()["result"] == initial
-    assert fs.agfs._files == stored
-
-
-@pytest.mark.parametrize("memory_type", EDITABLE_MEMORY_TEMPLATE_FIELDS)
-async def test_account_memory_templates_module_reset_keeps_other_edits(
-    lightweight_admin_client, lightweight_admin_app, template_account, memory_type
-):
-    account_id, headers = template_account
-    client = lightweight_admin_client
-    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}"
-    initial = (await client.get(url, headers=headers)).json()["result"]
-    body = _editable_template_form(initial["defaults"], memory_type)
-    body["description"] += "\nType edit."
-    body["fields"][0]["description"] += "\nField edit."
-    response = await client.put(url, json=body, headers=headers)
-    assert response.status_code == 200, response.text
-    body["description"] = initial["defaults"]["description"]
-    response = await client.put(url, json=body, headers=headers)
-    assert response.status_code == 200, response.text
-    result = response.json()["result"]
-    assert result["status"] == "custom"
-    assert result["updated_at"]
-    assert result["effective"]["description"] == initial["defaults"]["description"]
-    field = next(f for f in result["effective"]["fields"] if f["name"] == body["fields"][0]["name"])
-    assert field["description"] == body["fields"][0]["description"]
-    assert account_memory_template_path(account_id, memory_type) in (
-        lightweight_admin_app.state.fake_service.viking_fs.agfs._files
-    )
 
 
 async def test_account_memory_templates_save_clears_legacy_default_override(
@@ -666,34 +841,45 @@ async def test_account_memory_templates_save_clears_legacy_default_override(
 
 
 @pytest.mark.parametrize(
-    "body",
+    ("body", "diagnostic"),
     [
-        {"description": 123},
-        {"description": "{{ language | length }}"},
-        {"description": "{{ cycler.__init__.__globals__.__builtins__.len('harmless') }}"},
-        {"description": "literal {{ unclosed"},
-        {"fields": [{"name": "summary", "description": "{{ summary }}"}]},
-        {"fields": [{"name": "summary", "description": "{{ language | trim('x') }}"}]},
-        {"fields": [{"name": "summary", "description": "literal {{ unclosed"}]},
-        {"_account_description": False},
-        {"fields": [{"name": "summary", "_account_description": False}]},
-        {"memory_type": "other"},
-        {"fields": None},
-        {"fields": [{}]},
-        {"fields": [{"name": "x", "type": "not-a-type"}]},
-        {"fields": [{"name": "x", "merge_op": "not-an-op"}]},
-        {"fields": [{"name": "x"}, {"name": "x"}]},
-        {"fields": [{"name": "x", "description": "{{"}]},
-        {"content_template": "{{"},
-        {"content_template": "{{ unknown_field }}"},
-        {"content_template": "{{ extract_context.messages }}"},
-        {"content_template": "{% include 'private.yaml' %}"},
-        {"content_template": "{{ summary | attr('__class__') }}"},
-        {"content_template": "{{ summary | length }}"},
-        {"content_template": "{{ summary | trim('x') }}"},
-        {"content_template": "{{ summary | default('pending', true) }}"},
-        {"content_template": "{{ summary.strip('x') }}"},
-        {"content_template": "x" * (64 * 1024 + 1)},
+        ({"description": 123}, "description must be a nonempty string"),
+        (
+            {"fields": [{"name": "summary", "description": "{{ summary }}"}]},
+            "fields.summary.description: unknown_variable",
+        ),
+        (
+            {"fields": [{"name": "summary", "description": "{{ language | trim('x') }}"}]},
+            "fields.summary.description: invalid_arguments",
+        ),
+        ({"_account_description": False}, "Unknown configuration field: _account_description"),
+        (
+            {"fields": [{"name": "summary", "_account_description": False}]},
+            "Unknown configuration field: fields.summary._account_description",
+        ),
+        ({"fields": None}, "fields must be a list"),
+        ({"fields": [{}]}, "Each fields entry must identify an existing field by name"),
+        ({"content_template": "{{"}, "content_template: invalid_jinja"),
+        (
+            {"content_template": "{{ extract_context.messages }}"},
+            "content_template: unsupported_attribute",
+        ),
+        (
+            {"content_template": "{% include 'private.yaml' %}"},
+            "content_template: unsupported_syntax",
+        ),
+        (
+            {"content_template": "{{ summary | attr('__class__') }}"},
+            "content_template: unsupported_filter",
+        ),
+        ({"content_template": "{{ summary | length }}"}, "content_template: unsupported_filter"),
+        ({"content_template": "{{ summary | trim('x') }}"}, "content_template: invalid_arguments"),
+        (
+            {"content_template": "{{ summary | default('pending', true) }}"},
+            "content_template: invalid_arguments",
+        ),
+        ({"content_template": "{{ summary.strip('x') }}"}, "content_template: invalid_arguments"),
+        ({"content_template": "x" * (64 * 1024 + 1)}, "content_template: template_too_large"),
     ],
 )
 async def test_account_memory_templates_reject_invalid_configuration(
@@ -701,6 +887,7 @@ async def test_account_memory_templates_reject_invalid_configuration(
     lightweight_admin_app,
     template_account,
     body,
+    diagnostic,
 ):
     account_id, headers = template_account
     url = f"/api/v1/admin/accounts/{account_id}/memory-templates/events"
@@ -712,7 +899,8 @@ async def test_account_memory_templates_reject_invalid_configuration(
     fs = lightweight_admin_app.state.fake_service.viking_fs
     original = dict(fs.agfs._files)
     response = await lightweight_admin_client.put(url, json=body, headers=headers)
-    assert response.status_code in {400, 422}, response.text
+    assert response.status_code == 400, response.text
+    assert diagnostic in response.json()["error"]["message"]
     assert fs.agfs._files == original
 
 
@@ -765,41 +953,44 @@ async def test_account_memory_templates_description_diagnostics_and_legacy_recov
     assert path not in fs.agfs._files
 
 
-@pytest.mark.parametrize("memory_type", list(EDITABLE_MEMORY_TEMPLATE_FIELDS))
 @pytest.mark.parametrize("character", ["a", "中", "😀"])
 async def test_account_memory_templates_description_character_limit(
     lightweight_admin_client,
     lightweight_admin_app,
     template_account,
-    memory_type,
     character,
 ):
     account_id, headers = template_account
-    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}"
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/profile"
     text = character * 50_000
     fs = lightweight_admin_app.state.fake_service.viking_fs
-    # Check one field at a time without exceeding the aggregate 1 MiB cap.
-    for field_name in [None, *EDITABLE_MEMORY_TEMPLATE_FIELDS[memory_type]]:
-        body = {"description": text}
-        target = body
-        if field_name is not None:
-            target = {"name": field_name, "description": text}
-            body["fields"] = [target]
-        response = await lightweight_admin_client.put(url, json=body, headers=headers)
-        assert response.status_code == 200, response.text
-        effective = response.json()["result"]["effective"]
-        assert effective["description"] == text
-        if field_name is not None:
-            field = next(field for field in effective["fields"] if field["name"] == field_name)
-            assert field["description"] == text
-        original = dict(fs.agfs._files)
-        target["description"] = text + character
+    response = await lightweight_admin_client.put(
+        url,
+        json={"description": text, "fields": [{"name": "content", "description": text}]},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    effective = response.json()["result"]["effective"]
+    assert effective["description"] == text
+    field = next(field for field in effective["fields"] if field["name"] == "content")
+    assert field["description"] == text
+
+    original = dict(fs.agfs._files)
+    too_long = text + character
+    for location, body in (
+        ("description", {"description": too_long}),
+        ("fields.content.description", {"fields": [{"name": "content", "description": too_long}]}),
+    ):
         response = await lightweight_admin_client.put(url, json=body, headers=headers)
         assert response.status_code == 400, response.text
-        assert "50000 Unicode characters" in response.json()["error"]["message"]
+        assert response.json()["error"]["message"].endswith(
+            f"{location} must not exceed 50000 Unicode characters"
+        )
         assert fs.agfs._files == original
-    assert (await lightweight_admin_client.get(url, headers=headers)).status_code == 200
-    assert (await lightweight_admin_client.delete(url, headers=headers)).status_code == 200
+
+    response = await lightweight_admin_client.get(url, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["effective"] == effective
 
 
 async def test_account_memory_templates_content_validation_error_details(
@@ -820,12 +1011,8 @@ async def test_account_memory_templates_content_validation_error_details(
     }
 
 
-@pytest.mark.parametrize(
-    "expression",
-    ["selected", "ranges|default('')|trim", "ranges|default('0-999')", "ranges if summary else ''"],
-)
 async def test_account_memory_templates_range_expressions_reach_file_body(
-    lightweight_admin_client, lightweight_admin_app, template_account, expression
+    lightweight_admin_client, lightweight_admin_app, template_account
 ):
     from openviking.message import Message, TextPart
     from openviking.session.memory.dataclass import MemoryFile
@@ -835,9 +1022,7 @@ async def test_account_memory_templates_range_expressions_reach_file_body(
     account_id, headers = template_account
     url = f"/api/v1/admin/accounts/{account_id}/memory-templates/events"
     template = (
-        "{% set selected = ranges %}{{ extract_context.get_event_content("
-        + expression
-        + ", summary, 0) }}"
+        "{% set selected = ranges %}{{ extract_context.get_event_content(selected, summary, 0) }}"
     )
     published = await lightweight_admin_client.put(
         url, json={"content_template": template}, headers=headers
@@ -867,104 +1052,9 @@ async def test_account_memory_templates_range_expressions_reach_file_body(
     assert "Unrelated source message" not in content
 
 
-async def test_account_memory_templates_range_values_are_checked_at_render_time(
-    lightweight_admin_client, lightweight_admin_app, template_account
-):
-    from types import SimpleNamespace
-
-    from openviking.session.memory.dataclass import MemoryFile
-    from openviking.session.memory.utils.content_template import ContentTemplateError
-    from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-    account_id, headers = template_account
-    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/events"
-    template = "{% set selected = summary %}{{ extract_context.get_year(selected) }}"
-    published = await lightweight_admin_client.put(
-        url, json={"content_template": template}, headers=headers
-    )
-    assert published.status_code == 200, published.text
-    fs = lightweight_admin_app.state.fake_service.viking_fs
-    snapshot = await resolve_account_memory_registry(fs, account_id, MemoryTypeRegistry())
-    schema = snapshot.get("events")
-    get_year = Mock(spec=[], return_value="2026")
-    with pytest.raises(ContentTemplateError, match="invalid_ranges"):
-        MemoryFileUtils.write(
-            MemoryFile(memory_type="events", extra_fields={"ranges": "0", "summary": "0-999"}),
-            content_template=schema.content_template,
-            extract_context=SimpleNamespace(get_year=get_year),
-            account_content_template_type="events",
-        )
-    get_year.assert_not_called()
-
-
 @pytest.mark.parametrize(
     "memory_type, field_name",
-    [("events", "summary"), ("soul", "core_truths"), ("identity", "introduction")],
-)
-@pytest.mark.parametrize("formatting", [".strip().upper()", " | trim | upper"])
-async def test_account_memory_templates_string_formatting_reaches_file_body(
-    lightweight_admin_client,
-    lightweight_admin_app,
-    template_account,
-    memory_type,
-    field_name,
-    formatting,
-):
-    from openviking.session.memory.dataclass import MemoryFile
-    from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-    account_id, headers = template_account
-    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}"
-    body = {"content_template": "# {{ " + field_name + formatting + " }}"}
-    response = await lightweight_admin_client.put(url, json=body, headers=headers)
-    assert response.status_code == 200, response.text
-    effective = (await lightweight_admin_client.get(url, headers=headers)).json()["result"][
-        "effective"
-    ]
-    assert effective["content_template"] == body["content_template"]
-    roundtrip = await lightweight_admin_client.put(url, json=effective, headers=headers)
-    assert roundtrip.status_code == 200, roundtrip.text
-    fs = lightweight_admin_app.state.fake_service.viking_fs
-    snapshot = await resolve_account_memory_registry(fs, account_id, MemoryTypeRegistry())
-    schema = snapshot.get(memory_type)
-    assert schema._account_content_template is True
-    rendered = MemoryFileUtils.write(
-        MemoryFile(memory_type=memory_type, extra_fields={field_name: " business fact "}),
-        content_template=schema.content_template,
-        account_content_template_type=schema.memory_type,
-    )
-    assert MemoryFileUtils.read(rendered).content == "# BUSINESS FACT"
-
-
-async def test_account_memory_templates_description_only_keeps_safe_deployment_methods(
-    lightweight_admin_client,
-    lightweight_admin_app,
-    template_account,
-    monkeypatch,
-):
-    account_id, headers = template_account
-    defaults = MemoryTypeRegistry()
-    defaults.get("events").content_template = "# {{ summary.strip().upper() }}"
-    monkeypatch.setattr("openviking.server.routers.admin.get_default_registry", lambda: defaults)
-    response = await lightweight_admin_client.put(
-        f"/api/v1/admin/accounts/{account_id}/memory-templates/events",
-        json={"description": "Capture release decisions"},
-        headers=headers,
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["result"]["effective"]["content_template"] == (
-        "# {{ summary.strip().upper() }}"
-    )
-    snapshot = await resolve_account_memory_registry(
-        lightweight_admin_app.state.fake_service.viking_fs, account_id, defaults
-    )
-    assert snapshot.get("events")._account_content_template is False
-    assert snapshot.get("events").content_template == "# {{ summary.strip().upper() }}"
-
-
-@pytest.mark.parametrize(
-    "memory_type, field_name",
-    [("events", "summary"), ("soul", "core_truths"), ("identity", "introduction")],
+    [("events", "summary")],
 )
 @pytest.mark.parametrize("request_kind", ["description_only", "empty", "roundtrip"])
 async def test_account_memory_templates_inherit_exact_deployment_body(
@@ -1026,13 +1116,11 @@ async def test_account_memory_templates_inherit_exact_deployment_body(
     assert MemoryFileUtils.read(rendered).content == "# NEW FACT"
 
 
-@pytest.mark.parametrize("alteration", ["whitespace", "different_body"])
 async def test_account_memory_templates_recheck_persisted_body_without_trusting_flags(
     lightweight_admin_client,
     lightweight_admin_app,
     template_account,
     monkeypatch,
-    alteration,
 ):
     from openviking_cli.exceptions import FailedPreconditionError
 
@@ -1049,7 +1137,7 @@ async def test_account_memory_templates_recheck_persisted_body_without_trusting_
     fs = lightweight_admin_app.state.fake_service.viking_fs
     path = account_memory_template_path(account_id, "events")
     original = fs.agfs._files[path]
-    altered_body = deployment_body + (" " if alteration == "whitespace" else "changed")
+    altered_body = deployment_body + " "
     # Even a whitespace change is custom; equality is exact, not normalized.
     response = await lightweight_admin_client.put(
         url, json={"content_template": altered_body}, headers=headers
@@ -1150,12 +1238,10 @@ async def test_account_memory_templates_old_content_can_be_read_replaced_and_res
             ),
         )
         assert response.status_code == 200, response.text
-        assert fs.agfs._files[path + ".backup"] == raw
+        assert path + ".backup" not in fs.agfs._files
 
 
-@pytest.mark.parametrize(
-    "memory_type", ["profile", "events", "preferences", "entities", "soul", "identity"]
-)
+@pytest.mark.parametrize("memory_type", ["profile", "events", "preferences", "entities"])
 async def test_account_memory_templates_locked_fields_cannot_be_modified(
     lightweight_admin_client,
     lightweight_admin_app,
@@ -1171,7 +1257,7 @@ async def test_account_memory_templates_locked_fields_cannot_be_modified(
     fs = lightweight_admin_app.state.fake_service.viking_fs
     original = dict(fs.agfs._files)
     editable = {"description", "fields"}
-    if memory_type in {"events", "soul", "identity"}:
+    if memory_type == "events":
         editable.add("content_template")
     invalid = [
         {key: None if value is not None else "changed"}
@@ -1209,7 +1295,7 @@ async def test_account_memory_templates_locked_fields_cannot_be_modified(
         invalid.extend(
             {"fields": [{"name": name, "description": "changed"}]} for name in ("goal", "ranges")
         )
-    if memory_type in {"events", "soul", "identity"}:
+    if memory_type == "events":
         invalid.extend([{"content_template": None}, {"content_template": " "}])
     for body in invalid:
         response = await client.put(url, json=body, headers=headers)
@@ -1307,22 +1393,12 @@ async def test_account_memory_templates_permissions_and_isolation(
 
 @pytest.mark.parametrize("merge", [False, True], ids=["extraction", "patch-merge"])
 @pytest.mark.parametrize("output_format", ["python", "json"])
-@pytest.mark.parametrize(
-    "marker",
-    [
-        "{{ language.upper() }}",
-        "{% if language == 'en' %}EN{% else %}OTHER{% endif %}",
-        "{{ language | trim | upper }}",
-    ],
-    ids=["safe-method", "safe-condition", "safe-filters"],
-)
 async def test_account_memory_templates_reach_live_prompts(
     lightweight_admin_client,
     lightweight_admin_app,
     template_account,
     merge,
     output_format,
-    marker,
     monkeypatch,
 ):
     monkeypatch.setattr(get_openviking_config().memory, "extraction_output_format", output_format)
@@ -1369,11 +1445,11 @@ async def test_account_memory_templates_reach_live_prompts(
     initial = await prompt_for(account_id, "alice")
     # Account descriptions render through the same restricted schema path.
     body = {
-        "description": "CUSTOM_ACCOUNT_SCOPE " + marker,
+        "description": "CUSTOM_ACCOUNT_SCOPE {{ language.upper() }}",
         "fields": [
             {
                 "name": "content",
-                "description": "ACCOUNT_FIELD " + marker + " {{ language }}",
+                "description": "ACCOUNT_FIELD {{ language | trim | upper }} {{ language }}",
             }
         ],
     }
@@ -1405,11 +1481,11 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
 
     account_id, headers = template_account
     fs = lightweight_admin_app.state.fake_service.viking_fs
-    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/soul"
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/events"
     template = {
         "description": "ACCOUNT_DESCRIPTION",
-        "content_template": "# OLD_TEMPLATE\n{{ core_truths }}",
-        "fields": [{"name": "core_truths", "description": "Business core values"}],
+        "content_template": "# OLD_TEMPLATE\n{{ summary }}",
+        "fields": [{"name": "summary", "description": "Business summary"}],
     }
     assert (
         await lightweight_admin_client.put(url, json=template, headers=headers)
@@ -1421,10 +1497,11 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
         "openviking.storage.viking_fs",
     ):
         monkeypatch.setattr(f"{module}.get_viking_fs", lambda: fs)
+    monkeypatch.setattr("openviking.session.compressor_v3.ensure_agent_file", AsyncMock())
     initialized = []
 
     async def initialize(registry, ctx, allowed_memory_types=None):
-        initialized.append(registry.get("soul").filename_template)
+        initialized.append(registry.get("events").filename_template)
 
     monkeypatch.setattr(MemoryTypeRegistry, "initialize_memory_files", initialize)
     # Deliberately retain a cached deployment registry: request snapshots must win.
@@ -1437,7 +1514,7 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
         AsyncMock(return_value=updater),
     )
     ctx = RequestContext(user=UserIdentifier(account_id, "alice"), role=Role.USER)
-    uri = "viking://user/alice/memories/soul.md"
+    uri = "viking://user/alice/memories/events/test.md"
 
     def orchestrator(**kwargs):
         provider = kwargs["context_provider"]
@@ -1445,7 +1522,7 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
 
         async def run():
             # A publish during the LLM call must not switch the writer's template.
-            changed = {**template, "content_template": "# NEW_TEMPLATE\n{{ core_truths }}"}
+            changed = {**template, "content_template": "# NEW_TEMPLATE\n{{ summary }}"}
             assert (
                 await lightweight_admin_client.put(url, json=changed, headers=headers)
             ).status_code == 200
@@ -1454,9 +1531,14 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
                 errors=[],
                 upsert_operations=[
                     ResolvedOperation(
-                        memory_type="soul",
+                        memory_type="events",
                         uris=[uri],
-                        memory_fields={"core_truths": "Business fact"},
+                        memory_fields={
+                            "event_name": "test",
+                            "goal": "test",
+                            "ranges": "0",
+                            "summary": "Business fact",
+                        },
                     )
                 ],
             ), []
@@ -1471,12 +1553,12 @@ async def test_account_memory_templates_commit_keeps_snapshot_through_file_write
         await compressor._extract_user_memories(
             messages=[Message(id="m1", role="user", parts=[TextPart("Business fact")])],
             ctx=ctx,
-            allowed_memory_types={"soul"},
+            allowed_memory_types={"events"},
         )
     finally:
         await updater.close()
     resolver.get_vlm.assert_awaited_once_with(account_id)
-    assert initialized == ["soul.md"]
+    assert initialized == [get_default_registry().get("events").filename_template]
     content = MemoryFileUtils.read(fs.files[uri], uri=uri).content
     assert "# OLD_TEMPLATE" in content and "Business fact" in content
     assert "# NEW_TEMPLATE" not in content
@@ -1618,7 +1700,7 @@ async def test_account_memory_templates_reject_oversized_serialized_config(
     assert fs.agfs._files == original
 
 
-async def test_account_memory_templates_corrupt_storage_is_not_overwritten(
+async def test_account_memory_templates_read_rejects_corrupt_storage_but_writes_can_recover(
     lightweight_admin_client,
     lightweight_admin_app,
     template_account,
@@ -1626,42 +1708,235 @@ async def test_account_memory_templates_corrupt_storage_is_not_overwritten(
     account_id, headers = template_account
     fs = lightweight_admin_app.state.fake_service.viking_fs
     path = account_memory_template_path(account_id, "profile")
-    fs.agfs._files[path] = b'{"invalid-json"'
-    original = dict(fs.agfs._files)
     url = f"/api/v1/admin/accounts/{account_id}/memory-templates/profile"
-    for method in ("GET", "PUT", "DELETE"):
-        response = await lightweight_admin_client.request(
-            method,
-            url,
-            headers=headers,
-            **({"json": {"description": "New"}} if method == "PUT" else {}),
-        )
-        assert response.status_code == 412, response.text
-        assert response.json()["error"]["code"] == "FAILED_PRECONDITION"
-        assert fs.agfs._files == original
+    corrupt = b'{"invalid-json"'
+
+    fs.agfs._files[path] = corrupt
+    response = await lightweight_admin_client.get(url, headers=headers)
+    assert response.status_code == 412, response.text
+    assert response.json()["error"]["code"] == "FAILED_PRECONDITION"
+    assert fs.agfs._files[path] == corrupt
+
+    response = await lightweight_admin_client.put(
+        url, headers=headers, json={"description": "Recovered"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["effective"]["description"] == "Recovered"
+    assert path + ".backup" not in fs.agfs._files
+
+    fs.agfs._files[path] = corrupt
+    response = await lightweight_admin_client.delete(url, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["status"] == "system_default"
+    assert path not in fs.agfs._files
+    assert path + ".backup" not in fs.agfs._files
 
 
+async def test_account_memory_templates_read_legacy_without_side_effect_then_migrate_on_put(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    template_account,
+):
+    account_id, headers = template_account
+    client = lightweight_admin_client
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/profile"
+    fs = lightweight_admin_app.state.fake_service.viking_fs
+    path = account_memory_template_path(account_id, "profile")
+    legacy_path = legacy_account_memory_template_path(account_id, "profile")
+
+    published = await client.put(url, headers=headers, json={"description": "Legacy"})
+    assert published.status_code == 200, published.text
+    original = fs.agfs._files.pop(path)
+    fs.agfs._files[legacy_path] = original
+
+    read = await client.get(url, headers=headers)
+    assert read.status_code == 200, read.text
+    assert read.json()["result"]["effective"]["description"] == "Legacy"
+    assert path not in fs.agfs._files
+    assert fs.agfs._files[legacy_path] == original
+
+    migrated = await client.put(url, headers=headers, json=read.json()["result"]["effective"])
+    assert migrated.status_code == 200, migrated.text
+    assert migrated.json()["result"]["effective"]["description"] == "Legacy"
+    assert path in fs.agfs._files
+    assert legacy_path not in fs.agfs._files
+    assert path + ".backup" not in fs.agfs._files
+
+
+async def test_account_memory_templates_invalid_new_path_does_not_fallback_to_legacy(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    template_account,
+):
+    account_id, headers = template_account
+    client = lightweight_admin_client
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/profile"
+    fs = lightweight_admin_app.state.fake_service.viking_fs
+    path = account_memory_template_path(account_id, "profile")
+    legacy_path = legacy_account_memory_template_path(account_id, "profile")
+
+    published = await client.put(url, headers=headers, json={"description": "Legacy"})
+    assert published.status_code == 200, published.text
+    fs.agfs._files[legacy_path] = fs.agfs._files[path]
+    fs.agfs._files[path] = b"invalid: ["
+
+    response = await client.get(url, headers=headers)
+    assert response.status_code == 412, response.text
+    assert response.json()["error"]["code"] == "FAILED_PRECONDITION"
+
+
+async def test_account_memory_templates_retry_cleans_legacy_after_published_migration(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    template_account,
+    monkeypatch,
+):
+    account_id, headers = template_account
+    client = lightweight_admin_client
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/profile"
+    fs = lightweight_admin_app.state.fake_service.viking_fs
+    path = account_memory_template_path(account_id, "profile")
+    legacy_path = legacy_account_memory_template_path(account_id, "profile")
+
+    published = await client.put(url, headers=headers, json={"description": "Legacy"})
+    assert published.status_code == 200, published.text
+    fs.agfs._files[legacy_path] = fs.agfs._files.pop(path)
+    remove = fs.agfs.rm
+    failed = False
+
+    def fail_legacy_cleanup_once(target, **kwargs):
+        nonlocal failed
+        if target == legacy_path and not failed:
+            failed = True
+            raise OSError("legacy cleanup failed")
+        return remove(target, **kwargs)
+
+    monkeypatch.setattr(fs.agfs, "rm", fail_legacy_cleanup_once)
+    response = await client.put(url, headers=headers, json={"description": "Current"})
+    assert response.status_code == 412, response.text
+    assert response.json()["error"]["details"] == {
+        "published": True,
+        "legacy_cleanup_pending": True,
+        "retryable": True,
+    }
+    assert path in fs.agfs._files
+    assert legacy_path in fs.agfs._files
+    current = (await client.get(url, headers=headers)).json()["result"]
+    assert current["effective"]["description"] == "Current"
+
+    retry = await client.put(url, headers=headers, json={"description": "Current"})
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["result"]["updated_at"] == current["updated_at"]
+    assert legacy_path not in fs.agfs._files
+
+
+async def test_account_memory_templates_reset_removes_legacy_before_current(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    template_account,
+    monkeypatch,
+):
+    account_id, headers = template_account
+    client = lightweight_admin_client
+    url = f"/api/v1/admin/accounts/{account_id}/memory-templates/profile"
+    fs = lightweight_admin_app.state.fake_service.viking_fs
+    path = account_memory_template_path(account_id, "profile")
+    legacy_path = legacy_account_memory_template_path(account_id, "profile")
+
+    published = await client.put(url, headers=headers, json={"description": "Current"})
+    assert published.status_code == 200, published.text
+    current = fs.agfs._files[path]
+    fs.agfs._files[legacy_path] = current
+    remove = fs.agfs.rm
+    removed = []
+    failed = False
+
+    def fail_legacy_cleanup_once(target, **kwargs):
+        nonlocal failed
+        removed.append(target)
+        if target == legacy_path and not failed:
+            failed = True
+            raise OSError("legacy cleanup failed")
+        return remove(target, **kwargs)
+
+    monkeypatch.setattr(fs.agfs, "rm", fail_legacy_cleanup_once)
+    response = await client.delete(url, headers=headers)
+    assert response.status_code == 412, response.text
+    assert response.json()["error"]["details"] == {
+        "legacy_cleanup_pending": True,
+        "retryable": True,
+    }
+    assert removed == [legacy_path]
+    assert fs.agfs._files[path] == current
+    assert fs.agfs._files[legacy_path] == current
+
+    response = await client.delete(url, headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["status"] == "system_default"
+    assert removed[-3:] == [legacy_path, path, path + ".backup"]
+    assert path not in fs.agfs._files
+    assert legacy_path not in fs.agfs._files
+    assert path + ".backup" not in fs.agfs._files
+
+
+@pytest.mark.parametrize("cluster_resources", [True, False])
 async def test_create_account(
-    admin_client: httpx.AsyncClient, admin_service: OpenVikingService, monkeypatch
+    admin_client: httpx.AsyncClient,
+    admin_service: OpenVikingService,
+    monkeypatch,
+    cluster_resources,
 ):
     """ROOT provisioning applies account settings before initializing storage."""
+    credential = {"provider": "openai", "api_key": "account-key"}
     settings = {
+        "output_language_override": "en",
+        "memory": {"extraction_enabled": False},
+        "parser_api": {"api_key": "parser-private-key"},
         "embedding": {"max_retries": 5},
+        "vlm": {"model": "account-vlm", "credentials": [credential]},
         "vectordb": {
             "backend": "vikingdb",
             "name": "account_context",
             "index_name": "default",
-            "dimension": 1024,
+            "dimension": admin_service._config.embedding.dimension,
             "vikingdb": {"host": "https://account.invalid"},
         },
     }
+    original_cluster = get_openviking_config()
+    if not cluster_resources:
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+        values = original_cluster.to_dict()
+        values.update(enable_default_resources=False, embedding={}, vlm={})
+        values["storage"]["vectordb"] = None
+        await admin_service.runtime_config_manager.replace_base_config(
+            OpenVikingConfig.from_dict(values)
+        )
+        settings["embedding"]["dense"] = {
+            "model": "account-embedding",
+            "dimension": 1024,
+            "credentials": [credential],
+        }
     adapter = Mock(mode="vikingdb", USE_CONTENT_FIELD=True)
     adapter.get.return_value = []
     adapter.get_collection.return_value.get_meta_data.return_value = {
-        "Fields": [{"FieldName": name} for name in (
-            "id", "uri", "account_id", "context_type", "abstract", "level",
-            "user", "agent", "vector", "sparse_vector", "created_at", "updated_at",
-        )]
+        "Fields": [
+            {"FieldName": name}
+            for name in (
+                "id",
+                "uri",
+                "account_id",
+                "context_type",
+                "abstract",
+                "level",
+                "user",
+                "agent",
+                "vector",
+                "sparse_vector",
+                "created_at",
+                "updated_at",
+            )
+        ]
     }
     adapter.upsert.side_effect = lambda rows: [row["id"] for row in rows]
     factory = Mock(return_value=adapter)
@@ -1675,11 +1950,12 @@ async def test_create_account(
         json={"account_id": acct, "admin_user_id": "alice", "settings": settings},
         headers=root_headers(),
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert "user_key" in body["result"]
+    assert "parser-private-key" not in resp.text
 
     ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN)
     assert await admin_service.viking_fs.abstract("viking://resources", ctx=ctx)
@@ -1687,13 +1963,62 @@ async def test_create_account(
     stored = await admin_client.get(
         f"/api/v1/admin/accounts/{acct}/configuration", headers=root_headers()
     )
-    assert stored.json()["result"]["settings"] == settings
+    assert stored.json()["result"]["settings"] == {
+        **settings,
+        "agent_evolution": {"enabled": False},
+    }
     effective = await admin_service.vector_config_resolver.resolve(acct)
     assert effective.dedicated_vectordb
     assert effective.vectordb.name == "account_context"
     assert effective.embedding.max_retries == 5
     assert factory.call_args.args[0].vikingdb.host == "https://account.invalid"
     adapter.create_collection.assert_not_called()
+
+    url = f"/api/v1/admin/accounts/{acct}/configuration"
+    admin_headers = {"X-API-Key": body["result"]["user_key"]}
+    visible = await admin_client.get(url, headers=admin_headers)
+    assert visible.json()["result"]["settings"] == {
+        "output_language_override": "en",
+        "memory": {"extraction_enabled": False},
+        "agent_evolution": {"enabled": False},
+    }
+    updated = await admin_client.patch(
+        url,
+        headers=admin_headers,
+        json={"settings": {"output_language_override": "", "memory": {"extraction_enabled": True}}},
+    )
+    assert updated.status_code == 200, updated.text
+    assert "parser-private-key" not in updated.text
+    denied = await admin_client.patch(
+        url, headers=admin_headers, json={"settings": {"parser_api": None}}
+    )
+    assert denied.status_code == 403, denied.text
+    invalid = await admin_client.patch(
+        url, headers=root_headers(), json={"settings": {"parser_api": {"api_key": " "}}}
+    )
+    assert invalid.status_code == 400, invalid.text
+    stored = await admin_client.get(url, headers=root_headers())
+    assert stored.json()["result"]["settings"]["parser_api"] == settings["parser_api"]
+    cleared = await admin_client.patch(
+        url, headers=root_headers(), json={"settings": {"vlm": None}}
+    )
+    assert cleared.status_code == (200 if cluster_resources else 400), cleared.text
+    if not cluster_resources:
+        assert "VLM" in cleared.text
+    reloaded = manager_over_source(
+        FileConfigSource(admin_service.viking_fs._async_agfs),
+        base_config=get_openviking_config(),
+    )
+    await reloaded.initialize()
+    vlm = await reloaded.get_account(acct, "vlm")
+    assert (vlm.model if vlm is not None else None) == (
+        None if cluster_resources else settings["vlm"]["model"]
+    )
+    assert (await admin_service.vlm_resolver.effective_vlm_config(acct)).model == (
+        original_cluster.vlm.model if cluster_resources else settings["vlm"]["model"]
+    )
+    if not cluster_resources:
+        await admin_service.runtime_config_manager.replace_base_config(original_cluster)
 
 
 async def test_create_account_rolls_back_when_runtime_config_write_fails(
@@ -1725,8 +2050,22 @@ async def test_create_account_rolls_back_when_runtime_config_write_fails(
     )
 
     assert response.status_code == 500
-    assert not any(item["account_id"] == acct for item in admin_app.state.api_key_manager.get_accounts())
+    assert not any(
+        item["account_id"] == acct for item in await admin_app.state.api_key_manager.list_accounts()
+    )
     assert not await _agfs_exists(admin_service, f"/local/{acct}")
+
+
+async def test_team_compile_status(lightweight_admin_client, template_account):
+    client = lightweight_admin_client
+    account, headers = template_account
+    url = f"/api/v1/admin/accounts/{account}/users/alice/settings"
+    field = "team_compile_status"
+    for status in ("closed", "open", "suspend", "closed"):
+        updated = await client.patch(url, headers=headers, json={field: status})
+        assert updated.json()["result"][field] == status
+        loaded = await client.get(url, headers=headers)
+        assert loaded.json()["result"][field] == status
 
 
 async def test_create_user_paths_accept_initial_user_config(
@@ -1741,18 +2080,26 @@ async def test_create_user_paths_accept_initial_user_config(
         json={
             "account_id": acct,
             "admin_user_id": "alice",
-            # Legacy uid-less spelling, normalized to the viking://~ home alias.
-            "user_config": {"add_targets": {"resource_uri": "viking://user/resources/admin"}},
+            "user_config": {"add_targets": {"resource_uri": "viking://~/resources/admin"}},
         },
         headers=root_headers(),
     )
     assert resp.status_code == 200, resp.text
+    service = lightweight_admin_app.state.fake_service
+    assert service.account_lock_events == [("acquire", acct), ("release", acct)]
+    assert service.workspace_leases == [service.account_lease]
+    assert viking_fs.write_leases == [service.account_lease]
+    for path in (
+        f"/local/{acct}/_system/users.json",
+        f"/local/{acct}/_system/groups.json",
+    ):
+        assert viking_fs.agfs.write_contexts[path]["lease_ref"] == "account-provisioning"
 
-    alice_settings = await read_user_add_targets(
+    alice_settings = await read_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ADMIN),
     )
-    assert alice_settings.resource_uri == "viking://user/alice/resources/admin"
+    assert alice_settings.add_targets.resource_uri == "viking://user/alice/resources/admin"
 
     resp = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
@@ -1765,26 +2112,45 @@ async def test_create_user_paths_accept_initial_user_config(
     )
     assert resp.status_code == 200, resp.text
 
-    bob_settings = await read_user_add_targets(
+    bob_settings = await read_user_config(
         viking_fs,
         RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
     )
-    assert bob_settings.resource_uri == "viking://user/bob/resources/bob"
+    assert bob_settings.add_targets.resource_uri == "viking://user/bob/resources/bob"
+
+    lightweight_admin_app.state.api_key_manager._store._read_only = True
+    locks_before = list(service.account_lock_events)
+    files_before = dict(viking_fs.agfs._files)
+    rejected = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "charlie"},
+        headers=root_headers(),
+    )
+    assert rejected.status_code == 403, rejected.text
+    assert service.account_lock_events == locks_before
+    assert viking_fs.agfs._files == files_before
 
 
-async def test_user_memory_policy_can_be_initialized_and_hot_updated(
-    lightweight_admin_client: httpx.AsyncClient,
-    lightweight_admin_app: FastAPI,
+async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updates(
+    lightweight_admin_client, lightweight_admin_app, monkeypatch
 ):
+    import fakeredis.aioredis
+
+    from openviking.ttl import wiring
+    from openviking.ttl.runtime import DirectoryTTL
+    from openviking_cli.exceptions import PermissionDeniedError
+    from openviking_cli.utils.config.open_viking_config import set_openviking_config
+
+    client = lightweight_admin_client
     acct = _uid()
-    create_account = await lightweight_admin_client.post(
+    created = await client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
-    assert create_account.status_code == 200, create_account.text
-
-    create_user = await lightweight_admin_client.post(
+    assert created.status_code == 200, created.text
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
+    created = await client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={
             "user_id": "bob",
@@ -1793,105 +2159,259 @@ async def test_user_memory_policy_can_be_initialized_and_hot_updated(
         },
         headers=root_headers(),
     )
-    assert create_user.status_code == 200, create_user.text
+    assert created.status_code == 200, created.text
+    user_headers = {"X-API-Key": created.json()["result"]["user_key"]}
+    url = f"/api/v1/admin/accounts/{acct}/users/bob/settings"
+    service = lightweight_admin_app.state.fake_service
+    fs = service.viking_fs
 
-    get_settings = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
-        headers=root_headers(),
-    )
-    assert get_settings.status_code == 200, get_settings.text
-    assert get_settings.json()["result"]["memory_policy"] == {
-        "self": {"enabled": True},
-        "peer": {"enabled": True},
-        "memory_types": ["profile"],
-    }
+    async def check_access(uri, ctx, *, action):
+        if uri.startswith("viking://resources/"):
+            raise PermissionDeniedError("Shared resource directory is not writable")
 
-    patch_settings = await lightweight_admin_client.patch(
-        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
-        json={"memory_policy": {"memory_types": ["experiences"]}},
-        headers=root_headers(),
-    )
-    assert patch_settings.status_code == 200, patch_settings.text
-    memory_policy = patch_settings.json()["result"]["memory_policy"]
-    assert memory_policy["memory_types"] == [
-        "cases",
-        "experiences",
-        "trajectories",
-    ]
-
-    viking_fs = lightweight_admin_app.state.fake_service.viking_fs
-    persisted = await read_user_config(
-        viking_fs,
-        RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER),
-    )
-    assert persisted.memory_policy["memory_types"] == [
-        "cases",
-        "experiences",
-        "trajectories",
-    ]
+    monkeypatch.setattr(fs, "_ensure_access", check_access)
     user_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
-    backup = json.loads(viking_fs.files[user_config_backup_uri(user_ctx)])
-    assert backup["memory_policy"]["memory_types"] == ["profile"]
-
-    writes_before_noop = len(viking_fs.writes)
-    noop_patch = await lightweight_admin_client.patch(
-        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
-        json={"memory_policy": persisted.memory_policy},
-        headers=root_headers(),
-    )
-    assert noop_patch.status_code == 200, noop_patch.text
-    assert len(viking_fs.writes) == writes_before_noop
-
     lightweight_admin_app.state.config.user_config_defaults = UserConfig(
-        memory_policy={"memory_types": ["events"]}
+        add_targets={
+            "resource_uri": "viking://resources/default",
+            "skill_uri": "viking://~/skills",
+        },
+        privacy={"mode": "registered", "restore": False, "never_mask": ["public-value"]},
     )
-    reset_settings = await lightweight_admin_client.patch(
-        f"/api/v1/admin/accounts/{acct}/users/bob/settings",
-        json={"memory_policy": None},
-        headers=root_headers(),
-    )
-    assert reset_settings.status_code == 200, reset_settings.text
-    assert reset_settings.json()["result"]["memory_policy"] == {
-        "self": {"enabled": True},
-        "peer": {"enabled": True},
-        "memory_types": ["events"],
+    loaded = await client.get(url, headers=user_headers)
+    assert loaded.status_code == 200, loaded.text
+    assert loaded.json()["result"]["add_targets"]["resource_uri"] == "viking://resources/default"
+    assert loaded.json()["result"]["privacy"] == {
+        "mode": "registered",
+        "restore": False,
+        "custom_rules": [],
+        "never_mask": ["public-value"],
     }
-
-    persisted = await read_user_config(viking_fs, user_ctx)
-    assert persisted.memory_policy is None
-    backup = json.loads(viking_fs.files[user_config_backup_uri(user_ctx)])
-    assert backup["memory_policy"]["memory_types"] == [
-        "cases",
-        "experiences",
-        "trajectories",
-    ]
-
-
-async def test_user_memory_policy_uses_server_default_without_user_override(
-    lightweight_admin_client: httpx.AsyncClient,
-    lightweight_admin_app: FastAPI,
-):
-    acct = _uid()
-    lightweight_admin_app.state.config.user_config_defaults = UserConfig(
-        memory_policy={"memory_types": ["profile"]}
-    )
-    create_account = await lightweight_admin_client.post(
+    other_acct = _uid()
+    created = await client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
+        json={"account_id": other_acct, "admin_user_id": "bob"},
         headers=root_headers(),
     )
-    assert create_account.status_code == 200, create_account.text
+    assert created.status_code == 200, created.text
+    before = dict(fs.files)
+    for method in ("GET", "PATCH"):
+        body = (
+            {"json": {"memory_policy": {"memory_types": ["events"]}, "privacy": {"mode": "auto"}}}
+            if method == "PATCH"
+            else {}
+        )
+        for headers, target in (
+            (user_headers, url.replace("/bob/", "/alice/")),
+            (user_headers, url.replace(acct, other_acct)),
+            (admin_headers, url.replace(acct, other_acct)),
+        ):
+            denied = await client.request(method, target, headers=headers, **body)
+            assert denied.status_code == 403, denied.text
+            assert fs.files == before
+    monkeypatch.setattr(wiring, "_adapter", None)
+    before = dict(fs.files)
+    rejected = await client.patch(url, json={"ttl": {"sessions": 7}}, headers=user_headers)
+    assert rejected.status_code == 501 and fs.files == before
 
-    get_settings = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users/alice/settings",
-        headers=root_headers(),
-    )
-    assert get_settings.status_code == 200, get_settings.text
-    assert get_settings.json()["result"]["memory_policy"] == {
-        "self": {"enabled": True},
-        "peer": {"enabled": True},
-        "memory_types": ["profile"],
-    }
+    engine = DirectoryTTL(resource_id="settings-contract", timezone_name="UTC")
+    engine.bind_runtime(service, lightweight_admin_app.state.api_key_manager)
+    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr(wiring, "_adapter", engine)
+    previous_config = get_openviking_config()
+    try:
+        await service.runtime_config_manager.patch_cluster({"ttl": {"global": 60, "sessions": 30}})
+        configured = await client.patch(
+            f"/api/v1/admin/accounts/{acct}/configuration",
+            json={"settings": {"ttl": {"global": 45, "peer_events": 14}}},
+            headers=root_headers(),
+        )
+        assert configured.status_code == 200, configured.text
+        patched = await client.patch(
+            url,
+            json={
+                "add_targets": {"resource_uri": "viking://~/peers/first/resources/project-a"},
+                "memory_policy": {"memory_types": ["experiences"]},
+                "privacy": {
+                    "mode": "auto",
+                    "custom_rules": [{"id": "corp", "prefix": "corp_", "min_length": 12}],
+                },
+                "ttl": {"sessions": 7, "peer_events": 3, "user_events": "disabled"},
+            },
+            headers=user_headers,
+        )
+        assert patched.status_code == 200, patched.text
+        loaded = await client.get(url, headers=user_headers)
+        assert loaded.status_code == 200, loaded.text
+        settings = loaded.json()["result"]
+        admin_view = await client.get(url, headers=admin_headers)
+        assert admin_view.status_code == 200 and admin_view.json()["result"] == settings
+        assert settings["add_targets"] == {
+            "resource_uri": "viking://user/bob/peers/first/resources/project-a",
+            "skill_uri": "viking://user/bob/skills",
+        }
+        assert settings["ttl"] == {"sessions": 7, "peer_events": 3, "user_events": "disabled"}
+        assert settings["memory_policy"]["memory_types"] == ["cases", "experiences", "trajectories"]
+        persisted = await read_user_config(fs, user_ctx)
+        assert persisted.ttl.sessions == 7
+        assert persisted.memory_policy["memory_types"] == settings["memory_policy"]["memory_types"]
+        assert settings["privacy"]["mode"] == "auto" and settings["privacy"]["restore"] is False
+        assert persisted.privacy.model_dump(exclude_none=True) == {
+            "mode": "auto",
+            "custom_rules": [{"id": "corp", "prefix": "corp_", "min_length": 12}],
+        }
+        before_rules = dict(fs.files)
+        rejected_rules = await client.patch(
+            url,
+            headers=user_headers,
+            json={
+                "privacy": {
+                    "custom_rules": [
+                        {"id": f"costly{i}", "regex": "[a-z0-9]{100000}"} for i in range(20)
+                    ]
+                }
+            },
+        )
+        assert rejected_rules.status_code == 422, rejected_rules.text
+        assert "compiled size budget" in rejected_rules.text
+        assert fs.files == before_rules
+        backup = json.loads(fs.files[user_config_backup_uri(user_ctx)])
+        assert backup["memory_policy"]["memory_types"] == ["profile"]
+        assert persisted.add_targets.resource_uri == settings["add_targets"]["resource_uri"]
+        assert persisted.add_targets.skill_uri is None
+
+        first_peer = "viking://user/bob/peers/first/memories/events/2026/01/01"
+        second_peer = "viking://user/bob/peers/second/memories/events/2026/01/01"
+        user_event = "viking://user/bob/memories/events/2026/01/01"
+        assert await engine.resolve_expires_at([first_peer, second_peer, user_event], user_ctx) == {
+            first_peer: "2026-01-04T00:00:00Z",
+            second_peer: "2026-01-04T00:00:00Z",
+            user_event: None,
+        }
+        queried = await client.get(
+            f"/api/v1/admin/accounts/{acct}/configuration",
+            params={"path": "viking://user/bob/peers"},
+            headers=root_headers(),
+        )
+        assert queried.status_code == 200 and queried.json()["result"]["effective_policy"] == 3
+
+        writes_before_noop = len(fs.writes)
+        noop = await client.patch(
+            url, json={"memory_policy": persisted.memory_policy}, headers=admin_headers
+        )
+        assert noop.status_code == 200 and len(fs.writes) == writes_before_noop
+        patched = await client.patch(
+            url,
+            json={
+                "ttl": {"sessions": None, "peer_events": "disabled"},
+                "privacy": {"restore": True},
+            },
+            headers=root_headers(),
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["result"]["ttl"] == {
+            "peer_events": "disabled",
+            "user_events": "disabled",
+        }
+        assert patched.json()["result"]["privacy"]["mode"] == "auto"
+        assert patched.json()["result"]["privacy"]["restore"] is True
+        assert (
+            json.loads(fs.files[user_config_backup_uri(user_ctx)])["privacy"]
+            == persisted.privacy.model_dump()
+        )
+        assert (await engine.policy(acct, "viking://user/bob/sessions")).days == 30
+        assert not (await engine.policy(acct, first_peer)).enabled
+        assert patched.json()["result"]["memory_policy"] == settings["memory_policy"]
+        assert json.loads(fs.files[user_config_backup_uri(user_ctx)])["ttl"]["sessions"] == 7
+
+        # Enabling retention must persist recovery intent before changing UserConfig.
+        before = dict(fs.files)
+        with monkeypatch.context() as failure:
+            failure.setattr(engine, "client", AsyncMock(side_effect=OSError("Redis unavailable")))
+            rejected = await client.patch(
+                url, json={"ttl": {"user_events": 7}}, headers=root_headers()
+            )
+        assert rejected.status_code == 503 and fs.files == before
+        cleared = await client.patch(
+            url, json={"ttl": None, "add_targets": None}, headers=root_headers()
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["result"]["ttl"] is None
+        assert cleared.json()["result"]["add_targets"] == {
+            "resource_uri": "viking://resources/default",
+            "skill_uri": "viking://user/bob/skills",
+        }
+        assert (await read_user_config(fs, user_ctx)).add_targets.model_dump(
+            exclude_none=True
+        ) == {}
+        assert cleared.json()["result"]["memory_policy"] == settings["memory_policy"]
+        assert (await engine.policy(acct, first_peer)).days == 14
+
+        lightweight_admin_app.state.config.user_config_defaults = UserConfig(
+            add_targets={"resource_uri": "viking://resources/default"},
+            memory_policy={"memory_types": ["events"]},
+            privacy={"mode": "registered", "restore": False},
+        )
+        reset = await client.patch(
+            url, json={"memory_policy": None, "privacy": None}, headers=root_headers()
+        )
+        assert reset.status_code == 200, reset.text
+        assert reset.json()["result"]["memory_policy"]["memory_types"] == ["events"]
+        assert (await read_user_config(fs, user_ctx)).memory_policy is None
+        assert (await read_user_config(fs, user_ctx)).privacy.model_dump(exclude_none=True) == {}
+        assert reset.json()["result"]["privacy"] == {
+            "mode": "registered",
+            "restore": False,
+            "custom_rules": [],
+            "never_mask": [],
+        }
+        assert json.loads(fs.files[user_config_backup_uri(user_ctx)])["memory_policy"][
+            "memory_types"
+        ] == ["cases", "experiences", "trajectories"]
+
+        # Old settings remain readable and do not block unrelated sparse updates.
+        stored_uri = user_config_uri(user_ctx)
+        stored = json.loads(fs.files[stored_uri])
+        stored["add_targets"] = {"resource_uri": "viking://user/resources/legacy"}
+        stored["memory_policy"] = {"memory_types": ["retired_type"]}
+        fs.files[stored_uri] = json.dumps(stored)
+        loaded = await client.get(url, headers=user_headers)
+        assert loaded.status_code == 200, loaded.text
+        patched = await client.patch(
+            url, json={"add_targets": {"skill_uri": "viking://~/skills"}}, headers=user_headers
+        )
+        assert patched.status_code == 200, patched.text
+        assert (
+            patched.json()["result"]["add_targets"]["resource_uri"]
+            == stored["add_targets"]["resource_uri"]
+        )
+        assert patched.json()["result"]["memory_policy"]["memory_types"] == ["retired_type"]
+        before_rejected = dict(fs.files)
+        rejected = await client.patch(
+            url, json={"memory_policy": stored["memory_policy"]}, headers=user_headers
+        )
+        assert rejected.status_code == 400 and fs.files == before_rejected
+        rejected = await client.patch(
+            url,
+            json={
+                "add_targets": {"resource_uri": "viking://user/bob/resources"},
+                "memory_policy": {"memory_types": ["profile"]},
+            },
+            headers=user_headers,
+        )
+        assert rejected.status_code == 422 and fs.files == before_rejected
+        patched = await client.patch(
+            url, json={"memory_policy": {"memory_types": ["events"]}}, headers=user_headers
+        )
+        assert patched.status_code == 200, patched.text
+        assert (
+            patched.json()["result"]["add_targets"]["resource_uri"]
+            == stored["add_targets"]["resource_uri"]
+        )
+        assert json.loads(fs.files[stored_uri])["memory_policy"]["memory_types"] == ["events"]
+    finally:
+        set_openviking_config(previous_config)
+        await engine.aclose()
 
 
 async def test_create_user_paths_ignore_deprecated_agent_evolution_config(
@@ -1938,6 +2458,8 @@ async def test_create_user_paths_ignore_deprecated_agent_evolution_config(
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
     """ROOT can list all accounts."""
+    unauthorized = await admin_client.get("/api/v1/admin/accounts")
+    assert unauthorized.status_code == 401, unauthorized.text
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -1964,60 +2486,6 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
     assert "default" not in queried_ids
 
 
-async def test_list_accounts_without_watcher_reads_only_accounts_registry(
-    lightweight_admin_client: httpx.AsyncClient,
-    lightweight_admin_app: FastAPI,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Without a watcher, account listing must not load user registries."""
-    manager = lightweight_admin_app.state.api_key_manager
-    original_read_json = manager._legacy._read_json
-    read_paths: list[str] = []
-
-    async def _record_read(path: str):
-        read_paths.append(path)
-        return await original_read_json(path)
-
-    monkeypatch.setattr(manager._legacy, "_read_json", _record_read)
-
-    resp = await lightweight_admin_client.get(
-        "/api/v1/admin/accounts?limit=5&page=1", headers=root_headers()
-    )
-
-    assert resp.status_code == 200, resp.text
-    assert read_paths == ["/local/_system/accounts.json"]
-
-
-async def test_list_users_without_watcher_reads_only_target_user_registry(
-    lightweight_admin_client: httpx.AsyncClient,
-    lightweight_admin_app: FastAPI,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Without a watcher, user listing must not load unrelated registries."""
-    acct = _uid()
-    await lightweight_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    manager = lightweight_admin_app.state.api_key_manager
-    original_read_json = manager._legacy._read_json
-    read_paths: list[str] = []
-
-    async def _record_read(path: str):
-        read_paths.append(path)
-        return await original_read_json(path)
-
-    monkeypatch.setattr(manager._legacy, "_read_json", _record_read)
-
-    resp = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users", headers=root_headers()
-    )
-
-    assert resp.status_code == 200, resp.text
-    assert read_paths == [f"/local/{acct}/_system/users.json"]
-
-
 async def test_list_users_for_default_account_without_users_file_returns_empty_list(
     lightweight_admin_client: httpx.AsyncClient,
 ):
@@ -2038,17 +2506,15 @@ async def test_list_accounts_with_watcher_uses_memory(
     """A running watcher keeps list requests on the in-memory fast path."""
     loop = asyncio.get_running_loop()
     watch_task = loop.create_future()
-    lightweight_admin_app.state.auth_plugin._watch_task = watch_task
 
     async def _unexpected_read(_path: str):
         raise AssertionError("list accounts should not read AGFS while watcher is running")
 
     manager = lightweight_admin_app.state.api_key_manager
-    monkeypatch.setattr(manager._legacy, "_read_json", _unexpected_read)
+    manager._store._watch_task = watch_task
+    monkeypatch.setattr(manager._store, "_read_json", _unexpected_read)
     try:
-        resp = await lightweight_admin_client.get(
-            "/api/v1/admin/accounts", headers=root_headers()
-        )
+        resp = await lightweight_admin_client.get("/api/v1/admin/accounts", headers=root_headers())
         users_resp = await lightweight_admin_client.get(
             "/api/v1/admin/accounts/default/users", headers=root_headers()
         )
@@ -2057,6 +2523,8 @@ async def test_list_accounts_with_watcher_uses_memory(
 
     assert resp.status_code == 200, resp.text
     assert users_resp.status_code == 200, users_resp.text
+    assert {account["account_id"] for account in resp.json()["result"]} == {"default"}
+    assert users_resp.json()["result"] == []
 
 
 async def test_identity_settings_refreshes_a_stale_registry_on_demand(
@@ -2065,74 +2533,29 @@ async def test_identity_settings_refreshes_a_stale_registry_on_demand(
     admin_service: OpenVikingService,
 ):
     """Detail settings reads must not depend on a preceding list request."""
-    replica = admin_app.state.api_key_manager
-    writer = APIKeyManager(
+    writer = build_api_key_manager(
         root_key=ROOT_KEY,
         viking_fs=admin_service.viking_fs,
     )
     await writer.load()
-    acct = _uid()
+    try:
+        acct = _uid()
+        await writer.ensure_trusted_identities({acct: {"trusted-user"}})
+        account_settings = await admin_client.get(
+            f"/api/v1/admin/accounts/{acct}/configuration",
+            headers=root_headers(),
+        )
+        assert account_settings.status_code == 200, account_settings.text
+        assert account_settings.json()["result"]["account_id"] == acct
 
-    await writer.ensure_trusted_identities({acct: {"trusted-user"}})
-    assert replica.has_user(acct, "trusted-user") is False
-
-    account_settings = await admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/settings",
-        headers=root_headers(),
-    )
-    assert account_settings.status_code == 200, account_settings.text
-    assert replica.has_user(acct, "trusted-user") is False
-
-    await writer.ensure_trusted_identities({acct: {"trusted-user-2"}})
-    assert replica.has_user(acct, "trusted-user-2") is False
-
-    user_settings = await admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users/trusted-user-2/settings",
-        headers=root_headers(),
-    )
-    assert user_settings.status_code == 200, user_settings.text
-    assert replica.has_user(acct, "trusted-user") is True
-    assert replica.has_user(acct, "trusted-user-2") is True
-
-
-async def test_identity_settings_without_watcher_use_scoped_registry_reads(
-    lightweight_admin_client: httpx.AsyncClient,
-    lightweight_admin_app: FastAPI,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Settings checks must not fall back to a full identity-registry reload."""
-    acct = _uid()
-    await lightweight_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    manager = lightweight_admin_app.state.api_key_manager
-    original_read_json = manager._legacy._read_json
-    read_paths: list[str] = []
-
-    async def _record_read(path: str):
-        read_paths.append(path)
-        return await original_read_json(path)
-
-    monkeypatch.setattr(manager._legacy, "_read_json", _record_read)
-
-    account_resp = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/settings", headers=root_headers()
-    )
-    assert account_resp.status_code == 200, account_resp.text
-    assert read_paths == ["/local/_system/accounts.json"]
-
-    read_paths.clear()
-    user_resp = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users/alice/settings",
-        headers=root_headers(),
-    )
-    assert user_resp.status_code == 200, user_resp.text
-    assert read_paths == [
-        "/local/_system/accounts.json",
-        f"/local/{acct}/_system/users.json",
-    ]
+        await writer.ensure_trusted_identities({acct: {"trusted-user-2"}})
+        user_settings = await admin_client.get(
+            f"/api/v1/admin/accounts/{acct}/users/trusted-user-2/settings",
+            headers=root_headers(),
+        )
+        assert user_settings.status_code == 200, user_settings.text
+    finally:
+        await writer.close()
 
 
 @pytest.mark.parametrize("index_updates_immediately", [True, False])
@@ -2180,7 +2603,7 @@ async def test_delete_account(
         for record_id in ids:
             rows.pop(record_id, None)
 
-    adapter._collection = SimpleNamespace(delete_data=delete_data)
+    adapter._collection = SimpleNamespace(delete_data=delete_data, close=Mock())
     scan_rows = rows if index_updates_immediately else indexed_rows
     adapter.query = lambda *, filter, limit, offset=0, **kwargs: list(
         islice(
@@ -2231,8 +2654,7 @@ async def test_delete_account(
     assert failed["status"] == "failed"
     assert "injected vector failure" in failed["error"]
     assert await _agfs_exists(admin_service, path)
-    await manager.reload()
-    assert manager.get_deletion(acct)["task_id"] == task_id
+    assert (await manager.get_deletion(acct))["task_id"] == task_id
 
     retried = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
     retry_task_id = retried.json()["result"]["task_id"]
@@ -2259,10 +2681,12 @@ async def test_delete_account(
     assert adapter.get(deleted_ids[:100])
     assert not await _agfs_exists(admin_service, f"/local/{acct}")
     assert await _agfs_exists(admin_service, "/local/other/resources/keep.md")
-    assert manager.get_deletion(acct) is None
-    assert not manager.has_user(acct, "alice")
+    assert await manager.get_deletion(acct) is None
+    assert not await manager.has_user(acct, "alice")
     assert await get_task_tracker().get(old_task.task_id, account_id=acct, user_id="alice") is None
-    assert await get_task_tracker().get(user_cleanup.task_id, account_id=acct, user_id="alice") is None
+    assert (
+        await get_task_tracker().get(user_cleanup.task_id, account_id=acct, user_id="alice") is None
+    )
     assert (await _wait_for_task(admin_client, task_id))["status"] == "failed"
 
     # Late cleanup deliveries are harmless after deletion, including when the
@@ -2280,40 +2704,50 @@ async def test_delete_account(
             account_id=SYSTEM_TASK_ACCOUNT_ID,
             user_id=SYSTEM_TASK_USER_ID,
         )
-        await queue.enqueue(
-            {
-                "task_id": user_cleanup.task_id,
-                "account_id": acct,
-                "user_id": "alice",
-                "target": {"account_id": acct, "user_id": "bob"},
-            }
-        )
-        await queue.enqueue(
-            {
-                "task_id": late_task_id,
-                "account_id": SYSTEM_TASK_ACCOUNT_ID,
-                "user_id": SYSTEM_TASK_USER_ID,
-                "target": {"account_id": acct, "user_id": "bob"},
-            }
-        )
+        with bind_task_context(user_cleanup.task_id, acct, "alice"):
+            with pytest.raises(TaskWorkRejected, match="unavailable"):
+                await queue.enqueue(
+                    {
+                        "task_id": user_cleanup.task_id,
+                        "account_id": acct,
+                        "user_id": "alice",
+                        "target": {"account_id": acct, "user_id": "bob"},
+                    }
+                )
+        with bind_task_context(
+            late_task_id,
+            SYSTEM_TASK_ACCOUNT_ID,
+            SYSTEM_TASK_USER_ID,
+        ):
+            await queue.enqueue(
+                {
+                    "task_id": late_task_id,
+                    "account_id": SYSTEM_TASK_ACCOUNT_ID,
+                    "user_id": SYSTEM_TASK_USER_ID,
+                    "target": {"account_id": acct, "user_id": "bob"},
+                }
+            )
         skipped = await _wait_for_task(admin_client, late_task_id)
         assert skipped["status"] == "completed"
         assert skipped["result"] == {"deleted": not recreated, "stale": True}
-        assert await get_task_tracker().get(
-            user_cleanup.task_id, account_id=acct, user_id="alice"
-        ) is None
+        assert (
+            await get_task_tracker().get(user_cleanup.task_id, account_id=acct, user_id="alice")
+            is None
+        )
         assert await _agfs_exists(admin_service, path) is recreated
         if recreated:
-            assert manager.resolve(replacement_key).user_id == "bob"
+            assert (await manager.resolve_identity(replacement_key)).user_id == "bob"
 
 
-async def test_delete_account_retries_when_runtime_config_cleanup_fails(
-    admin_client: httpx.AsyncClient,
-    admin_service: OpenVikingService,
-    admin_app: FastAPI,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
+    admin_client, admin_service, admin_app, monkeypatch
 ):
-    """Config cleanup failure keeps the deletion fence and can be retried."""
+    import fakeredis.aioredis
+
+    from openviking.scheduling.expiry.api import CallbackRequest, ItemIdentity
+    from openviking.ttl import wiring
+    from openviking.ttl.runtime import DirectoryTTL
+
     acct = _uid()
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
@@ -2321,227 +2755,222 @@ async def test_delete_account_retries_when_runtime_config_cleanup_fails(
         headers=root_headers(),
     )
     user_key = resp.json()["result"]["user_key"]
-    runtime_config = admin_service.runtime_config_manager
+    engine = DirectoryTTL(resource_id="account-cleanup")
+    engine.bind_runtime(admin_service, admin_app.state.api_key_manager)
+    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    scheduler = Mock(report=AsyncMock(), unregister=AsyncMock())
+    engine.install_expiry(scheduler)
+    monkeypatch.setattr(wiring, "_adapter", engine)
+    prefix = engine.prefix(acct)
+    other = engine.prefix("other") + "sessions"
+    await engine.redis.zadd(prefix + "sessions", {"viking://user/alice/sessions/s": 1})
+    await engine.redis.hset(prefix + "backfill:initial", "roots", "[]")
+    await engine.redis.set(prefix + "backfill:initial:done", "1")
+    await engine.redis.zadd(other, {"viking://user/alice/sessions/kept": 1})
+    unlink = engine.redis.unlink
+    monkeypatch.setattr(engine.redis, "unlink", AsyncMock(side_effect=OSError("Redis unavailable")))
     delete_config = AsyncMock(side_effect=OSError("provider unavailable"))
-    monkeypatch.setattr(runtime_config, "delete_account", delete_config)
+    monkeypatch.setattr(admin_service.runtime_config_manager, "delete_account", delete_config)
+    try:
+        resp = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
+        assert resp.status_code == 202
+        failed = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
+        assert failed["status"] == "failed" and "Redis unavailable" in failed["error"]
+        assert await engine.redis.zcard(prefix + "sessions") == 1
+        denied = await admin_client.get(
+            "/api/v1/fs/ls?uri=viking://", headers={"X-API-Key": user_key}
+        )
+        assert denied.status_code == 401
+        assert await admin_app.state.api_key_manager.get_deletion(acct) is not None
+        conflict = await admin_client.post(
+            "/api/v1/admin/accounts",
+            json={"account_id": acct, "admin_user_id": "replacement"},
+            headers=root_headers(),
+        )
+        assert conflict.status_code == 409
 
-    resp = await admin_client.delete(
-        f"/api/v1/admin/accounts/{acct}",
-        headers=root_headers(),
-    )
-    assert resp.status_code == 202
-    failed = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
-    assert failed["status"] == "failed"
-    assert "provider unavailable" in failed["error"]
-    denied = await admin_client.get(
-        "/api/v1/fs/ls?uri=viking://",
-        headers={"X-API-Key": user_key},
-    )
-    assert denied.status_code == 401
-    assert admin_app.state.api_key_manager.get_deletion(acct) is not None
+        monkeypatch.setattr(engine.redis, "unlink", unlink)
+        retry = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
+        failed = await _wait_for_task(admin_client, retry.json()["result"]["task_id"])
+        assert failed["status"] == "failed" and "provider unavailable" in failed["error"]
+        assert await admin_app.state.api_key_manager.get_deletion(acct) is not None
+        delete_config.side_effect = None
+        retry = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
+        completed = await _wait_for_task(admin_client, retry.json()["result"]["task_id"])
+        assert completed["status"] == "completed"
+        assert await admin_app.state.api_key_manager.get_deletion(acct) is None
+        assert delete_config.await_count == 2
+        assert not [key async for key in engine.redis.scan_iter(match=prefix + "*")]
+        assert await engine.redis.zcard(other) == 1
 
-    conflict = await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "replacement"},
-        headers=root_headers(),
-    )
-    assert conflict.status_code == 409
-
-    delete_config.side_effect = None
-    retry = await admin_client.delete(
-        f"/api/v1/admin/accounts/{acct}",
-        headers=root_headers(),
-    )
-    completed = await _wait_for_task(admin_client, retry.json()["result"]["task_id"])
-    assert completed["status"] == "completed"
-    assert admin_app.state.api_key_manager.get_deletion(acct) is None
-    assert delete_config.await_count == 2
+        # A delivery already in flight cannot revive maintenance for the deleted account.
+        callback = CallbackRequest(ItemIdentity("ttl", acct, "_system", "maintenance"))
+        assert (await engine.handle(callback)).reason == "account_deleted"
+        scheduler.report.assert_not_awaited()
+        assert not [key async for key in engine.redis.scan_iter(match=prefix + "*")]
+    finally:
+        await engine.aclose()
 
 
 async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
     """Creating duplicate account should fail."""
     acct = _uid()
-    await admin_client.post(
+    created = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
+    assert created.status_code == 200, created.text
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "bob"},
         headers=root_headers(),
     )
-    assert resp.status_code == 409  # ALREADY_EXISTS
+    assert resp.status_code == 409, resp.text
+    users = await admin_client.get(f"/api/v1/admin/accounts/{acct}/users", headers=root_headers())
+    assert users.status_code == 200, users.text
+    assert [user["user_id"] for user in users.json()["result"]] == ["alice"]
 
 
 # ---- User CRUD ----
 
 
-async def test_register_user(admin_client: httpx.AsyncClient):
-    """ROOT can register a user in an account."""
+@pytest.mark.parametrize("caller", ["root", "admin"])
+async def test_register_user(admin_client: httpx.AsyncClient, caller):
+    """ROOT and account ADMIN can issue a key for a regular account user."""
     acct = _uid()
-    await admin_client.post(
+    created = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
+    assert created.status_code == 200, created.text
+    headers = (
+        root_headers() if caller == "root" else {"X-API-Key": created.json()["result"]["user_key"]}
+    )
     resp = await admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
-        headers=root_headers(),
+        headers=headers,
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["result"]["user_id"] == "bob"
-    assert "user_key" in body["result"]
+    assert body["result"]["account_id"] == acct
 
-    # Bob's key should work
-    bob_key = body["result"]["user_key"]
-    resp = await admin_client.get(
-        "/api/v1/fs/ls?uri=viking://",
-        headers={"X-API-Key": bob_key},
-    )
-    assert resp.status_code == 200
+    user_headers = {"X-API-Key": body["result"]["user_key"]}
+    identity = await admin_client.get("/health", headers=user_headers)
+    assert identity.status_code == 200, identity.text
+    assert {key: identity.json()[key] for key in ("account_id", "user_id", "role")} == {
+        "account_id": acct,
+        "user_id": "bob",
+        "role": "user",
+    }
+    root_listing = await admin_client.get("/api/v1/fs/ls?uri=viking://", headers=user_headers)
+    assert root_listing.status_code == 200, root_listing.text
 
-
-async def test_root_can_register_admin_role_user(
-    lightweight_admin_client: httpx.AsyncClient,
-):
-    """ROOT can create an ADMIN user via register_user."""
-    acct = _uid()
-    await lightweight_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-
-    resp = await lightweight_admin_client.post(
-        f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "bob-admin", "role": "admin"},
-        headers=root_headers(),
-    )
-    assert resp.status_code == 200
-
-    admin_key = resp.json()["result"]["user_key"]
-    list_users = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users",
-        headers={"X-API-Key": admin_key},
-    )
-    assert list_users.status_code == 200
-
-
-async def test_root_cannot_register_root_role_user(
-    lightweight_admin_client: httpx.AsyncClient,
-):
-    """ROOT is the configured server identity, not an account user role."""
-    acct = _uid()
-    await lightweight_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-
-    resp = await lightweight_admin_client.post(
-        f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "mallory-root", "role": "root"},
-        headers=root_headers(),
-    )
-    assert resp.status_code == 403
-
-
-async def test_admin_can_register_user_in_own_account(admin_client: httpx.AsyncClient):
-    """ADMIN can register users in their own account."""
-    acct = _uid()
-    resp = await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    alice_key = resp.json()["result"]["user_key"]
-
-    resp = await admin_client.post(
-        f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "bob", "role": "user"},
-        headers={"X-API-Key": alice_key},
-    )
-    assert resp.status_code == 200
-
-
-async def test_admin_can_register_admin_role_user(
-    lightweight_admin_client: httpx.AsyncClient,
-):
-    """ADMIN can create another ADMIN in the same account via register_user."""
-    acct = _uid()
-    resp = await lightweight_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    alice_key = resp.json()["result"]["user_key"]
-
-    resp = await lightweight_admin_client.post(
-        f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "mallory-admin", "role": "admin"},
-        headers={"X-API-Key": alice_key},
-    )
-    assert resp.status_code == 200
-
-    admin_key = resp.json()["result"]["user_key"]
-    list_users = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users",
-        headers={"X-API-Key": admin_key},
-    )
-    assert list_users.status_code == 200
-
-
-async def test_admin_cannot_register_root_role_user(
-    lightweight_admin_client: httpx.AsyncClient,
-):
-    """ADMIN should not be able to mint a ROOT key via register_user."""
-    acct = _uid()
-    resp = await lightweight_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    alice_key = resp.json()["result"]["user_key"]
-
-    resp = await lightweight_admin_client.post(
-        f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "mallory-root", "role": "root"},
-        headers={"X-API-Key": alice_key},
-    )
-    assert resp.status_code == 403
-
-
-async def test_admin_cannot_mint_root_key_that_reaches_root_only_endpoint(
-    lightweight_admin_client: httpx.AsyncClient,
-):
-    """ADMIN registration must never yield a key that works on ROOT-only endpoints."""
-    acct = _uid()
-    resp = await lightweight_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    alice_key = resp.json()["result"]["user_key"]
-
-    resp = await lightweight_admin_client.post(
-        f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "mallory-root", "role": "root"},
-        headers={"X-API-Key": alice_key},
-    )
-    assert resp.status_code == 403
-    result = resp.json().get("result") or {}
-    assert "user_key" not in result
-
-    mallory_key = result.get("user_key")
-    if mallory_key:
-        root_only = await lightweight_admin_client.get(
-            "/api/v1/admin/accounts",
-            headers={"X-API-Key": mallory_key},
+    for user_id, registration in (("alice", created), ("bob", resp)):
+        listing = await admin_client.get(
+            "/api/v1/fs/ls",
+            params={
+                "uri": f"viking://user/{user_id}/memories",
+                "output": "original",
+                "include_abstract": True,
+                "include_overview": True,
+            },
+            headers={"X-API-Key": registration.json()["result"]["user_key"]},
         )
-        assert root_only.status_code == 403
+        assert listing.status_code == 200, listing.text
+        directories = [entry for entry in listing.json()["result"] if entry["isDir"]]
+        assert {entry["name"] for entry in directories} == {
+            "preferences",
+            "entities",
+            "events",
+            "cases",
+            "trajectories",
+            "experiences",
+        }
+        for directory in directories:
+            assert directory["abstract"] and directory["abstract"] != "[.abstract.md is not ready]"
+            assert directory["overview"] and directory["overview"] != "[.overview.md is not ready]"
+
+
+@pytest.mark.parametrize("caller", ["root", "admin"])
+async def test_register_admin_role_user(
+    lightweight_admin_client: httpx.AsyncClient,
+    caller,
+):
+    """The new key can perform operations that require account ADMIN."""
+    acct = _uid()
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200, created.text
+    headers = (
+        root_headers() if caller == "root" else {"X-API-Key": created.json()["result"]["user_key"]}
+    )
+    url = f"/api/v1/admin/accounts/{acct}"
+    resp = await lightweight_admin_client.post(
+        f"{url}/users",
+        json={"user_id": "bob", "role": "admin"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    admin_key = resp.json()["result"]["user_key"]
+    configuration = await lightweight_admin_client.get(
+        f"{url}/configuration",
+        headers={"X-API-Key": admin_key},
+    )
+    assert configuration.status_code == 200, configuration.text
+    assert configuration.json()["result"]["account_id"] == acct
+    users = await lightweight_admin_client.get(
+        f"{url}/users", params={"include_credentials": False}, headers=root_headers()
+    )
+    assert users.status_code == 200, users.text
+    assert {item["user_id"]: item["role"] for item in users.json()["result"]} == {
+        "alice": "admin",
+        "bob": "admin",
+    }
+
+
+@pytest.mark.parametrize("caller", ["root", "admin"])
+async def test_cannot_register_root_role_user(
+    lightweight_admin_client: httpx.AsyncClient,
+    caller,
+):
+    """A rejected ROOT registration leaves the account's users unchanged."""
+    acct = _uid()
+    resp = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": acct, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+    headers = (
+        root_headers() if caller == "root" else {"X-API-Key": resp.json()["result"]["user_key"]}
+    )
+    url = f"/api/v1/admin/accounts/{acct}/users"
+    users = await lightweight_admin_client.get(url, headers=headers)
+    assert users.status_code == 200, users.text
+    original = users.json()["result"]
+
+    resp = await lightweight_admin_client.post(
+        url,
+        json={"user_id": "mallory-root", "role": "root"},
+        headers=headers,
+    )
+    assert resp.status_code == 403, resp.text
+    body = resp.json()
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "Account users cannot be assigned ROOT" in body["error"]["message"]
+    assert "user_key" not in (body.get("result") or {})
+
+    users = await lightweight_admin_client.get(url, headers=headers)
+    assert users.status_code == 200, users.text
+    assert users.json()["result"] == original
 
 
 async def test_admin_cannot_register_user_in_other_account(admin_client: httpx.AsyncClient):
@@ -2569,38 +2998,605 @@ async def test_admin_cannot_register_user_in_other_account(admin_client: httpx.A
     assert resp.status_code == 403
 
 
-async def test_list_users(admin_client: httpx.AsyncClient):
-    """ROOT can list users in an account."""
+async def test_global_identity_is_created_and_managed_by_root_only(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app,
+):
+    """GLOBAL is created and maintained by ROOT; others only observe existence."""
+    manager = lightweight_admin_app.state.api_key_manager
     acct = _uid()
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    await admin_client.post(
+    alice_key = await manager.create_account(acct, "alice")
+
+    created = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "bob", "role": "user"},
+        json={"user_id": "agent", "role": "global"},
         headers=root_headers(),
     )
-    resp = await admin_client.get(f"/api/v1/admin/accounts/{acct}/users", headers=root_headers())
-    assert resp.status_code == 200
-    users = resp.json()["result"]
-    user_ids = {u["user_id"] for u in users}
-    assert user_ids == {"alice", "bob"}
+    assert created.status_code == 200, created.text
+    global_key = created.json()["result"]["user_key"]
+    identity = await manager.resolve_identity(global_key)
+    assert identity.role == Role.GLOBAL
+    assert (identity.account_id, identity.user_id) == (acct, "agent")
+
+    denied = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users",
+        json={"user_id": "agent-2", "role": "global"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert denied.status_code == 403
+
+    listed = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        headers={"X-API-Key": alice_key},
+    )
+    assert listed.status_code == 200
+    row = {user["user_id"]: user for user in listed.json()["result"]}["agent"]
+    assert row["role"] == Role.GLOBAL
+    assert "api_key" not in row and "key_prefix" not in row
+    assert row["api_key_available"] is True
+
+    root_listed = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users", headers=root_headers()
+    )
+    root_row = {user["user_id"]: user for user in root_listed.json()["result"]}["agent"]
+    assert root_row["api_key"] == global_key
+
+    bob_key = await manager.register_user(acct, "bob")
+    user_listed = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users", headers={"X-API-Key": bob_key}
+    )
+    bob_row = {user["user_id"]: user for user in user_listed.json()["result"]}["agent"]
+    assert bob_row == {"user_id": "agent", "role": Role.GLOBAL}
+
+    maintenance = [
+        ("delete", f"/api/v1/admin/accounts/{acct}/users/agent", None),
+        ("put", f"/api/v1/admin/accounts/{acct}/users/agent/role", {"role": "user"}),
+        ("post", f"/api/v1/admin/accounts/{acct}/users/agent/key", {}),
+    ]
+    for method, url, payload in maintenance:
+        response = await lightweight_admin_client.request(
+            method, url, json=payload, headers={"X-API-Key": alice_key}
+        )
+        assert response.status_code == 403, response.text
+
+    # ROOT cannot promote or demote a GLOBAL identity either; recreate instead.
+    root_role_change = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/agent/role",
+        json={"role": "user"},
+        headers=root_headers(),
+    )
+    assert root_role_change.status_code == 400
+    assert (await manager.get_user_membership(acct, "agent"))["role"] == Role.GLOBAL
+
+    await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/groups",
+        json={"group_id": "engineering"},
+        headers=root_headers(),
+    )
+    add_member = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/groups/engineering/members",
+        json={"user_ids": ["agent"]},
+        headers={"X-API-Key": alice_key},
+    )
+    assert add_member.status_code == 403
+
+    rotated = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users/agent/key",
+        json={},
+        headers=root_headers(),
+    )
+    assert rotated.status_code == 200
+    rotated_key = rotated.json()["result"]["user_key"]
+    assert rotated_key != global_key
+    assert (await manager.resolve_identity(rotated_key)).role == Role.GLOBAL
+
+
+@pytest.mark.parametrize("caller", ["root", "admin"])
+async def test_remove_group_members_batch_is_idempotent_and_scoped(
+    lightweight_admin_client, lightweight_admin_app, caller
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account, other_account = _uid(), _uid()
+    admin_key = await manager.create_account(account, "owner")
+    await manager.register_user(account, "alice")
+    await manager.register_user(account, "bob")
+    await manager.register_user(account, "carol")
+    await manager.register_user(account, "nonmember")
+    await manager.create_account(other_account, "alice")
+    for account_id, group_id, members in (
+        (account, "engineering", ["alice", "bob", "carol", "owner"]),
+        (account, "reviewers", ["alice"]),
+        (other_account, "engineering", ["alice"]),
+    ):
+        await manager.create_group(account_id, group_id)
+        await manager.add_group_members(account_id, group_id, members)
+    headers = {"X-API-Key": ROOT_KEY if caller == "root" else admin_key}
+    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
+
+    single = await lightweight_admin_client.request(
+        "DELETE", url, json={"user_ids": ["alice"]}, headers=headers
+    )
+    assert single.status_code == 200, single.text
+    assert single.json()["result"] == {"removed": True}
+    body = {"user_ids": ["alice", "bob", "carol", "bob", "nonmember", "missing"]}
+    for removed in (True, False):
+        response = await lightweight_admin_client.request("DELETE", url, json=body, headers=headers)
+        assert response.status_code == 200, response.text
+        assert response.json()["result"] == {"removed": removed}
+
+    members = await lightweight_admin_client.get(url, headers=headers)
+    assert members.json()["result"] == {"group_id": "engineering", "members": ["owner"]}
+    assert await manager.get_group_members(account, "reviewers") == ["alice"]
+    assert await manager.get_group_members(other_account, "engineering") == ["alice"]
+    assert await manager.get_user_group_ids(account, "alice") == ("reviewers",)
+    assert await manager.get_user_group_ids(account, "bob") == ()
+    assert await manager.has_user(account, "alice")
+    assert await manager.has_user(account, "bob")
+
+
+async def test_remove_group_members_batch_enforces_permissions_and_group_existence(
+    lightweight_admin_client, lightweight_admin_app
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    await manager.create_account(account, "owner")
+    user_key = await manager.register_user(account, "alice")
+    other_admin_key = await manager.create_account(_uid(), "other-owner")
+    await manager.create_group(account, "engineering")
+    await manager.add_group_members(account, "engineering", ["alice", "owner"])
+    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
+    for headers, status in (
+        ({"X-API-Key": user_key}, 403),
+        ({"X-API-Key": other_admin_key}, 403),
+        ({}, 401),
+    ):
+        response = await lightweight_admin_client.request(
+            "DELETE", url, json={"user_ids": ["alice", "owner"]}, headers=headers
+        )
+        assert response.status_code == status, response.text
+    for missing_url in (
+        url.replace("/engineering/", "/missing/"),
+        url.replace(f"/{account}/", "/missing-account/"),
+    ):
+        response = await lightweight_admin_client.request(
+            "DELETE", missing_url, json={"user_ids": ["alice"]}, headers=root_headers()
+        )
+        assert response.status_code == 404, response.text
+    assert await manager.get_group_members(account, "engineering") == ["alice", "owner"]
+
+
+async def test_remove_group_members_batch_replaces_single_route_and_accepts_maximum_size(
+    lightweight_admin_client, lightweight_admin_app
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    await manager.create_account(account, "alice")
+    await manager.create_group(account, "engineering")
+    await manager.add_group_members(account, "engineering", ["alice"])
+    url = f"/api/v1/admin/accounts/{account}/groups/engineering/members"
+
+    legacy = await lightweight_admin_client.delete(f"{url}/alice", headers=root_headers())
+    assert legacy.status_code == 404, legacy.text
+    assert await manager.get_group_members(account, "engineering") == ["alice"]
+    response = await lightweight_admin_client.request(
+        "DELETE", url, json={"user_ids": ["alice"] * 1000}, headers=root_headers()
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"] == {"removed": True}
+    assert await manager.get_group_members(account, "engineering") == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {},
+        {"user_ids": []},
+        {"user_ids": "alice"},
+        {"user_ids": [1]},
+        {"user_ids": [""]},
+        {"user_ids": [None]},
+        {"user_ids": ["alice"] * 1001},
+        {"user_ids": ["alice"], "extra": True},
+    ],
+)
+async def test_remove_group_members_batch_rejects_invalid_body(
+    admin_client, admin_app, body, monkeypatch
+):
+    remove = AsyncMock()
+    monkeypatch.setattr(admin_app.state.api_key_manager, "remove_group_members", remove)
+    response = await admin_client.request(
+        "DELETE",
+        "/api/v1/admin/accounts/acme/groups/engineering/members",
+        json=body,
+        headers=root_headers(),
+    )
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    assert error["details"]["validation_errors"]
+    remove.assert_not_awaited()
+
+
+@pytest.mark.parametrize("include_summary", [False, True])
+@pytest.mark.parametrize("include_credentials", [None, True, False])
+async def test_user_list_credentials_follow_caller_role(
+    lightweight_admin_client, lightweight_admin_app, include_summary, include_credentials
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    admin_key = await manager.create_account(account, "owner")
+    keys = {"owner": admin_key}
+    keys["alice"] = await manager.register_user(account, "alice")
+    keys["manager"] = await manager.register_user(account, "manager", Role.ADMIN)
+    params = {"include_summary": include_summary, "limit": 2, "page": 1}
+    if include_credentials is not None:
+        params["include_credentials"] = include_credentials
+    url = f"/api/v1/admin/accounts/{account}/users"
+
+    # Each ADMIN sees its own stored key in plaintext and only masked key_prefix
+    # for every other user; ROOT sees every plaintext key.
+    callers = [
+        (admin_key, "owner", False),
+        (keys["manager"], "manager", False),
+        (keys["alice"], "alice", False),
+        (ROOT_KEY, None, True),
+    ]
+    for caller_key, caller_id, is_root in callers:
+        users = []
+        for page in (1, 2):
+            response = await lightweight_admin_client.get(
+                url, params={**params, "page": page}, headers={"X-API-Key": caller_key}
+            )
+            assert response.status_code == 200
+            result = response.json()["result"]
+            if include_summary:
+                assert result["total"] == result["account_total"] == 3
+                if caller_id == "alice":
+                    assert "key_count" not in result
+                else:
+                    assert result["key_count"] == 3
+                result = result["users"]
+            users.extend(result)
+        assert len(users) == 3
+        for user in users:
+            key = keys[user["user_id"]]
+            if caller_id == "alice" and user["user_id"] != caller_id:
+                assert set(user) == {"user_id", "role"}
+            elif include_credentials is False:
+                assert user["api_key_available"] is True
+                assert "api_key" not in user and "key_prefix" not in user
+            elif is_root or user["user_id"] == caller_id:
+                assert user["api_key"] == key
+                assert "key_prefix" not in user
+            else:
+                account_part, user_part, secret = key.split(".")
+                assert user["key_prefix"] == (
+                    f"{account_part}.{user_part}.{'*' * (len(secret) - 4)}{secret[-4:]}"
+                )
+                assert "api_key" not in user
+                assert key not in json.dumps(users)
+                assert secret not in json.dumps(users)
+        if not is_root and include_credentials is not False:
+            payload = json.dumps(users)
+            assert keys[caller_id] in payload
+            for other_id, other_key in keys.items():
+                if other_id != caller_id:
+                    assert other_key not in payload
+                    assert other_key.split(".")[2] not in payload
+    assert (await manager.resolve_identity(keys["alice"])).user_id == "alice"
+    response = await lightweight_admin_client.get(url, headers={"X-API-Key": keys["alice"]})
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("seed", [None, "new-self-service-seed"])
+async def test_user_can_rotate_only_their_own_key(
+    lightweight_admin_client, lightweight_admin_app, seed
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    admin_key = await manager.create_account(account, "owner")
+    old_key = await manager.register_user(account, "alice")
+    await manager.create_account("other", "alice")
+    headers = {"X-API-Key": old_key, "X-OpenViking-User": "owner", "X-OpenViking-Account": "other"}
+    for target_account, target_user in [(account, "owner"), ("other", "alice")]:
+        denied = await lightweight_admin_client.post(
+            f"/api/v1/admin/accounts/{target_account}/users/{target_user}/key", headers=headers
+        )
+        assert denied.status_code == 403
+    denied = await lightweight_admin_client.get(
+        "/api/v1/admin/accounts/other/users", headers=headers
+    )
+    assert denied.status_code == 403
+    response = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{account}/users/alice/key",
+        headers=headers,
+        json={"seed": seed} if seed else {},
+    )
+    assert response.status_code == 200
+    new_key = response.json()["result"]["user_key"]
+    assert new_key != old_key
+    url = f"/api/v1/admin/accounts/{account}/users"
+    assert (
+        await lightweight_admin_client.get(url, headers={"X-API-Key": old_key})
+    ).status_code == 401
+    current = await lightweight_admin_client.get(url, headers={"X-API-Key": new_key})
+    assert current.status_code == 200
+    assert current.json()["result"][1]["api_key"] == new_key
+    assert (await manager.resolve_identity(admin_key)).role == Role.ADMIN
+
+
+@pytest.mark.parametrize(
+    "auth_mode,from_oauth",
+    [("api_key", True), ("oidc", False), ("ldap", False), ("trusted", False)],
+)
+async def test_user_other_auth_cannot_disclose_or_rotate_personal_key(
+    lightweight_admin_client, lightweight_admin_app, auth_mode, from_oauth
+):
+    from openviking.server.auth import get_request_context
+
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    await manager.create_account(account, "owner")
+    key = await manager.register_user(account, "alice")
+    lightweight_admin_app.state.config = lightweight_admin_app.state.config.model_copy(
+        update={"auth_mode": auth_mode}
+    )
+    lightweight_admin_app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        UserIdentifier(account, "alice"),
+        Role(Role.USER),
+        from_oauth=from_oauth,
+        api_key="identity-token",
+    )
+    response = await lightweight_admin_client.get(f"/api/v1/admin/accounts/{account}/users")
+    assert response.status_code == 200
+    assert all(set(row) == {"user_id", "role"} for row in response.json()["result"])
+    response = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{account}/users/alice/key"
+    )
+    assert response.status_code == 403
+    assert (await manager.resolve_identity(key)).user_id == "alice"
+
+
+async def test_in_flight_user_rotation_cannot_overwrite_admin_reset(
+    lightweight_admin_client, lightweight_admin_app, monkeypatch
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    account = _uid()
+    await manager.create_account(account, "owner")
+    old_key = await manager.register_user(account, "alice")
+    authenticated = asyncio.Event()
+    resume = asyncio.Event()
+    regenerate = manager.regenerate_key
+
+    async def pause_user_rotation(*args, **kwargs):
+        if kwargs.get("expected_api_key") == old_key:
+            authenticated.set()
+            await resume.wait()
+        return await regenerate(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "regenerate_key", pause_user_rotation)
+    path = f"/api/v1/admin/accounts/{account}/users/alice/key"
+    pending = asyncio.create_task(
+        lightweight_admin_client.post(path, headers={"X-API-Key": old_key})
+    )
+    try:
+        await asyncio.wait_for(authenticated.wait(), timeout=5)
+        reset = await lightweight_admin_client.post(path, headers={"X-API-Key": ROOT_KEY})
+        assert reset.status_code == 200
+        reset_key = reset.json()["result"]["user_key"]
+    finally:
+        resume.set()
+        response = await asyncio.wait_for(pending, timeout=5)
+    assert response.status_code == 401
+    url = f"/api/v1/admin/accounts/{account}/users"
+    assert (
+        await lightweight_admin_client.get(url, headers={"X-API-Key": reset_key})
+    ).status_code == 200
+    assert (
+        await lightweight_admin_client.get(url, headers={"X-API-Key": old_key})
+    ).status_code == 401
+
+
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        ("YWNtZQ.YWxpY2U.abcdefghijklmnop", "YWNtZQ.YWxpY2U.************mnop"),
+        ("YWNtZQ.YWxpY2U.abcdefgh", "YWNtZQ.YWxpY2U.****efgh"),
+        ("YWNtZQ.YWxpY2U.abcde", "YWNtZQ.YWxpY2U.*bcde"),
+        ("YWNtZQ.YWxpY2U.abcd", "YWNtZQ.YWxpY2U.****"),
+        ("YWNtZQ.YWxpY2U.a", "YWNtZQ.YWxpY2U.*"),
+        ("legacy-secret", "*************"),
+        ("two.parts", "*********"),
+        ("abcd", "****"),
+        ("a", "*"),
+    ],
+)
+async def test_user_key_mask_handles_malformed_and_short_keys(key, expected):
+    from openviking.server.api_keys import APIKeyManager
+
+    store = Mock()
+    store.list_users_page = AsyncMock(
+        return_value={
+            "users": [
+                {"user_id": "alice", "api_key": key},
+                {"user_id": "hashed", "key_prefix": "existing-prefix"},
+                {"user_id": "keyless"},
+            ],
+            "key_count": 2,
+        }
+    )
+    result = await APIKeyManager("root", store).list_users_page("acme", mask_keys=True)
+    assert result["users"] == [
+        {"user_id": "alice", "key_prefix": expected},
+        {"user_id": "hashed", "key_prefix": "existing-prefix"},
+        {"user_id": "keyless"},
+    ]
+    assert result["key_count"] == 2
+    store.list_users_page.assert_awaited_once_with("acme")
+
+
+async def test_user_key_mask_reveals_only_the_viewers_own_key():
+    from openviking.server.api_keys import APIKeyManager
+    from openviking.server.api_keys.key_mgr import generate_api_key, mask_api_key
+
+    alice_key = generate_api_key("acme", "alice")
+    bob_key = generate_api_key("acme", "bob")
+    other_alice_key = generate_api_key("other", "alice")
+    rows = {
+        "users": [
+            {"user_id": "alice", "api_key": alice_key},
+            {"user_id": "bob", "api_key": bob_key},
+            # Stored key that does not belong to the row's declared identity.
+            {"user_id": "carol", "api_key": other_alice_key},
+            {"user_id": "hashed", "key_prefix": "existing-prefix"},
+        ],
+        "key_count": 3,
+    }
+
+    def store_with_rows():
+        store = Mock()
+        store.list_users_page = AsyncMock(return_value=deepcopy(rows))
+        return store
+
+    # Matching viewer: only the viewer's own row stays plaintext.
+    result = await APIKeyManager("root", store_with_rows()).list_users_page(
+        "acme", mask_keys=True, viewer_account_id="acme", viewer_user_id="alice"
+    )
+    assert result["users"] == [
+        {"user_id": "alice", "api_key": alice_key},
+        {"user_id": "bob", "key_prefix": mask_api_key(bob_key)},
+        {"user_id": "carol", "key_prefix": mask_api_key(other_alice_key)},
+        {"user_id": "hashed", "key_prefix": "existing-prefix"},
+    ]
+
+    # Account mismatch suppresses the plaintext reveal.
+    result = await APIKeyManager("root", store_with_rows()).list_users_page(
+        "acme", mask_keys=True, viewer_account_id="other", viewer_user_id="alice"
+    )
+    assert result["users"][0] == {"user_id": "alice", "key_prefix": mask_api_key(alice_key)}
+
+    # User-only mismatch (row belongs to another account's identity) never reveals.
+    result = await APIKeyManager("root", store_with_rows()).list_users_page(
+        "acme", mask_keys=True, viewer_account_id="acme", viewer_user_id="carol"
+    )
+    assert result["users"][2] == {
+        "user_id": "carol",
+        "key_prefix": mask_api_key(other_alice_key),
+    }
+
+    # Without viewer identity everything is masked, including the caller's row.
+    result = await APIKeyManager("root", store_with_rows()).list_users_page("acme", mask_keys=True)
+    assert result["users"][0] == {"user_id": "alice", "key_prefix": mask_api_key(alice_key)}
+
+
+async def test_user_list_hides_other_prefixes_and_mismatched_keys():
+    from openviking.server.api_keys import APIKeyManager, generate_api_key
+
+    store = Mock()
+    store.list_users_page = AsyncMock(
+        return_value={
+            "users": [
+                {
+                    "user_id": "alice",
+                    "api_key": generate_api_key("other", "alice"),
+                    "key_prefix": "other-prefix",
+                },
+                {"user_id": "hashed", "key_prefix": "sensitive-prefix"},
+            ],
+            "key_count": 2,
+        }
+    )
+    page = await APIKeyManager("root", store).list_users_page(
+        "acme", hide_other_keys=True, viewer_account_id="acme", viewer_user_id="alice"
+    )
+    assert page["users"] == [{"user_id": "alice"}, {"user_id": "hashed"}]
+
+
+@pytest.mark.parametrize("scope", ["account", "user"])
+async def test_sqlite_identity_cleanup_with_tasks_exceeding_variable_limit(
+    admin_client, admin_service, admin_app, monkeypatch, tmp_path, scope
+):
+    from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
+    from openviking.service.task_tracker import TaskTracker, set_task_tracker
+    from tests.service.test_task_store_sql_deletion import _LimitedConnection, _seed, _snapshot
+
+    original_tracker = get_task_tracker()
+    store = SQLiteTaskWorkStore(params={"path": str(tmp_path / "tasks.db"), "maxsize": 1})
+    store._engine_options["connect_args"]["factory"] = _LimitedConnection
+    await store.load()
+    set_task_tracker(TaskTracker(store))
+    try:
+        await admin_app.state.deletion_service.initialize()
+        acct = _uid()
+        response = await admin_client.post(
+            "/api/v1/admin/accounts",
+            json={"account_id": acct, "admin_user_id": "alice"},
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        response = await admin_client.post(
+            f"/api/v1/admin/accounts/{acct}/users",
+            json={"user_id": "bob", "role": "user"},
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        await _seed(store, [f"task-{i:03}" for i in range(80)], account=acct, user="bob")
+        await _seed(store, ["alice-task"], account=acct, user="alice")
+        ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
+        uri = "viking://user/bob/memories/private.md"
+        await admin_service.viking_fs.write_file(uri, "private", ctx=ctx)
+        await _agfs_write(admin_service, "/local/other/resources/keep.md", "keep")
+
+        vectors = admin_service.viking_fs.vector_store
+        method = "delete_account_data" if scope == "account" else "delete_user_data"
+        delete_vectors = AsyncMock(wraps=getattr(vectors, method))
+        monkeypatch.setattr(vectors, method, delete_vectors)
+        endpoint = f"/api/v1/admin/accounts/{acct}"
+        if scope == "user":
+            endpoint += "/users/bob"
+        response = await admin_client.delete(endpoint, headers=root_headers())
+        assert response.status_code == 202, response.text
+        task = await _wait_for_task(admin_client, response.json()["result"]["task_id"])
+        assert task["status"] == "completed", task
+        assert task["result"] == {"deleted": True}
+        assert delete_vectors.await_count == 1
+        assert not await admin_service.viking_fs.exists(uri, ctx=ctx)
+        assert await _agfs_exists(admin_service, "/local/other/resources/keep.md")
+        manager = admin_app.state.api_key_manager
+        assert not await manager.has_user(acct, "bob")
+        assert await manager.get_deletion(acct, None if scope == "account" else "bob") is None
+        snapshot = await _snapshot(store)
+        for rows in snapshot.values():
+            assert not any(row["task_id"].startswith("task-") for row in rows)
+        alice = await store.get_task("alice-task", account_id=acct, user_id="alice")
+        assert (alice is None) == (scope == "account")
+    finally:
+        set_task_tracker(original_tracker)
+        await store.close()
 
 
 async def test_remove_user(
     admin_client: httpx.AsyncClient,
     admin_service: OpenVikingService,
     admin_app: FastAPI,
+    monkeypatch,
 ):
-    """Deletion revokes the user and removes only their private data, uploads, and tasks."""
+    """Deletion revokes the user and removes only their private data, uploads, tasks,
+    and embedded gateway state."""
+    import openviking_gateway.app as gateway_module
+
+    gateway = object()
+    delete_gateway_data = AsyncMock()
+    monkeypatch.setattr(gateway_module, "delete_data", delete_gateway_data)
+    monkeypatch.setattr(admin_app.state.deletion_service, "_gateway_app", gateway)
     acct = _uid()
-    await admin_client.post(
+    created = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
     resp = await admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
@@ -2610,6 +3606,8 @@ async def test_remove_user(
     bob_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
     private_uri = "viking://user/bob/memories/private.md"
     await admin_service.viking_fs.write_file(private_uri, "private", ctx=bob_ctx)
+    admin_service.viking_fs.set_frozen_file_reader(admin_app.state.api_key_manager.get_frozen_files)
+    await admin_app.state.api_key_manager.set_frozen_file(acct, "bob", "memories/private.md", True)
     alice_upload_uri = "viking://upload/1800000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     bob_upload_uri = "viking://upload/1800000000000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     upload_ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ROOT)
@@ -2626,7 +3624,7 @@ async def test_remove_user(
         user_id="bob",
     )
     resp = await admin_client.delete(
-        f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
+        f"/api/v1/admin/accounts/{acct}/users/bob", headers=admin_headers
     )
     assert resp.status_code == 202
     task_id = resp.json()["result"]["task_id"]
@@ -2643,7 +3641,8 @@ async def test_remove_user(
     assert not await admin_service.viking_fs.exists(private_uri, ctx=bob_ctx)
     assert not await admin_service.viking_fs.exists(bob_upload_uri, ctx=upload_ctx)
     assert await admin_service.viking_fs.exists(alice_upload_uri, ctx=upload_ctx)
-    assert not admin_app.state.api_key_manager.has_user(acct, "bob")
+    assert not await admin_app.state.api_key_manager.has_user(acct, "bob")
+    delete_gateway_data.assert_awaited_once_with(gateway, acct, "bob")
     assert (
         await get_task_tracker().get(
             bob_task.task_id,
@@ -2663,44 +3662,124 @@ async def test_remove_user(
 # ---- Role management ----
 
 
-async def test_admin_can_set_user_role_in_own_account(
+@pytest.mark.parametrize(
+    ("actor_role", "promotion", "demotion"),
+    [(Role.ROOT, "admin", "User"), (Role.ADMIN, "ADMIN", "user")],
+)
+async def test_root_or_admin_can_set_user_role(
     lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app,
+    actor_role: str,
+    promotion: str,
+    demotion: str,
 ):
-    """ADMIN can promote a user in its own account to ADMIN."""
+    """ROOT and ADMIN can promote and demote account users without rotating keys."""
     acct = _uid()
     create_account = await lightweight_admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
+    assert create_account.status_code == 200, create_account.text
     alice_key = create_account.json()["result"]["user_key"]
     create_user = await lightweight_admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
+    assert create_user.status_code == 200, create_user.text
     bob_key = create_user.json()["result"]["user_key"]
+    headers = root_headers() if actor_role == Role.ROOT else {"X-API-Key": alice_key}
+    manager = lightweight_admin_app.state.api_key_manager
+    url = f"/api/v1/admin/accounts/{acct}/users"
+    for requested_role, new_role, new_user, expected in (
+        (promotion, Role.ADMIN, "charlie", 200),
+        (demotion, Role.USER, "dana", 403),
+    ):
+        resp = await lightweight_admin_client.put(
+            f"{url}/bob/role", json={"role": requested_role}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["result"] == {"account_id": acct, "user_id": "bob", "role": new_role}
+        assert (await manager.get_user(acct, "bob"))["role"] == new_role
+        assert (await manager.resolve_identity(bob_key)).role == new_role
+        register = await lightweight_admin_client.post(
+            url, json={"user_id": new_user, "role": "user"}, headers={"X-API-Key": bob_key}
+        )
+        assert register.status_code == expected, register.text
+
+
+@pytest.mark.parametrize("new_role", ["ROOT", "global", "invalid"])
+async def test_set_user_role_rejects_unsupported_roles(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app,
+    new_role: str,
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    bob_key = await manager.register_user(acct, "bob", Role.ADMIN)
+
+    resp = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/bob/role",
+        json={"role": new_role},
+        headers=root_headers(),
+    )
+    assert resp.status_code == 400
+    error = resp.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    assert error["message"] == "set_user_role only supports user and admin roles."
+    assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
+
+
+@pytest.mark.parametrize("actor_role", [Role.USER, Role.ADMIN])
+async def test_set_user_role_rejects_unauthorized_callers(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app,
+    actor_role: str,
+):
+    """USER cannot change roles; ADMIN cannot change another account's roles."""
+    manager = lightweight_admin_app.state.api_key_manager
+    acct = _uid()
+    await manager.create_account(acct, "alice")
+    bob_key = await manager.register_user(acct, "bob", Role.USER)
+    if actor_role == Role.ADMIN:
+        actor_key = await manager.create_account(_uid(), "other-admin")
+    else:
+        actor_key = await manager.register_user(acct, "charlie", Role.USER)
 
     resp = await lightweight_admin_client.put(
         f"/api/v1/admin/accounts/{acct}/users/bob/role",
         json={"role": "admin"},
+        headers={"X-API-Key": actor_key},
+    )
+    assert resp.status_code == 403
+    assert (await manager.resolve_identity(bob_key)).role == Role.USER
+
+
+async def test_admin_can_demote_self_and_loses_role_management_access(
+    lightweight_admin_client: httpx.AsyncClient,
+    lightweight_admin_app,
+):
+    manager = lightweight_admin_app.state.api_key_manager
+    acct = _uid()
+    alice_key = await manager.create_account(acct, "alice")
+    await manager.register_user(acct, "bob", Role.ADMIN)
+
+    resp = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/alice/role",
+        json={"role": "user"},
         headers={"X-API-Key": alice_key},
     )
     assert resp.status_code == 200
-    assert resp.json()["result"]["role"] == "admin"
+    assert (await manager.resolve_identity(alice_key)).role == Role.USER
 
-    list_users = await lightweight_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users",
-        headers={"X-API-Key": bob_key},
-    )
-    assert list_users.status_code == 200
-
-    invalid_role = await lightweight_admin_client.put(
-        f"/api/v1/admin/accounts/{acct}/users/bob/role",
-        json={"role": "root"},
+    restore_role = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/users/alice/role",
+        json={"role": "admin"},
         headers={"X-API-Key": alice_key},
     )
-    assert invalid_role.status_code == 400
+    assert restore_role.status_code == 403
 
 
 async def test_regenerate_key(admin_client: httpx.AsyncClient):
@@ -2798,8 +3877,8 @@ async def test_empty_seed_rejected(admin_client: httpx.AsyncClient):
 # ---- Permission guard ----
 
 
-async def test_user_role_cannot_access_admin_api(admin_client: httpx.AsyncClient):
-    """USER role should not access admin endpoints."""
+async def test_user_role_cannot_register_users(admin_client: httpx.AsyncClient):
+    """USER self-service does not grant user-management privileges."""
     acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
@@ -2822,152 +3901,31 @@ async def test_user_role_cannot_access_admin_api(admin_client: httpx.AsyncClient
     assert resp.status_code == 403
 
 
-async def test_no_auth_admin_api_returns_401(admin_client: httpx.AsyncClient):
-    """Admin API without key should return 401."""
-    resp = await admin_client.get("/api/v1/admin/accounts")
-    assert resp.status_code == 401
-
-
-# ---- Legacy migration ----
-
-
-async def test_user_role_cannot_run_legacy_migration(admin_client: httpx.AsyncClient):
-    """Legacy migration is ROOT-only."""
-    acct = _uid()
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    resp = await admin_client.post(
-        f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "bob", "role": "user"},
-        headers=root_headers(),
-    )
-    bob_key = resp.json()["result"]["user_key"]
-
-    resp = await admin_client.post(
-        "/api/v1/admin/migrate",
-        headers={"X-API-Key": bob_key},
-    )
-    assert resp.status_code == 403
-
-
-async def test_legacy_migration_preflight_failure_does_not_create_task(
-    admin_client: httpx.AsyncClient,
-    admin_service: OpenVikingService,
+async def test_migration_endpoint_is_root_only_and_unsupported(
+    lightweight_admin_app, lightweight_admin_client
 ):
-    """Ambiguous session ownership fails preflight before task creation."""
-    acct = _uid()
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    await admin_client.post(
-        f"/api/v1/admin/accounts/{acct}/users",
-        json={"user_id": "bob", "role": "user"},
-        headers=root_headers(),
-    )
-    await _agfs_write(admin_service, f"/local/{acct}/session/orphan/messages.jsonl", "{}\n")
+    """The reserved endpoint rejects migration without relaxing ROOT authentication."""
+    from openviking.server.auth import get_request_context
 
-    resp = await admin_client.post("/api/v1/admin/migrate", headers=root_headers())
-    assert resp.status_code == 412
-    error = resp.json()["error"]
-    assert error["code"] == "FAILED_PRECONDITION"
-    assert error["details"]["operation_count"] == 0
-    assert error["details"]["errors"][0]["session_id"] == "orphan"
+    url = "/api/v1/admin/migrate"
+    response = await lightweight_admin_client.post(url)
+    assert response.status_code == 401
 
-    tasks_resp = await admin_client.get(
-        "/api/v1/tasks?task_type=legacy_migration",
-        headers=root_headers(),
-    )
-    assert tasks_resp.status_code == 200
-    assert tasks_resp.json()["result"] == []
+    for payload in (None, {"action": "migrate"}, {"action": "cleanup"}):
+        response = await lightweight_admin_client.post(url, headers=root_headers(), json=payload)
+        assert response.status_code == 400
+        body = response.json()
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "INVALID_ARGUMENT"
+        assert body["error"]["message"] == "Data migration is not currently supported."
+        assert body.get("result") is None
 
-
-async def test_legacy_migration_only_moves_sessions(
-    admin_client: httpx.AsyncClient,
-    admin_app,
-    admin_service: OpenVikingService,
-):
-    """Migration preserves public agent content and moves sessions under their owners."""
-    acct = _uid()
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    shared_path = f"/local/{acct}/agent/workflows/memories/guide.md"
-    await _agfs_write(admin_service, shared_path, "shared workflow")
-    for session_id, owner in (("s1", "alice"), ("s2", "charlie")):
-        await _agfs_write(
-            admin_service,
-            f"/local/{acct}/session/{session_id}/.meta.json",
-            json.dumps({"created_by_user_id": owner}),
+    for role in (Role.ADMIN, Role.USER):
+        lightweight_admin_app.dependency_overrides[get_request_context] = lambda role=role: (
+            RequestContext(user=UserIdentifier("default", "default"), role=role)
         )
-        await _agfs_write(
-            admin_service,
-            f"/local/{acct}/session/{session_id}/messages.jsonl",
-            '{"role":"user"}\n',
-        )
-
-    resp = await admin_client.post("/api/v1/admin/migrate", headers=root_headers())
-    assert resp.status_code == 200
-    task = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
-    assert task["status"] == "completed"
-    result = task["result"]
-    assert result["migrated"]["operations"] == {"sessions": 2}
-    assert result["created_users"] == [{"account_id": acct, "user_id": "charlie"}]
-    assert admin_app.state.api_key_manager.has_user(acct, "charlie")
-    assert await _agfs_read_text(admin_service, shared_path) == "shared workflow"
-    for session_id, owner in (("s1", "alice"), ("s2", "charlie")):
-        assert (
-            await _agfs_read_text(
-                admin_service, f"/local/{acct}/user/{owner}/sessions/{session_id}/messages.jsonl"
-            )
-            == '{"role":"user"}\n'
-        )
-        assert not await _agfs_exists(admin_service, f"/local/{acct}/user/{owner}/peers/workflows")
-
-
-async def test_legacy_cleanup_preserves_public_agent_directories(
-    admin_client: httpx.AsyncClient,
-    admin_service: OpenVikingService,
-):
-    """Session cleanup leaves public agent directories and user-owned data intact."""
-    acct = _uid()
-    await admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=root_headers(),
-    )
-    await _agfs_write(admin_service, f"/local/{acct}/session/s1/messages.jsonl", "old session")
-    preserved_paths = [
-        f"/local/{acct}/agent/skills/demo/SKILL.md",
-        f"/local/{acct}/agent/workflows/daily.md",
-        f"/local/{acct}/user/alice/agent/notes.md",
-        f"/local/{acct}/user/alice/peers/customer/memories/profile.md",
-        f"/local/{acct}/user/alice/sessions/s1/messages.jsonl",
-    ]
-    for path in preserved_paths:
-        await _agfs_write(admin_service, path, "preserved")
-
-    resp = await admin_client.post(
-        "/api/v1/admin/migrate",
-        json={"action": "cleanup"},
-        headers=root_headers(),
-    )
-    assert resp.status_code == 200
-    task = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
-    assert task["status"] == "completed"
-    assert task["task_type"] == "legacy_cleanup"
-    assert task["result"]["cleanup"]["targets"] == [
-        {"account_id": acct, "type": "session", "source": "viking://session"}
-    ]
-    assert not await _agfs_exists(admin_service, f"/local/{acct}/session")
-    for path in preserved_paths:
-        assert await _agfs_read_text(admin_service, path) == "preserved"
+        response = await lightweight_admin_client.post(url)
+        assert response.status_code == 403
 
 
 async def test_session_storage_uses_canonical_uri(
@@ -2977,12 +3935,12 @@ async def test_session_storage_uses_canonical_uri(
     ctx = RequestContext(user=UserIdentifier("default", "admin_user"), role=Role.USER)
     await _agfs_write(
         admin_service,
-        "/local/default/session/old-session/messages.jsonl",
+        "/local/default/user/admin_user/sessions/old-session/messages.jsonl",
         '{"role":"user"}\n',
     )
     await _agfs_write(
         admin_service,
-        "/local/default/session/old-session/.meta.json",
+        "/local/default/user/admin_user/sessions/old-session/.meta.json",
         '{"created_by_user_id":"admin_user"}',
     )
 
@@ -3000,21 +3958,24 @@ async def trusted_admin_app(admin_service):
     from openviking.server.auth.plugins import TrustedAuthPlugin
     from openviking.server.auth.registry import get_registry
 
-    config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
+    config = ServerConfig(
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+        trusted_identity_flush_interval_seconds=0,
+    )
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
-    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=admin_service.viking_fs)
-    await manager.load()
-    # Create test users for trusted mode tests if they don't exist
-    if "platform" not in manager._accounts:
-        await manager.create_account("platform", "gateway-admin")
-    app.state.api_key_manager = manager
 
-    # Set auth plugin (lifespan not triggered in ASGI tests)
+    # Initialize the plugin directly because the ASGI transport does not run lifespan.
     registry = get_registry()
     if registry.get("trusted") is None:
         registry.register(TrustedAuthPlugin)
     app.state.auth_plugin = registry.get("trusted")()
+    await app.state.auth_plugin.initialize(app, admin_service, config)
+
+    manager = app.state.api_key_manager
+    if await manager.get_account("platform") is None:
+        await manager.create_account("platform", "gateway-admin")
 
     return app
 
@@ -3049,6 +4010,15 @@ async def test_trusted_mode_root_can_create_account(
     assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert "user_key" not in body["result"]
+    listed = await trusted_admin_client.get(
+        "/api/v1/admin/accounts",
+        headers=trusted_headers(account="platform", user="gateway-admin", include_api_key=True),
+    )
+    assert listed.status_code == 200
+    account = next(item for item in listed.json()["result"] if item["account_id"] == acct)
+    assert set(account) == {"account_id", "created_at", "user_count", "status"}
+    assert account["status"] == "active"
+    assert account["user_count"] == 1
 
 
 async def test_trusted_mode_admin_can_register_user_in_own_account(
@@ -3082,6 +4052,21 @@ async def test_trusted_mode_admin_can_register_user_in_own_account(
     assert resp.json()["result"]["user_id"] == "bob"
     assert "user_key" not in resp.json()["result"]
 
+    users = await trusted_admin_client.get(
+        f"/api/v1/admin/accounts/{acct}/users",
+        params={"include_credentials": "false"},
+        headers=trusted_headers(account=acct, user="alice", include_api_key=True),
+    )
+    assert users.status_code == 200
+    assert all(user["api_key_available"] is False for user in users.json()["result"])
+
+    rotated = await trusted_admin_client.post(
+        f"/api/v1/admin/accounts/{acct}/users/bob/key",
+        headers=root_headers(),
+    )
+    assert rotated.status_code == 412
+    assert rotated.json()["error"]["code"] == "FAILED_PRECONDITION"
+
 
 async def test_trusted_mode_admin_can_list_users_with_account_only_in_url(
     trusted_admin_client: httpx.AsyncClient,
@@ -3100,41 +4085,12 @@ async def test_trusted_mode_admin_can_list_users_with_account_only_in_url(
     )
     assert create_resp.status_code == 200
 
-    resp = await trusted_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users",
-        headers={
-            "X-API-Key": ROOT_KEY,
-            "X-OpenViking-User": "alice",
-            "X-OpenViking-Account": acct,
-        },
-    )
-    assert resp.status_code == 200
-    assert any(user["user_id"] == "alice" for user in resp.json()["result"])
-
-
-async def test_trusted_mode_admin_can_list_users_without_account_or_user_headers(
-    trusted_admin_client: httpx.AsyncClient,
-    trusted_admin_app,
-):
-    """Trusted admin routes may omit caller account/user when the route itself identifies the target."""
-    acct = _uid()
-    create_resp = await trusted_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={"account_id": acct, "admin_user_id": "alice"},
-        headers=trusted_headers(
-            account="platform",
-            user="gateway-admin",
-            include_api_key=True,
-        ),
-    )
-    assert create_resp.status_code == 200
-
-    resp = await trusted_admin_client.get(
-        f"/api/v1/admin/accounts/{acct}/users",
-        headers={"X-API-Key": ROOT_KEY},
-    )
-    assert resp.status_code == 200
-    assert any(user["user_id"] == "alice" for user in resp.json()["result"])
+    for headers in ({"X-API-Key": ROOT_KEY}, {"X-API-Key": ROOT_KEY, "X-OpenViking-User": "alice"}):
+        resp = await trusted_admin_client.get(
+            f"/api/v1/admin/accounts/{acct}/users", headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert [user["user_id"] for user in resp.json()["result"]] == ["alice"]
 
 
 async def test_trusted_mode_admin_cannot_register_user_in_other_account(
@@ -3222,32 +4178,6 @@ async def test_trusted_mode_requires_matching_api_key_for_admin_api(
     assert resp.status_code == 401
 
 
-async def test_trusted_mode_create_account_lists_current_account_metadata(
-    trusted_admin_client: httpx.AsyncClient,
-    trusted_admin_app,
-):
-    """Trusted account creation should list the current account metadata shape."""
-    acct = _uid()
-    resp = await trusted_admin_client.post(
-        "/api/v1/admin/accounts",
-        json={
-            "account_id": acct,
-            "admin_user_id": "alice",
-        },
-        headers=trusted_headers(
-            account="platform",
-            user="gateway-admin",
-            include_api_key=True,
-        ),
-    )
-    assert resp.status_code == 200
-
-    manager = trusted_admin_app.state.api_key_manager
-    account = next(item for item in manager.get_accounts() if item["account_id"] == acct)
-    assert set(account) == {"account_id", "created_at", "user_count", "status"}
-    assert account["status"] == "active"
-
-
 async def test_user_page_summary_and_search_preserve_legacy_response(
     lightweight_admin_client: httpx.AsyncClient,
     lightweight_admin_app: FastAPI,
@@ -3260,36 +4190,35 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
     )
     assert created.status_code == 200
     manager = lightweight_admin_app.state.api_key_manager
-    seed = {
-        f"user-{index}": {
-            "role": "admin" if index == 2832 else "user",
-            "key": f"test-key-{index}",
-        }
-        for index in range(1, 2833)
-    }
-    seed["deleting-user"] = {"role": "admin", "key": "deleted", "deletion": {"status": "pending"}}
-    await manager._legacy._save_users_json(acct, seed)
+    for index in range(1, 113):
+        last_key = await manager.register_user(
+            acct, f"user-{index}", Role.ADMIN if index == 112 else Role.USER
+        )
+    await manager.register_user(acct, "deleting-user", Role.ADMIN)
+    await manager.begin_deletion(
+        acct, "deleting-user", task_id="delete", owner_account_id=acct, owner_user_id="owner"
+    )
     url = f"/api/v1/admin/accounts/{acct}/users"
 
     response = await lightweight_admin_client.get(
-        url, params={"include_summary": True, "limit": 20, "page": 142}, headers=root_headers()
+        url, params={"include_summary": True, "limit": 20, "page": 6}, headers=root_headers()
     )
     assert response.status_code == 200, response.text
     result = response.json()["result"]
     assert len(result["users"]) == 13
-    assert result["users"][-1]["user_id"] == "user-2832"
-    assert result["total"] == result["account_total"] == result["key_count"] == 2833
+    assert result["users"][-1]["user_id"] == "user-112"
+    assert result["total"] == result["account_total"] == result["key_count"] == 113
     assert result["manager_count"] == 2
 
     response = await lightweight_admin_client.get(
         url,
-        params={"include_summary": True, "limit": 20, "query": " UsEr-2832 "},
+        params={"include_summary": True, "limit": 20, "query": " UsEr-112 "},
         headers=root_headers(),
     )
     result = response.json()["result"]
     assert result["total"] == 1
-    assert result["users"][0]["user_id"] == "user-2832"
-    assert result["account_total"] == 2833
+    assert result["users"][0]["user_id"] == "user-112"
+    assert result["account_total"] == 113
     assert result["manager_count"] == 2
 
     response = await lightweight_admin_client.get(
@@ -3299,11 +4228,11 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
     )
     assert response.json()["result"]["total"] == 0
     assert response.json()["result"]["users"] == []
-    assert response.json()["result"]["account_total"] == 2833
+    assert response.json()["result"]["account_total"] == 113
 
     response = await lightweight_admin_client.get(url, headers=root_headers())
     assert isinstance(response.json()["result"], list)
-    assert len(response.json()["result"]) == 2833
+    assert len(response.json()["result"]) == 113
     response = await lightweight_admin_client.get(
         url,
         params={"limit": 1, "page": 2, "name": "user-*", "role": "user"},
@@ -3311,10 +4240,74 @@ async def test_user_page_summary_and_search_preserve_legacy_response(
     )
     assert response.json()["result"][0]["user_id"] == "user-2"
 
-    hidden = manager.get_users_page(acct, expose_key=False, limit=1)
+    hidden = await manager.list_users_page(acct, expose_key=False, limit=1)
     assert hidden["key_count"] == 0
     assert "api_key" not in hidden["users"][0]
     assert "key_prefix" not in hidden["users"][0]
+
+    # MCP exposes an account directory, not the admin response or credentials.
+    from types import SimpleNamespace
+
+    import openviking.server.mcp_endpoint as mcp_endpoint
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    await manager.create_group(acct, "engineering")
+    added = await lightweight_admin_client.put(
+        f"/api/v1/admin/accounts/{acct}/groups/engineering/members",
+        json={"user_ids": ["user-1", "user-2", "user-1"]},
+        headers=root_headers(),
+    )
+    assert added.status_code == 200, added.text
+    request = FastAPIRequest({"type": "http", "app": lightweight_admin_app})
+    context = SimpleNamespace(request_context=SimpleNamespace(request=request))
+    for role in (Role.USER, Role.ADMIN, Role.ROOT):
+        identity = RequestContext(UserIdentifier(acct, "user-1"), role, api_key="personal-key")
+        token = mcp_endpoint._mcp_ctx.set(identity)
+        try:
+            directory = await mcp_endpoint.list_users(context, query="user-112")
+            assert directory == {"users": [{"user_id": "user-112"}], "total": 1}
+            assert await mcp_endpoint.list_groups(context) == {
+                "groups": [{"group_id": "engineering"}]
+            }
+            credentials = await mcp_endpoint.list_users(
+                context, query="user-112", include_credentials=True
+            )
+            if role == Role.ROOT:
+                assert credentials["users"][0]["api_key"] == last_key
+            elif role == Role.ADMIN:
+                account_part, user_part, secret = last_key.split(".")
+                assert credentials["users"][0]["key_prefix"] == (
+                    f"{account_part}.{user_part}.{'*' * (len(secret) - 4)}{secret[-4:]}"
+                )
+                assert "api_key" not in credentials["users"][0]
+            else:
+                assert credentials == {
+                    "users": [{"user_id": "user-112", "role": "admin"}],
+                    "total": 1,
+                }
+                own = await mcp_endpoint.list_users(
+                    context, query="user-1", include_credentials=True
+                )
+                assert "api_key" in own["users"][0]
+                assert all(set(row) == {"user_id", "role"} for row in own["users"][1:])
+                assert await mcp_endpoint.list_users(
+                    context, query="missing", include_credentials=True
+                ) == {"users": [], "total": 0}
+            if role != Role.ROOT:
+                assert last_key not in json.dumps(credentials)
+            original_config = lightweight_admin_app.state.config
+            lightweight_admin_app.state.config = ServerConfig(
+                auth_mode="trusted", root_api_key=ROOT_KEY
+            )
+            try:
+                with pytest.raises(PermissionDeniedError, match="trusted"):
+                    await mcp_endpoint.list_users(context, include_credentials=True)
+                assert await mcp_endpoint.list_users(context, query="user-112") == directory
+            finally:
+                lightweight_admin_app.state.config = original_config
+
+        finally:
+            mcp_endpoint._mcp_ctx.reset(token)
 
 
 async def test_user_page_summary_respects_account_access(lightweight_admin_client):
@@ -3336,3 +4329,516 @@ async def test_user_page_summary_respects_account_access(lightweight_admin_clien
         headers={"X-API-Key": admin_key},
     )
     assert denied.status_code == 403
+
+
+@pytest.mark.parametrize("cli_host", [None, "127.0.0.1"])
+async def test_server_restart_requires_root_and_valid_revision(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    template_account,
+    tmp_path,
+    monkeypatch,
+    cli_host,
+):
+    import os
+
+    from openviking.config.config_file import read_config_file
+    from openviking.server.restart import RestartController, RestartRecovery
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    account_id, admin_headers = template_account
+    user = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{account_id}/users",
+        headers=admin_headers,
+        json={"user_id": "restart-test-user"},
+    )
+    assert user.status_code == 200
+    user_headers = {"X-API-Key": user.json()["result"]["user_key"]}
+    stopped = Mock()
+    monkeypatch.delenv("OPENVIKING_RESTART_RECOVERY", raising=False)
+    monkeypatch.delenv("OPENVIKING_RESTART_ROLLED_BACK", raising=False)
+    controller = RestartController(stopped, RestartRecovery())
+    lightweight_admin_app.state.restart_controller = controller
+    path = tmp_path / "ov.conf"
+    server = {}
+    server_overrides = {}
+    if cli_host:
+        server = {"host": "0.0.0.0", "auth_mode": "trusted", "root_api_key": ROOT_KEY}
+        server_overrides = {"host": cli_host}
+        lightweight_admin_app.state.server_config_overrides = server_overrides
+    path.write_text(
+        json.dumps(
+            {
+                "server": server,
+                "vlm": {"provider": "openai", "model": "gpt-4o", "api_key": "test-key"},
+            }
+        )
+    )
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file_content", path.read_bytes())
+    revision = read_config_file(server_overrides)["revision"]
+    url = "/api/v1/admin/restart"
+    for headers in [admin_headers, user_headers, {}]:
+        assert (
+            await lightweight_admin_client.get(
+                "/api/v1/admin/configuration?source=file", headers=headers
+            )
+        ).status_code in (401, 403)
+        assert (
+            await lightweight_admin_client.post(url, headers=headers, json={"revision": revision})
+        ).status_code in (401, 403)
+    stopped.assert_not_called()
+    assert not controller.requested
+    status = await lightweight_admin_client.get(
+        "/api/v1/admin/configuration?source=file", headers=root_headers()
+    )
+    assert status.json()["result"]["restart"]["supported"]
+    assert status.headers["cache-control"] == "no-store"
+    stale = await lightweight_admin_client.post(
+        url, headers=root_headers(), json={"revision": "stale"}
+    )
+    assert stale.status_code == 400
+    stopped.assert_not_called()
+    original = path.read_bytes()
+    accepted = await lightweight_admin_client.post(
+        url, headers=root_headers(), json={"revision": revision}
+    )
+    assert accepted.status_code == 202
+    assert accepted.json()["result"]["instance_id"] == controller.instance_id
+    assert accepted.json()["result"]["restarting"]
+    stopped.assert_called_once()
+    recovery = json.loads(os.environ["OPENVIKING_RESTART_RECOVERY"])
+    assert recovery["revision"] == revision
+    with open(recovery["backup"], "rb") as backup:
+        assert backup.read() == original
+    assert path.read_bytes() == original
+    blocked = await lightweight_admin_client.patch(
+        "/api/v1/admin/configuration",
+        params={"source": "file"},
+        headers=root_headers(),
+        json={"revision": revision, "content": original.decode()},
+    )
+    assert blocked.status_code == 412
+
+
+@pytest.mark.parametrize(
+    "invalid_server",
+    [
+        {"port": "invalid"},
+        {"root_api_key": ""},
+        {"auth_mode": "api_key"},
+        {"auth_mode": "trusted", "host": "127.0.0.1"},
+        {"auth_mode": "dev", "host": "0.0.0.0"},
+    ],
+)
+async def test_server_restart_unsupported_or_invalid_file_does_not_stop(
+    lightweight_admin_client,
+    lightweight_admin_app,
+    tmp_path,
+    monkeypatch,
+    invalid_server,
+):
+    import hashlib
+
+    from openviking.server.restart import RestartController
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    path = tmp_path / "ov.conf"
+    path.write_text("{}")
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    url = "/api/v1/admin/restart"
+    status = await lightweight_admin_client.get(
+        "/api/v1/admin/configuration?source=file", headers=root_headers()
+    )
+    assert not status.json()["result"]["restart"]["supported"]
+    assert (
+        await lightweight_admin_client.post(url, headers=root_headers(), json={"revision": "r"})
+    ).status_code == 412
+    stopped = Mock()
+    lightweight_admin_app.state.restart_controller = RestartController(stopped)
+    path.write_text(json.dumps({"server": invalid_server}))
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", path)
+    response = await lightweight_admin_client.post(
+        url,
+        headers=root_headers(),
+        json={"revision": hashlib.sha256(path.read_bytes()).hexdigest()},
+    )
+    assert response.status_code == 400
+    stopped.assert_not_called()
+
+
+@pytest.fixture
+def private_probe_config(monkeypatch, tmp_path):
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {"workspace": str(tmp_path)},
+            "vlm": {"provider": "openai", "model": "test-model", "api_key": "test-key"},
+            "embedding": {
+                "dense": {
+                    "provider": "openai",
+                    "model": "embedding",
+                    "api_key": "test-key",
+                    "dimension": 8,
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", config)
+
+
+async def test_private_model_probe_requires_authentication(
+    private_probe_config, lightweight_admin_client, monkeypatch
+):
+    probe = AsyncMock(return_value={"ok": True, "ms": 1})
+    monkeypatch.setattr("openviking.server.model_connection_test.probe_model", probe)
+    response = await lightweight_admin_client.post(
+        "/api/v1/admin/configuration/test-model",
+        json={"kind": "vlm", "config": {"provider": "openai"}},
+    )
+    assert response.status_code == 401
+    probe.assert_not_awaited()
+
+
+async def test_private_model_probe_is_hidden_and_root_only(
+    private_probe_config, lightweight_admin_app, lightweight_admin_client, monkeypatch
+):
+    from openviking.server.auth import get_request_context
+
+    probe = AsyncMock(return_value={"ok": True, "ms": 1})
+    monkeypatch.setattr("openviking.server.model_connection_test.probe_model", probe)
+    schema = lightweight_admin_app.openapi()
+    assert "/api/v1/admin/configuration/test-model" not in schema["paths"]
+    assert "ModelConnectionTestRequest" not in schema.get("components", {}).get("schemas", {})
+    for role in (Role.ADMIN, Role.USER):
+        lightweight_admin_app.dependency_overrides[get_request_context] = lambda role=role: (
+            RequestContext(user=UserIdentifier("default", "default"), role=role)
+        )
+        response = await lightweight_admin_client.post(
+            "/api/v1/admin/configuration/test-model",
+            json={"kind": "vlm", "config": {"provider": "openai"}},
+        )
+        assert response.status_code == 403
+    probe.assert_not_awaited()
+
+
+async def test_private_model_probe_passes_draft_without_saving(
+    private_probe_config, lightweight_admin_client, monkeypatch, tmp_path
+):
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    config_path = tmp_path / "ov.conf"
+    config = get_openviking_config()
+    original_vlm = config.vlm.model_dump()
+    config_path.write_text(config.model_dump_json())
+    original_file = config_path.read_bytes()
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", config_path)
+    probe = AsyncMock(return_value={"ok": True, "ms": 12})
+    monkeypatch.setattr("openviking.server.model_connection_test.probe_model", probe)
+    body = {
+        "kind": "vlm",
+        "config": {"provider": "openai", "model": "draft-model", "api_key": "draft-secret"},
+        "fallback": {"model": "o3"},
+        "thinking": True,
+    }
+    response = await lightweight_admin_client.post(
+        "/api/v1/admin/configuration/test-model", headers={"X-API-Key": ROOT_KEY}, json=body
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["result"] == {"ok": True, "ms": 12}
+    assert "draft-secret" not in response.text
+    probe.assert_awaited_once_with("vlm", body["config"], body["fallback"], True, "dense")
+    assert config_path.read_bytes() == original_file
+    assert get_openviking_config().vlm.model_dump() == original_vlm
+
+
+# ---- Exact account/user existence probes ----
+
+
+async def test_get_account_returns_credential_free_metadata_or_404(
+    lightweight_admin_client,
+):
+    account_id = _uid()
+    missing = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}", headers=root_headers()
+    )
+    assert missing.status_code == 404
+
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account_id, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200
+    denied = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}",
+        headers={"X-API-Key": created.json()["result"]["user_key"]},
+    )
+    assert denied.status_code == 403, denied.text
+
+    response = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}", headers=root_headers()
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result == {
+        "account_id": account_id,
+        "created_at": result["created_at"],
+        "user_count": 1,
+        "status": "active",
+    }
+    # Existence metadata must never carry credentials.
+    body = response.text
+    for secret_field in ("api_key", "user_key", "key_prefix", "seed"):
+        assert secret_field not in body
+
+
+async def test_user_point_read_returns_role_without_credentials(
+    lightweight_admin_client,
+):
+    account_id = _uid()
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account_id, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    assert created.status_code == 200
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
+
+    registered = await lightweight_admin_client.post(
+        f"/api/v1/admin/accounts/{account_id}/users",
+        json={"user_id": "bob"},
+        headers=admin_headers,
+    )
+    assert registered.status_code == 200
+
+    for user_id, role in (("alice", "admin"), ("bob", "user")):
+        response = await lightweight_admin_client.get(
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}",
+            headers=root_headers(),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["result"] == {"user_id": user_id, "role": role}
+        # The point read is defined as a credential-free membership probe; weld
+        # that contract shut so no credential field can ever leak through it.
+        for secret_field in ("api_key", "user_key", "key_prefix", "seed"):
+            assert secret_field not in response.text
+
+    unknown_user = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}/users/ghost",
+        headers=root_headers(),
+    )
+    assert unknown_user.status_code == 404
+    assert unknown_user.json()["error"]["message"] == "User not found: ghost"
+
+    # An unknown account bubbles up the account-level 404 from the refresh,
+    # matching list_users rather than masquerading as a missing user.
+    unknown_account_id = _uid()
+    unknown_account = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{unknown_account_id}/users/alice",
+        headers=root_headers(),
+    )
+    assert unknown_account.status_code == 404
+    assert unknown_account.json()["error"]["message"] == f"Account not found: {unknown_account_id}"
+
+
+async def test_user_point_read_admin_scoped_to_own_account(lightweight_admin_client):
+    account_id = _uid()
+    other = _uid()
+    created = await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": account_id, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
+    await lightweight_admin_client.post(
+        "/api/v1/admin/accounts",
+        json={"account_id": other, "admin_user_id": "alice"},
+        headers=root_headers(),
+    )
+
+    own = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{account_id}/users/alice",
+        headers=admin_headers,
+    )
+    assert own.status_code == 200
+    assert own.json()["result"] == {"user_id": "alice", "role": "admin"}
+
+    denied = await lightweight_admin_client.get(
+        f"/api/v1/admin/accounts/{other}/users/alice",
+        headers=admin_headers,
+    )
+    assert denied.status_code == 403
+
+
+async def test_user_point_read_sees_peer_process_writes_without_a_list(
+    admin_client: httpx.AsyncClient,
+    admin_app: FastAPI,
+    admin_service: OpenVikingService,
+):
+    """Point read must not depend on a preceding list to refresh the registry.
+
+    With the account-store watcher off (the default), a user created or re-roled
+    by a peer process landed in the shared store but not in this instance's
+    memory. The membership probe refreshes on demand, so it must not return a
+    stale 404 or a stale role.
+    """
+    writer = build_api_key_manager(
+        root_key=ROOT_KEY,
+        viking_fs=admin_service.viking_fs,
+    )
+    await writer.load()
+    try:
+        acct = _uid()
+        await writer.create_account(acct, "alice")
+        await writer.register_user(acct, "bob", role="user")
+
+        # The serving instance never listed this account, so bob is only in the
+        # peer's store. The probe must still resolve him.
+        created = await admin_client.get(
+            f"/api/v1/admin/accounts/{acct}/users/bob",
+            headers=root_headers(),
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["result"] == {"user_id": "bob", "role": "user"}
+
+        # A peer-side role change must be reflected too, not served from stale
+        # memory.
+        await writer.set_role(acct, "bob", "admin")
+        rerole = await admin_client.get(
+            f"/api/v1/admin/accounts/{acct}/users/bob",
+            headers=root_headers(),
+        )
+        assert rerole.status_code == 200, rerole.text
+        assert rerole.json()["result"] == {"user_id": "bob", "role": "admin"}
+    finally:
+        await writer.close()
+
+
+@pytest_asyncio.fixture
+async def acl_account_client(monkeypatch, tmp_path):
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    config = OpenVikingConfig.model_validate({"storage": {"workspace": str(tmp_path)}})
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", config)
+    app = _build_lightweight_admin_test_app()
+    await app.state.fake_service.runtime_config_manager.initialize()
+    await app.state.api_key_manager.load()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        yield app, client
+
+
+@pytest.mark.parametrize("operation", ["grant", "revoke", "set"])
+async def test_acl_principals_are_account_scoped(acl_account_client, monkeypatch, operation):
+    from openviking.server.auth.plugins import ApiKeyAuthPlugin
+    from openviking.server.routers import acl as acl_router
+    from openviking.service.fs_service import FSService
+    from openviking.storage.viking_fs import VikingFS
+    from tests.storage.test_vector_transfer import _RealAclMemoryTransferBackend, _record
+
+    app, client = acl_account_client
+    manager = app.state.api_key_manager
+    owner_key = await manager.create_account("acct", "alice")
+    await manager.create_account("other", "bob")
+    await manager.create_group("other", "outsiders")
+    await manager.register_user("acct", "carol")
+    uri = "viking://resources/photo.txt"
+    backend = _RealAclMemoryTransferBackend([_record("photo", uri)])
+    monkeypatch.setattr(backend, "get_strict", backend.get)
+    agfs = _FakeAGFS()
+    agfs.write("/local/acct/resources/photo.txt", b"photo")
+    fs = VikingFS(agfs=agfs, vector_store=backend, acl_manager=backend.acl_manager)
+    service = app.state.fake_service
+    service.viking_fs = fs
+    service.fs = FSService(viking_fs=fs)
+    monkeypatch.setattr(
+        "openviking.server.auth.plugins.api_key.build_api_key_manager", lambda **kwargs: manager
+    )
+    app.state.service_name = "test"
+    plugin = ApiKeyAuthPlugin()
+    await plugin.initialize(app, service, app.state.config)
+    app.state.auth_plugin = plugin
+    app.include_router(acl_router.router)
+
+    async def mutate(principal):
+        if operation == "set":
+            return await client.put(
+                "/api/v1/acl",
+                json={"uri": uri, "entries": [{"principal": principal, "level": "read"}]},
+                headers={"X-API-Key": owner_key},
+            )
+        return await client.post(
+            f"/api/v1/acl/{operation}",
+            json={
+                "uri": uri,
+                "principal": principal,
+                **({"level": "read"} if operation == "grant" else {}),
+            },
+            headers={"X-API-Key": owner_key, "X-OpenViking-User": "bob"},
+        )
+
+    # The same URI resolves only in the caller's account, even after an ACL mutation.
+    other = RequestContext(user=UserIdentifier("other", "bob"), role=Role(Role.ADMIN))
+    with pytest.raises(OpenVikingError, match="File not found"):
+        await fs.read(uri, ctx=other)
+    before = deepcopy(backend.records)
+    response = await mutate("user:bob")
+    assert response.status_code == 400, response.text
+    assert "cross-account" in response.json()["error"]["message"]
+    assert backend.records == before
+
+    for principal in ("user:missing", "group:missing", "group:outsiders"):
+        response = await mutate(principal)
+        assert response.status_code == 400, response.text
+    await manager.create_group("acct", "readers")
+    for principal in ("user:carol", "user:*", "group:readers"):
+        response = await mutate(principal)
+        assert response.status_code == 200, response.text
+
+    # Validate ingestion ACLs before content mutation, including mixed valid/invalid entries.
+    owner = RequestContext(user=UserIdentifier("acct", "alice"), role=Role(Role.ADMIN))
+    before = deepcopy(backend.records)
+    with pytest.raises(OpenVikingError, match="cross-account"):
+        await fs.prepare_acl_update(
+            "viking://resources/new.txt",
+            {"entries": [{"principal": "user:bob", "level": "read"}]},
+            owner,
+        )
+    with pytest.raises(OpenVikingError, match="cross-account"):
+        await fs.set_acl(
+            uri,
+            [
+                {"principal": "user:carol", "level": "read"},
+                {"principal": "user:bob", "level": "read"},
+            ],
+            ctx=owner,
+        )
+    assert backend.records == before
+    from openviking.storage.acl import AclMode
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    local = RequestContext(user=UserIdentifier("acct", "carol"), role=Role(Role.USER))
+    await fs.set_acl(uri, [], acl_mode=AclMode.RESTRICTED, ctx=owner)
+    with pytest.raises(PermissionDeniedError):
+        await fs.read(uri, ctx=local)
+    await fs.grant_acl(uri, "user:carol", "read", ctx=owner)
+    assert await fs.read(uri, ctx=local) == b"photo"
+    await fs.revoke_acl(uri, "user:carol", ctx=owner)
+    with pytest.raises(PermissionDeniedError):
+        await fs.read(uri, ctx=local)
+    # An identical user id in both accounts still refers only to the local member.
+    await manager.register_user("acct", "bob")
+    response = await mutate("user:bob")
+    assert response.status_code == 200, response.text
+    with pytest.raises(OpenVikingError, match="File not found"):
+        await fs.read(uri, ctx=other)

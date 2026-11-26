@@ -7,6 +7,8 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { readRequestBody } from "../../memory-plugin-shared/testing/support.mjs";
+
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_DIR = dirname(SCRIPT_DIR);
 const SESSION_ID = "recall-branch-session";
@@ -120,6 +122,29 @@ const NO_SERVER_ASSEMBLY = {
   "POST /api/v1/search/search": () => ({ status: 503, body: { status: "error", error: { message: "unavailable" } } }),
   "POST /api/v1/search/recall": () => ({ status: 404, body: { status: "error", error: { message: "gone" } } }),
 };
+
+test("auto-recall displays the server validation error with debug disabled", async () => {
+  let requests = 0;
+  const message = "Invalid request parameters: events_time_decay_protection";
+  const { stdout, state } = await recallTurn({
+    env: { OPENVIKING_DEBUG: "0" },
+    routes: {
+      ...HEALTHY,
+      "POST /api/v1/search/search": () => {
+        requests++;
+        return { status: 422, body: { status: "error", error: { code: "INVALID_ARGUMENT", message } } };
+      },
+      "POST /api/v1/search/recall": () => assert.fail("parameter errors must not fall back to /recall"),
+    },
+  });
+
+  assert.deepEqual(JSON.parse(stdout), {
+    decision: "approve",
+    systemMessage: `OpenViking auto recall failed (HTTP 422): ${message}`,
+  });
+  assert.equal(state.reason, "request_rejected");
+  assert.equal(requests, 1);
+});
 
 function memory(uri, score, abstract) {
   return { uri, score, abstract, level: 1, category: "entities" };
@@ -245,8 +270,9 @@ test("hits that all fall under the score threshold are recorded as filtered_out"
 });
 
 test("the client-ranked fallback degrades past the budget to URI hints", async () => {
-  const first = "x".repeat(500);
-  const second = "y".repeat(500);
+  // Leave room for the recall wrapper and both citations within the 200-token cap.
+  const first = "x".repeat(300);
+  const second = "y".repeat(300);
   const { stdout, state } = await recallTurn({
     env: { OPENVIKING_RECALL_TOKEN_BUDGET: "200" },
     routes: {
@@ -308,3 +334,25 @@ test("the plugin keeps no ranking or transcript copy of its own", async () => {
 
   assert.deepEqual(hits, []);
 });
+
+for (const excludeUris of ["", "viking://user/default/skills, viking://agent/skills"]) {
+  test(`context recall forwards configured subtree exclusions ${JSON.stringify(excludeUris)}`, async () => {
+    const requests = [];
+    const { stdout, state } = await recallTurn({
+      env: { OPENVIKING_RECALL_EXCLUDE_URIS: excludeUris },
+      routes: {
+        ...HEALTHY,
+        "POST /api/v1/search/search": async (req) => {
+          requests.push(await readRequestBody(req));
+          return { body: { status: "ok", result: { rendered: "", entries: [], stats: {} } } };
+        },
+      },
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].mode, "context");
+    assert.deepEqual(requests[0].exclude_uris, excludeUris
+      ? ["viking://user/default/skills", "viking://agent/skills"] : undefined);
+    assert.equal(state.reason, "no_results");
+    assert.equal(injectedContext(stdout), null);
+  });
+}

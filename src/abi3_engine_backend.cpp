@@ -799,6 +799,14 @@ bool parse_search_request(PyObject* obj, vdb::SearchRequest* request) {
   }
   Py_XDECREF(value);
 
+  if (!get_named_value(obj, "time_decay", &value, &found)) {
+    return false;
+  }
+  if (found && !py_to_string(value, &request->time_decay, false)) {
+    Py_DECREF(value);
+    return false;
+  }
+  Py_XDECREF(value);
   return true;
 }
 
@@ -1303,7 +1311,7 @@ PyObject* build_state_result(const vdb::StateResult& result) {
 PyObject* py_init_logging(PyObject*, PyObject* args, PyObject* kwargs) {
   const char* log_level = nullptr;
   const char* log_output = nullptr;
-  const char* log_format = "[%Y-%m-%d %H:%M:%S.%e] [%l] %v";
+  const char* log_format = "%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s";
   static const char* keywords[] = {"log_level", "log_output", "log_format",
                                    nullptr};
 

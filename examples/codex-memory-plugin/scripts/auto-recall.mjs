@@ -23,12 +23,15 @@ import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { createOvHttp } from "./shared/ov-http.mjs";
 import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
+import { answerContext } from "./usage/display.mjs";
+import { parseRecall } from "./usage/sources.mjs";
 
 let cfg = loadConfig();
 const { log, logError } = createLogger("auto-recall");
 let effectivePeer = { peerId: "" };
 
 let emitted = false;
+let usageTurnId = null;
 let activeCompressor = null;
 let recallDeadline = null;
 const RECALL_DIGEST_CACHE_PATH = join(getStateDir(), "recall-digest.json");
@@ -45,22 +48,18 @@ function output(obj, exitAfter = false) {
   process.stdout.write(line);
 }
 
-function emit(additionalContext) {
-  if (!additionalContext) {
-    output({});
-    return;
-  }
-  const wrappedContext = String(additionalContext).trim();
-  if (!wrappedContext) {
-    output({});
-    return;
-  }
-  output({
-    hookSpecificOutput: {
+function emit({ block, error } = {}) {
+  const result = error ? { systemMessage: error } : {};
+  const wrappedContext = String(block || "").trim();
+  if (wrappedContext) {
+    result.hookSpecificOutput = {
       hookEventName: "UserPromptSubmit",
-      additionalContext: wrappedContext,
-    },
-  });
+      additionalContext: [wrappedContext, usageTurnId ? answerContext({
+        recalled: parseRecall(wrappedContext), lookups: [],
+      }, usageTurnId, cfg) : ""].filter(Boolean).join("\n"),
+    };
+  }
+  output(result);
 }
 
 recallDeadline = setTimeout(() => {
@@ -90,6 +89,7 @@ runHookStage({
   onSkip: (reason) => log("skip", { stage: "init", reason }),
 }, async (stage) => {
   const { input, cwd } = stage;
+  usageTurnId = input.turn_id || null;
   cfg = stage.cfg;
   effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   fetchJSON = makeFetchJSON();
@@ -143,8 +143,9 @@ runHookStage({
     actorPeerId: effectivePeer.peerId, legacyPeerId: effectivePeer.legacyPeerId,
     sessionId: recallSessionId || "", runCompressor,
     localCompressorAvailable: Boolean(runCompressor),
+    excludeUris: cfg.recallExcludeUris,
     digestCachePath: RECALL_DIGEST_CACHE_PATH, log,
   });
   log("recall_complete", { stage: recalled.stage, chars: recalled.block.length });
-  return recalled.block;
+  return recalled;
 }).catch((err) => { logError("uncaught", err); emit(); });

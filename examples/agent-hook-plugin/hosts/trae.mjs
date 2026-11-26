@@ -7,21 +7,36 @@ import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils
 import { preToolUseOutput } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
 
+const INJECTION_EVENTS = {
+  "session-start": "SessionStart",
+  "user-prompt-submit": "UserPromptSubmit",
+  "post-compact": "PostCompact",
+};
+
 export const trae = {
   prefix: "tr-",
   tracksPendingPrompt: true,
   capturesOnlyWhenEnabled: true,
-  stages: { "session-start": "start", "user-prompt-submit": "prompt", stop: "capture" },
+  requestBudgets: { "session-start": 25_000, "user-prompt-submit": 17_000, "post-compact": 1_000, stop: 25_000 },
+  stages: { "session-start": "start", "user-prompt-submit": "prompt", "post-compact": "pointer", stop: "capture" },
   envelope(event, block) {
     const value = { decision: "approve" };
     if (block) {
       value.hookSpecificOutput = {
-        hookEventName: event === "session-start" ? "SessionStart" : "UserPromptSubmit",
+        hookEventName: INJECTION_EVENTS[event] || "UserPromptSubmit",
         additionalContext: block,
       };
     }
     return value;
   },
+  // TRAE holds PostCompact context for the next user prompt.
+  historyPointer: {
+    sessionDefault: false,
+    inject: (event) => (event === "post-compact" ? "compact" : ""),
+  },
+  // `_meta.chatSessionId` is read from the shipped app, not seen on the wire,
+  // so the note above still asks the model to pass `session`.
+  historySessionFromMeta: (meta) => (typeof meta.chatSessionId === "string" ? meta.chatSessionId.trim() : ""),
   guard: (input) => preToolUseOutput(input),
   prompt: (input) => cleanTraeText(input.prompt),
   async capture(ctx, state) {

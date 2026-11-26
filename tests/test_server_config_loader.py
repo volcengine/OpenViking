@@ -10,7 +10,6 @@ from openviking.server.config import (
     get_server_url_from_server_data,
     load_bot_gateway_token,
     load_server_config,
-    map_bind_host_to_loopback,
 )
 
 
@@ -57,7 +56,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
                     "host": "0.0.0.0",
                     "port": 1944,
                     "workers": 2,
-                    "executor_threads": 64,
+                    "executor_threads": 48,
                     "timeout_keep_alive": 120,
                     "auth_mode": "trusted",
                     "with_bot": True,
@@ -75,7 +74,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.host == "0.0.0.0"
     assert config.port == 1944
     assert config.workers == 2
-    assert config.executor_threads == 64
+    assert config.executor_threads == 48
     assert config.timeout_keep_alive == 120
     assert config.auth_mode == "trusted"
     assert config.with_bot is True
@@ -84,14 +83,14 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.encryption_enabled is True
 
 
-def test_load_server_config_defaults_timeout_keep_alive(tmp_path):
+def test_load_server_config_defaults(tmp_path):
     config_path = tmp_path / "ov.conf"
     config_path.write_text(json.dumps({"server": {"host": "0.0.0.0"}}))
 
     config = load_server_config(str(config_path))
 
     assert config.timeout_keep_alive == 5
-    assert config.executor_threads == 0
+    assert config.executor_threads == 64
 
 
 def test_load_server_config_rejects_negative_default_executor_size(tmp_path):
@@ -118,30 +117,6 @@ def test_server_config_get_effective_auth_mode():
     assert ServerConfig().get_effective_auth_mode() == "dev"
 
 
-def test_get_server_url_from_server_data_uses_server_host_and_port():
-    server = {"host": "127.0.0.1", "port": 1933}
-
-    assert get_server_url_from_server_data(server) == "http://127.0.0.1:1933"
-
-
-def test_get_server_url_from_server_config_uses_runtime_host_and_port():
-    config = ServerConfig(host="127.0.0.1", port=1944)
-
-    assert get_server_url_from_server_data(config) == "http://127.0.0.1:1944"
-
-
-def test_get_server_url_from_server_data_brackets_ipv6_literal():
-    server = {"host": "::1", "port": 1933}
-
-    assert get_server_url_from_server_data(server) == "http://[::1]:1933"
-
-
-def test_get_server_url_from_server_config_brackets_ipv6_literal():
-    config = ServerConfig(host="::1", port=1944)
-
-    assert get_server_url_from_server_data(config) == "http://[::1]:1944"
-
-
 @pytest.mark.parametrize(
     "host, expected",
     [
@@ -162,28 +137,12 @@ def test_get_server_url_from_server_config_brackets_ipv6_literal():
         ("openviking.local", "openviking.local"),
     ],
 )
-def test_map_bind_host_to_loopback(host, expected):
-    assert map_bind_host_to_loopback(host) == expected
+def test_server_url_resolves_raw_and_runtime_bind_hosts(host, expected):
+    raw = {"host": host, "port": 1933}
+    validated = ServerConfig(host=host, port=1944)
 
-
-def test_get_server_url_from_server_data_maps_ipv4_wildcard_to_loopback():
-    # Regression for issue #2856: server.host "0.0.0.0" is a bind address, not a
-    # destination the bot/client can connect to.
-    server = {"host": "0.0.0.0", "port": 1933}
-
-    assert get_server_url_from_server_data(server) == "http://127.0.0.1:1933"
-
-
-def test_get_server_url_from_server_config_maps_ipv4_wildcard_to_loopback():
-    config = ServerConfig(host="0.0.0.0", port=1933)
-
-    assert get_server_url_from_server_data(config) == "http://127.0.0.1:1933"
-
-
-def test_get_server_url_from_server_data_maps_ipv6_wildcard_to_loopback():
-    server = {"host": "::", "port": 1933}
-
-    assert get_server_url_from_server_data(server) == "http://[::1]:1933"
+    assert get_server_url_from_server_data(raw) == f"http://{expected}:1933"
+    assert get_server_url_from_server_data(validated) == f"http://{expected}:1944"
 
 
 def test_load_server_config_preserves_metrics_account_dimension_fields(tmp_path):
@@ -292,6 +251,7 @@ def test_load_server_config_trace_local_defaults(tmp_path):
     traces = config.observability.traces
     assert traces.enabled is True
     assert traces.protocol == "local"
+    assert traces.service_name == "openviking-server"
     assert traces.local_path == "~/.openviking/logs/traces.jsonl"
     assert traces.local_rotation_mb == 40
     assert traces.local_backup_count == 2

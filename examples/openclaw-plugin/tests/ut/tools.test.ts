@@ -47,42 +47,11 @@ function okResponse(result: unknown): Response {
 }
 
 function setupPlugin(
-  clientOverrides?: Record<string, unknown>,
   pluginConfigOverrides?: Record<string, unknown>,
 ) {
   const tools = new Map<string, ToolDef>();
   const factoryTools = new Map<string, (ctx: Record<string, unknown>) => ToolDef>();
   const commands = new Map<string, CommandDef>();
-
-  const mockClient = {
-    find: vi.fn().mockResolvedValue({ memories: [], total: 0 }),
-    read: vi.fn().mockResolvedValue("content"),
-    addSessionMessage: vi.fn().mockResolvedValue(undefined),
-    commitSession: vi.fn().mockResolvedValue({
-      status: "completed",
-      archived: false,
-      memories_extracted: { core: 2 },
-    }),
-    deleteUri: vi.fn().mockResolvedValue(undefined),
-    list: vi.fn().mockResolvedValue([]),
-    getSessionArchive: vi.fn().mockResolvedValue({
-      archive_id: "archive_001",
-      abstract: "Test archive",
-      overview: "",
-      messages: [],
-    }),
-    healthCheck: vi.fn().mockResolvedValue(undefined),
-    getSession: vi.fn().mockResolvedValue({ pending_tokens: 0 }),
-    getSessionContext: vi.fn().mockResolvedValue({
-      latest_archive_overview: "",
-      latest_archive_id: "",
-      pre_archive_abstracts: [],
-      messages: [],
-      estimatedTokens: 0,
-      stats: { totalArchives: 0, includedArchives: 0, droppedArchives: 0, failedArchives: 0, activeTokens: 0, archiveTokens: 0 },
-    }),
-    ...clientOverrides,
-  };
 
   const api = {
     pluginConfig: {
@@ -119,7 +88,7 @@ function setupPlugin(
     on: vi.fn(),
   };
 
-  return { tools, factoryTools, commands, mockClient, api };
+  return { tools, factoryTools, commands, api };
 }
 
 function makeMemory(overrides?: Partial<FindResultItem>): FindResultItem {
@@ -195,7 +164,7 @@ describe("Tool: memory_recall (registration)", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin(undefined, {
+    const { factoryTools, api } = setupPlugin({
       recallLimit: 1,
       recallPreferAbstract: true,
       recallScoreThreshold: 0.2,
@@ -266,7 +235,7 @@ describe("Tool: memory_recall (registration)", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin(undefined, {
+    const { factoryTools, api } = setupPlugin({
       recallLimit: 2,
       recallMaxInjectedChars: 20,
       recallScoreThreshold: 0.2,
@@ -324,7 +293,7 @@ describe("Tool: memory_recall (registration)", () => {
       return okResponse({});
     });
 
-    const { factoryTools, commands, api } = setupPlugin(undefined, {
+    const { factoryTools, commands, api } = setupPlugin({
       recallLimit: 6,
       recallTargetTypes: ["user", "agent"],
     });
@@ -358,7 +327,7 @@ describe("Tool: memory_recall (registration)", () => {
   });
 
   it("supports /ov-query-config get, unset, and reset for session scope", async () => {
-    const { commands, api } = setupPlugin(undefined, {
+    const { commands, api } = setupPlugin({
       recallLimit: 6,
       recallScoreThreshold: 0.15,
     });
@@ -396,7 +365,7 @@ describe("Tool: memory_recall (registration)", () => {
   });
 
   it("supports /ov-query-config weight parameters and recallPreferAbstract", async () => {
-    const { commands, api } = setupPlugin(undefined, {
+    const { commands, api } = setupPlugin({
       recallPreferAbstract: true,
     });
     contextEnginePlugin.register(api as any);
@@ -424,7 +393,7 @@ describe("Tool: memory_recall (registration)", () => {
   });
 
   it("rejects empty /ov-query-config set patches without overwriting existing config", async () => {
-    const { commands, api } = setupPlugin(undefined, { recallLimit: 6 });
+    const { commands, api } = setupPlugin({ recallLimit: 6 });
     contextEnginePlugin.register(api as any);
     const command = commands.get("ov-query-config");
     expect(command).toBeDefined();
@@ -473,7 +442,7 @@ describe("Tool: memory_store (behavioral)", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin(undefined, { peer_role: "sender" });
+    const { factoryTools, api } = setupPlugin({ peer_role: "sender" });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     const factory = factoryTools.get("memory_store");
@@ -529,6 +498,50 @@ describe("Tool: memory_store (behavioral)", () => {
 
     expect(result.content[0].text).toContain("trace_id=trace-memory-store");
     expect(result.details).toMatchObject({ traceId: "trace-memory-store" });
+  });
+
+  it("returns a tool-visible failure when commit extracts zero memories", async () => {
+    const openVikingTransport = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/messages")) {
+        return okResponse({ session_id: "sess-1" });
+      }
+      if (url.endsWith("/commit")) {
+        return okResponse({
+          status: "completed",
+          archived: true,
+          memories_extracted: {},
+          trace_id: "trace-zero",
+        });
+      }
+      return okResponse({});
+    });
+
+    const { factoryTools, api } = setupPlugin();
+    (api as any).openVikingTransport = openVikingTransport;
+    contextEnginePlugin.register(api as any);
+    const tool = factoryTools.get("memory_store")!({
+      sessionId: "runtime-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("tc-memory-store-zero", {
+      text: "Remember this important thing",
+    });
+
+    expect(result.content[0].text).toContain("created or updated no memory");
+    expect(result.content[0].text).toContain("no new memory was created");
+    expect(result.content[0].text).toContain("trace_id=trace-zero");
+    expect(result.content[0].text).not.toContain("Stored");
+    expect(result.details).toMatchObject({
+      action: "failed",
+      error: "no_memories_extracted",
+      memoriesCount: 0,
+      archived: true,
+      traceId: "trace-zero",
+    });
   });
 
   it("uses a temporary session by default instead of the current tool session", async () => {
@@ -609,14 +622,28 @@ describe("Tool: memory_forget (behavioral)", () => {
 });
 
 describe("Tool: ov_archive_expand (behavioral)", () => {
-  it("registers as factory tool with correct name", () => {
+  it("expands the requested archive from the active session", async () => {
+    const sessionId = "archive-session";
+    const archiveId = "archive_001";
+    const ovSessionId = openClawSessionToOvStorageId(sessionId);
+    const archivePath = `/api/v1/sessions/${ovSessionId}/archives/${archiveId}`;
+    const transport = vi.fn(async (url: string) => {
+      expect(new URL(url).pathname).toBe(archivePath);
+      return okResponse({
+        archive_id: archiveId,
+        messages: [{ role: "user", parts: [{ type: "text", text: "original request" }] }],
+      });
+    });
     const { factoryTools, api } = setupPlugin();
+    (api as any).openVikingTransport = transport;
     contextEnginePlugin.register(api as any);
-    const factory = factoryTools.get("ov_archive_expand");
-    expect(factory).toBeDefined();
-    const tool = factory!({ sessionId: "test-session", sessionKey: "sk" });
-    expect(tool.name).toBe("ov_archive_expand");
-    expect(tool.description).toContain("archive");
+    const tool = factoryTools.get("ov_archive_expand")!({ sessionId });
+    const result = await tool.execute("expand", { archiveId }) as ToolResult;
+
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(result.content[0]!.text).toContain(archiveId);
+    expect(result.content[0]!.text).toContain("original request");
+    expect(result.details).toMatchObject({ action: "expanded", archiveId, ovSessionId, messageCount: 1 });
   });
 
   it("factory-created tool returns error when archiveId is empty", async () => {
@@ -667,7 +694,7 @@ describe("Tool: OpenViking tool result access", () => {
         total_chars: 42,
         has_more: true,
         metadata: {
-          storage_uri: "viking://session/test-session/tool-results/tr_call_abc",
+          storage_uri: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
           tool_name: "read_file",
         },
       });
@@ -679,7 +706,7 @@ describe("Tool: OpenViking tool result access", () => {
     const tool = tools.get("openviking_tool_result_read")!;
 
     const result = await tool.execute("tc-read", {
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       offset: 5,
       limit: 10,
     }) as ToolResult;
@@ -687,7 +714,7 @@ describe("Tool: OpenViking tool result access", () => {
     expect(result.content[0]!.text).toBe("raw");
     expect(result.details).toMatchObject({
       action: "read",
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       tool_result_id: "tr_call_abc",
       offset: 5,
       limit: 10,
@@ -722,7 +749,7 @@ describe("Tool: OpenViking tool result access", () => {
     const tool = tools.get("openviking_tool_result_search")!;
 
     const result = await tool.execute("tc-search", {
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       query: "needle",
       limit: 2,
       context_chars: 15,
@@ -733,7 +760,7 @@ describe("Tool: OpenViking tool result access", () => {
     expect(result.content[0]!.text).toContain("hay needle stack");
     expect(result.details).toMatchObject({
       action: "searched",
-      tool_output_ref: "viking://session/test-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
       tool_result_id: "tr_call_abc",
       query: "needle",
       match_count: 1,
@@ -749,7 +776,7 @@ describe("Tool: OpenViking tool result access", () => {
         tool_results: [
           {
             tool_result_id: "tr_call_abc",
-            storage_uri: "viking://session/test-session/tool-results/tr_call_abc",
+            storage_uri: "viking://user/default/sessions/test-session/tool-results/tr_call_abc",
             tool_name: "read_file",
             original_chars: 42000,
             created_at: "2026-05-15T00:00:00Z",
@@ -770,7 +797,7 @@ describe("Tool: OpenViking tool result access", () => {
 
     expect(result.content[0]!.text).toContain("read_file");
     expect(result.content[0]!.text).toContain("original_chars=42000");
-    expect(result.content[0]!.text).toContain("viking://session/test-session/tool-results/tr_call_abc");
+    expect(result.content[0]!.text).toContain("viking://user/default/sessions/test-session/tool-results/tr_call_abc");
     expect(result.details).toMatchObject({
       action: "listed",
       session_id: "test-session",
@@ -785,7 +812,7 @@ describe("Tool: OpenViking tool result access", () => {
     const tool = tools.get("openviking_tool_result_read")!;
 
     const result = await tool.execute("tc-read", {
-      tool_output_ref: "viking://session/other-session/tool-results/tr_call_abc",
+      tool_output_ref: "viking://user/default/sessions/other-session/tool-results/tr_call_abc",
     }) as ToolResult;
 
     expect(result.content[0]!.text).toContain("another session");
@@ -801,7 +828,7 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
   });
 
   it("registers add_resource tool with expected parameters only when explicitly enabled", () => {
-    const { tools, api } = setupPlugin(undefined, { enableAddResourceTool: true });
+    const { tools, api } = setupPlugin({ enableAddResourceTool: true });
     contextEnginePlugin.register(api as any);
     const tool = tools.get("add_resource");
     expect(tool).toBeDefined();
@@ -831,7 +858,7 @@ describe("Tool: add_resource, add_skill, and ov_search (registration)", () => {
     expect(props).toHaveProperty("source");
     expect(props).toHaveProperty("data");
     expect(props).toHaveProperty("wait");
-    expect(props).toHaveProperty("timeout");
+    expect(props).not.toHaveProperty("timeout");
     expect(props).not.toHaveProperty("to");
     expect(props).not.toHaveProperty("parent");
   });
@@ -1279,8 +1306,9 @@ describe("Tool: ov_search (behavioral)", () => {
   });
 
   it("rejects display-truncated ov_read URIs before calling OpenViking", async () => {
-    const readMock = vi.fn().mockResolvedValue("content");
-    const { tools, api } = setupPlugin({ read: readMock });
+    const readMock = vi.fn(async () => okResponse("content"));
+    const { tools, api } = setupPlugin();
+    (api as any).openVikingTransport = readMock;
     contextEnginePlugin.register(api as any);
     const read = tools.get("ov_read")!;
 
@@ -1341,14 +1369,6 @@ describe("OpenViking import command parsing", () => {
     ).toThrow("Cannot specify both");
   });
 
-  it("parses add-skill flags", () => {
-    expect(parseAddSkillCommandArgs("./skills/demo --wait --timeout=30")).toMatchObject({
-      source: "./skills/demo",
-      wait: true,
-      timeout: 30,
-    });
-  });
-
   it("rejects resource-only flags for skill imports", () => {
     expect(() =>
       parseAddSkillCommandArgs("./skills/demo --to viking://resources/nope"),
@@ -1375,7 +1395,7 @@ describe("OpenViking ov_search command parsing", () => {
 
 describe("Tool: ov_recall_trace", () => {
   it("registers recall trace query tool and slash command", () => {
-    const { tools, commands, api } = setupPlugin(undefined, { traceRecall: true });
+    const { tools, commands, api } = setupPlugin({ traceRecall: true });
     contextEnginePlugin.register(api as any);
 
     const tool = tools.get("ov_recall_trace");
@@ -1416,7 +1436,7 @@ describe("Tool: ov_recall_trace", () => {
       }
       return okResponse({});
     });
-    const { tools, factoryTools, commands, api } = setupPlugin(undefined, { traceRecall: true });
+    const { tools, factoryTools, commands, api } = setupPlugin({ traceRecall: true });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     await tools.get("ov_search")!.execute("tc-search", { query: "trace design", uri: "viking://resources" });
@@ -1435,7 +1455,7 @@ describe("Tool: ov_recall_trace", () => {
   });
 
   it("registers recall trace gateway route when a route adapter is available", async () => {
-    const { api } = setupPlugin(undefined, { traceRecall: true });
+    const { api } = setupPlugin({ traceRecall: true });
     contextEnginePlugin.register(api as any);
     const service = (api.registerService as any).mock.calls[0][0];
     const registerRoute = vi.fn();
@@ -1461,7 +1481,7 @@ describe("Tool: ov_recall_trace", () => {
   });
 
   it("registers recall trace HTTP routes through the OpenClaw plugin API", () => {
-    const { api } = setupPlugin(undefined, { traceRecall: true });
+    const { api } = setupPlugin({ traceRecall: true });
 
     contextEnginePlugin.register(api as any);
 
@@ -1500,7 +1520,7 @@ describe("Tool: ov_recall_trace", () => {
       return okResponse({});
     });
 
-    const { api } = setupPlugin(undefined, { traceRecall: true });
+    const { api } = setupPlugin({ traceRecall: true });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     const service = (api.registerService as any).mock.calls[0][0];
@@ -1512,7 +1532,7 @@ describe("Tool: ov_recall_trace", () => {
         uri: "viking://resources/project/spec.md",
         includeContent: "true",
         offset: "10",
-        contentLimit: "5",
+        "content-limit": "5",
         agentId: "main",
       },
     }) as { status: number; body: any };
@@ -1556,10 +1576,11 @@ describe("Tool: ov_recall_trace", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
+    const { factoryTools, api } = setupPlugin({ traceRecall: true });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
-    const searchTool = factoryTools.get("ov_search")!({ sessionId: "route-session", agentId: "main" });
+    const sessionKey = "agent:main:route-session";
+    const searchTool = factoryTools.get("ov_search")!({ sessionId: "route-session", sessionKey, agentId: "main" });
     await searchTool.execute("tc-route-search", { query: "project spec", limit: 3 });
 
     const service = (api.registerService as any).mock.calls[0][0];
@@ -1568,7 +1589,7 @@ describe("Tool: ov_recall_trace", () => {
 
     const response = await routes.get("/api/openviking/recall-traces/latest-ov-search-list")!.handler({
       query: {
-        sessionId: "route-session",
+        sessionkey: sessionKey,
         limit: "5",
         includeSkills: "false",
       },
@@ -1587,6 +1608,21 @@ describe("Tool: ov_recall_trace", () => {
     });
     expect(response.body.items[0].detailUrl).toContain("/api/openviking/uri-detail?uri=viking%3A%2F%2Fresources%2Fproject%2Fspec.md");
     expect(response.body.items.some((item: any) => item.resultType === "skill")).toBe(false);
+
+    openVikingTransport.mockClear();
+    const traceId = response.body.trace.traceId;
+    const detail = await routes.get("/api/openviking/uri-detail")!.handler({
+      query: {
+        uri: response.body.items[0].uri,
+        "trace-id": traceId,
+        "include-content": "false",
+      },
+    });
+    expect(detail.status).toBe(200);
+    expect(detail.body.metadata).toMatchObject({ sourceTraceId: traceId, source: "ov_search" });
+    expect(detail.body.readStatus).toBe("not_requested");
+    expect(detail.body).not.toHaveProperty("content");
+    expect(openVikingTransport).not.toHaveBeenCalled();
   });
 
   it("filters recall trace gateway route by sessionKey aliases", async () => {
@@ -1607,7 +1643,10 @@ describe("Tool: ov_recall_trace", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
+    const { factoryTools, api } = setupPlugin({
+      traceRecall: true,
+      traceRecallIncludeContentByDefault: true,
+    });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     const searchTool = factoryTools.get("ov_search")!({
@@ -1628,159 +1667,68 @@ describe("Tool: ov_recall_trace", () => {
     const routes = new Map<string, any>();
     await service.start({ registerRoute: (route: any) => routes.set(route.path, route) });
 
-    const response = await routes.get("/api/openviking/recall-traces")!.handler({
-      query: {
-        sessionkey: "agent:main:route-session-by-key",
-        turn: "all",
-        limit: "5",
-      },
-    }) as { status: number; body: any };
+    openVikingTransport.mockClear();
+    for (const field of ["sessionkey", "session-key"]) {
+      const response = await routes.get("/api/openviking/recall-traces")!.handler({
+        query: {
+          [field]: "agent:main:route-session-by-key",
+          "include-content": "false",
+          turn: "all",
+          limit: "5",
+        },
+      });
 
-    expect(response.status).toBe(200);
-    expect(response.body.entries).toHaveLength(1);
-    expect(response.body.entries[0]).toMatchObject({
-      source: "ov_search",
-      sessionKey: "agent:main:route-session-by-key",
-    });
+      expect(response.status).toBe(200);
+      expect(response.body.entries).toHaveLength(1);
+      expect(response.body.entries[0]).toMatchObject({
+        source: "ov_search",
+        sessionKey: "agent:main:route-session-by-key",
+      });
+    }
+    expect(openVikingTransport).not.toHaveBeenCalled();
   });
 
-  it("does not combine explicit trace sessionKey filter with derived ovSessionId", async () => {
-    const openVikingTransport = vi.fn(async (url: string) => {
-      const requestUrl = new URL(url);
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        return okResponse({
-          memories: [],
-          resources: [makeMemory({
+  it("looks up traces by the host session key, with storage ID fallback for legacy traces", async () => {
+    const transport = vi.fn(async (url: string) =>
+      new URL(url).pathname === "/api/v1/search/find"
+        ? okResponse({ memories: [], resources: [makeMemory({
             uri: "viking://resources/project/session-key-history.md",
             abstract: "Session key history result",
-            score: 0.9,
-          })],
-          skills: [],
-          total: 1,
-        });
-      }
-      return okResponse({});
-    });
-
-    const { factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
-    (api as any).openVikingTransport = openVikingTransport;
-    contextEnginePlugin.register(api as any);
-    const sessionKey = "agent:main:historic-session-key";
-    const searchTool = factoryTools.get("ov_search")!({
-      sessionId: "11111111-1111-4111-8111-111111111111",
-      sessionKey,
-      agentId: "main",
-    });
-    await searchTool.execute("tc-route-search", { query: "historical route", limit: 3 });
-
-    const traceTool = factoryTools.get("ov_recall_trace")!({
-      sessionKey,
-      agentId: "main",
-    });
-    const result = await traceTool.execute("tc-trace", {
-      turn: "all",
-      sessionKey,
-      limit: 5,
-    }) as ToolResult;
-
-    expect(result.details.count).toBe(1);
-    expect((result.details.entries as any[])[0]).toMatchObject({
-      sessionKey,
-      ovSessionId: "11111111-1111-4111-8111-111111111111",
-      trigger: { query: "historical route" },
-    });
-  });
-
-  it("uses outer sessionKey as the default trace identity without derived ovSessionId", async () => {
-    const openVikingTransport = vi.fn(async (url: string) => {
-      const requestUrl = new URL(url);
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        return okResponse({
-          memories: [],
-          resources: [makeMemory({
-            uri: "viking://resources/project/web-session-history.md",
-            abstract: "Web session history result",
-            score: 0.9,
-          })],
-          skills: [],
-          total: 1,
-        });
-      }
-      return okResponse({});
-    });
-
-    const { factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
-    (api as any).openVikingTransport = openVikingTransport;
+          })], skills: [], total: 1 })
+        : okResponse({}),
+    );
+    const { factoryTools, api } = setupPlugin({ traceRecall: true });
+    (api as any).openVikingTransport = transport;
     contextEnginePlugin.register(api as any);
     const sessionKey = "agent:main:web-c6592a8e-5448-4622-9e7f-31a07447eee7";
-    const searchTool = factoryTools.get("ov_search")!({
-      sessionId: "22222222-2222-4222-8222-222222222222",
-      sessionKey,
-      agentId: "main",
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const search = factoryTools.get("ov_search")!;
+    const trace = factoryTools.get("ov_recall_trace")!;
+    await search({ sessionId, sessionKey, agentId: "main" }).execute("search", {
+      query: "current trace", uri: "viking://resources",
     });
-    await searchTool.execute("tc-route-search", { query: "web session route", limit: 3 });
 
-    const traceTool = factoryTools.get("ov_recall_trace")!({
-      sessionKey,
-      agentId: "main",
+    const current = trace({ sessionKey, agentId: "main" });
+    for (const filter of [{ sessionKey }, {}]) {
+      const result = await current.execute("trace", { ...filter, turn: "all" }) as ToolResult;
+      expect(result.details.count).toBe(1);
+      expect((result.details.entries as any[])[0]).toMatchObject({
+        sessionKey, ovSessionId: sessionId, trigger: { query: "current trace" },
+      });
+    }
+
+    const legacyKey = "agent:main:legacy-session-key-only";
+    const ovSessionId = openClawSessionToOvStorageId(undefined, legacyKey);
+    await search({ ovSessionId, agentId: "main" }).execute("old-search", {
+      query: "legacy trace", uri: "viking://resources",
     });
-    const result = await traceTool.execute("tc-trace", {
+    const legacy = await trace({ sessionKey: legacyKey, agentId: "main" }).execute("old-trace", {
       turn: "all",
-      limit: 5,
     }) as ToolResult;
-
-    expect(result.details.count).toBe(1);
-    expect((result.details.entries as any[])[0]).toMatchObject({
-      sessionKey,
-      ovSessionId: "22222222-2222-4222-8222-222222222222",
-      trigger: { query: "web session route" },
-    });
-  });
-
-  it("falls back to derived ovSessionId for legacy traces missing sessionKey", async () => {
-    const openVikingTransport = vi.fn(async (url: string) => {
-      const requestUrl = new URL(url);
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        return okResponse({
-          memories: [],
-          resources: [makeMemory({
-            uri: "viking://resources/project/legacy-trace.md",
-            abstract: "Legacy trace result",
-            score: 0.9,
-          })],
-          skills: [],
-          total: 1,
-        });
-      }
-      return okResponse({});
-    });
-
-    const { factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
-    (api as any).openVikingTransport = openVikingTransport;
-    contextEnginePlugin.register(api as any);
-    const sessionKey = "agent:main:legacy-session-key-only";
-    const ovSessionId = openClawSessionToOvStorageId(undefined, sessionKey);
-    const searchTool = factoryTools.get("ov_search")!({
-      ovSessionId,
-      agentId: "main",
-    });
-    await searchTool.execute("tc-legacy-search", { query: "legacy route", limit: 3 });
-
-    const traceTool = factoryTools.get("ov_recall_trace")!({
-      sessionKey,
-      agentId: "main",
-    });
-    const result = await traceTool.execute("tc-trace", {
-      turn: "all",
-      limit: 5,
-    }) as ToolResult;
-
-    expect(result.details.count).toBe(1);
-    expect((result.details.entries as any[])[0]).toMatchObject({
-      ovSessionId,
-      trigger: { query: "legacy route" },
-    });
-    expect((result.details.entries as any[])[0].sessionKey).toBeUndefined();
+    expect(legacy.details.count).toBe(1);
+    const [entry] = legacy.details.entries as any[];
+    expect(entry).toMatchObject({ ovSessionId, trigger: { query: "legacy trace" } });
+    expect(entry.sessionKey).toBeUndefined();
   });
 
   it("queries recorded traces from memory without calling OpenViking find", async () => {
@@ -1805,7 +1753,7 @@ describe("Tool: ov_recall_trace", () => {
       return okResponse({});
     });
 
-    const { tools, factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
+    const { tools, factoryTools, api } = setupPlugin({ traceRecall: true });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
 
@@ -1838,7 +1786,7 @@ describe("Tool: ov_recall_trace", () => {
       return okResponse({});
     });
 
-    const { tools, factoryTools, api } = setupPlugin(undefined, {
+    const { tools, factoryTools, api } = setupPlugin({
       traceRecall: true,
       traceRecallQueryMaxChars: 200,
     });
@@ -1877,7 +1825,7 @@ describe("Tool: ov_recall_trace", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin(undefined, {
+    const { factoryTools, api } = setupPlugin({
       traceRecall: true,
       recallResources: false,
       recallTargetTypes: ["user"],
@@ -1899,83 +1847,39 @@ describe("Tool: ov_recall_trace", () => {
     ]));
   });
 
-  it("defaults explicit memory_recall to backward-compatible user and agent memory recall", async () => {
-    const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
-      const requestUrl = new URL(url);
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        const memories = String(body.context_type ?? "") === "memory"
-          ? [makeMemory({ uri: "viking://user/default/memories/project-docs", abstract: "User memory docs", score: 0.9 })]
-          : [];
-        return okResponse({ memories, resources: [], skills: [], total: memories.length });
+  it.each([
+    ["default scope", {}],
+    ["explicit user scope", { resourceTypes: ["user"] }],
+  ])("queries and traces memory recall with %s", async (_name, options) => {
+    const findBodies: Array<Record<string, unknown>> = [];
+    const transport = vi.fn(async (url: string, init?: RequestInit) => {
+      switch (new URL(url).pathname) {
+        case "/api/v1/search/find":
+          findBodies.push(JSON.parse(String(init?.body)));
+          return okResponse({ memories: [makeMemory()], resources: [], skills: [], total: 1 });
+        case "/api/v1/content/read":
+          return okResponse("Full memory content");
+        default:
+          return okResponse({});
       }
-      if (requestUrl.pathname === "/api/v1/content/read") {
-        return okResponse("Full resource content");
-      }
-      return okResponse({});
     });
-
-    const { factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
-    (api as any).openVikingTransport = openVikingTransport;
+    const { factoryTools, api } = setupPlugin({ traceRecall: true });
+    (api as any).openVikingTransport = transport;
     contextEnginePlugin.register(api as any);
-    const recall = factoryTools.get("memory_recall")!({ sessionId: "test-session", agentId: "main" });
-    await recall.execute("tc-recall-resource", { query: "project docs", limit: 1, scoreThreshold: 0.2 });
+    const ctx = { sessionId: "test-session", agentId: "main" };
+    const recall = factoryTools.get("memory_recall")!(ctx);
+    await recall.execute("recall", { ...options, query: "project docs", limit: 1 });
 
-    const findBodies = openVikingTransport.mock.calls
-      .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
-      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
     expect(findBodies).toHaveLength(1);
     expect(findBodies[0]).toMatchObject({ context_type: "memory" });
     expect(findBodies[0]!.target_uri).toBeUndefined();
 
-    const trace = factoryTools.get("ov_recall_trace")!({ sessionId: "test-session" });
-    const result = await trace.execute("tc-trace", { source: "memory_recall", limit: 10 }) as ToolResult;
-    const entry = (result.details.entries as any[])[0];
-    expect(entry.resourceTypes).toEqual(["user"]);
-    expect(entry.searches.map((search: any) => search.resourceType)).toEqual(["user"]);
-    expect(entry.searches[0].targetUriResolved).toBeUndefined();
-  });
-
-  it("allows explicit memory_recall resourceTypes to opt into user recall", async () => {
-    const openVikingTransport = vi.fn(async (url: string, init?: RequestInit) => {
-      const requestUrl = new URL(url);
-      if (requestUrl.pathname === "/api/v1/search/find") {
-        const body = JSON.parse(String(init?.body ?? "{}"));
-        const memories = String(body.context_type ?? "") === "memory"
-          ? [makeMemory({ uri: "viking://user/default/memories/preference", abstract: "User preference", score: 0.9 })]
-          : [];
-        return okResponse({ memories, resources: [], skills: [], total: memories.length });
-      }
-      if (requestUrl.pathname === "/api/v1/content/read") {
-        return okResponse("Full user preference content");
-      }
-      return okResponse({});
-    });
-
-    const { factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
-    (api as any).openVikingTransport = openVikingTransport;
-    contextEnginePlugin.register(api as any);
-    const recall = factoryTools.get("memory_recall")!({ sessionId: "test-session", agentId: "main" });
-    await recall.execute("tc-recall-user", {
-      query: "user preference",
-      limit: 1,
-      scoreThreshold: 0.2,
-      resourceTypes: ["user"],
-    });
-
-    const findBodies = openVikingTransport.mock.calls
-      .filter(([calledUrl]) => String(calledUrl).includes("/api/v1/search/find"))
-      .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
-    expect(findBodies).toHaveLength(1);
-    expect(findBodies[0]).toMatchObject({ context_type: "memory" });
-    expect(findBodies[0]!.target_uri).toBeUndefined();
-
-    const trace = factoryTools.get("ov_recall_trace")!({ sessionId: "test-session" });
-    const result = await trace.execute("tc-trace", { source: "memory_recall", limit: 10 }) as ToolResult;
-    const entry = (result.details.entries as any[])[0];
-    expect(entry.resourceTypes).toEqual(["user"]);
-    expect(entry.searches[0]).toMatchObject({ resourceType: "user" });
-    expect(entry.searches[0].targetUriResolved).toBeUndefined();
+    const trace = factoryTools.get("ov_recall_trace")!(ctx);
+    const result = await trace.execute("trace", { source: "memory_recall" }) as ToolResult;
+    expect(result.details.entries).toMatchObject([{
+      resourceTypes: ["user"], searches: [{ resourceType: "user" }],
+    }]);
+    expect((result.details.entries as any[])[0].searches[0].targetUriResolved).toBeUndefined();
   });
 
   it("records archive search traces with displayed archive matches", async () => {
@@ -1985,7 +1889,7 @@ describe("Tool: ov_recall_trace", () => {
         return okResponse({
           matches: [{
             line: 12,
-            uri: "viking://session/test-session/history/archive_001#L12",
+            uri: "viking://user/default/sessions/test-session/history/archive_001#L12",
             content: "discussion about recall traces",
           }],
           count: 1,
@@ -1994,7 +1898,7 @@ describe("Tool: ov_recall_trace", () => {
       return okResponse({});
     });
 
-    const { factoryTools, api } = setupPlugin(undefined, { traceRecall: true });
+    const { factoryTools, api } = setupPlugin({ traceRecall: true });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
     const archiveSearch = factoryTools.get("ov_archive_search")!({ sessionId: "test-session", agentId: "main" });
@@ -2009,27 +1913,27 @@ describe("Tool: ov_recall_trace", () => {
     const entry = (result.details.entries as any[])[0];
     expect(entry.operationType).toBe("archive_grep");
     expect(entry.selected).toEqual(expect.arrayContaining([
-      expect.objectContaining({ uri: "viking://session/test-session/history/archive_001#L12", displayed: true }),
+      expect.objectContaining({ uri: "viking://user/default/sessions/test-session/history/archive_001#L12", displayed: true }),
     ]));
   });
 });
 
 describe("Plugin registration", () => {
-  it("registers all 14 default tools", () => {
+  it("registers all 15 default tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(14);
+    expect(api.registerTool).toHaveBeenCalledTimes(15);
   });
 
   it("registers only resource query tools when enabledTools is resource_query", () => {
-    const { tools, api } = setupPlugin(undefined, { enabledTools: ["resource_query"] });
+    const { tools, api } = setupPlugin({ enabledTools: ["resource_query"] });
     contextEnginePlugin.register(api as any);
     expect(api.registerTool).toHaveBeenCalledTimes(4);
     expect([...tools.keys()].sort()).toEqual(["ov_list", "ov_multi_read", "ov_read", "ov_search"]);
   });
 
   it("does not register memory tools when disabledTools includes memory group", () => {
-    const { tools, api } = setupPlugin(undefined, { disabledTools: ["memory"] });
+    const { tools, api } = setupPlugin({ disabledTools: ["memory"] });
     contextEnginePlugin.register(api as any);
     expect(tools.get("ov_search")).toBeDefined();
     expect(tools.get("ov_read")).toBeDefined();
@@ -2039,13 +1943,13 @@ describe("Plugin registration", () => {
   });
 
   it("keeps add_resource opt-in even when all tools are enabled", () => {
-    const { tools, api } = setupPlugin(undefined, { enabledTools: ["all"] });
+    const { tools, api } = setupPlugin({ enabledTools: ["all"] });
     contextEnginePlugin.register(api as any);
     expect(tools.get("add_resource")).toBeUndefined();
   });
 
   it("registers add_resource only when both selected and explicitly enabled", () => {
-    const { tools, api } = setupPlugin(undefined, {
+    const { tools, api } = setupPlugin({
       enabledTools: ["add_resource"],
       enableAddResourceTool: true,
     });
@@ -2098,7 +2002,7 @@ describe("Plugin registration", () => {
       return okResponse({});
     });
 
-    const { commands, api } = setupPlugin(undefined, { peer_role: "assistant" });
+    const { commands, api } = setupPlugin({ peer_role: "assistant" });
     (api as any).openVikingTransport = openVikingTransport;
     contextEnginePlugin.register(api as any);
 
@@ -2148,7 +2052,7 @@ describe("Plugin registration", () => {
       return okResponse({});
     });
 
-    const { commands, api } = setupPlugin(undefined, { peer_role: "assistant" });
+    const { commands, api } = setupPlugin({ peer_role: "assistant" });
     (api as any).openVikingTransport = openVikingTransport;
     api.pluginConfig = {
       ...api.pluginConfig,
@@ -2177,7 +2081,7 @@ describe("Plugin registration", () => {
       okResponse({ root_uri: "viking://resources/shared-docs", status: "success" }),
     );
 
-    const { tools, api } = setupPlugin(undefined, { enableAddResourceTool: true });
+    const { tools, api } = setupPlugin({ enableAddResourceTool: true });
     (api as any).openVikingTransport = openVikingTransport;
     api.pluginConfig = {
       ...api.pluginConfig,
@@ -2210,7 +2114,7 @@ describe("Plugin registration", () => {
       .mockResolvedValueOnce(okResponse({ root_uri: "viking://resources/sheet", status: "success" }));
 
     try {
-      const { tools, api } = setupPlugin(undefined, { enableAddResourceTool: true });
+      const { tools, api } = setupPlugin({ enableAddResourceTool: true });
       (api as any).openVikingTransport = openVikingTransport;
       contextEnginePlugin.register(api as any);
 
@@ -2246,7 +2150,6 @@ describe("Plugin registration", () => {
     const result = await tool.execute("tc-add-skill", {
       data: "name: demo\n",
       wait: true,
-      timeout: 30,
     }) as ToolResult;
 
     expect(result.content[0]!.text).toContain("Imported OpenViking skill");
@@ -2256,7 +2159,6 @@ describe("Plugin registration", () => {
     expect(body).toMatchObject({
       data: "name: demo\n",
       wait: true,
-      timeout: 30,
     });
   });
 
@@ -2289,13 +2191,18 @@ describe("Plugin registration", () => {
     );
   });
 
-  it("registers context engine when api.registerContextEngine is available", () => {
+  it("registers the context engine or warns when the host lacks that capability", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
     expect(api.registerContextEngine).toHaveBeenCalledWith(
       "openviking",
       expect.any(Function),
     );
+
+    const { api: { registerContextEngine: _omitted, ...oldHost }, tools } = setupPlugin();
+    contextEnginePlugin.register(oldHost as any);
+    expect(oldHost.logger.warn).toHaveBeenCalledWith(expect.stringContaining("registerContextEngine is unavailable"));
+    expect(tools.has("ov_search")).toBe(true);
   });
 
   it("registers hooks: session_start, session_end, before_reset, after_compaction", () => {
@@ -2317,17 +2224,34 @@ describe("Plugin registration", () => {
   });
 });
 
-describe("Tool: memory_forget (error paths)", () => {
-  it("factory-created forget tool requires either uri or query", async () => {
-    const { tools, api } = setupPlugin();
+describe("Tool: memory_forget", () => {
+  it("rejects missing or non-memory targets and deletes only the requested memory as the sender", async () => {
+    const memoryUri = "viking://user/default/memories/m1";
+    const transport = vi.fn(async (url: string, init: RequestInit) => {
+      const requestUrl = new URL(url);
+      expect(requestUrl.pathname).toBe("/api/v1/fs");
+      expect(requestUrl.searchParams.get("uri")).toBe(memoryUri);
+      expect(requestUrl.searchParams.get("recursive")).toBe("false");
+      expect(init.method).toBe("DELETE");
+      expect(new Headers(init.headers).get("X-OpenViking-Actor-Peer")).toBe("worker");
+      return okResponse({});
+    });
+    const { factoryTools, api } = setupPlugin({ peer_role: "sender" });
+    (api as any).openVikingTransport = transport;
     contextEnginePlugin.register(api as any);
-    const forget = tools.get("memory_forget");
-    expect(forget).toBeDefined();
+    const forget = factoryTools.get("memory_forget")!({ sessionId: "test-session", requesterSenderId: "worker" });
 
-    // memory_forget is a direct tool (not factory), so execute is available
-    // but depends on getClient. The error path for missing params doesn't need client.
-    const result = await forget!.execute("tc1", {}) as ToolResult;
+    const result = await forget.execute("missing", {}) as ToolResult;
     expect(result.content[0]!.text).toBe("Provide uri or query.");
     expect(result.details.error).toBe("missing_param");
+    const resource = "viking://resources/r1";
+    const rejected = await forget.execute("resource", { uri: resource }) as ToolResult;
+    expect(rejected.details).toMatchObject({ action: "rejected", uri: resource });
+    expect(transport).not.toHaveBeenCalled();
+
+    const deleted = await forget.execute("memory", { uri: memoryUri }) as ToolResult;
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(deleted.content[0]!.text).toBe(`Forgotten: ${memoryUri}`);
+    expect(deleted.details).toMatchObject({ action: "deleted", uri: memoryUri });
   });
 });

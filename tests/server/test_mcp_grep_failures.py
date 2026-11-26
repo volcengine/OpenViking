@@ -19,6 +19,7 @@ is that the reason travels with the empty list instead of being dropped.
 from types import SimpleNamespace
 
 import pytest
+from mcp.types import CallToolResult
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.dependencies import set_service
@@ -44,52 +45,25 @@ def _identity():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "exc",
+    ("exc", "code"),
     [
-        NotFoundError(URI, "file"),
-        PermissionDeniedError("access denied"),
-        RuntimeError("vector store unreachable"),
+        (NotFoundError(URI, "file"), "NOT_FOUND"),
+        (PermissionDeniedError("access denied"), "PERMISSION_DENIED"),
+        (RuntimeError("vector store unreachable"), "RuntimeError"),
     ],
     ids=["not-found", "permission-denied", "backend-error"],
 )
-async def test_a_failure_is_not_reported_as_no_matches(exc):
+async def test_a_failure_is_not_reported_as_no_matches(exc, code):
     async def grep(uri, pattern, **kwargs):
         raise exc
 
     _install(grep)
 
-    out = await mcp_endpoint.grep(uri=URI, pattern="anything")
-
+    result = await mcp_endpoint.mcp.call_tool("grep", {"uri": URI, "pattern": "anything"})
+    assert isinstance(result, CallToolResult) and result.isError
+    out = result.content[0].text
     assert "No matches found" not in out
-    assert type(exc).__name__ in out
-
-
-@pytest.mark.asyncio
-async def test_a_genuine_miss_still_reads_as_no_matches():
-    async def grep(uri, pattern, **kwargs):
-        return {"matches": []}
-
-    _install(grep)
-
-    assert await mcp_endpoint.grep(uri=URI, pattern="anything") == (
-        "No matches found for pattern(s): anything"
-    )
-
-
-@pytest.mark.asyncio
-async def test_one_failing_pattern_does_not_cost_the_others_their_matches():
-    async def grep(uri, pattern, **kwargs):
-        if pattern == "bad":
-            raise RuntimeError("boom")
-        return {"matches": [{"uri": f"{URI}/a.md", "line": 3, "content": "hit"}]}
-
-    _install(grep)
-
-    out = await mcp_endpoint.grep(uri=URI, pattern=["good", "bad"])
-
-    assert "hit" in out and "L3" in out
-    assert "Patterns that could not be searched:" in out
-    assert "bad: RuntimeError: boom" in out
+    assert f"anything: {code}: {exc}" in out
 
 
 @pytest.mark.asyncio
@@ -99,8 +73,9 @@ async def test_every_pattern_failing_reports_each_one():
 
     _install(grep)
 
-    out = await mcp_endpoint.grep(uri=URI, pattern=["one", "two"])
-
+    result = await mcp_endpoint.mcp.call_tool("grep", {"uri": URI, "pattern": ["one", "two"]})
+    assert isinstance(result, CallToolResult) and result.isError
+    out = result.content[0].text
     assert out.startswith("grep failed for every pattern:")
     assert "one: RuntimeError: boom-one" in out
     assert "two: RuntimeError: boom-two" in out
@@ -117,3 +92,93 @@ async def test_a_clean_multi_pattern_search_is_unchanged():
 
     assert out.startswith("Found 2 match(es) across 2 pattern(s):")
     assert "could not be searched" not in out
+
+
+@pytest.mark.asyncio
+async def test_grep_names_only_patterns_that_reach_the_limit():
+    async def grep(uri, pattern, **kwargs):
+        assert kwargs["node_limit"] == 2
+        count = 2 if pattern == "capped" else 1
+        return {
+            "matches": [
+                {"uri": f"{URI}/a.md", "line": index + 1, "content": pattern}
+                for index in range(count)
+            ],
+        }
+
+    _install(grep)
+
+    out = await mcp_endpoint.grep(uri=URI, pattern=["capped", "complete"], node_limit=2)
+
+    assert "Result limit reached (2 matches per pattern)" in out
+    assert "more matches may exist" in out
+    assert "Capped patterns: capped\n" in out
+    assert "[complete]: complete" in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visible_count", [0, 1])
+async def test_grep_preserves_backend_limit_after_permission_filtering(visible_count):
+    async def grep(uri, pattern, **kwargs):
+        return {
+            "matches": [
+                {"uri": f"{URI}/a.md", "line": 1, "content": "visible hit"}
+                for _ in range(visible_count)
+            ],
+            "limit_reached": True,
+        }
+
+    _install(grep)
+
+    out = await mcp_endpoint.grep(uri=URI, pattern="filtered")
+
+    assert "Capped patterns: filtered" in out
+    assert "more matches may exist" in out
+    if visible_count:
+        assert "Found 1 match(es)" in out
+        assert "visible hit" in out
+    else:
+        assert out.startswith("No matches returned for pattern(s): filtered")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("visible_count", [0, 1])
+async def test_grep_reports_candidate_limit_only_for_affected_pattern(visible_count):
+    async def grep(uri, pattern, **kwargs):
+        if pattern == "candidate-capped":
+            return {"matches": [], "candidate_limit_reached": True}
+        return {
+            "matches": [{"uri": f"{URI}/a.md", "line": 1, "content": "hit"}]
+            if visible_count
+            else []
+        }
+
+    _install(grep)
+
+    out = await mcp_endpoint.grep(uri=URI, pattern=["candidate-capped", "complete"])
+
+    assert "Candidate search may have been capped for pattern(s): candidate-capped." in out
+    assert "Result limit reached" not in out
+    if visible_count:
+        assert "L1 [complete]: hit" in out
+    else:
+        assert out.startswith("No matches returned for pattern(s): candidate-capped, complete")
+
+
+@pytest.mark.asyncio
+async def test_grep_reports_matches_limits_and_errors_for_separate_patterns():
+    async def grep(uri, pattern, **kwargs):
+        if pattern == "broken":
+            raise RuntimeError("boom")
+        if pattern == "capped":
+            return {"matches": [], "limit_reached": True}
+        return {"matches": [{"uri": f"{URI}/a.md", "line": 3, "content": "hit"}]}
+
+    _install(grep)
+
+    out = await mcp_endpoint.grep(uri=URI, pattern=["complete", "capped", "broken"])
+
+    assert out.startswith("Found 1 match(es) across 3 pattern(s):")
+    assert "L3 [complete]: hit" in out
+    assert "Capped patterns: capped\n" in out
+    assert "Patterns that could not be searched:\n  broken: RuntimeError: boom" in out

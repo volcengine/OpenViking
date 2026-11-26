@@ -14,7 +14,12 @@ from typing import Optional
 
 from openviking.config.account_config import AccountConfig
 from openviking.config.assembly import build_config_source, resolve_config_source_settings
-from openviking.config.manager import AccountCandidateValidator, RuntimeConfigManager
+from openviking.config.manager import (
+    AccountCandidateContext,
+    AccountCandidateValidator,
+    AccountConfigView,
+    RuntimeConfigManager,
+)
 from openviking.config.merge import apply_three_state_patch
 from openviking.config.source.base import ConfigSource
 from openviking.config.source.file_source import FileConfigSource
@@ -79,7 +84,48 @@ def _validate_request(patch: dict, is_account: bool, creating: bool) -> None:
         patch = {**patch, "vectordb": dict(patch["vectordb"])}
         if "project" in patch["vectordb"]:
             patch["vectordb"]["project_name"] = patch["vectordb"].pop("project")
+    if isinstance(patch, dict) and isinstance(patch.get("ttl"), dict):
+        # ``global`` is a reserved word, so the model declares it as ``global_``
+        # with a ``global`` alias; translate the external name for validation
+        # only, mirroring the vectordb ``project`` alias above.
+        patch = {**patch, "ttl": dict(patch["ttl"])}
+        if "global" in patch["ttl"]:
+            patch["ttl"]["global_"] = patch["ttl"].pop("global")
     validate_patch(model, patch, creating=creating)
+
+
+def _validate_account_vlm_candidate(context: AccountCandidateContext) -> None:
+    """Validate effective VLM on Account creation and VLM updates."""
+    if not context.creating and (
+        context.changed_sections is None or "vlm" not in context.changed_sections
+    ):
+        return
+    account = context.new_view.account
+    cluster = context.new_view.cluster
+    vlm = account.vlm.to_vlm_config(cluster.vlm) if account.vlm is not None else cluster.vlm
+    if not vlm.model or not vlm.is_available():
+        raise ValueError("Account requires a valid VLM in settings.vlm or cluster vlm")
+
+
+def validate_cluster_resources(config: OpenVikingConfig) -> None:
+    """Validate automatic Account creation using only Cluster resources."""
+    context = AccountCandidateContext(
+        new_view=AccountConfigView(AccountConfig(), config),
+        old_view=None,
+        changed_sections=None,
+        creating=True,
+    )
+    _validate_account_vlm_candidate(context)
+    validate_account_vector_candidate(context)
+
+
+def has_valid_cluster_resources(config: OpenVikingConfig) -> bool:
+    """Whether startup may create a default Account record."""
+    try:
+        validate_cluster_resources(config)
+    except ValueError:
+        return False
+    return True
 
 
 def build_runtime_config_manager(
@@ -125,8 +171,12 @@ def manager_over_source(
         validate_request=_validate_request,
         account_candidate_validators=[
             AccountCandidateValidator(
+                sections=frozenset({"vlm"}),
+                validate=_validate_account_vlm_candidate,
+            ),
+            AccountCandidateValidator(
                 sections=frozenset({"embedding", "vectordb"}),
                 validate=validate_account_vector_candidate,
-            )
+            ),
         ],
     )

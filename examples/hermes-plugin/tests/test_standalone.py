@@ -1,8 +1,11 @@
 """Exercise the external provider through Hermes, with no bundled provider."""
 
 import json
+import os
 import threading
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +25,292 @@ def test_external_discovery_preserves_profile_config_and_relative_setup(external
     assert module_b._setup._ov() is module_b
     assert provider_again.get_tool_schemas() == provider_a.get_tool_schemas()
     assert (home_a / "config.yaml").read_bytes() == before
+
+
+def test_rule_search_keeps_complete_rules_and_does_not_reingest_them(external_provider, monkeypatch):
+    _, provider, module, _ = external_provider("rules")
+    rendered = "完整规则\n" * 17000 + "LAST RULE"
+    calls = []
+
+    def post(path, payload):
+        calls.append((path, payload))
+        return {"result": {"rendered": rendered}}
+
+    monkeypatch.setattr(provider, "_ensure_client", lambda: True)
+    provider._client = SimpleNamespace(post=post)
+    assert "viking_rule_search" in {schema["name"] for schema in provider.get_tool_schemas()}
+    assert provider.handle_tool_call("viking_rule_search", {
+        "task_context": "deploy", "rule_probability_threshold": 0,
+    }) == rendered
+    assert calls == [("/api/v1/rules/search", {
+        "task_context": "deploy", "rule_probability_threshold": 0,
+    })]
+    assert module._is_openviking_recall_tool_name("viking_rule_search")
+    for args in (
+        {"task_context": " "}, {"task_context": "x" * 64001},
+        {"task_context": "deploy", "rule_probability_threshold": True},
+        {"task_context": "deploy", "rule_probability_threshold": float("nan")},
+    ):
+        assert "error" in provider.handle_tool_call("viking_rule_search", args)
+    assert len(calls) == 1
+
+    def fail(*_args):
+        raise RuntimeError("judge unavailable")
+
+    provider._client = SimpleNamespace(post=fail)
+    assert "judge unavailable" in provider.handle_tool_call("viking_rule_search", {"task_context": "deploy"})
+
+
+def test_initialized_profile_owns_connection_and_recall_across_other_profile(external_provider, monkeypatch):
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    requests = []
+    servers = []
+
+    def start_server(label):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                requests.append((label, self.path, body, self.headers.get("X-API-Key"),
+                                 self.headers.get("X-OpenViking-Actor-Peer")))
+                payload = b'{"result":{"memories":[]}}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        servers.append((server, worker))
+        return f"http://127.0.0.1:{server.server_port}"
+
+    @contextmanager
+    def profile_scope(home):
+        home_token = set_hermes_home_override(home)
+        secret_token = set_secret_scope(build_profile_secret_scope(home), profile_home=str(home))
+        try:
+            yield
+        finally:
+            reset_secret_scope(secret_token)
+            reset_hermes_home_override(home_token)
+
+    try:
+        endpoint_a, endpoint_b = start_server("a"), start_server("b")
+        home_a, provider, module, _ = external_provider("owner-a")
+        home_b, _, _, _ = external_provider("owner-b")
+        for home, endpoint, label, budget in (
+            (home_a, endpoint_a, "a", 1100), (home_b, endpoint_b, "b", 2200)
+        ):
+            (home / "config.yaml").write_text(
+                "memory:\n  provider: openviking\n  openviking:\n"
+                f"    endpoint: {endpoint}\n    recall_limit: {3 if label == 'a' else 9}\n"
+                "    profile_token_budget: ${OV_TEST_BUDGET}\n", encoding="utf-8"
+            )
+            (home / ".env").write_text(
+                f"OPENVIKING_API_KEY=key-{label}\n"
+                f"OPENVIKING_ACCOUNT=account-{label}\nOPENVIKING_USER=user-{label}\n"
+                f"OPENVIKING_AGENT=peer-{label}\nOV_TEST_BUDGET={budget}\n", encoding="utf-8"
+            )
+
+        monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+        with profile_scope(home_a):
+            provider.initialize("session-a", hermes_home=str(home_a))
+            assert provider._client._api_key == "key-a"
+            assert provider._profile_token_budget() == 1100
+
+        with profile_scope(home_b):
+            provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
+            assert provider._client._account == "account-a"
+            assert provider._client._user == "user-a"
+            assert provider._recall_config()["limit"] == 3
+            assert provider._profile_token_budget() == 1100
+
+            (home_a / ".env").write_text(
+                "OPENVIKING_API_KEY=key-a-new\nOPENVIKING_ACCOUNT=account-a\n"
+                "OPENVIKING_USER=user-a\nOPENVIKING_AGENT=peer-a-new\n"
+                "OV_TEST_BUDGET=1100\n", encoding="utf-8"
+            )
+            provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
+
+            # Removing A's credentials must not borrow B's active or process values.
+            (home_a / ".env").write_text(
+                "OPENVIKING_AGENT=peer-a\nOV_TEST_BUDGET=1100\n", encoding="utf-8"
+            )
+            monkeypatch.setenv("OPENVIKING_API_KEY", "process-b-key")
+            monkeypatch.setenv("OPENVIKING_ACCOUNT", "process-b-account")
+            monkeypatch.setenv("OPENVIKING_USER", "process-b-user")
+            provider.handle_tool_call("viking_search", {"query": "preference", "mode": "deep"})
+            assert (provider._client._api_key, provider._client._account, provider._client._user) == (
+                "", "default", "default"
+            )
+
+            # An absent A endpoint must not route to B's process-level endpoint.
+            (home_a / "config.yaml").write_text("memory:\n  provider: openviking\n", encoding="utf-8")
+            monkeypatch.setenv("OPENVIKING_ENDPOINT", endpoint_b)
+            assert provider._resolve_bound_connection_settings()["endpoint"] == module._DEFAULT_ENDPOINT
+
+        assert [(label, key, peer) for label, _, _, key, peer in requests] == [
+            ("a", "key-a", "peer-a"), ("a", "key-a-new", "peer-a-new"),
+            ("a", None, "peer-a")
+        ]
+        assert all(body["session_id"] == "session-a" for _, _, body, _, _ in requests)
+    finally:
+        for server, worker in servers:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
+
+
+def test_routed_profile_does_not_borrow_launch_process_env(external_provider, monkeypatch):
+    from agent.secret_scope import (
+        build_profile_secret_scope,
+        get_secret,
+        reset_secret_scope,
+        serves_routed_profile,
+        set_secret_scope,
+    )
+    from hermes_constants import (
+        get_routing_process_hermes_home,
+        pin_process_hermes_home,
+        process_hermes_home_is_pinned,
+        reset_hermes_home_override,
+        set_hermes_home_override,
+    )
+
+    launch_home, launch_provider, launch_module, _ = external_provider("launch")
+    routed_home, routed_provider, routed_module, _ = external_provider("routed")
+    launch_provider._hermes_home, launch_provider._hermes_home_bound = str(launch_home), True
+    routed_provider._hermes_home, routed_provider._hermes_home_bound = str(routed_home), True
+    monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", False)
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19521")
+    monkeypatch.setenv("OPENVIKING_API_KEY", "launch-key")
+    prior_pin = get_routing_process_hermes_home() if process_hermes_home_is_pinned() else None
+    pin_process_hermes_home(launch_home)
+    home_token = set_hermes_home_override(routed_home)
+    scope_token = set_secret_scope(build_profile_secret_scope(routed_home), profile_home=str(routed_home))
+    try:
+        # Some hosts mirror the routed home into process env; the pinned launch
+        # home, not the current override or env mirror, owns process credentials.
+        monkeypatch.setenv("HERMES_HOME", str(routed_home))
+        assert serves_routed_profile()
+        assert get_secret("OPENVIKING_API_KEY") is None
+        routed = routed_provider._resolve_bound_connection_settings()
+        launch = launch_provider._resolve_bound_connection_settings()
+        assert (routed["endpoint"], routed["api_key"]) == (routed_module._DEFAULT_ENDPOINT, "")
+        assert (launch["endpoint"], launch["api_key"]) == ("http://127.0.0.1:19521", "launch-key")
+    finally:
+        reset_secret_scope(scope_token)
+        reset_hermes_home_override(home_token)
+        pin_process_hermes_home(prior_pin)
+
+
+def test_multiplex_launch_profile_uses_frozen_process_secrets(external_provider, monkeypatch):
+    from agent.secret_scope import get_secret
+    from hermes_constants import (
+        get_routing_process_hermes_home,
+        pin_process_hermes_home,
+        process_hermes_home_is_pinned,
+    )
+    from tui_gateway import launch_profile_policy
+
+    launch_home, launch_provider, launch_module, _ = external_provider("multiplex-launch")
+    routed_home, routed_provider, routed_module, _ = external_provider("multiplex-routed")
+    launch_provider._hermes_home, launch_provider._hermes_home_bound = str(launch_home), True
+    routed_provider._hermes_home, routed_provider._hermes_home_bound = str(routed_home), True
+    monkeypatch.setenv("HERMES_HOME", str(launch_home))
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19522")
+    monkeypatch.setenv("OPENVIKING_API_KEY", "frozen-launch-key")
+    monkeypatch.setattr(launch_profile_policy, "_snapshot", None)
+    launch_profile_policy.capture_launch_env()
+    monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", True)
+    prior_pin = get_routing_process_hermes_home() if process_hermes_home_is_pinned() else None
+    pin_process_hermes_home(launch_home)
+    try:
+        # A later process mutation must not affect the launch snapshot or leak to B.
+        monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19523")
+        monkeypatch.setenv("OPENVIKING_API_KEY", "poisoned-live-key")
+        with launch_profile_policy.launch_profile_runtime_scope(launch_home):
+            assert get_secret("OPENVIKING_API_KEY") == "frozen-launch-key"
+            launch = launch_provider._resolve_bound_connection_settings()
+            routed = routed_provider._resolve_bound_connection_settings()
+            assert (launch["endpoint"], launch["api_key"]) == (
+                "http://127.0.0.1:19522", "frozen-launch-key"
+            )
+            assert (routed["endpoint"], routed["api_key"]) == (routed_module._DEFAULT_ENDPOINT, "")
+
+        (launch_home / ".env").write_text("OPENVIKING_API_KEY=file-key\n")
+        with launch_profile_policy.launch_profile_runtime_scope(launch_home):
+            assert launch_provider._resolve_bound_connection_settings()["api_key"] == "file-key"
+
+        # The messaging gateway may activate multiplex without freezing a launch
+        # snapshot. In that case, never capture its live process env on demand.
+        monkeypatch.setattr(launch_profile_policy, "_snapshot", None)
+        without_snapshot = launch_provider._resolve_bound_connection_settings()
+        assert (without_snapshot["endpoint"], without_snapshot["api_key"]) == (
+            launch_module._DEFAULT_ENDPOINT, "file-key"
+        )
+        assert launch_profile_policy._snapshot is None
+    finally:
+        pin_process_hermes_home(prior_pin)
+
+
+def test_api_key_trusted_retry_keeps_default_identity(external_provider):
+    _, _, module, _ = external_provider("trusted-retry")
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            account = self.headers.get("X-OpenViking-Account")
+            user = self.headers.get("X-OpenViking-User")
+            requests.append((self.path, account, user))
+            if self.path == "/health":
+                status, payload = 200, {"status": "ok", "healthy": True, "version": "0.4.18", "auth_mode": "trusted"}
+            elif account == user == "default":
+                status, payload = 200, {"result": {}}
+            else:
+                status, payload = 400, {"error": {"code": "INVALID_ARGUMENT", "message":
+                    "Trusted mode requests must include X-OpenViking-Account and X-OpenViking-User."}}
+            raw = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *_args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    endpoint = f"http://127.0.0.1:{server.server_port}"
+    try:
+        settings = module._resolve_connection_settings({}, env={"OPENVIKING_API_KEY": "test-key"})
+        assert (settings["account"], settings["user"]) == ("default", "default")
+        client = module._VikingClient(endpoint, settings["api_key"],
+                                      account=settings["account"], user=settings["user"])
+        assert client.validate_auth() == {"result": {}}
+        assert requests[:2] == [
+            ("/api/v1/system/status", None, None),
+            ("/api/v1/system/status", "default", "default"),
+        ]
+        ok, message, role = module._validate_openviking_setup_values(
+            {"endpoint": endpoint, "api_key": "test-key"})
+        assert (ok, message, role) == (True, "", "root")
+        assert all((account, user) in ((None, None), ("default", "default"))
+                   for _, account, user in requests)
+        assert requests[-1] == ("/api/v1/admin/accounts", "default", "default")
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
 
 
 @pytest.mark.parametrize("target", ["memory", "user"])
@@ -422,8 +711,7 @@ def test_external_provider_does_not_cache_unbound_client_identity(external_provi
 def test_save_config_targets_explicit_home_and_restores_outer_scope(
     external_provider, tmp_path, monkeypatch
 ):
-    import yaml
-
+    from hermes_cli.config import yaml
     from hermes_constants import reset_hermes_home_override, set_hermes_home_override
 
     _, provider, _, _ = external_provider("config-provider")
@@ -780,7 +1068,8 @@ def reload_provider(external_provider, monkeypatch):
         backend.post.return_value = {"result": {}}
 
     class Client:
-        def __init__(self, endpoint, api_key="", *, account="", user="", agent=""):
+        def __init__(self, endpoint, api_key="", *, account="", user="", agent="", extra_headers=None):
+            self._extra_headers = extra_headers or {}
             self._conn_snapshot = (endpoint, api_key, account, user, agent)
             self.get = backends[user].get
             self.post = backends[user].post
@@ -874,6 +1163,38 @@ def test_reload_keeps_new_connection_pending_after_old_commit(reload_provider, m
         assert commits[0].args == (f"/api/v1/sessions/{sid}/commit", {"keep_recent_count": 0})
 
 
+@pytest.mark.parametrize("agent_context", ["primary", "cron", "subagent", "flush"])
+@pytest.mark.parametrize("owner_run_id", ["", "dead-owner"])
+def test_startup_recovery_respects_write_context(external_provider, monkeypatch, agent_context, owner_run_id):
+    from unittest.mock import Mock
+
+    home, provider, module, _ = external_provider(f"recovery-{agent_context}")
+    if owner_run_id and module.fcntl is None:
+        pytest.skip("Scoped recovery requires POSIX advisory locks")
+    monkeypatch.setenv("OPENVIKING_ENDPOINT", "http://127.0.0.1:19531")
+    monkeypatch.setattr(module, "_classify_runtime_openviking_health", lambda *_: ("healthy", ""))
+    client = Mock()
+    client.post.return_value = {}
+    monkeypatch.setattr(provider, "_build_client", lambda: client)
+    monkeypatch.setattr(provider, "_new_client", lambda **_: client)
+    provider.initialize("live-sid", hermes_home=str(home))
+    marker = provider._state_path("pending", "previous-sid")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"session_id": "previous-sid", "owner_run_id": owner_run_id}))
+    provider.initialize("live-sid", hermes_home=str(home), agent_context=agent_context)
+    assert provider._drain_finalizers(timeout=5)
+    if agent_context == "primary":
+        client.post.assert_called_once_with("/api/v1/sessions/previous-sid/commit", {"keep_recent_count": 0})
+        assert not marker.exists()
+    else:
+        client.post.assert_not_called()
+        assert marker.exists()
+        provider.initialize("live-sid", hermes_home=str(home), agent_context="primary")
+        assert provider._drain_finalizers(timeout=5)
+        client.post.assert_called_once_with("/api/v1/sessions/previous-sid/commit", {"keep_recent_count": 0})
+        assert not marker.exists()
+
+
 def test_reload_recovery_preserves_markers_for_other_connections(reload_provider, monkeypatch):
     """Failed commits survive restart and recover only with matching credentials."""
     home, provider, module, backends, reload = reload_provider
@@ -962,3 +1283,189 @@ def test_reload_back_to_original_identity_keeps_new_generation_pending(reload_pr
     assert bob_marker.exists()
     commits = [c for c in backends["alice"].post.call_args_list if c.args[0].endswith("/commit")]
     assert len(commits) == 2
+
+
+def test_local_server_spawn_drops_unrelated_secrets(external_provider, monkeypatch):
+    _, _, module, _ = external_provider("profile-a")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "sentinel-bot-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "sentinel-embedding-key")
+    monkeypatch.setenv("PYTHONPATH", "/hermes/venv/site-packages")
+    monkeypatch.setattr(module, "_local_openviking_port_is_open", lambda *_: False)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "openviking-server")
+    spawned = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda argv, **kwargs: spawned.append(kwargs["env"]))
+
+    status, _ = module._start_local_openviking_server("http://127.0.0.1:1933")
+
+    assert status == module._LOCAL_SERVER_STARTED
+    (env,) = spawned
+    assert "TELEGRAM_BOT_TOKEN" not in env
+    assert "PYTHONPATH" not in env
+    assert env["OPENAI_API_KEY"] == "sentinel-embedding-key"
+
+
+def test_local_server_spawn_scrubs_profile_overlay(external_provider, monkeypatch, tmp_path):
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from tools.environments.local import _HERMES_PROVIDER_ENV_FORCE_PREFIX
+
+    monkeypatch.setenv("OPENAI_API_KEY", "launch-key")
+    monkeypatch.setenv("GH_TOKEN", "launch-gh-token")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_REAL_HOME", str(tmp_path))
+    monkeypatch.setenv(_HERMES_PROVIDER_ENV_FORCE_PREFIX + "OPENAI_API_KEY", "forced-key")
+    spawned = []
+    for name in ("a", "b", "a"):
+        home, _, module, _ = external_provider("spawn-" + name)
+        (home / ".env").write_text(
+            f"OPENAI_API_KEY=key-{name}\nTELEGRAM_BOT_TOKEN=bot-{name}\ngh_token=gh-{name}\n"
+            "FEISHU_APP_SECRET=feishu-key\nqq_client_secret=qq-key\nAPI_SERVER_KEY=gateway-key\n"
+            "VERCEL_TOKEN=vercel-key\nVERCEL_OIDC_TOKEN=vercel-oidc\n"
+            "PYTHONHOME=/other-python\nVIRTUAL_ENV=/other-venv\nCONDA_PREFIX=/other-conda\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(module, "_local_openviking_port_is_open", lambda *_: False)
+        monkeypatch.setattr(module.shutil, "which", lambda _: "openviking-server")
+        monkeypatch.setattr(module.subprocess, "Popen", lambda argv, **kwargs: spawned.append(kwargs["env"]))
+        token = set_hermes_home_override(home)
+        try:
+            status, message = module._start_local_openviking_server("http://127.0.0.1:1933")
+            assert status == module._LOCAL_SERVER_STARTED, message
+        finally:
+            reset_hermes_home_override(token)
+        env = spawned[-1]
+        assert env["OPENAI_API_KEY"] == "key-" + name
+        assert env["HERMES_HOME"] == str(home)
+        assert env["HOME"] == str(tmp_path)
+        assert not {"GH_TOKEN", "gh_token", "TELEGRAM_BOT_TOKEN", "PYTHONPATH"} & env.keys()
+        assert not {"FEISHU_APP_SECRET", "qq_client_secret", "API_SERVER_KEY", "VERCEL_TOKEN",
+                    "VERCEL_OIDC_TOKEN", "PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX"} & env.keys()
+        assert not any(key.startswith(_HERMES_PROVIDER_ENV_FORCE_PREFIX) for key in env)
+
+
+@pytest.mark.parametrize("failure", ["missing_helper", "unscoped"])
+def test_local_server_spawn_fails_closed(external_provider, monkeypatch, failure):
+    from tools.environments import local
+
+    _, _, module, _ = external_provider("spawn-failure")
+    if failure == "missing_helper":
+        monkeypatch.delattr(local, "_scrub_credentials")
+    else:
+        monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", True)
+        monkeypatch.setattr("agent.secret_scope.current_secret_scope", lambda: None)
+        monkeypatch.setattr("hermes_constants.get_hermes_home_override", lambda: None)
+    monkeypatch.setattr(module, "_local_openviking_port_is_open", lambda *_: False)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "openviking-server")
+    spawned = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *args, **kwargs: spawned.append(kwargs))
+
+    status, _ = module._start_local_openviking_server("http://127.0.0.1:1933")
+
+    assert status == module._LOCAL_SERVER_FAILED
+    assert not spawned
+
+
+def test_runtime_spawn_uses_provider_home_under_another_profile(external_provider, monkeypatch):
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    home_a, provider, module, _ = external_provider("runtime-owner")
+    home_b, _, _, _ = external_provider("runtime-caller")
+    for home, key in ((home_a, "owner-key"), (home_b, "caller-key")):
+        (home / ".env").write_text("OPENAI_API_KEY=" + key + "\n", encoding="utf-8")
+    provider._hermes_home, provider._hermes_home_bound = str(home_a), True
+    provider._endpoint = "http://127.0.0.1:1933"
+    monkeypatch.setattr(module, "_local_openviking_port_is_open", lambda *_: False)
+    monkeypatch.setattr(module.shutil, "which", lambda _: "openviking-server")
+    monkeypatch.setattr(provider, "_start_runtime_openviking_waiter", lambda **kwargs: None)
+    spawned = []
+    monkeypatch.setattr(module.subprocess, "Popen", lambda argv, **kwargs: spawned.append(kwargs["env"]))
+    token = set_hermes_home_override(home_b)
+    try:
+        provider._handle_runtime_openviking_unreachable()
+    finally:
+        reset_hermes_home_override(token)
+
+    assert len(spawned) == 1
+    assert spawned[0]["HERMES_HOME"] == str(home_a)
+    assert spawned[0]["OPENAI_API_KEY"] == "owner-key"
+    assert (home_a / "logs/openviking-server.log").exists()
+    assert not (home_b / "logs/openviking-server.log").exists()
+
+
+def test_recovery_lock_handoff_keeps_one_inode(external_provider):
+    home, provider, module, _ = external_provider("lock-handoff")
+    provider._hermes_home = str(home)
+    if module.fcntl is None:
+        pytest.skip("POSIX flock required")
+    owner = "dead-owner"
+    path = provider._state_path("lock", owner)
+    acquired, first = provider._claim_owner_run_for_recovery(owner)
+    assert acquired
+    second = None
+    third = None
+    handoff_acquired = False
+
+    class Handoff:
+        def fileno(self):
+            return first.fileno()
+
+        def close(self):
+            nonlocal second, handoff_acquired
+            # This is the legal schedule after A unlocks and before A removes
+            # the pathname. B acquires the existing inode during that gap.
+            handoff_acquired, second = provider._claim_owner_run_for_recovery(owner)
+            first.close()
+
+    try:
+        provider._flock_close(Handoff(), path, "owner run lock")
+        assert handoff_acquired, "second recovery could not claim the released owner lock"
+        # B still holds its lock. C must not obtain a second lock for this owner.
+        acquired, third = provider._claim_owner_run_for_recovery(owner)
+        old_inode = os.fstat(second.fileno()).st_ino
+        new_inode = os.fstat(third.fileno()).st_ino if acquired else None
+        assert not acquired, ("concurrent owner lock", old_inode, new_inode)
+        assert path.stat().st_ino == old_inode
+    finally:
+        for handle in (first, second, third):
+            if handle is not None and not handle.closed:
+                module.fcntl.flock(handle.fileno(), module.fcntl.LOCK_UN)
+                handle.close()
+
+
+def test_live_owner_still_blocks_recovery(external_provider):
+    home, provider, module, _ = external_provider("lock-control")
+    provider._hermes_home = str(home)
+    if module.fcntl is None:
+        pytest.skip("POSIX flock required")
+    owner = "dead-owner"
+    acquired, held = provider._claim_owner_run_for_recovery(owner)
+    assert acquired
+    try:
+        for _ in range(3):
+            acquired, other = provider._claim_owner_run_for_recovery(owner)
+            assert not acquired and other is None
+    finally:
+        module.fcntl.flock(held.fileno(), module.fcntl.LOCK_UN)
+        held.close()
+
+
+def test_failed_run_lock_claim_preserves_other_holder(external_provider):
+    home, provider, module, _ = external_provider("lock-failed-claim")
+    provider._hermes_home = str(home)
+    if module.fcntl is None:
+        pytest.skip("POSIX flock required")
+    path = provider._state_path("lock", provider._run_id)
+    held = provider._flock_open(path)
+    other = None
+    try:
+        provider._acquire_run_lock()
+        assert provider._run_lock_file is None
+        assert path.exists(), "failed acquisition removed another holder's lock file"
+        acquired, other = provider._claim_owner_run_for_recovery("control")
+        assert acquired
+        with pytest.raises(BlockingIOError):
+            provider._flock_open(path)
+    finally:
+        for handle in (held, other):
+            if handle is not None and not handle.closed:
+                module.fcntl.flock(handle.fileno(), module.fcntl.LOCK_UN)
+                handle.close()

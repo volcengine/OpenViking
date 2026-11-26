@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import tracemalloc
+
 import pytest
 
 from openviking.session.tool_result_synopsis import (
@@ -16,6 +18,7 @@ def _drain_background_tasks():
 
 
 def test_render_stub_preserves_navigation_contract():
+    ref = "viking://user/default/sessions/s1/tool-results/tr_123"
     synopsis = ToolResultSynopsis(
         kind="text",
         title="Text output",
@@ -27,7 +30,7 @@ def test_render_stub_preserves_navigation_contract():
 
     rendered = render_tool_result_stub(
         synopsis,
-        ref="viking://session/s1/tool-results/tr_123",
+        ref=ref,
         tool_name="read_file",
         sha256="0123456789abcdef0123",
         reason="single_threshold",
@@ -40,9 +43,15 @@ def test_render_stub_preserves_navigation_contract():
     assert "tool_name: read_file" in rendered
     assert "original_chars: 120" in rendered
     assert "preview_chars: 80" in rendered
-    assert "ref: viking://session/s1/tool-results/tr_123" in rendered
-    assert "openviking_tool_result_search" in rendered
-    assert "openviking_tool_result_read" in rendered
+    assert f"ref: {ref}" in rendered
+    output, history, optional_tools, *_ = rendered.split("Explore:\n", 1)[1].splitlines()
+    assert f"{ref}/output.txt" in output
+    assert "session_history" in history
+    assert all(hint in history for hint in ('action="search"', 'action="read"', "offset"))
+    assert optional_tools.startswith("- Only where offered:")
+    assert "openviking_tool_result_search" in optional_tools
+    assert "openviking_tool_result_read" in optional_tools
+    assert "id of this message" not in rendered
 
 
 def test_json_synopsis_reports_shape():
@@ -74,6 +83,31 @@ def test_tsv_synopsis_reports_columns_and_rows():
     joined = "\n".join(synopsis.summary + synopsis.structure)
     assert "columns: name, score" in joined
     assert "rows: 2" in joined
+
+
+@pytest.mark.parametrize("delimiter,kind", [(",", "csv"), ("\t", "tsv")])
+def test_large_table_synopsis_does_not_retain_all_rows(delimiter, kind):
+    content = f"name{delimiter}value\n" + f"Ada{delimiter}{'x' * 80}\n" * 20_000
+    tracemalloc.start()
+    try:
+        synopsis = generate_tool_result_synopsis(content, preview_chars=200)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert synopsis.kind == kind
+    assert "rows: 20000" in synopsis.structure
+    # Allow the StringIO input copy, but not a retained list of parsed rows.
+    assert peak < len(content) * 6
+
+
+def test_csv_synopsis_counts_quoted_multiline_rows_and_ignores_blank_rows():
+    content = 'name,score\n\n"Ada\nLovelace",99\n,\nLin,98\n'
+    synopsis = generate_tool_result_synopsis(content, preview_chars=200)
+
+    assert synopsis.kind == "csv"
+    assert "rows: 2" in synopsis.structure
+    assert "first row sample: Ada Lovelace,99" in synopsis.structure
 
 
 def test_yaml_synopsis_reports_shape():

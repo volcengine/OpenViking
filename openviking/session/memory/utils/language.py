@@ -21,6 +21,10 @@ _JAPANESE_KANA_MIN_CHARS = 3
 _STRONG_DOMINANT_MIN_CHARS = 10
 _STRONG_DOMINANT_RATIO = 0.95
 _PRIMARY_LANGUAGES = {"zh-CN", "en"}
+_LATIN_WORD_RE = re.compile(
+    r"(?<![A-Za-z\u00c0-\u024f\d_])[A-Za-z\u00c0-\u024f]+"
+    r"(?![A-Za-z\u00c0-\u024f\d_])"
+)
 # Bare import paths are machine tokens too: repeated .com domains otherwise
 # count as the Portuguese stopword "com" in code skeletons.
 _URI_LANGUAGE_NOISE_RE = re.compile(
@@ -102,10 +106,33 @@ _TIMEZONE_LANGUAGE_GROUPS = {
     "ja": ("asia/tokyo", "japan", "tokyo standard time"),
     "ko": ("asia/seoul", "rok", "korea standard time"),
     "ru": (
-        "europe/moscow",
+        # Every RU zone in tzdata zone.tab.
+        "europe/astrakhan",
         "europe/kaliningrad",
-        "asia/yekaterinburg",
+        "europe/kirov",
+        "europe/moscow",
+        "europe/samara",
+        "europe/saratov",
+        "europe/ulyanovsk",
+        "europe/volgograd",
+        "asia/anadyr",
+        "asia/barnaul",
+        "asia/chita",
+        "asia/irkutsk",
+        "asia/kamchatka",
+        "asia/khandyga",
+        "asia/krasnoyarsk",
+        "asia/magadan",
+        "asia/novokuznetsk",
+        "asia/novosibirsk",
+        "asia/omsk",
+        "asia/sakhalin",
+        "asia/srednekolymsk",
+        "asia/tomsk",
+        "asia/ust-nera",
         "asia/vladivostok",
+        "asia/yakutsk",
+        "asia/yekaterinburg",
         "russian standard time",
     ),
     "ar": (
@@ -268,8 +295,10 @@ def _detect_latin_language(text: str, fallback_language: str) -> str:
     if len(words) < 3:
         return "en"
 
+    # Keep the length guards, but do not score identifier fragments (e41 -> "e").
+    language_words = _LATIN_WORD_RE.findall(text.lower())
     stopword_scores = {
-        lang: sum(1 for word in words if word in stopwords)
+        lang: sum(1 for word in language_words if word in stopwords)
         for lang, stopwords in _LATIN_STOPWORDS.items()
     }
     scores = dict(stopword_scores)
@@ -311,7 +340,8 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
         "ko": len(re.findall(r"[\uac00-\ud7af]", user_text)),
         "ru": len(re.findall(r"[\u0400-\u04ff]", user_text)),
         "ar": len(re.findall(r"[\u0600-\u06ff]", user_text)),
-        "latin": len(re.findall(r"[A-Za-z\u00c0-\u024f]", user_text)),
+        # Count Latin words, not the letter fragments of identifiers or field_names.
+        "latin": sum(len(word) for word in _LATIN_WORD_RE.findall(user_text)),
     }
     signal_total = sum(counts.values())
     if signal_total == 0:
@@ -346,16 +376,21 @@ def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
     return fallback
 
 
-def resolve_with_override(config, detect: Callable[[], str]) -> str:
+def resolve_with_override(
+    config, detect: Callable[[], str], *, output_language_override: str | None = None
+) -> str:
     """Return config override if set, else call `detect()`.
 
     The callable returns the detected output language, letting callers choose
     the detector (text vs conversation vs messages) without duplicating the
-    override resolution logic.
+    override resolution logic. An explicit string takes precedence over config;
+    ``""`` enables detection, while ``None`` retains the legacy config lookup.
     """
-    if config is None:
-        config = get_openviking_config()
-    override = (getattr(config, "output_language_override", None) or "").strip()
+    if output_language_override is None:
+        if config is None:
+            config = get_openviking_config()
+        output_language_override = getattr(config, "output_language_override", None)
+    override = (output_language_override or "").strip()
     if override:
         return override
     return detect()
@@ -366,6 +401,7 @@ def resolve_output_language_from_text(
     config=None,
     *,
     fallback_language: str = "en",
+    output_language_override: str | None = None,
 ) -> str:
     """Resolve output language from text with an explicit fallback language.
 
@@ -374,7 +410,11 @@ def resolve_output_language_from_text(
     runtime environment language.
     """
     fallback = (fallback_language or "en").strip() or "en"
-    return resolve_with_override(config, lambda: _detect_language_from_text(text, fallback))
+    return resolve_with_override(
+        config,
+        lambda: _detect_language_from_text(text, fallback),
+        output_language_override=output_language_override,
+    )
 
 
 def strip_language_detection_noise(text: str) -> str:
@@ -382,13 +422,22 @@ def strip_language_detection_noise(text: str) -> str:
     return _URI_LANGUAGE_NOISE_RE.sub(" ", text or "")
 
 
-def resolve_output_language(text: str, config=None) -> str:
+def resolve_output_language(
+    text: str, config=None, *, output_language_override: str | None = None
+) -> str:
     """Resolve output language from text, honoring config override before detection."""
     fallback = _resolve_system_fallback_language("en")
-    return resolve_output_language_from_text(text, config=config, fallback_language=fallback)
+    return resolve_output_language_from_text(
+        text,
+        config=config,
+        fallback_language=fallback,
+        output_language_override=output_language_override,
+    )
 
 
-def resolve_output_language_from_conversation(conversation: str, config=None) -> str:
+def resolve_output_language_from_conversation(
+    conversation: str, config=None, *, output_language_override: str | None = None
+) -> str:
     """Resolve output language from a conversation, honoring config override.
 
     When no override is set, uses `detect_language_from_conversation` which
@@ -396,7 +445,9 @@ def resolve_output_language_from_conversation(conversation: str, config=None) ->
     """
     fallback = _resolve_system_fallback_language("en")
     return resolve_with_override(
-        config, lambda: detect_language_from_conversation(conversation, fallback)
+        config,
+        lambda: detect_language_from_conversation(conversation, fallback),
+        output_language_override=output_language_override,
     )
 
 

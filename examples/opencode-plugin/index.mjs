@@ -2,7 +2,9 @@ import { dirname } from "path"
 import { fileURLToPath } from "url"
 import { createOpenVikingRuntime } from "./lib/plugin-runtime.mjs"
 import { startV2Plugin } from "./lib/v2-plugin.mjs"
-import { injectOpenVikingMcpConfig } from "./lib/mcp-config.mjs"
+import { injectOpenVikingMcpConfig, injectOpenVikingSkillPaths } from "./lib/mcp-config.mjs"
+import { fillHistorySession } from "./lib/session-history.mjs"
+import { keepNewestStartContext } from "./lib/session-inject.mjs"
 import { isRecallEnabled } from "./lib/shared/recall-core.mjs"
 import { log } from "./lib/utils.mjs"
 
@@ -29,6 +31,7 @@ function v1Hooks(runtime) {
   return {
     config: async (opencodeConfig) => {
       const injected = injectOpenVikingMcpConfig(opencodeConfig, pluginRoot, config.mcp.enabled)
+      if (injected) injectOpenVikingSkillPaths(opencodeConfig, pluginRoot)
       const hookOnly = !config.mcp.enabled
       log(
         injected || hookOnly ? "INFO" : "WARN",
@@ -46,8 +49,15 @@ function v1Hooks(runtime) {
       }
     },
 
-    "tool.execute.before": vikingUriGuard,
+    "tool.execute.before": async (input, output) => {
+      fillHistorySession(sessionManager, { tool: input?.tool, sessionID: input?.sessionID, args: output?.args })
+      await vikingUriGuard(input, output)
+    },
     "tool.execute.after": vikingUriNotice,
+
+    "experimental.chat.messages.transform": async (_input, output) => {
+      keepNewestStartContext((output.messages || []).map((message) => message.parts))
+    },
 
     "experimental.chat.system.transform": (_input, output) => {
       const prompt = repoContext.getRepoSystemPrompt()

@@ -18,7 +18,7 @@ events imply "context for a particular codex `session_id` is gone".
   memory extractor) at session-end-equivalent moments. `/messages`
   auto-creates the OV session, so the plugin does not call session create.
 - **State file** — `~/.openviking/codex-plugin-state/<safe-codex-session-id>.json`,
-  shape `{ codexSessionId, ovSessionId, transcriptPath, capturedTurnCount, createdAt, lastUpdatedAt }`.
+  shape `{ codexSessionId, ovSessionId, transcriptPath, capturedTurnCount, captureFormatVersion, createdAt, lastUpdatedAt }`.
 - **End marker** — `<safe-codex-session-id>.ended.<timestamp>`, a sidecar written by the
   `SessionEnd` parent hook, containing the timestamp at which it was
   written. Its presence means "the thread ended and its commit has not been
@@ -210,8 +210,12 @@ a state file that never captured a turn is identical to no state file at all.
 Every `Stop` reads `transcript_path`, slices to `[capturedTurnCount, end)`,
 and appends each new user/assistant turn to the OV session for this codex
 `session_id` (the `/messages` endpoint auto-creates it on first append).
-State is updated:
-`{ovSessionId, capturedTurnCount, lastUpdatedAt: now}`.
+Codex's startup-only user message is removed before slicing. Only complete
+host blocks before the first `turn_context` qualify: plugin recommendations,
+`AGENTS.md instructions`, and `<environment_context>`. If a message also
+contains a real prompt, only those blocks are removed. Normal conversation
+may quote the same labels without being filtered. State is updated:
+`{ovSessionId, capturedTurnCount, captureFormatVersion, lastUpdatedAt: now}`.
 
 The transcript and persisted cursor own retries. Failed messages are not also
 put in the shared pending queue: replaying both sources would duplicate them.
@@ -222,10 +226,10 @@ available until that catch-up succeeds.
 After a complete append, Stop reads session meta and commits when
 `pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default 20000).
 The threshold commit passes
-`keep_recent_count=OPENVIKING_COMMIT_KEEP_RECENT_COUNT` (default 10) so
-the newest turns stay live after archive/extract. This keeps long-running
-sessions from waiting until PreCompact/SessionStart while still avoiding
-commit-on-every-turn fragmentation.
+`keep_recent_count=0`: Codex keeps its own transcript, so a live tail in
+OpenViking would only delay extraction. Committing at the threshold
+keeps long-running sessions from waiting until PreCompact/SessionStart
+while still avoiding commit-on-every-turn fragmentation.
 
 ## Injected context boundary
 
@@ -359,6 +363,7 @@ OV session id, while commits create additional archives under that session.
   "ovSessionId": "cx-0193af...-or-null", // null means "committed, awaiting next Stop or retirement"
   "transcriptPath": "/path/rollout.jsonl", // last rollout seen; lets the sweep catch up
   "capturedTurnCount": 7,            // turns from transcript already appended
+  "captureFormatVersion": 2,         // cursor counts turns after Codex startup filtering
   "createdAt": 1715000000000,
   "lastUpdatedAt": 1715000300000
 }
@@ -368,6 +373,12 @@ Legacy state files from earlier plugin versions may still contain a UUID
 `ovSessionId`; those are now overwritten with the derived `cx-*` id on the
 next resolve. The migration window for preserving old UUID sessions has
 closed.
+
+A state file without `captureFormatVersion` uses the old extraction count.
+On the first readable rollout under the session lock, the plugin subtracts
+startup turns before the old cursor and persists version 2 before appending.
+Unreadable rollouts leave the old cursor untouched for a later retry. Already
+written OV sessions and extracted memories are not changed.
 
 State files are atomic-write (tmpfile + rename) to survive crash mid-write.
 
@@ -432,9 +443,12 @@ codex -m <model> -c 'model_reasoning_effort="low"' exec ...
 ```
 
 The compressor runs with `--ignore-user-config`, so it does not inherit the
-main Codex process's provider table. When
-`OPENVIKING_RECALL_COMPRESS_BASE_URL` is set, the plugin adds an isolated
-provider for the nested request:
+main Codex process's provider table. When the user's `config.toml` selects a
+custom `model_provider`, the plugin forwards that provider's single-line
+`key = value` entries (endpoint and auth included) as `-c` overrides; a
+provider with sub-tables or multi-line values is not forwarded. When
+`OPENVIKING_RECALL_COMPRESS_BASE_URL` is set, the plugin instead adds an
+isolated provider for the nested request:
 
 ```bash
 -c 'model_provider="openviking_compressor"' \
@@ -463,7 +477,7 @@ Fallback order:
 
 1. configured model/thinking (`OPENVIKING_RECALL_COMPRESS_MODEL` +
    `OPENVIKING_RECALL_COMPRESS_THINKING`)
-2. `gpt-5.3-codex-spark`, thinking `default`
+2. `gpt-6-luna`, thinking `low`
 3. `gpt-5.6-luna`, thinking `low`
 4. off (deterministic digest, no child `codex exec`)
 

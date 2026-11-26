@@ -1,4 +1,4 @@
-# OpenViking Prompt Guide and Customization
+# Customize processing prompts
 
 This document introduces OpenViking's current prompt template system, with a focus on:
 
@@ -18,7 +18,7 @@ OpenViking's current prompts fall into two main groups:
    - Stored under `openviking/prompts/templates/<category>/*.yaml`
    - Used to instruct the model to perform tasks such as image understanding, document summarization, memory extraction, and retrieval intent analysis
 2. Memory schema templates
-   - Stored under `openviking/prompts/templates/memory/*.yaml`
+   - Stored under `openviking/system_assets/memory/memory_templates/builtin/*.yaml`
    - Used to define the fields, filename templates, content templates, and directory rules for a memory type
 
 From a usage perspective, these templates mainly serve the following processing stages:
@@ -149,18 +149,82 @@ When writing a memory schema, focus on:
 - whether the directory rule matches the intended retrieval scope
 - whether the merge strategy is appropriate for that memory type
 
+#### Memory schema template variables
+
+Each position is rendered with the data available at that stage. For example, a path can use `user_space`, while the description of a field can use `language`. To find the business fields for a memory type such as `events`, `entities`, or `preferences`, use `fields[].name` in the effective schema. The [built-in memory schemas](https://github.com/volcengine/OpenViking/tree/main/openviking/system_assets/memory/memory_templates/builtin) are the starting point for a deployment override.
+
+| Position | When it is rendered | Inputs |
+|----------|---------------------|--------|
+| `description` and `fields[].description` | When building the extraction schema, before calling the model | `language` is the only supplied variable. If it is unset, use a fallback such as <code v-pre>{{ language or 'English' }}</code>. |
+| `directory` | When locating existing files, initializing a memory file, and forming the write URI | Use `user_space` for a directory that must also work during lookup or initialization. The write URI also receives the current memory fields. For peer memory, `user_space` can include the peer path. |
+| `filename_template` | When forming the write URI | The current memory fields and `user_space`. Fields referenced by a path template contribute to the memory's identity. For example, `entities` uses `category` and `name` to locate a file. |
+| `content_template` | When writing the Markdown body | A deployment template receives the merged fields, `content`, `links`, `backlinks`, `source_uri`, and the helpers `uri_basename(uri)` and `link_target(uri)`. On initialization, fields are seeded from `fields[].init_value` or empty strings. |
+| `embedding_template` | When preparing text for vector indexing | The memory file's extra fields plus `content`, which is the plain abstract prepared from the body. |
+| `overview_template` | When generating the directory's `.overview.md` | `memory_type`, `directory_name`, and `items`. Each item has a `file_name` and a `file_content` mapping with the file's fields and content. |
+
+Keep `directory` independent of fields that only exist after extraction. For example, put an entity's category in the filename template when lookup must start at the entity directory. File initialization supplies only `user_space` to paths and skips schemas with a filename placeholder. This example uses the `category`, `name`, and `content` fields from the Entities schema.
+
+```yaml
+description: "Describe third-party entities in {{ language or 'English' }}."
+directory: "viking://user/{{ user_space }}/memories/entities"
+filename_template: "{{ category|lower }}/{{ name|lower }}.md"
+content_template: |-
+  # {{ name }}
+  {{ content }}
+embedding_template: |-
+  {{ category }}
+  {{ name }}
+  {{ content }}
+overview_template: |-
+  # {{ directory_name }}
+  {% for item in items %}
+  - [{{ item.file_content.name|default(item.file_name, true) }}](./{{ item.file_name }})
+  {% endfor %}
+```
+
+**Extraction context.** During extraction, the path, body, embedding, and overview renderers can receive `extract_context` from the caller. File initialization has no extraction context. Check the rendering stage before calling a helper, and use the current memory's `ranges` field for helpers that select source messages.
+
+| Helper | Result |
+|--------|--------|
+| `read_message_ranges(ranges)` | A structured selection of the source messages for a deployment template. An empty range selects no messages. |
+| `get_first_message_time_from_ranges(ranges)`, `get_first_message_time_with_weekday_from_ranges(ranges)` | The first source message's date, with an optional weekday. Without a source date the return value can be empty. |
+| `get_year(ranges)`, `get_month(ranges)`, `get_day(ranges)`, `get_timestamp_from_ranges(ranges)` | Date parts or a compact timestamp from the selected messages, falling back to the current time when no source time is available. |
+| `get_session_timestamp()`, `get_source_archive_suffix()` | A timestamp from the session and a stable suffix derived from the source archive and extraction scope. The timestamp can fall back to the current time. The suffix is empty when neither the archive nor the scope is supplied. |
+| `get_event_content(ranges, summary[, ratio_threshold])`, `get_resource_event_content(ranges, summary)` | Event text assembled from the selected messages or summary, or formatted text for a resource-add event. The resource helper can return an empty string. |
+
+The built-in Events filename uses source dates, for example <code v-pre>filename_template: "{{ extract_context.get_year(ranges) }}/{{ event_name }}.md"</code>.
+
+**Account overrides.** A customized Events body can use `event_name`, `goal`, `summary`, `ranges`, and the approved read-only helpers. The account template API validates descriptions and customized bodies before applying the change. See [account memory templates](../api/08-admin.md) for the exact allowlists and the rules for inherited deployment templates.
+
+**Missing variables and render errors.** An undeclared variable in a description raises `unknown_variable` during schema construction, which can stop extraction for that batch. The error line is relative to the description text. Check both the type description and `fields[].description` when diagnosing a line-only error. For a write URI, an absent or null value for a simple placeholder is rejected. A missing embedding input or a render failure uses the plain abstract instead. The deployment body renderer falls back to plain content on render exceptions, and a failed overview render keeps the existing overview. Legacy renderers can leave simple undefined placeholders in the text, so check the rendered files and paths with sample data.
+
 ## Current Prompt Template Reference
 
-The sections below list all current templates by category. Each entry explains which processing stage it belongs to and which external capabilities it mainly affects.
+The sections below describe template purposes, inputs, and related processing stages. A file in the template directory does not mean a request uses it: the call path, model configuration, and feature switches determine whether it takes effect.
 
 When reading this section, a simple rule helps:
 
 - For regular prompt templates, focus on `Purpose` and `Key inputs`
 - For memory schemas, focus on `Purpose` and `Key fields`
 
+### Check Whether a Template Is Used
+
+| Template or category | Current usage conditions |
+| --- | --- |
+| `compression.ov_wm_v2`, `compression.ov_wm_v2_update` | Initial working-memory generation and later updates in `openviking/session/session.py` |
+| `retrieval.intent_analysis` | Query planning when intent analysis is enabled and the session has usable content; specific planner models select dedicated templates, as described below |
+| `retrieval.recall_rewrite` | Optional server recall compression over assembled context, producing a digest with source references |
+| `semantic.*` | Selected by the semantic queue processor according to file type or directory task |
+| `parsing.image_summary`, `parsing.audio_summary`, `parsing.video_summary` | Media summaries; audio and video also require an enabled VLM that supports the input |
+| `memory/tools.yaml`, `memory/skills.yaml` | Built in with `enabled: false`; changing their descriptions does not enable them |
+| `memory/experimental_memory/*.yaml` | Loaded when `memory.experimental_memory_switch` is enabled |
+| `skill_extract/session_skills.yaml` | Separate schema for Session Skill extraction; see its loading rules below |
+
+`compression.structured_summary`, `indexing.relevance_scoring`, `parsing.chapter_analysis`, `parsing.context_generation`, `parsing.semantic_grouping`, `processing.*`, and `test.skill_test_generation` remain in the template directory, but no corresponding call sites were found in the current server source. Their inputs and intended purposes are retained below for maintenance and extensions; editing them should not be assumed to change live results.
+
 ### Compression
 
-These prompts are mainly used for session compression and working-memory updates. Long-term memory extraction uses the v2 schema-driven memory templates in the `memory` category.
+These prompts are mainly used for session compression and working-memory updates. Long-term memory extraction uses schema definitions in the `memory` category.
 
 - `compression.ov_wm_v2`
   - Effective stage: first working-memory generation stage
@@ -175,7 +239,7 @@ These prompts are mainly used for session compression and working-memory updates
   - Key inputs: `previous_working_memory`, `messages`
 
 - `compression.structured_summary`
-  - Effective stage: session archive summary generation stage
+  - Intended stage: session archive summary generation stage
   - Affects: archived session summaries and downstream review/retrieval quality
   - Purpose: generates a structured summary for archived sessions
   - Key inputs: `latest_archive_overview`, `messages`
@@ -185,7 +249,7 @@ These prompts are mainly used for session compression and working-memory updates
 This category is mainly used to support retrieval or indexing workflows with relevance judgments.
 
 - `indexing.relevance_scoring`
-  - Effective stage: candidate relevance evaluation stage
+  - Intended stage: candidate relevance evaluation stage
   - Affects: retrieval ranking and candidate filtering quality
   - Purpose: evaluates how relevant candidate content is to the user's query
   - Key inputs: `query`, `candidate`
@@ -216,13 +280,7 @@ These YAML files define the structure of different memory types. They are not si
   - Effective stage: experience-memory persistence and update stage
   - Affects: reusable guidance distilled from task outcomes
   - Purpose: records durable execution experience and the memories it supersedes
-  - Key fields: `experience_name`, `content`, `supersedes`
-
-- `identity`
-  - Effective stage: agent identity memory persistence stage
-  - Affects: long-term consistency of the agent's identity settings
-  - Purpose: defines the agent's name, persona, vibe, avatar, and self-introduction fields
-  - Key fields: `name`, `creature`, `vibe`, `emoji`, `avatar`, `introduction`
+  - Key fields: `experience_name`, `content`, `supersedes` (optional; omit when not replacing another experience)
 
 - `preferences`
   - Effective stage: preference-memory persistence and update stage
@@ -236,19 +294,13 @@ These YAML files define the structure of different memory types. They are not si
   - Purpose: defines the storage structure for "who the user is"
   - Key fields: `content`
 
-- `skills`
+- `skills` (disabled by default)
   - Effective stage: skill-usage memory persistence and update stage
   - Affects: skill usage statistics, experience accumulation, and recommended workflows
   - Purpose: defines skill usage counts, success rates, best-fit scenarios, and related information
   - Key fields: `skill_name`, `total_executions`, `success_count`, `fail_count`, `best_for`, `recommended_flow`
 
-- `soul`
-  - Effective stage: agent soul memory persistence stage
-  - Affects: the agent's core boundaries, continuity, and long-term identity stability
-  - Purpose: defines the agent's core truths, boundaries, vibe, and continuity
-  - Key fields: `core_truths`, `boundaries`, `vibe`, `continuity`
-
-- `tools`
+- `tools` (disabled by default)
   - Effective stage: tool-usage memory persistence and update stage
   - Affects: tool usage experience, optimal parameters, and failure pattern accumulation
   - Purpose: defines the storage structure for tool call statistics and tool-usage experience
@@ -265,13 +317,13 @@ These YAML files define the structure of different memory types. They are not si
 These prompts are mainly used to convert raw resource content into structured nodes, chapters, summaries, or image overviews that are easier to retrieve and understand.
 
 - `parsing.chapter_analysis`
-  - Effective stage: long-document chapter splitting stage
+  - Intended stage: long-document chapter splitting stage
   - Affects: document chapter structure and page organization
   - Purpose: analyzes document content and splits it into a reasonable chapter structure
   - Key inputs: `start_page`, `end_page`, `total_pages`, `content`
 
 - `parsing.context_generation`
-  - Effective stage: document node semantic generation stage
+  - Intended stage: document node semantic generation stage
   - Affects: node abstract/overview quality and downstream retrieval matching
   - Purpose: generates shorter, retrieval-friendly semantic titles, abstracts, and overviews for text nodes
   - Key inputs: `title`, `content`, `children_info`, `instruction`, `context_type`, `is_leaf`
@@ -283,29 +335,34 @@ These prompts are mainly used to convert raw resource content into structured no
   - Key inputs: `context`
 
 - `parsing.semantic_grouping`
-  - Effective stage: semantic grouping and splitting stage
+  - Intended stage: semantic grouping and splitting stage
   - Affects: document node granularity and content chunking quality
   - Purpose: decides whether content should be merged or split based on semantics
   - Key inputs: `items`, `threshold`, `mode`
+
+- `parsing.audio_summary`, `parsing.video_summary`
+  - Effective stage: audio/video understanding, requiring an enabled VLM that supports the media input
+  - Purpose: generates a media overview for semantic indexing, retaining topics, events, facts, and identifiable content
+  - Key inputs: `filename`, `fallback_language`; the media file is supplied separately to the model
 
 ### Processing
 
 These prompts are mainly used to distill strategies or experience from interaction records, tool chains, and resource background. They are used for post-processing and knowledge accumulation rather than direct one-turn user answering.
 
 - `processing.interaction_learning`
-  - Effective stage: post-interaction experience extraction stage
+  - Intended stage: post-interaction experience extraction stage
   - Affects: reusable interaction experience and distillation of effective resources and successful skills
   - Purpose: extracts reusable experience from interaction records
   - Key inputs: `interactions_summary`, `effective_resources`, `successful_skills`
 
 - `processing.strategy_extraction`
-  - Effective stage: post-resource-addition strategy extraction stage
+  - Intended stage: post-resource-addition strategy extraction stage
   - Affects: structured extraction and reuse of resource background intent
   - Purpose: extracts usage strategies from the reason, instruction, and abstract associated with resource addition
   - Key inputs: `reason`, `instruction`, `abstract`
 
 - `processing.tool_chain_analysis`
-  - Effective stage: tool-chain analysis stage
+  - Intended stage: tool-chain analysis stage
   - Affects: tool combination pattern recognition and tool experience accumulation
   - Purpose: analyzes tool call chains and identifies valuable usage patterns
   - Key inputs: `tool_calls`
@@ -319,6 +376,16 @@ These prompts are mainly used to understand user intent before retrieval and dec
   - Affects: retrieval query planning, recall direction, and search quality across different context types
   - Purpose: generates a retrieval plan using compressed summary, recent messages, and the current message
   - Key inputs: `compression_summary`, `recent_messages`, `current_message`, `context_type`, `target_abstract`
+
+- `retrieval.ov_intent_analysis_sft_v4`, `retrieval.ov_intent_analysis_sft_v7`
+  - Used when the query planner's `model` exactly matches `ollama/guoxuter/ov_intent_analysis_sft:v4_q8` or `ollama/guoxuter/ov_intent_analysis_sft:v7_q8`, respectively
+  - Purpose: uses the corresponding model's query-planning contract; other models use `retrieval.intent_analysis`
+  - Check the configured model before editing the default template to avoid changing an unused file
+
+- `retrieval.recall_rewrite`
+  - Effective stage: optional server compression after context assembly
+  - Purpose: produces query-relevant bullets with source URIs; output must pass the caller's format and source validation
+  - Key inputs: `query`, `rendered`, `max_bullets`
 
 ### Semantic
 
@@ -344,7 +411,7 @@ These prompts are mainly used to generate file-level and directory-level summari
 
 - `semantic.overview_generation`
   - Effective stage: directory overview generation stage
-  - Affects: directory overviews, hierarchical retrieval, and navigation experience
+  - Affects: directory overviews, global retrieval, and navigation experience
   - Purpose: generates a directory-level overview from file summaries and child directory abstracts
   - Key inputs: `dir_name`, `file_summaries`, `children_abstracts`, `output_language`
 
@@ -358,12 +425,17 @@ These prompts are mainly used to compress Skill content into summaries suitable 
   - Purpose: extracts key retrieval information from a Skill's name, description, and content
   - Key inputs: `skill_name`, `skill_description`, `skill_content`
 
+- `skill.privacy_extraction`
+  - Effective stage: Skill privacy configuration extraction
+  - Purpose: identifies private configuration items maintained by the user for placeholder replacement and privacy configuration storage
+  - Key inputs: `skill_name`, `skill_description`, `skill_content`
+
 ### Test
 
 These prompts are mainly used to help generate test cases.
 
 - `test.skill_test_generation`
-  - Effective stage: Skill testing support stage
+  - Intended stage: Skill testing support stage
   - Affects: Skill scenario test design and validation sample generation
   - Purpose: generates test cases from the names and descriptions of multiple Skills
   - Key inputs: `skills_info`
@@ -514,9 +586,11 @@ Available configuration:
 
 Loading behavior:
 
-- Built-in memory schemas are loaded first
-- If `memory.custom_templates_dir` is configured, schemas in that directory are loaded afterward
-- As a result, memory customization behaves more like extension and supplementation than a full replacement of the built-in set
+1. Load schemas from the built-in `memory/` directory.
+2. If `memory.experimental_memory_switch` is enabled, load built-in `memory/experimental_memory/` schemas.
+3. If `memory.custom_templates_dir` is configured, load that directory; otherwise, try `memory/` under the selected prompt directory.
+
+A later definition with the same `memory_type` replaces the earlier one; new types are added. Only `.yaml` and `.yml` files directly in each directory are read, without recursive loading. Custom schemas can therefore add types or override built-in types; changing the name creates a separate type. Loading failures are logged, so check which schemas actually loaded.
 
 Example directory:
 
@@ -551,6 +625,12 @@ Impact examples:
   - affects how user preference memories are organized and the granularity of recall
 - Modifying `tools`
   - affects tool experience accumulation and tool usage recommendations
+
+### Session Skill Schemas
+
+`skill_extract/session_skills.yaml` uses the memory schema format but is loaded separately by Session Skill extraction. It defines session skills the user asks to retain, distinct from the usage statistics in `memory/skills.yaml`.
+
+The loader reads `skill_extract/` directly under the selected prompt directory, without the per-file built-in fallback used for regular prompts. When using a custom `prompts.templates_dir` or `OPENVIKING_PROMPT_TEMPLATES_DIR` with Session Skill extraction, also copy the built-in `skill_extract/` directory and check the schema loading logs. Copying only a file under `semantic/` is insufficient for this path.
 
 ### High-Risk Changes During Customization
 
@@ -600,6 +680,8 @@ For a memory schema, focus on:
 - whether the new schema was loaded successfully
 - whether the target memory type actually participates in extraction and persistence
 
+`PromptManager` caches regular templates by default. After editing files, restart the service process that uses them; embedded applications can clear the corresponding manager's cache and reload. Memory registries also need to be recreated. Do not assume a running process automatically reads new schemas.
+
 ### Then: Verify That External Results Changed
 
 The most effective validation is capability-focused:
@@ -607,8 +689,10 @@ The most effective validation is capability-focused:
 - If you changed a `vision` template, re-parse images, tables, or scanned PDFs and check whether the results changed
 - If you changed a `semantic` or `parsing` template, re-import documents or files and check whether summaries and structure changed
 - If you changed a `retrieval` template, rerun the relevant search and check whether query planning and recall behavior changed
-- If you changed a `compression` template, re-trigger session commit or memory processing and check whether extraction and merge results changed
+- If you changed a `compression` template, trigger the relevant flow with a new test session and inspect working memory and the archive overview; these alone do not establish that long-term memory extraction changed
 - If you changed a `memory` schema, inspect the final persisted memory files, directories, and field structure
+
+Compare the original and modified templates with the same inputs, model, and other configuration, using separate test resources or sessions. Include a fact that should be retained, irrelevant information that should be omitted, and a case with an easily missed condition. Check whether summaries preserve key facts, retrieval finds the correct sources, and memories reach the expected directory and update existing content correctly. Record failures, latency, and model usage; smoother wording does not establish better accuracy.
 
 ### Common Troubleshooting Patterns
 
@@ -634,14 +718,15 @@ openviking/prompts/templates/
 
 It contains:
 
-- `compression/`: compression, extraction, and merging
+- `compression/`: working-memory compression and archive summaries
 - `indexing/`: relevance evaluation
 - `memory/`: memory type definitions
 - `parsing/`: structure analysis and semantic node generation
 - `processing/`: experience and strategy extraction
 - `retrieval/`: retrieval intent analysis
 - `semantic/`: file and directory summaries
-- `skill/`: Skill summaries
+- `skill/`: Skill summaries and privacy configuration extraction
+- `skill_extract/`: Session Skill schemas
 - `test/`: test case generation
 - `vision/`: image, page, and table understanding
 

@@ -143,6 +143,29 @@ test("successful capture records every dedup key and suppresses repeated Stop", 
   assert.equal(repeatedPlan.payloads.length, 0);
 });
 
+test("capture plan deduplicates identical messages within one rollout batch", () => {
+  const duplicatePrompt = { role: "user", content: "same prompt", turnId: "turn-001" };
+  const turnsWithRetries = [
+    ...Array.from({ length: 10 }, () => duplicatePrompt),
+    ...Array.from({ length: 5 }, (_, index) => ({
+      role: "assistant",
+      content: `assistant fragment ${index}`,
+      turnId: "turn-001",
+    })),
+  ];
+
+  const plan = buildZcodeCapturePlan(turnsWithRetries, {});
+
+  assert.equal(plan.payloads.length, 6);
+  assert.deepEqual(plan.payloads.map(({ role, content }) => ({ role, content })), [
+    { role: "user", content: "same prompt" },
+    ...Array.from({ length: 5 }, (_, index) => ({
+      role: "assistant",
+      content: `assistant fragment ${index}`,
+    })),
+  ]);
+});
+
 test("queued messages are acknowledged like sent messages", () => {
   const plan = buildZcodeCapturePlan(turns, {});
   const next = applyZcodeCaptureResult({}, plan, {

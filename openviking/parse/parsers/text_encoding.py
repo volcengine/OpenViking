@@ -9,6 +9,7 @@ from typing import Iterable, Optional, Union
 
 from charset_normalizer import from_bytes
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -71,7 +72,11 @@ def normalize_text_bytes(content: bytes, file_path: Union[str, Path] = "") -> by
     try:
         return _normalize_text_bytes(content, file_path)
     except Exception as exc:
-        logger.warning(f"Encoding detection failed for {file_path}: {exc}")
+        logger.info(
+            "Encoding detection failed; keeping original bytes path=%s error_type=%s",
+            safe_path_for_log(str(file_path)),
+            type(exc).__name__,
+        )
         return content
 
 
@@ -90,17 +95,23 @@ def _normalize_text_bytes(content: bytes, file_path: Union[str, Path] = "") -> b
         pass
 
     if _looks_binary(content):
-        logger.debug(f"Detected binary-like text file {file_path}, skipping encoding detection")
+        logger.debug(
+            "Binary-like text detected; skipping encoding detection path=%s",
+            safe_path_for_log(str(file_path)),
+        )
         return content
 
     candidate = _choose_candidate(_iter_candidates(content))
     if candidate is None:
-        logger.warning(f"Encoding detection failed for {file_path}: no matching encoding found")
+        logger.info(
+            "No matching encoding; keeping original bytes path=%s",
+            safe_path_for_log(str(file_path)),
+        )
         return content
 
     decoded = candidate.decoded.replace("\x00", "")
     normalized = decoded.encode("utf-8")
-    logger.debug(f"Converted {file_path} from {candidate.encoding} to UTF-8")
+    logger.debug("Text converted to UTF-8 path=%s", safe_path_for_log(str(file_path)))
     return normalized
 
 

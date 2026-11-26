@@ -1,30 +1,24 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.parse.accessors.base import LocalResource, SourceType
-from openviking.parse.parsers.media.utils import MPEG_TS_PACKET_SIZE, MPEG_TS_PROBE_BYTES
 from openviking.server.identity import RequestContext, Role
 from openviking.service import resource_service as resource_service_module
 from openviking.service.resource_service import ResourceService
 from openviking.storage.queuefs import QueueManager
 from openviking.storage.queuefs.add_resource_msg import AddResourceMsg
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
-
-
-def mpeg_ts_probe() -> bytes:
-    """Build a minimal MPEG-TS probe payload for routing tests."""
-    content = bytearray(MPEG_TS_PROBE_BYTES)
-    for offset in range(0, MPEG_TS_PROBE_BYTES, MPEG_TS_PACKET_SIZE):
-        content[offset] = 0x47
-    return bytes(content)
 
 
 @pytest.mark.asyncio
 async def test_extensionless_remote_url_queues_frozen_understanding_route(
     monkeypatch,
     tmp_path,
+    watch_vfs,
 ):
     """Queue understanding ingestion for extensionless remote URLs after prepare."""
     ctx = RequestContext(
@@ -66,16 +60,20 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         reserve_unique_candidate=AsyncMock(return_value=("viking://resources/manual", lock)),
         process_resource=AsyncMock(),
     )
+    for name, operation in vars(agfs).items():
+        monkeypatch.setattr(watch_vfs._async_agfs, name, operation)
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        viking_fs=watch_vfs,
         resource_processor=processor,
         skill_processor=object(),
     )
     service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
-        update_stage=AsyncMock(),
+        create=AsyncMock(
+            return_value=SimpleNamespace(task_id="task-1", task_type="add_resource", meta={})
+        ),
+        patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
     queue_manager = SimpleNamespace(enqueue=AsyncMock())
@@ -89,6 +87,14 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         lambda: queue_manager,
     )
 
+    with pytest.raises(InvalidArgumentError, match="args cannot contain"):
+        await service.add_resource(
+            path="https://example.com/download?id=1",
+            ctx=ctx,
+            to="viking://resources/manual",
+            args={"parser_api_config": {"api_key": "caller-key"}},
+        )
+
     result = await service.add_resource(
         path="https://example.com/download?id=1",
         ctx=ctx,
@@ -101,16 +107,19 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
         "status": "success",
         "root_uri": "viking://resources/manual",
         "task_id": "task-1",
+        "source_path": "https://example.com/download?id=1",
     }
     _, message = queue_manager.enqueue.await_args.args
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
     queued = AddResourceMsg.from_dict(message)
+    assert queued.account_id == ctx.account_id
+    assert ctx.api_key not in json.dumps(message)
     assert "parser_backend" not in queued.args
     assert queued.args["resolved_extension"] == ".pdf"
     assert queued.understanding_response_id == "response-1"
     assert queued.source_name == "manual.pdf"
     assert not downloaded.exists()
-    processor.submit_understanding.assert_awaited_once_with(prepared)
+    processor.submit_understanding.assert_awaited_once_with(prepared, ctx=ctx)
     processor.process_resource.assert_not_awaited()
     agfs.pathlock_to_handoff.assert_awaited_once_with(lock)
     agfs.pathlock_handoff.assert_awaited_once_with(lock)
@@ -120,6 +129,7 @@ async def test_extensionless_remote_url_queues_frozen_understanding_route(
 async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
     monkeypatch,
     tmp_path,
+    watch_vfs,
 ):
     """Route MPEG-TS resources to understanding with video target resolution."""
     ctx = RequestContext(
@@ -128,7 +138,7 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         api_key="secret",
     )
     downloaded = tmp_path / "sample.ts"
-    downloaded.write_bytes(mpeg_ts_probe())
+    downloaded.write_bytes(b"downloaded video snapshot")
     prepared = LocalResource(
         path=downloaded,
         source_type=SourceType.HTTP,
@@ -160,16 +170,20 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         reserve_unique_candidate=AsyncMock(return_value=("viking://resources/video/sample", lock)),
         process_resource=AsyncMock(),
     )
+    for name, operation in vars(agfs).items():
+        monkeypatch.setattr(watch_vfs._async_agfs, name, operation)
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        viking_fs=watch_vfs,
         resource_processor=processor,
         skill_processor=object(),
     )
     service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
-        update_stage=AsyncMock(),
+        create=AsyncMock(
+            return_value=SimpleNamespace(task_id="task-1", task_type="add_resource", meta={})
+        ),
+        patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
     queue_manager = SimpleNamespace(enqueue=AsyncMock())
@@ -194,10 +208,11 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
         "status": "success",
         "root_uri": "viking://resources/video/sample",
         "task_id": "task-1",
+        "source_path": "https://example.com/video/sample.ts?sign=1",
     }
     processor.prepare_durable_source.assert_awaited_once()
     processor.process_resource.assert_not_awaited()
-    processor.submit_understanding.assert_awaited_once_with(prepared)
+    processor.submit_understanding.assert_awaited_once_with(prepared, ctx=ctx)
     resolve_target_uri.assert_awaited_once()
     assert resolve_target_uri.await_args.kwargs["source_format"] == "video"
     _, message = queue_manager.enqueue.await_args.args
@@ -213,11 +228,10 @@ async def test_remote_mpeg_ts_url_queues_understanding_after_prepare(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("temp_file_id", ["upload_audio.m4a", "shared_audio"])
 async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     monkeypatch,
     tmp_path,
-    temp_file_id,
+    watch_vfs,
 ):
     """Upload snapshots keep only the external file_id before entering ExternalParse."""
     ctx = RequestContext(
@@ -260,16 +274,20 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
         reserve_unique_candidate=AsyncMock(return_value=("viking://resources/audio", lock)),
         process_resource=AsyncMock(),
     )
+    for name, operation in vars(agfs).items():
+        monkeypatch.setattr(watch_vfs._async_agfs, name, operation)
     service = ResourceService(
         vikingdb=object(),
-        viking_fs=SimpleNamespace(_async_agfs=agfs),
+        viking_fs=watch_vfs,
         resource_processor=processor,
         skill_processor=object(),
     )
     service._connector_delegate = SimpleNamespace(should_delegate=lambda *_args, **_kwargs: False)
     tracker = SimpleNamespace(
-        create=AsyncMock(return_value=SimpleNamespace(task_id="task-1")),
-        update_stage=AsyncMock(),
+        create=AsyncMock(
+            return_value=SimpleNamespace(task_id="task-1", task_type="add_resource", meta={})
+        ),
+        patch_task=AsyncMock(),
         fail=AsyncMock(),
     )
     queue_manager = SimpleNamespace(enqueue=AsyncMock())
@@ -290,17 +308,20 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
         wait=False,
         allow_local_path_resolution=True,
         internal_task=True,
-        temp_file_id=temp_file_id,
+        temp_file_id="upload_audio.m4a",
     )
 
     assert result == {
         "status": "success",
         "root_uri": "viking://resources/audio",
         "task_id": "task-1",
+        "source_path": "audio.m4a",
     }
     _, message = queue_manager.enqueue.await_args.args
     assert queue_manager.enqueue.await_args.args[0] == QueueManager.EXTERNAL_PARSE
     queued = AddResourceMsg.from_dict(message)
+    assert queued.account_id == ctx.account_id
+    assert ctx.api_key not in json.dumps(message)
     assert queued.understanding_file_id == "file-1"
     assert queued.understanding_response_id is None
     assert queued.staged_source is None
@@ -308,7 +329,7 @@ async def test_temp_uploaded_file_queues_external_parse_with_file_id(
     assert queued.path == "audio.m4a"
     assert queued.source_name == "audio.m4a"
     assert not uploaded.exists()
-    processor.upload_understanding_file.assert_awaited_once_with(prepared)
+    processor.upload_understanding_file.assert_awaited_once_with(prepared, ctx=ctx)
     processor.submit_understanding.assert_not_called()
     processor.process_resource.assert_not_awaited()
     agfs.pathlock_to_handoff.assert_awaited_once_with(lock)

@@ -353,9 +353,93 @@ function normalizeCodexCompletedToolEvents(rolloutEntries) {
   });
 }
 
-export function extractCaptureTurns(rolloutEntries, cfg = {}) {
+// Codex writes these host-provided blocks as a user message before its first
+// turn_context. Match the complete wrapper, not a tag mentioned by a user.
+const STARTUP_BLOCKS = [
+  /^<recommended_plugins>\r?\nHere is a list of plugins that are available but not installed\.[\s\S]*?\r?\n<\/recommended_plugins>$/,
+  /^# AGENTS\.md instructions(?: for [^\r\n]+)?\r?\n\r?\n<INSTRUCTIONS>\r?\n[\s\S]*?\r?\n<\/INSTRUCTIONS>$/,
+  /^<environment_context>\r?\n\s*<cwd>[^\r\n]*<\/cwd>\r?\n\s*<shell>[^\r\n]*<\/shell>\r?\n\s*<current_date>[^\r\n]*<\/current_date>\r?\n\s*<timezone>[^\r\n]*<\/timezone>[\s\S]*?<\/environment_context>$/,
+];
+
+function stripStartupBlocks(text) {
+  const source = String(text);
+  // Blocks can share an input_text part with a real prompt. A complete host
+  // block starts on its own line and ends there or at end of text.
+  const candidates = [
+    /<recommended_plugins>\r?\nHere is a list of plugins that are available but not installed\.[\s\S]*?\r?\n<\/recommended_plugins>/g,
+    /# AGENTS\.md instructions(?: for [^\r\n]+)?\r?\n\r?\n<INSTRUCTIONS>\r?\n[\s\S]*?\r?\n<\/INSTRUCTIONS>/g,
+    /<environment_context>\r?\n\s*<cwd>[^\r\n]*<\/cwd>\r?\n\s*<shell>[^\r\n]*<\/shell>\r?\n\s*<current_date>[^\r\n]*<\/current_date>\r?\n\s*<timezone>[^\r\n]*<\/timezone>[\s\S]*?<\/environment_context>/g,
+  ];
+  const matches = [];
+  for (let i = 0; i < candidates.length; i += 1) {
+    for (const match of source.matchAll(candidates[i])) {
+      const start = match.index;
+      const end = start + match[0].length;
+      if (start > 0 && !/\r?\n$/.test(source.slice(0, start))) continue;
+      if (end < source.length && !/^\r?\n/.test(source.slice(end))) continue;
+      if (STARTUP_BLOCKS[i].test(match[0])) matches.push({ start, end });
+    }
+  }
+  if (!matches.length) return source;
+  matches.sort((a, b) => a.start - b.start);
+  let output = "";
+  let cursor = 0;
+  for (const { start, end } of matches) {
+    if (start < cursor) continue;
+    output += source.slice(cursor, start);
+    cursor = end;
+  }
+  return (output + source.slice(cursor)).trim();
+}
+
+function withoutStartupContext(entries, cfg) {
+  const filtered = [];
+  const excludedLegacyTurnIndices = [];
+  let beforeFirstTurn = true;
+  for (const [index, entry] of entries.entries()) {
+    if (entry?.type === "turn_context") beforeFirstTurn = false;
+    const payload = entry?.payload;
+    if (
+      !beforeFirstTurn || entry?.type !== "response_item"
+      || payload?.type !== "message" || payload.role !== "user"
+      || !Array.isArray(payload.content)
+    ) {
+      filtered.push(entry);
+      continue;
+    }
+    let changed = false;
+    const content = payload.content.flatMap((part) => {
+      if (part?.type !== "input_text" || typeof part.text !== "string") return [part];
+      const text = stripStartupBlocks(part.text);
+      if (text === part.text) return [part];
+      changed = true;
+      return text ? [{ ...part, text }] : [];
+    });
+    if (!changed) {
+      filtered.push(entry);
+    } else if (content.length) {
+      filtered.push({ ...entry, payload: { ...payload, content } });
+    } else {
+      // Use the old extractor to locate this message in the old cursor's
+      // coordinate system. Capture filters may already have dropped it.
+      const prefix = extractSharedCaptureTurns(entries.slice(0, index), cfg).length;
+      if (extractSharedCaptureTurns(entries.slice(0, index + 1), cfg).length > prefix) {
+        excludedLegacyTurnIndices.push(prefix);
+      }
+    }
+  }
+  return { entries: filtered, excludedLegacyTurnIndices };
+}
+
+export function extractCaptureTranscript(rolloutEntries, cfg = {}) {
   const expanded = expandCodexRolloutEntries(rolloutEntries);
   const deduplicated = deduplicateCodexToolEvents(expanded);
   const normalized = normalizeCodexNativeToolEvents(deduplicated);
-  return extractSharedCaptureTurns(normalizeCodexCompletedToolEvents(normalized), cfg);
+  const completed = normalizeCodexCompletedToolEvents(normalized);
+  const { entries, excludedLegacyTurnIndices } = withoutStartupContext(completed, cfg);
+  return { turns: extractSharedCaptureTurns(entries, cfg), excludedLegacyTurnIndices };
+}
+
+export function extractCaptureTurns(rolloutEntries, cfg = {}) {
+  return extractCaptureTranscript(rolloutEntries, cfg).turns;
 }

@@ -1,8 +1,12 @@
+import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it, vi } from "vitest";
 
 import { OpenVikingClient } from "../../client.js";
 import type { HttpTransport } from "../../adapters/http-transport.js";
-import type { ResourcePackager } from "../../adapters/resource-packager.js";
+import { defaultResourcePackager } from "../../adapters/resource-packager.js";
 
 function okResponse(result: unknown): Response {
   return new Response(JSON.stringify({ status: "ok", result }), {
@@ -52,67 +56,54 @@ describe("OpenVikingClient adapter seams", () => {
     await expect(client.healthCheck()).rejects.toThrow("OpenViking request failed [INVALID_ARGUMENT]: bad import");
   });
 
-  it("uses injected resource packager so remote URLs do not trigger local packaging", async () => {
-    const transport = vi.fn<HttpTransport>().mockResolvedValue(okResponse({ root_uri: "viking://resources/site" }));
-    const packager: ResourcePackager = {
-      prepareResourceSource: vi.fn().mockResolvedValue({ kind: "remote", path: "https://example.com/docs" }),
-      prepareLocalUploadSource: vi.fn(),
-      createTempUploadBody: vi.fn(),
-      cleanup: vi.fn(),
+  it("passes remote sources directly and uploads an actual archive for local directories", async () => {
+    const folder = await mkdtemp(join(tmpdir(), "ov-client-resource-"));
+    const remote = "https://example.com/docs";
+    let archivePath: string | undefined;
+    const resourcePackager = {
+      ...defaultResourcePackager,
+      async prepareResourceSource(path: string) {
+        const source = await defaultResourcePackager.prepareResourceSource(path);
+        if (source.kind === "upload") archivePath = source.cleanupPath;
+        return source;
+      },
     };
+    const transport = vi.fn<HttpTransport>(async (url, init) => {
+      const endpoint = new URL(url).pathname;
+      if (endpoint === "/api/v1/resources/temp_upload") {
+        expect(init.body).toBeInstanceOf(FormData);
+        const file = (init.body as FormData).get("file");
+        expect(file).toBeInstanceOf(Blob);
+        const entries = unzipSync(new Uint8Array(await (file as Blob).arrayBuffer()));
+        expect(Object.keys(entries)).toEqual(["nested/note.md"]);
+        expect(strFromU8(entries["nested/note.md"]!)).toBe("archive content");
+        return okResponse({ temp_file_id: "uploaded-draft" });
+      }
+      expect(endpoint).toBe("/api/v1/resources");
+      return okResponse({ root_uri: "viking://resources/docs" });
+    });
     const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5_000, "", "", undefined, {
       transport,
-      resourcePackager: packager,
+      resourcePackager,
     });
 
-    await client.addResource({ pathOrUrl: "https://example.com/docs", wait: true });
+    try {
+      await client.addResource({ pathOrUrl: remote });
+      expect(transport).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(transport.mock.calls[0]![1].body))).toMatchObject({ path: remote });
 
-    expect(packager.prepareResourceSource).toHaveBeenCalledWith("https://example.com/docs");
-    expect(packager.prepareLocalUploadSource).not.toHaveBeenCalled();
-    expect(packager.cleanup).toHaveBeenCalledWith({ kind: "remote", path: "https://example.com/docs" });
-    expect(transport).toHaveBeenCalledTimes(1);
-    const [, init] = transport.mock.calls[0]!;
-    expect(JSON.parse(String(init.body))).toMatchObject({
-      path: "https://example.com/docs",
-      wait: true,
-    });
-  });
-
-  it("uses injected resource packager for local directories before temp upload", async () => {
-    const uploadPath = "/fake-packager/resource-dir.zip";
-    const uploadBody = new FormData();
-    uploadBody.append("file", new Blob(["zip-bytes"]), "resource-dir.zip");
-    const transport = vi
-      .fn<HttpTransport>()
-      .mockResolvedValueOnce(okResponse({ temp_file_id: "upload_resource.zip" }))
-      .mockResolvedValueOnce(okResponse({ root_uri: "viking://resources/dir" }));
-    const packaged = {
-      kind: "upload" as const,
-      uploadPath,
-      sourceName: "resource-dir",
-      cleanupPath: uploadPath,
-    };
-    const packager: ResourcePackager = {
-      prepareResourceSource: vi.fn().mockResolvedValue(packaged),
-      prepareLocalUploadSource: vi.fn(),
-      createTempUploadBody: vi.fn().mockResolvedValue(uploadBody),
-      cleanup: vi.fn(),
-    };
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5_000, "", "", undefined, {
-      transport,
-      resourcePackager: packager,
-    });
-
-    await client.addResource({ pathOrUrl: "/workspace/resource-dir" });
-
-    expect(packager.prepareResourceSource).toHaveBeenCalledWith("/workspace/resource-dir");
-    expect(packager.createTempUploadBody).toHaveBeenCalledWith(uploadPath);
-    expect(packager.cleanup).toHaveBeenCalledWith(packaged);
-    expect(transport.mock.calls[0]![0]).toBe("http://127.0.0.1:1933/api/v1/resources/temp_upload");
-    expect(JSON.parse(String(transport.mock.calls[1]![1].body))).toMatchObject({
-      temp_file_id: "upload_resource.zip",
-      source_name: "resource-dir",
-    });
+      await mkdir(join(folder, "nested"));
+      await writeFile(join(folder, "nested", "note.md"), "archive content");
+      await client.addResource({ pathOrUrl: folder });
+      expect(transport).toHaveBeenCalledTimes(3);
+      const ingest = JSON.parse(String(transport.mock.calls[2]![1].body));
+      expect(ingest).toHaveProperty("temp_file_id", "uploaded-draft");
+      expect(ingest).not.toHaveProperty("path");
+      expect(archivePath).toBeDefined();
+      await expect(access(archivePath!)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
   });
 
   it("uses injected clock and sleep for wait=true commit polling", async () => {
@@ -132,7 +123,7 @@ describe("OpenVikingClient adapter seams", () => {
       },
     });
 
-    const result = await client.commitSession("session-1", { wait: true, timeoutMs: 2_000, agentId: "runtime-agent" });
+    const result = await client.commitSession("session-1", { wait: true, agentId: "runtime-agent" });
 
     expect(result).toMatchObject({
       status: "completed",
@@ -157,11 +148,11 @@ describe("OpenVikingClient adapter seams", () => {
       transport,
       now: () => now,
       sleep: async (ms) => {
-        now += ms;
+        now += 150_000;
       },
     });
 
-    const result = await client.commitSession("slow-session", { wait: true, timeoutMs: 1_000 });
+    const result = await client.commitSession("slow-session", { wait: true });
 
     expect(result).toMatchObject({ status: "timeout", task_id: "task-timeout" });
     expect(transport.mock.calls.map(([url]) => url)).toEqual([

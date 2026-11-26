@@ -21,17 +21,31 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
 
+test("runtime uses a portable OpenViking id for DSH IM sessions", () => {
+  const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+  const state = runtime.stateFor({
+    id: "im:weixin_fixture:dm:1790750070550:chat_fixture@im.wechat",
+    header: { cwd: "/workspace" },
+  });
+
+  assert.equal(
+    state.ovSessionId,
+    "dsh-im_weixin_fixture_dm_1790750070550_chat_fixture@im.wechat__eb8b3dae7d74",
+  );
+});
+
 test("capture queues retryable failures but drops permanent client errors", async () => {
   for (const [status, expectedPending] of [[400, 0], [503, 1]]) {
     const pendingDir = await mkdtemp(join(tmpdir(), `dsh-memory-${status}-`));
     tempDirs.push(pendingDir);
     process.env.OPENVIKING_PENDING_DIR = pendingDir;
 
+    const warnings = [];
     const runtime = new OpenVikingRuntime({
       async addMessage() {
         return { ok: false, status, error: { code: "FAILED" } };
       },
-    }, config(), { debug() {} });
+    }, config(), { debug() {}, warn: message => warnings.push(message) });
     const session = { id: `session-${status}`, header: { cwd: "/workspace" } };
     runtime.stateFor(session).ready = true;
 
@@ -39,6 +53,7 @@ test("capture queues retryable failures but drops permanent client errors", asyn
     await runtime.flush(session);
 
     assert.equal((await listPending()).length, expectedPending, `HTTP ${status}`);
+    assert.equal(warnings.length, status === 400 ? 1 : 0);
   }
 });
 
@@ -114,6 +129,38 @@ test("a retryable threshold commit failure is queued", async () => {
   ]);
 });
 
+test("compaction/start commits below the token threshold without reading session metadata", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-compaction-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  let getSessionCalls = 0;
+  let commitCalls = 0;
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      getSessionCalls += 1;
+      return { pending_tokens: 5 };
+    },
+    async commitSession() {
+      commitCalls += 1;
+      return { ok: true };
+    },
+  }, config(), { debug() {} });
+  const session = { id: "compaction-commit", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+
+  assert.equal(getSessionCalls, 0);
+  assert.equal(commitCalls, 1);
+
+  runtime.maybeCommit(session, { type: "compaction/end" });
+  await runtime.flush(session);
+
+  assert.equal(getSessionCalls, 0);
+  assert.equal(commitCalls, 1);
+});
+
 test("once a write is queued, later messages and the final commit stay ordered on disk", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-order-"));
   tempDirs.push(pendingDir);
@@ -151,11 +198,11 @@ test("once a write is queued, later messages and the final commit stay ordered o
   ]);
   assert.deepEqual(
     pending.map(item => (
-      item.entry.payload.parts?.[0]?.text
-      || item.entry.payload.content
-      || item.entry.payload.keep_recent_count
+      item.entry.type === "commitSession"
+        ? item.entry.payload
+        : item.entry.payload.parts?.[0]?.text || item.entry.payload.content
     )),
-    ["First queued message.", "Second queued message.", 10],
+    ["First queued message.", "Second queued message.", { keep_recent_count: 0 }],
   );
   assert.deepEqual(
     pending.map(item => item.entry.createdAt),
@@ -241,100 +288,26 @@ test("dispose waits for the final commit before deleting session state", async (
   assert.equal(runtime.states.has(session.id), false);
 });
 
-test("persisted profile delivery survives dispose and re-seed", async () => {
-  const runtime = new OpenVikingRuntime({
-    async commitSession() {
-      return { ok: true };
-    },
-  }, config(), { debug() {} });
+test("profile delivery follows the history the model keeps", async () => {
+  const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+  let history = [];
   const session = {
-    id: "profile-resume",
+    id: "profile-history",
     header: { cwd: "/workspace" },
-    events: [],
+    deriveMessages: () => history,
   };
-  const firstState = runtime.stateFor(session);
-  firstState.ready = true;
-  firstState.profileBlock = "profile v1";
-
+  Object.assign(runtime.stateFor(session), { ready: true, profileBlock: "profile" });
   const profile = await runtime.profileMessage({ session });
   assert.equal(profile?.source?.kind, OPENVIKING_PLUGIN_KIND);
   assert.equal(profile?.source?.form, "instructions");
-  session.events.push({ type: "user/message", data: profile });
-  await runtime.dispose(session);
-
-  const resumedSession = {
-    id: session.id,
-    header: session.header,
-    events: [...session.events],
-  };
-  const resumedState = runtime.stateFor(resumedSession);
-  resumedState.ready = true;
-  resumedState.profileBlock = "profile v2";
-  assert.equal(await runtime.profileMessage({ session: resumedSession }), null);
-  assert.equal(resumedState.profileDelivered, true);
-
-  const pendingSession = {
-    id: "profile-pending",
-    header: { cwd: "/workspace" },
-    events: [],
-  };
-  const pendingState = runtime.stateFor(pendingSession);
-  pendingState.ready = true;
-  pendingState.profileBlock = "pending profile";
-  assert.equal(await runtime.profileMessage({
-    session: pendingSession,
-    inbox: { nextTurn: [], nextStep: [profile] },
-  }), null);
-
-  const otherSession = {
-    id: "profile-other",
-    header: { cwd: "/workspace", seedLength: 1 },
-    events: [{ type: "user/message", data: profile }],
-  };
-  const otherState = runtime.stateFor(otherSession);
-  otherState.ready = true;
-  otherState.profileBlock = "other profile";
-  assert.equal(
-    (await runtime.profileMessage({ session: otherSession }))?.source?.form,
-    "instructions",
-  );
-});
-
-test("profile delivery uses current DSH session-owned history on resume and fork", async () => {
-  const profile = {
-    type: "user/message",
-    data: {
-      role: "user",
-      content: [{ type: "text", text: "stored profile" }],
-      source: { kind: "plugin", plugin: "openviking-memory", form: "instructions" },
-    },
-  };
-  for (const [id, ownEvents, expected] of [
-    ["resumed", [profile], null],
-    ["forked", [], "instructions"],
-    ["forked-resumed", [profile], null],
-  ]) {
-    const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
-    let historyReads = 0;
-    const session = {
-      id,
-      header: { cwd: "/workspace", isSeeded: id !== "resumed" },
-      ownEvents() {
-        historyReads += 1;
-        return ownEvents;
-      },
-    };
-    const state = runtime.stateFor(session);
-    state.ready = true;
-    state.profileBlock = "current profile";
-
-    const message = await runtime.profileMessage({ session });
-
-    assert.equal(message?.source?.form ?? null, expected, id);
-    assert.equal(historyReads, 1, id);
-    assert.equal(state.profileDelivered, true, id);
-    assert.equal(await runtime.profileMessage({ session }), null, id);
-  }
+  // Queued, claimed into this step's batch, or kept in the history: not repeated.
+  assert.equal(await runtime.profileMessage({ session, inbox: { nextTurn: [], nextStep: [profile] } }), null);
+  assert.equal(await runtime.profileMessage({ session }, [profile]), null);
+  history = [profile];
+  assert.equal(await runtime.profileMessage({ session }), null);
+  // A compaction that summarized it away (the event log still holds it).
+  history = [];
+  assert.equal((await runtime.profileMessage({ session }))?.source?.form, "instructions");
 });
 
 test("disposeAll drains every live session", async () => {
@@ -366,6 +339,23 @@ test("autoRecall false stops the recall request", async () => {
   runtime.initialize = async () => ({ ready: true, config: { ...config(), autoRecall: false } });
 
   assert.equal(await runtime.recallMessage({}, [{ role: "user", content: "what did we decide" }]), null);
+});
+
+// A batch of injected context alone (time-context, job notices) carries no
+// user query, so it must not trigger a recall request.
+test("injected context alone does not trigger recall", async () => {
+  const runtime = new OpenVikingRuntime({
+    async fetchJSON() {
+      throw new Error("recall must not run without user input");
+    },
+  }, { ...config(), minQueryLength: 0 }, { debug() {} });
+  runtime.initialize = async () => ({ ready: true, config: { ...config(), minQueryLength: 0 } });
+
+  assert.equal(await runtime.recallMessage({}, [{
+    role: "user",
+    content: [{ type: "text", text: "Current time: 2026-10-05 21:20" }],
+    source: { kind: "time-context" },
+  }]), null);
 });
 
 // recall-core reads options.excludeUris, but the DSH runtime built its options
@@ -487,6 +477,99 @@ test("the per-session peer honors peerSource", async () => {
   assert.equal(byCwd.peerId, deriveWorkspacePeerId(root));
 });
 
+test("permanent capture failures warn once per session and recover without logging payloads", async () => {
+  const warnings = [];
+  let response = { ok: false, status: 400, error: { code: "INVALID_ARGUMENT", message: "private message" } };
+  const runtime = new OpenVikingRuntime({
+    async addMessage() { return response; },
+  }, config(), { warn: message => warnings.push(message) });
+  const session = { id: "warnings", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+  const capture = async () => {
+    runtime.capture(session, userEvent("private message"));
+    await runtime.flush(session);
+  };
+
+  await capture();
+  await capture();
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /capture/);
+  assert.match(warnings[0], /"status":400/);
+  assert.match(warnings[0], /"code":"INVALID_ARGUMENT"/);
+  assert.match(warnings[0], /\/api\/v1\/sessions\/\{session_id\}\/messages/);
+  assert.ok(!warnings[0].includes("private message"));
+
+  response = { ok: true };
+  await capture();
+  response = { ok: false, status: 403, error: { code: "private message" } };
+  await capture();
+  assert.equal(warnings.length, 2);
+  assert.ok(!warnings[1].includes("private message"));
+  const other = { id: "other", header: { cwd: "/workspace" } };
+  runtime.stateFor(other).ready = true;
+  runtime.capture(other, userEvent("private message"));
+  await runtime.flush(other);
+  assert.equal(warnings.length, 3);
+});
+
+test("permanent threshold, compaction and shutdown commit failures are visible", async () => {
+  for (const eventType of ["turn/end", "compaction/start"]) {
+    const warnings = [];
+    const runtime = new OpenVikingRuntime({
+      async getSession() { return { pending_tokens: 20000 }; },
+      async commitSession() { return { ok: false, status: 401, error: { code: "UNAUTHENTICATED" } }; },
+    }, { ...config(), commitTokenThreshold: 100 }, { warn: message => warnings.push(message) });
+    const session = { id: "commit-warnings", header: { cwd: "/workspace" } };
+    runtime.stateFor(session).ready = true;
+    runtime.maybeCommit(session, { type: eventType });
+    runtime.maybeCommit(session, { type: eventType });
+    await runtime.flush(session);
+    assert.equal(warnings.length, 1);
+    const stage = eventType === "compaction/start" ? "compaction_commit" : "commit";
+    assert.match(warnings[0], new RegExp(`${stage}.*"status":401`));
+    await runtime.dispose(session);
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[1], /shutdown_commit/);
+  }
+});
+
+test("permanent initialization failures are visible", async () => {
+  for (const stage of ["health", "ensure_session"]) {
+    const warnings = [];
+    const failure = { ok: false, status: 403, error: { code: "FORBIDDEN" } };
+    const runtime = new OpenVikingRuntime({
+      async healthResult() { return stage === "health" ? failure : { ok: true }; },
+      async ensureSessionResult() { return failure; },
+    }, config(), { warn: message => warnings.push(message) });
+    const session = { id: stage, header: { cwd: "/workspace" } };
+    runtime.capture(session, userEvent("private message"));
+    runtime.capture(session, userEvent("private message"));
+    await runtime.flush(session);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], new RegExp(stage));
+  }
+});
+
+test("thrown writes warn without exposing exception text and the write chain continues", async () => {
+  const warnings = [];
+  let fail = true;
+  const runtime = new OpenVikingRuntime({
+    async addMessage() {
+      if (fail) throw new Error("private message");
+      return { ok: true };
+    },
+  }, config(), { warn: message => warnings.push(message) });
+  const session = { id: "thrown", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+  for (const shouldFail of [true, true, false, true]) {
+    fail = shouldFail;
+    runtime.capture(session, userEvent("private message"));
+    await runtime.flush(session);
+  }
+  assert.equal(warnings.length, 2);
+  assert.ok(warnings.every(message => message.includes("write_error") && !message.includes("private message")));
+});
+
 function config() {
   return {
     explicitPeerId: "",
@@ -512,3 +595,77 @@ function userEvent(text) {
     },
   };
 }
+
+test("DSH recall modes use host digests, preserve fallbacks, and isolate session caches", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dsh-compression-"));
+  tempDirs.push(dir);
+  process.env.OPENVIKING_STATE_DIR = dir;
+  const uri = "viking://user/test/memories/decision.md";
+  for (const mode of ["off", "client", "auto", "server"]) {
+    for (const outcome of ["ok", "invalid", "unrelated", "error"]) {
+      const bodies = [];
+      const calls = [];
+      const cfg = { ...config(), recallRewrite: mode, recallCompressMinInputChars: 0, recallCompressTimeoutMs: 1000 };
+      const runtime = new OpenVikingRuntime({
+        async fetchJSON(path, init) {
+          bodies.push(JSON.parse(init.body));
+          return { ok: true, result: {
+            rendered: `Keep PostgreSQL. source: ${uri}`,
+            entries: [{ uri, text: "Keep PostgreSQL." }], stats: {},
+          } };
+        },
+      }, cfg, { debug() {} });
+      const agent = {
+        session: { id: `${mode}-${outcome}`, header: { cwd: dir } },
+        options: { provider: "local", model: "strong" },
+        ctx: { llm: { async *stream(request) {
+          calls.push(request);
+          if (outcome === "error") throw new Error("provider failed");
+          yield { type: "text-delta", index: 0, text: outcome === "ok"
+            ? `- PostgreSQL was chosen. source: ${uri}`
+            : outcome === "unrelated" ? "NO_RELEVANT_MEMORY" : "invalid output" };
+          yield { type: "finish", reason: { kind: "stop" } };
+        } } },
+      };
+      runtime.stateFor(agent.session).ready = true;
+      const message = await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
+      const local = mode === "client" || mode === "auto";
+      assert.equal(calls.length, local ? 1 : 0, `${mode}/${outcome}`);
+      assert.equal(bodies[0].rewrite, mode === "server" ? true : undefined);
+      if (local && outcome === "unrelated") assert.equal(message, null);
+      else {
+        const text = message.content[0].text;
+        assert.ok(text.includes(uri));
+        assert.match(text, local && outcome === "ok" ? /PostgreSQL was chosen/ : /Keep PostgreSQL/);
+      }
+      if (local && outcome === "ok") {
+        await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
+        assert.equal(calls.length, 1, "same-session digest is cached");
+        agent.session = { id: `${mode}-other-session`, header: { cwd: dir } };
+        runtime.stateFor(agent.session).ready = true;
+        await runtime.recallMessage(agent, [{ role: "user", content: "which database" }]);
+        assert.equal(calls.length, 2, "another session does not reuse the digest cache");
+      }
+    }
+  }
+});
+
+test("missing DSH model only permits server rewrite in auto mode", async () => {
+  for (const mode of ["client", "auto"]) {
+    let body;
+    const cfg = { ...config(), recallRewrite: mode };
+    const runtime = new OpenVikingRuntime({
+      async fetchJSON(path, init) {
+        body = JSON.parse(init.body);
+        return { ok: true, result: { rendered: "original fragments", entries: [], stats: {} } };
+      },
+    }, cfg, { debug() {} });
+    runtime.initialize = async () => ({ ready: true, config: cfg });
+    const message = await runtime.recallMessage({}, [{ role: "user", content: "which database" }]);
+    assert.equal(body.rewrite, mode === "auto" ? "auto" : undefined);
+    assert.match(message.content[0].text, /original fragments/);
+    const controller = new AbortController();
+    controller.abort();
+    assert.equal(await runtime.recallMessage({}, [{ role: "user", content: "which database" }], controller.signal), null);
+  }
+});

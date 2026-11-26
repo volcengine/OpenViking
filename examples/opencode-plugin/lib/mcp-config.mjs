@@ -24,6 +24,21 @@ export function createOpenVikingV2McpConfig(pluginRoot) {
   }
 }
 
+export function openVikingSkillsDir(pluginRoot) {
+  return resolvePath(pluginRoot, "skills")
+}
+
+// The bundled skills teach the MCP tools, so callers add them only once the
+// server is registered.
+export function injectOpenVikingSkillPaths(config, pluginRoot) {
+  if (!config || typeof config !== "object") return false
+  config.skills = config.skills && typeof config.skills === "object" ? config.skills : {}
+  const paths = Array.isArray(config.skills.paths) ? config.skills.paths : []
+  const dir = openVikingSkillsDir(pluginRoot)
+  config.skills.paths = paths.includes(dir) ? paths : [...paths, dir]
+  return true
+}
+
 export function injectOpenVikingMcpConfig(config, pluginRoot, enabled = true) {
   if (!config || typeof config !== "object") return false
   if (!enabled) return false

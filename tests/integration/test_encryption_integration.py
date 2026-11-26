@@ -17,10 +17,14 @@ import pytest_asyncio
 from openviking.crypto.config import bootstrap_encryption
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import LocalFileProvider
-from openviking.server.api_keys import APIKeyManager, is_new_format_key
+from openviking.message import TextPart
+from openviking.server.api_keys import is_valid_format_key
+from openviking.server.identity import RequestContext, Role
+from openviking.server.store_assembly import build_api_key_manager
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+from tests.server.conftest import _install_fake_embedder, _install_fake_vlm
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -143,61 +147,51 @@ class TestEncryptionDisabled:
         assert test_content in contents
 
 
+@pytest_asyncio.fixture
+async def openviking_service_with_encryption(tmp_path, encryption_config, monkeypatch):
+    _install_fake_embedder(monkeypatch)
+    _install_fake_vlm(monkeypatch)
+    root_key = "test-root-key-for-encryption-tests-abcdef123456"
+    config = {
+        **encryption_config,
+        "storage": {
+            "workspace": str(tmp_path / "workspace"),
+            "vectordb": {"name": "test", "backend": "local", "project": "default"},
+        },
+        "embedding": {
+            "dense": {"provider": "openai", "api_key": "fake", "model": "text-embedding-3-small"}
+        },
+        "vlm": {"provider": "openai", "api_key": "fake", "model": "gpt-4-vision-preview"},
+        "server": {"root_api_key": root_key},
+    }
+    OpenVikingConfigSingleton.reset_instance()
+    OpenVikingConfigSingleton.initialize(config_dict=config)
+    service = OpenVikingService(path=str(tmp_path / "viking"))
+    manager = None
+    try:
+        await service.initialize()
+        await service.recover()
+        await service.start_background()
+        manager = build_api_key_manager(root_key=root_key, viking_fs=service.viking_fs)
+        await manager.load()
+        yield {"service": service, "api_key_manager": manager, "test_data_dir": tmp_path}
+    finally:
+        if manager is not None:
+            await manager.close()
+        await service.close()
+        OpenVikingConfigSingleton.reset_instance()
+
+
+def _backend_file_bytes(service, ctx, data_dir: Path, uri: str) -> bytes:
+    path = service.viking_fs._uri_to_path(uri, ctx=ctx).removeprefix("/local/")
+    return (data_dir / "viking" / "viking" / path).read_bytes()
+
+
 class TestVikingFSEncryptionWithAccounts:
     """
     Complete VikingFS encryption tests, including account management, resource operations, skill operations, etc.
     Uses internal APIs directly instead of HTTP clients to improve test efficiency and accuracy.
     """
-
-    ROOT_KEY = "test-root-key-for-encryption-tests-abcdef123456"
-
-    @pytest_asyncio.fixture(scope="function")
-    async def openviking_service_with_encryption(self, test_data_dir: Path, encryption_config):
-        """
-        Fixture that provides an OpenVikingService instance with encryption enabled.
-        Also initializes APIKeyManager for account management.
-        """
-        # Clean data directory
-        if test_data_dir.exists():
-            import shutil
-
-            shutil.rmtree(test_data_dir)
-        test_data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create config dict with encryption enabled and root_api_key set
-        config_dict = {}
-        config_dict.update(encryption_config)
-        config_dict["storage"] = {
-            "workspace": str(test_data_dir / "workspace"),
-            "vectordb": {"name": "test", "backend": "local", "project": "default"},
-        }
-        config_dict["embedding"] = {
-            "dense": {"provider": "openai", "api_key": "fake", "model": "text-embedding-3-small"}
-        }
-        config_dict["vlm"] = {
-            "provider": "openai",
-            "api_key": "fake",
-            "model": "gpt-4-vision-preview",
-        }
-        config_dict["server"] = {"root_api_key": self.ROOT_KEY}
-
-        # Initialize config singleton
-        OpenVikingConfigSingleton.initialize(config_dict=config_dict)
-
-        # Create OpenVikingService
-        svc = OpenVikingService(
-            path=str(test_data_dir / "viking"), user=UserIdentifier.the_default_user("test_user")
-        )
-        await svc.initialize()
-
-        # Create APIKeyManager using VikingFS to ensure system file encryption
-        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
-        await api_key_manager.load()
-
-        yield {"service": svc, "api_key_manager": api_key_manager, "test_data_dir": test_data_dir}
-
-        await svc.close()
-        OpenVikingConfigSingleton.reset_instance()
 
     def _is_file_encrypted(self, file_path: Path) -> bool:
         """
@@ -218,74 +212,6 @@ class TestVikingFSEncryptionWithAccounts:
         except Exception:
             return False
 
-    def _agfs_data_root(self, test_data_dir: Path) -> Path:
-        """Return the mounted localfs root used by integration tests."""
-        return test_data_dir / "viking" / "viking"
-
-    def _backend_file_path(self, svc, ctx, test_data_dir: Path, uri: str) -> Path:
-        """Map one Viking URI to the underlying backend file path."""
-        agfs_path = svc.viking_fs._uri_to_path(uri, ctx=ctx)
-        rel_path = agfs_path.removeprefix("/local/").lstrip("/")
-        return self._agfs_data_root(test_data_dir) / rel_path
-
-    def _backend_file_bytes(self, svc, ctx, test_data_dir: Path, uri: str) -> bytes:
-        """Read the underlying backend bytes for one Viking URI."""
-        file_path = self._backend_file_path(svc, ctx, test_data_dir, uri)
-        assert file_path.exists(), f"Backend file missing for {uri}: {file_path}"
-        return file_path.read_bytes()
-
-    def _assert_uri_encrypted(self, svc, ctx, test_data_dir: Path, uri: str) -> bytes:
-        """Assert one Viking URI is stored as ciphertext on disk."""
-        raw_content = self._backend_file_bytes(svc, ctx, test_data_dir, uri)
-        assert raw_content.startswith(b"OVE1"), f"File not encrypted: {uri}"
-        return raw_content
-
-    def _check_all_files_encrypted(
-        self, svc, ctx, test_data_dir: Path, base_uri: str, print_paths: bool = True
-    ) -> None:
-        """
-        Recursively check if all files in a directory are encrypted.
-
-        Args:
-            svc: OpenVikingService instance
-            ctx: RequestContext instance
-            base_uri: Base URI to check
-            print_paths: Whether to print encrypted file paths
-        """
-
-        async def _check_recursive(uri: str):
-            try:
-                entries = await svc.viking_fs.ls(uri, ctx=ctx)
-                for entry in entries:
-                    entry_uri = entry["uri"]
-                    if entry["isDir"]:
-                        await _check_recursive(entry_uri)
-                    else:
-                        try:
-                            self._assert_uri_encrypted(svc, ctx, test_data_dir, entry_uri)
-                            if print_paths:
-                                print(f"[ENCRYPTED] {entry_uri}")
-                        except AssertionError:
-                            raise
-                        except Exception as e:
-                            if print_paths:
-                                print(f"[SKIP] Skip file {entry_uri}: {e}")
-            except AssertionError:
-                raise
-            except Exception as e:
-                print(f"[WARNING] Error checking {uri}: {e}")
-
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(_check_recursive(base_uri))
-
-    def _generate_random_suffix(self) -> str:
-        """Generate random suffix for test account/user names"""
-        import secrets
-
-        return secrets.token_hex(4)
-
     async def test_account_creation_and_encryption(self, openviking_service_with_encryption):
         """
         Test 1.1: Create account, verify system files (_system/accounts.json, _system/users.json) are encrypted
@@ -301,7 +227,7 @@ class TestVikingFSEncryptionWithAccounts:
 
         # Verify account created successfully
         assert user_key is not None
-        assert is_new_format_key(user_key)
+        assert is_valid_format_key(user_key)
 
         # RAGFS /local/... paths map to test_data_dir/viking/viking/...
         # because OpenVikingService path is test_data_dir/viking,
@@ -325,7 +251,7 @@ class TestVikingFSEncryptionWithAccounts:
         )
 
         # Verify identity can be resolved correctly via API Key
-        identity = api_key_manager.resolve(user_key)
+        identity = await api_key_manager.resolve_identity(user_key)
         assert identity.account_id == account_id
         assert identity.user_id == admin_user_id
 
@@ -347,7 +273,7 @@ class TestVikingFSEncryptionWithAccounts:
 
         # Verify user registered successfully
         assert new_user_key is not None
-        assert is_new_format_key(new_user_key)
+        assert is_valid_format_key(new_user_key)
 
         # AGFS /local/... paths map to test_data_dir/viking/viking/...
         agfs_data_root = test_data_dir / "viking" / "viking"
@@ -357,7 +283,7 @@ class TestVikingFSEncryptionWithAccounts:
         assert self._is_file_encrypted(account_users_path), "users.json not encrypted after update"
 
         # Verify identity can be resolved via new user's API Key
-        identity = api_key_manager.resolve(new_user_key)
+        identity = await api_key_manager.resolve_identity(new_user_key)
         assert identity.account_id == account_id
         assert identity.user_id == new_user_id
 
@@ -371,15 +297,12 @@ class TestVikingFSEncryptionWithAccounts:
         svc = data["service"]
 
         # Create request context
-        from openviking.server.identity import RequestContext, Role
-        from openviking_cli.session.user_id import UserIdentifier
-
         default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Write test file directly via VikingFS
         test_content = "This is a test resource file content that needs encrypted storage"
-        test_uri = "viking://default/test_encrypted.txt"
+        test_uri = "viking://resources/test_encrypted.txt"
 
         await svc.viking_fs.write_file(test_uri, test_content, ctx=ctx)
 
@@ -388,7 +311,7 @@ class TestVikingFSEncryptionWithAccounts:
         assert read_content == test_content, "Read content does not match original content"
 
         # Verify encryption by reading backend file content directly
-        raw_content = self._backend_file_bytes(svc, ctx, data["test_data_dir"], test_uri)
+        raw_content = _backend_file_bytes(svc, ctx, data["test_data_dir"], test_uri)
         assert raw_content.startswith(b"OVE1"), (
             f"File not encrypted, raw content start: {raw_content[:10]}"
         )
@@ -422,8 +345,8 @@ class TestVikingFSEncryptionWithAccounts:
         assert self._is_file_encrypted(account2_users_path)
 
         # Verify respective API Keys can resolve correctly
-        identity1 = api_key_manager.resolve(key1)
-        identity2 = api_key_manager.resolve(key2)
+        identity1 = await api_key_manager.resolve_identity(key1)
+        identity2 = await api_key_manager.resolve_identity(key2)
 
         assert identity1.account_id == account1_id
         assert identity2.account_id == account2_id
@@ -438,14 +361,11 @@ class TestVikingFSEncryptionWithAccounts:
         svc = data["service"]
 
         # Create request context
-        from openviking.server.identity import RequestContext, Role
-        from openviking_cli.session.user_id import UserIdentifier
-
         default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Create skill directory and files directly via VikingFS
-        skill_uri = "viking://default/skill/test-skill"
+        skill_uri = "viking://user/default/skills/test-skill"
         await svc.viking_fs.mkdir(skill_uri, ctx=ctx)
 
         # Create SKILL.md file with YAML frontmatter
@@ -474,7 +394,7 @@ This is a test skill for verifying encryption functionality.
 
         # Verify encryption by reading raw file content directly via AGFS
         skill_md_uri = f"{skill_uri}/SKILL.md"
-        raw_content = self._backend_file_bytes(svc, ctx, data["test_data_dir"], skill_md_uri)
+        raw_content = _backend_file_bytes(svc, ctx, data["test_data_dir"], skill_md_uri)
         assert raw_content.startswith(b"OVE1"), (
             f"Skill file not encrypted, raw content start: {raw_content[:10]}"
         )
@@ -482,511 +402,42 @@ This is a test skill for verifying encryption functionality.
             "Skill file content is plaintext, not encrypted"
         )
 
-    async def _check_all_files_encrypted(
-        self, root_uri, ctx, svc, test_data_dir: Path, prefix="  "
-    ):
-        """
-        Recursively check if all files are encrypted
-
-        Args:
-            root_uri: Root URI
-            ctx: Request context
-            svc: OpenVikingService instance
-            test_data_dir: Integration test data directory
-            prefix: Output prefix
-        """
-        try:
-            # First try to get URI path to see if it's a file
-            try:
-                stat_info = await svc.viking_fs.stat(root_uri, ctx=ctx)
-                if not stat_info["isDir"]:
-                    # This is a file, check directly
-                    self._assert_uri_encrypted(svc, ctx, test_data_dir, root_uri)
-                    print(f"{prefix}✓ [ENCRYPTED] {root_uri}")
-                    return
-            except Exception:
-                pass  # Not a file or doesn't exist, continue trying as directory
-
-            # Try to handle as directory
-            entries = await svc.viking_fs.ls(root_uri, ctx=ctx)
-            for entry in entries:
-                if entry["isDir"]:
-                    # Recursively check subdirectories
-                    await self._check_all_files_encrypted(
-                        entry["uri"], ctx, svc, test_data_dir, prefix + "  "
-                    )
-                else:
-                    # Check file encryption
-                    self._assert_uri_encrypted(svc, ctx, test_data_dir, entry["uri"])
-                    print(f"{prefix}✓ [ENCRYPTED] {entry['uri']}")
-        except Exception as e:
-            print(f"{prefix}[WARNING] Error checking {root_uri}: {e}")
-
-    async def test_complete_encryption_workflow(self, openviking_service_with_encryption, tmp_path):
-        """
-        Complete encryption workflow test, implemented according to user plan:
-        - Prerequisites: Create random account, user
-        - Execute tests: resource, skill, memory, and session operations
-        - Post operations: Cleanup
-        """
+    async def test_complete_encryption_workflow(self, openviking_service_with_encryption):
         data = openviking_service_with_encryption
-        svc = data["service"]
-        api_key_manager = data["api_key_manager"]
-        test_data_dir = data["test_data_dir"]
-
-        # ========== Prerequisites ==========
-        print("\n" + "=" * 80)
-        print("Prerequisites: Create test account and user")
-        print("=" * 80)
-
-        # 1. Create random test account
-        random_suffix = self._generate_random_suffix()
-        test_account_id = f"encrypt-test-account-{random_suffix}"
-        test_admin_user_id = "admin"
-        print(f"[1] Create test account: {test_account_id}")
-
-        admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
-        assert admin_user_key is not None
-        assert is_new_format_key(admin_user_key)
-
-        # 2. Verify list-accounts operation (via accessing APIKeyManager internal data)
-        print("[2] Verify list-accounts operation")
-        assert test_account_id in api_key_manager._accounts, (
-            f"Account {test_account_id} not in account list"
-        )
-        print(f"  ✓ Account {test_account_id} exists in account list")
-
-        # 3. Register new user in test account
-        test_user_id = f"encrypt-test-user-{random_suffix}"
-        print(f"[3] Register test user: {test_user_id}")
-        test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
-        assert test_user_key is not None
-        assert is_new_format_key(test_user_key)
-
-        # 4. Verify list-users operation
-        print("[4] Verify list-users operation")
-        account_info = api_key_manager._accounts.get(test_account_id)
-        assert account_info is not None
-        assert test_user_id in account_info.users, f"User {test_user_id} not in user list"
-        print(f"  ✓ User {test_user_id} exists in user list")
-
-        # 5. Check all files in account directory are encrypted (recursive check)
-        print("[5] Check all files in account directory are encrypted")
-
-        from openviking.server.identity import RequestContext, Role
-        from openviking_cli.session.user_id import UserIdentifier
-
-        test_user = UserIdentifier(test_account_id, test_user_id)
-        ctx = RequestContext(user=test_user, role=Role.USER)
-        root_ctx = RequestContext(user=test_user, role=Role.ROOT)
-
-        account_root_uri = f"viking://{test_account_id}"
-
-        await self._check_all_files_encrypted(account_root_uri, ctx, svc, test_data_dir)
-
-        # ========== Execute tests ==========
-        print("\n" + "=" * 80)
-        print("Execute tests: 1. Resource operations")
-        print("=" * 80)
-
-        # 1. Resource operations
-        print(
-            "[1.1] Create test resources directly using VikingFS (avoid waiting for semantic processing)"
-        )
-        test_resource_content = "This is test resource file content for verifying encryption functionality. Contains keyword OpenViking."
-
-        # Create test file directly using VikingFS
-        test_resource_uri = "viking://resources/test_encryption_file.txt"
-        await svc.viking_fs.write_file(test_resource_uri, test_resource_content, ctx=ctx)
-        print(f"  ✓ Test file created successfully: {test_resource_uri}")
-
-        # Create a test directory
-        test_dir_uri = "viking://resources/test_encryption_dir"
-        await svc.viking_fs.mkdir(test_dir_uri, ctx=ctx)
-        test_file_in_dir_uri = f"{test_dir_uri}/nested_file.txt"
-        await svc.viking_fs.write_file(test_file_in_dir_uri, "This is nested file content", ctx=ctx)
-        print(f"  ✓ Test directory created successfully: {test_dir_uri}")
-
-        # Check all files in resources directory are encrypted
-        print("[1.1] Check files in resources directory are encrypted")
-        resources_dir_uri = "viking://resources"
-        await self._check_all_files_encrypted(resources_dir_uri, ctx, svc, test_data_dir)
-
-        # 1.2 Execute various operations to verify returns unencrypted
-        print("[1.2] Verify various operations return unencrypted content")
-
-        # ls operation
-        print("  Executing ls operation...")
-        ls_entries = await svc.viking_fs.ls(resources_dir_uri, ctx=ctx)
-        assert len(ls_entries) > 0
-        print("  ✓ ls operation successful")
-
-        # tree operation
-        print("  Executing tree operation...")
-        tree_entries = await svc.viking_fs.tree(resources_dir_uri, ctx=ctx)
-        assert len(tree_entries) > 0
-        print("  ✓ tree operation successful")
-
-        # read operation
-        print(f"  Executing read operation, using URI: {test_resource_uri}")
-        read_content = await svc.viking_fs.read_file(test_resource_uri, ctx=ctx)
-        assert test_resource_content in read_content, "read operation returned incorrect content"
-        print("  ✓ read operation returns unencrypted content")
-
-        # read nested file
-        print(f"  Executing read nested file, using URI: {test_file_in_dir_uri}")
-        nested_content = await svc.viking_fs.read_file(test_file_in_dir_uri, ctx=ctx)
-        assert "nested file" in nested_content, "read nested file returned incorrect content"
-        print("  ✓ read nested file returns unencrypted content")
-
-        # get operation (using read_file)
-        print("  Executing get operation...")
-        get_content = await svc.viking_fs.read_file(test_resource_uri, ctx=ctx)
-        assert test_resource_content in get_content, "get operation returned incorrect content"
-        print("  ✓ get operation returns unencrypted content")
-
-        # grep operation
-        print("  Executing grep operation...")
-        grep_result = await svc.viking_fs.grep(resources_dir_uri, "OpenViking", ctx=ctx)
-        assert grep_result["count"] > 0
-        assert any("OpenViking" in match["content"] for match in grep_result["matches"])
-        print("  ✓ grep operation successful")
-
-        # abstract operation
-        print("  Executing abstract operation...")
-        try:
-            abstract = await svc.viking_fs.abstract(test_resource_uri, ctx=ctx)
-            assert abstract is not None
-            assert "OVE1" not in abstract, "abstract returns encrypted content"
-            print("  ✓ abstract operation successful, returns unencrypted content")
-        except Exception as e:
-            print(f"  [WARNING] abstract operation may not be supported: {e}")
-
-        # overview operation
-        print("  Executing overview operation...")
-        try:
-            overview = await svc.viking_fs.overview(test_resource_uri, ctx=ctx)
-            assert overview is not None
-            assert "OVE1" not in overview, "overview returns encrypted content"
-            print("  ✓ overview operation successful, returns unencrypted content")
-        except Exception as e:
-            print(f"  [WARNING] overview operation may not be supported: {e}")
-
-        # ========== 2. Skill operations ==========
-        print("\n" + "=" * 80)
-        print("Execute tests: 2. Skill operations")
-        print("=" * 80)
-
-        print(
-            "[2.1] Create test skill directly using VikingFS (avoid waiting for semantic processing)"
-        )
-        skill_content = """---
-name: Test Skill
-description: This is a test skill for verifying encryption functionality
-version: 1.0.0
-tags:
-  - test
-  - encryption
----
-
-# Test Skill
-
-This is a test skill for verifying encryption functionality.
-
-## Features
-
-- Test encryption
-- Verify file storage
-"""
-
-        # Create test file directly using VikingFS.
-        test_skill_uri = "viking://user/default/skills/test_encryption_skill/SKILL.md"
-        test_skill_dir_uri = "viking://user/default/skills/test_encryption_skill"
-        await svc.viking_fs.mkdir(test_skill_dir_uri, ctx=root_ctx)
-        await svc.viking_fs.write_file(test_skill_uri, skill_content, ctx=root_ctx)
-        print(f"  ✓ Test skill created successfully: {test_skill_uri}")
-
-        # Check all files in the skill directory are encrypted
-        print("[2.1] Check files in skill directory are encrypted")
-        await self._check_all_files_encrypted(test_skill_dir_uri, root_ctx, svc, test_data_dir)
-
-        # 2.2 Verify various operations return unencrypted
-        print("[2.2] Verify various operations return unencrypted content")
-
-        # ls operation
-        print("  Executing ls operation...")
-        skill_ls_entries = await svc.viking_fs.ls(test_skill_dir_uri, ctx=root_ctx)
-        assert len(skill_ls_entries) > 0
-        print("  ✓ ls operation successful")
-
-        # tree operation
-        print("  Executing tree operation...")
-        try:
-            skill_tree_entries = await svc.viking_fs.tree(test_skill_dir_uri, ctx=root_ctx)
-            assert len(skill_tree_entries) > 0
-            print("  ✓ tree operation successful")
-        except Exception as e:
-            print(f"  [WARNING] tree operation may not be supported: {e}")
-
-        # read operation
-        print("  Executing read operation...")
-        skill_read_content = await svc.viking_fs.read_file(test_skill_uri, ctx=root_ctx)
-        assert "Test Skill" in skill_read_content
-        print("  ✓ read operation returns unencrypted content")
-
-        # get operation
-        print("  Executing get operation...")
-        skill_get_content = await svc.viking_fs.read_file(test_skill_uri, ctx=root_ctx)
-        assert "Test Skill" in skill_get_content
-        print("  ✓ get operation returns unencrypted content")
-
-        # grep operation
-        print("  Executing grep operation...")
-        try:
-            skill_grep_result = await svc.viking_fs.grep(
-                test_skill_dir_uri,
-                "Test Skill",
-                ctx=root_ctx,
-            )
-            assert skill_grep_result is not None
-            print("  ✓ grep operation successful")
-        except Exception as e:
-            print(f"  [WARNING] grep operation may not be supported: {e}")
-
-        # abstract operation
-        print("  Executing abstract operation...")
-        try:
-            skill_abstract = await svc.viking_fs.abstract(test_skill_uri, ctx=root_ctx)
-            assert skill_abstract is not None
-            assert "OVE1" not in skill_abstract, "abstract returns encrypted content"
-            print("  ✓ abstract operation successful, returns unencrypted content")
-        except Exception as e:
-            print(f"  [WARNING] abstract operation may not be supported: {e}")
-
-        # overview operation
-        print("  Executing overview operation...")
-        try:
-            skill_overview = await svc.viking_fs.overview(test_skill_uri, ctx=root_ctx)
-            assert skill_overview is not None
-            assert "OVE1" not in skill_overview, "overview returns encrypted content"
-            print("  ✓ overview operation successful, returns unencrypted content")
-        except Exception as e:
-            print(f"  [WARNING] overview operation may not be supported: {e}")
-
-        # ========== 3. Memory operations ==========
-        print("\n" + "=" * 80)
-        print("Execute tests: 3. Memory operations")
-        print("=" * 80)
-
-        print("[3.1] Add memory file")
-        memory_dir_uri = f"viking://{test_account_id}/user/{test_user_id}/memories"
-
-        # Create memories directory
-        try:
-            await svc.viking_fs.mkdir(memory_dir_uri, ctx=ctx)
-        except Exception:
-            pass  # Directory may already exist
-
-        # Create preferences subdirectory
-        preferences_dir_uri = f"{memory_dir_uri}/preferences"
-        try:
-            await svc.viking_fs.mkdir(preferences_dir_uri, ctx=ctx)
-        except Exception:
-            pass
-
-        # Write memory file
-        memory_content = "# Test Preferences\n\nUser prefers dark theme, likes clean code style."
-        memory_uri = f"{preferences_dir_uri}/theme.md"
-        await svc.viking_fs.write_file(memory_uri, memory_content, ctx=ctx)
-        print(f"  ✓ Memory file added: {memory_uri}")
-
-        # Check all files in user directory are encrypted
-        print("[3.1] Check files in user directory are encrypted")
-        user_dir_uri = f"viking://{test_account_id}/user/{test_user_id}"
-        await self._check_all_files_encrypted(user_dir_uri, ctx, svc, test_data_dir)
-
-        # 3.2 Verify various operations return unencrypted
-        print("[3.2] Verify various operations return unencrypted content")
-
-        # ls operation
-        print("  Executing ls operation...")
-        memory_ls_entries = await svc.viking_fs.ls(user_dir_uri, ctx=ctx)
-        assert len(memory_ls_entries) >= 0
-        print("  ✓ ls operation successful")
-
-        # tree operation
-        print("  Executing tree operation...")
-        try:
-            memory_tree_entries = await svc.viking_fs.tree(user_dir_uri, ctx=ctx)
-            assert len(memory_tree_entries) >= 0
-            print("  ✓ tree operation successful")
-        except Exception as e:
-            print(f"  [WARNING] tree operation may not be supported: {e}")
-
-        # read operation
-        print("  Executing read operation...")
-        memory_read_content = await svc.viking_fs.read_file(memory_uri, ctx=ctx)
-        assert "Test Preferences" in memory_read_content
-        print("  ✓ read operation returns unencrypted content")
-
-        # get operation
-        print("  Executing get operation...")
-        memory_get_content = await svc.viking_fs.read_file(memory_uri, ctx=ctx)
-        assert "Test Preferences" in memory_get_content
-        print("  ✓ get operation returns unencrypted content")
-
-        # grep operation
-        print("  Executing grep operation...")
-        memory_grep_result = await svc.viking_fs.grep(user_dir_uri, "dark theme", ctx=ctx)
-        assert memory_grep_result["count"] > 0
-        assert any("dark theme" in match["content"] for match in memory_grep_result["matches"])
-        print("  ✓ grep operation successful")
-
-        # abstract operation
-        print("  Executing abstract operation...")
-        try:
-            memory_abstract = await svc.viking_fs.abstract(memory_uri, ctx=ctx)
-            assert memory_abstract is not None
-            assert "OVE1" not in memory_abstract, "abstract returns encrypted content"
-            print("  ✓ abstract operation successful, returns unencrypted content")
-        except Exception as e:
-            print(f"  [WARNING] abstract operation may not be supported: {e}")
-
-        # overview operation
-        print("  Executing overview operation...")
-        try:
-            memory_overview = await svc.viking_fs.overview(memory_uri, ctx=ctx)
-            assert memory_overview is not None
-            assert "OVE1" not in memory_overview, "overview returns encrypted content"
-            print("  ✓ overview operation successful, returns unencrypted content")
-        except Exception as e:
-            print(f"  [WARNING] overview operation may not be supported: {e}")
-
-        # ========== 4. Session operations ==========
-        print("\n" + "=" * 80)
-        print("Execute tests: 4. Session operations")
-        print("=" * 80)
-
-        print("[4.1] Create new session")
-        session = await svc.sessions.create(ctx)
-        session_id = session.session_id
-        print(f"  ✓ Session created: {session_id}")
-
-        # Check session directory files are encrypted
-        print("[4.1] Check files in session directory are encrypted")
-        session_dir_uri = f"viking://{test_account_id}/session"
-        await self._check_all_files_encrypted(session_dir_uri, ctx, svc, test_data_dir)
-
-        # 4.2 Verify various operations return unencrypted
-        print("[4.2] Verify various operations return unencrypted content")
-        try:
-            session_entries = await svc.viking_fs.ls(session_dir_uri, ctx=ctx)
-            assert len(session_entries) >= 0
-            print("  ✓ ls operation successful")
-
-            # tree operation
-            try:
-                session_tree = await svc.viking_fs.tree(session_dir_uri, ctx=ctx)
-                assert len(session_tree) >= 0
-                print("  ✓ tree operation successful")
-            except Exception as e:
-                print(f"  [WARNING] tree operation may not be supported: {e}")
-
-            # get operation (via sessions.get)
-            print("  Executing get operation...")
-            reloaded_session = await svc.sessions.get(session_id, ctx)
-            assert reloaded_session is not None
-            print("  ✓ get operation returns unencrypted content")
-
-            # grep operation
-            grep_result = await svc.viking_fs.grep(session_dir_uri, "session", ctx=ctx)
-            assert grep_result["count"] > 0
-            assert any("session" in match["content"] for match in grep_result["matches"])
-            print("  ✓ grep operation successful")
-
-            # abstract operation (on session directory)
-            try:
-                abstract = await svc.viking_fs.abstract(session_dir_uri, ctx=ctx)
-                assert abstract is not None
-                assert "OVE1" not in abstract, "abstract returns encrypted content"
-                print("  ✓ abstract operation successful, returns unencrypted content")
-            except Exception as e:
-                print(f"  [WARNING] abstract operation may not be supported: {e}")
-
-            # overview operation
-            try:
-                overview = await svc.viking_fs.overview(session_dir_uri, ctx=ctx)
-                assert overview is not None
-                assert "OVE1" not in overview, "overview returns encrypted content"
-                print("  ✓ overview operation successful, returns unencrypted content")
-            except Exception as e:
-                print(f"  [WARNING] overview operation may not be supported: {e}")
-
-        except Exception as e:
-            print(f"  [WARNING] Operation verification: {e}")
-
-        # 4.3 Add message and check message.jsonl encryption
-        print("[4.3] Add message to session")
-        from openviking.message import TextPart
-
-        test_message = "This is a test message for verifying session message.jsonl encryption"
-        parts = [TextPart(text=test_message)]
-        session.add_message(role="user", parts=parts)
-
-        print("  ✓ Message added (add_message auto-saves)")
-
-        # Check message.jsonl file encryption
-        print("[4.3] Check messages file encryption")
-        await self._check_all_files_encrypted(session_dir_uri, ctx, svc, test_data_dir)
-
-        # 4.4 Verify read operation returns unencrypted
-        print("[4.4] Re-read session to verify message")
-        reloaded_session2 = await svc.sessions.get(session_id, ctx)
-        assert len(reloaded_session2.messages) == 1
-        assert test_message in reloaded_session2.messages[0].content
-        print("  ✓ read operation returns unencrypted message")
-
-        # ========== 5. Additional resource operations ==========
-        print("\n" + "=" * 80)
-        print("Execute tests: 5. Additional resource operations")
-        print("=" * 80)
-
-        print("[5.1] Create two resource files directly using VikingFS")
-        # Create additional_resource_test directory
-        resource_test_dir_uri = "viking://resources/additional_resource_test"
-        await svc.viking_fs.mkdir(resource_test_dir_uri, ctx=ctx)
-
-        # Create resource A directory and file
-        dir_a_uri = "viking://resources/additional_resource_test/resource_a"
-        await svc.viking_fs.mkdir(dir_a_uri, ctx=ctx)
-        resource_a_content = "This is resource A content for testing encrypted resource writes."
-        resource_a_file_uri = f"{dir_a_uri}/resource_a.txt"
-        await svc.viking_fs.write_file(resource_a_file_uri, resource_a_content, ctx=ctx)
-        print(f"  ✓ Resource A created: {dir_a_uri}")
-
-        # Create resource B directory and file
-        dir_b_uri = "viking://resources/additional_resource_test/resource_b"
-        await svc.viking_fs.mkdir(dir_b_uri, ctx=ctx)
-        resource_b_content = "This is resource B content for testing encrypted resource writes."
-        resource_b_file_uri = f"{dir_b_uri}/resource_b.txt"
-        await svc.viking_fs.write_file(resource_b_file_uri, resource_b_content, ctx=ctx)
-        print(f"  ✓ Resource B created: {dir_b_uri}")
-
-        # ========== Post operations ==========
-        print("\n" + "=" * 80)
-        print("Post operations: Clean up test account")
-        print("=" * 80)
-
-        # Delete test account
-        await api_key_manager.delete_account(test_account_id)
-        assert test_account_id not in api_key_manager._accounts, (
-            f"Account {test_account_id} not deleted"
-        )
-        print(f"  ✓ Test account deleted: {test_account_id}")
-
-        print("\n" + "=" * 80)
-        print("✅ All tests completed!")
-        print("=" * 80)
+        service = data["service"]
+        manager = data["api_key_manager"]
+        account_id = "encrypted-account"
+        await manager.create_account(account_id, "admin")
+        key = await manager.register_user(account_id, "alice", "user")
+        identity = await manager.resolve_identity(key)
+        assert (identity.account_id, identity.user_id) == (account_id, "alice")
+        ctx = RequestContext(user=UserIdentifier(account_id, "alice"), role=Role.USER)
+
+        session = await service.sessions.create(ctx)
+        message = "A private message inside the encrypted workspace."
+        await session.add_message_async("user", [TextPart(text=message)])
+        loaded = await service.sessions.get(session.session_id, ctx)
+        assert [item.parts[0].text for item in loaded.messages] == [message]
+
+        files = {
+            "viking://resources/encrypted-note.md": "Shared file with an encrypted body.",
+            "viking://user/alice/memories/preferences/preference.md": "Use the offline model.",
+            "viking://user/alice/skills/demo/SKILL.md": "# A private skill",
+        }
+        for uri, content in files.items():
+            await service.viking_fs.write_file(uri, content, ctx=ctx)
+            assert await service.viking_fs.read_file(uri, ctx=ctx) == content
+            raw = _backend_file_bytes(service, ctx, data["test_data_dir"], uri)
+            assert raw.startswith(b"OVE1")
+            assert content.encode() not in raw
+
+        messages_uri = f"{session.uri}/messages.jsonl"
+        raw_messages = _backend_file_bytes(service, ctx, data["test_data_dir"], messages_uri)
+        assert raw_messages.startswith(b"OVE1")
+        assert message.encode() not in raw_messages
+
+        await manager.delete_account(account_id)
+        assert await manager.get_account(account_id) is None
 
     async def test_read_file_with_offset_and_limit_encryption(
         self, openviking_service_with_encryption
@@ -999,9 +450,6 @@ This is a test skill for verifying encryption functionality.
         svc = data["service"]
 
         # Create request context
-        from openviking.server.identity import RequestContext, Role
-        from openviking_cli.session.user_id import UserIdentifier
-
         default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
@@ -1014,7 +462,7 @@ This is a test skill for verifying encryption functionality.
             "Line 4: Fifth and final line",
         ]
         test_content = "\n".join(test_lines)
-        test_uri = "viking://default/test_multiline.txt"
+        test_uri = "viking://resources/test_multiline.txt"
 
         await svc.viking_fs.write_file(test_uri, test_content, ctx=ctx)
 
@@ -1035,7 +483,7 @@ This is a test skill for verifying encryption functionality.
         assert from_line_3.rstrip("\n") == expected_from_line_3, "Read from offset failed"
 
         # Verify file is encrypted on disk
-        raw_content = self._backend_file_bytes(svc, ctx, data["test_data_dir"], test_uri)
+        raw_content = _backend_file_bytes(svc, ctx, data["test_data_dir"], test_uri)
         assert raw_content.startswith(b"OVE1"), "File should be encrypted"
 
         print("\n" + "=" * 80)
@@ -1051,15 +499,12 @@ This is a test skill for verifying encryption functionality.
         svc = data["service"]
 
         # Create request context
-        from openviking.server.identity import RequestContext, Role
-        from openviking_cli.session.user_id import UserIdentifier
-
         default_user = UserIdentifier("default", "default")
         ctx = RequestContext(user=default_user, role=Role.ROOT)
 
         # Write a test file
         test_content = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        test_uri = "viking://default/test_bytes.txt"
+        test_uri = "viking://resources/test_bytes.txt"
 
         await svc.viking_fs.write_file(test_uri, test_content.decode("utf-8"), ctx=ctx)
 
@@ -1081,7 +526,7 @@ This is a test skill for verifying encryption functionality.
         assert from_byte_10.rstrip(b"\n") == expected_from_byte_10, "Read from offset failed"
 
         # Verify file is encrypted on disk
-        raw_content = self._backend_file_bytes(svc, ctx, data["test_data_dir"], test_uri)
+        raw_content = _backend_file_bytes(svc, ctx, data["test_data_dir"], test_uri)
         assert raw_content.startswith(b"OVE1"), "File should be encrypted"
 
         print("\n" + "=" * 80)
@@ -1095,231 +540,40 @@ class TestAddResourceWithSemanticProcessing:
     and ls operation decryption.
     """
 
-    ROOT_KEY = "test-root-key-for-encryption-tests-abcdef123456"
-
-    @pytest_asyncio.fixture(scope="function")
-    async def openviking_service_with_encryption(self, test_data_dir: Path, encryption_config):
-        """
-        Fixture that provides an OpenVikingService instance with encryption enabled.
-        Also initializes APIKeyManager for account management.
-        """
-        from openviking_cli.session.user_id import UserIdentifier
-
-        # Clean data directory
-        if test_data_dir.exists():
-            import shutil
-
-            shutil.rmtree(test_data_dir)
-        test_data_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create config dict with encryption enabled and root_api_key set
-        config_dict = {}
-        config_dict.update(encryption_config)
-        config_dict["storage"] = {
-            "workspace": str(test_data_dir / "workspace"),
-            "vectordb": {"name": "test", "backend": "local", "project": "default"},
-        }
-        config_dict["embedding"] = {
-            "dense": {"provider": "openai", "api_key": "fake", "model": "text-embedding-3-small"}
-        }
-        config_dict["vlm"] = {
-            "provider": "openai",
-            "api_key": "fake",
-            "model": "gpt-4-vision-preview",
-        }
-        config_dict["server"] = {"root_api_key": self.ROOT_KEY}
-
-        # Initialize config singleton
-        OpenVikingConfigSingleton.initialize(config_dict=config_dict)
-
-        # Create OpenVikingService
-        svc = OpenVikingService(
-            path=str(test_data_dir / "viking"), user=UserIdentifier.the_default_user("test_user")
-        )
-        await svc.initialize()
-
-        # Create APIKeyManager using VikingFS to ensure system file encryption
-        api_key_manager = APIKeyManager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
-        await api_key_manager.load()
-
-        yield {
-            "service": svc,
-            "api_key_manager": api_key_manager,
-            "test_data_dir": test_data_dir,
-        }
-
-        await svc.close()
-        OpenVikingConfigSingleton.reset_instance()
-
     async def test_add_resource_and_ls_abstract(self, openviking_service_with_encryption, tmp_path):
-        """
-        Test complete add-resource workflow and verify ls returns decrypted abstract.
-        This is the test that would have caught the double encryption bug!
-        """
         data = openviking_service_with_encryption
-        svc = data["service"]
-        api_key_manager = data["api_key_manager"]
+        service = data["service"]
+        manager = data["api_key_manager"]
+        account_id = "encrypted-import"
+        await manager.create_account(account_id, "alice")
+        ctx = RequestContext(user=UserIdentifier(account_id, "alice"), role=Role.ADMIN)
 
-        print("\n" + "=" * 80)
-        print("Test: add-resource complete workflow + ls abstract decryption")
-        print("=" * 80)
-
-        random_suffix = secrets.token_hex(4)
-        test_account_id = f"test-abstract-account-{random_suffix}"
-        test_admin_user_id = "admin"
-        test_user_id = f"test-abstract-user-{random_suffix}"
-
-        print(f"[1] Create test account: {test_account_id}")
-        admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
-        assert admin_user_key is not None
-        assert is_new_format_key(admin_user_key)
-
-        print(f"[2] Register test user: {test_user_id}")
-        test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
-        assert test_user_key is not None
-        assert is_new_format_key(test_user_key)
-
-        from openviking.server.identity import RequestContext, Role
-        from openviking_cli.session.user_id import UserIdentifier
-
-        test_user = UserIdentifier(test_account_id, test_user_id)
-        ctx = RequestContext(user=test_user, role=Role.USER)
-
-        print("[3] Create test resource files (including directory structure)")
-        test_dir = tmp_path / "test_abstract_dir"
-        test_dir.mkdir()
-
-        (test_dir / "README.md").write_text("""# Test Directory
-
-This is a test directory for verifying .abstract.md generation and decryption.
-
-## Features
-
-- Test semantic abstract generation
-- Test ls operation in encryption mode
-- Verify .abstract.md correctly decrypted and displayed
-""")
-
-        subdir1 = test_dir / "subdir1"
-        subdir1.mkdir()
-        (subdir1 / "file1.md").write_text("""# Subdir1 File
-
-This is a file in subdir1.
-""")
-
-        subdir2 = test_dir / "subdir2"
-        subdir2.mkdir()
-        (subdir2 / "file2.md").write_text("""# Subdir2 File
-
-This is a file in subdir2.
-""")
-
-        print(f"  ✓ Test directory created: {test_dir}")
-
-        print("[4] Execute add-resource operation, wait for completion")
-        result = await svc.resources.add_resource(
-            path=str(test_dir), reason="Test abstract generation and decryption", ctx=ctx, wait=True
+        source = tmp_path / "import-source"
+        (source / "topic").mkdir(parents=True)
+        (source / "README.md").write_text("# Directory of guides\n")
+        body = "# Guide\n\nKeep the encrypted guide readable.\n"
+        (source / "topic" / "guide.md").write_text(body)
+        root = "viking://resources/encrypted-guide"
+        result = await service.resources.add_resource(
+            path=str(source), to=root, ctx=ctx, wait=True, args={"parse_mode": "no_split"}
         )
-        root_uri = result["root_uri"]
-        print(f"  ✓ add-resource successful: {root_uri}")
+        assert result["status"] == "success", result
+        assert result["root_uri"] == root
 
-        print("[5] Check all files are encrypted")
+        directory = f"{root}/topic"
+        document = f"{directory}/guide.md"
+        assert await service.fs.read(document, ctx=ctx) == body
+        entries = (await service.fs.ls(root, ctx=ctx, include_abstract=True)).entries
+        [entry] = [item for item in entries if item["uri"] == directory]
+        assert entry["isDir"]
+        abstract = await service.fs.abstract(directory, ctx=ctx)
+        assert abstract
+        assert entry["abstract"] == abstract
 
-        async def check_encrypted_files(uri: str):
-            try:
-                entries = await svc.viking_fs.ls(uri, output="original", ctx=ctx)
-                for entry in entries:
-                    entry_uri = entry["uri"]
-                    entry_name = entry.get("name", "")
-
-                    if entry["isDir"]:
-                        await check_encrypted_files(entry_uri)
-                    else:
-                        try:
-                            raw_content = self._backend_file_bytes(
-                                svc, ctx, data["test_data_dir"], entry_uri
-                            )
-                            assert raw_content.startswith(b"OVE1"), (
-                                f"File not encrypted: {entry_uri}"
-                            )
-                            print(f"  ✓ [ENCRYPTED] {entry_uri}")
-                        except Exception as e:
-                            print(f"  [SKIP] {entry_uri}: {e}")
-            except Exception as e:
-                print(f"  [WARNING] Checking {uri}: {e}")
-
-        await check_encrypted_files(root_uri)
-
-        print("[6] Execute ls operation, verify abstract decrypted display")
-        ls_entries = await svc.viking_fs.ls(root_uri, output="agent", abs_limit=1024, ctx=ctx)
-        assert len(ls_entries) > 0
-
-        print("  Directory list returned by ls:")
-        found_abstract = False
-        for entry in ls_entries:
-            entry_name = entry.get("name", entry.get("uri", "unknown"))
-            print(f"    - {entry_name} (isDir={entry.get('isDir')})")
-            if entry.get("isDir"):
-                abstract = entry.get("abstract", "")
-                print(f"      Abstract: {abstract[:100]}...")
-                assert "[.abstract.md is not ready]" not in abstract, (
-                    f"Abstract not ready for {entry_name}"
-                )
-                assert "OVE1" not in abstract, f"Abstract shows encrypted content for {entry_name}"
-                assert "Test Directory" in abstract or "subdir" in abstract or abstract != "", (
-                    f"Abstract content missing for {entry_name}"
-                )
-                found_abstract = True
-
-        assert found_abstract, "No directory with abstract found"
-        print("  ✓ ls operation successful, abstract correctly decrypted and displayed")
-
-        print("[7] Execute abstract operation, verify returns unencrypted content")
-        for entry in ls_entries:
-            if entry.get("isDir"):
-                try:
-                    abstract = await svc.viking_fs.abstract(entry["uri"], ctx=ctx)
-                    assert abstract is not None
-                    assert "OVE1" not in abstract, (
-                        f"Abstract returns encrypted content for {entry['uri']}"
-                    )
-                    print(f"  ✓ abstract operation successful: {entry['uri']}")
-                except Exception as e:
-                    print(f"  [WARNING] abstract operation {entry['uri']}: {e}")
-
-        print("[8] Execute tree operation")
-        tree_entries = await svc.viking_fs.tree(root_uri, output="agent", abs_limit=512, ctx=ctx)
-        assert len(tree_entries) > 0
-        print(f"  ✓ tree operation successful, found {len(tree_entries)} nodes")
-
-        print("[9] Verify .abstract.md file exists and is encrypted")
-        for entry in tree_entries:
-            if entry.get("isDir"):
-                try:
-                    abstract_md_uri = f"{entry['uri']}/.abstract.md"
-                    raw_content = self._backend_file_bytes(
-                        svc, ctx, data["test_data_dir"], abstract_md_uri
-                    )
-                    assert raw_content.startswith(b"OVE1"), (
-                        f".abstract.md not encrypted: {abstract_md_uri}"
-                    )
-                    print(f"  ✓ [ENCRYPTED] {abstract_md_uri}")
-                except Exception as e:
-                    print(f"  [SKIP] .abstract.md check for {entry['uri']}: {e}")
-
-        print("\n" + "=" * 80)
-        print("Post operations: Clean up test account")
-        print("=" * 80)
-
-        await api_key_manager.delete_account(test_account_id)
-        assert test_account_id not in api_key_manager._accounts, (
-            f"Account {test_account_id} not deleted"
-        )
-        print(f"  ✓ Test account deleted: {test_account_id}")
-
-        print("\n" + "=" * 80)
-        print("✅ add-resource + ls abstract decryption test completed!")
-        print("=" * 80)
+        for uri, plaintext in [(document, body), (f"{directory}/.abstract.md", abstract)]:
+            raw = _backend_file_bytes(service, ctx, data["test_data_dir"], uri)
+            assert raw.startswith(b"OVE1")
+            assert plaintext.encode() not in raw
 
 
 if __name__ == "__main__":

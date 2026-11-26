@@ -55,7 +55,6 @@ export type RecallOptions = {
   localCompressorAvailable?: boolean;
   runCompressor?: ((prompt: string) => Promise<string | null>) | null;
   digestCachePath?: string;
-  legacyCachePath?: string;
 };
 
 export type DetailedRecall = {
@@ -63,7 +62,8 @@ export type DetailedRecall = {
   contentCount: number;
   hintCount: number;
   budgetUsed: number;
-  stage: "server_assembled" | "ranked" | "no_results" | "filtered_out";
+  stage: "server_assembled" | "ranked" | "no_results" | "filtered_out" | "request_rejected";
+  error?: string;
 };
 
 export function buildRecallBlockDetailed(
@@ -85,3 +85,4 @@ export function estimateTokens(text: string): number;
 export function isRecallEnabled(cfg?: Record<string, any>): boolean;
 
 export function selectRecallContent(result?: { rendered?: string; digest?: string; stats?: Record<string, unknown> }): string;
+export const RECALL_CONTEXT_TEMPLATE: string;

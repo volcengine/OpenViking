@@ -14,12 +14,7 @@ import pytest
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult, embed_compat
 from openviking.models.vlm.base import VLMBase
 from openviking.observability.context import (
-    bind_operation_observability_context,
-    bind_root_observability_context,
-    get_operation_observability_context,
     get_root_observability_context,
-    reset_operation_observability_context,
-    reset_root_observability_context,
 )
 from openviking.storage.collection_schemas import TextEmbeddingHandler
 from openviking.storage.queuefs.process_result import ProcessOutcome
@@ -33,44 +28,13 @@ from openviking.telemetry import (
     unregister_telemetry,
 )
 from openviking.telemetry.backends.memory import MemoryOperationTelemetry
-from openviking.telemetry.context import bind_telemetry, bind_telemetry_stage
-from openviking.telemetry.snapshot import TelemetrySnapshot
-from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
+from openviking.telemetry.context import (
+    bind_ingestion_source_type,
+    bind_telemetry,
+    bind_telemetry_stage,
+    get_ingestion_source_type,
+)
 from openviking_cli.utils import logger as logger_module
-
-
-def test_root_observability_context_bind_and_reset():
-    root = RootSpanAttributes(http_method="GET", http_route="/demo", request_id="req-1")
-    token = bind_root_observability_context(root)
-    try:
-        assert get_root_observability_context() is root
-    finally:
-        reset_root_observability_context(token)
-    assert get_root_observability_context() is None
-
-
-def test_operation_observability_context_bind_and_reset():
-    operation = OperationSpanAttributes(operation="search.find", telemetry_id="tm-demo")
-    token = bind_operation_observability_context(operation)
-    try:
-        assert get_operation_observability_context() is operation
-    finally:
-        reset_operation_observability_context(token)
-    assert get_operation_observability_context() is None
-
-
-def test_telemetry_snapshot_to_dict_supports_summary_only():
-    snapshot = TelemetrySnapshot(
-        telemetry_id="tm_demo",
-        summary={"duration_ms": 1.2, "tokens": {"total": 3}},
-    )
-
-    payload = snapshot.to_dict(include_summary=True)
-
-    assert payload == {
-        "id": "tm_demo",
-        "summary": {"duration_ms": 1.2, "tokens": {"total": 3}},
-    }
 
 
 def test_telemetry_summary_breaks_down_llm_and_embedding_token_usage():
@@ -133,6 +97,21 @@ async def test_bind_telemetry_stage_propagates_across_async_tasks():
         "output": 4,
         "total": 10,
     }
+
+
+@pytest.mark.asyncio
+async def test_ingestion_source_type_is_scoped_and_propagates_across_async_tasks():
+    assert get_ingestion_source_type() is None
+
+    with bind_ingestion_source_type("repository"):
+        assert await asyncio.create_task(_read_ingestion_source_type()) == "repository"
+
+    assert get_ingestion_source_type() is None
+
+
+async def _read_ingestion_source_type() -> str | None:
+    await asyncio.sleep(0)
+    return get_ingestion_source_type()
 
 
 @pytest.mark.asyncio
@@ -203,23 +182,25 @@ def test_disabled_telemetry_still_has_request_id():
 
 
 def test_telemetry_summary_uses_simplified_internal_metric_keys():
-    summary = MemoryOperationTelemetry(
+    search = MemoryOperationTelemetry(
         operation="search.find",
         enabled=True,
     )
-    summary.count("vector.searches", 2)
-    summary.count("vector.scored", 5)
-    summary.count("vector.passed", 3)
-    summary.set("vector.returned", 2)
-    summary.count("vector.scanned", 5)
-    summary.set("vector.scan_reason", "")
-    summary.set("semantic_nodes.total", 4)
-    summary.set("semantic_nodes.done", 3)
-    summary.set("semantic_nodes.pending", 1)
-    summary.set("semantic_nodes.running", 0)
-    summary.set("memory.extracted", 6)
+    search.count("vector.searches", 2)
+    search.count("vector.scored", 5)
+    search.count("vector.passed", 3)
+    search.set("vector.returned", 2)
+    search.count("vector.scanned", 5)
+    search.set("vector.scan_reason", "")
+    search.set("semantic_nodes.total", 4)
+    search.set("semantic_nodes.done", 3)
+    search.set("semantic_nodes.pending", 1)
+    search.set("semantic_nodes.running", 0)
+    search.set("memory.extracted", 6)
 
-    result = summary.finish().summary
+    snapshot = search.finish()
+    assert snapshot is not None
+    result = snapshot.summary
 
     assert result["vector"] == {
         "searches": 2,
@@ -235,6 +216,20 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
         "pending": 1,
     }
     assert result["memory"] == {"extracted": 6}
+
+    telemetry = MemoryOperationTelemetry(operation="session.commit", enabled=True)
+    telemetry.record_token_usage("llm", 5, 3)
+    telemetry.set("memory.extracted", 4)
+
+    snapshot = telemetry.finish()
+    assert snapshot is not None
+    summary = snapshot.summary
+
+    assert summary["memory"] == {"extracted": 4}
+    assert "queue" not in summary
+    assert "vector" not in summary
+    assert "semantic_nodes" not in summary
+    assert "errors" not in summary
 
 
 def test_telemetry_summary_includes_cuvs_route_and_stage_timings():
@@ -496,233 +491,108 @@ def test_cuvs_telemetry_distinguishes_zero_memory_from_unobserved_memory():
     assert "estimated_peak_bytes_max" not in cuvs["memory"]
 
 
-def test_init_tracer_forwards_headers_to_grpc_exporter(monkeypatch):
-    captured = {}
+@pytest.mark.parametrize(
+    "protocol,endpoint,exporter_name,transport_options",
+    [
+        ("grpc", "localhost:4317", "OTLPGrpcSpanExporter", {"insecure": True}),
+        ("http", "http://localhost:4318/v1/traces", "OTLPHttpSpanExporter", {}),
+    ],
+    ids=["grpc", "http"],
+)
+def test_init_tracer_forwards_headers_and_exports_span(
+    monkeypatch, protocol, endpoint, exporter_name, transport_options
+):
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    class FakeExporter:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(tracer_module, "OTLPGrpcSpanExporter", FakeExporter)
-    monkeypatch.setattr(tracer_module, "BatchSpanProcessor", lambda exporter, **kwargs: exporter)
-
-    class FakeTracerProvider:
-        def __init__(self, resource=None):
-            self.resource = resource
-
-        def add_span_processor(self, _processor):
-            return None
-
-    monkeypatch.setattr(tracer_module, "TracerProvider", FakeTracerProvider)
+    sink = InMemorySpanExporter()
+    exporter = Mock(return_value=sink)
+    providers: list[TracerProvider] = []
+    monkeypatch.setattr(tracer_module, exporter_name, exporter)
+    monkeypatch.setattr(tracer_module, "_otel_tracer", None)
+    monkeypatch.setattr(tracer_module, "_propagator", None)
+    monkeypatch.setattr(tracer_module.otel_trace, "set_tracer_provider", providers.append)
     monkeypatch.setattr(
-        tracer_module,
-        "Resource",
-        SimpleNamespace(create=lambda attrs: attrs),
-    )
-    monkeypatch.setattr(
-        tracer_module,
-        "otel_trace",
-        SimpleNamespace(
-            set_tracer_provider=lambda _provider: None,
-            get_tracer=lambda service_name: f"tracer:{service_name}",
-        ),
-    )
-    monkeypatch.setattr(
-        tracer_module,
-        "TraceContextTextMapPropagator",
-        lambda: "propagator",
+        tracer_module.otel_trace, "get_tracer", lambda name: providers[0].get_tracer(name)
     )
     monkeypatch.setattr(tracer_module, "_setup_logging", lambda: None)
     monkeypatch.setattr(tracer_module, "_init_asyncio_instrumentation", lambda: None)
+    headers = {"x-byteapm-appkey": "trace-test-key"}
 
-    tracer_module.init_tracer(
-        endpoint="apmplus-cn-beijing.ivolces.com:4317",
-        service_name="memorydb",
-        protocol="grpc",
-        insecure=True,
-        headers={"x-byteapm-appkey": "trace-appkey"},
-        enabled=True,
-    )
-
-    assert captured["endpoint"] == "apmplus-cn-beijing.ivolces.com:4317"
-    assert captured["insecure"] is True
-    assert captured["headers"] == {"x-byteapm-appkey": "trace-appkey"}
-
-
-def test_init_tracer_forwards_headers_to_http_exporter(monkeypatch):
-    captured = {}
-
-    class FakeExporter:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr(tracer_module, "OTLPHttpSpanExporter", FakeExporter)
-    monkeypatch.setattr(tracer_module, "BatchSpanProcessor", lambda exporter, **kwargs: exporter)
-
-    class FakeTracerProvider:
-        def __init__(self, resource=None):
-            self.resource = resource
-
-        def add_span_processor(self, _processor):
-            return None
-
-    monkeypatch.setattr(tracer_module, "TracerProvider", FakeTracerProvider)
-    monkeypatch.setattr(
-        tracer_module,
-        "Resource",
-        SimpleNamespace(create=lambda attrs: attrs),
-    )
-    monkeypatch.setattr(
-        tracer_module,
-        "otel_trace",
-        SimpleNamespace(
-            set_tracer_provider=lambda _provider: None,
-            get_tracer=lambda service_name: f"tracer:{service_name}",
-        ),
-    )
-    monkeypatch.setattr(
-        tracer_module,
-        "TraceContextTextMapPropagator",
-        lambda: "propagator",
-    )
-    monkeypatch.setattr(tracer_module, "_setup_logging", lambda: None)
-    monkeypatch.setattr(tracer_module, "_init_asyncio_instrumentation", lambda: None)
-
-    tracer_module.init_tracer(
-        endpoint="https://apmplus-cn-beijing.ivolces.com/api/otlp/v1/traces",
-        service_name="memorydb",
-        protocol="http",
-        headers={"X-ByteAPM-AppKey": "trace-appkey"},
-        enabled=True,
-    )
-
-    assert captured["endpoint"] == "https://apmplus-cn-beijing.ivolces.com/api/otlp/v1/traces"
-    assert captured["headers"] == {"X-ByteAPM-AppKey": "trace-appkey"}
+    try:
+        tracer = tracer_module.init_tracer(
+            endpoint=endpoint,
+            service_name="memorydb",
+            protocol=protocol,
+            insecure=True,
+            headers=headers,
+        )
+        assert tracer is not None
+        exporter.assert_called_once_with(endpoint=endpoint, headers=headers, **transport_options)
+        with tracer.start_as_current_span("test-operation"):
+            pass
+        assert providers[0].force_flush(timeout_millis=1000)
+        (span,) = sink.get_finished_spans()
+        assert span.name == "test-operation"
+        assert span.resource.attributes["service.name"] == "memorydb"
+    finally:
+        for provider in providers:
+            provider.shutdown()
 
 
-def test_init_otel_log_handler_forwards_headers_to_grpc_exporter(monkeypatch):
-    captured = {}
+@pytest.mark.parametrize(
+    ("protocol", "endpoint", "exporter_name", "transport_options"),
+    [
+        ("grpc", "localhost:4317", "OTLPGrpcLogExporter", {"insecure": True}),
+        ("http", "http://localhost:4318/v1/logs", "OTLPHttpLogExporter", {}),
+    ],
+    ids=["grpc", "http"],
+)
+def test_init_otel_log_handler_forwards_headers(
+    monkeypatch, protocol, endpoint, exporter_name, transport_options
+):
+    import logging
 
-    class FakeExporter:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
+    from opentelemetry.sdk._logs import LoggerProvider
+    from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 
-    class FakeLoggerProvider:
-        def __init__(self, resource=None):
-            self.resource = resource
-
-        def add_log_record_processor(self, _processor):
-            return None
-
+    exporter = InMemoryLogRecordExporter()
+    exporter_factory = Mock(return_value=exporter)
+    providers: list[LoggerProvider] = []
     monkeypatch.setattr(logger_module, "_otel_log_handler_initialized", False)
     monkeypatch.setattr(logger_module, "_otel_log_handler", None)
-    monkeypatch.setattr(logger_module, "OTLPGrpcLogExporter", FakeExporter)
-    monkeypatch.setattr(
-        logger_module,
-        "BatchLogRecordProcessor",
-        lambda exporter: exporter,
-    )
-    monkeypatch.setattr(logger_module, "LoggerProvider", FakeLoggerProvider)
-    monkeypatch.setattr(
-        logger_module,
-        "LoggingHandler",
-        lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-    monkeypatch.setattr(
-        logger_module,
-        "Resource",
-        SimpleNamespace(create=lambda attrs: attrs),
-    )
-    monkeypatch.setattr(logger_module, "set_logger_provider", lambda _provider: None)
-    monkeypatch.setattr(
-        logger_module,
-        "get_logger",
-        lambda _name: SimpleNamespace(
-            info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None
-        ),
-    )
+    monkeypatch.setattr(logger_module, exporter_name, exporter_factory)
+    monkeypatch.setattr(logger_module, "set_logger_provider", providers.append)
+    headers = {"x-byteapm-appkey": "test-log-key"}
 
-    handler = logger_module.init_otel_log_handler(
-        protocol="grpc",
-        endpoint="apmplus-cn-beijing.ivolces.com:4317",
-        service_name="memorydb",
-        insecure=True,
-        headers={"x-byteapm-appkey": "log-appkey"},
-        enabled=True,
-    )
+    try:
+        handler = logger_module.init_otel_log_handler(
+            protocol=protocol,
+            endpoint=endpoint,
+            service_name="memorydb",
+            insecure=True,
+            headers=headers,
+        )
 
-    assert handler is not None
-    assert captured["endpoint"] == "apmplus-cn-beijing.ivolces.com:4317"
-    assert captured["insecure"] is True
-    assert captured["headers"] == {"x-byteapm-appkey": "log-appkey"}
-
-
-def test_init_otel_log_handler_forwards_headers_to_http_exporter(monkeypatch):
-    captured = {}
-
-    class FakeExporter:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    class FakeLoggerProvider:
-        def __init__(self, resource=None):
-            self.resource = resource
-
-        def add_log_record_processor(self, _processor):
-            return None
-
-    monkeypatch.setattr(logger_module, "_otel_log_handler_initialized", False)
-    monkeypatch.setattr(logger_module, "_otel_log_handler", None)
-    monkeypatch.setattr(logger_module, "OTLPHttpLogExporter", FakeExporter)
-    monkeypatch.setattr(
-        logger_module,
-        "BatchLogRecordProcessor",
-        lambda exporter: exporter,
-    )
-    monkeypatch.setattr(logger_module, "LoggerProvider", FakeLoggerProvider)
-    monkeypatch.setattr(
-        logger_module,
-        "LoggingHandler",
-        lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-    monkeypatch.setattr(
-        logger_module,
-        "Resource",
-        SimpleNamespace(create=lambda attrs: attrs),
-    )
-    monkeypatch.setattr(logger_module, "set_logger_provider", lambda _provider: None)
-    monkeypatch.setattr(
-        logger_module,
-        "get_logger",
-        lambda _name: SimpleNamespace(
-            info=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None
-        ),
-    )
-
-    handler = logger_module.init_otel_log_handler(
-        protocol="http",
-        endpoint="https://apmplus-cn-beijing.ivolces.com/api/otlp/v1/logs",
-        service_name="memorydb",
-        headers={"X-ByteAPM-AppKey": "log-appkey"},
-        enabled=True,
-    )
-
-    assert handler is not None
-    assert captured["endpoint"] == "https://apmplus-cn-beijing.ivolces.com/api/otlp/v1/logs"
-    assert captured["headers"] == {"X-ByteAPM-AppKey": "log-appkey"}
-
-
-def test_telemetry_summary_detects_groups_by_prefix_without_static_key_lists():
-    telemetry = MemoryOperationTelemetry(operation="search.find", enabled=True)
-    telemetry.set("vector.debug_probe", 1)
-    telemetry.set("queue.semantic.processed", 2)
-    telemetry.set("memory.extracted", 1)
-
-    result = telemetry.finish().summary
-
-    assert "vector" in result
-    assert "queue" in result
-    assert "memory" in result
+        assert handler is not None
+        exporter_factory.assert_called_once_with(
+            endpoint=endpoint, headers=headers, **transport_options
+        )
+        record = logging.LogRecord(
+            "openviking.test", logging.ERROR, __file__, 1, "test log", (), None
+        )
+        record.api_key = "private-key"
+        handler.handle(record)
+        assert providers[0].force_flush(timeout_millis=1000)
+        (exported,) = (
+            item for item in exporter.get_finished_logs() if item.log_record.body == "test log"
+        )
+        assert exported.log_record.attributes is not None
+        assert "api_key" not in exported.log_record.attributes
+        assert exported.resource.attributes["service.name"] == "memorydb"
+    finally:
+        for provider in providers:
+            provider.shutdown()
 
 
 @pytest.mark.asyncio
@@ -866,7 +736,8 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
 
     provider = SimpleNamespace(bind=Mock(return_value=_TelemetryAwareEmbedder()))
     handler = TextEmbeddingHandler(
-        _DummyVikingDB(), embedding_provider=provider,
+        _DummyVikingDB(),
+        embedding_provider=provider,
     )
     payload = {
         "data": json.dumps(
@@ -894,17 +765,3 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     result = telemetry.finish()
     summary = result.summary
     assert summary["tokens"]["embedding"] == {"total": 9}
-
-
-def test_telemetry_summary_includes_only_memory_group_when_memory_metrics_exist():
-    telemetry = MemoryOperationTelemetry(operation="session.commit", enabled=True)
-    telemetry.record_token_usage("llm", 5, 3)
-    telemetry.set("memory.extracted", 4)
-
-    summary = telemetry.finish().summary
-
-    assert summary["memory"] == {"extracted": 4}
-    assert "queue" not in summary
-    assert "vector" not in summary
-    assert "semantic_nodes" not in summary
-    assert "errors" not in summary

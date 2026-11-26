@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from openviking.config.vlm import VLMHandle
 from openviking.message import Message
+from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 from openviking.prompts import render_prompt
 from openviking_cli.retrieve.types import ContextType, QueryPlan, TypedQuery
 from openviking_cli.utils.llm import parse_json_from_response
@@ -24,6 +25,7 @@ DEFAULT_INTENT_ANALYSIS_PROMPT = "retrieval.intent_analysis"
 QUERY_PLANNER_PROMPT_BY_MODEL: dict[str, str] = {
     "ollama/guoxuter/ov_intent_analysis_sft:v7_q8": "retrieval.ov_intent_analysis_sft_v7",
     "ollama/guoxuter/ov_intent_analysis_sft:v4_q8": "retrieval.ov_intent_analysis_sft_v4",
+    "ov_intent_analysis_rl": "retrieval.ov_intent_analysis_rl",
 }
 
 
@@ -85,7 +87,8 @@ class IntentAnalyzer:
             prompt_id=resolve_intent_analysis_prompt_id(query_planner),
         )
 
-        response = await query_planner.get_completion_async(prompt)
+        with bind_dashboard_token_source_type("semantic_search"):
+            response = await query_planner.get_completion_async(prompt)
 
         # Parse result
         parsed = parse_json_from_response(response)
@@ -124,11 +127,12 @@ class IntentAnalyzer:
             )
 
         # Log analysis result
-        for i, q in enumerate(queries):
-            logger.info(
-                f'  [{i + 1}] type={q.context_type.value}, priority={q.priority}, query="{q.query}"'
-            )
-        logger.debug(f"[IntentAnalyzer] Reasoning: {reasoning[:200]}...")
+        logger.debug(
+            "intent analysis completed total=%d reasoning_chars=%d",
+            len(queries),
+            len(reasoning),
+            extra={"total": len(queries)},
+        )
 
         return QueryPlan(
             queries=queries,

@@ -4,12 +4,14 @@
 """Tests for the Prometheus metrics endpoint and exposition output."""
 
 import json
+import re
 from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from openviking.metrics.core.registry import MetricRegistry
+from openviking.metrics.datasources.http import HttpRequestLifecycleDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
 from openviking.metrics.global_api import (
     get_metrics_registry,
@@ -27,48 +29,6 @@ from openviking.server.config import (
     PrometheusExporterConfig,
     ServerConfig,
 )
-
-
-class TestPrometheusExposition:
-    def test_counter_histogram_and_labels(self):
-        registry = MetricRegistry()
-        labels = {"context_type": "memory"}
-        registry.counter(
-            "openviking_retrieval_requests_total",
-            label_names=("context_type",),
-        ).inc(labels=labels)
-        registry.counter(
-            "openviking_retrieval_requests_total",
-            label_names=("context_type",),
-        ).inc(labels=labels)
-        registry.histogram(
-            "openviking_retrieval_latency_seconds",
-            label_names=("context_type",),
-        ).observe(0.02, labels=labels)
-
-        registry.counter("openviking_cache_hits_total", label_names=("level",)).inc(
-            labels={"level": "L0"}
-        )
-        registry.counter("openviking_cache_hits_total", label_names=("level",)).inc(
-            labels={"level": "L0"}
-        )
-        registry.counter("openviking_cache_misses_total", label_names=("level",)).inc(
-            labels={"level": "L1"}
-        )
-
-        exporter = PrometheusExporter(registry=registry)
-        text = exporter.render()
-
-        assert 'openviking_retrieval_requests_total{context_type="memory"} 2' in text
-        assert 'openviking_retrieval_latency_seconds_count{context_type="memory"} 1' in text
-        assert (
-            'openviking_retrieval_latency_seconds_bucket{context_type="memory",le="0.05"} 1' in text
-        )
-        assert (
-            'openviking_retrieval_latency_seconds_bucket{context_type="memory",le="+Inf"} 1' in text
-        )
-        assert 'openviking_cache_hits_total{level="L0"} 2' in text
-        assert 'openviking_cache_misses_total{level="L1"} 1' in text
 
 
 class TestRetrievalStatsMetricsIntegration:
@@ -109,9 +69,10 @@ class TestRetrievalStatsMetricsIntegration:
                 'openviking_retrieval_results_total{account_id="__unknown__",context_type="memory"} 3'
                 in text
             )
-            assert (
-                'openviking_retrieval_latency_seconds_count{account_id="__unknown__",context_type="memory"} 1'
-                in text
+            assert re.search(
+                r'openviking_retrieval_latency_seconds_count\{account_id="__unknown__",'
+                r'bucket_schema="[0-9a-f]{16}",context_type="memory"\} 1',
+                text,
             )
         finally:
             shutdown_metrics(app=None)
@@ -156,55 +117,38 @@ class TestMetricsEndpoint:
             resp = await client.get("/metrics")
             assert resp.status_code == 404
 
-    async def test_metrics_enabled_returns_200(self):
+    @pytest.mark.parametrize("roles", [["api"], ["queue_worker"], ["scheduler"]])
+    async def test_metrics_enabled_exports_sample_with_default_prometheus(self, roles):
         config = ServerConfig(
-            observability=ObservabilityConfig(
-                metrics=MetricsConfig(
-                    enabled=True,
-                    exporters=MetricsExportersConfig(
-                        prometheus=PrometheusExporterConfig(enabled=True)
-                    ),
-                )
-            )
+            roles=roles,
+            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True)),
         )
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app)
         transport = httpx.ASGITransport(app=app)
         try:
             registry = get_metrics_registry()
-            registry.counter(
+            registry.inc_counter(
                 "openviking_retrieval_requests_total",
                 label_names=("context_type",),
-            ).inc(labels={"context_type": "memory"})
+                labels={"context_type": "memory"},
+            )
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
                 resp = await client.get("/metrics")
                 assert resp.status_code == 200
-                assert "openviking_retrieval_requests_total" in resp.text
+                assert resp.headers["content-type"].startswith("text/plain")
+                assert 'openviking_retrieval_requests_total{context_type="memory"} 1' in resp.text
         finally:
             shutdown_metrics(app=app)
 
-    async def test_metrics_enabled_by_new_server_metrics_flag(self):
-        config = ServerConfig(
-            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))
-        )
-        app = create_app(config=config, service=None)
-        init_metrics_from_server_config(config, app=app)
-        transport = httpx.ASGITransport(app=app)
-        try:
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-                resp = await client.get("/metrics")
-                assert resp.status_code == 200
-        finally:
-            shutdown_metrics(app=app)
-
-    async def test_metrics_account_dimension_config_is_loaded(self):
+    async def test_metrics_account_dimension_config_applies_to_exported_samples(self):
         config = ServerConfig(
             observability=ObservabilityConfig(
                 metrics=MetricsConfig(
                     enabled=True,
                     account_dimension=MetricsAccountDimensionConfig(
                         enabled=True,
-                        max_active_accounts=3,
+                        max_active_accounts=2,
                         metric_allowlist=["openviking_http_requests_total"],
                     ),
                 )
@@ -213,11 +157,34 @@ class TestMetricsEndpoint:
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app)
         try:
-            assert config.observability.metrics.account_dimension.enabled is True
-            assert config.observability.metrics.account_dimension.max_active_accounts == 3
-            assert config.observability.metrics.account_dimension.metric_allowlist == [
-                "openviking_http_requests_total"
+            for account_id in ("acct-a", "acct-b", "acct-c"):
+                HttpRequestLifecycleDataSource.record_request(
+                    method="POST",
+                    route="/api/v1/resources",
+                    status="200",
+                    duration_seconds=0.2,
+                    account_id=account_id,
+                )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                response = await client.get("/metrics")
+            assert response.status_code == 200, response.text
+            samples = response.text.splitlines()
+            requests = [
+                line for line in samples if line.startswith("openviking_http_requests_total{")
             ]
+            assert len(requests) == 3
+            for account_id in ("acct-a", "acct-b", "__overflow__"):
+                assert any(f'account_id="{account_id}"' in line for line in requests)
+            durations = [
+                line
+                for line in samples
+                if line.startswith("openviking_http_request_duration_seconds_count{")
+            ]
+            [duration] = durations
+            assert 'account_id="__unknown__"' in duration
+            assert float(duration.rsplit(" ", 1)[1]) == 3
         finally:
             shutdown_metrics(app=app)
 
@@ -269,7 +236,7 @@ class TestMetricsEndpoint:
         finally:
             shutdown_metrics(app=app)
 
-    def test_default_collector_manager_import_does_not_require_vikingbot(self, monkeypatch):
+    async def test_default_collector_manager_import_does_not_require_vikingbot(self, monkeypatch):
         import importlib
         import sys
 

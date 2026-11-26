@@ -3,7 +3,7 @@
 """
 Retrieval module for OpenViking.
 
-Provides intent-driven hierarchical context retrieval.
+Provides global context retrieval with optional intent analysis and reranking.
 """
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever

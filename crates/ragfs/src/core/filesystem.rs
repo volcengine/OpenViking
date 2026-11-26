@@ -174,9 +174,8 @@ pub(crate) fn relative_depth(rel: &str) -> usize {
 
 /// Compile a grep pattern into a `Regex`, applying the case-insensitive `(?i)` prefix.
 ///
-/// Shared by the trait's default `grep` and by `EncryptionWrappedFS::grep`, so the regex setup
-/// lives in exactly one place (no copy-paste drift between the two call sites).
-pub(crate) fn compile_grep_regex(pattern: &str, case_insensitive: bool) -> Result<Regex> {
+/// Shared by filesystem grep and the matcher for already-read text.
+pub fn compile_grep_regex(pattern: &str, case_insensitive: bool) -> Result<Regex> {
     let regex_pattern = if case_insensitive {
         format!("(?i){}", pattern)
     } else {
@@ -595,6 +594,7 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `offset` - Number of flattened DFS entries to skip
     /// * `sort_by` - Optional sibling sort field
     /// * `sort_order` - Optional sibling sort direction
+    /// * `directories_only` - Whether to return only directory entries
     ///
     /// # Returns
     /// A flat `Vec<TreeEntry>` in DFS order (directories before their children).
@@ -607,6 +607,7 @@ pub trait FileSystem: Send + Sync + Any {
         offset: Option<usize>,
         sort_by: Option<ListSortBy>,
         sort_order: Option<SortOrder>,
+        directories_only: bool,
     ) -> Result<Vec<TreeEntry>> {
         let normalized_path = normalize_prefix_path(path);
         let mut result = Vec::new();
@@ -620,6 +621,7 @@ pub trait FileSystem: Send + Sync + Any {
             level_limit,
             sort_by,
             sort_order,
+            directories_only,
             &mut result,
         )
         .await?;
@@ -647,7 +649,16 @@ pub trait FileSystem: Send + Sync + Any {
         }
 
         let entries = self
-            .tree_directory(path, show_hidden, None, level_limit, None, None, None)
+            .tree_directory(
+                path,
+                show_hidden,
+                None,
+                level_limit,
+                None,
+                None,
+                None,
+                false,
+            )
             .await?;
 
         let mut matched = Vec::new();
@@ -696,6 +707,7 @@ pub trait FileSystem: Send + Sync + Any {
     /// * `level_limit` - Maximum depth relative to base_path
     /// * `sort_by` - Optional sibling sort field
     /// * `sort_order` - Optional sibling sort direction
+    /// * `directories_only` - Whether to add only directory entries to the result
     /// * `result` - Accumulator for the flat result list
     async fn tree_directory_internal(
         &self,
@@ -706,6 +718,7 @@ pub trait FileSystem: Send + Sync + Any {
         level_limit: Option<usize>,
         sort_by: Option<ListSortBy>,
         sort_order: Option<SortOrder>,
+        directories_only: bool,
         result: &mut Vec<TreeEntry>,
     ) -> Result<()> {
         if node_limit.is_some_and(|limit| result.len() >= limit) {
@@ -746,12 +759,14 @@ pub trait FileSystem: Send + Sync + Any {
 
             let rel_path = relative_match_file(base_path, &entry_path);
 
-            result.push(TreeEntry {
-                path: entry_path.clone(),
-                rel_path,
-                info: entry.clone(),
-                extra: std::collections::HashMap::new(),
-            });
+            if entry.is_dir || !directories_only {
+                result.push(TreeEntry {
+                    path: entry_path.clone(),
+                    rel_path,
+                    info: entry.clone(),
+                    extra: std::collections::HashMap::new(),
+                });
+            }
 
             if entry.is_dir {
                 self.tree_directory_internal(
@@ -762,6 +777,7 @@ pub trait FileSystem: Send + Sync + Any {
                     level_limit,
                     sort_by,
                     sort_order,
+                    directories_only,
                     result,
                 )
                 .await?;
@@ -814,71 +830,6 @@ pub trait FileSystem: Send + Sync + Any {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-
-    // Mock filesystem for testing
-    struct MockFS;
-
-    #[async_trait]
-    impl FileSystem for MockFS {
-        async fn create(&self, _path: &str) -> Result<()> {
-            Ok(())
-        }
-
-        async fn mkdir(&self, _path: &str, _mode: u32) -> Result<()> {
-            Ok(())
-        }
-
-        async fn remove(&self, _path: &str) -> Result<()> {
-            Ok(())
-        }
-
-        async fn remove_all(&self, _path: &str) -> Result<()> {
-            Ok(())
-        }
-
-        async fn read(&self, _path: &str, _offset: u64, _size: u64) -> Result<Vec<u8>> {
-            Ok(vec![])
-        }
-
-        async fn write(
-            &self,
-            _path: &str,
-            _data: &[u8],
-            _offset: u64,
-            _flags: WriteFlag,
-        ) -> Result<u64> {
-            Ok(_data.len() as u64)
-        }
-
-        async fn read_dir(
-            &self,
-            _path: &str,
-            _offset: Option<usize>,
-            _limit: Option<usize>,
-            _sort_by: Option<ListSortBy>,
-            _sort_order: Option<SortOrder>,
-        ) -> Result<Vec<FileInfo>> {
-            Ok(vec![])
-        }
-
-        async fn stat(&self, _path: &str) -> Result<FileInfo> {
-            Ok(FileInfo::new_file("test".to_string(), 0, 0o644))
-        }
-
-        async fn rename(&self, _old_path: &str, _new_path: &str) -> Result<()> {
-            Ok(())
-        }
-
-        async fn chmod(&self, _path: &str, _mode: u32) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn test_filesystem_trait() {
-        let fs = MockFS;
-        assert!(fs.exists("/test").await);
-    }
 
     #[derive(Default)]
     struct TreeFS {
@@ -1123,6 +1074,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         )
         .await
         .unwrap()
@@ -1251,12 +1203,45 @@ mod tests {
                 Some(1),
                 Some(ListSortBy::Name),
                 Some(SortOrder::Asc),
+                false,
             )
             .await
             .unwrap();
 
         assert_eq!(entries.len(), 3);
         assert_tree_names(&entries, &["b.txt", "c.txt", "d.txt"]);
+    }
+
+    #[tokio::test]
+    async fn test_tree_directories_only_filters_before_pagination() {
+        let fs = TreeFS::default()
+            .with_dir_entries(
+                "/root",
+                vec![
+                    ("file-a.txt", false),
+                    ("dir-a", true),
+                    ("file-b.txt", false),
+                    ("dir-b", true),
+                ],
+            )
+            .with_dir_entries("/root/dir-a", vec![])
+            .with_dir_entries("/root/dir-b", vec![]);
+
+        let entries = fs
+            .tree_directory(
+                "/root",
+                false,
+                Some(1),
+                None,
+                Some(1),
+                Some(ListSortBy::Name),
+                Some(SortOrder::Asc),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_tree_names(&entries, &["dir-b"]);
     }
 
     #[tokio::test]
@@ -1354,7 +1339,7 @@ mod tests {
         let fs = TreeFS::default().with_dir_entries("/", vec![("a.txt", false), ("sub", true)]);
 
         let entries = fs
-            .tree_directory("/", false, None, None, None, None, None)
+            .tree_directory("/", false, None, None, None, None, None, false)
             .await
             .unwrap();
 
@@ -1373,7 +1358,7 @@ mod tests {
             .with_dir_entries("/a/b/c/d/e", vec![("f.txt", false)]);
 
         let entries = fs
-            .tree_directory("/a", false, None, None, None, None, None)
+            .tree_directory("/a", false, None, None, None, None, None, false)
             .await
             .unwrap();
 

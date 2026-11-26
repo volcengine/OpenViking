@@ -1,7 +1,7 @@
 import { OpenVikingClient } from "./client.mjs";
 import { resolveConfig } from "./config.mjs";
 import { injectStartupProfile } from "./lifecycle.mjs";
-import { mountOpenVikingMcp } from "./mcp.mjs";
+import { fillHistorySession, mountOpenVikingMcp } from "./mcp.mjs";
 import { OpenVikingRuntime } from "./runtime.mjs";
 import { mountOpenVikingSkills } from "./skills.mjs";
 import { guardVikingUri, noticeVikingUri } from "./uri-guard.mjs";
@@ -12,7 +12,11 @@ export const inject = ["agents", "sessions", "tools"];
 export function apply(ctx, input = {}) {
   const config = resolveConfig(input);
   const client = new OpenVikingClient(config);
-  const runtime = new OpenVikingRuntime(client, config, ctx.logger);
+  const runtime = new OpenVikingRuntime(client, config, ctx.logger, cwd => (
+    // Rebuild from the host input, not the config already merged for boot's cwd.
+    // The shared loader preserves host/env precedence over workspace settings.
+    resolveConfig(input, process.env, cwd)
+  ));
   const skipMemory = session => (
     config.skipSubagentSessions && session?.header?.origin === "subagent"
   );
@@ -30,14 +34,43 @@ export function apply(ctx, input = {}) {
     "openvikingMemory.stopDrainer()",
   );
 
-  ctx.on("agent/session-start", ({ agent }) => {
-    if (skipMemory(agent.session)) return false;
+  // Per-agent startup: register the session's disposal commit, initialize the
+  // OpenViking session, and inject the profile while the agent is still idle.
+  // Runs at most once per agent, whichever DSH event reaches it.
+  const started = new WeakSet();
+  const startAgent = async (agent, signal, source) => {
+    if (skipMemory(agent.session) || started.has(agent)) return false;
+    started.add(agent);
+    if (source === "resume") runtime.markHistoryPointer(agent.session, "resume");
     agent.ctx.effect(
       () => () => runtime.dispose(agent.session),
       "openvikingMemory.disposeSession()",
     );
-    return injectStartupProfile(agent, runtime);
+    try {
+      return await injectStartupProfile(agent, runtime, signal);
+    } catch (error) {
+      // A throw from a serial `agent/created` listener fails agent creation;
+      // memory startup must never do that. pre-step retries profile delivery.
+      runtime.log("startup_error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  };
+
+  // DSH 0.1.7+ has no `agent/session-start`; startup is the serial
+  // `agent/created` event with `{ agent, source, signal? }`, and AgentLoop holds
+  // queued input until its listeners settle. DSH 0.1.0-rc.6 and 0.1.5 still
+  // emit a composition-only `agent/created` with `{ agent }` only, followed by
+  // `agent/session-start`, so a missing `source` leaves startup to that event.
+  // The listener must resolve to undefined: any other value bails the serial
+  // dispatch and skips the listeners registered after this one.
+  ctx.on("agent/created", async ({ agent, source, signal }) => {
+    if (source === undefined) return undefined;
+    await untilAborted(startAgent(agent, signal, source), signal);
+    return undefined;
   });
+  ctx.on("agent/session-start", ({ agent, source }) => startAgent(agent, undefined, source));
 
   // prepend: downstream waterfall listeners run first, so this plugin sees
   // the final claimed batch and appends after every other contributor.
@@ -49,13 +82,15 @@ export function apply(ctx, input = {}) {
     if (skipMemory(agent.session)) return decision;
     if (decision.kind !== "enter" || signal.aborted) return decision;
     const [profile, recall] = await Promise.all([
-      runtime.profileMessage(agent),
-      runtime.recallMessage(agent, decision.messages),
+      runtime.profileMessage(agent, decision.messages),
+      runtime.recallMessage(agent, decision.messages, signal),
     ]);
     if (signal.aborted) return decision;
-    const additions = [profile, recall].filter(Boolean);
+    const additions = [profile, recall, runtime.historyPointerMessage(agent, ctx.sessions)].filter(Boolean);
+    // Keep the rest of the decision: goal-round-driver marks its entries with
+    // `startsRequestSeries`, and rebuilding the object would drop that flag.
     return additions.length > 0
-      ? { kind: "enter", messages: [...decision.messages, ...additions] }
+      ? { ...decision, messages: [...decision.messages, ...additions] }
       : decision;
   }, { prepend: true });
 
@@ -63,6 +98,9 @@ export function apply(ctx, input = {}) {
     if (skipMemory(session)) return;
     runtime.capture(session, event);
     runtime.maybeCommit(session, event);
+    if (event.type === "compaction/end" && !event.data?.error) {
+      runtime.markHistoryPointer(session, "compact");
+    }
   });
 
   ctx.on("session/flush", async session => {
@@ -72,10 +110,31 @@ export function apply(ctx, input = {}) {
 
   ctx.on("tools/pre-execute", guardVikingUri);
   ctx.on("tools/post-execute", noticeVikingUri);
+  ctx.on("tools/execute", (exec, next) => (
+    skipMemory(exec.agent?.session) ? next() : fillHistorySession(ctx.tools, exec, next, ctx.sessions)
+  ));
 
   // Mounted last, and deliberately not awaited: the bridge's apply blocks on
   // its first tools/list, so a server that accepts the connection but never
   // answers would otherwise hold up every registration above it.
+  // The skills tell the model to call the MCP tools, so `mcpEnabled: false`
+  // leaves both out, as on OpenCode and pi.
+  if (config.mcpEnabled === false) return;
   mountOpenVikingMcp(ctx, config);
   mountOpenVikingSkills(ctx);
+}
+
+// Resolve when `promise` settles or `signal` aborts, whichever comes first. An
+// abandoned initialization keeps running and is reused by the pre-step path.
+function untilAborted(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const onAbort = () => resolve();
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.finally(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    });
+  });
 }

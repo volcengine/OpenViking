@@ -1,10 +1,10 @@
 # 上下文层级（L0/L1/L2）
 
-OpenViking 使用三层信息模型，在检索效率、导航能力和原始内容完整性之间取得平衡。
+OpenViking 用摘要和概览定位内容，需要细节时再读取正文。这三个层级分别称为 L0、L1 和 L2。
 
 ## 概览
 
-| 层级 | 名称 | 存储形式 | 默认正文上限 | 用途 |
+| 层级 | 名称 | 存储形式 | 默认生成正文预算 | 用途 |
 | --- | --- | --- | --- | --- |
 | **L0** | 摘要 | 目录内的 `.abstract.md` | 256 字符 | 向量检索、快速过滤 |
 | **L1** | 概览 | 目录内的 `.overview.md` | 4000 字符 | Rerank、内容导航 |
@@ -14,7 +14,7 @@ L0/L1 是**目录级语义 sidecar**。它们描述一个目录，不是为每�
 
 L0 和 L1 通常成对生成，但系统允许只存在其中一个。例如，`mkdir()` 会先创建 L0：未传入 `description` 时使用目录名作为默认正文，传入后使用该说明。因此只有 `.abstract.md` 的目录也是合法状态。读取和向量重建只处理实际存在的层级。
 
-正文上限由 `semantic.abstract_max_chars` 和 `semantic.overview_max_chars` 配置；上表是默认值。限制只作用于 Markdown 正文，不会截断 sidecar 元数据。
+资源目录摘要的生成预算按字符计算，由 `semantic.abstract_max_chars` 和 `semantic.overview_max_chars` 配置；上表是默认值。预算作用于生成的 Markdown 正文，不包含 sidecar 元数据。
 
 ## L0：摘要
 
@@ -50,11 +50,11 @@ L1 提供更完整的目录摘要和导航信息，用于 Rerank 和决定是否
 overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
-L0 从 L1 正文中提取：取 H1 标题之后、第一个 `##` 标题之前的 Brief Description 段落。YAML frontmatter 不参与提取。
+普通目录由模型根据文件摘要和子目录 L0 写一份目录简介。L1 开头保留完整简介，模板补上条目导航和读取指引，按剩余空间放入链接和说明。L0 从同一份简介取短版。记忆目录刷新时，如果 L0 缺失且类型提供了预设文案，就写入预设 L0 并标记为 `manual`。L1 直接使用已存的记忆字段渲染，普通记忆写入后的目录刷新无需调用文本生成模型。Skill 根目录的 L0 来自 Skill 元信息，L1 使用 `SKILL.md` 正文。
 
 ## L2：详情
 
-L2 是原始文件或解析后的完整内容，只在需要时加载，并保留源格式和结构。
+L2 是原始文件或解析后的正文，按需加载。格式取决于导入方式，例如 PDF 可被解析为 Markdown，并不一定保留源文件格式。
 
 ```python
 content = client.read(uri="viking://resources/docs/auth/oauth.md")
@@ -146,11 +146,11 @@ API 认证指南，涵盖 OAuth 2.0、JWT 令牌和 API 密钥。
 - `unsampled_entries`：未采样的直接子项数，满足 `sampled + unsampled = total`。
 - `pending_child_changes`：尚未反映到当前正文中的直接子项变化事件数（同一子项重复变化会分别计数）。
 
-当直接子项超过 `semantic.overview_sample_limit`（默认 32）时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，避免无意义的正文和 Git diff 抖动。
+当直接子项超过 `semantic.overview_sample_limit`（默认 32）时，系统使用确定性、保序的稳定采样。相同目录树重复刷新会选择相同样本，减少采样变化带来的正文差异；模型重新生成的正文仍可能不同。
 
 `pending_child_changes > 0` 表示正文仍然可读，但已知落后于下层变化。父目录刷新成功后，该值会随新的覆盖率元数据重置为 0。
 
-resource/skill 的父目录刷新已使用 freshness 决策。子目录 L0 正文不变时，不触发向上传播。正文变化后，若父目录没有 freshness 基线，或直接子项数不超过 `semantic.overview_sample_limit`，则立即安排刷新。更大的目录会累计 `pending_child_changes`，其与 `total_entries` 的比值达到 `semantic.freshness_refresh_ratio`（默认 `0.10`）时才刷新。手动刷新或导入仅对请求的根目录跳过阈值，不会强制刷新所有祖先。传播止于 namespace 根边界。未达阈值时父目录仍可读，但保留 pending 状态；阈值策略不承诺定时刷新。
+资源、记忆和 Skill 的自动目录刷新共用 freshness 决策。子目录 L0 正文不变时，不触发向上传播。正文变化后，若父目录没有 freshness 基线，或直接子项数不超过 `semantic.overview_sample_limit`，则立即安排刷新。更大的目录会累计 `pending_child_changes`，其与 `total_entries` 的比值达到 `semantic.freshness_refresh_ratio`（默认 `0.10`）时才刷新。手动刷新或导入仅对请求的根目录跳过阈值，不会强制刷新所有祖先。传播止于 namespace 根边界。未达阈值时父目录仍可读，但保留 pending 状态；阈值策略不承诺定时刷新。
 
 ## 写保护
 
@@ -163,15 +163,19 @@ L0/L1 正文可以通过公共 `write` / `batch_write` 更新，但 metadata 受
 - `append` 只追加正文，不会把用户内容追加到 frontmatter。
 - 正文更新只重建该目录实际存在的 L0/L1 向量，不触发语义重新生成，避免刚写入的正文被覆盖。
 
+通过 `write` / `batch_write` 修改已有 L0 正文后，系统将其标记为 `maintenance: manual`。该标记由系统维护，不能通过公共写入 API 修改或删除。之后的自动刷新和语义重建保留人工 L0，L1 导航仍自动更新。L1 不支持人工保留区域，直接修改的正文会在后续生成时被替换。
+
+系统预置的 L0 同样属于 `manual`。新建时写入该标记；此前由目录初始化写入、尚无该标记的 L0 按已有生成来源识别为人工维护。预置 L1 不受此保护。
+
 ## 生成机制
 
 SemanticProcessor 自底向上处理目录：
 
 ```text
-文件摘要 → 叶子目录 L1 → 叶子目录 L0 → 父目录 → namespace 根边界
+文件摘要 / 子目录 L0 → 目录 L0 → 模板渲染目录 L1 → 父目录
 ```
 
-子目录 L0 被聚合到父目录 L1。Memory 目录也通过统一的 SemanticProcessor 入口处理，但当前父级冒泡逻辑只用于 resource/skill。多模态文件会先生成文本摘要，再作为普通文件摘要参与其所在目录的 L0/L1；不会为每个图片、音频或视频创建 per-file L0/L1 sidecar。
+子目录 L0 被聚合到父目录 L0，再作为父目录 L1 的简介。父目录传播沿用各命名空间的语义根边界。多模态文件会先生成文本摘要，再作为普通文件摘要参与其所在目录的 L0/L1；不会为每个图片、音频或视频创建 per-file L0/L1 sidecar。
 
 ## 最佳实践
 

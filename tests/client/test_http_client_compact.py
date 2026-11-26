@@ -1,138 +1,71 @@
-"""Unit tests for request-body compaction on find/search/add_resource.
+"""Request compatibility with servers that reject unknown optional fields."""
 
-Older OpenViking instances use ``model_config = ConfigDict(extra="forbid")`` and
-reject any field they do not yet define. The SDK must not attach optional fields
-as ``null``/``{}`` when the caller never set them, otherwise the whole request
-fails with ``body.<field>: Extra inputs are not permitted`` (see PR #2799 for the
-equivalent CLI fix).
-"""
+import json
 
-from typing import Any, Dict, List
+import httpx
+import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
 
 
-class _FakeHTTPClient:
-    """Records the last request and returns a canned response."""
+@pytest_asyncio.fixture
+async def client_requests(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(tmp_path / "missing.conf"))
+    requests = []
 
-    def __init__(self):
-        self.calls: List[Dict[str, Any]] = []
-        self.next_response: Any = object()
+    def handle(request):
+        requests.append((request.url.path, json.loads(request.content)))
+        return httpx.Response(200, json={"status": "ok", "result": {}})
 
-    async def post(self, path, *, json=None, headers=None):
-        self.calls.append({"method": "POST", "path": path, "json": json, "headers": headers})
-        return self.next_response
-
-
-def _client_with_fake() -> tuple[AsyncHTTPClient, _FakeHTTPClient]:
     client = AsyncHTTPClient(url="http://localhost:1933")
-    fake = _FakeHTTPClient()
-    client._http = fake
-    client._handle_response_data = lambda response: {"result": {}}
-    return client, fake
+    client._http = httpx.AsyncClient(
+        base_url="http://localhost:1933", transport=httpx.MockTransport(handle)
+    )
+    try:
+        yield client, requests
+    finally:
+        await client.close()
 
 
-def test_compact_request_body_drops_null_and_empty_args():
-    body = {
-        "query": "hi",
-        "score_threshold": None,
-        "tags": None,
-        "args": {},
-        "wait": False,
-        "create_parent": True,
-        "filter": {"k": "v"},
-    }
-    compacted = AsyncHTTPClient._compact_request_body(body)
-    # Non-null values are kept, including `False` and non-empty objects.
-    assert compacted["query"] == "hi"
-    assert compacted["wait"] is False
-    assert compacted["create_parent"] is True
-    assert compacted["filter"] == {"k": "v"}
-    # Null fields and an empty `args` are dropped so pre-field servers accept it.
-    assert "score_threshold" not in compacted
-    assert "tags" not in compacted
-    assert "args" not in compacted
-
-
-def test_compact_request_body_keeps_non_empty_args():
-    body = {"path": "x", "args": {"feishu_access_token": "u-x"}}
-    compacted = AsyncHTTPClient._compact_request_body(body)
-    assert compacted["args"] == {"feishu_access_token": "u-x"}
-
-
-async def test_find_omits_unset_optional_fields():
-    client, fake = _client_with_fake()
-
+async def test_find_omits_unset_optional_fields(client_requests):
+    client, requests = client_requests
     await client.find("hello")
+    await client.find("hello", options={"tags": ["team=search", "env=prod"], "level": 0})
 
-    payload = fake.calls[-1]["json"]
-    assert payload["query"] == "hello"
-    assert payload["limit"] == 10
-    # `tags` is the field that breaks `find` against pre-#2706 strict instances.
-    for dropped in ("score_threshold", "filter", "context_type", "tags"):
-        assert dropped not in payload
+    assert requests == [
+        ("/api/v1/search/find", {"query": "hello", "target_uri": "", "limit": 10}),
+        (
+            "/api/v1/search/find",
+            {
+                "query": "hello",
+                "target_uri": "",
+                "limit": 10,
+                "tags": ["team=search", "env=prod"],
+                "level": 0,
+            },
+        ),
+    ]
 
 
-async def test_find_keeps_explicit_tags():
-    client, fake = _client_with_fake()
-
-    await client.find("hello", tags=["a", "b"])
-
-    payload = fake.calls[-1]["json"]
-    assert payload["tags"] == ["a", "b"]
-
-
-async def test_search_omits_unset_optional_fields():
-    client, fake = _client_with_fake()
-
+async def test_search_omits_unset_optional_fields(client_requests):
+    client, requests = client_requests
     await client.search("hello")
 
-    payload = fake.calls[-1]["json"]
-    assert payload["query"] == "hello"
-    for dropped in ("session_id", "score_threshold", "filter", "context_type", "tags"):
-        assert dropped not in payload
+    assert requests == [
+        ("/api/v1/search/search", {"query": "hello", "target_uri": "", "limit": 10})
+    ]
 
 
-async def test_add_resource_omits_empty_args_and_null_fields():
-    client, fake = _client_with_fake()
+async def test_add_resource_omits_empty_args_and_null_fields(client_requests):
+    client, requests = client_requests
+    await client.add_resource("https://example.com/doc", options={"args": {}})
+    args = {"feishu_access_token": "test-token", "parse_mode": "no_split"}
+    await client.add_resource("https://example.feishu.cn/docx/example", options={"args": args})
 
-    # A non-existent path is sent as a plain `path` body (no temp-file upload).
-    await client.add_resource("https://example.com/doc")
-
-    payload = fake.calls[-1]["json"]
-    assert payload["path"] == "https://example.com/doc"
-    # `args` is the field that breaks `add-resource` against pre-#2549 instances.
-    assert "args" not in payload
-    assert "parse_mode" not in payload
-    for dropped in (
-        "add_type",
-        "to",
-        "parent",
-        "timeout",
-        "ignore_dirs",
-        "include",
-        "exclude",
-    ):
-        assert dropped not in payload
-
-
-async def test_add_resource_keeps_explicit_args():
-    client, fake = _client_with_fake()
-
-    await client.add_resource("https://example.com/doc", args={"feishu_access_token": "u-x"})
-
-    payload = fake.calls[-1]["json"]
-    assert payload["args"] == {"feishu_access_token": "u-x"}
-
-
-async def test_add_resource_keeps_explicit_no_split_mode():
-    client, fake = _client_with_fake()
-
-    await client.add_resource(
-        "https://example.com/doc",
-        args={"parse_mode": "no_split"},
-    )
-
-    payload = fake.calls[-1]["json"]
-    assert payload["args"] == {"parse_mode": "no_split"}
-    assert "parse_mode" not in payload
+    assert requests == [
+        ("/api/v1/resources", {"path": "https://example.com/doc", "wait": False}),
+        (
+            "/api/v1/resources",
+            {"path": "https://example.feishu.cn/docx/example", "wait": False, "args": args},
+        ),
+    ]

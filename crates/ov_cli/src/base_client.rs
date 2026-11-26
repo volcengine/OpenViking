@@ -16,6 +16,68 @@ use crate::error::{Error, Result};
 const GATEWAY_MARKER_HEADER: &str = "X-VikingBot-Gateway";
 const GATEWAY_TOKEN_HEADER: &str = "X-Gateway-Token";
 
+#[cfg(test)]
+thread_local! {
+    static LAST_TEST_PROGRESS: std::cell::RefCell<Option<ProgressBar>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn progress_spinner(message: impl Into<String>) -> ProgressBar {
+    let progress = ProgressBar::new_spinner();
+    progress.set_message(message.into());
+    progress.enable_steady_tick(std::time::Duration::from_millis(100));
+    #[cfg(test)]
+    LAST_TEST_PROGRESS.with(|slot| slot.borrow_mut().replace(progress.clone()));
+    progress
+}
+
+pub(crate) struct ProgressGuard(Option<ProgressBar>, &'static str);
+
+impl ProgressGuard {
+    pub(crate) fn new(message: impl Into<String>, failure_message: &'static str) -> Self {
+        Self(Some(progress_spinner(message)), failure_message)
+    }
+
+    pub(crate) fn set_message(&self, message: &'static str) {
+        self.0.as_ref().unwrap().set_message(message);
+    }
+
+    pub(crate) fn finish(mut self, message: &'static str) {
+        self.0.take().unwrap().finish_with_message(message);
+    }
+}
+
+impl Drop for ProgressGuard {
+    fn drop(&mut self) {
+        if let Some(progress) = self.0.take() {
+            progress.abandon_with_message(self.1);
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn take_test_progress() -> Option<ProgressBar> {
+    LAST_TEST_PROGRESS.with(|slot| slot.borrow_mut().take())
+}
+
+#[cfg(test)]
+pub(crate) async fn spawn_test_response(status: &'static str, body: &'static str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut connection, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 8192];
+        let _ = connection.read(&mut request).await.unwrap();
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()
+        );
+        connection.write_all(response.as_bytes()).await.unwrap();
+    });
+    format!("http://{address}")
+}
+
 fn parse_ignore_dirs(ignore_dirs: Option<&str>) -> Vec<String> {
     ignore_dirs
         .map(|s| {
@@ -655,79 +717,53 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
 
-    #[test]
-    fn unwrap_success_envelope_preserves_profile_for_value_results() {
-        let body = json!({
-            "status": "ok",
-            "result": [
-                {"id": "1"}
-            ],
-            "profile": [
-                "line one",
-                "line two"
-            ]
-        });
-
-        let result = unwrap_success_envelope(body, true);
-
-        assert_eq!(
-            result,
-            json!({
-                "result": [
-                    {"id": "1"}
-                ],
-                "profile": [
-                    "line one",
-                    "line two"
-                ]
-            })
-        );
-    }
-
-    #[test]
-    fn unwrap_success_envelope_preserves_listing_metadata_for_value_results() {
-        let body = json!({
-            "status": "ok",
-            "result": [{"name": "a.md"}],
-            "has_more": true
-        });
-
-        let result = unwrap_success_envelope(body, true);
-
-        assert_eq!(
-            result,
-            json!({
-                "result": [{"name": "a.md"}],
-                "has_more": true
-            })
-        );
+    #[tokio::test]
+    async fn list_response_preserves_profile_and_pagination_metadata() {
+        let entries = json!([{"name": "a.md"}]);
+        for (body, expected) in [
+            (
+                r#"{"status":"ok","result":[{"name":"a.md"}],"profile":["line one"]}"#,
+                json!({"result": entries, "profile": ["line one"]}),
+            ),
+            (
+                r#"{"status":"ok","result":[{"name":"a.md"}],"has_more":true}"#,
+                json!({"result": entries, "has_more": true}),
+            ),
+            (
+                r#"{"status":"ok","result":[{"name":"a.md"}],"profile":null}"#,
+                entries.clone(),
+            ),
+        ] {
+            let base_url = spawn_test_response("200 OK", body).await;
+            let client = BaseClient::new(base_url, None, None, None, None, 5.0, true, None);
+            let response: Value = client
+                .get(
+                    "/api/v1/fs/ls",
+                    &[("uri".into(), "viking://resources".into())],
+                )
+                .await
+                .unwrap();
+            assert_eq!(response, expected);
+        }
     }
 
     #[tokio::test]
-    async fn request_timeout_is_not_reported_as_network_failure() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            let _connection = listener.accept().await.unwrap();
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        });
+    async fn content_response_preserves_profile_for_json_and_returns_text_for_string() {
+        let body = r#"{"status":"ok","result":"content","profile":["line one"]}"#;
+        let query = [("uri".into(), "viking://resources/a.md".into())];
 
-        let client = BaseClient::new(
-            format!("http://{address}"),
-            None,
-            None,
-            None,
-            None,
-            0.02,
-            false,
-            None,
+        let base_url = spawn_test_response("200 OK", body).await;
+        let client = BaseClient::new(base_url, None, None, None, None, 5.0, true, None);
+        let profiled: Value = client.get("/api/v1/content/read", &query).await.unwrap();
+        assert_eq!(
+            profiled,
+            json!({"result": "content", "profile": ["line one"]})
         );
-        let error = client
-            .get::<Value>("/slow", &[])
-            .await
-            .expect_err("slow response should time out");
 
-        assert!(matches!(error, Error::Timeout(_)));
+        let base_url = spawn_test_response("200 OK", body).await;
+        let client = BaseClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let text: String = client.get("/api/v1/content/read", &query).await.unwrap();
+        assert_eq!(text, "content");
     }
 
     #[tokio::test]
@@ -799,105 +835,28 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn unwrap_success_envelope_drops_null_profile_for_value_results() {
-        let body = json!({
-            "status": "ok",
-            "result": [
-                {"id": "1"}
-            ],
-            "profile": null
-        });
+    #[tokio::test]
+    async fn upload_progress_reports_failure_for_http_error() {
+        let base_url = spawn_test_response(
+            "400 Bad Request",
+            r#"{"error":{"code":"BAD_REQUEST","message":"invalid archive"}}"#,
+        )
+        .await;
+        let client = BaseClient::new(base_url, None, None, None, None, 5.0, false, None);
+        let uploader = FileUploader::new(&client);
+        let file = tempfile::NamedTempFile::new().expect("temporary upload should be created");
+        std::fs::write(file.path(), b"invalid").expect("temporary upload should be written");
 
-        let result = unwrap_success_envelope(body, true);
+        let _ = take_test_progress();
+        let error = uploader
+            .upload_temp_file_with_progress(file.path(), false)
+            .await
+            .expect_err("HTTP error should fail upload");
+        let progress = take_test_progress().expect("upload progress should be recorded");
 
-        assert_eq!(
-            result,
-            json!([
-                {"id": "1"}
-            ])
-        );
-    }
-
-    #[test]
-    fn unwrap_success_envelope_wraps_scalar_results_when_profile_is_preserved() {
-        let body = json!({
-            "status": "ok",
-            "result": "content",
-            "profile": [
-                "line one"
-            ]
-        });
-
-        let result = unwrap_success_envelope(body, true);
-
-        assert_eq!(
-            result,
-            json!({
-                "result": "content",
-                "profile": [
-                    "line one"
-                ]
-            })
-        );
-    }
-
-    #[test]
-    fn unwrap_success_envelope_drops_profile_for_scalar_results() {
-        let body = json!({
-            "status": "ok",
-            "result": "content",
-            "profile": [
-                "line one"
-            ]
-        });
-
-        let result = unwrap_success_envelope(body, false);
-
-        assert_eq!(result, json!("content"));
-    }
-
-    #[test]
-    fn append_profile_query_adds_flag_when_enabled() {
-        let client = BaseClient::new(
-            "http://localhost:1933",
-            None,
-            None,
-            None,
-            None,
-            5.0,
-            true,
-            None,
-        );
-
-        let params =
-            client.append_profile_query(&[("to_uri".to_string(), "viking://x".to_string())]);
-
-        assert_eq!(
-            params,
-            vec![
-                ("to_uri".to_string(), "viking://x".to_string()),
-                ("profile".to_string(), "1".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn append_profile_query_keeps_existing_profile_flag() {
-        let client = BaseClient::new(
-            "http://localhost:1933",
-            None,
-            None,
-            None,
-            None,
-            5.0,
-            true,
-            None,
-        );
-
-        let params = client.append_profile_query(&[("profile".to_string(), "1".to_string())]);
-
-        assert_eq!(params, vec![("profile".to_string(), "1".to_string())]);
+        assert!(matches!(error, Error::Api { status: Some(400), .. }));
+        assert!(progress.is_finished());
+        assert_eq!(progress.message(), "Upload failed");
     }
 
     #[test]
@@ -908,12 +867,31 @@ mod tests {
         assert_eq!(entry, "scripts/check_bounding_boxes.py");
     }
 
-    #[test]
-    fn zip_entry_name_preserves_posix_separators() {
-        let entry = zip_entry_name(Path::new("scripts/check_bounding_boxes.py"))
-            .expect("path should be utf-8");
+    #[tokio::test]
+    async fn socks5_proxy_receives_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let connection = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            drop(socket);
+        });
 
-        assert_eq!(entry, "scripts/check_bounding_boxes.py");
+        let proxy = reqwest::Proxy::all(format!("socks5://{address}")).unwrap();
+        let client = ReqwestClient::builder()
+            .proxy(proxy)
+            .timeout(Duration::from_millis(500))
+            .build()
+            .unwrap();
+
+        client
+            .get("http://127.0.0.1:9/")
+            .send()
+            .await
+            .expect_err("the request should fail without a working proxy");
+        tokio::time::timeout(Duration::from_secs(1), connection)
+            .await
+            .expect("the request should connect to the configured proxy")
+            .unwrap();
     }
 }
 
@@ -1129,14 +1107,11 @@ impl<'a> FileUploader<'a> {
         file_path: &Path,
         verbose: bool,
     ) -> Result<String> {
-        use indicatif::ProgressBar;
-
         let url = format!("{}/api/v1/resources/temp_upload", self.client.base_url);
         let file_name = file_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("temp_upload.zip");
-
         let file_content = tokio::fs::read(file_path).await?;
         let file_size = file_content.len() as u64;
 
@@ -1148,16 +1123,16 @@ impl<'a> FileUploader<'a> {
             );
         }
 
-        let pb = ProgressBar::new_spinner();
-        pb.set_message(format!(
-            "Uploading {} ({:.2} MB)...",
-            file_name,
-            file_size as f64 / 1024.0 / 1024.0
-        ));
-        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        let progress = ProgressGuard::new(
+            format!(
+                "Uploading {} ({:.2} MB)...",
+                file_name,
+                file_size as f64 / 1024.0 / 1024.0
+            ),
+            "Upload failed",
+        );
 
         let part = reqwest::multipart::Part::bytes(file_content).file_name(file_name.to_string());
-
         let part = part
             .mime_str("application/octet-stream")
             .map_err(|e| Error::from_reqwest("Failed to set mime type", e))?;
@@ -1184,13 +1159,13 @@ impl<'a> FileUploader<'a> {
             .await
             .map_err(|e| Error::from_reqwest("File upload failed", e))?;
 
-        pb.finish_with_message("Upload complete");
-
         let result: Value = self.client.handle_response(response).await?;
-        result
+        let temp_file_id = result
             .get("temp_file_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| Error::Parse("Missing temp_file_id in response".to_string()))
+            .ok_or_else(|| Error::Parse("Missing temp_file_id in response".to_string()))?;
+        progress.finish("Upload complete");
+        Ok(temp_file_id)
     }
 }

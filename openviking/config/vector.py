@@ -39,7 +39,9 @@ PROVIDER_BINDING = frozenset(
 # enable_fusion, res_level, max_video_frames) are intentionally not listed: they
 # are behavior/infra defaults, not tenant routing or credentials.
 PROVIDER_SPECIFIC_ISOLATED = frozenset({"extra_body", "model_path"})
-BACKEND_CONNECTIONS = frozenset({"path", "url", "volcengine", "vikingdb", "cuvs", "custom_params"})
+BACKEND_CONNECTIONS = frozenset(
+    {"path", "url", "volcengine", "vikingdb", "cuvs", "opengauss", "pgvector", "custom_params"}
+)
 
 
 def _account_values(section: Any) -> dict:
@@ -109,16 +111,23 @@ def resolve_effective_embedding(cluster: EmbeddingConfig, account: Any) -> Embed
                     "model", independent.get("model")
                 )
                 EmbeddingModelConfig.model_validate(independent)
-    return EmbeddingConfig.model_validate(_overlay(base, override))
+    values = _overlay(base, override)
+    if not any(values.get(mode) for mode in MODEL_SECTIONS):
+        raise ValueError(
+            "Account requires an embedding model in settings.embedding or cluster embedding"
+        )
+    return EmbeddingConfig.model_validate(values)
 
 
 def resolve_effective_vectordb(
-    cluster: VectorDBBackendConfig, account: Any
+    cluster: VectorDBBackendConfig | None, account: Any
 ) -> VectorDBBackendConfig:
     """Keep index defaults; an Account owns its complete connection and auth."""
     if isinstance(account, dict):
         account = AccountVectorDBConfig.model_validate(account)
-    base = cluster.model_dump(by_alias=True)
+    if cluster is None and account is None:
+        raise ValueError("Account requires settings.vectordb or cluster storage.vectordb")
+    base = cluster.model_dump(by_alias=True) if cluster is not None else {}
     override = _account_values(account)
     if "project_name" in override:
         override["project"] = override.pop("project_name")
@@ -190,14 +199,9 @@ class AccountVectorConfigResolver:
 
 
 def resolve_account_vector_settings(account: Any, cluster: Any) -> VectorRuntimeSettings:
-    # Account and Cluster remain independent publications. Choosing Cluster
-    # when an Account section is absent is vector-domain behavior, not generic
-    # RuntimeField fallback. This path also keeps pre-materialization Account
-    # documents working; new Account provisioning should snapshot defaults into
-    # Account-owned settings instead of adding further runtime Cluster coupling.
     embedding = resolve_effective_embedding(cluster.embedding, account.embedding)
     vectordb = resolve_effective_vectordb(cluster.storage.vectordb, account.vectordb)
-    if account.vectordb is None:
+    if account.vectordb is None and cluster.embedding.dimension > 0:
         vectordb = validate_vector_settings(cluster.embedding, vectordb)
     vectordb = validate_vector_settings(embedding, vectordb)
     identity = {}
@@ -235,6 +239,13 @@ def vector_settings_from_view(view) -> VectorRuntimeSettings:
 
 def validate_account_vector_candidate(context: AccountCandidateContext) -> None:
     """Check the effective pair and preserve an existing Account's vector contract."""
+    if not context.creating and not any(
+        getattr(view.account, section) is not None
+        for view in (context.new_view, context.old_view)
+        if view is not None
+        for section in ("embedding", "vectordb")
+    ):
+        return
     after = vector_settings_from_view(context.new_view).embedding
     if context.creating or context.old_view is None:
         return

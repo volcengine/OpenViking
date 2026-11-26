@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 import { OpenVikingClient } from "../../dist/index.js";
 
 export const client = new OpenVikingClient({
@@ -6,6 +9,12 @@ export const client = new OpenVikingClient({
 
 // @ts-expect-error the server only accepts local or shared temporary uploads.
 new OpenVikingClient({ baseUrl: "https://example.com", uploadMode: "proxy" });
+
+client.addResource("https://example.com/raw.pdf", {
+  args: { parse_mode: "no_split" },
+});
+// @ts-expect-error parse_mode is configured through args.
+client.addResource("https://example.com/raw.pdf", { parseMode: "no_split" });
 
 client.getSkill("demo", { targetUri: "viking://agent/skills" });
 // @ts-expect-error getSkill accepts one concrete skill root, not multiple roots.

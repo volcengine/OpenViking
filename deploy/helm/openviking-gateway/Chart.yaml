@@ -1,0 +1,8 @@
+apiVersion: v2
+name: openviking-gateway
+description: Standalone OpenViking Gateway with SQLite or shared Redis storage
+type: application
+version: 0.1.0-dev.0
+# Replace only after a release containing the Redis gateway has been published.
+appVersion: "0.0.0-unreleased"
+kubeVersion: ">=1.24.0-0"

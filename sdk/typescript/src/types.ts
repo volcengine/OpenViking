@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+// SPDX-License-Identifier: AGPL-3.0
+
 /** Arbitrary JSON object returned by APIs without a dedicated result type. */
 export type JsonObject = Record<string, unknown>;
 /** One target URI or multiple target scopes. */
@@ -71,8 +74,71 @@ export interface RequestOptions {
 /** Options shared by asynchronous processing APIs. */
 export interface WaitOptions {
   wait?: boolean;
+  /** @deprecated Accepted for compatibility and ignored. */
   timeout?: number;
   telemetry?: unknown;
+}
+/** Options for mounting an MCP tool as a live context node. */
+export interface MountMCPToolOptions {
+  description?: string;
+  timeoutSeconds?: number;
+  arguments?: JsonObject;
+  tags?: string[];
+  wait?: boolean;
+}
+/** One MCP-backed live context node in a batch mount request. */
+export interface MCPToolMount {
+  toolUri: string;
+  nodeUri: string;
+  title: string;
+  description?: string;
+  timeoutSeconds?: number;
+  arguments?: JsonObject;
+  tags?: string[];
+}
+/** A batch skips failed items, retaining completed changes and processing later nodes. */
+export interface MCPBatchResult {
+  total: number;
+  succeeded: string[];
+  failed: {
+    node_uri: string;
+    code: string;
+    message: string;
+    applied: boolean;
+  }[];
+  not_attempted: string[];
+}
+export interface MCPBatchMountResult extends MCPBatchResult {
+  mounts: JsonObject[];
+}
+export interface MCPBatchUnmountResult extends MCPBatchResult {
+  unmounts: JsonObject[];
+}
+/** One live context mount affected by an MCP catalog sync. */
+export interface MCPAffectedMount {
+  node_uri: string;
+  tool_uri: string;
+  tool: string;
+  status: "REVIEW" | "INVALID" | "REMOVED";
+  mounted_input_revision: string;
+  current_input_revision: string | null;
+  reason: string;
+}
+/** MCP tool-name changes reported by a catalog sync. */
+export interface MCPToolChanges {
+  added: string[];
+  changed: string[];
+  unchanged: string[];
+  removed: string[];
+}
+/** Result returned by syncMCP. */
+export interface MCPSyncResult {
+  name: string;
+  synced: boolean;
+  protocol_version: string;
+  tool_count: number;
+  changes: MCPToolChanges;
+  affected_mounts: MCPAffectedMount[];
 }
 /** Writable direct grants and inheritance mode. */
 export interface AclSpec {
@@ -102,11 +168,14 @@ export interface AddResourceOptions extends WaitOptions {
 }
 /** Content write options. */
 export interface WriteOptions extends WaitOptions {
+  useSnapshot?: boolean;
   acl?: AclSpec;
   mode?: string;
   processingMode?: ProcessingMode;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
+  resolveConflicts?: boolean;
+  deferProcessing?: boolean;
   extra?: JsonObject;
 }
 /** One file write in a batch. */
@@ -115,20 +184,49 @@ export interface BatchWriteOperation {
   content?: string;
   contentBase64?: string;
   mode?: "replace" | "append" | "create" | "upsert";
+  expectedSha256?: string;
+  ifAbsent?: boolean;
+  resolveConflicts?: boolean;
+  tags?: string[];
+  tagMode?: "replace" | "append" | "clear";
+  acl?: AclSpec;
 }
 /** Batch-write request options. */
 export interface BatchWriteOptions extends WaitOptions {
+  useSnapshot?: boolean;
+  deferProcessing?: boolean;
+  processingMode?: ProcessingMode;
+  skipConflicts?: boolean;
   extra?: JsonObject;
 }
-/** Compile request options. */
-export interface CompileOptions {
+/** Full compilation inputs; creation accepts scheduling controls in args. */
+export interface CompileInput {
+  from: string[];
+  to: string;
+  skill: string;
   instruction?: string;
   args?: JsonObject;
-  extra?: JsonObject;
 }
+/** Select saved inputs or supply full inputs; in-place memory mode needs no sources. */
+export type CompileRequest =
+  | (CompileInput & { compile_name?: never })
+  | (Omit<CompileInput, "from" | "skill"> & {
+      skill: "memory";
+      from?: [];
+      compile_name?: never;
+    })
+  | {
+      compile_name: string;
+      from?: never;
+      to?: never;
+      skill?: never;
+      instruction?: never;
+      /** Only owner_user_id is used; other keys are ignored. */
+      args?: JsonObject & { owner_user_id?: string };
+    };
 /** Retrieval tag update options. */
 export interface SetTagsOptions {
-  mode?: "replace" | "append";
+  mode?: "replace" | "append" | "clear";
   recursive?: boolean;
   telemetry?: unknown;
   extra?: JsonObject;
@@ -137,7 +235,7 @@ export interface SetTagsOptions {
 export interface ReindexOptions {
   mode?: string;
   wait?: boolean;
-  dryRun?: boolean;
+  force?: boolean;
   recursive?: boolean;
   tags?: string[];
   tagMode?: "replace" | "append" | "clear";
@@ -160,14 +258,19 @@ export interface FindOptions {
   tags?: string[];
   includeProvenance?: boolean;
   readContent?: boolean;
+  eventsTimeDecayProtection?: string | null;
   extra?: JsonObject;
 }
-/** Session-aware semantic retrieval options. */
+/** Session-aware retrieval options. */
 export interface SearchOptions extends FindOptions {
   sessionId?: string;
+  searchType?: "semantic" | "keywords";
+  /** Advanced keyword-search engine options; only with searchType="keywords". */
+  args?: JsonObject;
 }
 /** Server-side context assembly options. */
 export interface SearchContextOptions {
+  searchType?: "semantic" | "keywords";
   image?: string;
   sessionId?: string;
   limit?: number;
@@ -180,6 +283,7 @@ export interface SearchContextOptions {
   since?: string;
   until?: string;
   timeField?: string;
+  eventsTimeDecayProtection?: string | null;
   queryExpansion?: "off" | "auto";
   maxTokens?: number;
   quotas?: Record<string, number>;
@@ -215,12 +319,16 @@ export interface ListOptions {
   recursive?: boolean;
   output?: string;
   absLimit?: number;
+  includeAbstract?: boolean;
+  includeOverview?: boolean;
+  overviewLimit?: number;
   showAllHidden?: boolean;
   nodeLimit?: number;
   offset?: number;
   limit?: number;
   sortBy?: "name" | "mtime";
   sortOrder?: "asc" | "desc";
+  extraFields?: Array<"locked" | "id" | "count">;
   tags?: string[];
   includeTags?: boolean;
 }
@@ -228,13 +336,28 @@ export interface ListOptions {
 export interface TreeOptions {
   output?: string;
   absLimit?: number;
+  includeAbstract?: boolean;
+  includeOverview?: boolean;
+  overviewLimit?: number;
   showAllHidden?: boolean;
+  directoriesOnly?: boolean;
   nodeLimit?: number;
   levelLimit?: number;
   offset?: number;
   limit?: number;
+  extraFields?: Array<"locked" | "id" | "count">;
   tags?: string[];
   includeTags?: boolean;
+}
+/** Directory listing page with pagination metadata. */
+export interface ListPage {
+  result: unknown[];
+  hasMore: boolean;
+}
+/** Directory tree page with pagination metadata. */
+export interface TreePage {
+  result: JsonObject[];
+  hasMore: boolean;
 }
 /** Session message payload. */
 export interface Message {
@@ -278,6 +401,8 @@ export interface BatchAddMessagesOptions {
 }
 /** Session commit and turn-retention options. */
 export interface CommitSessionOptions {
+  /** Override only Working Memory for this commit; null inherits the session policy. */
+  enableWorkingMemory?: boolean | null;
   keepRecentCount?: number;
   retentionMode?: "turn_budget";
   keepRecentTurnCount?: number;
@@ -348,6 +473,8 @@ export interface MatchedContext {
   level?: number;
   abstract?: string;
   score?: number;
+  origin_score?: number | null;
+  time_score?: number | null;
   tags?: string[];
   [key: string]: unknown;
 }
@@ -384,6 +511,7 @@ export interface APIErrorInfo {
 export interface ResponseEnvelope<T> {
   status?: string;
   result?: T;
+  has_more?: boolean;
   error?: APIErrorInfo;
   telemetry?: unknown;
   profile?: string[];

@@ -1,7 +1,11 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { stateDir } from "./shared/workspace-identity.mjs";
+import { createRecallCompressor } from "./compressor.mjs";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
-import { deriveHarnessSessionId } from "./shared/session-model.mjs";
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
 import {
   dequeue,
   enqueue,
@@ -16,12 +20,14 @@ import {
   pluginMessage,
   promptText,
 } from "./capture.mjs";
+import { deriveDshSessionId, historySessionIds } from "./session-id.mjs";
 
 export class OpenVikingRuntime {
-  constructor(client, config, logger = console) {
+  constructor(client, config, logger = console, resolveSessionConfig = null) {
     this.client = client;
     this.config = config;
     this.logger = logger;
+    this.resolveSessionConfig = resolveSessionConfig;
     this.states = new Map();
     this.drainTimer = null;
     this.drainRunning = false;
@@ -33,7 +39,8 @@ export class OpenVikingRuntime {
     let state = this.states.get(session.id);
     if (state) return state;
     const cwd = session.header?.cwd || process.cwd();
-    const peer = resolveEffectivePeerId({
+    const resolved = this.resolveSessionConfig?.(cwd);
+    const peer = resolved?.effectivePeer ?? resolveEffectivePeerId({
       cfg: {
         peerId: this.config.explicitPeerId,
         peerSource: this.config.peerSource,
@@ -44,13 +51,14 @@ export class OpenVikingRuntime {
     });
     state = {
       dshSessionId: String(session.id),
-      ovSessionId: deriveHarnessSessionId("dsh-", String(session.id)),
-      config: { ...this.config, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
+      ovSessionId: deriveDshSessionId(session.id),
+      config: { ...this.config, ...resolved, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
       ready: false,
       profileBlock: "",
-      profileDelivered: false,
+      historyPointer: null,
       toolNames: new Map(),
       writes: Promise.resolve(),
+      warnedFailures: new Set(),
       initializationRetryable: false,
       hasPendingWrites: false,
       pendingCreatedAt: 0,
@@ -77,6 +85,7 @@ export class OpenVikingRuntime {
   async initializeState(state) {
     state.initializationRetryable = false;
     const health = await this.client.healthResult();
+    this.reportWriteResult(state, "health", health, "/health");
     if (!health.ok) {
       state.initializationRetryable = isRetryableFailure(health);
       return state;
@@ -89,9 +98,11 @@ export class OpenVikingRuntime {
       !ensured.ok
       && !(ensured.status === 409 && ensured.error?.code === "ALREADY_EXISTS")
     ) {
+      this.reportWriteResult(state, "ensure_session", ensured, "/api/v1/sessions");
       state.initializationRetryable = isRetryableFailure(ensured);
       return state;
     }
+    state.warnedFailures.delete("ensure_session");
     // Replay is a write, so it stays behind the same toggle: a backlog queued
     // while capture was on waits for a session that still writes.
     if (isCaptureEnabled(state.config)) {
@@ -115,27 +126,36 @@ export class OpenVikingRuntime {
     return state;
   }
 
-  async profileMessage(agent) {
+  // Sent whenever the model would not see it: at session start, and again after
+  // a compaction summarizes it away. `batch` is the step's claimed messages.
+  async profileMessage(agent, batch = []) {
     const state = await this.initialize(agent);
-    if (!state.ready || !state.profileBlock || state.profileDelivered) return null;
-    if (hasStartupProfile(agent)) {
-      state.profileDelivered = true;
-      return null;
-    }
-    state.profileDelivered = true;
+    if (!state.ready || !state.profileBlock || hasStartupProfile(agent, batch)) return null;
     return pluginMessage(state.profileBlock, { form: "instructions" });
   }
 
-  async recallMessage(agent, messages) {
+  async recallMessage(agent, messages, signal) {
     const state = await this.initialize(agent);
     if (!state.ready || !isRecallEnabled(state.config)) return null;
     const query = promptText(messages);
-    if (query.length < state.config.minQueryLength) return null;
+    if (!query || query.length < state.config.minQueryLength) return null;
+    if (signal?.aborted) return null;
+    const runCompressor = ["client", "auto"].includes(state.config.recallRewrite)
+      ? createRecallCompressor(agent, state.config, signal) : null;
+    const cacheId = createHash("sha256").update(JSON.stringify([
+      state.config.baseUrl, state.config.account, state.config.user, state.config.apiKey,
+      state.config.peerId, state.ovSessionId, agent.options?.provider,
+      state.config.recallCompressModel || agent.options?.model,
+      state.config.recallCompressThinking,
+    ])).digest("hex");
     const block = await buildRecallBlock(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config,
       query,
       {
+        runCompressor,
+        localCompressorAvailable: Boolean(runCompressor),
+        digestCachePath: join(stateDir(), `dsh-recall-${cacheId}.json`),
         actorPeerId: state.config.peerId,
         legacyPeerId: state.config.legacyPeerId,
         sessionId: state.ovSessionId,
@@ -143,7 +163,24 @@ export class OpenVikingRuntime {
         log: (stage, data) => this.log(stage, data),
       },
     );
-    return block ? pluginMessage(block, { form: "recall" }) : null;
+    return block && !signal?.aborted ? pluginMessage(block, { form: "recall" }) : null;
+  }
+
+  // A finished compaction or a resume leaves the session-history note for the
+  // agent's next step.
+  markHistoryPointer(session, event) {
+    this.stateFor(session).historyPointer = event;
+  }
+
+  historyPointerMessage(agent, sessions) {
+    const state = this.stateFor(agent.session);
+    const event = state.historyPointer;
+    if (!event) return null;
+    state.historyPointer = null;
+    if (!state.config.sessionHistoryPointer || !isCaptureEnabled(state.config)) return null;
+    return pluginMessage(formatSessionHistoryPointer(historySessionIds(agent.session, sessions), { event }), {
+      form: "session-history",
+    });
   }
 
   capture(session, event) {
@@ -171,6 +208,7 @@ export class OpenVikingRuntime {
         payload,
         state.config.peerId,
       );
+      this.reportWriteResult(state, "capture", response, "/api/v1/sessions/{session_id}/messages");
       if (isRetryableFailure(response)) {
         await this.enqueuePendingMessage(state, payload);
       }
@@ -178,31 +216,36 @@ export class OpenVikingRuntime {
   }
 
   maybeCommit(session, event) {
-    if (event.type !== "turn/end") return;
+    // DSH appends compaction/start before it summarizes and rewrites history,
+    // so commit there regardless of the threshold, like PreCompact elsewhere.
+    const boundary = event.type === "compaction/start";
+    if (event.type !== "turn/end" && !boundary) return;
     const state = this.stateFor(session);
     if (!isCaptureEnabled(state.config)) return;
     this.enqueueWrite(state, async () => {
       if (state.hasPendingWrites) return;
       if (!state.ready && !(await this.ensureState(state)).ready) return;
-      const metadata = await this.client.getSession(
-        state.ovSessionId,
-        state.config.peerId,
-      );
-      if (Number(metadata?.pending_tokens || 0) < state.config.commitTokenThreshold) return;
+      if (!boundary) {
+        const metadata = await this.client.getSession(
+          state.ovSessionId,
+          state.config.peerId,
+        );
+        if (Number(metadata?.pending_tokens || 0) < state.config.commitTokenThreshold) return;
+      }
       const response = await this.client.commitSession(
         state.ovSessionId,
         state.config.peerId,
       );
-      this.log("commit", {
+      const stage = boundary ? "compaction_commit" : "commit";
+      this.reportWriteResult(state, stage, response, "/api/v1/sessions/{session_id}/commit");
+      this.log(stage, {
         sessionId: state.ovSessionId,
         ok: response.ok,
         trace_id: response.result?.trace_id || response.traceId,
         error: response.ok ? undefined : response.error?.message || response.error?.code,
       });
       if (isRetryableFailure(response)) {
-        await this.enqueueFinalCommit(state, {
-          keep_recent_count: state.config.commitKeepRecentCount,
-        });
+        await this.enqueueFinalCommit(state, { keep_recent_count: 0 });
       }
     });
   }
@@ -214,9 +257,7 @@ export class OpenVikingRuntime {
     state.disposing = (async () => {
       this.enqueueWrite(state, async () => {
         if (!isCaptureEnabled(state.config)) return;
-        const commitPayload = {
-          keep_recent_count: state.config.commitKeepRecentCount,
-        };
+        const commitPayload = { keep_recent_count: 0 };
         if (state.hasPendingWrites) {
           await this.enqueueFinalCommit(state, commitPayload);
           return;
@@ -227,6 +268,7 @@ export class OpenVikingRuntime {
           state.config.peerId,
           { timeoutMs: Math.min(3000, Number(state.config.requestTimeoutMs) || 3000) },
         );
+        this.reportWriteResult(state, "shutdown_commit", response, "/api/v1/sessions/{session_id}/commit");
         this.log("shutdown_commit", {
           sessionId: state.ovSessionId,
           ok: response.ok,
@@ -253,11 +295,41 @@ export class OpenVikingRuntime {
 
   enqueueWrite(state, operation) {
     state.writes = state.writes
-      .then(operation)
-      .catch(error => this.log("write_error", {
-        sessionId: state.ovSessionId,
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      .then(async () => {
+        await operation();
+        state.warnedFailures.delete("write_error");
+      })
+      .catch(error => {
+        this.log("write_error", {
+          sessionId: state.ovSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.warnOnce(state, "write_error", {});
+      });
+  }
+
+  reportWriteResult(state, stage, response, path) {
+    if (response.ok) {
+      state.warnedFailures.delete(stage);
+    } else if (!isRetryableFailure(response)) {
+      // Error messages/bodies may echo captured content or credentials. Keep
+      // only a bounded code token and a static endpoint template in warnings.
+      const code = response.error?.code;
+      this.warnOnce(state, stage, {
+        path,
+        status: Number(response.status) || 0,
+        code: typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : undefined,
+      });
+    }
+  }
+
+  warnOnce(state, stage, data) {
+    if (state.warnedFailures.has(stage)) return;
+    state.warnedFailures.add(stage);
+    this.logger?.warn?.(`[openviking:dsh] ${stage} ${JSON.stringify({
+      sessionId: state.ovSessionId,
+      ...data,
+    })}`);
   }
 
   async enqueuePending(state, type, payload) {
@@ -406,16 +478,11 @@ export class OpenVikingRuntime {
   }
 }
 
-function hasStartupProfile(agent) {
-  const session = agent.session;
-  const ownEvents = typeof session?.ownEvents === "function"
-    ? session.ownEvents()
-    : (session?.events || []).slice(session?.header?.seedLength ?? 0);
-  const inHistory = ownEvents.some(event => (
-    event?.type === "user/message" && isStartupProfile(event.data)
-  ));
-  if (inHistory) return true;
-  return [agent.inbox?.nextTurn, agent.inbox?.nextStep].some(messages => (
+// The history the model keeps: a compaction replaces summarized messages here
+// but never removes their events from the log.
+function hasStartupProfile(agent, batch) {
+  const history = agent.session?.deriveMessages?.() ?? [];
+  return [history, batch, agent.inbox?.nextTurn, agent.inbox?.nextStep].some(messages => (
     (messages || []).some(isStartupProfile)
   ));
 }

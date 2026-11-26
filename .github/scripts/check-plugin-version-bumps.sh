@@ -27,6 +27,7 @@ PLUGINS=(
   "examples/opencode-plugin:examples/opencode-plugin/package.json"
   "examples/dsh-memory-plugin:examples/dsh-memory-plugin/package.json"
   "examples/pi-coding-agent-extension:examples/pi-coding-agent-extension/package.json"
+  "examples/magpie-memory-plugin:examples/magpie-memory-plugin/package.json"
 )
 
 # A change to the shared library reaches every plugin, and it no longer reaches
@@ -52,14 +53,18 @@ process.stdin.on("end", () => {
 '
 }
 
-# A plugin that carries both a host manifest and an installer manifest has to
-# say the same version in both: the host installs by one and the installer
-# decides "nothing changed" by the other, so a mismatch means a plugin that
-# reports upgraded and behaves like it did not.
+# Each host-facing manifest must report the distributed agent-hook version.
+# Kimi also exposes kimi.plugin.json to the host and its marketplace, and
+# CodeBuddy and Qoder resolve an installed plugin by the manifest version, so
+# keep them aligned with the integration and root manifests.
 PAIRED=(
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/cursor/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/trae/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/zcode/openviking.integration.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/openviking.integration.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/kimicode/kimi.plugin.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/codebuddy/plugin.json"
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/qoder/plugin.json"
 )
 
 failed=0
@@ -79,7 +84,9 @@ for entry in "${PLUGINS[@]}"; do
   dir="${entry%%:*}"
   manifest="${entry#*:}"
 
-  changed="$(git diff --name-only "$BASE_REF...HEAD" -- "$dir" "$SHARED_LIB" | grep -v '/node_modules/' || true)"
+  # Test-only edits do not change the distributed plugin runtime.
+  changed="$(git diff --name-only "$BASE_REF...HEAD" -- "$dir" "$SHARED_LIB" \
+    ':(exclude)**/*.test.mjs' ':(exclude)**/tests/**' | grep -v '/node_modules/' || true)"
   [ -n "$changed" ] || continue
 
   # A plugin added in this branch has no baseline version to compare against.

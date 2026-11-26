@@ -3,9 +3,8 @@
 """Hotness scoring for cold/hot memory lifecycle management (#296).
 
 Provides a pure function to compute a 0.0–1.0 hotness score based on
-access frequency (active_count) and recency (updated_at).  The score
-can be blended with semantic similarity to boost frequently-accessed,
-recently-updated contexts in search results.
+access frequency (active_count) and recency (updated_at). The memory
+health statistics API uses this score to classify cold, warm, and hot memories.
 """
 
 import math

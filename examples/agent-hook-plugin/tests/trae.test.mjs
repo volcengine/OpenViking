@@ -30,6 +30,7 @@ test("TRAE integration contains native Hook and MCP declarations", () => {
     "SessionStart",
     "UserPromptSubmit",
     "PreToolUse",
+    "PostCompact",
     "Stop",
   ]);
 });

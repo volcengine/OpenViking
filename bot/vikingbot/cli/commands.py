@@ -10,36 +10,75 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
-import typer
-from loguru import logger
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import FormattedText
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.styles import Style as PromptStyle
-from rich.console import Console
-from rich.table import Table
 
-from openviking.utils.time_utils import parse_iso_datetime
-from vikingbot import __logo__, __version__
-from vikingbot.agent.loop import AgentLoop
-from vikingbot.bus.queue import MessageBus
-from vikingbot.channels.manager import ChannelManager
-from vikingbot.config.loader import (
+# --- stdout-safety guard (must run before any openviking/vikingbot imports) ---
+#
+# Some top-level imports below (e.g. vikingbot.agent -> vikingbot.config.loader
+# -> openviking.server.config -> ...) eagerly call get_logger(__name__) inside
+# openviking modules. That loads ov.conf and, if the config contains unknown
+# fields (e.g. legacy `memory.working_memory_enabled`), emits a WARNING through
+# openviking_cli.utils.logger's QueueListener whose backing StreamHandler is
+# tied to log.output = "stdout" by default. In `vikingbot chat -e` mode stdout
+# is a JSON contract, so any log line there breaks downstream JSON parsers
+# (e.g. benchmark/locomo/vikingbot/run_eval.py). Redirect the shared stdout
+# stream handler to stderr before we let those imports run.
+def _preimport_redirect_openviking_logs_to_stderr() -> None:
+    try:
+        from openviking_cli.utils.logger import (  # type: ignore
+            _create_queued_stream_handler,
+            _std_stream_handlers,
+        )
+    except Exception:
+        return
+    # Force the "stdout" queue listener + real handler pair to exist, then
+    # rebind its stream to stderr. Later get_logger("stdout") calls fetch the
+    # cached listener and inherit the redirection.
+    try:
+        _create_queued_stream_handler("stdout")
+    except Exception:
+        return
+    entry = _std_stream_handlers.get("stdout")
+    if entry is None:
+        return
+    _listener, real_handler = entry
+    try:
+        real_handler.setStream(sys.stderr)
+    except AttributeError:
+        real_handler.stream = sys.stderr
+
+
+_preimport_redirect_openviking_logs_to_stderr()
+
+import typer  # noqa: E402
+from loguru import logger  # noqa: E402
+from prompt_toolkit import PromptSession  # noqa: E402
+from prompt_toolkit.formatted_text import FormattedText  # noqa: E402
+from prompt_toolkit.history import FileHistory  # noqa: E402
+from prompt_toolkit.patch_stdout import patch_stdout  # noqa: E402
+from prompt_toolkit.styles import Style as PromptStyle  # noqa: E402
+from rich.console import Console  # noqa: E402
+from rich.table import Table  # noqa: E402
+
+from openviking.utils.time_utils import parse_iso_datetime  # noqa: E402
+from vikingbot import __logo__, __version__  # noqa: E402
+from vikingbot.agent.loop import AgentLoop  # noqa: E402
+from vikingbot.bus.queue import MessageBus  # noqa: E402
+from vikingbot.channels.manager import ChannelManager  # noqa: E402
+from vikingbot.config.loader import (  # noqa: E402
     ensure_config,
     get_config_path,
     get_data_dir,
     load_config,
     validate_openviking_auth,
 )
-from vikingbot.config.schema import Config, SessionKey, requires_gateway_token
-from vikingbot.cron.service import CronService
-from vikingbot.cron.types import CronJob
-from vikingbot.heartbeat.service import HeartbeatService
-from vikingbot.integrations.langfuse import LangfuseClient
-from vikingbot.observability.feedback_stats import (
+from vikingbot.config.schema import Config, SessionKey, requires_gateway_token  # noqa: E402
+from vikingbot.cron.service import CronService  # noqa: E402
+from vikingbot.cron.types import CronJob  # noqa: E402
+from vikingbot.heartbeat.service import HeartbeatService  # noqa: E402
+from vikingbot.integrations.langfuse import LangfuseClient  # noqa: E402
+from vikingbot.observability.feedback_stats import (  # noqa: E402
     compute_feedback_stats,
     format_feedback_stats_table,
     select_feedback_stats,
@@ -47,9 +86,9 @@ from vikingbot.observability.feedback_stats import (
 )
 
 # Create sandbox manager
-from vikingbot.sandbox.manager import SandboxManager
-from vikingbot.session.manager import SessionManager
-from vikingbot.utils.helpers import (
+from vikingbot.sandbox.manager import SandboxManager  # noqa: E402
+from vikingbot.session.manager import SessionManager  # noqa: E402
+from vikingbot.utils.helpers import (  # noqa: E402
     get_bridge_path,
     get_history_path,
     get_source_workspace_path,
@@ -69,6 +108,13 @@ app = typer.Typer(
     help=f"{__logo__} vikingbot - Personal AI Assistant",
     no_args_is_help=True,
 )
+# Force UTF-8 stdio on Windows. rich's legacy Windows renderer writes through
+# sys.stdout/stderr; on Chinese Windows (code page 936/gbk) that stream cannot
+# encode "✓" (U+2713), raising UnicodeEncodeError when output is redirected.
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8")
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
@@ -97,13 +143,32 @@ def _redirect_openviking_logs_to_stderr() -> None:
 
     This prevents log output (e.g. deprecation warnings from memory_config)
     from polluting stdout when vikingbot chat is used in --eval mode or piped.
+    Must run before ensure_config() so config-load warnings also land on
+    stderr.
     """
     import logging
 
+    def _redirect_stream_handler(handler: logging.Handler) -> None:
+        """Swap a StreamHandler-like handler's stdout stream for stderr."""
+        stream = getattr(handler, "stream", None)
+        if stream is sys.stdout:
+            try:
+                handler.setStream(sys.stderr)  # StreamHandler API
+            except AttributeError:
+                handler.stream = sys.stderr
+
+    def _redirect_handler(handler: logging.Handler) -> None:
+        # openviking_cli routes managed loggers through a QueueHandler whose
+        # backing StreamHandler is the one that actually writes to stdout/stderr
+        # from a listener thread. Redirect that real handler too.
+        real = getattr(handler, "_ov_real_handler", None)
+        if isinstance(real, logging.StreamHandler):
+            _redirect_stream_handler(real)
+        if isinstance(handler, logging.StreamHandler):
+            _redirect_stream_handler(handler)
+
     for root_name in ("openviking", "openviking_cli"):
         root_logger = logging.getLogger(root_name)
-        # If the logger has no handlers yet, add a stderr handler now.
-        # If it already has handlers, swap any stdout StreamHandlers to stderr.
         if not root_logger.handlers:
             handler = logging.StreamHandler(sys.stderr)
             formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -112,8 +177,21 @@ def _redirect_openviking_logs_to_stderr() -> None:
             root_logger.propagate = False
         else:
             for handler in root_logger.handlers:
-                if isinstance(handler, logging.StreamHandler) and handler.stream is sys.stdout:
-                    handler.setStream(sys.stderr)
+                _redirect_handler(handler)
+
+    # openviking_cli.utils.logger keeps a process-wide QueueListener whose real
+    # StreamHandler was constructed from the current log.output setting (often
+    # stdout). Redirect that shared handler too so future writes go to stderr.
+    try:
+        from openviking_cli.utils.logger import _std_stream_handlers  # type: ignore
+
+        entry = _std_stream_handlers.get("stdout")
+        if entry is not None:
+            _listener, real_handler = entry
+            _redirect_stream_handler(real_handler)
+    except Exception:
+        # Best-effort; if the internal API changes we still fall through.
+        pass
 
     # Also redirect Python warnings to stderr
     warnings.simplefilter("default")
@@ -314,7 +392,7 @@ def _make_provider(config, langfuse_client: Any = None):
     """
     p = config.agents
     model = p.model if p else None
-    temperature = p.temperature if p else 0.7
+    temperature = p.temperature if p else None
     thinking = p.thinking if p else True
     api_key = p.api_key if p else None
     api_base = p.api_base if p else None
@@ -513,6 +591,7 @@ def gateway(
         enable_openapi=True,
         openapi_port=effective_port,
         compile_service=compile_service,
+        agent_loop=agent_loop,
     )
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
 
@@ -722,6 +801,7 @@ def prepare_channel(
     enable_openapi: bool = False,
     openapi_port: int = 18790,
     compile_service=None,
+    agent_loop=None,
 ):
     """Prepare channels for the bot.
 
@@ -748,6 +828,7 @@ def prepare_channel(
             app=fastapi_app,  # Pass the external FastAPI app
             global_config=config,
             compile_service=compile_service,
+            agent_loop=agent_loop,
         )
         from vikingbot.studio.service import StudioService
 
@@ -811,6 +892,7 @@ def prepare_agent_channel(
     sender: str | None = None,
     memory_peer: list[str] | None = None,
     memory_user: list[str] | None = None,
+    disabled_tools: list[str] | None = None,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
@@ -832,6 +914,7 @@ def prepare_agent_channel(
             markdown=markdown,
             eval=eval,
             sender=sender,
+            disabled_tools=disabled_tools,
         )
         channels.add_channel(channel)
     else:
@@ -848,6 +931,7 @@ def prepare_agent_channel(
             markdown=markdown,
             logs=logs,
             sender=sender,
+            disabled_tools=disabled_tools,
         )
         channels.add_channel(channel)
 
@@ -881,16 +965,22 @@ def chat(
         "--memory-user",
         help="Deprecated legacy OpenViking user ID for root-key memory fanout",
     ),
+    disabled_tools: Annotated[
+        list[str] | None, typer.Option("--disable-tool", help="Disable a tool (repeatable)")
+    ] = None,
 ):
     """Interact with the agent directly."""
     path = Path(config_path).expanduser() if config_path is not None else None
 
-    bus = MessageBus()
-    config = ensure_config(path)
-
     # Redirect openviking/openviking_cli standard-library logs to stderr so they
     # don't pollute stdout JSON output (important for --eval mode and piping).
+    # Must run BEFORE ensure_config(): parsing ov.conf can emit warnings (e.g.
+    # unknown config fields), and those would otherwise land on stdout ahead
+    # of the JSON result.
     _redirect_openviking_logs_to_stderr()
+
+    bus = MessageBus()
+    config = ensure_config(path)
 
     validate_openviking_auth(config)
     _warn_deprecated_memory_user(memory_user)
@@ -937,6 +1027,7 @@ def chat(
         sender,
         memory_peer,
         memory_user,
+        disabled_tools=disabled_tools,
     )
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval

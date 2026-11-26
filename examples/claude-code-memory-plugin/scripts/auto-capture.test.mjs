@@ -6,7 +6,9 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { readRequestBody, withMockOpenViking, withPendingDir, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { extractCaptureTurns } from "./cc-transcript.mjs";
+import { enqueue, listPending, replayPending } from "./lib/pending-queue.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -121,6 +123,110 @@ test("failed non-retryable capture keeps the cursor for a later retry", async ()
       await readFile(join(root, "openviking-cc-capture-state", `${sessionId}.json`), "utf-8"),
     );
     assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop replays queued writes before sending the new turns", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-replay-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const requests = [];
+
+  try {
+    await writeTranscript(transcriptPath);
+    await withPendingDir(async (pendingDir) => {
+      for (let i = 0; i < 20; i++) {
+        await enqueue("addMessage", "cc-old-session", {
+          role: "assistant",
+          parts: [{ type: "text", text: `old ${i}` }],
+        }, { createdAt: 1000 + i });
+      }
+
+      await withMockOpenViking(async (req, res) => {
+        const url = new URL(req.url, "http://127.0.0.1");
+        if (req.method === "GET" && url.pathname === "/health") {
+          writeJson(res, { status: "ok", result: { healthy: true } });
+          return;
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+          const body = await readRequestBody(req);
+          requests.push({ path: url.pathname, count: body.messages.length });
+          writeJson(res, { status: "ok", result: { added: body.messages.length } });
+          return;
+        }
+        if (req.method === "POST" && url.pathname.endsWith("/messages")) {
+          const body = await readRequestBody(req);
+          requests.push({ path: url.pathname, text: body.parts[0].text });
+          writeJson(res, { status: "ok", result: {} });
+          return;
+        }
+        writeJson(res, { status: "ok", result: {} });
+      }, async (baseUrl) => {
+        await runAutoCapture(
+          { session_id: "capture-replay", transcript_path: transcriptPath, cwd: root },
+          { ...hookEnv(root, baseUrl), OPENVIKING_PENDING_DIR: pendingDir },
+        );
+      });
+
+      assert.deepEqual(await listPending(), []);
+    });
+
+    assert.deepEqual(requests, [
+      ...Array.from({ length: 20 }, (_, i) => ({
+        path: "/api/v1/sessions/cc-old-session/messages",
+        text: `old ${i}`,
+      })),
+      { path: "/api/v1/sessions/cc-capture-replay/messages/batch", count: 2 },
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("threshold commit archives every captured message", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-commit-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const commits = [];
+
+  try {
+    await writeTranscript(transcriptPath);
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { healthy: true } });
+        return;
+      }
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        const body = await readRequestBody(req);
+        writeJson(res, { status: "ok", result: { added: body.messages.length } });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/v1/sessions/cc-capture-commit") {
+        writeJson(res, {
+          status: "ok",
+          result: { message_count: 2, pending_tokens: 5000, commit_count: 0 },
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/sessions/cc-capture-commit/commit") {
+        commits.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { status: "accepted" } });
+        return;
+      }
+      writeJson(res, { status: "error", error: { code: "NOT_FOUND" } }, 404);
+    }, async (baseUrl) => {
+      await runAutoCapture(
+        { session_id: "capture-commit", transcript_path: transcriptPath, cwd: root },
+        {
+          ...hookEnv(root, baseUrl),
+          OPENVIKING_COMMIT_TOKEN_THRESHOLD: "1000",
+          OPENVIKING_COMMIT_KEEP_RECENT_COUNT: "10",
+        },
+      );
+    });
+
+    assert.deepEqual(commits, [{ keep_recent_count: 0 }]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -441,6 +547,339 @@ test("subagent capture sanitizes injected text before filtering and sending", as
     assert.deepEqual(batches[0].messages.map((message) => message.parts), [
       [{ type: "text", text: "approved [redacted]" }],
     ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("api-request-blob lines are not captured as conversation turns", () => {
+  const question = { role: "user", content: [{ type: "text", text: "what does the cursor track?" }] };
+  const answer = { role: "assistant", content: [{ type: "text", text: "the number of captured turns" }] };
+  const blob = (message) => ({ type: "api-request-blob", sessionId: "s1", hash: "h", message });
+  const turns = extractCaptureTurns([
+    { type: "user", sessionId: "s1", message: question },
+    blob({ role: "system", content: "You are Claude Code." }),
+    blob(question),
+    { type: "assistant", sessionId: "s1", message: answer },
+    blob(answer),
+  ]);
+
+  assert.deepEqual(turns.map((turn) => [turn.role, turn.text]), [
+    ["user", "what does the cursor track?"],
+    ["assistant", "the number of captured turns"],
+  ]);
+});
+
+function ccRecord(role, content, flags = {}) {
+  return { type: role, sessionId: "s1", ...flags, message: { role, content } };
+}
+
+test("host-authored user records are skipped, and a cursor from before the upgrade still lines up", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-host-records-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const batches = [];
+  try {
+    await writeFile(transcriptPath, [
+      ccRecord("user", "first question"),
+      ccRecord("assistant", "first answer"),
+      ccRecord("user", "<local-command-caveat>The command below was run</local-command-caveat>", { isMeta: true }),
+      // Not yet captured:
+      ccRecord("user", "This session is being continued from a previous conversation.", { isCompactSummary: true }),
+      ccRecord("user", [{ type: "text", text: "Base directory for this skill: /skills/review" }], { isMeta: true }),
+      ccRecord("user", "second question"),
+      ccRecord("assistant", "second answer"),
+    ].map((record) => JSON.stringify(record)).join("\n"));
+    // Written by the previous plugin version, which counted the caveat among the turns it had sent.
+    const stateDir = join(root, "openviking-cc-capture-state");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, "upgrade.json"), JSON.stringify({ capturedTurnCount: 3 }));
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { added: batches.at(-1).messages.length } });
+      } else {
+        writeJson(res, { status: "ok", result: {} });
+      }
+    }, async (baseUrl) => {
+      await runAutoCapture(
+        { session_id: "upgrade", transcript_path: transcriptPath, cwd: root },
+        { ...hookEnv(root, baseUrl), OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP: "0" },
+      );
+    });
+
+    const sent = batches.flatMap((batch) => batch.messages).map((message) => [
+      message.role,
+      message.parts.filter((p) => p.type === "text").map((p) => p.text).join(""),
+    ]);
+    assert.deepEqual(sent, [["user", "second question"], ["assistant", "second answer"]]);
+    const state = JSON.parse(await readFile(join(stateDir, "upgrade.json"), "utf-8"));
+    assert.equal(state.capturedTurnCount, 7);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a subagent stopping again pushes and commits only its new turns", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-subagent-cursor-"));
+  const transcriptPath = join(root, "subagent.jsonl");
+  const batches = [];
+  let commits = 0;
+  const lines = [
+    JSON.stringify({ role: "user", content: "first task for the subagent" }),
+    JSON.stringify({ role: "assistant", content: "first task done" }),
+  ];
+  try {
+    await writeFile(transcriptPath, lines.join("\n"));
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "GET" && url.pathname === "/health") {
+        writeJson(res, { status: "ok", result: { healthy: true } });
+      } else if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { added: batches.at(-1).messages.length } });
+      } else if (req.method === "POST" && url.pathname.endsWith("/commit")) {
+        await readRequestBody(req);
+        commits++;
+        writeJson(res, { status: "ok", result: {} });
+      } else {
+        writeJson(res, { status: "ok", result: {} });
+      }
+    }, async (baseUrl) => {
+      const env = hookEnv(root, baseUrl);
+      const input = {
+        session_id: "parent-cursor",
+        agent_id: "child-cursor",
+        agent_transcript_path: transcriptPath,
+        cwd: root,
+      };
+      await runHook("subagent-start.mjs", input, env);
+      await runHook("subagent-stop.mjs", input, env);
+      // Woken again: the transcript grows and the start hook may run again.
+      await writeFile(transcriptPath, [
+        ...lines,
+        JSON.stringify({ role: "user", content: "follow-up from a background task" }),
+      ].join("\n"));
+      await runHook("subagent-start.mjs", input, env);
+      await runHook("subagent-stop.mjs", input, env);
+      // Stopping with nothing new must not commit an empty archive.
+      await runHook("subagent-stop.mjs", input, env);
+    });
+    const texts = (batch) => batch.messages.flatMap(
+      (message) => message.parts.filter((p) => p.type === "text").map((p) => p.text),
+    );
+    assert.equal(batches.length, 2);
+    assert.deepEqual(texts(batches[0]), ["first task for the subagent", "first task done"]);
+    assert.deepEqual(texts(batches[1]), ["follow-up from a background task"]);
+    assert.equal(commits, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function captureFinalAnswer(root, transcriptPath, input) {
+  const batches = [];
+  await withMockOpenViking(async (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    if (req.method === "GET" && url.pathname === "/health") {
+      writeJson(res, { status: "ok", result: { healthy: true } });
+    } else if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+      batches.push(await readRequestBody(req));
+      writeJson(res, { status: "ok", result: { added: batches.at(-1).messages.length } });
+    } else {
+      writeJson(res, { status: "ok", result: {} });
+    }
+  }, async (baseUrl) => {
+    await runAutoCapture({ session_id: "final-answer", transcript_path: transcriptPath, cwd: root, ...input }, hookEnv(root, baseUrl));
+  });
+  return batches.flatMap((batch) => batch.messages).map((message) => [
+    message.role,
+    message.parts.filter((p) => p.type === "text").map((p) => p.text).join(""),
+  ]);
+}
+
+const question = JSON.stringify({ role: "user", content: "remember which port the server uses" });
+const answer = JSON.stringify({ role: "assistant", content: "The server listens on 1933." });
+
+test("Stop captures the final answer the transcript has not been written with yet", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  try {
+    await writeFile(transcriptPath, question);
+    const messages = await captureFinalAnswer(root, transcriptPath, {
+      last_assistant_message: "The server listens on 1933.",
+    });
+    assert.deepEqual(messages, [
+      ["user", "remember which port the server uses"],
+      ["assistant", "The server listens on 1933."],
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop captures the whole final answer when only part of it is in the transcript", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-partial-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const full = "All checks passed.\n\nI ran the test suite. All checks passed.";
+  try {
+    await writeFile(transcriptPath, [
+      question,
+      JSON.stringify({ role: "assistant", content: [{ type: "text", text: "All checks passed." }] }),
+    ].join("\n"));
+    const messages = await captureFinalAnswer(root, transcriptPath, { last_assistant_message: full });
+    assert.deepEqual(messages, [
+      ["user", "remember which port the server uses"],
+      ["assistant", "All checks passed."],
+      ["assistant", full],
+    ]);
+
+    const state = JSON.parse(
+      await readFile(join(root, "openviking-cc-capture-state", "final-answer.json"), "utf-8"),
+    );
+    assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Stop does not repeat a final answer the transcript already holds", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-present-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  try {
+    await writeFile(transcriptPath, [question, answer].join("\n"));
+    const messages = await captureFinalAnswer(root, transcriptPath, {
+      last_assistant_message: "The server listens on 1933.",
+    });
+    assert.deepEqual(messages, [
+      ["user", "remember which port the server uses"],
+      ["assistant", "The server listens on 1933."],
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function queueWrites(sessionId, count, createdAt) {
+  for (let i = 0; i < count; i++) {
+    await enqueue("addMessage", sessionId, {
+      role: "user",
+      parts: [{ type: "text", text: `parked ${i}` }],
+    }, { createdAt: createdAt + i });
+  }
+}
+
+async function queueOrder() {
+  return (await listPending()).map(({ entry }) => [entry.type, entry.sessionId]);
+}
+
+async function replayAll() {
+  const paths = [];
+  await replayPending(async (path) => {
+    paths.push(path);
+    return { ok: true, result: {} };
+  }, () => {});
+  return paths;
+}
+
+function rejectAllButHealth(healthy) {
+  return async (req, res) => {
+    const url = new URL(req.url, "http://127.0.0.1");
+    if (req.method === "GET" && url.pathname === "/health" && healthy) {
+      writeJson(res, { status: "ok", result: { healthy: true } });
+      return;
+    }
+    if (req.method === "POST") await readRequestBody(req);
+    writeJson(res, { status: "error", error: { code: "UNAVAILABLE" } }, 503);
+  };
+}
+
+for (const healthy of [true, false]) {
+  test(`SessionEnd queues its commit behind parked writes (health ${healthy ? "ok" : "down"})`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "ov-cc-session-end-parked-"));
+    const ovSessionId = "cc-end-parked";
+    try {
+      await withPendingDir(async (pendingDir) => {
+        // A commit left over from an earlier failure, and writes stamped
+        // ahead of the clock the way a failed batch stamps them.
+        await enqueue("commitSession", ovSessionId, {}, { createdAt: Date.now() - 1000 });
+        await queueWrites(ovSessionId, 3, Date.now() + 60_000);
+
+        await withMockOpenViking(rejectAllButHealth(healthy), async (baseUrl) => {
+          await runHook("session-end.mjs", { session_id: "end-parked", cwd: root }, {
+            ...hookEnv(root, baseUrl),
+            OPENVIKING_PENDING_DIR: pendingDir,
+          });
+        });
+
+        assert.deepEqual(await queueOrder(), [
+          ["addMessage", ovSessionId],
+          ["addMessage", ovSessionId],
+          ["addMessage", ovSessionId],
+          ["commitSession", ovSessionId],
+        ]);
+        assert.deepEqual(await replayAll(), [
+          ...Array(3).fill(`/api/v1/sessions/${ovSessionId}/messages`),
+          `/api/v1/sessions/${ovSessionId}/commit`,
+        ]);
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("SessionEnd sends parked writes before committing once the server is back", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-session-end-replay-"));
+  const ovSessionId = "cc-end-replay";
+  try {
+    await withPendingDir(async (pendingDir) => {
+      await queueWrites(ovSessionId, 3, Date.now());
+
+      await withMockOpenViking(async (req, res) => {
+        if (req.method === "POST") await readRequestBody(req);
+        writeJson(res, { status: "ok", result: {} });
+      }, async (baseUrl, requests) => {
+        await runHook("session-end.mjs", { session_id: "end-replay", cwd: root }, {
+          ...hookEnv(root, baseUrl),
+          OPENVIKING_PENDING_DIR: pendingDir,
+        });
+        assert.deepEqual(requests.filter((r) => r.method === "POST").map((r) => r.path), [
+          ...Array(3).fill(`/api/v1/sessions/${ovSessionId}/messages`),
+          `/api/v1/sessions/${ovSessionId}/commit`,
+        ]);
+      });
+
+      assert.deepEqual(await listPending(), []);
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("SubagentStop queues its commit behind turns parked by a failed send", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-subagent-parked-"));
+  const transcriptPath = join(root, "subagent.jsonl");
+  try {
+    await writeTranscript(transcriptPath);
+    await withPendingDir(async (pendingDir) => {
+      await withMockOpenViking(rejectAllButHealth(true), async (baseUrl, requests) => {
+        await runHook("subagent-stop.mjs", {
+          session_id: "parent-parked",
+          agent_id: "child-parked",
+          agent_transcript_path: transcriptPath,
+          cwd: root,
+        }, { ...hookEnv(root, baseUrl), OPENVIKING_PENDING_DIR: pendingDir });
+        assert.equal(requests.some((r) => r.path.endsWith("/commit")), false);
+      });
+
+      assert.deepEqual((await queueOrder()).map(([type]) => type), [
+        "addMessage",
+        "addMessage",
+        "commitSession",
+      ]);
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

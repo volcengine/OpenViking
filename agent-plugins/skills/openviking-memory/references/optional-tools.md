@@ -34,9 +34,11 @@ lets the server file extracted memories on its own):
   `edit` over rewriting whole files, and re-`read` the file first if your copy
   of its content might be stale.
 
-Use them for curated notes under `viking://~/` (your own user root) and shared
-reference material under `viking://resources/`. When neither is registered,
-fall back to `remember` as SKILL.md describes.
+Use them for notes you author under `viking://~/` (your own user root) or
+`viking://resources/`. A file, URL, or repo the user hands you goes through
+`add_resource`, and a skill through `add_skill`: `write` skips parsing and
+installation. When neither tool is registered, fall back to `remember` as
+SKILL.md describes.
 
 ## `list_watches()` and `cancel_watch(to_uri)`
 

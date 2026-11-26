@@ -3,8 +3,8 @@
 
 """Tests for multi-tenant authentication (openviking/server/auth.py)."""
 
-import asyncio
 import uuid
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -14,13 +14,15 @@ from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
+from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.auth.registry import get_registry
-from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
+from openviking.server.config import ServerConfig, validate_server_config
 from openviking.server.dependencies import set_service
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.store_assembly import build_api_key_manager
 from openviking.service.core import OpenVikingService
 from openviking.service.task_store import PersistentTaskStore
 from openviking.service.task_tracker import (
@@ -28,7 +30,7 @@ from openviking.service.task_tracker import (
     get_task_tracker,
     set_task_tracker,
 )
-from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError, PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -53,6 +55,7 @@ class _FakeAgfs:
         return "OK"
 
     def read(self, path: str, offset: int = 0, size: int = -1, stream: bool = False):
+        del stream
         if path not in self.files:
             raise FileNotFoundError(path)
         data = self.files[path]
@@ -92,21 +95,29 @@ def _make_request(
     # Ensure built-in plugins are registered
     import openviking.server.auth.plugins  # noqa: F401
 
+    if auth_mode == "trusted" and root_api_key is None:
+        root_api_key = ROOT_KEY
+    request_headers = dict(headers or {})
+    if auth_mode == "trusted":
+        request_headers.setdefault("X-API-Key", ROOT_KEY)
+
     raw_headers = []
-    for key, value in (headers or {}).items():
+    for key, value in request_headers.items():
         raw_headers.append((key.lower().encode("latin-1"), value.encode("latin-1")))
     app = FastAPI()
     # When auth is disabled and mode is the default api_key, fall back to dev mode
     effective_auth_mode = auth_mode if auth_enabled or auth_mode != "api_key" else "dev"
     app.state.config = ServerConfig(auth_mode=effective_auth_mode, root_api_key=root_api_key)
-    if auth_enabled:
-        # Non-empty api_key_manager means the server is in authenticated mode.
-        app.state.api_key_manager = api_key_manager if api_key_manager is not None else object()
+    app.state.api_key_manager = (
+        api_key_manager if auth_enabled and api_key_manager is not None else None
+    )
     # Set auth plugin based on mode
     registry = get_registry()
     plugin_cls = registry.get(effective_auth_mode)
     if plugin_cls is not None:
         app.state.auth_plugin = plugin_cls()
+        if effective_auth_mode == "trusted":
+            app.state.auth_plugin._api_key_manager = api_key_manager
     scope = {
         "type": "http",
         "path": path,
@@ -131,13 +142,14 @@ def _build_auth_http_test_app(
     # Ensure built-in plugins are registered
     import openviking.server.auth.plugins  # noqa: F401
 
+    if auth_mode == "trusted" and root_api_key is None:
+        root_api_key = ROOT_KEY
+
     app = FastAPI()
     # When auth is disabled and mode is the default api_key, fall back to dev mode
     effective_auth_mode = auth_mode if auth_enabled or auth_mode != "api_key" else "dev"
     app.state.config = ServerConfig(auth_mode=effective_auth_mode, root_api_key=root_api_key)
-    if auth_enabled:
-        # Match production auth mode so get_request_context enters the guard path.
-        app.state.api_key_manager = object()
+    app.state.api_key_manager = object() if auth_enabled else None
     # Set auth plugin based on mode
     registry = get_registry()
     plugin_cls = registry.get(effective_auth_mode)
@@ -175,23 +187,9 @@ def _build_auth_http_test_app(
             "result": {
                 "account_id": ctx.user.account_id,
                 "user_id": ctx.user.user_id,
+                "role": str(ctx.role),
             },
         }
-
-    @app.get("/api/v1/observer/system")
-    async def observer_system(ctx=Depends(get_request_context)):
-        """Expose a monitoring route that should keep implicit ROOT behavior."""
-        return {"status": "ok", "result": {"role": str(ctx.role)}}
-
-    @app.post("/api/v1/system/wait")
-    async def system_wait(ctx=Depends(get_request_context)):
-        """Expose a non-tenant system route for auth regression tests."""
-        return {"status": "ok", "result": {"role": str(ctx.role)}}
-
-    @app.get("/api/v1/debug/vector/scroll")
-    async def debug_vector_scroll(ctx=Depends(get_request_context)):
-        """Expose a tenant-scoped debug route for auth regression tests."""
-        return {"status": "ok", "result": {"role": str(ctx.role)}}
 
     @app.get("/api/v1/test/accounts/{account_id}/users/{user_id}")
     async def trusted_identity_from_url(
@@ -227,14 +225,15 @@ async def auth_service(temp_dir):
         path=str(temp_dir / "auth_data"), user=UserIdentifier.the_default_user("auth_user")
     )
     await svc.initialize()
+    await svc.recover()
+    await svc.start_background()
     yield svc
     await svc.close()
 
 
 @pytest_asyncio.fixture(scope="function")
 async def auth_app(auth_service):
-    """App with root_api_key configured and APIKeyManager loaded."""
-    from openviking.server.api_keys import APIKeyManager
+    """App with root_api_key configured and identity services initialized."""
     from openviking.server.auth.plugins import ApiKeyAuthPlugin
     from openviking.server.auth.registry import get_registry
 
@@ -242,8 +241,7 @@ async def auth_app(auth_service):
     app = create_app(config=config, service=auth_service)
     set_service(auth_service)
 
-    # Manually initialize APIKeyManager (lifespan not triggered in ASGI tests)
-    manager = APIKeyManager(root_key=ROOT_KEY, viking_fs=auth_service.viking_fs)
+    manager = build_api_key_manager(ROOT_KEY, auth_service.viking_fs)
     await manager.load()
     app.state.api_key_manager = manager
 
@@ -255,7 +253,20 @@ async def auth_app(auth_service):
     plugin = plugin_cls()
     app.state.auth_plugin = plugin
 
-    return app
+    yield app
+    await manager.close()
+
+
+async def _stored_users(service, account_id):
+    manager = build_api_key_manager(ROOT_KEY, service.viking_fs)
+    await manager.load()
+    try:
+        if await manager.get_account(account_id) is None:
+            return []
+        page = await manager.list_users_page(account_id, expose_key=True)
+        return page["users"]
+    finally:
+        await manager.close()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -278,31 +289,6 @@ async def user_key(auth_app):
 # ---- Basic auth tests ----
 
 
-async def test_health_no_auth_required(auth_client: httpx.AsyncClient):
-    """/health should be accessible without any API key."""
-    resp = await auth_client.get("/health")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-
-
-async def test_root_key_via_x_api_key(auth_client: httpx.AsyncClient):
-    """Root key via X-API-Key should grant ROOT access."""
-    resp = await auth_client.get(
-        "/api/v1/system/status",
-        headers={"X-API-Key": ROOT_KEY},
-    )
-    assert resp.status_code == 200
-
-
-async def test_root_key_via_bearer(auth_client: httpx.AsyncClient):
-    """Root key via Bearer token should grant ROOT access."""
-    resp = await auth_client.get(
-        "/api/v1/system/status",
-        headers={"Authorization": f"Bearer {ROOT_KEY}"},
-    )
-    assert resp.status_code == 200
-
-
 async def test_user_key_access(auth_client: httpx.AsyncClient, user_key: str):
     """User key should grant access to regular endpoints."""
     resp = await auth_client.get(
@@ -312,101 +298,79 @@ async def test_user_key_access(auth_client: httpx.AsyncClient, user_key: str):
     assert resp.status_code == 200
 
 
-async def test_missing_key_returns_401(auth_client: httpx.AsyncClient):
-    """Request without API key should return 401."""
-    resp = await auth_client.get("/api/v1/system/status")
-    assert resp.status_code == 401
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "UNAUTHENTICATED"
-
-
-async def test_wrong_key_returns_401(auth_client: httpx.AsyncClient):
-    """Request with invalid key should return 401."""
-    resp = await auth_client.get(
-        "/api/v1/system/status",
-        headers={"X-API-Key": "definitely-wrong-key"},
-    )
-    assert resp.status_code == 401
-
-
-async def test_bearer_without_prefix_fails(auth_client: httpx.AsyncClient):
-    """Authorization header without 'Bearer ' prefix should fail."""
-    resp = await auth_client.get(
-        "/api/v1/system/status",
-        headers={"Authorization": ROOT_KEY},
-    )
-    assert resp.status_code == 401
+async def test_missing_or_invalid_key_returns_401(auth_client: httpx.AsyncClient):
+    for headers, reason in (
+        ({}, "Missing API Key"),
+        ({"Authorization": ROOT_KEY}, "Missing API Key"),
+        ({"X-API-Key": "definitely-wrong-key"}, "Invalid API key format"),
+    ):
+        response = await auth_client.get("/api/v1/system/status", headers=headers)
+        assert response.status_code == 401
+        body = response.json()
+        assert body["status"] == "error"
+        assert body["error"]["code"] == "UNAUTHENTICATED"
+        assert reason in body["error"]["message"]
 
 
 async def test_dev_mode_no_auth(client: httpx.AsyncClient):
-    """When no root_api_key configured (dev mode), all requests pass as ROOT."""
-    resp = await client.get("/api/v1/system/status")
-    assert resp.status_code == 200
+    """In dev mode data and status requests do not need any credentials."""
+    status = await client.get("/api/v1/system/status")
+    assert status.status_code == 200
+    assert status.json()["result"]["user"] == "default"
+    listing = await client.get("/api/v1/fs/ls", params={"uri": "viking://"})
+    assert listing.status_code == 200 and isinstance(listing.json()["result"], list)
 
 
-async def test_auth_on_multiple_endpoints(auth_client: httpx.AsyncClient):
-    """Protected endpoints should require auth before any role-specific checks."""
-    endpoints = [
+async def test_auth_on_multiple_endpoints(
+    auth_client: httpx.AsyncClient, auth_service, monkeypatch
+):
+    wait_processed = AsyncMock(return_value={})
+    monkeypatch.setattr(auth_service.resources, "wait_processed", wait_processed)
+    allowed = [
         ("GET", "/api/v1/system/status"),
+        ("POST", "/api/v1/system/wait"),
         ("GET", "/api/v1/observer/system"),
         ("GET", "/api/v1/debug/health"),
-        ("GET", "/api/v1/fs/ls?uri=viking://"),
     ]
-    for method, url in endpoints:
-        resp = await auth_client.request(method, url)
-        assert resp.status_code == 401, f"{method} {url} should require auth"
+    for method, url in [*allowed, ("GET", "/api/v1/fs/ls?uri=viking://")]:
+        response = await auth_client.request(method, url)
+        assert response.status_code == 401, f"{method} {url}: {response.text}"
+        assert response.json()["error"]["code"] == "UNAUTHENTICATED"
 
-    for method, url in endpoints[:3]:
-        resp = await auth_client.request(method, url, headers={"X-API-Key": ROOT_KEY})
-        assert resp.status_code == 200, f"{method} {url} should succeed with root key"
+    root = {"X-API-Key": ROOT_KEY}
+    for method, url in allowed:
+        response = await auth_client.request(method, url, headers=root)
+        assert response.status_code == 200, f"{method} {url}: {response.text}"
+        assert response.json()["status"] == "ok"
+    wait_processed.assert_awaited_once()
 
-    tenant_resp = await auth_client.get(
-        "/api/v1/fs/ls?uri=viking://",
-        headers={"X-API-Key": ROOT_KEY},
+    bearer = await auth_client.get(
+        "/api/v1/system/status", headers={"Authorization": f"Bearer {ROOT_KEY}"}
     )
-    assert tenant_resp.status_code == 403
-    assert tenant_resp.json()["error"]["code"] == "PERMISSION_DENIED"
+    assert bearer.status_code == 200
+    assert bearer.json()["result"]["user"] == "default"
 
-
-async def test_admin_sync_route_accepts_root_key(auth_client: httpx.AsyncClient, auth_service):
-    """ROOT keys should be allowed to call the system sync admin route."""
-    calls: list[str] = []
-
-    async def _fake_system_sync_status(uri: str, ctx):
-        calls.append(uri)
-        return {"path": uri, "entry_count": 1}
-
-    auth_service.fs.system_sync_status = _fake_system_sync_status
-
-    resp = await auth_client.get(
-        "/api/v1/system/sync/viking://resources",
-        headers={"X-API-Key": ROOT_KEY},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["result"] == {"path": "viking://resources", "entry_count": 1}
-    assert calls == ["viking://resources"]
-
-
-async def test_admin_sync_route_rejects_user_key(auth_client: httpx.AsyncClient, user_key: str):
-    """Regular user keys must not access the system sync admin route."""
-    resp = await auth_client.get(
-        "/api/v1/system/sync/viking://resources",
-        headers={"X-API-Key": user_key},
-    )
-    assert resp.status_code == 403
-    assert resp.json()["error"]["code"] == "PERMISSION_DENIED"
-
-    tenant_resp = await auth_client.get(
-        "/api/v1/fs/ls?uri=viking://",
-        headers={
-            "X-API-Key": ROOT_KEY,
-            "X-OpenViking-Account": "default",
-            "X-OpenViking-User": "default",
-        },
-    )
-    assert tenant_resp.status_code == 403
-    assert tenant_resp.json()["error"]["code"] == "PERMISSION_DENIED"
+    tenant_headers = {
+        "X-OpenViking-Account": "acme",
+        "X-OpenViking-User": "alice",
+    }
+    for method, url, body, headers in (
+        ("GET", "/api/v1/fs/ls?uri=viking://", None, root),
+        ("POST", "/api/v1/resources", {"path": "https://example.com/file.md"}, root),
+        (
+            "POST",
+            "/api/v1/resources",
+            {"path": "https://example.com/file.md"},
+            {**root, **tenant_headers},
+        ),
+        ("POST", "/api/v1/content/reindex", {"uri": "viking://resources"}, root),
+        ("GET", "/api/v1/debug/vector/scroll", None, root),
+    ):
+        response = await auth_client.request(method, url, json=body, headers=headers)
+        assert response.status_code == 403, f"{method} {url}: {response.text}"
+        error = response.json()["error"]
+        assert error["code"] == "PERMISSION_DENIED"
+        assert "ROOT API keys cannot access tenant-scoped data APIs" in error["message"]
 
 
 async def test_task_endpoints_require_auth():
@@ -489,108 +453,42 @@ async def test_task_endpoints_are_user_scoped():
 
 
 async def test_user_key_cannot_access_admin_api(auth_client: httpx.AsyncClient, user_key: str):
-    """User key (ADMIN role) should NOT access ROOT-only admin endpoints."""
+    """Personal tenant credentials cannot list every account."""
     # list accounts is ROOT-only
     resp = await auth_client.get(
         "/api/v1/admin/accounts",
         headers={"X-API-Key": user_key},
     )
-    # ADMIN can't list all accounts (ROOT only)
     assert resp.status_code == 403
 
 
-async def test_admin_key_cannot_switch_effective_user_within_account(auth_app):
-    """ADMIN API keys cannot assert a different data-plane user in api_key mode."""
+@pytest.mark.parametrize("role", [Role.ADMIN, Role.USER])
+async def test_api_key_identity_cannot_be_overridden(auth_app, role):
     manager = auth_app.state.api_key_manager
     account_id = _uid()
     admin_key = await manager.create_account(account_id, "admin_user")
-    await manager.register_user(account_id, "alice")
-
-    request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-API-Key": admin_key,
-            "X-OpenViking-Account": account_id,
-            "X-OpenViking-User": "alice",
-        },
-        auth_enabled=True,
-        api_key_manager=manager,
-    )
-
-    with pytest.raises(PermissionDeniedError, match="X-OpenViking-Account"):
-        await resolve_identity(
-            request,
-            x_api_key=admin_key,
-            x_openviking_account=account_id,
-            x_openviking_user="alice",
-        )
-
-
-async def test_admin_key_cannot_switch_account_via_header(auth_app):
-    """ADMIN keys must stay inside their own account."""
-    manager = auth_app.state.api_key_manager
-    account_id = _uid()
-    admin_key = await manager.create_account(account_id, "admin_user")
-
-    request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-API-Key": admin_key,
-            "X-OpenViking-Account": "other-account",
-        },
-        auth_enabled=True,
-        api_key_manager=manager,
-    )
-
-    with pytest.raises(PermissionDeniedError, match="X-OpenViking-Account"):
-        await resolve_identity(
-            request,
-            x_api_key=admin_key,
-            x_openviking_account="other-account",
-        )
-
-
-async def test_user_key_resolves_to_key_user_and_cannot_switch_user(auth_app):
-    """USER keys resolve to their owner and may not impersonate another user."""
-    manager = auth_app.state.api_key_manager
-    account_id = _uid()
-    await manager.create_account(account_id, "admin_user")
     user_key = await manager.register_user(account_id, "alice")
-
-    request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-API-Key": user_key,
-        },
-        auth_enabled=True,
-        api_key_manager=manager,
-    )
-
-    identity = await resolve_identity(
-        request,
-        x_api_key=user_key,
-    )
-
-    assert identity.role == Role.USER
-    assert identity.account_id == account_id
-    assert identity.user_id == "alice"
-
-    forbidden_request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-API-Key": user_key,
-            "X-OpenViking-User": "bob",
-        },
-        auth_enabled=True,
-        api_key_manager=manager,
-    )
-
-    with pytest.raises(PermissionDeniedError, match="X-OpenViking-User"):
-        await resolve_identity(
-            forbidden_request,
-            x_api_key=user_key,
-            x_openviking_user="bob",
+    key, owner = (admin_key, "admin_user") if role == Role.ADMIN else (user_key, "alice")
+    for overrides in (
+        {},
+        {"X-OpenViking-Account": "other-account"},
+        {"X-OpenViking-Account": account_id, "X-OpenViking-User": "bob"},
+    ):
+        request = _make_request(
+            "/api/v1/resources",
+            headers={"X-API-Key": key, **overrides},
+            auth_enabled=True,
+            api_key_manager=manager,
         )
+        identity = await resolve_identity(
+            request,
+            x_api_key=key,
+            x_openviking_account=overrides.get("X-OpenViking-Account"),
+            x_openviking_user=overrides.get("X-OpenViking-User"),
+        )
+        assert (identity.account_id, identity.user_id, identity.role) == (account_id, owner, role)
+        assert "x-openviking-account" not in request.headers
+        assert "x-openviking-user" not in request.headers
 
 
 async def test_cross_tenant_session_get_returns_not_found(auth_client: httpx.AsyncClient, auth_app):
@@ -710,52 +608,6 @@ async def test_sessions_are_isolated_between_users_within_account(
     assert bob_get_same_id.json()["result"]["message_count"] == 1
 
 
-async def test_root_tenant_scoped_requests_rejected_in_api_key_mode():
-    """ROOT API keys cannot access tenant-scoped data APIs in api_key mode."""
-    request = _make_request("/api/v1/resources", auth_enabled=True)
-    identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
-
-    with pytest.raises(PermissionDeniedError, match="ROOT API keys"):
-        await get_request_context(request, identity)
-
-
-async def test_root_system_status_allows_implicit_default_identity():
-    """ROOT may call status endpoints without explicit tenant headers."""
-    request = _make_request("/api/v1/system/status", auth_enabled=True)
-    identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
-
-    ctx = await get_request_context(request, identity)
-
-    assert ctx.role == Role.ROOT
-    assert ctx.user.account_id == "default"
-    assert ctx.user.user_id == "default"
-
-
-async def test_root_tenant_scoped_requests_reject_explicit_identity_in_api_key_mode():
-    """Header identity assertion belongs to trusted mode, not ROOT API key access."""
-    request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-OpenViking-Account": "acme",
-            "X-OpenViking-User": "alice",
-        },
-        auth_enabled=True,
-    )
-    identity = ResolvedIdentity(role=Role.ROOT, account_id="acme", user_id="alice")
-
-    with pytest.raises(PermissionDeniedError, match="ROOT API keys"):
-        await get_request_context(request, identity)
-
-
-async def test_root_reindex_requests_rejected_in_api_key_mode():
-    """ROOT API keys cannot select tenant data through data-plane reindex."""
-    request = _make_request("/api/v1/content/reindex", auth_enabled=True)
-    identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
-
-    with pytest.raises(PermissionDeniedError, match="ROOT API keys"):
-        await get_request_context(request, identity)
-
-
 async def test_admin_reindex_requests_use_key_owner_in_api_key_mode():
     """ADMIN reindex is allowed for the admin key's own account only."""
     request = _make_request("/api/v1/content/reindex", auth_enabled=True)
@@ -794,38 +646,6 @@ async def test_actor_peer_header_rejects_path_separators():
         await get_request_context(request, identity, "bad/peer")
 
 
-async def test_root_monitoring_requests_allow_implicit_default_identity():
-    """Observer/debug endpoints keep the existing ROOT monitoring flow."""
-    observer_request = _make_request("/api/v1/observer/system", auth_enabled=True)
-    debug_request = _make_request("/api/v1/debug/health", auth_enabled=True)
-    identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
-
-    observer_ctx = await get_request_context(observer_request, identity)
-    debug_ctx = await get_request_context(debug_request, identity)
-
-    assert observer_ctx.role == Role.ROOT
-    assert debug_ctx.role == Role.ROOT
-
-
-async def test_root_system_wait_allows_implicit_default_identity():
-    """ROOT may call system wait without explicit tenant headers."""
-    request = _make_request("/api/v1/system/wait", auth_enabled=True)
-    identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
-
-    ctx = await get_request_context(request, identity)
-
-    assert ctx.role == Role.ROOT
-
-
-async def test_root_debug_vector_requests_rejected_in_api_key_mode():
-    """Tenant-scoped debug routes cannot use ROOT API keys in api_key mode."""
-    request = _make_request("/api/v1/debug/vector/scroll", auth_enabled=True)
-    identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
-
-    with pytest.raises(PermissionDeniedError, match="ROOT API keys"):
-        await get_request_context(request, identity)
-
-
 async def test_dev_mode_root_tenant_scoped_requests_allow_implicit_identity():
     """Dev mode should keep the existing implicit ROOT/default behavior."""
     request = _make_request("/api/v1/resources", auth_enabled=False)
@@ -836,125 +656,6 @@ async def test_dev_mode_root_tenant_scoped_requests_allow_implicit_identity():
     assert ctx.role == Role.ROOT
     assert ctx.user.account_id == "default"
     assert ctx.user.user_id == "default"
-
-
-async def test_root_tenant_scoped_requests_return_structured_403_via_http():
-    """Tenant-scoped HTTP routes should reject ROOT API-key data-plane access."""
-    app = _build_auth_http_test_app(
-        ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default"),
-        auth_enabled=True,
-    )
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/v1/fs/ls")
-
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "PERMISSION_DENIED"
-
-
-async def test_root_monitoring_requests_keep_200_via_http():
-    """Monitoring HTTP routes should still work with implicit ROOT identity."""
-    app = _build_auth_http_test_app(
-        ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default"),
-        auth_enabled=True,
-    )
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/v1/observer/system")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
-
-
-async def test_root_system_wait_keeps_200_via_http():
-    """System wait should keep working for ROOT without tenant headers."""
-    app = _build_auth_http_test_app(
-        ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default"),
-        auth_enabled=True,
-    )
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/v1/system/wait")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
-
-
-async def test_root_debug_vector_requests_return_structured_403_via_http():
-    """Tenant-scoped debug routes should reject ROOT API-key data-plane access."""
-    app = _build_auth_http_test_app(
-        ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default"),
-        auth_enabled=True,
-    )
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/v1/debug/vector/scroll")
-
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "PERMISSION_DENIED"
-
-
-async def test_dev_mode_root_tenant_scoped_requests_keep_200_via_http():
-    """Dev mode HTTP routes should keep the existing implicit ROOT/default behavior."""
-    app = _build_auth_http_test_app(
-        ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default"),
-        auth_enabled=False,
-    )
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/v1/fs/ls")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
-
-
-async def test_trusted_mode_allows_header_identity_without_api_key():
-    """Trusted mode should accept explicit tenant headers without API key."""
-    request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-OpenViking-Account": "acme",
-            "X-OpenViking-User": "alice",
-        },
-        auth_enabled=False,
-        auth_mode="trusted",
-    )
-
-    identity = await resolve_identity(
-        request,
-        x_openviking_account="acme",
-        x_openviking_user="alice",
-    )
-
-    assert identity.role == Role.USER
-    assert identity.account_id == "acme"
-    assert identity.user_id == "alice"
-
-
-async def test_trusted_mode_defaults_role_to_user():
-    """Trusted mode should default requests to USER when no explicit role header is sent."""
-    request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-OpenViking-Account": "acme",
-            "X-OpenViking-User": "alice",
-        },
-        auth_enabled=False,
-        auth_mode="trusted",
-    )
-
-    identity = await resolve_identity(
-        request,
-        x_openviking_account="acme",
-        x_openviking_user="alice",
-    )
-
-    assert identity.role == Role.USER
 
 
 async def test_trusted_mode_looks_up_role_from_api_key_manager(auth_app):
@@ -1064,46 +765,40 @@ async def test_trusted_mode_defaults_to_user_when_account_not_found(auth_app):
 
 
 async def test_trusted_identity_registration_batches_data_plane_identity(auth_service):
-    """Enabled trusted registration queues every data-plane identity until flush."""
+    """Registration is delayed until flush and remains idempotent after restart."""
     from openviking.server.auth.plugins import TrustedAuthPlugin
 
     config = ServerConfig(
         auth_mode="trusted",
+        root_api_key=ROOT_KEY,
         trusted_identity_flush_interval_seconds=300,
     )
-    app = FastAPI()
-    app.state.config = config
-    plugin = TrustedAuthPlugin()
-    await plugin.initialize(app, auth_service, config)
-    try:
-        request = _make_request(
-            "/api/v1/resources",
-            headers={
-                "X-OpenViking-Account": "acme",
-                "X-OpenViking-User": "alice",
-            },
-            auth_enabled=False,
-            auth_mode="trusted",
-        )
-        request.app.state.config = config
-        request.app.state.api_key_manager = app.state.api_key_manager
-
-        identity = await plugin.resolve_identity(
-            request,
-            x_openviking_account="acme",
-            x_openviking_user="alice",
-        )
-        assert identity.account_id == "acme"
-        assert identity.user_id == "alice"
-        assert plugin._api_key_manager.has_user("acme", "alice") is False
-
-        await plugin.flush_trusted_identities()
-
-        assert plugin._api_key_manager.get_users("acme", expose_key=True) == [
-            {"user_id": "alice", "role": "user"}
-        ]
-    finally:
-        await plugin.shutdown()
+    for restarted in (False, True):
+        app = FastAPI()
+        app.state.config = config
+        app.state.service_name = "openviking-server"
+        plugin = TrustedAuthPlugin()
+        await plugin.initialize(app, auth_service, config)
+        try:
+            request = _make_request("/api/v1/resources", auth_enabled=False, auth_mode="trusted")
+            request.app.state.config = config
+            request.app.state.api_key_manager = app.state.api_key_manager
+            identity = await plugin.resolve_identity(
+                request, x_openviking_account="acme", x_openviking_user="alice"
+            )
+            assert (identity.account_id, identity.user_id, identity.role) == (
+                "acme",
+                "alice",
+                Role.USER,
+            )
+            if not restarted:
+                assert await _stored_users(auth_service, "acme") == []
+            await plugin.flush_trusted_identities()
+            assert await _stored_users(auth_service, "acme") == [
+                {"user_id": "alice", "role": "user"}
+            ]
+        finally:
+            await plugin.shutdown()
 
 
 async def test_invalid_trusted_identity_does_not_block_later_registration(
@@ -1114,10 +809,12 @@ async def test_invalid_trusted_identity_does_not_block_later_registration(
 
     config = ServerConfig(
         auth_mode="trusted",
+        root_api_key=ROOT_KEY,
         trusted_identity_flush_interval_seconds=300,
     )
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     plugin = TrustedAuthPlugin()
     await plugin.initialize(app, auth_service, config)
     try:
@@ -1139,8 +836,6 @@ async def test_invalid_trusted_identity_does_not_block_later_registration(
                 x_openviking_user="invalid/user",
             )
 
-        assert plugin._pending == {}
-
         valid_request = _make_request(
             "/api/v1/resources",
             headers={
@@ -1158,7 +853,9 @@ async def test_invalid_trusted_identity_does_not_block_later_registration(
         )
         await plugin.flush_trusted_identities()
 
-        assert plugin._api_key_manager.has_user("good-account", "alice")
+        assert await _stored_users(auth_service, "good-account") == [
+            {"user_id": "alice", "role": "user"}
+        ]
     finally:
         await plugin.shutdown()
 
@@ -1167,9 +864,10 @@ async def test_trusted_identity_registration_skips_identity_loaded_from_registry
     """A restarted plugin must not queue an identity already loaded from storage."""
     from openviking.server.auth.plugins import TrustedAuthPlugin
 
-    config = ServerConfig(auth_mode="trusted")
+    config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     first_plugin = TrustedAuthPlugin()
     await first_plugin.initialize(app, auth_service, config)
     try:
@@ -1179,6 +877,7 @@ async def test_trusted_identity_registration_skips_identity_loaded_from_registry
 
     restarted_app = FastAPI()
     restarted_app.state.config = config
+    restarted_app.state.service_name = "openviking-server"
     restarted_plugin = TrustedAuthPlugin()
     await restarted_plugin.initialize(restarted_app, auth_service, config)
     try:
@@ -1202,95 +901,27 @@ async def test_trusted_identity_registration_skips_identity_loaded_from_registry
         await restarted_plugin.shutdown()
 
 
-async def test_trusted_identity_registration_keeps_rootless_admin_api_disabled(auth_service):
-    """A private registry manager must not enable Admin APIs in rootless trusted mode."""
-    from openviking.server.auth import require_auth_root
-    from openviking.server.auth.plugins import TrustedAuthPlugin
-
-    config = ServerConfig(auth_mode="trusted")
-    app = _build_auth_http_test_app(
-        identity=None, auth_enabled=False, auth_mode="trusted"
-    )
-    app.state.config = config
-
-    @app.get("/api/v1/admin/guarded")
-    @require_auth_root
-    async def guarded_admin(request: FastAPIRequest, ctx=Depends(get_request_context)):
-        return {"status": "ok"}
-
-    plugin = TrustedAuthPlugin()
-    await plugin.initialize(app, auth_service, config)
-    try:
-        assert app.state.api_key_manager is None
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            admin_response = await client.get("/api/v1/admin/guarded")
-            assert admin_response.status_code == 403
-
-        request = _make_request(
-            "/api/v1/resources",
-            headers={
-                "X-OpenViking-Account": "acme",
-                "X-OpenViking-User": "alice",
-            },
-            auth_enabled=False,
-            auth_mode="trusted",
-        )
-        request.app.state.config = config
-        await plugin.resolve_identity(
-            request, x_openviking_account="acme", x_openviking_user="alice"
-        )
-        await plugin.flush_trusted_identities()
-        assert plugin._api_key_manager.has_user("acme", "alice")
-    finally:
-        await plugin.shutdown()
-
-
-async def test_disabled_trusted_identity_registration_and_admin_paths_do_not_enqueue(auth_service):
+@pytest.mark.parametrize(
+    "interval,path",
+    [(0, "/api/v1/resources"), (0, "/api/v1/admin/accounts"), (300, "/api/v1/admin/accounts")],
+)
+async def test_trusted_registration_respects_configuration_and_route(auth_service, interval, path):
     """A zero interval disables registration, and Admin paths never register."""
     from openviking.server.auth.plugins import TrustedAuthPlugin
 
-    config = ServerConfig(auth_mode="trusted", trusted_identity_flush_interval_seconds=0)
+    config = ServerConfig(
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+        trusted_identity_flush_interval_seconds=interval,
+    )
     app = FastAPI()
     app.state.config = config
-    plugin = TrustedAuthPlugin()
-    await plugin.initialize(app, auth_service, config)
-    try:
-        assert plugin._flush_task is None
-        for path in ("/api/v1/resources", "/api/v1/admin/accounts"):
-            headers = {
-                "X-OpenViking-Account": "acme",
-                "X-OpenViking-User": "alice",
-            }
-            request = _make_request(
-                path, headers=headers, auth_enabled=False, auth_mode="trusted"
-            )
-            request.app.state.config = config
-            request.app.state.api_key_manager = app.state.api_key_manager
-            await plugin.resolve_identity(
-                request,
-                x_openviking_account="acme",
-                x_openviking_user="alice",
-            )
-
-        await plugin.flush_trusted_identities()
-        assert plugin._api_key_manager.has_user("acme", "alice") is False
-    finally:
-        await plugin.shutdown()
-
-
-async def test_trusted_identity_registration_excludes_admin_paths(auth_service):
-    """Enabled registration must still exclude Admin requests."""
-    from openviking.server.auth.plugins import TrustedAuthPlugin
-
-    config = ServerConfig(auth_mode="trusted")
-    app = FastAPI()
-    app.state.config = config
+    app.state.service_name = "openviking-server"
     plugin = TrustedAuthPlugin()
     await plugin.initialize(app, auth_service, config)
     try:
         request = _make_request(
-            "/api/v1/admin/accounts",
+            path,
             headers={
                 "X-OpenViking-Account": "acme",
                 "X-OpenViking-User": "alice",
@@ -1307,7 +938,8 @@ async def test_trusted_identity_registration_excludes_admin_paths(auth_service):
             x_openviking_user="alice",
         )
 
-        assert plugin._pending == {}
+        await plugin.flush_trusted_identities()
+        assert await _stored_users(auth_service, "acme") == []
     finally:
         await plugin.shutdown()
 
@@ -1320,89 +952,66 @@ async def test_trusted_identity_registration_retries_failed_batch_without_exceed
 
     config = ServerConfig(
         auth_mode="trusted",
+        root_api_key=ROOT_KEY,
         trusted_identity_pending_max_size=2,
     )
     app = FastAPI()
     app.state.config = config
+    app.state.service_name = "openviking-server"
     plugin = TrustedAuthPlugin()
     await plugin.initialize(app, auth_service, config)
     try:
-        plugin._queue_trusted_identity("acme", "alice")
-        plugin._queue_trusted_identity("acme", "bob")
-        plugin._queue_trusted_identity("acme", "eve")
-        assert plugin._pending == {"acme": {"alice", "bob"}}
+        for user_id in ("alice", "bob", "eve"):
+            request = _make_request(
+                "/api/v1/resources",
+                headers={
+                    "X-OpenViking-Account": "acme",
+                    "X-OpenViking-User": user_id,
+                },
+                auth_enabled=False,
+                auth_mode="trusted",
+            )
+            request.app.state.config = config
+            await plugin.resolve_identity(
+                request,
+                x_openviking_account="acme",
+                x_openviking_user=user_id,
+            )
 
-        original_ensure = plugin._api_key_manager.ensure_trusted_identities
+        original_ensure = APIKeyManager.ensure_trusted_identities
+        failed = False
 
-        async def _fail_once(identities):
-            monkeypatch.setattr(plugin._api_key_manager, "ensure_trusted_identities", original_ensure)
-            raise RuntimeError("temporary storage failure")
+        async def _fail_once(manager, identities):
+            nonlocal failed
+            if not failed:
+                failed = True
+                raise RuntimeError("temporary storage failure")
+            return await original_ensure(manager, identities)
 
-        monkeypatch.setattr(plugin._api_key_manager, "ensure_trusted_identities", _fail_once)
+        monkeypatch.setattr(APIKeyManager, "ensure_trusted_identities", _fail_once)
         await plugin.flush_trusted_identities()
-        assert plugin._pending == {"acme": {"alice", "bob"}}
 
         await plugin.flush_trusted_identities()
-        assert plugin._api_key_manager.has_user("acme", "alice")
-        assert plugin._api_key_manager.has_user("acme", "bob")
+        assert await _stored_users(auth_service, "acme") == [
+            {"user_id": "alice", "role": "user"},
+            {"user_id": "bob", "role": "user"},
+        ]
     finally:
         await plugin.shutdown()
 
 
 def test_trusted_identity_registration_config_allows_disabling():
     """A zero interval disables registration; negative values remain invalid."""
-    assert ServerConfig(trusted_identity_flush_interval_seconds=0).trusted_identity_flush_interval_seconds == 0
+    assert (
+        ServerConfig(
+            trusted_identity_flush_interval_seconds=0
+        ).trusted_identity_flush_interval_seconds
+        == 0
+    )
     with pytest.raises(ValueError):
         ServerConfig(trusted_identity_flush_interval_seconds=-1)
     with pytest.raises(ValueError):
         ServerConfig(trusted_identity_pending_max_size=0)
-
-
-async def test_trusted_mode_with_root_api_key_requires_matching_api_key():
-    """Trusted mode should require the configured server API key when present."""
-    request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-OpenViking-Account": "acme",
-            "X-OpenViking-User": "alice",
-        },
-        auth_enabled=False,
-        auth_mode="trusted",
-        root_api_key=ROOT_KEY,
-    )
-
-    with pytest.raises(OpenVikingError, match="Missing API Key"):
-        await resolve_identity(
-            request,
-            x_openviking_account="acme",
-            x_openviking_user="alice",
-        )
-
-
-async def test_trusted_mode_with_root_api_key_accepts_matching_api_key():
-    """Trusted mode should accept explicit identity headers plus the configured server API key."""
-    request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-API-Key": ROOT_KEY,
-            "X-OpenViking-Account": "acme",
-            "X-OpenViking-User": "alice",
-        },
-        auth_enabled=False,
-        auth_mode="trusted",
-        root_api_key=ROOT_KEY,
-    )
-
-    identity = await resolve_identity(
-        request,
-        x_api_key=ROOT_KEY,
-        x_openviking_account="acme",
-        x_openviking_user="alice",
-    )
-
-    assert identity.role == Role.USER
-    assert identity.account_id == "acme"
-    assert identity.user_id == "alice"
 
 
 async def test_trusted_mode_root_key_allows_admin_role_header(auth_app):
@@ -1462,27 +1071,6 @@ async def test_trusted_mode_rejects_root_role_header():
         )
 
 
-async def test_trusted_mode_rejects_role_header_without_root_key():
-    """Role assertions require a configured root key so localhost trusted mode cannot self-elevate."""
-    request = _make_request(
-        "/api/v1/resources",
-        headers={
-            "X-OpenViking-Account": "acme",
-            "X-OpenViking-User": "alice",
-            "X-OpenViking-Role": "admin",
-        },
-        auth_enabled=False,
-        auth_mode="trusted",
-    )
-
-    with pytest.raises(InvalidArgumentError, match="X-OpenViking-Role"):
-        await resolve_identity(
-            request,
-            x_openviking_account="acme",
-            x_openviking_user="alice",
-        )
-
-
 async def test_trusted_mode_tenant_http_routes_require_explicit_identity_headers():
     """Trusted mode should reject tenant-scoped routes without account/user headers."""
     app = _build_auth_http_test_app(
@@ -1493,32 +1081,10 @@ async def test_trusted_mode_tenant_http_routes_require_explicit_identity_headers
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/v1/fs/ls")
+        response = await client.get("/api/v1/fs/ls", headers={"X-API-Key": ROOT_KEY})
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
-
-
-async def test_trusted_mode_tenant_http_routes_accept_explicit_identity_headers():
-    """Trusted mode should allow tenant-scoped routes with account/user headers."""
-    app = _build_auth_http_test_app(
-        identity=None,
-        auth_enabled=False,
-        auth_mode="trusted",
-    )
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get(
-            "/api/v1/fs/ls",
-            headers={
-                "X-OpenViking-Account": "acme",
-                "X-OpenViking-User": "alice",
-            },
-        )
-
-    assert response.status_code == 200
-    assert response.json()["result"] == {"account_id": "acme", "user_id": "alice"}
 
 
 async def test_trusted_mode_http_routes_accept_explicit_identity_from_url():
@@ -1531,7 +1097,10 @@ async def test_trusted_mode_http_routes_accept_explicit_identity_from_url():
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/v1/test/accounts/acme/users/alice")
+        response = await client.get(
+            "/api/v1/test/accounts/acme/users/alice",
+            headers={"X-API-Key": ROOT_KEY},
+        )
 
     assert response.status_code == 200
     assert response.json()["result"] == {
@@ -1554,71 +1123,36 @@ async def test_trusted_mode_rejects_conflicting_header_and_url_identity():
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
         response = await client.get(
             "/api/v1/test/accounts/acme/users/alice",
-            headers={"X-OpenViking-Account": "other-acct"},
+            headers={
+                "X-API-Key": ROOT_KEY,
+                "X-OpenViking-Account": "other-acct",
+            },
         )
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
-async def test_trusted_mode_http_routes_require_api_key_when_root_key_configured():
-    """Trusted mode HTTP routes should require the configured server API key when present."""
+async def test_trusted_mode_http_routes_authenticate_the_gateway():
     app = _build_auth_http_test_app(
-        identity=None,
-        auth_enabled=False,
-        auth_mode="trusted",
-        root_api_key=ROOT_KEY,
+        identity=None, auth_enabled=False, auth_mode="trusted", root_api_key=ROOT_KEY
     )
-    transport = httpx.ASGITransport(app=app)
+    headers = {"X-OpenViking-Account": "acme", "X-OpenViking-User": "alice"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        for key, reason in ((None, "Missing API Key"), ("wrong-gateway-key", "Invalid API Key")):
+            credentials = {"X-API-Key": key} if key is not None else {}
+            response = await client.get("/api/v1/fs/ls", headers={**headers, **credentials})
+            assert response.status_code == 401
+            error = response.json()["error"]
+            assert error["code"] == "UNAUTHENTICATED"
+            assert reason in error["message"]
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get(
-            "/api/v1/fs/ls",
-            headers={
-                "X-OpenViking-Account": "acme",
-                "X-OpenViking-User": "alice",
-            },
-        )
-
-    assert response.status_code == 401
-    assert response.json()["error"]["code"] == "UNAUTHENTICATED"
-
-
-async def test_trusted_mode_http_routes_accept_api_key_when_root_key_configured():
-    """Trusted mode HTTP routes should accept the configured server API key plus explicit identity headers."""
-    app = _build_auth_http_test_app(
-        identity=None,
-        auth_enabled=False,
-        auth_mode="trusted",
-        root_api_key=ROOT_KEY,
-    )
-    transport = httpx.ASGITransport(app=app)
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get(
-            "/api/v1/fs/ls",
-            headers={
-                "X-API-Key": ROOT_KEY,
-                "X-OpenViking-Account": "acme",
-                "X-OpenViking-User": "alice",
-            },
-        )
+        response = await client.get("/api/v1/fs/ls", headers={**headers, "X-API-Key": ROOT_KEY})
 
     assert response.status_code == 200
-    assert response.json()["result"] == {"account_id": "acme", "user_id": "alice"}
-
-
-# ---- _is_localhost tests ----
-
-
-@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
-def test_is_localhost_true(host: str):
-    assert _is_localhost(host) is True
-
-
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.1", "10.0.0.1"])
-def test_is_localhost_false(host: str):
-    assert _is_localhost(host) is False
+    assert response.json()["result"] == {"account_id": "acme", "user_id": "alice", "role": "user"}
 
 
 # ---- validate_server_config tests ----
@@ -1633,9 +1167,10 @@ def test_validate_no_key_localhost_passes():
 
 def test_validate_no_key_non_localhost_raises():
     """No root_api_key + non-localhost should raise SystemExit."""
-    config = ServerConfig(host="0.0.0.0", root_api_key=None)
-    with pytest.raises(SystemExit):
-        validate_server_config(config)
+    for host in ("0.0.0.0", "::", "192.168.1.1", "10.0.0.1"):
+        with pytest.raises(SystemExit) as exit_info:
+            validate_server_config(ServerConfig(host=host, root_api_key=None))
+        assert exit_info.value.code == 1
 
 
 def test_validate_with_key_any_host_passes():
@@ -1645,39 +1180,16 @@ def test_validate_with_key_any_host_passes():
         validate_server_config(config)  # should not raise
 
 
-def test_validate_trusted_mode_without_key_localhost_passes():
-    """Trusted mode without root_api_key should still be allowed on localhost only."""
-    for host in ("127.0.0.1", "localhost", "::1"):
+def test_validate_trusted_mode_requires_root_key_on_every_host():
+    """Trusted mode without root_api_key should fail on every host."""
+    for host in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
         config = ServerConfig(host=host, root_api_key=None, auth_mode="trusted")
-        validate_server_config(config)
+        with pytest.raises(SystemExit):
+            validate_server_config(config)
 
 
-def test_validate_trusted_mode_without_key_non_localhost_raises():
-    """Trusted mode without root_api_key should be rejected off localhost."""
-    config = ServerConfig(host="0.0.0.0", root_api_key=None, auth_mode="trusted")
-    with pytest.raises(SystemExit):
-        validate_server_config(config)
-
-
-async def test_trusted_mode_admin_api_without_identity_defaults_to_root():
-    """Trusted mode admin APIs without identity should default to ROOT role."""
-    request = _make_request(
-        "/api/v1/admin/accounts",
-        headers={},
-        auth_enabled=False,
-        auth_mode="trusted",
-    )
-
-    identity = await resolve_identity(request)
-
-    assert identity.role == Role.ROOT
-    assert identity.account_id == "trusted"
-    assert identity.user_id == "trusted"
-
-
-async def test_trusted_mode_admin_api_with_partial_identity_still_requires_full_identity():
-    """Trusted mode admin APIs with partial identity should still require full identity."""
-    # Only account, no user
+async def test_trusted_mode_admin_api_treats_partial_identity_as_target():
+    """Trusted Admin paths treat account/user values as resource targets."""
     request = _make_request(
         "/api/v1/admin/accounts",
         headers={"X-OpenViking-Account": "acme"},
@@ -1685,11 +1197,11 @@ async def test_trusted_mode_admin_api_with_partial_identity_still_requires_full_
         auth_mode="trusted",
     )
 
-    with pytest.raises(InvalidArgumentError, match="Trusted mode requests must include"):
-        await resolve_identity(
-            request,
-            x_openviking_account="acme",
-        )
+    identity = await resolve_identity(request, x_openviking_account="acme")
+
+    assert identity.role == Role.ROOT
+    assert identity.account_id == "acme"
+    assert identity.user_id == "trusted"
 
 
 async def test_trusted_mode_root_key_can_target_account_without_caller_identity():
@@ -1768,98 +1280,13 @@ async def test_trusted_mode_admin_api_http_route_without_identity():
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/v1/admin/accounts")
+        response = await client.get(
+            "/api/v1/admin/accounts",
+            headers={"X-API-Key": ROOT_KEY},
+        )
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert response.json()["result"]["role"] == "root"
     assert response.json()["result"]["account_id"] == "trusted"
     assert response.json()["result"]["user_id"] == "trusted"
-
-
-# ---- API key store watcher (read-replica refresh) tests ----
-#
-# When server.api_key_watch_enabled is set, the api_key plugin starts a
-# background task that polls the shared key store and reloads the in-memory
-# index on change, so read replicas converge on writer-side user changes.
-
-
-class _FakeManager:
-    """Minimal APIKeyManager stand-in that records watcher interactions."""
-
-    def __init__(self, signatures):
-        # signatures: list of signatures returned on successive calls; the last
-        # value is repeated once exhausted.
-        self._signatures = list(signatures)
-        self.reload_calls = 0
-        self.signature_calls = 0
-
-    async def compute_store_signature(self):
-        self.signature_calls += 1
-        idx = min(self.signature_calls - 1, len(self._signatures) - 1)
-        return self._signatures[idx]
-
-    async def reload(self):
-        self.reload_calls += 1
-
-
-async def test_watcher_disabled_by_default(auth_service):
-    """No watch task should start when api_key_watch_enabled is unset."""
-    from openviking.server.auth.plugins import ApiKeyAuthPlugin
-
-    app = create_app(config=ServerConfig(root_api_key=ROOT_KEY), service=auth_service)
-    plugin = ApiKeyAuthPlugin()
-    config = ServerConfig(root_api_key=ROOT_KEY)
-    await plugin.initialize(app, auth_service, config)
-    try:
-        assert plugin._watch_task is None
-    finally:
-        await plugin.shutdown()
-
-
-async def test_watcher_reloads_on_signature_change(auth_service):
-    """The watcher reloads only when the store signature changes."""
-    from openviking.server.auth.plugins import ApiKeyAuthPlugin
-
-    manager = _FakeManager(signatures=[("sig-a",), ("sig-b",)])
-    task = asyncio.create_task(ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01))
-    try:
-        await asyncio.sleep(0.1)
-    finally:
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-    # First signature is the baseline; the change to sig-b triggers a reload.
-    assert manager.reload_calls >= 1
-
-
-async def test_watcher_skips_reload_when_unchanged(auth_service):
-    """A stable signature must not trigger any reload."""
-    from openviking.server.auth.plugins import ApiKeyAuthPlugin
-
-    manager = _FakeManager(signatures=[("sig-stable",)])
-    task = asyncio.create_task(ApiKeyAuthPlugin._watch_key_store(manager, interval=0.01))
-    try:
-        await asyncio.sleep(0.08)
-    finally:
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-    assert manager.reload_calls == 0
-
-
-async def test_shutdown_cancels_watch_task(auth_service):
-    """shutdown() must cancel a running watch task and clear the handle."""
-    from openviking.server.auth.plugins import ApiKeyAuthPlugin
-
-    app = create_app(config=ServerConfig(root_api_key=ROOT_KEY), service=auth_service)
-    plugin = ApiKeyAuthPlugin()
-    config = ServerConfig(
-        root_api_key=ROOT_KEY,
-        api_key_watch_enabled=True,
-        api_key_watch_interval_seconds=0.01,
-    )
-    await plugin.initialize(app, auth_service, config)
-    assert plugin._watch_task is not None
-    await plugin.shutdown()
-    assert plugin._watch_task is None

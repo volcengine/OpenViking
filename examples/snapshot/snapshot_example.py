@@ -37,13 +37,12 @@ def write_text(client: Any, uri: str, content: str, mode: str) -> None:
         content=content,
         mode=mode,
         wait=True,
-        timeout=WAIT_TIMEOUT,
     )
     print(f"write: {uri} (mode={result.get('mode')}, bytes={result.get('written_bytes')})")
 
 
 def remove_resource(client: Any, uri: str) -> None:
-    client.rm(uri=uri, wait=True, timeout=WAIT_TIMEOUT)
+    client.rm(uri=uri, wait=True)
     print(f"rm: {uri}")
 
 

@@ -128,6 +128,8 @@ export function buildContextSearchBody(cfg = {}, options = {}) {
   if (limitConfigured) body.quotas = codingQuotas(limit);
   if (maxTokensConfigured) body.max_tokens = maxTokens;
   if (cfg.recallPeerScope === "actor") body.peer_scope = "actor";
+  const decayProtection = String(cfg.recallEventsDecayProtection ?? "").trim();
+  if (decayProtection && decayProtection !== "off") body.events_time_decay_protection = decayProtection;
 
   const sessionId = String(options.sessionId || "").trim();
   if (sessionId) {
@@ -430,23 +432,9 @@ async function writeJsonFile(path, value) {
 }
 
 /**
- * Hooks are one-shot processes, so "this server has no context face" has to be
- * remembered on disk or every turn pays for a rejected request.
- */
-export async function isContextFaceLegacy(path = stateFile("context-face.json"), now = Date.now()) {
-  const cached = await readJsonFile(path);
-  return Boolean(cached?.legacyUntil && Number(cached.legacyUntil) > now);
-}
-
-export async function markContextFaceLegacy(path = stateFile("context-face.json"), now = Date.now()) {
-  await writeJsonFile(path, { legacyUntil: now + LEGACY_CACHE_TTL_MS });
-}
-
-/**
- * A `peer_scope` the server rejects is remembered the same way, but unlike the
- * context face this one is not a silent capability probe: dropping the field
- * widens recall from the caller's own peer to the whole user root, so doctor
- * reads this file back and warns.
+ * Remember when the server rejects `peer_scope`. Dropping the field widens
+ * recall from the caller's own peer to the whole user root, so doctor reads
+ * this file back and warns.
  */
 export function peerScopeMemoPath() {
   return stateFile("peer-scope.json");
@@ -472,23 +460,29 @@ function looksLikeUnknownField(res) {
   return text.includes("extra") || text.includes("mode") || text.includes("unexpected");
 }
 
+// Recalled text is the user's own history. Without a provenance boundary a model
+// may cite an internal decision as external evidence or industry practice.
+export const RECALL_CONTEXT_TEMPLATE = [
+  "<openviking-context>",
+  "Relevant memory from OpenViking. It is this user's own saved history (past conversations, meetings, notes) as recorded then: internal context, not an external source or established fact. Use the search/read MCP tools to expand URIs.",
+  "{context}",
+  "</openviking-context>",
+].join("\n");
+
 function wrapContext(body) {
   // Retrieved text cannot introduce a second capture delimiter inside ours.
   const text = String(body)
     .replace(/<\/?relevant-memor(?:y|ies)\b[^>]*>/gi, "legacy memory wrapper")
     .replace(/<\/?openviking-context\b[^>]*>/gi, "openviking context marker");
-  return [
-    "<openviking-context>",
-    "Relevant memory from OpenViking. Use the search/read MCP tools to expand URIs.",
-    text,
-    "</openviking-context>",
-  ].join("\n");
+  // Use a replacer so recalled dollar sequences stay literal.
+  return RECALL_CONTEXT_TEMPLATE.replace("{context}", () => text);
 }
 
 /**
  * Server-assembled context: the context face when the deployment has it, else
  * the deprecated /recall preset. Returns the injection block, "" when there was
  * nothing relevant, or null when no server-side path was usable at all.
+ * A validation error is returned as { error }.
  */
 export async function buildServerAssembledBlock(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
@@ -500,15 +494,12 @@ export async function buildServerAssembledBlock(fetchJSON, cfg, query, options =
 }
 
 /**
- * Raw server-assembled context, or null when the deployment has no context face.
- * Returns `{ rendered, entries, digest, stats }` — callers that need the entries
- * (their own compression, their own envelope) use this instead of the block
- * builders below.
+ * Raw server-assembled context, null when a fallback can be tried, or
+ * { error } when the server rejects the request parameters.
  */
 export async function fetchAssembledContext(fetchJSON, cfg, query, options = {}) {
   const actorPeerId = options.actorPeerId || "";
   const log = options.log || (() => {});
-  if (await isContextFaceLegacy(options.legacyCachePath)) return null;
 
   const body = buildContextSearchBody(cfg, options);
   body.query = query;
@@ -519,12 +510,12 @@ export async function fetchAssembledContext(fetchJSON, cfg, query, options = {})
 
   if (!res.ok) {
     const status = res.status || 0;
-    if ((status === 400 || status === 422) && looksLikeUnknownField(res)) {
-      await markContextFaceLegacy(options.legacyCachePath);
-      log("recall_context_face_unsupported", { status });
-    } else {
-      log("recall_context_face_error", { status });
+    if (status === 400 || status === 422) {
+      const message = typeof res.error === "string" ? res.error : res.error?.message;
+      log("recall_context_request_rejected", { status, message });
+      return { error: `OpenViking auto recall failed (HTTP ${status}): ${message || "Invalid request parameters"}` };
     }
+    log("recall_context_face_error", { status });
     return null;
   }
 
@@ -601,7 +592,7 @@ async function finalizeRecall(result, cfg, query, options, log, shortContext) {
 
 async function recallViaContextFace(fetchJSON, cfg, query, options, log) {
   const assembled = await fetchAssembledContext(fetchJSON, cfg, query, { ...options, log });
-  if (assembled === null) return null;
+  if (assembled === null || assembled.error) return assembled;
   const text = await finalizeRecall(assembled, cfg, query, options, log);
   return text ? wrapContext(text) : "";
 }
@@ -675,6 +666,7 @@ export async function postRecall(fetchJSON, body, opts = {}) {
  */
 export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = {}) {
   const primary = await recallForPeer(fetchJSON, cfg, query, options);
+  if (primary.stage === "request_rejected") return primary;
 
   const legacyPeerId = String(options.legacyPeerId || "").trim();
   const actorPeerId = options.actorPeerId ?? cfg.peerId ?? "";
@@ -682,6 +674,7 @@ export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = 
 
   const log = options.log || (() => {});
   const legacy = await recallForPeer(fetchJSON, cfg, query, { ...options, actorPeerId: legacyPeerId });
+  if (legacy.error) return { ...(primary.block ? primary : legacy), error: legacy.error };
   if (!legacy.block) return primary;
   log("recall_legacy_peer_hit", { legacyPeerId });
   return {
@@ -693,9 +686,10 @@ export async function buildRecallBlockDetailed(fetchJSON, cfg, query, options = 
   };
 }
 
-/** The block alone, or null when nothing was injectable. */
+/** The block alone, with request errors reported to stderr. */
 export async function buildRecallBlock(fetchJSON, cfg, query, options = {}) {
-  const { block } = await buildRecallBlockDetailed(fetchJSON, cfg, query, options);
+  const { block, error } = await buildRecallBlockDetailed(fetchJSON, cfg, query, options);
+  if (error) console.error(error);
   return block || null;
 }
 
@@ -709,13 +703,13 @@ async function recallForPeer(fetchJSON, cfg, query, options = {}) {
   const trimmed = String(query || "").trim();
   if (!trimmed) return emptyRecall("no_results");
 
-  // Assembly happens server-side when the deployment offers the context face;
-  // older servers fall through to /recall, then to raw find.
+  // When Context is unavailable, fall back to /recall and then raw find.
   const serverBlock = await buildServerAssembledBlock(fetchJSON, cfg, trimmed, {
     ...options,
     actorPeerId,
     log,
   });
+  if (serverBlock?.error) return { ...emptyRecall("request_rejected"), error: serverBlock.error };
   if (serverBlock !== null) {
     if (!serverBlock) return emptyRecall("no_results");
     // The server rendered one budgeted unit, so nothing here degraded to a

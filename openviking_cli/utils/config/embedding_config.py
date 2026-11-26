@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, model_validator
 
 from openviking_cli.utils.logger import get_logger
 
@@ -16,6 +16,10 @@ TEXT_SOURCES = SUMMARY_TEXT_SOURCES | {TEXT_SOURCE_CONTENT_ONLY}
 
 class EmbeddingCredential(BaseModel):
     """Single embedding credential configuration for multi-credential failover."""
+
+    cost_bearer: Optional[Literal["ov", "customer", "unknown"]] = Field(
+        default=None, description="Billing owner supplied by the credential provisioner"
+    )
 
     id: Optional[str] = Field(default=None, description="Unique identifier for this credential")
     provider: Optional[str] = Field(default=None, description="Provider type")
@@ -454,6 +458,13 @@ class EmbeddingModelConfig(BaseModel):
 
             return get_cohere_model_default_dimension(model)
 
+        if provider == "jina":
+            from openviking.models.embedder.jina_embedders import (
+                get_jina_model_default_dimension,
+            )
+
+            return get_jina_model_default_dimension(model)
+
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
@@ -476,7 +487,7 @@ class EmbeddingModelConfig(BaseModel):
             except ImportError:
                 return 1024
 
-        # Providers without a known dimension lookup (volcengine, jina,
+        # Providers without a known dimension lookup (volcengine,
         # vikingdb, ollama for unlisted models, etc.) cannot be cross-checked
         # here without an explicit dimension. Return None so validation skips
         # them; same-provider credentials are typically dimension-compatible
@@ -539,6 +550,13 @@ class EmbeddingModelConfig(BaseModel):
             )
 
             return get_cohere_model_default_dimension(effective_model)
+
+        if provider == "jina":
+            from openviking.models.embedder.jina_embedders import (
+                get_jina_model_default_dimension,
+            )
+
+            return get_jina_model_default_dimension(effective_model)
 
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
@@ -640,7 +658,7 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10,
         ge=1,
-        description="Maximum number of concurrent embedding requests",
+        description="Maximum concurrent document embedding requests; retrieval queries bypass this limit",
     )
     max_retries: int = Field(
         default=3,
@@ -671,12 +689,14 @@ class EmbeddingConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def apply_default_local_dense(cls, data: Any) -> Any:
+    def apply_default_local_dense(cls, data: Any, info: ValidationInfo) -> Any:
         if data is None:
             data = {}
         if not isinstance(data, dict):
             return data
 
+        if (info.context or {}).get("enable_default_resources") is False:
+            return data
         if not data.get("dense") and not data.get("sparse") and not data.get("hybrid"):
             data = dict(data)
             data["dense"] = {
@@ -688,14 +708,9 @@ class EmbeddingConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if not self.dense and not self.sparse and not self.hybrid:
-            raise ValueError(
-                "At least one embedding configuration (dense, sparse, or hybrid) is required"
-            )
         if self.text_source == "summary_only":
-            logger.warning(
-                "embedding.text_source=summary_only is deprecated; use summary_first instead. "
-                "Files without a summary still fall back to content for vectorization."
+            logger.info(
+                "embedding.text_source=summary_only is deprecated; use summary_first instead. Files without a summary still fall back to content for vectorization."
             )
             self.text_source = TEXT_SOURCE_SUMMARY_FIRST
         if self.text_source not in TEXT_SOURCES:
@@ -730,6 +745,7 @@ class EmbeddingConfig(BaseModel):
             LocalDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
+            RetryEmbedder,
             VikingDBDenseEmbedder,
             VikingDBHybridEmbedder,
             VikingDBSparseEmbedder,
@@ -1007,7 +1023,12 @@ class EmbeddingConfig(BaseModel):
                 "google-genai is not installed. Install it with: pip install openviking[gemini]"
             )
         params = param_builder(config)
-        return embedder_class(**params)
+        embedder = embedder_class(**params)
+        if provider == "local":
+            return embedder
+        if isinstance(embedder, RetryEmbedder):
+            return embedder
+        return RetryEmbedder(embedder)
 
     def get_embedder(self):
         """Get embedder instance based on configuration.
@@ -1091,7 +1112,17 @@ class EmbeddingConfig(BaseModel):
                 **({"input": config.input} if "input" in config.model_fields_set else {}),
             )
             provider = self._require_provider(merged_config.provider)
-            embedders.append(self._create_embedder(provider, embedder_type, merged_config))
+            embedder = self._create_embedder(provider, embedder_type, merged_config)
+            # Retry wrappers delegate the actual provider request to their child.
+            # Each failover candidate keeps its own owner, including failed calls.
+            if cred.cost_bearer is not None:
+                current = embedder
+                seen = set()
+                while current is not None and id(current) not in seen:
+                    seen.add(id(current))
+                    current.cost_bearer = cred.cost_bearer
+                    current = getattr(current, "inner", None)
+            embedders.append(embedder)
             credential_ids.append(cred.id or f"credential-{len(credential_ids)}")
 
         if len(embedders) == 1:
@@ -1117,7 +1148,7 @@ class EmbeddingConfig(BaseModel):
             return self.dense.get_effective_dimension()
         if self.sparse:
             return self.sparse.get_effective_dimension()
-        return 2048
+        return 0
 
     @staticmethod
     def _require_provider(provider: Optional[str]) -> str:

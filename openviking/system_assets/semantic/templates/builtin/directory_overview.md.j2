@@ -1,0 +1,17 @@
+# {{ title }}
+
+{{ abstract }}
+
+## {{ "目录导航" if chinese else "Directory navigation" }}
+
+{{ navigation }}{% if partial %}
+
+{{ "已展示部分条目，可在本目录内检索或分页浏览。" if chinese else "Only some entries are listed. Search within this directory or browse further pages." }}{% endif %}
+
+## {{ "使用指引" if chinese else "Access guide" }}
+
+{% if chinese -%}
+已确定文件位置时，直接读取对应文件；位置不明确时，先在本目录内检索。需要了解目录结构或查看更多条目时，可分页浏览目录。可参考 `read`、`find`、`list` 等工具。
+{%- else -%}
+Read the file directly when its location is known; otherwise search within this directory first. Browse directory entries with pagination to explore its structure or find more entries. Tools such as `read`, `find`, and `list` can support these operations.
+{%- endif %}

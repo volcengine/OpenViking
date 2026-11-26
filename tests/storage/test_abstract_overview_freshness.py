@@ -23,13 +23,17 @@ class _FakeFS:
         self._async_agfs = self
         self._lock = asyncio.Lock()
         self.lock_timeouts = []
+        self.read_count = 0
+        self.write_count = 0
 
     async def read_file(self, uri, ctx=None):
+        self.read_count += 1
         if uri not in self.files:
             raise KeyError(uri)
         return self.files[uri]
 
     async def write_file(self, uri, content, ctx=None, lease_ref=None):
+        self.write_count += 1
         self.files[uri] = content
 
     def _uri_to_path(self, uri, ctx=None):
@@ -58,7 +62,7 @@ def _files(dir_uri, *, total=161, pending=3):
 
 
 @pytest.mark.asyncio
-async def test_pending_increment_and_threshold_decision_share_one_snapshot():
+async def test_refresh_decision_reuses_sidecar_reads_and_only_marks_large_directories():
     dir_uri = "viking://resources/wide"
     fs = _FakeFS(_files(dir_uri, pending=15))
 
@@ -83,8 +87,21 @@ async def test_pending_increment_and_threshold_decision_share_one_snapshot():
     assert first.action is FreshnessAction.MARK_PENDING
     assert second.action is FreshnessAction.REFRESH_NOW
     assert fs.lock_timeouts == [1.0, 0.0]
+    assert (fs.read_count, fs.write_count) == (8, 4)
     for raw in fs.files.values():
         assert parse_abstract_overview(raw).metadata["freshness"]["pending_child_changes"] == 17
+
+    small_uri = "viking://resources/small"
+    small_fs = _FakeFS(_files(small_uri, total=1, pending=0))
+    small = await plan_abstract_overview_refresh(
+        viking_fs=small_fs,
+        dir_uri=small_uri,
+        changed_entries=1,
+        ctx=None,
+    )
+
+    assert small.action is FreshnessAction.REFRESH_NOW
+    assert (small_fs.read_count, small_fs.write_count) == (4, 0)
 
 
 @pytest.mark.asyncio
@@ -98,7 +115,6 @@ async def test_write_result_ignores_metadata_only_changes_and_preserves_new_pend
         overview="overview",
         abstract="abstract",
         ctx=None,
-        is_stale=lambda: False,
         metadata={"freshness": freshness_metadata(160, 32)},
         consume_pending=3,
     )
