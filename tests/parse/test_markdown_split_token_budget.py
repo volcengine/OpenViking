@@ -77,3 +77,30 @@ def test_oversized_header_and_row_stay_together_without_duplicate_header(header_
     row = "| " + "文" * 2500 + " | Y |"
     content = header + "\n" + row
     assert parser._smart_split_content(content, max_size=2000) == [content]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("underline", ["=======", "-------"])
+async def test_layout_uses_setext_headings_as_sections(underline):
+    parser = MarkdownParser(config=ParserConfig(max_section_chars=950))
+    body = "Install and validate the application. " * 22
+    install = f"Install ##\n{underline}\n\n{body.strip()}"
+    run = f"Run\n{underline}\n\n{body.strip()}"
+
+    layout = await parser._compute_layout(
+        f"{install}\n\n{run}", "viking://temp/test", resource_name="doc"
+    )
+    sections = [(op.uri.rsplit("/", 1)[-1], op.content) for op in layout.ops if op.kind == "write"]
+
+    assert sections == [("Install.md", install), ("Run.md", run)]
+
+
+def test_retained_frontmatter_is_not_a_setext_heading():
+    parser = MarkdownParser()
+    content = "---\ntitle: Demo\n---\n\nInstall\n-------\n\nSteps."
+
+    headings = parser._find_headings(content)
+
+    assert [title for _, _, title, _ in headings] == ["Install"]
+    start, end, _, _ = headings[0]
+    assert content[start:end] == "Install\n-------"
