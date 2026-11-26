@@ -348,7 +348,9 @@ async def test_prepare_background_initializes_sqlite_without_redis_or_scan(index
     service = OpenVikingService.__new__(OpenVikingService)
     service._background_prepared = False
     service._shared_initialized = True
-    service._session_idle_index = index
+    service._session_auto_commit_scheduler = SessionAutoCommitScheduler(
+        None, SessionAutoCommitConfig(), idle_index=index
+    )
     service._compile_scheduler = None
     service._ttl_adapter = None
     service._config = SimpleNamespace(pdf=SimpleNamespace(strategy="default", mineru_endpoint=None))

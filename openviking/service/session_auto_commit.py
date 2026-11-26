@@ -59,11 +59,15 @@ class SessionAutoCommitScheduler:
         self._scan_failures = 0
         self._idle_index = idle_index
 
+    async def open(self) -> None:
+        """Open the idle index for every host role, including writer-only processes."""
+        if self._idle_index is not None:
+            await self._idle_index.start()
+
     async def start(self) -> None:
         if self._running:
             return
-        if self._idle_index is not None:
-            await self._idle_index.start()
+        await self.open()
         self._running = True
         logger.info(
             "session auto-commit scheduler started check_interval_seconds=%.3f",
@@ -80,6 +84,12 @@ class SessionAutoCommitScheduler:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+    async def close(self) -> None:
+        """Stop the loop and release the idle index."""
+        await self.stop()
+        if self._idle_index is not None:
+            await self._idle_index.close()
 
     async def _run_loop(self) -> None:
         while self._running:
