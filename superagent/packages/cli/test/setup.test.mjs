@@ -19,6 +19,7 @@ import { TelegramState } from '../../daemon/src/telegram/state.mjs';
 import { configureOpenViking } from '../src/ov-setup.mjs';
 import { detectOpenViking, savedOVConfigPath } from '../src/ov.mjs';
 import { updateManifest } from '../../daemon/src/deployment-manifest.mjs';
+import { installNodeCommand } from '../../daemon/test/fake-executable.mjs';
 import { rolePresetText } from '../../daemon/src/conversation-policy.mjs';
 import { capabilities } from '../../daemon/src/capabilities.mjs';
 
@@ -2022,4 +2023,49 @@ test('Durable setup writes secrets under USERPROFILE when HOME is unset', async 
   assert.equal(await configureDurable({ prompter, env: { USERPROFILE: dir } }), true);
   const file = path.join(dir, '.ov-superagent', 'secrets.env');
   assert.match(fs.readFileSync(file, 'utf8'), /^DEEPSEEK_API_KEY=sk-userprofile$/m);
+});
+
+test('checking the Feishu apps: one whose settings cannot be read is named, not counted as complete', async (t) => {
+  const { checkLarkApps } = await import('../src/setup.mjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ov-lark-check-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const { tenant, user } = larkScopes();
+  // The first profile's app is gone (the platform answers not found); the second reads fine and has everything.
+  const bin = `#!${process.execPath}
+const args = process.argv.slice(2);
+const profile = args[args.indexOf('--profile') + 1];
+const out = (value) => process.stdout.write(JSON.stringify(value));
+const at = args.indexOf('api');
+if (at >= 0) {
+  const target = args[at + 2];
+  if (profile === 'superagent-gone') {
+    out({ ok: false, error: { code: 99992361, message: 'app not found' } });
+  } else if (target.endsWith('/applications/me')) {
+    out({ ok: true, data: { app: { app_id: 'cli_live', app_name: 'Live', online_version_id: 'oav_1',
+      scopes: [...${JSON.stringify(tenant)}.map((scope) => ({ scope, token_types: ['tenant'] })),
+        ...${JSON.stringify(user)}.map((scope) => ({ scope, token_types: ['user'] }))],
+      callback_info: { callback_type: 'websocket', subscribed_callbacks: ['card.action.trigger'] } } } });
+  } else if (target.includes('/app_versions/')) {
+    out({ ok: true, data: { app_version: { event_infos: ${JSON.stringify(['im.message.receive_v1', 'im.message.recalled_v1', 'im.message.reaction.created_v1', 'im.message.reaction.deleted_v1', 'drive.notice.comment_add_v1'])}.map((event_type) => ({ event_type })) } } });
+  } else {
+    out({ ok: true, data: { activate_status: 2, app_name: 'Live' } });
+  }
+} else {
+  out({ identities: { user: { openId: 'ou_owner' } } });
+}
+`;
+  const larkBin = installNodeCommand(dir, 'lark-cli', { body: bin });
+  const manifest = { version: 1, agents: [
+    { id: 'gone', displayName: 'Gone', profile: 'superagent-gone', connectors: ['lark'] },
+    { id: 'live', displayName: 'Live', profile: 'superagent-live', connectors: ['lark'] },
+  ] };
+  const session = pipePrompter([]);
+  const lacking = await checkLarkApps({ prompter: session.prompter, env: { LARK_CLI_BIN: larkBin, LANG: 'zh_CN.UTF-8' }, manifest });
+  const text = stripAnsi(session.written());
+  assert.doesNotMatch(text, /飞书应用的权限和事件都齐了/, 'an app that could not be read is not "all set"');
+  assert.match(text, /Gone（gone）\s?的飞书应用读不到/, 'the unreadable app is named with what it might be');
+  assert.match(text, /可能已被删除|凭据失效/, 'the warning says why the read may have failed');
+  assert.deepEqual(lacking.map(({ agent }) => agent.id), ['gone'], 'what is returned names the unreadable instance too');
+  assert.equal(lacking[0].unreadable, true);
+  assert.equal(lacking[0].count, 0);
 });

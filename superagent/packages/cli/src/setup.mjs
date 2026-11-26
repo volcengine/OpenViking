@@ -249,11 +249,17 @@ async function chooseTarget(prompter, manifest, lacking = []) {
   const agents = manifest?.agents ?? [];
   if (agents.length === 0) return null;
   const needsOf = (agent) => lacking.find((needs) => needs.agent.id === agent.id);
+  const larkNote = (agent) => {
+    const needs = needsOf(agent);
+    if (!needs) return '';
+    if (needs.unreadable) return t(' · 飞书应用读不到', ' · its Feishu/Lark app cannot be read');
+    return t(` · 飞书应用缺 ${needs.count} 项`, ` · its Feishu/Lark app lacks ${needs.count}`);
+  };
   return prompter.select(t('要做什么', 'What to do'), [
     { label: t('新建一个实例', 'Add an instance'), value: null },
     ...agents.map((agent) => ({
       label: t(`修改 ${agent.displayName}（${agent.id}）`, `Change ${agent.displayName} (${agent.id})`),
-      hint: `${imList(connectorsOf(agent), agent.emailAccounts?.length)}${needsOf(agent) ? t(` · 飞书应用缺 ${needsOf(agent).count} 项`, ` · its Feishu/Lark app lacks ${needsOf(agent).count}`) : ''}`,
+      hint: `${imList(connectorsOf(agent), agent.emailAccounts?.length)}${larkNote(agent)}`,
       value: agent,
     })),
     { label: t('删除一个实例', 'Remove an instance'), value: 'remove' },
@@ -1288,8 +1294,11 @@ export async function updateLarkApp({ agent, prompter, larkCli, scopes = larkSco
 }
 
 // Every Feishu/Lark instance checked at once, for setup's first menu and the
-// instance's 飞书应用 setting: the ones that lack something this release asks for. An app that cannot be
-// read is left out.
+// instance's 飞书应用 setting. Three outcomes per instance, kept apart: it has
+// what this release asks for; it was read and lacks something (the ones setup
+// offers to complete); or its settings could not be read at all — a deleted
+// app, refused credentials, no network — which is not the same as having
+// nothing to do, so those come back as `unreadable` and are named.
 export async function checkLarkApps({ prompter, env, manifest }) {
   const agents = (manifest?.agents ?? []).filter((agent) => connectorsOf(agent).includes('lark') && agent.profile);
   const bin = agents.length ? env.LARK_CLI_BIN || manifest.env?.LARK_CLI_BIN || resolveLarkCli(env) : null;
@@ -1297,15 +1306,23 @@ export async function checkLarkApps({ prompter, env, manifest }) {
   const larkCli = new LarkCli(bin);
   const spinning = prompter.spin(t('核对飞书应用的权限和事件', 'Checking the Feishu/Lark apps\' permissions and events'));
   const checked = await Promise.all(agents.map((agent) => larkNeeds({ agent, larkCli }).then(
-    (needs) => (needs.count ? { agent, ...needs } : null), () => null)));
-  const lacking = checked.filter(Boolean);
+    (needs) => (needs.count ? { agent, ...needs } : null),
+    () => ({ agent, unreadable: true, count: 0, missing: null, login: [] }))));
+  const found = checked.filter(Boolean);
+  const unreadable = found.filter(({ unreadable }) => unreadable);
+  const lacking = found.filter(({ unreadable: failed }) => !failed);
   if (lacking.length) {
     spinning.warn(t(`${list(lacking.map(({ agent }) => `${agent.displayName}（${agent.id}）`))} 的飞书应用缺这个版本要的权限或事件：修改实例 →「飞书应用」里扫码补齐`,
       `The Feishu/Lark app of ${list(lacking.map(({ agent }) => `${agent.displayName} (${agent.id})`))} lacks permissions or events this release needs: change the instance and complete it under Feishu/Lark app`));
-  } else {
+  }
+  if (unreadable.length) {
+    spinning.warn(t(`${list(unreadable.map(({ agent }) => `${agent.displayName}（${agent.id}）`))} 的飞书应用读不到，可能已被删除或凭据失效，也可能只是网络不通：修改实例 →「飞书应用」里扫码换一个或重新授权`,
+      `The Feishu/Lark app of ${list(unreadable.map(({ agent }) => `${agent.displayName} (${agent.id})`))} could not be read: it may have been deleted, its credentials may be refused, or the network is down. Change the instance and pick or scan another under Feishu/Lark app`));
+  }
+  if (!lacking.length && !unreadable.length) {
     spinning.succeed(t('飞书应用的权限和事件都齐了', 'The Feishu/Lark apps have every permission and event they need'));
   }
-  return lacking;
+  return [...lacking, ...unreadable];
 }
 
 // canGoBack: ← while the code waits stops the login before anything is bound
