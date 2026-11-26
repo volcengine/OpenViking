@@ -14,7 +14,7 @@ import { OVUnavailableError } from '../ov-connection.mjs';
 import { OVSessionClient, withoutWorkingMemory } from '../ov-session-context.mjs';
 import { OVToolClient } from '../ov-tools.mjs';
 import { opaqueRef, redactSensitive, safeError } from '../logger.mjs';
-import { BOT_SENDERS, isoMinute, readMetadataTag, senderLabel } from '../runtime-input.mjs';
+import { BOT_SENDERS, isoMinute, metadataTag, oneLine, readMetadataTag, senderLabel } from '../runtime-input.mjs';
 import { personDirectory, personId } from '../ov-person.mjs';
 import { TimerSchedule } from '../timers.mjs';
 import {
@@ -34,6 +34,8 @@ const BOT_REPLY_FUSE = 20;
 // stay_silent, send or timer) before the daemon ends that turn. One repeat is
 // a harmless retry; this many is a model that cannot stop.
 const LOOP_BREAK_AFTER = 3;
+// Characters of an input a refusal quotes: enough to reconsider on.
+const QUOTE_CHARS = 300;
 
 const HANDLERS = {
   send_message: 'sendMessage',
@@ -88,8 +90,10 @@ const WORKER_TOOLS = new Set([
 const SETTLING = new Set(['send_message', 'notify_owner', 'reply_message', 'stay_silent']);
 
 // A refusal the model can act on; `code` is what logs and activities record.
-function blocked(code, message) {
-  return Object.assign(new Error(message), { code });
+// `detail` (an input it quotes) goes to the model after the message, never
+// into a log or an activity.
+function blocked(code, message, detail = null) {
+  return Object.assign(new Error(message), { code, ...(detail ? { detail } : {}) });
 }
 
 // Tools whose success changes something (a delivery, a decision, a timer), as
@@ -718,9 +722,12 @@ export class ActionService {
 
   // Freshness fence: the decision must resolve to exactly one accepted inbound
   // event with nothing newer accepted in its scope (the chat/thread, or the
-  // subject of a non-chat event).
-  fence(input, caller) {
+  // subject of a non-chat event). `target`, the message a reply answers, is
+  // checked against the tasks the delivery names before freshness: a decision
+  // from the wrong place is refused for that, not for being stale there.
+  fence(input, caller, target = null) {
     const row = this.resolveDecision(input, caller);
+    if (target) this.assertDecidedWhereAsked(input.task_ids, row, target, caller);
     if (!this.isTimerReminder(row)) this.assertFresh(row, caller);
     return row;
   }
@@ -787,13 +794,44 @@ export class ActionService {
     const newerSeq = this.store.newerAcceptedSeq(decision.scope_key, decision.seq);
     if (newerSeq !== null) {
       caller.trace.newerSeq = newerSeq;
-      const waiting = this.deliverWaiting(decision.scope_key);
-      if (waiting > 0) {
-        caller.trace.inboxDelivered = waiting;
-        throw blocked('stale_decision', `Delivery blocked: ${waiting} newer input(s) in the same chat/thread, or about the same subject, were waiting in your inbox; they follow as your next input. Read them, then use the newest event= as decision_id if the action still fits.`);
-      }
-      throw blocked('stale_decision', 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits.');
+      const next = this.newestThere(decision.scope_key, newerSeq, caller);
+      throw blocked('stale_decision', `Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. ${next.text}`, next.quote);
     }
+  }
+
+  // A reply naming tasks, to a message where one of them was asked, is decided
+  // there: on an input of that chat/thread, or of the thread opened on that
+  // message. An input from elsewhere would leave newer words there unchecked
+  // and record the reply as answering that other input. A reply the task
+  // makes somewhere else (a message in another group) is not held to it.
+  assertDecidedWhereAsked(taskIds, decision, target, caller) {
+    if (!taskIds?.length || !this.tasks || !target.scope_key || decision.scope_key === target.scope_key) return;
+    if (decision.chat_id === target.chat_id && decision.thread_root_id && decision.thread_root_id === target.message_id) return;
+    const asked = this.tasks.askedIn(taskIds, target.scope_key);
+    if (asked.length === 0) return;
+    const newest = this.store.newerAcceptedSeq(target.scope_key, 0) ?? target.seq;
+    const next = this.newestThere(target.scope_key, newest, caller);
+    throw blocked('decision_elsewhere', `Delivery blocked: ${asked.join(', ')} was asked in the chat/thread this reply goes to, and decision_id is an input from another conversation. ${next.text}`, next.quote);
+  }
+
+  // Where a refusal sends the model: inputs still waiting in the scope go to it
+  // now; else the newest there is quoted, since one it was shown before is no
+  // longer in its inbox and no tool reads it back by event=. The quote has no
+  // msg=, which is never a decision_id.
+  newestThere(scopeKey, seq, caller) {
+    const waiting = this.deliverWaiting(scopeKey);
+    if (waiting > 0) {
+      caller.trace.inboxDelivered = waiting;
+      return { text: `${waiting} newer input(s) there were waiting in your inbox; they follow as your next input. Read them, then use the newest event= as decision_id if the action still fits.` };
+    }
+    const event = this.store.inboundBySeq(seq);
+    const text = oneLine([event.title, event.content, ...(event.attachments ?? []).map((item) => `[${item.type || 'attachment'}]`)]
+      .filter(Boolean).join(' '));
+    const chars = [...text];
+    return {
+      text: 'Reconsider with the newest input there, quoted below, then use its event= as decision_id if the action still fits.',
+      quote: `event=${metadataTag(event.eventId)} time=${isoMinute(event.createTimeMs)} from=${senderLabel(event)}: ${chars.length > QUOTE_CHARS ? `${chars.slice(0, QUOTE_CHARS).join('')}…` : text}`,
+    };
   }
 
   // A safety fuse, not a rule the agent works by: whether to answer a bot is
@@ -886,7 +924,7 @@ export class ActionService {
     // A card action's msg= is internal (ca_...); replies go to its card= id.
     const target = ['card_action', 'reaction'].includes(fence.message_type) ? fence.parent_id : fence.message_id;
     throw blocked('thread_target_mismatch',
-      `Delivery blocked: decision_id is a message inside a thread, and send_message to its chat posts outside that thread. Answer inside the thread with reply_message, message_id=${target}, reply_in_thread=true. ${NO_ACTION}`);
+      `Delivery blocked: decision_id is a message inside a thread, and send_message to its chat posts outside that thread. Answer inside the thread with reply_message, message_id=${target}, reply_in_thread=true. If this message does not answer that thread but carries out a request made in another conversation, decide on the newest input where that request was made instead. ${NO_ACTION}`);
   }
 
   isTimerReminder(fence) {
@@ -1159,7 +1197,7 @@ export class ActionService {
     if (inThread && !spec.thread) {
       throw blocked('unsupported', `${connector} does not support thread replies. ${NO_ACTION}`);
     }
-    const fence = this.fence(input, caller);
+    const fence = this.fence(input, caller, target);
     // The reply lands where its target is. A target outside any chat (a mail)
     // has no chat: it never borrows the decision's.
     const chatId = target ? target.chat_id : fence.chat_id;

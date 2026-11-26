@@ -1544,6 +1544,12 @@ export class TaskManager {
     });
   }
 
+  // Tasks among these with a round asked in this chat/thread.
+  askedIn(taskIds, scopeKey) {
+    const asked = this.db.prepare('SELECT 1 FROM task_rounds WHERE task_id = ? AND origin_scope = ? LIMIT 1');
+    return [...new Set(taskIds)].filter((id) => asked.get(id, scopeKey));
+  }
+
   // A router turn ended. A report it was shown and did not settle is offered
   // again: after a failed turn as it was, after a finished one once more,
   // marked undelivered. Past that, it is logged and left.
