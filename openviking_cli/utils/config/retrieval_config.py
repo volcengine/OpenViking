@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field
 class RetrievalConfig(BaseModel):
     """Configuration for query planning and context assembly."""
 
+    mcp_min_score: float = Field(
+        default=0.35,
+        allow_inf_nan=False,
+        description="Default score threshold for MCP find and list-mode search when min_score is omitted.",
+    )
     recall_intent_timeout_s: float = Field(
         default=5.0,
         gt=0.0,
