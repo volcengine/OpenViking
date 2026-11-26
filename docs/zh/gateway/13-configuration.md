@@ -213,8 +213,8 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | Studio 名称 | API 名称 | 默认值 | 取值范围 | 含义 |
 | --- | --- | --- | --- | --- |
 | 保存对话 | `capture` | `true` | | 把完成的轮次保存到 OpenViking。 |
-| 空闲提交时间 | `idle_seconds` | `600`（秒） | 1 及以上 | 最后一轮结束后多久没有新的一轮结束，就提交剩下的全部消息。开启 `openviking_auto_commit` 时由 OpenViking 计时：低于 300 的值按 300 处理，超过 604,800（7 天）的值按 604,800 处理，并且需要 Server 开启 `memory.session_auto_commit.enabled`。 |
-| 提交阈值 | `commit_tokens` | `20000` | 1 及以上 | 一轮结束时待提交的 token 数达到这个值就提交一次。开启 `openviking_auto_commit` 时由 OpenViking 检查，超过 1,000,000 的值按 1,000,000 处理。 |
+| 空闲提交时间 | `idle_seconds` | `1800`（秒） | 1 及以上 | 最后一轮结束后多久没有新的一轮结束，就提交剩下的全部消息。开启 `openviking_auto_commit` 时由 OpenViking 计时：低于 300 的值按 300 处理，超过 604,800（7 天）的值按 604,800 处理，并且需要 Server 开启 `memory.session_auto_commit.enabled`。 |
+| 提交阈值 | `commit_tokens` | `100000` | 1 及以上 | 一轮结束时待提交的 token 数达到这个值就提交一次。开启 `openviking_auto_commit` 时由 OpenViking 检查，超过 1,000,000 的值按 1,000,000 处理。 |
 | 保留最近消息 | `keep_recent_messages` | `10` | 0–1,000 | 按提交阈值提交时，会话中保留的消息数。 |
 | （仅 API） | `capture_memory_types` | `null`（Server 0.5.0 及以上继承用户策略） | 记忆类型名称，例如 `preferences`、`events`；`[]` 表示不提取 | OpenViking 从保存的对话中提取哪些记忆类型。显式列表设置会话策略。 |
 

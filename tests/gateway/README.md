@@ -226,7 +226,7 @@ automatic commits off and calls the commit endpoint itself. Only scenario 19 red
 with `openviking_auto_commit: true`. A Pod that stops commits nothing; the capture document
 keeps the idle commit's due time, and every Pod looks once a minute for commits that have
 been due for a minute. The default
-profile keeps the 600-second `idle_seconds`, so other scenarios see no idle commit;
+profile keeps the 1800-second `idle_seconds`, so other scenarios see no idle commit;
 scenarios 2, 18 and 19 set shorter values per conversation with `X-OpenViking-Context`.
 
 The `gateway-e2e.yml` workflow runs nightly against `ghcr.io/volcengine/openviking:main`.

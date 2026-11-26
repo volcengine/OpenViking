@@ -47,12 +47,12 @@ class Policy(BaseModel):
     recall_peer_scope: Literal["all", "actor"] = "all"
     # Start each turn's reply with a summary of what OpenViking injected; the model never sees it.
     show_recall: bool = False
-    commit_tokens: int = Field(default=20000, ge=1, le=JSON_INT_MAX)
+    commit_tokens: int = Field(default=100000, ge=1, le=JSON_INT_MAX)
     keep_recent_messages: int = Field(default=10, ge=0, le=1000)
     # Memory types OpenViking extracts from saved conversations: None means every enabled
     # type, an empty list none.
     capture_memory_types: list[str] | None = None
-    idle_seconds: float = Field(default=600, ge=1)
+    idle_seconds: float = Field(default=1800, ge=1)
     compaction: bool = True
     compaction_threshold: float = Field(default=0.9, ge=0.5, le=0.98)
     summary_max_tokens: int = Field(default=8000, ge=1000, le=32000)

@@ -17,7 +17,7 @@ Besides its name and the [Let clients override settings](#client-overrides) swit
 | Section | What it does | Main settings and defaults |
 | --- | --- | --- |
 | Recall memory | Searches OpenViking with each new user message and appends what is relevant to that message. | Sources: memories, resources, skills · Budget per message: 1,600 tokens · Budget per context window: 30,000 tokens · Relevance threshold: 0.35 · Time limit: 2 s |
-| Save conversations | Writes each finished turn to an OpenViking session and commits it, so OpenViking can extract memories. | Commit when idle for: 600 s · Commit after: 20,000 tokens · Keep recent messages: 10 |
+| Save conversations | Writes each finished turn to an OpenViking session and commits it, so OpenViking can extract memories. | Commit when idle for: 1800 s · Commit after: 100,000 tokens · Keep recent messages: 10 |
 | Long conversations | When a conversation nears the context window, has the same model write a summary that replaces the earlier messages. | Compaction: on · Compact at: 0.9 of the window · Summary length: 8,000 tokens · Agent-managed context windows: off |
 | OpenViking tools | Lets the model use OpenViking's tools while it answers. | On · every tool selected; see [OpenViking tools](04-openviking-tools.md) |
 
@@ -89,8 +89,8 @@ The **Save conversations** section (on by default) controls [saving](../guides/1
 
 | Setting | Default | What it controls |
 | --- | --- | --- |
-| **Commit when idle for** | 600 s | How long after the conversation's last finished turn everything left in the session is committed. |
-| **Commit after** | 20,000 tokens | How many uncommitted tokens at the end of a turn make the session be committed at once. |
+| **Commit when idle for** | 1800 s | How long after the conversation's last finished turn everything left in the session is committed. |
+| **Commit after** | 100,000 tokens | How many uncommitted tokens at the end of a turn make the session be committed at once. |
 | **Keep recent messages** | 10 | How many of the latest messages a **Commit after** commit leaves in the session. |
 
 - By default the gateway makes both commits, which works with any OpenViking server. It creates the OpenViking session with OpenViking's own automatic commits off, checks **Commit after** when each turn ends, and times **Commit when idle for** for each conversation; each newer finished turn starts the wait again, and a save in the middle of a turn or a failed save leaves the waiting commit as it is. After each commit, OpenViking extracts memories in the background.

@@ -169,8 +169,8 @@
 <polyline points="410,940 422,940" fill="none" stroke="#7F3BF5" stroke-width="1.8" stroke-linejoin="round"/>
 <polygon points="431,940 421.0,945.5 421.0,934.5" fill="#7F3BF5"/>
 <rect x="433" y="904" width="159.5" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
-<text x="512.75" y="925.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">20,000 tokens</text>
-<text x="512.75" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">pending, or 10</text>
+<text x="512.75" y="925.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">100,000 tokens</text>
+<text x="512.75" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">pending, or 30</text>
 <text x="512.75" y="963.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">quiet minutes</text>
 <polyline points="595.5,940 607.5,940" fill="none" stroke="#7F3BF5" stroke-width="1.8" stroke-linejoin="round"/>
 <polygon points="616.5,940 606.5,945.5 606.5,934.5" fill="#7F3BF5"/>
@@ -179,7 +179,7 @@
 <text x="698.25" y="944.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">OpenViking</text>
 <text x="698.25" y="963.5" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">extracts memories</text>
 <text x="62" y="1000" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">A regenerated answer is saved beside the one it replaced.</text>
-<text x="62" y="1019" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">What is left is committed after 10 quiet minutes.</text>
+<text x="62" y="1019" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">What is left is committed after 30 quiet minutes.</text>
 <rect x="830" y="856" width="630" height="180" rx="12" fill="#F7F3FF" stroke="#7F3BF5" stroke-width="1.5"/>
 <text x="852" y="888" font-size="17" font-weight="700" fill="#1F2329" text-anchor="start">Across turns: compact long conversations</text>
 <rect x="852" y="904" width="178" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>
