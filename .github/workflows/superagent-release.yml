@@ -362,7 +362,7 @@ jobs:
           $node = Join-Path $destination 'runtime/node.exe'
           Push-Location $destination
           try {
-            & $node --test packages/daemon/test/durable-coding-tools.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/updater/test/windows-artifacts.test.mjs
+            & $node --test packages/daemon/test/durable-coding-tools.test.mjs packages/daemon/test/windows-process.test.mjs packages/daemon/test/windows-action-api.test.mjs packages/updater/test/windows-artifacts.test.mjs packages/updater/test/windows-installer.test.mjs packages/updater/test/windows-upgrade.test.mjs
             if ($LASTEXITCODE -ne 0) { throw 'Windows regression tests failed' }
           } finally { Pop-Location }
       - uses: actions/upload-artifact@v7
@@ -383,7 +383,7 @@ jobs:
 
           Extract the Actions artifact first, then follow README.md.
           This package passed offline runtime checks, not real connector/account acceptance.
-          No TOS upload, stable latest update, autostart or automatic upgrade is performed.
+          No TOS upload, stable latest update or autostart is performed here.
           "@ >> $env:GITHUB_STEP_SUMMARY
 
   windows-preview-publish:

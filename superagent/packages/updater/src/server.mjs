@@ -1,24 +1,31 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { execFile as execFileCallback, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
-import { chmod, lstat, mkdir, realpath, rm, rmdir } from 'node:fs/promises';
+import { chmod, lstat, mkdir, readFile, realpath, rm, rmdir, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import * as platform from '../../daemon/src/platform/index.mjs';
 import {
   SHARED_WEB,
   assertUpgradeTarget,
   defaultReleaseLink,
-  defaultSocketPath,
+  defaultUpdaterEndpoint,
   getUpgradeTargets,
   loadTargets,
   shouldUpgradeSharedWeb,
+  updaterTokenPath,
 } from './targets.mjs';
 import { publishLatestRelease } from './publisher.mjs';
+import { updaterMode } from './artifacts.mjs';
+import { pm2Bin as releasePm2Bin } from './pm2-platform.mjs';
+import { publishWithInstaller, republishPrevious } from './windows-installer.mjs';
 import {
   appControlEnv,
   cleanPm2ControlEnv,
@@ -31,7 +38,9 @@ import {
 
 export { cleanPm2ControlEnv, cleanWebPm2ControlEnv, resolveRelease, verifyPm2App } from './pm2.mjs';
 
-const execFile = promisify(execFileCallback);
+// pm2 is a shell shim on POSIX and a batch file on Windows; the platform adapter
+// runs the Node entrypoint behind either one.
+const execFile = promisify(platform.execFile);
 const MAX_BODY_BYTES = 4096;
 // superagent-<instance>; superagent-web and superagent-updater share the prefix but are never pruned.
 const MANAGED_DAEMON_APP = /^superagent-(?!(?:web|updater)$)[a-z][a-z0-9-]{0,31}$/;
@@ -117,6 +126,7 @@ async function previousConfigForProcess(processInfo, release) {
 }
 
 async function upgradeApp(spec, {
+  baseDir,
   release,
   configPath,
   pm2Bin,
@@ -129,6 +139,14 @@ async function upgradeApp(spec, {
   const processes = await pm2Processes({ pm2Bin, execFileImpl, pm2Env: appPm2Env });
   const previous = processes.find((processInfo) => processInfo?.name === spec.app) || null;
   const previousWasOnline = previous?.pm2_env?.status === 'online';
+  // Already on the release being published and answering: restarting it would
+  // only take a working instance down, which is what makes `upgrade` on the
+  // installed version a no-op. An instance still behind keeps its restart.
+  if (previousWasOnline && releaseOfProcess(baseDir, previous) === path.basename(release)) {
+    const ready = await waitUntilReady(spec.readyUrl, fetchImpl, { ...(readyOptions ?? {}), attempts: 2, intervalMs: 500 })
+      .then(() => true, () => false);
+    if (ready) return { skipped: true };
+  }
   const previousConfig = previous ? await previousConfigForProcess(previous, release) : null;
   if (previous) {
     await execFileImpl(pm2Bin, ['delete', spec.app], { timeout: 30_000, env: appPm2Env });
@@ -154,24 +172,83 @@ async function upgradeApp(spec, {
     }
     throw error;
   }
+  return { skipped: false };
 }
+
+function describeFailure(error) {
+  return String(error?.message || error);
+}
+
+// The release an app is actually running from. pm2 keeps the script path it was
+// given; only a path under releases/<version>/ names the code the live process
+// loaded, because a path through `current` resolves to whatever the link names
+// now.
+function releaseOfProcess(baseDir, processInfo) {
+  const execPath = processInfo?.pm2_env?.pm_exec_path;
+  if (typeof execPath !== 'string' || execPath === '') return null;
+  const relative = path.relative(path.join(baseDir, 'releases'), path.resolve(execPath));
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  return relative.split(path.sep)[0];
+}
+
+
 
 // After an upgrade the updater still runs the old release. It cannot
 // replace itself from inside its own pm2 process (pm2 kills the process tree
 // on delete), so a detached shell outlives it: the inner subshell is orphaned
 // before the delete, then starts superagent-updater from the new release.
-export function scheduleUpdaterRestart({ release, pm2Bin, pm2Env, spawnImpl = spawn }) {
-  const releasePm2 = path.join(release, 'bin', 'pm2');
-  const script = '(sleep 2; "$PM2" delete superagent-updater >/dev/null 2>&1; '
+export function scheduleUpdaterRestart({
+  release,
+  pm2Bin,
+  pm2Env,
+  spawnImpl = spawn,
+  implementation = platform,
+}) {
+  const configPath = path.join(release, 'ecosystem.config.cjs');
+  const releasePm2 = releasePm2Bin(release, implementation);
+  const pm2 = fs.existsSync(releasePm2) ? releasePm2 : pm2Bin;
+  if (!implementation.supportsShellScripts) {
+    // Windows has no `/bin/sh` and pm2 deletes an app as a process tree, so the
+    // restart runs from a batch file that `start` hands to a new process and
+    // that outlives the updater. It is written with the paths it needs, so no
+    // environment has to survive either.
+    const helper = path.join(os.tmpdir(), `superagent-updater-restart-${process.pid}-${Date.now()}.cmd`);
+    const script = [
+      '@echo off',
+      'rem Restart the updater from the release that was just installed.',
+      'ping -n 3 127.0.0.1 >nul',
+      // `call` is what keeps this batch going: without it cmd hands control to
+      // bin\pm2.cmd and the remaining lines never run.
+      `call "${pm2}" delete superagent-updater >nul 2>&1`,
+      `call "${pm2}" start "${configPath}" --only superagent-updater --update-env >nul 2>&1`,
+      `call "${pm2}" save >nul 2>&1`,
+      'del "%~f0" >nul 2>&1',
+    ].join('\r\n');
+    fs.writeFileSync(helper, `${script}\r\n`);
+    const child = spawnImpl(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `start "" /b "${helper}"`], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      // Node quotes the command string itself, which turns `start "" /b "<path>"`
+      // into something cmd cannot parse: the helper is then never launched and the
+      // updater keeps running the release it just replaced. Hand cmd the line as
+      // written.
+      windowsVerbatimArguments: true,
+      env: { ...pm2Env },
+    });
+    child.unref();
+    return;
+  }
+  const shell = '(sleep 2; "$PM2" delete superagent-updater >/dev/null 2>&1; '
     + '"$PM2" start "$CONFIG" --only superagent-updater --update-env >/dev/null 2>&1; '
     + '"$PM2" save >/dev/null 2>&1) </dev/null >/dev/null 2>&1 &';
-  const child = spawnImpl('/bin/sh', ['-c', script], {
+  const child = spawnImpl('/bin/sh', ['-c', shell], {
     detached: true,
     stdio: 'ignore',
     env: {
       ...pm2Env,
-      PM2: fs.existsSync(releasePm2) ? releasePm2 : pm2Bin,
-      CONFIG: path.join(release, 'ecosystem.config.cjs'),
+      PM2: pm2,
+      CONFIG: configPath,
     },
   });
   child.unref();
@@ -184,30 +261,41 @@ export async function upgradeTarget(target, {
   fetchImpl = globalThis.fetch,
   readyOptions,
   pm2Env = cleanPm2ControlEnv(),
-  publishReleaseImpl = publishLatestRelease,
+  publishReleaseImpl = null,
   publishOptions = {},
-  // Only the running updater replaces itself (createUpdaterServer turns this
-  // on); a direct call, as in tests, never touches pm2's superagent-updater.
+  mode = updaterMode(),
+  republishPreviousImpl = republishPrevious,
   restartSelfImpl = null,
   selfEntry = fileURLToPath(import.meta.url),
 } = {}) {
   // The manifest is read on every request, so an instance added since the
   // updater started is already a valid target.
   assertUpgradeTarget(target, loadTargets());
-  const deployLock = path.join(path.dirname(path.resolve(releaseLink)), 'deploy.lock');
-  try {
-    await mkdir(deployLock, { mode: 0o700 });
-  } catch (error) {
-    if (error?.code === 'EEXIST') throw new Error('another ov-superagent deploy or upgrade is running');
-    throw error;
+  const baseDir = path.dirname(path.resolve(releaseLink));
+  const installerMode = mode === 'installer';
+  // Windows publishes through the installer the release ships; it verifies,
+  // unpacks and switches the release links itself (see windows-installer.mjs).
+  const publish = publishReleaseImpl ?? (installerMode
+    ? (options) => publishWithInstaller({ baseDir, env: process.env, execFileImpl, ...options })
+    : publishLatestRelease);
+  const deployLock = path.join(baseDir, 'deploy.lock');
+  // The Windows installer takes the same lock itself and refuses to start while
+  // it is held, so the updater must not hold it for the publication.
+  if (!installerMode) {
+    try {
+      await mkdir(deployLock, { mode: 0o700 });
+    } catch (error) {
+      if (error?.code === 'EEXIST') throw new Error('another ov-superagent deploy or upgrade is running');
+      throw error;
+    }
   }
   try {
     // Setup may remove an instance while this request is acquiring the lock.
     // Use only the configuration observed after we own it.
     const targets = loadTargets();
     assertUpgradeTarget(target, targets);
-    const publication = await publishReleaseImpl({
-      baseDir: path.dirname(path.resolve(releaseLink)),
+    const publication = await publish({
+      baseDir,
       ...publishOptions,
     });
     const release = await resolveRelease(releaseLink);
@@ -216,46 +304,93 @@ export async function upgradeTarget(target, {
     const configPath = await realpath(path.join(release, 'ecosystem.config.cjs'));
     if (!isInside(release, configPath)) throw new Error('ecosystem config resolves outside the release');
 
-    const upgradedApps = [];
-    for (const [, spec] of getUpgradeTargets(target, targets)) {
-      await upgradeApp(spec, {
-        release,
-        configPath,
-        pm2Bin,
-        execFileImpl,
-        fetchImpl,
-        readyOptions,
-        pm2Env,
-      });
-      upgradedApps.push(spec.app);
-    }
-
+    const specs = getUpgradeTargets(target, targets).map(([, spec]) => spec);
     // Single-instance installations roll their shared Activity Web with their
     // only daemon. Multi-instance installs keep the explicit `all` boundary.
-    if (shouldUpgradeSharedWeb(target, targets)) {
-      await upgradeApp(SHARED_WEB, {
-        release,
-        configPath,
-        pm2Bin,
-        execFileImpl,
-        fetchImpl,
-        readyOptions,
-        pm2Env,
-      });
-      upgradedApps.push(SHARED_WEB.app);
+    if (shouldUpgradeSharedWeb(target, targets)) specs.push(SHARED_WEB);
+
+    const startSpec = (appRelease, appConfig, spec) => upgradeApp(spec, {
+      baseDir,
+      release: appRelease,
+      configPath: appConfig,
+      pm2Bin,
+      execFileImpl,
+      fetchImpl,
+      readyOptions,
+      pm2Env,
+    });
+
+    const upgraded = [];
+    const skipped = [];
+    try {
+      for (const spec of specs) {
+        const outcome = await startSpec(release, configPath, spec);
+        if (outcome?.skipped) skipped.push(spec.app);
+        else upgraded.push(spec);
+      }
+    } catch (error) {
+      // A Windows publication has already moved `current` by the time the first
+      // app starts, and the installer keeps the previous release on disk. Put the
+      // publication back so a retry, or the next `ov-superagent restart`, does not
+      // start a release that just failed, and move the apps that did start back.
+      if (installerMode && publication.published && publication.previousRelease) {
+        let note = 'the previous release could not be made current again';
+        try {
+          const reverted = await republishPreviousImpl({
+            baseDir,
+            previousVersion: publication.previousVersion,
+            failedRelease: release,
+            env: process.env,
+            execFileImpl,
+          });
+          // A rollback that could not take the lock, or found `current` moved by
+          // someone else, changed nothing: say so instead of pretending it did.
+          if (reverted?.skipped) {
+            throw new Error(`the previous release was not restored: ${reverted.reason}`);
+          }
+          const revertedRelease = await resolveRelease(releaseLink);
+          if (await realpath(reverted.release) !== revertedRelease) {
+            throw new Error('publisher did not activate the previous release');
+          }
+          const revertedConfig = await realpath(path.join(revertedRelease, 'ecosystem.config.cjs'));
+          if (!isInside(revertedRelease, revertedConfig)) {
+            throw new Error('ecosystem config resolves outside the previous release');
+          }
+          const back = reverted.version || publication.previousRelease;
+          try {
+            for (const spec of upgraded) await startSpec(revertedRelease, revertedConfig, spec);
+            note = `rolled back to ${back}`;
+          } catch (restartError) {
+            note = `switched back to ${back}, but restarting ${upgraded.map((spec) => spec.app).join(', ')} `
+              + `from it failed (${describeFailure(restartError)}); run ov-superagent restart`;
+          }
+        } catch (rollbackError) {
+          note = `the previous release could not be made current again (${describeFailure(rollbackError)})`;
+        }
+        throw new Error(`${describeFailure(error)}; ${note}`, { cause: error });
+      }
+      throw error;
     }
+
+    const upgradedApps = upgraded.map((spec) => spec.app);
+    const readyApps = [...upgradedApps, ...skipped];
     const removedApps = target === 'all'
       ? await removeStaleManagedDaemonApps({ targets, release, pm2Bin, execFileImpl, pm2Env })
       : [];
     await execFileImpl(pm2Bin, ['save'], { timeout: 30_000, env: pm2Env });
     const realSelf = await realpath(selfEntry).catch(() => selfEntry);
+    // The updater follows the release it is running from, whatever the instances
+    // did: a no-op for them must still move it forward, and one already inside
+    // the release is never replaced.
     const restartsUpdater = Boolean(restartSelfImpl) && !isInside(release, realSelf);
     if (restartsUpdater) restartSelfImpl({ release, pm2Bin, pm2Env });
 
     return {
       target,
-      ...(upgradedApps.length === 1 ? { app: upgradedApps[0] } : {}),
-      apps: upgradedApps,
+      ...(readyApps.length === 1 ? { app: readyApps[0] } : {}),
+      apps: readyApps,
+      skipped,
+      upgraded: upgradedApps,
       removedApps,
       release,
       commit: publication.commit,
@@ -265,9 +400,11 @@ export async function upgradeTarget(target, {
       status: 'ready',
     };
   } finally {
-    await rmdir(deployLock).catch((error) => {
-      if (error?.code !== 'ENOENT') throw error;
-    });
+    if (!installerMode) {
+      await rmdir(deployLock).catch((error) => {
+        if (error?.code !== 'ENOENT') throw error;
+      });
+    }
   }
 }
 
@@ -311,12 +448,28 @@ async function removeStaleSocket(socketPath) {
   await rm(socketPath);
 }
 
+// A named pipe cannot say who is on the other end, so the updater keeps a token
+// in the install directory (readable only by this account) and an upgrade
+// request has to present it. A process that merely learns the pipe name is
+// refused.
+async function ensureUpdaterToken(file = updaterTokenPath()) {
+  const existing = String(await readFile(file, 'utf8').catch(() => '')).trim();
+  if (/^[0-9a-f]{32,}$/i.test(existing)) return existing;
+  const token = randomBytes(32).toString('hex');
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await writeFile(file, `${token}\n`, { mode: 0o600 });
+  return token;
+}
+
 export async function createUpdaterServer({
-  socketPath = process.env.OV_SUPERAGENT_UPDATER_SOCKET || defaultSocketPath(),
+  socketPath = process.env.OV_SUPERAGENT_UPDATER_SOCKET || defaultUpdaterEndpoint(),
   upgrade = (target) => upgradeTarget(target, { restartSelfImpl: scheduleUpdaterRestart }),
   requestBodyTimeoutMs = 5000,
+  tokenPath = updaterTokenPath(),
 } = {}) {
   let activeTarget = null;
+  // Filled in below for a named pipe; the handler only runs after listen.
+  let pipeToken = '';
   const server = http.createServer(async (request, response) => {
     request.setTimeout(requestBodyTimeoutMs, () => request.destroy(new Error('request body timed out')));
     if (request.method === 'GET' && request.url === '/ready') {
@@ -329,6 +482,10 @@ export async function createUpdaterServer({
     }
     if (activeTarget) {
       writeJson(response, 409, { error: `upgrade already running for ${activeTarget}` });
+      return;
+    }
+    if (pipeToken && request.headers['x-superagent-token'] !== pipeToken) {
+      writeJson(response, 403, { error: 'updater token mismatch' });
       return;
     }
     activeTarget = 'pending';
@@ -353,9 +510,15 @@ export async function createUpdaterServer({
     }
   });
 
-  const resolvedSocketPath = path.resolve(socketPath);
-  await mkdir(path.dirname(resolvedSocketPath), { recursive: true, mode: 0o700 });
-  await removeStaleSocket(resolvedSocketPath);
+  // A Windows endpoint is a named pipe: nothing to create, check or remove on
+  // disk, and the name belongs to this user alone.
+  const namedPipe = platform.isNamedPipe(socketPath);
+  pipeToken = namedPipe ? await ensureUpdaterToken(tokenPath) : '';
+  const resolvedSocketPath = namedPipe ? socketPath : path.resolve(socketPath);
+  if (!namedPipe) {
+    await mkdir(path.dirname(resolvedSocketPath), { recursive: true, mode: 0o700 });
+    await removeStaleSocket(resolvedSocketPath);
+  }
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(resolvedSocketPath, () => {
@@ -363,14 +526,15 @@ export async function createUpdaterServer({
       resolve();
     });
   });
-  await chmod(resolvedSocketPath, 0o600);
-  const socketIdentity = await lstat(resolvedSocketPath);
+  if (!namedPipe) await chmod(resolvedSocketPath, 0o600);
+  const socketIdentity = namedPipe ? null : await lstat(resolvedSocketPath);
 
   return {
     server,
     socketPath: resolvedSocketPath,
     async close() {
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+      if (namedPipe) return;
       const current = await lstat(resolvedSocketPath).catch((error) => {
         if (error?.code === 'ENOENT') return null;
         throw error;

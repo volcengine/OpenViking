@@ -24,7 +24,7 @@ import {
   verifyPm2App,
   waitUntilReady,
 } from '../../updater/src/pm2.mjs';
-import { SHARED_WEB, defaultReleaseLink, defaultSocketPath, loadTargets } from '../../updater/src/targets.mjs';
+import { SHARED_WEB, defaultReleaseLink, defaultUpdaterEndpoint, loadTargets } from '../../updater/src/targets.mjs';
 import { ignoredFieldsNotice, imList, loadInstances } from './instances.mjs';
 import { manifestPath } from './manifest.mjs';
 import { t } from './i18n.mjs';
@@ -68,7 +68,7 @@ function defaults(options = {}) {
     fetchImpl: options.fetchImpl ?? globalThis.fetch,
     readyOptions: options.readyOptions,
     releaseLink: options.releaseLink ?? env.OV_SUPERAGENT_UPDATER_RELEASE_LINK ?? defaultReleaseLink(homeDir(env)),
-    socketPath: options.socketPath ?? env.OV_SUPERAGENT_UPDATER_SOCKET ?? defaultSocketPath(homeDir(env)),
+    socketPath: options.socketPath ?? env.OV_SUPERAGENT_UPDATER_SOCKET ?? defaultUpdaterEndpoint(homeDir(env)),
     pm2Env: options.pm2Env ?? pm2.pm2Env,
     stdout: options.stdout ?? process.stdout,
     stderr: options.stderr ?? process.stderr,

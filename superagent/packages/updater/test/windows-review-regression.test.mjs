@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const ecosystem = fileURLToPath(new URL('../../../ecosystem.config.cjs', import.meta.url));
 
-test('ecosystem excludes updater only on Windows and preserves mixed-case Path', (t) => {
+test('ecosystem runs the updater everywhere and preserves mixed-case Path', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-ecosystem-review-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const config = path.join(home, 'config.json');
@@ -25,7 +25,17 @@ test('ecosystem excludes updater only on Windows and preserves mixed-case Path',
       console.log(JSON.stringify(buildEcosystem({HOME: process.env.HOME, OV_SUPERAGENT_CONFIG: process.env.OV_SUPERAGENT_CONFIG, Path: 'inherited-path'})));
     `], { env: { ...process.env, HOME: home, OV_SUPERAGENT_CONFIG: config }, encoding: 'utf8' });
     const apps = JSON.parse(output).apps;
-    assert.equal(apps.some(app => app.name === 'superagent-updater'), platform !== 'win32');
+    // Windows upgrades through the PowerShell installer, so it runs there too.
+    const updater = apps.find(app => app.name === 'superagent-updater');
+    assert.ok(updater, platform);
+    if (platform === 'win32') {
+      assert.match(updater.env.OV_SUPERAGENT_UPDATER_SOCKET, /^\\\\\.\\pipe\\superagent-updater-[0-9a-f]{24}$/);
+    } else {
+      // The POSIX implementation joins with path.posix, so the expectation must
+      // too when a POSIX platform is simulated on a Windows host.
+      assert.equal(updater.env.OV_SUPERAGENT_UPDATER_SOCKET,
+        path.posix.join(path.join(home, '.ov-superagent'), 'updater.sock'));
+    }
     const daemon = apps.find(app => app.name === 'superagent-primary');
     if (platform === 'win32') assert.equal(daemon.env.PATH, 'inherited-path');
     else assert.equal(daemon.env.PATH, ':/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin');

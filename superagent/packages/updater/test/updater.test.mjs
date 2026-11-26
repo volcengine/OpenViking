@@ -3,11 +3,13 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import {
   mkdir,
   mkdtemp,
   readFile,
   realpath,
+  rm,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -15,14 +17,19 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import nodeTest from 'node:test';
-// The Windows preview does not ship the updater (docs/windows.md), so its
-// suite has no Windows behavior to measure. Keep the same cases for POSIX.
+// The updater runs on Windows too, through the PowerShell installer a Windows
+// release ships, so this suite runs there. Only the cases that need a socket
+// file, a POSIX shell or the deploy-directory lock stay POSIX-only, and they say
+// so with `skip: process.platform === 'win32'`.
 const test = (name, ...rest) => {
   const fn = rest.pop();
   const options = typeof rest[0] === 'object' && rest[0] !== null ? rest[0] : {};
-  const skip = process.platform === 'win32' ? 'the Windows preview does not ship the updater' : false;
-  return nodeTest(name, { ...options, ...(skip ? { skip } : {}) }, fn);
+  return nodeTest(name, options, fn);
 };
+
+// Windows makes a directory link a junction (no privilege needed), which is what
+// the installer writes for current/rollback; POSIX uses a plain directory symlink.
+const linkDir = (target, at) => symlink(target, at, process.platform === 'win32' ? 'junction' : 'dir');
 import { fileURLToPath } from 'node:url';
 
 process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON = JSON.stringify({
@@ -55,7 +62,7 @@ async function fixtureRelease() {
   const release = path.join(base, 'releases', '0.4.0-test');
   await mkdir(release, { recursive: true });
   await writeFile(path.join(release, 'ecosystem.config.cjs'), 'module.exports = {};\n');
-  await symlink(release, path.join(base, 'current'));
+  await linkDir(release, path.join(base, 'current'));
   return { root, release, releaseLink: path.join(base, 'current') };
 }
 
@@ -114,14 +121,14 @@ function replacePm2Harness({ app, initialEntry, entriesByConfig }) {
   };
 }
 
-function post(socketPath, body) {
+function post(socketPath, body, extraHeaders = {}) {
   const payload = JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const request = http.request({
       socketPath,
       path: '/v1/upgrade',
       method: 'POST',
-      headers: { 'content-length': Buffer.byteLength(payload) },
+      headers: { 'content-length': Buffer.byteLength(payload), ...extraHeaders },
     }, (response) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
@@ -210,26 +217,35 @@ test('upgradeTarget cold-starts only the allowlisted Beta app from current relea
 
 test('upgrade all rolls both daemons and the shared web from one ecosystem config', async () => {
   const fixture = await fixtureRelease();
-  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
-  const webEntry = path.join(fixture.release, 'packages', 'web', 'src', 'main.mjs');
-  await mkdir(path.dirname(daemonEntry), { recursive: true });
-  await mkdir(path.dirname(webEntry), { recursive: true });
-  await writeFile(daemonEntry, '');
-  await writeFile(webEntry, '');
+  // The apps run the previous release; an app already on the published one is a
+  // no-op and has its own case.
+  const older = path.join(path.dirname(fixture.release), '0.3.0-test');
+  const targetDaemon = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  const targetWeb = path.join(fixture.release, 'packages', 'web', 'src', 'main.mjs');
+  const olderDaemon = path.join(older, 'packages', 'daemon', 'src', 'main.mjs');
+  const olderWeb = path.join(older, 'packages', 'web', 'src', 'main.mjs');
+  for (const entry of [targetDaemon, targetWeb, olderDaemon, olderWeb]) {
+    await mkdir(path.dirname(entry), { recursive: true });
+    await writeFile(entry, '');
+  }
+  await writeFile(path.join(older, 'ecosystem.config.cjs'), 'module.exports = {};\n');
   const calls = [];
   const fetches = [];
-  const processes = [
-    { name: 'superagent-alpha', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
-    { name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } },
-    { name: 'superagent-web', pm2_env: { status: 'online', pm_exec_path: webEntry } },
-  ];
+  const moved = new Set();
+  const entryFor = (app) => (moved.has(app)
+    ? (app === 'superagent-web' ? targetWeb : targetDaemon)
+    : (app === 'superagent-web' ? olderWeb : olderDaemon));
+  const processesFor = () => ['superagent-alpha', 'superagent-beta', 'superagent-web'].map((name) => ({
+    name, pm2_env: { status: 'online', pm_exec_path: entryFor(name) },
+  }));
   const result = await upgradeTarget('all', {
     releaseLink: fixture.releaseLink,
     publishReleaseImpl: useFixtureRelease(fixture),
     pm2Bin: '/fake/pm2',
     execFileImpl: async (_command, args) => {
       calls.push(args);
-      return { stdout: args[0] === 'jlist' ? JSON.stringify(processes) : '' };
+      if (args[0] === 'start') moved.add(args[3]);
+      return { stdout: args[0] === 'jlist' ? JSON.stringify(processesFor()) : '' };
     },
     fetchImpl: async (url) => { fetches.push(url); return { ok: true }; },
     readyOptions: { attempts: 1, intervalMs: 0 },
@@ -514,7 +530,7 @@ test('upgradeTarget rejects inherited object property names as targets', async (
   await assert.rejects(upgradeTarget('toString'), /target must be one of/);
 });
 
-test('upgradeTarget rechecks the target after acquiring the deploy lock', async () => {
+test('upgradeTarget rechecks the target after acquiring the deploy lock', { skip: process.platform === 'win32' }, async () => {
   const fixture = await fixtureRelease();
   const original = process.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON;
   let published = false;
@@ -535,7 +551,7 @@ test('upgradeTarget rechecks the target after acquiring the deploy lock', async 
   }
 });
 
-test('upgradeTarget shares the deploy lock with the installer', async () => {
+test('upgradeTarget shares the deploy lock with the installer', { skip: process.platform === 'win32' }, async () => {
   const fixture = await fixtureRelease();
   await mkdir(path.join(path.dirname(fixture.releaseLink), 'deploy.lock'));
   let called = false;
@@ -588,16 +604,27 @@ test('upgradeTarget publishes upstream before rolling the target', async () => {
 
 test('the updater replaces itself after an upgrade that moved it to another release', async () => {
   const fixture = await fixtureRelease();
-  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
-  await mkdir(path.dirname(daemonEntry), { recursive: true });
-  await writeFile(daemonEntry, '');
+  const older = path.join(path.dirname(fixture.release), '0.3.0-test');
+  const daemonEntry = path.join(older, 'packages', 'daemon', 'src', 'main.mjs');
+  const targetEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  for (const entry of [daemonEntry, targetEntry]) {
+    await mkdir(path.dirname(entry), { recursive: true });
+    await writeFile(entry, '');
+  }
+  await writeFile(path.join(older, 'ecosystem.config.cjs'), 'module.exports = {};\n');
+  let restartedApp = false;
   const restarts = [];
   const options = {
     releaseLink: fixture.releaseLink,
     publishReleaseImpl: async () => ({ release: fixture.release, commit: 'c', version: '0.5.0', published: true }),
-    execFileImpl: async (_command, args) => ({
-      stdout: args[0] === 'jlist' ? JSON.stringify([{ name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } }]) : '',
-    }),
+    execFileImpl: async (_command, args) => {
+      if (args[0] === 'start') restartedApp = true;
+      return {
+        stdout: args[0] === 'jlist'
+          ? JSON.stringify([{ name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: restartedApp ? targetEntry : daemonEntry } }])
+          : '',
+      };
+    },
     fetchImpl: async () => ({ ok: true }),
     readyOptions: { attempts: 1, intervalMs: 0 },
     restartSelfImpl: (request) => restarts.push(request.release),
@@ -615,7 +642,7 @@ test('the updater replaces itself after an upgrade that moved it to another rele
   assert.equal(restarts.length, 1);
 });
 
-test('the replacement shell outlives the updater and starts it from the new release', () => {
+test('the replacement shell outlives the updater and starts it from the new release', { skip: process.platform === 'win32' }, () => {
   const calls = [];
   scheduleUpdaterRestart({
     release: '/superagent/releases/0.5.0',
@@ -634,7 +661,74 @@ test('the replacement shell outlives the updater and starts it from the new rele
   assert.equal(options.env.PM2_HOME, '/home/u/.ov-superagent/pm2');
 });
 
-test('server accepts one allowlisted upgrade over its private socket', async (t) => {
+test('the Windows replacement is a detached batch file that outlives the updater', async (t) => {
+  const windows = await import('../../daemon/src/platform/win32.mjs');
+  const release = await realpath(await mkdtemp(path.join(os.tmpdir(), 'superagent-updater-win-restart-')));
+  t.after(() => fs.rmSync(release, { recursive: true, force: true }));
+  await mkdir(path.join(release, 'bin'), { recursive: true });
+  await writeFile(path.join(release, 'bin', 'pm2.cmd'), '@echo off\r\n');
+  const calls = [];
+  scheduleUpdaterRestart({
+    release,
+    pm2Bin: 'fallback-pm2.cmd',
+    pm2Env: { PM2_HOME: 'C:\\Users\\u\\.ov-superagent\\pm2' },
+    implementation: windows,
+    spawnImpl: (command, args, options) => { calls.push({ command, args, options }); return { unref() {} }; },
+  });
+  const [{ command, args, options }] = calls;
+  assert.equal(command, process.env.ComSpec || 'cmd.exe');
+  const helper = args[3].slice('start "" /b "'.length, -1);
+  t.after(() => fs.rmSync(helper, { force: true }));
+  // `start` hands it to a new process, so PM2's tree kill of the updater misses
+  // it; the delay then restarts the updater from the release just installed.
+  assert.equal(args.slice(0, 3).join(' '), '/d /s /c');
+  assert.match(args[3], /^start "" \/b ".+\.cmd"$/);
+  assert.equal(options.detached, true);
+  assert.equal(options.windowsHide, true);
+  // Without this Node re-quotes the command string and cmd never runs the helper.
+  assert.equal(options.windowsVerbatimArguments, true);
+  const script = await readFile(helper, 'utf8');
+  assert.match(script, /ping -n 3 127\.0\.0\.1 >nul/);
+  assert.ok(script.includes(`call "${path.join(release, 'bin', 'pm2.cmd')}" delete superagent-updater`));
+  assert.ok(script.includes(`call "${path.join(release, 'bin', 'pm2.cmd')}" start "${path.join(release, 'ecosystem.config.cjs')}" --only superagent-updater --update-env`));
+  assert.match(script, /del "%~f0" >nul 2>&1/);
+});
+
+test('a Windows updater endpoint is one stable named pipe per install directory', async () => {
+  const windows = await import('../../daemon/src/platform/win32.mjs');
+  const one = windows.localSocketPath('C:\\Users\\Alice\\.ov-superagent', 'updater', { shared: true });
+  assert.equal(one, windows.localSocketPath('c:\\users\\alice\\.ov-superagent\\', 'updater', { shared: true }));
+  assert.notEqual(one, windows.localSocketPath('C:\\Users\\Alice\\.ov-superagent\\other', 'updater', { shared: true }));
+  assert.match(one, /^\\\\.\\pipe\\superagent-updater-[0-9a-f]{24}$/);
+  // The per-process nonce stays on the daemon's own action endpoint.
+  assert.match(windows.localSocketPath('C:\\Users\\Alice\\.ov-superagent'), /-actions-[0-9a-f]{24}-[0-9a-f]{48}$/);
+});
+
+test('the updater serves and closes a Windows named pipe', { skip: process.platform !== 'win32' }, async (t) => {
+  const { localSocketPath } = await import('../../daemon/src/platform/index.mjs');
+  const root = await fixtureTempRoot('superagent-updater-pipe-');
+  const socketPath = localSocketPath(path.join(os.tmpdir(), 'superagent-updater-pipe'), 'updater', { shared: true });
+  const tokenPath = path.join(root, 'updater.token');
+  const first = await createUpdaterServer({
+    socketPath,
+    tokenPath,
+    upgrade: async (target) => ({ target, status: 'ready' }),
+  });
+  await assert.rejects(createUpdaterServer({ socketPath, tokenPath, upgrade: async () => ({}) }), { code: 'EADDRINUSE' });
+  const token = (await readFile(tokenPath, 'utf8')).trim();
+  assert.match(token, /^[0-9a-f]{64}$/);
+  // Knowing the pipe name is not enough to drive an upgrade: the token lives in
+  // the install directory, which belongs to this account.
+  const refused = await post(socketPath, { target: 'beta' });
+  assert.equal(refused.status, 403);
+  const response = await post(socketPath, { target: 'beta' }, { 'x-superagent-token': token });
+  assert.equal(response.status, 200);
+  await first.close();
+  const again = await createUpdaterServer({ socketPath, tokenPath, upgrade: async () => ({}) });
+  await again.close();
+});
+
+test('server accepts one allowlisted upgrade over its private socket', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-socket-test-');
   const socketPath = path.join(root, 'updater.sock');
   const calls = [];
@@ -653,7 +747,7 @@ test('server accepts one allowlisted upgrade over its private socket', async (t)
   assert.equal(response.body.status, 'ready');
 });
 
-test('request body timeout does not abort a long-running upgrade response', async (t) => {
+test('request body timeout does not abort a long-running upgrade response', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-socket-test-');
   const socketPath = path.join(root, 'updater.sock');
   const updater = await createUpdaterServer({
@@ -671,7 +765,7 @@ test('request body timeout does not abort a long-running upgrade response', asyn
   assert.equal(response.body.status, 'ready');
 });
 
-test('client disconnect does not cancel an upgrade already owned by the updater', async (t) => {
+test('client disconnect does not cancel an upgrade already owned by the updater', { skip: process.platform === 'win32' }, async (t) => {
   // Keep the Unix socket path below macOS's sockaddr_un limit. os.tmpdir()
   // already expands to a long /private/var/folders path on developer Macs.
   const root = await fixtureTempRoot('lud-');
@@ -709,7 +803,7 @@ test('client disconnect does not cancel an upgrade already owned by the updater'
   assert.equal(await completed, 'alpha');
 });
 
-test('server rejects a non-allowlisted target without calling upgrade', async (t) => {
+test('server rejects a non-allowlisted target without calling upgrade', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-reject-test-');
   const socketPath = path.join(root, 'updater.sock');
   let called = false;
@@ -725,7 +819,7 @@ test('server rejects a non-allowlisted target without calling upgrade', async (t
   assert.equal(called, false);
 });
 
-test('server serializes upgrade requests', async (t) => {
+test('server serializes upgrade requests', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-busy-test-');
   const socketPath = path.join(root, 'updater.sock');
   let releaseFirst;
@@ -747,13 +841,14 @@ test('server serializes upgrade requests', async (t) => {
   assert.equal((await first).status, 200);
 });
 
-test('a second updater cannot unlink the live updater socket', async (t) => {
+test('a second updater cannot unlink the live updater socket', { skip: process.platform === 'win32' }, async (t) => {
   const root = await fixtureTempRoot('superagent-updater-owner-test-');
   const socketPath = path.join(root, 'updater.sock');
   const first = await createUpdaterServer({
     socketPath,
     upgrade: async (target) => ({ target, status: 'ready' }),
   });
+  // An unclosed server keeps the test process alive on the socket file.
   t.after(() => first.close());
 
   await assert.rejects(
@@ -764,7 +859,7 @@ test('a second updater cannot unlink the live updater socket', async (t) => {
   assert.equal(response.status, 200);
 });
 
-test('CLI upgrade reaches the updater only on artifact-supported platforms', async (t) => {
+test('CLI upgrade reaches the updater only on artifact-supported platforms', { skip: process.platform === 'win32' }, async (t) => {
   const { capabilities } = await import('../../daemon/src/capabilities.mjs');
   const root = await fixtureTempRoot('superagent-updater-cli-test-');
   const socketPath = path.join(root, 'updater.sock');
@@ -811,4 +906,267 @@ test('CLI upgrade reaches the updater only on artifact-supported platforms', asy
     assert.equal(Buffer.concat(stderr).toString('utf8'),
       'Automatic release upgrades are not available on this platform. Stop OpenViking SuperAgent and update the installation manually.\n');
   }
+});
+
+// ---- Windows installer publication -----------------------------------------
+
+// Two instances on an older release, a newer release published by the installer,
+// and PM2 entries per ecosystem config and app name.
+function installerModeFixture() {
+  const events = [];
+  const entries = new Map();
+  const key = (config, app) => `${config}\0${app}`;
+  const state = { failStart: null, current: null };
+  return {
+    events,
+    state,
+    setEntry(config, app, entry) { entries.set(key(config, app), entry); },
+    execFileImpl: async (_command, args) => {
+      events.push(['pm2', ...args]);
+      const [operation] = args;
+      if (operation === 'jlist') {
+        return {
+          stdout: JSON.stringify([...state.current.entries()].map(([app, entry]) => ({
+            name: app,
+            pm2_env: { status: 'online', pm_exec_path: entry },
+          }))),
+        };
+      }
+      if (operation === 'delete' || operation === 'stop') {
+        state.current.delete(args[1]);
+        return { stdout: '' };
+      }
+      if (operation === 'start') {
+        const app = args[3];
+        if (state.failStart && state.failStart({ app, config: args[1] })) {
+          throw new Error(`${app} is not online (status=errored, exit_code=1)`);
+        }
+        const entry = entries.get(key(args[1], app));
+        assert.ok(entry, `unexpected ecosystem config for ${app}: ${args[1]}`);
+        state.current.set(app, entry);
+        return { stdout: '' };
+      }
+      if (operation === 'save') return { stdout: '' };
+      throw new Error(`unexpected PM2 operation: ${operation}`);
+    },
+  };
+}
+
+test('an installer publication skips the deploy lock the installer takes itself', async () => {
+  const fixture = await fixtureRelease();
+  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  await mkdir(path.dirname(daemonEntry), { recursive: true });
+  await writeFile(daemonEntry, '');
+  // The installer holds this directory while it runs; the updater must not.
+  await mkdir(path.join(path.dirname(fixture.releaseLink), 'deploy.lock'));
+  const harness = installerModeFixture();
+  harness.setEntry(path.join(fixture.release, 'ecosystem.config.cjs'), 'superagent-beta', daemonEntry);
+  harness.state.current = new Map([['superagent-beta', daemonEntry]]);
+  const result = await upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    mode: 'installer',
+    publishReleaseImpl: async () => ({
+      release: fixture.release,
+      commit: 'c',
+      version: '0.5.0',
+      published: false,
+      previousRelease: fixture.release,
+      previousVersion: '0.5.0',
+    }),
+    execFileImpl: harness.execFileImpl,
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+  });
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.apps, ['superagent-beta']);
+  assert.ok(fs.existsSync(path.join(path.dirname(fixture.releaseLink), 'deploy.lock')),
+    'the lock the installer owns is left untouched');
+});
+
+test('a Windows release that cannot start rolls the publication and the started apps back', async () => {
+  const fixture = await fixtureRelease();
+  const entryRelative = path.join('packages', 'daemon', 'src', 'main.mjs');
+  const newer = await fixtureAppRelease(fixture, '0.5.0-test', entryRelative);
+  const oldAlpha = path.join(fixture.release, entryRelative);
+  await mkdir(path.dirname(oldAlpha), { recursive: true });
+  await writeFile(oldAlpha, '');
+  const oldBeta = path.join(fixture.release, entryRelative);
+  const newAlpha = path.join(newer.release, entryRelative);
+  const newBeta = path.join(newer.release, entryRelative);
+  const oldConfig = path.join(fixture.release, 'ecosystem.config.cjs');
+
+  const harness = installerModeFixture();
+  harness.setEntry(oldConfig, 'superagent-alpha', oldAlpha);
+  harness.setEntry(oldConfig, 'superagent-beta', oldBeta);
+  harness.setEntry(newer.config, 'superagent-alpha', newAlpha);
+  harness.setEntry(newer.config, 'superagent-beta', newBeta);
+  harness.state.current = new Map([
+    ['superagent-alpha', oldAlpha],
+    ['superagent-beta', oldBeta],
+  ]);
+  harness.state.failStart = ({ app, config }) => app === 'superagent-beta' && config === newer.config;
+
+  const republished = [];
+  await assert.rejects(upgradeTarget('all', {
+    releaseLink: fixture.releaseLink,
+    mode: 'installer',
+    publishReleaseImpl: async () => {
+      await rm(fixture.releaseLink);
+      await linkDir(newer.release, fixture.releaseLink);
+      return {
+        release: newer.release,
+        commit: 'd',
+        version: '0.5.0',
+        published: true,
+        previousRelease: fixture.release,
+        previousVersion: '0.4.0',
+      };
+    },
+    republishPreviousImpl: async (options) => {
+      republished.push(options.previousVersion);
+      await rm(fixture.releaseLink);
+      await linkDir(fixture.release, fixture.releaseLink);
+      return { release: fixture.release, version: '0.4.0', published: true };
+    },
+    execFileImpl: harness.execFileImpl,
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+  }), /rolled back to 0\.4\.0/);
+
+  assert.deepEqual(republished, ['0.4.0']);
+  assert.equal(await realpath(fixture.releaseLink), await realpath(fixture.release));
+  // Alpha had already started on the new release and is moved back to the old one;
+  // beta was restored by the failed start's own rollback.
+  const alphaStart = harness.events.filter((event) => event[0] === 'pm2' && event[1] === 'start'
+    && event[4] === 'superagent-alpha').map((event) => event[2]);
+  assert.deepEqual(alphaStart, [newer.config, oldConfig]);
+  assert.equal(harness.state.current.get('superagent-alpha'), oldAlpha);
+  assert.equal(harness.state.current.get('superagent-beta'), oldBeta);
+});
+
+test('a failed Windows rollback keeps the original failure and says so', async () => {
+  const fixture = await fixtureRelease();
+  const newer = await fixtureAppRelease(fixture, '0.5.0-test', path.join('packages', 'daemon', 'src', 'main.mjs'));
+  const harness = installerModeFixture();
+  harness.state.current = new Map();
+  harness.state.failStart = () => true;
+  await assert.rejects(upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    mode: 'installer',
+    publishReleaseImpl: async () => {
+      await rm(fixture.releaseLink);
+      await linkDir(newer.release, fixture.releaseLink);
+      return { release: newer.release, commit: 'd', version: '0.5.0', published: true,
+        previousRelease: fixture.release, previousVersion: '0.4.0' };
+    },
+    republishPreviousImpl: async () => { throw new Error('the release host answered 503'); },
+    execFileImpl: harness.execFileImpl,
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+  }), /is not online .*could not be made current again \(the release host answered 503\)/);
+});
+
+test('an app already on the published release is left running', async () => {
+  const fixture = await fixtureRelease();
+  const calls = [];
+  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  await mkdir(path.dirname(daemonEntry), { recursive: true });
+  await writeFile(daemonEntry, '');
+  const result = await upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    publishReleaseImpl: async () => ({
+      release: fixture.release, version: '0.4.0', published: false, previousRelease: null,
+    }),
+    pm2Bin: '/fake/pm2',
+    execFileImpl: async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (args[0] === 'jlist') {
+        return {
+          stdout: JSON.stringify([{
+            name: 'superagent-beta',
+            pm2_env: { status: 'online', pm_exec_path: daemonEntry },
+          }]),
+        };
+      }
+      return { stdout: '' };
+    },
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+    pm2Env: { HOME: '/safe-home' },
+    // The updater is already inside this release, so nothing has to replace it.
+    selfEntry: path.join(fixture.release, 'packages', 'updater', 'src', 'server.mjs'),
+  });
+
+  assert.deepEqual(result.skipped, ['superagent-beta']);
+  assert.deepEqual(result.upgraded, []);
+  assert.deepEqual(result.apps, ['superagent-beta']);
+  assert.equal(result.restartsUpdater, false);
+  assert.ok(!calls.some(({ args }) => args[0] === 'start'), 'nothing was started again');
+});
+test('a no-op for the instances still replaces an updater left behind', async () => {
+  const fixture = await fixtureRelease();
+  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  await mkdir(path.dirname(daemonEntry), { recursive: true });
+  await writeFile(daemonEntry, '');
+  const calls = [];
+  const restarts = [];
+  const result = await upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    publishReleaseImpl: async () => ({
+      release: fixture.release, version: '0.4.0', published: false, previousRelease: null,
+    }),
+    pm2Bin: '/fake/pm2',
+    execFileImpl: async (_command, args) => {
+      calls.push(args);
+      if (args[0] === 'jlist') {
+        return {
+          stdout: JSON.stringify([{
+            name: 'superagent-beta',
+            pm2_env: { status: 'online', pm_exec_path: daemonEntry },
+          }]),
+        };
+      }
+      return { stdout: '' };
+    },
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+    pm2Env: { HOME: '/safe-home' },
+    restartSelfImpl: (request) => restarts.push(request.release),
+    selfEntry: path.join(fixture.root, 'old-release', 'packages', 'updater', 'src', 'server.mjs'),
+  });
+
+  assert.deepEqual(result.skipped, ['superagent-beta']);
+  assert.deepEqual(result.upgraded, []);
+  assert.equal(result.restartsUpdater, true);
+  assert.deepEqual(restarts, [fixture.release]);
+  assert.ok(!calls.some((args) => args[0] === 'start'), 'the instance was not restarted');
+});
+
+test('nothing restarts when the instances and the updater are on the target release', async () => {
+  const fixture = await fixtureRelease();
+  const daemonEntry = path.join(fixture.release, 'packages', 'daemon', 'src', 'main.mjs');
+  await mkdir(path.dirname(daemonEntry), { recursive: true });
+  await writeFile(daemonEntry, '');
+  const restarts = [];
+  const result = await upgradeTarget('beta', {
+    releaseLink: fixture.releaseLink,
+    publishReleaseImpl: async () => ({
+      release: fixture.release, version: '0.4.0', published: false, previousRelease: null,
+    }),
+    pm2Bin: '/fake/pm2',
+    execFileImpl: async (_command, args) => ({
+      stdout: args[0] === 'jlist'
+        ? JSON.stringify([{ name: 'superagent-beta', pm2_env: { status: 'online', pm_exec_path: daemonEntry } }])
+        : '',
+    }),
+    fetchImpl: async () => ({ ok: true }),
+    readyOptions: { attempts: 1, intervalMs: 0 },
+    pm2Env: { HOME: '/safe-home' },
+    restartSelfImpl: (request) => restarts.push(request.release),
+    selfEntry: path.join(fixture.release, 'packages', 'updater', 'src', 'server.mjs'),
+  });
+
+  assert.deepEqual(result.skipped, ['superagent-beta']);
+  assert.equal(result.restartsUpdater, false);
+  assert.deepEqual(restarts, []);
 });
