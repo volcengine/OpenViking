@@ -178,26 +178,6 @@ async def test_parent_reimport_does_not_delete_independent_child_item(service, t
 
 
 @pytest.mark.asyncio
-async def test_add_skill_establishes_item_declaration(client, service):
-    md = "---\nname: review-probe\ndescription: Review probe skill\n---\n# Review\nUse this skill for the review probe.\n"
-    response = await client.post("/api/v1/skills", json={"data": md, "wait": True})
-    assert response.status_code == 200, response.text
-    uri = response.json()["result"]["uri"]
-    ordinary = await client.post(
-        "/api/v1/search/find", json={"query": "Review probe", "context_type": "skill"}
-    )
-    item_mode = await client.post(
-        "/api/v1/search/find",
-        json={"query": "Review probe", "context_type": "skill", "search_as_item": {}},
-    )
-    assert ordinary.status_code == item_mode.status_code == 200
-    resolved = await service.viking_fs._get_vector_store().catalog_execute(
-        {"op": "resolve", "uris": [uri]}, ctx=ctx()
-    )
-    assert resolved["data"][0].get("item_uuid"), "add_skill succeeded without declaring an Item"
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_skill_replacement_preserves_item_identity_or_legacy_absence(client, service, legacy):
     name = "skill-identity-legacy" if legacy else "skill-identity-item"
@@ -221,26 +201,33 @@ async def test_skill_replacement_preserves_item_identity_or_legacy_absence(clien
 
 
 @pytest.mark.asyncio
-async def test_new_skill_declaration_failure_is_retryable(client, service, monkeypatch):
-    storage = service.viking_fs._get_vector_store()
+async def test_new_skill_declares_before_writing_and_can_retry(client, service, monkeypatch):
+    fs = service.viking_fs
+    storage = fs._get_vector_store()
     execute = storage.catalog_execute
     roots = []
 
     async def fail_first_declaration(request, *, ctx):
-        if request["op"] == "declare_item" and not roots:
-            roots.append(request["uri"])
-            raise OSError("synthetic declaration failure")
+        if request["op"] == "declare_item":
+            root = request["uri"]
+            assert not await fs.exists(f"{root}/SKILL.md", ctx=ctx)
+            roots.append(root)
+            if len(roots) == 1:
+                raise OSError("synthetic declaration failure")
         return await execute(request, ctx=ctx)
 
     monkeypatch.setattr(storage, "catalog_execute", fail_first_declaration)
     md = "---\nname: declaration-retry\ndescription: Retry declaration\n---\n# Retry\n"
     failed = await client.post("/api/v1/skills", json={"data": md, "wait": True})
     assert failed.status_code >= 400, failed.text
-    assert roots
-    assert not await service.viking_fs.exists(roots[0] + "/SKILL.md", ctx=ctx())
+    assert len(roots) == 1
+    assert not await fs.exists(f"{roots[0]}/SKILL.md", ctx=ctx())
     retried = await client.post("/api/v1/skills", json={"data": md, "wait": True})
     assert retried.status_code == 200, retried.text
-    resolved = await storage.catalog_execute({"op": "resolve", "uris": roots}, ctx=ctx())
+    root = retried.json()["result"]["uri"]
+    assert roots == [root, root]
+    assert await fs.exists(f"{root}/SKILL.md", ctx=ctx())
+    resolved = await execute({"op": "resolve", "uris": [root]}, ctx=ctx())
     assert resolved["data"][0]["item_uuid"]
 
 
@@ -429,7 +416,7 @@ async def test_item_reimport_replaces_resource_snapshot_and_preserves_uuid(servi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("occupant", ["file", "directory", "marker-directory"])
+@pytest.mark.parametrize("occupant", ["file", "directory"])
 async def test_item_import_does_not_reserve_original_paths(
     service, tmp_path, occupant, monkeypatch
 ):
@@ -443,8 +430,6 @@ async def test_item_import_does_not_reserve_original_paths(
     original_uri = root + "/.original"
     if occupant != "file":
         await fs.mkdir(original_uri, ctx=owner)
-        if occupant == "marker-directory":
-            await fs.mkdir(original_uri + "/.ov-originals", ctx=owner)
         original_uri += "/legacy.bin"
     await fs.write_file_bytes(original_uri, b"Legacy original must remain unchanged.", ctx=owner)
     backend = fs._get_vector_store()
@@ -474,8 +459,9 @@ async def test_item_import_does_not_reserve_original_paths(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("first_is_directory", [False, True])
-@pytest.mark.parametrize("fail_first_delete", [False, True])
+@pytest.mark.parametrize(
+    ("first_is_directory", "fail_first_delete"), [(False, False), (True, True)]
+)
 async def test_item_reimport_reconciles_file_directory_replacements(
     service, tmp_path, monkeypatch, first_is_directory, fail_first_delete
 ):

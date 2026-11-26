@@ -385,40 +385,6 @@ async def test_account_cleanup_deletes_hidden_catalog_only_in_target_partition(
     assert {row["account_id"] for row in collection.client.rows.values()} == {"b"}
 
 
-@pytest.mark.parametrize("operator", ["and", "or", None])
-def test_item_attribute_filters_are_forwarded_without_catalog_reads(collection, operator):
-    item_filter = {"op": "must", "field": "item_attrs", "conds": ["missing=value"]}
-    if operator is not None:
-        declare(collection, "/resources/A", "parent", item_attrs=["project=P1"])
-        declare(collection, "/resources/A/B", "child", item_attrs=["asset=V1"])
-        item_filter = {
-            "op": operator,
-            "conds": [
-                {"op": "must", "field": "item_attrs", "conds": ["project=P1"]},
-                {"op": "must_not", "field": "item_attrs", "conds": ["asset=V1"]},
-            ],
-        }
-    filters = {
-        "op": "and",
-        "conds": [{"op": "must", "field": "account_id", "conds": ["a"]}, item_filter],
-    }
-    before = len(collection.client.calls)
-    original = deepcopy(filters)
-    assert collection.search_item_groups("catalog-index", dense_vector=[1, 0], filters=filters) == {
-        "groups": []
-    }
-    calls = collection.client.calls[before:]
-    assert [path.rsplit("/", 1)[-1] for _, path, _ in calls] == ["vector"]
-    request = calls[0][2]
-    assert request["partition"] == "a"
-    assert "partition_by" not in request
-    assert request["filter"] == {
-        "op": "and",
-        "conds": [original, {"op": "must_not", "field": "level", "conds": [-1]}],
-    }
-    assert filters == original
-
-
 def test_subtree_scan_and_point_fetches_respect_record_batch_limit(collection):
     for i in range(121):
         uri = f"/resources/batch-{i}"

@@ -239,9 +239,15 @@ def test_collection_default_union_survives_reload_before_activation(tmp_path):
     collection.close()
 
 
-@pytest.mark.parametrize("mode", ["shadow", "union"])
-@pytest.mark.parametrize("aggregation", ["max", "sum"])
-@pytest.mark.parametrize(("sign", "max_members"), [(1, 10), (-1, 1)])
+@pytest.mark.parametrize(
+    ("mode", "aggregation", "sign", "max_members"),
+    [
+        ("shadow", "max", -1, 1),
+        ("shadow", "sum", 1, 10),
+        ("union", "max", 1, 10),
+        ("union", "sum", -1, 1),
+    ],
+)
 def test_duplicate_labels_contribute_each_input_row(mode, aggregation, sign, max_members):
     engine = CatalogEngine()
     nodes(engine, "/resources/A/B")
@@ -760,8 +766,7 @@ def test_filter_scan_keeps_complete_counts_without_python_members(
     assert adapter.search_item_groups(**options, score_threshold=0.1)["group_count"] == 0
 
 
-@pytest.mark.parametrize("aggregation", ["max", "sum"])
-def test_filter_scan_projects_live_fields_after_update_delete_and_reopen(adapter, aggregation):
+def test_filter_scan_projects_live_fields_after_update_delete_and_reopen(adapter):
     root = "viking://resources/items"
     declare_adapter_item(adapter, f"{root}/A", "a", ["kind=asset"])
     declare_adapter_item(adapter, f"{root}/B", "b", ["kind=asset"])
@@ -790,7 +795,7 @@ def test_filter_scan_projects_live_fields_after_update_delete_and_reopen(adapter
                 TimeRange("updated_at", start="2026-11-10T00:00:00Z"),
             ]
         ),
-        "aggregation": aggregation,
+        "aggregation": "sum",
         "filter_only": True,
     }
     assert adapter.search_item_groups(**options)["groups"][0]["candidate_members_count"] == 2

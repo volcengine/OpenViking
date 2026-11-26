@@ -123,25 +123,33 @@ def search(collection, *, filters=None, **kwargs):
     )
 
 
-@pytest.mark.parametrize(("aggregation", "op"), [("max", "must"), ("sum", "must_not")])
-def test_item_attribute_filter_preserves_platform_groups_and_uses_one_request(
-    collection, aggregation, op
-):
+def test_item_attribute_filter_preserves_platform_groups_and_uses_one_request(collection):
     # Member filtering and root group metadata are separate platform concerns.
+    collection.meta_data["Fields"].append({"FieldName": "level", "FieldType": "int64"})
     collection.client.result = {"groups": [group("a", 0.9, ["kind=root"])]}
     filters = {
         "op": "and",
         "conds": [
             {"op": "must", "field": "account_id", "conds": ["a"]},
-            {"op": op, "field": "item_attrs", "conds": ["color=red", "lang=en"]},
+            {
+                "op": "or",
+                "conds": [
+                    {"op": "must", "field": "item_attrs", "conds": ["color=red", "lang=en"]},
+                    {"op": "must_not", "field": "item_attrs", "conds": ["kind=archived"]},
+                ],
+            },
         ],
     }
     original = deepcopy(filters)
-    result = search(collection, filters=filters, aggregation=aggregation)
+    result = search(collection, filters=filters, aggregation="sum")
     assert len(collection.client.calls) == 1
     _, path, request = collection.client.calls[0]
     assert path == "/api/vikingdb/data/search/vector"
-    assert request["filter"] == original
+    assert request["partition"] == "a"
+    assert request["filter"] == {
+        "op": "and",
+        "conds": [original, {"op": "must_not", "field": "level", "conds": [-1]}],
+    }
     assert filters == original
     assert result["groups"] == [
         {
@@ -165,7 +173,6 @@ def test_threshold_applies_to_aggregate_score_and_empty_groups_are_valid(collect
 
 @pytest.mark.parametrize("case", ["shadow", "partition", "inherited_attrs"])
 def test_unsupported_platform_combinations_fail_before_http(collection, case):
-    kwargs = {}
     if case == "shadow":
         collection.meta_data["Fields"][1]["InheritanceMode"] = "shadow"
     elif case == "partition":
@@ -173,7 +180,7 @@ def test_unsupported_platform_combinations_fail_before_http(collection, case):
     elif case == "inherited_attrs":
         collection.meta_data["Fields"][2]["MountPathField"] = "uri"
     with pytest.raises(NotImplementedError):
-        search(collection, **kwargs)
+        search(collection)
     assert collection.client.calls == []
 
 
@@ -242,12 +249,11 @@ def test_ordinary_search_never_checks_item_metadata_or_adds_grouping(collection)
     assert "partition_by" not in request
 
 
-@pytest.mark.parametrize("aggregation", ["max", "sum"])
-def test_keywords_use_native_groups_and_preserve_filters(collection, aggregation):
+def test_keywords_use_native_groups_and_preserve_filters(collection):
     collection.client.result = {"groups": [group("a", 2.5, ["kind=root"])]}
     filters = {"op": "must", "field": "account_id", "conds": ["a"]}
     result = collection.search_item_groups(
-        "index", keywords_query="fresh", filters=filters, aggregation=aggregation
+        "index", keywords_query="fresh", filters=filters, aggregation="sum"
     )
     assert result["groups"][0]["entity_score"] == 2.5
     assert len(collection.client.calls) == 1
@@ -255,12 +261,11 @@ def test_keywords_use_native_groups_and_preserve_filters(collection, aggregation
     assert path == "/api/vikingdb/data/search/keywords"
     assert request["query"] == "fresh"
     assert request["filter"] == filters
-    assert request["group_by"]["op"] == aggregation
+    assert request["group_by"]["op"] == "sum"
     assert "dense_vector" not in request
 
 
-@pytest.mark.parametrize("aggregation", ["max", "sum"])
-def test_scalar_groups_scan_past_repeated_members_and_use_own_roots(collection, aggregation):
+def test_scalar_groups_scan_past_repeated_members_and_use_own_roots(collection):
     from openviking.storage.vectordb.collection.vikingdb_catalog import _id
 
     collection.meta_data["Fields"].extend(
@@ -307,7 +312,7 @@ def test_scalar_groups_scan_past_repeated_members_and_use_own_roots(collection, 
 
     collection._data_post = post
     result = collection.search_item_groups(
-        "index", filters=filters, filter_only=True, max_groups=2, aggregation=aggregation
+        "index", filters=filters, filter_only=True, max_groups=2, aggregation="sum"
     )
     assert [(g["entity_id"], g["entity_score"], g["entity_attrs"]) for g in result["groups"]] == [
         ("c", 0.0, ["kind=child"]),

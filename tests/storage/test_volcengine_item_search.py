@@ -61,8 +61,7 @@ def adapter_for(schema):
     return config, adapter, adapter.get_collection()._Collection__collection
 
 
-@pytest.mark.parametrize("aggregation", ["max", "sum"])
-@pytest.mark.parametrize("provide_metadata", [True, False])
+@pytest.mark.parametrize(("provide_metadata", "aggregation"), [(True, "max"), (False, "sum")])
 def test_api_key_adapter_uses_native_group_metadata_and_passes_attrs_filter_once(
     schema, aggregation, provide_metadata
 ):

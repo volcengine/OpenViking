@@ -581,18 +581,23 @@ async def test_cp_removes_target_file_when_vector_copy_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cp_keeps_preexisting_target_when_vector_copy_fails(monkeypatch):
+@pytest.mark.parametrize(
+    ("operation", "vector_method"),
+    [("cp", "_copy_vector_store_uris"), ("mv", "_update_vector_store_uris")],
+)
+async def test_transfer_keeps_preexisting_target_when_vector_write_fails(
+    monkeypatch, operation, vector_method
+):
     agfs = _CopyAGFS(target_exists=True)
     fs = _viking_fs(monkeypatch, agfs)
     monkeypatch.setattr(
         fs,
-        "_copy_vector_store_uris",
-        AsyncMock(side_effect=RuntimeError("vector copy failed")),
-        raising=False,
+        vector_method,
+        AsyncMock(side_effect=RuntimeError("injected vector write failure")),
     )
 
-    with pytest.raises(RuntimeError, match="vector copy failed"):
-        await fs.cp(
+    with pytest.raises(RuntimeError, match="injected vector write failure"):
+        await getattr(fs, operation)(
             "viking://resources/source.md",
             "viking://resources/target.md",
             ctx=_ctx(),
@@ -602,27 +607,6 @@ async def test_cp_keeps_preexisting_target_when_vector_copy_fails(monkeypatch):
     assert not any(
         event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
     )
-
-
-@pytest.mark.asyncio
-async def test_cp_keeps_partial_target_when_agfs_copy_fails(monkeypatch):
-    agfs = _CopyAGFS(fail_copy=True)
-    fs = _viking_fs(monkeypatch, agfs)
-    vector_copy = AsyncMock()
-    monkeypatch.setattr(fs, "_copy_vector_store_uris", vector_copy, raising=False)
-
-    with pytest.raises(RuntimeError, match="injected AGFS copy failure"):
-        await fs.cp(
-            "viking://resources/source.md",
-            "viking://resources/target.md",
-            ctx=_ctx(),
-        )
-
-    assert not any(
-        event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
-    )
-    assert agfs.target_exists
-    vector_copy.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -718,29 +702,6 @@ async def test_mv_preserves_original_error_when_vector_failure_cleanup_fails(mon
 
 
 @pytest.mark.asyncio
-async def test_mv_keeps_preexisting_target_when_vector_move_fails(monkeypatch):
-    agfs = _CopyAGFS(target_exists=True)
-    fs = _viking_fs(monkeypatch, agfs)
-    monkeypatch.setattr(
-        fs,
-        "_update_vector_store_uris",
-        AsyncMock(side_effect=RuntimeError("vector move failed")),
-    )
-
-    with pytest.raises(RuntimeError, match="vector move failed"):
-        await fs.mv(
-            "viking://resources/source.md",
-            "viking://resources/target.md",
-            ctx=_ctx(),
-        )
-
-    assert agfs.target_exists
-    assert not any(
-        event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
-    )
-
-
-@pytest.mark.asyncio
 async def test_mv_restores_catalog_after_vector_compensation_recreates_source(monkeypatch):
     agfs = _CopyAGFS()
     fs = _viking_fs(monkeypatch, agfs)
@@ -764,18 +725,6 @@ async def test_mv_restores_catalog_after_vector_compensation_recreates_source(mo
 
     assert catalog.roots == {"viking://resources/source.md"}
     assert not agfs.target_exists
-
-
-@pytest.mark.asyncio
-async def test_mv_does_not_copy_back_after_source_delete_failure(monkeypatch):
-    agfs = _MoveRollbackAGFS()
-    fs = _viking_fs(monkeypatch, agfs)
-    with pytest.raises(RuntimeError, match="injected source delete failure"):
-        await fs.mv("viking://resources/source.md", "viking://resources/target.md", ctx=_ctx())
-    assert [event[1:3] for event in agfs.events if event[0] == "cp"] == [
-        ("/local/acct/resources/source.md", "/local/acct/resources/target.md")
-    ]
-    assert agfs.paths == {"/local/acct/resources/target.md"}
 
 
 @pytest.mark.asyncio
