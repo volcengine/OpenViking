@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -14,6 +15,7 @@ use tokio::sync::RwLock;
 use crate::core::internal_names::is_hidden_runtime_lock_name;
 use crate::core::FileSystem;
 use crate::crypto;
+use crate::metrics::duration::DurationMetrics;
 
 use super::codec::LockTokenCodec;
 use super::types::{
@@ -725,6 +727,7 @@ struct FilesystemAcquisitionPlan {
 pub struct FilesystemPathLockProvider {
     fs: Arc<dyn FileSystem>,
     empty_token_expire_secs: f64,
+    descendant_scan: DurationMetrics,
 }
 
 impl FilesystemPathLockProvider {
@@ -736,6 +739,7 @@ impl FilesystemPathLockProvider {
         Self {
             fs,
             empty_token_expire_secs: lock_expire_secs,
+            descendant_scan: DurationMetrics::default(),
         }
     }
 
@@ -865,7 +869,10 @@ impl FilesystemPathLockProvider {
         owner: &str,
         stale_before: u128,
     ) -> PathLockResult<()> {
-        for lock_path in self.scan_descendant_locks(path).await? {
+        let scan_start = Instant::now();
+        let lock_paths = self.scan_descendant_locks(path).await?;
+        self.descendant_scan.record(scan_start.elapsed(), &[]);
+        for lock_path in lock_paths {
             if let Some(token) = self.read_token(&lock_path).await? {
                 if token.owner_id != owner && token.live_kind(stale_before).is_some() {
                     return Err(PathLockError::Conflict {
@@ -1238,6 +1245,10 @@ mod tests {
 
 #[async_trait]
 impl PathLockProvider for FilesystemPathLockProvider {
+    fn update_metrics(&self, metrics: &mut super::metrics::LockMetrics) {
+        metrics.descendant_scan = self.descendant_scan.clone();
+    }
+
     async fn try_acquire_holders_atomic(
         &self,
         requests: &[PathLockRequest],
