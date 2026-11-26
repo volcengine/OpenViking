@@ -422,8 +422,9 @@ class TaskTracker:
                 restored.append(task)
         return restored
 
-    def start_cleanup_loop(self) -> None:
-        if self._cleanup_task is None or self._cleanup_task.done():
+    def start_cleanup_loop(self, *, cleanup_history: bool = True) -> None:
+        """Start cancellation polling. Set cleanup_history=False on read-only replicas."""
+        if cleanup_history and (self._cleanup_task is None or self._cleanup_task.done()):
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         if self._cancel_poll_task is None or self._cancel_poll_task.done():
             self._cancel_poll_task = asyncio.create_task(self._cancel_poll_loop())
