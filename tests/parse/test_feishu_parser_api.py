@@ -330,7 +330,7 @@ async def test_feishu_parse_sends_uat_and_uses_artifact_root(tmp_path: Path):
         zf.writestr("真实文档标题/0.md", "content")
 
     api = _understanding_api_for_parse()
-    api._create_response_for_url = AsyncMock(return_value={"id": "response-1"})
+    api._submit_response = AsyncMock(return_value={"id": "response-1"})
     api._poll_response = AsyncMock(
         return_value={"status": "completed", "result": {"zip_url": "https://tos/result.zip"}}
     )
@@ -340,13 +340,14 @@ async def test_feishu_parse_sends_uat_and_uses_artifact_root(tmp_path: Path):
     result = await api.parse(
         "https://example.larkoffice.com/wiki/wikicnToken",
         feishu_access_token="u-test",
+        enable_nested_import=True,
+        nested_depth=3,
     )
 
-    api._create_response_for_url.assert_awaited_once_with(
-        url="https://example.larkoffice.com/wiki/wikicnToken",
-        doc_type="wiki",
-        lark_file={"user_access_token": "u-test"},
-    )
+    payload = api._submit_response.await_args.args[0]
+    assert payload["input"][0]["content"][0]["lark_file"] == {"user_access_token": "u-test"}
+    assert payload["enable_nested_import"] is True
+    assert payload["nested_depth"] == 3
     api._unpack_zip_to_temp_dir.assert_awaited_once_with(
         zip_path=zip_path,
         resource_name="真实文档标题",
@@ -374,6 +375,8 @@ async def test_feishu_parse_resumes_prepared_response_without_lark_auth(tmp_path
 
     result = await api.parse(
         "https://example.larkoffice.com/docx/doxcnToken",
+        enable_nested_import=True,
+        nested_depth=3,
         **{PREPARED_RESPONSE_ID_ARG: "response-1"},
     )
 
@@ -448,7 +451,18 @@ async def test_feishu_parse_requires_lark_auth():
 
 
 @pytest.mark.asyncio
-async def test_create_response_payload_contains_lark_file(monkeypatch):
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},
+        {"enable_nested_import": True, "nested_depth": 3},
+        {"enable_nested_import": True},
+        {"nested_depth": 3},
+        {"enable_nested_import": False},
+        {"nested_depth": 0},
+    ],
+)
+async def test_submit_feishu_url_sends_explicit_nested_options(monkeypatch, options):
     seen = {}
 
     class FakeResponse:
@@ -480,37 +494,41 @@ async def test_create_response_payload_contains_lark_file(monkeypatch):
     api._api_key = "parser-key"
     api._http_timeout_sec = 10
 
-    result = await api._create_response_for_url(
-        url="https://example.larkoffice.com/base/bascnToken?table=tblToken",
-        doc_type="bitable",
-        lark_file={"user_access_token": "u-test"},
-    )
-
-    assert result == {"id": "response-1"}
-    assert seen["payload"]["input"][0]["content"] == [
-        {
-            "type": "input_file",
-            "file_url": "https://example.larkoffice.com/base/bascnToken?table=tblToken",
-            "lark_file": {"user_access_token": "u-test"},
-        }
-    ]
-
-
-@pytest.mark.asyncio
-async def test_submit_url_returns_response_id_without_persisting_auth():
-    api = _understanding_api_for_parse()
-    api._create_response_for_url = AsyncMock(return_value={"id": "response-1"})
-
+    url = "https://example.larkoffice.com/base/bascnToken?table=tblToken"
     response_id = await api.submit_url(
-        "https://example.larkoffice.com/docx/doxcnToken",
-        feishu_access_token="u-test",
+        url,
+        lark_file={"user_access_token": "u-test"},
+        **options,
     )
 
     assert response_id == "response-1"
-    api._create_response_for_url.assert_awaited_once_with(
-        url="https://example.larkoffice.com/docx/doxcnToken",
-        doc_type="docx",
-        lark_file={"user_access_token": "u-test"},
+    assert seen["url"] == "https://parser.example/api/v3/responses"
+    content = {"type": "input_file", "file_url": url, "lark_file": {"user_access_token": "u-test"}}
+    assert seen["payload"] == {
+        "input": [{"role": "user", "content": [content]}],
+        "tools": [{"type": "understanding"}],
+        "store": True,
+        **options,
+    }
+    # Dict equality alone treats False and 0 as equal.
+    for key, expected in options.items():
+        assert type(seen["payload"][key]) is type(expected)
+
+
+@pytest.mark.asyncio
+async def test_submit_non_feishu_url_omits_nested_options():
+    api = _understanding_api_for_parse()
+    api._submit_response = AsyncMock(return_value={"id": "response-1"})
+    url = "https://example.com/document.pdf"
+
+    await api.submit_url(url, enable_nested_import=True, nested_depth=3)
+
+    api._submit_response.assert_awaited_once_with(
+        {
+            "input": [{"role": "user", "content": [{"type": "input_file", "file_url": url}]}],
+            "tools": [{"type": "understanding"}],
+            "store": True,
+        }
     )
 
 

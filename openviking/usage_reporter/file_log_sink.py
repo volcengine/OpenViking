@@ -56,7 +56,7 @@ def _interprocess_lock(path: Path) -> Iterator[None]:
             os.close(descriptor)
 
 
-class _ProcessSafeTimedRotatingFileHandler(TimedRotatingFileHandler):
+class ProcessSafeTimedRotatingFileHandler(TimedRotatingFileHandler):
     """Timed handler that coordinates rollover with sibling worker processes."""
 
     def __init__(self, filename: Path, **kwargs: Any) -> None:
@@ -211,7 +211,7 @@ class FileLogUsageSink:
 
         self._path = Path(os.path.expandvars(os.path.expanduser(raw_path)))
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._handler = _ProcessSafeTimedRotatingFileHandler(
+        self._handler = ProcessSafeTimedRotatingFileHandler(
             filename=self._path,
             when="H",
             interval=rotation_interval_hours,

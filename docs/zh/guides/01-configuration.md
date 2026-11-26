@@ -15,7 +15,11 @@ openviking-server init
 openviking-server doctor
 ```
 
-OpenViking 启动时需要 Embedding 和 VLM。未指定 Embedding 模型时使用内置的本地默认模型。`openviking-server init` 会引导你配置这两种模型。对于 `OpenAI`、`Volcengine`、`Kimi`、`GLM` 这类 API 型 VLM，按提示填写对应的 VLM API Key；如果要使用 Codex 作为 VLM，请选择 `OpenAI Codex`，向导会自动帮你处理已有 Codex 鉴权的导入，或直接引导你完成登录。
+向导配置 Embedding 和 VLM。API 型 Provider 需要填写凭证；`OpenAI Codex` 支持导入已有鉴权或登录。
+
+`enable_default_resources` 默认为 `true`，补齐缺省的本地 Embedding/VectorDB，并预置默认 Account 目录。`false` 关闭这些默认行为，显式 Cluster 资源仍生效。系统文件按 `reconcile_system_assets_on_startup` 同步。
+
+`dev` 和 `trusted` 要求 Cluster VLM、Embedding、VectorDB 配置完整合法。关闭默认资源后，`api_key` 可在没有 Cluster 资源时启动，由 ROOT 在 [Account 创建配置](../api/08-admin.md#account-configuration-接口参考)中提供资源。`api_key` 和 `trusted` 仅在 Cluster 资源合法时自动创建默认 Account 记录。
 
 ## 快速开始
 
@@ -1405,7 +1409,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `agfs` | object | RAGFS（Rust 实现的 AGFS）配置 | {} |
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
-| `watch_store` | object | Watch 存储：`file`（单节点）、`mysql` 或 `postgres`（多节点共享） | `{"provider":"file"}` |
+| `watch_store` | object | Watch 存储：`file`（单进程）、`sqlite`（同机）或 `mysql` / `postgres`（多节点共享） | `{"provider":"file"}` |
 
 
 ```json
@@ -1505,6 +1509,36 @@ Task/Work/Event 更新使用 READ COMMITTED 事务，先锁 Task 行，再修改
 已有任务；生产部署切换前需安排数据迁移。
 
 #### watch_store
+
+需要本地持久化 Watch 元数据时，安装 `openviking[sqlite]` 并选择 `sqlite`。
+数据库和表会自动创建，默认路径为
+`{storage.workspace}/_system/watch/watch.db`。可通过 `params.path` 指定本地磁盘上的
+绝对路径；`params.table` 默认为 `ov_watch_tasks`，
+`params.busy_timeout_ms` 默认为 `5000`，必须为正整数。
+SQLite 在读取事务状态前获取写锁。事务（包括读取）串行执行，
+适用于 Watch 流量较低的本地部署。同一主机的多个进程可以共享数据库及
+`service_name`，不同 service name 的数据互相隔离。数据库不能放在 NFS/EFS 上，
+也不能跨主机共享。选择 SQLite 不会更改 Task store 或 PathLock 后端；
+多进程运行调度器时仍需单独配置共享协调和目标锁。SQLite 不会自动启用 Redis 协调。
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "sqlite",
+      "params": {
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+与 MySQL 一样，SQLite 必须配置 `params.credential_encryption_key`（base64 编码的
+32 字节密钥），以 AES-GCM 加密私有 `auth_state` 和 `connector_states`。
+重启时须保留密钥，共享数据的进程须使用相同密钥。运行占用、Task 关联、
+已删除但仍运行的 Watch 和 checkpoint 版本均在重启后保留，沿用缺失 Task 的宽限期。
+已有 file provider 的 Watch 不会自动导入。
 
 默认的 `file` provider 与旧版本一样，把 Watch 任务保存在内部控制文件
 `viking://resources/.watch_tasks.json` 中，只供单个 OpenViking 进程使用。任务启动时
@@ -2200,13 +2234,13 @@ openviking-server --config /path/to/ov.conf
 - `enabled=false` 时：既无显式 policy、也无 `server.user_config_defaults.auto_commit_policy` 的新 Session 保持 auto commit 关闭，并返回 `auto_commit_policy: null`；同时不启动 `SessionAutoCommitScheduler`。
 - `enabled=true` 时：
   - 既无显式 policy、也无部署级默认 policy 的新 Session 会带上下方内置 policy。
-  - `idle_backend="local"` 时，`SessionAutoCommitScheduler` 启动后立即开始扫描；扫描过程以 `scan_rate_limit_files_per_second` 为上限串行读取 session `.meta.json`，每轮结束后至少等待 `check_interval_seconds`。
-  - `idle_backend="redis"` 时，服务通过顶层 `expiry` 配置整体启用 expiry 上报、发布和 callback 消费。
+  - `idle_backend="local"` 时，`scheduler` 节点启动 `SessionAutoCommitScheduler` 并立即扫描；扫描过程以 `scan_rate_limit_files_per_second` 为上限串行读取 session `.meta.json`，每轮结束后至少等待 `check_interval_seconds`。
+  - `idle_backend="redis"` 时，顶层 `expiry` 配置控制共享调度：`scheduler` 节点发布到期事件，`queue_worker` 节点执行 callback。
 - token 和 message-count 自动触发在消息写入后内联执行，不依赖 scheduler，但同样以 session 是否带有 `auto_commit_policy` 为前提。
 
 #### 分布式 Expiry 配置
 
-共享同一份 expiry 状态的 API、publisher 和 callback 实例必须使用相同且稳定的 `service_name`。它表示部署的文档服务名，不是单个 Pod 名。
+共享 expiry 状态的各节点必须使用相同且稳定的 `service_name`，它表示部署的文档服务名，不是单个 Pod 名。角色划分见[服务角色与启停](../configuration/03-server-roles.md)。
 
 ```json
 {
@@ -2228,16 +2262,16 @@ openviking-server --config /path/to/ov.conf
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `service_name` | string | 使用同一份 expiry 数据的所有实例共享的稳定文档服务名 | `""` |
-| `publisher_separate_process` | bool | 由 `openviking-server` 在独立子进程中托管 publisher；为 `false` 时 publisher 在各 API 进程内运行 | `true` |
+| `publisher_separate_process` | bool | `scheduler` 节点由父进程托管 publisher 子进程；为 `false` 时在各 `scheduler` 进程内运行 | `true` |
 | `shard_count` | int | expiry 逻辑分片数；所有共享同一 namespace 的实例必须一致，取值范围为 `1..512` | `128` |
-| `session_consumer_concurrency` | int | 每个 API 进程中 Session expiry callback 的并发数，必须大于 `0` | `8` |
+| `session_consumer_concurrency` | int | 每个 `queue_worker` 进程中 Session expiry callback 的并发数，必须大于 `0` | `8` |
 | `redis.mode` | string | Redis 部署模式：`standalone` 或 `cluster` | `standalone` |
 | `redis.endpoints` | string array | Redis 地址；集群模式可以只配置一个统一 proxy 地址 | `[]` |
 | `redis.username` | string | Redis ACL 用户名 | `""` |
 | `redis.password_env` | string | 保存 Redis 密码的环境变量名；变量不存在时启动失败 | `""` |
 | `redis.password` | string | 兼容用明文密码；建议使用 `password_env`，两者互斥 | `""` |
 
-启用 Redis idle auto commit 时必须配置 `service_name` 和 Redis 地址。用户名与密码只能使用上述独立字段，不能写入 endpoint URI。默认 `publisher_separate_process=true` 时，`openviking-server` 会在开始服务前拉起一个内部 publisher 子进程，在服务关闭时停止它，并在子进程异常退出时一并退出。publisher 不再暴露为公共 CLI 命令。
+启用 Redis idle auto commit 时必须配置 `service_name` 和 Redis 地址。用户名与密码只能使用上述独立字段，不能写入 endpoint URI。`publisher_separate_process=true` 时，`scheduler` 启动会拉起一个内部 publisher 子进程，关闭时停止它，子进程异常退出时一并退出。publisher 不提供公共 CLI 入口。
 
 ##### 单 session 自动 commit 策略
 
@@ -2383,8 +2417,9 @@ Account Store 表的 `service_name` 列，并在多个 OpenViking 集群共用�
 充当隔离边界。修改 `service_name` 会选择另一组逻辑 Account Store 分区。
 
 Provider 不会创建或迁移数据库表。启动服务前，应通过现有 DBA 或部署流程手工创建
-`openviking/server/account_stores/sql/init.sql` 中定义的规范化表。后续经评审的
-schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`。
+`openviking/server/account_stores/sql/init.sql` 中定义的规范化表，再按顺序执行
+`openviking/server/account_stores/sql/changes/` 中的迁移。已有数据库只执行部署流程中
+尚未记录为已完成的迁移。
 五张 `ov_accounts*` 表的名称固定；多个 OpenViking 集群共用数据库时，通过不同的
 顶层 `service_name` 隔离部署，不使用不同表前缀。
 
@@ -2410,7 +2445,9 @@ schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`�
 PostgreSQL Account Store 使用 `postgres` provider，安装 `pip install 'openviking[postgres]'`。
 它直接通过 psycopg 3 和 SQLAlchemy 连接 PostgreSQL，无需 Redis 或 pgvector。
 先由迁移账号执行
-`openviking/server/account_stores/sql/postgres/init.sql`，启动不会创建或迁移表。
+`openviking/server/account_stores/sql/postgres/init.sql`，再执行
+`openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql`。
+已有数据库只需执行一次该迁移，启动不会创建或迁移表。
 运行账号需要目标 schema 的 `USAGE`、五张 `ov_accounts*` 表的
 `SELECT, INSERT, UPDATE, DELETE` 和三个主键序列的 `USAGE, SELECT`，
 无需表所有权或 schema `CREATE` 权限。新部署首次启动会创建 `default` 账号。

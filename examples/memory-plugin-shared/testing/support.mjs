@@ -160,11 +160,17 @@ export async function withMockOpenViking(handler, fn) {
  * the exit code comes back like any other output; call `expectExit` where a
  * clean exit is part of the expectation.
  */
-export function runHookScript(scriptPath, { argv = [], input, env, cwd } = {}) {
+export function runHookScript(scriptPath, { argv = [], input, env, cwd, inheritOpenVikingEnv = true } = {}) {
+  const childEnv = { ...process.env };
+  if (!inheritOpenVikingEnv) {
+    for (const key of Object.keys(childEnv)) {
+      if (key.startsWith("OPENVIKING_")) delete childEnv[key];
+    }
+  }
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [scriptPath, ...argv], {
       cwd,
-      env: { ...process.env, ...env },
+      env: { ...childEnv, ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";

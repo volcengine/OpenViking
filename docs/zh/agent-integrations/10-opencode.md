@@ -6,11 +6,18 @@
 
 ## 安装
 
-前置条件：[OpenCode](https://opencode.ai/) 1.15.7+ 或 2.0.15+、Node.js 18+，以及一个可访问的 OpenViking HTTP server（用 `curl http://localhost:1933/health` 确认）；服务端启用了鉴权时，还需要一个可用的 OpenViking API key。
+前置条件：[OpenCode](https://opencode.ai/) 1.15.7+ 或 2.0.15+、Node.js 18+，以及一个可访问的 OpenViking 服务（托管或自建；仅本地服务使用 `curl http://localhost:1933/health` 检查）；服务端启用了鉴权时，还需要一个可用的 OpenViking API key。
 
 ### 一键安装（推荐）
 
 OpenCode 与 Claude Code、Codex 共用同一个安装器。它会询问要安装的 harness 和 OpenViking 凭据；每一步都是幂等的，重复运行完全安全。
+
+连接托管实例时，选择 **OpenViking 托管服务**，再选择服务商：
+
+- **Volcengine**：输入服务 API Key，安装器会提供服务地址。
+- **BytePlus**：输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+
+旧版安装器连接 BytePlus 时使用**自定义 URL**。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash

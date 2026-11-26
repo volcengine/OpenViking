@@ -227,7 +227,8 @@ export const sections: DocSection[] = [
         p('guides/03-deployment'),
         p('getting-started/04-setup-for-agent'),
         p('guides/01-configuration'),
-        p('guides/02-volcengine-purchase-guide')
+        p('guides/02-volcengine-purchase-guide'),
+        p('guides/27-byteplus-setup')
       ]),
       g('Enterprise deployment', '企业私有化部署', [
         p('guides/19-deployment-checklist'),
@@ -265,6 +266,7 @@ export const sections: DocSection[] = [
         p('reference/01-overview'),
         p('api/01-overview'),
         p('configuration/01-server'),
+        p('configuration/03-server-roles'),
         p('configuration/02-client'),
         p('guides/06-mcp-integration')
       ]),

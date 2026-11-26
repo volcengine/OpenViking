@@ -62,6 +62,9 @@ test('a controlled Console removes a host body portal while conversation is inac
 test('inactive Skill upload releases its focus and body lock while its inline answer is retained', async () => {
   const initialOverflow = document.body.style.overflowY;
   const client = createOvClient({ fetch });
+  const wiki = 'viking://agent/skills/wiki/SKILL.md';
+  const report = 'viking://agent/skills/report/SKILL.md';
+  const answers = [];
   const skill = {
     ...presentCard(
       {
@@ -72,12 +75,10 @@ test('inactive Skill upload releases its focus and body lock while its inline an
         request: {
           kind: 'choice',
           options: [
-            {
-              value: 'viking://agent/skills/wiki/SKILL.md',
-              label: 'Wiki Skill',
-            },
+            { value: wiki, label: 'Wiki Skill' },
+            { value: report, label: 'Report Skill' },
           ],
-          initialValue: 'viking://agent/skills/wiki/SKILL.md',
+          initialValue: wiki,
         },
       },
       'en-US',
@@ -87,6 +88,7 @@ test('inactive Skill upload releases its focus and body lock while its inline an
       [],
     ),
     requestKey: 'skill',
+    onSubmit: (answer) => answers.push(answer),
   };
   const conversation = { interaction: skill };
   const host = await mount(frame('conversation', conversation));
@@ -95,11 +97,7 @@ test('inactive Skill upload releases its focus and body lock while its inline an
       (button) => button.textContent === text,
     );
   try {
-    const selected = host.container.querySelector(
-      'input[value="viking://agent/skills/wiki/SKILL.md"]',
-    );
-    await click(selected);
-    assert.equal(selected.checked, true);
+    await click(host.container.querySelector(`input[value="${report}"]`));
     await click(host.container.querySelector('[aria-haspopup="dialog"]'));
     await settle();
     await click(named('.ov-context-picker', 'Upload skill'));
@@ -115,13 +113,16 @@ test('inactive Skill upload releases its focus and body lock while its inline an
     await act(async () => terminal.focus());
     await settle();
     assert.equal(document.activeElement === terminal, true);
+    await host.render(frame('conversation', conversation));
     assert.equal(
-      host.container.querySelector(
-        'input[value="viking://agent/skills/wiki/SKILL.md"]',
-      ) === selected,
+      host.container.querySelector(`input[value="${report}"]`).checked,
       true,
     );
-    assert.equal(selected.checked, true);
+    await click(host.container.querySelector('button[type="submit"]'));
+    assert.deepEqual(
+      answers.map(({ value }) => value),
+      [report],
+    );
   } finally {
     await host.unmount();
   }

@@ -13,6 +13,113 @@ from openviking_cli.utils.config import RerankConfig
 from tests.server.test_api_resources import _wait_task_terminal
 
 
+@pytest.mark.parametrize(
+    "auth_mode, enable_default_resources",
+    [("api_key", True), ("api_key", False), ("dev", False), ("trusted", False)],
+)
+async def test_default_resource_policy_validates_creation_before_identity_write(
+    temp_dir, monkeypatch, auth_mode, enable_default_resources
+):
+    import httpx
+
+    from openviking.server.app import create_app
+    from openviking.server.config import ServerConfig
+    from openviking.server.dependencies import set_service
+    from openviking.server.runtime import initialize_auth_plugin
+    from openviking.service.core import OpenVikingService
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+    from tests.server.conftest import _install_fake_embedder
+
+    _install_fake_embedder(monkeypatch)
+    OpenVikingConfigSingleton.reset_instance()
+    OpenVikingConfigSingleton.initialize(
+        config_dict={
+            "enable_default_resources": enable_default_resources,
+            "enable_watch_scheduler": False,
+            "storage": {"workspace": str(temp_dir / "empty"), "agfs": {"backend": "local"}},
+        }
+    )
+    service = OpenVikingService(path=str(temp_dir / "empty"))
+    config = ServerConfig(
+        auth_mode=auth_mode,
+        root_api_key="root" if auth_mode != "dev" else None,
+        trusted_identity_flush_interval_seconds=0,
+    )
+    app = create_app(config=config, service=service)
+    try:
+        await service.initialize()
+        set_service(service)
+        default_workspace_exists = await service.viking_fs.exists(
+            "viking://resources/.abstract.md",
+            ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        )
+        assert default_workspace_exists == enable_default_resources
+        if auth_mode in {"dev", "trusted"}:
+            with pytest.raises(ValueError, match=f"auth_mode='{auth_mode}'.*Cluster.*VLM"):
+                await initialize_auth_plugin(app, service, config)
+            assert not (temp_dir / "empty" / "viking" / "_system" / "accounts.json").exists()
+            return
+        await initialize_auth_plugin(app, service, config)
+        if not enable_default_resources:
+            assert not (temp_dir / "empty" / "vectordb").exists()
+        manager = app.state.api_key_manager
+        assert await manager.get_account("default") is None
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/admin/accounts",
+                headers={"X-API-Key": "root"},
+                json={"account_id": "new", "admin_user_id": "admin"},
+            )
+            assert response.status_code == 400, response.text
+            assert "VLM" in response.text
+            assert await manager.get_account("new") is None
+    finally:
+        plugin = getattr(app.state, "auth_plugin", None)
+        if plugin is not None:
+            await plugin.shutdown()
+        await service.close()
+        set_service(None)
+
+
+@pytest.mark.parametrize("auth_mode", ["api_key", "trusted"])
+async def test_valid_cluster_creates_default_record_without_workspace(
+    temp_dir, monkeypatch, auth_mode
+):
+    from openviking.server.app import create_app
+    from openviking.server.config import ServerConfig
+    from openviking.server.runtime import initialize_auth_plugin
+    from openviking.service.core import OpenVikingService
+    from openviking_cli.utils.config import get_openviking_config, set_openviking_config
+    from tests.server.conftest import _install_fake_embedder, _install_fake_vlm
+
+    _install_fake_embedder(monkeypatch)
+    _install_fake_vlm(monkeypatch)
+    set_openviking_config(
+        get_openviking_config().model_copy(update={"enable_default_resources": False})
+    )
+    service = OpenVikingService(path=str(temp_dir / "data"))
+    config = ServerConfig(
+        auth_mode=auth_mode, root_api_key="root", trusted_identity_flush_interval_seconds=0
+    )
+    app = create_app(config=config, service=service)
+    try:
+        await service.initialize()
+        await initialize_auth_plugin(app, service, config)
+        manager = app.state.api_key_manager
+        assert await manager.get_account("default") is not None
+        assert not await service.viking_fs.exists(
+            "viking://resources/.abstract.md",
+            ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        )
+    finally:
+        plugin = getattr(app.state, "auth_plugin", None)
+        if plugin is not None:
+            await plugin.shutdown()
+        await service.close()
+
+
 def result(response):
     assert response.status_code == 200, response.text
     body = response.json()

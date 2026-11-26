@@ -164,3 +164,38 @@ test("loadConfig defaults an invalid commit keep recent count", async () => {
     }
   })
 })
+
+test("OpenVikingPlugin tool.execute.before fills session_history's session", async () => {
+  const snapshot = { ...process.env }
+  await withTempDir("ov-oc-history-fill-", async (dir) => {
+    await withHealthServer(async (endpoint) => {
+      try {
+        for (const key of Object.keys(process.env)) {
+          if (key.startsWith("OPENVIKING_")) delete process.env[key]
+        }
+        const ovcli = join(dir, "ovcli.conf")
+        await writeFile(ovcli, JSON.stringify({
+          url: endpoint,
+          plugin: {
+            opencode: {
+              dataDir: join(dir, "runtime"),
+              repoContext: false,
+              autoRecall: false,
+              autoCapture: false,
+            },
+          },
+        }))
+        process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
+        process.env.OPENVIKING_URL = endpoint
+
+        const plugin = await OpenVikingPlugin({ client: {}, directory: dir })
+        const output = { args: { action: "overview" } }
+        await plugin["tool.execute.before"]({ tool: "openviking_session_history", sessionID: "ses_v1" }, output)
+        assert.equal(output.args.session, "oc-ses_v1")
+        await plugin.dispose()
+      } finally {
+        restoreOpenVikingEnv(snapshot)
+      }
+    })
+  })
+})

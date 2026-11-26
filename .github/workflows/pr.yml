@@ -119,17 +119,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Run the OpenClaw plugin Vitest suite
-        # The suite is otherwise never exercised by CI, so regressions in
-        # examples/openclaw-plugin only surface in user installs.
-        # tests/ut/architecture-boundaries.test.ts is excluded until its 2
-        # pre-existing failures are resolved (see #4720 / #4731 / #4732);
-        # every other file passes (42 files / 675 tests).
-        # The node_modules exclude restores vitest's default filters, which a
-        # custom --exclude replaces.
-        run: >
-          npm test --
-          --exclude "tests/ut/architecture-boundaries.test.ts"
-          --exclude "**/node_modules/**"
+        run: npm test
 
   plugin-versions:
     needs: check-deps

@@ -117,9 +117,11 @@ class TestMetricsEndpoint:
             resp = await client.get("/metrics")
             assert resp.status_code == 404
 
-    async def test_metrics_enabled_exports_sample_with_default_prometheus(self):
+    @pytest.mark.parametrize("roles", [["api"], ["queue_worker"], ["scheduler"]])
+    async def test_metrics_enabled_exports_sample_with_default_prometheus(self, roles):
         config = ServerConfig(
-            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True))
+            roles=roles,
+            observability=ObservabilityConfig(metrics=MetricsConfig(enabled=True)),
         )
         app = create_app(config=config, service=None)
         init_metrics_from_server_config(config, app=app)

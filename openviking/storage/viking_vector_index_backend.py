@@ -1246,19 +1246,19 @@ class VikingVectorIndexBackend:
 
     ALLOWED_CONTEXT_TYPES = {"resource", "skill", "memory"}
 
-    def __init__(self, config: Optional[VectorDBBackendConfig]):
-        if config is None:
-            raise ValueError("VectorDB backend config is required")
-
+    def __init__(
+        self,
+        config: Optional[VectorDBBackendConfig],
+    ):
         init_cpp_logging()
 
         self._config = config
-        self._backend_type = config.backend  # expose for engine resolution
-        self.vector_dim = config.dimension
-        self.distance_metric = config.distance_metric
-        self.sparse_weight = config.sparse_weight
-        self._collection_name = config.name or "context"
-        self._index_name = config.index_name or DEFAULT_INDEX_NAME
+        self._backend_type = self._config.backend if self._config else None
+        self.vector_dim = self._config.dimension if self._config else 0
+        self.distance_metric = self._config.distance_metric if self._config else None
+        self.sparse_weight = self._config.sparse_weight if self._config else 0
+        self._collection_name = self._config.name or "context" if self._config else None
+        self._index_name = self._config.index_name or DEFAULT_INDEX_NAME if self._config else None
         self.acl_manager: Optional[AclManager] = None
         self._account_backends: Dict[str, _SingleAccountBackend] = {}
         self._vector_config_resolver = None
@@ -1269,14 +1269,17 @@ class VikingVectorIndexBackend:
         self._root_backend: Optional[_SingleAccountBackend] = None
         # Share a single adapter (and its underlying PersistStore/RocksDB instance)
         # across all account backends to avoid LOCK contention.
-        self._shared_adapter = create_collection_adapter(config)
-        self._shared_async_adapter = _AsyncVectorAdapter(self._shared_adapter)
+        self._shared_adapter = create_collection_adapter(self._config) if self._config else None
+        self._shared_async_adapter = (
+            _AsyncVectorAdapter(self._shared_adapter) if self._shared_adapter is not None else None
+        )
         self._closing = False
 
         logger.debug("VikingVectorIndexBackend facade initialized")
 
     @property
     def collection_name(self) -> str:
+        self._require_shared_backend()
         return self._collection_name
 
     @property
@@ -1285,11 +1288,19 @@ class VikingVectorIndexBackend:
 
     @property
     def uses_content_field(self) -> bool:
+        self._require_shared_backend()
         return self._shared_adapter.USE_CONTENT_FIELD
 
     # =========================================================================
     # 内部辅助方法
     # =========================================================================
+
+    def _require_shared_backend(self) -> None:
+        if self._config is None:
+            raise ValueError(
+                "Vector operations require an account_id and account vector settings; "
+                "no cluster default backend is available"
+            )
 
     def _get_default_backend(self) -> _SingleAccountBackend:
         """获取默认 backend（用于 collection 管理等操作）"""
@@ -1297,6 +1308,7 @@ class VikingVectorIndexBackend:
 
     def _get_backend_for_account(self, account_id: str) -> _SingleAccountBackend:
         """获取指定 account 的 backend，懒创建"""
+        self._require_shared_backend()
         if account_id not in self._account_backends:
             backend = _SingleAccountBackend(
                 self._config, bound_account_id=account_id, shared_adapter=self._shared_adapter
@@ -1365,6 +1377,7 @@ class VikingVectorIndexBackend:
 
     def _get_root_backend(self) -> _SingleAccountBackend:
         """获取 root 特权 backend"""
+        self._require_shared_backend()
         if not self._root_backend:
             self._root_backend = _SingleAccountBackend(
                 self._config, bound_account_id=None, shared_adapter=self._shared_adapter
@@ -1983,9 +1996,9 @@ class VikingVectorIndexBackend:
         await run_to_completion(self._close_backends)
 
     async def _close_backends(self) -> None:
-        adapters: dict[int, _AsyncVectorAdapter] = {
-            id(self._shared_adapter): self._shared_async_adapter
-        }
+        adapters: dict[int, _AsyncVectorAdapter] = {}
+        if self._shared_async_adapter is not None:
+            adapters[id(self._shared_adapter)] = self._shared_async_adapter
         backends: set[_SingleAccountBackend] = set()
         backends.update(self._account_backends.values())
         backends.update(self._retiring_backends)
@@ -2055,22 +2068,23 @@ class VikingVectorIndexBackend:
             level=level,
             acl_enabled=acl_enabled,
         )
-        if events_time_decay_protection is None:
-            return await self.search(
+        if events_time_decay_protection is not None:
+            parse_duration_ms(
+                events_time_decay_protection, parameter_name="events_time_decay_protection"
+            )
+        backend = await self._get_backend_for_context(ctx)
+        if events_time_decay_protection is None or not backend._adapter.supports_event_time_decay:
+            return await backend.query(
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,
                 filter=scope_filter,
                 limit=limit,
                 offset=offset,
                 output_fields=RETRIEVAL_OUTPUT_FIELDS,
-                ctx=ctx,
             )
 
-        parse_duration_ms(
-            events_time_decay_protection, parameter_name="events_time_decay_protection"
-        )
         return await self._search_with_event_time_decay(
-            ctx=ctx,
+            backend=backend,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             scope_filter=scope_filter,
@@ -2168,7 +2182,7 @@ class VikingVectorIndexBackend:
     async def _search_with_event_time_decay(
         self,
         *,
-        ctx: RequestContext,
+        backend: _SingleAccountBackend,
         query_vector: Optional[List[float]],
         sparse_query_vector: Optional[Dict[str, float]],
         scope_filter: Optional[FilterExpr],
@@ -2192,7 +2206,6 @@ class VikingVectorIndexBackend:
             }
         }
         search_kwargs: Dict[str, Any] = {
-            "ctx": ctx,
             "query_vector": query_vector,
             "sparse_query_vector": sparse_query_vector,
             "limit": final_window,
@@ -2200,8 +2213,8 @@ class VikingVectorIndexBackend:
             "output_fields": RETRIEVAL_OUTPUT_FIELDS,
         }
         remaining_results, event_results = await asyncio.gather(
-            self.search(filter=non_event_filter, **search_kwargs),
-            self.search(filter=event_filter, advance=advance, **search_kwargs),
+            backend.query(filter=non_event_filter, **search_kwargs),
+            backend.query(filter=event_filter, advance=advance, **search_kwargs),
         )
 
         results = remaining_results + event_results

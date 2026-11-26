@@ -227,6 +227,30 @@ class RuntimeConfigSettings(BaseModel):
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
+    enable_default_resources: bool = Field(
+        default=True,
+        strict=True,
+        description="Create default local Embedding/VectorDB resources and initialize the default account",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _prepare_default_resources(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("enable_default_resources", True):
+            return data
+        data = dict(data)
+        embedding = data.get("embedding", {})
+        if embedding is None:
+            embedding = {}
+        if isinstance(embedding, dict):
+            data["embedding"] = EmbeddingConfig.model_validate(
+                embedding, context={"enable_default_resources": False}
+            )
+        storage = data.get("storage", {})
+        if isinstance(storage, dict):
+            data["storage"] = {**storage, "vectordb": storage.get("vectordb") or None}
+        return data
+
     default_account: Optional[str] = Field(
         default="default", description="Default account identifier"
     )
@@ -451,7 +475,8 @@ class OpenVikingConfig(BaseModel):
             )
         coordination = self.storage.agfs.coordination
         uses_cache = self.watch_leader_provider == "cache" or (
-            self.watch_leader_provider == "auto" and self.storage.watch_store.provider != "file"
+            self.watch_leader_provider == "auto"
+            and self.storage.watch_store.provider in {"mysql", "postgres"}
         )
         if uses_cache and "provider" not in coordination.model_fields_set:
             self.storage.agfs.coordination = coordination.model_copy(update={"provider": "cache"})
@@ -557,10 +582,10 @@ class OpenVikingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_watch_store(self) -> "OpenVikingConfig":
-        if self.storage.watch_store.provider == "mysql":
+        if self.storage.watch_store.provider in {"mysql", "sqlite"}:
             if not self.storage.watch_store.params.get("credential_encryption_key"):
                 raise ValueError(
-                    "storage.watch_store.provider='mysql' requires "
+                    f"storage.watch_store.provider='{self.storage.watch_store.provider}' requires "
                     "storage.watch_store.params.credential_encryption_key"
                 )
         return self
@@ -956,11 +981,6 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     # Validate account identifier
     if not config.default_account or not config.default_account.strip():
         errors.append("Default account identifier cannot be empty")
-    if not config.vlm.model:
-        errors.append(
-            "A VLM is required. Configure the vlm section in ov.conf or run openviking-server init."
-        )
-
     if errors:
         error_message = "Invalid OpenViking configuration:\n" + "\n".join(
             f"  - {e}" for e in errors
@@ -1002,7 +1022,8 @@ def initialize_openviking_config(
     if path:
         # Explicit local workspace override
         config.storage.agfs.backend = config.storage.agfs.backend or "local"
-        config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
+        if config.storage.vectordb is not None:
+            config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
         # Resolve and update workspace + dependent paths (model_validator won't
         # re-run on attribute assignment, so sync agfs.path / vectordb.path here).
         workspace_path = Path(path).expanduser().resolve()
@@ -1010,9 +1031,11 @@ def initialize_openviking_config(
         resolved = str(workspace_path)
         config.storage.workspace = resolved
         config.storage.agfs.path = resolved
-        config.storage.vectordb.path = resolved
+        if config.storage.vectordb is not None:
+            config.storage.vectordb.path = resolved
 
-    config.storage.vectordb.apply_resolved_dimension(config.embedding.dimension)
+    if config.storage.vectordb is not None:
+        config.storage.vectordb.apply_resolved_dimension(config.embedding.dimension)
 
     # Validate configuration
     if not is_valid_openviking_config(config):

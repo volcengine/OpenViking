@@ -25,8 +25,11 @@ async def test_service_waits_for_account_embedder_before_closing_storage(monkeyp
             events.append("background")
 
     class _QueueManager:
-        def stop(self) -> None:
+        def stop_workers(self) -> None:
             events.append("queue")
+
+        def stop(self) -> None:
+            pass
 
     class _VikingDBManager:
         def mark_closing(self) -> None:
