@@ -96,6 +96,21 @@ test('Linux: no systemd unit is installed until Linger becomes yes', async (t) =
   assert.equal(enabled.calls.some(([command]) => command === 'systemctl'), false);
 });
 
+test('Linux: a refused enable takes the unit back out, so the next setup asks again', async (t) => {
+  const directory = home(t);
+  const platform = { ...posix, loginService: 'systemd' };
+  const unit = path.join(directory, '.config', 'systemd', 'user', 'superagent.service');
+  const enabled = () => autostartEnabled({ env: { PATH: '/usr/bin' }, homeDir: directory, platform });
+  assert.equal(enabled(), false, 'nothing is set up yet');
+  await assert.rejects(run(directory, platform, 'enable', async (command, args) => {
+    if (command === 'loginctl') return { stdout: 'yes\n' };
+    if (command === 'systemctl' && args.includes('enable')) throw new Error('Failed to enable unit: Access denied');
+    return { stdout: '' };
+  }));
+  assert.equal(fs.existsSync(unit), false, 'no unit is left behind for the next run to read as on');
+  assert.equal(enabled(), false, 'setup asks again instead of reporting it as on');
+});
+
 test('macOS: a LaunchAgent bootstrapped into the user GUI domain', async (t) => {
   const directory = home(t);
   const enabled = await run(directory, { ...posix, loginService: 'launchd' }, 'enable');
@@ -104,6 +119,54 @@ test('macOS: a LaunchAgent bootstrapped into the user GUI domain', async (t) => 
   assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
   assert.deepEqual(enabled.calls.at(-1), ['launchctl', 'bootstrap', 'gui/501', path.join(directory, 'Library', 'LaunchAgents', 'com.superagent.agent.plist')]);
   assert.equal((await run(directory, { ...posix, loginService: 'launchd' }, 'bogus')).code, 2);
+});
+
+test('macOS: a plist that could not be loaded is taken back out', async (t) => {
+  const directory = home(t);
+  const platform = { ...posix, loginService: 'launchd' };
+  const plist = path.join(directory, 'Library', 'LaunchAgents', 'com.superagent.agent.plist');
+  await assert.rejects(run(directory, platform, 'enable', async (command, args) => {
+    if (command === 'launchctl' && args[0] === 'bootstrap') throw new Error('Bootstrap failed: 5: Input/output error');
+    return { stdout: '' };
+  }));
+  assert.equal(fs.existsSync(plist), false, 'no plist is left behind for the next run to read as on');
+  assert.equal(autostartEnabled({ env: { PATH: '/usr/bin' }, homeDir: directory, platform }), false);
+});
+
+test('Linux: a refused update preserves the installed systemd unit', async (t) => {
+  const directory = home(t);
+  const platform = { ...posix, loginService: 'systemd' };
+  const unit = path.join(directory, '.config', 'systemd', 'user', 'superagent.service');
+  fs.mkdirSync(path.dirname(unit), { recursive: true });
+  const original = '[Service]\nEnvironment=PATH=/opt/previous/bin\n';
+  fs.writeFileSync(unit, original);
+  await assert.rejects(run(directory, platform, 'enable', async (command, args) => {
+    if (command === 'loginctl') return { stdout: 'yes\n' };
+    if (args.includes('enable')) throw new Error('Failed to enable unit: Access denied');
+    return { stdout: '' };
+  }), /Access denied/);
+  assert.equal(fs.readFileSync(unit, 'utf8'), original);
+});
+
+test('macOS: a refused update restores the old LaunchAgent and loads it again', async (t) => {
+  const directory = home(t);
+  const platform = { ...posix, loginService: 'launchd' };
+  const plist = path.join(directory, 'Library', 'LaunchAgents', 'com.superagent.agent.plist');
+  fs.mkdirSync(path.dirname(plist), { recursive: true });
+  const original = '<plist><dict><key>Label</key><string>com.superagent.agent</string></dict></plist>';
+  fs.writeFileSync(plist, original);
+  const loaded = [];
+  await assert.rejects(run(directory, platform, 'enable', async (command, args) => {
+    assert.equal(command, 'launchctl');
+    if (args[0] === 'bootstrap') {
+      const candidate = fs.readFileSync(plist, 'utf8');
+      if (candidate !== original) throw new Error('Bootstrap failed');
+      loaded.push(candidate);
+    }
+    return { stdout: '' };
+  }), /Bootstrap failed/);
+  assert.equal(fs.readFileSync(plist, 'utf8'), original);
+  assert.deepEqual(loaded, [original]);
 });
 
 test('Windows: a Startup-folder script that starts superagent hidden, with no service and no elevation', async (t) => {

@@ -446,7 +446,7 @@ export const TOOLS = [
       text: { type: 'string', minLength: 1, maxLength: 4000 },
       timezone: { type: 'string', minLength: 1, maxLength: 100 },
       schedule: { type: 'object' },
-      max_runs: { minimum: 1, maximum: 1_000_000 },
+      max_runs: { type: 'integer', minimum: 1, maximum: 1_000_000 },
       delivery: { type: 'object' },
       ...DECISION_FIELDS,
     }, ['title', 'text', 'schedule', 'delivery', 'decision_id']),
