@@ -18,6 +18,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
     DeleteId,
+    DirectoryMergePlan,
     MemoryFile,
     MemoryOperationSkip,
     MemoryOperationSkipCode,
@@ -999,6 +1000,12 @@ class ExtractLoop:
                     raise ValueError(f"Cannot create {memory_type} without original messages")
                 upsert_operations.append(resolved_op)
 
+        directory_merges = []
+        requests = getattr(operations, "directory_merges", ())
+        if requests and self._output_context and self._output_context.supports_directory_merges:
+            directory_merges = await self.context_provider.resolve_directory_merges(requests)
+            self._stage_directory_rename_writes(upsert_operations, directory_merges)
+
         delete_replacements: dict[str, str] = {}
         delete_ids = self._normalize_delete_ids(getattr(operations, "delete_ids", []) or [])
         for delete_id in delete_ids:
@@ -1084,10 +1091,6 @@ class ExtractLoop:
             page_id_assignments,
             page_id_map,
         )
-        directory_merges = []
-        requests = getattr(operations, "directory_merges", ())
-        if requests and self._output_context and self._output_context.supports_directory_merges:
-            directory_merges = await self.context_provider.resolve_directory_merges(requests)
         resolved = ResolvedOperations(
             upsert_operations=upsert_operations,
             delete_file_contents=delete_file_contents,
@@ -1104,6 +1107,31 @@ class ExtractLoop:
                     break
 
         return resolved, raw_links
+
+    @staticmethod
+    def _stage_directory_rename_writes(
+        operations: list[ResolvedOperation], plans: list[DirectoryMergePlan]
+    ) -> None:
+        # Keep card writes in the source until the directory rename can move them together.
+        renames = {plan.target_uri: plan for plan in plans if plan.operation == "rename"}
+        if not renames:
+            return
+        for operation in operations:
+            if len(operation.uris) != 1:
+                continue
+            target, _, filename = operation.uris[0].rpartition("/")
+            plan = renames.get(target)
+            if plan is None or plan.memory_type != operation.memory_type:
+                continue
+            old_card = operation.old_memory_file_content
+            if old_card and (old_card.uri or "").rpartition("/")[0] != plan.source_uri:
+                continue
+            field = "category" if plan.memory_type == "entities" else "user"
+            operation.uris = [f"{plan.source_uri}/{filename}"]
+            if old_card:
+                operation.memory_fields.pop(field, None)
+            else:
+                operation.memory_fields[field] = plan.source_uri.rsplit("/", 1)[1]
 
     async def _updated_uri_for_existing_operation(
         self,
