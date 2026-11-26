@@ -98,7 +98,7 @@ def _build_split_operations(delete_replacements=None):
     updater._apply_upsert = AsyncMock(return_value=None)
     updater._apply_delete = AsyncMock()
     updater._vectorize_memories = AsyncMock()
-    updater.generate_overview = AsyncMock()
+    updater._submit_directory_changes = AsyncMock()
 
     operations = ResolvedOperations(
         upsert_operations=[
@@ -233,7 +233,7 @@ def _build_replacement_operations(delete_replacements, deleted_uris_with_links=N
     updater._apply_upsert = AsyncMock(return_value=None)
     updater._apply_delete = AsyncMock()
     updater._vectorize_memories = AsyncMock()
-    updater.generate_overview = AsyncMock()
+    updater._submit_directory_changes = AsyncMock()
 
     operations = ResolvedOperations(
         upsert_operations=[
@@ -264,8 +264,7 @@ async def test_direct_replacement_inherits_links_on_terminal_target():
         event_uri,
     ) = _build_replacement_operations(
         {
-            "viking://user/u/memories/preferences/Evan/hobby_preferences.md":
-                "viking://user/u/memories/preferences/Evan/hobby_final.md"
+            "viking://user/u/memories/preferences/Evan/hobby_preferences.md": "viking://user/u/memories/preferences/Evan/hobby_final.md"
         }
     )
 
@@ -284,9 +283,7 @@ async def test_direct_replacement_inherits_links_on_terminal_target():
         (link["from_uri"], link["to_uri"]) for link in final_file.backlinks
     }
     event = MemoryFileUtils.read(files[event_uri], uri=event_uri)
-    assert (event_uri, final_uri) in {
-        (link["from_uri"], link["to_uri"]) for link in event.links
-    }
+    assert (event_uri, final_uri) in {(link["from_uri"], link["to_uri"]) for link in event.links}
 
 
 @pytest.mark.asyncio
@@ -328,9 +325,7 @@ async def test_chained_replacement_inherits_links_on_terminal_target():
         (link["from_uri"], link["to_uri"]) for link in profile.backlinks
     }
     event = MemoryFileUtils.read(files[event_uri], uri=event_uri)
-    assert (event_uri, final_uri) in {
-        (link["from_uri"], link["to_uri"]) for link in event.links
-    }
+    assert (event_uri, final_uri) in {(link["from_uri"], link["to_uri"]) for link in event.links}
 
 
 @pytest.mark.asyncio
@@ -347,7 +342,9 @@ async def test_replacement_and_delete_keep_only_live_links():
     ) = _build_replacement_operations(
         {source_uri: "viking://user/u/memories/preferences/Evan/hobby_final.md"}
     )
-    operations.delete_file_contents.append(MemoryFileUtils.read(files[profile_uri], uri=profile_uri))
+    operations.delete_file_contents.append(
+        MemoryFileUtils.read(files[profile_uri], uri=profile_uri)
+    )
     operations.resolved_links = [StoredLink(from_uri=final_uri, to_uri=profile_uri)]
     updater._apply_delete.side_effect = lambda uri, ctx, **kwargs: files.pop(uri)
 

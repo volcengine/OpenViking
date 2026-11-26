@@ -10,7 +10,7 @@ from openviking.crypto.providers import LocalFileProvider
 from openviking.scheduling.expiry import CallbackRequest, CallbackStatus, ItemIdentity
 from openviking.server.identity import RequestContext, ResolvedIdentity, Role
 from openviking.service.compile_scheduler import CompileScheduler, _ExpiryHandler
-from openviking_cli.exceptions import FailedPreconditionError, InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import FailedPreconditionError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 
 COMPILE_NAME = "daily-Wiki_1"
@@ -32,14 +32,6 @@ OWNER = "creator"
             "trigger_failed",
         ),
         (COMPILE_NAME, True, None, NotFoundError("source"), CallbackStatus.RETRY, "trigger_failed"),
-        (
-            COMPILE_NAME,
-            True,
-            None,
-            InvalidArgumentError("target must be a directory"),
-            CallbackStatus.RETRY,
-            "trigger_failed",
-        ),
         (COMPILE_NAME, True, None, None, CallbackStatus.COMPLETED, "submitted"),
     ],
 )
@@ -90,6 +82,8 @@ async def test_scheduled_credential_uses_current_key_identity():
         ctx, _ = await scheduler._executor(record)
         assert ctx.user == caller.user and ctx.role == (Role.USER if role == Role.ROOT else role)
         assert ctx.group_ids == ("reviewers",) and not ctx.bypass_acl
+        resolve.assert_awaited_with(caller.api_key)
     resolve.return_value = ResolvedIdentity(Role.USER, ACCOUNT, "other")
-    with pytest.raises(FailedPreconditionError):
+    with pytest.raises(FailedPreconditionError) as exc:
         await scheduler._executor(record)
+    assert exc.value.details["reason"] == "COMPILE_CREDENTIAL_INVALID"

@@ -380,6 +380,7 @@ class _SemanticMixin:
         events_time_decay_protection: Optional[str] = None,
         search_type: SearchType = "semantic",
         context_types: Optional[List[ContextType]] = None,
+        args: Optional[Dict[str, Any]] = None,
     ):
         """Complex search with session context.
 
@@ -389,6 +390,7 @@ class _SemanticMixin:
             session_info: Session information
             limit: Return count
             filter: Metadata filter
+            args: Advanced keyword-search options passed through to the engine
 
         Returns:
             FindResult
@@ -525,6 +527,7 @@ class _SemanticMixin:
                 events_time_decay_protection=events_time_decay_protection,
                 request_now=request_now,
                 search_type=search_type,
+                keywords_args=args,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])
@@ -579,7 +582,11 @@ class _SemanticMixin:
             if text
         ]
         await self._ensure_access_many(
-            [uri, *(summary_uri for _, summary_uri, _ in summaries)],
+            [
+                uri,
+                *(summary_uri for _, summary_uri, _ in summaries),
+                *([f"{uri}/{content_filename}"] if content else []),
+            ],
             ctx,
             action=AclAction.WRITE,
         )
@@ -613,7 +620,8 @@ class _SemanticMixin:
                             "generated_by": {
                                 "component": "VikingFS.write_context",
                                 "trigger": "context_write",
-                            }
+                            },
+                            **({"maintenance": "manual"} if level == ContextLevel.ABSTRACT else {}),
                         },
                     ),
                     ctx=ctx,

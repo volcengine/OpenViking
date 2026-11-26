@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from io import BytesIO
 from pathlib import Path
 
 from loguru import logger
@@ -14,7 +15,7 @@ from telegram.request import HTTPXRequest
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.channels.utils import extract_image_paths, read_image_file
+from vikingbot.channels.utils import extract_image_filenames, read_image_file
 from vikingbot.config.schema import TelegramChannelConfig
 
 
@@ -212,26 +213,17 @@ class TelegramChannel(BaseChannel):
             # chat_id should be the Telegram chat ID (integer)
             chat_id = int(msg.session_key.chat_id)
 
-            # First extract local image file paths
-            local_image_paths, content_no_paths = extract_image_paths(msg.content)
+            for filename in extract_image_filenames(msg.content):
+                try:
+                    image_bytes = read_image_file(filename)
+                    await self._app.bot.send_photo(chat_id=chat_id, photo=BytesIO(image_bytes))
+                    logger.debug(f"Sent local image to {chat_id}: {filename}")
+                except Exception as e:
+                    logger.warning(f"Failed to process local image {filename}: {e}")
 
-            # Send local images first
-            if local_image_paths:
-                for img_path in local_image_paths:
-                    try:
-                        logger.debug(f"Processing local image file: {img_path}")
-                        image_bytes = read_image_file(img_path)
-                        from io import BytesIO
-
-                        await self._app.bot.send_photo(chat_id=chat_id, photo=BytesIO(image_bytes))
-                        logger.debug(f"Sent local image to {chat_id}: {img_path}")
-                    except Exception as e:
-                        logger.warning(f"Failed to process local image {img_path}: {e}")
-
-            # Send remaining text content
-            if content_no_paths.strip():
+            if msg.content.strip():
                 # Convert markdown to Telegram HTML
-                html_content = _markdown_to_telegram_html(content_no_paths)
+                html_content = _markdown_to_telegram_html(msg.content)
                 await self._app.bot.send_message(
                     chat_id=chat_id, text=html_content, parse_mode="HTML"
                 )

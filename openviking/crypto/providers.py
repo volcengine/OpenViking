@@ -247,9 +247,17 @@ class LocalFileProvider(BaseProvider):
             with open(self.key_file, "r") as f:
                 hex_key = f.read().strip()
             try:
-                return bytes.fromhex(hex_key)
+                root_key = bytes.fromhex(hex_key)
             except ValueError:
                 raise ConfigError(f"Invalid root key format in {self.key_file}")
+            # A truncated or hand-edited key file must not silently become a
+            # shorter root key: the account keys derived from it would encrypt
+            # new files under a key the real 32-byte root key cannot open.
+            if len(root_key) != 32:
+                raise ConfigError(
+                    f"Invalid root key in {self.key_file}: expected 32 bytes, got {len(root_key)}"
+                )
+            return root_key
         else:
             # Create new key
             root_key = secrets.token_bytes(32)

@@ -1,5 +1,7 @@
 # Hermes
 
+> **Recommended: connect through [OpenViking Gateway](../guides/15-gateway.md).** Turn the plugin below off, point the model base URL at the gateway, and use a gateway key instead of the provider key. The gateway then recalls memory for each new user message and saves the conversation. The [upstream](../gateway/07-upstreams.md#upstreams) needs its own provider API key, so a subscription login cannot be used. Settings are in [Connect clients](../gateway/03-connect-clients.md#openclaw-and-hermes), with [Get started with OpenViking Gateway](../gateway/02-quickstart.md) for a first key; [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin) covers which fits better. The official page is [openviking.ai/gateway](https://openviking.ai/gateway).
+
 Use OpenViking for long-term memory in [Hermes Agent](https://hermes-agent.nousresearch.com/).
 
 ## Get started
@@ -25,16 +27,20 @@ memory while keeping your conversation history settings. Choose **Shared Agent**
 to share history within each group or thread and recall all senders' memories
 under the same OpenViking user. Shared Agent asks for confirmation.
 
-Then choose a connection:
+Then choose a connection in **Hermes's own setup menu**:
 
+- **OpenViking Managed Service** lets you choose **Volcengine** or **BytePlus**.
+  Volcengine uses a fixed service URL and an API key from its
+  [managed service](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes).
+  For BytePlus, enter your OpenViking API key.
+  See [BytePlus setup](../guides/27-byteplus-setup.md).
+- **Custom** connects using a service URL and credentials. It can also reuse
+  a saved `ovcli.conf`.
 - **Quick Local** installs a local server and embedding model. It reuses your
   supported Hermes language model for extraction, which can use a remote API.
-- **OpenViking Service (VolcEngine Cloud)** connects to VolcEngine's
-  [managed OpenViking cloud service](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)
-  with a service API key. You do not need to install a server or configure
-  local models.
-- **Custom** connects to your own server with its URL and credentials. Setup
-  can also reuse a saved `ovcli.conf`.
+
+Older plugin versions use **OpenViking Service (VolcEngine Cloud)** for
+Volcengine and **Custom** for BytePlus.
 
 After setup, chat as usual. The plugin requests a commit at 20,000 pending
 tokens by default, at session end and when switching sessions. Memories become

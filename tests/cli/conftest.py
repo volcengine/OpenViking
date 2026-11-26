@@ -337,7 +337,7 @@ def _apply_cli_skip_markers(items):
     if not CLI_COMPATIBLE:
         skip_reason = "openviking CLI not available"
         if CLI_BIN is None:
-            skip_reason = "openviking CLI binary not found. Install via: curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash"
+            skip_reason = "openviking CLI binary not found. Install via: npm install -g @openviking/cli"
         else:
             try:
                 result = subprocess.run(
@@ -622,6 +622,10 @@ def pytest_collection_modifyitems(items):
 
 @pytest.fixture(scope="session")
 def ensure_resources_dir():
+    existing = ov(["stat", "viking://resources", "-o", "json"])
+    if existing["exit_code"] == 0:
+        return
+    skip_if_auth_error(existing)
     r = ov_mkdir("viking://resources")
     if r["exit_code"] != 0:
         if "already exists" in (r.get("stderr") or "").lower():

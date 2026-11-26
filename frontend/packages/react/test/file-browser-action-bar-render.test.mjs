@@ -22,62 +22,56 @@ const renderModule = (props) =>
     createElement(FileBrowser, { locale: 'en-US', ...props }),
   );
 
-for (const module of [false, true]) {
-  test(`a host popover receives the native button and ref from ${module ? 'FileBrowser' : 'FileBrowserActionBar'}`, async () => {
-    const anchor = createRef();
-    const clicks = { entry: 0, host: 0 };
-    function HostPopover({ children }) {
-      const [open, setOpen] = useState(false);
-      return createElement(
-        Fragment,
-        null,
-        cloneElement(children, {
-          ref: anchor,
-          onClick(event) {
-            children.props.onClick?.(event);
-            clicks.host++;
-            setOpen(!open);
-          },
-        }),
-        open
-          ? createPortal(
-              createElement('div', { role: 'dialog' }, 'Host import'),
-              document.body,
-            )
-          : null,
-      );
-    }
-    const props = {
-      locale: 'en-US',
-      onImportResources: () => clicks.entry++,
-      renderImportResources: (trigger) =>
-        createElement(HostPopover, null, trigger),
-      labels: { importResources: 'Import with host' },
-    };
-    const host = await mount(
-      module
-        ? renderModule({ ...props, labels: { actionBar: props.labels } })
-        : createElement(FileBrowserActionBar, props),
+test('a host popover receives the native import button and ref through FileBrowser', async () => {
+  const anchor = createRef();
+  const clicks = { entry: 0, host: 0 };
+  function HostPopover({ children }) {
+    const [open, setOpen] = useState(false);
+    return createElement(
+      Fragment,
+      null,
+      cloneElement(children, {
+        ref: anchor,
+        onClick(event) {
+          children.props.onClick?.(event);
+          clicks.host++;
+          setOpen(!open);
+        },
+      }),
+      open
+        ? createPortal(
+            createElement('div', { role: 'dialog' }, 'Host import'),
+            document.body,
+          )
+        : null,
     );
-    try {
-      const button = host.container.querySelector('button');
-      assert.equal(anchor.current, button);
-      assert.equal(button.type, 'button');
-      assert.equal(button.textContent, 'Import with host');
-      assert.ok(
-        button.classList.contains('ov-file-browser-action-bar__action'),
-      );
-      await act(() => button.click());
-      assert.deepEqual(clicks, { entry: 1, host: 1 });
-      const panel = document.querySelector('[role="dialog"]');
-      assert.equal(panel.textContent, 'Host import');
-      assert.ok(!host.container.contains(panel));
-    } finally {
-      await host.unmount();
-    }
-    assert.equal(document.querySelector('[role="dialog"]'), null);
-  });
-}
+  }
+  const props = {
+    locale: 'en-US',
+    onImportResources: () => clicks.entry++,
+    renderImportResources: (trigger) =>
+      createElement(HostPopover, null, trigger),
+    labels: { importResources: 'Import with host' },
+  };
+  const host = await mount(
+    renderModule({ ...props, labels: { actionBar: props.labels } }),
+  );
+  try {
+    const button = host.container.querySelector('button');
+    assert.equal(anchor.current, button);
+    assert.equal(button.type, 'button');
+    assert.equal(button.textContent, 'Import with host');
+    assert.ok(button.classList.contains('ov-file-browser-action-bar__action'));
+    await act(() => button.click());
+    assert.deepEqual(clicks, { entry: 1, host: 1 });
+    const panel = document.querySelector('[role="dialog"]');
+    assert.equal(panel.textContent, 'Host import');
+    assert.ok(!host.container.contains(panel));
+  } finally {
+    await host.unmount();
+  }
+  assert.equal(document.querySelector('[role="dialog"]'), null);
+});
 
 test('FileBrowser owns entry visibility and passes localized entry copy', async () => {
   let imports = 0;

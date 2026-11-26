@@ -607,6 +607,9 @@ class VolcengineCollection(ICollection):
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         path = "/api/vikingdb/data/search/keywords"
         data = {
@@ -623,6 +626,12 @@ class VolcengineCollection(ICollection):
             "offset": offset,
             "ignore_unknown_fields": True,
         }
+        if bm25_k1 is not None:
+            data["bm25_k1"] = bm25_k1
+        if bm25_b is not None:
+            data["bm25_b"] = bm25_b
+        if advance is not None:
+            data["advance"] = advance
         data = {k: v for k, v in data.items() if v is not None}
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)

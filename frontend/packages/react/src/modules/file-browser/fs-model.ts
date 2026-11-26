@@ -5,6 +5,7 @@ import type {
 import type { ReactNode } from 'react';
 
 import { nameFromUri } from '../../shared/directory-tree/rows.js';
+import { directoryIcon } from './fs-icon.js';
 import { decodePathLabel } from '../../shared/path-label.js';
 import type { FsEntry } from '../../shared/directory-tree/types.js';
 import type { DirectorySummaryLabels } from './file-browser-labels.js';
@@ -84,13 +85,22 @@ export interface DirectorySummary {
   overviewError?: string;
 }
 
+type DirectorySummaryLevel = FilePreviewDirectoryTab['levels'][number] & {
+  hasSummary: boolean;
+};
+
 export function toDirectoryTab(
   uri: string,
   summary: DirectorySummary,
   labels: DirectorySummaryLabels,
   openParent?: (uri: string) => Promise<void>,
-  icon?: ReactNode,
-): FilePreviewDirectoryTab {
+  navigation?: Pick<
+    FilePreviewDirectoryTab,
+    'resolveImage' | 'activeLevelKey' | 'onActiveLevelChange'
+  >,
+): Omit<FilePreviewDirectoryTab, 'levels'> & {
+  levels: readonly [DirectorySummaryLevel, DirectorySummaryLevel];
+} {
   const name = nameFromUri(uri);
   // 取不到的那一级显示失败原因而不是空正文：空正文会被读成「还没生成」，而两级
   // 摘要各自可能独立失败（后端出错、权限不足），这两种情况处置完全不同。
@@ -117,10 +127,13 @@ export function toDirectoryTab(
     // A directory tab shows the last path segment and the folder icon, matching
     // the row in the tree.
     title: decodePathLabel(name),
-    icon,
+    icon: directoryIcon(),
+    ...navigation,
     levels: [
       {
         key: 'l0',
+        hasSummary:
+          Boolean(summary.abstract) && summary.abstractError === undefined,
         label: labels.l0,
         emptyLabel: labels.l0Empty,
         source: {
@@ -132,6 +145,8 @@ export function toDirectoryTab(
       },
       {
         key: 'l1',
+        hasSummary:
+          Boolean(summary.overview) && summary.overviewError === undefined,
         label: labels.l1,
         emptyLabel: labels.l1Empty,
         source: {

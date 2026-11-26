@@ -202,6 +202,10 @@ run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、
 
 无变化时可复用开始快照。失败、取消不推进成功源基线。执行计划及必要恢复检查点保存在私有 Task 状态；公共配置、run 和 Task 不暴露执行凭据。
 
+VikingBot 在已知来源、worker 或写入失败仍未解决时返回 `result.completion_status: "partial"`。
+已确认输出会保留，命名 Compile 保留原成功源基线，使遗漏且未再次变化的输入仍能进入下一轮。
+其他结果省略该标记；没有标记不代表语义覆盖完整或索引成功。
+
 Compile 业务文件仅有：
 
 ```text
@@ -215,7 +219,7 @@ Compile 业务文件仅有：
 
 state 的精确字段为 `from`、`to`、`skill`、`instruction`、`args`、`auto_update`、`update_schedule`、`task_first_create_time`、`last_run_time`、`last_triggered_slot`、`next_triggered_slot`、`progress`、`updated_by`、`execution_context`。`progress` 保存成功增量基线，其中 `model_name` 记录成功执行请求的模型名，未指定时为空字符串；`execution_context` 保存内部执行上下文和加密参数。
 
-Compile 成功收尾时发布产物快照并推进增量基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
+Compile 成功收尾时发布产物快照。完整交付且目标有文件新增、修改或删除时推进增量基线。部分交付后的增量恢复也可在目标零变更时推进基线，但仅限本轮所有新增或修改的来源均已处理，且能核对实际读取内容与冻结源快照一致。涉及未验证来源、删除或全量扫描时，零变更结果保留原基线。回滚后为恢复和删除的路径调度索引重建，不等待重建完成。
 
 ### 检查 Compile 可用性
 

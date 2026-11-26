@@ -1,6 +1,16 @@
 use crate::git::snapshot_log::{SnapshotLogRow, SnapshotLogStore, SqliteSnapshotLogStore};
 
-async fn make_snapshot_log_store() -> Arc<SqliteSnapshotLogStore> {
+async fn make_snapshot_log_store() -> Arc<dyn SnapshotLogStore> {
+    // The same commit/restore/tail-backfill regressions run against PostgreSQL
+    // in the database CI job; absent an explicit DSN, retain SQLite coverage.
+    #[cfg(feature = "postgres")]
+    if let Ok(dsn) = std::env::var("SNAPSHOT_LOG_TEST_PG_DSN") {
+        return Arc::new(
+            crate::git::PostgresSnapshotLogStore::connect(&dsn, 4, 5_000)
+                .await
+                .expect("PostgreSQL SnapshotLog schema must be provisioned"),
+        );
+    }
     let dir = tempfile::tempdir().unwrap().keep();
     let db_path = dir.join("snapshot-log.db");
     Arc::new(
@@ -110,7 +120,9 @@ async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
     let c4 = make_commit(&svc, "acct_snapshot_tail", "main", "fourth").await;
     svc.snapshot_log_store = Some(store);
     // Keep the indexed boundary at c2 while verifying each page.
-    svc.snapshot_log_backfills.lock().unwrap()
+    svc.snapshot_log_backfills
+        .lock()
+        .unwrap()
         .insert(("acct_snapshot_tail".into(), "main".into()));
 
     let request = LogRequest {
@@ -127,14 +139,25 @@ async fn test_snapshot_log_tail_scan_merges_when_latest_is_behind_head() {
         (3, vec![c1]),
         (4, vec![]),
     ] {
-        let log = svc.log(LogRequest { offset, ..request.clone() }).await.unwrap();
+        let log = svc
+            .log(LogRequest {
+                offset,
+                ..request.clone()
+            })
+            .await
+            .unwrap();
         let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
         assert_eq!(oids, expected, "offset={offset}");
     }
     #[cfg(target_pointer_width = "64")]
     {
-        let err = svc.log(LogRequest { offset: i64::MAX as usize + 1, ..request })
-            .await.unwrap_err();
+        let err = svc
+            .log(LogRequest {
+                offset: i64::MAX as usize + 1,
+                ..request
+            })
+            .await
+            .unwrap_err();
         assert!(matches!(err, GitError::InvalidLogOffset(_)));
     }
 }
@@ -181,6 +204,102 @@ async fn test_snapshot_log_restore_indexes_project_dir_relative_paths() {
         .unwrap();
     let oids: Vec<ObjectId> = log.into_iter().map(|entry| entry.oid).collect();
     assert_eq!(oids, vec![c3, c2, c1]);
+}
+
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn test_snapshot_log_postgres_restore_completes_with_locked_index_and_backfills() {
+    let Ok(dsn) = std::env::var("SNAPSHOT_LOG_TEST_PG_DSN") else {
+        return;
+    };
+    let account = uuid::Uuid::new_v4().simple().to_string();
+    let (_dir, vfs, _object_store, _ref_store, svc) = make_service(&account);
+    let store = Arc::new(
+        crate::git::PostgresSnapshotLogStore::connect_with_timeout(&dsn, 2, 5_000, 200)
+            .await
+            .unwrap(),
+    );
+    let svc = svc.with_snapshot_log(Some(store.clone()));
+    vfs.put("proj/a.md", b"v1");
+    let c1 = make_commit(&svc, &account, "main", "first").await;
+    vfs.put("proj/a.md", b"v2");
+    let c2 = make_commit(&svc, &account, "main", "second").await;
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&dsn)
+        .await
+        .unwrap();
+    let mut lock = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("{}:{}main", account.len(), account))
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        svc.restore(RestoreRequest {
+            account: account.clone(),
+            branch: "main".into(),
+            project_dir: Some("proj".into()),
+            source_commit: c1.to_hex().to_string(),
+            allow_missing_source: false,
+            dry_run: false,
+            message: None,
+            author_name: "tester".into(),
+            author_email: "tester@example.com".into(),
+        }),
+    )
+    .await
+    .expect("restore must complete without releasing the index lock")
+    .unwrap();
+    let c3 = match response {
+        RestoreResponse::Applied { new_commit_oid, .. } => new_commit_oid,
+        other => panic!("expected Applied, got {other:?}"),
+    };
+    assert_eq!(
+        vfs.read(&format!("/local/{account}/proj/a.md"), 0, u64::MAX)
+            .await
+            .unwrap(),
+        b"v1",
+    );
+    let request = LogRequest {
+        account: account.clone(),
+        branch: "main".into(),
+        limit: 10,
+        offset: 0,
+        paths: Some(vec!["proj/a.md".into()]),
+    };
+    // Missing index rows do not hide the restored commit: the Git tail scan wins.
+    let log = svc.log(request.clone()).await.unwrap();
+    assert_eq!(
+        log.into_iter().map(|entry| entry.oid).collect::<Vec<_>>(),
+        vec![c3, c2, c1]
+    );
+    lock.rollback().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if store
+                .load_latest_indexed_commit(&account, "main")
+                .await
+                .unwrap()
+                .is_some_and(|(_, oid)| oid == c3.to_hex().to_string())
+            {
+                break;
+            }
+            // Also retries backfill if the first background attempt timed out.
+            svc.log(request.clone()).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("index must catch up after the conflicting lock is released");
+    sqlx::query("DELETE FROM snapshot_log WHERE account = $1")
+        .bind(&account)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
 }
 
 #[tokio::test]

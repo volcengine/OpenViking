@@ -61,6 +61,11 @@ export interface VikingBotChatService {
     message: VikingBotMessage,
     signal: AbortSignal,
   ) => Promise<void>;
+  /** Read the current submission task, if it covers the latest messages. */
+  getSessionCommitTask?: (
+    id: string,
+    signal: AbortSignal,
+  ) => Promise<TaskReference | undefined>;
   /** Submit the conversation for asynchronous memory extraction. */
   commitSession?: (
     id: string,
@@ -135,6 +140,7 @@ export interface VikingBotChatResult extends VikingBotChatState {
   canSteer: boolean;
   /** Commits the current session after its pending message writes finish. */
   commitSession?: NonNullable<VikingBotChatService['commitSession']>;
+  getSessionCommitTask?: VikingBotChatService['getSessionCommitTask'];
   /** For a new turn, the optional callback runs once the stream acknowledges the input. */
   send: (
     input: string | VikingBotDraft,

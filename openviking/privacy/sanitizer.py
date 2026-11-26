@@ -11,7 +11,7 @@ import os
 import time
 from collections import ChainMap, Counter
 from collections.abc import Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
@@ -22,11 +22,12 @@ from openviking.core.namespace import (
     owner_space_for_uri,
     resolve_request_uri,
 )
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.content import PrivacyContent
 from openviking.privacy.models import UserPrivacyConfigVersion
 from openviking.privacy.reference import PrivacyFieldReference
 from openviking.pyagfs import get_privacy_matcher_class
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
 from openviking_cli.utils import get_logger
@@ -138,6 +139,13 @@ class PrivacySanitizer:
         """Number of ambiguous occurrences observed by this sanitizer instance."""
         return self._ambiguous_matches
 
+    @staticmethod
+    def _privacy_read_context(ctx: RequestContext) -> RequestContext:
+        """Return the actor's context without GLOBAL resource bypass for private catalog reads."""
+        if ctx.role == Role.GLOBAL and ctx.bypass_acl:
+            return replace(ctx, bypass_acl=False)
+        return ctx
+
     async def prepare_matcher(
         self,
         ctx: RequestContext,
@@ -154,6 +162,7 @@ class PrivacySanitizer:
         A snapshot may be supplied under the target lock; version zero denotes
         a target without a persisted configuration.
         """
+        ctx = self._privacy_read_context(ctx)
         if settings is None:
             settings = await self._privacy.get_settings(ctx)
         if settings.mode == "off":
@@ -196,6 +205,7 @@ class PrivacySanitizer:
             or PrivacyContent.is_skill_metadata(uri)
         ):
             return PrivacySanitizationResult(content=content)
+        ctx = self._privacy_read_context(ctx)
         if settings is None:
             settings = await self._privacy.get_settings(ctx)
         if settings.mode == "off":
@@ -275,7 +285,7 @@ class PrivacySanitizer:
         owner = owner_space_for_uri(uri)
         if owner and owner != ctx.user.user_id:
             return None
-        settings = await self._privacy.get_settings(ctx)
+        settings = await self._privacy.get_settings(self._privacy_read_context(ctx))
         if settings.mode == "off":
             return None
         if settings.mode != "auto_strict" and self.scope_from_uri(uri, ctx) is None:
@@ -309,7 +319,13 @@ class PrivacySanitizer:
                 raise
             reason = "privacy_structure_changed"
         self.write_failures[reason] += 1
-        logger.warning("Privacy write kept original content: uri=%s reason=%s", uri, reason)
+        target_id = safe_uri_for_log(uri)
+        logger.error(
+            "privacy write kept original content target_id=%s error_code=%s",
+            target_id,
+            reason,
+            extra={"degraded": True, "target_id": target_id, "error_code": reason},
+        )
         return content
 
     async def _matcher(
@@ -477,12 +493,13 @@ class PrivacySanitizer:
             "yes",
             "on",
         }
-        logger.warning(
-            "Privacy ambiguous_matches=%d strict=%s uri=%s canonical_references=%s",
+        target_id = safe_uri_for_log(uri)
+        logger.info(
+            "privacy ambiguous matches total=%d strict=%s target_id=%s",
             occurrences,
             strict,
-            uri,
-            tuple(items[0] for items in ambiguous),
+            target_id,
+            extra={"degraded": True, "total": occurrences, "target_id": target_id},
         )
         if strict:
             raise InvalidArgumentError(

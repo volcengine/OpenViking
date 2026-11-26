@@ -11,6 +11,7 @@ import {
 } from './ark-message-row.js';
 import { resolveVikingBotLabels } from './labels.js';
 import type { VikingBotMessageListProps } from './types.js';
+import { createMessageDebugText } from './message-debug.js';
 
 const INITIAL_TARGET = { kind: 'end', behavior: 'auto' } as const;
 const SCROLLER_STYLE = { paddingLeft: 16, paddingRight: 16, paddingBottom: 48 };
@@ -46,6 +47,7 @@ export function VikingBotMessageListView({
   streaming,
   footer,
   listKey,
+  debugContext,
   onOpenUri,
   onCopy,
   onMessageAction,
@@ -120,6 +122,14 @@ export function VikingBotMessageListView({
             ) : item.message ? (
               <VikingBotMessageRow
                 message={item.message}
+                debugText={() =>
+                  createMessageDebugText({
+                    message: item.message!,
+                    messages,
+                    context: debugContext,
+                    isStreaming,
+                  })
+                }
                 labels={labels}
                 onOpenUri={onOpenUri}
                 onCopy={onCopy}

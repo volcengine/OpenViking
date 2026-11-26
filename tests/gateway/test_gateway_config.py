@@ -46,6 +46,17 @@ def test_removed_fields_are_ignored_with_one_warning(caplog):
     caplog.clear()
     StandaloneGatewayConfig(openviking_url="http://localhost:1933", encryption_key_env="MY_KEY")
     assert len(caplog.records) == 1 and caplog.records[0].skipped == 1
+    caplog.clear()
+    # The file sink now rotates by time; its old size limit is ignored.
+    config = StandaloneGatewayConfig(
+        openviking_url="http://localhost:1933",
+        request_log_sink="file",
+        request_log_path="requests.jsonl",
+        request_log_max_bytes=1024,
+    )
+    assert config.request_log_rotation_interval_hours == 1
+    assert config.request_log_backup_count == 168
+    assert len(caplog.records) == 1 and caplog.records[0].skipped == 1
     with pytest.raises(ValidationError):
         EmbeddedGatewayConfig.model_validate({"enabled": True, "urll": "typo"})
     with pytest.raises(ValidationError):

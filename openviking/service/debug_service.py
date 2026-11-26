@@ -3,6 +3,7 @@
 """
 Debug Service - provides system status query and health check.
 """
+
 import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -151,7 +152,9 @@ class ObserverService:
         """Check if both vikingdb and config dependencies are set."""
         return self._vikingdb is not None and self._config is not None
 
-    async def get_queue_status_async(self, *, format: str = "table") -> ComponentStatus:
+    async def get_queue_status_async(
+        self, *, format: str = "table", account_id: str | None = None
+    ) -> ComponentStatus:
         """Get queue status."""
         try:
             qm = get_queue_manager()
@@ -162,14 +165,11 @@ class ObserverService:
                 has_errors=True,
                 status=_queue_not_initialized_status(format),
             )
-        observer = QueueObserver(qm)
+        observer = QueueObserver(
+            qm, **({"account_id": account_id} if account_id is not None else {})
+        )
         try:
-            status = (
-                await observer.get_status_json_async()
-                if format == "json"
-                else await observer.get_status_table_async()
-            )
-            has_errors = await observer.has_active_errors_async()
+            status, has_errors = await observer.observe_async(format=format)
             is_healthy = not has_errors
         except Exception as exc:
             logger.info(
@@ -187,10 +187,10 @@ class ObserverService:
                         "errors": 0,
                         "total": 0,
                     },
-                    "error": str(exc),
+                    "error": "Status unavailable",
                 }
             else:
-                status = f"Status unavailable: {exc}"
+                status = "Status unavailable"
             is_healthy = False
             has_errors = True
         return ComponentStatus(
@@ -256,9 +256,7 @@ class ObserverService:
         vlm_instance = None
         embedding_instance = None
         scope = "Node aggregate"
-        if self._vlm_resolver is not None and hasattr(
-            self._vlm_resolver, "get_node_token_usage"
-        ):
+        if self._vlm_resolver is not None and hasattr(self._vlm_resolver, "get_node_token_usage"):
             vlm_instance = SimpleNamespace(
                 model="node-aggregate",
                 provider="aggregate",
@@ -428,13 +426,17 @@ class ObserverService:
             )
 
     async def account_system(
-        self, ctx: RequestContext, *, format: str = "table"
+        self, ctx: RequestContext, *, format: str = "table", account_scope: bool = False
     ) -> SystemStatus:
         queue, vikingdb, models, lock, filesystem = await asyncio.gather(
-            self.get_queue_status_async(format=format),
+            self.get_queue_status_async(
+                format=format, **({"account_id": ctx.account_id} if account_scope else {})
+            ),
             self.account_vikingdb(ctx, format=format),
             self.account_models(ctx, format=format),
-            self.get_lock_status_async(format=format),
+            self.get_lock_status_async(
+                format=format, **({"account_id": ctx.account_id} if account_scope else {})
+            ),
             self.get_filesystem_status_async(format=format),
         )
         components = {
@@ -442,15 +444,22 @@ class ObserverService:
             "vikingdb": vikingdb,
             "models": models,
             "lock": lock,
-            "retrieval": self.get_retrieval_status(format=format),
+            "retrieval": self.get_retrieval_status(
+                format=format, **({"account_id": ctx.account_id} if account_scope else {})
+            ),
             "filesystem": filesystem,
         }
+        health_components = [
+            component
+            for name, component in components.items()
+            if not account_scope or name != "filesystem"
+        ]
         return SystemStatus(
-            is_healthy=all(component.is_healthy for component in components.values()),
+            is_healthy=all(component.is_healthy for component in health_components),
             components=components,
             errors=[
                 f"{component.name} has errors"
-                for component in components.values()
+                for component in health_components
                 if component.has_errors
             ],
         )
@@ -460,11 +469,17 @@ class ObserverService:
         """Get lock system status via pathlock_observe snapshot."""
         return self.get_lock_status()
 
-    async def get_lock_status_async(self, *, format: str = "table") -> ComponentStatus:
+    async def get_lock_status_async(
+        self, *, format: str = "table", account_id: str | None = None
+    ) -> ComponentStatus:
         """Get lock system status via pathlock_observe snapshot."""
         try:
             viking_fs = get_viking_fs()
-            snapshot = await viking_fs._async_agfs.pathlock_observe()
+            snapshot = (
+                await viking_fs._async_agfs.pathlock_observe()
+                if account_id is None
+                else await viking_fs._async_agfs.pathlock_observe(fs_ctx={"account_id": account_id})
+            )
         except Exception:
             return ComponentStatus(
                 name="lock",
@@ -514,9 +529,11 @@ class ObserverService:
             status=observer.get_status_table(),
         )
 
-    def get_retrieval_status(self, *, format: str = "table") -> ComponentStatus:
+    def get_retrieval_status(
+        self, *, format: str = "table", account_id: str | None = None
+    ) -> ComponentStatus:
         """Get retrieval quality status."""
-        observer = RetrievalObserver()
+        observer = RetrievalObserver(account_id=account_id)
         return ComponentStatus(
             name="retrieval",
             is_healthy=observer.is_healthy(),
@@ -575,7 +592,9 @@ class ObserverService:
             )
             return {}
 
-    def system(self, ctx: Optional[RequestContext] = None, *, format: str = "table") -> SystemStatus:
+    def system(
+        self, ctx: Optional[RequestContext] = None, *, format: str = "table"
+    ) -> SystemStatus:
         """Get system overall status."""
         if ctx is not None:
             return run_async(self.account_system(ctx, format=format))

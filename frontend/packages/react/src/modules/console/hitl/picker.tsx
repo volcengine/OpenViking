@@ -44,6 +44,7 @@ export function CompilePicker({
     ...scope,
     directoryClient: scope.client,
     enabled: true,
+    searchSkills: mode === 'skill',
   });
   const open = references?.onOpenChange;
   // Mounting this modal opens a directory browser and subscribes to its data.

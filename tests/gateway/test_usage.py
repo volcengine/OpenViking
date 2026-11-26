@@ -148,7 +148,15 @@ def test_add_usage_skips_nulls_and_keeps_flags():
     }
 
 
-@pytest.mark.parametrize("late", [None, 0])
+@pytest.mark.parametrize(
+    "late",
+    [
+        {},
+        {"input_tokens": None, "cache_read_input_tokens": None},
+        {"input_tokens": 0, "cache_read_input_tokens": 0},
+    ],
+    ids=["omitted", "null", "zero"],
+)
 def test_anthropic_delta_keeps_start_cache(late):
     capture = ResponseCapture("anthropic")
     start = {"input_tokens": 12, "cache_read_input_tokens": 88}
@@ -157,11 +165,15 @@ def test_anthropic_delta_keeps_start_cache(late):
         {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn"},
-            "usage": {"output_tokens": 20, "input_tokens": late, "cache_read_input_tokens": late},
+            "usage": {"output_tokens": 20, **late},
         }
     )
-    assert capture.usage["input_tokens"] == 100
-    assert capture.usage["cached_tokens"] == 88
+    assert capture.usage == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "cached_tokens": 88,
+        "cache_write_tokens": 0,
+    }
 
 
 def test_anthropic_delta_carries_relayed_cache():

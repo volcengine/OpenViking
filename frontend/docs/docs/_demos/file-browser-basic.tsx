@@ -51,13 +51,16 @@ export default function FileBrowserBasic() {
     <div
       lang={componentLocale}
       style={{
-        minHeight: 720,
         display: 'grid',
-        gridTemplateRows: 'minmax(360px, 1fr) auto',
+        gridTemplateRows: '720px auto',
         gap: 8,
       }}
     >
-      <OpenVikingProvider fetch={preview.fetch}>
+      <OpenVikingProvider
+        fetch={preview.fetch}
+        userId="alice"
+        userRootMode="current"
+      >
         <FileBrowser
           ref={browserRef}
           locale={componentLocale}

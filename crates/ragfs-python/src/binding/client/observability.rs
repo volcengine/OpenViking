@@ -1,17 +1,25 @@
 #[pymethods]
 impl RAGFSBindingClient {
     /// Return an observability snapshot of current lock state.
-    #[pyo3(signature = (ctx=None))]
+    #[pyo3(signature = (ctx=None, account_scope=false))]
     fn pathlock_observe(
         &self,
         py: Python<'_>,
         ctx: Option<HashMap<String, String>>,
+        account_scope: bool,
     ) -> PyResult<Py<PyAny>> {
         let mgr = self.clone_pathlock_manager();
         let fs_ctx = build_fs_context(ctx);
         let snapshot = self.run_scoped(py, fs_ctx, move || {
             let mgr = mgr.clone();
-            async move { mgr.observe().await }
+            async move {
+                if account_scope {
+                    let view = FsContextView::current();
+                    mgr.observe_account(view.account_id().unwrap_or("")).await
+                } else {
+                    mgr.observe().await
+                }
+            }
         });
         Python::attach(|py| {
             let dict = PyDict::new(py);

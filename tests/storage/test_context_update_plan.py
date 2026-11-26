@@ -10,6 +10,7 @@ import pytest
 
 from openviking.storage import resource_diff
 from openviking.storage.index_action import FieldPatch
+from openviking.storage.queuefs.semantic_ops.directory_generation import DirectoryGeneration
 
 
 def test_context_plan_has_explicit_actions_and_compact_semantic_roundtrip():
@@ -382,7 +383,7 @@ def test_reuse_entry_rejects_index_mutation():
 
 
 @pytest.mark.asyncio
-async def test_resolver_compares_missing_fingerprints_with_bounded_reads():
+async def test_resolver_compares_missing_fingerprints_with_bounded_reads(monkeypatch):
     from openviking.storage.resource_rnfv import (
         FormalEntry,
         FormalTreeSnapshot,
@@ -392,6 +393,8 @@ async def test_resolver_compares_missing_fingerprints_with_bounded_reads():
         RNFVSnapshot,
         VectorIndexSnapshot,
     )
+
+    monkeypatch.setattr(resource_diff, "FILE_TASK_CONCURRENCY", 2, raising=False)
 
     paths = [f"{i}.py" for i in range(8)]
     snapshot = RNFVSnapshot(
@@ -422,7 +425,6 @@ async def test_resolver_compares_missing_fingerprints_with_bounded_reads():
         store=SimpleNamespace(read_bytes=read),
         artifact_ref=None,
         target=SimpleNamespace(read_file=read),
-        concurrency=2,
     )
     assert peak == 4
     assert active == 0
@@ -529,40 +531,8 @@ async def test_resolver_marks_removed_content_vectors_as_obsolete():
 
 
 @pytest.mark.asyncio
-async def test_resolver_uses_same_duplicate_record_winner_as_planner():
-    from openviking.storage.context_update_plan import ContentState
-    from openviking.storage.resource_rnfv import (
-        FormalEntry,
-        FormalTreeSnapshot,
-        NewArtifactSnapshot,
-        NewEntry,
-        RequestIntent,
-        RNFVSnapshot,
-        VectorIndexSnapshot,
-        VectorRecordSnapshot,
-    )
-
-    root = "viking://resources/repo"
-    records = {
-        "z-new": VectorRecordSnapshot("z-new", f"{root}/a.py", "a.py", 2, {"md5": "new"}),
-        "a-old": VectorRecordSnapshot("a-old", f"{root}/a.py", "a.py", 2, {"md5": "old"}),
-    }
-    snapshot = RNFVSnapshot(
-        RequestIntent(root, "semantic_and_vectors"),
-        NewArtifactSnapshot({"a.py": NewEntry(md5="new")}),
-        FormalTreeSnapshot({"a.py": FormalEntry()}),
-        VectorIndexSnapshot(records, frozenset({"id", "uri", "level", "md5"})),
-    )
-
-    result = await resource_diff.resolve_resource_diff(
-        snapshot, store=AsyncMock(), artifact_ref=object(), target=AsyncMock()
-    )
-
-    assert result.entries["a.py"].content_state is ContentState.MODIFIED
-
-
-@pytest.mark.asyncio
-async def test_resolver_index_state_uses_canonical_duplicate_record():
+@pytest.mark.parametrize("digest, matches_canonical", [("old", True), ("new", False)])
+async def test_resolver_index_state_uses_canonical_duplicate_record(digest, matches_canonical):
     from openviking.storage.context_update_plan import ContentState, IndexState
     from openviking.storage.resource_rnfv import (
         FormalEntry,
@@ -582,7 +552,7 @@ async def test_resolver_index_state_uses_canonical_duplicate_record():
     }
     snapshot = RNFVSnapshot(
         RequestIntent(root, "semantic_and_vectors"),
-        NewArtifactSnapshot({"a.py": NewEntry(md5="old")}),
+        NewArtifactSnapshot({"a.py": NewEntry(md5=digest)}),
         FormalTreeSnapshot({"a.py": FormalEntry()}),
         VectorIndexSnapshot(records, frozenset({"id", "uri", "level", "md5"})),
     )
@@ -592,8 +562,10 @@ async def test_resolver_index_state_uses_canonical_duplicate_record():
     )
 
     entry = result.entries["a.py"]
-    assert entry.content_state is ContentState.UNCHANGED
-    assert entry.index_state is IndexState.COMPLETE
+    expected_state = ContentState.UNCHANGED if matches_canonical else ContentState.MODIFIED
+    assert entry.content_state is expected_state
+    if matches_canonical:
+        assert entry.index_state is IndexState.COMPLETE
 
 
 @pytest.mark.asyncio
@@ -645,80 +617,6 @@ async def test_resolver_log_separates_files_directories_and_logical_root(monkeyp
     assert "index={file:{'complete': 1},dir:{'complete': 1}}" in message
     assert message.index("md5_fast_path=1") < message.index("states=")
     assert "n_entries=" not in message
-
-
-def test_tree_entry_log_counts_empty_path_as_a_real_flat_file():
-    from openviking.storage.resource_diff import count_tree_entry_kinds
-    from openviking.storage.resource_rnfv import FormalEntry, NewEntry
-
-    assert count_tree_entry_kinds({"": NewEntry(md5="digest")}) == (1, 0, False)
-    assert count_tree_entry_kinds({"": FormalEntry()}) == (1, 0, False)
-
-
-def test_planning_details_log_at_debug(monkeypatch):
-    from openviking.storage.context_update_plan import ContextUpdatePlan
-    from openviking.storage.resource_diff import ResourceDiffResult
-    from openviking.utils import resource_processor
-
-    log_info = Mock()
-    log_debug = Mock()
-    monkeypatch.setattr(resource_processor.logger, "info", log_info)
-    monkeypatch.setattr(resource_processor.logger, "debug", log_debug)
-    plan = ContextUpdatePlan("viking://resources/repo", "resource")
-
-    resource_processor.ResourceProcessor._log_context_update_plan(plan)
-    resource_processor.ResourceProcessor._log_context_commit_summary(
-        ResourceDiffResult({}),
-        content_actions=(),
-        root_uri=plan.root_uri,
-        is_initial=False,
-    )
-    resource_processor.ResourceProcessor._log_context_commit_summary(
-        ResourceDiffResult({}),
-        content_actions=(),
-        root_uri=plan.root_uri,
-        is_initial=True,
-    )
-
-    assert log_info.call_count == 0
-    assert log_debug.call_count == 3
-
-
-def test_content_commit_log_uses_debug_for_mutations(monkeypatch):
-    from openviking.storage.context_update_plan import (
-        ContentTreeAction,
-        ContentTreeOperation,
-    )
-    from openviking.utils import resource_processor
-
-    log_info = Mock()
-    log_debug = Mock()
-    monkeypatch.setattr(resource_processor.logger, "info", log_info)
-    monkeypatch.setattr(resource_processor.logger, "debug", log_debug)
-
-    resource_processor.ResourceProcessor._log_content_tree_commit(
-        root_uri="viking://resources/repo",
-        artifact_backend="local",
-        actions=(),
-        duration_ms=1.0,
-    )
-    resource_processor.ResourceProcessor._log_content_tree_commit(
-        root_uri="viking://resources/repo",
-        artifact_backend="local",
-        actions=(
-            ContentTreeAction(
-                ContentTreeOperation.UPSERT,
-                "a.py",
-                new_kind="file",
-                artifact_path="a.py",
-                md5="digest",
-            ),
-        ),
-        duration_ms=2.0,
-    )
-
-    assert log_debug.call_count == 2
-    log_info.assert_not_called()
 
 
 def test_builder_maps_content_semantic_and_direct_index_actions():
@@ -2464,7 +2362,7 @@ async def test_hydration_reads_summaries_before_full_scalars_for_active_records(
 
 
 @pytest.mark.asyncio
-async def test_content_executor_uploads_files_with_bounded_concurrency():
+async def test_content_executor_uploads_files_with_bounded_concurrency(monkeypatch):
     from unittest.mock import patch
 
     import openviking.concurrency as concurrency_utils
@@ -2472,6 +2370,8 @@ async def test_content_executor_uploads_files_with_bounded_concurrency():
         ContentTreeAction,
         execute_content_tree_actions,
     )
+
+    monkeypatch.setattr("openviking.storage.context_update_plan.FILE_TASK_CONCURRENCY", 3)
 
     active = peak = 0
     gate = asyncio.Event()
@@ -2515,7 +2415,6 @@ async def test_content_executor_uploads_files_with_bounded_concurrency():
             store=Store(),
             artifact_ref=object(),
             target=Target(),
-            concurrency=3,
         )
 
     assert peak == 3
@@ -3124,6 +3023,8 @@ async def test_v3_tree_reuses_explicit_node_without_listing_its_subtree(monkeypa
 
     fs = FS()
     fs._async_agfs = fs
+    fs.pathlock_acquire_exact_batch = AsyncMock(return_value={"paths": []})
+    fs.pathlock_release = AsyncMock()
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     processor = AsyncMock()
     plan = SemanticPlan(
@@ -3172,6 +3073,8 @@ async def test_directory_index_slots_choose_exact_levels(monkeypatch):
         _uri_to_path=lambda uri, ctx=None: uri,
     )
     fs._async_agfs = fs
+    fs.pathlock_acquire_exact_batch = AsyncMock(return_value={"paths": []})
+    fs.pathlock_release = AsyncMock()
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_openviking_config",
@@ -3179,12 +3082,10 @@ async def test_directory_index_slots_choose_exact_levels(monkeypatch):
     )
 
     class Processor:
-        _generate_overview = AsyncMock(return_value="overview")
+        _generate_directory_semantics = AsyncMock(
+            return_value=DirectoryGeneration(overview="overview", abstract="abstract")
+        )
         _vectorize_directory = AsyncMock(return_value={1})
-
-        @staticmethod
-        def _normalize_overview_generation(overview):
-            return overview, "abstract"
 
     processor = Processor()
     plan = SemanticPlan(
@@ -3237,6 +3138,8 @@ async def test_directory_sidecar_write_failure_fails_semantic_plan(monkeypatch):
     root = "viking://resources/repo"
     fs = SimpleNamespace(_async_agfs=None, _uri_to_path=lambda uri, ctx=None: uri)
     fs._async_agfs = fs
+    fs.pathlock_acquire_exact_batch = AsyncMock(return_value={"paths": []})
+    fs.pathlock_release = AsyncMock()
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_openviking_config",
@@ -3244,12 +3147,10 @@ async def test_directory_sidecar_write_failure_fails_semantic_plan(monkeypatch):
     )
 
     class Processor:
-        _generate_overview = AsyncMock(return_value="overview")
+        _generate_directory_semantics = AsyncMock(
+            return_value=DirectoryGeneration(overview="overview", abstract="abstract")
+        )
         _vectorize_directory = AsyncMock(return_value={0, 1})
-
-        @staticmethod
-        def _normalize_overview_generation(overview):
-            return overview, "abstract"
 
     processor = Processor()
     plan = SemanticPlan(
@@ -3289,6 +3190,8 @@ async def test_directory_repair_passes_partial_update_per_missing_level(monkeypa
     root = "viking://resources/repo"
     fs = SimpleNamespace(_async_agfs=None, _uri_to_path=lambda uri, ctx=None: uri)
     fs._async_agfs = fs
+    fs.pathlock_acquire_exact_batch = AsyncMock(return_value={"paths": []})
+    fs.pathlock_release = AsyncMock()
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_openviking_config",
@@ -3296,12 +3199,10 @@ async def test_directory_repair_passes_partial_update_per_missing_level(monkeypa
     )
 
     class Processor:
-        _generate_overview = AsyncMock(return_value="overview")
+        _generate_directory_semantics = AsyncMock(
+            return_value=DirectoryGeneration(overview="overview", abstract="abstract")
+        )
         _vectorize_directory = AsyncMock(return_value={0, 1})
-
-        @staticmethod
-        def _normalize_overview_generation(overview):
-            return overview, "abstract"
 
     processor = Processor()
     plan = SemanticPlan(
@@ -3370,6 +3271,8 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
     root = "viking://resources/repo"
     fs = SimpleNamespace(_async_agfs=None, _uri_to_path=lambda uri, ctx=None: uri)
     fs._async_agfs = fs
+    fs.pathlock_acquire_exact_batch = AsyncMock(return_value={"paths": []})
+    fs.pathlock_release = AsyncMock()
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_openviking_config",
@@ -3384,12 +3287,10 @@ async def test_directory_output_unchanged_still_applies_planned_scalar_fields(mo
     monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue_manager)
 
     class Processor(SemanticProcessor):
-        _generate_overview = AsyncMock(return_value="overview")
+        _generate_directory_semantics = AsyncMock(
+            return_value=DirectoryGeneration(overview="overview", abstract="abstract")
+        )
         _vectorize_directory = AsyncMock(return_value=set())
-
-        @staticmethod
-        def _normalize_overview_generation(overview):
-            return overview, "abstract"
 
     processor = Processor()
     plan = SemanticPlan(
@@ -3470,6 +3371,8 @@ async def test_code_summary_unchanged_still_reembeds_after_content_change(monkey
         read_file_bytes=AsyncMock(return_value=b"changed body"),
     )
     fs._async_agfs = fs
+    fs.pathlock_acquire_exact_batch = AsyncMock(return_value={"paths": []})
+    fs.pathlock_release = AsyncMock()
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_openviking_config",
@@ -3480,12 +3383,10 @@ async def test_code_summary_unchanged_still_reembeds_after_content_change(monkey
         _generate_single_file_summary = AsyncMock(return_value={"name": "a.py", "summary": "same"})
         _update_file_vector_fields = AsyncMock(return_value=True)
         _vectorize_single_file = AsyncMock(return_value=True)
-        _generate_overview = AsyncMock(return_value="overview")
+        _generate_directory_semantics = AsyncMock(
+            return_value=DirectoryGeneration(overview="overview", abstract="abstract")
+        )
         _vectorize_directory = AsyncMock(return_value=set())
-
-        @staticmethod
-        def _normalize_overview_generation(overview):
-            return overview, "abstract"
 
     processor = Processor()
     plan = SemanticPlan(
@@ -3556,6 +3457,8 @@ async def test_file_repair_passes_partial_update_to_embedding(monkeypatch):
         read_file_bytes=AsyncMock(return_value=b"body"),
     )
     fs._async_agfs = fs
+    fs.pathlock_acquire_exact_batch = AsyncMock(return_value={"paths": []})
+    fs.pathlock_release = AsyncMock()
     monkeypatch.setattr("openviking.storage.queuefs.semantic_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_executor.get_openviking_config",
@@ -3567,12 +3470,10 @@ async def test_file_repair_passes_partial_update_to_embedding(monkeypatch):
             return_value={"name": "a.py", "summary": "summary"}
         )
         _vectorize_single_file = AsyncMock(return_value=True)
-        _generate_overview = AsyncMock(return_value="overview")
+        _generate_directory_semantics = AsyncMock(
+            return_value=DirectoryGeneration(overview="overview", abstract="abstract")
+        )
         _vectorize_directory = AsyncMock(return_value=set())
-
-        @staticmethod
-        def _normalize_overview_generation(overview):
-            return overview, "abstract"
 
     processor = Processor()
     plan = SemanticPlan(

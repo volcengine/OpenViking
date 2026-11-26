@@ -31,10 +31,13 @@
     var(--ov-ui-primary-default)
   );
   box-sizing: border-box;
+  display: flex;
   width: 1000px;
   max-width: 100%;
+  min-height: 100%;
+  flex-direction: column;
   container-type: inline-size;
-  overflow-x: auto;
+  overflow-x: clip;
   background: var(--ov-ui-agent-connect-bg);
   color: var(--ov-ui-agent-connect-text);
   font-family:
@@ -54,7 +57,8 @@
   isolation: isolate;
   width: 100%;
   min-height: 949px;
-  overflow: hidden;
+  flex: 1 0 auto;
+  overflow: clip;
   box-shadow: inset 0 0 0 0.5px
     var(--ov-ui-color-connect-outline, var(--ov-ui-connect-outline-default));
 }
@@ -81,7 +85,7 @@
       transparent
     ),
     radial-gradient(
-      ellipse 230.5px 212px at -63.5px 869px,
+      ellipse 230.5px 212px at -63.5px calc(100% - 80px),
       var(
         --ov-ui-color-connect-glow-warm,
         var(--ov-ui-connect-glow-warm-default)
@@ -89,7 +93,7 @@
       transparent
     ),
     radial-gradient(
-      ellipse 173.5px 159.5px at 236.5px 947.5px,
+      ellipse 173.5px 159.5px at 236.5px calc(100% - 1.5px),
       var(
         --ov-ui-color-connect-glow-pink-soft,
         var(--ov-ui-connect-glow-pink-soft-default)
@@ -159,12 +163,18 @@
   padding: 0 60px 24px 40px;
 }
 .ov-agent-connect__list {
+  position: sticky;
+  top: 0;
   display: flex;
+  align-self: start;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+  max-height: min(100dvh, var(--ov-ui-agent-connect-scroll-height, 100dvh));
   margin: 0;
   padding: 24px 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   list-style: none;
 }
 .ov-agent-connect__item {
@@ -192,6 +202,11 @@
   width: 20px;
   height: 20px;
   flex: 0 0 20px;
+}
+.ov-agent-connect__layout--custom .ov-agent-connect__item-icon {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
 }
 .ov-agent-connect__item-name {
   white-space: nowrap;
@@ -223,6 +238,10 @@
 .ov-agent-connect__detail-icon--frame > svg {
   width: 48px;
   height: 48px;
+}
+.ov-agent-connect__layout--custom .ov-agent-connect__detail-icon--frame > svg {
+  width: 24px;
+  height: 24px;
 }
 .ov-agent-connect__summary {
   display: flex;
@@ -476,8 +495,11 @@
     padding: 0 16px 24px;
   }
   .ov-agent-connect__list {
+    position: static;
     flex-direction: row;
+    max-height: none;
     overflow-x: auto;
+    overscroll-behavior-y: auto;
     padding: 4px 0 12px;
   }
   .ov-agent-connect__list > li {

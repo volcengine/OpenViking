@@ -4,13 +4,11 @@
 """Tests for the resources-only WebDAV adapter."""
 
 import xml.etree.ElementTree as ET
+from unittest.mock import AsyncMock
 
 import httpx
-from starlette.requests import Request
 
-from openviking.server.routers import webdav as webdav_router
-from openviking.server.routers.webdav import _ensure_exposed_path, _exposed_child_entries
-from openviking_cli.exceptions import NotFoundError
+from openviking.utils.summarizer import Summarizer
 
 
 def _dav_display_names(xml_bytes: bytes) -> list[str]:
@@ -24,38 +22,31 @@ def _webdav_path_from_uri(uri: str) -> str:
     return uri[len(prefix) :].lstrip("/")
 
 
-async def test_webdav_get_content_length_uses_delivered_body_size(monkeypatch):
-    class FakeFS:
-        async def stat(self, uri: str, ctx=None):
-            assert uri == "viking://resources/scratch/notes.md"
-            return {
-                "isDir": False,
-                "name": "notes.md",
-                "size": len(b"hello") + 100,
-                "modTime": "",
-            }
+async def test_webdav_get_content_length_uses_delivered_body_size(client, service, monkeypatch):
+    uri = "viking://resources/scratch/notes.md"
+    body = "Hello 你好".encode()
+    await service.viking_fs.write_file_bytes(uri, body)
+    stat = service.fs.stat
 
-        async def read_file_bytes(self, uri: str, ctx=None):
-            assert uri == "viking://resources/scratch/notes.md"
-            return b"hello"
+    async def stale_stat(*args, **kwargs):
+        return {**await stat(*args, **kwargs), "size": 105}
 
-    class FakeService:
-        fs = FakeFS()
+    monkeypatch.setattr(service.fs, "stat", stale_stat)
+    reader = AsyncMock(wraps=service.fs.read_file_bytes)
+    monkeypatch.setattr(service.fs, "read_file_bytes", reader)
+    path = "/webdav/resources/scratch/notes.md"
 
-    monkeypatch.setattr(webdav_router, "get_service", lambda: FakeService())
-    request = Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": "/webdav/resources/scratch/notes.md",
-            "headers": [],
-        }
-    )
+    head = await client.head(path)
+    assert head.status_code == 200
+    assert head.content == b""
+    assert head.headers["content-length"] == "105"
+    reader.assert_not_awaited()
 
-    resp = await webdav_router.get_or_head(request, "scratch/notes.md", None)
-
-    assert resp.body == b"hello"
-    assert resp.headers["content-length"] == "5"
+    fetched = await client.get(path)
+    assert fetched.status_code == 200
+    assert fetched.content == body
+    assert fetched.headers["content-length"] == str(len(body))
+    assert fetched.headers["last-modified"] == head.headers["last-modified"]
 
 
 async def test_webdav_options_advertises_dav(client: httpx.AsyncClient):
@@ -65,82 +56,50 @@ async def test_webdav_options_advertises_dav(client: httpx.AsyncClient):
     assert "PROPFIND" in resp.headers["Allow"]
 
 
-async def test_webdav_propfind_hides_reserved_files_but_keeps_user_dotdirs(client_with_resource):
+async def test_webdav_hides_internal_files_and_keeps_user_dotdirs(
+    client_with_resource, service, request_context
+):
     client, uri = client_with_resource
-    webdav_path = _webdav_path_from_uri(uri)
-
-    mkcol_resp = await client.request("MKCOL", f"/webdav/resources/{webdav_path}/.obsidian")
-    assert mkcol_resp.status_code == 201
-
-    put_resp = await client.request(
-        "PUT",
-        f"/webdav/resources/{webdav_path}/.obsidian/config.json",
-        content='{"theme":"light"}'.encode("utf-8"),
-    )
-    assert put_resp.status_code == 201
-
-    resp = await client.request(
-        "PROPFIND",
-        f"/webdav/resources/{webdav_path}",
-        headers={"Depth": "1"},
-    )
-    assert resp.status_code == 207
-
-    names = _dav_display_names(resp.content)
-    assert ".obsidian" in names
-    assert ".abstract.md" not in names
-    assert ".overview.md" not in names
-    assert ".relations.json" not in names
-    assert ".path.ovlock" not in names
-    assert ".sync_log.json" not in names
-    assert ".redirect.json" not in names
-
-
-async def test_webdav_rejects_direct_access_to_reserved_semantic_files(client_with_resource):
-    client, uri = client_with_resource
-    webdav_path = _webdav_path_from_uri(uri)
-
-    resp = await client.get(f"/webdav/resources/{webdav_path}/.abstract.md")
-    assert resp.status_code == 404
-
-
-async def test_webdav_rejects_direct_access_to_multiwrite_internal_files(client_with_resource):
-    client, uri = client_with_resource
-    webdav_path = _webdav_path_from_uri(uri)
-
-    for hidden_name in (".path.ovlock", ".sync_log.json", ".redirect.json"):
-        resp = await client.get(f"/webdav/resources/{webdav_path}/{hidden_name}")
-        assert resp.status_code == 404
-
-
-def test_webdav_unit_rejects_direct_access_to_multiwrite_internal_files():
-    for hidden_name in (
+    path = f"/webdav/resources/{_webdav_path_from_uri(uri)}"
+    hidden_names = (
+        ".abstract.md",
+        ".overview.md",
+        ".relations.json",
         ".path.ovlock",
         ".exact.ovlock.notes.md.0123abcd",
         ".sync_log.json",
         ".redirect.json",
-    ):
-        try:
-            _ensure_exposed_path(f"workspace/{hidden_name}")
-        except NotFoundError:
-            continue
-        raise AssertionError(f"{hidden_name} should be rejected")
+    )
+    assert (await client.request("MKCOL", f"{path}/.obsidian")).status_code == 201
+    config = b'{"theme":"light"}'
+    assert (await client.put(f"{path}/.obsidian/config.json", content=config)).status_code == 201
+
+    # Stage real directory entries after the WebDAV writes that acquire content locks.
+    physical_dir = service.viking_fs._uri_to_path(uri, ctx=request_context)
+    for name in hidden_names:
+        if name not in {".path.ovlock", ".exact.ovlock.notes.md.0123abcd"}:
+            await service.viking_fs._async_agfs.write(f"{physical_dir}/{name}", b"internal")
+    # The local lock backend uses its own token format and manages the marker.
+    lease = await service.viking_fs._async_agfs.pathlock_acquire_tree(physical_dir)
+
+    try:
+        response = await client.request("PROPFIND", path, headers={"Depth": "1"})
+        assert response.status_code == 207
+        names = _dav_display_names(response.content)
+        assert ".obsidian" in names
+        assert "sample.md" in names
+        assert set(hidden_names).isdisjoint(names)
+
+        for name in hidden_names:
+            assert (await client.get(f"{path}/{name}")).status_code == 404, name
+        assert (await client.get(f"{path}/.obsidian/config.json")).content == config
+    finally:
+        await service.viking_fs._async_agfs.pathlock_release(lease)
 
 
-def test_webdav_unit_filters_multiwrite_internal_files_from_children():
-    entries = [
-        {"name": ".obsidian"},
-        {"name": ".path.ovlock"},
-        {"name": ".exact.ovlock.notes.md.0123abcd"},
-        {"name": ".sync_log.json"},
-        {"name": ".redirect.json"},
-        {"name": "notes.md"},
-    ]
-    filtered = _exposed_child_entries(entries)
-    assert [entry["name"] for entry in filtered] == [".obsidian", "notes.md"]
-
-
-async def test_webdav_put_create_get_and_replace_text_file(client: httpx.AsyncClient):
+async def test_webdav_put_create_get_and_replace_text_file(
+    client: httpx.AsyncClient, service, monkeypatch
+):
     mkcol_resp = await client.request("MKCOL", "/webdav/resources/scratch")
     assert mkcol_resp.status_code == 201
 
@@ -156,60 +115,33 @@ async def test_webdav_put_create_get_and_replace_text_file(client: httpx.AsyncCl
     assert get_resp.text == "# Notes\n\nhello"
     assert get_resp.headers["content-length"] == str(len(get_resp.content))
 
+    refresh = Summarizer.refresh_file_parent
+    scheduled_refresh = False
+
+    async def check_persisted_before_refresh(summarizer, *, file_uri, ctx, **kwargs):
+        nonlocal scheduled_refresh
+        assert file_uri == "viking://resources/scratch/notes.md"
+        assert await service.viking_fs.read_file(file_uri, ctx=ctx) == "# Notes\n\nupdated"
+        scheduled_refresh = True
+        return await refresh(summarizer, file_uri=file_uri, ctx=ctx, **kwargs)
+
+    monkeypatch.setattr(Summarizer, "refresh_file_parent", check_persisted_before_refresh)
+
     replace_resp = await client.request(
         "PUT",
         "/webdav/resources/scratch/notes.md",
         content="# Notes\n\nupdated".encode("utf-8"),
     )
     assert replace_resp.status_code == 204
+    assert scheduled_refresh
 
     get_resp = await client.get("/webdav/resources/scratch/notes.md")
     assert get_resp.status_code == 200
     assert get_resp.text == "# Notes\n\nupdated"
     assert get_resp.headers["content-length"] == str(len(get_resp.content))
-
-
-async def test_webdav_put_replace_reuses_direct_write_path(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    assert (await client.request("MKCOL", "/webdav/resources/replace-space")).status_code == 201
-    assert (
-        await client.request(
-            "PUT",
-            "/webdav/resources/replace-space/notes.md",
-            content="first version".encode("utf-8"),
-        )
-    ).status_code == 201
-
-    calls: list[tuple[str, object]] = []
-
-    async def _unexpected_fs_write(*args, **kwargs):
-        raise AssertionError("WebDAV replace should not use service.fs.write")
-
-    async def _tracked_write_file(uri, content, ctx=None):
-        calls.append(("write_file", uri, content))
-
-    async def _tracked_summarize(resource_uris, ctx=None, **kwargs):
-        calls.append(("summarize", tuple(resource_uris)))
-        return {"status": "success"}
-
-    monkeypatch.setattr(service.fs, "write", _unexpected_fs_write)
-    monkeypatch.setattr(service.viking_fs, "write_file", _tracked_write_file)
-    monkeypatch.setattr(service.resources, "summarize", _tracked_summarize)
-
-    replace_resp = await client.request(
-        "PUT",
-        "/webdav/resources/replace-space/notes.md",
-        content="second version".encode("utf-8"),
-    )
-
-    assert replace_resp.status_code == 204
-    assert calls == [
-        ("write_file", "viking://resources/replace-space/notes.md", "second version"),
-        ("summarize", ("viking://resources/replace-space/notes.md",)),
-    ]
+    await service.resources.wait_processed()
+    overview = await service.viking_fs.read_file("viking://resources/scratch/.overview.md")
+    assert "notes.md" in overview
 
 
 async def test_webdav_put_rejects_non_utf8_content(client: httpx.AsyncClient):
@@ -222,6 +154,8 @@ async def test_webdav_put_rejects_non_utf8_content(client: httpx.AsyncClient):
     )
 
     assert resp.status_code == 415
+    assert "UTF-8" in resp.text
+    assert (await client.get("/webdav/resources/binary-space/blob.bin")).status_code == 404
 
 
 async def test_webdav_move_and_delete_text_file(client: httpx.AsyncClient):

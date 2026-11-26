@@ -13,7 +13,13 @@ The agent follows a short guide published as plain Markdown, so any agent can fe
 
 Both are also served from `docs.openviking.net`, which is usually faster from mainland China.
 
-## The prompt
+## BytePlus
+
+Follow the [BytePlus setup guide](../guides/27-byteplus-setup.md#connect-an-agent) for your agent. If you use the shared installer, select **OpenViking Managed Service → BytePlus** and enter your API key. See the guide if your installer asks for a URL or does not list BytePlus. The prompts below are for Volcengine and use its service URL.
+
+## Volcengine prompt
+
+<a id="the-prompt"></a>
 
 First pick your edition in the prompt's header: **Personal** if you use OpenViking on your own, **Team** if you are a member of a team that shares folders in one OpenViking account. Copy the prompt and replace `<API_KEY>` with your key before you send it: on the personal edition, and for team admins, it is in the [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing?utm_source=opensource_docs&utm_medium=referral&utm_campaign=getting-started_07-agent-onboarding) under **User Management → API Key**; team members get it from the OpenViking workbench their team gave them.
 

@@ -6,11 +6,11 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 
 读取或写入文件正文见[内容 API](12-content.md)。通过 WebDAV 客户端访问文件见 [WebDAV](20-webdav.md)。
 
-`viking://system` 的文件系统和内容 API 对所有角色开放读取；ROOT 和 ADMIN
-只能修改 `viking://system/memory/memory_templates/custom/` 下的具体资产。
-`builtin/` 内置模板和 `viking://system/compile/example-skills/` 官方示例由服务自动同步，
-API 不允许写入、追加、删除、移动或覆盖复制，也不能通过操作其父目录绕过限制。
-自定义模板也可以通过[模板管理 API](08-admin.md)发布。
+`viking://system` 的文件系统和内容 API 对所有角色开放读取。
+服务自动同步内置记忆模板、`viking://system/semantic/templates/builtin/` 中的目录 L0 和 L1 模板，
+以及 `viking://system/compile/example-skills/` 中的官方示例。这些资产对账户角色只读，包括账户管理员（ADMIN）。
+服务 ROOT 角色可以管理系统命名空间。账户管理员可以在
+`viking://system/memory/memory_templates/custom/` 下发布自定义记忆模板，也可以通过[模板管理 API](08-admin.md)发布。
 
 ## API 参考
 
@@ -18,13 +18,38 @@ API 不允许写入、追加、删除、移动或覆盖复制，也不能通过�
 
 ### ls()
 
-列出目录内容。
+列出目录的子节点；URI 指向文件时，将文件自身作为一条记录返回。目录列表不包含请求的目录自身。
+
+| 目标 | `ls` | `ls` 设置 `recursive=true` / `tree` |
+|------|------|-------------------------------------|
+| 目录 URI | 直接子节点 | 后代节点，`rel_path` 相对于目标目录 |
+| 文件 URI | 一条文件记录，不带 `rel_path` | 一条文件记录，`rel_path` 为文件名 |
+
+文件结果沿用目录列表的 `original`、`agent` 和 `simple` 纯 URI 输出格式。
+请求文件摘要或概览时，对应字段为空字符串，不读取父目录摘要。
+文件结果的 `has_more=false`；`offset>=1` 或 tags 不匹配时返回空数组。
+通过 `extra_fields=id,locked` 按需返回 `id` 和 `isLocked`，文件不返回 `count`。
+显式指定隐藏文件时无需设置 `show_all_hidden=true`，存储内部名称仍不暴露。
+目录读取已明确抛出的 `NOT_FOUND`、`PERMISSION_DENIED` 等错误继续传播。
+
+文件目标兼容由文件系统服务提供，作用于 HTTP、SDK、CLI 和 MCP 入口。
+内部 `VikingFS.ls/tree` 保留原有目录接口行为，同步和 OVPack 等操作不增加文件类型探测。
+
+首先尝试目录读取，收到 Not-a-directory 错误后改为读取文件元数据。
+由于部分对象存储后端对文件目标返回空列表，目录读取为空时也会检查目标类型。
+目录读取成功为空、随后元数据确认不存在时，保留原来的空列表结果。
+例如 S3 的非递归 `ls` 对不存在的前缀仍返回 HTTP 200 和空数组。
+元数据查询的权限错误及其他后端错误继续传播；Not-a-directory 后确认目标不存在时，仍返回 `NOT_FOUND`。
+
+对外接口的非空目录列表不增加类型检查请求。普通请求读取到空页且 `offset>0` 时，
+直接返回空列表，不再探测元数据。GLOBAL 和有数据访问范围约束的请求仍保留类型校验，
+因为被授权遍历的容器必须是目录。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | Viking URI |
+| uri | str | 是 | - | 文件或目录的 Viking URI |
 | simple | bool | 否 | False | 仅返回相对路径 |
 | recursive | bool | 否 | False | 递归列出所有子目录 |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
@@ -149,6 +174,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=true" \
   -H "X-API-Key: your-key"
 
+# 单个文件，仍使用列表响应结构
+curl -G "http://localhost:1933/api/v1/fs/ls" \
+  --data-urlencode "uri=viking://resources/project/readme.md" \
+  --data-urlencode "output=original" \
+  -H "X-API-Key: your-key"
+
 # 递归列表
 curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
   -H "X-API-Key: your-key"
@@ -226,13 +257,16 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 
 ### tree()
 
-获取目录树结构。
+获取目录的后代节点；URI 指向文件时，将该文件作为单节点树返回。
+响应仍是扁平节点数组。文件的 `rel_path` 为文件名（如 `readme.md`），
+`level_limit` 不产生额外后代节点。设置 `directories_only=true` 时排除文件，返回空数组。
+文件分页、tags、元数据和错误行为与上面的 `ls` 一致。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | Viking URI |
+| uri | str | 是 | - | 文件或目录的 Viking URI |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
 | abs_limit | int | 否 | HTTP：256；SDK：128 | 返回的摘要最大长度 |
 | include_abstract | bool | 否 | 未设置 | 是否返回目录 L0 摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
@@ -659,7 +693,7 @@ ov mkdir viking://resources/new-project/ --description "接口文档目录"
 
 ### rm()
 
-删除文件或目录。递归删除目录时会返回删除的项目估计数量。
+删除文件或目录。递归删除按 URI 范围清理向量记录，并向存储后端发起一次递归删除请求，无需在 Python 层遍历文件子树。
 
 `rm` 是幂等操作：删除一个合法但不存在的 URI 仍会成功。
 URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用域时返回 `INVALID_URI`。
@@ -669,7 +703,7 @@ URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要删除的 Viking URI |
-| wait | bool | 否 | False | 等待删除后的语义刷新完成 |
+| wait | bool | 否 | False | 确认本次删除任务完成 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | recursive | bool | 否 | False | 递归删除目录 |
 
@@ -747,9 +781,9 @@ ov rm viking://resources/old.md [--recursive]
 }
 ```
 
-`estimated_deleted_count` 字段（递归删除时）包含删除的项目（文件和目录）估计数量（来自向量索引）。CLI 会在输出中显示此信息。
+`estimated_deleted_count` 表示已提交删除的向量记录数量。一个文件或目录可以对应多条记录，未索引内容不计入数量；该数量不保证向量索引立即可见。CLI 会在输出中显示此数量。
 
-删除 `viking://resources/...` 时，响应可能包含 `memory_cleanup`，表示删除前已清理引用该资源 URI 的用户记忆。
+删除资源后，已有记忆会保留原有内容和 `resource_refs`，HTTP 响应不再包含 `memory_cleanup`。
 
 在大小写不敏感的 `localfs` 上，大小写别名可能影响删除目标。例如真实文件是 `viking://resources/bob-private/private.md`，执行 `ov rm viking://resources/BOB-PRIVATE/private.md` 可能删除同一个文件；大小写敏感系统上，别名目标不存在时该幂等删除仍会成功，但不会删除真实文件。
 

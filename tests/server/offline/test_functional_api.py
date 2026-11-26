@@ -1,13 +1,123 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""API contracts that need processing and indexing, but not model quality."""
+"""API contracts for processing, indexing, and retrieval with fixed model responses."""
 
 import pytest
 
 from openviking.core.mcp_converter import mcp_to_skill
+from openviking.models.rerank import RerankClient
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config import RerankConfig
+from tests.server.test_api_resources import _wait_task_terminal
+
+
+@pytest.mark.parametrize(
+    "auth_mode, enable_default_resources",
+    [("api_key", True), ("api_key", False), ("dev", False), ("trusted", False)],
+)
+async def test_default_resource_policy_validates_creation_before_identity_write(
+    temp_dir, monkeypatch, auth_mode, enable_default_resources
+):
+    import httpx
+
+    from openviking.server.app import create_app
+    from openviking.server.config import ServerConfig
+    from openviking.server.dependencies import set_service
+    from openviking.server.runtime import initialize_auth_plugin
+    from openviking.service.core import OpenVikingService
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+    from tests.server.conftest import _install_fake_embedder
+
+    _install_fake_embedder(monkeypatch)
+    OpenVikingConfigSingleton.reset_instance()
+    OpenVikingConfigSingleton.initialize(
+        config_dict={
+            "enable_default_resources": enable_default_resources,
+            "enable_watch_scheduler": False,
+            "storage": {"workspace": str(temp_dir / "empty"), "agfs": {"backend": "local"}},
+        }
+    )
+    service = OpenVikingService(path=str(temp_dir / "empty"))
+    config = ServerConfig(
+        auth_mode=auth_mode,
+        root_api_key="root" if auth_mode != "dev" else None,
+        trusted_identity_flush_interval_seconds=0,
+    )
+    app = create_app(config=config, service=service)
+    try:
+        await service.initialize()
+        set_service(service)
+        default_workspace_exists = await service.viking_fs.exists(
+            "viking://resources/.abstract.md",
+            ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        )
+        assert default_workspace_exists == enable_default_resources
+        if auth_mode in {"dev", "trusted"}:
+            with pytest.raises(ValueError, match=f"auth_mode='{auth_mode}'.*Cluster.*VLM"):
+                await initialize_auth_plugin(app, service, config)
+            assert not (temp_dir / "empty" / "viking" / "_system" / "accounts.json").exists()
+            return
+        await initialize_auth_plugin(app, service, config)
+        if not enable_default_resources:
+            assert not (temp_dir / "empty" / "vectordb").exists()
+        manager = app.state.api_key_manager
+        assert await manager.get_account("default") is None
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/admin/accounts",
+                headers={"X-API-Key": "root"},
+                json={"account_id": "new", "admin_user_id": "admin"},
+            )
+            assert response.status_code == 400, response.text
+            assert "VLM" in response.text
+            assert await manager.get_account("new") is None
+    finally:
+        plugin = getattr(app.state, "auth_plugin", None)
+        if plugin is not None:
+            await plugin.shutdown()
+        await service.close()
+        set_service(None)
+
+
+@pytest.mark.parametrize("auth_mode", ["api_key", "trusted"])
+async def test_valid_cluster_creates_default_record_without_workspace(
+    temp_dir, monkeypatch, auth_mode
+):
+    from openviking.server.app import create_app
+    from openviking.server.config import ServerConfig
+    from openviking.server.runtime import initialize_auth_plugin
+    from openviking.service.core import OpenVikingService
+    from openviking_cli.utils.config import get_openviking_config, set_openviking_config
+    from tests.server.conftest import _install_fake_embedder, _install_fake_vlm
+
+    _install_fake_embedder(monkeypatch)
+    _install_fake_vlm(monkeypatch)
+    set_openviking_config(
+        get_openviking_config().model_copy(update={"enable_default_resources": False})
+    )
+    service = OpenVikingService(path=str(temp_dir / "data"))
+    config = ServerConfig(
+        auth_mode=auth_mode, root_api_key="root", trusted_identity_flush_interval_seconds=0
+    )
+    app = create_app(config=config, service=service)
+    try:
+        await service.initialize()
+        await initialize_auth_plugin(app, service, config)
+        manager = app.state.api_key_manager
+        assert await manager.get_account("default") is not None
+        assert not await service.viking_fs.exists(
+            "viking://resources/.abstract.md",
+            ctx=RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT),
+        )
+    finally:
+        plugin = getattr(app.state, "auth_plugin", None)
+        if plugin is not None:
+            await plugin.shutdown()
+        await service.close()
 
 
 def result(response):
@@ -72,12 +182,23 @@ async def test_add_skill_stores_content_and_indexes_all_levels(client, mcp_forma
                 "required": ["expression"],
             },
         }
-    added = result(await client.post("/api/v1/skills", json={"data": skill, "wait": True}))
+    # The regular dict takes the default async route. MCP uses the blocking route
+    # so its assertions also verify that wait=True returns the queue results.
+    request = {"data": skill, "wait": True} if mcp_format else {"data": skill}
+    added = result(await client.post("/api/v1/skills", json=request))
     assert added["status"] == "success", added
     expected_name = name.replace("_", "-") if mcp_format else name
     assert added["name"] == expected_name
     root = added["root_uri"]
     assert root.endswith(f"/skills/{expected_name}")
+    if mcp_format:
+        assert added["queue_status"]["Embedding"]["error_count"] == 0
+    else:
+        task_id = added["task_id"]
+        task = await _wait_task_terminal(client, task_id)
+        assert task["status"] == "completed", task
+        assert task["task_type"] == "add_skill"
+        assert task["result"]["root_uri"] == root
     shown = result(await client.get(f"/api/v1/skills/{expected_name}"))
     assert shown["name"] == expected_name
     assert shown["description"] == description
@@ -137,25 +258,33 @@ async def test_resource_delete_removes_files_and_index(offline_resource_api):
     ), after
 
 
-@pytest.mark.parametrize("endpoint", ["find", "search"])
-@pytest.mark.parametrize("query", ["how to authenticate", "what is OpenViking"])
-async def test_basic_retrieval_contract(offline_resource_api, endpoint, query):
+async def test_basic_retrieval_contract(offline_resource_api, service, monkeypatch):
     client, root = offline_resource_api
-    found = result(
-        await client.post(
-            f"/api/v1/search/{endpoint}",
-            json={"query": query, "target_uri": root, "level": [2], "limit": 5},
-        )
-    )
-    for field in ("resources", "memories", "skills"):
-        assert isinstance(found[field], list)
-    assert isinstance(found["total"], int)
-    assert found["resources"], found
-    assert len(found["resources"]) <= 5
-    for hit in found["resources"]:
-        assert hit["uri"].startswith(root + "/"), hit
-        assert hit["level"] == 2
-        assert 0 <= hit["score"] <= 1
+    payload = {"query": "how to authenticate", "target_uri": root, "level": [2], "limit": 1}
+    baseline = result(await client.post("/api/v1/search/find", json=payload))
+    [hit] = baseline["resources"]
+    assert hit["uri"] == f"{root}/oauth.md"
+    assert hit["level"] == 2
+    assert hit["score"] > 0
+    assert baseline["total"] == 1
+    assert baseline["memories"] == baseline["skills"] == []
+
+    class Model:
+        def rerank_batch(self, query, documents):
+            assert query == payload["query"]
+            assert len(documents) == 1
+            return [0.6]
+
+    monkeypatch.setattr(service.viking_fs, "rerank_config", RerankConfig(ak="ak", sk="sk"))
+    monkeypatch.setattr(RerankClient, "from_config", lambda config: Model())
+
+    found = result(await client.post("/api/v1/search/find", json=payload))
+    assert found == baseline
+
+    searched = result(await client.post("/api/v1/search/search", json=payload))
+    assert searched["total"] == 1
+    assert searched["memories"] == searched["skills"] == []
+    assert searched["resources"] == [{**hit, "score": 0.6}]
 
 
 async def test_copy_file_preserves_source_content_and_index(client):
@@ -206,6 +335,11 @@ async def test_copy_directory_requires_recursive_and_copies_tree(client):
     await write(client, source + "/nested/child.md", "Recursive copy child.")
     refused = await client.post("/api/v1/fs/cp", json={"from_uri": source, "to_uri": target})
     assert refused.status_code == 400, refused.text
+    error = refused.json()["error"]
+    assert error["code"] == "INVALID_ARGUMENT"
+    assert error["message"] == f"Cannot copy directory without --recursive: {source}"
+    missing = await client.get("/api/v1/fs/stat", params={"uri": target})
+    assert missing.status_code == 404, missing.text
     result(await client.post("/api/v1/system/wait", json={}))
     copied = result(
         await client.post(

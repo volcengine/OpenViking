@@ -21,16 +21,23 @@ use super::prompts::{
     InputValueLabel, LiveRegion, PromptResult, print_cancelled, prompt_select, prompt_text,
 };
 use crate::config_wizard::store::{
-    ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, IdentityField, OPENVIKING_SERVICE_URL,
-    custom_allows_empty_api_key,
+    ApiKeyRole, BYTEPLUS_SERVICE_URL, ConfigDraft, ConfigKind, ConfigStore, IdentityField,
+    OPENVIKING_SERVICE_URL, custom_allows_empty_api_key,
 };
 use crate::error::Result;
 use crate::i18n::{Language, copy};
 use crate::theme;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ManagedProvider {
+    Volcengine,
+    BytePlus,
+}
+
 pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> Result<bool> {
     enum Stage {
         Kind,
+        Provider,
         Name,
         Url,
         KeyMode,
@@ -42,6 +49,7 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
 
     let mut stage = Stage::Kind;
     let mut kind = ConfigKind::Custom;
+    let mut managed_provider = None;
     let mut name: Option<String> = None;
     let default_server_url = current_server_url_default(store)?;
     let mut url = default_server_url.clone();
@@ -67,19 +75,11 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                 &[],
             )? {
                 PromptResult::Value(0) => {
-                    kind = ConfigKind::OpenVikingService;
-                    url = OPENVIKING_SERVICE_URL.to_string();
-                    name = None;
-                    api_key = None;
-                    root_api_key = None;
-                    account = None;
-                    user = None;
-                    identity_mode = None;
-                    key_mode = None;
-                    stage = Stage::Name;
+                    stage = Stage::Provider;
                 }
                 PromptResult::Value(1) => {
                     kind = ConfigKind::Custom;
+                    managed_provider = None;
                     url = default_server_url.clone();
                     name = None;
                     api_key = None;
@@ -97,6 +97,52 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                 }
                 PromptResult::Value(_) => unreachable!("selection is constrained by kind list"),
             },
+            Stage::Provider => {
+                let default = match managed_provider {
+                    Some(ManagedProvider::Volcengine) => 0,
+                    Some(ManagedProvider::BytePlus) => 1,
+                    None => usize::from(Language::current() == Language::En),
+                };
+                match prompt_select(
+                    ui,
+                    section_add(),
+                    copy(Language::current(), "Cloud provider", "云服务商"),
+                    &["Volcengine", "BytePlus"],
+                    default,
+                    &[],
+                )? {
+                    PromptResult::Value(index @ (0 | 1)) => {
+                        let provider = if index == 0 {
+                            ManagedProvider::Volcengine
+                        } else {
+                            ManagedProvider::BytePlus
+                        };
+                        managed_provider = Some(provider);
+                        kind = ConfigKind::OpenVikingService;
+                        url = match provider {
+                            ManagedProvider::Volcengine => OPENVIKING_SERVICE_URL,
+                            ManagedProvider::BytePlus => BYTEPLUS_SERVICE_URL,
+                        }
+                        .to_string();
+                        name = None;
+                        api_key = None;
+                        root_api_key = None;
+                        account = None;
+                        user = None;
+                        identity_mode = None;
+                        key_mode = None;
+                        stage = Stage::Name;
+                    }
+                    PromptResult::Back => stage = Stage::Kind,
+                    PromptResult::Quit => {
+                        print_cancelled(ui)?;
+                        return Ok(true);
+                    }
+                    PromptResult::Value(_) => {
+                        unreachable!("selection is constrained by provider list")
+                    }
+                }
+            }
             Stage::Name => {
                 match prompt_add_config_name(ui, section_add(), add_config_name_label(), store)? {
                     PromptResult::Value(value) => {
@@ -116,7 +162,11 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                         identity_mode = None;
                         key_mode = None;
                         url = default_server_url.clone();
-                        stage = Stage::Kind;
+                        stage = if managed_provider.is_some() {
+                            Stage::Provider
+                        } else {
+                            Stage::Kind
+                        };
                     }
                     PromptResult::Quit => {
                         print_cancelled(ui)?;
@@ -182,16 +232,17 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                 }
             }
             Stage::ApiKey => {
-                let helper_lines = if kind == ConfigKind::OpenVikingService {
-                    openviking_service_api_key_helper_lines()
+                let (label, helper_lines) = if kind == ConfigKind::OpenVikingService {
+                    (
+                        api_key_label(false),
+                        openviking_service_api_key_helper_lines(&url),
+                    )
                 } else {
-                    custom_api_key_input_helper_lines(key_mode.unwrap_or(CustomKeyMode::UserKey))
-                };
-
-                let label = if kind == ConfigKind::Custom {
-                    custom_api_key_input_label(key_mode.unwrap_or(CustomKeyMode::UserKey))
-                } else {
-                    api_key_label(false)
+                    let mode = key_mode.unwrap_or(CustomKeyMode::UserKey);
+                    (
+                        custom_api_key_input_label(mode),
+                        custom_api_key_input_helper_lines(mode),
+                    )
                 };
                 match prompt_text(
                     ui,

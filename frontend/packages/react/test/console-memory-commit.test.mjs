@@ -67,11 +67,13 @@ test('a managed conversation waits for message writes before submitting to the p
     await settle();
     const { messageId, action } = lastAction();
     assert.equal(action.status, 'idle');
+    assert.equal(action.label, 'Extract long-term memory');
     await act(() => {
       view.onMessageAction(messageId, action.key);
       view.onMessageAction(messageId, action.key);
     });
     assert.equal(lastAction().action.status, 'pending');
+    assert.equal(lastAction().action.label, 'Extract long-term memory');
     assert.deepEqual(saved, ['user']);
     assert.deepEqual(requests, []);
     await act(async () => {
@@ -81,6 +83,7 @@ test('a managed conversation waits for message writes before submitting to the p
     });
     assert.deepEqual(saved, ['user', 'assistant']);
     assert.equal(lastAction().action.status, 'submitted');
+    assert.equal(lastAction().action.label, 'Extract long-term memory');
     assert.deepEqual(
       requests.map(({ path, method }) => [path, method]),
       [
@@ -94,6 +97,7 @@ test('a managed conversation waits for message writes before submitting to the p
       await tick();
     });
     assert.equal(lastAction().action.status, 'success');
+    assert.equal(lastAction().action.label, 'Long-term memory extracted');
   } finally {
     await host.unmount();
   }
@@ -167,7 +171,7 @@ for (const stop of ['terminal event', 'stop button']) {
       assert.equal(actions().length, 0);
       await send('Next question');
       assert.equal(actions().length, 1);
-      assert.equal(actions()[0].action.label, 'Commit session');
+      assert.equal(actions()[0].action.label, 'Extract long-term memory');
       await act(async () => view.sessions.onSelect('saved'));
       await settle();
       assert.equal(actions().length, 1);

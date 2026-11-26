@@ -377,9 +377,8 @@ def test_ttl_rejected_without_writes(adapter):
     assert adapter.count() == 0
 
 
+@pytest.mark.parametrize("adapter", ["hnsw"], indirect=True)
 def test_hnsw_physical_plan_and_missing_index(adapter):
-    if adapter._config.index_type != "hnsw":
-        pytest.skip("Physical ANN index is specific to HNSW")
     seed(adapter)
     meta = adapter.get_collection().get_index_meta_data("default")
     name = meta["_pg_index_name"]
@@ -407,9 +406,8 @@ def test_hnsw_physical_plan_and_missing_index(adapter):
 
 
 @pytest.mark.parametrize("physical_index", ["missing", "wrong_operator_class"])
+@pytest.mark.parametrize("adapter", ["hnsw"], indirect=True)
 def test_drop_collection_with_unavailable_hnsw_after_reload(adapter, physical_index):
-    if adapter._config.index_type != "hnsw":
-        pytest.skip("Physical ANN index is specific to HNSW")
     seed(adapter)
     collection = adapter.get_collection()._Collection__collection
     name = collection.get_index_meta_data("default")["_pg_index_name"]
@@ -492,6 +490,235 @@ def test_distance_metrics(adapter, metric):
     finally:
         other.drop_collection()
         other.close()
+
+
+def test_cosine_guard_never_reads_scalar_rejected_vectors(adapter):
+    adapter.upsert(
+        [
+            {"id": "mine", "vector": [1, 0, 0], "account_id": "one"},
+            {"id": "zero", "vector": [0, 0, 0], "account_id": "one"},
+            {"id": "foreign", "vector": [-1, 0, 0], "account_id": "two"},
+        ]
+    )
+    collection = adapter.get_collection()._Collection__collection
+    predicate, params = collection._dense_filter_clause("<=>", '"account_id" = %s', ["one"])
+    cursor = collection._cursor()
+    try:
+        # A cheap norm function lets the planner evaluate an ordinary AND before
+        # scalar filtering. CASE must protect scalar-rejected heap rows.
+        cursor.execute(
+            """CREATE FUNCTION pg_temp.ov_test_norm(v vector) RETURNS double precision
+               LANGUAGE plpgsql COST 0.0001 AS $$
+               BEGIN
+                 IF v = '[-1,0,0]'::vector THEN
+                   RAISE EXCEPTION 'read scalar-rejected vector';
+                 END IF;
+                 RETURN vector_norm(v);
+               END $$"""
+        )
+        cursor.execute("SET LOCAL enable_indexscan = off")
+        cursor.execute("SET LOCAL enable_bitmapscan = off")
+        cursor.execute(
+            f'SELECT id FROM "{adapter.collection_name}" WHERE '
+            + predicate.replace("vector_norm(vector)", "pg_temp.ov_test_norm(vector)"),
+            params,
+        )
+        assert cursor.fetchall() == [("mine",)]
+    finally:
+        collection._conn.rollback()
+        cursor.close()
+    assert [
+        r["id"]
+        for r in adapter.query(query_vector=[1, 0, 0], filter=Eq("account_id", "one"), limit=10)
+    ] == ["mine"]
+
+
+@pytest.mark.parametrize("offset", [0, 1, 2, 3])
+def test_cosine_zero_vectors_after_dense_pagination(adapter, offset):
+    adapter.upsert(
+        [
+            {"id": "first", "vector": [1, 0, 0], "account_id": "one"},
+            {"id": "second", "vector": [0, 1, 0], "account_id": "one"},
+            *[{"id": f"zero_{i}", "vector": [0, 0, 0], "account_id": "one"} for i in range(8)],
+        ]
+    )
+    expected = ["first", "second"][offset : offset + 3]
+    for advance in [None, {"time_decay": {"protection": "1d"}}]:
+        rows = adapter.query(
+            query_vector=[1, 0, 0],
+            filter=Eq("account_id", "one"),
+            limit=3,
+            offset=offset,
+            advance=advance,
+        )
+        assert [r["id"] for r in rows] == expected
+    assert adapter.query(query_vector=[0, 0, 0], filter=Eq("account_id", "one")) == []
+
+
+@pytest.mark.parametrize("depth", [-1, 0, 1])
+def test_cosine_zero_vectors_scoped_pagination_and_ranked(adapter, depth):
+    collection = adapter.get_collection()._Collection__collection
+    path = "viking://resources/目录_%"
+    records = [
+        {
+            "id": f"mine_{i:02d}",
+            "vector": [1, i / 10, 0],
+            "sparse_vector": {"hello": i + 1},
+            "uri": path if i == 0 else path + ("/sub" if i % 2 else "") + f"/f{i}",
+            "account_id": "one",
+            "search_tags": ["allowed"],
+            "updated_at": "2026-11-12T00:00:00Z",
+        }
+        for i in range(12)
+    ]
+    records += [
+        {
+            "id": "tenant",
+            "vector": [1, 0, 0],
+            "uri": path,
+            "account_id": "two",
+            "search_tags": ["allowed"],
+        },
+        {
+            "id": "acl",
+            "vector": [1, 0, 0],
+            "uri": path,
+            "account_id": "one",
+            "search_tags": ["denied"],
+        },
+        {
+            "id": "sibling",
+            "vector": [1, 0, 0],
+            "uri": path + "suffix/f",
+            "account_id": "one",
+            "search_tags": ["allowed"],
+        },
+        {"id": "null", "uri": path, "account_id": "one", "search_tags": ["allowed"]},
+        {
+            "id": "zero",
+            "vector": [0, 0, 0],
+            "sparse_vector": {"hello": 100},
+            "uri": path,
+            "account_id": "one",
+            "search_tags": ["allowed"],
+        },
+    ]
+    adapter.upsert(records)
+    scope = And(
+        [Eq("account_id", "one"), Eq("search_tags", "allowed"), PathScope("uri", path, depth)]
+    )
+    modes = [
+        {},
+        {"sparse_query_vector": {"hello": 1}},
+        {"advance": {"time_decay": {"protection": "1d", "origin": "2026-11-15T00:00:00Z"}}},
+    ]
+    for mode in modes:
+        actual = adapter.query(
+            query_vector=[1, 0, 0], filter=scope, limit=3, offset=1, output_fields=["uri"], **mode
+        )
+        # Flat search on the same table is the oracle even with a physical HNSW
+        # index. Restore metadata before the next query.
+        index_meta = collection._indexes["default"]
+        previous_type = index_meta["_pg_index_type"]
+        try:
+            index_meta["_pg_index_type"] = "flat"
+            expected = adapter.query(
+                query_vector=[1, 0, 0],
+                filter=scope,
+                limit=3,
+                offset=1,
+                output_fields=["uri"],
+                **mode,
+            )
+        finally:
+            index_meta["_pg_index_type"] = previous_type
+        assert [r["id"] for r in actual] == [r["id"] for r in expected]
+        assert [r["_score"] for r in actual] == pytest.approx([r["_score"] for r in expected])
+        assert all(r["id"].startswith("mine_") for r in actual)
+    if depth < 0:
+        full = adapter.query(query_vector=[1, 0, 0], filter=scope, limit=20)
+        assert [r["id"] for r in full] == [f"mine_{i:02d}" for i in range(12)]
+        assert adapter.query(query_vector=[1, 0, 0], filter=scope, limit=3, offset=20) == []
+
+
+@pytest.mark.parametrize("adapter", ["hnsw"], indirect=True)
+def test_cosine_ranked_candidates_use_hnsw_without_forcing_planner(adapter):
+    collection = adapter.get_collection()._Collection__collection
+    meta = collection._indexes["default"]
+    cursor = collection._cursor()
+    try:
+        # A tiny table favors a sequential scan. Use enough nonzero rows to
+        # exercise natural HNSW selection, including PostgreSQL 16's planner.
+        cursor.execute(
+            f'INSERT INTO "{adapter.collection_name}" (id, vector, updated_at) '
+            "SELECT 'plan_' || i, "
+            "ARRAY[sin(i::double precision), cos(i::double precision), 1]::vector, "
+            "(extract(epoch FROM '2026-11-12T00:00:00Z'::timestamptz) * 1000)::bigint "
+            "FROM generate_series(1, 25000) i"
+        )
+        cursor.execute(f'ANALYZE "{adapter.collection_name}"')
+        collection._conn.commit()
+        collection._apply_search_params_on_cursor(cursor, "default")
+        sql, params = collection._dense_candidate_query("default", "", [], "[1,0,0]", "<=>", 100)
+        cursor.execute("EXPLAIN (ANALYZE, FORMAT JSON) " + sql, params)
+        plan = cursor.fetchone()[0][0]["Plan"]
+
+        def nodes(node):
+            yield node
+            for child in node.get("Plans", []):
+                yield from nodes(child)
+
+        scans = [node for node in nodes(plan) if node.get("Index Name") == meta["_pg_index_name"]]
+        assert len(scans) == 1, plan
+        assert scans[0]["Node Type"] == "Index Scan"
+        assert scans[0]["Actual Rows"] == 100
+    finally:
+        collection._conn.rollback()
+        cursor.close()
+
+    for mode in [
+        {"sparse_query_vector": {"hello": 1}},
+        {"advance": {"time_decay": {"protection": "1d", "origin": "2026-11-15T00:00:00Z"}}},
+    ]:
+        rows = adapter.query(query_vector=[1, 0, 0], limit=10, **mode)
+        assert len(rows) == 10
+        assert all(row["id"].startswith("plan_") for row in rows)
+        assert [(-row["_score"], row["id"]) for row in rows] == sorted(
+            (-row["_score"], row["id"]) for row in rows
+        )
+
+
+def test_cosine_zero_vectors_do_not_consume_hybrid_sparse_budget(adapter):
+    adapter.upsert(
+        [
+            {"id": "dense", "vector": [1, 0, 0], "account_id": "one"},
+            {
+                "id": "sparse",
+                "vector": [0, 1, 0],
+                "account_id": "one",
+                "sparse_vector": {"hello": 2},
+            },
+            {
+                "id": "zero",
+                "vector": [0, 0, 0],
+                "account_id": "one",
+                "sparse_vector": {"hello": 100},
+            },
+        ]
+    )
+    collection = adapter.get_collection()._Collection__collection
+    collection.create_sparse_index(candidate_limit=1, sparse_weight=0.5)
+    rows = adapter.query(
+        query_vector=[1, 0, 0],
+        sparse_query_vector={"hello": 1},
+        filter=Eq("account_id", "one"),
+        limit=1,
+    )
+    assert [r["id"] for r in rows] == ["sparse"]
+    assert rows[0]["_score"] == pytest.approx(1)
+    # A zero dense vector remains eligible when no cosine score is requested.
+    rows = adapter.query(sparse_query_vector={"hello": 1}, filter=Eq("account_id", "one"), limit=1)
+    assert [r["id"] for r in rows] == ["zero"]
 
 
 @pytest.mark.asyncio

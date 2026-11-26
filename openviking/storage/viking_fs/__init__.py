@@ -57,7 +57,6 @@ from openviking.storage.expr import And, PathScope, RawDSL
 from openviking.storage.viking_fs import _base as _base_mod
 from openviking.storage.viking_fs._access import _AccessMixin
 from openviking.storage.viking_fs._base import (
-    _ABSTRACT_WORKER_COUNT,
     _DEFAULT_GREP_FILE_CONCURRENCY,
     _T,
     LS_ALL_NODES,
@@ -66,8 +65,6 @@ from openviking.storage.viking_fs._base import (
     SNAPSHOT_DIFF_MAX_OUTPUT_BYTES,
     SNAPSHOT_DIFF_TIMEOUT_MS,
     _ensure_non_empty_search_query,
-    _get_abstract_worker_count,
-    _get_cpu_count,
     _is_directory_not_empty_error,
     _prepare_snapshot_diff,
     _snapshot_line_count,

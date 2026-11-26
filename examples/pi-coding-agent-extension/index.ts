@@ -20,10 +20,11 @@ import { RecallManager } from "./recall.js";
 import { RecallLedger } from "./lib/recall-ledger.mjs";
 import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
 import { isBypassed } from "./shared/session-model.mjs";
 import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-guard-adapter.mjs";
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
-import { registerMcpTools } from "./tools.js";
+import { registerMcpTools, TOOL_NAME_PREFIX } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
 import { HANDLER_BUDGET_MS, describeSkip } from "./lib/takeover-core.mjs";
 
@@ -97,6 +98,9 @@ export default async function (pi: ExtensionAPI) {
   const toolNames: string[] = [];
   let toolFailureNotified = false;
   let compacted = false;
+  let historyEvent: "compact" | "resume" | null = null;
+  let compactedInRun = false;
+  let reloaded = false;
   let started = false;
   let startPromise: Promise<void> | null = null;
 
@@ -116,7 +120,7 @@ export default async function (pi: ExtensionAPI) {
   ): void => {
     if (!bridge || closed || toolsRegistered) return;
     if (state.connected) {
-      toolNames.push(...registerMcpTools(pi, bridge));
+      toolNames.push(...registerMcpTools(pi, bridge, () => sync.sessionId));
       toolsRegistered = true;
       toolsReady = toolNames.length > 0;
       logger.log("mcp_tools", { registered: toolNames.length });
@@ -131,6 +135,15 @@ export default async function (pi: ExtensionAPI) {
       `OpenViking: no tools this session — ${state.error || "handshake failed"}${rootKeyHint(state.error)}`,
       "warning",
     );
+  };
+
+  const historyPointer = (): string => {
+    if (!historyEvent || !config.sessionHistoryPointer || !isCaptureEnabled(config)
+        || !toolNames.includes(TOOL_NAME_PREFIX + "session_history")) return "";
+    return formatSessionHistoryPointer(sync.sessionId, {
+      event: historyEvent,
+      tool: "the OpenViking tool openviking_session_history",
+    }) || "";
   };
 
   /** The `/viking` line about the tool surface: a count, or the last failure. */
@@ -198,6 +211,13 @@ export default async function (pi: ExtensionAPI) {
         takeover.restore(branch);
       }
       sync.restoreCapture(branch, !ctx.sessionManager.getHeader?.()?.parentSession);
+      // Only a branch this OV session already captured is resumed; a fork's
+      // checkpoints belong to its parent's session.
+      if (sync.syncedCount > 0 && !historyEvent) {
+        if (!reloaded) historyEvent = "resume";
+        // /reload leaves the context as it was, so only a compaction in it needs the note.
+        else if (branch.some((entry: any) => entry?.type === "compaction")) historyEvent = "compact";
+      }
 
       await sync.replayPending();
       if (config.takeoverEnabled && sync.droppedCount > 0) {
@@ -231,6 +251,7 @@ export default async function (pi: ExtensionAPI) {
 
   // --- session_start ---
   pi.on("session_start", async (event, ctx) => {
+    reloaded = (event as any)?.reason === "reload";
     // Fire-and-forget: the OV chain (health check, session ensure, profile
     // build) costs ~2s against the remote server; blocking session_start on it
     // delays every pi startup. start() is memoized via startPromise, so
@@ -253,6 +274,8 @@ export default async function (pi: ExtensionAPI) {
     // costs the first turn a second handshake budget before recall is even
     // queued, for an answer start() already has.
     const wasStarted = started;
+    // From here on the note rides in this run's system prompt.
+    compactedInRun = false;
 
     // session_start doesn't fire for pi -c continuations.
     await start(ctx);
@@ -292,6 +315,10 @@ export default async function (pi: ExtensionAPI) {
     if (toolNames.length) {
       parts.push(`OpenViking tools (use these for viking:// URIs): ${toolNames.join(", ")}.`);
     }
+    // Kept on every turn after a compaction or resume: pi rebuilds the system
+    // prompt each turn, so a one-turn note would drop out of the context again.
+    const pointer = historyPointer();
+    if (pointer) parts.push(pointer);
 
     const additions = parts.join("\n\n");
     if (!additions) return;
@@ -353,6 +380,13 @@ export default async function (pi: ExtensionAPI) {
       afterTakeover,
       (message) => messageIds.get(message) ?? null,
     );
+    // A compaction inside a run keeps that run's system prompt, so the rest of
+    // the run gets the note right after the summary.
+    const pointer = compactedInRun ? historyPointer() : "";
+    if (pointer) {
+      const at = messages.findIndex((message: any) => message?.role === "compactionSummary") + 1;
+      messages.splice(at, 0, { role: "user", content: [{ type: "text", text: pointer }], timestamp: Date.now() });
+    }
     return { messages };
   });
 
@@ -412,6 +446,11 @@ export default async function (pi: ExtensionAPI) {
       );
     }
     // Return nothing → pi proceeds with default compaction
+  });
+
+  pi.on("session_compact", async () => {
+    historyEvent = "compact";
+    compactedInRun = true;
   });
 
   // --- session_shutdown ---
