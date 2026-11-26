@@ -45,7 +45,7 @@ The **Recall memory** section (on by default) controls [recall](../guides/15-gat
 | Setting | Default | What it controls |
 | --- | --- | --- |
 | **User profile at conversation start** | On | Gives the model your OpenViking user profile when a conversation starts. |
-| **Soul at conversation start** | On | Gives the model your `soul.md`, the standing instructions you keep in OpenViking, when a conversation starts, and tells the model to follow it. The soul is added whole. |
+| **Soul at conversation start** | On | Gives the model your `SOUL.md` (or the historical lowercase fallback through March 31, 2027 at the latest), the standing instructions you keep in OpenViking, when a conversation starts, and tells the model to follow it. The soul is added whole. |
 | **Opening context budget** | 4,000 tokens | The most the profile and the memory and skill catalogs may use at the start. The soul is not counted. |
 | **Show recall summary** | Off | Starts the reply with a one-line summary; see [Recall summary](#recall-summary). |
 | **Sources** | Memories, resources, skills | What recall searches. |

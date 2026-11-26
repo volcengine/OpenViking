@@ -192,7 +192,7 @@ Explained in [Recall memory](08-context-profiles.md#recall-memory).
 | --- | --- | --- | --- | --- |
 | Recall memory | `recall` | `true` | | Search memory for each new user message. |
 | User profile at conversation start | `profile` | `true` | | Provide the user profile when a conversation starts, independently of recall. |
-| Soul at conversation start | `soul` | `true` | | Provide the user's `memories/soul.md` when a conversation starts and tell the model to follow it, independently of recall. It is added whole, outside the opening context budget. |
+| Soul at conversation start | `soul` | `true` | | Provide the user's root `SOUL.md` (or historical `memories/soul.md` through March 31, 2027 at the latest) when a conversation starts and tell the model to follow it, independently of recall. It is added whole, outside the opening context budget. |
 | Opening context budget | `profile_max_tokens` | `4000` | 0–32,000 | Separate budget for the profile and catalogs; 0 leaves them out. Catalogs need the OpenViking `read` tool (`openviking_read`). |
 | Show recall summary | `show_recall` | `false` | | Start the reply with a summary of what OpenViking added, or why recall failed. The model never sees it. |
 | Sources | `context_types` | `memory`, `resource`, `skill` | At least one while recall is on (checked by Studio only) | What to search: memories, resources, skills. |

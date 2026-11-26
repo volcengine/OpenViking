@@ -49,7 +49,7 @@ async def test_soul_profile_and_catalog_are_independent(soul, profile, catalog):
         tools("read", "list") if catalog else [],
     )
     text = result["text"]
-    assert ('<agent-soul uri="viking://user/alice/memories/soul.md">' in text) == soul
+    assert ('<agent-soul uri="viking://user/alice/SOUL.md">' in text) == soul
     assert ("soul" in result["parts"]) == soul
     assert ("<user-profile" in text) == profile
     if soul and profile:
@@ -139,7 +139,7 @@ async def test_profile_and_skills_respect_full_token_budgets(
         viking, "key", Policy(profile_max_tokens=budget), tools("read", "list")
     )
     # The soul is whole whatever the budget, and the budget holds for the rest.
-    whole = f'<agent-soul uri="viking://user/alice/memories/soul.md">\n{viking.soul.strip()}\n'
+    whole = f'<agent-soul uri="viking://user/alice/SOUL.md">\n{viking.soul.strip()}\n'
     whole += "</agent-soul>"
     assert result["text"].startswith(whole) == bool(soul)
     rest = result["text"].removeprefix(whole).lstrip("\n")
@@ -157,7 +157,14 @@ async def test_profile_and_skills_respect_full_token_budgets(
         uris = [
             parse_qs(urlsplit(path).query).get("uri") for _, path, _, _ in viking.profile_requests
         ]
-        assert uris == [None, ["viking://user"], ["viking://user/alice/memories/soul.md"]]
+        expected_uris = [
+            None,
+            ["viking://user"],
+            ["viking://user/alice/SOUL.md"],
+        ]
+        if not soul:
+            expected_uris.append(["viking://user/alice/memories/soul.md"])
+        assert uris == expected_uris
         viking.profile_requests.clear()
         policy = Policy(profile_max_tokens=0, soul=False)
         off = await build_profile(viking, "key", policy, tools("read", "list"))
@@ -177,6 +184,18 @@ async def test_missing_soul_and_profile_files_are_not_failures():
     result = await build_profile(viking, "key", Policy(), tools("read"))
     assert result["reason"] == "injected" and result["parts"] == ["memories", "skills"]
     assert (await build_profile(viking, "key", Policy(), []))["reason"] == "empty"
+
+
+async def test_historical_lowercase_soul_is_used_only_as_a_fallback():
+    viking = populated_viking()
+    viking.soul = ""
+    viking.legacy_soul = "Historical instructions."
+    result = await build_profile(viking, "key", Policy(profile=False), [])
+    assert result["text"] == (
+        '<agent-soul uri="viking://user/alice/memories/soul.md">\n'
+        "Historical instructions.\n"
+        "</agent-soul>"
+    )
 
 
 def test_profile_elision_preserves_identity_and_recent_events():

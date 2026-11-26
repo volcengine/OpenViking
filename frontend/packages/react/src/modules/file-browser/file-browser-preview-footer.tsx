@@ -81,6 +81,7 @@ function isAiGeneratedPreview(uri: string | null, isCompile: boolean) {
   return (
     isCompile ||
     isSummaryUri(uri) ||
+    /^viking:\/\/(?:user\/[^/]+|~)\/SOUL\.md$/.test(uri) ||
     /^viking:\/\/(?:user\/[^/]+|~)(?:\/peers\/[^/]+)?\/memories\/(?:identity|soul)\.md$/i.test(
       uri,
     ) ||

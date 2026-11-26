@@ -378,11 +378,11 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 
 首次使用某个活动 Workspace 时，VikingBot 会从内置 `bot/workspace` 模板复制初始文件。常用定制入口如下：
 
-配置 OpenViking 后，VikingBot 每轮读取当前用户的 `viking://~/memories/soul.md`，优先使用该文件替代本地 `SOUL.md`。文件不存在、为空、读取失败或读取超过 5 秒时，回退到本地 `SOUL.md`；未配置 OpenViking 时直接使用本地 `SOUL.md`。
+配置 OpenViking 后，VikingBot 每轮读取当前用户根目录的 `viking://~/SOUL.md`，优先使用该文件替代本地 `SOUL.md`。根目录文件不存在或为空时再尝试历史路径 `memories/soul.md`；两者都无法在 5 秒内读到时回退本地 `SOUL.md`。两个远端文件同时存在时以根目录文件为准。历史远端路径仅用于限期迁移，请在 2027 年 3 月 31 日前将内容迁移到根目录 `SOUL.md`，该兜底最晚于该日移除。未配置 OpenViking 时直接使用本地 `SOUL.md`。
 
 | 文件或目录 | 作用 | 加载方式 |
 |------------|------|----------|
-| OpenViking `memories/soul.md` | Agent 指令 | 每轮优先于本地 `SOUL.md` 加载 |
+| OpenViking 根目录 `SOUL.md`（兼容历史 `memories/soul.md`） | Agent 指令 | 每轮优先于本地 `SOUL.md` 加载 |
 | `SOUL.md` | 人格、价值观和表达风格 | OpenViking Agent 指令不可用时的本地兜底 |
 | `AGENTS.md` | 全局工作规则和任务约束；可按需创建 | 每轮自动加入系统提示 |
 | `IDENTITY.md` | Agent 名称、角色和身份背景；可按需创建 | 每轮自动加入系统提示 |
@@ -403,7 +403,7 @@ Agent 实际使用的活动目录还取决于 `bot.sandbox.mode`：
 - 不确定时明确说明假设，不编造结果
 ```
 
-当前选用的指令文件保存后，通常会在下一轮 Agent 对话中生效，无需重启 Gateway。使用 OpenViking `soul.md` 时，应编辑该远端文件，本地 `SOUL.md` 不会同时注入。这些指令只能改变提示行为，不能绕过 Channel 权限、工具可见性或 Sandbox 限制。
+当前选用的指令文件保存后，通常会在下一轮 Agent 对话中生效，无需重启 Gateway。使用 OpenViking `SOUL.md` 或历史小写兜底文件时，应编辑当前选中的远端文件，本地 `SOUL.md` 不会同时注入。这些指令只能改变提示行为，不能绕过 Channel 权限、工具可见性或 Sandbox 限制。
 
 > [!NOTE]
 > 请修改活动 Workspace 中的文件。仓库或安装包中的 `bot/workspace` 是初始化模板，不会覆盖已经存在的 Workspace。不要在启动文件中保存 API Key 等秘密。

@@ -59,7 +59,7 @@ OpenViking 网关是一个模型 API 代理：客户端只要能修改 Base URL�
 接入后你会得到：
 
 - 每条新消息都补上相关记忆；
-- 新对话开头带上你的 soul（`soul.md` 里的指令）和用户画像；
+- 新对话开头带上你的 soul（`SOUL.md` 里的指令，历史小写路径最晚兼容到 2027 年 3 月 31 日）和用户画像；
 - 对话保存回 OpenViking，并提取成新记忆；
 - 长对话自动压缩；
 - 开启 OpenViking 工具后，模型还能主动检索、读取和写入记忆（见[让任意客户端拥有 Agentic 记忆](../gateway/04-openviking-tools.md#agentic-memory-for-any-client)）。

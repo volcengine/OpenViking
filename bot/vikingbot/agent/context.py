@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from openviking_cli.exceptions import NotFoundError
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.agent.tools.base import MultimodalToolResult
@@ -32,6 +33,12 @@ class ContextBuilder:
     """
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md"]
+    # TODO(2027-03-31): Remove the lowercase remote fallback no later than this
+    # date; it exists only to give existing users time to move to root SOUL.md.
+    REMOTE_SOUL_URIS = (
+        "viking://~/SOUL.md",
+        "viking://~/memories/soul.md",
+    )
     INIT_DIR = "init"
 
     def __init__(
@@ -147,8 +154,8 @@ class ContextBuilder:
             )
 
         # Bootstrap files
-        agent_instructions = await self._load_viking_agent(workspace_id)
-        bootstrap = self._load_bootstrap_files(agent_instructions)
+        agent_uri, agent_instructions = await self._load_viking_agent(workspace_id)
+        bootstrap = self._load_bootstrap_files(agent_instructions, agent_uri)
         if bootstrap:
             parts.append(bootstrap)
 
@@ -388,10 +395,10 @@ IMPORTANT:
 ## Memory
 - Remember important facts: using openviking_memory_commit tool to commit"""
 
-    async def _load_viking_agent(self, workspace_id: str) -> str:
+    async def _load_viking_agent(self, workspace_id: str) -> tuple[str, str]:
         """Prefer the current OpenViking user's static instructions when readable."""
         if self._config is None or not self._config.ov_server.is_available():
-            return ""
+            return "", ""
         client = None
         try:
             client = await VikingClient.create(
@@ -400,14 +407,22 @@ IMPORTANT:
                 actor_peer_id=self._actor_peer_id,
                 config=self._config,
             )
+
+            async def read_soul() -> tuple[str, str]:
+                for uri in self.REMOTE_SOUL_URIS:
+                    try:
+                        content = await client.read_raw(uri)
+                    except NotFoundError:
+                        continue
+                    if content.strip():
+                        return uri, content
+                return "", ""
+
             # Bootstrap reads must not hold up a turn when the upstream is unavailable.
-            content = await asyncio.wait_for(
-                client.read_raw("viking://~/memories/soul.md"), timeout=5.0
-            )
-            return content if content.strip() else ""
+            return await asyncio.wait_for(read_soul(), timeout=5.0)
         except Exception as exc:
-            logger.debug("OpenViking soul.md unavailable; using local SOUL.md: {}", exc)
-            return ""
+            logger.debug("OpenViking SOUL.md unavailable; using local SOUL.md: {}", exc)
+            return "", ""
         finally:
             if client is not None:
                 try:
@@ -415,13 +430,13 @@ IMPORTANT:
                 except Exception as exc:
                     logger.warning("Error closing VikingClient: {}", exc)
 
-    def _load_bootstrap_files(self, agent_instructions: str = "") -> str:
+    def _load_bootstrap_files(self, agent_instructions: str = "", agent_uri: str = "") -> str:
         """Load workspace bootstrap files, replacing Soul with remote Agent instructions."""
         parts = []
 
         for filename in self.BOOTSTRAP_FILES:
             if filename == "SOUL.md" and agent_instructions:
-                parts.append(f"## viking://~/memories/soul.md\n\n{agent_instructions}")
+                parts.append(f"## {agent_uri}\n\n{agent_instructions}")
                 continue
             file_path = self.workspace / filename
             if file_path.exists():

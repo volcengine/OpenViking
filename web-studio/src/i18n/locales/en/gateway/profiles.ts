@@ -83,7 +83,7 @@ const profiles = {
     soul: {
       label: 'Soul at conversation start',
       description:
-        'Give the model your soul.md, the standing instructions you keep in OpenViking, when a conversation starts. The model is told to follow it. It is added whole and does not count against the opening context budget.',
+        'Give the model the root SOUL.md, the standing instructions you keep in OpenViking, when a conversation starts. The historical memories/soul.md fallback ends no later than March 31, 2027. The model is told to follow it. It is added whole and does not count against the opening context budget.',
     },
     profileMaxTokens: {
       label: 'Opening context budget',

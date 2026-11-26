@@ -209,9 +209,9 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         f"{uri.removeprefix(user_root + '/')}/{filename}" if uri != user_root else filename
         for uri in expected_uris
         for filename in (".abstract.md", ".overview.md")
-    } | {"memories/soul.md"}
-    assert (root_path / "memories/soul.md").read_text() == (
-        SYSTEM_ASSETS_DIR / "memory" / "soul.md"
+    } | {"SOUL.md"}
+    assert (root_path / "SOUL.md").read_text() == (
+        SYSTEM_ASSETS_DIR / "agent" / "SOUL.md"
     ).read_text()
     assert "Sanitized scope." in (root_path / ".abstract.md").read_text()
     assert (

@@ -59,7 +59,7 @@ RECALL_PROVENANCE_NOTE = (
 def gateway_note(policy, tools, soul=False):
     """Opening lines that tell the model what the gateway adds to this history.
 
-    ``soul`` says the block carries the user's soul.md.
+    ``soul`` says the block carries the user's SOUL.md.
     """
     if not (policy.recall or tools or soul):
         return ""
@@ -69,7 +69,7 @@ def gateway_note(policy, tools, soul=False):
     ]
     if soul:
         lines.append(
-            "- The <agent-soul> section below is the soul.md file from the user's OpenViking "
+            "- The <agent-soul> section below is the SOUL.md file from the user's OpenViking "
             "account: their standing instructions for who you are and how you behave. Follow it, "
             "except where the system prompt or the user in this conversation says otherwise."
         )

@@ -19,9 +19,9 @@ export const PAGE = 3;
 
 const SPEC: Spec = {
   [`${USER}/`]: {
+    'SOUL.md': null,
     'memories/': {
       'profile.md': null,
-      'soul.md': null,
       'preferences/': {},
       'entities/': {},
       'events/': {},

@@ -96,7 +96,7 @@ results = client.find(
 
 Schema 定义的 `memories/tools/` 和 `memories/skills/` 类型已禁用。它们与存放在 `viking://user/{user_id}/skills/{skill_name}/SKILL.md` 下的独立 Skill 不同，后者仍然保留并受支持。
 
-`memories/soul.md` 是静态 Agent 指令文件，创建用户工作区时按原 Soul 的默认正文初始化。可通过文件接口编辑，不参与 session commit 的自动提取或合并。已有用户在初始化或下次提取 Self 记忆时，若缺少 `soul.md` 则按默认内容补齐；已有 `soul.md` 和 `identity.md` 均保持原样。
+用户根目录下的 `SOUL.md` 是静态 Agent 指令文件，创建用户工作区时按原 Soul 的默认正文初始化。它属于设定而不是记忆，可通过文件接口编辑，不参与 session commit 的自动提取或合并。历史路径 `memories/soul.md` 仅在限期迁移窗口内受支持：已有文件保持原样，在根目录 `SOUL.md` 不存在时继续使用。请在 2027 年 3 月 31 日前将内容迁移到根目录 `SOUL.md`，历史路径兜底最晚于该日移除。两者同时存在时以根目录 `SOUL.md` 为准。`profile.md` 继续位于 `memories/`，新工作区不再创建 `identity.md`。
 
 ### 使用
 

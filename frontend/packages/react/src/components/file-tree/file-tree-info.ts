@@ -59,6 +59,8 @@ const MEMORY_KEY_BY_SEGMENT: Record<string, FileTreeInfoKey> = {
   entities: 'entities',
   events: 'events',
   'identity.md': 'identity',
+  // TODO(2027-03-31): Stop assigning Soul semantics to this historical path
+  // no later than this date; root SOUL.md is the only canonical location.
   'soul.md': 'soul',
   cases: 'cases',
   trajectories: 'trajectories',
@@ -94,7 +96,10 @@ export function resolveFileTreeInfoKey(uri: string): FileTreeInfoKey | null {
     const third = segments[2];
     if (!third) return null;
 
-    if (segments.length === 3) return USER_SCOPE_KEY_BY_SEGMENT[third] ?? null;
+    if (segments.length === 3) {
+      if (third === 'soul.md') return 'soul';
+      return USER_SCOPE_KEY_BY_SEGMENT[third] ?? null;
+    }
 
     // 只有 `memories` 的子级有语义；其他分支下的同名目录沿用上级含义。
     // Only children of `memories` carry a meaning of their own.

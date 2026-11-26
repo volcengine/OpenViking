@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from unittest.mock import call as mock_call
 
 import pytest
 from vikingbot.agent.context import ContextBuilder
@@ -448,21 +449,35 @@ async def test_context_prefers_openviking_agent_and_falls_back_to_local_soul(tem
     assert "Remote Agent instructions" in prompt
     assert "Local Soul instructions" not in prompt
     assert "Local working rules" in prompt
-    client.read_raw.assert_awaited_once_with("viking://~/memories/soul.md", offset=0, limit=-1)
+    client.read_raw.assert_awaited_once_with("viking://~/SOUL.md", offset=0, limit=-1)
     assert http_client.call_args.kwargs["api_key"] == "request-key"
     assert http_client.call_args.kwargs["user"] == "alice"
     assert http_client.call_args.kwargs["actor_peer_id"] == "sender-1"
 
-    for failure in (NotFoundError("soul.md"), TimeoutError("OpenViking unavailable")):
+    client.read_raw.reset_mock()
+    client.read_raw.side_effect = [NotFoundError("SOUL.md"), "Historical Agent instructions"]
+    prompt = await system_prompt()
+    assert "Historical Agent instructions" in prompt
+    assert "Local Soul instructions" not in prompt
+    assert client.read_raw.await_args_list == [
+        mock_call("viking://~/SOUL.md", offset=0, limit=-1),
+        mock_call("viking://~/memories/soul.md", offset=0, limit=-1),
+    ]
+
+    for failure in (
+        [NotFoundError("SOUL.md"), NotFoundError("soul.md")],
+        TimeoutError("OpenViking unavailable"),
+    ):
+        client.read_raw.reset_mock()
         client.read_raw.side_effect = failure
         prompt = await system_prompt()
         assert "Local Soul instructions" in prompt
         assert "Remote Agent instructions" not in prompt
-    assert client.close.await_count == 3
+    assert client.close.await_count == 4
 
     config.ov_server.server_url = ""
     assert "Local Soul instructions" in await system_prompt()
-    assert http_client.call_count == 3
+    assert http_client.call_count == 4
 
 
 @pytest.mark.asyncio

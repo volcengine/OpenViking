@@ -145,6 +145,8 @@ test('AI notice follows generated document scope and locale', async () => {
         assert.match(meta(), /AI 生成/);
       }
     }
+    await view.render(page('viking://user/alice/SOUL.md'));
+    assert.match(meta(), /AI 生成/);
     await view.render(page('viking://resources/wiki/chapter.md'));
     assert.match(meta(), /AI 生成/);
     await view.render(page('viking://resources/wiki/chapter.md', 'zh-CN', []));
