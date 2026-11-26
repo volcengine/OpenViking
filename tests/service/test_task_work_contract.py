@@ -736,7 +736,7 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
         assert await tracker.get_work_state("task", work_ids[0], **OWNER) is WorkState.CANCELLED
         assert not worker.done()
         monkeypatch.setattr("openviking.service.task_tracker._CANCEL_POLL_INTERVAL", 0)
-        remote.start_cleanup_loop()
+        remote.start_cleanup_loop(cleanup_history=False)
         # Cancellation delivery precedes durable cleanup. MySQL commits during
         # unregister_running_task must settle before the worker propagates it;
         # a one-second timeout on the worker can cancel that cleanup itself.
