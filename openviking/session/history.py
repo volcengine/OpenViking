@@ -1058,29 +1058,39 @@ def _matching_lines(item: _Item, patterns: Sequence[re.Pattern]) -> tuple[List[_
     hidden = False
     starts: List[int] = []
     ends: List[int] = []
-    covered = 0  # matches before this position are already printed
+    covered = 0  # exclusive end of the last printed line or window
     spans = heapq.merge(*(map(re.Match.span, pattern.finditer(text)) for pattern in patterns))
     for match_start, match_end in spans:
         verdict = _allowed(match_start, item)
         if not verdict:
             hidden = hidden or verdict is None
             continue
-        if lines and match_start < covered:
+        uncovered_start = max(match_start, covered)
+        if uncovered_start >= match_end:
             continue
-        if not lines:
+        if not starts:
             breaks = [match.span() for match in _LINE_BREAK_RE.finditer(text)]
             starts = [0, *(end for _start, end in breaks)]
             ends = [*(start for start, _end in breaks), len(text)]
-        index = bisect.bisect_right(starts, match_start) - 1
-        start, end = starts[index], ends[index]
-        if end - start > LONG_LINE_CHARS:
-            window_start = max(start, covered, match_start - LINE_WINDOW_CHARS)
-            window_end = min(end, max(match_end, match_start + 1) + LINE_WINDOW_CHARS)
-            lines.append(_Line(window_start, window_end, end - start))
-            covered = window_end
-        else:
-            lines.append(_Line(start, end, 0))
-            covered = starts[index + 1] if index + 1 < len(starts) else len(text) + 1
+        first = bisect.bisect_right(starts, uncovered_start) - 1
+        stop = bisect.bisect_left(starts, match_end)
+        for index in range(first, stop):
+            start, end = starts[index], ends[index]
+            if end <= uncovered_start or start <= match_start < covered:
+                continue
+            if start > match_start:
+                verdict = _allowed(start, item)
+                if not verdict:
+                    hidden = hidden or verdict is None
+                    continue
+            if end - start > LONG_LINE_CHARS:
+                window_start = max(start, covered, match_start - LINE_WINDOW_CHARS)
+                window_end = min(end, match_end + LINE_WINDOW_CHARS)
+                lines.append(_Line(window_start, window_end, end - start))
+                covered = window_end
+            else:
+                lines.append(_Line(start, end, 0))
+                covered = starts[index + 1] if index + 1 < len(starts) else len(text) + 1
     return lines, hidden
 
 
