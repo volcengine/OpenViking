@@ -36,6 +36,12 @@ def _fs(*, acl_manager=None) -> VikingFS:
     return VikingFS(agfs=SimpleNamespace(), acl_manager=acl_manager)
 
 
+def test_global_acl_bypass_rejects_mixed_targets():
+    targets = ["viking://resources/team", "viking://user/other/memories"]
+    with pytest.raises(PermissionDeniedError):
+        _fs().authorize_read(_ctx(Role.GLOBAL, bypass_acl=True), targets)
+
+
 @pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
 @pytest.mark.parametrize(
     "uri",
