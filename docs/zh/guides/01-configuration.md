@@ -1127,7 +1127,7 @@ python -c "from tree_sitter_language_pack import download_all; download_all()"
 
 ### pdf
 
-PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru`（远程 MinerU API）、`auto`（先本地、失败回退 MinerU）。
+PDF 解析配置。`local` 只在本地解析，`mineru` 要求远程解析成功，`auto` 会先把 PDF 发给已配置的 MinerU，远程失败时回退到本地解析。未配置端点时，`auto` 直接在本地解析。
 
 ```json
 {
@@ -1148,10 +1148,11 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 |------|------|------|
 | `strategy` | str | 解析策略：`local` / `mineru` / `auto`（默认 `auto`） |
 | `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
-| `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
-| `mineru_bodys` | dict | MinerU API multipart form 参数 |
+| `mineru_timeout` | float | 请求和托管版结果轮询的超时秒数（默认 `300.0`） |
+| `mineru_bodys` | dict | 额外的 MinerU 请求参数（自托管版表单或托管版 JSON） |
+| `mineru_token` | str | MinerU 官方托管版 v4 API 的 Bearer token |
 
-**MinerU 协议**：同步调用 `POST {mineru_endpoint}/file_parse`，multipart 文件字段为 `files`，form 参数由 `mineru_bodys` 透传。
+使用自托管 MinerU 时，填写服务地址，OpenViking 通过 `/file_parse` 上传 PDF。使用官方托管版时，将 `mineru_endpoint` 设为 `https://mineru.net/api/v4` 并填写 `mineru_token`，OpenViking 会通过 v4 接口上传文件和获取结果。
 
 ### 外部解析 API（`parser_api`） {#parser-api}
 

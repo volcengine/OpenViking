@@ -182,7 +182,16 @@ In `gateway.conf`, `client_rules` sits at the root, without the `gateway` wrappe
 
 ## Context profile settings {#context-profile-settings}
 
-In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles). **Let clients override settings** (`client_overrides`, default `true`) lets clients change every other setting for a new conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides).
+In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles). **Let clients override settings** (`client_overrides`, default `true`) lets clients change every other setting for a new conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides). The two switches below it, which that header cannot set either, are in [Secret sealing](#profile-seal-secrets).
+
+### Secret sealing {#profile-seal-secrets}
+
+Explained in [Secret sealing in the gateway](14-seal-secrets.md).
+
+| Studio label | API name | Default | Range | Meaning |
+| --- | --- | --- | --- | --- |
+| Seal secrets | `seal_secrets` | `false` | | Send registered credentials, and new tokens the user types, to the model only as references; give client tools the real values. Needs OpenViking Server 0.5.7 or later. A request that cannot be sealed is refused. `X-OpenViking-Context` cannot set it. |
+| Also store secrets found in tool output | `enroll_tool_secrets` | `false` | | Also store new tokens from tool results and attached blocks. Only with `seal_secrets`. `X-OpenViking-Context` cannot set it. |
 
 ### Recall memory {#profile-recall}
 

@@ -23,7 +23,7 @@ POST /api/v1/compile/create
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `compile_name` | string | 是 | 调用者指定的配置名称，原样返回 |
-| `from` | string[] | 是 | 非空来源目录列表 |
+| `from` | string[] | 是 | 1 至 100 个来源目录，按 URI 解析后去重计数 |
 | `to` | string | 是 | 调用者可写、与来源不重叠的输出目录 |
 | `skill` | string | 是 | 可读的 Skill 目录或其 `SKILL.md` URI |
 | `instruction` | string | 否 | 补充指令；null 使用 Skill 默认行为 |

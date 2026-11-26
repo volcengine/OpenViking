@@ -150,6 +150,11 @@ export type ProfileSettings = {
   tool_result_bytes: number
   tool_total_seconds: number | null
   tool_total_tokens: number | null
+  /** Registered secrets reach the model only as references, and what cannot be sealed
+   * fails; clients cannot override it. */
+  seal_secrets: boolean
+  /** With `seal_secrets`, new tokens in tool results and attached blocks are enrolled too. */
+  enroll_tool_secrets: boolean
   /** Clients may override the other settings with `X-OpenViking-Context`. */
   client_overrides: boolean
 }
