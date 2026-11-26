@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import os
 import signal
@@ -21,6 +22,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def load_expiry_config(path: Path):
+    """Load the aggregate config and validate expiry publisher requirements."""
     from openviking.server.config import TTLAdapterConfig
     from openviking_cli.utils.config.config_loader import expand_config_environment
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
@@ -36,7 +38,7 @@ def load_expiry_config(path: Path):
     config.expiry.validate_for_runtime()
     if not config.expiry.publisher_separate_process:
         raise ValueError("expiry publisher process is disabled by configuration")
-    return config.expiry
+    return config
 
 
 def write_startup_status(path: Path, status: str, error: str | None = None) -> None:
@@ -58,12 +60,26 @@ def install_signal_handlers(stop: asyncio.Event) -> None:
 
 
 async def run_publisher(config, stop: asyncio.Event, startup_status: Path) -> None:
+    """Run the expiry publisher with the named CacheRuntime selected by config."""
     from openviking.scheduling.expiry.runtime import ExpiryRuntime, ExpiryRuntimeRoles
+    from openviking.utils.agfs_utils import build_runtime_ragfs_binding_config, create_agfs_client
 
-    runtime = ExpiryRuntime(config, roles=ExpiryRuntimeRoles(publish=True))
+    agfs = None
+    runtime = None
+    runtime_closed = False
     wait_task: asyncio.Task[None] | None = None
     stop_task: asyncio.Task[bool] | None = None
     try:
+        binding_config, _ = build_runtime_ragfs_binding_config(config)
+        agfs = create_agfs_client(binding_config)
+        expiry_config = config.expiry
+        if expiry_config.cache is None:
+            raise ValueError("expiry.cache.instance is required by the expiry publisher")
+        runtime = ExpiryRuntime(
+            expiry_config,
+            cache_runtime=agfs.cache_runtime(expiry_config.cache.instance),
+            roles=ExpiryRuntimeRoles(publish=True),
+        )
         await runtime.start_storage()
         await runtime.start_roles()
         write_startup_status(startup_status, "ready")
@@ -78,6 +94,7 @@ async def run_publisher(config, stop: asyncio.Event, startup_status: Path) -> No
         finally:
             stop.set()
             await runtime.close()
+            runtime_closed = True
     finally:
         if wait_task is not None:
             if not wait_task.done():
@@ -87,8 +104,15 @@ async def run_publisher(config, stop: asyncio.Event, startup_status: Path) -> No
             if not stop_task.done():
                 stop_task.cancel()
             await asyncio.gather(stop_task, return_exceptions=True)
-        if wait_task is None:
+        if runtime is not None and wait_task is None:
             await runtime.close()
+            runtime_closed = True
+        if runtime is None or runtime_closed:
+            close = getattr(agfs, "close", None)
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
 
 
 def main(argv: list[str] | None = None) -> int:

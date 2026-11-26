@@ -196,6 +196,7 @@ async def test_flat_file_refreshes_parent_semantics_and_vectorizes_via_summary(
         created=True,
         file_md5=None,
         file_abstract="",
+        generation_trigger="resource_ingest",
     )
 
 

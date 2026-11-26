@@ -1492,6 +1492,7 @@ class ResourceProcessor:
                         created=not target_preexisting,
                         file_md5=file_refresh.md5,
                         file_abstract="",
+                        generation_trigger="resource_ingest",
                     )
                 elif build_index and context_update_plan is None:
                     if root_is_file:
@@ -1522,6 +1523,7 @@ class ResourceProcessor:
                     created=not target_preexisting,
                     file_md5=file_refresh.md5,
                     file_abstract="",
+                    generation_trigger="resource_ingest",
                 )
             except BaseException:
                 await cleanup_artifact_if_owned()
@@ -1666,7 +1668,7 @@ class ResourceProcessor:
                     if not isinstance(source, bytes):
                         raise ValueError(f"file vector source must be bytes: {action.uri}")
                     file_kwargs["file_content"] = source
-                    if getattr(self.vikingdb, "uses_content_field", False):
+                    if await self.vikingdb.account_uses_content_field(ctx.account_id):
                         file_kwargs["materialize_content"] = True
                 if await self._vectorize_resource_file(action.uri, **file_kwargs):
                     completed_actions += 1

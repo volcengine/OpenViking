@@ -62,6 +62,7 @@ def test_fixed_and_official_system_roots_are_explicit():
     assert SYSTEM_OFFICIAL_ASSET_ROOTS == {
         "viking://system/compile/example-skills",
         "viking://system/memory/memory_templates/builtin",
+        "viking://system/semantic/templates/builtin",
     }
     assert is_system_fixed_directory_uri("viking://system/memory/memory_templates/custom/")
     assert not is_system_fixed_directory_uri(

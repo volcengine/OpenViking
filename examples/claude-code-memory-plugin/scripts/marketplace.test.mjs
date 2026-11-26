@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -76,6 +77,40 @@ test("Claude .mcp.json starts the stdio MCP proxy", () => {
   execFileSync("node", ["--check", join(pluginDir, "servers", "mcp-proxy.mjs")], { stdio: "pipe" });
 });
 
+test("Claude hook commands run from plugin roots containing spaces", {
+  skip: process.platform === "win32",
+}, async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "ov-claude-hooks-"));
+  const pluginRoot = join(home, "Application Support [plugin]");
+  symlinkSync(pluginDir, pluginRoot, "dir");
+  try {
+    const { hooks } = readJson(join(pluginDir, "hooks", "hooks.json"));
+    for (const [event, entries] of Object.entries(hooks)) {
+      for (const { hooks: commands } of entries) {
+        for (const hook of commands) {
+          await t.test(`${event}: ${hook.command}`, () => {
+            execFileSync("sh", ["-c", hook.command], {
+              input: "{}",
+              stdio: ["pipe", "pipe", "pipe"],
+              env: {
+                ...process.env,
+                HOME: home,
+                CLAUDE_PLUGIN_ROOT: pluginRoot,
+                OPENVIKING_HOME: join(home, ".openviking"),
+                OPENVIKING_CONFIG_FILE: join(home, "ov.conf"),
+                OPENVIKING_CLI_CONFIG_FILE: join(home, "ovcli.conf"),
+                OPENVIKING_MEMORY_ENABLED: "0",
+              },
+            });
+          });
+        }
+      }
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("Claude hooks include optional skill experience PostToolUse Read hook", () => {
   const hooks = readJson(join(pluginDir, "hooks", "hooks.json"));
   const postToolUse = hooks.hooks?.PostToolUse;
@@ -84,7 +119,7 @@ test("Claude hooks include optional skill experience PostToolUse Read hook", () 
   assert.ok(readHook, "PostToolUse must include a Read matcher");
   assert.equal(
     readHook.hooks?.[0]?.command,
-    "node ${CLAUDE_PLUGIN_ROOT}/scripts/skill-experience.mjs",
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/skill-experience.mjs"',
   );
   execFileSync("node", ["--check", join(pluginDir, "scripts", "skill-experience.mjs")], { stdio: "pipe" });
 });
@@ -97,7 +132,7 @@ test("Claude hooks include PreToolUse URI guard for file and shell tools", () =>
   assert.ok(guardHook, "PreToolUse must guard Read|Glob|Grep|Edit|Write|Bash");
   assert.equal(
     guardHook.hooks?.[0]?.command,
-    "node ${CLAUDE_PLUGIN_ROOT}/scripts/uri-guard.mjs",
+    'node "${CLAUDE_PLUGIN_ROOT}/scripts/uri-guard.mjs"',
   );
   execFileSync("node", ["--check", join(pluginDir, "scripts", "uri-guard.mjs")], { stdio: "pipe" });
 });

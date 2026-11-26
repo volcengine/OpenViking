@@ -12,6 +12,7 @@ from openviking.core.namespace import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
+from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
@@ -213,6 +214,14 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         SYSTEM_ASSETS_DIR / "memory" / "soul.md"
     ).read_text()
     assert "Sanitized scope." in (root_path / ".abstract.md").read_text()
+    assert (
+        parse_abstract_overview((root_path / ".abstract.md").read_text()).metadata["maintenance"]
+        == "manual"
+    )
+    assert (
+        "maintenance"
+        not in parse_abstract_overview((root_path / ".overview.md").read_text()).metadata
+    )
 
     with pytest.raises(PermissionDeniedError):
         await viking_fs.write_context(user_root, abstract="blocked", ctx=ctx)

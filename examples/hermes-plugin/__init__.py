@@ -36,16 +36,28 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import url2pathname
 
-from agent.message_content import flatten_message_text
 from agent.memory_provider import MemoryProvider, spawn_context_thread
 from agent.secret_scope import get_secret
-from agent.skill_commands import extract_user_instruction_from_skill_message
 from hermes_cli import __version__ as _HERMES_VERSION
 from hermes_constants import get_hermes_home, get_process_hermes_home
 from tools.registry import tool_error
 from utils import atomic_json_write, env_var_enabled
 
 from . import quick_local
+
+try:
+    from agent.message_content import flatten_message_text
+except ModuleNotFoundError as exc:
+    if exc.name != "agent.message_content":
+        raise
+    from session_rules.turns import flatten_message_text
+
+try:
+    from agent.skill_commands import extract_user_instruction_from_skill_message
+except ImportError as exc:
+    if exc.name != "agent.skill_commands":
+        raise
+    from session_rules.turns import extract_user_instruction_from_skill_message
 
 try:
     import fcntl
@@ -61,6 +73,7 @@ except ImportError:  # Hermes releases before process-home pinning
 
 _DEFAULT_ENDPOINT = "http://127.0.0.1:1933"
 _OPENVIKING_SERVICE_ENDPOINT = "https://api.vikingdb.cn-beijing.volces.com/openviking"
+_BYTEPLUS_SERVICE_ENDPOINT = "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking"
 _DEFAULT_AGENT = ""
 _OPENVIKING_USER_AGENT = f"openviking-memory-hermes/{_HERMES_VERSION}"
 _OVCLI_CONFIG_ENV = "OPENVIKING_CLI_CONFIG_FILE"

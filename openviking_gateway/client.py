@@ -4,11 +4,13 @@
 
 import asyncio
 import hashlib
+import json
 import time
 from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from importlib.resources import files
 
 import aiohttp
 from packaging.version import InvalidVersion, Version
@@ -22,6 +24,26 @@ PEER_HEADER = "X-OpenViking-Actor-Peer"
 # OpenViking's bounds for a session's automatic commits.
 MIN_IDLE_SECONDS = 300
 MAX_COMMIT_TOKENS = 1_000_000
+# The first OpenViking version with each server capability the gateway depends on. The
+# plugins share the table; examples/memory-plugin-shared/sync.mjs writes this copy.
+FEATURES = json.loads(
+    files("openviking_gateway").joinpath("server-features.json").read_text(encoding="utf-8")
+)
+
+
+def supports(feature, version):
+    """Whether an OpenViking of ``version`` has ``feature``; an unreadable version has none.
+
+    Only the release counts, so ``0.5.7.dev44`` has what 0.5.7 has. An unknown
+    ``feature`` raises ``KeyError``: it is a programming error, not a server property.
+    """
+    required = Version(FEATURES[feature])
+    if not isinstance(version, str):
+        return False
+    try:
+        return Version(Version(version).base_version) >= required
+    except InvalidVersion:
+        return False
 
 
 @dataclass
@@ -261,6 +283,18 @@ class VikingClient:
             peer=peer,
         )
 
+    async def seal(self, key, texts, timeout):
+        """Replace the caller's registered secrets in ``texts``; enroll-flagged ones add new."""
+        return await self.request(
+            "POST", "/api/v1/privacy-configs/seal", key, {"texts": texts}, timeout=timeout
+        )
+
+    async def resolve(self, key, reference, timeout):
+        """The caller's own field a reference names, value included."""
+        return await self.request(
+            "POST", "/api/v1/privacy-configs/resolve", key, {"selector": reference}, timeout=timeout
+        )
+
     async def write(self, key, session, messages):
         return await self.request(
             "POST", f"/api/v1/sessions/{session}/messages/batch", key, {"messages": messages}
@@ -331,8 +365,27 @@ class VikingClient:
         )
 
     async def _working_memory_opt_in(self, key):
-        """From 0.5.0 a commit writes working memory only where a policy asks for it."""
-        return Version((await self.health(key))["version"]) >= Version("0.5.0")
+        """A commit writes working memory only where a policy asks for it."""
+        return await self.supports(key, "working_memory_opt_in")
+
+    async def server_version(self, key):
+        """The version ``key``'s ``/health`` reports, from the identity cache; None if unknown.
+
+        For callers that treat an unreadable version as "not supported";
+        ``supports`` below is for callers that must not guess."""
+        try:
+            version = (await self.identify(key)).get("version")
+        except VikingError:
+            return None
+        return version if isinstance(version, str) else None
+
+    async def supports(self, key, feature):
+        """Whether the OpenViking ``key`` reaches has ``feature``, by the version ``/health``
+        reports. ``health`` raises when that server cannot be used at all, so a failed probe
+        is an error here, never a server without the feature."""
+        if feature not in FEATURES:
+            raise KeyError(f"unknown OpenViking feature {feature!r}")
+        return supports(feature, (await self.health(key)).get("version"))
 
     async def tools(self, key):
         async def load():

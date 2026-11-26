@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 from .api import CallbackRequest, CallbackStatus, ExpiryError
+from .cache_runtime_store import CacheRuntimeExpiryStore
 from .config import ExpiryConfig
 from .keys import decode_item_id
 from .metrics import ExpiryMetrics
@@ -22,7 +23,6 @@ from .models import (
     StoreOperationError,
     decode_claim_score,
 )
-from .redis_store import RedisExpiryStore
 from .registry import HandlerBinding
 from .shard_runner import ShardExecution, ShardRunner
 
@@ -44,7 +44,7 @@ class _BucketScan:
 class ExpiryConsumer:
     def __init__(
         self,
-        store: RedisExpiryStore,
+        store: CacheRuntimeExpiryStore,
         runner: ShardRunner,
         item_type: str,
         binding: HandlerBinding,

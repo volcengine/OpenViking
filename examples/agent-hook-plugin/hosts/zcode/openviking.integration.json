@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "openviking-memory",
-  "version": "0.5.36",
+  "version": "0.5.40",
   "clients": [
     "zcode"
   ],

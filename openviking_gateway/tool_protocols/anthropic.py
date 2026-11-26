@@ -3,9 +3,14 @@
 """Messages content blocks, preserving thinking/signatures in native history."""
 
 import copy
+import re
 
 import orjson
 
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.logger import bind_log_request_id
+
+from ..client import CALL
 from ..protocols import string_type, strip_thinking, text_content
 from .common import (
     SUMMARY_HEADROOM,
@@ -20,6 +25,23 @@ from .common import (
 )
 
 THINKING = {"thinking", "redacted_thinking"}
+logger = get_logger(__name__)
+
+
+def escape_invalid_backslashes(arguments):
+    """Double backslashes with unknown escapes inside JSON strings."""
+    in_string = False
+
+    def replace(match):
+        nonlocal in_string
+        token = match[0]
+        if token == '"':
+            in_string = not in_string
+        elif in_string and token[1] not in '"\\/bfnrtu':
+            return "\\" + token
+        return token
+
+    return re.sub(r'\\.|"', replace, arguments)
 
 
 class AnthropicProtocol(ToolProtocol):
@@ -146,7 +168,29 @@ class AnthropicProtocol(ToolProtocol):
     def begin(self):
         super().begin()
         self.blocks, self.arguments, self.indices = {}, {}, {}
+        self.invalid_arguments = set()
         self.opened, self.stopped, self.closed = False, False, set()
+
+    def parse_arguments(self, index, arguments):
+        block = self.blocks[index]
+        try:
+            return orjson.loads(arguments)
+        except orjson.JSONDecodeError as error:
+            if block["type"] != "tool_use" or block["name"] not in self.gateway_tools:
+                raise
+            try:
+                return orjson.loads(escape_invalid_backslashes(arguments))
+            except orjson.JSONDecodeError:
+                context = CALL.get()
+                with bind_log_request_id(context.request_id if context else ""):
+                    logger.info(
+                        "invalid streamed tool arguments; returning a tool error length=%d offset=%d",
+                        len(arguments),
+                        error.pos,
+                        extra={"error_type": type(error).__name__},
+                    )
+                self.invalid_arguments.add(index)
+                return {}
 
     def accumulate(self, value):
         kind = value.get("type")
@@ -172,7 +216,7 @@ class AnthropicProtocol(ToolProtocol):
             self.closed.add(index)
             arguments = self.arguments.get(index, "")
             if arguments:
-                self.blocks[index]["input"] = orjson.loads(arguments)
+                self.blocks[index]["input"] = self.parse_arguments(index, arguments)
         elif kind == "message_delta":
             self.finish = value.get("delta", {}).get("stop_reason") or self.finish
             self.envelope.update(value.get("delta", {}))
@@ -233,11 +277,14 @@ class AnthropicProtocol(ToolProtocol):
     def end(self):
         if not self.stopped or not self.finish or self.closed != set(self.blocks):
             raise ToolLoopError("Incomplete Anthropic message", code="tool_upstream_incomplete")
-        blocks = [self.blocks[i] for i in sorted(self.blocks)]
-        self.output = [{"role": "assistant", "content": blocks}]
+        blocks = sorted(self.blocks.items())
+        self.output = [{"role": "assistant", "content": [block for _, block in blocks]}]
         self.calls = [
-            call(b["id"], b["name"], orjson.dumps(b["input"]).decode())
-            for b in blocks
+            {
+                **call(b["id"], b["name"], orjson.dumps(b["input"]).decode()),
+                **({"invalid_arguments": True} if index in self.invalid_arguments else {}),
+            }
+            for index, b in blocks
             if b["type"] == "tool_use"
         ]
 

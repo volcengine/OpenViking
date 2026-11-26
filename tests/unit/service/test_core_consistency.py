@@ -4,7 +4,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -101,12 +101,42 @@ def test_service_loads_account_store_runtime_from_config_file(tmp_path, monkeypa
     )
 
     binding = service._build_ragfs_binding_config()
-    assert binding.account_store_cache_instance == "accountstore"
+    assert binding.required_cache_instances == {"Redis MySQL Account Store": "accountstore"}
     cache = binding.to_binding_dict()["cache"]
     assert cache["runtime_enabled"] is True
     assert cache["cachefs"]["enabled"] is False
     assert cache["instances"]["accountstore"]["provider"] == "redis"
     assert cache["instances"]["accountstore"]["redis"]["endpoints"] == ["redis://127.0.0.1:6380"]
+
+
+def test_service_requires_ttl_runtime_from_registered_config(monkeypatch) -> None:
+    """Select the enabled Directory TTL CacheRuntime before constructing AGFS."""
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = object()
+    calls = []
+    server_config = SimpleNamespace(
+        account_store=SimpleNamespace(provider="file", params={}),
+        ttl_adapter=SimpleNamespace(
+            enabled=True,
+            cache=SimpleNamespace(instance="ttl"),
+        ),
+    )
+
+    monkeypatch.setattr(
+        "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
+        lambda: None,
+    )
+    monkeypatch.setattr("openviking.server.dependencies._server_config", server_config)
+    monkeypatch.setattr(
+        "openviking.service.core.build_runtime_ragfs_binding_config",
+        lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
+    )
+
+    service._build_ragfs_binding_config()
+
+    assert calls == [
+        (service._config, {"required_cache_instances": {"Directory TTL": "ttl"}})
+    ]
 
 
 @pytest.mark.asyncio
@@ -129,9 +159,12 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
             events.append("resource_tasks")
 
     class QueueManager:
-        def stop(self) -> None:
+        def stop_workers(self) -> None:
             assert wiring.get_ttl_adapter() is adapter
             events.append("queue_manager")
+
+        def stop(self) -> None:
+            pass
 
     class RagfsClient:
         def close(self) -> None:
@@ -146,7 +179,9 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
         stop_roles=AsyncMock(side_effect=lambda **_: events.append("expiry_roles")),
         close=AsyncMock(side_effect=lambda: events.append("expiry_storage")),
     )
-    service._session_service = SimpleNamespace(set_session_expiry_adapter=lambda _: None)
+    service._session_service = SimpleNamespace(
+        set_session_expiry_adapter=lambda _: None, set_usage_reporter=Mock()
+    )
     service._runtime_config_manager = None
     service._watch_runtime = None
     service._watch_manager = None
@@ -154,7 +189,7 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
     service._queue_manager = QueueManager()
     service._vikingdb_manager = None
     service._agfs_client = RagfsClient()
-    service._viking_fs = object()
+    service._viking_fs = SimpleNamespace(set_post_write_hook=Mock())
     service._resource_processor = object()
     service._skill_processor = object()
     service._session_compressor = object()

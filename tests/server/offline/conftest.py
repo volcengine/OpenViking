@@ -39,7 +39,6 @@ def offline_config(temp_dir, monkeypatch):
             "agfs": {"backend": "local"},
             "vectordb": {"backend": "local"},
         },
-        "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "unused"},
         "embedding": {
             "dense": {
                 "provider": "openai",
@@ -47,6 +46,11 @@ def offline_config(temp_dir, monkeypatch):
                 "api_key": "unused-offline-key",
                 "dimension": 2048,
             }
+        },
+        "vlm": {
+            "provider": "openai",
+            "model": "offline-vlm",
+            "api_key": "unused-offline-key",
         },
     }
     config_path = temp_dir / "ov.conf"

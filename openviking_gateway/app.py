@@ -34,6 +34,7 @@ from .management import (
 from .observe import VIKING_DETAILS, GatewayError, RequestRecord, degrade
 from .protocols import configure_rules
 from .proxy import ProxyRequest, filtered_headers, resolve_binding
+from .sealing import Sealer
 from .sinks import FileSink, Stats, snapshot_loop
 from .storage import (
     AsyncCodec,
@@ -124,7 +125,12 @@ def open_stores(config: GatewayConfig, encryptor, stats=None):
         close.push_async_callback(asyncio.to_thread, management.close)
     log, sink = stdout_log if config.request_log_sink == "stdout" else None, None
     if config.request_log_sink == "file":
-        sink = FileSink(config.request_log_path, config.request_log_max_bytes, stats)
+        sink = FileSink(
+            config.request_log_path,
+            config.request_log_rotation_interval_hours,
+            config.request_log_backup_count,
+            stats,
+        )
         close.callback(sink.close)
         log = sink.log
     return store, CachedManagement(management, log=log), close.aclose, sink
@@ -163,6 +169,7 @@ def create_app(config: GatewayConfig, *, openviking_url: str, vlm_source=None, e
                     config.openviking_breaker_failures,
                     config.openviking_breaker_seconds,
                 )
+                app.state.sealer = Sealer(app.state.viking)
                 app.state.kernel = MemoryKernel(
                     store, app.state.viking, config.openviking_auto_commit, management
                 )

@@ -1,105 +1,95 @@
 import assert from 'node:assert/strict';
+import { createElement as h } from 'react';
 import test from 'node:test';
+import { mount, ok } from './helpers/module-dom.mjs';
 
-import { createElement } from 'react';
-import { renderMarkup } from './helpers/csr-render.mjs';
+const { OpenVikingProvider, useOvClient } = await import(
+  `${process.env.OV_UI_TEST_HOOKS}/provider.js`
+);
 
-import { OpenVikingProvider } from '@openviking/react/client';
-import { mergeProviderConfig } from '../src/client/options.ts';
+test('nested providers inherit, override and explicitly clear request settings', async () => {
+  const calls = [];
+  const clients = new Map();
+  const transport =
+    (origin) =>
+    async (url, { credentials, headers }) => {
+      calls.push({
+        origin,
+        url: String(url),
+        credentials,
+        apiKey: headers['x-api-key'],
+        account: headers['x-openviking-account'],
+        user: headers['x-openviking-user'],
+      });
+      return ok([]);
+    };
 
-test('the Provider renders its children', () => {
-  const html = renderMarkup(
-    createElement(
+  function Probe({ name }) {
+    clients.set(name, useOvClient());
+    return h('span', null, name);
+  }
+
+  const view = await mount(
+    h(
       OpenVikingProvider,
-      { baseURL: 'https://ov.test' },
-      createElement('span', null, 'inside'),
+      {
+        baseURL: 'https://ov.test/gateway',
+        apiKey: 'parent-key',
+        accountId: 'acct-1',
+        credentials: 'omit',
+        fetch: transport('parent'),
+      },
+      h(
+        OpenVikingProvider,
+        { userId: 'alice' },
+        h(Probe, { name: 'inherited' }),
+      ),
+      h(
+        OpenVikingProvider,
+        { apiKey: '', baseURL: '', credentials: 'include' },
+        h(Probe, { name: 'cleared' }),
+      ),
+      h(
+        OpenVikingProvider,
+        { baseURL: 'https://other.test', fetch: transport('child') },
+        h(Probe, { name: 'replaced' }),
+      ),
     ),
   );
-  assert.equal(html, '<span>inside</span>');
-});
 
-test('mounting the Provider sends no request', () => {
-  let called = false;
-  const fetch = async () => {
-    called = true;
-    throw new Error('should not be called');
-  };
-  renderMarkup(
-    createElement(
-      OpenVikingProvider,
-      { baseURL: 'https://ov.test', fetch },
-      createElement('span', null, 'x'),
-    ),
-  );
-  assert.equal(called, false);
-});
-
-test('a nested Provider inherits the address and credential it does not declare', () => {
-  const outer = mergeProviderConfig(undefined, {
-    baseURL: 'https://ov.test/gateway',
-    apiKey: 'outer-key',
-    accountId: 'acc_1',
-    credentials: 'omit',
-  });
-
-  const inner = mergeProviderConfig(outer, { userId: 'other-user' });
-
-  assert.equal(
-    inner.baseURL,
-    'https://ov.test/gateway',
-    'address is inherited',
-  );
-  assert.equal(inner.identity.apiKey, 'outer-key', 'credential is inherited');
-  assert.equal(inner.identity.accountId, 'acc_1');
-  assert.equal(inner.identity.userId, 'other-user', 'only userId changes');
-  assert.equal(inner.credentials, 'omit', 'cookie policy is inherited');
-  assert.equal(
-    mergeProviderConfig(outer, { credentials: 'include' }).credentials,
-    'include',
-    'an explicit inner cookie policy wins',
-  );
-});
-
-test('an explicit empty value clears the inherited field', () => {
-  const outer = mergeProviderConfig(undefined, {
-    baseURL: 'https://ov.test',
-    apiKey: 'outer-key',
-  });
-
-  const inner = mergeProviderConfig(outer, { apiKey: '' });
-
-  assert.equal(inner.identity.apiKey, '', 'the field is explicitly cleared');
-});
-
-test('an inner baseURL wins, and an empty one means same origin', () => {
-  const outer = mergeProviderConfig(undefined, { baseURL: 'https://ov.test' });
-
-  assert.equal(
-    mergeProviderConfig(outer, { baseURL: 'https://other.test' }).baseURL,
-    'https://other.test',
-  );
-  assert.equal(mergeProviderConfig(outer, { baseURL: '' }).baseURL, '');
-});
-
-test('an inner Provider inherits the outer transport', () => {
-  const outerFetch = async () => new Response('{}');
-  const outer = mergeProviderConfig(undefined, {
-    baseURL: 'https://ov.test',
-    fetch: outerFetch,
-  });
-
-  const inner = mergeProviderConfig(outer, { userId: 'other-user' });
-
-  assert.equal(inner.fetch, outerFetch, 'the transport is inherited');
-});
-
-test('an inner Provider can replace the transport explicitly', () => {
-  const outerFetch = async () => new Response('{}');
-  const innerFetch = async () => new Response('{}');
-  const outer = mergeProviderConfig(undefined, { fetch: outerFetch });
-
-  assert.equal(
-    mergeProviderConfig(outer, { fetch: innerFetch }).fetch,
-    innerFetch,
-  );
+  try {
+    assert.equal(view.container.textContent, 'inheritedclearedreplaced');
+    assert.deepEqual(calls, []);
+    for (const client of clients.values()) {
+      await client.request({ method: 'GET', path: '/api/v1/sessions' });
+    }
+    assert.deepEqual(calls, [
+      {
+        origin: 'parent',
+        url: 'https://ov.test/gateway/api/v1/sessions',
+        credentials: 'omit',
+        apiKey: 'parent-key',
+        account: 'acct-1',
+        user: 'alice',
+      },
+      {
+        origin: 'parent',
+        url: '/api/v1/sessions',
+        credentials: 'include',
+        apiKey: undefined,
+        account: 'acct-1',
+        user: undefined,
+      },
+      {
+        origin: 'child',
+        url: 'https://other.test/api/v1/sessions',
+        credentials: 'omit',
+        apiKey: 'parent-key',
+        account: 'acct-1',
+        user: undefined,
+      },
+    ]);
+  } finally {
+    await view.unmount();
+  }
 });

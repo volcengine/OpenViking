@@ -42,6 +42,7 @@ use ragfs::git::{CasMode, S3Config, S3IndexStore, S3ObjectStore, S3RefStore};
 pub fn build_git_service(
     cfg: &GitConfig,
     vfs: Arc<dyn FileSystem>,
+    service_name: &str,
 ) -> PyResult<Option<Arc<GitService>>> {
     if !cfg.enabled {
         return Ok(None);
@@ -82,7 +83,7 @@ pub fn build_git_service(
         }
     };
 
-    let snapshot_log_store = build_snapshot_log_store(cfg)?;
+    let snapshot_log_store = build_snapshot_log_store(cfg, service_name)?;
 
     let svc = GitService::with_index(vfs, object_store, ref_store, index_store)
         .with_blob_exists_precheck(cfg.tuning.blob_exists_precheck_enabled);
@@ -93,6 +94,7 @@ pub fn build_git_service(
 
 fn build_snapshot_log_store(
     cfg: &GitConfig,
+    service_name: &str,
 ) -> PyResult<Option<Arc<dyn ragfs::git::SnapshotLogStore>>> {
     match cfg.snapshot.log.provider.as_str() {
         "none" => Ok(None),
@@ -105,8 +107,11 @@ fn build_snapshot_log_store(
                     "git.snapshot.log.sqlite.path is required for sqlite provider",
                 )
             })?;
+            let service_name = service_name.to_string();
             match handle
-                .block_on(async move { ragfs::git::SqliteSnapshotLogStore::connect(&path).await })
+                .block_on(async move {
+                    ragfs::git::SqliteSnapshotLogStore::connect(&service_name, &path).await
+                })
             {
                 Ok(store) => Ok(Some(
                     Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
@@ -132,8 +137,10 @@ fn build_snapshot_log_store(
             })?;
             let max_connections = mysql.max_connections;
             let connect_timeout_ms = mysql.connect_timeout_ms;
+            let service_name = service_name.to_string();
             match handle.block_on(async move {
                 ragfs::git::MySqlSnapshotLogStore::connect(
+                    &service_name,
                     &dsn,
                     max_connections,
                     connect_timeout_ms,
@@ -144,6 +151,34 @@ fn build_snapshot_log_store(
                     Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
                 )),
                 Err(err) => snapshot_log_init_fallback("mysql", err),
+            }
+        }
+        "postgres" => {
+            let postgres = cfg
+                .snapshot
+                .log
+                .postgres
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("[git.snapshot.log.postgres] missing"))?;
+            let dsn = std::env::var(&postgres.dsn_env).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "environment variable {} is required for snapshot log postgres provider",
+                    postgres.dsn_env
+                ))
+            })?;
+            let handle = tokio::runtime::Handle::try_current().map_err(|_| {
+                PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
+            })?;
+            match handle.block_on(ragfs::git::PostgresSnapshotLogStore::connect_with_timeout(
+                &dsn,
+                postgres.max_connections,
+                postgres.connect_timeout_ms,
+                postgres.operation_timeout_ms,
+            )) {
+                Ok(store) => Ok(Some(
+                    Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
+                )),
+                Err(err) => snapshot_log_init_fallback("postgres", err),
             }
         }
         other => Err(PyValueError::new_err(format!(
@@ -773,12 +808,82 @@ mod tests {
         }
     }
 
+    #[test]
+    fn postgres_snapshot_log_missing_configuration_errors() {
+        Python::initialize();
+        let mut cfg = local_cfg("/tmp/snapshot-pg-config");
+        cfg.snapshot.log.provider = "postgres".into();
+        let err = match build_snapshot_log_store(&cfg, "test-service") {
+            Err(err) => err,
+            Ok(_) => panic!("missing PostgreSQL section must fail"),
+        };
+        assert!(err
+            .to_string()
+            .contains("[git.snapshot.log.postgres] missing"));
+        cfg.snapshot.log.postgres = Some(ragfs::git::GitSnapshotLogPostgresConfig {
+            dsn_env: format!("SNAPSHOT_MISSING_{}", uuid::Uuid::new_v4().simple()),
+            max_connections: 1,
+            connect_timeout_ms: 1000,
+            operation_timeout_ms: 1000,
+        });
+        let err = match build_snapshot_log_store(&cfg, "test-service") {
+            Err(err) => err,
+            Ok(_) => panic!("missing PostgreSQL DSN environment must fail"),
+        };
+        assert!(err
+            .to_string()
+            .contains("required for snapshot log postgres provider"));
+    }
+
+    #[test]
+    #[ignore = "requires SNAPSHOT_LOG_TEST_PG_DSN and a provisioned PostgreSQL database"]
+    fn postgres_snapshot_log_factory_connects_to_real_store() {
+        let mut cfg = local_cfg("/tmp/snapshot-pg-binding");
+        cfg.snapshot.log.provider = "postgres".into();
+        cfg.snapshot.log.postgres = Some(ragfs::git::GitSnapshotLogPostgresConfig {
+            dsn_env: "SNAPSHOT_LOG_TEST_PG_DSN".into(),
+            max_connections: 2,
+            connect_timeout_ms: 5000,
+            operation_timeout_ms: 5000,
+        });
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _enter = runtime.enter();
+        let store = build_snapshot_log_store(&cfg, "test-service")
+            .unwrap()
+            .expect("PG index enabled");
+        runtime.block_on(async {
+            let account = uuid::Uuid::new_v4().simple().to_string();
+            let oid = "1234567890123456789012345678901234567890";
+            store
+                .append_rows_if_latest(
+                    &account,
+                    "main",
+                    None,
+                    &[ragfs::git::SnapshotLogRow {
+                        path: "/".into(),
+                        commit_oid: oid.into(),
+                    }],
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .load_latest_indexed_commit(&account, "main")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .1,
+                oid
+            );
+        });
+    }
+
     #[tokio::test]
     async fn build_git_service_disabled_returns_none() {
         let fs = Arc::new(MountableFS::new()) as Arc<dyn ragfs::core::FileSystem>;
         let mut cfg = local_cfg("/tmp/ov-git-test-disabled");
         cfg.enabled = false;
-        let svc = build_git_service(&cfg, fs).expect("build ok");
+        let svc = build_git_service(&cfg, fs, "test-service").expect("build ok");
         assert!(svc.is_none());
     }
 
@@ -786,7 +891,7 @@ mod tests {
     async fn build_git_service_local_returns_some() {
         let fs = Arc::new(MountableFS::new()) as Arc<dyn ragfs::core::FileSystem>;
         let cfg = local_cfg("/tmp/ov-git-test-local");
-        let svc = build_git_service(&cfg, fs).expect("build ok");
+        let svc = build_git_service(&cfg, fs, "test-service").expect("build ok");
         assert!(svc.is_some());
     }
 
@@ -799,7 +904,7 @@ mod tests {
         let mut cfg = local_cfg("/tmp/ov-git-test-bad");
         cfg.backend = "bogus".into();
         // `GitService` is not `Debug`, so we can't use `unwrap_err()`; match instead.
-        let err = match build_git_service(&cfg, fs) {
+        let err = match build_git_service(&cfg, fs, "test-service") {
             Ok(_) => panic!("expected error for bogus backend"),
             Err(e) => e,
         };
@@ -812,7 +917,7 @@ mod tests {
         let fs = Arc::new(MountableFS::new()) as Arc<dyn ragfs::core::FileSystem>;
         let mut cfg = local_cfg("/tmp/ov-git-test-nolocal");
         cfg.local = None;
-        let err = match build_git_service(&cfg, fs) {
+        let err = match build_git_service(&cfg, fs, "test-service") {
             Ok(_) => panic!("expected error when [git.local] missing"),
             Err(e) => e,
         };

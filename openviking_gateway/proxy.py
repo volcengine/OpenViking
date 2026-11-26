@@ -19,11 +19,22 @@ from pydantic import ValidationError
 from openviking.core.peer_id import normalize_peer_id
 from openviking.observability.log_safety import short_hash
 
+from .billing import UpstreamBilling
 from .client import PEER_HEADER
 from .kernel import Budget
 from .models import KEY_PLACEHOLDER, Policy, validation_detail
 from .observe import GatewayError, RequestRecord, degrade, elapsed_ms, error_code
 from .protocols import HEARTBEAT_SECONDS, SSEDecoder, heartbeat, parse_body
+from .sealing import (
+    SealError,
+    Unsealer,
+    UnsealRelay,
+    defines_tools,
+    inbound,
+    seal_failure,
+    unseal_failure,
+    with_note,
+)
 from .storage import digest
 from .tool_executor import ToolExecutor
 from .tool_loop import HiddenToolLoop, ToolLoopError
@@ -224,8 +235,14 @@ def context_override(policy, header):
         raise context_error("X-OpenViking-Context is not valid JSON")
     if not isinstance(override, dict):
         raise context_error("X-OpenViking-Context must be a JSON object")
-    # The profile's name and its switch are not per-conversation settings.
-    if blocked := override.keys() & {"name", "client_overrides"}:
+    # The profile's name and its switches are not per-conversation settings; sealing
+    # is a deployment's choice that a client must not turn off.
+    if blocked := override.keys() & {
+        "name",
+        "client_overrides",
+        "seal_secrets",
+        "enroll_tool_secrets",
+    }:
         raise context_error("X-OpenViking-Context cannot set " + ", ".join(sorted(blocked)))
     try:
         merged = Policy.model_validate({**policy, **override})
@@ -304,6 +321,13 @@ def matches(upstream, protocol, model):
     )
 
 
+def continuation_seal_failure(error):
+    failure = seal_failure(error)
+    return ToolLoopError(
+        failure.detail["detail"], failure.status_code, code=failure.detail["reason"]
+    )
+
+
 class Binding(NamedTuple):
     policy: dict | None
     # Disabled ones included; callers skip them.
@@ -337,6 +361,9 @@ async def resolve_binding(management, config, credential):
 
 
 class ProxyRequest:
+    # Set from the current profile once routed; ``secrets`` seals for this request.
+    sealing, secrets = False, None
+
     def __init__(self, app, request, path, credential, record=None):
         self.app, self.request, self.credential = app, request, credential
         self.config, self.store, self.management = (
@@ -356,6 +383,8 @@ class ProxyRequest:
         # The record under construction: what the request writes however it ends.
         self.metrics = self.record.metrics
         self.metrics.setdefault("kind", "passthrough")
+        self.billing = UpstreamBilling(self.metrics)
+        self.model_call = None
 
     async def run(self):
         if self.request.headers.get("upgrade", "").lower() == "websocket":
@@ -385,6 +414,15 @@ class ProxyRequest:
         self.started = time.monotonic()
         self.metrics["added_ms"] = elapsed_ms(self.record.started)
         self.record.attempted = True
+        self.model_call = self.begin_call(
+            "model"
+            if self.request.method == "POST"
+            and self.path in {"/v1/responses", "/v1/messages", "/v1/chat/completions"}
+            else "passthrough",
+            self.upstream,
+            self.body,
+            self.headers,
+        )
         try:
             self.response = await open_upstream(
                 self.app.state.http,
@@ -395,7 +433,11 @@ class ProxyRequest:
                 headers=self.headers,
                 allow_redirects=False,
             )
+        except asyncio.CancelledError:
+            self.billing.end(self.model_call, error="client_disconnected")
+            raise
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
+            self.billing.end(self.model_call, error=upstream_failure(error).detail["reason"])
             self.metrics["duration_ms"] = elapsed_ms(self.started)
             raise upstream_failure(error) from None
         self.metrics.update(
@@ -413,7 +455,17 @@ class ProxyRequest:
             and not self.path.endswith("count_tokens")
         ):
             return await self.tool_response()
-        return await self.observe_response()
+        # Elsewhere a sealed request's client tool calls are unsealed on the way through.
+        relay = None
+        if (
+            self.sealing
+            and defines_tools(self.body)
+            and self.protocol
+            and self.response.status < 300
+            and not self.path.endswith("count_tokens")
+        ):
+            relay = UnsealRelay(Unsealer(self.secrets), self.protocol)
+        return await self.observe_response(relay)
 
     async def route(self):
         routing = self.body
@@ -489,6 +541,24 @@ class ProxyRequest:
             upstream_key(self.upstream, self.request.headers)
 
     async def prepare(self):
+        # Read from the current profile, never the session's copy; the context header
+        # cannot set it.
+        self.sealing = bool(self.policy and self.policy.get("seal_secrets"))
+        temporary, replaced = [], False
+        if self.sealing:
+            self.secrets = self.app.state.sealer.session(self.credential, self.metrics)
+            original = self.body
+            self.body, temporary = await inbound(
+                self.secrets,
+                self.body,
+                self.raw,
+                dict(self.request.headers),
+                self.protocol,
+                self.path,
+                tool_output=bool(self.policy.get("enroll_tool_secrets")),
+            )
+            # Sealing copies only a body it changed.
+            replaced = self.body is not original
         if (
             self.protocol
             and self.body
@@ -509,15 +579,30 @@ class ProxyRequest:
                 self.summarize,
                 peer=self.peer,
                 budget=Budget(self.config.prepare_timeout_seconds),
+                sealed=self.sealing,
+                temporary=temporary,
             )
             self.record.merge(metrics)
             if self.prepared:
                 self.upstream = self.prepared.upstream
+        if (temporary or replaced) and (not self.prepared or self.prepared.disabled):
+            # The kernel records the note only where it injects; elsewhere every request
+            # of the turn carries it alike, and the session text's short form with it.
+            self.body = with_note(
+                self.body,
+                None if self.path.endswith("count_tokens") else self.protocol,
+                dict(self.request.headers),
+                temporary,
+                self.prepared.kind if self.prepared else None,
+                replaced=replaced,
+            )
         elif self.raw and self.body is None:
             degrade(self.metrics, "unsafe_json")
         check_coding_plan(self.upstream)
         if self.body:
             self.body = await self.outgoing(self.body, self.upstream, self.prepared)
+            if self.sealing:
+                self.body = await self.egress(self.body)
             if self.prepared:
                 self.prepared.body = self.body
                 self.record.merge(self.prepared.metrics)
@@ -533,6 +618,13 @@ class ProxyRequest:
         mapped = upstream.get("aliases", {}).get(self.model)
         return {**body, "model": mapped} if mapped else body
 
+    async def egress(self, body, error=seal_failure):
+        """The last sweep before a body goes to a model upstream."""
+        try:
+            return await self.secrets.egress(body)
+        except SealError as failure:
+            raise error(failure) from None
+
     async def summarize(self, prepared, body):
         """Send the kernel's summary request to the session's upstream and parse the reply."""
         upstream = prepared.upstream
@@ -544,7 +636,12 @@ class ProxyRequest:
             raise SummaryError(f"summary_http_{error.status_code}") from error
         headers.setdefault("content-type", "application/json")
         body = await self.outgoing(body, upstream, prepared)
+        if self.sealing:
+            body = await self.egress(body, lambda _: SummaryError("summary_seal_failed"))
+        call = self.begin_call("summary", upstream, body, headers)
         self.record.attempted = True
+        value, status = None, None
+        complete, failure = False, ""
         try:
             async with self.app.state.http.post(
                 target,
@@ -556,11 +653,58 @@ class ProxyRequest:
                 ),
                 allow_redirects=False,
             ) as response:
+                status = response.status
+                raw = await response.read()
+                try:
+                    value = orjson.loads(raw)
+                except ValueError:
+                    if response.status < 300:
+                        raise
                 if response.status >= 300:
                     raise SummaryError(f"summary_http_{response.status}")
-                return orjson.loads(await response.read())
+                try:
+                    tool_protocol(upstream["protocol"]).summary_text(value)
+                    complete = True
+                except SummaryError as error:
+                    failure = str(error)
+                return value
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+            failure = "summary_unavailable"
             raise SummaryError("summary_unavailable") from error
+        except BaseException as error:
+            failure = (
+                "client_disconnected" if isinstance(error, asyncio.CancelledError) else str(error)
+            )
+            raise
+        finally:
+            self.billing.end(
+                call,
+                status=status,
+                envelope=value,
+                usage=value.get("usage") if isinstance(value, dict) else None,
+                complete=complete,
+                error=failure,
+            )
+
+    def begin_call(self, kind, upstream, body, headers):
+        return self.billing.begin(
+            kind,
+            upstream,
+            body,
+            authenticated=any(
+                key.lower()
+                in {
+                    "authorization",
+                    "x-api-key",
+                    "api-key",
+                    upstream.get("key_header", "authorization").lower(),
+                }
+                and bool(value)
+                for key, value in headers.items()
+            )
+            or KEY_PLACEHOLDER in upstream["base_url"],
+            account_header=any(key.lower() == "chatgpt-account-id" for key in headers),
+        )
 
     async def relay(self):
         """Record a finished reply before the client receives its end."""
@@ -576,6 +720,16 @@ class ProxyRequest:
     async def finish(self):
         """Book an answered request and write its record; called once per answered request."""
         try:
+            assembler = self.capture.assembler
+            self.billing.end(
+                self.model_call,
+                status=self.response.status,
+                envelope=assembler.envelope if assembler else None,
+                usage=assembler.usage if assembler else None,
+                complete=self.capture.finished and not self.metrics.get("error_reason"),
+                error=self.metrics.get("error_reason", "")
+                or ("upstream_error" if self.response.status >= 300 else ""),
+            )
             self.metrics.update(self.capture.usage or {})
             if self.upstream.get("vendor") in ARK_VENDORS:
                 self.metrics["cache_min_tokens"] = self.upstream.get("cache_min_tokens", 1024)
@@ -673,7 +827,8 @@ class ProxyRequest:
         self.metrics.setdefault("bookkeeping_failed", []).append(step)
 
     async def tool_response(self):
-        response, prepared, capture = self.response, self.prepared, self.capture
+        response, capture = self.response, self.capture
+        prepared = self.prepared
         executor = ToolExecutor(
             self.app.state.viking,
             self.store,
@@ -684,8 +839,35 @@ class ProxyRequest:
             self.config.mcp_file_links,
         )
         loop = HiddenToolLoop(
-            prepared, executor, self.store, capture, self.app.state.kernel.capture
+            prepared,
+            executor,
+            self.store,
+            capture,
+            self.app.state.kernel.capture,
+            **({"unsealer": Unsealer(self.secrets)} if self.sealing else {}),
         )
+
+        def record_round(adapter, upstream_response, error):
+            self.billing.end(
+                self.model_call,
+                status=upstream_response.status if upstream_response is not None else None,
+                envelope=adapter.envelope,
+                usage=adapter.usage,
+                complete=error is None,
+                error=(
+                    tool_failure(error).code
+                    if isinstance(error, (ToolLoopError, aiohttp.ClientError, asyncio.TimeoutError))
+                    else (
+                        "client_disconnected"
+                        if isinstance(error, (asyncio.CancelledError, GeneratorExit))
+                        else "upstream_read_failed"
+                    )
+                )
+                if error
+                else "",
+            )
+
+        loop.observe_upstream = record_round
         headers = {
             k.lower(): v
             for k, v in filtered_headers(response.headers).items()
@@ -693,7 +875,12 @@ class ProxyRequest:
         }
 
         async def send(payload, timeout):
+            if self.sealing:
+                payload = await self.egress(payload, continuation_seal_failure)
             # A total tool deadline also bounds the whole continuation, body included.
+            self.model_call = self.begin_call(
+                "tool_continuation", self.upstream, payload, self.headers
+            )
             return await open_upstream(
                 self.app.state.http,
                 "POST",
@@ -771,13 +958,14 @@ class ProxyRequest:
         await self.relay()
         self.record.deferred = True
         return _FinishingResponse(
-            orjson.dumps(loop.final),
+            orjson.dumps(loop.sent),
             headers=headers,
             media_type="application/json",
             cleanup=self.finish,
         )
 
-    async def observe_response(self):
+    async def observe_response(self, relay=None):
+        """Relay the upstream's reply; ``relay`` unseals its client tool calls."""
         response, capture = self.response, self.capture
         headers = filtered_headers(response.headers)
         if "text/event-stream" in response.headers.get("content-type", ""):
@@ -795,6 +983,7 @@ class ProxyRequest:
                             if observe and not decoder.buffer:
                                 yield b": keep-alive\n\n"
                             continue
+                        frames = []
                         if observe:
                             try:
                                 # A chunk inside one event completes none: no reply to reread.
@@ -814,8 +1003,31 @@ class ProxyRequest:
                                 capture.complete = False
                                 degrade(self.metrics, "capture_parse_failure")
                             await self.relay()
+                        if relay and not observe:
+                            raise ToolLoopError(
+                                "The model reply could not be read to unseal its tool calls; "
+                                "turn off seal_secrets in the profile to relay such replies",
+                                502,
+                                code="secret_unseal_failed",
+                            )
+                        elif relay:
+                            chunk = relay.feed(frames)
+                            if not chunk:
+                                continue
                         self.metrics.setdefault("first_chunk_ms", elapsed_ms(self.record.started))
                         yield chunk
+                    if relay:
+                        if tail := await relay.flush(decoder.buffer):
+                            yield tail
+                        self.metrics["secrets_unsealed"] = relay.unsealer.unsealed
+                    finished = True
+                except ToolLoopError as error:
+                    # Only an unsealing failure: the calls must not reach the client sealed.
+                    capture.complete = False
+                    self.record.stream_failed(response.status, error.code)
+                    yield unseal_failure(
+                        self.protocol, self.body, capture.response_id or opened, error
+                    )
                     finished = True
                 except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                     # A provider error event ends the reply as much as its terminal event.
@@ -850,6 +1062,11 @@ class ProxyRequest:
                 content = await response.read()
             except (aiohttp.ClientError, asyncio.TimeoutError) as error:
                 capture.complete = False
+                self.billing.end(
+                    self.model_call,
+                    status=response.status,
+                    error=upstream_failure(error).detail["reason"],
+                )
                 self.metrics["duration_ms"] = elapsed_ms(self.started)
                 raise upstream_failure(error) from None
             if response.status < 300 and not response.headers.get("content-encoding"):
@@ -859,6 +1076,38 @@ class ProxyRequest:
                     pass
             elif response.status >= 300 and (code := error_code(content)):
                 self.metrics["upstream_error_code"] = code
+            if relay:
+                try:
+                    unsealed = await relay.reply(content)
+                except ToolLoopError as error:
+                    # The upstream answered in full and bills for it; only the client goes without.
+                    capture.complete = False
+                    assembler = capture.assembler
+                    self.billing.end(
+                        self.model_call,
+                        status=response.status,
+                        envelope=assembler.envelope if assembler else None,
+                        usage=assembler.usage if assembler else None,
+                        error=error.code,
+                    )
+                    raise GatewayError(error.code, str(error)) from None
+                self.metrics["secrets_unsealed"] = relay.unsealer.unsealed
+                if unsealed is not content:
+                    content = unsealed
+                    headers = {
+                        k: v
+                        for k, v in headers.items()
+                        if k.lower() not in {"content-length", "etag"}
+                    }
+        except BaseException as error:
+            self.billing.end(
+                self.model_call,
+                status=response.status,
+                error="client_disconnected"
+                if isinstance(error, asyncio.CancelledError)
+                else "upstream_read_failed",
+            )
+            raise
         finally:
             response.close()
         await self.relay()

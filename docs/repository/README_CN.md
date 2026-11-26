@@ -161,7 +161,14 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>使用 OpenViking Service（火山引擎托管）</strong></summary>
 
-同一个 OpenViking 服务，由火山引擎替你运行。前 50 个文件免费。在[火山引擎产品页](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme)开通后，到控制台的「用户管理 → API Key」创建一个 API key。服务地址是 `https://api.vikingdb.cn-beijing.volces.com/openviking`，接入 agent 时要用到它和 API key。
+同一个 OpenViking 服务，由火山引擎替你运行。前 50 个文件免费。在[火山引擎产品页](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme)开通后，到控制台的「用户管理 → API Key」创建一个 API key。在向导中选择 Volcengine 后，服务地址会自动设置。手动配置时，请使用 `https://api.vikingdb.cn-beijing.volces.com/openviking`。
+
+</details>
+
+<details>
+<summary><strong>使用 OpenViking Service（BytePlus 托管）</strong></summary>
+
+[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) 在亚太地区（柔佛）托管 OpenViking。在配置向导中输入实例的 API Key。选择 BytePlus 后，服务地址会自动设置。CLI 与 Agent 接入方法见 [BytePlus 接入指南](https://docs.openviking.ai/zh/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme)。
 
 </details>
 
@@ -209,7 +216,7 @@ API key 是我在这个服务上给自己生成的 user key，安装器会把它
 <details>
 <summary><strong>自己在终端安装</strong></summary>
 
-运行安装脚本，按提示勾选工具、选择服务：本机的服务选「自建 / 本地」，OpenViking Service 选「火山引擎 OpenViking 云服务」，其他地址选「自定义 URL」。开了鉴权的话，填 user key，不是 root key。
+运行安装脚本，按提示勾选工具、选择服务。托管实例选择「OpenViking 托管服务」，再选择「BytePlus」或「Volcengine」。本机服务选择「自建 / 本地」，其他服务选择「自定义 URL」。旧版安装器连接 BytePlus 时使用「自定义 URL」。开了鉴权的话，填 user key，不是 root key。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -348,7 +355,7 @@ ov chat   # 在另一个终端运行
 <img src="../images/commercial-saas.png" alt="商业化 SaaS 版" width="100%" />
 
 <h3>☁️ 商业化 SaaS 版</h3>
-<p>由<a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">火山引擎</a>托管和运维，提供个人版、企业版，以及开源部署的迁移工具。套餐与额度见<a href="https://docs.volcengine.com/docs/84313/2374478">服务文档</a>。中国以外地区的托管服务计划在 <a href="https://www.byteplus.com">BytePlus</a> 上线。</p>
+<p>由<a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">火山引擎</a>托管和运维，提供个人版、企业版，以及开源部署的迁移工具。套餐与额度见<a href="https://docs.volcengine.com/docs/84313/2374478">服务文档</a>。<a href="https://openviking.ai/byteplus?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">BytePlus</a> 在亚太地区（柔佛）托管 OpenViking。</p>
 
 </td>
 <td width="50%" valign="top">

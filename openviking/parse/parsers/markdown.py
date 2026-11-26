@@ -32,6 +32,7 @@ import yaml
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
+from openviking.parse.image_rewrite import is_remote_image_target, unwrap_link_destination
 from openviking.parse.image_validation import is_valid_image
 from openviking.parse.output import (
     ParseArtifactWriter,
@@ -551,11 +552,11 @@ class MarkdownParser(BaseParser):
             content = op.content or ""
             if "![" in content:
                 for match in self._image_pattern.finditer(content):
-                    if not self._is_remote_uri(match.group(2)):
+                    if not is_remote_image_target(match.group(2)):
                         return True
             if "<img" in content.lower():
                 for match in HTML_IMG_PATTERN.finditer(content):
-                    if not self._is_remote_uri(match.group(2)):
+                    if not is_remote_image_target(match.group(2)):
                         return True
         return False
 
@@ -573,7 +574,7 @@ class MarkdownParser(BaseParser):
         image_refs.extend(match.group(2) for match in HTML_IMG_PATTERN.finditer(content))
         seen: set[Path] = set()
         for image_ref in image_refs:
-            if self._is_remote_uri(image_ref):
+            if is_remote_image_target(image_ref):
                 continue
             resolved = self._resolve_image_path(image_ref, base_dir, allowed_media_dirs)
             if resolved is None or resolved in seen:
@@ -835,7 +836,7 @@ class MarkdownParser(BaseParser):
 
             for path_str in image_refs:
                 # Skip remote URIs
-                if self._is_remote_uri(path_str):
+                if is_remote_image_target(path_str):
                     continue
 
                 resolved_path = self._resolve_image_path(path_str, base_dir, allowed_media_dirs)
@@ -943,7 +944,7 @@ class MarkdownParser(BaseParser):
             allowed root, otherwise None
         """
         try:
-            path = Path(unquote(self._unwrap_link_destination(path_str), errors="strict"))
+            path = Path(unquote(unwrap_link_destination(path_str), errors="strict"))
 
             # Reject absolute paths: they can point anywhere on the host
             if path.is_absolute():
@@ -1017,28 +1018,6 @@ class MarkdownParser(BaseParser):
             True if the image satisfies all requirements, otherwise False
         """
         return is_valid_image(image_bytes, source_path)
-
-    @staticmethod
-    def _unwrap_link_destination(path: str) -> str:
-        """Return the path represented by a Markdown ``<destination>``."""
-        path = path.strip()
-        if len(path) >= 2 and path.startswith("<") and path.endswith(">"):
-            return path[1:-1]
-        return path
-
-    @classmethod
-    def _is_remote_uri(cls, path: str) -> bool:
-        """
-        Check if a path is a remote URI.
-
-        Args:
-            path: Path to check
-
-        Returns:
-            True if path starts with http://, https://, viking://, data:, or ftp://
-        """
-        remote_prefixes = ("http://", "https://", "viking://", "data:", "ftp://")
-        return cls._unwrap_link_destination(path).startswith(remote_prefixes)
 
     @staticmethod
     def _deduplicate_filename(filename: str, used_names: set[str]) -> str:

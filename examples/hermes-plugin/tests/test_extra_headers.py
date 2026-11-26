@@ -9,12 +9,22 @@ linked ``ovcli.conf``); these tests pin the same behaviour for this plugin.
 
 import json
 import threading
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import pytest
 
-def _start_server(records, *, require_header=None, redirect_to=None, plain_redirect_to=None,
-                  gateway_value=None, require_key=False, key_retry_redirect_to=None):
+
+def _start_server(
+    records,
+    *,
+    require_header=None,
+    redirect_to=None,
+    plain_redirect_to=None,
+    gateway_value=None,
+    require_key=False,
+    key_retry_redirect_to=None,
+):
     """Local stand-in for an OpenViking server.
 
     ``redirect_to`` models an authenticating gateway that answers header-less requests
@@ -49,8 +59,9 @@ def _start_server(records, *, require_header=None, redirect_to=None, plain_redir
 
         def _redirect_with_json(self, target):
             """A redirect that also carries a healthy payload: only the status is honest."""
-            raw = json.dumps({"status": "ok", "healthy": True, "version": "0.4.18",
-                              "auth_mode": "api_key"}).encode()
+            raw = json.dumps(
+                {"status": "ok", "healthy": True, "version": "0.4.18", "auth_mode": "api_key"}
+            ).encode()
             self.send_response(302)
             self.send_header("Location", target)
             self.send_header("Content-Type", "application/json")
@@ -83,14 +94,22 @@ def _start_server(records, *, require_header=None, redirect_to=None, plain_redir
                     self._json(403, {"error": "blocked at edge"})
                     return
             if require_key and not self.headers.get("X-API-Key"):
-                self._json(401, {"error": {"code": "AuthenticationError",
-                                           "message": "The API key in the request is missing or invalid."}})
+                self._json(
+                    401,
+                    {
+                        "error": {
+                            "code": "AuthenticationError",
+                            "message": "The API key in the request is missing or invalid.",
+                        }
+                    },
+                )
                 return
             if key_retry_redirect_to:
                 self._redirect_with_json(key_retry_redirect_to)
                 return
-            self._json(200, {"status": "ok", "healthy": True,
-                             "version": "0.4.18", "auth_mode": "api_key"})
+            self._json(
+                200, {"status": "ok", "healthy": True, "version": "0.4.18", "auth_mode": "api_key"}
+            )
 
         def log_message(self, *_args):
             pass
@@ -101,25 +120,42 @@ def _start_server(records, *, require_header=None, redirect_to=None, plain_redir
     return server, worker
 
 
+@contextmanager
+def _server_url(records, **options):
+    server, worker = _start_server(records, **options)
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
 def test_extra_headers_from_env_reach_every_request(external_provider):
     _, _, module, _ = external_provider("extra-headers")
     records = []
     server, worker = _start_server(records, require_header="CF-Access-Client-Id")
     endpoint = f"http://127.0.0.1:{server.server_port}"
     try:
-        settings = module._resolve_connection_settings({}, env={
-            "OPENVIKING_API_KEY": "test-key",
-            "OPENVIKING_EXTRA_HEADERS": json.dumps({
-                "CF-Access-Client-Id": "id.access",
-                "CF-Access-Client-Secret": "gateway-secret",
-            }),
-        })
+        settings = module._resolve_connection_settings(
+            {},
+            env={
+                "OPENVIKING_API_KEY": "test-key",
+                "OPENVIKING_EXTRA_HEADERS": json.dumps(
+                    {
+                        "CF-Access-Client-Id": "id.access",
+                        "CF-Access-Client-Secret": "gateway-secret",
+                    }
+                ),
+            },
+        )
         assert settings["extra_headers"] == {
             "CF-Access-Client-Id": "id.access",
             "CF-Access-Client-Secret": "gateway-secret",
         }
-        client = module._VikingClient(endpoint, settings["api_key"],
-                                      extra_headers=settings["extra_headers"])
+        client = module._VikingClient(
+            endpoint, settings["api_key"], extra_headers=settings["extra_headers"]
+        )
         assert client.get("/health")["status"] == "ok"
         assert records[-1]["CF-Access-Client-Id"] == "id.access"
         assert records[-1]["CF-Access-Client-Secret"] == "gateway-secret"
@@ -141,29 +177,39 @@ def test_extra_headers_are_read_from_linked_ovcli_conf():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
 
-    values = module._connection_values_from_ovcli({
-        "url": "https://ov.example.com",
-        "api_key": "user-key",
-        "extra_headers": {"CF-Access-Client-Id": "id.access"},
-    })
+    values = module._connection_values_from_ovcli(
+        {
+            "url": "https://ov.example.com",
+            "api_key": "user-key",
+            "extra_headers": {"CF-Access-Client-Id": "id.access"},
+        }
+    )
     assert values["extra_headers"] == {"CF-Access-Client-Id": "id.access"}
 
 
 def test_extra_headers_cannot_forge_identity(external_provider):
     _, _, module, _ = external_provider("extra-headers-identity")
-    parsed = module._parse_extra_headers(json.dumps({
-        "X-OpenViking-Account": "someone-else",
-        "X-OpenViking-User": "root",
-        "CF-Access-Client-Id": "id.access",
-    }))
+    parsed = module._parse_extra_headers(
+        json.dumps(
+            {
+                "X-OpenViking-Account": "someone-else",
+                "X-OpenViking-User": "root",
+                "CF-Access-Client-Id": "id.access",
+            }
+        )
+    )
     assert parsed == {"CF-Access-Client-Id": "id.access"}
 
-    client = module._VikingClient("http://127.0.0.1:1", "real-key", extra_headers={
-        "X-API-Key": "not-mine",
-        "Authorization": "Bearer not-mine",
-        "X-OpenViking-Actor-Peer": "not-mine",
-        "CF-Access-Client-Id": "id.access",
-    })
+    client = module._VikingClient(
+        "http://127.0.0.1:1",
+        "real-key",
+        extra_headers={
+            "X-API-Key": "not-mine",
+            "Authorization": "Bearer not-mine",
+            "X-OpenViking-Actor-Peer": "not-mine",
+            "CF-Access-Client-Id": "id.access",
+        },
+    )
     headers = client._headers()
     assert headers["X-API-Key"] == "real-key"
     assert headers["Authorization"] == "Bearer real-key"
@@ -229,13 +275,11 @@ def test_startup_probe_retries_when_gateway_redirects_to_login(external_provider
     OpenViking" and drops the client, even though every authenticated request would work.
     """
     records = []
-    server, worker = _start_server(
+    with _server_url(
         records,
         require_header="CF-Access-Client-Id",
         redirect_to="https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com",
-    )
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
+    ) as endpoint:
         home, provider, _module, _settings = external_provider("extra-headers-redirect")
         (home / ".env").write_text(
             "OPENVIKING_ENDPOINT=%s\nOPENVIKING_API_KEY=test-key\nOPENVIKING_EXTRA_HEADERS=%s\n"
@@ -250,17 +294,14 @@ def test_startup_probe_retries_when_gateway_redirects_to_login(external_provider
             "the retry after the redirect went out without the resolved headers"
         )
         leaked = [
-            r for r in records[-1:]
+            r
+            for r in records[-1:]
             if r.get("X-API-Key") or r.get("Authorization") or r.get("X-OpenViking-Actor-Peer")
         ]
         assert not leaked, (
             "the retry after a redirect carried more than the gateway headers: %s"
             % json.dumps(leaked[-1])
         )
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
 
 
 def test_ordinary_redirect_receives_no_secrets(external_provider):
@@ -272,9 +313,7 @@ def test_ordinary_redirect_receives_no_secrets(external_provider):
     stays unusable exactly as it was before this change.
     """
     records = []
-    server, worker = _start_server(records, plain_redirect_to="https://example.com/moved")
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
+    with _server_url(records, plain_redirect_to="https://example.com/moved") as endpoint:
         home, provider, _module, _settings = external_provider("plain-redirect")
         (home / ".env").write_text(
             "OPENVIKING_ENDPOINT=%s\nOPENVIKING_API_KEY=test-key\n" % endpoint,
@@ -284,11 +323,12 @@ def test_ordinary_redirect_receives_no_secrets(external_provider):
 
         assert records, "startup should have probed /health"
         leaked = [
-            r for r in records
+            r
+            for r in records
             if r.get("X-API-Key") or r.get("Authorization") or r.get("X-OpenViking-Account")
         ]
-        assert not leaked, (
-            "an ordinary redirect was answered with credentials: %s" % json.dumps(leaked[-1])
+        assert not leaked, "an ordinary redirect was answered with credentials: %s" % json.dumps(
+            leaked[-1]
         )
         assert len(records) == 1, (
             "the probe retried after an ordinary redirect instead of failing once: %d requests"
@@ -297,47 +337,28 @@ def test_ordinary_redirect_receives_no_secrets(external_provider):
         assert provider._client is None, (
             "a redirecting non-OpenViking endpoint was accepted as a client"
         )
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
 
 
-def test_gateway_only_deployment_needs_no_api_key(external_provider):
-    """A gateway-only deployment: extra_headers set, no OpenViking API key at all.
-
-    The gateway retry carries the operator's headers and nothing else, so it must not be
-    gated on a key that request never sends. A loopback OpenViking published through
-    Cloudflare Access has exactly this shape.
-    """
+@pytest.mark.parametrize(
+    "redirect_to",
+    [None, "https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com"],
+    ids=["403", "302"],
+)
+def test_gateway_only_deployment_needs_no_api_key(external_provider, redirect_to):
     records = []
-    server, worker = _start_server(
-        records,
-        require_header="CF-Access-Client-Id",
-        redirect_to="https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com",
-    )
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
+    with _server_url(
+        records, require_header="CF-Access-Client-Id", redirect_to=redirect_to
+    ) as endpoint:
         _, _, module, _ = external_provider("gateway-only-no-key")
         client = module._VikingClient(
             endpoint, "", extra_headers={"CF-Access-Client-Id": "id.access"}
         )
-        payload = client.health_payload()
 
-        assert payload.get("status") == "ok", (
-            "a gateway-only deployment could not probe /health without an API key"
+        assert client.health_payload().get("status") == "ok"
+        assert [record.get("CF-Access-Client-Id") for record in records] == [None, "id.access"]
+        assert all(
+            not (record.get("X-API-Key") or record.get("Authorization")) for record in records
         )
-        assert len(records) == 2, (
-            "expected one anonymous probe and one gateway retry, got %d requests" % len(records)
-        )
-        assert records[1].get("CF-Access-Client-Id") == "id.access"
-        assert not (records[1].get("X-API-Key") or records[1].get("Authorization")), (
-            "the gateway retry carried credentials it never needed"
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
 
 
 def test_gateway_redirect_then_key_challenge_is_answered(external_provider):
@@ -348,14 +369,12 @@ def test_gateway_redirect_then_key_challenge_is_answered(external_provider):
     redirect attempt.
     """
     records = []
-    server, worker = _start_server(
+    with _server_url(
         records,
         require_header="CF-Access-Client-Id",
         redirect_to="https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com",
         require_key=True,
-    )
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
+    ) as endpoint:
         _, _, module, _ = external_provider("gateway-then-key")
         client = module._VikingClient(
             endpoint, "test-key", extra_headers={"CF-Access-Client-Id": "id.access"}
@@ -375,10 +394,6 @@ def test_gateway_redirect_then_key_challenge_is_answered(external_provider):
             "the explicit 401 challenge went unanswered"
         )
         assert records[2].get("CF-Access-Client-Id") == "id.access"
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
 
 
 def test_stale_gateway_token_reports_the_gateway_not_openviking(external_provider):
@@ -387,14 +402,12 @@ def test_stale_gateway_token_reports_the_gateway_not_openviking(external_provide
     The retry stays bounded and the login URL is never followed.
     """
     records = []
-    server, worker = _start_server(
+    with _server_url(
         records,
         require_header="CF-Access-Client-Id",
         redirect_to="https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com",
         gateway_value="rotated-token",
-    )
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
+    ) as endpoint:
         _, _, module, _ = external_provider("stale-gateway-token")
         client = module._VikingClient(
             endpoint, "test-key", extra_headers={"CF-Access-Client-Id": "stale-token"}
@@ -412,53 +425,12 @@ def test_stale_gateway_token_reports_the_gateway_not_openviking(external_provide
         assert not (records[1].get("X-API-Key") or records[1].get("Authorization")), (
             "the bounded retry carried credentials"
         )
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
-
-
-def test_gateway_only_deployment_needs_no_api_key_when_gateway_answers_403(external_provider):
-    """A gateway-only deployment whose gateway answers ``403`` instead of redirecting.
-
-    Cloudflare Access redirects, but oauth2-proxy and many WAFs answer ``401``/``403``
-    to a request that carries no service token. The retry that would satisfy them sends
-    the operator's headers and no OpenViking key, so it must not be gated on a key this
-    deployment does not have. ``require_header`` with no ``redirect_to`` is exactly that
-    shape: the header-less probe is refused, the header-bearing retry is accepted.
-    """
-    records = []
-    server, worker = _start_server(records, require_header="CF-Access-Client-Id")
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
-        _, _, module, _ = external_provider("gateway-only-403")
-        client = module._VikingClient(
-            endpoint, "", extra_headers={"CF-Access-Client-Id": "id.access"}
-        )
-        payload = client.health_payload()
-
-        assert payload.get("status") == "ok", (
-            "a gateway-only deployment could not probe a gateway that answers 403"
-        )
-        assert len(records) == 2, (
-            "expected one anonymous probe and one gateway retry, got %d requests" % len(records)
-        )
-        assert records[1].get("CF-Access-Client-Id") == "id.access"
-        assert not (records[1].get("X-API-Key") or records[1].get("Authorization")), (
-            "the gateway retry carried credentials it never needed"
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
 
 
 def test_gateway_only_deployment_starts_when_gateway_answers_403(external_provider):
     """The same shape through provider.initialize(): the client must survive startup."""
     records = []
-    server, worker = _start_server(records, require_header="CF-Access-Client-Id")
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
+    with _server_url(records, require_header="CF-Access-Client-Id") as endpoint:
         home, provider, _module, _settings = external_provider("gateway-only-403-startup")
         (home / ".env").write_text(
             "OPENVIKING_ENDPOINT=%s\nOPENVIKING_EXTRA_HEADERS=%s\n"
@@ -474,10 +446,6 @@ def test_gateway_only_deployment_starts_when_gateway_answers_403(external_provid
         assert any(r.get("CF-Access-Client-Id") == "id.access" for r in records), (
             "no request ever carried the gateway headers"
         )
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
 
 
 def test_key_retry_that_lands_on_a_redirect_is_not_read_as_a_payload(external_provider):
@@ -488,13 +456,11 @@ def test_key_retry_that_lands_on_a_redirect_is_not_read_as_a_payload(external_pr
     — even though the gateway is still gating the request.
     """
     records = []
-    server, worker = _start_server(
+    with _server_url(
         records,
         require_key=True,
         key_retry_redirect_to="https://team.cloudflareaccess.com/cdn-cgi/access/login/openviking.example.com",
-    )
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
+    ) as endpoint:
         _, _, module, _ = external_provider("key-retry-redirect")
         client = module._VikingClient(endpoint, "test-key")
         message = ""
@@ -505,83 +471,36 @@ def test_key_retry_that_lands_on_a_redirect_is_not_read_as_a_payload(external_pr
             message = str(exc)
 
         assert not (isinstance(payload, dict) and payload.get("status") == "ok"), (
-            "a redirect answered to the key retry was accepted as a healthy payload: %r" % (payload,)
+            "a redirect answered to the key retry was accepted as a healthy payload: %r"
+            % (payload,)
         )
         assert "302" in message and "redirecting" in message, (
             "a redirect answered to the key retry was reported as %r" % message
         )
         assert len(records) == 2, "the retry was not bounded: %d requests" % len(records)
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
 
 
-def test_redirect_destination_is_never_requested(external_provider):
-    """The login URL must not be fetched — proven by a second listener as the target.
+@pytest.mark.parametrize("gateway", [False, True], ids=["ordinary", "gateway"])
+def test_redirect_destination_is_never_requested(external_provider, gateway):
+    target_records, records = [], []
+    with _server_url(target_records) as target:
+        destination = f"{target}/cdn-cgi/access/login"
+        if gateway:
+            server_options = {
+                "require_header": "CF-Access-Client-Id",
+                "redirect_to": destination,
+                "gateway_value": "rotated-token",
+            }
+            headers = {"CF-Access-Client-Id": "stale-token"}
+        else:
+            server_options = {"plain_redirect_to": destination}
+            headers = {}
 
-    A single listener cannot tell a followed redirect from an unfollowed one: if the
-    ``Location`` names another host, nothing in the test process would observe the
-    request. So the target is a second stub on loopback, and it must stay empty.
-    """
-    target_records = []
-    target, target_worker = _start_server(target_records)
-    destination = "http://127.0.0.1:%d/cdn-cgi/access/login" % target.server_port
-    records = []
-    server, worker = _start_server(records, plain_redirect_to=destination)
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
-        _, _, module, _ = external_provider("redirect-destination")
-        client = module._VikingClient(endpoint, "test-key")
-        with suppress(Exception):
-            client.health_payload()
+        with _server_url(records, **server_options) as endpoint:
+            _, _, module, _ = external_provider("redirect-destination")
+            client = module._VikingClient(endpoint, "test-key", extra_headers=headers)
+            with suppress(Exception):
+                client.health_payload()
 
-        assert not target_records, (
-            "the redirect destination was requested %d time(s): %s"
-            % (len(target_records), json.dumps(target_records))
-        )
-        assert len(records) == 1, (
-            "the probe did not fail once on an ordinary redirect: %d requests" % len(records)
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
-        target.shutdown()
-        target.server_close()
-        target_worker.join(timeout=5)
-
-
-def test_gateway_redirect_destination_is_never_requested(external_provider):
-    """Same for the gateway path: the retry must not follow the login URL either."""
-    target_records = []
-    target, target_worker = _start_server(target_records)
-    destination = "http://127.0.0.1:%d/cdn-cgi/access/login" % target.server_port
-    records = []
-    server, worker = _start_server(
-        records,
-        require_header="CF-Access-Client-Id",
-        redirect_to=destination,
-        gateway_value="rotated-token",
-    )
-    endpoint = "http://127.0.0.1:%d" % server.server_port
-    try:
-        _, _, module, _ = external_provider("gateway-redirect-destination")
-        client = module._VikingClient(
-            endpoint, "test-key", extra_headers={"CF-Access-Client-Id": "stale-token"}
-        )
-        with suppress(Exception):
-            client.health_payload()
-
-        assert not target_records, (
-            "the gateway retry followed the login URL (%d request(s) at the destination)"
-            % len(target_records)
-        )
-        assert len(records) == 2, "the retry was not bounded: %d requests" % len(records)
-    finally:
-        server.shutdown()
-        server.server_close()
-        worker.join(timeout=5)
-        target.shutdown()
-        target.server_close()
-        target_worker.join(timeout=5)
+        assert target_records == []
+    assert len(records) == (2 if gateway else 1)

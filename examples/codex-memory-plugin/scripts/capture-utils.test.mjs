@@ -96,196 +96,64 @@ test("keeps timestamped user log lines on the capture wire", () => {
   assert.deepEqual(turns[0].parts, [{ type: "text", text: log }]);
 });
 
-test("pairs current Codex function_call records by call_id", () => {
-  const turns = extractCaptureTurns(
-    [
-      {
-        type: "response_item",
-        payload: {
-          type: "function_call",
-          id: "fc-item-1",
-          call_id: "logical-call-1",
-          name: "exec_command",
-          arguments: JSON.stringify({ cmd: "pwd" }),
-        },
-      },
-      {
-        type: "response_item",
-        payload: {
-          type: "function_call_output",
-          id: "fco-item-1",
-          call_id: "logical-call-1",
-          output: "project root",
-        },
-      },
-    ],
-    CAPTURE_CONFIG,
-  );
+const responseItem = (payload) => ({ type: "response_item", payload });
+const eventMessage = (payload) => ({ type: "event_msg", payload });
+const captureParts = (...entries) =>
+  extractCaptureTurns(entries, CAPTURE_CONFIG).flatMap(({ parts }) => parts);
 
-  assert.deepEqual(
-    turns.flatMap((turn) => turn.parts),
-    [
-      {
-        type: "tool",
-        tool_id: "logical-call-1",
-        tool_name: "exec_command",
-        tool_status: "running",
-        tool_input: { cmd: "pwd" },
-      },
-      {
-        type: "tool",
-        tool_id: "logical-call-1",
-        tool_name: "exec_command",
-        tool_status: "completed",
-        tool_output: "project root",
-      },
-    ],
-  );
-});
-
-test("captures current Codex custom_tool_call records", () => {
-  const turns = extractCaptureTurns(
-    [
-      {
-        type: "response_item",
-        payload: {
-          type: "custom_tool_call",
-          id: "ctc-item-1",
-          call_id: "custom-call-1",
-          status: "completed",
-          name: "exec",
-          input: "sed -n '1,200p' /tmp/skills/tdd/SKILL.md",
-        },
-      },
-      {
-        type: "response_item",
-        payload: {
-          type: "custom_tool_call_output",
-          id: "ctco-item-1",
-          call_id: "custom-call-1",
-          output: "skill contents",
-        },
-      },
-    ],
-    CAPTURE_CONFIG,
-  );
-
-  assert.deepEqual(
-    turns.flatMap((turn) => turn.parts),
-    [
-      {
-        type: "tool",
-        tool_id: "custom-call-1",
-        tool_name: "exec",
-        tool_status: "running",
-        tool_input: { value: "sed -n '1,200p' /tmp/skills/tdd/SKILL.md" },
-      },
-      {
-        type: "tool",
-        tool_id: "custom-call-1",
-        tool_name: "exec",
-        tool_status: "completed",
-        tool_output: "skill contents",
-      },
-    ],
-  );
-});
-
-test("captures current Codex tool_search records", () => {
-  const turns = extractCaptureTurns(
-    [
-      {
-        type: "response_item",
-        payload: {
-          type: "tool_search_call",
-          id: "ts-item-1",
-          call_id: "tool-search-1",
-          status: "completed",
-          arguments: { query: "calendar tools", limit: 3 },
-        },
-      },
-      {
-        type: "response_item",
-        payload: {
-          type: "tool_search_output",
-          id: "tso-item-1",
-          call_id: "tool-search-1",
-          status: "completed",
-          tools: [{ name: "calendar.search" }],
-        },
-      },
-    ],
-    CAPTURE_CONFIG,
-  );
-
-  assert.deepEqual(
-    turns.flatMap((turn) => turn.parts),
-    [
-      {
-        type: "tool",
-        tool_id: "tool-search-1",
-        tool_name: "tool_search",
-        tool_status: "running",
-        tool_input: { query: "calendar tools", limit: 3 },
-      },
-      {
-        type: "tool",
-        tool_id: "tool-search-1",
-        tool_name: "tool_search",
-        tool_status: "completed",
-        tool_output: JSON.stringify({ tools: [{ name: "calendar.search" }] }),
-      },
-    ],
-  );
-});
+for (const { name, call, output, input, result } of [
+  {
+    name: "exec_command",
+    call: { type: "function_call", name: "exec_command", arguments: '{"cmd":"pwd"}' },
+    output: { type: "function_call_output", output: "project root" },
+    input: { cmd: "pwd" },
+    result: "project root",
+  },
+  {
+    name: "exec",
+    call: { type: "custom_tool_call", name: "exec", status: "completed", input: "cat note.md" },
+    output: { type: "custom_tool_call_output", output: "skill contents" },
+    input: { value: "cat note.md" },
+    result: "skill contents",
+  },
+  {
+    name: "tool_search",
+    call: { type: "tool_search_call", status: "completed", arguments: { query: "calendar tools", limit: 3 } },
+    output: { type: "tool_search_output", status: "completed", tools: [{ name: "calendar.search" }] },
+    input: { query: "calendar tools", limit: 3 },
+    result: '{"tools":[{"name":"calendar.search"}]}',
+  },
+]) {
+  test(`pairs Codex ${call.type} and its output by their shared call_id`, () => {
+    const call_id = "logical-call";
+    const parts = captureParts(
+      responseItem({ ...call, call_id, id: "call-item" }),
+      responseItem({ ...output, call_id, id: "output-item" }),
+    );
+    const identity = { type: "tool", tool_id: call_id, tool_name: name };
+    assert.deepEqual(parts, [
+      { ...identity, tool_status: "running", tool_input: input },
+      { ...identity, tool_status: "completed", tool_output: result },
+    ]);
+  });
+}
 
 test("deduplicates function records also reported as mcp_tool_call_end", () => {
-  const turns = extractCaptureTurns(
-    [
-      {
-        type: "response_item",
-        payload: {
-          type: "function_call",
-          id: "fc-mcp-1",
-          call_id: "mcp-call-1",
-          name: "js",
-          arguments: JSON.stringify({ code: "return 1" }),
-        },
-      },
-      {
-        type: "response_item",
-        payload: {
-          type: "function_call_output",
-          id: "fco-mcp-1",
-          call_id: "mcp-call-1",
-          output: "1",
-        },
-      },
-      {
-        type: "event_msg",
-        payload: {
-          type: "mcp_tool_call_end",
-          call_id: "mcp-call-1",
-          invocation: {
-            server: "node-repl",
-            tool: "js",
-            arguments: { code: "return 1" },
-          },
-          result: {
-            Ok: {
-              content: [{ type: "text", text: "1" }],
-            },
-          },
-        },
-      },
-    ],
-    CAPTURE_CONFIG,
+  const call_id = "mcp-call-1";
+  const parts = captureParts(
+    responseItem({ type: "function_call", id: "function", call_id, name: "js", arguments: '{"code":"return 1"}' }),
+    responseItem({ type: "function_call_output", id: "output", call_id, output: "1" }),
+    eventMessage({
+      type: "mcp_tool_call_end", call_id,
+      invocation: { server: "node-repl", tool: "js", arguments: { code: "return 1" } },
+      result: { Ok: { content: [{ type: "text", text: "1" }] } },
+    }),
   );
-
-  const parts = turns.flatMap((turn) => turn.parts);
-  assert.equal(parts.length, 2);
-  assert.deepEqual(parts.map((part) => part.tool_status), ["running", "completed"]);
-  assert.deepEqual(parts.map((part) => part.tool_id), ["mcp-call-1", "mcp-call-1"]);
+  const identity = { type: "tool", tool_id: call_id, tool_name: "js" };
+  assert.deepEqual(parts, [
+    { ...identity, tool_status: "running", tool_input: { code: "return 1" } },
+    { ...identity, tool_status: "completed", tool_output: "1" },
+  ]);
 });
 
 test("keeps outer exec and captures its nested MCP tool by the nested call id", () => {
@@ -917,65 +785,29 @@ test("captures generic OpenViking MCP calls as standard tool parts", () => {
   ]);
 });
 
-test("keeps MCP tool-level errors out of completed generic read tool parts", () => {
-  const uri = "viking://user/test/memories/experiences/a.md";
-  const turns = extractCaptureTurns(
-    [
-      {
-        type: "event_msg",
-        payload: {
-          type: "mcp_tool_call_end",
-          call_id: "exec-read-error",
-          invocation: {
-            server: "openviking-memory",
-            tool: "read",
-            arguments: { uri },
-          },
-          result: {
-            Ok: {
-              isError: true,
-              content: [{ type: "text", text: "OpenViking request failed (HTTP 500)" }],
-            },
-          },
-        },
-      },
-    ],
-    CAPTURE_CONFIG,
-  );
+const readFailureText = "OpenViking request failed (HTTP 500)";
+const failureUri = "viking://user/test/memories/experiences/a.md";
 
-  const parts = turns.flatMap((turn) => turn.parts);
-  assert.deepEqual(parts.map((part) => part.tool_status), ["running", "error"]);
-  assert.equal(parts.some((part) => part.tool_status === "completed"), false);
-});
-
-test("marks paginated MCP errors as failed tool parts", () => {
-  const turns = extractCaptureTurns(
-    [
-      {
-        type: "event_msg",
-        payload: {
-          type: "item_completed",
-          item: {
-            type: "McpToolCall",
-            id: "nested-read-error",
-            server: "openviking-memory",
-            tool: "read",
-            arguments: { uris: ["viking://user/test/memories/experiences/a.md"] },
-            status: "failed",
-            error: { message: "OpenViking request failed (HTTP 500)" },
-          },
-        },
-      },
-    ],
-    CAPTURE_CONFIG,
-  );
-
-  assert.deepEqual(toolParts(turns, "read").map((part) => part.tool_status), [
-    "running",
-    "error",
-  ]);
-  assert.match(toolParts(turns, "read")[1].tool_output, /HTTP 500/);
-});
+for (const [name, payload] of [
+  ["legacy MCP event", {
+    type: "mcp_tool_call_end", call_id: "read-call",
+    invocation: { server: "openviking-memory", tool: "read", arguments: { uri: failureUri } },
+    result: { Ok: { isError: true, content: [{ type: "text", text: readFailureText }] } },
+  }],
+  ["paginated completion", {
+    type: "item_completed",
+    item: {
+      type: "McpToolCall", id: "read-call", server: "openviking-memory", tool: "read",
+      arguments: { uris: [failureUri] }, status: "failed", error: { message: readFailureText },
+    },
+  }],
+]) {
+  test(`captures a failed read from the ${name} as an error`, () => {
+    const parts = captureParts(eventMessage(payload));
+    assert.deepEqual(parts.map((part) => part.tool_status), ["running", "error"]);
+    assert.match(parts[1].tool_output, /HTTP 500/);
+  });
+}
 
 test("preserves generic read input when Codex truncates a long MCP result", () => {
   const uri = "viking://user/test/memories/experiences/long-experience.md";
