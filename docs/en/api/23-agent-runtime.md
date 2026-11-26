@@ -23,7 +23,7 @@ POST /api/v1/compile/create
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `compile_name` | string | Yes | Caller-selected configuration name; returned unchanged |
-| `from` | string[] | Yes | Non-empty source directory list |
+| `from` | string[] | Yes | 1 to 100 distinct source directories, counted after URI resolution |
 | `to` | string | Yes | Output directory, writable by the caller and disjoint from the sources |
 | `skill` | string | Yes | Readable Skill directory or its `SKILL.md` URI |
 | `instruction` | string | No | Additional instructions; null uses the Skill's default behavior |
