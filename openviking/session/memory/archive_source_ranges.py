@@ -15,19 +15,19 @@ ARCHIVE_SOURCE_RANGE_INSTRUCTION = (
     'Use strings such as "3" or "7-9". Select passages worth looking up verbatim later because '
     "they contain precise details, constraints, decisions, or work results. Use at most 16 "
     "message or chunk positions. Omit routine conversation. Only select text from user or "
-    "assistant messages. You may select material that also supports a memory operation. "
+    "assistant messages. Prefer passages with useful details that the memory operations "
+    "do not preserve. "
     "Use an empty list when there are no useful sources. Do not quote or summarize the text."
 )
 _INDEX_RANGE = re.compile(r"([0-9]{1,9})(?:-([0-9]{1,9}))?")
 
 
 @dataclass(frozen=True, slots=True)
-class ArchiveSourceSpan:
-    """A half-open character range in the joined text of one stored message."""
+class ArchiveSourceExcerpt:
+    """A selected original excerpt and its message ID for archive membership checks."""
 
     message_id: str
-    start_char: int
-    end_char: int
+    excerpt: str
 
 
 def plain_archive_text(message: Message) -> str:

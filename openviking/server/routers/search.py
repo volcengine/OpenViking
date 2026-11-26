@@ -37,7 +37,7 @@ from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
-from openviking.session.archive_source_recall import read_archive_source, search_archive_sources
+from openviking.session.archive_source_recall import search_archive_sources
 from openviking.telemetry import TelemetryRequest
 from openviking.utils.image_search import is_viking_uri
 from openviking.utils.search_filters import (
@@ -388,15 +388,6 @@ class ArchiveSourceSearchRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=20)
 
 
-class ArchiveSourceReference(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    archive_uri: str
-    message_id: str
-    start_char: int = Field(ge=0, strict=True)
-    end_char: int = Field(gt=0, strict=True)
-
-
 @router.post("/archive-sources")
 async def archive_source_search(
     request: ArchiveSourceSearchRequest,
@@ -404,15 +395,6 @@ async def archive_source_search(
 ):
     result = await search_archive_sources(get_service().fs, request.query, request.limit, ctx)
     return Response(status="ok", result=_sanitize_floats(result))
-
-
-@router.post("/archive-sources/read")
-async def archive_source_read(
-    request: ArchiveSourceReference,
-    ctx: RequestContext = Depends(get_request_context),
-):
-    result = await read_archive_source(get_service().fs, request.model_dump(), ctx)
-    return Response(status="ok", result=result)
 
 
 @router.post("/find")

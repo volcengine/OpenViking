@@ -30,7 +30,7 @@ from openviking.session.extraction_batch import (
 )
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.agent_file import ensure_agent_file
-from openviking.session.memory.archive_source_ranges import ArchiveSourceSpan
+from openviking.session.memory.archive_source_ranges import ArchiveSourceExcerpt
 from openviking.session.memory.constants import (
     AGENT_EVOLUTION_MEMORY_TYPES,
     CASE_MEMORY_TYPE,
@@ -1511,7 +1511,7 @@ class _V3ExtractionResult:
     memory_diff: dict[str, Any] | None = None
     case_uri_by_name: dict[str, str] = field(default_factory=dict)
     skipped_operations: list[dict[str, Any]] = field(default_factory=list)
-    archive_source_candidates: list[ArchiveSourceSpan] = field(default_factory=list)
+    archive_source_candidates: list[ArchiveSourceExcerpt] = field(default_factory=list)
 
 
 @dataclass(slots=True)

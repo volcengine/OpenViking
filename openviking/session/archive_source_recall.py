@@ -1,15 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Index selected archive passages and resolve them for agent tools."""
+"""Index selected archive passages and return excerpts with their source URI."""
 
 from typing import TYPE_CHECKING, Any
 
-from openviking.message import Message
 from openviking.models.embedder.base import embed_compat
 from openviking.server.identity import RequestContext
 from openviking.session.archive_store import ArchiveStore
-from openviking.session.memory.archive_source_ranges import plain_archive_text
-from openviking.storage.archive_source import MAX_ARCHIVE_SOURCE_CHARS, is_archive_source_uri
+from openviking.storage.archive_source import is_archive_source_uri
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
@@ -30,32 +28,18 @@ ARCHIVE_SOURCE_CANDIDATES = "archive_source_candidates"
 async def enqueue_archive_sources(
     fs: "VikingFS",
     archive_uri: str,
-    messages: list[Message],
-    candidates: list[dict[str, Any]],
+    excerpts: list[str],
     ctx: RequestContext,
 ) -> None:
     store = fs._get_vector_store()
-    if not candidates or store is None:
+    if not excerpts or store is None:
         return
-    messages_by_id = {message.id: message for message in messages}
-    for candidate in candidates:
-        message = messages_by_id.get(candidate["message_id"])
-        if message is None:
-            continue
-        start, end = candidate["start_char"], candidate["end_char"]
-        text = plain_archive_text(message)
-        if not 0 <= start < end <= len(text):
-            continue
-        end = min(end, start + MAX_ARCHIVE_SOURCE_CHARS)
-        excerpt = text[start:end]
-        if not excerpt.strip():
+    for excerpt in excerpts:
+        if not isinstance(excerpt, str):
             continue
         try:
             await store.enqueue_archive_source(
                 archive_uri=f"{archive_uri}/messages.jsonl",
-                message_id=message.id,
-                start=start,
-                end=end,
                 excerpt=excerpt,
                 ctx=ctx,
             )
@@ -68,29 +52,20 @@ def _require_enabled() -> None:
         raise NotFoundError("archive source recall", "feature")
 
 
-async def _open_source_archive(
-    fs: "VikingFS", source_ref: dict[str, Any], ctx: RequestContext
-) -> tuple[ArchiveStore, str]:
-    uri = source_ref["archive_uri"]
-    if not is_archive_source_uri(uri, ctx):
-        raise InvalidArgumentError("Expected a source from the current user's archived messages")
-    await fs._ensure_access(uri, ctx)
-    if not await fs.exists(uri, ctx=ctx):
-        raise NotFoundError("archive source message", "archive source")
-
-    archive_uri = uri.rsplit("/", 1)[0]
+async def _selected_excerpts(fs: "VikingFS", source_uri: str, ctx: RequestContext) -> set[str]:
+    if not is_archive_source_uri(source_uri, ctx):
+        return set()
+    await fs._ensure_access(source_uri, ctx)
+    if not await fs.exists(source_uri, ctx=ctx):
+        return set()
+    archive_uri = source_uri.rsplit("/", 1)[0]
     archive = ArchiveStore(fs, ctx, archive_uri.rsplit("/", 2)[0])
-    candidates = (await archive.read_meta(archive_uri)).get(ARCHIVE_SOURCE_CANDIDATES) or []
-    start, end = source_ref["start_char"], source_ref["end_char"]
-    for candidate in candidates:
-        if (
-            candidate["message_id"] == source_ref["message_id"]
-            and start == candidate["start_char"]
-            and end == min(candidate["end_char"], start + MAX_ARCHIVE_SOURCE_CHARS)
-            and start < end
-        ):
-            return archive, archive_uri
-    raise NotFoundError("archive source reference", "archive source")
+    meta = await archive.read_meta(archive_uri)
+    return {
+        excerpt
+        for excerpt in meta.get(ARCHIVE_SOURCE_CANDIDATES) or []
+        if isinstance(excerpt, str)
+    }
 
 
 async def search_archive_sources(
@@ -118,39 +93,23 @@ async def search_archive_sources(
         ctx=ctx,
     )
     sources = []
+    selected_by_uri: dict[str, set[str]] = {}
+    seen = set()
     for hit in hits:
-        source_ref = {
-            "archive_uri": hit["archive_uri"],
-            "message_id": hit["message_id"],
-            "start_char": hit["start"],
-            "end_char": hit["end"],
-        }
+        source_uri, excerpt = hit["source_uri"], hit["excerpt"]
+        if not isinstance(source_uri, str) or not isinstance(excerpt, str):
+            continue
+        key = (source_uri, excerpt)
+        if key in seen:
+            continue
+        seen.add(key)
         try:
-            await _open_source_archive(fs, source_ref, ctx)
-            excerpt = await fs_service.make_visible(hit["archive_uri"], hit["excerpt"], ctx)
+            if source_uri not in selected_by_uri:
+                selected_by_uri[source_uri] = await _selected_excerpts(fs, source_uri, ctx)
+            if excerpt not in selected_by_uri[source_uri]:
+                continue
+            visible = await fs_service.make_visible(source_uri, excerpt, ctx)
         except (InvalidArgumentError, NotFoundError, PermissionDeniedError, ResourceExhaustedError):
             continue
-        sources.append({"excerpt": excerpt, "source_ref": source_ref, "score": hit["score"]})
+        sources.append({"excerpt": visible, "source_uri": source_uri, "score": hit["score"]})
     return {"sources": sources}
-
-
-async def read_archive_source(
-    fs_service: "FSService", source_ref: dict[str, Any], ctx: RequestContext
-) -> dict[str, str]:
-    _require_enabled()
-    archive, archive_uri = await _open_source_archive(
-        fs_service._ensure_initialized(), source_ref, ctx
-    )
-    for message in await archive.read_messages(archive_uri):
-        if message.id != source_ref["message_id"]:
-            continue
-        text = plain_archive_text(message)
-        if source_ref["end_char"] <= len(text):
-            start = max(0, source_ref["start_char"] - MAX_ARCHIVE_SOURCE_CHARS)
-            end = source_ref["end_char"] + MAX_ARCHIVE_SOURCE_CHARS
-            return {
-                "content": await fs_service.make_visible(
-                    source_ref["archive_uri"], text[start:end], ctx
-                )
-            }
-    raise NotFoundError("archive source message", "archive source")

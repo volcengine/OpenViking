@@ -48,28 +48,16 @@ def is_archive_source_uri(uri: str, ctx: RequestContext) -> bool:
 def make_archive_source_record(
     *,
     archive_uri: str,
-    message_id: str,
-    start: int,
-    end: int,
     excerpt: str,
     ctx: RequestContext,
 ) -> dict[str, Any]:
     if not is_archive_source_uri(archive_uri, ctx):
         raise InvalidArgumentError("Archive source must reference the caller's archived messages")
-    if not message_id or len(message_id) > 256:
-        raise InvalidArgumentError("Invalid archive source message ID")
-    if (
-        not 0 <= start < end
-        or len(excerpt) != end - start
-        or len(excerpt) > MAX_ARCHIVE_SOURCE_CHARS
-        or not excerpt.strip()
-    ):
-        raise InvalidArgumentError("Invalid archive source excerpt range")
+    if len(excerpt) > MAX_ARCHIVE_SOURCE_CHARS or not excerpt.strip():
+        raise InvalidArgumentError("Invalid archive source excerpt")
 
-    # The existing name field carries the locator while the URI points to the archive.
-    locator = json.dumps([message_id, start, end], ensure_ascii=False, separators=(",", ":"))
     identity = json.dumps(
-        [ctx.account_id, archive_uri, message_id, start, end],
+        [ctx.account_id, archive_uri, excerpt],
         ensure_ascii=False,
         separators=(",", ":"),
     )
@@ -81,7 +69,6 @@ def make_archive_source_record(
         "context_type": ARCHIVE_SOURCE_CONTEXT_TYPE,
         "level": 2,
         "is_leaf": True,
-        "name": locator,
         "abstract": excerpt,
         "account_id": ctx.account_id,
         "owner_user_id": ctx.user.user_id,
@@ -92,12 +79,8 @@ def make_archive_source_record(
 
 
 def archive_source_hit(record: dict[str, Any]) -> dict[str, Any]:
-    message_id, start, end = json.loads(record["name"])
     return {
-        "archive_uri": record["uri"],
-        "message_id": message_id,
-        "start": start,
-        "end": end,
+        "source_uri": record["uri"],
         "excerpt": record["abstract"],
         "score": record.get("_score", 0.0),
     }

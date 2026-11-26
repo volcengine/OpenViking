@@ -132,18 +132,12 @@ class VikingDBManager(VikingVectorIndexBackend):
         self,
         *,
         archive_uri: str,
-        message_id: str,
-        start: int,
-        end: int,
         excerpt: str,
         ctx: RequestContext,
     ) -> str:
         """Queue only the original excerpt as input to the account's embedding model."""
         record = make_archive_source_record(
             archive_uri=archive_uri,
-            message_id=message_id,
-            start=start,
-            end=end,
             excerpt=excerpt,
             ctx=ctx,
         )

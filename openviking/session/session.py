@@ -2837,7 +2837,7 @@ class Session:
                     async def _record_memory_step(
                         step: str,
                         step_messages: List[Message],
-                        source_candidates: list[dict[str, Any]] | None = None,
+                        source_candidates: list[dict[str, str]] | None = None,
                     ) -> None:
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
@@ -2852,14 +2852,17 @@ class Session:
                         }
                         if source_candidates:
                             meta = await self._archives.read_meta(archive_uri)
-                            saved = list(meta.get(ARCHIVE_SOURCE_CANDIDATES) or [])
-                            for candidate in source_candidates:
-                                if (
-                                    candidate["message_id"] in archived_message_ids
-                                    and candidate not in saved
-                                ):
-                                    saved.append(candidate)
-                            updates[ARCHIVE_SOURCE_CANDIDATES] = saved
+                            saved = [
+                                excerpt
+                                for excerpt in meta.get(ARCHIVE_SOURCE_CANDIDATES) or []
+                                if isinstance(excerpt, str)
+                            ]
+                            saved.extend(
+                                candidate["excerpt"]
+                                for candidate in source_candidates
+                                if candidate["message_id"] in archived_message_ids
+                            )
+                            updates[ARCHIVE_SOURCE_CANDIDATES] = list(dict.fromkeys(saved))
                         await self._merge_archive_meta(archive_uri, updates)
 
                     async def _run_recorded_memory_step(
@@ -3040,7 +3043,6 @@ class Session:
                         await enqueue_archive_sources(
                             self._viking_fs,
                             archive_uri,
-                            messages,
                             meta.get(ARCHIVE_SOURCE_CANDIDATES) or [],
                             self.ctx,
                         )

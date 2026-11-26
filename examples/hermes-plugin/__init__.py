@@ -176,10 +176,6 @@ _CONFIG_SCHEMA = [
     _cfg_field("recall_full_read_limit", "Max full L2 content reads per recall", type="integer", minimum=0, maximum=100, default=2),
     _cfg_field("recall_prefer_abstract", "Use abstracts instead of full L2 reads", type="boolean", default=False),
     _cfg_field("recall_resources", "Include resources in recall", type="boolean", default=False),
-    _cfg_field(
-        "archive_source_recall_enabled", "Expose tools for searching and reading archived Session excerpts",
-        type="boolean", default=False,
-    ),
 ]
 # Typed settings (config.yaml primary, env override) keyed by config key.
 _SETTING_SPECS = {f["key"]: f for f in _CONFIG_SCHEMA if "type" in f}
@@ -694,43 +690,12 @@ ADD_RESOURCE_SCHEMA = _tool_schema(
     ["url"],
 )
 
-ARCHIVE_SOURCE_SEARCH_SCHEMA = _tool_schema(
-    "viking_archive_source_search",
-    "Search verbatim excerpts from archived OpenViking Sessions when ordinary recall lacks the exact detail. "
-    "Pass a result's source_ref to viking_archive_source_read for its original context.",
-    {
-        "query": _str("Question or details to look up in archived Session messages.", minLength=1),
-        "limit": {"type": "integer", "description": "Maximum number of excerpts (default: 5).",
-                  "minimum": 1, "maximum": 20},
-    },
-    ["query"],
-)
-
-ARCHIVE_SOURCE_READ_SCHEMA = _tool_schema(
-    "viking_archive_source_read",
-    "Read the archived Session excerpt and its surrounding context using the source_ref from archive search.",
-    {
-        "archive_uri": _str("Archived messages file URI from source_ref."),
-        "message_id": _str("Archived message ID from source_ref."),
-        "start_char": {"type": "integer", "minimum": 0},
-        "end_char": {"type": "integer", "minimum": 1},
-    },
-    ["archive_uri", "message_id", "start_char", "end_char"],
-)
-
 _TOOL_SCHEMAS = [SEARCH_SCHEMA, RULE_SEARCH_SCHEMA, READ_SCHEMA, BROWSE_SCHEMA, REMEMBER_SCHEMA, FORGET_SCHEMA, ADD_RESOURCE_SCHEMA]
-_ARCHIVE_SOURCE_TOOL_SCHEMAS = [ARCHIVE_SOURCE_SEARCH_SCHEMA, ARCHIVE_SOURCE_READ_SCHEMA]
-_ARCHIVE_SOURCE_TOOL_NAMES = {schema["name"] for schema in _ARCHIVE_SOURCE_TOOL_SCHEMAS}
 # Recall tools (read-only) whose results are never re-ingested — echoing recalled
 # memory back into the transcript would re-store it. Write tools are deliberately absent.
-_OPENVIKING_RECALL_TOOL_NAMES = {
-    SEARCH_SCHEMA["name"], RULE_SEARCH_SCHEMA["name"], READ_SCHEMA["name"], BROWSE_SCHEMA["name"],
-} | _ARCHIVE_SOURCE_TOOL_NAMES
+_OPENVIKING_RECALL_TOOL_NAMES = {SEARCH_SCHEMA["name"], RULE_SEARCH_SCHEMA["name"], READ_SCHEMA["name"], BROWSE_SCHEMA["name"]}
 # viking_* tool name -> provider method (resolved via getattr so instance patches apply).
-_TOOL_HANDLERS = {
-    schema["name"]: "_tool_" + schema["name"].removeprefix("viking_")
-    for schema in (*_TOOL_SCHEMAS, *_ARCHIVE_SOURCE_TOOL_SCHEMAS)
-}
+_TOOL_HANDLERS = {schema["name"]: "_tool_" + schema["name"].removeprefix("viking_") for schema in _TOOL_SCHEMAS}
 # Inbound tool-result status aliases -> canonical "error" / "completed" (else "pending").
 _TOOL_STATUS_ERROR_ALIASES = {"error", "failed", "failure"}
 _TOOL_STATUS_COMPLETED_ALIASES = {"completed", "complete", "success", "succeeded"}
@@ -3328,18 +3293,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     # -- tools ------------------------------------------------------------------
 
-    def _archive_source_recall_enabled(self) -> bool:
-        cfg, env = self._profile_config_and_env()
-        return self._setting("archive_source_recall_enabled", cfg, env=env)
-
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        if self._archive_source_recall_enabled():
-            return [*_TOOL_SCHEMAS, *_ARCHIVE_SOURCE_TOOL_SCHEMAS]
         return list(_TOOL_SCHEMAS)
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
-        if tool_name in _ARCHIVE_SOURCE_TOOL_NAMES and not self._archive_source_recall_enabled():
-            return tool_error("Archive-source recall is disabled for this profile")
         if not self._ensure_client():
             return tool_error("OpenViking server not connected")
         handler = _TOOL_HANDLERS.get(tool_name)
@@ -3429,40 +3386,6 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 scored_entries.append((raw_score if raw_score is not None else 0.0, entry))
         formatted = [entry for _, entry in sorted(scored_entries, key=lambda x: x[0], reverse=True)]
         return json.dumps({"results": formatted, "total": result.get("total", len(formatted))}, ensure_ascii=False)
-
-    def _tool_archive_source_search(self, args: dict) -> str:
-        query = args.get("query")
-        limit = args.get("limit", 5)
-        if not isinstance(query, str) or not query.strip():
-            return tool_error("query is required")
-        if type(limit) is not int or not 1 <= limit <= 20:
-            return tool_error("limit must be an integer between 1 and 20")
-        result = self._unwrap_result(self._client.post(
-            "/api/v1/search/archive-sources",
-            {"query": query.strip(), "limit": limit},
-        ))
-        return json.dumps(result, ensure_ascii=False)
-
-    def _tool_archive_source_read(self, args: dict) -> str:
-        archive_uri, message_id = args.get("archive_uri"), args.get("message_id")
-        start_char, end_char = args.get("start_char"), args.get("end_char")
-        if (
-            not isinstance(archive_uri, str) or not archive_uri.startswith("viking://")
-            or not isinstance(message_id, str) or not message_id.strip()
-            or type(start_char) is not int or type(end_char) is not int
-            or not 0 <= start_char < end_char
-        ):
-            return tool_error("Pass a valid source_ref from viking_archive_source_search")
-        result = self._unwrap_result(self._client.post(
-            "/api/v1/search/archive-sources/read",
-            {
-                "archive_uri": archive_uri,
-                "message_id": message_id,
-                "start_char": start_char,
-                "end_char": end_char,
-            },
-        ))
-        return json.dumps(result, ensure_ascii=False)
 
     def _read_uri_payload(self, uri: str, level: str, *, limit: Optional[int] = None) -> Dict[str, Any]:
         summary_level = level in {"abstract", "overview"}

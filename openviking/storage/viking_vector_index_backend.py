@@ -2075,7 +2075,7 @@ class VikingVectorIndexBackend:
             sparse_query_vector=sparse_query_vector,
             filter=scope_filter,
             limit=limit,
-            output_fields=["uri", "name", "abstract"],
+            output_fields=["uri", "abstract"],
         )
         return [archive_source_hit(record) for record in records]
 

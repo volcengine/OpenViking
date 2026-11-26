@@ -27,7 +27,7 @@ from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFST
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.archive_source_ranges import (
-    ArchiveSourceSpan,
+    ArchiveSourceExcerpt,
     plain_archive_text,
     selected_archive_source_indexes,
 )
@@ -53,6 +53,7 @@ from openviking.session.memory.utils.resource_refs import (
 )
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
+from openviking.storage.archive_source import MAX_ARCHIVE_SOURCE_CHARS
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
@@ -395,7 +396,7 @@ class ExtractContext:
 
     def archive_source_candidates(
         self, ranges: list[str], original_messages: list[Message]
-    ) -> list[ArchiveSourceSpan]:
+    ) -> list[ArchiveSourceExcerpt]:
         indexes = selected_archive_source_indexes(ranges, len(self.messages))
         if not indexes:
             return []
@@ -412,7 +413,9 @@ class ExtractContext:
             start = chunk.start_char if chunk else 0
             end = start + len(text)
             if plain_archive_text(original)[start:end] == text:
-                candidates.append(ArchiveSourceSpan(message_id, start, end))
+                excerpt = text[:MAX_ARCHIVE_SOURCE_CHARS]
+                if excerpt.strip():
+                    candidates.append(ArchiveSourceExcerpt(message_id, excerpt))
         return candidates
 
     @classmethod

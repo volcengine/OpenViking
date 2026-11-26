@@ -93,6 +93,7 @@ from openviking.server.upload_token_store import download_token_store, upload_to
 from openviking.service.rule_service import RuleSearchRequest
 from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.session import history as _history
+from openviking.session.archive_source_recall import search_archive_sources
 from openviking.storage.acl import AclSpec
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking.utils.search_filters import resolve_context_types
@@ -787,6 +788,20 @@ async def find(
             events_time_decay_protection=events_time_decay_protection,
         )
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
+
+
+@_mcp_error_results()
+@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+async def archive_source_search(
+    query: Annotated[str, Field(min_length=1)],
+    limit: Annotated[int, Field(ge=1, le=20)] = 5,
+) -> dict[str, Any]:
+    """Search selected passages from archived Sessions when archive source selection is enabled.
+
+    Returns original excerpts and source_uri. If an excerpt is insufficient, call read with its source_uri.
+    """
+    ctx = _get_ctx()
+    return await search_archive_sources(get_service().fs, query, limit, ctx)
 
 
 # This tool exposes two of the router's context-only fields as a pair each, so a caller
