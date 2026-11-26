@@ -4,9 +4,9 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DWClient, TOPIC_ROBOT } from 'dingtalk-stream';
-import { safeError } from '../logger.mjs';
+import { safeError, opaqueRef } from '../logger.mjs';
 import { CONTEXT_AGE_MS } from '../onebot/gate.mjs';
-import { chatId, normalizeDwsMessage, messageId, normalizeMessage, parseChatId, parseMessageTarget } from './events.mjs';
+import { chatId, isDwsGroupMessage, normalizeDwsMessage, messageId, normalizeMessage, parseChatId, parseMessageTarget } from './events.mjs';
 import { requestDingTalk, sendGroup } from './api.mjs';
 import { checkDws, DwsSubscription, sendDws } from './dws.mjs';
 import { DingTalkGate } from './gate.mjs';
@@ -28,6 +28,12 @@ function quietConsole(logger) {
   });
 }
 
+// What a DWS message carried instead of text, for the skipped-content log.
+function contentKind(content) {
+  if (content == null) return 'missing';
+  return Array.isArray(content) ? 'list' : typeof content;
+}
+
 export class DingTalkClient {
   #credentials;
   #token;
@@ -44,6 +50,8 @@ export class DingTalkClient {
     this.watch = null;
     this.dwsSends = new Map();
     this.dwsInbound = new Map();
+    this.dwsContentSeen = new Set();
+    this.allGroupsWarned = false;
   }
 
   async preflight() {
@@ -92,9 +100,10 @@ export class DingTalkClient {
     const pendingGroups = new Set(this.state.pendingKinds().map(({ group_id: group }) => group));
     for (const group of pendingGroups) this.state.reconcileGroup(group, this.policy.route(group));
     if (this.policy.dws) {
-      if (this.policy.dws.allGroups) {
+      if (this.policy.dws.allGroups && !this.allGroupsWarned) {
+        this.allGroupsWarned = true;
         this.logger.warn('dingtalk_dws_all_groups_enabled', {
-          message: 'Unlisted visible groups use ambient processing. Admitted messages may be stored in SQLite and synced to OpenViking memory.',
+          detail: 'Unlisted visible groups use ambient processing. Admitted messages may be stored in SQLite and synced to OpenViking memory.',
         });
       }
       const state = this.state;
@@ -223,7 +232,14 @@ export class DingTalkClient {
   async stageDws(raw, group, route, state) {
     if (this.state !== state) return;
     const event = normalizeDwsMessage(raw, { group, tenantId: this.policy.dws.tenantId });
-    if (!event) return;
+    if (!event) {
+      // Text is the only content this Connector reads; say so once per group
+      // and content type instead of dropping an image or a card without trace.
+      if (isDwsGroupMessage(raw, group) && typeof raw.content !== 'string') {
+        this.noteSkippedContent(group, contentKind(raw.content));
+      }
+      return;
+    }
     if (event.actor.id === this.policy.dws.selfOpenId) {
       if (this.policy.dws.sendAs === 'robot') return;
       // A personal send can echo before the CLI returns its message ID.
@@ -233,6 +249,13 @@ export class DingTalkClient {
       return;
     }
     this.gate.stage(event, group, classifyDws(event, route.strategy, this.policy.dws.selfOpenId));
+  }
+
+  noteSkippedContent(group, kind) {
+    const key = `${group}:${kind}`;
+    if (this.dwsContentSeen.has(key)) return;
+    this.dwsContentSeen.add(key);
+    this.logger.info('dingtalk_dws_content_skipped', { group: opaqueRef(group), content_type: kind });
   }
 
   drainDws(group) {

@@ -250,7 +250,10 @@ reuse the Core idempotency key and wait for a DWS receipt. Confirmed Agent
 sends are matched to incoming echoes by message ID. Other messages from the
 same account are staged as context. A failed DWS user send stays on the user
 route. Personal proactive messages and timers use Markdown, and quoted
-replies use plain text. Robot sends and replies are new group messages.
+replies use plain text. Inline local image links in that Markdown are replaced
+with their alt text so missing files do not block the send. HTTP(S) images and
+DingTalk media references are preserved. Robot sends and replies are new group
+messages.
 Personal automation is subject to DingTalk account and messaging controls.
 Stream groups retain robot sending.
 

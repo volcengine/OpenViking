@@ -47,15 +47,23 @@ export function normalizeMessage(callback, { botId }) {
   });
 }
 
+// A flattened DWS event for a group message this Connector handles, before the
+// content type is looked at. Lets the caller tell an unreadable content type
+// from an event it never processes.
+export function isDwsGroupMessage(raw, group) {
+  const time = raw?.event_time || raw?.timestamp;
+  return ['user_im_message_receive_group', 'user_im_message_receive_group_all'].includes(raw?.type)
+    && raw.conversation_id === group && Boolean(raw.message_id) && Boolean(raw.sender_open_dingtalk_id)
+    && Number.isFinite(time) && time > 0;
+}
+
 // DWS emits a flattened personal event. The documented v1.0.69 output has no
 // structured @ list, so a display name in content never creates a mention.
 export function normalizeDwsMessage(raw, { group, tenantId }) {
-  if (!['user_im_message_receive_group', 'user_im_message_receive_group_all'].includes(raw?.type) ||
-      raw.conversation_id !== group || !raw.message_id || !raw.sender_open_dingtalk_id) return null;
+  if (!isDwsGroupMessage(raw, group)) return null;
   const text = typeof raw.content === 'string' ? raw.content.trim() : '';
   if (!text) return null;
   const time = raw.event_time || raw.timestamp;
-  if (!Number.isFinite(time) || time <= 0) return null;
   const id = messageId(group, raw.message_id);
   const quote = raw.quoted_message;
   const quoted = quote?.conversation_id === group && quote.message_id ? quote : null;

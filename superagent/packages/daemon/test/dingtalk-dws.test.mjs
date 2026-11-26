@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { test } from 'node:test';
-import { checkDws, DWS_ALL_GROUPS, DWS_EVENT, DwsSubscription, sendDws } from '../src/dingtalk/dws.mjs';
+import { checkDws, DWS_ALL_GROUPS, DWS_EVENT, DwsSubscription, markdownForDws, sendDws } from '../src/dingtalk/dws.mjs';
 import { chatId, normalizeDwsMessage, normalizeMessage, parseMessageTarget } from '../src/dingtalk/events.mjs';
 import { DingTalkGate } from '../src/dingtalk/gate.mjs';
 import { parsePolicy } from '../src/dingtalk/policy.mjs';
@@ -234,6 +234,82 @@ test('DWS reports an uncertain send without resubmitting it', async () => {
     return { code: 0, stdout: '{"deliveryStatus":"unknown","openMessageId":"possible-send"}' };
   } }, config, { group, key: 'core-key', text: 'hello' }), /did not confirm/);
   assert.equal(calls, 1);
+});
+
+test('DWS proactive Markdown drops local images while a quoted reply stays literal', async () => {
+  const bodies = [];
+  const registry = { run: async (_bin, args, options) => {
+    bodies.push({ args, body: options.input });
+    return { code: 0, stdout: '{"deliveryStatus":"delivered","openMessageId":"sent-1"}' };
+  } };
+  assert.equal(markdownForDws('a ![图](./chart.png) b'), 'a 图 b');
+  assert.equal(markdownForDws('![a](./x.png "标题")'), 'a');
+  assert.equal(markdownForDws('![](./x.png)'), '');
+  assert.equal(markdownForDws('![a](/workspace/x.png)'), 'a');
+  assert.equal(markdownForDws('![r](https://example.com/a.png)'), '![r](https://example.com/a.png)');
+  assert.equal(markdownForDws('![local](<./my chart.png>)'), 'local');
+  const remote = '![r](<https://example.com/a.png>) ![m](mediaid:example) ![m](@example)';
+  assert.equal(markdownForDws(remote), remote);
+  await sendDws(registry, config, {
+    group, key: 'core-send-key', text: '见 ![图](./chart.png) 和 ![r](https://example.com/a.png)',
+  });
+  assert.equal(bodies[0].args.includes('--markdown'), true);
+  assert.equal(bodies[0].body, '见 图 和 ![r](https://example.com/a.png)');
+  await sendDws(registry, config, { group, message: 'm-0', key: 'core-reply-key', text: '![x](./a.png)' });
+  assert.equal(bodies[1].args.includes('--content'), true);
+  assert.equal(bodies[1].body, '![x](./a.png)');
+});
+
+test('DWS reports the allGroups scope once and keeps its event name', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ovsa-dingtalk-scope-'));
+  const logged = [];
+  const logger = {
+    warn: (message, fields) => logged.push({ message, fields }),
+    info: (message, fields) => logged.push({ message, fields }),
+    debug: () => {},
+  };
+  await writeFile(path.join(directory, 'dingtalk-policy.json'), JSON.stringify({
+    dws: { ...config, allGroups: true, sendAs: 'user', userOpenId: 'personal-open-id' },
+  }));
+  const registry = { run: async () => ({ code: 0, stdout: '{"authenticated":true}' }) };
+  t.mock.method(DwsSubscription.prototype, 'start', () => {});
+  const client = new DingTalkClient({ dataDir: directory }, registry, logger);
+  t.after(async () => { await client.stop(); await rm(directory, { recursive: true, force: true }); });
+  await client.preflight();
+  client.startSubscription(() => {}, () => {});
+  await client.stop();
+  client.startSubscription(() => {}, () => {});
+  const notices = logged.filter(({ message }) => message === 'dingtalk_dws_all_groups_enabled');
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].fields.detail, /Unlisted visible groups/);
+  assert.equal(Object.hasOwn(notices[0].fields, 'message'), false);
+});
+
+test('DWS notes unsupported content once per group and type', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'ovsa-dingtalk-content-'));
+  const logged = [];
+  const logger = {
+    warn: (message, fields) => logged.push({ message, fields }),
+    info: (message, fields) => logged.push({ message, fields }),
+    debug: () => {},
+  };
+  await writeFile(path.join(directory, 'dingtalk-policy.json'), JSON.stringify({
+    dws: { ...config, allGroups: true, sendAs: 'user', userOpenId: 'personal-open-id' },
+  }));
+  const registry = { run: async () => ({ code: 0, stdout: '{"authenticated":true}' }) };
+  t.mock.method(DwsSubscription.prototype, 'start', () => {});
+  const client = new DingTalkClient({ dataDir: directory }, registry, logger);
+  t.after(async () => { await client.stop(); await rm(directory, { recursive: true, force: true }); });
+  await client.preflight();
+  client.startSubscription(() => {}, () => {});
+  const picture = { ...fixture, message_id: 'img-1', content: { media: 'picture' } };
+  await client.receiveDws(picture, group);
+  await client.receiveDws({ ...picture, message_id: 'img-2' }, group);
+  await client.receiveDws({ ...picture, message_id: 'file-1', content: 42 }, group);
+  const skipped = logged.filter(({ message }) => message === 'dingtalk_dws_content_skipped');
+  assert.equal(skipped.length, 2);
+  assert.deepEqual(skipped.map(({ fields }) => fields.content_type), ['object', 'number']);
+  assert.match(skipped[0].fields.group, /^[a-f0-9]{12}$/);
 });
 
 test('DWS stop reaps a consumer that ignores graceful shutdown', async () => {

@@ -155,14 +155,26 @@ export class DwsSubscription {
   }
 }
 
+// The CLI uploads local images a proactive Markdown body refers to. A path the
+// model wrote but no file backs would fail the whole send, so local references
+// travel as their alt text; remote links need no upload and stay as written.
+const INLINE_IMAGE = /!\[([^\]]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))(?:[ \t]+"[^"]*")?\s*\)/g;
+const REMOTE_IMAGE = /^(?:https?:\/\/|mediaid:.)|^[@$][^/\\]+$/i;
+
+export function markdownForDws(text) {
+  return text.replace(INLINE_IMAGE, (whole, alt, angleTarget, target) =>
+    REMOTE_IMAGE.test(angleTarget ?? target) ? whole : alt);
+}
+
 // Reuse the Core action's idempotency key and the CLI's delivery receipt.
 // A failed or uncertain send is handed back to the existing Core Outbox.
 export async function sendDws(registry, { cliBin, profile }, { group, message, text, key, cwd, timeoutMs }) {
   const command = message ? '+messages-reply' : '+messages-send';
+  const body = message ? text : markdownForDws(text);
   const args = ['--profile', profile, 'chat', command, '--as', 'user', '--group', group,
     ...(message ? ['--message-id', message, '--content', '-'] : ['--markdown', '-']),
     '--body-stdin', '--idempotency-key', key, '--wait-delivery', '--yes', '--format', 'json'];
-  const result = await registry.run(cliBin, args, { cwd, timeoutMs, input: text });
+  const result = await registry.run(cliBin, args, { cwd, timeoutMs, input: body });
   if (result.timedOut) throw new Error('DingTalk DWS send timed out before confirming delivery');
   if (result.code !== 0) {
     const detail = safeError(result.stderr.trim());
