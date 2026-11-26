@@ -28,6 +28,7 @@ function fixture(t, online = []) {
   const releaseLink = path.join(home, '.ov-superagent', 'current');
   fs.symlinkSync(release, releaseLink, windows ? 'junction' : 'dir');
   const apps = new Map(online.map((name) => [name, 'online']));
+  const execPaths = new Map();
   const commands = [];
   const timeouts = [];
   const execFileImpl = async (bin, args, execOptions = {}) => {
@@ -35,11 +36,17 @@ function fixture(t, online = []) {
     timeouts.push([args[0], execOptions.timeout]);
     const [verb] = args;
     if (verb === 'jlist') {
-      return { stdout: JSON.stringify([...apps].map(([name, status]) => ({ name, pm2_env: { status, pm_exec_path: script, kill_timeout: 30000 } }))) };
+      return { stdout: JSON.stringify([...apps].map(([name, status]) => ({ name, pm2_env: { status, pm_exec_path: execPaths.get(name) ?? script, kill_timeout: 30000 } }))) };
     }
-    if (verb === 'start' || verb === 'startOrRestart') apps.set(args[3], 'online');
+    if (verb === 'start') {
+      apps.set(args[3], 'online');
+      // PM2 records the script from the ecosystem the entry is registered with;
+      // later in-place restarts keep that path.
+      execPaths.set(args[3], path.join(path.dirname(args[1]), 'packages', 'daemon', 'src', 'main.mjs'));
+    }
+    if (verb === 'startOrRestart') apps.set(args[3], 'online');
     if (verb === 'stop') apps.set(args[1], 'stopped');
-    if (verb === 'delete') apps.delete(args[1]);
+    if (verb === 'delete') { apps.delete(args[1]); execPaths.delete(args[1]); }
     return { stdout: '' };
   };
   const ready = [];
@@ -145,6 +152,26 @@ test('restart never deletes the app it restarts, even when the caller lives insi
   const restart = f.commands.find((command) => command.startsWith('startOrRestart'));
   assert.match(restart, /--only superagent-alpha --update-env$/);
   assert.ok(f.commands.indexOf('save') < f.commands.indexOf(restart), 'the list is saved before the bounce');
+});
+
+// PM2 keeps the script path an entry was first registered with: `startOrRestart`
+// refreshes only the environment of the existing entry. Once the current link
+// moves, restarting in place would bring the app back on the previous release's
+// script and `waitUntilOnline` rejects the result, so that one case re-registers.
+test('restart re-registers an app whose recorded script sits outside the current release', async (t) => {
+  const f = fixture(t, ['superagent-alpha']);
+  const release = path.join(path.dirname(f.options.releaseLink), 'releases', '0.5.0-test');
+  fs.mkdirSync(path.join(release, 'packages', 'daemon', 'src'), { recursive: true });
+  fs.writeFileSync(path.join(release, 'ecosystem.config.cjs'), 'module.exports = {};\n');
+  fs.writeFileSync(path.join(release, 'packages', 'daemon', 'src', 'main.mjs'), '');
+  fs.rmSync(f.options.releaseLink);
+  fs.symlinkSync(release, f.options.releaseLink, windows ? 'junction' : 'dir');
+
+  await restartCommand('alpha', { ...f.options, readyOptions: { attempts: 2, intervalMs: 1 } });
+  assert.deepEqual(f.commands.filter((command) => !command.startsWith('jlist')).map((command) => command.split(' ')[0]),
+    ['save', 'delete', 'start']);
+  assert.match(f.commands.find((command) => command.startsWith('start ')), new RegExp(`^start ${fs.realpathSync(path.join(release, 'ecosystem.config.cjs'))} --only superagent-alpha --update-env$`));
+  assert.ok(f.apps.has('superagent-alpha'), 'the app is registered again on the new release');
 });
 
 test('restart and stop wait longer than the app kill_timeout', async (t) => {

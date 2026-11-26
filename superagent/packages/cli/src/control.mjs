@@ -207,16 +207,27 @@ export async function startCommand(target, options) {
   return 1;
 }
 
-// Restarts a registered app without deleting it. `startOrRestart --only` keeps
-// the entry, so the PM2 daemon owns the restart even when the CLI asking for it
-// is a child of the process being restarted. `restart`/`start` alone keep the
-// script path PM2 first recorded, so they cannot leave a previous release; this
-// one re-reads the ecosystem.
-function relaunchApp(spec, context) {
-  return context.execFileImpl(context.pm2Bin, ['startOrRestart', context.configPath, '--only', spec.app, '--update-env'], {
-    timeout: pm2StopTimeout(context.restarting.get(spec.app)),
-    env: appControlEnv(spec.app, context.pm2Env),
-  });
+// Restarts a registered app without deleting it in the common case: the entry
+// stays, so the PM2 daemon owns the restart even when the CLI asking for it is a
+// child of the process being restarted. PM2 keeps the script path it first
+// recorded, though — `startOrRestart`/`restart`/`startOrReload` only refresh the
+// environment of the existing entry — so after the release link moves the app
+// would come back on the previous release's script. Only that case drops the
+// entry and lets `start` register the new script; refreshing in place is kept
+// whenever the recorded path already lives in the current release.
+async function relaunchApp(spec, context) {
+  const appEnv = appControlEnv(spec.app, context.pm2Env);
+  const current = context.restarting.get(spec.app);
+  const execPath = await realpath(current?.pm2_env?.pm_exec_path || '').catch(() => null);
+  if (execPath && isInside(context.release, execPath)) {
+    await context.execFileImpl(context.pm2Bin, ['startOrRestart', context.configPath, '--only', spec.app, '--update-env'], {
+      timeout: pm2StopTimeout(current),
+      env: appEnv,
+    });
+    return;
+  }
+  await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: pm2StopTimeout(current), env: appEnv });
+  await context.execFileImpl(context.pm2Bin, ['start', context.configPath, '--only', spec.app, '--update-env'], { timeout: 60_000, env: appEnv });
 }
 
 // A restart run from a session that lives inside the app deletes the entry it
