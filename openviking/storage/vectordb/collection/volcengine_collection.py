@@ -18,7 +18,6 @@ from openviking.storage.vectordb.collection.vikingdb_catalog import is_account_s
 from openviking.storage.vectordb.collection.vikingdb_query_scope import (
     is_search_or_agg,
     with_account_partition,
-    without_catalog_rows,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import (
     VIKING_DB_VERSION,
@@ -301,7 +300,6 @@ class VolcengineCollection(ICollection):
         if is_search_or_agg(path):
             if is_account_sharded(self.meta_data):
                 safe_data = with_account_partition(safe_data)
-            safe_data = without_catalog_rows(safe_data, self.meta_data)
         response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
             error = self._build_response_error(response, path)

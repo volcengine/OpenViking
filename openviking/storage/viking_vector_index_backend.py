@@ -48,6 +48,7 @@ from openviking.storage.acl import (
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, Range, RawDSL
 from openviking.storage.scope_filter import build_scope_filter, merge_filters
+from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vector_migration import (
     rewrite_transfer_uri,
     rewrite_vector_record,
@@ -170,6 +171,7 @@ class _PreparedVectorTransfer:
     batches: int
     affected_target_ids: tuple[str, ...] = ()
     target_acl_fields: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    target_item_fields: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
@@ -469,7 +471,11 @@ class _SingleAccountBackend:
         """Drop runtime-only or stale legacy fields before writing back to the current schema."""
         self._validate_vector_dimension(data.get("vector"))
         payload = {k: v for k, v in data.items() if v is not None}
+        if payload.get("item_uuids"):
+            payload.setdefault("item_attrs", [])
         filtered = self._filter_known_fields(payload)
+        if payload.get("item_uuids") and not {"item_uuids", "item_attrs"} <= filtered.keys():
+            raise ValueError("Item root indexing requires item_uuids and item_attrs fields")
         result = {k: v for k, v in filtered.items() if v is not None}
         # Raw writes (including transfer rollback) also encode explicit empty grants.
         for grant_field in ACL_GRANT_FIELDS:
@@ -2904,13 +2910,12 @@ class VikingVectorIndexBackend:
         root_backend = await self.get_account_backend(account_id)
         deleted = await root_backend.delete_by_filter(Eq("account_id", account_id))
         try:
-            # Catalog is separate from vectors locally and hidden from ordinary
-            # VikingDB queries. Clear its entire account scope before completion.
+            # The native Catalog is separate from vector records.
             await root_backend._async_adapter.call(
                 "catalog_execute", {"op": "delete_subtree", "scope": account_id, "uri": "/"}
             )
         except NotImplementedError:
-            # Backends without Catalog cannot contain Item declarations.
+            # VikingDB stores Item declarations in the records already deleted above.
             pass
         return deleted
 
@@ -3486,6 +3491,39 @@ class VikingVectorIndexBackend:
                 str(record["uri"])
             ):
                 affected_target_ids.append(str(record["id"]))
+        target_item_fields: Dict[str, Dict[str, Any]] = {}
+        if affected_target_ids:
+            backend = await self._get_backend_for_context(ctx)
+            if getattr(backend, "_mode", None) in {"vikingdb", "volcengine"}:
+                affected_ids = set(affected_target_ids)
+                root_ids = [
+                    str(record["id"])
+                    for record in target_records
+                    if str(record["id"]) in affected_ids
+                    and record["id"] == vector_record_id(ctx.account_id, str(record["uri"]), 0)
+                ]
+                for start in range(0, len(root_ids), 100):
+                    # Only a point read gives the target's own UUID, without inheritance.
+                    for row in await self._strict_transfer_get(ctx, root_ids[start : start + 100]):
+                        if row.get("item_uuids"):
+                            target_item_fields[str(row["id"])] = {
+                                "item_uuids": row["item_uuids"],
+                                "item_attrs": row.get("item_attrs") or [],
+                            }
+                replaced_roots = {
+                    vector_record_id(
+                        ctx.account_id,
+                        rewrite_transfer_uri(str(record["uri"]), source_uri, target_uri),
+                        0,
+                    )
+                    for record in source_records
+                    if record.get("level") == 0
+                }
+                affected_target_ids = [
+                    record_id
+                    for record_id in affected_target_ids
+                    if record_id not in target_item_fields or record_id in replaced_roots
+                ]
         target_acl_fields: Dict[str, Dict[str, Any]] = {}
         if self.acl_manager is not None and replacement_target_uris:
             acl_target_uris = {uri for uri in replacement_target_uris if is_acl_uri(uri)}
@@ -3504,6 +3542,7 @@ class VikingVectorIndexBackend:
             batches=batches,
             affected_target_ids=tuple(affected_target_ids),
             target_acl_fields=target_acl_fields,
+            target_item_fields=target_item_fields,
         )
 
     async def copy_uri_mapping(
@@ -3552,6 +3591,8 @@ class VikingVectorIndexBackend:
             )
             for record in source_records
         ]
+        for payload in target_payloads:
+            payload.update(prepared.target_item_fields.get(str(payload["id"]), {}))
         if target_acl_fields:
             for payload in target_payloads:
                 acl_fields = target_acl_fields.get(
@@ -3662,6 +3703,8 @@ class VikingVectorIndexBackend:
                 mode="move",
                 timestamp=timestamp,
             )
+            if not payload.get("item_uuids"):
+                payload.update(prepared.target_item_fields.get(str(payload["id"]), {}))
             acl_fields = target_acl_fields.get(
                 self._vector_entry_uri(str(payload["uri"]), target_acl_fields)
             )

@@ -5,20 +5,17 @@
 from typing import Any, Dict, List, Optional
 
 from .vikingdb_catalog import VikingDBCatalog, is_account_sharded
-from .vikingdb_query_scope import is_search_or_agg, with_account_partition, without_catalog_rows
+from .vikingdb_query_scope import is_search_or_agg, with_account_partition
 
 
 class VikingDBItemCollectionMixin:
     def _item_metadata(self) -> Dict[str, Any] | None:
         return self.meta_data
 
-    def _initialize_item_collection(self, index_name: str) -> None:
-        self.catalog_index_name = index_name
+    def _initialize_item_collection(self) -> None:
         self._catalog = VikingDBCatalog(self)
 
-    def _prepare_data_request(
-        self, path: str, data: Dict[str, Any], *, include_catalog: bool = False
-    ) -> Dict[str, Any]:
+    def _prepare_data_request(self, path: str, data: Dict[str, Any]) -> Dict[str, Any]:
         is_query = is_search_or_agg(path)
         meta = self._item_metadata()
         account_sharded = meta is not None and is_account_sharded(meta)
@@ -26,8 +23,6 @@ class VikingDBItemCollectionMixin:
             shard_field = self.meta_data.get("ShardBy", self.meta_data.get("PartitionBy"))
             if account_sharded or (meta is None and shard_field in (None, "account_id")):
                 data = with_account_partition(data, require_scope=account_sharded)
-            if not include_catalog:
-                data = without_catalog_rows(data, self.meta_data)
         elif meta is None or account_sharded:
             if (
                 meta is not None

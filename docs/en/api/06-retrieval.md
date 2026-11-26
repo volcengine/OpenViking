@@ -65,6 +65,8 @@ Merging an ordinary directory into an Item preserves the destination's declarati
 
 Existing ordinary directories and resource roots cannot be promoted to Items; import their original inputs into a new Item root. Existing Items support same-root updates and retries. New Skill packages declare Items automatically; updates preserve an existing declaration or its absence for legacy packages.
 
+VikingDB stores the Item UUID and attributes on the directory's level-0 record. A first declaration through resource import requires `build_index=true` and `processing_mode=semantic_and_vectors`.
+
 An explicit `mkdir` retry on an existing Item resumes initialization: it creates a missing abstract, preserves an existing abstract verbatim, and retries the existing directory L0 indexing enqueue. Failures remain errors. The UUID, attributes, and member files are preserved; other Items are not scanned or backfilled.
 
 The HTTP success result for `mkdir(as_item=true)` includes `uri`, `item_uuid`, and `item_attrs` to confirm the declaration. Ordinary `mkdir` still returns only `uri`, and the Python SDK still returns `None`. The SDK and CLI raise `FAILED_PRECONDITION` if an older server returns no UUID. That server may already have created an ordinary directory; check the target URI and upgrade the server. The client does not delete it automatically. Confirmation reuses the declaration result without another probe or storage read. Ordinary `mkdir` retains its existing behavior of ignoring unrelated extra fields, while rejecting caller-supplied `item_uuid` or `item_uuids`.
@@ -557,7 +559,7 @@ Semantic retrieval with optional session-aware query planning.
 
 In Item mode, `level` filters member tiers. See [Item Search](#item-search-preview) for root result fields and incompatible options.
 
-In list mode, an empty or whitespace-only query with a filter uses the same filter-only retrieval as `find()`: scores are zero, similarity thresholds are ignored, and no embedding or session query planning runs. A filter can also come from `tags`, `context_type`, or time shortcuts. Without a query, image, or filter, both endpoints return 400.
+Ordinary `search()` requires a text query or image. Use `find()` for filter-only content retrieval.
 
 `search()` uses the same target resolution and explicit tag filtering rules as `find()`, including the peer collection filter selected by `X-OpenViking-Actor-Peer` or SDK `actor_peer_id`. When `image_url` is provided, `search()` uses direct image retrieval and skips session query planning. `keywords` requires a non-empty text query and a remote VikingDB backend with a full-text index. `args` accepts engine tuning options for `search_type="keywords"` in `mode="list"`. Keyword queries reject image input.
 

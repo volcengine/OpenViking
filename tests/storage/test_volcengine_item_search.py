@@ -97,7 +97,7 @@ def test_api_key_adapter_uses_native_group_metadata_and_passes_attrs_filter_once
     assert body["partition"] == "a"
     assert body["group_by"]["op"] == aggregation
     assert body["group_by"]["group_limit"] == 2
-    assert predicate in body["filter"]["conds"][0]["conds"]
+    assert predicate in body["filter"]["conds"]
     assert [g["entity_id"] for g in result["groups"]] == ["blue", "red"]
     assert result["groups"][0]["entity_attrs"] == ["kind=parent"]
     assert result["groups"][0]["entity_uri"] == "viking://resources/blue"
@@ -143,7 +143,7 @@ def test_api_key_without_metadata_forwards_item_request_and_keeps_unscoped_ordin
     collection.data_client = Client({"data": []})
     collection.search_by_vector("default", dense_vector=[1.0, 0.0])
     body = collection.data_client.calls[0][2]
-    assert body["filter"] == {"op": "must_not", "field": "level", "conds": [-1]}
+    assert not body.get("filter")
     assert "partition" not in body and "group_by" not in body
     condition = {"op": "must", "field": "account_id", "conds": ["a"]}
     collection.data_client.result = {"groups": []}
@@ -153,7 +153,7 @@ def test_api_key_without_metadata_forwards_item_request_and_keeps_unscoped_ordin
     assert len(collection.data_client.calls) == 2
     body = collection.data_client.calls[-1][2]
     assert body["partition"] == "a" and body["group_by"]["item_ids_field"] == "item_uuids"
-    assert condition in body["filter"]["conds"]
+    assert body["filter"] == condition
 
 
 def test_api_key_metadata_for_another_collection_fails_before_io(schema):

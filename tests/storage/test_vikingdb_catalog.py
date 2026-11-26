@@ -1,14 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-import threading
-from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 
 import pytest
 
 from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.errors import VikingDBException
 from openviking.storage.vector_ids import vector_record_id
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
@@ -48,8 +45,6 @@ class RecordAPI:
     def __init__(self):
         self.rows = {}
         self.calls = []
-        self.fail_delete_once = False
-        self.stale_index = False
 
     def do_req(self, method, path, *, req_body):
         data = deepcopy(req_body)
@@ -62,9 +57,6 @@ class RecordAPI:
                 self.rows[row["id"]] = row
             return Response({})
         if path.endswith("/delete"):
-            if self.fail_delete_once:
-                self.fail_delete_once = False
-                return Response({}, status=503)
             for record_id in data["ids"]:
                 row = self.rows.get(record_id)
                 assert row is None or row["account_id"] == scope
@@ -94,8 +86,6 @@ class RecordAPI:
             if scope is not None:
                 rows = [r for r in rows if r["account_id"] == scope]
             rows = [r for r in rows if matches(r, data["filter"])]
-            if self.stale_index:
-                rows = []
             if path.endswith("/agg"):
                 return Response({"agg": {"_total": len(rows)}})
             offset = data.get("offset", 0)
@@ -139,9 +129,7 @@ def collection(request):
         coll = VolcengineApiKeyCollection("test-key", host="unused.invalid", meta_data=meta)
         coll.data_client = api
     else:
-        coll = VikingDBCollection(
-            "https://unused.invalid", meta_data=meta, index_name="catalog-index"
-        )
+        coll = VikingDBCollection("https://unused.invalid", meta_data=meta)
     coll.client = api
     return coll
 
@@ -152,51 +140,47 @@ def call(collection, op, scope="a", **kwargs):
 
 def declare(collection, uri, item_uuid, *, scope="a", **kwargs):
     call(collection, "upsert_nodes", scope, nodes=[{"uri": uri, "node_type": "dir"}])
-    return call(collection, "declare_item", scope, uri=uri, item_uuids=[item_uuid], **kwargs)
+    result = call(collection, "declare_item", scope, uri=uri, item_uuids=[item_uuid], **kwargs)
+    if result.pop("index_with_root"):
+        collection.upsert_data(
+            [
+                {
+                    "id": vector_record_id(scope, "viking://" + uri.lstrip("/"), 0),
+                    "account_id": scope,
+                    "uri": uri,
+                    "level": 0,
+                    "vector": [1, 0],
+                    "item_uuids": [result["item_uuid"]],
+                    "item_attrs": result["item_attrs"],
+                }
+            ]
+        )
+    return result
 
 
-def test_omitted_new_item_attrs_do_not_use_the_engine_column_default(collection, monkeypatch):
-    monkeypatch.setattr(
-        "openviking.storage.vectordb.collection.vikingdb_catalog._INDEX_WAIT_SECONDS", 0
-    )
-    original = collection.client.do_req
-
-    def apply_column_default(method, path, *, req_body):
-        body = deepcopy(req_body)
-        if path.endswith("/upsert"):
-            for row in body["data"]:
-                if row.get("item_attrs") is None:
-                    row["item_attrs"] = ["default"]
-        return original(method, path, req_body=body)
-
-    monkeypatch.setattr(collection.client, "do_req", apply_column_default)
-    first = declare(collection, "/user/owner/skills/test", "uuid-skill")
-    assert first["item_attrs"] == []
-    assert declare(collection, "/user/owner/skills/test", "unused-retry") == first
-
-
-def test_declarations_are_stable_and_separate_from_semantic_upserts(collection):
-    first = declare(collection, "/resources/A", "uuid-a", item_attrs=["kind=case"])
-    retry = declare(collection, "/resources/A", "unused-retry-uuid")
-    assert retry == first
-    assert first == {"uri": "/resources/A", "item_uuid": "uuid-a", "item_attrs": ["kind=case"]}
+def test_declaration_is_prepared_for_normal_root_and_keeps_uuid_on_retry(collection):
+    uri = "/resources/A"
+    prepared = call(collection, "declare_item", uri=uri, item_uuids=["uuid-a"])
+    assert prepared == {
+        "uri": uri,
+        "item_uuid": "uuid-a",
+        "item_attrs": [],
+        "index_with_root": True,
+    }
+    assert collection.client.rows == {}
+    declare(collection, uri, "uuid-a", item_attrs=["kind=case"])
+    assert declare(collection, uri, "unused-retry-uuid")["item_uuid"] == "uuid-a"
     with pytest.raises(ValueError, match="cannot change"):
-        declare(collection, "/resources/A", "ignored", item_attrs=[])
-    before = deepcopy(collection.client.rows)
-    calls = len(collection.client.calls)
-    record_id = vector_record_id("a", "viking://resources/A", 0)
-    collection.upsert_data(
-        [{"id": record_id, "account_id": "a", "uri": "/resources/A", "level": 0, "vector": [1, 0]}]
-    )
-    assert len(collection.client.calls) == calls + 1
-    assert all(collection.client.rows[k] == v for k, v in before.items())
+        declare(collection, uri, "ignored", item_attrs=[])
+    root_id = vector_record_id("a", "viking://resources/A", 0)
+    assert list(collection.client.rows) == [root_id]
     account_filter = {"op": "must", "field": "account_id", "conds": ["a"]}
     result = collection.search_by_vector(
         "catalog-index", dense_vector=[1, 0], filters=account_filter
     )
-    assert [r.id for r in result.data] == [record_id]
+    assert [row.id for row in result.data] == [root_id]
     assert collection.aggregate_data("catalog-index", filters=account_filter).agg == {"_total": 1}
-    assert collection.client.calls[-1][2]["partition"] == "a"
+    assert collection.client.calls[-1][2]["filter"] == account_filter
 
 
 @pytest.mark.parametrize("mode,expected", [("union", ["child", "parent"]), ("shadow", ["child"])])
@@ -227,107 +211,13 @@ def test_management_resolves_account_scoped_declarations_without_copying_attrs(
             assert request["partition_by"] in ("a", "b")
 
 
-def test_preserve_root_rejects_independent_children_before_deletion(collection):
-    declare(collection, "/resources/A", "parent", item_attrs=[])
-    call(collection, "delete_subtree", uri="/resources/A", preserve_item_root=True)
-    assert call(collection, "resolve", uris=["/resources/A"])["data"][0]["item_uuid"] == "parent"
-    declare(collection, "/resources/A/child", "child")
-    before = deepcopy(collection.client.rows)
-    for op in ("validate_resource_update", "delete_subtree"):
-        with pytest.raises(ValueError, match="independent child Items"):
-            call(collection, op, uri="/resources/A", preserve_item_root=True)
-    assert collection.client.rows == before
-    call(collection, "delete_subtree", uri="/resources/A")
-    assert collection.client.rows == {}
-
-
-@pytest.mark.parametrize("fail", [False, True])
-@pytest.mark.parametrize("source_is_item", [False, True])
-def test_move_and_rollback_preserve_source_and_preexisting_target(collection, fail, source_is_item):
-    if source_is_item:
-        declare(collection, "/resources/A", "source", item_attrs=["kind=source"])
-    else:
-        call(collection, "upsert_nodes", nodes=[{"uri": "/resources/A", "node_type": "dir"}])
-    declare(collection, "/resources/A/child", "child")
-    declare(collection, "/resources/B", "old-target", item_attrs=["kind=target"])
-    declare(collection, "/resources/B/kept", "target-only", item_attrs=["kind=kept"])
-    declare(collection, "/resources/A", "other-account", scope="b")
-    before = deepcopy(collection.client.rows)
-    moved_uuid = "source" if source_is_item else "old-target"
-    moved_attrs = ["kind=source"] if source_is_item else ["kind=target"]
-    before_move = len(collection.client.calls)
-    collection.client.fail_delete_once = fail
-    if fail:
-        with pytest.raises(VikingDBException):
-            call(collection, "move_subtree", from_uri="/resources/A", to_uri="/resources/B")
-    else:
-        moved = call(collection, "move_subtree", from_uri="/resources/A", to_uri="/resources/B")
-        assert moved["moved_nodes"] == 2
-        reads = collection.client.calls[before_move:]
-        assert [path.rsplit("/", 1)[-1] for _, path, _ in reads[:3]] == [
-            "scalar",
-            "fetch_in_collection",
-            "upsert",
-        ]
-        assert len(reads[1][2]["ids"]) == 4
-        assert call(collection, "resolve", uris=["/resources/B/child/hit"])["data"][0][
-            "item_uuids"
-        ] == ["child", moved_uuid]
-        assert call(collection, "resolve", uris=["/resources/B/kept/hit"])["data"][0][
-            "item_uuids"
-        ] == ["target-only", moved_uuid]
-        moved_roots = call(collection, "resolve", uris=["/resources/B", "/resources/B/kept"])[
-            "data"
-        ]
-        assert [(r["item_uuid"], r["item_root_uri"]) for r in moved_roots] == [
-            (moved_uuid, "/resources/B"),
-            ("target-only", "/resources/B/kept"),
-        ]
-        assert declare(collection, "/resources/B", "_read")["item_attrs"] == moved_attrs
-        assert declare(collection, "/resources/B/kept", "_read")["item_attrs"] == ["kind=kept"]
-        with pytest.raises(ValueError, match="different account"):
-            call(collection, "restore_move", "b", undo=moved["undo"])
-        call(collection, "restore_move", undo=moved["undo"])
-    assert collection.client.rows == before
-
-
-def test_retry_after_index_visibility_timeout_keeps_committed_uuid(collection, monkeypatch):
-    import openviking.storage.vectordb.collection.vikingdb_catalog as catalog
-
-    monkeypatch.setattr(catalog, "_INDEX_WAIT_SECONDS", 0)
-    collection.client.stale_index = True
-    with pytest.raises(VikingDBException) as exc:
-        declare(collection, "/resources/A", "committed", item_attrs=["kind=case"])
-    assert exc.value.retryable is True
-    assert exc.value.status_code == 503
-    collection.client.stale_index = False
-    retry = declare(collection, "/resources/A", "new-retry-id")
-    assert retry["item_uuid"] == "committed"
-    assert retry["item_attrs"] == ["kind=case"]
-
-
-def test_index_visibility_wait_does_not_block_another_account(collection, monkeypatch):
-    declare(collection, "/resources/B", "b-item", scope="b")
-    entered = threading.Event()
-    release = threading.Event()
-    original = collection._catalog._wait_visible
-
-    def wait_for_index(scope, expected):
-        if scope == "a":
-            entered.set()
-            assert release.wait(5)
-        return original(scope, expected)
-
-    monkeypatch.setattr(collection._catalog, "_wait_visible", wait_for_index)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(declare, collection, "/resources/A", "a-item")
-        try:
-            assert entered.wait(5)
-            second = pool.submit(call, collection, "resolve", "b", uris=["/resources/B/file"])
-            assert second.result(timeout=3)["data"][0]["item_uuid"] == "b-item"
-        finally:
-            release.set()
-        assert first.result(timeout=5)["item_uuid"] == "a-item"
+def test_resource_replacement_refuses_to_remove_child_items(collection):
+    root = "/resources/A"
+    child = root + "/child"
+    declare(collection, root, "parent")
+    declare(collection, child, "child")
+    with pytest.raises(ValueError, match="independent child Items"):
+        call(collection, "validate_resource_update", uri=root, uris=[child])
 
 
 def test_collection_configuration_is_validated_without_metadata_http_calls(collection):
@@ -341,14 +231,8 @@ def test_collection_configuration_is_validated_without_metadata_http_calls(colle
     assert collection.client.calls == []
 
 
-def test_other_account_rollback_makes_no_requests(collection):
-    with pytest.raises(ValueError, match="different account"):
-        call(collection, "restore_move", undo={"scope": "b", "rows": [], "added_uris": []})
-    assert collection.client.calls == []
-
-
 @pytest.mark.asyncio
-async def test_account_cleanup_deletes_hidden_catalog_only_in_target_partition(
+async def test_account_cleanup_deletes_item_roots_with_regular_records(
     collection, vector_backend_factory
 ):
     from openviking.server.identity import RequestContext, Role
@@ -383,24 +267,3 @@ async def test_account_cleanup_deletes_hidden_catalog_only_in_target_partition(
         call(collection, "resolve", "b", uris=["/resources/A"])["data"][0]["item_uuid"] == "b-root"
     )
     assert {row["account_id"] for row in collection.client.rows.values()} == {"b"}
-
-
-def test_subtree_scan_and_point_fetches_respect_record_batch_limit(collection):
-    for i in range(121):
-        uri = f"/resources/batch-{i}"
-        row = {
-            "id": "ov-item:" + vector_record_id("a", "viking://" + uri.lstrip("/")),
-            "uri": uri,
-            "account_id": "a",
-            "level": -1,
-            "type": "dir",
-            "item_uuids": [f"uuid-{i}"],
-            "item_attrs": None,
-        }
-        collection.client.rows[row["id"]] = row
-    assert len(collection.client.rows) == 121
-    call(collection, "delete_subtree", uri="/resources")
-    assert collection.client.rows == {}
-    for _, path, request in collection.client.calls:
-        if path.endswith("/fetch_in_collection"):
-            assert len(request["ids"]) <= 100

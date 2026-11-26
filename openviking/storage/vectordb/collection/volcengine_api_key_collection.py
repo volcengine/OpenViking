@@ -50,7 +50,7 @@ class VolcengineApiKeyCollection(VikingDBItemCollectionMixin, ICollection):
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
         self.index_name = self.meta_data.get("IndexName", "default")
-        self._initialize_item_collection(self.index_name)
+        self._initialize_item_collection()
 
     def _item_metadata(self) -> None:
         # The API-key data plane validates the pre-created schema itself.
@@ -182,16 +182,15 @@ class VolcengineApiKeyCollection(VikingDBItemCollectionMixin, ICollection):
             normalized["op"] = "time_range"
         return normalized
 
-    def _data_post(self, path: str, data: Dict[str, Any], *, include_catalog: bool = False):
+    def _data_post(self, path: str, data: Dict[str, Any]):
         safe_data = self._sanitize_payload(data)
         if isinstance(safe_data, dict) and "filter" in safe_data:
             safe_data["filter"] = self._normalize_date_time_filter(safe_data["filter"])
         has_explicit_partition = "partition" in safe_data
-        safe_data = self._prepare_data_request(path, safe_data, include_catalog=include_catalog)
+        safe_data = self._prepare_data_request(path, safe_data)
         response = self.data_client.do_req("POST", path, req_body=safe_data)
         if (
             response.status_code == 400
-            and not include_catalog
             and not has_explicit_partition
             and "partition" in safe_data
             and not is_account_sharded(self.meta_data)
@@ -294,7 +293,11 @@ class VolcengineApiKeyCollection(VikingDBItemCollectionMixin, ICollection):
             "CollectionName": self.collection_name,
             "IndexName": self.index_name,
             "Description": "data-plane only backend",
-            "Fields": schema.get("Fields", []),
+            "Fields": [
+                *schema.get("Fields", []),
+                {"FieldName": "item_uuids", "FieldType": "list<string>"},
+                {"FieldName": "item_attrs", "FieldType": "list<string>"},
+            ],
             "ScalarIndex": schema.get("ScalarIndex", []),
             "FullText": schema.get("FullText", []),
         }
@@ -350,7 +353,11 @@ class VolcengineApiKeyCollection(VikingDBItemCollectionMixin, ICollection):
             **self._base_data_payload(),
             "data": data_list,
             "ttl": ttl,
-            "ignore_unknown_fields": True,
+            # Explicit declarations require Item fields. Automatic Skill declarations
+            # are optional for older API-key collections without schema metadata.
+            "ignore_unknown_fields": not any(
+                row.get("item_uuids") and row.get("context_type") != "skill" for row in data_list
+            ),
         }
         return self._data_post(path, data)
 

@@ -71,7 +71,7 @@ async def declare_item(
     item_attrs: Any = ITEM_ATTRS_OMITTED,
     is_dir: bool,
 ) -> dict[str, Any] | None:
-    """Atomically create or replay an Item declaration at its actual root."""
+    """Prepare or replay an Item declaration at its actual root."""
     normalized_attrs = validate_item_declaration(as_item, item_attrs, is_dir=is_dir)
     if not as_item:
         return None
@@ -103,11 +103,18 @@ async def declare_item(
         if normalized_attrs is not None:
             request["item_attrs"] = encode_item_attrs(normalized_attrs)
         result = await storage.catalog_execute(request, ctx=ctx)
-        return {
+        declaration = {
             "item_uuid": result["item_uuid"],
             "uri": result["uri"],
             "item_attrs": decode_item_attrs(result.get("item_attrs")),
         }
+        if result.get("index_with_root"):
+            declaration["_item_root"] = {
+                "uri": uri,
+                "item_uuids": [result["item_uuid"]],
+                "item_attrs": result.get("item_attrs") or [],
+            }
+        return declaration
     except OpenVikingError as exc:
         exc.details = {**exc.details, "uri": uri, "stage": "catalog_declaration"}
         raise
@@ -127,6 +134,7 @@ async def validate_resource_item_update(
     as_item: bool,
     item_attrs: Any = ITEM_ATTRS_OMITTED,
     is_dir: bool | None = None,
+    directory_uris: list[str] | None = None,
 ) -> None:
     """Check a replacement before committing bytes under its resource lease."""
     from openviking_cli.exceptions import UnimplementedError
@@ -142,6 +150,8 @@ async def validate_resource_item_update(
         request["node_type"] = "dir" if is_dir else "file"
     if attrs is not None:
         request["item_attrs"] = encode_item_attrs(attrs)
+    if directory_uris:
+        request["uris"] = directory_uris
     try:
         await execute(request, ctx=ctx)
     except UnimplementedError:

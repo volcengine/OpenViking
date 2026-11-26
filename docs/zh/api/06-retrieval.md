@@ -65,6 +65,8 @@ MCP 的 `add_resource` 工具暴露相同的 `as_item` 和 `item_attrs` 参数�
 
 存量普通目录／资源根不支持补声明为 Item，需要用原输入导入新的 Item 根。已有 Item 可同根更新和幂等重试。新增 Skill 包自动声明 Item；旧普通 Skill 包更新时不补声明，已有 Item 包更新保留身份。
 
+VikingDB 在目录的 L0 记录中保存 Item UUID 和属性。通过资源导入首次声明 Item 时，需要 `build_index=true` 和 `processing_mode=semantic_and_vectors`。
+
 已有 Item 的显式 `mkdir` 重试会继续初始化：补写缺失摘要，已有摘要原文保持不变，并重新提交现有目录 L0 索引入队；失败仍返回错误。UUID、属性及成员文件保持不变，不会扫描或回刷其他 Item。
 
 `mkdir(as_item=true)` 的 HTTP 成功结果包含 `uri`、`item_uuid` 和 `item_attrs`，用于确认声明成功；普通 `mkdir` 仍只返回 `uri`，Python SDK 的返回值仍为 `None`。SDK／CLI 收到缺少 UUID 的旧服务端响应时会报 `FAILED_PRECONDITION`；旧服务端可能已创建普通目录，需核对目标 URI 后升级服务端，不会自动清理。确认复用已有声明结果，不增加探测请求或存储读取。普通 `mkdir` 保留忽略无关额外字段的既有行为，但拒绝外部指定 `item_uuid`／`item_uuids`。
@@ -557,7 +559,7 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 
 Item 模式的 `level` 过滤成员层级；根结果字段和互斥参数见 [Item Search](#item-search-preview)。
 
-list 模式下，空或仅含空白的 query 加过滤条件，会复用 `find()` 的纯过滤检索：分数为 0，忽略相似度阈值，不调用 Embedding 和会话 query planning。过滤条件也可由 `tags`、`context_type` 或时间快捷参数生成。query、图片和过滤条件都为空时，两个接口均返回 400。
+普通 `search()` 需要文本 query 或图片。纯过滤内容查询使用 `find()`。
 
 `search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。`keywords` 要求非空文本 query 和配置了全文索引的远程 VikingDB。`args` 在 `search_type="keywords"` 且 `mode="list"` 时接收引擎调参选项。关键词查询拒绝图片输入。
 

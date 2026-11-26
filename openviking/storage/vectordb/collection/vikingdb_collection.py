@@ -40,14 +40,13 @@ class VikingDBCollection(VikingDBItemCollectionMixin, ICollection):
         host: str,
         headers: Optional[Dict[str, str]] = None,
         meta_data: Optional[Dict[str, Any]] = None,
-        index_name: str = "default",
     ):
         super().__init__()
         self.client = VikingDBClient(host, headers)
         self.meta_data = meta_data if meta_data is not None else {}
         self.project_name = self.meta_data.get("ProjectName", "default")
         self.collection_name = self.meta_data.get("CollectionName", "")
-        self._initialize_item_collection(index_name)
+        self._initialize_item_collection()
 
     @staticmethod
     def _build_response_error(response: Any, action: str) -> VikingDBException:
@@ -122,8 +121,8 @@ class VikingDBCollection(VikingDBItemCollectionMixin, ICollection):
                 raise self._build_response_error(response, action)
             return {}
 
-    def _data_post(self, path: str, data: Dict[str, Any], *, include_catalog: bool = False):
-        data = self._prepare_data_request(path, data, include_catalog=include_catalog)
+    def _data_post(self, path: str, data: Dict[str, Any]):
+        data = self._prepare_data_request(path, data)
         response = self.client.do_req("POST", path, req_body=data)
         if response.status_code != 200:
             raise self._build_response_error(response, path)

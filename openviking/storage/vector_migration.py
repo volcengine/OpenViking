@@ -17,7 +17,6 @@ from openviking.storage.abstract_overview import (
     rewrite_viking_uri_references,
 )
 from openviking.storage.acl import ACL_CONTEXT_FIELDS
-from openviking.storage.expr import And, Contains, Eq, Or, PathScope
 from openviking.storage.vector_ids import vector_record_id
 from openviking_cli.utils.uri import VikingURI
 
@@ -85,6 +84,9 @@ def rewrite_vector_record(
         }
     )
     if mode == "copy":
+        # Item declarations have unique identities and are omitted when copying content.
+        payload.pop("item_uuids", None)
+        payload.pop("item_attrs", None)
         payload.update(
             {
                 "created_at": timestamp,

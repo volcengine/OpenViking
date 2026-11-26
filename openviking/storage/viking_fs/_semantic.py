@@ -562,18 +562,7 @@ class _SemanticMixin:
         Returns:
             FindResult
         """
-        filter_only = is_filter_only_query(query, image_url)
-        if filter_only and search_as_item is None:
-            return await self.find(
-                query=query,
-                target_uri=target_uri,
-                limit=limit,
-                score_threshold=score_threshold,
-                filter=filter,
-                ctx=ctx,
-                level=level,
-                events_time_decay_protection=events_time_decay_protection,
-            )
+        filter_only = search_as_item is not None and is_filter_only_query(query, image_url)
         if filter_only:
             _ensure_filter_present(filter)
         else:

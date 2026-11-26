@@ -194,7 +194,7 @@ class SearchService:
         except ValueError as exc:
             raise InvalidArgumentError(str(exc)) from exc
         resolved_image_url = await self._resolve_image_url(image_url, ctx)
-        _validate_query(query, resolved_image_url, filter)
+        _validate_query(query, resolved_image_url, filter if search_as_item is not None else None)
         _reject_system_targets(target_uri)
         if search_type == "keywords" and search_as_item is None:
             await self.ensure_keywords_search_supported(ctx)
@@ -204,7 +204,6 @@ class SearchService:
         # Item mode and intent-off searches do not use session context.
         if (
             search_as_item is None
-            and query.strip()
             and session is not None
             and self.is_intent_enabled()
             and not resolved_image_url

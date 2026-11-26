@@ -146,10 +146,7 @@ def test_item_attribute_filter_preserves_platform_groups_and_uses_one_request(co
     _, path, request = collection.client.calls[0]
     assert path == "/api/vikingdb/data/search/vector"
     assert request["partition"] == "a"
-    assert request["filter"] == {
-        "op": "and",
-        "conds": [original, {"op": "must_not", "field": "level", "conds": [-1]}],
-    }
+    assert request["filter"] == original
     assert filters == original
     assert result["groups"] == [
         {
@@ -243,7 +240,7 @@ def test_ordinary_search_never_checks_item_metadata_or_adds_grouping(collection)
     assert len(collection.client.calls) == 1
     request = collection.client.calls[0][2]
     assert request["limit"] == 3
-    assert request["filter"] == {"op": "must_not", "field": "level", "conds": [-1]}
+    assert not request.get("filter")
     assert "group_by" not in request
     assert "partition" not in request
     assert "partition_by" not in request
@@ -281,7 +278,7 @@ def test_scalar_groups_scan_past_repeated_members_and_use_own_roots(collection):
     parent = {
         "id": _id("a", "/resources/p"),
         "account_id": "a",
-        "level": -1,
+        "level": 0,
         "uri": "/resources/p",
         "item_uuids": ["p"],
         "item_attrs": ["kind=parent"],
@@ -289,20 +286,19 @@ def test_scalar_groups_scan_past_repeated_members_and_use_own_roots(collection):
     child = {
         "id": _id("a", "/resources/p/c"),
         "account_id": "a",
-        "level": -1,
+        "level": 0,
         "uri": "/resources/p/c",
         "item_uuids": ["c"],
         "item_attrs": ["kind=child"],
     }
     calls = []
 
-    def post(path, request, *, include_catalog=False):
+    def post(path, request):
         calls.append((path, deepcopy(request)))
         if path.endswith("fetch_in_collection"):
             rows = [r for r in (parent, child) if r["id"] in request["ids"]]
             return {"fetch": [{"id": r["id"], "fields": r} for r in rows]}
         assert path.endswith("search/scalar")
-        assert include_catalog
         assert request["filter"] == filters
         assert "group_by" not in request and "dense_vector" not in request
         if request["offset"] == 0:

@@ -33,6 +33,80 @@ class EnabledAcl:
 
 
 @pytest.mark.asyncio
+async def test_api_key_item_declarations_use_normal_directory_records(service, client, tmp_path):
+    import asyncio
+
+    from openviking.storage.vector_ids import vector_record_id
+    from openviking.storage.vectordb.collection.collection import Collection
+    from openviking.storage.vectordb.collection.volcengine_api_key_collection import (
+        VolcengineApiKeyCollection,
+    )
+    from openviking.storage.vectordb_adapters.volcengine_adapter import VolcengineCollectionAdapter
+    from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
+    from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+    from tests.storage.test_vikingdb_catalog import RecordAPI
+
+    owner = ctx()
+    vectors = service.vikingdb_manager
+    config = VectorDBBackendConfig(
+        backend="volcengine",
+        dimension=vectors.vector_dim,
+        volcengine={"api_key": "test-key", "host": "unused.invalid"},
+    )
+    adapter = VolcengineCollectionAdapter.from_config(config)
+    collection = VolcengineApiKeyCollection("test-key", host="unused.invalid")
+    collection.data_client = api = RecordAPI()
+    adapter._collection = Collection(collection)
+    vectors._resolved_backends[owner.account_id] = _SingleAccountBackend(
+        config, owner.account_id, shared_adapter=adapter
+    )
+
+    uri = "viking://resources/item-root"
+    result = await asyncio.wait_for(
+        service.fs.mkdir(uri, ctx=owner, as_item=True, item_attrs={"kind": "case"}),
+        timeout=20,
+    )
+    root_id = vector_record_id(owner.account_id, uri, 0)
+    assert [row["id"] for row in api.rows.values() if row["uri"] == "/resources/item-root"] == [
+        root_id
+    ]
+    assert api.rows[root_id]["level"] == 0 and api.rows[root_id]["vector"]
+    assert api.rows[root_id]["item_uuids"] == [result["item_uuid"]]
+    assert api.rows[root_id]["item_attrs"] == ["kind=case"]
+    assert await service.fs.mkdir(uri, ctx=owner, as_item=True) == result
+
+    source = tmp_path / "doc.md"
+    source.write_text("# Resource\nItem resource content")
+    resource_uri = "viking://resources/item-import"
+    for options in ({"build_index": False}, {"processing_mode": "vectors_only"}):
+        rejected = await service.resources.add_resource(
+            str(source), to=resource_uri, ctx=owner, wait=True, as_item=True, **options
+        )
+        assert rejected["status"] == "error"
+        assert not await service.viking_fs.exists(resource_uri, ctx=owner)
+    imported = await service.resources.add_resource(
+        str(source), to=resource_uri, ctx=owner, wait=True, as_item=True
+    )
+    assert imported["status"] == "success", imported
+    added = await client.post(
+        "/api/v1/skills",
+        json={
+            "data": "---\nname: item-package\ndescription: Item package\n---\n# Item\n",
+            "wait": True,
+        },
+    )
+    assert added.status_code == 200, added.text
+    for root_uri in (resource_uri, added.json()["result"]["uri"]):
+        expected_id = vector_record_id(owner.account_id, root_uri, 0)
+        declarations = [
+            row
+            for row in api.rows.values()
+            if row["uri"] == root_uri.removeprefix("viking:/") and row.get("item_uuids")
+        ]
+        assert [(row["id"], row["level"]) for row in declarations] == [(expected_id, 0)]
+
+
+@pytest.mark.asyncio
 async def test_item_root_reference_does_not_authorize_root_content(service):
     fs = service.viking_fs
     backend = fs._get_vector_store()

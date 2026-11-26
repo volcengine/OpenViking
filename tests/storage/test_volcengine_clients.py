@@ -38,7 +38,7 @@ from openviking_cli.utils.config.vectordb_config import (
         ("signed", None),
     ],
 )
-def test_vikingdb_ordinary_queries_route_by_schema_and_hide_catalog(backend, shard_by):
+def test_vikingdb_ordinary_queries_route_by_schema_and_preserve_filters(backend, shard_by):
     meta = {"CollectionName": "context"}
     if shard_by is not None:
         meta["ShardBy"] = shard_by
@@ -80,19 +80,13 @@ def test_vikingdb_ordinary_queries_route_by_schema_and_hide_catalog(backend, sha
         "scalar",
         "agg",
     ]
-    hidden = {"op": "must_not", "field": "level", "conds": [-1]}
     for _, _, body in calls:
         if shard_by == "account_id" or backend == "api_key":
             assert body["partition"] == "tenant-a"
         else:
             assert "partition" not in body
         assert "partition_by" not in body
-        assert body["filter"] == {"op": "and", "conds": [filters, hidden]}
-
-    if backend == "private" and shard_by is None:
-        collection.meta_data["ScalarIndex"] = ["account_id"]
-        collection.aggregate_data("index", filters=filters)
-        assert calls[-1][2]["filter"] == filters
+        assert body["filter"] == filters
 
     if not (backend == "private" and shard_by == "account_id"):
         cross_account = {
@@ -125,7 +119,7 @@ def test_api_key_retries_ordinary_query_when_unsharded_index_rejects_inferred_pa
     assert [item.id for item in result.data] == ["existing"]
     assert len(calls) == 2
     assert calls[0] == {**calls[1], "partition": "tenant-a"}
-    assert calls[1]["filter"]["conds"][0] == account
+    assert calls[1]["filter"] == account
 
 
 def test_console_client_prepare_request_includes_session_token():
@@ -610,7 +604,7 @@ def test_volcengine_query_preserves_time_filters_and_applies_decay(monkeypatch):
             }
         ]
     }
-    assert captured["req_body"]["filter"]["conds"][0] == {
+    assert captured["req_body"]["filter"] == {
         "op": "and",
         "conds": [
             {
@@ -664,7 +658,7 @@ def test_volcengine_collection_date_time_filter_is_idempotent(monkeypatch):
         },
     )
 
-    assert captured["req_body"]["filter"]["conds"][0] == {
+    assert captured["req_body"]["filter"] == {
         "op": "time_range",
         "field": "updated_at",
         "gte": "2026-08-10T00:00:00+00:00",
@@ -804,7 +798,7 @@ def test_volcengine_api_key_collection_uses_date_time_filter_operator(monkeypatc
     )
 
     assert captured["path"] == "/api/vikingdb/data/agg"
-    assert captured["req_body"]["filter"]["conds"][0] == {
+    assert captured["req_body"]["filter"] == {
         "op": "and",
         "conds": [
             {
@@ -861,7 +855,7 @@ def test_volcengine_api_key_collection_date_time_filter_is_idempotent(monkeypatc
         },
     )
 
-    assert captured["req_body"]["filter"]["conds"][0] == {
+    assert captured["req_body"]["filter"] == {
         "op": "time_range",
         "field": "updated_at",
         "gte": "2026-08-10T00:00:00+00:00",

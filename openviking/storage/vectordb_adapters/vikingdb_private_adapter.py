@@ -81,7 +81,6 @@ class VikingDBPrivateCollectionAdapter(CollectionAdapter):
                 host=self._host,
                 headers=self._headers,
                 meta_data=meta,
-                index_name=self._index_name,
             )
         )
 

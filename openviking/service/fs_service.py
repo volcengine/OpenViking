@@ -47,7 +47,11 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
-from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
+from openviking.service.task_tracker import (
+    get_task_tracker,
+    run_tracked_operation,
+    wait_for_enqueued_work,
+)
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import (
     bind_task_context,
@@ -614,7 +618,7 @@ class FSService:
             else:
                 raise AGFSAlreadyExistsError(f"path already exists: {directory_uri}")
 
-        async def initialize(acl_update, lease, *, preserve_existing=False):
+        async def initialize(ingest_options, lease, *, preserve_existing=False):
             abstract = self._normalize_directory_description(description)
             if not abstract:
                 abstract = f"# {uri_leaf_name(directory_uri)}"
@@ -652,15 +656,20 @@ class FSService:
                     lease_ref=lease,
                 )
             # A prior attempt may have written the summary but failed to enqueue it.
-            await vectorize_directory_meta(
+            levels = await vectorize_directory_meta(
                 uri=directory_uri,
                 abstract=abstract,
                 overview="",
                 context_type=context_type_for_uri(directory_uri),
                 ctx=ctx,
-                ingest_options=IngestOptions(acl_update=acl_update),
+                ingest_options=ingest_options,
                 include_overview=False,
             )
+            if ingest_options.item_root:
+                if ContextLevel.ABSTRACT.value not in levels:
+                    raise RuntimeError("Item root indexing was not enqueued")
+                await wait_for_enqueued_work("Embedding")
+                await require_existing_item_root(viking_fs._get_vector_store(), directory_uri, ctx)
 
         async with self._hold_watch_scope(
             [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
@@ -685,7 +694,7 @@ class FSService:
             )
             declaration = None
             if as_item:
-                # Publish the declaration before the directory can appear ordinary.
+                # Prepare the declaration before publishing the directory.
                 declaration = await run_to_completion(
                     partial(
                         declare_item,
@@ -697,9 +706,28 @@ class FSService:
                         is_dir=True,
                     )
                 )
+            item_root = declaration.pop("_item_root", None) if declaration else None
+            if file_only and item_root:
+                raise InvalidArgumentError("A new Item requires indexing its directory root")
             await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease, exist_ok=item_replay)
             if not file_only:
-                await initialize(acl_update, lease, preserve_existing=item_replay)
+                initialize_directory = partial(
+                    initialize,
+                    IngestOptions(acl_update=acl_update, item_root=item_root),
+                    lease,
+                    preserve_existing=item_replay,
+                )
+                if item_root:
+                    await run_tracked_operation(
+                        "mkdir",
+                        account_id=ctx.account_id,
+                        user_id=ctx.user.user_id,
+                        operation=initialize_directory,
+                        wait=True,
+                        resource_id=directory_uri,
+                    )
+                else:
+                    await initialize_directory()
             return declaration
 
     def _tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
