@@ -176,3 +176,27 @@ async fn gc_stops_before_sweep_on_corrupt_overlay_blob() {
         std::fs::write(path, original).unwrap();
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn scheduled_gc_spaces_scans_from_completion_and_respects_pending_grace() {
+    use tokio::time::{sleep, Duration, Instant};
+    for grace_seconds in [600, 7200] {
+        let (_dir, _, _, _, mut svc) = make_service("acct");
+        svc.gc_grace = Duration::from_secs(grace_seconds);
+        let (runs, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        svc.before_sweep_hook = Some(Arc::new(move || {
+            let runs = runs.clone();
+            Box::pin(async move {
+                runs.send(Instant::now()).unwrap();
+                sleep(Duration::from_secs(120)).await;
+            })
+        }));
+        svc.schedule_gc("acct");
+        let first = observed.recv().await.unwrap();
+        svc.schedule_gc("acct");
+        let pending_deadline = svc.scheduled_gc.lock().unwrap()["acct"];
+        let second = observed.recv().await.unwrap();
+        assert!(second >= pending_deadline);
+        assert!(second >= first + Duration::from_secs(120 + 3600));
+    }
+}

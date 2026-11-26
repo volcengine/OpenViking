@@ -3,6 +3,8 @@ use rand::Rng;
 use std::time::Duration;
 use tokio::time::Instant;
 
+const MIN_GC_INTERVAL: Duration = Duration::from_secs(3600);
+
 impl GitService {
     pub(super) fn schedule_gc(&self, account: &str) {
         if !self.gc_enabled {
@@ -40,11 +42,15 @@ impl GitService {
                         tracing::warn!(target:"ragfs::git::gc",%account,%error,"snapshot GC failed")
                     }
                 }
+                // Keep this worker registered during cooldown so even a new delete
+                // arriving after the scan cannot start another worker early.
+                let cooldown_end = Instant::now() + MIN_GC_INTERVAL;
+                tokio::time::sleep_until(cooldown_end).await;
                 let mut pending = svc.scheduled_gc.lock().unwrap();
                 // A later delete may still be in its grace period. Run again
                 // at its deadline even if it arrived during this collection.
                 if let Some(last) = pending.get(&account).filter(|d| **d > started) {
-                    next = *last;
+                    next = (*last).max(cooldown_end);
                 } else {
                     pending.remove(&account);
                     return;

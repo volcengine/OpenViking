@@ -95,7 +95,7 @@ Configuration reference:
 | `git.author_email` | `bot@viking.local` | Default author email |
 | `git.local.base_dir` | `""` | Directory holding Git objects/refs. **When empty, defaults to `{storage.workspace}/.ovgit`** |
 | `git.snapshot.gc.enabled` | `true` | Schedule physical reclamation of objects after snapshot deletion. On S3, use an unversioned bucket. Physical GC requires a successful `GetBucketVersioning` check confirming versioning was never enabled. If the check fails, inspect the warning, restore access and restart the instance to retry. |
-| `git.snapshot.gc.grace_seconds` | `3600` | Minimum age in seconds before reclamation. Must be at least 600. |
+| `git.snapshot.gc.grace_seconds` | `3600` | Minimum age in seconds before reclamation. Must be at least 600. Within one instance, successive background GC scans for the same account start at least one hour after the previous scan finishes. |
 | `git.snapshot.log.provider` | `sqlite` | Path history index provider for `snapshot/log?paths=...`: `sqlite`, `mysql`, `postgres`, or `none` |
 | `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | Optional absolute SQLite database path. When omitted, each workspace gets its own index DB |
 
