@@ -5,6 +5,9 @@ description: |
   Entity should be rich and distributed - avoid putting all info in one entity.
 directory: "viking://user/{{ user_space }}/memories/entities"
 filename_template: "{{ category|lower }}/{{ name|lower }}.md"
+abstract_template: >-
+  {% if subdirectory %}Remembered entities in the {{ subdirectory }} category.
+  {% else %}Remembered people, projects, and other entities organized by category.{% endif %}
 enabled: true
 
 overview_template: |-

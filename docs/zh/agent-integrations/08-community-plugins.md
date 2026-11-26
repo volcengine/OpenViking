@@ -22,7 +22,7 @@ ZCode 不提供 `PreCompact`、`SessionEnd` 和 subagent 生命周期 Hook。因
 连接托管实例时，选择 **OpenViking 托管服务**，再选择服务商：
 
 - **Volcengine**：输入服务 API Key，安装器会提供服务地址。
-- **BytePlus**：先输入实例的完整 HTTPS 服务地址，再输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+- **BytePlus**：输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
 
 旧版安装器连接 BytePlus 时使用**自定义 URL**。
 
@@ -68,7 +68,7 @@ Kimi Code 集成是原生 managed plugin。它复用 OpenViking 的共享 Hook �
 连接托管实例时，选择 **OpenViking 托管服务**，再选择服务商：
 
 - **Volcengine**：输入服务 API Key，安装器会提供服务地址。
-- **BytePlus**：先输入实例的完整 HTTPS 服务地址，再输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+- **BytePlus**：输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
 
 旧版安装器连接 BytePlus 时使用**自定义 URL**。
 
@@ -110,7 +110,7 @@ Antigravity 的 `hooks.json` 格式与 Claude Code 不同：顶层 key 是 Hook 
 
 前置条件：Node.js 18+、运行中的 OpenViking 服务，以及 Antigravity app 或 `agy`。
 
-此非交互命令使用 `~/.openviking/ovcli.conf` 中已保存的连接。请先运行 `ov config`，选择 **OpenViking 托管服务**，再选择 **Volcengine**（服务 API Key）或 **BytePlus**（完整 HTTPS 服务地址和 API Key）。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md#连接-cli)。
+此非交互命令使用 `~/.openviking/ovcli.conf` 中已保存的连接。请先运行 `ov config`，选择 **OpenViking 托管服务**，再选择 **Volcengine**（服务 API Key）或 **BytePlus**（输入 API Key）。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md#连接-cli)。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity

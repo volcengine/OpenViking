@@ -3,7 +3,8 @@
 use super::prompts::{InputValueLabel, LiveRegion, PromptResult, prompt_text, status_live_lines};
 use crate::config::Config;
 use crate::config_wizard::store::{
-    ApiKeyRole, ConfigDraft, ConfigKind, IdentityField, build_config, custom_allows_empty_api_key,
+    ApiKeyRole, BYTEPLUS_SERVICE_URL, ConfigDraft, ConfigKind, IdentityField, build_config,
+    custom_allows_empty_api_key,
     validate_candidate_config, validate_candidate_config_with_role, validate_identity_value,
 };
 use crate::error::{Error, Result};
@@ -492,8 +493,19 @@ pub(super) fn root_key_used_for_normal_commands(config: &Config) -> bool {
     !api_key.is_empty() && api_key == root_api_key
 }
 
-pub(crate) fn openviking_service_api_key_helper_lines() -> Vec<String> {
+pub(super) fn openviking_service_api_key_helper_lines(url: &str) -> Vec<String> {
     let language = Language::current();
+    if url.trim_end_matches('/') == BYTEPLUS_SERVICE_URL {
+        return vec![
+            theme::muted(format!("{}: {url}", copy(language, "Server", "服务器"))).to_string(),
+            theme::muted(copy(
+                language,
+                "Enter your BytePlus OpenViking API key.",
+                "请输入 BytePlus OpenViking API Key。",
+            ))
+            .to_string(),
+        ];
+    }
     vec![
         format!(
             "{} {}",

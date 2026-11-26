@@ -1,182 +1,88 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from types import SimpleNamespace
+import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.storage.queuefs import semantic_processor as semantic_processor_module
-from openviking.storage.queuefs.semantic_processor import SemanticProcessor
-
-
-class RecordingVLM:
-    def __init__(self):
-        self.prompts = []
-
-    def is_available(self):
-        return True
-
-    async def get_completion_async(self, prompt):
-        self.prompts.append(prompt)
-        return f"overview-{len(self.prompts)}"
-
-
-class MergePlaceholderVLM(RecordingVLM):
-    async def get_completion_async(self, prompt):
-        self.prompts.append(prompt)
-        if len(self.prompts) == 1:
-            return "[first](viking://input_sample_f1)"
-        if len(self.prompts) == 2:
-            return "[second](viking://input_sample_f2)"
-        return (
-            "# Docs\n\n## Detailed Description\n\n"
-            "### [Friendly title](viking://input_sample_f1)\n\nFirst reusable summary.\n\n"
-            "### [第二章](viking://input_sample_f2)\n\nSecond reusable summary."
-        )
-
-
-class _TestVLMResolver:
-    def __init__(self, vlm):
-        self._vlm = vlm
-
-    async def get_vlm(self, account_id):
-        del account_id
-        return self._vlm
+from openviking.storage.queuefs.semantic_ops.directory_generation import (
+    generate_directory_semantics,
+)
+from openviking_cli.utils.config.parser_config import SemanticConfig
 
 
 @pytest.mark.asyncio
-async def test_children_only_oversized_overview_is_batched(monkeypatch):
-    vlm = RecordingVLM()
-    config = SimpleNamespace(
-        vlm=vlm,
-        semantic=SimpleNamespace(
-            max_overview_prompt_chars=20,
-            overview_batch_size=2,
-        ),
-        output_language_override="en",
-    )
-    monkeypatch.setattr(
-        semantic_processor_module,
-        "get_openviking_config",
-        lambda: config,
-    )
-    monkeypatch.setattr(
-        semantic_processor_module,
-        "render_prompt",
-        lambda _name, values: (
-            f"files={values['file_summaries']}|children={values['children_abstracts']}"
-        ),
-    )
-    children = [{"name": f"child-{index}", "abstract": "x" * 20} for index in range(3)]
+@pytest.mark.parametrize(
+    ("budget", "responses", "expected"),
+    [
+        (60_000, ("Summary.",), "Summary."),
+        (2_000, ("First batch.", "Second batch.", "Summary."), "Summary."),
+        (2_000, (None, "Second batch."), "Second batch."),
+        (2_000, (None, None), "[Directory overview is not generated]"),
+        (2_000, ("First batch.", "Second batch.", None), "First batch."),
+    ],
+)
+async def test_directory_batch_generation_retains_successful_summaries(budget, responses, expected):
+    remaining = iter(responses)
+    batches_started = asyncio.Event()
 
-    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
+    async def respond(_prompt):
+        response = next(remaining)
+        call_count = complete.await_count
+        if budget == 2_000 and call_count <= 2:
+            if call_count == 2:
+                batches_started.set()
+            await asyncio.wait_for(batches_started.wait(), timeout=1)
+        if response is None:
+            raise RuntimeError("model call failed")
+        return response
+
+    complete = AsyncMock(side_effect=respond)
+    config = SemanticConfig(max_overview_prompt_chars=budget, overview_batch_size=2)
+    result = await generate_directory_semantics(
         "viking://resources/root",
-        file_summaries=[],
-        children_abstracts=children,
+        {f"child-{i}": {"kind": "directory", "summary": str(i) * 1000} for i in range(3)},
+        previous=None,
+        total_entries=3,
+        config=config,
+        language="en",
+        complete=complete,
+        max_concurrent_llm=2,
     )
-
-    assert overview == "overview-3"
-    assert len(vlm.prompts) == 3
-    assert "child-0" in vlm.prompts[0]
-    assert "child-1" in vlm.prompts[0]
-    assert "child-2" not in vlm.prompts[0]
-    assert "child-2" in vlm.prompts[1]
-    assert all(f"child-{index}" not in vlm.prompts[2] for index in range(3))
+    prompts = [call.args[0] for call in complete.await_args_list]
+    assert len(prompts) == len(responses)
+    if budget == 2_000:
+        first, second, *merge = prompts
+        assert "child-0" in first and "child-1" in first and "child-2" not in first
+        assert "child-2" in second and "child-0" not in second and "child-1" not in second
+        if merge:
+            (merged,) = merge
+            assert "First batch." in merged and "Second batch." in merged
+            assert all(f"child-{i}" not in merged for i in range(3))
+    else:
+        (prompt,) = prompts
+        assert all(f"child-{i}" in prompt for i in range(3))
+    assert result.abstract == expected
+    assert expected in result.overview
 
 
 @pytest.mark.asyncio
-async def test_sampled_overview_prompt_describes_full_directory_coverage(monkeypatch):
-    vlm = RecordingVLM()
-    config = SimpleNamespace(
-        vlm=vlm,
-        semantic=SimpleNamespace(
-            max_overview_prompt_chars=10_000,
-            overview_batch_size=32,
-        ),
-        output_language_override="en",
+async def test_single_oversized_file_summary_is_truncated_before_summarizing():
+    complete = AsyncMock(return_value="Guide to local setup.")
+    result = await generate_directory_semantics(
+        "viking://resources/root",
+        {"guide.md": {"kind": "file", "summary": "x" * 4_000 + "y" * 800}},
+        previous=None,
+        total_entries=1,
+        config=SemanticConfig(max_overview_prompt_chars=4_000),
+        language="en",
+        complete=complete,
+        max_concurrent_llm=2,
     )
-    captured = {}
-    monkeypatch.setattr(
-        semantic_processor_module,
-        "get_openviking_config",
-        lambda: config,
-    )
-
-    def fake_render_prompt(_name, values):
-        captured.update(values)
-        return "prompt"
-
-    monkeypatch.setattr(semantic_processor_module, "render_prompt", fake_render_prompt)
-
-    await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
-        "viking://resources/docs_flat",
-        file_summaries=[],
-        children_abstracts=[{"name": "sample", "abstract": "summary"}],
-        total_files=0,
-        total_children=513,
-    )
-
-    coverage = captured["directory_coverage"]
-    assert "Total direct entries: 513" in coverage
-    assert "Summaries provided for this aggregation: 1" in coverage
-    assert "Direct entries not individually shown: 512" in coverage
-    assert "Coverage: sampled" in coverage
-
-
-@pytest.mark.asyncio
-async def test_batched_overview_resolves_links_and_reuses_summaries_by_filename(monkeypatch):
-    vlm = MergePlaceholderVLM()
-    config = SimpleNamespace(
-        vlm=vlm,
-        semantic=SimpleNamespace(
-            max_overview_prompt_chars=1,
-            overview_batch_size=1,
-        ),
-        output_language_override="en",
-    )
-    monkeypatch.setattr(
-        semantic_processor_module,
-        "get_openviking_config",
-        lambda: config,
-    )
-    monkeypatch.setattr(
-        semantic_processor_module,
-        "render_prompt",
-        lambda _name, values: values["file_summaries"],
-    )
-
-    processor = SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))
-    overview = await processor._generate_overview(
-        "viking://resources/业务 docs",
-        file_summaries=[
-            {"name": "first file (approved).md", "summary": "first summary"},
-            {"name": "第二章#file.md", "summary": "second summary"},
-        ],
-        children_abstracts=[],
-    )
-
-    assert (
-        "[Friendly title](viking://resources/业务%20docs/first%20file%20%28approved%29.md)"
-        in overview
-    )
-    assert "[第二章](viking://resources/业务%20docs/第二章%23file.md)" in overview
-    assert "viking://input_sample_" not in overview
-    assert processor._parse_overview_md(overview) == {
-        "first file (approved).md": "First reusable summary.",
-        "第二章#file.md": "Second reusable summary.",
-    }
-
-
-@pytest.mark.asyncio
-async def test_overview_includes_more_than_32_children_under_budget(monkeypatch):
-    from openviking_cli.utils.config.parser_config import SemanticConfig
-
-    vlm = RecordingVLM()
-    config = SimpleNamespace(semantic=SemanticConfig(), output_language_override="en")
-    monkeypatch.setattr(semantic_processor_module, "get_openviking_config", lambda: config)
-    files = [{"name": f"file-{i:03}.md", "summary": f"marker-{i:03}"} for i in range(40)]
-    await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
-        "viking://resources/wide", files, []
-    )
-    assert len(vlm.prompts) == 1
-    assert all(item["summary"] in vlm.prompts[0] for item in files)
+    complete.assert_awaited_once()
+    prompt = complete.await_args.args[0]
+    assert "x" * 4_000 in prompt
+    assert "y" * 800 not in prompt
+    assert result.abstract == "Guide to local setup."
+    assert "[guide.md]" in result.overview
