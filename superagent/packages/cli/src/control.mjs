@@ -20,8 +20,8 @@ import {
   isInside,
   pm2Processes,
   resolveRelease,
-  startApp,
   verifyPm2App,
+  waitUntilOnline,
   waitUntilReady,
 } from '../../updater/src/pm2.mjs';
 import { SHARED_WEB, defaultReleaseLink, defaultUpdaterEndpoint, loadTargets } from '../../updater/src/targets.mjs';
@@ -121,17 +121,6 @@ async function waitForUpdater(socketPath, { attempts = 30, intervalMs = 1000 } =
   throw new Error(`updater did not become ready on ${socketPath}`);
 }
 
-async function startOne(spec, context) {
-  const { release, configPath, pm2Bin, execFileImpl, fetchImpl, readyOptions, pm2Env, socketPath } = context;
-  if (spec.app !== UPDATER_APP) {
-    await startApp(spec, { release, configPath, pm2Bin, execFileImpl, fetchImpl, readyOptions, pm2Env });
-    return;
-  }
-  await execFileImpl(pm2Bin, ['start', configPath, '--only', spec.app, '--update-env'], { timeout: 60_000, env: pm2Env });
-  await verifyPm2App({ app: spec.app, release, pm2Bin, execFileImpl, pm2Env });
-  await waitForUpdater(socketPath, readyOptions);
-}
-
 // One app's start, with a spinner on a terminal; the line says how it ended.
 async function step(context, label, done, run) {
   const spinning = spinner(context.stdout, label, { env: context.env });
@@ -218,20 +207,38 @@ export async function startCommand(target, options) {
   return 1;
 }
 
+// Restarts a registered app without deleting it. `startOrRestart --only` keeps
+// the entry, so the PM2 daemon owns the restart even when the CLI asking for it
+// is a child of the process being restarted. `restart`/`start` alone keep the
+// script path PM2 first recorded, so they cannot leave a previous release; this
+// one re-reads the ecosystem.
+function relaunchApp(spec, context) {
+  return context.execFileImpl(context.pm2Bin, ['startOrRestart', context.configPath, '--only', spec.app, '--update-env'], {
+    timeout: pm2StopTimeout(context.restarting.get(spec.app)),
+    env: appControlEnv(spec.app, context.pm2Env),
+  });
+}
+
+// A restart run from a session that lives inside the app deletes the entry it
+// is about to start again: `pm2 delete` tree-kills the CLI along with the app,
+// and the unregistered app never comes back (#8171). One supervised operation
+// instead, with the list saved before the bounce so the dump never records a
+// half-restarted set.
 export async function restartCommand(target, options) {
   const context = defaults(options);
   const apps = appsFor(target, loadTargets(context.env));
   Object.assign(context, await installedRelease(context.releaseLink));
-  const running = new Map((await pm2Processes(context)).map((processInfo) => [processInfo?.name, processInfo]));
+  context.restarting = new Map((await pm2Processes(context)).map((processInfo) => [processInfo?.name, processInfo]));
+  await context.execFileImpl(context.pm2Bin, ['save'], { timeout: 30_000, env: context.pm2Env });
   for (const spec of apps) {
     await step(context, t(`重启 ${spec.app}`, `Restarting ${spec.app}`), t(`${spec.app} 已就绪`, `${spec.app} is ready`), async () => {
-      if (running.has(spec.app)) {
-        await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: pm2StopTimeout(running.get(spec.app)), env: appControlEnv(spec.app, context.pm2Env) });
-      }
-      await startOne(spec, context);
+      // Nothing registered to restart: start it, as `start` would.
+      if (context.restarting.has(spec.app)) await relaunchApp(spec, context);
+      else await context.execFileImpl(context.pm2Bin, ['start', context.configPath, '--only', spec.app, '--update-env'], { timeout: 60_000, env: appControlEnv(spec.app, context.pm2Env) });
+      await waitUntilOnline({ app: spec.app, release: context.release, pm2Bin: context.pm2Bin, execFileImpl: context.execFileImpl, pm2Env: appControlEnv(spec.app, context.pm2Env) }, context.readyOptions);
+      await awaitAppReady(spec, context);
     });
   }
-  await context.execFileImpl(context.pm2Bin, ['save'], { timeout: 30_000, env: context.pm2Env });
   return 0;
 }
 
