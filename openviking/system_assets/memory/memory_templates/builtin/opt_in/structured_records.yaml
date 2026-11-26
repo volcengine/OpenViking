@@ -1,0 +1,38 @@
+memory_type: structured_records
+description: |
+  Retain source text that later work may need to quote, compare, or calculate
+  with. For each record return only the retrieval title and message indices.
+  The server copies the original body. Do not write out tables or JSON in fields.
+  Prioritize precise input values, applicable terms, explicit corrections, and
+  substantive deliverables. Skip routine status, tool traces, and instructions
+  about formatting the current reply.
+
+  Preserve each small table or structured deliverable in one record, including
+  JSON-wrapped answers. Include subject, column headers, row keys, units, period,
+  version, conditions, and applicable footnotes. For long material choose
+  self-contained ranges up to 24,000 UTF-8 bytes. Select distinct versions
+  separately. Preserve a user's explicit approval or correction in a separate
+  user record. An assistant reply is a historical deliverable.
+directory: "viking://user/{{ user_space }}/memories/structured_records"
+filename_template: "{{ extract_context.get_message_excerpt_id(ranges, title) }}.md"
+operation_mode: add_only
+enabled: true
+content_template: |
+  # {{ title | e }}
+
+  {{ extract_context.get_message_excerpt(ranges) }}
+fields:
+  - name: title
+    type: string
+    description: |
+      A single-line retrieval title up to 160 characters in {{ language }}.
+      Use the subject, document or deliverable type, and applicable scope or
+      version when explicitly present. Keep qualifiers and identifiers literal.
+    merge_op: immutable
+  - name: ranges
+    type: string
+    description: |
+      Use the first bracketed index on each selected message. Give "N" for one
+      index or "N-M" for a contiguous range with the same [source=...] label.
+      Select enough consecutive chunks to cover complete lines and tables.
+    merge_op: immutable

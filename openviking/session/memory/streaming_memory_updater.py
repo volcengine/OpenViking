@@ -117,6 +117,7 @@ class MemoryUpdateRequest:
     isolation_options: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     memory_registry: MemoryTypeRegistry | None = None
+    extract_context: ExtractContext | None = None
 
 
 @dataclass(slots=True)
@@ -412,6 +413,7 @@ class StreamingMemoryUpdater:
             operations=operations,
             request=request,
             messages=request.messages,
+            extract_context=request.extract_context,
         )
         result = StreamingMemoryUpdateResult(
             operations=operations,
@@ -552,8 +554,11 @@ class StreamingMemoryUpdater:
         operations: ResolvedOperations,
         request: MemoryUpdateRequest,
         messages: list[Message],
+        extract_context: ExtractContext | None = None,
     ) -> MemoryUpdateResult:
-        extract_context = ExtractContext(messages)
+        # Append-only ranges refer to the extraction frame, including its normalized messages.
+        if extract_context is None:
+            extract_context = ExtractContext(messages)
         isolation_handler = _make_isolation_handler(request, extract_context)
         async with self._apply_lock:
             viking_fs = safe_get_viking_fs()
@@ -1801,6 +1806,7 @@ def clone_memory_update_request(
         isolation_options=dict(request.isolation_options or {}),
         metadata=dict(request.metadata or {}),
         memory_registry=request.memory_registry,
+        extract_context=request.extract_context,
     )
 
 

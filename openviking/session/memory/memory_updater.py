@@ -63,6 +63,9 @@ from openviking_cli.utils import VikingURI, get_logger
 logger = get_logger(__name__)
 
 _MEMORY_ABSTRACT_MAX_BYTES = 50_000
+_MESSAGE_EXCERPT_MAX_BYTES = 24_000
+_MESSAGE_EXCERPT_RANGE = re.compile(r"([0-9]{1,9})(?:\s*-\s*([0-9]{1,9}))?")
+_MESSAGE_EXCERPT_METADATA = re.compile(r"<!--\s*MEMORY_FIELDS\b")
 _EXTRACTION_CHUNK_MIN_CHARS = 100
 _EXTRACTION_CHUNK_BOUNDARY_RE = re.compile(r"(\n+|[。！？；!?;]+|(?<!\d)\.(?!\d))")
 _RESOURCE_ADDITION_FIELD_RE = re.compile(
@@ -320,6 +323,7 @@ class ExtractContext:
         split_long_text_messages: bool = True,
         source_archive_uri: str = "",
         extraction_scope: str = "",
+        source_messages: List[Message] | None = None,
     ):
         if chunk_meta is None:
             if split_long_text_messages:
@@ -332,6 +336,7 @@ class ExtractContext:
         self.page_id_map = PageIdMap()
         self.source_archive_uri = (source_archive_uri or "").rstrip("/")
         self.extraction_scope = extraction_scope
+        self._source_messages = source_messages if source_messages is not None else (messages or [])
 
     @classmethod
     def _build_extraction_messages(
@@ -539,6 +544,62 @@ class ExtractContext:
         if len(summary) / len(original) >= ratio_threshold:
             return original
         return summary
+
+    def _message_excerpt(self, ranges: str) -> tuple[Message, str]:
+        """Resolve one contiguous excerpt of a user message or assistant reply."""
+        match = _MESSAGE_EXCERPT_RANGE.fullmatch(ranges.strip())
+        if not match:
+            raise ValueError("A source excerpt requires one contiguous message range")
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if start > end or end >= len(self.messages):
+            raise ValueError("Source excerpt range is outside the extraction messages")
+
+        selected = self.messages[start : end + 1]
+        source_ids = {
+            meta.source_message_id if (meta := self.chunk_meta.get(id(message))) else message.id
+            for message in selected
+        }
+        if len(source_ids) != 1:
+            raise ValueError("A source excerpt must belong to one original message")
+        source_id = next(iter(source_ids))
+        source = next(
+            (message for message in self._source_messages if message.id == source_id), None
+        )
+        if source is None or source.role not in {"user", "assistant"}:
+            raise ValueError("A source excerpt requires a user message or assistant reply")
+
+        excerpt = "".join(
+            "\n".join(part.text for part in message.parts if isinstance(part, TextPart))
+            for message in selected
+        )
+        source_parts = [part.text for part in source.parts if isinstance(part, TextPart)]
+        if (
+            not excerpt.strip()
+            or _MESSAGE_EXCERPT_METADATA.search(excerpt)
+            or (excerpt not in "".join(source_parts) and excerpt not in "\n".join(source_parts))
+        ):
+            raise ValueError("Source excerpt must contain original message text")
+        if len(excerpt.encode("utf-8")) > _MESSAGE_EXCERPT_MAX_BYTES:
+            raise ValueError("Source excerpt exceeds the size of one record")
+        return source, excerpt
+
+    def get_message_excerpt_id(self, ranges: str, title: str) -> str:
+        """Derive an immutable identity from the source and its exact text."""
+        if not title.strip() or len(title) > 160 or "\n" in title or "\r" in title:
+            raise ValueError("A source excerpt requires a short, single-line title")
+        source, excerpt = self._message_excerpt(ranges)
+        digest = hashlib.sha256(
+            f"{self.get_source_archive_suffix()}\0{source.id}\0{excerpt}".encode("utf-8")
+        )
+        return digest.hexdigest()[:24]
+
+    def get_message_excerpt(self, ranges: str) -> str:
+        """Render source text with the original author role and recording time."""
+        source, excerpt = self._message_excerpt(ranges)
+        label = "User message" if source.role == "user" else "Historical assistant reply"
+        recorded_at = f" ({source.created_at})" if source.created_at else ""
+        return f"**{label}{recorded_at}**\n\n{excerpt}"
 
     def get_resource_event_content(self, ranges_str: str, summary: str) -> str:
         """Return a user-readable event body for add-resource derived events."""

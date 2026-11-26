@@ -44,6 +44,8 @@ from openviking.session.memory.streaming_memory_updater import (
     split_request_by_merge_group,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.session.memory.utils.uri import generate_uri
+from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OpenVikingConfig, OpenVikingConfigSingleton
@@ -634,6 +636,41 @@ async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
     )
     assert ("write", written_uri, lease) in fs.events
     assert fs.events[-1] == ("release", lease)
+
+
+@pytest.mark.asyncio
+async def test_structured_record_uses_the_ranges_shown_to_the_extractor(monkeypatch):
+    fs = PathlockedInMemoryVikingFS({})
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.get_viking_fs", lambda: fs
+    )
+    monkeypatch.setattr("openviking.session.memory.memory_updater.get_viking_fs", lambda: fs)
+    registry = _registry()
+    registry.load_from_directory(str(builtin_memory_templates_dir() / "opt_in"))
+    schema = registry.get("structured_records")
+    preceding = Message(id="m0", role="user", parts=[TextPart("Other source")])
+    evidence = Message(id="m1", role="user", parts=[TextPart("2025 Q2: -368.20 USD")])
+    messages = [preceding, evidence]
+    extract_context = ExtractContext([evidence], source_messages=messages)
+    fields = {"title": "Restated income", "ranges": "0"}
+    uri = generate_uri(schema, fields, "u", extract_context)
+    operation = ResolvedOperation(memory_fields=fields, memory_type=schema.memory_type, uris=[uri])
+    updater = StreamingMemoryUpdater(registry=registry, config=StreamingMemoryUpdaterConfig())
+    result = await updater.submit(
+        MemoryUpdateRequest(
+            operations=ResolvedOperations(
+                upsert_operations=[operation], delete_file_contents=[], errors=[]
+            ),
+            messages=messages,
+            ctx=_ctx(),
+            extract_context=extract_context,
+        )
+    )
+
+    assert result.apply_result.written_uris == [uri]
+    content = MemoryFileUtils.read(fs.files[uri], uri=uri).content
+    assert "2025 Q2: -368.20 USD" in content
+    assert "Other source" not in content
 
 
 @pytest.mark.asyncio
