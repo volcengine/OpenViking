@@ -15,6 +15,20 @@ const profile = (patch: Partial<ProfileSettings> = {}): ProfileSettings => ({
 })
 
 describe('toProfileSettings', () => {
+  it.each(['seal_secrets', 'enroll_tool_secrets'] as const)(
+    'keeps %s, so saving never turns it off, and defaults it to off',
+    (field) => {
+      const stored: Profile = {
+        ...profile({ seal_secrets: true, [field]: true }),
+        id: 'p',
+        revision: 1,
+      }
+      expect(toProfileSettings(stored)[field]).toBe(true)
+      const { [field]: _, ...legacy } = profile()
+      expect(toProfileSettings(legacy as ProfileSettings)[field]).toBe(false)
+    },
+  )
+
   it('keeps known fields only while preserving false and zero values', () => {
     const stored: Profile = {
       ...profile({ recall: false, score_threshold: 0, session_max_tokens: 0 }),

@@ -1113,7 +1113,7 @@ needs those platform-specific URL semantics. Add other Git hosts to
 
 ### pdf
 
-PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+PDF parsing configuration. `local` parses on this machine, `mineru` requires remote parsing to succeed, and `auto` sends PDFs to the configured MinerU endpoint first and falls back to local parsing on failure. With no endpoint, `auto` parses locally.
 
 ```json
 {
@@ -1134,10 +1134,11 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 |-----------|------|-------------|
 | `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
 | `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
-| `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
-| `mineru_bodys` | dict | MinerU API multipart form fields |
+| `mineru_timeout` | float | Timeout in seconds for requests and hosted result polling (default `300.0`) |
+| `mineru_bodys` | dict | Additional MinerU request fields (self-hosted form or hosted JSON) |
+| `mineru_token` | str | Bearer token for the hosted MinerU v4 API |
 
-**MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+For self-hosted MinerU, use its base URL. OpenViking sends the PDF to `/file_parse`. For hosted MinerU, set `mineru_endpoint` to `https://mineru.net/api/v4` and provide `mineru_token`. OpenViking uses the v4 upload and result APIs.
 
 ### External parser API (`parser_api`) {#parser-api}
 
@@ -2287,17 +2288,34 @@ All nodes sharing expiry state must use the same stable `service_name`. It ident
 
 ```json
 {
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://redis-cache.example.com:6379"]
+        }
+      },
+      "expiry": {
+        "provider": "redis",
+        "params": {
+          "mode": "cluster",
+          "endpoints": ["redis://redis-proxy.example.com:6379"],
+          "username": "openviking",
+          "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD",
+          "default_ttl_seconds": 0
+        }
+      }
+    }
+  },
   "expiry": {
     "service_name": "openviking-documents",
     "publisher_separate_process": true,
     "shard_count": 128,
     "session_consumer_concurrency": 8,
-    "redis": {
-      "mode": "cluster",
-      "endpoints": ["redis://redis-proxy.example.com:6379"],
-      "username": "openviking",
-      "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD"
-    }
+    "cache": {"instance": "expiry"},
+    "request_budget_seconds": 5,
+    "max_inflight_requests": 128
   }
 }
 ```
@@ -2308,13 +2326,40 @@ All nodes sharing expiry state must use the same stable `service_name`. It ident
 | `publisher_separate_process` | bool | On `scheduler` nodes, supervise publisher in a child process; when `false`, run it inside each `scheduler` process | `true` |
 | `shard_count` | int | Number of logical expiry shards; all instances sharing a namespace must use the same value, in the range `1..512` | `128` |
 | `session_consumer_concurrency` | int | Concurrent Session expiry callbacks per `queue_worker` process; must be greater than `0` | `8` |
-| `redis.mode` | string | Redis deployment mode: `standalone` or `cluster` | `standalone` |
-| `redis.endpoints` | string array | Redis endpoints; a cluster may use one proxy endpoint | `[]` |
-| `redis.username` | string | Redis ACL username | `""` |
-| `redis.password_env` | string | Environment variable containing the Redis password; startup fails if it is not set | `""` |
-| `redis.password` | string | Legacy plaintext password; prefer `password_env`; mutually exclusive with it | `""` |
+| `cache.instance` | string | Named Redis CacheRuntime selected for expiry state | required when expiry is enabled |
+| `request_budget_seconds` | number | Total budget for one expiry Store operation; must be shorter than owner renewal | `5` |
+| `max_inflight_requests` | int | Maximum concurrent expiry Store operations | `128` |
 
-`service_name` and Redis endpoints are required when Redis idle auto commit is enabled. Credentials must use the dedicated fields above and cannot be embedded in endpoint URIs. With `publisher_separate_process=true`, `scheduler` startup launches one internal publisher, stops it during shutdown, and exits if that child fails unexpectedly. This publisher is not exposed as a public CLI command.
+The selected `cache.instances.<instance>` must use `provider="redis"` and set
+`params.default_ttl_seconds=0`. Expiry state is durable scheduling state, so
+only its Lua scripts set TTLs for metadata and owner leases.
+
+`service_name` and `cache.instance` are required when Redis idle auto commit is
+enabled. Redis endpoints, credentials, pool size, and timeouts belong in
+`cache.instances.<instance>.params`; credentials cannot be embedded in endpoint
+URIs. With the default `publisher_separate_process=true`, `openviking-server`
+starts one internal publisher before serving traffic, stops it during shutdown,
+and exits if that child fails unexpectedly. This publisher is not exposed as a
+public CLI command.
+
+`expiry.redis` is not supported. Move its connection fields to
+`cache.instances.<instance>.params`, move `request_budget_seconds` and
+`max_inflight_requests` directly under `expiry`, then set
+`expiry.cache.instance` to that instance name.
+
+| Old field | New field | Migration |
+| --- | --- | --- |
+| `expiry.redis.mode` | `cache.instances.<instance>.params.mode` | Copy the value. |
+| `expiry.redis.endpoints` | `cache.instances.<instance>.params.endpoints` | Add `redis://` or `rediss://`; bare `host:port` values are rejected. |
+| `expiry.redis.tls` | endpoint scheme | Preserve an explicit `redis://` or `rediss://` scheme; use `rediss://` only when converting a bare endpoint with `tls=true`. |
+| `expiry.redis.username` | `cache.instances.<instance>.params.username` | Copy the value. |
+| `expiry.redis.password_env` | `cache.instances.<instance>.params.password_env` | Copy the value. |
+| `expiry.redis.password` | `cache.instances.<instance>.params.password` | Copy the value; prefer `password_env` for new deployments. |
+| `expiry.redis.connect_timeout_seconds` | `connect_timeout_ms` | Multiply by 1000. |
+| `expiry.redis.socket_timeout_seconds` | `command_timeout_ms` | Multiply by 1000. |
+| `expiry.redis.max_connections` | `pool_size` | Copy the value. |
+| `expiry.redis.request_budget_seconds` | `expiry.request_budget_seconds` | Copy the value. |
+| `expiry.redis.max_inflight_requests` | `expiry.max_inflight_requests` | Copy the value. |
 
 ##### Per-session Auto Commit Policy
 

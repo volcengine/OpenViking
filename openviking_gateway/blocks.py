@@ -56,12 +56,13 @@ RECALL_PROVENANCE_NOTE = (
 )
 
 
-def gateway_note(policy, tools, soul=False):
+def gateway_note(policy, tools, soul=False, sealed=""):
     """Opening lines that tell the model what the gateway adds to this history.
 
-    ``soul`` says the block carries the user's soul.md.
+    ``soul`` says the block carries the user's soul.md; ``sealed`` is the line on
+    secret references, when the current profile seals them.
     """
-    if not (policy.recall or tools or soul):
+    if not (policy.recall or tools or soul or sealed):
         return ""
     lines = [
         "The OpenViking Gateway, a proxy between the client and the model, added this "
@@ -107,6 +108,8 @@ def gateway_note(policy, tools, soul=False):
         )
     if policy.capture:
         lines.append("- The gateway saves this conversation to the user's OpenViking memory.")
+    if sealed:
+        lines.append(sealed)
     return "\n".join(lines)
 
 

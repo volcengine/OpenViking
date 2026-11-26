@@ -7,7 +7,7 @@ For [Volcengine](https://www.volcengine.com/product/openviking-service), activat
 [OpenViking console](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing).
 Open **User Management**, then **API Key**.
 
-For BytePlus, use your instance's HTTPS service URL and OpenViking API key.
+For BytePlus, have your OpenViking API key ready.
 See [BytePlus setup](https://docs.openviking.ai/en/guides/27-byteplus-setup).
 
 ## Set up
@@ -31,7 +31,7 @@ In the wizard:
 2. If prompted, choose **Create new OpenViking profile**. You can also reuse
    a saved `ovcli.conf`.
 3. Choose **OpenViking Managed Service**, then **Volcengine** or **BytePlus**.
-4. For BytePlus, enter the HTTPS service URL, then the API key. For Volcengine,
+4. For BytePlus, enter your API key. For Volcengine,
    enter the API key; the wizard supplies the service URL.
 5. Choose where to save the connection. **Keep in Hermes only** saves it in
    the Hermes `.env`. **Mirror to OpenViking store** saves a local
