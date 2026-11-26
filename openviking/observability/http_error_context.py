@@ -170,6 +170,13 @@ def _redact_sensitive_text(value: str) -> str:
     return _SENSITIVE_ASSIGNMENT_RE.sub(_redact_assignment, value)
 
 
+def redact_credentials(value: str) -> str:
+    """Redact bearer tokens, provider key prefixes and ``key=value`` credentials."""
+    if not isinstance(value, str):
+        return value
+    return _redact_sensitive_text(value)
+
+
 def _is_sensitive_key(key: str) -> bool:
     normalized = key.strip().lower().replace("-", "_")
     return normalized in _SENSITIVE_KEYS or normalized.endswith(

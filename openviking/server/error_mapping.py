@@ -7,6 +7,7 @@ from typing import Any, Iterator
 
 import httpx
 
+from openviking.observability.http_error_context import redact_credentials
 from openviking.pyagfs.exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -152,7 +153,7 @@ def _exception_chain_text(exc: Exception) -> str:
 
 
 def _trim_message(message: str, limit: int = 500) -> str:
-    normalized = _normalize_message(message)
+    normalized = _normalize_message(redact_credentials(message))
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 3] + "..."
