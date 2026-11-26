@@ -17,6 +17,7 @@ import {
   RUNTIME_ALIASES,
   RUNTIME_IDS,
   currentModelEntry,
+  isRuntimeDefaultModel,
   supportedModelEfforts,
   parseRuntimeModelSelector,
 } from './runtime-catalog.mjs';
@@ -110,7 +111,7 @@ export function helpText(snapshot) {
     '',
     `当前会话：${snapshot.session?.id ?? snapshot.threadId ?? '（未连接）'}`,
     `Runtime：${snapshot.runtime ?? 'codex'}`,
-    `模型：${snapshot.model || '（默认）'}`,
+    `模型：${modelText(snapshot)}`,
   );
   if (supportsEffort) lines.push(`推理档位：${snapshot.effort || '未设置'}`);
   return lines.join('\n');
@@ -146,12 +147,21 @@ export function statusHeadline(snapshot, nowMs = Date.now()) {
   return { headline, queued: status.queued ?? 0 };
 }
 
+// The router's model as a reader needs it. A runtime with no model chosen
+// reports its canonical default (the manifest's runtime selector, e.g. "pi"),
+// which is not an id; what the session actually runs on is the fact worth
+// naming then (snapshot.resolvedModel, when the runtime reports one).
+function modelText(snapshot) {
+  if (!isRuntimeDefaultModel(snapshot.runtime, snapshot.model)) return snapshot.model || '（默认）';
+  return snapshot.resolvedModel ? `默认（${snapshot.resolvedModel}）` : '默认';
+}
+
 export function statusText(snapshot, nowMs = Date.now()) {
   const { headline, queued } = statusHeadline(snapshot, nowMs);
   const lines = [
     headline,
     `Runtime：${snapshot.runtime ?? 'codex'}`,
-    `模型：${snapshot.model || '（默认）'}`,
+    `模型：${modelText(snapshot)}`,
     ...(snapshot.effort ? [`推理档位：${snapshot.effort}`] : []),
   ];
   if (queued > 0) lines.push(`排队消息：${queued}`);
@@ -280,8 +290,9 @@ export async function executeCommand(command, runtime, { primary, tasks, workers
     if (!command.arg) {
       const selected = currentModelEntry(current);
       const resolved = selected?.resolvedModel || current.resolvedModel;
-      const lines = [`Runtime：${current.runtime}`, `当前模型：${current.model || '（默认）'}`];
-      if (resolved) lines.push(`实际模型：${resolved}`);
+      const lines = [`Runtime：${current.runtime}`, `当前模型：${modelText(current)}`];
+      // The default already names the session's own model.
+      if (resolved && !isRuntimeDefaultModel(current.runtime, current.model)) lines.push(`实际模型：${resolved}`);
       lines.push(...modelMenuLines(models, current.runtime));
       lines.push('用法：/model <名称>（支持前缀匹配）；切换 Runtime 请用 /runtime');
       return { ok: true, text: lines.join('\n') };

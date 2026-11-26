@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { RUNTIME_IDS, compatibleModelEffort, currentModelEntry, getRuntimeDefinition, modelIdPattern, staticModelEntries } from './runtime-catalog.mjs';
+import { RUNTIME_IDS, compatibleModelEffort, currentModelEntry, getRuntimeDefinition, isRuntimeDefaultModel, modelIdPattern, staticModelEntries } from './runtime-catalog.mjs';
 import { isWorkerRuntime } from './worker-settings.mjs';
 import { WORKER_RUNTIMES } from './worker-executor.mjs';
 
@@ -58,10 +58,27 @@ function select(options, initial, extra = {}) {
   };
 }
 
+// The router's model as the card may offer it: a runtime with no model chosen
+// reports its canonical default (the manifest's runtime selector, e.g. "pi"),
+// which is not an id to prepend to the list or to label an inherited option
+// with, so it reads as "no model chosen" here.
+function routerModelOf(snapshot) {
+  const model = snapshot.model || '';
+  return isRuntimeDefaultModel(snapshot.runtime, model) ? '' : model;
+}
+
+// What the "现在" table says for the router's model. The runtime's own default
+// is a fact worth naming; the selector that stands for it is not.
+function routerModelCell(snapshot) {
+  const model = routerModelOf(snapshot);
+  if (model) return model;
+  return snapshot.resolvedModel ? `默认（${snapshot.resolvedModel}）` : '默认';
+}
+
 // What is set now. `worker` is null where there are no workers, or for
 // someone other than the owner.
 export function currentSettings(snapshot, settings) {
-  const router = { runtime: snapshot.runtime ?? '', model: snapshot.model || '', effort: snapshot.effort || '' };
+  const router = { runtime: snapshot.runtime ?? '', model: routerModelOf(snapshot), effort: snapshot.effort || '' };
   if (!settings) return { router, worker: null };
   const runtime = settings.preferred();
   const own = isWorkerRuntime(runtime) ? settings.own(runtime) : { model: '', effort: '' };
@@ -93,7 +110,7 @@ function modelsOf(runtime, snapshot) {
 
 // The rows of the "now" table, as the commands report them.
 function nowRows(snapshot, settings) {
-  const rows = [{ who: 'router', runtime: snapshot.runtime ?? '—', model: snapshot.model || '默认', effort: snapshot.effort || '—' }];
+  const rows = [{ who: 'router', runtime: snapshot.runtime ?? '—', model: routerModelCell(snapshot), effort: snapshot.effort || '—' }];
   if (settings) {
     const runtime = settings.preferred();
     const model = isWorkerRuntime(runtime) ? settings.modelFor(runtime) : { model: null, effort: null };
@@ -129,7 +146,7 @@ export function settingsCard({ snapshot, settings = null, draft = null, seen = n
   // default model, and the model's own default effort). Its model is always
   // offered, listed or not.
   const sameRouter = draft.router === snapshot.runtime;
-  const kept = sameRouter ? { model: snapshot.model || '', effort: snapshot.effort || '' }
+  const kept = sameRouter ? { model: routerModelOf(snapshot), effort: snapshot.effort || '' }
     : { model: saved(draft.router)?.model || '', effort: saved(draft.router)?.effort || '' };
   const listed = modelsOf(draft.router, snapshot);
   const routerModels = kept.model && !listed.some(({ id }) => id === kept.model)

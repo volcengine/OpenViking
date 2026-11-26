@@ -10,6 +10,7 @@ import {
   RUNTIME_CATALOG,
   RUNTIME_IDS,
   getRuntimeDefinition,
+  isRuntimeDefaultModel,
   modelMatchesRuntime,
   parseRuntimeModelSelector,
   resolveRuntimeModelTarget,
@@ -185,6 +186,21 @@ describe('runtime catalog', () => {
     for (const [value, expected] of cases) {
       assert.deepEqual(resolveRuntimeModelTarget(value), expected, value);
     }
+  });
+
+  it('tells a canonical default that is only a selector from a model a runtime serves', () => {
+    // The manifest names the runtime by its canonical default ("pi"), so an
+    // unconfigured runtime reports it as its model; it is no id to show or
+    // offer. DSH and Volc serve their canonical default as a real model.
+    for (const id of ['traex', 'claude', 'pi', 'durable', 'opencode', 'agy']) {
+      assert.equal(isRuntimeDefaultModel(id, getRuntimeDefinition(id).canonicalDefault), true, id);
+    }
+    assert.equal(isRuntimeDefaultModel('dsh', 'deepseek-official/deepseek-flash'), false);
+    assert.equal(isRuntimeDefaultModel('volc', 'ark'), false);
+    assert.equal(isRuntimeDefaultModel('pi', 'ollama/deepseek-v4.1-flash:1017'), false);
+    assert.equal(isRuntimeDefaultModel('pi', ''), false);
+    assert.equal(isRuntimeDefaultModel('codex', 'codex'), false);
+    assert.equal(isRuntimeDefaultModel('missing', 'missing'), false);
   });
 
   it('parses command selectors without treating bare runtime-looking names as qualifiers', () => {

@@ -286,6 +286,39 @@ describe('executeCommand', () => {
     assert.equal(codex.calls.length, 0);
   });
 
+  it('names a runtime with no model chosen as its default, never as the runtime id', async () => {
+    // Pi reports its canonical default ("pi"), which is the manifest's runtime
+    // selector. Nobody chose it and /model cannot set it; what the session runs
+    // on is the fact worth naming.
+    const pi = fakeCodex({
+      runtime: 'pi',
+      model: 'pi',
+      resolvedModel: 'ollama/deepseek-v4.1-flash:1017',
+      listModels: async () => [{ id: 'ollama/deepseek-v4.1-flash:1017', efforts: ['high'] }],
+    });
+
+    const help = await executeCommand({ name: 'help', arg: '' }, pi);
+    assert.match(help.text, /模型：默认（ollama\/deepseek-v4\.1-flash:1017）/);
+    assert.doesNotMatch(help.text, /模型：pi/);
+
+    const status = await executeCommand({ name: 'status', arg: '' }, pi);
+    assert.match(status.text, /模型：默认（ollama\/deepseek-v4\.1-flash:1017）/);
+
+    const model = await executeCommand({ name: 'model', arg: '' }, pi);
+    assert.match(model.text, /当前模型：默认（ollama\/deepseek-v4\.1-flash:1017）/);
+    // Already named by the default, so it is not repeated as 实际模型.
+    assert.doesNotMatch(model.text, /实际模型/);
+    assert.doesNotMatch(model.text, /当前模型：pi/);
+  });
+
+  it('falls back to 默认 when a runtime default selector has no session model to name', async () => {
+    const pi = fakeCodex({ runtime: 'pi', model: 'pi', listModels: async () => [] });
+    const help = await executeCommand({ name: 'help', arg: '' }, pi);
+    assert.match(help.text, /模型：默认\n/);
+    const model = await executeCommand({ name: 'model', arg: '' }, pi);
+    assert.match(model.text, /当前模型：默认\n/);
+  });
+
   it('model resolves prefixes against the live list and rejects unknown or ambiguous names', async () => {
     const codex = fakeCodex({
       listModels: async () => [

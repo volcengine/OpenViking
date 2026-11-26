@@ -313,6 +313,23 @@ export function getRuntimeDefinition(runtimeOrAlias) {
   return Object.hasOwn(RUNTIME_CATALOG, id) ? RUNTIME_CATALOG[id] : null;
 }
 
+/**
+ * Whether a reported model is only the runtime's canonical default: the
+ * manifest's runtime selector ("pi", "opencode"), which stands for "no model
+ * chosen" and is not an id anyone can pick. A runtime whose own list serves that
+ * name (DSH's deepseek-flash, Volc's ark) has a real model and answers false, so
+ * its default keeps being named as a model.
+ * @param {unknown} runtimeOrAlias - runtime id or alias.
+ * @param {unknown} model - the model a snapshot reports.
+ * @returns {boolean}
+ */
+export function isRuntimeDefaultModel(runtimeOrAlias, model) {
+  const definition = getRuntimeDefinition(runtimeOrAlias);
+  const raw = String(model ?? '');
+  if (!definition || !raw || raw !== definition.canonicalDefault) return false;
+  return !definition.models.includes(raw);
+}
+
 // Resolve the selected model before consulting capabilities. Never combine
 // efforts from unrelated models (or fall back from an explicit empty list).
 export function currentModelEntry({ runtime, model, resolvedModel, models = [] }) {
