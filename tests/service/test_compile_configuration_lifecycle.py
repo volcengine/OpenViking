@@ -222,6 +222,43 @@ def setup(monkeypatch):
     )
 
 
+@pytest.fixture
+def checkpoint_outage(setup, monkeypatch):
+    """Reject one matching execution checkpoint, then allow recovery writes."""
+
+    def arm(matches):
+        patch_task = setup.tracker.patch_task
+
+        async def fail_once(task_id, patch, **kwargs):
+            checkpoint = (patch.auth or {}).get("compile_execution") or {}
+            if matches(checkpoint):
+                monkeypatch.setattr(setup.tracker, "patch_task", patch_task)
+                raise OSError("checkpoint unavailable")
+            return await patch_task(task_id, patch, **kwargs)
+
+        monkeypatch.setattr(setup.tracker, "patch_task", fail_once)
+
+    return arm
+
+
+@pytest.fixture
+def state_outage(setup, monkeypatch):
+    """Reject one matching configuration write, then allow recovery writes."""
+
+    def arm(matches):
+        write = setup.files.write
+
+        async def fail_once(path, body, **kwargs):
+            if path.endswith("/state.json") and matches(json.loads(body)):
+                monkeypatch.setattr(setup.files, "write", write)
+                raise OSError("state unavailable")
+            return await write(path, body, **kwargs)
+
+        monkeypatch.setattr(setup.files, "write", fail_once)
+
+    return arm
+
+
 def make_task(
     setup,
     *,
@@ -868,7 +905,15 @@ async def test_registration_failure_does_not_publish_configuration(setup):
     ],
 )
 async def test_cancel_after_publication_still_restores_the_start_snapshot(
-    setup, registered, compile_metric_events, monkeypatch, cancel_at, baseline, partial_delivery
+    setup,
+    registered,
+    compile_metric_events,
+    monkeypatch,
+    checkpoint_outage,
+    state_outage,
+    cancel_at,
+    baseline,
+    partial_delivery,
 ):
     record, compile_name, task = registered
     if baseline != "empty":
@@ -904,22 +949,13 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(
     )
     if cancel_at != "publication":
         setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
-        patch_task = setup.tracker.patch_task
-        interrupted = False
-
-        async def fail_publication_checkpoint(task_id, patch, **kwargs):
-            nonlocal interrupted
-            checkpoint = (patch.auth or {}).get("compile_execution") or {}
-            if not interrupted and (
+        checkpoint_outage(
+            lambda checkpoint: (
                 checkpoint.get("phase") == "finished"
                 if cancel_at == "finished"
                 else checkpoint.get("outcome") is not None
-            ):
-                interrupted = True
-                raise OSError("checkpoint unavailable")
-            return await patch_task(task_id, patch, **kwargs)
-
-        monkeypatch.setattr(setup.tracker, "patch_task", fail_publication_checkpoint)
+            )
+        )
         with pytest.raises(OSError, match="checkpoint unavailable"):
             await setup.lifecycle.on_finish(task, terminal)
         published = await setup.store.get("acme", "alice", compile_name)
@@ -929,40 +965,18 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(
         setup.tracker.cancelled.add(task.task_id)
 
         # A failed compensation write retries without restoring the output a second time.
-        write = setup.files.write
-        compensation_failed = False
-
-        async def fail_compensation_once(path, body, **kwargs):
-            nonlocal compensation_failed
-            if not compensation_failed and path.endswith("/state.json"):
-                compensation_failed = True
-                raise OSError("baseline unavailable")
-            await write(path, body, **kwargs)
-
         if any(published[key] != before[key] for key in ("progress", "execution_context")):
-            monkeypatch.setattr(setup.files, "write", fail_compensation_once)
-            with pytest.raises(OSError, match="baseline unavailable"):
+            state_outage(lambda state: True)
+            with pytest.raises(OSError, match="state unavailable"):
                 await CompileLifecycle(setup.store, setup.fs).on_finish(deepcopy(task), terminal)
             assert (await setup.store.get("acme", "alice", compile_name))["progress"] == published[
                 "progress"
             ]
-            monkeypatch.setattr(setup.files, "write", write)
         if cancel_at == "outcome":
-            cancellation_interrupted = False
-
-            async def fail_cancellation_outcome(task_id, patch, **kwargs):
-                nonlocal cancellation_interrupted
-                checkpoint = (patch.auth or {}).get("compile_execution") or {}
-                if (
-                    not cancellation_interrupted
-                    and (checkpoint.get("outcome") or {}).get("status") == "cancelled"
-                ):
-                    cancellation_interrupted = True
-                    raise OSError("cancellation outcome unavailable")
-                return await patch_task(task_id, patch, **kwargs)
-
-            monkeypatch.setattr(setup.tracker, "patch_task", fail_cancellation_outcome)
-            with pytest.raises(OSError, match="cancellation outcome unavailable"):
+            checkpoint_outage(
+                lambda checkpoint: (checkpoint.get("outcome") or {}).get("status") == "cancelled"
+            )
+            with pytest.raises(OSError, match="checkpoint unavailable"):
                 await CompileLifecycle(setup.store, setup.fs).on_finish(deepcopy(task), terminal)
     restarted = CompileLifecycle(setup.store, setup.fs)
     result = await restarted.on_finish(deepcopy(task), terminal)
@@ -987,24 +1001,15 @@ async def test_cancel_after_publication_still_restores_the_start_snapshot(
     "change", ["progress", "partial_compile", "inputs", "replacement", "unrelated", "deleted"]
 )
 async def test_baseline_compensation_preserves_later_configuration(
-    setup, registered, monkeypatch, change
+    setup, registered, checkpoint_outage, change
 ):
     """Cancellation only undoes the baseline owned by this run."""
     _, name, task = registered
     await setup.lifecycle.on_start(task)
     setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
-    patch_task = setup.tracker.patch_task
-
-    async def fail_finished_checkpoint(task_id, patch, **kwargs):
-        checkpoint = (patch.auth or {}).get("compile_execution") or {}
-        if checkpoint.get("phase") == "finished":
-            raise OSError("checkpoint unavailable")
-        return await patch_task(task_id, patch, **kwargs)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(setup.tracker, "patch_task", fail_finished_checkpoint)
-        with pytest.raises(OSError, match="checkpoint unavailable"):
-            await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
+    checkpoint_outage(lambda checkpoint: checkpoint.get("phase") == "finished")
+    with pytest.raises(OSError, match="checkpoint unavailable"):
+        await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     published = await setup.store.get("acme", "alice", name)
     if change in {"replacement", "deleted"}:
         setup.files.files.pop(setup.store._record_path("acme", "alice", name))
@@ -1133,44 +1138,17 @@ async def test_prepared_finalization_replays_with_empty_auth(setup, registered, 
 
 @pytest.mark.parametrize("failure", ["undo", "state"])
 async def test_progress_publication_recovers_after_state_write_failure(
-    setup, registered, monkeypatch, failure
+    setup, registered, checkpoint_outage, state_outage, failure
 ):
-    """A durable finished run retries its successful baseline after a state write fails."""
+    """A run retries baseline publication after a checkpoint or configuration write fails."""
     _, compile_name, task = registered
     await setup.lifecycle.on_start(task)
     setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
-    write = setup.files.write
-    fail = True
-
-    async def write_with_outage(path, body, **kwargs):
-        """Reject one baseline publication while preserving the durable finished run."""
-        nonlocal fail
-        if (
-            failure == "state"
-            and fail
-            and path.endswith("/state.json")
-            and json.loads(body)["progress"]
-        ):
-            fail = False
-            raise OSError("state unavailable")
-        await write(path, body, **kwargs)
-
-    patch_task = setup.tracker.patch_task
-
-    async def fail_undo_once(task_id, patch, **kwargs):
-        nonlocal fail
-        if (
-            failure == "undo"
-            and fail
-            and ((patch.auth or {}).get("compile_execution") or {}).get("progress_rollback")
-        ):
-            fail = False
-            raise OSError("state unavailable")
-        return await patch_task(task_id, patch, **kwargs)
-
-    monkeypatch.setattr(setup.files, "write", write_with_outage)
-    monkeypatch.setattr(setup.tracker, "patch_task", fail_undo_once)
-    with pytest.raises(OSError, match="state unavailable"):
+    if failure == "undo":
+        checkpoint_outage(lambda checkpoint: checkpoint.get("progress_rollback"))
+    else:
+        state_outage(lambda state: state["progress"])
+    with pytest.raises(OSError, match="unavailable"):
         await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status="completed"))
     assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
     assert setup.tracker.tasks[task.task_id].auth["compile_execution"]["phase"] != "finished"

@@ -691,10 +691,8 @@ async def test_public_serialization_skips_private_payloads(tracker: TaskTracker)
 
 @pytest.mark.parametrize("cleanup_history", [True, False])
 async def test_periodic_history_cleanup(tracker, monkeypatch, cleanup_history):
-    compile_cleanup = AsyncMock(return_value=0)
     # End the loop after one sweep reaches the Task store.
     task_cleanup = AsyncMock(side_effect=asyncio.CancelledError)
-    tracker.compile_history_cleanup = compile_cleanup
     monkeypatch.setattr(tracker._store, "delete_expired", task_cleanup)
     monkeypatch.setattr(tracker, "CLEANUP_INTERVAL", 0)
 
@@ -702,11 +700,13 @@ async def test_periodic_history_cleanup(tracker, monkeypatch, cleanup_history):
     try:
         if cleanup_history:
             await asyncio.wait_for(tracker._cleanup_task, timeout=1)
-            compile_cleanup.assert_awaited_once()
             task_cleanup.assert_awaited_once()
+            policy = task_cleanup.await_args.args[0]
+            now = task_cleanup.await_args.kwargs["now"]
+            assert not policy.is_expired("completed", now - 2 * 86_400, now, "compile")
+            assert policy.is_expired("completed", now - 8 * 86_400, now, "compile")
         else:
             assert tracker._cleanup_task is None
-            compile_cleanup.assert_not_awaited()
             task_cleanup.assert_not_awaited()
     finally:
         await tracker.stop_background_loops()
