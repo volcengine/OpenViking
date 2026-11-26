@@ -101,8 +101,12 @@ Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built
 | `OPENVIKING_CAPTURE_FILTERS` | `""` | CSV of sed-style regex rules applied to every captured turn (same grammar) |
 | `OPENVIKING_MEMORY_ENABLED` | (auto) | Force on/off |
 | `OPENVIKING_DEBUG` | `false` | Write logs to `~/.openviking/logs/cc-hooks.log` |
+| `OPENVIKING_SEAL_SECRETS` | `false` | Seal secrets out of what the model sees (`sealSecrets`; needs OpenViking server 0.5.7 or newer) |
+| `OPENVIKING_ENROLL_TOOL_SECRETS` | `false` | With `sealSecrets` on, also store new secrets found in tool output (`enrollToolSecrets`) |
 
 Most of these knobs can also live in `ovcli.conf` under `plugin` — see [Plugin Settings](../configuration/02-client.md#plugin-settings). The two filter knobs are better written there, as JSON arrays, because the environment form is split on commas.
+
+Sealing secrets is described in [Seal secrets](#seal-secrets).
 
 If recall latency matters most, see [Low-latency recall](./01-overview.md#low-latency-recall) for the environment-variable and `ovcli.conf` settings that disable query expansion and result compression.
 
@@ -125,6 +129,23 @@ The plugin renders an OpenViking status indicator beneath your Claude Code input
 Under each answer, the plugin adds a one-line card listing the OpenViking sources that answer drew on: what auto-recall added to the prompt, and what Claude searched for and read on its own. For example: `OV · 8 sources · 4 past events · 3 work memories · 1 team doc · 1 read in full  [Expand]`. Expand a card with its button, or expand and collapse every card with `/openviking-usage expand` and `/openviking-usage collapse`. Cards are collapsed by default.
 
 The cards need Claude Code 2.1.286 or newer with plugin hooks modules enabled. On older versions, or with modules off, no cards are shown, and recall, capture and the other hooks work as before. See [Source cards](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#source-cards) in the plugin README.
+
+## Seal secrets {#seal-secrets}
+
+With `sealSecrets` on, the plugin replaces the secrets your OpenViking server knows with <code v-pre>{{ov_privacy:…}}</code> references in what Claude reads, and gives tools the real values back. It is off by default and needs OpenViking server 0.5.7 or newer. It runs on your machine.
+
+| Setting | Environment variable | Default | Effect |
+|---------|----------------------|---------|--------|
+| `sealSecrets` | `OPENVIKING_SEAL_SECRETS` | `false` | Turns sealing on |
+| `enrollToolSecrets` | `OPENVIKING_ENROLL_TOOL_SECRETS` | `false` | Also stores new secrets found in tool output |
+
+Set them in `ovcli.conf` (see the plugin README) or in the environment; a changed setting takes effect in a new session. Sealing runs in the plugin's hooks module, so it needs what [Source cards](#source-cards) need; where the module is not loaded, nothing is sealed.
+
+- **Sealed:** your prompt, tool results, and the files, reminders and hook context Claude Code attaches. New secrets are stored from your prompt, and from tool results only with `enrollToolSecrets`. A reference Claude writes in a tool call becomes the real value before the tool runs. The local transcript stores prompts and tool results with references; for attached files and reminders it keeps Claude Code's own record, with the original text.
+- **When sealing cannot be done** (a server older than 0.5.7, a failed `/health`, seal or resolve call), it stops: your prompt is not sent, a tool result is withheld, and a tool call whose references cannot be resolved does not run. The message says why. Upgrade the server or restore the connection, or turn `sealSecrets` off.
+- **Not covered:** the system prompt, slash-command arguments, skill bodies, and history written before sealing was turned on.
+
+Details: [plugin README](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/README.md#seal-secrets).
 
 ## Troubleshooting
 

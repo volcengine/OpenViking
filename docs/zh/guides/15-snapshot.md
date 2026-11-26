@@ -169,15 +169,21 @@ provider 取值：
 | Provider | 适用场景 |
 | --- | --- |
 | `sqlite` | 单机部署。默认数据库位于 `{storage.workspace}/_system/snapshot/log/snapshot_log.db`；如需覆盖，设置绝对路径 `git.snapshot.log.sqlite.path` |
-| `mysql` | 多实例部署。DSN 从 `git.snapshot.log.mysql.dsn_env` 指定的环境变量读取 |
+| `mysql` | 多实例部署。先建表，DSN 从 `git.snapshot.log.mysql.dsn_env` 指定的环境变量读取 |
 | `postgres` | 多实例部署。先建表，再配置 `git.snapshot.log.postgres.dsn_env` |
 | `none` | 关闭索引，保留原有历史扫描逻辑 |
 
-MySQL 示例：
+MySQL 部署时，由具备 DDL 权限的部署角色一次性建表：
 
 ```bash
+mysql "$OPENVIKING_SNAPSHOT_LOG_ADMIN_DSN" \
+  < openviking/service/sql/snapshot_log_mysql_init.sql
 export OPENVIKING_SNAPSHOT_LOG_DSN='mysql://user:password@host:3306/openviking'
 ```
+
+运行时不会创建或迁移 MySQL 表。运行账号只需要 `snapshot_log` 的 `SELECT`、`INSERT`
+权限，DDL 和 DML 权限可以分离。每行都带顶层 `service_name`，唯一键和全部索引都以它为
+前缀，因此多个 OV 部署可以共用同一个数据库而不串扰；每个部署使用独立库也仍然可行。
 
 PostgreSQL（14+）部署时，由管理员或 migration role 一次性建表：
 

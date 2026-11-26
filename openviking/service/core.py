@@ -1049,7 +1049,11 @@ class OpenVikingService:
             await self._expiry_runtime.start_roles()
         if self._runtime_config_manager is not None:
             self._runtime_config_manager.start_refresh_loop()
-        get_task_tracker().start_cleanup_loop()
+        get_task_tracker().start_cleanup_loop(
+            cleanup_history=(
+                self._server_config is None or self._server_config.enable_task_history_cleanup
+            )
+        )
         if scheduler:
             await self.start_scheduler()
         if queue_worker:

@@ -283,6 +283,18 @@ class VikingClient:
             peer=peer,
         )
 
+    async def seal(self, key, texts, timeout):
+        """Replace the caller's registered secrets in ``texts``; enroll-flagged ones add new."""
+        return await self.request(
+            "POST", "/api/v1/privacy-configs/seal", key, {"texts": texts}, timeout=timeout
+        )
+
+    async def resolve(self, key, reference, timeout):
+        """The caller's own field a reference names, value included."""
+        return await self.request(
+            "POST", "/api/v1/privacy-configs/resolve", key, {"selector": reference}, timeout=timeout
+        )
+
     async def write(self, key, session, messages):
         return await self.request(
             "POST", f"/api/v1/sessions/{session}/messages/batch", key, {"messages": messages}
@@ -355,6 +367,17 @@ class VikingClient:
     async def _working_memory_opt_in(self, key):
         """A commit writes working memory only where a policy asks for it."""
         return await self.supports(key, "working_memory_opt_in")
+
+    async def server_version(self, key):
+        """The version ``key``'s ``/health`` reports, from the identity cache; None if unknown.
+
+        For callers that treat an unreadable version as "not supported";
+        ``supports`` below is for callers that must not guess."""
+        try:
+            version = (await self.identify(key)).get("version")
+        except VikingError:
+            return None
+        return version if isinstance(version, str) else None
 
     async def supports(self, key, feature):
         """Whether the OpenViking ``key`` reaches has ``feature``, by the version ``/health``

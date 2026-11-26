@@ -125,7 +125,7 @@ POST /api/v1/privacy-configs/scan
 
 ### seal_privacy_texts()
 
-把调用方提交的文本中、调用者已登记的值（`credential` 和 `auto` 分类中的值）换成规范引用，并可选地登记识别出的新 token，例如在文本发给模型厂商之前调用。结果不受用户隐私 `mode` 影响，`mode` 为 `off` 时同样生效。供网关、agent 插件等客户端使用。
+把调用方提交的文本中、调用者已登记的值（`credential` 和 `auto` 分类中的值）换成规范引用，并可选地登记识别出的新 token，例如在文本发给模型厂商之前调用。结果不受用户隐私 `mode` 影响，`mode` 为 `off` 时同样生效。供网关、agent 插件等客户端使用。网关的用法见[封存密钥](../gateway/14-seal-secrets.md)。
 
 ```text
 POST /api/v1/privacy-configs/seal
@@ -755,3 +755,4 @@ ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credent
 - [隐私配置](../concepts/13-privacy.md) - 隐私敏感值的提取与还原机制
 - [文件系统](03-filesystem.md) - `read`/`write`/`ls` 等
 - [系统](07-system.md) - 服务状态与可观测性
+- [网关中的密钥封存](../gateway/14-seal-secrets.md) - 在模型请求中封存密钥

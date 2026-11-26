@@ -12,7 +12,7 @@ A [context profile](../guides/15-gateway.md#key-terms) is a named set of memory 
 
 In embedded dev mode, startup seeds `default_profile` into the `default` account once; later edits to `ov.conf` do not change that saved profile, so edit it in Studio.
 
-Besides its name and the [Let clients override settings](#client-overrides) switch, a profile has four sections. The defaults below are also the recommended settings:
+Besides its name, the [Let clients override settings](#client-overrides) switch and the two [Seal secrets](#seal-secrets) switches below it, a profile has four sections. The defaults below are also the recommended settings:
 
 | Section | What it does | Main settings and defaults |
 | --- | --- | --- |
@@ -124,15 +124,26 @@ The API name and range of every setting are in the [Configuration reference](13-
 X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
 ```
 
-- **What it can change.** Every setting except `name` and `client_overrides`. Fields the header leaves out keep the profile's values. Tool access only narrows: `disabled_tools` in the header adds to the tools the profile unchecks, and `gateway_tools` can turn OpenViking tools off but not back on, so `{"disabled_tools":[]}` or `{"gateway_tools":true}` offers nothing the profile withholds.
+- **What it can change.** Every setting except `name`, `client_overrides`, `seal_secrets` and `enroll_tool_secrets`. Fields the header leaves out keep the profile's values. Tool access only narrows: `disabled_tools` in the header adds to the tools the profile unchecks, and `gateway_tools` can turn OpenViking tools off but not back on, so `{"disabled_tools":[]}` or `{"gateway_tools":true}` offers nothing the profile withholds.
 - **When it applies.** As with a saved profile change, a conversation keeps the settings it started with: only the header on a conversation's first request shapes it. Later headers are still checked, so an invalid one, or any header once the switch is off, still fails.
 - **Errors.** With the switch off, any request that carries the header gets 403 `context_override_not_allowed` instead of being served with the saved settings. With it on, the request gets 400 `context_override_invalid` when the header:
   - is not a JSON object;
-  - names an unknown field, `name` or `client_overrides`;
+  - names an unknown field, `name`, `client_overrides`, `seal_secrets` or `enroll_tool_secrets`;
   - holds a value out of range.
 - **In the request log.** [Request details](10-overview-and-requests.md#request-details) list the names of the fields the client sent in the header, never their values.
 
 The switch defaults on, so anyone holding a key that uses the profile can change any field, including budgets, and withhold more tools. On the `default` profile, that includes every client using an [OpenViking API key directly](09-gateway-keys.md#openviking-keys). Turn it off on profiles that must stay locked. How each client sends the header is in [Override profile settings](03-connect-clients.md#override-profile-settings).
+
+## Seal secrets {#seal-secrets}
+
+Below **Let clients override settings**, two switches, both off by default, keep the user's registered secrets, and new tokens the user types, away from the model provider: the gateway replaces them with references before a request reaches the model, and gives client tools the real value. Sealing needs OpenViking Server 0.5.7 or later. Once it is on, a request that cannot be sealed is refused rather than sent unsealed.
+
+- **Seal secrets** (`seal_secrets`) turns sealing on.
+- **Also store secrets found in tool output** (`enroll_tool_secrets`) also stores new tokens from tool results and attached blocks.
+
+The second only works while **Seal secrets** is on. Both are read from the profile as it is now, also for conversations that started earlier, and `X-OpenViking-Context` cannot change them.
+
+How it works, what it covers and what happens when sealing cannot be done: [Secret sealing in the gateway](14-seal-secrets.md).
 
 ## Next steps {#next-steps}
 
