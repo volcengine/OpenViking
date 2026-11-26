@@ -372,6 +372,58 @@ async def test_full_device_flow(app_with_oauth, client):
 
 
 @pytest.mark.asyncio
+async def test_status_poll_mints_at_most_one_code(app_with_oauth, client, monkeypatch):
+    """One consent yields one authorization code even when two polls overlap.
+
+    Both polls can read the pending row after verification; only the poll that
+    atomically removes the row may mint a code. The second poll here is fed the
+    stale verified record to model the read that happened before the first poll
+    deleted it.
+    """
+    _, store, _ = app_with_oauth
+    client_id, pending_id, _, verifier = await _start_authorize(
+        client, redirect_uri="https://claude.ai/cb"
+    )
+
+    record = await store.load_pending_authorization(pending_id)
+    assert record is not None
+    verify = await client.post(
+        "/api/v1/auth/oauth-verify",
+        json={"code": record["display_code"], "decision": "approve"},
+    )
+    assert verify.status_code == 200, verify.text
+    stale = await store.load_pending_authorization(pending_id)
+    assert stale is not None and stale["verified"]
+
+    first = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "approved"
+
+    async def _stale_load(_pending_id):
+        return stale
+
+    monkeypatch.setattr(store, "load_pending_authorization", _stale_load)
+    second = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
+    assert second.status_code == 410
+    assert second.json()["status"] == "expired"
+
+    # The one code that was minted still exchanges successfully.
+    redirect_url = first.json()["redirect_url"]
+    auth_code = redirect_url.split("code=")[1].split("&")[0]
+    token_resp = await client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": auth_code,
+            "redirect_uri": "https://claude.ai/cb",
+            "client_id": client_id,
+            "code_verifier": verifier,
+        },
+    )
+    assert token_resp.status_code == 200, token_resp.text
+
+
+@pytest.mark.asyncio
 async def test_oauth_pending_info_endpoint(app_with_oauth, client):
     """Public GET endpoint returns minimum info for the Studio consent UI;
     never exposes display_code or the full redirect_uri."""
