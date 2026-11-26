@@ -941,12 +941,18 @@ class OpenVikingService:
 
         if queue_worker and should_preflight_mineru and pdf_config.mineru_endpoint:
             try:
-                await wait_for_mineru_ready(pdf_config.mineru_endpoint)
+                mode, _ = await wait_for_mineru_ready(
+                    pdf_config.mineru_endpoint,
+                    api_mode=pdf_config.mineru_api_mode,
+                    headers=pdf_config.mineru_headers,
+                )
+                if mode == "v1":
+                    pdf_config.validate_mineru_v1()
                 logger.info(
                     "MinerU preflight passed",
                     extra={"target_id": safe_uri_for_log(pdf_config.mineru_endpoint)},
                 )
-            except RuntimeError as exc:
+            except (RuntimeError, ValueError) as exc:
                 if pdf_config.strategy == "mineru":
                     await self._stop_expiry()
                     raise

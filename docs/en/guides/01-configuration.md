@@ -1118,14 +1118,12 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 ```json
 {
   "pdf": {
-    "strategy": "auto",
+    "strategy": "mineru",
     "mineru_endpoint": "http://127.0.0.1:8000",
+    "mineru_api_mode": "v1",
     "mineru_timeout": 300.0,
-    "mineru_bodys": {
-      "backend": "hybrid-auto-engine",
-      "lang_list": ["ch"],
-      "parse_method": "auto"
-    }
+    "mineru_ocr_mode": "auto",
+    "mineru_output_formats": ["zip"]
   }
 }
 ```
@@ -1134,10 +1132,22 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 |-----------|------|-------------|
 | `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
 | `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
-| `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
-| `mineru_bodys` | dict | MinerU API multipart form fields |
+| `mineru_timeout` | float | Parse timeout in seconds (default `300.0`) |
+| `mineru_api_mode` | str | API protocol: `auto` (default, checks V1 first), `v1`, or `legacy` |
+| `mineru_token` | str | Optional Bearer token for an authenticated self-hosted endpoint |
+| `mineru_tier` | str | V1 tier: `flash`, `basic`, `standard`, or `advanced`. Omit to use the server's choice |
+| `mineru_ocr_mode` | str | V1 OCR mode: `auto` (default), `txt`, or `ocr` |
+| `mineru_output_formats` | list[str] | V1 output: `["zip"]` (default, Markdown and images) or `["markdown"]` (text only) |
+| `mineru_bodys` | dict | Extra multipart form fields for legacy MinerU |
 
-**MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+**Self-hosted MinerU compatibility**
+
+- **V1** checks `GET /v1/health`. MinerU 4.0 deployments that expose the synchronous `POST /v1/file_parse` endpoint include 4.0.12. MinerU 4.1–4.2 servers and routers that advertise `task_output_formats` use `/v1/tasks` and return a ZIP with the `default` output. OpenViking imports its images when `"zip"` is selected. Use the main MinerU API or router base URL. [MinerU 4.1 migration guide](https://opendatalab.github.io/MinerU/reference/migration_4_1/)
+- **Legacy** supports 2.x/3.x `mineru-api` deployments that report `status: "healthy"` and a `protocol_version` on `GET /health` and return inline JSON from `POST /file_parse`. To keep a 3.x deployment, install `mineru[core]>=3.4,<4` and run `mineru-api`.
+
+When migrating to V1, remove `mineru_bodys`. Choose `mineru_tier` for the old `backend` setting, set `mineru_output_formats` to include images, and use `mineru_ocr_mode` to control OCR. V1 has no equivalent for the legacy `formula_enable`, `table_enable`, or `lang_list` fields.
+
+Choose `strategy: "mineru"` to use MinerU for every PDF. `strategy: "auto"` invokes MinerU when local conversion fails. `mineru_api_mode` selects only the remote protocol.
 
 ### External parser API (`parser_api`) {#parser-api}
 
