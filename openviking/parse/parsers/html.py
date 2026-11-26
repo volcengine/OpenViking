@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import List, Optional, Union
 
+from markdown_it import MarkdownIt
+
 from openviking.parse.base import (
     NodeType,
     ParseResult,
@@ -127,9 +129,26 @@ class HTMLParser(BaseParser):
         content = self._clean_markdown(content)
         if not content:
             content = self._extract_noscript_notice(html)
-        if title and title not in content:
+        if title and not self._has_title_heading(content, title):
             content = f"# {title}\n\n{content}" if content else f"# {title}"
         return content
+
+    @staticmethod
+    def _has_title_heading(markdown: str, title: str) -> bool:
+        """Check the visible text of document headings for an existing title."""
+        tokens = MarkdownIt("commonmark").parse(markdown)
+        for index, token in enumerate(tokens):
+            if token.type != "heading_open" or token.level != 0:
+                continue
+            inline = tokens[index + 1]
+            text = "".join(
+                child.content
+                for child in inline.children or []
+                if child.type in {"text", "code_inline"}
+            )
+            if text == title:
+                return True
+        return False
 
     @staticmethod
     def _extract_noscript_notice(html: str) -> str:

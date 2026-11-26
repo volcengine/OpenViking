@@ -5,6 +5,9 @@ non-empty Markdown after the underlying extractor changed from
 readabilipy + markdownify to trafilatura.
 """
 
+from bs4 import BeautifulSoup
+from markdown_it import MarkdownIt
+
 from openviking.parse.parsers.html import HTMLParser
 
 
@@ -50,3 +53,31 @@ def test_html_to_markdown_returns_empty_string_on_garbage_input():
     parser = HTMLParser()
     md = parser._html_to_markdown("<html><body></body></html>")
     assert md == ""
+
+
+def test_html_to_markdown_uses_heading_structure_to_deduplicate_title():
+    title = "Ocean Current Guide"
+    paragraph = (
+        "This guide describes coastal water movement in clear terms. "
+        "The examples explain how steady winds shape currents and influence the local climate. "
+        "Each section helps readers recognize familiar patterns in the ocean."
+    )
+    parser = HTMLParser()
+
+    for heading, body in [
+        ("", f"This is an overview of the {title}. {paragraph}"),
+        (f"<h1>{title}</h1>", paragraph),
+        ("<h1><em>Ocean</em> Current Guide</h1>", paragraph),
+        (f"<h2>{title} appendix</h2>", paragraph),
+    ]:
+        html = f"""<!doctype html>
+<html><head><title>{title}</title></head><body>
+<main>{heading}<p>{body}</p>
+<p>Coastal researchers compare changes in surface and deeper layers.
+Their observations help readers spot patterns across several seasons.</p>
+</main></body></html>"""
+        markdown = parser._html_to_markdown(html)
+        document = BeautifulSoup(MarkdownIt("commonmark").render(markdown), "html.parser")
+        headings = [heading.get_text() for heading in document.find_all("h1", recursive=False)]
+        assert headings == [title]
+        assert body in markdown
