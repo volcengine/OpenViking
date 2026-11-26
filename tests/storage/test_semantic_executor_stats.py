@@ -28,6 +28,7 @@ from openviking.storage.queuefs.semantic_executor import (
     SemanticTreeStats,
     SemanticTreeWork,
 )
+from openviking.storage.queuefs.semantic_ops.directory_generation import DirectoryGeneration
 from openviking.telemetry import (
     OperationTelemetry,
     bind_telemetry,
@@ -79,17 +80,19 @@ class _FakeProcessor:
             result["content"] = "x" * 100_000
         return result
 
-    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, **kwargs):
+    async def _load_indexed_file_summaries(self, file_paths, ctx=None):
+        return {}
+
+    async def _generate_directory_semantics(
+        self, dir_uri, file_summaries, children_abstracts, **kwargs
+    ):
         self.overview_inputs.append((dir_uri, file_summaries, children_abstracts, kwargs))
         if self.verify_streaming:
             assert all("content" not in item for item in file_summaries)
             assert all(
                 f"{dir_uri}/{item['name']}" in self.vectorized_files for item in file_summaries
             )
-        return "overview"
-
-    def _normalize_overview_generation(self, overview):
-        return overview, "abstract"
+        return DirectoryGeneration(overview="overview", abstract="abstract")
 
     async def _vectorize_directory(
         self,
@@ -290,7 +293,7 @@ async def test_incremental_wide_directory_samples_summary_inputs(monkeypatch, sa
     assert summaries[0]["name"] == "file-000.txt"
     assert summaries[-1]["name"] == "file-039.txt"
     assert "file-004.txt" not in {item["name"] for item in summaries}
-    assert coverage["total_files"] == 40
+    assert coverage["total_entries"] == 40
     overview = parse_abstract_overview(dict(fake_fs.writes)[f"{root_uri}/.overview.md"])
     assert overview.metadata["freshness"] == freshness_metadata(40, sample_limit)
 
@@ -341,8 +344,7 @@ async def test_non_recursive_memory_samples_files_and_child_abstracts_together(m
     assert child_abstracts == [
         {"name": "a-child", "abstract": "child a abstract"},
     ]
-    assert coverage["total_files"] == 4
-    assert coverage["total_children"] == 2
+    assert coverage["total_entries"] == 6
 
 
 @pytest.mark.asyncio

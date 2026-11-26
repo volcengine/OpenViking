@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openviking.core.context import ContextLevel
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
@@ -32,7 +33,6 @@ from openviking.session.memory.streaming_memory_updater import (
     StreamingMemoryUpdater,
     StreamingMemoryUpdaterConfig,
     StreamingMemoryUpdateResult,
-    acquire_memory_operation_lease,
     classify_memory_merge_mode,
     enforce_merge_group_peer_id,
     filter_valid_links,
@@ -44,6 +44,12 @@ from openviking.session.memory.streaming_memory_updater import (
     split_request_by_merge_group,
 )
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+from openviking.storage.abstract_overview import (
+    freshness_metadata,
+    parse_abstract_overview,
+    render_abstract_overview,
+)
+from openviking.storage.errors import LockAcquisitionError
 from openviking_cli.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config import OpenVikingConfig, OpenVikingConfigSingleton
@@ -120,22 +126,22 @@ class InMemoryVikingFS:
 class RecordingPathlockClient:
     def __init__(self, events: list[tuple]):
         self.events = events
+        self.active_paths: dict[str, set[str]] = {}
 
     async def pathlock_acquire_exact_batch(self, paths, timeout_secs=0.0):
+        if any(locked.intersection(paths) for locked in self.active_paths.values()):
+            raise LockAcquisitionError("Path is already locked")
         lease_number = len([event for event in self.events if event[0] == "acquire"]) + 1
         lease_ref = (
             "memory-batch-lease" if lease_number == 1 else f"memory-batch-lease-{lease_number}"
         )
         lease = {"lease_ref": lease_ref}
+        self.active_paths[lease_ref] = set(paths)
         self.events.append(("acquire", tuple(paths), timeout_secs))
         return lease
 
-    async def pathlock_acquire_exact_tree_batch(self, exact_paths, tree_paths, timeout_secs=0.0):
-        lease = {"lease_ref": "memory-mixed-lease"}
-        self.events.append(("acquire_mixed", tuple(exact_paths), tuple(tree_paths), timeout_secs))
-        return lease
-
     async def pathlock_release(self, lease):
+        del self.active_paths[lease["lease_ref"]]
         self.events.append(("release", lease))
 
 
@@ -396,21 +402,21 @@ async def test_deletes_reacquire_persisted_relation_locks_before_writes(monkeypa
         messages=messages,
     )
 
-    acquires = [event for event in fs.events if event[0] == "acquire_mixed"]
+    acquires = [event for event in fs.events if event[0] == "acquire"]
     writes = [event for event in fs.events if event[0] == "write"]
     assert len(acquires) == 2
     assert "/user/u/memories/cases/added.md" not in acquires[0][1]
     assert "/user/u/memories/cases/added.md" in acquires[1][1]
     assert writes
-    assert all(event[2] == {"lease_ref": "memory-mixed-lease"} for event in writes)
+    assert all(event[2] == {"lease_ref": "memory-batch-lease-2"} for event in writes)
     assert fs.events.index(acquires[1]) < min(fs.events.index(event) for event in writes)
     assert deleted_uri not in fs.files and purged_uri not in fs.files
     assert MemoryFileUtils.read(fs.files[new_neighbor_uri], uri=new_neighbor_uri).links == []
 
 
-async def test_streaming_apply_migrates_uri_under_one_stable_lease(monkeypatch):
-    source_uri = "viking://user/u/memories/notes/old.md"
-    target_uri = "viking://user/u/memories/notes/new.md"
+async def test_streaming_apply_migrates_between_directories_under_one_lease(monkeypatch):
+    source_uri = "viking://user/u/memories/notes/source/old.md"
+    target_uri = "viking://user/u/memories/notes/target/new.md"
     old_file = MemoryFile(
         uri=source_uri,
         content="old content",
@@ -454,77 +460,13 @@ async def test_streaming_apply_migrates_uri_under_one_stable_lease(monkeypatch):
     assert source_uri not in fs.files
     assert MemoryFileUtils.read(fs.files[target_uri]).extra_fields["note_name"] == "new"
     acquire = next(event for event in fs.events if event[0] == "acquire")
-    assert "/user/u/memories/notes/old.md" in acquire[1]
-    assert "/user/u/memories/notes/new.md" in acquire[1]
+    assert acquire[1] == (
+        "/user/u/memories/notes/source/old.md",
+        "/user/u/memories/notes/target/new.md",
+    )
     lease = {"lease_ref": "memory-batch-lease"}
     assert all(event[2] == lease for event in fs.events if event[0] == "write")
     assert fs.events[-1] == ("release", lease)
-
-
-async def test_cross_directory_migration_tree_locks_old_parent():
-    source_uri = "viking://user/u/memories/entities/人物/小美.md"
-    target_uri = "viking://user/u/memories/entities/person/xiaomei.md"
-    old_file = MemoryFile(
-        uri=source_uri,
-        content="小美",
-        memory_type="entities",
-        extra_fields={"category": "人物", "name": "小美"},
-    )
-    fs = PathlockedInMemoryVikingFS({source_uri: MemoryFileUtils.write(old_file)})
-    operations = ResolvedOperations(
-        upsert_operations=[
-            ResolvedOperation(
-                old_memory_file_content=old_file,
-                memory_type="entities",
-                uris=[target_uri],
-                memory_fields={"category": "person", "name": "xiaomei"},
-            )
-        ],
-        delete_file_contents=[],
-        errors=[],
-    )
-
-    lease = await acquire_memory_operation_lease(operations, fs, _ctx())
-
-    source_directory_path = "/user/u/memories/entities/人物"
-    target_file_path = "/user/u/memories/entities/person/xiaomei.md"
-    mixed = next(event for event in fs.events if event[0] == "acquire_mixed")
-    assert mixed[2] == (source_directory_path,)
-    assert target_file_path in mixed[1]
-    assert not any(path.startswith(f"{source_directory_path}/") for path in mixed[1])
-    assert lease == {"lease_ref": "memory-mixed-lease"}
-
-
-async def test_same_directory_migration_keeps_exact_locks():
-    source_uri = "viking://user/u/memories/entities/person/小美.md"
-    target_uri = "viking://user/u/memories/entities/person/xiaomei.md"
-    old_file = MemoryFile(
-        uri=source_uri,
-        content="小美",
-        memory_type="entities",
-        extra_fields={"category": "person", "name": "小美"},
-    )
-    fs = PathlockedInMemoryVikingFS({source_uri: MemoryFileUtils.write(old_file)})
-    operations = ResolvedOperations(
-        upsert_operations=[
-            ResolvedOperation(
-                old_memory_file_content=old_file,
-                memory_type="entities",
-                uris=[target_uri],
-                memory_fields={"category": "person", "name": "xiaomei"},
-            )
-        ],
-        delete_file_contents=[],
-        errors=[],
-    )
-
-    lease = await acquire_memory_operation_lease(operations, fs, _ctx())
-
-    assert not any(event[0] == "acquire_mixed" for event in fs.events)
-    exact = next(event for event in fs.events if event[0] == "acquire")
-    assert "/user/u/memories/entities/person/小美.md" in exact[1]
-    assert "/user/u/memories/entities/person/xiaomei.md" in exact[1]
-    assert lease == {"lease_ref": "memory-batch-lease"}
 
 
 async def test_operation_to_patch_skips_failed_field_preview_update():
@@ -584,17 +526,20 @@ async def test_operation_to_patch_skips_failed_field_preview_update():
 
 
 @pytest.mark.asyncio
-async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
-    fs = PathlockedInMemoryVikingFS({})
+async def test_streaming_memory_updater_records_directory_changes_after_write(monkeypatch):
+    directory = "viking://user/u/memories/cases"
+    sidecars = {".abstract.md": ContextLevel.ABSTRACT, ".overview.md": ContextLevel.OVERVIEW}
+    fs = PathlockedInMemoryVikingFS(
+        {
+            f"{directory}/{name}": render_abstract_overview(
+                level, directory, "Existing cases", {"freshness": freshness_metadata(160, 32)}
+            )
+            for name, level in sidecars.items()
+        }
+    )
     fs.search = AsyncMock(return_value=[])
-    monkeypatch.setattr(
-        "openviking.session.memory.streaming_memory_updater.get_viking_fs",
-        lambda: fs,
-    )
-    monkeypatch.setattr(
-        "openviking.session.memory.memory_updater.get_viking_fs",
-        lambda: fs,
-    )
+    monkeypatch.setattr("openviking.storage.viking_fs._base._instance", fs)
+    monkeypatch.setattr(OpenVikingConfigSingleton, "_instance", OpenVikingConfig())
 
     updater = StreamingMemoryUpdater(
         registry=_registry(),
@@ -620,20 +565,10 @@ async def test_streaming_memory_updater_submit_applies_fast_path(monkeypatch):
     assert result.operations.upsert_operations[0].memory_type == "cases"
     written_uri = "viking://user/u/memories/cases/重复预订处理.md"
     assert result.apply_result.written_uris == [written_uri]
-    assert fs.writes
-    _, written_content, _ = fs.writes[0]
-    assert "重复预订处理" in written_content
-    lease = {"lease_ref": "memory-batch-lease"}
-    assert fs.events[0] == (
-        "acquire",
-        (
-            "/user/u/memories/cases/.overview.md",
-            "/user/u/memories/cases/重复预订处理.md",
-        ),
-        300.0,
-    )
-    assert ("write", written_uri, lease) in fs.events
-    assert fs.events[-1] == ("release", lease)
+    assert "重复预订处理" in fs.files[written_uri]
+    for name in sidecars:
+        document = parse_abstract_overview(fs.files[f"{directory}/{name}"])
+        assert document.metadata["freshness"]["pending_child_changes"] == 1
 
 
 @pytest.mark.asyncio

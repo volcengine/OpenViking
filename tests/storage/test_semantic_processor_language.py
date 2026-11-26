@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openviking.prompts import render_prompt
+from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.utils.language import (
     _detect_language_from_text,
     _language_from_locale_value,
@@ -16,6 +16,8 @@ from openviking.session.memory.utils.language import (
     resolve_output_language,
     resolve_output_language_from_conversation,
 )
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.parser_config import SemanticConfig
 
 
 class _TestVLMResolver:
@@ -172,7 +174,8 @@ class TestOverviewGenerationFlow:
             ("", "", "en"),
             ("这是用于查询任务状态和统计运行时间的客户端代码。", "", "zh-CN"),
             (
-                "Este documento descreve as preferências do usuário e o projeto para completar.",
+                "Este documento descreve as preferências do usuário e o projeto para completar. "
+                "Ele reúne informações importantes sobre funcionalidades e configuração.",
                 "",
                 "pt",
             ),
@@ -188,68 +191,32 @@ class TestOverviewGenerationFlow:
         skeleton = "package client\nimport (\n" + "\n".join(imports) + "\n)\nfunc NewClient()"
         config = MagicMock()
         config.output_language_override = override
-        config.semantic.max_overview_prompt_chars = 60_000
-        config.semantic.overview_batch_size = 50
+        config.semantic = SemanticConfig()
         config.vlm.get_completion_async = AsyncMock(return_value="# client\nClient overview.")
 
-        with patch(
-            "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-            return_value=config,
+        with (
+            patch(
+                "openviking.storage.queuefs.semantic_processor.get_openviking_config",
+                return_value=config,
+            ),
+            patch(
+                "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+                return_value=MagicMock(read_file=AsyncMock(side_effect=FileNotFoundError)),
+            ),
         ):
-            await SemanticProcessor(vlm_resolver=_TestVLMResolver(config.vlm))._generate_overview(
+            await SemanticProcessor(
+                vlm_resolver=_TestVLMResolver(config.vlm)
+            )._generate_directory_semantics(
                 "viking://resources/example/client",
                 [{"name": "client.go", "summary": description + "\n" + skeleton}],
                 [],
+                total_entries=1,
+                ctx=RequestContext(user=UserIdentifier("test", "user"), role=Role.USER),
             )
 
         prompt = config.vlm.get_completion_async.call_args.args[0]
         assert f"Output Language: {expected_language}" in prompt
-        assert all(path in prompt for path in imports)
-        headings = (
-            ("简要描述", "快速导航", "详细说明", "目录覆盖")
-            if expected_language == "zh-CN"
-            else (
-                "Brief Description",
-                "Quick Navigation",
-                "Detailed Description",
-                "Directory Coverage",
-            )
-        )
-        assert all(heading in prompt for heading in headings)
-
-    def test_overview_generation_prompt_preserves_repository_hierarchy(self):
-        prompt = render_prompt(
-            "semantic.overview_generation",
-            {
-                "dir_name": "repo-root",
-                "file_summaries": "[1] pyproject.toml: Python project config",
-                "children_abstracts": "- backend/: API service\n- frontend/: web UI",
-                "output_language": "en",
-            },
-        )
-
-        assert "Relationship rules:" in prompt
-        assert (
-            "- Treat child directories as parts of the same repository unless the summaries clearly show they are independent projects."
-            in prompt
-        )
-        assert (
-            "- Do not describe every child directory as an independent project by default."
-            in prompt
-        )
-        assert (
-            "- When the summaries indicate a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders."
-            in prompt
-        )
-        assert (
-            "- Describe only what the provided summaries state; do not invent entities, facts, or relationships not present in them."
-            in prompt
-        )
-        assert "Before output, remove any named entity absent from the provided summaries" in prompt
-        assert "never fill gaps with outside knowledge" in prompt
-        assert "Who it's suitable for, if stated in the provided summaries" in prompt
-        assert "keep this paragraph useful as a standalone retrieval abstract" in prompt
-        assert "**Directory Coverage** (H2)" in prompt
+        assert all(path.strip('"') in prompt for path in imports)
 
 
 class LanguageAwareMockVLM:
@@ -374,7 +341,8 @@ class TestOutputLanguageOverride:
             "openviking.storage.queuefs.semantic_processor.get_openviking_config", lambda: cluster
         )
         monkeypatch.setattr(
-            "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: MagicMock()
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            lambda: MagicMock(read_file=AsyncMock(side_effect=FileNotFoundError)),
         )
         manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
         await manager.patch_account("a", {"output_language_override": "en"})
@@ -404,8 +372,8 @@ class TestOutputLanguageOverride:
             vlm.language_responses["zh-CN"],
         ]
         await manager.patch_account("a", {"output_language_override": ""})
-        await processor._generate_overview(
-            "viking://resources/project", [summaries[1]], [], ctx=contexts[0]
+        await processor._generate_directory_semantics(
+            "viking://resources/project", [summaries[1]], [], ctx=contexts[0], total_entries=1
         )
         assert "Output Language: zh-CN" in vlm.prompts_received[-1]
         assert cluster.output_language_override == "en"

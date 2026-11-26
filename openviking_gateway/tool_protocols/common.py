@@ -228,6 +228,7 @@ class ToolProtocol(ABC):
 
     def __init__(self, body: dict):
         self.body = body
+        self.gateway_tools: set[str] = set()
         self.identifier = self.id_prefix + "ovgw-" + uuid.uuid4().hex
         self.visible: list[dict] = []
         self.started = False
