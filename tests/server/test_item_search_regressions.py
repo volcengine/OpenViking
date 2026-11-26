@@ -120,6 +120,20 @@ async def test_api_key_item_declarations_use_normal_directory_records(
         ]
         assert [(row["id"], row["level"]) for row in declarations] == [(expected_id, 0)]
 
+    skill_root = added.json()["result"]["uri"]
+    skill_id = vector_record_id(owner.account_id, skill_root, 0)
+    skill_uuid = api.rows[skill_id]["item_uuids"]
+    updated = await client.put(
+        "/api/v1/skills/item-package",
+        json={
+            "data": "---\nname: item-package\ndescription: Updated package\n---\n# Updated\n",
+            "wait": True,
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert api.rows[skill_id]["item_uuids"] == skill_uuid
+    assert "Updated package" in api.rows[skill_id]["abstract"]
+
 
 @pytest.mark.asyncio
 async def test_item_root_reference_does_not_authorize_root_content(service):
@@ -255,7 +269,7 @@ async def test_parent_reimport_does_not_delete_independent_child_item(service, t
     assert await service.viking_fs.exists(child_content_uri, ctx=owner)
     shutil.rmtree(source / "nested")
     result = await service.resources.add_resource(
-        str(source), to=root, ctx=owner, wait=True, as_item=True
+        str(source), to=root, ctx=owner, wait=True, build_index=False
     )
     assert result["status"] == "error", result
     exists = await service.viking_fs.exists(child_content_uri, ctx=owner)

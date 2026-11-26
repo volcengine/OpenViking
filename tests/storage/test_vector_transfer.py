@@ -25,7 +25,7 @@ from openviking.storage.viking_vector_index_backend import (
     VikingVectorIndexBackend,
     _SingleAccountBackend,
 )
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, UnimplementedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
@@ -83,6 +83,9 @@ class _MemoryTransferBackend(VikingVectorIndexBackend):
     async def _get_backend_for_context(self, ctx):
         del ctx
         return SimpleNamespace(strict_query=self._query)
+
+    async def catalog_execute(self, request, *, ctx):
+        raise UnimplementedError("In-memory transfer backend has no Catalog")
 
     async def _query(
         self, *, filter, limit=10, offset=0, output_fields=None, order_by=None, order_desc=False

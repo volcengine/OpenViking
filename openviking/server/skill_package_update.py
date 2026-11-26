@@ -44,4 +44,6 @@ async def clear_skill_package_contents(
             ctx=ctx,
             lease_ref=lease_ref,
         )
-    await viking_fs._delete_from_vector_store([root_uri, f"{root_uri}/SKILL.md"], ctx=ctx)
+    await viking_fs._delete_from_vector_store(
+        [root_uri, f"{root_uri}/SKILL.md"], ctx=ctx, preserve_item_root=root_uri
+    )

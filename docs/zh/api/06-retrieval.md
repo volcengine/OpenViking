@@ -69,7 +69,7 @@ VikingDB 在目录的 L0 记录中保存 Item UUID 和属性。通过资源导�
 
 已有 Item 的显式 `mkdir` 重试会继续初始化：补写缺失摘要，已有摘要原文保持不变，并重新提交现有目录 L0 索引入队；失败仍返回错误。UUID、属性及成员文件保持不变，不会扫描或回刷其他 Item。
 
-`mkdir(as_item=true)` 的 HTTP 成功结果包含 `uri`、`item_uuid` 和 `item_attrs`，用于确认声明成功；普通 `mkdir` 仍只返回 `uri`，Python SDK 的返回值仍为 `None`。SDK／CLI 收到缺少 UUID 的旧服务端响应时会报 `FAILED_PRECONDITION`；旧服务端可能已创建普通目录，需核对目标 URI 后升级服务端，不会自动清理。确认复用已有声明结果，不增加探测请求或存储读取。普通 `mkdir` 保留忽略无关额外字段的既有行为，但拒绝外部指定 `item_uuid`／`item_uuids`。
+`mkdir(as_item=true)` 的 HTTP 成功结果包含 `uri`、`item_uuid` 和 `item_attrs`，用于确认声明成功；普通 `mkdir` 仍只返回 `uri`，Python SDK 的返回值仍为 `None`。SDK／CLI 收到缺少 UUID 的旧服务端响应时会报 `FAILED_PRECONDITION`；旧服务端可能已创建普通目录，需核对目标 URI 后升级服务端，不会自动清理。确认复用已有声明结果，不增加探测请求或存储读取。普通 `mkdir` 沿用忽略额外字段的行为。Item 创建请求中的 `item_uuid`／`item_uuids` 由服务端保留。
 
 开源 Python 与原生引擎需配套使用。Item Search 尚未上线，不提供早期草稿数据格式的兼容读取或迁移。
 

@@ -242,7 +242,12 @@ async def test_mkdir_preserves_legacy_ignored_fields(client):
     uri = "viking://resources/legacy-mkdir-extra"
     response = await client.post(
         "/api/v1/fs/mkdir",
-        json={"uri": uri, "request_id": "caller-trace-1"},
+        json={
+            "uri": uri,
+            "request_id": "caller-trace-1",
+            "item_uuid": "legacy-extra-field",
+            "item_uuids": ["legacy-extra-field"],
+        },
     )
     assert response.status_code == 200, response.text
     assert response.json()["result"] == {"uri": uri}

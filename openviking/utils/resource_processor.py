@@ -546,20 +546,6 @@ class ResourceProcessor:
                         else {}
                     ),
                 )
-            if target_preexisting:
-                await validate_resource_item_update(
-                    self.vikingdb,
-                    root_uri,
-                    ctx,
-                    as_item=as_item,
-                    item_attrs=item_attrs,
-                    is_dir=not root_is_file,
-                    directory_uris=[
-                        root_uri.rstrip("/") + "/" + path
-                        for path, entry in rnfv.formal.entries.items()
-                        if path and entry.is_dir
-                    ],
-                )
             from collections import Counter
 
             n_files, n_dirs, _ = count_tree_entry_kinds(rnfv.new.entries)
@@ -594,6 +580,26 @@ class ResourceProcessor:
                     ingest_options=ingest_options,
                     source_metadata=source_metadata,
                     root_is_file=root_is_file,
+                )
+            replaces_directory = any(
+                action.old_kind == "directory"
+                and action.operation
+                in {ContentTreeOperation.DELETE, ContentTreeOperation.REPLACE_KIND}
+                for action in context_plan.content_tree_actions
+            )
+            if target_preexisting and (as_item or replaces_directory):
+                await validate_resource_item_update(
+                    self.vikingdb,
+                    root_uri,
+                    ctx,
+                    as_item=as_item,
+                    item_attrs=item_attrs,
+                    is_dir=not root_is_file,
+                    directory_uris=[
+                        root_uri.rstrip("/") + "/" + path
+                        for path, entry in rnfv.formal.entries.items()
+                        if path and entry.is_dir
+                    ],
                 )
         except Exception:
             telemetry.set(
@@ -1172,18 +1178,20 @@ class ResourceProcessor:
                             uri=root_uri,
                             root_is_file=root_is_file,
                         )
-                    # Recheck the final URI under the lease, bypassing any
-                    # cached result from target resolution.
-                    try:
-                        await viking_fs._async_agfs.stat(dst_path, bypass_cache=True)
-                    except AGFSNotFoundError:
-                        pass
-                    else:
-                        if candidate_uri:
-                            raise AGFSAlreadyExistsError(
-                                f"Auto-named resource target is already occupied: {root_uri}"
-                            )
-                        target_preexisting = True
+                    if as_item:
+                        # The first declaration needs a fresh existence check under the lease.
+                        try:
+                            await viking_fs._async_agfs.stat(dst_path, bypass_cache=True)
+                        except AGFSNotFoundError:
+                            pass
+                        else:
+                            if candidate_uri:
+                                raise AGFSAlreadyExistsError(
+                                    f"Auto-named resource target is already occupied: {root_uri}"
+                                )
+                            target_preexisting = True
+                    elif not candidate_uri:
+                        target_preexisting = await viking_fs.exists(root_uri, ctx=ctx)
                     if preacquired_lock is None:
                         newly_reserved = not target_preexisting
                     if acl is not None:

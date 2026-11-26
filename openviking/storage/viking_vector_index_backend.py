@@ -2934,7 +2934,12 @@ class VikingVectorIndexBackend:
         )
 
     async def delete_uris(
-        self, ctx: RequestContext, uris: List[str], *, recursive: bool = False
+        self,
+        ctx: RequestContext,
+        uris: List[str],
+        *,
+        recursive: bool = False,
+        preserve_item_root: str | None = None,
     ) -> int:
         """Return the number of records submitted for URI-scoped deletion."""
         deleted_count = 0
@@ -2950,8 +2955,13 @@ class VikingVectorIndexBackend:
                 Eq("account_id", ctx.account_id),
                 Or([Eq("uri", uri), In("uri", [f"{uri}/"])]),
             ]
-
             backend = await self._get_backend_for_context(ctx)
+            if uri == preserve_item_root and backend._mode in {"vikingdb", "volcengine"}:
+                # The point read sees the declaration stored on L0, without inherited UUIDs.
+                root_id = vector_record_id(ctx.account_id, uri, 0)
+                rows = await backend.get_strict([root_id])
+                if any(row.get("item_uuids") for row in rows):
+                    conds.append(RawDSL({"op": "must_not", "field": "level", "conds": [0]}))
             deleted_count += await backend.delete_by_filter(And(conds))
         return deleted_count
 

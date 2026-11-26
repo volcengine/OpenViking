@@ -1647,15 +1647,15 @@ pub async fn handle_find(
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
-    let has_filter = filter.is_some()
-        || context_type
-            .as_ref()
-            .is_some_and(|values| !values.is_empty())
-        || tags.as_ref().is_some_and(|values| !values.is_empty());
-    if query.trim().is_empty() && image.is_none() && !has_filter {
+    let has_item_filter = search_as_item
+        && (filter.is_some()
+            || context_type
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            || tags.as_ref().is_some_and(|values| !values.is_empty()));
+    if query.trim().is_empty() && image.is_none() && !has_item_filter {
         return Err(Error::Client(
-            "Search query or --image must not be empty unless --filter, --tags, or --context-type is provided."
-                .to_string(),
+            "Search query or --image must not be empty.".to_string(),
         ));
     }
     validate_cli_item_search(
@@ -1753,15 +1753,15 @@ pub async fn handle_search(
     ctx: CliContext,
 ) -> Result<()> {
     let query = query.unwrap_or_default();
-    let has_filter = filter.is_some()
-        || context_type
-            .as_ref()
-            .is_some_and(|values| !values.is_empty())
-        || tags.as_ref().is_some_and(|values| !values.is_empty());
-    if query.trim().is_empty() && image.is_none() && !has_filter {
+    let has_item_filter = search_as_item
+        && (filter.is_some()
+            || context_type
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            || tags.as_ref().is_some_and(|values| !values.is_empty()));
+    if query.trim().is_empty() && image.is_none() && !has_item_filter {
         return Err(Error::Client(
-            "Search query or --image must not be empty unless --filter, --tags, or --context-type is provided."
-                .to_string(),
+            "Search query or --image must not be empty.".to_string(),
         ));
     }
     if search_type == "keywords" && image.is_some() {
