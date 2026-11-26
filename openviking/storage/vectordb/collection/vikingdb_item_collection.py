@@ -4,8 +4,8 @@
 
 from typing import Any, Dict, List, Optional
 
-from .vikingdb_catalog import CATALOG_LEVEL, VikingDBCatalog, catalog_mode, is_account_sharded
-from .vikingdb_query_scope import is_search_or_agg, with_account_partition
+from .vikingdb_catalog import VikingDBCatalog, is_account_sharded
+from .vikingdb_query_scope import is_search_or_agg, with_account_partition, without_catalog_rows
 
 
 class VikingDBItemCollectionMixin:
@@ -15,11 +15,6 @@ class VikingDBItemCollectionMixin:
     def _initialize_item_collection(self, index_name: str) -> None:
         self.catalog_index_name = index_name
         self._catalog = VikingDBCatalog(self)
-        meta = self._item_metadata()
-        self._has_catalog_metadata = meta is None or (
-            catalog_mode(meta) is not None
-            and any(f.get("FieldName") == "level" for f in meta.get("Fields", []))
-        )
 
     def _prepare_data_request(
         self, path: str, data: Dict[str, Any], *, include_catalog: bool = False
@@ -28,7 +23,11 @@ class VikingDBItemCollectionMixin:
         meta = self._item_metadata()
         account_sharded = meta is not None and is_account_sharded(meta)
         if is_query:
-            data = with_account_partition(data, require_scope=account_sharded)
+            shard_field = self.meta_data.get("ShardBy", self.meta_data.get("PartitionBy"))
+            if account_sharded or (meta is None and shard_field in (None, "account_id")):
+                data = with_account_partition(data, require_scope=account_sharded)
+            if not include_catalog:
+                data = without_catalog_rows(data, self.meta_data)
         elif meta is None or account_sharded:
             if (
                 meta is not None
@@ -47,18 +46,6 @@ class VikingDBItemCollectionMixin:
                     **data,
                     "data": [{k: v for k, v in row.items() if k != "account_id"} for row in rows],
                 }
-        if (
-            is_query
-            and not include_catalog
-            and getattr(self, "_has_catalog_metadata", False)
-            and (meta is not None or data.get("partition"))
-        ):
-            hidden = {"op": "must_not", "field": "level", "conds": [CATALOG_LEVEL]}
-            condition = data.get("filter")
-            data = {
-                **data,
-                "filter": {"op": "and", "conds": [condition, hidden]} if condition else hidden,
-            }
         return data
 
     def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:

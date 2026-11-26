@@ -294,6 +294,7 @@ class VikingDBCatalog:
                         "offset": offset,
                         "output_fields": ["uri", "item_uuids"],
                     },
+                    include_catalog=True,
                 )
                 page = result.get("data")
                 if not isinstance(page, list):

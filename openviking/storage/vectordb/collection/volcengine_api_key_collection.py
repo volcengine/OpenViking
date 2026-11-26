@@ -24,6 +24,7 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
 from openviking.utils.search_filters import VALID_TIME_FIELDS
 from openviking_cli.utils.logger import get_logger
 
+from .vikingdb_catalog import is_account_sharded
 from .vikingdb_item_collection import VikingDBItemCollectionMixin
 
 logger = get_logger(__name__)
@@ -185,8 +186,21 @@ class VolcengineApiKeyCollection(VikingDBItemCollectionMixin, ICollection):
         safe_data = self._sanitize_payload(data)
         if isinstance(safe_data, dict) and "filter" in safe_data:
             safe_data["filter"] = self._normalize_date_time_filter(safe_data["filter"])
+        has_explicit_partition = "partition" in safe_data
         safe_data = self._prepare_data_request(path, safe_data, include_catalog=include_catalog)
         response = self.data_client.do_req("POST", path, req_body=safe_data)
+        if (
+            response.status_code == 400
+            and not include_catalog
+            and not has_explicit_partition
+            and "partition" in safe_data
+            and not is_account_sharded(self.meta_data)
+            and "partition_by not found" in response.text
+        ):
+            # The data-plane API key cannot describe an existing index. Its
+            # unsharded endpoint may reject an inferred partition.
+            safe_data = {key: value for key, value in safe_data.items() if key != "partition"}
+            response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
             raise self._build_response_error(response, path)
         try:

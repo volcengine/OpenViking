@@ -144,7 +144,7 @@ def test_api_key_without_metadata_forwards_item_request_and_keeps_unscoped_ordin
     collection.data_client = Client({"data": []})
     collection.search_by_vector("default", dense_vector=[1.0, 0.0])
     body = collection.data_client.calls[0][2]
-    assert body.get("filter") is None
+    assert body["filter"] == {"op": "must_not", "field": "level", "conds": [-1]}
     assert "partition" not in body and "group_by" not in body
     condition = {"op": "must", "field": "account_id", "conds": ["a"]}
     collection.data_client.result = {"groups": []}

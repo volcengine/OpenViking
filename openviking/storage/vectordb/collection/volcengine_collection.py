@@ -14,9 +14,11 @@ from openviking.storage.vectordb.collection.result import (
     SearchResult,
     parse_remote_search_result,
 )
+from openviking.storage.vectordb.collection.vikingdb_catalog import is_account_sharded
 from openviking.storage.vectordb.collection.vikingdb_query_scope import (
     is_search_or_agg,
     with_account_partition,
+    without_catalog_rows,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import (
     VIKING_DB_VERSION,
@@ -297,7 +299,9 @@ class VolcengineCollection(ICollection):
         if isinstance(safe_data, dict) and "filter" in safe_data:
             safe_data["filter"] = self._normalize_date_time_filter(safe_data["filter"])
         if is_search_or_agg(path):
-            safe_data = with_account_partition(safe_data)
+            if is_account_sharded(self.meta_data):
+                safe_data = with_account_partition(safe_data)
+            safe_data = without_catalog_rows(safe_data, self.meta_data)
         response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
             error = self._build_response_error(response, path)
@@ -341,11 +345,14 @@ class VolcengineCollection(ICollection):
             "ProjectName": self.project_name,
             "CollectionName": self.collection_name,
         }
-        return self._console_get(
+        metadata = self._console_get(
             params,
             action="GetVikingdbCollection",
             raise_on_error=raise_on_error,
         )
+        if metadata and metadata.get("CollectionName") == self.collection_name:
+            self.meta_data = {**self.meta_data, **metadata}
+        return metadata
 
     def close(self):
         pass

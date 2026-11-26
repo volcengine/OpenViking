@@ -28,12 +28,21 @@ from openviking_cli.utils.config.vectordb_config import (
 )
 
 
-@pytest.mark.parametrize("backend", ["private", "private_legacy", "api_key", "signed"])
-def test_vikingdb_searches_and_aggregation_preserve_account_filter_and_add_partition(backend):
+@pytest.mark.parametrize(
+    ("backend", "shard_by"),
+    [
+        ("private", "account_id"),
+        ("private", None),
+        ("api_key", None),
+        ("signed", "account_id"),
+        ("signed", None),
+    ],
+)
+def test_vikingdb_ordinary_queries_route_by_schema_and_hide_catalog(backend, shard_by):
     meta = {"CollectionName": "context"}
+    if shard_by is not None:
+        meta["ShardBy"] = shard_by
     if backend == "private":
-        meta["ShardBy"] = "account_id"
-    if backend.startswith("private"):
         collection = VikingDBCollection("https://unused.invalid", meta_data=meta)
     elif backend == "api_key":
         collection = VolcengineApiKeyCollection("test-key", host="unused.invalid", meta_data=meta)
@@ -46,7 +55,7 @@ def test_vikingdb_searches_and_aggregation_preserve_account_filter_and_add_parti
         calls.append((method, path, req_body))
         return SimpleNamespace(status_code=200, json=lambda: {"result": {}})
 
-    if backend.startswith("private"):
+    if backend == "private":
         collection.client = SimpleNamespace(do_req=record)
     else:
         collection.data_client = SimpleNamespace(do_req=record)
@@ -71,23 +80,52 @@ def test_vikingdb_searches_and_aggregation_preserve_account_filter_and_add_parti
         "scalar",
         "agg",
     ]
+    hidden = {"op": "must_not", "field": "level", "conds": [-1]}
     for _, _, body in calls:
-        assert body["partition"] == "tenant-a"
-        assert "partition_by" not in body
-        if backend == "api_key":
-            # The API-key client already adds the Catalog exclusion.
-            assert body["filter"]["conds"][0] == filters
+        if shard_by == "account_id" or backend == "api_key":
+            assert body["partition"] == "tenant-a"
         else:
-            assert body["filter"] == filters
+            assert "partition" not in body
+        assert "partition_by" not in body
+        assert body["filter"] == {"op": "and", "conds": [filters, hidden]}
 
-    if backend != "private":
+    if backend == "private" and shard_by is None:
+        collection.meta_data["ScalarIndex"] = ["account_id"]
+        collection.aggregate_data("index", filters=filters)
+        assert calls[-1][2]["filter"] == filters
+
+    if not (backend == "private" and shard_by == "account_id"):
         cross_account = {
             "op": "or",
             "conds": [account, {"op": "must", "field": "account_id", "conds": ["tenant-b"]}],
         }
         collection.aggregate_data("index", filters=cross_account)
-        assert calls[-1][2]["filter"] == cross_account
         assert "partition" not in calls[-1][2]
+
+
+def test_api_key_retries_ordinary_query_when_unsharded_index_rejects_inferred_partition():
+    collection = VolcengineApiKeyCollection(
+        "test-key", host="unused.invalid", meta_data={"CollectionName": "context"}
+    )
+    calls = []
+
+    def record(method, path, *, req_body):
+        calls.append(req_body)
+        if "partition" in req_body:
+            return SimpleNamespace(status_code=400, text="invalid request, partition_by not found")
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"result": {"data": [{"id": "existing", "score": 1}]}},
+        )
+
+    collection.data_client = SimpleNamespace(do_req=record)
+    account = {"op": "must", "field": "account_id", "conds": ["tenant-a"]}
+    result = collection.search_by_vector("index", dense_vector=[1.0], filters=account)
+
+    assert [item.id for item in result.data] == ["existing"]
+    assert len(calls) == 2
+    assert calls[0] == {**calls[1], "partition": "tenant-a"}
+    assert calls[1]["filter"]["conds"][0] == account
 
 
 def test_console_client_prepare_request_includes_session_token():
@@ -572,7 +610,7 @@ def test_volcengine_query_preserves_time_filters_and_applies_decay(monkeypatch):
             }
         ]
     }
-    assert captured["req_body"]["filter"] == {
+    assert captured["req_body"]["filter"]["conds"][0] == {
         "op": "and",
         "conds": [
             {
@@ -626,7 +664,7 @@ def test_volcengine_collection_date_time_filter_is_idempotent(monkeypatch):
         },
     )
 
-    assert captured["req_body"]["filter"] == {
+    assert captured["req_body"]["filter"]["conds"][0] == {
         "op": "time_range",
         "field": "updated_at",
         "gte": "2026-08-10T00:00:00+00:00",
@@ -766,7 +804,7 @@ def test_volcengine_api_key_collection_uses_date_time_filter_operator(monkeypatc
     )
 
     assert captured["path"] == "/api/vikingdb/data/agg"
-    assert captured["req_body"]["filter"] == {
+    assert captured["req_body"]["filter"]["conds"][0] == {
         "op": "and",
         "conds": [
             {
@@ -823,7 +861,7 @@ def test_volcengine_api_key_collection_date_time_filter_is_idempotent(monkeypatc
         },
     )
 
-    assert captured["req_body"]["filter"] == {
+    assert captured["req_body"]["filter"]["conds"][0] == {
         "op": "time_range",
         "field": "updated_at",
         "gte": "2026-08-10T00:00:00+00:00",
