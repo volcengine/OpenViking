@@ -6,6 +6,7 @@ import hashlib
 from typing import TYPE_CHECKING, Any
 
 from openviking.models.embedder.base import embed_compat
+from openviking.pyagfs.exceptions import AGFSClientError
 from openviking.server.identity import RequestContext
 from openviking.session.archive_store import ArchiveStore
 from openviking.storage.archive_source import archive_source_hit, is_archive_source_uri
@@ -61,16 +62,13 @@ async def _selected_excerpts(fs: "VikingFS", source_uri: str, ctx: RequestContex
     meta = await archive.read_meta(archive_uri)
     phase1 = meta.get("phase1")
     recorded_hash = phase1.get("messages_sha256") if isinstance(phase1, dict) else None
-    if not recorded_hash:
+    candidates = meta.get(ARCHIVE_SOURCE_CANDIDATES)
+    if not recorded_hash or not isinstance(candidates, list):
         return set()
     raw = await fs.read_file(source_uri, ctx=ctx)
     if hashlib.sha256(raw.encode("utf-8")).hexdigest() != recorded_hash:
         return set()
-    return {
-        excerpt
-        for excerpt in meta.get(ARCHIVE_SOURCE_CANDIDATES) or []
-        if isinstance(excerpt, str)
-    }
+    return {excerpt for excerpt in candidates if isinstance(excerpt, str)}
 
 
 async def search_archive_sources(
@@ -113,6 +111,7 @@ async def visible_archive_source_hits(
             continue
         try:
             if source_uri not in selected_by_uri:
+                selected_by_uri[source_uri] = set()
                 selected_by_uri[source_uri] = await _selected_excerpts(fs, source_uri, ctx)
             if excerpt not in selected_by_uri[source_uri]:
                 continue
@@ -127,7 +126,14 @@ async def visible_archive_source_hits(
                             excerpt, ctx=read_ctx, uri=source_uri, settings=settings
                         )
                     ).content
-        except (InvalidArgumentError, NotFoundError, PermissionDeniedError, ResourceExhaustedError):
+        except (
+            AGFSClientError,
+            OSError,
+            InvalidArgumentError,
+            NotFoundError,
+            PermissionDeniedError,
+            ResourceExhaustedError,
+        ):
             continue
         sources.append({**hit, "abstract": excerpt})
     return sources
