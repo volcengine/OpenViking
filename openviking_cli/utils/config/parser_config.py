@@ -135,13 +135,14 @@ class PDFConfig(ParserConfig):
     Supports three strategies:
     - "local": Use pdfplumber for local PDF→Markdown conversion
     - "mineru": Use MinerU API for remote PDF→Markdown conversion
-    - "auto": Try local first, fallback to MinerU if available
+    - "auto": Try MinerU if configured, then fall back to local
 
     Attributes:
         strategy: Parsing strategy ("local" | "mineru" | "auto")
         mineru_endpoint: MinerU API endpoint URL
         mineru_timeout: MinerU request timeout in seconds
-        mineru_bodys: Additional MinerU API multipart form fields
+        mineru_bodys: Additional MinerU API request fields
+        mineru_token: Optional bearer token for the hosted MinerU v4 API
     """
 
     strategy: str = "auto"  # "local" | "mineru" | "auto"
@@ -149,7 +150,8 @@ class PDFConfig(ParserConfig):
     # MinerU API configuration
     mineru_endpoint: Optional[str] = None  # API endpoint URL
     mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
-    mineru_bodys: Optional[dict] = None  # Additional API multipart form fields
+    mineru_bodys: Optional[dict] = None
+    mineru_token: Optional[str] = None
 
     # Heading detection configuration
     heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"

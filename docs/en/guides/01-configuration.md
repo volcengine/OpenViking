@@ -1113,7 +1113,7 @@ needs those platform-specific URL semantics. Add other Git hosts to
 
 ### pdf
 
-PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+PDF parsing configuration. `local` parses on this machine, `mineru` requires remote parsing to succeed, and `auto` sends PDFs to the configured MinerU endpoint first and falls back to local parsing on failure. With no endpoint, `auto` parses locally.
 
 ```json
 {
@@ -1134,10 +1134,11 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 |-----------|------|-------------|
 | `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
 | `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
-| `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
-| `mineru_bodys` | dict | MinerU API multipart form fields |
+| `mineru_timeout` | float | Timeout in seconds for requests and hosted result polling (default `300.0`) |
+| `mineru_bodys` | dict | Additional MinerU request fields (self-hosted form or hosted JSON) |
+| `mineru_token` | str | Bearer token for the hosted MinerU v4 API |
 
-**MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+For self-hosted MinerU, use its base URL. OpenViking sends the PDF to `/file_parse`. For hosted MinerU, set `mineru_endpoint` to `https://mineru.net/api/v4` and provide `mineru_token`. OpenViking uses the v4 upload and result APIs.
 
 ### External parser API (`parser_api`) {#parser-api}
 

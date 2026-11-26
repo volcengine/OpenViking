@@ -989,7 +989,9 @@ class OpenVikingService:
 
         if queue_worker and should_preflight_mineru and pdf_config.mineru_endpoint:
             try:
-                await wait_for_mineru_ready(pdf_config.mineru_endpoint)
+                await wait_for_mineru_ready(
+                    pdf_config.mineru_endpoint, token=pdf_config.mineru_token
+                )
                 logger.info(
                     "MinerU preflight passed",
                     extra={"target_id": safe_uri_for_log(pdf_config.mineru_endpoint)},
