@@ -403,6 +403,12 @@ export function getConfig() {
     profile: daemonProfile || cliProfile,
     ignoredSenderIds: csvEnv('OV_SUPERAGENT_IGNORED_SENDER_IDS'),
     sendTimeoutMs: intEnv('OV_SUPERAGENT_SEND_TIMEOUT_MS', 30_000, { min: 1_000 }),
+    // A delivery the provider did not confirm (an internal error, a timeout)
+    // is repeated this many times with the same idempotency key before the
+    // attempt is left uncertain: the provider then holds one message either
+    // way, instead of the model rewording and sending a second copy.
+    sendRetries: intEnv('OV_SUPERAGENT_SEND_RETRIES', 2, { min: 0, max: 5 }),
+    sendRetryDelayMs: intEnv('OV_SUPERAGENT_SEND_RETRY_DELAY_MS', 1_500, { min: 0, max: 60_000 }),
     shutdownTimeoutMs: intEnv('OV_SUPERAGENT_SHUTDOWN_TIMEOUT_MS', 20_000, { min: 5_000, max: 25_000 }),
     maxReplyChars: intEnv('OV_SUPERAGENT_MAX_REPLY_CHARS', 30_000, { min: 100, max: 100_000 }),
     maxEventBytes: intEnv('OV_SUPERAGENT_MAX_EVENT_BYTES', 1_000_000, { min: 1_024, max: 10_000_000 }),

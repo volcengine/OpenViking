@@ -305,12 +305,20 @@ export class LarkClient {
     const result = await this.registry.run(this.config.larkCliBin, ['--profile', this.profile, ...args], {
       cwd, timeoutMs,
     });
-    if (result.timedOut) throw new Error(`lark-cli ${label} timed out after ${timeoutMs}ms`);
+    if (result.timedOut) {
+      throw Object.assign(new Error(`lark-cli ${label} timed out after ${timeoutMs}ms`), { retryable: true });
+    }
     let parsed = null;
     try { parsed = JSON.parse(result.stdout); } catch {}
     if (result.code !== 0 || parsed?.ok === false) {
       const detail = parsed?.error?.message || result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
-      throw new Error(`lark-cli ${label} failed: ${redactSensitive(detail).slice(-2_000)}`);
+      // Lark's own `retryable` says the request may be repeated without
+      // changing its effect: an internal error (2200) arrives after the
+      // message often already exists, so the caller can check before it
+      // resends instead of treating the failure as "not delivered".
+      throw Object.assign(new Error(`lark-cli ${label} failed: ${redactSensitive(detail).slice(-2_000)}`), {
+        retryable: parsed?.error?.retryable === true,
+      });
     }
     if (!parsed || typeof parsed !== 'object') throw new Error(`lark-cli ${label} returned invalid JSON`);
     return parsed.data ?? parsed;
@@ -503,10 +511,10 @@ export class LarkClient {
     return { chats: matched.slice(0, limit), has_more: hasMore || matched.length > limit };
   }
 
-  async listChatMessages({ chat_id: chatId, limit = 20, as = 'bot', cursor }) {
+  async listChatMessages({ chat_id: chatId, limit = 20, as = 'bot', cursor, start = null }) {
     const data = await this.im([
       '+chat-messages-list', '--as', as, '--chat-id', chatId, '--sort', 'desc', '--page-size', String(limit), '--format', 'json',
-      ...(cursor ? ['--page-token', cursor] : []),
+      ...(cursor ? ['--page-token', cursor] : []), ...(start ? ['--start', start] : []),
     ], 'list chat messages');
     return { messages: messageList(data), has_more: Boolean(data.has_more),
       next_cursor: data.has_more && typeof data.page_token === 'string' ? data.page_token : '' };
@@ -522,9 +530,10 @@ export class LarkClient {
     return { messages: messageList(data).slice(0, limit), has_more: Boolean(data.has_more) };
   }
 
-  async listThreadMessages({ thread_id: threadId, limit = 50, as = 'bot', cursor }) {
+  async listThreadMessages({ thread_id: threadId, limit = 50, as = 'bot', cursor, order = 'asc' }) {
     const data = await this.im([
-      '+threads-messages-list', '--as', as, '--thread', threadId, '--order', 'asc', '--page-size', String(limit), '--format', 'json',
+      '+threads-messages-list', '--as', as, '--thread', threadId, '--order', order === 'desc' ? 'desc' : 'asc',
+      '--page-size', String(limit), '--format', 'json',
       ...(cursor ? ['--page-token', cursor] : []),
     ], 'list thread messages');
     return { messages: messageList(data), has_more: Boolean(data.has_more),

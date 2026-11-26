@@ -205,6 +205,22 @@ export const TOOLS = [
     annotations: LOCAL_WRITE,
   },
   {
+    // The uncertain delivery: did the message the provider refused land anyway?
+    name: 'check_delivery',
+    query: 'chat.messages',
+    title: 'Check an uncertain delivery',
+    description: 'After send_message or reply_message returned an error that leaves the outcome open (for example Lark 2200 internal error), check whether the message actually reached the chat before sending anything again. Pass the outbox_id from that error. The daemon reads the destination chat or thread back: a match settles the attempt as delivered, and nothing is sent. Without outbox_id it lists the bot\'s recent messages in chat_id. Read-only; it never sends.',
+    inputSchema: schema({
+      outbox_id: { type: 'string', pattern: '^(?:outbox:)?[0-9]{1,12}$',
+        description: 'The outbox_id the failed delivery reported, for example "outbox_id=7262" in its error.' },
+      source: SOURCE,
+      chat_id: { type: 'string', pattern: ID, description: 'Optional, without outbox_id: the chat to look through, as in the chat= tag.' },
+      since_minutes: { type: 'integer', minimum: 1, maximum: 1440, default: 30,
+        description: 'Without outbox_id: how far back to look, in minutes.' },
+    }),
+    annotations: READ,
+  },
+  {
     // The workers scheduler: the router hands a request to a worker.
     name: 'task_create',
     router: true,

@@ -43,6 +43,7 @@ const HANDLERS = {
   retract_message: 'retractMessage',
   stay_silent: 'staySilent',
   message_check: 'messageCheck',
+  check_delivery: 'checkDelivery',
   task_create: 'taskCreate',
   task_route: 'taskRoute',
   task_stop: 'taskStop',
@@ -128,6 +129,88 @@ function timerDelivery(row) {
   } catch {
     return null;
   }
+}
+
+// Whether a delivery that reported an error actually landed: the provider lists
+// back what it holds, and the attempt is only settled as sent when that listing
+// matches what was sent. Lark answers 2200 (internal error) after it has often
+// already taken the message, so the error alone cannot answer this.
+function messageTimeMs(message) {
+  const raw = String(message?.create_time ?? '');
+  if (/^\d{10,}$/.test(raw)) return Number(raw);
+  const at = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(raw)
+    ? Date.parse(`${raw.replace(' ', 'T')}:00`) : Date.parse(raw);
+  return Number.isFinite(at) ? at : null;
+}
+
+// A message from a bot rather than a person. A connector that names the sender
+// type says it outright; Lark shows a bot's app id, never an ou_ open id.
+function isBotMessage(message, connectorName) {
+  const sender = message?.sender ?? {};
+  if (sender.type === 'bot' || sender.type === 'app') return true;
+  if (sender.type === 'user') return false;
+  const id = String(sender.id ?? '');
+  if (!id) return false;
+  if (connectorName === 'lark') return !id.startsWith('ou_');
+  return true;
+}
+
+// Text as both sides can be compared: rendered mentions, markup and layout
+// differ between what was sent and what the provider lists back.
+function normalizeDeliveryText(value) {
+  return String(value ?? '')
+    .replace(/<at\b[^>]*>([\s\S]*?)<\/at>/gi, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/[`*_~#>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// A card's own title, which is what a connector lists back for it.
+function cardTitle(card) {
+  const title = card?.header?.title;
+  const text = title?.content ?? title?.i18n?.zh_cn ?? title?.i18n?.en_us;
+  return typeof text === 'string' && text.trim() ? text : null;
+}
+
+function cardTexts(card) {
+  const texts = [];
+  const walk = (value, depth = 0) => {
+    if (depth > 12 || value === null || value === undefined) return;
+    if (typeof value === 'string') { texts.push(value); return; }
+    if (Array.isArray(value)) { for (const item of value) walk(item, depth + 1); return; }
+    if (typeof value === 'object') for (const child of Object.values(value)) walk(child, depth + 1);
+  };
+  walk(card?.body ?? card?.elements ?? []);
+  return normalizeDeliveryText(texts.join(' '));
+}
+
+// Same message, allowing for the provider's own normalization of a long text.
+function sameDeliveryText(wanted, listed) {
+  if (!wanted || !listed) return false;
+  if (wanted === listed) return true;
+  if (wanted.length < 40 || listed.length < 40) return false;
+  const head = 60;
+  const near = Math.abs(wanted.length - listed.length) <= Math.max(80, Math.round(wanted.length * 0.25));
+  return near && (listed.startsWith(wanted.slice(0, head)) || wanted.startsWith(listed.slice(0, head)));
+}
+
+export function messageMatchesDelivery(content, message) {
+  const listed = normalizeDeliveryText(message?.content);
+  if (!listed) return false;
+  if (content?.type === 'markdown' && typeof content.text === 'string') {
+    if (message.msg_type === 'interactive') return false;
+    return sameDeliveryText(normalizeDeliveryText(content.text), listed);
+  }
+  if (content?.type === 'card') {
+    if (message.msg_type !== 'interactive') return false;
+    const title = normalizeDeliveryText(cardTitle(content.card));
+    const listedTitle = normalizeDeliveryText(/<card\b[^>]*\btitle="([^"]*)"/i.exec(String(message.content))?.[1] ?? '');
+    if (title && listedTitle) return title === listedTitle;
+    const body = cardTexts(content.card);
+    return Boolean(body) && listed.includes(body.slice(0, 60));
+  }
+  return false;
 }
 
 function messageLines(messages, { withChat = false } = {}) {
@@ -372,6 +455,99 @@ export class ActionService {
       text: `Delivered ${result.delivered} waiting input(s)${where}, oldest first. ${when}; decide on each as usual. ${result.waiting} still waiting.`,
       data: { delivered: result.delivered, waiting: result.waiting },
     };
+  }
+
+  // A delivery that failed with an open outcome: is the message in the chat?
+  // Lark's 2200 arrives after it has taken the message, so the error cannot
+  // answer this and only reading the destination back can. The outbox row is
+  // settled as sent only on a match; anything less is reported as it is.
+  async checkDelivery(input, caller) {
+    const outboxId = input.outbox_id === undefined ? null
+      : Number.parseInt(String(input.outbox_id).replace(/^outbox:/, ''), 10);
+    const entry = outboxId === null ? null : this.store.outboxEntry(outboxId);
+    if (outboxId !== null && !entry) {
+      throw blocked('invalid_target', `There is no delivery with outbox_id=${outboxId} here. ${NO_ACTION}`);
+    }
+    if (entry && !['message.send', 'message.reply'].includes(entry.action)) {
+      throw blocked('unsupported', `outbox_id=${entry.id} is a ${entry.action}, which reads no message back. ${NO_ACTION}`);
+    }
+    if (entry?.status === 'SENT') {
+      const sent = entry.remote_message_id ? ` as message_id=${entry.remote_message_id}` : '';
+      return { text: `outbox_id=${entry.id} was delivered${sent}. Nothing to resend.`,
+        data: { status: 'SENT', message_id: entry.remote_message_id ?? undefined } };
+    }
+    const connector = entry?.connector
+      ?? this.route(caller, 'chat.messages', 'queries', input.source, { chatId: input.chat_id });
+    const chatId = entry?.chat_id ?? input.chat_id;
+    if (!chatId) throw blocked('invalid_target', `check_delivery needs the outbox_id from the error, or a chat_id. ${NO_ACTION}`);
+    this.assertAuthority(caller.authority);
+    const since = entry ? Math.max(0, entry.created_at_ms - 180_000)
+      : Date.now() - (input.since_minutes ?? 30) * 60_000;
+    const queries = this.manifest(connector)?.queries ?? [];
+    const inThread = entry?.action === 'message.reply' && entry.payload?.reply_in_thread === true
+      && queries.includes('thread.messages');
+    let messages;
+    let where;
+    try {
+      if (inThread) {
+        const data = await this.connectors.invoke(connector, 'thread.messages', {
+          thread_id: entry.payload.message_id, limit: 50, order: 'desc' });
+        messages = [...(data.messages ?? [])].reverse();
+        where = `the thread of message_id=${entry.payload.message_id}`;
+      } else if (queries.includes('chat.messages')) {
+        const data = await this.connectors.invoke(connector, 'chat.messages', {
+          chat_id: chatId, limit: 50, start: new Date(since).toISOString() });
+        messages = [...(data.messages ?? [])].reverse();
+        where = `chat_id=${chatId}`;
+      } else {
+        throw new Error(`this connector reads no message history`);
+      }
+    } catch (error) {
+      throw blocked('check_failed', `Could not read ${chatId} back (${safeError(error)}). The delivery stays uncertain: check again in a few seconds, and do not reword and resend it meanwhile.`);
+    }
+    this.assertAuthority(caller.authority);
+    const name = this.manifest(connector)?.name ?? null;
+    const bot = messages.filter((message) => {
+      const at = messageTimeMs(message);
+      return (at === null || at >= since - 60_000) && isBotMessage(message, name);
+    });
+    const content = entry?.payload?.content ?? null;
+    const matches = content ? bot.filter((message) => messageMatchesDelivery(content, message)) : [];
+    // Two attempts of the same text can both be in the window; the newest one
+    // is the attempt being checked, and saying how many there are matters.
+    const match = matches.at(-1) ?? null;
+    if (match) {
+      const result = { message_id: match.message_id, chat_id: chatId };
+      if (entry) this.store.settleOutbox(entry.id, 'SENT', { result });
+      // A card that landed after its error is still a card this daemon sent:
+      // without its row a press on it has no delivery to resolve against.
+      const warning = entry && content?.type === 'card'
+        ? this.rememberCard(content, { ...result, duplicate: false }, {
+          connector, chatId, seen: [entry.payload?.reply_in_thread
+            ? this.store.eventByMessageId(entry.payload.message_id, connector) : null],
+          replyInThread: entry.payload?.reply_in_thread === true, replyTarget: entry.payload?.message_id ?? null,
+        }) : null;
+      const what = entry ? `outbox_id=${entry.id} is` : 'The message is';
+      const repeated = matches.length > 1
+        ? ` ${matches.length} identical messages from this bot are in that window: ${matches.map((item) => item.message_id).join(', ')}.` : '';
+      return { text: `Confirmed ${where}: ${what} message_id=${match.message_id} (${match.create_time}). It was delivered: do not send it again.${repeated}${warning ? ` ${warning}` : ''}`,
+        data: { status: 'SENT', ...result } };
+    }
+    if (!content) {
+      const listed = bot.length ? `\n${messageLines(bot.slice(-10))}` : '';
+      return { text: `Bot messages in ${where} since ${new Date(since).toISOString()}: ${bot.length}.${listed}\nThis delivery cannot be matched automatically (its content type is not text or a card); decide from the list.`,
+        data: { status: entry?.status ?? 'unknown', candidates: bot.length } };
+    }
+    if (bot.length) {
+      const listed = messageLines(bot.slice(-10));
+      const unreadable = bot.some((message) => /^\[Invalid (?:rich )?text JSON\]$/.test(String(message.content).trim()));
+      const cannotRead = unreadable
+        ? ' At least one of them cannot be read back (the provider answered with an unreadable body), so look at the chat yourself before sending anything.' : '';
+      return { text: `Not confirmed: none of the ${bot.length} bot message(s) in ${where} since ${new Date(since).toISOString()} matches what outbox_id=${entry?.id ?? '-'} tried to send:\n${listed}\nIf the earlier attempt is not among them, it did not land. Sending the same content again is safe: the provider keeps one message per idempotency key for an hour.${cannotRead}`,
+        data: { status: 'UNCONFIRMED', candidates: bot.length } };
+    }
+    return { text: `No message from this bot is among the ${messages.length} newest read back from ${where} after ${new Date(since).toISOString()}, so it did not land. Send the answer again; an identical repeat within an hour is deduplicated by the provider.`,
+      data: { status: 'NOT_DELIVERED', candidates: 0 } };
   }
 
   // Newer input in a decision's scope may still be waiting in the inbox: the
@@ -1038,14 +1214,46 @@ export class ActionService {
     caller.trace.invoked = true;
     let result;
     try {
-      result = await this.connectors.invoke(connector, action, { ...input, idempotency_key: key });
+      result = await this.invokeWithRetry({ connector, action, input, key, spec, caller });
     } catch (error) {
       this.store.settleOutbox(reservation.id, 'UNCERTAIN', { error: safeError(error) });
-      throw error;
+      throw this.uncertainDelivery(error, { connector, action, reservation, spec });
     }
     this.store.settleOutbox(reservation.id, 'SENT', { result });
     this.liveness?.touch();
     return { ...result, outbox_id: reservation.id };
+  }
+
+  // A provider that answers an error it could retry may still have performed
+  // the action (Lark's 2200). Repeating it with the same idempotency key is
+  // safe where the provider honours the key: at most one message results. The
+  // model must not be the one to retry, because it rewords and so sends twice.
+  async invokeWithRetry({ connector, action, input, key, spec, caller }) {
+    const retries = spec.idempotent ? Math.max(0, this.config.sendRetries ?? 0) : 0;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.connectors.invoke(connector, action, { ...input, idempotency_key: key });
+      } catch (error) {
+        if (error?.retryable !== true || attempt >= retries) throw error;
+        this.logger.warn('delivery_retry', {
+          connector, action, attempt: attempt + 1, of: retries + 1, error: safeError(error),
+        });
+        if (caller?.trace) caller.trace.retries = attempt + 1;
+        await new Promise((resolve) => setTimeout(resolve, this.config.sendRetryDelayMs ?? 0));
+      }
+    }
+  }
+
+  // An attempt whose outcome the provider left open. The message may be in the
+  // chat even though the call failed, so the error tells the model to check
+  // before it sends anything again.
+  uncertainDelivery(error, { connector, action, reservation, spec }) {
+    if (!spec.idempotent || !['message.send', 'message.reply'].includes(action)) return error;
+    const queries = this.manifest(connector)?.queries ?? [];
+    if (!queries.includes('chat.messages') && !queries.includes('thread.messages')) return error;
+    return Object.assign(new Error(`${error.message} The message may still have been delivered: do not reword and resend it. Check first with check_delivery outbox_id=${reservation.id}, and send only if it is not in the chat.`), {
+      code: 'delivery_uncertain',
+    });
   }
 
   // Scope of a target message on its connector: an inbound this daemon
