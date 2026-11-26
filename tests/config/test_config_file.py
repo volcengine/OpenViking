@@ -355,14 +355,16 @@ def test_shared_vlm_model_changes_preserve_inheritance_and_explicit_overrides(
         (r'"api_key": "\u0024STUDIO_TEST_KEY"', {"STUDIO_TEST_KEY": "secret-from-env"}),
     ],
 )
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
 def test_environment_files_are_form_readonly_and_saved_verbatim(
-    config_file, monkeypatch, fragment, environment
+    config_file, monkeypatch, fragment, environment, newline
 ):
     path, _ = config_file
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
     content = '{\n  "vlm": {"model": "gpt-4o", "provider": "openai", ' + fragment + "}\n}\n"
-    path.write_text(content)
+    content = content.replace("\n", newline)
+    path.write_bytes(content.encode("utf-8"))
     loaded = read_config_file()
     assert loaded["content"] == content
     assert loaded["form_readonly"] is True
