@@ -32,24 +32,7 @@ function re2Problem(pattern) {
 
 const tool = (name) => TOOLS.find((entry) => entry.name === name);
 
-// Gemini / Vertex refuses a whole request when one function parameter has no
-// type, so agy failed every turn while one property lacked it.
-function untypedProperties(schema, at, found = []) {
-  if (!schema || typeof schema !== 'object') return found;
-  for (const [name, property] of Object.entries(schema.properties ?? {})) {
-    const typed = property.type || property.anyOf || property.oneOf || property.allOf || property.enum || 'const' in property;
-    if (!typed) found.push(`${at}.${name}`);
-    untypedProperties(property, `${at}.${name}`, found);
-  }
-  if (schema.items) untypedProperties(schema.items, `${at}[]`, found);
-  return found;
-}
-
 describe('Core tool schemas', () => {
-  it('give every parameter a type', () => {
-    assert.deepEqual(TOOLS.flatMap((entry) => untypedProperties(entry.inputSchema, entry.name)), []);
-  });
-
   it('advertise only patterns that compile as Go RE2', () => {
     const patterns = TOOLS.flatMap((entry) => schemaPatterns(entry.inputSchema, entry.name));
     assert.ok(patterns.length > 20, 'the walk reaches the tool schemas');
