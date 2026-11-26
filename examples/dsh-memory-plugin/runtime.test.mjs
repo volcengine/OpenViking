@@ -288,100 +288,26 @@ test("dispose waits for the final commit before deleting session state", async (
   assert.equal(runtime.states.has(session.id), false);
 });
 
-test("persisted profile delivery survives dispose and re-seed", async () => {
-  const runtime = new OpenVikingRuntime({
-    async commitSession() {
-      return { ok: true };
-    },
-  }, config(), { debug() {} });
+test("profile delivery follows the history the model keeps", async () => {
+  const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
+  let history = [];
   const session = {
-    id: "profile-resume",
+    id: "profile-history",
     header: { cwd: "/workspace" },
-    events: [],
+    deriveMessages: () => history,
   };
-  const firstState = runtime.stateFor(session);
-  firstState.ready = true;
-  firstState.profileBlock = "profile v1";
-
+  Object.assign(runtime.stateFor(session), { ready: true, profileBlock: "profile" });
   const profile = await runtime.profileMessage({ session });
   assert.equal(profile?.source?.kind, OPENVIKING_PLUGIN_KIND);
   assert.equal(profile?.source?.form, "instructions");
-  session.events.push({ type: "user/message", data: profile });
-  await runtime.dispose(session);
-
-  const resumedSession = {
-    id: session.id,
-    header: session.header,
-    events: [...session.events],
-  };
-  const resumedState = runtime.stateFor(resumedSession);
-  resumedState.ready = true;
-  resumedState.profileBlock = "profile v2";
-  assert.equal(await runtime.profileMessage({ session: resumedSession }), null);
-  assert.equal(resumedState.profileDelivered, true);
-
-  const pendingSession = {
-    id: "profile-pending",
-    header: { cwd: "/workspace" },
-    events: [],
-  };
-  const pendingState = runtime.stateFor(pendingSession);
-  pendingState.ready = true;
-  pendingState.profileBlock = "pending profile";
-  assert.equal(await runtime.profileMessage({
-    session: pendingSession,
-    inbox: { nextTurn: [], nextStep: [profile] },
-  }), null);
-
-  const otherSession = {
-    id: "profile-other",
-    header: { cwd: "/workspace", seedLength: 1 },
-    events: [{ type: "user/message", data: profile }],
-  };
-  const otherState = runtime.stateFor(otherSession);
-  otherState.ready = true;
-  otherState.profileBlock = "other profile";
-  assert.equal(
-    (await runtime.profileMessage({ session: otherSession }))?.source?.form,
-    "instructions",
-  );
-});
-
-test("profile delivery uses current DSH session-owned history on resume and fork", async () => {
-  const profile = {
-    type: "user/message",
-    data: {
-      role: "user",
-      content: [{ type: "text", text: "stored profile" }],
-      source: { kind: "plugin", plugin: "openviking-memory", form: "instructions" },
-    },
-  };
-  for (const [id, ownEvents, expected] of [
-    ["resumed", [profile], null],
-    ["forked", [], "instructions"],
-    ["forked-resumed", [profile], null],
-  ]) {
-    const runtime = new OpenVikingRuntime({}, config(), { debug() {} });
-    let historyReads = 0;
-    const session = {
-      id,
-      header: { cwd: "/workspace", isSeeded: id !== "resumed" },
-      ownEvents() {
-        historyReads += 1;
-        return ownEvents;
-      },
-    };
-    const state = runtime.stateFor(session);
-    state.ready = true;
-    state.profileBlock = "current profile";
-
-    const message = await runtime.profileMessage({ session });
-
-    assert.equal(message?.source?.form ?? null, expected, id);
-    assert.equal(historyReads, 1, id);
-    assert.equal(state.profileDelivered, true, id);
-    assert.equal(await runtime.profileMessage({ session }), null, id);
-  }
+  // Queued, claimed into this step's batch, or kept in the history: not repeated.
+  assert.equal(await runtime.profileMessage({ session, inbox: { nextTurn: [], nextStep: [profile] } }), null);
+  assert.equal(await runtime.profileMessage({ session }, [profile]), null);
+  history = [profile];
+  assert.equal(await runtime.profileMessage({ session }), null);
+  // A compaction that summarized it away (the event log still holds it).
+  history = [];
+  assert.equal((await runtime.profileMessage({ session }))?.source?.form, "instructions");
 });
 
 test("disposeAll drains every live session", async () => {
