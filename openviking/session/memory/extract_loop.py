@@ -16,6 +16,7 @@ from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.observability.log_safety import safe_uri_for_log, short_hash
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
+from openviking.session.memory.archive_source_ranges import ARCHIVE_SOURCE_RANGES_FIELD
 from openviking.session.memory.dataclass import (
     DeleteId,
     MemoryFile,
@@ -225,6 +226,9 @@ class ExtractLoop:
             schemas,
             template_context={"language": output_language},
             consolidation=getattr(self.context_provider, "is_consolidation", False),
+            archive_source_selection_enabled=(
+                getattr(self.context_provider, "archive_source_selection_enabled", False) is True
+            ),
             # include_decision_reasoning=(
             #     type(self.context_provider).__name__ != "PatchMergeContextProvider"
             # ),
@@ -1086,6 +1090,11 @@ class ExtractLoop:
             delete_file_contents=delete_file_contents,
             errors=errors,
             delete_replacements=delete_replacements,
+            archive_source_ranges=(
+                getattr(operations, ARCHIVE_SOURCE_RANGES_FIELD, [])
+                if getattr(type(operations), "_archive_source_ranges_enabled", False)
+                else []
+            ),
         )
 
         for op in upsert_operations:

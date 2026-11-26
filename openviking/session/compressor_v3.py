@@ -30,6 +30,7 @@ from openviking.session.extraction_batch import (
 )
 from openviking.session.memory import ExtractLoop, MemoryUpdater, StreamingMemoryUpdaterConfig
 from openviking.session.memory.agent_file import ensure_agent_file
+from openviking.session.memory.archive_source_ranges import ArchiveSourceSpan
 from openviking.session.memory.constants import (
     AGENT_EVOLUTION_MEMORY_TYPES,
     CASE_MEMORY_TYPE,
@@ -503,6 +504,11 @@ class SessionCompressorV3:
             allowed_memory_types = effective_types - AGENT_EVOLUTION_MEMORY_TYPES
 
         message_list = list(messages)
+        archive_source_selection_enabled = bool(
+            archive_uri
+            and allow_self_memory
+            and get_openviking_config().memory.archive_source_selection_enabled
+        )
         fast_path_case = _training_case_from_first_message(
             message_list,
             allowed_memory_types,
@@ -533,6 +539,7 @@ class SessionCompressorV3:
                 peer_memory_enabled=peer_memory_enabled,
                 allowed_peer_ids=allowed_peer_ids,
                 event_search_tags=event_search_tags,
+                archive_source_selection_enabled=archive_source_selection_enabled,
             )
             agent_memory_types = _allowed_agent_memory_types(allowed_memory_types)
             cases_allowed = (
@@ -580,11 +587,18 @@ class SessionCompressorV3:
                     train_result.get("memory_diff"),
                 ],
             )
-            return _v3_extraction_response(
+            response = _v3_extraction_response(
                 contexts=result.contexts,
                 train_result=train_result,
                 archive_uri=archive_uri or "",
             )
+            if archive_source_selection_enabled and result.archive_source_candidates:
+                if isinstance(response, list):
+                    response = {"contexts": response, "session_skills": []}
+                response["archive_source_candidates"] = [
+                    asdict(span) for span in result.archive_source_candidates
+                ]
+            return response
         except Exception:
             if strict_extract_errors:
                 raise
@@ -737,6 +751,7 @@ class SessionCompressorV3:
         peer_memory_enabled: bool = True,
         allowed_peer_ids: Optional[set[str]] = None,
         event_search_tags: Optional[List[str]] = None,
+        archive_source_selection_enabled: bool = False,
     ) -> "_V3ExtractionResult":
         del user
         if not messages:
@@ -783,6 +798,7 @@ class SessionCompressorV3:
             memory_registry=registry,
             vlm_config=vlm_config,
             output_language_override=output_language_override,
+            archive_source_selection_enabled=archive_source_selection_enabled,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -881,6 +897,13 @@ class SessionCompressorV3:
             case_uri_by_name=_case_uri_by_name(canonical_cases, patch_operations, result),
             skipped_operations=_serialize_skipped_operations(
                 getattr(result, "skipped_operations", [])
+            ),
+            archive_source_candidates=(
+                extract_context.archive_source_candidates(
+                    operations.archive_source_ranges, messages
+                )
+                if archive_source_selection_enabled
+                else []
             ),
         )
 
@@ -1488,6 +1511,7 @@ class _V3ExtractionResult:
     memory_diff: dict[str, Any] | None = None
     case_uri_by_name: dict[str, str] = field(default_factory=dict)
     skipped_operations: list[dict[str, Any]] = field(default_factory=list)
+    archive_source_candidates: list[ArchiveSourceSpan] = field(default_factory=list)
 
 
 @dataclass(slots=True)

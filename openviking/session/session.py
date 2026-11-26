@@ -2660,6 +2660,7 @@ class Session:
         completed_memory_steps: Dict[str, set[str]] = {}
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archives.archive_index_from_uri(archive_uri)
+        archived_message_ids = {message.id for message in messages}
 
         try:
             (
@@ -2832,6 +2833,7 @@ class Session:
                     async def _record_memory_step(
                         step: str,
                         step_messages: List[Message],
+                        source_candidates: list[dict[str, Any]] | None = None,
                     ) -> None:
                         completed_memory_steps.setdefault(step, set()).update(
                             message.id for message in step_messages
@@ -2839,16 +2841,22 @@ class Session:
                         # Persist progress before waiting for sibling Phase 2
                         # tasks. A process restart or a sibling failure can then
                         # resume without applying this memory step twice.
-                        await self._merge_archive_meta(
-                            archive_uri,
-                            {
-                                "completed_memory_steps": (
-                                    self._archives.serialize_completed_memory_steps(
-                                        completed_memory_steps
-                                    )
-                                )
-                            },
-                        )
+                        updates = {
+                            "completed_memory_steps": self._archives.serialize_completed_memory_steps(
+                                completed_memory_steps
+                            )
+                        }
+                        if source_candidates:
+                            meta = await self._archives.read_meta(archive_uri)
+                            saved = list(meta.get("archive_source_candidates") or [])
+                            for candidate in source_candidates:
+                                if (
+                                    candidate["message_id"] in archived_message_ids
+                                    and candidate not in saved
+                                ):
+                                    saved.append(candidate)
+                            updates["archive_source_candidates"] = saved
+                        await self._merge_archive_meta(archive_uri, updates)
 
                     async def _run_recorded_memory_step(
                         operation_name: str,
@@ -2857,7 +2865,12 @@ class Session:
                         fn: Callable[[], Awaitable[Any]],
                     ) -> Any:
                         result = await _run_retryable_phase2_step(operation_name, fn)
-                        await _record_memory_step(step, step_messages)
+                        candidates = (
+                            result.get("archive_source_candidates")
+                            if isinstance(result, dict)
+                            else None
+                        )
+                        await _record_memory_step(step, step_messages, candidates)
                         return result
 
                     # Summary and V3 long-term memory extraction run concurrently.

@@ -13,6 +13,10 @@ from typing import Annotated, Any, Dict, List, Optional, Tuple, Type, Union
 from pydantic import BaseModel, Field, WithJsonSchema, create_model, model_validator
 from pydantic.config import ConfigDict
 
+from openviking.session.memory.archive_source_ranges import (
+    ARCHIVE_SOURCE_RANGE_INSTRUCTION,
+    ARCHIVE_SOURCE_RANGES_FIELD,
+)
 from openviking.session.memory.dataclass import (
     DeleteId,
     FaultTolerantBaseModel,
@@ -78,6 +82,7 @@ class SchemaModelGenerator:
         template_context: Optional[Dict[str, Any]] = None,
         *,
         consolidation: bool = False,
+        archive_source_selection_enabled: bool = False,
         # include_decision_reasoning: bool = True,
     ):
         if hasattr(schemas, "list_all"):
@@ -87,6 +92,7 @@ class SchemaModelGenerator:
             self._all_schemas = list(schemas)
         self.schemas = list(schemas)
         self.consolidation = consolidation
+        self.archive_source_selection_enabled = archive_source_selection_enabled
         self._template_context = dict(template_context or {})
         # self._include_decision_reasoning = include_decision_reasoning
         self._model_cache: Dict[str, Type[BaseModel]] = {}
@@ -352,6 +358,17 @@ class SchemaModelGenerator:
                 ),
             )
 
+        archive_source_ranges_enabled = (
+            self.archive_source_selection_enabled
+            and not self.consolidation
+            and ARCHIVE_SOURCE_RANGES_FIELD not in field_definitions
+        )
+        if archive_source_ranges_enabled:
+            field_definitions[ARCHIVE_SOURCE_RANGES_FIELD] = (
+                List[str],
+                Field(default_factory=list, description=ARCHIVE_SOURCE_RANGE_INSTRUCTION),
+            )
+
         # Create model using create_model
         StructuredMemoryOperations = create_model(
             "StructuredMemoryOperations",
@@ -407,6 +424,9 @@ class SchemaModelGenerator:
         StructuredMemoryOperations._memory_type_fields = memory_type_fields  # type: ignore
         # Every top-level field defaults to a list, so [] is a valid no-operations result.
         StructuredMemoryOperations._allow_empty_list_response = True  # type: ignore
+        StructuredMemoryOperations._archive_source_ranges_enabled = (  # type: ignore
+            archive_source_ranges_enabled
+        )
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model
