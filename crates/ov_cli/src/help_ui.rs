@@ -214,15 +214,23 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
         purpose: "Manage remote MCP servers, tools, and live context mounts.",
         examples: &[
             HelpItem {
-                label: "ov mcps add '{\"mcpServers\":{\"weather\":{\"url\":\"https://example.com/mcp\"}}}'",
+                label: r#"ov mcps add '{
+  "mcpServers": {
+    "mcp_server_weather": {
+      "url": "https://example.com/mcp"
+    }
+  }
+}'"#,
                 description: "Register servers from standard MCP configuration JSON.",
             },
             HelpItem {
-                label: "ov mcps find \"current weather\"",
-                description: "Find a tool in registered catalogs.",
-            },
-            HelpItem {
-                label: "ov mcps mount viking://agent/tools/weather/current.json viking://resources/demo/weather.md --title \"Beijing Weather\" --description \"Current weather in Beijing\" --timeout-seconds 120 --args '{\"city\":\"Beijing\"}'",
+                label: r#"ov mcps mount \
+  viking://agent/tools/mcp_server_weather/current.json \
+  viking://resources/demo/weather.md \
+  --title "Beijing Weather" \
+  --description "Current weather in Beijing" \
+  --timeout-seconds 120 \
+  --args '{"city":"Beijing"}'"#,
                 description: "Mount a tool as a live context node.",
             },
         ],
@@ -1594,12 +1602,21 @@ fn render_command_help_with_width(spec: &CommandHelpSpec, width: usize) -> Strin
         truncate_to_display_width(&usage, width.saturating_sub(2))
     };
     lines.push(format!("  {}", theme::strong(usage)));
-    push_section(
-        &mut lines,
-        copy(language, "Examples", "示例"),
-        spec.examples,
-        width,
-    );
+    if spec.path == ["mcps"] {
+        push_example_blocks(
+            &mut lines,
+            copy(language, "Examples", "示例"),
+            spec.examples,
+            width,
+        );
+    } else {
+        push_section(
+            &mut lines,
+            copy(language, "Examples", "示例"),
+            spec.examples,
+            width,
+        );
+    }
     let argument_items = arguments_from_command(&clap_command);
     push_dynamic_section(
         &mut lines,
@@ -1895,6 +1912,26 @@ fn localized_option_section_title(title: &str, language: Language) -> &str {
         "Advanced options" => copy(language, "Advanced options", "高级选项"),
         "Options" => copy(language, "Options", "选项"),
         _ => title,
+    }
+}
+
+fn push_example_blocks(lines: &mut Vec<String>, title: &str, items: &[HelpItem], width: usize) {
+    if items.is_empty() {
+        return;
+    }
+
+    lines.push(String::new());
+    lines.push(heading_line(title, width));
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            lines.push(String::new());
+        }
+        let description =
+            localized_help_item_description(item.label, item.description, Language::current());
+        lines.push(format!("  {}", theme::body(description)));
+        for line in item.label.lines() {
+            lines.push(format!("    {}", theme::command(line)));
+        }
     }
 }
 
