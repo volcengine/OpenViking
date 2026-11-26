@@ -42,6 +42,7 @@ use ragfs::git::{CasMode, S3Config, S3IndexStore, S3ObjectStore, S3RefStore};
 pub fn build_git_service(
     cfg: &GitConfig,
     vfs: Arc<dyn FileSystem>,
+    service_name: &str,
 ) -> PyResult<Option<Arc<GitService>>> {
     if !cfg.enabled {
         return Ok(None);
@@ -82,7 +83,7 @@ pub fn build_git_service(
         }
     };
 
-    let snapshot_log_store = build_snapshot_log_store(cfg)?;
+    let snapshot_log_store = build_snapshot_log_store(cfg, service_name)?;
 
     let svc = GitService::with_index(vfs, object_store, ref_store, index_store)
         .with_blob_exists_precheck(cfg.tuning.blob_exists_precheck_enabled);
@@ -93,6 +94,7 @@ pub fn build_git_service(
 
 fn build_snapshot_log_store(
     cfg: &GitConfig,
+    service_name: &str,
 ) -> PyResult<Option<Arc<dyn ragfs::git::SnapshotLogStore>>> {
     match cfg.snapshot.log.provider.as_str() {
         "none" => Ok(None),
@@ -105,8 +107,11 @@ fn build_snapshot_log_store(
                     "git.snapshot.log.sqlite.path is required for sqlite provider",
                 )
             })?;
+            let service_name = service_name.to_string();
             match handle
-                .block_on(async move { ragfs::git::SqliteSnapshotLogStore::connect(&path).await })
+                .block_on(async move {
+                    ragfs::git::SqliteSnapshotLogStore::connect(&service_name, &path).await
+                })
             {
                 Ok(store) => Ok(Some(
                     Arc::new(store) as Arc<dyn ragfs::git::SnapshotLogStore>
@@ -132,8 +137,10 @@ fn build_snapshot_log_store(
             })?;
             let max_connections = mysql.max_connections;
             let connect_timeout_ms = mysql.connect_timeout_ms;
+            let service_name = service_name.to_string();
             match handle.block_on(async move {
                 ragfs::git::MySqlSnapshotLogStore::connect(
+                    &service_name,
                     &dsn,
                     max_connections,
                     connect_timeout_ms,
@@ -778,7 +785,7 @@ mod tests {
         let fs = Arc::new(MountableFS::new()) as Arc<dyn ragfs::core::FileSystem>;
         let mut cfg = local_cfg("/tmp/ov-git-test-disabled");
         cfg.enabled = false;
-        let svc = build_git_service(&cfg, fs).expect("build ok");
+        let svc = build_git_service(&cfg, fs, "test-service").expect("build ok");
         assert!(svc.is_none());
     }
 
@@ -786,7 +793,7 @@ mod tests {
     async fn build_git_service_local_returns_some() {
         let fs = Arc::new(MountableFS::new()) as Arc<dyn ragfs::core::FileSystem>;
         let cfg = local_cfg("/tmp/ov-git-test-local");
-        let svc = build_git_service(&cfg, fs).expect("build ok");
+        let svc = build_git_service(&cfg, fs, "test-service").expect("build ok");
         assert!(svc.is_some());
     }
 
@@ -799,7 +806,7 @@ mod tests {
         let mut cfg = local_cfg("/tmp/ov-git-test-bad");
         cfg.backend = "bogus".into();
         // `GitService` is not `Debug`, so we can't use `unwrap_err()`; match instead.
-        let err = match build_git_service(&cfg, fs) {
+        let err = match build_git_service(&cfg, fs, "test-service") {
             Ok(_) => panic!("expected error for bogus backend"),
             Err(e) => e,
         };
@@ -812,7 +819,7 @@ mod tests {
         let fs = Arc::new(MountableFS::new()) as Arc<dyn ragfs::core::FileSystem>;
         let mut cfg = local_cfg("/tmp/ov-git-test-nolocal");
         cfg.local = None;
-        let err = match build_git_service(&cfg, fs) {
+        let err = match build_git_service(&cfg, fs, "test-service") {
             Ok(_) => panic!("expected error when [git.local] missing"),
             Err(e) => e,
         };

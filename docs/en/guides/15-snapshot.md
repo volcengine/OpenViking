@@ -168,14 +168,22 @@ Provider choices:
 | Provider | Use case |
 | --- | --- |
 | `sqlite` | Single-node deployments. By default the DB is stored at `{storage.workspace}/_system/snapshot/log/snapshot_log.db`; override with an absolute `git.snapshot.log.sqlite.path` if needed |
-| `mysql` | Multi-instance deployments. Set the DSN in the environment variable named by `git.snapshot.log.mysql.dsn_env` |
+| `mysql` | Multi-instance deployments. Provision the table first, then set the DSN in the environment variable named by `git.snapshot.log.mysql.dsn_env` |
 | `none` | Disable the index and keep the original history scan path |
 
-For MySQL:
+For MySQL, provision the table once with a deployment role that has DDL privileges:
 
 ```bash
+mysql "$OPENVIKING_SNAPSHOT_LOG_ADMIN_DSN" \
+  < openviking/service/sql/snapshot_log_mysql_init.sql
 export OPENVIKING_SNAPSHOT_LOG_DSN='mysql://user:password@host:3306/openviking'
 ```
+
+Runtime startup does not create or migrate MySQL tables. The runtime role needs
+only `SELECT` and `INSERT` on `snapshot_log`, so DDL and DML privileges can stay
+separate. Every row carries the top-level `service_name`, and the unique key plus
+all indexes are prefixed with it, so several OV deployments can share one database
+without cross-talk; a dedicated database per deployment still works.
 
 After editing the server config, restart the OpenViking service. Reinitializing an HTTP SDK client does not reload server configuration.
 

@@ -236,9 +236,19 @@ impl RAGFSBindingClient {
         // Build the git service from inline config when present; otherwise fall
         // back to loading the [git] section from a config file path.
         let (git_service, git_backend) = match inline_git_cfg {
-            Some(git_cfg) => build_git_from_cfg(git_cfg, &stack.mountable, &rt)?,
+            Some(git_cfg) => {
+                let service_name = service_name
+                    .as_deref()
+                    .ok_or_else(|| PyValueError::new_err("service_name is required"))?;
+                build_git_from_cfg(git_cfg, &stack.mountable, &rt, service_name)?
+            }
             None => match git_config_path {
-                Some(path) => load_git_from_config(path, &stack.mountable, &rt)?,
+                Some(path) => load_git_from_config(
+                    path,
+                    &stack.mountable,
+                    &rt,
+                    service_name.as_deref().unwrap_or("ragfs"),
+                )?,
                 None => (None, None),
             },
         };
