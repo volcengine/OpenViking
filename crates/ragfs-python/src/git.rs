@@ -271,17 +271,7 @@ fn build_s3_service(
     let os_cfg = s3_config.clone();
     let object_store = rt.block_on(S3ObjectStore::from_config(os_cfg))
         .map_err(|e| PyRuntimeError::new_err(format!("S3ObjectStore: {}", e)))?;
-    let gc_enabled = match rt.block_on(object_store.bucket_versioning_status()) {
-        Ok(Some(status)) if matches!(status.as_str(), "Enabled" | "Suspended") => {
-            tracing::error!(%status, "S3 bucket versioning disables physical snapshot GC");
-            false
-        }
-        Err(error) => {
-            warn!(%error, "could not verify S3 bucket versioning for snapshot GC");
-            cfg.snapshot.gc.enabled
-        }
-        _ => cfg.snapshot.gc.enabled,
-    };
+    let gc_enabled = cfg.snapshot.gc.enabled && rt.block_on(object_store.allows_snapshot_gc());
 
     let rs_cfg = s3_config.clone();
     let ref_store = Arc::new(

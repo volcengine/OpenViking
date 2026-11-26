@@ -109,16 +109,41 @@ impl S3ObjectStore {
         Ok(Self::new(client, config.bucket, config.prefix))
     }
 
-    /// Fetch bucket versioning state. An absent status means it was never enabled.
-    pub async fn bucket_versioning_status(&self) -> Result<Option<String>, ObjectStoreError> {
-        let result = self
+    /// Only a successful probe with no versioning status permits physical GC.
+    pub async fn allows_snapshot_gc(&self) -> bool {
+        use aws_sdk_s3::error::ProvideErrorMetadata;
+
+        match self
             .client
             .get_bucket_versioning()
             .bucket(&self.bucket)
             .send()
             .await
-            .map_err(s3_error)?;
-        Ok(result.status().map(|status| status.as_str().to_owned()))
+        {
+            Ok(result) => match result.status() {
+                None => true,
+                Some(status) => {
+                    tracing::warn!("S3 bucket {} has versioning status {}; physical snapshot GC disabled",
+                        self.bucket, status.as_str());
+                    false
+                }
+            },
+            Err(error) => {
+                let response = error.raw_response();
+                let service = error.as_service_error();
+                tracing::warn!(
+                    "GetBucketVersioning failed for bucket {}. Physical snapshot GC disabled. \
+                     Check s3:GetBucketVersioning permission and connectivity, then restart to retry. \
+                     HTTP status={:?}, request_id={}, code={}, message={}, cause={error}: {:?}",
+                    self.bucket, response.map(|r| r.status().as_u16()),
+                    response.and_then(|r| r.headers().get("x-amz-request-id")).unwrap_or("-"),
+                    service.and_then(|e| e.code()).unwrap_or("-"),
+                    service.and_then(|e| e.message()).unwrap_or("-"),
+                    std::error::Error::source(&error).map(ToString::to_string),
+                );
+                false
+            }
+        }
     }
 
     async fn head_object(
@@ -193,10 +218,12 @@ impl S3ObjectStore {
                 // Measure ownership using our monotonic clock. Comparing S3
                 // LastModified against client wall time could steal a live
                 // lease from another writer on a clock-skewed host.
+                let idle = meta.content_length() == Some(0);
                 let tag = meta
                     .e_tag
                     .ok_or_else(|| s3_error("sweep lease missing ETag"))?;
                 match observed.as_ref() {
+                    _ if idle => etag = Some(tag),
                     Some((old, since)) if *old == tag => {
                         if since.elapsed() > Duration::from_secs(120) {
                             etag = Some(tag);
@@ -233,9 +260,12 @@ impl S3ObjectStore {
         {
             return result;
         }
+        // A held lease contains a unique nonce. An empty lease is available
+        // immediately, and If-Match prevents a stale holder releasing a newer lease.
         let release = self
             .client
-            .delete_object()
+            .put_object()
+            .body(Bytes::new().into())
             .bucket(&self.bucket)
             .key(key)
             .if_match(tag)
@@ -1075,6 +1105,105 @@ mod tests {
 
     /// A valid 40-char SHA-1 hex object id used across tests.
     const VALID_OID_HEX: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    // Script the S3 requests so a lease release that needs DELETE fails this test.
+    async fn scripted_store(
+        steps: Vec<(&'static str, &'static str, &'static str)>,
+    ) -> (S3ObjectStore, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let store = S3ObjectStore::from_config(S3Config {
+            bucket: "test".into(),
+            endpoint: Some(format!("http://{}", listener.local_addr().unwrap())),
+            access_key_id: Some("test".into()),
+            secret_access_key: Some("test".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let server = tokio::spawn(async move {
+            for (method, condition, response) in steps {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut headers = String::new();
+                while !headers.ends_with("\r\n\r\n") {
+                    assert_ne!(reader.read_line(&mut headers).await.unwrap(), 0);
+                }
+                assert!(headers.starts_with(method), "{headers}");
+                assert!(
+                    headers.to_ascii_lowercase().contains(condition),
+                    "{headers}"
+                );
+                let size = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length: ")?
+                            .parse::<usize>()
+                            .ok()
+                    })
+                    .unwrap_or(0);
+                reader.read_exact(&mut vec![0; size]).await.unwrap();
+                if method == "PUT " {
+                    let releasing = matches!(condition, "if-match: a" | "if-match: b");
+                    assert_eq!(size == 0, releasing);
+                }
+                let (response, body) = response.split_once("\n\n").unwrap_or((response, ""));
+                reader
+                    .get_mut()
+                    .write_all(
+                        format!("HTTP/1.1 {response}\r\nConnection: close\r\n\r\n{body}")
+                            .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        (store, server)
+    }
+
+    #[tokio::test]
+    async fn snapshot_gc_requires_successful_version_probe() {
+        let (store, server) = scripted_store(vec![
+            ("GET ", "?versioning", "403 Forbidden"),
+            ("GET ", "?versioning", "200 OK\n\n<VersioningConfiguration><Status>Suspended</Status></VersioningConfiguration>"),
+            (
+                "GET ",
+                "?versioning",
+                "200 OK\n\n<VersioningConfiguration/>",
+            ),
+        ])
+        .await;
+        assert!(!store.allows_snapshot_gc().await);
+        assert!(!store.allows_snapshot_gc().await);
+        assert!(store.allows_snapshot_gc().await);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sweep_lease_can_be_reused_without_delete_permission() {
+        let (store, server) = scripted_store(vec![
+            ("PUT ", "if-none-match: *", "200 OK\r\nETag: a"),
+            ("PUT ", "if-match: a", "200 OK\r\nETag: idle"),
+            ("PUT ", "if-none-match: *", "412 Precondition Failed"),
+            ("HEAD ", "", "200 OK\r\nETag: idle\r\nContent-Length: 0"),
+            ("PUT ", "if-match: idle", "200 OK\r\nETag: b"),
+            ("PUT ", "if-match: b", "200 OK"),
+        ])
+        .await;
+        let operations = async {
+            for _ in 0..2 {
+                store
+                    .with_sweep_lease("account", async |_| Ok(()))
+                    .await
+                    .unwrap();
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), operations)
+            .await
+            .unwrap();
+        server.await.unwrap();
+    }
 
     #[test]
     fn test_s3_config_default() {

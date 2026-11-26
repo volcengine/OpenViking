@@ -92,7 +92,7 @@ memory 仅协调同一个客户端内的操作。租约有效期间，共享同�
 | `git.author_name` | `viking-bot` | 调用方未传 `author_name` 时使用的默认提交者名字 |
 | `git.author_email` | `bot@viking.local` | 默认提交者邮箱 |
 | `git.local.base_dir` | `""` | Git 对象/引用的存放目录。**留空时默认使用 `{storage.workspace}/.ovgit`** |
-| `git.snapshot.gc.enabled` | `true` | 删除快照后在后台回收对象。使用 S3 时，存储桶须从未启用版本控制。已启用或暂停版本控制的存储桶会禁用物理回收。 |
+| `git.snapshot.gc.enabled` | `true` | 删除快照后在后台回收对象。使用 S3 时，存储桶须从未启用版本控制。只有 `GetBucketVersioning` 确认版本控制从未启用时才会物理回收。查询失败时可查看告警日志，恢复访问后重启实例以重新探测。 |
 | `git.snapshot.gc.grace_seconds` | `3600` | 物理回收的宽限期（秒），最小值为 600。 |
 | `git.snapshot.log.provider` | `sqlite` | `snapshot/log?paths=...` 的路径历史索引 provider：`sqlite`、`mysql`、`postgres` 或 `none` |
 | `git.snapshot.log.sqlite.path` | `{storage.workspace}/_system/snapshot/log/snapshot_log.db` | 可选 SQLite 数据库绝对路径。留空时每个 workspace 使用自己的索引库 |
