@@ -46,7 +46,8 @@ description: 查询 OpenViking 网关的配置字段、环境变量、上下文�
 | `response_ttl_seconds` | 两者 | `2592000`（30 天） | 60 及以上 | Responses 响应与上游的对应关系保留多少秒 |
 | `request_log_sink` | 两者 | `store` | `store`, `stdout`, `file` | 将请求记录写入存储，或以每条一行 JSON 写到 stdout 并立即刷新，或由后台线程把同样的行写入 `request_log_path`；见[观测](../guides/22-gateway-operations.md#monitoring)。`file` 输出需要单个 worker 进程：独立网关设 `workers: 1`，嵌入式网关需要服务端只有一个 worker |
 | `request_log_path` | 两者 | 空 | 文件路径 | `file` 输出写入的文件；使用 `file` 时必填 |
-| `request_log_max_bytes` | 两者 | `268435456`（256 MiB） | 1,048,576 及以上 | `file` 输出的文件达到这个大小时轮转，保留四个旧文件 |
+| `request_log_rotation_interval_hours` | 两者 | `1` | 1 及以上 | `file` 输出每隔这么多小时轮转一次文件，与服务端的[用量日志](../guides/01-configuration.md#usage-reporter)相同；旧文件以开始时的 UTC 小时命名，如 `requests.jsonl.2026-01-31_13`。父目录不存在时自动创建 |
+| `request_log_backup_count` | 两者 | `168` | 0 及以上 | `file` 输出保留的旧文件数；`0` 表示全部保留 |
 | `snapshot_interval_seconds` | 两者 | `0` | 0 及以上 | 写一行本进程计数的[状态行](../guides/22-gateway-operations.md#status-line)的间隔秒数。`0` 表示不写 |
 | `trusted_host_headers` | 两者 | `false` | `true`, `false` | 把网关前置服务发来的 `X-OpenViking-Resource-Id` 和 `X-OpenViking-Request-Source` 记为 `resource_id` 和 `request_source`；见[宿主集成约定](../guides/22-gateway-operations.md#host-integration-contract)。只有客户端无法直接访问网关时才打开，见[来自宿主的请求头](11-security-and-data.md#headers-from-a-host) |
 | `log_retention_days` | 两者 | `30` | 1 及以上 | 存储中的请求日志保留天数；stdout 和文件的保留期限由日志采集系统管理 |
@@ -145,7 +146,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `tenancy` | `key` 要求 `management_api: false`；`openviking_keys` 关闭时此字段不生效 |
 | `client_rules` | 新增的模式必须是合法的 Python 正则表达式；新增的标签名以英文字母开头，只能包含英文字母、数字、`_`、`.`、`:` 和 `-` |
 | 未知字段 | 校验失败 |
-| 已删除的字段 | 忽略，启动时打印警告：`encryption_key_env`、`session_ttl_days`（已由 `session_ttl_seconds` 取代）、`capture_concurrency`、`capture_delivery_records`，以及 `ov.conf` 中[迁移](../guides/22-gateway-operations.md#migration)列出的 v0.5 字段 |
+| 已删除的字段 | 忽略，启动时打印警告：`encryption_key_env`、`session_ttl_days`（已由 `session_ttl_seconds` 取代）、`capture_concurrency`、`capture_delivery_records`、`request_log_max_bytes`（`file` 输出改为按时间轮转），以及 `ov.conf` 中[迁移](../guides/22-gateway-operations.md#migration)列出的 v0.5 字段 |
 
 ## 客户端规则 {#client-rules}
 

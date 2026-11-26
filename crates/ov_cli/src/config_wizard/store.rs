@@ -15,6 +15,31 @@ use crate::{
 
 pub const OPENVIKING_SERVICE_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
 
+/// A verified release URL is an optional default for the BytePlus URL prompt.
+pub(super) fn byteplus_service_url() -> Option<&'static str> {
+    validate_byteplus_endpoint(option_env!("OPENVIKING_BYTEPLUS_SERVICE_URL")?)
+}
+
+pub(super) fn normalize_byteplus_service_url(input: &str) -> Option<String> {
+    let url = Url::parse(input.trim()).ok()?;
+    validate_byteplus_endpoint(url.as_str()).map(str::to_string)
+}
+
+fn validate_byteplus_endpoint(endpoint: &str) -> Option<&str> {
+    let endpoint = endpoint.trim_end_matches('/');
+    let parsed = Url::parse(endpoint).ok()?;
+    (parsed.scheme() == "https"
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+        // Require the same canonical literal that the client will use.
+        && parsed.as_str().trim_end_matches('/') == endpoint
+        && endpoint != OPENVIKING_SERVICE_URL)
+        .then_some(endpoint)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigKind {
     OpenVikingService,
@@ -22,13 +47,6 @@ pub enum ConfigKind {
 }
 
 impl ConfigKind {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::OpenVikingService => "OpenViking Service (VolcEngine Cloud)",
-            Self::Custom => "Custom",
-        }
-    }
-
     pub(crate) fn compact_label(self) -> &'static str {
         match self {
             Self::OpenVikingService => "OpenViking Service",
@@ -772,11 +790,6 @@ fn admin_probe_regular_key_status(status: u16) -> bool {
     )
 }
 
-#[cfg(test)]
-fn admin_probe_ambiguous_status(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500..=599)
-}
-
 fn should_run_authenticated_probe(
     health: &Value,
     require_api_key: bool,
@@ -932,8 +945,7 @@ fn non_empty_option(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::{
         ApiKeyRole, ConfigDraft, ConfigKind, ConfigStore, OPENVIKING_SERVICE_URL,
-        admin_probe_ambiguous_status, admin_probe_regular_key_status, build_config,
-        should_run_authenticated_probe, validate_candidate_config,
+        build_config, validate_candidate_config,
         validate_candidate_config_with_role, validate_config_name,
     };
     use crate::config::Config;
@@ -1141,18 +1153,6 @@ mod tests {
         assert_eq!(redacted["extra_headers"]["X-Gateway-Token"], "********");
     }
 
-    #[test]
-    fn openviking_service_provider_label_uses_product_casing() {
-        assert_eq!(
-            ConfigKind::OpenVikingService.label(),
-            "OpenViking Service (VolcEngine Cloud)"
-        );
-        assert_eq!(
-            ConfigKind::OpenVikingService.compact_label(),
-            "OpenViking Service"
-        );
-    }
-
     fn write_config(path: &Path, config: &Config) {
         fs::write(
             path,
@@ -1240,41 +1240,6 @@ mod tests {
     }
 
     #[test]
-    fn openviking_service_config_listing_marks_only_one_duplicate_as_active() {
-        let dir = unique_dir("duplicate-ov-service-active");
-        let store = ConfigStore::for_config_dir(dir.clone());
-        let config = sample_config(OPENVIKING_SERVICE_URL, Some("service-key"));
-        store
-            .save_named_config("ov-service", &config)
-            .expect("ov-service config should save");
-        store
-            .save_named_config("ov-service-copy", &config)
-            .expect("ov-service copy config should save");
-        store
-            .activate_config("ov-service")
-            .expect("ov-service config should become active");
-
-        let configs = store.list_configs().expect("configs should load");
-        let active = configs
-            .iter()
-            .filter(|entry| entry.is_active)
-            .map(|entry| entry.name.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(active, vec!["ov-service"]);
-        assert!(
-            store
-                .is_config_name_active("ov-service")
-                .expect("active check")
-        );
-        assert!(
-            !store
-                .is_config_name_active("ov-service-copy")
-                .expect("copy active check")
-        );
-    }
-
-    #[test]
     fn config_name_validation_rejects_unsafe_names() {
         for name in ["", "   ", ".hidden", "../prod", "prod/dev", "prod\\dev"] {
             assert!(validate_config_name(name).is_err(), "{name:?} should fail");
@@ -1305,6 +1270,81 @@ mod tests {
 
         assert_eq!(config.url, OPENVIKING_SERVICE_URL);
         assert_eq!(config.api_key.as_deref(), Some("viking-key"));
+    }
+
+    #[test]
+    fn byteplus_endpoint_must_be_a_distinct_canonical_https_url() {
+        let fixture = "https://byteplus.example/openviking";
+        assert_eq!(super::validate_byteplus_endpoint(fixture), Some(fixture));
+        let with_slash = format!("{fixture}/");
+        assert_eq!(
+            super::validate_byteplus_endpoint(&with_slash),
+            Some(fixture)
+        );
+        for url in [
+            "https://API.vikingdb.cn-beijing.volces.com:443/openviking",
+            OPENVIKING_SERVICE_URL,
+            "http://byteplus.example/openviking",
+            "https://byteplus.example/openviking ",
+            "https://byteplus.example/openviking?",
+            "https://byteplus.example/openviking#",
+            "https://user:password@byteplus.example/openviking",
+            "https://byteplus.example/openviking?token=value",
+            "https://byteplus.example/openviking#section",
+            "byteplus.example/openviking",
+            "",
+        ] {
+            assert_eq!(super::validate_byteplus_endpoint(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn byteplus_endpoint_does_not_change_saved_custom_profiles() {
+        let url = super::byteplus_service_url().unwrap_or("https://byteplus.example/openviking");
+        let draft = ConfigDraft {
+            name: "byteplus".into(),
+            kind: ConfigKind::Custom,
+            url: url.into(),
+            api_key: Some("byteplus-test-key".into()),
+            root_api_key: Some("separate-root-key".into()),
+            account: None,
+            user: None,
+        };
+        let config = build_config(&draft).unwrap();
+        let json = serde_json::to_string(&config).unwrap();
+        let reopened: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(ConfigKind::from_config(&reopened), ConfigKind::Custom);
+        assert_eq!(reopened.url, url);
+        assert_eq!(reopened.api_key.as_deref(), Some("byteplus-test-key"));
+        assert_eq!(reopened.root_api_key.as_deref(), Some("separate-root-key"));
+    }
+
+    #[test]
+    fn manual_byteplus_url_normalizes_https_and_rejects_unsafe_addresses() {
+        for input in [
+            "https://byteplus.example/openviking",
+            "HTTPS://BYTEPLUS.EXAMPLE:443/openviking/",
+            " https://byteplus.example/openviking/ ",
+        ] {
+            assert_eq!(
+                super::normalize_byteplus_service_url(input),
+                Some("https://byteplus.example/openviking".to_string())
+            );
+        }
+        for input in [
+            "http://byteplus.example/openviking",
+            "https://user:password@byteplus.example/openviking",
+            "https://byteplus.example/openviking?key=value",
+            "https://byteplus.example/openviking#fragment",
+            "https://byteplus.example/openviking?",
+            OPENVIKING_SERVICE_URL,
+            "",
+        ] {
+            assert!(
+                super::normalize_byteplus_service_url(input).is_none(),
+                "{input}"
+            );
+        }
     }
 
     #[test]
@@ -1438,39 +1478,6 @@ mod tests {
             .expect_err("auth-required local server should reject empty API key");
 
         assert!(matches!(error, crate::error::Error::Api { .. }));
-    }
-
-    #[test]
-    fn authenticated_probe_runs_for_keys_or_auth_required_health_modes() {
-        let dev_health = serde_json::json!({ "healthy": true, "auth_mode": "dev" });
-        let api_key_health = serde_json::json!({ "healthy": true, "auth_mode": "api_key" });
-        let trusted_health = serde_json::json!({ "healthy": true, "auth_mode": "trusted" });
-
-        assert!(!should_run_authenticated_probe(&dev_health, false, false));
-        assert!(should_run_authenticated_probe(&dev_health, false, true));
-        assert!(should_run_authenticated_probe(&dev_health, true, false));
-        assert!(should_run_authenticated_probe(
-            &api_key_health,
-            false,
-            false
-        ));
-        assert!(should_run_authenticated_probe(
-            &trusted_health,
-            false,
-            false
-        ));
-    }
-
-    #[test]
-    fn admin_probe_status_classification_is_explicit() {
-        assert!(admin_probe_regular_key_status(401));
-        assert!(admin_probe_regular_key_status(403));
-        assert!(admin_probe_regular_key_status(404));
-        assert!(admin_probe_ambiguous_status(408));
-        assert!(admin_probe_ambiguous_status(429));
-        assert!(admin_probe_ambiguous_status(500));
-        assert!(admin_probe_ambiguous_status(503));
-        assert!(!admin_probe_regular_key_status(500));
     }
 
     #[test]

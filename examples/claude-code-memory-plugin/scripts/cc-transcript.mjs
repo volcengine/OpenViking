@@ -92,6 +92,7 @@ function normalizeMessage(message, cfg) {
   if (!message || typeof message !== "object") return null;
   let role = message.role;
   let content;
+  let hostAuthored = false;
   if (message.content !== undefined) {
     content = message.content;
   } else if (message.message && typeof message.message === "object") {
@@ -99,6 +100,9 @@ function normalizeMessage(message, cfg) {
     // `api-request-blob` repeats a request message already in the transcript);
     // only the user/assistant entries are the conversation.
     if (message.type !== undefined && message.type !== "user" && message.type !== "assistant") return null;
+    // Host-authored records in the user's role: the compaction summary, and
+    // meta records such as expanded skill bodies and local-command caveats.
+    hostAuthored = message.isCompactSummary === true || message.isMeta === true;
     role = message.message.role || role;
     content = message.message.content;
   }
@@ -107,6 +111,7 @@ function normalizeMessage(message, cfg) {
     content: Array.isArray(content)
       ? content.map((block) => normalizeBlock(block, cfg))
       : content,
+    hostAuthored,
   };
 }
 
@@ -131,7 +136,10 @@ function textFromParts(parts) {
  * Every user/assistant turn in the transcript, in order.
  *
  * Turns carrying no structured part are dropped; the rest keep their index, so
- * a caller can treat the position of a turn as a durable cursor.
+ * a caller can treat the position of a turn as a durable cursor. Host-authored
+ * records (the compaction summary, meta records) stay in the sequence, flagged
+ * `hostAuthored`, so cursors written before they were recognised still line
+ * up; callers leave them out of what they send.
  */
 export function extractCaptureTurns(messages, cfg = {}) {
   const payloads = (messages || []).map((message) => normalizeMessage(message, cfg));
@@ -144,7 +152,9 @@ export function extractCaptureTurns(messages, cfg = {}) {
     // "[truncated, N more chars]" note that cap just appended.
     const parts = extractPartsFromPayload(payload, { toolMaxChars: Infinity, toolNameById });
     if (parts.length === 0) continue;
-    turns.push({ role, text: textFromParts(parts), parts });
+    const turn = { role, text: textFromParts(parts), parts };
+    if (payload.hostAuthored) turn.hostAuthored = true;
+    turns.push(turn);
   }
   return turns;
 }

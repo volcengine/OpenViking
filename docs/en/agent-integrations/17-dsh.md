@@ -11,6 +11,13 @@ Source: [examples/dsh-memory-plugin](https://github.com/volcengine/OpenViking/tr
 
 DSH shares the installer with the other memory plugins. It asks which harnesses to install and for your OpenViking credentials; every step is idempotent—re-running it is entirely safe.
 
+For a managed connection, select **OpenViking Managed Service**, then:
+
+- **Volcengine:** enter your service API key. The installer supplies the URL.
+- **BytePlus:** enter your instance's full HTTPS service URL, then its API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older installers use **Custom URL** for BytePlus.
+
 ```bash
 curl -fsSL https://openviking.ai/install | bash
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
@@ -111,7 +118,7 @@ To remove the bundle, use **Uninstall** on its Plugins page entry, or quit Deskt
 
 ## How it works
 
-The bundle runs inside DSH as a Cordis plugin rather than as external hooks, so it follows the session in-process. At session start it injects your OpenViking profile block, an index of available memories, and an `<available-skills>` catalog of your OpenViking skills. When a model step takes new user input, it searches OpenViking with the text the user typed and appends what it finds to that step as a durable message, so the injection replays with the session and is visible to compaction. Context that DSH or other plugins inject (for example `time-context` or job notices) and tool results neither trigger recall nor enter the query. It captures user, assistant, and (optionally) tool-result messages straight from DSH's event stream, skipping injected context, and commits to OpenViking once pending tokens cross the threshold or when DSH begins a compaction, archiving every captured message. Writes that fail land in a pending queue and replay at the next session start.
+The bundle runs inside DSH as a Cordis plugin rather than as external hooks, so it follows the session in-process. At session start it injects your OpenViking profile block, an index of available memories, and an `<available-skills>` catalog of your OpenViking skills; when a compaction summarizes that block away, the next model step sends it again. When a model step takes new user input, it searches OpenViking with the text the user typed and appends what it finds to that step as a durable message, so the injection replays with the session and is visible to compaction. Context that DSH or other plugins inject (for example `time-context` or job notices) and tool results neither trigger recall nor enter the query. It captures user, assistant, and (optionally) tool-result messages straight from DSH's event stream, skipping injected context, and commits to OpenViking once pending tokens cross the threshold or when DSH begins a compaction, archiving every captured message. Writes that fail land in a pending queue and replay at the next session start.
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking, and every subagent gets its own session.
 

@@ -5,6 +5,7 @@ import { createRecallCompressor } from "./compressor.mjs";
 import { isCaptureEnabled } from "./shared/capture-utils.mjs";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
 import {
   dequeue,
   enqueue,
@@ -19,7 +20,7 @@ import {
   pluginMessage,
   promptText,
 } from "./capture.mjs";
-import { deriveDshSessionId } from "./session-id.mjs";
+import { deriveDshSessionId, historySessionIds } from "./session-id.mjs";
 
 export class OpenVikingRuntime {
   constructor(client, config, logger = console, resolveSessionConfig = null) {
@@ -54,7 +55,7 @@ export class OpenVikingRuntime {
       config: { ...this.config, ...resolved, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
       ready: false,
       profileBlock: "",
-      profileDelivered: false,
+      historyPointer: null,
       toolNames: new Map(),
       writes: Promise.resolve(),
       warnedFailures: new Set(),
@@ -125,14 +126,11 @@ export class OpenVikingRuntime {
     return state;
   }
 
-  async profileMessage(agent) {
+  // Sent whenever the model would not see it: at session start, and again after
+  // a compaction summarizes it away. `batch` is the step's claimed messages.
+  async profileMessage(agent, batch = []) {
     const state = await this.initialize(agent);
-    if (!state.ready || !state.profileBlock || state.profileDelivered) return null;
-    if (hasStartupProfile(agent)) {
-      state.profileDelivered = true;
-      return null;
-    }
-    state.profileDelivered = true;
+    if (!state.ready || !state.profileBlock || hasStartupProfile(agent, batch)) return null;
     return pluginMessage(state.profileBlock, { form: "instructions" });
   }
 
@@ -166,6 +164,23 @@ export class OpenVikingRuntime {
       },
     );
     return block && !signal?.aborted ? pluginMessage(block, { form: "recall" }) : null;
+  }
+
+  // A finished compaction or a resume leaves the session-history note for the
+  // agent's next step.
+  markHistoryPointer(session, event) {
+    this.stateFor(session).historyPointer = event;
+  }
+
+  historyPointerMessage(agent, sessions) {
+    const state = this.stateFor(agent.session);
+    const event = state.historyPointer;
+    if (!event) return null;
+    state.historyPointer = null;
+    if (!state.config.sessionHistoryPointer || !isCaptureEnabled(state.config)) return null;
+    return pluginMessage(formatSessionHistoryPointer(historySessionIds(agent.session, sessions), { event }), {
+      form: "session-history",
+    });
   }
 
   capture(session, event) {
@@ -463,16 +478,11 @@ export class OpenVikingRuntime {
   }
 }
 
-function hasStartupProfile(agent) {
-  const session = agent.session;
-  const ownEvents = typeof session?.ownEvents === "function"
-    ? session.ownEvents()
-    : (session?.events || []).slice(session?.header?.seedLength ?? 0);
-  const inHistory = ownEvents.some(event => (
-    event?.type === "user/message" && isStartupProfile(event.data)
-  ));
-  if (inHistory) return true;
-  return [agent.inbox?.nextTurn, agent.inbox?.nextStep].some(messages => (
+// The history the model keeps: a compaction replaces summarized messages here
+// but never removes their events from the log.
+function hasStartupProfile(agent, batch) {
+  const history = agent.session?.deriveMessages?.() ?? [];
+  return [history, batch, agent.inbox?.nextTurn, agent.inbox?.nextStep].some(messages => (
     (messages || []).some(isStartupProfile)
   ));
 }

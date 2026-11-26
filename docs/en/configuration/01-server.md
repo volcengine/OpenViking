@@ -53,6 +53,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 |---|---|---|---|
 | `default_account` | string | `"default"` | Default account for the service context |
 | `default_user` | string | `"default"` | Default user for the service context |
+| `enable_default_resources` | boolean | `true` | Supply omitted local Embedding/VectorDB and preset default Account directories; see [resource configuration](../guides/01-configuration.md) |
 | `embedding` | object | built-in local dense model | Dense, sparse, and hybrid embedding; defaults to `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Model for retrieval intent analysis and recall rewriting. Falls back to `vlm` when omitted or empty; recall rewrite in `auto` mode requires a configured cluster `query_planner` or an account-level `query_planner` or `vlm` override |

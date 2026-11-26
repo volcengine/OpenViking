@@ -39,6 +39,7 @@ async def test_temp_scope_isolated_between_users_in_same_account(viking_fs):
     )
 
     temp_uri = viking_fs.create_temp_uri(ctx=owner_ctx)
+    assert temp_uri.startswith(f"viking://temp/{owner_ctx.user.user_space_name()}/")
     secret_uri = f"{temp_uri}/secret.txt"
 
     await viking_fs.mkdir(temp_uri, exist_ok=True, ctx=owner_ctx)
@@ -109,20 +110,6 @@ async def test_temp_root_listing_only_shows_callers_own_entries(viking_fs):
 
 
 @pytest.mark.asyncio
-async def test_temp_root_destructive_operations_are_blocked_for_non_root_users(viking_fs):
-    alice_ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="alice"),
-        role=Role.USER,
-    )
-
-    with pytest.raises(PermissionDeniedError):
-        await viking_fs.rm("viking://temp", recursive=True, ctx=alice_ctx)
-
-    with pytest.raises(PermissionDeniedError):
-        await viking_fs.delete_temp("viking://temp", ctx=alice_ctx)
-
-
-@pytest.mark.asyncio
 async def test_delete_temp_removes_repository_tasks_directory(viking_fs):
     ctx = RequestContext(
         user=UserIdentifier(account_id="acct1", user_id="alice"),
@@ -165,24 +152,6 @@ async def test_legacy_temp_trees_remain_accessible_for_same_account_users(viking
     assert legacy_temp_uri in bob_uris
 
 
-def test_create_temp_uri_uses_user_scope_segment(viking_fs):
-    ctx = RequestContext(
-        user=UserIdentifier(account_id="acct1", user_id="alice"),
-        role=Role.USER,
-    )
-
-    temp_uri = viking_fs.create_temp_uri(ctx=ctx)
-
-    assert temp_uri.startswith(f"viking://temp/{ctx.user.user_space_name()}/")
-
-
-def test_create_temp_uri_without_context_preserves_legacy_shape(viking_fs):
-    temp_uri = viking_fs.create_temp_uri()
-
-    assert temp_uri.startswith("viking://temp/")
-    assert temp_uri.count("/") == 3
-
-
 @pytest.mark.asyncio
 async def test_legacy_temp_uri_remains_accessible_to_same_account_users(viking_fs):
     alice_ctx = RequestContext(
@@ -195,6 +164,8 @@ async def test_legacy_temp_uri_remains_accessible_to_same_account_users(viking_f
     )
 
     legacy_temp_uri = viking_fs.create_temp_uri()
+    assert legacy_temp_uri.startswith("viking://temp/")
+    assert legacy_temp_uri.count("/") == 3
     secret_uri = f"{legacy_temp_uri}/shared.txt"
 
     await viking_fs.mkdir(legacy_temp_uri, exist_ok=True, ctx=alice_ctx)
@@ -204,7 +175,7 @@ async def test_legacy_temp_uri_remains_accessible_to_same_account_users(viking_f
 
 
 @pytest.mark.asyncio
-async def test_non_root_cannot_delete_temp_root_recursively(viking_fs):
+async def test_temp_root_destructive_operations_are_blocked_for_non_root_users(viking_fs):
     alice_ctx = RequestContext(
         user=UserIdentifier(account_id="acct1", user_id="alice"),
         role=Role.USER,
@@ -224,5 +195,8 @@ async def test_non_root_cannot_delete_temp_root_recursively(viking_fs):
 
     with pytest.raises(PermissionDeniedError):
         await viking_fs.rm("viking://temp", recursive=True, ctx=alice_ctx)
+
+    with pytest.raises(PermissionDeniedError):
+        await viking_fs.delete_temp("viking://temp", ctx=alice_ctx)
 
     assert (await viking_fs.read(bob_secret_uri, ctx=bob_ctx)).decode("utf-8") == "bob secret"

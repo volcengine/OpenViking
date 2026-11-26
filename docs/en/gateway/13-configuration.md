@@ -46,7 +46,8 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `response_ttl_seconds` | Both | `2592000` (30 days) | 60 or more | Seconds to remember which upstream created a Responses response |
 | `request_log_sink` | Both | `store` | `store`, `stdout`, `file` | Write request logs to storage, as one flushed JSON line per record on stdout, or as the same lines to `request_log_path` from a background thread; see [Monitoring](../guides/22-gateway-operations.md#monitoring). The `file` sink needs one worker process: `workers: 1` standalone, one server worker embedded |
 | `request_log_path` | Both | empty | File path | File for the `file` sink; required with it |
-| `request_log_max_bytes` | Both | `268435456` (256 MiB) | 1,048,576 or more | Size at which the `file` sink rotates its file; four old files are kept |
+| `request_log_rotation_interval_hours` | Both | `1` | 1 or more | Hours after which the `file` sink rotates its file, as the server's [usage log](../guides/01-configuration.md#usage-reporter) does; old files are named after the UTC hour they started, such as `requests.jsonl.2026-01-31_13`. The parent directory is created if missing |
+| `request_log_backup_count` | Both | `168` | 0 or more | Old `file` sink files kept; `0` keeps all |
 | `snapshot_interval_seconds` | Both | `0` | 0 or more | Seconds between [status lines](../guides/22-gateway-operations.md#status-line) with this process's counters. `0` writes none |
 | `trusted_host_headers` | Both | `false` | `true`, `false` | Record `X-OpenViking-Resource-Id` and `X-OpenViking-Request-Source` from a service in front of the gateway as `resource_id` and `request_source`; see [Host integration contract](../guides/22-gateway-operations.md#host-integration-contract). Turn it on only when clients cannot reach the gateway directly; see [Headers from a host](11-security-and-data.md#headers-from-a-host) |
 | `log_retention_days` | Both | `30` | 1 or more | Days to keep request logs in storage; stdout and file retention is managed by the log collector |
@@ -145,7 +146,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `tenancy` | `key` requires `management_api: false`; it has no effect when `openviking_keys` is off |
 | `client_rules` | Every added pattern must be a valid Python regular expression; added tag names start with an ASCII letter and use only ASCII letters, digits, `_`, `.`, `:` and `-` |
 | Unknown fields | Fail validation |
-| Removed fields | Ignored, with a startup warning: `encryption_key_env`, `session_ttl_days` (replaced by `session_ttl_seconds`), `capture_concurrency`, `capture_delivery_records`, and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
+| Removed fields | Ignored, with a startup warning: `encryption_key_env`, `session_ttl_days` (replaced by `session_ttl_seconds`), `capture_concurrency`, `capture_delivery_records`, `request_log_max_bytes` (the `file` sink rotates by time), and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
 
 ## Client rules {#client-rules}
 

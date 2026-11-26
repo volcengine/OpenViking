@@ -1,0 +1,74 @@
+name: PostgreSQL SnapshotLog Tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'crates/ragfs/**'
+      - 'crates/ragfs-python/**'
+      - 'openviking/service/sql/snapshot_log_postgres_init.sql'
+      - 'openviking_cli/utils/config/git_config.py'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/snapshot-log-postgres.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/ragfs/**'
+      - 'crates/ragfs-python/**'
+      - 'openviking/service/sql/snapshot_log_postgres_init.sql'
+      - 'openviking_cli/utils/config/git_config.py'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/snapshot-log-postgres.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapshot-log-postgres-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: snapshot_log_test
+          POSTGRES_USER: snapshot_log_test
+          POSTGRES_PASSWORD: integration-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U snapshot_log_test -d snapshot_log_test"
+          --health-interval=5s --health-timeout=5s --health-retries=12
+    env:
+      SNAPSHOT_LOG_TEST_PG_DSN: postgresql://snapshot_log_test:integration-test-password@127.0.0.1:5432/snapshot_log_test
+      PGPASSWORD: integration-test-password
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: ./.github/actions/compiler-cache
+      - name: Provision database schema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          psql -h 127.0.0.1 -U snapshot_log_test -d snapshot_log_test -v ON_ERROR_STOP=1 \
+            -f openviking/service/sql/snapshot_log_postgres_init.sql
+      - name: Test real PostgreSQL contracts
+        run: cargo test --locked -p ragfs --features postgres --test postgres_snapshot_log -- --ignored
+      - name: Test commit, restore and index backfill on PostgreSQL
+        run: cargo test --locked -p ragfs --features postgres --lib snapshot_log
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Test Python provider binding against PostgreSQL
+        env:
+          PYO3_PYTHON: python3
+        run: cargo test --locked -p ragfs-python --no-default-features --lib postgres_snapshot_log -- --include-ignored

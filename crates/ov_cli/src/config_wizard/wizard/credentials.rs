@@ -39,8 +39,8 @@ pub(super) enum CustomEditKeyAction {
 
 pub(super) fn provider_labels(language: Language) -> [&'static str; 2] {
     match language {
-        Language::En => [ConfigKind::OpenVikingService.label(), "Custom"],
-        Language::ZhCn => ["OpenViking 服务（火山引擎云）", "自定义"],
+        Language::En => ["OpenViking Managed Service", "Custom"],
+        Language::ZhCn => ["OpenViking 托管服务", "自定义"],
     }
 }
 

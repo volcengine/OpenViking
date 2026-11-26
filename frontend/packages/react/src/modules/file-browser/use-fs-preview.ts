@@ -145,7 +145,7 @@ export function useFsPreview({
       const stat = resourceType === 'unknown' ? await metadata : undefined;
       const isDir = stat?.isDirectory ?? resourceType === 'directory';
       if (signal.aborted) throw abortError();
-      if (resourceType === 'unknown' && isDir !== undefined) {
+      if (resourceType === 'unknown' && stat?.isDirectory !== undefined) {
         const type = isDir ? 'directory' : 'file';
         setStatType({ lookup, type });
         setTabs([loadingTab(uri, type)]);

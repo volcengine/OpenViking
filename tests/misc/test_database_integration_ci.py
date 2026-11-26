@@ -22,7 +22,7 @@ def test_schema_parser_ignores_commented_migration_template():
 
 def report(tmp_path, *, skipped=None, omitted=None):
     suite = ET.Element("testsuite")
-    cases = [("tests.server.test_account_services", name) for name in sorted(ci.ACCOUNT_CASES)] + [
+    cases = sorted(ci.ACCOUNT_CASES) + [
         ("tests.server.test_redis_mysql_account_store", "test_auth[encrypted]"),
         ("tests.service.test_task_work_contract", "test_history[mysql-stage]"),
         ("tests.service.test_task_work_contract", "test_history[postgres-stage]"),
@@ -68,7 +68,7 @@ def test_verifier_accepts_real_coverage_and_expected_file_skip(tmp_path):
 @pytest.mark.parametrize(
     "name",
     [
-        *sorted(ci.ACCOUNT_CASES),
+        *(name for _, name in sorted(ci.ACCOUNT_CASES)),
         "test_auth[encrypted]",
         "test_history[mysql-stage]",
         "test_history[postgres-stage]",

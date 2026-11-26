@@ -171,6 +171,9 @@ SOURCE_ARG=""
 DIST_ARG=""
 LANG_ARG=""
 URL_ARG=""
+VOLCENGINE_SERVICE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
+# A verified release URL is an optional default for the BytePlus URL prompt.
+BYTEPLUS_SERVICE_URL=""
 API_KEY_ARG="__OPENVIKING_UNSET__"
 ACCOUNT_ARG="__OPENVIKING_UNSET__"
 USER_ARG="__OPENVIKING_UNSET__"
@@ -318,14 +321,16 @@ if [ "$YES" -ne 1 ] && ( exec 3</dev/tty ) 2>/dev/null; then
   INTERACTIVE=1
 fi
 
-read_tty() { # read_tty <varname> [-s]
-  local __var="$1" __val=""
+read_tty() { # read_tty <varname> [-s] [required]
+  local __var="$1" __val="" __eof=0
   if [ "${2:-}" = "-s" ]; then
-    if IFS= read -rs __val <&3 2>/dev/null; then printf '\n'; else __val=""; fi
+    if IFS= read -rs __val <&3 2>/dev/null; then printf '\n'; else __val=""; __eof=1; fi
   else
-    IFS= read -r __val <&3 || __val=""
+    IFS= read -r __val <&3 || { __val=""; __eof=1; }
   fi
   eval "$__var=\$__val"
+  if [ "${3:-}" = "required" ] && [ "$__eof" -eq 1 ]; then return 1; fi
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -710,12 +715,55 @@ json_merge_ovcli() {
   local file="$1" url="$2" key="$3" account="$4" user="$5"
   # Not as arguments: any user can read those in the process list, and one of
   # the values is the API key.
-  OVCLI_URL="$url" OVCLI_API_KEY="$key" OVCLI_ACCOUNT="$account" OVCLI_USER="$user" node - "$file" <<'NODE'
+  OVCLI_URL="$url" OVCLI_API_KEY="$key" OVCLI_ACCOUNT="$account" OVCLI_USER="$user" OVCLI_LANG="$UI_LANG" node - "$file" <<'NODE'
 const fs = require("node:fs");
 const file = process.argv[2];
 const { OVCLI_URL: url, OVCLI_API_KEY: apiKey, OVCLI_ACCOUNT: account, OVCLI_USER: user } = process.env;
-let c = {};
-try { c = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+const read = (path) => {
+  try { return JSON.parse(fs.readFileSync(path, "utf8")) || {}; } catch { return {}; }
+};
+const endpoint = (value) => typeof value === "string" ? value.trim().replace(/\/+$/, "") : "";
+const c = read(file);
+if (url && endpoint(c.url) !== endpoint(url)) {
+  const home = require("node:os").homedir();
+  const legacyPath = process.env.OPENVIKING_CONFIG_FILE?.trim() || `${home}/.openviking/ov.conf`;
+  const legacy = read(legacyPath.replace(/^~\//, `${home}/`));
+  const server = legacy.server || {};
+  const legacyHost = typeof server.host === "string" && server.host.trim()
+    ? server.host.trim().replace("0.0.0.0", "127.0.0.1") : "127.0.0.1";
+  const legacyPort = Number.isFinite(Number(server.port)) ? Math.floor(Number(server.port)) : 1933;
+  const legacyUrl = typeof server.url === "string" && server.url.trim()
+    ? server.url.trim() : `http://${legacyHost}:${legacyPort}`;
+  const legacyKey = server.root_api_key || legacy.api_key || Object.values(legacy).some(section => section?.apiKey);
+  const envKey = process.env.OPENVIKING_BEARER_TOKEN?.trim() || process.env.OPENVIKING_API_KEY?.trim();
+  const envUrl = process.env.OPENVIKING_URL?.trim() || process.env.OPENVIKING_BASE_URL?.trim();
+  const hasNewKey = apiKey && apiKey.trim() && apiKey !== "__OPENVIKING_KEEP__";
+  if (!hasNewKey && ((legacyKey && endpoint(legacyUrl) !== endpoint(url)) || (envKey && !envUrl))) {
+    console.error(process.env.OVCLI_LANG === "zh"
+      ? "新连接可能沿用其他服务的密钥。请填写新连接的 API Key，为环境变量中的密钥指定对应 URL，或使用单独的连接配置。"
+      : "The new connection could reuse a key from another server. Set its API key and pair any environment key with its own URL, or use a separate connection configuration.");
+    process.exit(1);
+  }
+  if (envKey && !envUrl) {
+    // Saving a file does not change environment precedence in the caller's agents.
+    console.warn(process.env.OVCLI_LANG === "zh"
+      ? "未指定 URL 的环境变量密钥可能覆盖已保存的 API Key，并被发送到新服务。启动 Agent 前，请清除该环境变量或为此密钥指定其服务地址。"
+      : "An environment key without a URL can override the saved API key and be sent to the new server. Before starting your agent, unset it or pair it with its own server URL.");
+  }
+  // Do not migrate authentication settings to a different or unknown server.
+  for (const field of ["api_key", "root_api_key", "account", "account_id", "user", "user_id",
+    "actor_peer_id", "peer_id", "agent_id", "extra_header", "extra_headers", "gateway_token",
+    "auth_mode", "ldap_username", "ldap_password", "oidc_token"]) {
+    delete c[field];
+  }
+  if (c.plugin && typeof c.plugin === "object") {
+    for (const section of [c.plugin, ...Object.values(c.plugin)]) {
+      if (section && typeof section === "object") {
+        for (const field of ["apiKey", "accountId", "userId", "authMode", "auth_mode"]) delete section[field];
+      }
+    }
+  }
+}
 if (url) c.url = url;
 if (apiKey !== "__OPENVIKING_KEEP__") c.api_key = apiKey;
 if (account !== "__OPENVIKING_KEEP__") {
@@ -1598,21 +1646,56 @@ EOF
 # ovcli.conf wizard
 # ---------------------------------------------------------------------------
 
+normalize_byteplus_service_url() {
+  printf '%s' "$1" | node -e '
+    const input = require("fs").readFileSync(0, "utf8").trim().replace(/\/+$/, "");
+    try {
+      const url = new URL(input);
+      if (url.protocol !== "https:" || !url.hostname || url.username || url.password ||
+          url.search || url.hash || input.includes("?") || input.includes("#") ||
+          url.href.replace(/\/+$/, "") === "https://api.vikingdb.cn-beijing.volces.com/openviking") process.exit(1);
+      process.stdout.write(url.href.replace(/\/+$/, ""));
+    } catch { process.exit(1); }
+  '
+}
+
 prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KEEP__)
-  local current_url="$1" current_key="$2" url_input reply def=2 custom hidden
+  local current_url="$1" current_key="$2" url_input reply def=2 custom hidden provider="" provider_def=1
   custom="$(t 'Custom URL' '自定义 URL')"
   if [ -n "$current_url" ]; then
     custom="$(t 'Custom URL / keep current' '自定义 URL / 保持当前')  [$current_url]"
   else
     def=0
   fi
-  tui_menu "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')" "$def" \
-    "$(t 'Self-hosted / local' '自建 / 本地')  [http://127.0.0.1:1933]" \
-    "$(t 'Volcengine OpenViking Cloud' '火山引擎 OpenViking 云服务')  [api.vikingdb.cn-beijing.volces.com]" \
+  local options=(
+    "$(t 'Self-hosted / local' '自建 / 本地')  [http://127.0.0.1:1933]"
+    "$(t 'OpenViking Managed Service' 'OpenViking 托管服务')"
     "$custom"
+  )
+  tui_menu "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')" "$def" "${options[@]}"
   case "$TUI_MENU_CHOICE" in
     0) WIZ_URL="http://127.0.0.1:1933" ;;
-    1) WIZ_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" ;;
+    1)
+      [ "$UI_LANG" != "zh" ] || provider_def=0
+      tui_menu "$(t 'Cloud provider' '云服务商')" "$provider_def" "Volcengine" "BytePlus"
+      if [ "$TUI_MENU_CHOICE" -eq 0 ]; then
+        provider="volcengine"
+        WIZ_URL="$VOLCENGINE_SERVICE_URL"
+      else
+        provider="byteplus"
+        while :; do
+          ask "$(t 'BytePlus service URL' 'BytePlus 服务地址')${BYTEPLUS_SERVICE_URL:+ [$BYTEPLUS_SERVICE_URL]}: "
+          if ! read_tty url_input "" required; then
+            info "$(t 'Cancelled; nothing was changed.' '已取消，未做任何修改。')"
+            exit 0
+          fi
+          if WIZ_URL="$(normalize_byteplus_service_url "${url_input:-$BYTEPLUS_SERVICE_URL}")"; then
+            break
+          fi
+          err "$(t 'Enter the full HTTPS service URL for your BytePlus instance, without login credentials, a query or a fragment.' '请输入 BytePlus 实例的完整 HTTPS 服务地址，不要包含登录凭据、查询参数或片段。')"
+        done
+      fi
+      ;;
     *)
       ask "$(t 'Server URL' '服务地址') [${current_url:-http://127.0.0.1:1933}]: "
       read_tty url_input
@@ -1620,29 +1703,54 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
       ;;
   esac
 
+  # A blank answer may keep a key only for the endpoint that supplied it.
+  if ! same_connection_url "$WIZ_URL" "$current_url"; then
+    current_key=""
+  fi
   hidden="$(t 'typing is not shown' '输入内容不会显示')"
-  if [ -n "$current_key" ]; then
-    ask "$(t "API key [Enter = keep $(mask_secret "$current_key"), '-' = clear; $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空；$hidden]: ")"
-  elif [ "$TUI_MENU_CHOICE" -eq 1 ]; then
-    info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
-    info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
-    ask "$(t "API key ($hidden): " "API key（${hidden}）: ")"
-  else
-    ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；${hidden}）: ")"
+  if [ "$provider" = "byteplus" ]; then
+    current_key="$(printf '%s' "$current_key" | node -e 'process.stdout.write(require("fs").readFileSync(0, "utf8").trim())')"
+    info "$(t 'Server' '服务器'): $WIZ_URL"
   fi
-  read_tty reply -s
-  if [ "$reply" = "-" ]; then
-    WIZ_KEY=""
-  elif [ -n "$reply" ]; then
-    WIZ_KEY="$reply"
-  else
-    # Not `[ -z ... ] && ...`: as the function's last command a false test makes
-    # prompt_connection return 1, and `set -e` aborts the whole installer.
-    WIZ_KEY="__OPENVIKING_KEEP__"
-    if [ -z "$current_key" ]; then
-      WIZ_KEY=""
+  while :; do
+    if [ -n "$current_key" ]; then
+      ask "$(t "API key [Enter = keep $(mask_secret "$current_key"), '-' = clear; $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空；$hidden]: ")"
+    elif [ "$provider" = "volcengine" ]; then
+      info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
+      info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
+      ask "$(t "API key ($hidden): " "API key（${hidden}）: ")"
+    elif [ "$provider" = "byteplus" ]; then
+      ask "$(t "BytePlus OpenViking API key ($hidden): " "BytePlus OpenViking API key（${hidden}）: ")"
+    else
+      ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；${hidden}）: ")"
     fi
-  fi
+    if [ "$provider" = "byteplus" ]; then
+      if ! read_tty reply -s required; then
+        info "$(t 'Cancelled; nothing was changed.' '已取消，未做任何修改。')"
+        exit 0
+      fi
+      reply="$(printf '%s' "$reply" | node -e 'process.stdout.write(require("fs").readFileSync(0, "utf8").trim())')"
+    else
+      read_tty reply -s
+    fi
+    if [ "$reply" = "-" ]; then
+      WIZ_KEY=""
+    elif [ -n "$reply" ]; then
+      WIZ_KEY="$reply"
+    else
+      # Not `[ -z ... ] && ...`: as the function's last command a false test makes
+      # prompt_connection return 1, and `set -e` aborts the whole installer.
+      WIZ_KEY="__OPENVIKING_KEEP__"
+      if [ -z "$current_key" ]; then
+        WIZ_KEY=""
+      fi
+    fi
+    if [ "$provider" = "byteplus" ] && [ -z "$WIZ_KEY" ]; then
+      err "$(t 'An API key is required for the BytePlus instance.' 'BytePlus 实例需要 API Key。')"
+    else
+      break
+    fi
+  done
 }
 
 # What the credentials step settled on. Nothing is written until the plan is
@@ -1655,6 +1763,21 @@ PROBE_CODE=""
 
 cred_value() { # cred_value <chosen> <stored>
   if [ "$1" = "__OPENVIKING_KEEP__" ]; then printf '%s' "$2"; else printf '%s' "$1"; fi
+}
+
+same_connection_url() {
+  local left="$1" right="$2"
+  # An absent URL does not identify the server an existing key came from.
+  [ -n "$left" ] && [ -n "$right" ] || return 1
+  while [ "${left%/}" != "$left" ]; do left="${left%/}"; done
+  while [ "${right%/}" != "$right" ]; do right="${right%/}"; done
+  [ "$left" = "$right" ]
+}
+
+clear_inherited_credentials() {
+  if [ "$CRED_KEY" = "__OPENVIKING_KEEP__" ]; then CRED_KEY=""; fi
+  if [ "$CRED_ACCOUNT" = "__OPENVIKING_KEEP__" ]; then CRED_ACCOUNT=""; fi
+  if [ "$CRED_USER" = "__OPENVIKING_KEEP__" ]; then CRED_USER=""; fi
 }
 
 gather_credentials() {
@@ -1695,7 +1818,13 @@ gather_credentials() {
     fi
   fi
   if [ -z "$CRED_URL" ]; then
+    # Keeping an implicit connection must not pin its saved key to a new URL.
+    # The clients still resolve their usual default when no URL is saved.
+    if [ -n "$CUR_KEY" ]; then return 0; fi
     CRED_URL="http://127.0.0.1:1933"
+  fi
+  if ! same_connection_url "$CRED_URL" "$CUR_URL"; then
+    clear_inherited_credentials
   fi
 }
 
@@ -1730,6 +1859,10 @@ probe_server() { # probe_server <url> <key> <account> <user> -> PROBE_RESULT, PR
 
 check_server() {
   local key def
+  if [ -z "$CRED_URL" ]; then
+    info "$(t 'Kept the existing connection. Skipping the server check because there is no explicit server URL.' '已沿用现有连接。未明确设置服务地址，跳过连接检查。')"
+    return 0
+  fi
   command -v curl >/dev/null 2>&1 || return 0
   while :; do
     key="$(cred_value "$CRED_KEY" "$CUR_KEY")"
@@ -1755,6 +1888,11 @@ check_server() {
       "$(t 'Continue anyway' '仍然继续')"
     [ "$TUI_MENU_CHOICE" -eq 0 ] || return 0
     prompt_connection "$CRED_URL" "$key"
+    if ! same_connection_url "$WIZ_URL" "$CRED_URL"; then
+      CRED_KEY=""
+      CRED_ACCOUNT=""
+      CRED_USER=""
+    fi
     CRED_URL="$WIZ_URL"
     [ "$WIZ_KEY" = "__OPENVIKING_KEEP__" ] || CRED_KEY="$WIZ_KEY"
   done
@@ -3220,7 +3358,7 @@ install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>...
   cp "$config/runtime-index.mjs" "$root/hosts/index.mjs" || { rm -rf "$bundle"; return 1; }
   for host_module in "$root"/hosts/*.mjs; do
     case "$(basename "$host_module")" in
-      index.mjs|incremental-turn-capture.mjs|"$host.mjs"|"$host-turns.mjs") ;;
+      index.mjs|incremental-turn-capture.mjs|history-session.mjs|"$host.mjs"|"$host-turns.mjs") ;;
       *) rm -f "$host_module" ;;
     esac
   done
@@ -3825,7 +3963,7 @@ print_plan() {
   user="$(cred_value "$CRED_USER" "$CUR_USER")"
   step_heading "$(t 'Review' '确认安装内容')"
   print_selection
-  info "$(t 'Server:' '服务地址：') $CRED_URL"
+  info "$(t 'Server:' '服务地址：') ${CRED_URL:-$(t '(existing settings)' '（沿用现有设置）')}"
   info "API key: $(mask_secret "$(cred_value "$CRED_KEY" "$CUR_KEY")")"
   if [ -n "$account" ]; then info "account: $account"; fi
   if [ -n "$user" ]; then info "user: $user"; fi
@@ -4080,7 +4218,7 @@ EOF
       "$(t 'quit DeepSeek Harness Desktop with ⌘Q if it is open, reopen it and start a new conversation' '如 DeepSeek Harness Desktop 已打开，用 ⌘Q 退出后重新打开，再新建对话')" \
       "$(t 're-run this installer, or update it on the Plugins page' '重新运行本安装脚本，或在“插件”页更新')" \
       "\"$DSH_DESKTOP_CLI\" plugin --profile desktop ls" \
-      "$(t "with Desktop quit, \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE; or Plugins page → $DSH_PACKAGE → Uninstall" "退出 Desktop 后运行 \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE；或在“插件”页 → $DSH_PACKAGE → 卸载")"
+      "$(t "with Desktop quit, \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE; or Plugins page → $DSH_PACKAGE → Uninstall" "退出 Desktop 后运行 \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm ${DSH_PACKAGE}；或在“插件”页 → $DSH_PACKAGE → 卸载")"
   elif contains_harness dsh-desktop; then
     next_steps "DeepSeek Harness Desktop" \
       "$(t "open DeepSeek Harness Desktop: Plugins → Add plugin → enter $DSH_PACKAGE → Install, then turn it on if its switch is off" "打开 DeepSeek Harness Desktop：插件 → 添加插件 → 输入 $DSH_PACKAGE → 安装，开关未打开时再打开")" \

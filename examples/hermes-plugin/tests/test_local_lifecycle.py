@@ -406,8 +406,11 @@ def test_unexpected_start_failure_clears_flag_and_reaches_cli(modules, monkeypat
 
 
 def test_cold_import_timeout_does_not_trigger_reinstallation(modules, monkeypatch):
-    home, _p, _m, ql, _life, _packages = modules
+    home, _p, _m, ql, _life, packages = modules
     paths = ql.managed_paths(home)
+    monkeypatch.setattr(
+        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.5.0"
+    )
     monkeypatch.setattr(ql, "_pm_available", lambda: False)
     paths.runtime_python.parent.mkdir(parents=True)
     paths.runtime_python.touch()
@@ -465,7 +468,10 @@ def test_platform_without_reviewed_binary_requires_explicit_consent(modules, mon
 def test_broken_pm_import_never_calls_legacy_uv_shim(modules, monkeypatch):
     import builtins
 
-    home, _p, _m, ql, _life, _packages = modules
+    home, _p, _m, ql, _life, packages = modules
+    monkeypatch.setattr(
+        packages, "resolve_server_requirement", lambda **_kw: "openviking[local-embed]==0.5.0"
+    )
     monkeypatch.setattr(ql, "openviking_install_satisfies_requirement", lambda _paths: False)
     monkeypatch.setattr(ql, "_pm_available", lambda: True)
     original = builtins.__import__
