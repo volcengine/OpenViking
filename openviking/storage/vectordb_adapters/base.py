@@ -13,6 +13,7 @@ from tempfile import TemporaryFile
 from typing import Any, Dict, Iterable, Optional
 from urllib.parse import urlparse
 
+from openviking.observability.log_safety import short_hash
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.expr import (
     And,
@@ -100,6 +101,9 @@ class CollectionAdapter(ABC):
     _DATA_BATCH_SIZE: int | None = None
 
     mode: str
+    # Remote glob can use this adapter's random-search post-processing path.
+    # Used when enable_path_glob is unspecified in VectorDB configuration.
+    enable_path_glob: bool = False
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
     # Only derived fields may be shortened silently. An oversized abstract is
@@ -129,6 +133,10 @@ class CollectionAdapter(ABC):
     @property
     def collection_name(self) -> str:
         return self._collection_name
+
+    @property
+    def supports_event_time_decay(self) -> bool:
+        return True
 
     @property
     def index_name(self) -> str:
@@ -204,18 +212,22 @@ class CollectionAdapter(ABC):
                 try:
                     coll.drop_index(index_name)
                 except Exception as e:
-                    logger.warning("Failed to drop index %s: %s", index_name, e)
+                    logger.info(
+                        "Failed to drop index %s: %s", short_hash(str(index_name)), type(e).__name__
+                    )
         except Exception as e:
-            logger.warning("Failed to list indexes before dropping collection: %s", e)
+            logger.info("Failed to list indexes before dropping collection: %s", type(e).__name__)
 
         try:
             coll.drop()
-        except NotImplementedError:
-            logger.warning("Collection drop is not supported by backend mode=%s", self.mode)
+        except NotImplementedError as _log_error:
+            logger.info(
+                "Collection drop is not supported by backend mode=%s error_type=%s",
+                self.mode,
+                type(_log_error).__name__,
+            )
             return False
-        finally:
-            self._collection = None
-
+        self._collection = None
         return True
 
     def close(self) -> None:
@@ -487,7 +499,7 @@ class CollectionAdapter(ABC):
         advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
         decay_request = (advance or {}).get("time_decay")
-        if decay_request is not None and self.mode != "opengauss":
+        if decay_request is not None and self.mode not in {"opengauss", "pgvector"}:
             from openviking.utils.time_decay import (
                 build_time_decay_fusion_spec,
                 build_time_decay_post_process_ops,
@@ -705,17 +717,20 @@ class CollectionAdapter(ABC):
         output_fields: Optional[list[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[list[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> list[Dict[str, Any]]:
         coll = self.get_collection()
         compiled_filter = self._compile_filter(filter)
         logger.debug(
-            "search_by_keywords: keywords=%s query=%s limit=%s offset=%s filter=%s output_fields=%s",
-            keywords,
-            query,
+            "Keyword search prepared keyword_count=%d query_length=%d limit=%s offset=%s has_filter=%s",
+            # input params choose either keywords or query
+            len(keywords or ()),
+            len(query or ""),
             limit,
             offset,
-            json.dumps(compiled_filter, ensure_ascii=False),
-            output_fields,
+            bool(compiled_filter),
         )
         result = coll.search_by_keywords(
             index_name=self._index_name,
@@ -727,6 +742,9 @@ class CollectionAdapter(ABC):
             offset=offset,
             filters=compiled_filter,
             output_fields=output_fields,
+            bm25_k1=bm25_k1,
+            bm25_b=bm25_b,
+            advance=advance,
         )
         records: list[Dict[str, Any]] = []
         for item in result.data:

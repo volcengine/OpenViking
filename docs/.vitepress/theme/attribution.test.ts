@@ -38,6 +38,28 @@ test('无参数的直接访问只生成文档默认来源，不向站内导航�
   assert.equal(attributionUrl(product + '?utm_source=opensource_docs&utm_medium=referral&utm_campaign=static', docs), undefined)
 })
 
+test('BytePlus 页面继承来源或使用文档默认来源，保留业务参数与锚点', () => {
+  for (const origin of ['https://openviking.ai', 'https://www.openviking.ai', 'https://openviking.net', 'https://www.openviking.net']) {
+    const target = origin + '/byteplus/?plan=enterprise#availability'
+    const result = new URL(attributionUrl(target, tagged)!)
+    assert.deepEqual(readUtm(result.href), incoming)
+    assert.equal(result.searchParams.get('plan'), 'enterprise')
+    assert.equal(result.hash, '#availability')
+    assert.deepEqual(readUtm(attributionUrl(origin + '/byteplus', docs)!), {
+      utm_source: 'opensource_docs', utm_medium: 'referral', utm_campaign: 'getting-started_02-quickstart'
+    })
+  }
+  assert.equal(attributionUrl('https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme', docs), undefined)
+})
+
+test('BytePlus 相似路径、子路径和伪造域名不接收来源参数', () => {
+  for (const target of [
+    'https://openviking.ai/byteplus-other',
+    'https://openviking.ai/byteplus/api',
+    'https://openviking.ai.evil.example/byteplus'
+  ]) assert.equal(attributionUrl(target, tagged), undefined, target)
+})
+
 test('文档默认 campaign 在语言、扩展名和部署 base 下保持一致', () => {
   assert.equal(docsCampaign('/zh/getting-started/02-quickstart'), docsCampaign('/en/getting-started/02-quickstart.html'))
   assert.equal(docsCampaign('/guide/en/guides/03-deployment.html', '/guide/'), 'guides_03-deployment')

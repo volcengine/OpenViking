@@ -17,6 +17,8 @@ class EnqueueContext:
     payload: Payload
     committed: bool = False
     work_id: Optional[str] = None
+    group_key: Optional[str] = None
+    serial_key: Optional[str] = None
 
 
 class EnqueueReceipt(str):

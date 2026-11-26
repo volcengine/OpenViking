@@ -62,3 +62,4 @@ class AccountInfo:
     groups: Dict[str, dict] = field(default_factory=dict)
     groups_loaded: bool = True
     deletion: dict | None = None
+    frozen_files: tuple[str, ...] = ()

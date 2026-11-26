@@ -3,13 +3,18 @@
 /**
  * SessionStart hook for Codex.
  *
- * Triggers (matcher = "clear|startup|resume" in hooks.json):
+ * Triggers (matcher = "clear|startup|resume|compact" in hooks.json):
  *   - source=startup → fresh codex CLI / `/new` / zouk daemon spawn-without-sessionId
  *   - source=clear   → `/clear` (orphans the current process's previous session)
  *   - source=resume  → `/resume` or short reconnect (no commit/sweep;
- *     may inject latest archive summary if the live OV session was already committed)
+ *     may inject latest archive summary if the live OV session was already
+ *     committed), then the session-history pointer, which is sent even when
+ *     the server is unreachable
+ *   - source=compact → after Codex compacted the thread: only the session-history
+ *     pointer, no state or server work
+ *   OPENVIKING_SESSION_HISTORY_POINTER=0 turns the pointer off on both sources.
  *
- * Every source injects the shared OpenViking profile block unless
+ * Every other source injects the shared OpenViking profile block unless
  * OPENVIKING_NO_AUTO_INJECT=1. The block contains profile.md plus
  * abstract-annotated indexes of preferences/ and entities/, capped by
  * OPENVIKING_PROFILE_TOKEN_BUDGET with the shared CJK-aware estimator.
@@ -64,6 +69,7 @@ import {
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { replayPending } from "./shared/pending-queue.mjs";
 import { buildProfileBlock, isRepeatInjection, truncateToBytes } from "./shared/profile-inject.mjs";
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 let cfg = loadConfig();
@@ -257,9 +263,9 @@ async function buildResumeArchiveContext(newSessionId) {
  *
  * Returns { committed: bool, ovSessionId: string|null, traceId: string }.
  */
-async function commitAndRelease(state, reason, endToken) {
+async function commitAndRelease(state, reason, endToken, sessionFetchJSONRes) {
   const ovSessionId = state.ovSessionId;
-  const commit = await commitOvSession(fetchJSONRes, ovSessionId);
+  const commit = await commitOvSession(sessionFetchJSONRes, ovSessionId);
   if (!commit?.ok) {
     log("commit", {
       reason,
@@ -337,13 +343,20 @@ runHookStage({
   cfg = stage.cfg;
   const source = input.source || "unknown";
   const newSessionId = input.session_id || "unknown";
+  // PreCompact already committed; a Stop worker may still be writing the state
+  // file, so this source leaves it alone.
+  if (source === "compact") {
+    log("start", { source, newSessionId, bypassed });
+    if (bypassed || !cfg.sessionHistoryPointer || !cfg.autoCapture || newSessionId === "unknown") return;
+    return { contexts: [formatSessionHistoryPointer(deriveOvSessionId(newSessionId))] };
+  }
   const effectivePeer = resolveEffectivePeerId({ cfg, cwd });
   activePeerId = effectivePeer.peerId;
   if (!bypassed && newSessionId !== "unknown") {
     const state = await loadState(newSessionId);
     await saveState({
       ...state,
-      workspacePeerId: effectivePeer.source === "workspace" ? effectivePeer.peerId : "",
+      workspacePeerId: effectivePeer.peerId,
     });
   }
   log("start", {
@@ -364,10 +377,14 @@ runHookStage({
     // Earliest liveness signal after `codex resume`: the thread is running
     // again, so a marker left by its previous exit must not trigger the sweep.
     await clearEnded(newSessionId, { before: HOOK_STARTED_AT });
+    // Needs nothing from the server, so it goes out even when the rest cannot.
+    const historyPointer = !bypassed && cfg.sessionHistoryPointer && cfg.autoCapture && newSessionId !== "unknown"
+      ? formatSessionHistoryPointer(deriveOvSessionId(newSessionId), { event: "resume" })
+      : "";
     const health = await fetchJSON("/health");
     if (!health) {
       logError("health_check", "server unreachable; skipping profile + archive injection");
-      return;
+      return { contexts: [historyPointer] };
     }
     await replayPendingWrites();
     if (bypassed) {
@@ -375,11 +392,13 @@ runHookStage({
       return;
     }
     const archiveContext = await buildResumeArchiveContext(newSessionId);
+    const reservedBytes = Buffer.byteLength(archiveContext, "utf8")
+      + (historyPointer ? Buffer.byteLength(historyPointer, "utf8") + 2 : 0);
     const maxBytes = cfg.sessionStartMaxBytes > 0
-      ? Math.max(1, cfg.sessionStartMaxBytes - Buffer.byteLength(archiveContext, "utf8"))
+      ? Math.max(1, cfg.sessionStartMaxBytes - reservedBytes)
       : 0;
     const profileContext = await buildSessionProfileContext({ sessionId: newSessionId, source, maxBytes });
-    return { contexts: [profileContext, archiveContext] };
+    return { contexts: [profileContext, archiveContext, historyPointer] };
   }
 
   // Other non-startup sources are hard no-ops. We don't sweep there, because
@@ -442,14 +461,21 @@ runHookStage({
         }
       }
 
+      // The historical session owns both message attribution and request headers.
+      // Its empty pin means user-level capture, even in a new project workspace.
+      const sweepPeerId = fresh.workspacePeerId || "";
+      const { fetchJSONRes: sweepFetchJSONRes } = makeFetchJSON(cfg, {
+        getActorPeerId: () => sweepPeerId,
+      });
+
       // Turns the session's own workers never sent would be lost by an
       // archive-now commit, so catch them up first and keep the session live
       // for the next sweep if any of them failed to land.
       const { newTurns, added, skipped, unreadable } = await catchUpTurns({
         state: fresh,
         transcriptPath: fresh.transcriptPath,
-        fetchJSONRes,
-        activePeerId: fresh.workspacePeerId || activePeerId,
+        fetchJSONRes: sweepFetchJSONRes,
+        activePeerId: sweepPeerId,
         cfg,
         log,
         logError,
@@ -497,7 +523,7 @@ runHookStage({
         return null;
       }
 
-      return commitAndRelease(fresh, reason, endToken);
+      return commitAndRelease(fresh, reason, endToken, sweepFetchJSONRes);
     }, { waitMs: 0 });
 
     if (outcome.skipped) {

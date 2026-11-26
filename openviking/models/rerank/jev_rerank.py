@@ -16,7 +16,6 @@ Same interface as the other rerank clients:
 rerank_batch(query, documents) -> List[float]
 """
 
-import json
 import time
 from typing import Dict, List, Optional, Protocol
 
@@ -188,10 +187,10 @@ class JevRerankClient(RerankBase):
                 "questions": self._strategy.build_questions(documents),
             }
             if self.log_payloads:
-                logger.warning(
-                    "[JevRerank] Request items=%s payload=%s",
+                logger.debug(
+                    "rerank request summary total=%d payload=true",
                     len(documents),
-                    json.dumps(body, ensure_ascii=False),
+                    extra={"payload": True, "total": len(documents)},
                 )
             started = time.monotonic()
             resp = self._client.post(self.api_url, json=body)
@@ -199,16 +198,23 @@ class JevRerankClient(RerankBase):
             resp.raise_for_status()
             data = resp.json()
             if self.log_payloads:
-                logger.warning(
-                    "[JevRerank] Response status=%s duration_ms=%.1f payload=%s",
+                logger.debug(
+                    "rerank response summary http_status_code=%d duration_ms=%.1f payload=true",
                     resp.status_code,
                     duration_seconds * 1000,
-                    json.dumps(data, ensure_ascii=False),
+                    extra={
+                        "payload": True,
+                        "http_status_code": resp.status_code,
+                        "duration_ms": duration_seconds * 1000,
+                    },
                 )
 
             answers = data.get("answers")
             if not isinstance(answers, dict):
-                logger.warning("[JevRerank] Response has no answers object")
+                logger.info(
+                    "rerank answers missing; using vector scores degraded=true",
+                    extra={"degraded": True},
+                )
                 return None
 
             scores = self._strategy.parse_scores(answers, len(documents))
@@ -226,14 +232,24 @@ class JevRerankClient(RerankBase):
                 duration_seconds=duration_seconds,
             )
 
-            logger.debug(f"[JevRerank] Reranked {len(documents)} documents")
+            logger.debug(
+                "rerank completed total=%d", len(documents), extra={"total": len(documents)}
+            )
             return scores
 
         except httpx.HTTPStatusError as e:
-            logger.error(f"[JevRerank] API error: {e.response.status_code} {e.response.text}")
+            logger.info(
+                "rerank request rejected; using vector scores http_status_code=%d degraded=true",
+                e.response.status_code,
+                extra={"http_status_code": e.response.status_code, "degraded": True},
+            )
             return None
         except Exception as e:
-            logger.error(f"[JevRerank] Rerank failed: {e}")
+            logger.info(
+                "rerank failed; using vector scores error_type=%s degraded=true",
+                type(e).__name__,
+                extra={"error_type": type(e).__name__, "degraded": True},
+            )
             return None
 
     def close(self):

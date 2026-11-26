@@ -20,7 +20,9 @@ from openviking.models.embedder.base import (
 from openviking.models.model_error import model_error_boundary
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
-from openviking_cli.utils.logger import default_logger as logger
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
 
 _DASHSCOPE_DIMENSIONS: Dict[str, int] = {
     "text-embedding-v3": 1024,

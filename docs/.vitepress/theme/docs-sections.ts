@@ -33,6 +33,7 @@ export const sections: DocSection[] = [
         p('getting-started/08-resources'),
         p('getting-started/09-memory'),
         p('getting-started/10-skills'),
+        p('getting-started/24-live-context'),
         p('getting-started/16-rules'),
         p('getting-started/06-evaluate')
       ]),
@@ -108,6 +109,8 @@ export const sections: DocSection[] = [
         p('agent-integrations/04-codex'),
         p('agent-integrations/12-cursor'),
         p('agent-integrations/13-trae'),
+        p('agent-integrations/20-codebuddy'),
+        p('agent-integrations/21-qoder'),
         p('agent-integrations/10-opencode'),
         p('agent-integrations/17-dsh')
       ]),
@@ -224,7 +227,8 @@ export const sections: DocSection[] = [
         p('guides/03-deployment'),
         p('getting-started/04-setup-for-agent'),
         p('guides/01-configuration'),
-        p('guides/02-volcengine-purchase-guide')
+        p('guides/02-volcengine-purchase-guide'),
+        p('guides/27-byteplus-setup')
       ]),
       g('Enterprise deployment', '企业私有化部署', [
         p('guides/19-deployment-checklist'),
@@ -246,7 +250,10 @@ export const sections: DocSection[] = [
       g('Storage and performance', '存储与性能', [
         p('guides/13-multi-write-storage'),
         p('guides/14-ragfs-cache'),
-        p('guides/16-cuvs')
+        p('guides/15-postgres-queuefs'),
+        p('guides/16-cuvs'),
+        p('guides/25-pgvector'),
+        p('guides/26-pgvector-directory-filtering')
       ])
     ]
   },
@@ -259,6 +266,7 @@ export const sections: DocSection[] = [
         p('reference/01-overview'),
         p('api/01-overview'),
         p('configuration/01-server'),
+        p('configuration/03-server-roles'),
         p('configuration/02-client'),
         p('guides/06-mcp-integration')
       ]),

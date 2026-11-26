@@ -28,7 +28,11 @@ class MergePlaceholderVLM(RecordingVLM):
             return "[first](viking://input_sample_f1)"
         if len(self.prompts) == 2:
             return "[second](viking://input_sample_f2)"
-        return "[first](viking://input_sample_f1) and [second](viking://input_sample_f2)"
+        return (
+            "# Docs\n\n## Detailed Description\n\n"
+            "### [Friendly title](viking://input_sample_f1)\n\nFirst reusable summary.\n\n"
+            "### [第二章](viking://input_sample_f2)\n\nSecond reusable summary."
+        )
 
 
 class _TestVLMResolver:
@@ -120,7 +124,7 @@ async def test_sampled_overview_prompt_describes_full_directory_coverage(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch):
+async def test_batched_overview_resolves_links_and_reuses_summaries_by_filename(monkeypatch):
     vlm = MergePlaceholderVLM()
     config = SimpleNamespace(
         vlm=vlm,
@@ -141,20 +145,26 @@ async def test_batched_merge_resolves_placeholders_from_merge_output(monkeypatch
         lambda _name, values: values["file_summaries"],
     )
 
-    overview = await SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))._generate_overview(
+    processor = SemanticProcessor(vlm_resolver=_TestVLMResolver(vlm))
+    overview = await processor._generate_overview(
         "viking://resources/业务 docs",
         file_summaries=[
-            {"name": "first file.md", "summary": "first summary"},
+            {"name": "first file (approved).md", "summary": "first summary"},
             {"name": "第二章#file.md", "summary": "second summary"},
         ],
         children_abstracts=[],
     )
 
-    assert overview == (
-        "[first](viking://resources/业务%20docs/first%20file.md) and "
-        "[second](viking://resources/业务%20docs/第二章%23file.md)"
+    assert (
+        "[Friendly title](viking://resources/业务%20docs/first%20file%20%28approved%29.md)"
+        in overview
     )
+    assert "[第二章](viking://resources/业务%20docs/第二章%23file.md)" in overview
     assert "viking://input_sample_" not in overview
+    assert processor._parse_overview_md(overview) == {
+        "first file (approved).md": "First reusable summary.",
+        "第二章#file.md": "Second reusable summary.",
+    }
 
 
 @pytest.mark.asyncio

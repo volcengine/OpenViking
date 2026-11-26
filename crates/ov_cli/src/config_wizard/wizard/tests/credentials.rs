@@ -20,6 +20,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 #[test]
+fn connection_menu_groups_managed_services_and_keeps_custom() {
+    assert_eq!(
+        provider_labels(Language::En),
+        ["OpenViking Managed Service", "Custom"]
+    );
+    assert_eq!(
+        provider_labels(Language::ZhCn),
+        ["OpenViking 托管服务", "自定义"]
+    );
+}
+
+#[test]
 fn provider_helper_copy_is_minimal_and_custom_is_clear() {
     let cloud = openviking_service_api_key_helper_lines();
     let local_custom = custom_api_key_helper_lines(true);
@@ -31,7 +43,7 @@ fn provider_helper_copy_is_minimal_and_custom_is_clear() {
 
     assert_eq!(
         provider_labels(Language::En)[0],
-        "OpenViking Service (VolcEngine Cloud)"
+        "OpenViking Managed Service"
     );
     assert!(cloud.iter().any(|line| line.contains("Get your API key:")));
     assert!(cloud.iter().any(|line| {

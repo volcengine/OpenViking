@@ -60,6 +60,35 @@ Configure `root_api_key` in `~/.openviking/ovcli.conf`:
 - `--sudo` only works with the commands above - using it with regular data commands will error
 - Must have `root_api_key` configured to use `--sudo`
 
+## Account frozen file list
+
+An ADMIN can maintain a persistent frozen file list within its own account, containing up to ten file paths for ordinary USER identities (including agents). Operations only access account authorization metadata; they neither read the target file nor grant access to the user's data.
+
+```bash
+ov admin freeze-file acme agent-a skills/example/SKILL.md
+ov admin frozen-file-status acme agent-a skills/example/SKILL.md
+ov admin unfreeze-file acme agent-a skills/example/SKILL.md
+```
+
+All three CLI commands also accept a full user URI such as `viking://user/agent-a/skills/example/SKILL.md` and convert it to a relative path. The URI user must match the command's `user-id`, otherwise the CLI reports an error. Conversion preserves the literal path without decoding escapes or resolving `..`; the server still validates the relative path.
+
+ROOT can manage a specified account with `--sudo`. USER and GLOBAL cannot manage these rules; freezing requires a USER target. Server-side paths are relative to that user's root and use GLOBAL's strict literal path syntax: no globs, URIs, encoded escapes, traversal or storage-internal filenames, and at most 255 bytes per component. Matching, status and unfreezing are case-sensitive: `a.md` and `A.md` are separate entries.
+
+The file need not exist. Status only reports membership in the account frozen file list, without existence, content, size or summaries. Repeated freeze/unfreeze operations are idempotent; old rules can still be removed after the target user is deleted or changes role.
+
+Protection applies to writes, appends, deletes, moves, replacements, background writes and version restore. Removing/moving an ancestor or copying into a target subtree intersecting a blocked path is denied. Reads retain existing permissions; unfreezing grants no permissions. Business leases, `bypass_acl` and disabling automatic PathLock do not bypass protection. Authorized identity deletion removes all user data, including frozen files, through its dedicated cleanup task.
+
+Rules load on the first write check and are reused within that request or background execution; ordinary reads and authentication do not load them. With its watcher running, FileStore reads the in-memory list without a mutation lock. Otherwise FileStore and direct SQL providers cache successful empty snapshots for 60 seconds; Redis/MySQL reuses its configured cache TTL for a local empty snapshot confirmed by SQL. Empty-cache hits perform no storage IO or path matching and do not extend expiry. Each provider retains at most 1,024 empty account snapshots, and local freeze/unfreeze attempts invalidate the target snapshot. Nonempty lists retain the existing provider refresh/cache behavior. In-flight executions retain their loaded snapshot. When the empty snapshot expires, failed rule reads or invalid rules stop writes rather than being treated as an empty list. Cache propagation delay is intentional.
+
+| Method | Path | Parameters |
+|--------|------|------------|
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file?path={path}` | Required query: `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | JSON: `{"path":"skills/example/SKILL.md","frozen":true}` |
+
+The result contains `account_id`, `user_id`, `path`, and `frozen`. This is independent of the temporary lease reported by `stat.isLocked`. Rejected changes return `PERMISSION_DENIED` with `details.reason=admin_file_frozen`.
+
+MySQL/PostgreSQL deployments must apply `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql` once before starting the upgraded runtime. New MySQL databases execute `sql/init.sql` followed by the ordered `sql/changes/` migrations; new PostgreSQL databases execute `sql/postgres/init.sql` followed by `0002_account_frozen_files.sql` (the earlier list indexes are already in the PostgreSQL initial schema). Existing databases apply only unapplied migrations. Open-source and commercial deployments should record this migration in their existing DBA/deployment process; the runtime never adds columns. External account-store providers must implement this metadata capability to support the management commands.
+
 ## Groups
 
 A group belongs to one account and lets one ACL principal grant access to multiple users. Its caller-supplied `group_id` follows the same identifier rules as `user_id` and is the account-unique, stable identifier; there is no separate group name. Only existing users from the same account can be members, and groups cannot be nested.
@@ -98,6 +127,44 @@ To delete a group that still has members, call `DELETE /api/v1/admin/accounts/ac
 The Python SDK exposes `admin_create_group`, `admin_list_groups`, `admin_list_group_members`, `admin_add_group_member`, `admin_remove_group_member`, and `admin_delete_group`. The Go SDK uses matching PascalCase method names.
 
 ## API Reference
+
+### metric_inventory
+
+Stream a metadata inventory for offline reporting. Requires **ROOT** authentication, including when filtering to one account. The export contains account scopes, user identifiers and roles, file metadata, skill metadata, and vector-record metadata; it excludes file contents, vector values, and credentials.
+
+**HTTP API**
+
+```http
+GET /api/v1/admin/metric-inventory?account_id=acme&page_size=500
+X-API-Key: your-root-api-key
+```
+
+| Query parameter | Type    | Default | Description                                                                                |
+| --------------- | ------- | ------- | ------------------------------------------------------------------------------------------ |
+| `account_id`    | string  | omitted | Optional exact account ID; omit to scan all registered accounts.                           |
+| `page_size`     | integer | `500`   | Internal scan batch size, from `1` to `1000`; this does not limit the total exported rows. |
+
+The response is a streaming `application/x-ndjson` body, with one JSON object per line, rather than the regular `status` / `result` envelope. Each object has an `event_name`: `inventory_scope`, `inventory_user`, `inventory_file`, `inventory_skill`, `inventory_vector_record`, or the final `inventory_batch_end` marker.
+
+```bash
+curl --no-buffer 'http://localhost:1933/api/v1/admin/metric-inventory?account_id=acme&page_size=500' \
+  -H 'X-API-Key: your-root-api-key'
+```
+
+The final line reports whether the scan completed:
+
+```json
+{
+  "event_name": "inventory_batch_end",
+  "status": "complete",
+  "row_count": 0,
+  "scan_started_at": 1794268800000,
+  "scan_finished_at": 1794268800010,
+  "consistency": "scan_window"
+}
+```
+
+This illustrative marker describes a scan window, not an atomic snapshot. `row_count` counts emitted rows before the final marker. Scan failures, including an unknown `account_id`, emit a final marker with `status: "failed"` and no `consistency` field. After streaming begins, HTTP success alone does not prove completeness: consumers must require a final `complete` marker before replacing an existing inventory. Missing or failed final markers indicate an incomplete export.
 
 ### account / user existence queries
 
@@ -246,7 +313,7 @@ whether the User is named `default`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List the six editable templates, full defaults and effective values |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | List the four editable templates, full defaults and effective values |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Read one template |
 | PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Complete and publish one template |
 | DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | Remove that override and restore deployment defaults |
@@ -260,7 +327,7 @@ To update a template while keeping existing customizations:
 Use DELETE to restore deployment defaults for that type.
 
 The kernel accepts the existing memory YAML structure as a JSON object and enforces
-the following editing allowlist at the API boundary. Only these six types are
+the following editing allowlist at the API boundary. Only these four types are
 exposed. Experience, Cases, Trajectories and other types are not exposed for reading
 or editing. These APIs cannot create, delete or rename Memory Types; DELETE removes
 only the Account override.
@@ -271,8 +338,6 @@ only the Account override.
 | `events` | `description`; `fields.event_name.description`, `fields.summary.description`; `content_template` |
 | `preferences` | `description`; `fields.topic.description`, `fields.content.description` |
 | `entities` | `description`; `fields.category.description`, `fields.name.description`, `fields.content.description` |
-| `soul` | `description`; `fields.core_truths.description`, `fields.boundaries.description`, `fields.vibe.description`, `fields.continuity.description`; `content_template` |
-| `identity` | `description`; `fields.creature.description`, `fields.name.description`, `fields.vibe.description`, `fields.avatar.description`, `fields.emoji.description`, `fields.introduction.description`; `content_template` |
 
 Here `fields.<name>.description` selects an existing entry in the `fields` array
 by `name`; it does not replace that field. JSON keys are case-sensitive: use
@@ -284,8 +349,7 @@ All other configuration stays locked to deployment defaults: `memory_type`,
 `filename_template`, field names/types/merge operations/initial values,
 `embedding_template`, `overview_template`, and unlisted field descriptions.
 Profile keeps `profile.md` and content's `merge_op=patch`; Events keeps
-`add_only` and the descriptions of `goal` and `ranges`; Identity keeps Name's
-immutable merge rule. Profile, Preferences and Entities cannot edit
+`add_only` and the descriptions of `goal` and `ranges`. Profile, Preferences and Entities cannot edit
 `content_template`. Changing topic/category/name/event_name instructions can
 still indirectly affect future paths/names, without changing their templates.
 
@@ -447,8 +511,6 @@ retrieval input. Paths, field definitions and merge rules remain locked.
 | Type | Content variables |
 | --- | --- |
 | events | event_name, goal, summary, ranges |
-| soul | core_truths, boundaries, vibe, continuity |
-| identity | name, creature, vibe, emoji, avatar, introduction |
 
 `language` is a description variable, not a content variable. Only Events
 may call these read-only `extract_context` helpers with positional arguments:
@@ -501,7 +563,7 @@ multiplication/concatenation and reserved `MEMORY_FIELDS` comments are not allow
 Limits: 64 KiB UTF-8 source, 2048 AST nodes, 1 MiB rendered body excluding system
 metadata. Nonmatching Account bodies are checked at publication and extraction load,
 then rendered with a restricted Jinja environment and only approved fields/helpers.
-The built-in Events, Soul and Identity bodies also pass this restricted syntax,
+The built-in Events body also passes this restricted syntax,
 including after edits to headings, trailing newlines or CRLF line endings. These
 edits do not bypass validation or mark the edited body as deployment-owned.
 Runtime failures on this restricted path stop that file write instead of falling
@@ -584,8 +646,8 @@ version, text source and input token limit are create-only. Provider fields outs
 fusion/video settings and metadata override are not on the Account API surface.
 Every change validates the effective Embedding/VectorDB pair before persistence.
 
-An explicit `embedding: {}` is valid and declares no Account model mode or runtime
-policy. As a PATCH, `{}` merges with existing settings and does not clear them.
+An explicit `embedding: {}` declares no Account model mode or runtime policy.
+As a PATCH, `{}` merges with existing settings and does not clear them.
 When no Account model mode is configured, Cluster model bindings are used.
 An explicit Account VectorDB connection replaces Cluster connection and
 authentication fields even when the backend type is unchanged; only remote
@@ -612,6 +674,7 @@ Account section or their Feishu defaults; only `domain` remains Cluster-owned.
 GitHub and ACL have no Cluster fallback.
 
 VLM business resolution uses Cluster VLM when an Account has no VLM section.
+Removing the Account VLM section requires a valid Cluster VLM.
 Once the Account section exists, its model-service identity fields come
 exclusively from Account settings, while selected runtime behavior is composed
 with Cluster settings. Account `timeout` overrides Cluster `timeout` when set;
@@ -1066,7 +1129,7 @@ compatibility.
 ROOT can read and update any User's settings. ADMIN can read and update non-GLOBAL
 Users in its own account. USER callers can read and update only their own settings:
 both `account_id` and `user_id` in the URL must match the authenticated identity.
-The endpoint accepts `add_targets`, `memory_policy`, and `ttl`. The shared top-level
+The endpoint accepts `add_targets`, `memory_policy`, `ttl`, and `privacy`. The shared top-level
 `memory_types` filter controls which memory schemas may be extracted.
 User memories are routed to Self or Peer according to each message's `peer_id`;
 Agent memory types remain Self-only.
@@ -1123,6 +1186,17 @@ DELETE /api/v1/user-settings/add-locations
 
 `ttl` still returns explicit User values without filling defaults from other layers.
 
+GET/PATCH responses return the effective `privacy` settings:
+
+| Field | Description | Built-in default |
+|---|---|---|
+| `privacy.mode` | `off`, `registered`, `auto`, or `auto_strict`; see [Privacy Configs](../concepts/13-privacy.md#usage) | `off` |
+| `privacy.restore` | Restore placeholders on `raw=true` reads of Skills and Sessions | `true` |
+| `privacy.custom_rules` | Custom rules; each provides a unique `id` and either `prefix` + `min_length` or `regex` | `[]` |
+| `privacy.never_mask` | Exact string values excluded from automatic discovery and matching | `[]` |
+
+For example, PATCH `{"privacy":{"mode":"auto"}}` to enable automatic discovery and protection for Skills and Sessions. `min_length` counts characters required after the prefix; `regex` uses Rust regular-expression syntax. Omitted fields remain unchanged, `null` resumes inheritance, and arrays are replaced as a whole (`[]` clears the list). `{"privacy":null}` clears all User privacy overrides.
+
 ---
 
 ### create_account
@@ -1153,14 +1227,14 @@ Create a new workspace with its first admin user.
 | account_id | str | Yes | - | Workspace ID; at most 255 UTF-8 bytes for new file-backed accounts |
 | admin_user_id | str | Yes | - | First admin user ID |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
+| user_config | object | No | `null` | Initial config for the first admin user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, `memory_policy`, and `privacy` |
 | settings | object | No | `null` | Initial Account runtime configuration. ROOT-only; supports `feishu`, `github`, `acl`, `agent_evolution`, `vlm`, `query_planner`, `embedding`, and `vectordb`. `vectordb` and Embedding create-only fields can only be set here |
 
 **Notes:**
 - File-backed account creation rejects an `account_id` over 255 UTF-8 bytes with `INVALID_ARGUMENT` before writing the account registry. Newly persisted user IDs are limited to 255 characters across account-store providers. Trusted mode rejects an oversized new user or a new oversized account before enqueueing auto-registration, so invalid identities cannot block other identities from registering. Existing oversized File users and accounts remain readable.
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.
 - Omit `seed` for the default random API key. Set `OV_KEY_SEED` to a securely generated secret before running a deterministic example; the Go example also requires `import "os"`. Short or predictable seeds make the key guessable.
-- `settings` receives structural and effective Embedding/VectorDB pair validation before the Account and its directories are created. A failed validation leaves no Account, user, or configuration file.
+- Creation requires valid effective VLM, Embedding, and VectorDB settings, using Account values or Cluster fallback. Validation checks configuration without model requests or remote provisioning; failure leaves no Account, user, or configuration file.
 - Account `vlm`, `query_planner`, `embedding`, and `vectordb` are ROOT-only. See [Account Configuration Reference](#account-configuration-reference) above for their schema, lifecycle, and validation. The current Python SDK, CLI, and other SDK Account-creation wrappers do not expose a `settings` argument; use the HTTP API for this capability.
 - Account-level namespace isolation settings are no longer supported. User memory uses user-scoped namespaces, and one-to-many external participants are represented with `peer_id`.
 - `user_config.add_targets.resource_uri` must be a resource directory URI: `viking://resources` or `viking://resources/...`, `viking://~/resources` or `viking://~/resources/...`, `viking://~/peers/{peer_id}/resources` or `viking://~/peers/{peer_id}/resources/...`.
@@ -1553,7 +1627,7 @@ Register a new user in a workspace.
 | user_id | str | Yes | - | User ID |
 | role | str | No | "user" | Role to assign. `ROOT` and same-account `ADMIN` may register `"user"` or `"admin"`; only `ROOT` may register `"global"`. ROOT identity comes only from `server.root_api_key`. |
 | seed | str | No | `null` | Optional deterministic API key seed. When set, the key secret is `sha256(user_id + "\0" + seed)` |
-| user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, and `memory_policy` |
+| user_config | object | No | `null` | Initial config for the new user. Supports `add_targets.resource_uri`, `add_targets.skill_uri`, `memory_policy`, and `privacy` |
 
 **Notes:**
 - In `trusted` mode, only identity and role are created: no personal key, hash, or key index is generated. The response omits `user_key`, and `seed` is unused.

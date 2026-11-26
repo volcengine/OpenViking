@@ -18,6 +18,7 @@ def _drain_background_tasks():
 
 
 def test_render_stub_preserves_navigation_contract():
+    ref = "viking://user/default/sessions/s1/tool-results/tr_123"
     synopsis = ToolResultSynopsis(
         kind="text",
         title="Text output",
@@ -29,7 +30,7 @@ def test_render_stub_preserves_navigation_contract():
 
     rendered = render_tool_result_stub(
         synopsis,
-        ref="viking://user/default/sessions/s1/tool-results/tr_123",
+        ref=ref,
         tool_name="read_file",
         sha256="0123456789abcdef0123",
         reason="single_threshold",
@@ -42,9 +43,15 @@ def test_render_stub_preserves_navigation_contract():
     assert "tool_name: read_file" in rendered
     assert "original_chars: 120" in rendered
     assert "preview_chars: 80" in rendered
-    assert "ref: viking://user/default/sessions/s1/tool-results/tr_123" in rendered
-    assert "openviking_tool_result_search" in rendered
-    assert "openviking_tool_result_read" in rendered
+    assert f"ref: {ref}" in rendered
+    output, history, optional_tools, *_ = rendered.split("Explore:\n", 1)[1].splitlines()
+    assert f"{ref}/output.txt" in output
+    assert "session_history" in history
+    assert all(hint in history for hint in ('action="search"', 'action="read"', "offset"))
+    assert optional_tools.startswith("- Only where offered:")
+    assert "openviking_tool_result_search" in optional_tools
+    assert "openviking_tool_result_read" in optional_tools
+    assert "id of this message" not in rendered
 
 
 def test_json_synopsis_reports_shape():

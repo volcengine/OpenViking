@@ -1,17 +1,25 @@
 """Unit tests for GitConfig pydantic model."""
+
 import json
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from openviking.utils.agfs_utils import _build_git_config_dict
 from openviking_cli.utils.config import (
     GitConfig,
     GitLocalConfig,
     GitS3Config,
     OpenVikingConfig,
 )
-from openviking.utils.agfs_utils import _build_git_config_dict
+from openviking_cli.utils.config.git_config import (
+    GitSnapshotConfig,
+    GitSnapshotLogConfig,
+    GitSnapshotLogMySqlConfig,
+    GitSnapshotLogPostgresConfig,
+    GitSnapshotLogSqliteConfig,
+)
 
 
 class TestGitConfigDefaults:
@@ -30,13 +38,54 @@ class TestGitConfigDefaults:
 
 
 class TestGitConfigValidation:
+    @pytest.mark.parametrize("backend", ["local", "s3"])
+    def test_postgres_snapshot_log_binding_config(self, backend):
+        cfg = GitConfig(
+            backend=backend,
+            s3=GitS3Config(bucket="bucket", region="region"),
+            snapshot={
+                "log": {
+                    "provider": "postgres",
+                    "postgres": {
+                        "dsn_env": "OV_SNAPSHOT_PG",
+                        "max_connections": 7,
+                        "connect_timeout_ms": 1234,
+                        "operation_timeout_ms": 5678,
+                    },
+                }
+            },
+        )
+        out = _build_git_config_dict(cfg, Path("/tmp/storage"))
+        assert out["snapshot"]["log"]["provider"] == "postgres"
+        assert out["snapshot"]["log"]["postgres"] == {
+            "dsn_env": "OV_SNAPSHOT_PG",
+            "max_connections": 7,
+            "connect_timeout_ms": 1234,
+            "operation_timeout_ms": 5678,
+        }
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"dsn_env": ""},
+            {"max_connections": 0},
+            {"connect_timeout_ms": 0},
+            {"operation_timeout_ms": 0},
+            {"operation_timeout_ms": 2147483648},
+        ],
+    )
+    def test_invalid_postgres_snapshot_log_config(self, override):
+        with pytest.raises(ValidationError):
+            GitSnapshotLogPostgresConfig(**override)
+
     def test_invalid_backend_rejected(self):
         with pytest.raises(ValidationError):
             GitConfig(backend="ftp")
 
-    def test_unknown_field_rejected(self):
-        with pytest.raises(ValidationError):
-            GitConfig(unknown_thing=True)
+    def test_unknown_field_ignored(self):
+        cfg = GitConfig(unknown_thing=True)
+        assert cfg == GitConfig()
+        assert "unknown_thing" not in cfg.model_dump()
 
     def test_enabled_with_local_backend_ok(self):
         cfg = GitConfig(enabled=True, backend="local", local=GitLocalConfig(base_dir="/tmp/git"))
@@ -63,6 +112,29 @@ class TestGitConfigOnOpenVikingConfig:
         )
         assert cfg.git.enabled is True
         assert cfg.git.local.base_dir == "/tmp/g"
+
+    def test_open_viking_config_accepts_nested_snapshot_log_section(self):
+        """Verify ov.conf JSON accepts git.snapshot.log as the SnapshotLog config path."""
+        cfg = OpenVikingConfig(
+            storage={"workspace": "/tmp/x"},
+            git={
+                "snapshot": {
+                    "log": {
+                        "provider": "mysql",
+                        "mysql": {
+                            "dsn_env": "OV_TEST_DSN",
+                            "max_connections": 7,
+                            "connect_timeout_ms": 1234,
+                        },
+                    },
+                },
+            },
+        )
+
+        assert cfg.git.snapshot.log.provider == "mysql"
+        assert cfg.git.snapshot.log.mysql.dsn_env == "OV_TEST_DSN"
+        assert cfg.git.snapshot.log.mysql.max_connections == 7
+        assert cfg.git.snapshot.log.mysql.connect_timeout_ms == 1234
 
     def test_git_config_round_trip_via_config_file(self, tmp_path):
         """Round-trip the new `git` section through the runtime JSON file loader."""
@@ -119,9 +191,7 @@ class TestGitInheritsFromAgfs:
         assert cfg.git.s3.secret_key == "SK"
 
     def test_memory_agfs_maps_to_local(self):
-        cfg = OpenVikingConfig(
-            storage={"workspace": "/tmp/x", "agfs": {"backend": "memory"}}
-        )
+        cfg = OpenVikingConfig(storage={"workspace": "/tmp/x", "agfs": {"backend": "memory"}})
         assert cfg.git.backend == "local"
 
     def test_explicit_git_backend_overrides_inheritance(self):
@@ -199,9 +269,10 @@ class TestGitS3ConfigParsing:
         cfg = GitConfig(enabled=False, backend="s3", s3=None)
         assert cfg.s3 is None
 
-    def test_s3_unknown_field_rejected(self):
-        with pytest.raises(ValidationError):
-            GitS3Config(bucket="b", region="r", unknown="x")
+    def test_s3_unknown_field_ignored(self):
+        cfg = GitS3Config(bucket="b", region="r", unknown="x")
+        assert cfg == GitS3Config(bucket="b", region="r")
+        assert "unknown" not in cfg.model_dump()
 
     def test_invalid_cas_mode_rejected(self):
         with pytest.raises(ValidationError):
@@ -252,6 +323,31 @@ class TestBuildGitConfigDictS3:
         assert "access_key" not in out["s3"]
         assert "secret_key" not in out["s3"]
 
+    def test_snapshot_log_config_is_passed_through(self):
+        """S3 git config passes the nested SnapshotLog provider settings to binding."""
+        cfg = GitConfig(
+            enabled=True,
+            backend="s3",
+            s3=GitS3Config(bucket="my-bucket", region="cn-beijing"),
+            snapshot=GitSnapshotConfig(
+                log=GitSnapshotLogConfig(
+                    provider="mysql",
+                    sqlite=GitSnapshotLogSqliteConfig(path="/tmp/snapshot-log.db"),
+                    mysql=GitSnapshotLogMySqlConfig(
+                        dsn_env="OV_TEST_DSN",
+                        max_connections=7,
+                        connect_timeout_ms=1234,
+                    ),
+                ),
+            ),
+        )
+        out = _build_git_config_dict(cfg, Path("/tmp/storage"))
+        assert out["snapshot"]["log"]["provider"] == "mysql"
+        assert out["snapshot"]["log"]["sqlite"]["path"] == "/tmp/snapshot-log.db"
+        assert out["snapshot"]["log"]["mysql"]["dsn_env"] == "OV_TEST_DSN"
+        assert out["snapshot"]["log"]["mysql"]["max_connections"] == 7
+        assert out["snapshot"]["log"]["mysql"]["connect_timeout_ms"] == 1234
+
     def test_missing_s3_section_raises(self):
         # Build a disabled config (skips model validation) then force s3=None to
         # exercise the builder's own guard.
@@ -275,3 +371,13 @@ class TestBuildGitConfigDictLocal:
         cfg = GitConfig(enabled=True, backend="local")
         out = _build_git_config_dict(cfg, Path("/tmp/storage"))
         assert out["local"]["base_dir"] == str(Path("/tmp/storage") / ".ovgit")
+
+    def test_snapshot_log_config_is_passed_through(self):
+        """Local git config passes the SnapshotLog provider switch to binding."""
+        cfg = GitConfig(
+            enabled=True,
+            backend="local",
+            snapshot=GitSnapshotConfig(log=GitSnapshotLogConfig(provider="none")),
+        )
+        out = _build_git_config_dict(cfg, Path("/tmp/storage"))
+        assert out["snapshot"]["log"]["provider"] == "none"

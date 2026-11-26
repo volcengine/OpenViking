@@ -9,6 +9,7 @@ import {
   deriveHarnessSessionId,
 } from "./shared/session-model.mjs"
 import {
+  deferCommitBehindPendingWrites,
   enqueue,
   replayPending,
 } from "./shared/pending-queue.mjs"
@@ -130,6 +131,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       lastActivityAt: state.lastActivityAt,
       lastCommitTime: state.lastCommitTime,
       compactedAt: state.compactedAt,
+      historyPointerAt: state.historyPointerAt,
       messages: Array.from(state.messages.entries()).map(([messageId, message]) => ([
         messageId,
         {
@@ -157,6 +159,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       lastActivityAt: persisted.lastActivityAt,
       lastCommitTime: persisted.lastCommitTime,
       compactedAt: persisted.compactedAt,
+      historyPointerAt: persisted.historyPointerAt,
       messages: new Map((persisted.messages ?? []).map(([messageId, message]) => ([
         messageId,
         {
@@ -170,6 +173,15 @@ export function createMemorySessionManager({ config, pluginRoot }) {
 
   function getMappedSessionId(opencodeSessionId) {
     return getOrCreateSession(opencodeSessionId).ovSessionId
+  }
+
+  // The OV session id once per compaction of this session, "" otherwise.
+  function takeHistoryPointer(opencodeSessionId) {
+    const state = sessions.get(opencodeSessionId)
+    if (!state?.compactedAt || state.historyPointerAt === state.compactedAt) return ""
+    state.historyPointerAt = state.compactedAt
+    debouncedSaveState()
+    return state.ovSessionId
   }
 
   async function handleEvent(event) {
@@ -355,6 +367,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     waitForBackground,
     handleEvent,
     getMappedSessionId,
+    takeHistoryPointer,
     commitSession,
     flushAll,
     flushSession,
@@ -378,6 +391,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       lastActivityAt: Date.now(),
       lastCommitTime: undefined,
       compactedAt: undefined,
+      // The compactedAt whose session-history pointer was already injected.
+      historyPointerAt: undefined,
       messages: new Map(),
     }
   }
@@ -519,6 +534,20 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
     const body = { keep_recent_count: 0 }
+    const deferred = await deferCommitBehindPendingWrites(
+      (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
+      ovSessionId,
+      body,
+      (stage, data) => log("DEBUG", "pending", stage, data),
+    )
+    if (deferred) {
+      log("WARN", "session", "Queued OpenViking session commit behind queued messages", {
+        openviking_session: ovSessionId,
+        reason,
+        queued: deferred.ok,
+      })
+      return { status: "queued" }
+    }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
       method: "POST",
       body: JSON.stringify(body),

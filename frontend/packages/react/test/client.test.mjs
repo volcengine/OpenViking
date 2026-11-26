@@ -1,150 +1,123 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createOvClient, isOvClientError } from '@openviking/react/client';
+import { createOvClient, OV_PATHS } from '@openviking/react/client';
 
-/** 记录每次调用，并按 handler 返回预设响应。 */
-function fakeFetch(handler) {
-  const calls = [];
-  const impl = async (url, init) => {
-    calls.push({ url, init });
-    return handler(url, init);
-  };
-  impl.calls = calls;
-  return impl;
-}
-
-function json(body, init = {}) {
-  return new Response(JSON.stringify(body), {
-    status: init.status ?? 200,
-    headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
-  });
-}
-
-const ok = () => json({ status: 'ok', result: null });
-
-test('joins the gateway prefix with the API path', async () => {
-  const fetch = fakeFetch(() => json({ status: 'ok', result: [] }));
+test('joins the gateway prefix and applies per-request URL overrides', async () => {
+  const urls = [];
   const client = createOvClient({
     baseURL: 'https://ov.test/gateway/openviking',
-    fetch,
+    fetch: async (url) => {
+      urls.push(url);
+      return Response.json({ status: 'ok', result: [] });
+    },
   });
 
   await client.request({
     method: 'GET',
-    path: '/api/v1/fs/ls',
-    query: { uri: 'viking://a' },
+    path: OV_PATHS.fsLs,
+    query: {
+      uri: 'viking://resources',
+      tags: ['x', 'y'],
+      include_tags: true,
+      node_limit: 5,
+      limit: undefined,
+      offset: null,
+    },
   });
+  for (const baseURL of ['https://other.test', '']) {
+    await client.request({
+      method: 'GET',
+      path: OV_PATHS.fsLs,
+      options: { baseURL },
+    });
+  }
 
-  assert.equal(
-    fetch.calls[0].url,
-    'https://ov.test/gateway/openviking/api/v1/fs/ls?uri=viking%3A%2F%2Fa',
-  );
+  assert.deepEqual(urls, [
+    'https://ov.test/gateway/openviking/api/v1/fs/ls?uri=viking%3A%2F%2Fresources&tags=x&tags=y&include_tags=true&node_limit=5',
+    'https://other.test/api/v1/fs/ls',
+    '/api/v1/fs/ls',
+  ]);
 });
 
-test('returns the native result rather than the envelope', async () => {
-  const fetch = fakeFetch(() => json({ status: 'ok', result: [{ id: 1 }] }));
-  const client = createOvClient({ baseURL: 'https://ov.test', fetch });
-
-  const result = await client.request({ method: 'GET', path: '/api/v1/x' });
-  assert.deepEqual(result, [{ id: 1 }]);
-});
-
-test('identity fields become request headers', async () => {
-  const fetch = fakeFetch(ok);
+test('inherits, overrides, and clears identity per request with fresh credentials', async () => {
+  const requests = [];
+  let evaluations = 0;
   const client = createOvClient({
     baseURL: 'https://ov.test',
-    apiKey: 'sk-open-source',
+    apiKey: () => `token-${++evaluations}`,
     accountId: 'acc_1',
     userId: 'user_1',
     resourceId: 'lib_1',
-    fetch,
+    fetch: async (_url, init) => {
+      requests.push(init.headers);
+      return Response.json({ status: 'ok', result: [] });
+    },
   });
 
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-
-  assert.deepEqual(fetch.calls[0].init.headers, {
-    'x-api-key': 'sk-open-source',
-    'x-openviking-account': 'acc_1',
-    'x-openviking-user': 'user_1',
-    'v-resource-id': 'lib_1',
+  const list = { method: 'GET', path: OV_PATHS.fsLs };
+  await client.request(list);
+  await client.request({
+    ...list,
+    options: { accountId: 'acc_2', resourceId: 'lib_2' },
   });
+  assert.equal(evaluations, 2);
+  await client.request({ ...list, options: { apiKey: '', accountId: '' } });
+
+  assert.deepEqual(requests, [
+    {
+      'x-api-key': 'token-1',
+      'x-openviking-account': 'acc_1',
+      'x-openviking-user': 'user_1',
+      'v-resource-id': 'lib_1',
+    },
+    {
+      'x-api-key': 'token-2',
+      'x-openviking-account': 'acc_2',
+      'x-openviking-user': 'user_1',
+      'v-resource-id': 'lib_2',
+    },
+    { 'x-openviking-user': 'user_1', 'v-resource-id': 'lib_1' },
+  ]);
 });
 
-test('an omitted identity field sends no header', async () => {
-  const fetch = fakeFetch(ok);
-  const client = createOvClient({
-    baseURL: 'https://ov.test',
-    accountId: 'acc_1',
-    userId: 'user_1',
-    resourceId: 'lib_1',
-    fetch,
-  });
+test('uses browser credentials by default with no configured API key', async () => {
+  const credentials = [];
+  const fetch = async (_url, init) => {
+    assert.deepEqual(init.headers, { 'x-openviking-account': 'acc_1' });
+    credentials.push(init.credentials);
+    return Response.json({ status: 'ok', result: [] });
+  };
 
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-
-  assert.deepEqual(fetch.calls[0].init.headers, {
-    'x-openviking-account': 'acc_1',
-    'x-openviking-user': 'user_1',
-    'v-resource-id': 'lib_1',
-  });
+  for (const configured of [undefined, 'same-origin', 'omit']) {
+    const client = createOvClient({
+      fetch,
+      credentials: configured,
+      accountId: 'acc_1',
+    });
+    await client.request({ method: 'GET', path: OV_PATHS.fsLs });
+  }
+  assert.deepEqual(credentials, ['include', 'same-origin', 'omit']);
 });
 
-test('a per-request identity field replaces the client one', async () => {
-  const fetch = fakeFetch(ok);
+test('creating a session sends JSON and listing sessions sends no body', async () => {
+  const requests = [];
   const client = createOvClient({
-    baseURL: 'https://ov.test',
-    accountId: 'acc_1',
-    userId: 'user_1',
-    fetch,
+    fetch: async (_url, init) => {
+      requests.push(init);
+      return Response.json({ status: 'ok', result: null });
+    },
   });
 
   await client.request({
-    method: 'GET',
-    path: '/api/v1/x',
-    options: { resourceId: 'lib_2' },
+    method: 'POST',
+    path: OV_PATHS.sessions,
+    body: { session_id: 'demo' },
   });
+  await client.request({ method: 'GET', path: OV_PATHS.sessions });
 
-  const sent = fetch.calls[0].init.headers;
-  assert.equal(sent['v-resource-id'], 'lib_2');
-  assert.equal(sent['x-openviking-account'], 'acc_1');
-  assert.equal(
-    Object.keys(sent).filter((k) => k === 'v-resource-id').length,
-    1,
-    'the header appears once',
-  );
-});
-
-test('an apiKey function is re-evaluated on every request', async () => {
-  const fetch = fakeFetch(ok);
-  let token = 'first';
-  const client = createOvClient({
-    baseURL: 'https://ov.test',
-    apiKey: () => token,
-    fetch,
-  });
-
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-  token = 'second';
-  await client.request({ method: 'GET', path: '/api/v1/x' });
-
-  assert.equal(fetch.calls[0].init.headers['x-api-key'], 'first');
-  assert.equal(fetch.calls[1].init.headers['x-api-key'], 'second');
-});
-
-test('credentials default to same-origin and can be overridden', async () => {
-  const fetch = fakeFetch(ok);
-
-  await createOvClient({ baseURL: 'https://ov.test', fetch }).request({
-    method: 'GET',
-    path: '/api/v1/x',
-  });
-  await createOvClient({
-    baseURL: 'https://ov.test',
-    credentials: 'include',
-    fetch,
-  }).request({ method: 'GET', path: '/api/v1/x' });
-
-  assert.equal(fetch.calls[0].init.credentials, 'same-origin');
-  assert.equal(fetch.calls[1].init.credentials, 'include');
+  assert.equal(requests[0].headers['content-type'], 'application/json');
+  assert.deepEqual(JSON.parse(requests[0].body), { session_id: 'demo' });
+  assert.equal(requests[1].headers['content-type'], undefined);
+  assert.equal(requests[1].body, undefined);
 });

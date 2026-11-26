@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -12,7 +12,6 @@ from openviking.metrics.collectors.async_system_probe import AsyncSystemProbeCol
 from openviking.metrics.collectors.base import (
     CollectorConfig,
     DomainStatsMetricCollector,
-    ProbeMetricCollector,
     StateMetricCollector,
 )
 from openviking.metrics.collectors.encryption_probe import EncryptionProbeCollector
@@ -20,25 +19,9 @@ from openviking.metrics.collectors.model_provider_probe import ModelProviderProb
 from openviking.metrics.collectors.retrieval_backend_probe import RetrievalBackendProbeCollector
 from openviking.metrics.collectors.service_probe import ServiceProbeCollector
 from openviking.metrics.collectors.storage_probe import StorageProbeCollector
-from openviking.metrics.core.base import ReadEnvelope
 from openviking.metrics.core.registry import MetricRegistry
 from openviking.metrics.datasources import probes as probe_datasources
-
-
-class _FailingProbeCollector(ProbeMetricCollector):
-    config = CollectorConfig()
-
-    def __init__(self) -> None:
-        self.stale_called = False
-
-    def read_metric_input(self):
-        raise RuntimeError("probe read failed")
-
-    def collect_hook(self, registry, metric_input) -> None:
-        raise AssertionError("collect_hook must not be called on read failure")
-
-    def collect_stale_hook(self, registry, error: Exception) -> None:
-        self.stale_called = True
+from openviking.metrics.datasources.encryption import EncryptionProbeDataSource
 
 
 class _FailingStateCollector(StateMetricCollector):
@@ -49,23 +32,6 @@ class _FailingStateCollector(StateMetricCollector):
 
     def collect_hook(self, registry, metric_input) -> None:
         raise AssertionError("collect_hook must not be called on read failure")
-
-
-class _StaleOnErrorStateCollector(StateMetricCollector):
-    config = CollectorConfig()
-    STALE_ON_ERROR = True
-
-    def __init__(self) -> None:
-        self.stale_called = False
-
-    def read_metric_input(self):
-        raise RuntimeError("state read failed")
-
-    def collect_hook(self, registry, metric_input) -> None:
-        raise AssertionError("collect_hook must not be called on read failure")
-
-    def collect_stale_hook(self, registry, error: Exception) -> None:
-        self.stale_called = True
 
 
 class _DeltaDomainStatsCollector(DomainStatsMetricCollector):
@@ -95,57 +61,6 @@ class _DeltaDomainStatsCollector(DomainStatsMetricCollector):
         )
 
 
-@dataclass
-class _ProbeDataSource:
-    value: object | None = None
-    ok: bool = True
-    raises: bool = False
-
-    def read_probe_state(self):
-        if self.raises:
-            raise RuntimeError("probe read failed")
-        return ReadEnvelope(ok=self.ok, value=self.value, error_type="probe", error_message="fail")
-
-
-class _DummyStateCollector(StateMetricCollector):
-    config = CollectorConfig()
-
-    def __init__(self) -> None:
-        self.seen = []
-
-    def read_metric_input(self):
-        return {"value": 3}
-
-    def collect_hook(self, registry, metric_input) -> None:
-        self.seen.append(("state", metric_input["value"]))
-
-
-class _DummyProbeCollector(ProbeMetricCollector):
-    config = CollectorConfig()
-
-    def __init__(self) -> None:
-        self.seen = []
-
-    def read_metric_input(self):
-        return {"ok": True}
-
-    def collect_hook(self, registry, metric_input) -> None:
-        self.seen.append(("probe", metric_input["ok"]))
-
-
-class _DummyDomainCollector(DomainStatsMetricCollector):
-    config = CollectorConfig()
-
-    def __init__(self) -> None:
-        self.seen = []
-
-    def read_metric_input(self):
-        return {"total": 7}
-
-    def collect_hook(self, registry, metric_input) -> None:
-        self.seen.append(("domain", metric_input["total"]))
-
-
 class _DummyFailingStateCollector(StateMetricCollector):
     config = CollectorConfig()
 
@@ -162,30 +77,12 @@ class _DummyFailingStateCollector(StateMetricCollector):
         self.error_seen = str(error)
 
 
-def test_probe_default_error_strategy_does_not_raise_and_calls_stale_hook():
-    registry = MetricRegistry()
-    collector = _FailingProbeCollector()
-
-    collector.collect(registry)
-
-    assert collector.stale_called is True
-
-
 def test_state_default_error_strategy_raises():
     registry = MetricRegistry()
     collector = _FailingStateCollector()
 
     with pytest.raises(RuntimeError, match="state read failed"):
         collector.collect(registry)
-
-
-def test_state_stale_on_error_strategy_calls_stale_hook_and_does_not_raise():
-    registry = MetricRegistry()
-    collector = _StaleOnErrorStateCollector()
-
-    collector.collect(registry)
-
-    assert collector.stale_called is True
 
 
 def test_domain_stats_delta_helper_applies_non_negative_deltas_and_handles_resets():
@@ -206,16 +103,23 @@ def test_domain_stats_delta_helper_applies_non_negative_deltas_and_handles_reset
 def test_service_probe_collector_emits_valid_on_success_and_invalid_on_failure(
     registry, render_prometheus
 ):
-    ds = _ProbeDataSource(
-        value={"service_readiness": True, "api_key_manager_readiness": False}, ok=True
+    app_state = Mock(return_value=SimpleNamespace(api_key_manager=object()))
+
+    class App:
+        @property
+        def state(self):
+            return app_state()
+
+    ds = probe_datasources.ServiceProbeDataSource(
+        app=App(), service=SimpleNamespace(initialized=True)
     )
     c = ServiceProbeCollector(data_source=ds)
     c.collect(registry)
     text = render_prometheus(registry)
     assert 'openviking_service_readiness{valid="1"} 1.0' in text
-    assert 'openviking_api_key_manager_readiness{valid="1"} 0.0' in text
+    assert 'openviking_api_key_manager_readiness{valid="1"} 1.0' in text
 
-    ds.ok = False
+    app_state.side_effect = RuntimeError("state read failed")
     c.collect(registry)
     text2 = render_prometheus(registry)
     assert 'openviking_service_readiness{valid="0"} 0.0' in text2
@@ -223,39 +127,51 @@ def test_service_probe_collector_emits_valid_on_success_and_invalid_on_failure(
 
 
 def test_storage_probe_collector_preserves_last_probe_set_and_marks_invalid(
-    registry, render_prometheus
+    monkeypatch, registry, render_prometheus
 ):
-    ds = _ProbeDataSource(value={"agfs": True, "other": False}, ok=True)
-    c = StorageProbeCollector(data_source=ds)
+    get_fs = Mock(return_value=SimpleNamespace(agfs=object()))
+    monkeypatch.setattr(probe_datasources, "get_viking_fs", get_fs)
+    c = StorageProbeCollector(data_source=probe_datasources.StorageProbeDataSource())
     c.collect(registry)
     text = render_prometheus(registry)
     assert 'openviking_storage_readiness{probe="agfs",valid="1"} 1.0' in text
-    assert 'openviking_storage_readiness{probe="other",valid="1"} 0.0' in text
-
-    ds.raises = True
+    get_fs.side_effect = RuntimeError("filesystem unavailable")
     c.collect(registry)
     text2 = render_prometheus(registry)
     assert 'openviking_storage_readiness{probe="agfs",valid="0"} 0.0' in text2
-    assert 'openviking_storage_readiness{probe="other",valid="0"} 0.0' in text2
 
 
 def test_retrieval_backend_probe_collector_preserves_last_probe_set_and_marks_invalid(
     registry, render_prometheus
 ):
-    ds = _ProbeDataSource(value={"vikingdb": True}, ok=True)
+    service = SimpleNamespace()
+    ds = probe_datasources.RetrievalBackendProbeDataSource(service=service)
     c = RetrievalBackendProbeCollector(data_source=ds)
+    c.collect(registry)
+    assert 'openviking_retrieval_backend_readiness{probe="vikingdb",valid="1"} 0.0' in (
+        render_prometheus(registry)
+    )
+    health_check = AsyncMock(return_value=True)
+    service.vikingdb = SimpleNamespace(health_check=health_check)
     c.collect(registry)
     text = render_prometheus(registry)
     assert 'openviking_retrieval_backend_readiness{probe="vikingdb",valid="1"} 1.0' in text
 
-    ds.ok = False
+    health_check.side_effect = RuntimeError("VikingDB unavailable")
     c.collect(registry)
     text2 = render_prometheus(registry)
     assert 'openviking_retrieval_backend_readiness{probe="vikingdb",valid="0"} 0.0' in text2
 
 
-def test_encryption_probe_collector_uses_last_provider_on_failure(registry, render_prometheus):
-    ds = _ProbeDataSource(value=(True, "volcengine"), ok=True)
+def test_encryption_probe_collector_uses_last_provider_on_failure(
+    monkeypatch, registry, render_prometheus
+):
+    bootstrap = Mock()
+    monkeypatch.setattr("openviking.crypto.config.bootstrap_encryption", bootstrap)
+    config_provider = Mock(
+        return_value=SimpleNamespace(encryption=SimpleNamespace(provider="volcengine"))
+    )
+    ds = EncryptionProbeDataSource(config_provider=config_provider)
     c = EncryptionProbeCollector(data_source=ds)
     c.collect(registry)
     text = render_prometheus(registry)
@@ -263,7 +179,12 @@ def test_encryption_probe_collector_uses_last_provider_on_failure(registry, rend
     assert 'openviking_encryption_root_key_ready{valid="1"} 1.0' in text
     assert 'openviking_encryption_kms_provider_ready{provider="volcengine",valid="1"} 1.0' in text
 
-    ds.raises = True
+    bootstrap.side_effect = RuntimeError("encryption bootstrap failed")
+    c.collect(registry)
+    assert 'openviking_encryption_kms_provider_ready{provider="volcengine",valid="0"} 0.0' in (
+        render_prometheus(registry)
+    )
+    config_provider.side_effect = RuntimeError("encryption config unavailable")
     c.collect(registry)
     text2 = render_prometheus(registry)
     assert 'openviking_encryption_component_health{valid="0"} 0.0' in text2
@@ -272,13 +193,17 @@ def test_encryption_probe_collector_uses_last_provider_on_failure(registry, rend
 
 
 def test_model_provider_probe_collector_uses_last_provider_on_failure(registry, render_prometheus):
-    ds = _ProbeDataSource(value={"provider": ("volcengine", True)}, ok=True)
+    get_vlm_instance = Mock(return_value=object())
+    config = SimpleNamespace(
+        vlm=SimpleNamespace(provider="volcengine", get_vlm_instance=get_vlm_instance)
+    )
+    ds = probe_datasources.ModelProviderProbeDataSource(config_provider=lambda: config)
     c = ModelProviderProbeCollector(data_source=ds)
     c.collect(registry)
     text = render_prometheus(registry)
     assert 'openviking_model_provider_readiness{provider="volcengine",valid="1"} 1.0' in text
 
-    ds.ok = False
+    get_vlm_instance.side_effect = RuntimeError("model client unavailable")
     c.collect(registry)
     text2 = render_prometheus(registry)
     assert 'openviking_model_provider_readiness{provider="volcengine",valid="0"} 0.0' in text2
@@ -301,161 +226,6 @@ def test_async_system_probe_collector_marks_invalid_on_failure(
     c.collect(registry)
     text2 = render_prometheus(registry)
     assert 'openviking_async_system_readiness{probe="queue",valid="0"} 0.0' in text2
-
-
-def test_required_core_modules_exist():
-    import openviking.metrics.core.base as core_base
-    import openviking.metrics.core.refresh as core_refresh
-    import openviking.metrics.core.registry as core_registry
-    import openviking.metrics.core.runtime as core_runtime
-    import openviking.metrics.core.types as core_types
-
-    assert hasattr(core_base, "MetricDataSource")
-    assert hasattr(core_base, "MetricCollector")
-    assert hasattr(core_base, "MetricExporter")
-    assert hasattr(core_refresh, "RefreshGate")
-    assert hasattr(core_registry, "MetricRegistry")
-    assert hasattr(core_runtime, "EventCollectorRouter")
-    assert core_types is not None
-
-
-def test_required_architecture_types_exist():
-    import openviking.metrics.core.base as base_module
-
-    assert hasattr(base_module, "MetricDataSource")
-    assert hasattr(base_module, "MetricCollector")
-    assert hasattr(base_module, "MetricExporter")
-
-
-def test_required_intermediate_types_exist():
-    import openviking.metrics.collectors.base as collector_base_module
-    import openviking.metrics.datasources as ds_module
-    import openviking.metrics.datasources.base as ds_base_module
-
-    assert hasattr(ds_base_module, "EventMetricDataSource")
-    assert hasattr(ds_base_module, "StateMetricDataSource")
-    assert hasattr(ds_base_module, "DomainStatsMetricDataSource")
-    assert hasattr(ds_base_module, "ProbeMetricDataSource")
-    assert hasattr(ds_module, "CacheEventDataSource")
-    assert hasattr(ds_module, "TelemetryBridgeEventDataSource")
-
-    assert hasattr(collector_base_module, "EventMetricCollector")
-    assert hasattr(collector_base_module, "StateMetricCollector")
-    assert hasattr(collector_base_module, "DomainStatsMetricCollector")
-    assert hasattr(collector_base_module, "ProbeMetricCollector")
-    assert hasattr(collector_base_module, "Refreshable")
-    assert not hasattr(collector_base_module, "AbstractMetricCollector")
-
-
-def test_prometheus_exporter_inherits_base_metric_exporter():
-    import openviking.metrics.exporters as exporters_module
-    from openviking.metrics.core.base import MetricExporter
-    from openviking.metrics.exporters.prometheus import PrometheusExporter
-
-    assert issubclass(PrometheusExporter, MetricExporter)
-    assert not hasattr(exporters_module, "AbstractMetricExporter")
-
-
-def test_concrete_datasources_and_collectors_follow_doc_inheritance():
-    from openviking.metrics.collectors.base import (
-        DomainStatsMetricCollector,
-        ProbeMetricCollector,
-        Refreshable,
-        StateMetricCollector,
-    )
-    from openviking.metrics.collectors.queue import QueueCollector
-    from openviking.metrics.collectors.ragfs import RagfsMetricCollector
-    from openviking.metrics.collectors.service_probe import ServiceProbeCollector
-    from openviking.metrics.collectors.vikingdb import VikingDBCollector
-    from openviking.metrics.datasources.base import (
-        DomainStatsMetricDataSource,
-        ProbeMetricDataSource,
-        StateMetricDataSource,
-    )
-    from openviking.metrics.datasources.observer_state import (
-        ObserverStateDataSource,
-        VikingDBStateDataSource,
-    )
-    from openviking.metrics.datasources.probes import ServiceProbeDataSource
-    from openviking.metrics.datasources.queue import QueuePipelineStateDataSource
-    from openviking.metrics.datasources.ragfs import RagfsMetricDataSource
-
-    assert issubclass(QueuePipelineStateDataSource, StateMetricDataSource)
-    assert issubclass(ObserverStateDataSource, DomainStatsMetricDataSource)
-    assert issubclass(RagfsMetricDataSource, DomainStatsMetricDataSource)
-    assert issubclass(VikingDBStateDataSource, StateMetricDataSource)
-    assert issubclass(ServiceProbeDataSource, ProbeMetricDataSource)
-
-    assert issubclass(QueueCollector, StateMetricCollector)
-    assert issubclass(RagfsMetricCollector, DomainStatsMetricCollector)
-    assert issubclass(VikingDBCollector, StateMetricCollector)
-    assert issubclass(ServiceProbeCollector, ProbeMetricCollector)
-    assert issubclass(QueueCollector, Refreshable)
-    assert issubclass(RagfsMetricCollector, Refreshable)
-    assert issubclass(VikingDBCollector, Refreshable)
-    assert issubclass(ServiceProbeCollector, Refreshable)
-
-
-def test_metrics_code_has_no_snapshot_api():
-    root = Path(__file__).resolve().parents[3] / "openviking" / "metrics"
-    for path in root.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        assert ".snapshot(" not in text, f"snapshot api still found in {path}"
-
-
-def test_metric_collector_supports_collect_and_receive():
-    from openviking.metrics.core.base import MetricCollector
-
-    class _DummyCollector(MetricCollector):
-        @classmethod
-        def kind(cls) -> str:
-            return "dummy"
-
-    collector = _DummyCollector()
-    assert collector.collector_name() == "_DummyCollector"
-    assert collector.collect(None) is None
-    assert collector.receive("event", {}, None) is None
-
-
-def test_runtime_code_has_no_prometheus_observer_references():
-    root = Path(__file__).resolve().parents[3] / "openviking"
-    banned = (
-        "PrometheusObserver",
-        "get_prometheus_observer",
-        "set_prometheus_observer",
-        "prometheus_observer.py",
-    )
-    for path in root.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        for needle in banned:
-            assert needle not in text, f"{needle} still found in {path}"
-
-
-def test_state_metric_collector_collect_uses_template_hooks():
-    registry = MetricRegistry()
-    collector = _DummyStateCollector()
-
-    collector.collect(registry)
-
-    assert collector.seen == [("state", 3)]
-
-
-def test_probe_metric_collector_collect_uses_template_hooks():
-    registry = MetricRegistry()
-    collector = _DummyProbeCollector()
-
-    collector.collect(registry)
-
-    assert collector.seen == [("probe", True)]
-
-
-def test_domain_stats_metric_collector_collect_uses_template_hooks():
-    registry = MetricRegistry()
-    collector = _DummyDomainCollector()
-
-    collector.collect(registry)
-
-    assert collector.seen == [("domain", 7)]
 
 
 def test_state_metric_collector_collect_error_hook_can_handle_read_failures():

@@ -27,6 +27,7 @@ import {
 } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { maybeDetach, readHookStdin } from "../../memory-plugin-shared/lib/async-writer.mjs";
 import { isCaptureEnabled } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { formatSessionHistoryPointer } from "../../memory-plugin-shared/lib/session-history-pointer.mjs";
 import { HOSTS } from "../hosts/index.mjs";
 import { withRequestBudget } from "./request-budget.mjs";
 
@@ -63,19 +64,56 @@ const contextBlock = (source, body) => (
   body ? `<openviking-context source="${source}">\n${body}\n</openviking-context>` : ""
 );
 
+// What `host.historyPointer[which]` makes of this event: "compact", "resume" or
+// "". `inject` names the events whose own answer reaches the model, `defer` the
+// ones that can only leave the note for the next prompt.
+function historyPointerKind(ctx, which) {
+  const signal = host.historyPointer?.[which];
+  if (!signal || !ctx.cfg.sessionHistoryPointer || !isCaptureEnabled(ctx.cfg)) return "";
+  return signal(event, ctx.input) || "";
+}
+
+// A resumed transcript still holds the note sent before, so a resume brings one
+// only when none was sent or is pending; a pending compaction note stays.
+function pointerFor(state, kind) {
+  return kind === "resume" && (state.historyPointerSent || state.historyPointer) ? "" : kind;
+}
+
+function withDeferredPointer(state, kind) {
+  const next = pointerFor(state, kind);
+  return next ? { ...state, historyPointer: next } : state;
+}
+
+function historyPointer(ctx, kind) {
+  if (!kind) return "";
+  const { sessionDefault, tool } = host.historyPointer;
+  return formatSessionHistoryPointer(ctx.sessionId, { event: kind, sessionDefault, tool });
+}
+
 async function sessionStart(ctx) {
   return withAgentHookLock(clientId, ctx.nativeSessionId, async () => {
     const state = await readHookState(clientId, ctx.nativeSessionId);
     const now = Date.now();
-    if (now - Number(state.lastSessionStartAt || 0) < 2000) return "";
-    await writeHookState(clientId, ctx.nativeSessionId, { ...state, lastSessionStartAt: now });
+    const injected = pointerFor(state, historyPointerKind(ctx, "inject"));
+    const pointer = historyPointer(ctx, injected);
+    let next = withDeferredPointer(state, ctx.deferredPointer);
+    if (injected) next = { ...next, historyPointerSent: true };
+    // A resume and the compaction it runs can start within the window.
+    if (now - Number(state.lastSessionStartAt || 0) < 2000) {
+      if (next !== state) await writeHookState(clientId, ctx.nativeSessionId, next);
+      return pointer;
+    }
+    await writeHookState(clientId, ctx.nativeSessionId, { ...next, lastSessionStartAt: now });
+    if (host.pendingReplayLimit && !process.env.OPENVIKING_PENDING_REPLAY_LIMIT) {
+      process.env.OPENVIKING_PENDING_REPLAY_LIMIT = String(host.pendingReplayLimit);
+    }
     await replayAgentPending(ctx.fetchJSON, log).catch((error) => logError("pending", error));
-    if ((host.profileStage || "session-start") !== "session-start") return "";
+    if ((host.profileStage || "session-start") !== "session-start") return pointer;
     const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
       logError("profile", error);
       return null;
     });
-    return contextBlock("session-start", profile);
+    return [contextBlock("session-start", profile), pointer].filter(Boolean).join("\n\n");
   });
 }
 
@@ -110,8 +148,12 @@ async function promptSubmit(ctx) {
           return null;
         });
     if (recallBlock) parts.push(recallBlock);
+    const pointerSent = Boolean(state.historyPointer && ctx.cfg.sessionHistoryPointer && isCaptureEnabled(ctx.cfg));
+    if (pointerSent) parts.push(historyPointer(ctx, state.historyPointer));
     await writeHookState(clientId, ctx.nativeSessionId, {
       ...state,
+      historyPointer: undefined,
+      ...(pointerSent ? { historyPointerSent: true } : {}),
       promptHash,
       promptEventId,
       promptAt: now,
@@ -125,12 +167,21 @@ async function promptSubmit(ctx) {
 
 async function capture(ctx) {
   if (host.capturesOnlyWhenEnabled && !isCaptureEnabled(ctx.cfg)) return "";
-  await withAgentHookLock(clientId, ctx.nativeSessionId, async (stateFile) => {
-    const state = await readHookState(clientId, ctx.nativeSessionId);
-    ctx.stateFile = stateFile;
-    const next = await host.capture(ctx, state, event);
-    if (next) await writeHookState(clientId, ctx.nativeSessionId, next);
-  });
+  // A terminal event that loses the lock to a slow Stop would drop the final
+  // commit, so a detached one keeps waiting up to the stale-lock age.
+  const terminal = host.detachesCapture && (event === "session-end" || event === "pre-compact");
+  for (let attempt = 0; attempt < (terminal ? 12 : 1); attempt += 1) {
+    const done = await withAgentHookLock(clientId, ctx.nativeSessionId, async (stateFile) => {
+      const read = await readHookState(clientId, ctx.nativeSessionId);
+      const state = withDeferredPointer(read, ctx.deferredPointer);
+      ctx.stateFile = stateFile;
+      const next = await host.capture(ctx, state, event);
+      if (next || state !== read) await writeHookState(clientId, ctx.nativeSessionId, next || state);
+      return true;
+    });
+    if (done) return "";
+  }
+  log("capture_lock_timeout");
   return "";
 }
 
@@ -169,6 +220,9 @@ async function main() {
       log,
       logError,
     };
+    ctx.deferredPointer = historyPointerKind(ctx, "defer");
+    if (stageName === "fill") return host.fillHistorySession(payload, ctx.sessionId);
+    if (stageName === "pointer") return historyPointer(ctx, historyPointerKind(ctx, "inject"));
     if (stageName === "start") return sessionStart(ctx);
     if (stageName === "prompt") return promptSubmit(ctx);
     return capture(ctx);

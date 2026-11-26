@@ -3,7 +3,6 @@
 import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Literal, Optional
@@ -15,7 +14,7 @@ from openviking_cli.session.user_id import UserIdentifier
 
 from .agent_evolution_config import AgentEvolutionConfig
 from .cache_config import CacheConfig
-from .config_loader import resolve_config_path
+from .config_loader import expand_config_environment, resolve_config_path
 from .config_utils import (
     DEFAULT_SERVICE_NAME,
     format_validation_error,
@@ -57,7 +56,6 @@ from .parser_config import (
 )
 from .prompts_config import PromptsConfig
 from .queue_worker_config import QueueWorkersConfig
-from .reindex_config import ReindexConfig
 from .rerank_config import RerankConfig
 from .retrieval_config import RetrievalConfig
 from .rules_config import RulesConfig
@@ -229,6 +227,30 @@ class RuntimeConfigSettings(BaseModel):
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
+    enable_default_resources: bool = Field(
+        default=True,
+        strict=True,
+        description="Create default local Embedding/VectorDB resources and initialize the default account",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _prepare_default_resources(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or data.get("enable_default_resources", True):
+            return data
+        data = dict(data)
+        embedding = data.get("embedding", {})
+        if embedding is None:
+            embedding = {}
+        if isinstance(embedding, dict):
+            data["embedding"] = EmbeddingConfig.model_validate(
+                embedding, context={"enable_default_resources": False}
+            )
+        storage = data.get("storage", {})
+        if isinstance(storage, dict):
+            data["storage"] = {**storage, "vectordb": storage.get("vectordb") or None}
+        return data
+
     default_account: Optional[str] = Field(
         default="default", description="Default account identifier"
     )
@@ -354,11 +376,6 @@ class OpenVikingConfig(BaseModel):
         description="Queue worker runtime configuration",
     )
 
-    reindex: ReindexConfig = Field(
-        default_factory=ReindexConfig,
-        description="Admin reindex runtime configuration",
-    )
-
     parser_api: ParserApiConfig = Field(
         default_factory=ParserApiConfig,
         description="Third-party parser API configuration (files/responses)",
@@ -387,12 +404,11 @@ class OpenVikingConfig(BaseModel):
     watch_leader_provider: Literal["auto", "local", "cache"] = Field(
         default="auto",
         description=(
-            "Watch scheduler leader provider. 'auto' keeps the storage-derived default "
-            "(local for file WatchStore, cache-backed distributed leader otherwise); "
-            "'local' and 'cache' explicitly select the leader mode."
+            "Deprecated; will be removed in the next version. Use "
+            "storage.agfs.coordination.provider instead; explicit coordination takes precedence."
         ),
+        json_schema_extra={"deprecated": True},
     )
-
     reconcile_system_assets_on_startup: bool = Field(
         default=True,
         description=(
@@ -451,6 +467,22 @@ class OpenVikingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _normalize_watch_leader_provider(self) -> "OpenVikingConfig":
+        if "watch_leader_provider" in self.model_fields_set:
+            _get_config_logger().warning(
+                "Config field 'watch_leader_provider' is deprecated and will be removed "
+                "in the next version; use 'storage.agfs.coordination.provider' instead."
+            )
+        coordination = self.storage.agfs.coordination
+        uses_cache = self.watch_leader_provider == "cache" or (
+            self.watch_leader_provider == "auto"
+            and self.storage.watch_store.provider in {"mysql", "postgres"}
+        )
+        if uses_cache and "provider" not in coordination.model_fields_set:
+            self.storage.agfs.coordination = coordination.model_copy(update={"provider": "cache"})
+        return self
+
+    @model_validator(mode="after")
     def _validate_cache_runtime_config(self) -> "OpenVikingConfig":
         """Require the shared cache Provider whenever AGFS selects a cache-backed runtime."""
         agfs = self.storage.agfs
@@ -459,6 +491,7 @@ class OpenVikingConfig(BaseModel):
             agfs.cachefs.backend == "cache"
             or agfs.queuefs.backend == "cache"
             or agfs.pathlock.provider == "cache"
+            or agfs.coordination.provider == "cache"
             or backups.get("provider", "filesystem") == "cache"
         )
         if uses_canonical_cache and self.cache is None:
@@ -521,7 +554,8 @@ class OpenVikingConfig(BaseModel):
         default=False,
         description=(
             "Allow fetching resources from private/non-public network addresses. "
-            "When disabled (default), only public IP addresses and hostnames are allowed."
+            "Configured code hosts may also use private networks. Loopback, link-local, "
+            "unspecified, multicast, reserved and known metadata addresses are always rejected."
         ),
     )
 
@@ -548,10 +582,10 @@ class OpenVikingConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_watch_store(self) -> "OpenVikingConfig":
-        if self.storage.watch_store.provider == "mysql":
+        if self.storage.watch_store.provider in {"mysql", "sqlite"}:
             if not self.storage.watch_store.params.get("credential_encryption_key"):
                 raise ValueError(
-                    "storage.watch_store.provider='mysql' requires "
+                    f"storage.watch_store.provider='{self.storage.watch_store.provider}' requires "
                     "storage.watch_store.params.credential_encryption_key"
                 )
         return self
@@ -737,7 +771,19 @@ class OpenVikingConfig(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary."""
-        return self.model_dump()
+        config = self.model_dump()
+        if config["cache"] is None:
+            config.pop("cache")
+        agfs = config["storage"]["agfs"]
+        if agfs["queuefs"]["backend"] != "cache":
+            agfs["queuefs"].pop("instance", None)
+        if agfs["cachefs"]["backend"] != "cache":
+            agfs["cachefs"].pop("instance", None)
+        if agfs["pathlock"]["provider"] != "cache":
+            agfs["pathlock"].pop("instance", None)
+        if agfs["coordination"]["provider"] != "cache":
+            agfs["coordination"].pop("instance", None)
+        return config
 
     def get_query_planner(self) -> VLMConfig:
         """Return the model config used for retrieval intent analysis and query planning."""
@@ -860,9 +906,7 @@ class OpenVikingConfigSingleton:
             data = config_path.read_bytes()
             raw = data.decode("utf-8-sig")
 
-            # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
-            # Unset variables are left unchanged by expandvars().
-            raw = os.path.expandvars(raw)
+            raw = expand_config_environment(raw)
             config_data = json.loads(raw)
 
             config = OpenVikingConfig.from_dict(config_data)
@@ -937,7 +981,6 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     # Validate account identifier
     if not config.default_account or not config.default_account.strip():
         errors.append("Default account identifier cannot be empty")
-
     if errors:
         error_message = "Invalid OpenViking configuration:\n" + "\n".join(
             f"  - {e}" for e in errors
@@ -979,7 +1022,8 @@ def initialize_openviking_config(
     if path:
         # Explicit local workspace override
         config.storage.agfs.backend = config.storage.agfs.backend or "local"
-        config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
+        if config.storage.vectordb is not None:
+            config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
         # Resolve and update workspace + dependent paths (model_validator won't
         # re-run on attribute assignment, so sync agfs.path / vectordb.path here).
         workspace_path = Path(path).expanduser().resolve()
@@ -987,9 +1031,11 @@ def initialize_openviking_config(
         resolved = str(workspace_path)
         config.storage.workspace = resolved
         config.storage.agfs.path = resolved
-        config.storage.vectordb.path = resolved
+        if config.storage.vectordb is not None:
+            config.storage.vectordb.path = resolved
 
-    config.storage.vectordb.apply_resolved_dimension(config.embedding.dimension)
+    if config.storage.vectordb is not None:
+        config.storage.vectordb.apply_resolved_dimension(config.embedding.dimension)
 
     # Validate configuration
     if not is_valid_openviking_config(config):

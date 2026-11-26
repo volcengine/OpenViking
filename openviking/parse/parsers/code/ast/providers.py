@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from openviking.observability.log_safety import safe_path_for_log
 from openviking.parse.parsers.code.ast.aider_repomap import (
     _extract_with_grep_ast,
     has_tag_query,
@@ -62,7 +63,10 @@ def extract_skeleton_result(
         if is_skeleton_useful(text):
             return SkeletonExtractionResult(text, "aider_repomap", False, "maintained tags query")
         reason = "tags query produced no useful skeleton"
-        logger.debug("Code skeleton requires LLM fallback for '%s': %s", file_name, reason)
+        logger.debug(
+            "Code skeleton unavailable path=%s reason=empty_tags_skeleton",
+            safe_path_for_log(file_name),
+        )
         return SkeletonExtractionResult(None, "llm", True, reason)
     else:
         reasons.append("no maintained tags query")
@@ -73,5 +77,8 @@ def extract_skeleton_result(
     reasons.append("process produced no useful skeleton")
 
     reason = "; ".join(reasons)
-    logger.debug("Code skeleton requires LLM fallback for '%s': %s", file_name, reason)
+    logger.debug(
+        "Code skeleton unavailable path=%s reason=empty_process_skeleton",
+        safe_path_for_log(file_name),
+    )
     return SkeletonExtractionResult(None, "llm", True, reason)

@@ -173,6 +173,68 @@ def test_real_openviking_config_exposes_no_mutable_path():
         validate_patch(OpenVikingConfig, {"vlm": {"model": "m"}})
     with pytest.raises(ConfigPatchError):
         validate_patch(OpenVikingConfig, {"rerank": {"enabled": True}})
+    with pytest.raises(ConfigPatchError):
+        validate_patch(OpenVikingConfig, {"enable_default_resources": False})
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {},
+        {"enable_default_resources": False},
+        {"enable_default_resources": False, "embedding": None, "storage": {"vectordb": None}},
+    ],
+)
+def test_default_resources_survive_config_round_trip(values):
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+
+    config = OpenVikingConfig.from_dict(values)
+    restored = OpenVikingConfig.from_dict(config.to_dict())
+    assert restored.enable_default_resources == values.get("enable_default_resources", True)
+    if not restored.enable_default_resources:
+        assert restored.embedding.dense is None
+        assert restored.embedding.sparse is None
+        assert restored.embedding.hybrid is None
+        assert restored.storage.vectordb is None
+    else:
+        assert restored.embedding.dense is not None
+        assert restored.storage.vectordb is not None
+        assert restored.embedding.dense.provider == "local"
+        assert restored.storage.vectordb.backend == "local"
+
+
+@pytest.mark.parametrize("missing", ["vlm", "embedding", "vectordb"])
+async def test_account_creation_requires_effective_resources(missing):
+    from openviking.config.binding import manager_over_source
+    from openviking_cli.utils.config import set_openviking_config
+    from openviking_cli.utils.config.open_viking_config import (
+        OpenVikingConfig,
+        OpenVikingConfigSingleton,
+    )
+
+    values = {
+        "enable_default_resources": False,
+        "vlm": {"provider": "openai", "model": "vlm", "api_key": "key"},
+        "embedding": {
+            "dense": {"provider": "openai", "model": "embedding", "api_key": "key", "dimension": 4}
+        },
+        "storage": {"vectordb": {"backend": "local"}},
+    }
+    if missing == "vectordb":
+        values.pop("storage")
+    else:
+        values.pop(missing)
+    cluster = OpenVikingConfig.from_dict(values)
+    set_openviking_config(cluster)
+    source = MemoryConfigSource()
+    manager = manager_over_source(source, base_config=cluster)
+    try:
+        await manager.initialize()
+        with pytest.raises(ValueError, match=missing if missing != "vlm" else "VLM"):
+            await manager.patch_account("new", {}, creating=True)
+        assert await source.load(ConfigScope.account("new")) is None
+    finally:
+        OpenVikingConfigSingleton.reset_instance()
 
 
 def test_cluster_rebuild_preserves_explicit_and_default_field_semantics():
@@ -690,6 +752,7 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         get_output_language_override,
     )
     from openviking.config.vector import AccountVectorConfigResolver
+    from openviking.config.vlm import AccountVLMProvider
     from openviking_cli.utils.config import set_openviking_config
     from openviking_cli.utils.config.open_viking_config import (
         OpenVikingConfig,
@@ -698,6 +761,8 @@ async def test_account_runtime_binding_and_updates_are_isolated():
 
     cluster = OpenVikingConfig.from_dict(
         {
+            "enable_default_resources": False,
+            "storage": {"vectordb": {"backend": "local"}},
             "output_language_override": "en",
             "memory": {"extraction_enabled": False},
             "embedding": {
@@ -720,6 +785,7 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         "provider": "openai",
         "api_key": "account-secret",
         "api_base": "https://account.invalid/v1",
+        "cost_bearer": "ov",
     }
     settings = {
         "output_language_override": "",
@@ -748,14 +814,22 @@ async def test_account_runtime_binding_and_updates_are_isolated():
         assert await get_memory_extraction_enabled(manager, "a") is True
         assert await get_output_language_override(manager, "b") == "en"
         assert await get_memory_extraction_enabled(manager, "b") is False
-        account, default = await resolver.resolve("a"), await resolver.resolve("b")
+        account = await resolver.resolve("a")
         assert account.dedicated_vectordb and account.vectordb.dimension == 8
         assert account.embedding.dense.credentials[0].api_key == "account-secret"
+        assert account.embedding.dense.credentials[0].cost_bearer == "ov"
         assert account.embedding.dense.api_key is None
+        default = await resolver.resolve("b")
         assert default.embedding.dense.api_key == "cluster-secret"
         assert default.vectordb.dimension == 4 and not default.dedicated_vectordb
+        provider = AccountVLMProvider(manager)
+        try:
+            assert (await provider.effective_vlm_config("b")).model == "cluster-vlm"
+        finally:
+            await provider.close()
         vlm = (await manager.get_account("a", "vlm")).to_vlm_config(cluster.vlm)
         assert vlm.model == "account-vlm" and vlm.credentials[0].api_key == "account-secret"
+        assert vlm.credentials[0].cost_bearer == "ov"
         assert vlm.api_key is None
 
         before = await source.load(ConfigScope.account("a"))
@@ -772,6 +846,11 @@ async def test_account_runtime_binding_and_updates_are_isolated():
             "a", {"embedding": {"dense": {"credentials": [{**credential, "api_key": "rotated"}]}}}
         )
         assert (await resolver.resolve("a")).embedding.dense.credentials[0].api_key == "rotated"
+        await manager.patch_account(
+            "a", {"vlm": {"credentials": [{**credential, "cost_bearer": "customer"}]}}
+        )
+        assert (await manager.get_account("a", "vlm")).credentials[0].cost_bearer == "customer"
+        assert (await resolver.resolve("a")).embedding.dense.credentials[0].cost_bearer == "ov"
         assert (await resolver.resolve("b")).embedding.dense.api_key == "cluster-secret"
         await manager.patch_account("a", {"output_language_override": None, "memory": None})
         assert await get_output_language_override(manager, "a") == "en"

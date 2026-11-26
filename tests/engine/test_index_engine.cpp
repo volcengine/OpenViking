@@ -5,7 +5,6 @@
 #include "store/volatile_store.h"
 #include <iostream>
 #include <vector>
-#include <cassert>
 #include <filesystem>
 #include <cmath>
 #include "spdlog/spdlog.h"
@@ -212,17 +211,11 @@ void test_basic_workflow() {
     exit(1);
   }
 
-  // 5. Search again to verify deletion
+  // 5. Deletion must take effect before saving the index.
   res = engine.search(search_req);
-  // Depending on soft delete implementation, result might still be there but
-  // filtered, or simply not returned. For brute force, it usually checks
-  // filter. If it returns, ensure it's not the deleted one or handle
-  // accordingly.
-  if (res.result_num > 0 && res.labels[0] == 1001) {
-    SPDLOG_WARN(
-        "Deleted item 1001 still found (might be soft delete delay or consistency model)");
-  } else {
-    SPDLOG_INFO("Deleted item 1001 correctly not found or ranked lower");
+  if (res.result_num != 1 || res.labels != std::vector<uint64_t>{1002}) {
+    SPDLOG_ERROR("Search after deletion did not return exactly the surviving row");
+    exit(1);
   }
 
   // 6. Dump
@@ -558,6 +551,9 @@ void expect_paged_store_scan(KVStore& store) {
   const std::vector<std::string> keys = {
       "candidate:1", "candidate:10", "candidate:2", "other:1"};
   const std::vector<std::string> values = {"one", "ten", "two", "other"};
+  using Rows = std::vector<std::pair<std::string, std::string>>;
+  const Rows all_rows = {
+      {keys[0], values[0]}, {keys[1], values[1]}, {keys[2], values[2]}};
   if (store.put_data(keys, values) != 0) {
     SPDLOG_ERROR("Paged store test data add failed");
     exit(1);
@@ -565,33 +561,30 @@ void expect_paged_store_scan(KVStore& store) {
 
   const auto first =
       store.seek_range_page("candidate:", "candidate;", 2, 1024, false);
-  if (first.size() != 2 || first[0].first != "candidate:1" ||
-      first[1].first != "candidate:10") {
+  if (first != Rows{all_rows[0], all_rows[1]}) {
     SPDLOG_ERROR("Paged store first page was incorrect");
     exit(1);
   }
   const auto second =
       store.seek_range_page(first.back().first, "candidate;", 2, 1024, true);
-  if (second.size() != 1 || second[0].first != "candidate:2") {
+  if (second != Rows{all_rows[2]}) {
     SPDLOG_ERROR("Paged store exclusive continuation was incorrect");
     exit(1);
   }
   const auto byte_limited =
       store.seek_range_page("candidate:", "candidate;", 10, 14, false);
-  if (byte_limited.size() != 1 ||
-      byte_limited[0].first != "candidate:1") {
+  if (byte_limited != Rows{all_rows[0]}) {
     SPDLOG_ERROR("Paged store byte budget was not enforced");
     exit(1);
   }
   const auto oversized_first =
       store.seek_range_page("candidate:", "candidate;", 10, 1, false);
-  if (oversized_first.size() != 1 ||
-      oversized_first[0].first != "candidate:1") {
+  if (oversized_first != Rows{all_rows[0]}) {
     SPDLOG_ERROR("Paged store did not admit one oversized row for progress");
     exit(1);
   }
   const auto full = store.seek_range("candidate:", "candidate;");
-  if (full.size() != 3) {
+  if (full != all_rows) {
     SPDLOG_ERROR("Existing full store scan behavior changed");
     exit(1);
   }
@@ -664,7 +657,7 @@ void test_persist_store_write_error_is_actionable_and_path_safe() {
 }
 
 int main() {
-  init_logging("INFO", "stdout", "[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  init_logging("INFO", "stdout", "%(asctime)s %(levelname)s %(name)s pid=%(process)d request_id=%(request_id)s trace_id=%(trace_id)s message=%(message)s");
   test_basic_workflow();
   test_routed_filter_projection_edge_cases();
   test_path_bitmap_lifecycle_and_reload();

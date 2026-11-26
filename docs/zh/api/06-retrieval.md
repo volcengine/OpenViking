@@ -409,6 +409,7 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 | session | Session | 否 | None | 用于上下文感知搜索的会话（SDK）|
 | session_id | str | 否 | None | 用于上下文感知搜索的会话 ID（HTTP）|
 | events_time_decay_protection | str \| null | 否 | null | 不传或传 `null` 关闭衰减；传 `"0"` 立即衰减；传 `"7d"` 等时长则在保护期内保持原分，之后衰减。支持非负整数 `Xm`/`Xh`/`Xd` |
+| args | Dict | 否 | null | `search_type="keywords"` 且 `mode="list"` 时的高级引擎参数。支持 `bm25_k1`（float，> 0）、`bm25_b`（float，`[0, 1]`）、`post_process_input_limit`（int，有效 `limit`/`node_limit` 到 `2000000`）。未知 key 会被拒绝 |
 | context_type | str \| List[str] | 否 | None | 限定一个或多个 `ContextType` 取值：`memory`、`resource` 或 `skill` |
 | tags | List[str] | 否 | None | 显式检索标签，必须是严格的 `k=v` 格式。多个 tags 之间是 AND 关系，结果必须同时包含所有请求的标签 |
 | limit | int | 否 | 10 | 每条规划查询的结果上限；list 模式直接汇总各查询结果，总数可能超过此值 |
@@ -423,13 +424,13 @@ ov find "红色海报风格" --image ./poster.png --uri "viking://resources/imag
 | read_content | bool | 否 | False | 按可见内容 read 语义读取每个最终命中的 URI，并以内联 `content` 返回。单个读取失败时保留原命中，不附加内容；仅支持 `mode="list"`。 |
 | telemetry | bool \| object | 否 | False | 在响应中附带遥测数据 |
 
-`search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。`keywords` 要求非空文本 query，不支持图片，且需要远程 VikingDB 配置全文索引。
+`search()` 使用和 `find()` 相同的目标解析和显式标签过滤规则，包括由 `X-OpenViking-Actor-Peer` 或 SDK `actor_peer_id` 选择的 peer 集合过滤。提供 `image_url` 时，`search()` 会直接执行图片检索并跳过会话 query planning。`keywords` 要求非空文本 query，不支持图片，且需要远程 VikingDB 配置全文索引。`args` 仅在 `search_type="keywords"` 且 `mode="list"` 时接受，用同一个 map 承载引擎调参，避免为每个参数增加顶层字段。
 
 事件时间衰减作用于语义 `find()`、`search(mode="list")` 和 `search(mode="context")` 中带 `memory_type=events` 标签的结果。记忆提取流程将该标签写入 user / peer 事件的 L2 记录；检索按标签判断，不从 URI 或层级推断事件类型。无事件标签的结果、无 query 的纯过滤 `find()`、`recall`、`grep` 和 `glob` 不受影响。事件召回阶段由向量引擎将原向量分乘以 `time_score`；响应中的 `score` 是最终检索分数，开启模型 rerank 时使用模型分。context 模式默认按向量分组装候选，开启 `retrieval.apply_rerank_to_context` 后按模型分组装。保护期内 `time_score` 为 1，原分不变；时间距离与 VikingDB 指数衰减算子一致，取时间戳与请求时间的绝对差。list 响应中的 event 结果额外返回 `origin_score` 和 `time_score`，CLI 分别展示为 semantic、time 和 final 分。时间取自已有索引的 `updated_at` 字段，无需重新索引或改写时间戳；本地计算遇到缺失或非法时间时保持原分；云端使用索引中的日期时间字段和后处理算子。衰减曲线由服务端内部维护，调用方只需按请求传入保护期，无需修改 `ov.conf` 或 `ovcli.conf`。
 
 由记忆提取流程新生成或更新的记忆会自动写入 `memory_type=<类型>` 检索标签。启用衰减时，本地和云端均将按是否带 `memory_type=events` 标签拆成互斥且完整覆盖原范围的两路，再合并排序；两路均保留原 scope 的权限、目录和 level 限制，无需指定 peer id。存量数据不补标签，无标签记忆保持原分。直接内容刷新和普通标签更新保留已有类型，不从 URI 推断或重设类型。
 
-本地向量引擎按所需 event 条数在内部最多放大 3 倍候选（上限 100,000），在 C++ 中计算衰减并排序，截取 top-k 后才读取摘要等字段。这是有界候选近似，不能保证将语义候选窗口以外的事件提升进结果。HTTP 向量服务透传同一规则；云端 Adapter 使用 VikingDB 分数融合，仅请求 limit + offset，不设置固定 100,000 条输入预算。cuVS 集合的衰减请求使用其原生标量/向量索引。openGauss 接收透传参数但不执行时间衰减，保留普通向量分数。
+本地向量引擎按所需 event 条数在内部最多放大 3 倍候选（上限 100,000），在 C++ 中计算衰减并排序，截取 top-k 后才读取摘要等字段。这是有界候选近似，不能保证将语义候选窗口以外的事件提升进结果。HTTP 向量服务透传同一规则；云端 Adapter 使用 VikingDB 分数融合，仅请求 limit + offset，不设置固定 100,000 条输入预算。cuVS 集合的衰减请求使用其原生标量/向量索引。分布式 openGauss 收到衰减请求时，仍按普通向量检索和排序返回结果。
 
 启用模型 rerank 时，两路各请求 `2 × limit` 条结果。事件分支在召回时已完成衰减：云端由 VikingDB 计算，开源本地由 C++ 引擎计算。两路按召回分合并，取前 `2 × limit` 条统一执行一次模型 rerank，再按模型分排序、过滤阈值并取最终结果，模型后不再衰减。模型失败时使用已经衰减过的召回分。`origin_score` 和 `time_score` 始终描述召回阶段的原向量分与时间因子，因此二者乘积不一定等于成功 rerank 后的模型分。最终分数不混入父目录分数或热度分。
 
@@ -478,7 +479,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
         "query": "hnsw",
         "search_type": "keywords",
         "target_uri": "viking://resources/docs",
-        "limit": 10
+        "limit": 10,
+        "args": {
+            "bm25_k1": 1.2,
+            "bm25_b": 0.75,
+            "post_process_input_limit": 100
+        }
     }'
 ```
 
@@ -600,6 +606,10 @@ ov search "how to implement OAuth 2.0 authorization code flow"
 
 # BM25 关键词检索
 ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs"
+
+# BM25 关键词检索并调优引擎参数
+ov search "SearchByKeywords" --search-type keywords --uri "viking://resources/docs" \
+  --args '{"bm25_k1":1.2,"bm25_b":0.75,"post_process_input_limit":100}'
 
 # 限定层级范围（仅 L0）
 ov search "best practices" --level 0
@@ -728,7 +738,7 @@ Agent 插件每轮注入上下文时，过去需要按类型逐个检索、再�
 - **保底**：每条结果至少给出 `uri`。记忆类摘要缺失或超出单条上限时回落到概览档：写入侧把整篇正文存进了摘要标量，所以对记忆类别而言概览档在内容阶梯上位于摘要档*之下*，这次替换披露得更少。而 `resources` / `skills` 的摘要是语义处理生成的短摘要，同样的替换会去读调用方没有请求的正文，因此这两类直接退成裸 `uri`，不向上加深
 - **显式 `detail`**：把该档作为全部结果请求的起点和上限；装不下的条目仍逐档退档而不截断。上述记忆类概览档替换是实际档位唯一可能高于指定档的情况，且仅因为它比指定档携带的内容更少
 - **概览档按来源取骨架**：记忆文件取开头的 `# Summary` 段，代码文件取函数与类签名（复用 `code_outline`），长文档取标题树加首段
-- **单条上限**：`max_tokens ÷ 候选条数 × 2`，对除裸 `uri` 外的所有档位一律生效；某一档超出该上限时退回上一档，不做截断。预算仍有剩余时，最后一轮加深不受该上限约束，只受 `max_tokens` 约束
+- **单条上限**：`max_tokens ÷ 候选条数 × 2`，对除裸 `uri` 外的所有档位一律生效；某一档超出该上限时退回上一档，不做截断。预算仍有剩余时，最后一轮全文加深不受该上限约束，只受 `max_tokens` 约束；再在类别上限内，用剩余预算补回完整摘要和概览
 
 #### 3. 使用示例
 
@@ -861,7 +871,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要搜索的 Viking URI |
-| pattern | str | 是 | - | 搜索模式（正则表达式）|
+| pattern | str | 是 | - | 搜索模式，使用 Rust `regex` 语法逐行匹配 |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
@@ -871,9 +881,15 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | before_context | int | 否 | 0 | 每条匹配行之前返回的上下文行数；仅 HTTP API 和 CLI 支持 |
 | after_context | int | 否 | 0 | 每条匹配行之后返回的上下文行数；仅 HTTP API 和 CLI 支持 |
 
+环视、反向引用等超出支持范围的写法属于无效正则。
+
 `tags` 使用 AND 语义，并在内容匹配与 `node_limit` 截断之前过滤候选文件。例如 `["team=search", "env=prod"]` 只匹配同时具有两个标签的文件。
 
 使用 `tags` 过滤或传 `include_tags=true` 时，`matches` 中的命中会返回文件的 `tags`；没有检索标签的文件返回空数组 `[]`。普通 grep 会省略 `tags`，避免不必要的 VectorDB 读取。
+
+原生文件系统 grep 在 ACL 权限过滤前应用 `node_limit`，并返回布尔字段 `limit_reached`。该字段为 true 时，即使 `matches` 少于 `node_limit` 条或为空，结果仍可能不完整。该标记不保证还存在更多可见匹配；可提高 `node_limit` 或缩小范围、调整模式后重试。返回的匹配及其数量仍经过权限过滤。其他 grep 实现及旧版服务可能省略该字段；字段缺失不代表结果完整。
+
+grep 使用 BM25 召回文件再执行正则匹配时，候选返回数量达到本次请求的上限会返回 `candidate_limit_reached: true`。即使 `matches` 为空，仍可能有文件未进入正则扫描。可缩小 URI 范围或直接读取有希望的文件核验证据。
 
 #### 3. 使用示例
 

@@ -19,6 +19,11 @@ from openviking.server.account_stores.models import (
 class AccountStore(ABC):
     """Nominal contract implemented by every complete account store provider."""
 
+    @property
+    def read_only(self) -> bool:
+        """Whether management writes must be rejected before acquiring locks."""
+        return False
+
     @abstractmethod
     async def load(self) -> None: ...
 
@@ -28,6 +33,18 @@ class AccountStore(ABC):
     # Account
     @abstractmethod
     async def get_account(self, account_id: str) -> AccountSummary | None: ...
+
+    async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        """Account authorization metadata; legacy external stores have no frozen files."""
+        return ()
+
+    async def set_frozen_file(
+        self, account_id: str, user_id: str, path: str, frozen: bool
+    ) -> tuple[str, ...]:
+        """Atomically change one path; providers without this capability reject it."""
+        from openviking_cli.exceptions import FailedPreconditionError
+
+        raise FailedPreconditionError("Account store does not support frozen files")
 
     @abstractmethod
     async def create_account(
@@ -64,9 +81,7 @@ class AccountStore(ABC):
     @abstractmethod
     async def get_user(self, account_id: str, user_id: str) -> UserSummary | None: ...
 
-    async def get_user_membership(
-        self, account_id: str, user_id: str
-    ) -> UserSummary | None:
+    async def get_user_membership(self, account_id: str, user_id: str) -> UserSummary | None:
         """Point-read one user for the admin membership probe.
 
         Mirrors ``get_account``: stores whose in-memory state can lag a peer
@@ -125,9 +140,7 @@ class AccountStore(ABC):
     async def get_user_group_ids(self, account_id: str, user_id: str) -> tuple[str, ...]: ...
 
     @abstractmethod
-    async def add_group_members(
-        self, account_id: str, group_id: str, user_ids: list[str]
-    ) -> bool:
+    async def add_group_members(self, account_id: str, group_id: str, user_ids: list[str]) -> bool:
         """Atomically add existing active users, ignoring duplicate memberships."""
         ...
 

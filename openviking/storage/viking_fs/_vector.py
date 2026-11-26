@@ -3,13 +3,17 @@
 """Vector store integration mixin for VikingFS."""
 
 from functools import partial
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Mapping, Optional
 
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs._base import logger
 
 if TYPE_CHECKING:
-    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+    from openviking.storage.viking_vector_index_backend import (
+        VikingVectorIndexBackend,
+        _PreparedVectorTransfer,
+    )
 
 
 class _VectorMixin:
@@ -30,12 +34,12 @@ class _VectorMixin:
         try:
             await vector_store.delete_uris(real_ctx, uris)
             for uri in uris:
-                logger.debug(f"[VikingFS] Deleted from vector store: {uri}")
+                logger.debug("Deleted from vector store: %s", safe_uri_for_log(str(uri)))
         except Exception as e:
-            logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
+            logger.debug("Failed to delete from vector store: %s", type(e).__name__)
             raise
 
-    async def _copy_vector_store_uris(
+    async def _prepare_vector_store_uris(
         self,
         old_base: str,
         new_base: str,
@@ -43,28 +47,40 @@ class _VectorMixin:
         recursive: bool,
         ctx: Optional[RequestContext] = None,
         source_uris: List[str] | None = None,
-    ) -> Any:
-        """Copy a complete vector URI scope while preserving the source."""
+        source_expected_levels: Mapping[str, set[int]] | None = None,
+    ) -> Optional["_PreparedVectorTransfer"]:
+        """Read all vector transfer dependencies before filesystem writes."""
         vector_store = self._get_vector_store()
         if not vector_store:
             return None
-        return await vector_store.copy_uri_mapping(
-            ctx=self._ctx_or_default(ctx),
-            source_uri=old_base,
-            target_uri=new_base,
+        return await vector_store._prepare_uri_transfer(
+            self._ctx_or_default(ctx),
+            old_base,
+            new_base,
             recursive=recursive,
             target_entry_exists=partial(self.exists, ctx=ctx),  # type: ignore[attr-defined]
-            **({"source_uris": source_uris} if source_uris is not None else {}),
+            source_uris=source_uris,
+            **(
+                {"source_expected_levels": source_expected_levels}
+                if source_expected_levels is not None
+                else {}
+            ),
         )
+
+    async def _copy_vector_store_uris(
+        self, prepared: "_PreparedVectorTransfer", ctx: Optional[RequestContext] = None
+    ) -> Any:
+        """Apply prepared vector copy data without repeating inventory reads."""
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return None
+        return await vector_store._copy_prepared_uri_mapping(self._ctx_or_default(ctx), prepared)
 
     async def _update_vector_store_uris(
         self,
-        old_base: str,
-        new_base: str,
+        prepared: "_PreparedVectorTransfer",
         *,
-        recursive: bool,
         ctx: Optional[RequestContext] = None,
-        source_uris: List[str] | None = None,
         restore_acl: dict[str, dict[str, Any]] | None = None,
     ) -> Any:
         """Move a vector URI scope, overwriting matching target records.
@@ -74,13 +90,9 @@ class _VectorMixin:
         vector_store = self._get_vector_store()
         if not vector_store:
             return None
-        return await vector_store.update_uri_mapping(
-            ctx=self._ctx_or_default(ctx),
-            source_uri=old_base,
-            target_uri=new_base,
-            recursive=recursive,
-            target_entry_exists=partial(self.exists, ctx=ctx),  # type: ignore[attr-defined]
-            **({"source_uris": source_uris} if source_uris is not None else {}),
+        return await vector_store._move_prepared_uri_mapping(
+            self._ctx_or_default(ctx),
+            prepared,
             **({"restore_acl": restore_acl} if restore_acl is not None else {}),
         )
 

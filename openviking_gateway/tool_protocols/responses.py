@@ -10,6 +10,7 @@ from ..protocols import string_type, text_content
 from .common import (
     PREFIX,
     SUMMARY_HEADROOM,
+    StreamEvent,
     SummaryError,
     ToolLoopError,
     ToolProtocol,
@@ -22,6 +23,45 @@ from .common import (
 CLIENT_CALLS = {"function_call", "custom_tool_call"}
 TOOL_OUTPUTS = {"function_call_output", "custom_tool_call_output"}
 ANNOUNCEMENTS = {"response.created", "response.in_progress"}
+RESPONSE_ERROR_CODES = frozenset(
+    {
+        "server_error",
+        "rate_limit_exceeded",
+        "invalid_prompt",
+        "data_residency_mismatch",
+        "bio_policy",
+        "misalignment_policy_violation",
+        "vector_store_timeout",
+        "invalid_image",
+        "invalid_image_format",
+        "invalid_base64_image",
+        "invalid_image_url",
+        "image_too_large",
+        "image_too_small",
+        "image_parse_error",
+        "image_content_policy_violation",
+        "invalid_image_mode",
+        "image_file_too_large",
+        "unsupported_image_media_type",
+        "empty_image_file",
+        "failed_to_download_image",
+        "image_file_not_found",
+    }
+)
+RATE_LIMIT_ERROR_ALIASES = frozenset(
+    {"429", "rate_limit", "rate_limit_error", "too_many_requests", "upstream_rate_limit"}
+)
+
+
+def response_error_code(detail):
+    """Map provider errors into the Responses API's ResponseError code enum."""
+    candidates = (detail.get("code"), detail.get("type"))
+    if any(value in RATE_LIMIT_ERROR_ALIASES for value in candidates):
+        return "rate_limit_exceeded"
+    return next(
+        (value for value in candidates if value in RESPONSE_ERROR_CODES),
+        "server_error",
+    )
 
 
 class ResponsesProtocol(ToolProtocol):
@@ -156,7 +196,7 @@ class ResponsesProtocol(ToolProtocol):
 
     def accumulate(self, value):
         kind = value.get("type")
-        if kind in {"response.completed", "response.incomplete"}:
+        if kind in {"response.completed", "response.incomplete", "response.failed"}:
             self.envelope = copy.deepcopy(value["response"])
             self.finish = self.envelope.get("status")
             self.usage = self.envelope.get("usage") or {}
@@ -186,7 +226,7 @@ class ResponsesProtocol(ToolProtocol):
         if kind in {"response.completed", "response.incomplete"}:
             return []
         if kind == "response.failed":
-            raise ToolLoopError("Model response failed")
+            raise ToolLoopError("Model response failed", code="tool_upstream_stream_error")
         if "output_index" in value:
             index = value["output_index"]
             if kind == "response.output_item.added":
@@ -226,7 +266,9 @@ class ResponsesProtocol(ToolProtocol):
 
     def end(self):
         if not self.completed or self.finish not in {"completed", "incomplete"}:
-            raise ToolLoopError("Incomplete Responses event stream")
+            raise ToolLoopError(
+                "Incomplete Responses event stream", code="tool_upstream_incomplete"
+            )
         if self.body.get("stream"):
             # Prefer terminal output for opaque fields; done events are complete
             # items when a sparse terminal omits the entire output.
@@ -327,7 +369,17 @@ class ResponsesProtocol(ToolProtocol):
     def terminal(self, final):
         return [{"type": "response." + self.finish, "response": final}]
 
-    def error(self, message):
+    def error(self, message, kind="gateway_tool_error") -> list[StreamEvent]:
+        # Responses clients read error codes from a fixed set; the reason stays in the message.
+        return self.failed("server_error", message)
+
+    def upstream_error(self, event) -> list[StreamEvent]:
+        detail = event.get("error")
+        detail = detail if isinstance(detail, dict) else event
+        message = detail.get("message") or "Model stream failed"
+        return self.failed(response_error_code(detail), message)
+
+    def failed(self, code, message) -> list[StreamEvent]:
         return [
             {
                 "type": "response.failed",
@@ -336,7 +388,7 @@ class ResponsesProtocol(ToolProtocol):
                     "object": "response",
                     "model": self.body.get("model"),
                     "status": "failed",
-                    "error": {"code": "server_error", "message": message},
+                    "error": {"code": code, "message": message},
                     "incomplete_details": None,
                     "output": self.visible,
                 },

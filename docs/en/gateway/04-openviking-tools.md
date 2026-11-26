@@ -31,6 +31,7 @@ The tool list comes straight from the MCP tools your OpenViking server provides,
 | Purpose | Tools | What the model uses them for |
 | --- | --- | --- |
 | Search | `find`, `search`, `grep`, `glob` | Semantic search over memory and resources; exact lookups by regular expression or file name. |
+| Conversation history | `session_history` | Looking up exact details of this conversation that a summary replaced; see [Finding what was cut](05-long-conversations.md#finding-what-was-cut). |
 | Browse and read | `list`, `tree`, `read` | Expanding a recalled entry to its original text by URI; browsing memory and skill directories. |
 | Write | `remember`, `write`, `edit` | Storing a long-term memory; writing or editing memory files. |
 | Import | `add_resource`, `add_skill` | Importing a web page or repository by URL, importing a chat attachment, creating a skill from text, all without a shell on the client. |
@@ -69,7 +70,7 @@ To hide the notices, turn off **Show tool calls**. Like other profile changes, t
 
 > **Warning**: Selected tools run without the client's permission prompts, including tools that write or delete data; a tool-call notice reports a call after it ran and is not an approval step. If users need to approve each call, connect the OpenViking plugin or MCP server instead (see [Gateway or plugin?](../guides/15-gateway.md#gateway-or-plugin)). The model can never do more than the user's own OpenViking permissions allow.
 
-Before you check a tool that changes data, make sure that is acceptable. For profiles used by chat apps, leave at least `forget` and `set_acl` unchecked.
+Tools that change data, `forget` and `set_acl` included, are selected by default; make sure that is acceptable, or uncheck them. For profiles used by chat apps, uncheck at least `forget` and `set_acl`.
 
 What admins control:
 
@@ -82,21 +83,16 @@ What admins control:
 
 ## Choose tools {#choose-tools}
 
-The **Tools** list in a [context profile](08-context-profiles.md#context-profiles)'s **OpenViking tools** section decides which OpenViking tools the model gets. New context profiles have **OpenViking tools** on, including those made with **Create with recommended settings**, and every tool is selected except the ones the gateway knows change data:
+The **Tools** list in a [context profile](08-context-profiles.md#context-profiles)'s **OpenViking tools** section decides which OpenViking tools the model gets. New context profiles have **OpenViking tools** on, including those made with **Create with recommended settings**, and every tool is selected, including the ones that change data, such as `remember`, `write`, `edit`, `add_resource`, `forget` and `set_acl`.
 
-| Default | Tools |
-| --- | --- |
-| Selected | `find`, `search`, `grep`, `glob`, `list`, `tree`, `read`, `download`, `list_watches`, `get_acl`, `list_users`, `list_groups`, `health` |
-| Not selected (they change data) | `remember`, `write`, `edit`, `add_resource`, `add_skill`, `forget`, `set_acl`, `cancel_watch` |
-
-Check `remember` to let the model save memories, and `add_resource` to let it import web pages or attachments. Read the warning in [Risks and controls](#risks-and-controls) before checking any tool that changes data.
+Uncheck the tools the model should not use. Before you leave any tool that changes data selected, read the warning in [Risks and controls](#risks-and-controls).
 
 **Allow OpenViking tools** is on by default for every [upstream](07-upstreams.md#upstreams). With both switches on, new conversations get the selected tools with an `openviking_` prefix, such as `openviking_find` and `openviking_read`. Tool definitions go with every request in the conversation, and the full set adds about 3,500 input tokens, so unchecking tools nobody needs also saves tokens.
 
 Things to know about the list:
 
-- **Where it comes from**: the **Tools** list comes from your OpenViking service, and Studio describes what each tool does. When OpenViking annotates a tool, Studio also shows a **Read only** or **Modifies data** badge next to it. OpenViking marks `search` as **Modifies data**, but the gateway still selects it by default.
-- **Tools added later**: tools that OpenViking adds later are available by default; ongoing conversations keep the tool list they started with. Existing context profiles keep their selection.
+- **Where it comes from**: the **Tools** list comes from your OpenViking service, and Studio describes what each tool does. When OpenViking annotates a tool, Studio also shows a **Read only** or **Modifies data** badge next to it.
+- **Tools added later**: tools that OpenViking adds later are available by default; ongoing conversations keep the tool list they started with. Existing context profiles keep their selection. An account without a saved `default` profile uses the deployment's `default_profile`, which selects every tool unless it sets `disabled_tools`.
 - **The list is empty for root**: OpenViking does not accept root API keys for its tools, so for root the gateway reads the list with the OpenViking key behind a [gateway key](09-gateway-keys.md#gateway-keys) issued in the current account. Until the account has a gateway key, the list can be empty and Studio shows **Issue a gateway key to load the tool list.** Issue a key first, or edit the profile signed in as a user or account admin. A profile saved before then keeps the default selection.
 - **`download` needs a shell**: `download` returns a one-time `curl` command, so the client needs a shell tool, and the link must be reachable from the client. See [With a client shell tool](#import-with-a-shell-tool) for which names count and where the link points.
 
@@ -128,12 +124,12 @@ A request can reach the model without OpenViking tools even though its [context 
 | **The client required a specific tool** (`tools_forced_choice`) | `tool_choice` is anything other than `auto` or `none`: for example `required`, Anthropic `any` or `tool`, a named function, or a Responses object such as `allowed_tools`. |
 | **DeepSeek thinking is on and earlier reasoning cannot be sent back** (`deepseek_reasoning_history_required`) | The upstream is DeepSeek, thinking is on (standard Responses requests have no `thinking` field and count as on), and earlier replies would reach DeepSeek without their reasoning. Turn on **Restore reasoning the client drops** in the upstream's **Routing** section ([details and cases it cannot cover](07-upstreams.md#restore-reasoning)), or send `"thinking": {"type": "disabled"}`. |
 | **The client already has OpenViking tools** (`tool_name_collision`) | The gateway stops offering its own tools for the rest of the conversation (requests that resend history in which the model already called gateway tools keep them). See [When the client has its own OpenViking tools](#client-has-openviking-tools). |
-| **OpenViking's tool list couldn't be loaded when this conversation first needed it** (`tools_unavailable`) | The tool list could not be loaded from OpenViking, and no earlier list was available. Start a new conversation once the connection is back. |
+| **OpenViking's tool list couldn't be loaded when this conversation first needed it** (`tools_unavailable`) | The tool list could not be loaded from OpenViking, and no earlier list was available. The conversation's next request that could use tools loads it again; until a list has loaded once, the gateway tries at most every 30 seconds. When the tools arrive after the conversation's first turn, the model is told about them at the start of the next user turn. |
 | **This conversation has no OpenViking tools** (`tools_not_selected_at_session_start`) | The profile has tools on, but this conversation's tool list is empty: either the profile selects no tools, or the conversation started before a gateway upgrade. Start a new conversation. |
 
 ### When the decision is made {#when-the-decision-is-made}
 
-Whether a conversation gets tools is decided at its first request that could use them (housekeeping requests such as title generation do not count) and then stays fixed, so profile changes only reach new conversations. The one exception switches tools off: the client turns out to have OpenViking tools of its own before the model has called a gateway tool, for example because an MCP server connected after the first turn.
+Whether a conversation gets tools is decided at its first request that could use them (housekeeping requests such as title generation do not count; neither does a request for which the tool list could not be loaded) and then stays fixed, so profile changes only reach new conversations. The one exception switches tools off: the client turns out to have OpenViking tools of its own before the model has called a gateway tool, for example because an MCP server connected after the first turn.
 
 Housekeeping requests, sub-agent requests and conversations where an OpenViking plugin was detected never get OpenViking tools. If such a request sends back history in which the model used these tools, the gateway still attaches the tool definitions so the history stays valid, but refuses new OpenViking calls. The client's own tools stay available in every request.
 
@@ -192,16 +188,17 @@ When a single OpenViking call fails, the model receives an error result and can 
 
 - The provider rejects a follow-up model request.
 - The model calls an OpenViking tool that is not available in this conversation, or keeps calling OpenViking tools after they were refused.
-- **Hidden tool request timed out**: the OpenViking tool rounds took longer than the profile's tool **Total time**; or, with no total time set, one model request during the rounds took longer than `upstream_timeout_seconds`.
+- **Hidden tool request timed out**: the OpenViking tool rounds took longer than the profile's tool **Total time**. A model reply that keeps arriving is limited only by **Total time**.
+- **Model upstream did not answer in time**: during the rounds, the provider took longer than `upstream_timeout_seconds` to start a reply or sent nothing for that long in the middle of one.
 
 The client then receives an error, and the request log shows **OpenViking tools failed** (`hidden_tool_loop_failed`). What the error looks like depends on the request:
 
 | Request | What the client receives |
 | --- | --- |
-| Streaming | An error event at the end of the stream: `response.failed` in Responses, and an `error` of type `gateway_tool_error` in Chat Completions and Anthropic Messages. The HTTP status is already 200 by then. |
+| Streaming | An error event at the end of the stream: `response.failed` in Responses, and an `error` in Chat Completions and Anthropic Messages. Its type is `upstream_timeout`, `upstream_disconnected` or `upstream_unreachable` when the provider did not answer or dropped the connection, and `gateway_tool_error` otherwise. The HTTP status is already 200 by then. |
 | Non-streaming, the provider rejected a follow-up request | The provider's own error body and status. |
-| Non-streaming, timed out | 504 (`gateway_http_504`). |
-| Non-streaming, any other failure | 502 with body `{"reason": "gateway_http_502", "detail": "..."}`. |
+| Non-streaming, timed out | 504 `tool_loop_timeout` when **Total time** ran out, 504 `upstream_timeout` when the provider did not answer in time. |
+| Non-streaming, any other failure | 502 with body `{"reason": "...", "detail": "...", "request_id": "..."}`; the reason is `tool_upstream_invalid`, `tool_upstream_incomplete`, `tool_upstream_stream_error`, `tool_call_invalid`, `tool_loop_limit`, `upstream_unreachable` or `upstream_disconnected` (see [Model route errors](../api/25-gateway.md#model-route-errors)). |
 
 Two more cases:
 

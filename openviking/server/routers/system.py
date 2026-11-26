@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 """System endpoints for OpenViking HTTP Server."""
 
+from typing import Literal
+
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from openviking.core.path_variables import resolve_path_variables
 from openviking.core.uri_validation import validate_request_viking_uri
+from openviking.pyagfs import AsyncAGFSClient
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
@@ -116,24 +119,38 @@ async def readiness_check(request: Request):
         )
 
     checks = {}
+    config = getattr(service, "_config", None)
+    initialize_default = getattr(config, "enable_default_resources", True)
+    cluster_vectors = getattr(getattr(config, "storage", None), "vectordb", None)
 
     # 1. AGFS: probe filesystem access
     try:
-        checks["agfs"] = await _probe_agfs_readiness()
-    except Exception as e:
-        checks["agfs"] = {"status": "error", "checks": {"filesystem": f"error: {e}"}}
+        if not initialize_default:
+            # This node probe has no Account context; check the shared mount.
+            await AsyncAGFSClient(get_viking_fs().agfs).ls("/local")
+            checks["agfs"] = {"status": "ok", "checks": {"filesystem": "ok"}}
+        else:
+            checks["agfs"] = await _probe_agfs_readiness()
+    except Exception:
+        logger.debug("AGFS readiness check failed", exc_info=True)
+        checks["agfs"] = {"status": "error", "checks": {"filesystem": "error"}}
 
     # 2. VectorDB: health_check()
     try:
-        viking_fs = get_viking_fs()
-        storage = viking_fs._get_vector_store()
-        if storage:
-            healthy = await storage.health_check()
-            checks["vectordb"] = "ok" if healthy else "unhealthy"
-        else:
+        if cluster_vectors is None:
+            # Business collections are resolved by Account, not by this probe.
             checks["vectordb"] = "not_configured"
-    except Exception as e:
-        checks["vectordb"] = f"error: {e}"
+        else:
+            viking_fs = get_viking_fs()
+            storage = viking_fs._get_vector_store()
+            if storage:
+                healthy = await storage.health_check()
+                checks["vectordb"] = "ok" if healthy else "unhealthy"
+            else:
+                checks["vectordb"] = "not_configured"
+    except Exception:
+        logger.debug("VectorDB readiness check failed", exc_info=True)
+        checks["vectordb"] = "error"
 
     # 3. APIKeyManager: check if loaded
     try:
@@ -142,8 +159,9 @@ async def readiness_check(request: Request):
             checks["api_key_manager"] = "ok"
         else:
             checks["api_key_manager"] = "not_configured"
-    except Exception as e:
-        checks["api_key_manager"] = f"error: {e}"
+    except Exception:
+        logger.debug("API key manager readiness check failed", exc_info=True)
+        checks["api_key_manager"] = "error"
 
     # 4. Embedding: the provider is initialized by the service startup path.
     # There is no Account context on an unauthenticated readiness probe, so do
@@ -151,25 +169,32 @@ async def readiness_check(request: Request):
     try:
         embedding_provider = getattr(service, "embedding_provider", None)
         checks["embedding"] = "ok" if embedding_provider is not None else "not_initialized"
-    except Exception as e:
-        checks["embedding"] = f"error: {e}"
+    except Exception:
+        logger.debug("Embedding readiness check failed", exc_info=True)
+        checks["embedding"] = "error"
 
-    # 5. Ollama: connectivity check if configured
-    try:
-        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
-        from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config
+    # Probe explicitly configured Cluster models regardless of default-resource policy.
+    embedding = getattr(config, "embedding", None)
+    vlm = getattr(config, "vlm", None)
+    if (vlm is not None and vlm.model) or any(
+        getattr(embedding, mode, None) is not None for mode in ("dense", "sparse", "hybrid")
+    ):
+        try:
+            from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+            from openviking_cli.utils.ollama import check_ollama_running, detect_ollama_in_config
 
-        ov_config = OpenVikingConfigSingleton.get_instance()
-        uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
-        if uses_ollama:
-            if check_ollama_running(ollama_host, ollama_port):
-                checks["ollama"] = "ok"
+            ov_config = OpenVikingConfigSingleton.get_instance()
+            uses_ollama, ollama_host, ollama_port = detect_ollama_in_config(ov_config)
+            if uses_ollama:
+                if check_ollama_running(ollama_host, ollama_port):
+                    checks["ollama"] = "ok"
+                else:
+                    checks["ollama"] = "unreachable"
             else:
-                checks["ollama"] = f"unreachable at {ollama_host}:{ollama_port}"
-        else:
-            checks["ollama"] = "not_configured"
-    except Exception as e:
-        checks["ollama"] = f"error: {e}"
+                checks["ollama"] = "not_configured"
+        except Exception:
+            logger.debug("Ollama readiness check failed", exc_info=True)
+            checks["ollama"] = "error"
 
     all_ok = all(_is_ready_check_ok(v) for v in checks.values())
     status_code = 200 if all_ok else 503
@@ -207,6 +232,7 @@ class WaitRequest(BaseModel):
         deprecated=True,
         description="Deprecated compatibility parameter; accepted and ignored.",
     )
+    scope: Literal["account", "runtime"] | None = None
 
 
 class ConsistencyRequest(BaseModel):
@@ -218,11 +244,15 @@ class ConsistencyRequest(BaseModel):
 @router.post("/api/v1/system/wait", tags=["system"])
 async def wait_processed(
     request: WaitRequest | None = Body(None),
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Wait for all processing to complete."""
     service = get_service()
-    result = await service.resources.wait_processed()
+    result = (
+        await service.resources.wait_processed(ctx=ctx)
+        if request is not None and request.scope == "account"
+        else await service.resources.wait_processed()
+    )
     return Response(status="ok", result=result)
 
 

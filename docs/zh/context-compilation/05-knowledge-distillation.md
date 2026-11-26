@@ -42,21 +42,23 @@ ov skills list
 在 `--instruction` 里说清**分析问题、对比维度、基线和范围**——这直接决定蒸馏的方向：
 
 ```bash
-ov compile \
+ov compile create --compile-name finance-insights \
   --from viking://resources/finance-reports \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
   --instruction "对比近三年财报，找到营收质量、盈利能力和风险的变化及驱动因素"
+ov compile --compile-name finance-insights
 ```
 
 `--from` 可以传多个来源，用于跨知识库对比：
 
 ```bash
-ov compile \
+ov compile create --compile-name finance-comparison \
   --from viking://resources/finance-2024,viking://resources/finance-2025 \
   --to viking://resources/finance-insights \
   --skill viking://agent/skills/knowledge-distillation \
   --instruction "对比两个年度知识库，找出关键指标的变化与结构性差异"
+ov compile --compile-name finance-comparison
 ```
 
 命令会立刻返回 `task_id`：

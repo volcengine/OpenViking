@@ -1,11 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Watch store contracts on the file store and, when configured, MySQL.
+"""Watch store contracts on File, SQLite, MySQL and PostgreSQL.
 
 In file mode every simulated node shares the one process's store. Set
 OPENVIKING_WATCH_MYSQL_PARAMS to a JSON object of connection parameters for
 an isolated MySQL database; the fixture provisions a randomly named table from
 openviking/service/sql/001_watch_tasks.sql and drops them afterwards.
+OPENVIKING_WATCH_POSTGRES_PARAMS similarly enables PostgreSQL using its shipped DDL.
 """
 
 import asyncio
@@ -19,9 +20,13 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.service import UserPrivacyConfigService
 from openviking.resource.watch_store import WatchStore
 from openviking.resource.watch_store_file import FileWatchStore
 from openviking.resource.watch_store_mysql import MySQLWatchStore
+from openviking.resource.watch_store_postgres import PostgresWatchStore
+from openviking.resource.watch_store_sqlite import SQLiteWatchStore
 from openviking.resource.watch_types import (
     PermissionDeniedError,
     WatchAuthority,
@@ -33,7 +38,9 @@ from openviking_cli.exceptions import ConflictError, InvalidArgumentError
 from tests.utils.watch_fixtures import local_viking_fs, reserve_watch
 
 MYSQL_PARAMS = os.environ.get("OPENVIKING_WATCH_MYSQL_PARAMS")
+POSTGRES_PARAMS = os.environ.get("OPENVIKING_WATCH_POSTGRES_PARAMS")
 SCHEMA = Path(__file__).parents[2] / "openviking/service/sql/001_watch_tasks.sql"
+POSTGRES_SCHEMA = SCHEMA.with_name("001_watch_tasks_postgres.sql")
 ACCOUNT = "account-a"
 OWNER = WatchAuthority(ACCOUNT, "user-a", "user")
 CONNECTOR_AUTH = {"provider": "connector_encrypted", "ciphertext": "unused"}
@@ -47,14 +54,19 @@ def _mysql_connection(params):
     return pymysql.connect(**values, charset="utf8mb4", autocommit=True)
 
 
-@pytest_asyncio.fixture(params=["file", "mysql"])
+@pytest_asyncio.fixture(params=["file", "sqlite", "mysql", "postgres"])
 async def make_store(request, tmp_path):
     """Return a factory for stores sharing one database (one per simulated node)."""
     created: list[WatchStore] = []
     cleanup = None
     if request.param == "file":
         viking_fs = local_viking_fs(tmp_path / "agfs")
-    else:
+    elif request.param == "sqlite":
+        params = {
+            "path": str(tmp_path / "watch.db"),
+            "credential_encryption_key": ENCRYPTION_KEY,
+        }
+    elif request.param == "mysql":
         if not MYSQL_PARAMS:
             pytest.skip("OPENVIKING_WATCH_MYSQL_PARAMS is not configured")
         base = json.loads(MYSQL_PARAMS)
@@ -74,9 +86,46 @@ async def make_store(request, tmp_path):
         connection = await asyncio.to_thread(provision)
 
         def cleanup():
-            with connection.cursor() as cursor:
-                cursor.execute(f"DROP TABLE `{table}`")
-            connection.close()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(f"DROP TABLE `{table}`")
+            finally:
+                connection.close()
+
+    else:
+        if not POSTGRES_PARAMS:
+            pytest.skip("OPENVIKING_WATCH_POSTGRES_PARAMS is not configured")
+        import psycopg
+        from psycopg import sql
+
+        base = json.loads(POSTGRES_PARAMS)
+        table = "ov_test_watch_" + uuid.uuid4().hex[:12]
+        params = {**base, "table": table, "credential_encryption_key": ENCRYPTION_KEY}
+        connect = {key: value for key, value in base.items() if key != "maxsize"}
+        connect["dbname"] = connect.pop("database")
+
+        def provision():
+            connection = psycopg.connect(**connect, autocommit=True)
+            try:
+                ddl = POSTGRES_SCHEMA.read_text().replace("ov_watch_tasks", table)
+                ddl = "\n".join(
+                    line for line in ddl.splitlines() if not line.lstrip().startswith("--")
+                )
+                for statement in ddl.split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
+            except BaseException:
+                connection.close()
+                raise
+            return connection
+
+        connection = await asyncio.to_thread(provision)
+
+        def cleanup():
+            try:
+                connection.execute(sql.SQL("DROP TABLE {}").format(sql.Identifier(table)))
+            finally:
+                connection.close()
 
     async def factory(service_name: str = "watch-test", **overrides) -> WatchStore:
         if request.param == "file":
@@ -84,7 +133,12 @@ async def make_store(request, tmp_path):
                 return created[0]
             store: WatchStore = FileWatchStore(viking_fs)
         else:
-            store = MySQLWatchStore(service_name=service_name, params={**params, **overrides})
+            cls = {
+                "mysql": MySQLWatchStore,
+                "postgres": PostgresWatchStore,
+                "sqlite": SQLiteWatchStore,
+            }[request.param]
+            store = cls(service_name=service_name, params={**params, **overrides})
         await store.initialize()
         created.append(store)
         return store
@@ -92,10 +146,12 @@ async def make_store(request, tmp_path):
     try:
         yield factory
     finally:
-        for store in created:
-            await store.close()
-        if cleanup is not None:
-            await asyncio.to_thread(cleanup)
+        try:
+            for store in created:
+                await store.close()
+        finally:
+            if cleanup is not None:
+                await asyncio.to_thread(cleanup)
 
 
 @pytest_asyncio.fixture
@@ -106,12 +162,72 @@ async def store(make_store):
 async def create(store, uri="viking://resources/a", *, initial_run_id=None, due=False, **values):
     values.setdefault("account_id", ACCOUNT)
     values.setdefault("user_id", "user-a")
+    values.setdefault("path", "https://example.org/doc")
     if due:
         values["created_at"] = datetime.now() - timedelta(minutes=5)
-    task = WatchTask(path="https://example.org/doc", to_uri=uri, watch_interval=1, **values)
+    task = WatchTask(to_uri=uri, watch_interval=1, **values)
     task.next_execution_time = task.calculate_next_execution_time() if task.is_active else None
     await store.create_task(task, initial_run_id=initial_run_id)
     return task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("make_store", ["sqlite", "mysql", "postgres"], indirect=True)
+async def test_sql_duplicate_watch_id_reports_conflict_without_overwriting(store):
+    task = await create(store, task_id="duplicate-id")
+    with pytest.raises(ConflictError, match="already exists"):
+        await create(store, "viking://resources/other", task_id=task.task_id)
+    assert (await store.get_task(task.task_id)).to_uri == task.to_uri
+    await create(store, "viking://resources/other", task_id="new-id")
+
+
+@pytest.mark.parametrize("violation", ["not_null", "check"])
+@pytest.mark.asyncio
+@pytest.mark.parametrize("make_store", ["sqlite", "mysql", "postgres"], indirect=True)
+async def test_sql_create_preserves_nonduplicate_constraint_error(store, violation):
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError, OperationalError
+
+    if store.provider == "sqlite" and violation == "check":
+        pytest.skip("SQLite CHECK constraints must be defined before table creation")
+    task = WatchTask(
+        task_id="invalid-id",
+        path="https://example.org/doc",
+        to_uri="viking://resources/invalid",
+        account_id=ACCOUNT,
+        user_id=OWNER.user_id,
+    )
+    if violation == "not_null":
+        # Bypass model validation to exercise the database constraint.
+        task = task.model_copy(update={"original_role": None})
+    else:
+
+        async def provision_check():
+            async with store._transaction() as session:
+                await session.execute(
+                    text(
+                        f"ALTER TABLE {store._table_name} ADD CONSTRAINT watch_role_guard "
+                        "CHECK (original_role <> 'invalid')"
+                    )
+                )
+
+        await store._sql_runtime.run(provision_check)
+        task.original_role = "invalid"
+    # PyMySQL classifies CHECK violations as OperationalError.
+    expected_error = (
+        OperationalError if store.provider == "mysql" and violation == "check" else IntegrityError
+    )
+    with pytest.raises(expected_error) as raised:
+        await store.create_task(task)
+    if store.provider == "postgres":
+        assert raised.value.orig.sqlstate == ("23502" if violation == "not_null" else "23514")
+    elif store.provider == "sqlite":
+        assert "NOT NULL constraint failed" in str(raised.value.orig)
+    else:
+        assert raised.value.orig.args[0] == (1048 if violation == "not_null" else 3819)
+    assert await store.get_task(task.task_id) is None
+    # The failed transaction must release the connection and permit a retry.
+    await create(store, task.to_uri, task_id=task.task_id)
 
 
 @pytest.mark.asyncio
@@ -503,10 +619,9 @@ async def test_scan_pages_do_not_lose_due_or_running_watches(store):
 
 
 @pytest.mark.asyncio
-async def test_mysql_running_scan_does_not_decrypt_private_state(make_store):
+@pytest.mark.parametrize("make_store", ["sqlite", "mysql", "postgres"], indirect=True)
+async def test_sql_running_scan_does_not_decrypt_private_state(make_store):
     first = await make_store()
-    if first.provider != "mysql":
-        pytest.skip("MySQL encryption contract")
     task = await create(
         first,
         due=True,
@@ -599,10 +714,9 @@ async def test_move_rejects_incomplete_explicit_task_selection(store):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("make_store", ["sqlite", "mysql", "postgres"], indirect=True)
 async def test_service_names_partition_rows(make_store):
     first = await make_store()
-    if first.provider == "file":
-        pytest.skip("the file store belongs to one deployment")
     other = await make_store("other-service")
     task = await create(first, initial_run_id="run-1")
 
@@ -612,9 +726,15 @@ async def test_service_names_partition_rows(make_store):
     await create(other)
 
 
-@pytest.mark.parametrize("key", ["not base64!", base64.b64encode(b"short").decode()])
-def test_mysql_store_rejects_malformed_encryption_keys(key):
-    with pytest.raises(ValueError, match="credential_encryption_key"):
+@pytest.mark.parametrize(
+    "key,error",
+    [
+        ("not base64!", "must be base64-encoded"),
+        (base64.b64encode(b"short").decode(), "must decode to exactly 32 bytes"),
+    ],
+)
+def test_sql_store_rejects_malformed_encryption_keys(key, error):
+    with pytest.raises(ValueError, match=f"credential_encryption_key {error}"):
         MySQLWatchStore(
             service_name="watch-test",
             params={
@@ -762,12 +882,22 @@ class TestFileRecovery:
     async def test_occupied_deletion_is_persisted_without_runtime_occupancy(
         self, watch_vfs, watch_store
     ):
+        sanitizer = PrivacySanitizer(UserPrivacyConfigService(watch_vfs))
+        connector_states = {"cursor": "x" * sanitizer.max_content_bytes}
+        retained = await create(
+            watch_store,
+            "viking://resources/retained",
+            connector_states=connector_states,
+        )
         task = await create(watch_store, initial_run_id="run-1")
+        watch_vfs.set_privacy_sanitizer(sanitizer)
         await watch_store.delete_task(task.task_id, OWNER)
         assert await watch_store.has_running_overlap(ACCOUNT, [task.to_uri])
         snapshot = await watch_vfs.read_file(FileWatchStore.STORAGE_URI)
         reopened = FileWatchStore(watch_vfs)
         await reopened.initialize()
+        loaded = await reopened.get_task(retained.task_id)
+        assert loaded is not None and loaded.connector_states == connector_states
         assert await reopened.get_task(task.task_id) is None
         assert await reopened.get_state(task.task_id) is None
         assert not await reopened.has_running_overlap(ACCOUNT, [task.to_uri])

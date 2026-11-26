@@ -86,9 +86,9 @@ pub struct MountableFS {
     #[cfg(feature = "cache")]
     cache: Option<MountCacheConfig>,
 
-    /// Optional shared runtime, independent of mount-level CacheFS enablement.
+    /// Named runtimes available to cache-backed mounted modules.
     #[cfg(feature = "cache")]
-    cache_runtime: Option<Arc<CacheRuntime>>,
+    cache_runtimes: HashMap<String, Arc<CacheRuntime>>,
 }
 
 #[cfg(feature = "cache")]
@@ -96,6 +96,7 @@ pub struct MountableFS {
 struct MountCacheConfig {
     runtime: Arc<CacheRuntime>,
     service_name: String,
+    shared_redis_ttl: Option<Duration>,
 }
 
 impl MountableFS {
@@ -236,13 +237,19 @@ impl MountableFS {
             #[cfg(feature = "cache")]
             cache: None,
             #[cfg(feature = "cache")]
-            cache_runtime: None,
+            cache_runtimes: HashMap::new(),
         }
     }
 
     /// Create a MountableFS that shares a runtime without enabling CacheFS.
     #[cfg(feature = "cache")]
     pub fn with_shared_cache_runtime(runtime: Arc<CacheRuntime>) -> Self {
+        Self::with_cache_runtimes(HashMap::from([("default".to_string(), runtime)]))
+    }
+
+    /// Create a MountableFS that shares named runtimes without enabling CacheFS.
+    #[cfg(feature = "cache")]
+    pub fn with_cache_runtimes(cache_runtimes: HashMap<String, Arc<CacheRuntime>>) -> Self {
         Self {
             mounts: Arc::new(RwLock::new(Trie::new())),
             registry: Arc::new(RwLock::new(HashMap::new())),
@@ -250,13 +257,39 @@ impl MountableFS {
             encryption_provider_type: RwLock::new(None),
             pathlock_manager: OnceLock::new(),
             cache: None,
-            cache_runtime: Some(runtime),
+            cache_runtimes,
         }
     }
 
     /// Create a MountableFS backed by the unified CacheRuntime.
     #[cfg(feature = "cache")]
     pub fn with_cache_runtime(runtime: Arc<CacheRuntime>, service_name: impl Into<String>) -> Self {
+        Self::with_cache_runtime_and_shared_redis_ttl(runtime, service_name, None)
+    }
+
+    /// Create a MountableFS backed by the unified CacheRuntime and a shared-Redis TTL.
+    #[cfg(feature = "cache")]
+    pub fn with_cache_runtime_and_shared_redis_ttl(
+        runtime: Arc<CacheRuntime>,
+        service_name: impl Into<String>,
+        shared_redis_ttl: Option<Duration>,
+    ) -> Self {
+        Self::with_cache_runtimes_and_shared_redis_ttl(
+            HashMap::from([("default".to_string(), runtime.clone())]),
+            runtime,
+            service_name,
+            shared_redis_ttl,
+        )
+    }
+
+    /// Create a MountableFS with named runtimes and a selected CacheFS Runtime.
+    #[cfg(feature = "cache")]
+    pub fn with_cache_runtimes_and_shared_redis_ttl(
+        cache_runtimes: HashMap<String, Arc<CacheRuntime>>,
+        runtime: Arc<CacheRuntime>,
+        service_name: impl Into<String>,
+        shared_redis_ttl: Option<Duration>,
+    ) -> Self {
         Self {
             mounts: Arc::new(RwLock::new(Trie::new())),
             registry: Arc::new(RwLock::new(HashMap::new())),
@@ -266,8 +299,9 @@ impl MountableFS {
             cache: Some(MountCacheConfig {
                 runtime: runtime.clone(),
                 service_name: service_name.into(),
+                shared_redis_ttl,
             }),
-            cache_runtime: Some(runtime),
+            cache_runtimes,
         }
     }
 
@@ -412,11 +446,14 @@ impl MountableFS {
                 let arc: Arc<dyn FileSystem> = Arc::new(mw);
                 #[cfg(feature = "cache")]
                 let arc = match &self.cache {
-                    Some(cache) => Arc::new(CachedFileSystem::with_runtime(
-                        Box::new(ArcFileSystem(arc)),
-                        cache.runtime.clone(),
-                        &cache.service_name,
-                    )),
+                    Some(cache) => Arc::new(
+                        CachedFileSystem::with_runtime(
+                            Box::new(ArcFileSystem(arc)),
+                            cache.runtime.clone(),
+                            &cache.service_name,
+                        )
+                        .with_shared_redis_ttl(cache.shared_redis_ttl),
+                    ),
                     None => arc,
                 };
                 (arc, None)
@@ -472,7 +509,7 @@ impl MountableFS {
                 pathlock_manager,
                 backend_prefix: config.mount_path.clone(),
                 #[cfg(feature = "cache")]
-                cache_runtime: self.cache_runtime.clone(),
+                cache_runtimes: self.cache_runtimes.clone(),
             },
         )
         .await
@@ -481,11 +518,14 @@ impl MountableFS {
     #[cfg(feature = "cache")]
     fn maybe_wrap_cache(&self, fs: Arc<dyn FileSystem>) -> Arc<dyn FileSystem> {
         match &self.cache {
-            Some(cache) => Arc::new(CachedFileSystem::with_runtime(
-                Box::new(ArcFileSystem(fs)),
-                cache.runtime.clone(),
-                &cache.service_name,
-            )),
+            Some(cache) => Arc::new(
+                CachedFileSystem::with_runtime(
+                    Box::new(ArcFileSystem(fs)),
+                    cache.runtime.clone(),
+                    &cache.service_name,
+                )
+                .with_shared_redis_ttl(cache.shared_redis_ttl),
+            ),
             None => fs,
         }
     }
@@ -1224,6 +1264,42 @@ mod tests {
         PluginConfig::single_backend(name, mount_path, HashMap::new())
     }
 
+    /// Verifies the shared-Redis TTL reaches the mount cache configuration.
+    #[cfg(feature = "cache")]
+    #[test]
+    fn shared_redis_ttl_reaches_the_mount_cache_config() {
+        use crate::cache_runtime::MemoryMockProvider;
+
+        let runtime = CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new()));
+        let mountable = MountableFS::with_cache_runtime_and_shared_redis_ttl(
+            runtime,
+            "cache-ttl-test",
+            Some(Duration::from_secs(60)),
+        );
+
+        assert_eq!(
+            mountable
+                .cache
+                .as_ref()
+                .and_then(|cache| cache.shared_redis_ttl),
+            Some(Duration::from_secs(60))
+        );
+
+        let without_override = MountableFS::with_cache_runtime_and_shared_redis_ttl(
+            CacheRuntime::memory_with_provider(Arc::new(MemoryMockProvider::new())),
+            "cache-ttl-test",
+            None,
+        );
+
+        assert_eq!(
+            without_override
+                .cache
+                .as_ref()
+                .and_then(|cache| cache.shared_redis_ttl),
+            None
+        );
+    }
+
     /// Helper to create a simple multi-write PluginConfig for tests.
     fn multiwrite_test_config(
         primary_backend: &str,
@@ -1236,6 +1312,7 @@ mod tests {
             params: HashMap::new(),
             backups: Some(BackendsConfig {
                 service_name: "mw-test".to_string(),
+                instance: "default".to_string(),
                 initial_partitions: 16,
                 checkpoint_interval_secs: 86_400,
                 reconcile_existing_data: false,

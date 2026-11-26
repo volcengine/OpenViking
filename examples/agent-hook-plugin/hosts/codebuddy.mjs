@@ -3,16 +3,11 @@ import { preToolUseOutput } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import {
   applyIncrementalCaptureResult,
   buildIncrementalCapturePlan,
+  shouldCommitCapture,
 } from "./incremental-turn-capture.mjs";
 import { buildCodebuddyTurns, cleanCodebuddyText } from "./codebuddy-turns.mjs";
 
-export function shouldCommitCodebuddyCapture(event, cfg = {}, previous = 0, captured = 0) {
-  const uncommitted = Number(previous || 0) + captured;
-  if (uncommitted <= 0) return false;
-  if (event === "session-end") return true;
-  if (event === "pre-compact") return cfg.autoCommitOnCompact !== false;
-  return uncommitted >= Number(cfg.commitTurnThreshold || Infinity);
-}
+export { shouldCommitCapture as shouldCommitCodebuddyCapture };
 
 export const codebuddy = {
   prefix: "cb-",
@@ -45,6 +40,33 @@ export const codebuddy = {
       return { decision: "approve", hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: block } };
     }
     return null;
+  },
+  // SessionStart context is dropped after a compaction and a --resume, so they
+  // leave the note for the next UserPromptSubmit. `/compact` after `-c` fired
+  // no PreCompact, hence SessionStart(compact) too (DESIGN.md §12).
+  historyPointer: {
+    sessionDefault: true,
+    defer: (event, input) => {
+      if (event === "pre-compact") return "compact";
+      if (event !== "session-start") return "";
+      return input.source === "compact" || input.source === "resume" ? input.source : "";
+    },
+  },
+  // Every MCP call's `_meta` names the session in W3C baggage; inside a
+  // subagent the baggage keeps the parent's id, which is the session the hooks
+  // capture, while `workbuddy.ai/conversationId` names the subagent's own.
+  historySessionFromMeta(meta) {
+    for (const entry of String(meta.baggage || "").split(",")) {
+      const [key, ...value] = entry.split("=");
+      if (key.trim() !== "codebuddy.session_id") continue;
+      try {
+        return decodeURIComponent(value.join("=").split(";")[0].trim());
+      } catch {
+        return "";
+      }
+    }
+    const id = meta["workbuddy.ai/conversationId"];
+    return typeof id === "string" ? id.trim() : "";
   },
   guard(input = {}) {
     // Deny-only in effect: the hooks.json matcher leaves the shell tools out,
@@ -81,7 +103,7 @@ export const codebuddy = {
     if (plan.toSend.length > 0) {
       const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
       next = applyIncrementalCaptureResult(state, plan, result, cleanCodebuddyText);
-    } else if (shouldCommitCodebuddyCapture(event, ctx.cfg, state.capturedSinceCommit, 0)) {
+    } else if (shouldCommitCapture(event, ctx.cfg, state.capturedSinceCommit, 0)) {
       // Nothing new to send, but turns sent earlier are still uncommitted; a
       // session end or compaction may be their last chance.
       next = { ...state, captured: 0 };
@@ -89,7 +111,7 @@ export const codebuddy = {
       return null;
     }
     let capturedSinceCommit = Number(state.capturedSinceCommit || 0) + next.captured;
-    if (shouldCommitCodebuddyCapture(event, ctx.cfg, state.capturedSinceCommit, next.captured)) {
+    if (shouldCommitCapture(event, ctx.cfg, state.capturedSinceCommit, next.captured)) {
       const committed = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
       if (committed.ok || committed.pendingQueued) capturedSinceCommit = 0;
     }

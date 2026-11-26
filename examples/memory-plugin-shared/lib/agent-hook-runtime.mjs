@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { createLogger } from "./debug-log.mjs";
 import { sendSessionMessages } from "./batch-send.mjs";
 import { createOvHttp } from "./ov-http.mjs";
-import { enqueue, replayPending } from "./pending-queue.mjs";
+import { deferCommitBehindPendingWrites, enqueue, replayPending } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./recall-core.mjs";
 import { buildPluginConfig } from "./plugin-config.mjs";
@@ -109,11 +109,20 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function withAgentHookLock(clientId, nativeSessionId, callback) {
+/**
+ * Run `callback` holding the session's lock, or return null when it cannot be
+ * taken within `waitMs`. A lock untouched for `staleMs` is taken over; a holder
+ * whose work can outlast that keeps the lock fresh with `heartbeatMs`.
+ */
+export async function withAgentHookLock(clientId, nativeSessionId, callback, {
+  waitMs = 5000,
+  staleMs = 60_000,
+  heartbeatMs = 0,
+} = {}) {
   const file = statePath(clientId, nativeSessionId);
   const lock = `${file}.lock`;
   await mkdir(dirname(file), { recursive: true, mode: STATE_DIR_MODE });
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + waitMs;
   while (true) {
     try {
       await mkdir(lock, { mode: STATE_DIR_MODE });
@@ -121,7 +130,7 @@ export async function withAgentHookLock(clientId, nativeSessionId, callback) {
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
       try {
-        if (Date.now() - (await stat(lock)).mtimeMs > 60_000) {
+        if (Date.now() - (await stat(lock)).mtimeMs > staleMs) {
           await rm(lock, { recursive: true, force: true });
           continue;
         }
@@ -130,9 +139,17 @@ export async function withAgentHookLock(clientId, nativeSessionId, callback) {
       await sleep(50);
     }
   }
+  const heartbeat = heartbeatMs > 0
+    ? setInterval(() => {
+      const now = new Date();
+      utimes(lock, now, now).catch(() => {});
+    }, heartbeatMs)
+    : null;
+  heartbeat?.unref();
   try {
     return await callback(file);
   } finally {
+    if (heartbeat) clearInterval(heartbeat);
     await rm(lock, { recursive: true, force: true }).catch(() => {});
   }
 }
@@ -233,6 +250,11 @@ export async function addAgentMessages(fetchJSON, sessionId, payloads, peerId = 
 
 export async function commitAgentSession(fetchJSON, sessionId, log = () => {}, payload = {}) {
   const body = payload || {};
+  const deferred = await deferCommitBehindPendingWrites(fetchJSON, sessionId, body, log);
+  if (deferred) {
+    log("commit", { sessionId, ok: false, queued: deferred.ok, reason: "pending_writes" });
+    return { ok: false, pendingQueued: deferred.ok, pendingEnqueueFailed: !deferred.ok };
+  }
   const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
     method: "POST",
     body: JSON.stringify(body),

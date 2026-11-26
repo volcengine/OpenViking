@@ -3,7 +3,7 @@
 use crate::cli::Cli;
 use crate::cli_arg_scan;
 use crate::output::OutputFormat;
-use clap::CommandFactory;
+use clap::{CommandFactory, FromArgMatches};
 use std::ffi::OsString;
 
 pub(crate) fn find_command_index(args: &[OsString]) -> Option<usize> {
@@ -34,6 +34,23 @@ pub(crate) fn find_command_index(args: &[OsString]) -> Option<usize> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlainHelpMisuse {
     pub(crate) help_command: String,
+}
+
+/// Returns the conflicting execution flag even when either value is missing.
+pub(crate) fn named_compile_conflict(args: &[OsString]) -> Option<&str> {
+    let flags = args.iter().take_while(|arg| *arg != "--").map(|arg| {
+        let token = arg.to_str().unwrap_or_default();
+        token.split_once('=').map_or(token, |(flag, _)| flag)
+    });
+    let name = flags.clone().position(|flag| flag == "--compile-name")?;
+    let (input, flag) = flags.enumerate().find(|(_, flag)| {
+        matches!(
+            *flag,
+            "--from" | "--to" | "--skill" | "--instruction"
+        )
+    })?;
+    let command = command_tokens_for_plain_help(&args[..name.min(input)]);
+    (command == ["compile"]).then_some(flag)
 }
 
 pub(crate) fn plain_help_misuse(args: &[OsString]) -> Option<PlainHelpMisuse> {
@@ -102,16 +119,24 @@ fn command_tokens_for_plain_help(args: &[OsString]) -> Vec<String> {
     tokens
 }
 
-fn cli_value_options() -> cli_arg_scan::ValueOptions {
-    let mut command = Cli::command();
-    command.build();
-    cli_arg_scan::ValueOptions::from_command(&command)
+fn cli_value_options() -> &'static cli_arg_scan::ValueOptions {
+    static OPTIONS: std::sync::LazyLock<cli_arg_scan::ValueOptions> =
+        std::sync::LazyLock::new(|| {
+            let mut command = Cli::command();
+            command.build();
+            cli_arg_scan::ValueOptions::from_command(&command)
+        });
+    &OPTIONS
 }
 
-fn cli_root_value_options() -> cli_arg_scan::ValueOptions {
-    let mut command = Cli::command();
-    command.build();
-    cli_arg_scan::ValueOptions::from_command_arguments(&command)
+fn cli_root_value_options() -> &'static cli_arg_scan::ValueOptions {
+    static OPTIONS: std::sync::LazyLock<cli_arg_scan::ValueOptions> =
+        std::sync::LazyLock::new(|| {
+            let mut command = Cli::command();
+            command.build();
+            cli_arg_scan::ValueOptions::from_command_arguments(&command)
+        });
+    &OPTIONS
 }
 
 fn canonical_plain_help_token(token: &str) -> &str {
@@ -416,6 +441,7 @@ fn is_privacy_subcommand(token: &str) -> bool {
             | "get"
             | "reference"
             | "resolve"
+            | "run"
             | "upsert"
             | "versions"
             | "version"
@@ -512,56 +538,148 @@ fn preprocess_privacy_upsert_field_flags(args: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn preprocess_compact_args(args: Vec<OsString>) -> Vec<OsString> {
-    if args.is_empty() {
-        return args;
-    }
-
     let mut converted = Vec::with_capacity(args.len());
-    converted.push(args[0].clone());
-    let mut i = 1;
-
-    while i < args.len() {
-        let token = args[i].to_string_lossy();
-        if token == "--compact" || token == "-c" {
-            if let Some(next) = args.get(i + 1) {
-                let next_value = next.to_string_lossy();
-                if is_bool_arg(&next_value) {
-                    converted.push(OsString::from(format!("--compact={next_value}")));
-                    i += 2;
-                    continue;
-                }
-            }
-            converted.push(OsString::from("--compact=true"));
-            i += 1;
+    let mut tokens = args.into_iter().peekable();
+    while let Some(arg) = tokens.next() {
+        if arg == "--" {
+            converted.push(arg);
+            converted.extend(tokens);
+            break;
+        }
+        if arg != "-c" && arg != "--compact" {
+            converted.push(arg);
             continue;
         }
-
-        converted.push(args[i].clone());
-        i += 1;
+        // Once the trailing program has started, its flags are literal.
+        if has_forwarded_args(&converted) {
+            converted.push(arg);
+            converted.extend(tokens);
+            break;
+        }
+        let value = tokens
+            .next_if(|next| next.to_str().is_some_and(is_bool_arg))
+            .unwrap_or_else(|| "true".into());
+        converted.push(format!("--compact={}", value.to_string_lossy()).into());
     }
-
     converted
+}
+
+pub(crate) struct CliInvocation {
+    pub cli: clap::error::Result<Cli>,
+    pub display_args: Vec<OsString>,
+    pub output: OutputFormat,
+    pub compact: bool,
+}
+
+impl CliInvocation {
+    /// Parse normalized argv and keep only the arguments owned by ov for diagnostics.
+    pub fn parse(args: Vec<OsString>) -> Self {
+        use clap::error::{ContextKind, ContextValue};
+
+        let mut root = Cli::command();
+        let parsed = root.try_get_matches_from_mut(&args);
+        // A failed parse can still specify the output format or select a command.
+        let partial;
+        let matches = match &parsed {
+            Ok(matches) => Some(matches),
+            Err(_) => {
+                root.build();
+                partial = Cli::command()
+                    .ignore_errors(true)
+                    .try_get_matches_from(&args)
+                    .ok();
+                partial.as_ref()
+            }
+        };
+        let output = matches
+            .and_then(|m| m.get_one("output"))
+            .copied()
+            .unwrap_or(OutputFormat::Table);
+        let compact = matches
+            .and_then(|m| m.get_one("compact"))
+            .copied()
+            .unwrap_or(true);
+
+        let (mut command, mut path) = match matches {
+            Some(m) => {
+                let (command, _, path) = matched_command(&root, m);
+                (command, path)
+            }
+            None => (&root, vec![OsString::from("ov")]),
+        };
+        if parsed.is_err() && command.has_subcommands() {
+            // An invalid option can stop clap at a parent. Follow registered
+            // subcommands through the remaining words to recover the diagnostic path.
+            for word in command_tokens_for_config_gate(&args)
+                .into_iter()
+                .skip(path.len() - 1)
+            {
+                let Some(next) = command.find_subcommand(&word) else {
+                    break;
+                };
+                command = next;
+                path.push(command.get_name().into());
+            }
+        }
+        let mut cli = parsed.and_then(|mut m| Cli::from_arg_matches_mut(&mut m));
+        let display_args = if trailing_arg(command).is_some() {
+            if let Err(error) = &mut cli
+                && error.use_stderr()
+            {
+                // Clap error values can quote the caller's argv. Usage comes from the schema.
+                let mut safe = clap::Error::new(error.kind());
+                safe.insert(
+                    ContextKind::Usage,
+                    ContextValue::StyledStr(command.clone().render_usage()),
+                );
+                *error = safe;
+            }
+            path
+        } else {
+            args
+        };
+        Self {
+            cli,
+            display_args,
+            output,
+            compact,
+        }
+    }
+}
+
+fn matched_command<'c, 'm>(
+    mut command: &'c clap::Command,
+    mut matches: &'m clap::ArgMatches,
+) -> (&'c clap::Command, &'m clap::ArgMatches, Vec<OsString>) {
+    let mut path = vec![OsString::from("ov")];
+    while let Some((name, next)) = matches.subcommand() {
+        command = command
+            .find_subcommand(name)
+            .expect("clap matched a registered command");
+        matches = next;
+        path.push(name.into());
+    }
+    (command, matches, path)
+}
+
+fn trailing_arg(command: &clap::Command) -> Option<&clap::Arg> {
+    command
+        .get_positionals()
+        .find(|arg| arg.is_trailing_var_arg_set())
+}
+
+fn has_forwarded_args(args: &[OsString]) -> bool {
+    let mut root = Cli::command().ignore_errors(true);
+    let Ok(matches) = root.try_get_matches_from_mut(args) else {
+        return false;
+    };
+    let (command, matches, _) = matched_command(&root, &matches);
+    trailing_arg(command).is_some_and(|arg| matches.get_raw(arg.get_id().as_str()).is_some())
 }
 
 pub(crate) fn preprocess_cli_args(args: Vec<OsString>) -> Vec<OsString> {
     let args = preprocess_compact_args(args);
     preprocess_privacy_args(args)
-}
-
-pub(crate) fn pre_parse_output_options(args: &[OsString]) -> (OutputFormat, bool) {
-    let Ok(matches) = Cli::command()
-        .ignore_errors(true)
-        .try_get_matches_from(args)
-    else {
-        return (OutputFormat::Table, true);
-    };
-    (
-        matches
-            .get_one::<OutputFormat>("output")
-            .copied()
-            .unwrap_or(OutputFormat::Table),
-        matches.get_one::<bool>("compact").copied().unwrap_or(true),
-    )
 }
 
 pub(crate) fn preprocess_privacy_args(args: Vec<OsString>) -> Vec<OsString> {

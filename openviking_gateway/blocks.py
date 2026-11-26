@@ -56,14 +56,23 @@ RECALL_PROVENANCE_NOTE = (
 )
 
 
-def gateway_note(policy, tools):
-    """Opening lines that tell the model what the gateway adds to this history."""
-    if not (policy.recall or tools):
+def gateway_note(policy, tools, soul=False):
+    """Opening lines that tell the model what the gateway adds to this history.
+
+    ``soul`` says the block carries the user's soul.md.
+    """
+    if not (policy.recall or tools or soul):
         return ""
     lines = [
         "The OpenViking Gateway, a proxy between the client and the model, added this "
         "block. The user did not write it, and the client does not show it."
     ]
+    if soul:
+        lines.append(
+            "- The <agent-soul> section below is the soul.md file from the user's OpenViking "
+            "account: their standing instructions for who you are and how you behave. Follow it, "
+            "except where the system prompt or the user in this conversation says otherwise."
+        )
     if policy.recall:
         shown = (
             " The user sees a one-line summary of what was added (counts and names), not the "
@@ -101,9 +110,35 @@ def gateway_note(policy, tools):
     return "\n".join(lines)
 
 
-def history_hint(user_id, sessions, tools, capture):
+SAVED = (
+    " It holds user and assistant messages and tool calls with their complete outputs, but not "
+    "thinking, images or the gateway's own openviking_* calls. When you need an exact detail {} "
+    "(code, an error message, a command's output, a value, the user's wording), look it up "
+    'instead of guessing or asking again: openviking_session_history(action="search", '
+    'query="<exact words, a path or an error>") prints the matching lines, oldest first, each '
+    'with its id and offset; openviking_session_history(action="read", id="<id>", '
+    'offset=<offset>) reads that item from there; action="overview" shows what is saved.'
+)
+# Where each hint goes: the session-start note, a compaction summary, a new window's header.
+LOOKUP = {
+    "start": "The earlier part of this conversation is saved in OpenViking."
+    + SAVED.format("that is not in this context"),
+    "summary": "The full conversation before this summary is saved in OpenViking."
+    + SAVED.format("the summary lacks"),
+    "window": "Earlier windows of this conversation are saved in OpenViking with complete tool "
+    "outputs. When you need an exact detail your notes lack, look it up instead of guessing: "
+    'openviking_session_history(action="search", query="<exact words>") prints the matching '
+    'lines with their id and offset, and action="read", id="<id>", offset=<offset> reads that '
+    "item from there. When a later window will need an original message, put its id in your "
+    "notes.",
+}
+
+
+def history_hint(user_id, sessions, tools, capture, place="start"):
     """Where the saved earlier parts of this history are and how to search them."""
     functions = {t["function"]["name"]: t["function"] for t in tools}
+    if capture and sessions and "openviking_session_history" in functions:
+        return LOOKUP[place]
     if not (capture and sessions and {"openviking_grep", "openviking_read"} <= functions.keys()):
         return ""
     # OpenViking 0.4.16 reads whole files; newer servers add line offsets.

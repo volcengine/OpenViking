@@ -41,7 +41,7 @@ class VikingDBManager(VikingVectorIndexBackend):
 
     def __init__(
         self,
-        vectordb_config: VectorDBBackendConfig,
+        vectordb_config: VectorDBBackendConfig | None,
         queue_manager: Optional[QueueManager] = None,
     ):
         """
@@ -66,19 +66,6 @@ class VikingDBManager(VikingVectorIndexBackend):
         into vector storage to avoid lock contention during rapid restart.
         """
         self._closing = True
-
-    async def close(self) -> None:
-        """Close storage connection and release resources."""
-        self.mark_closing()
-        try:
-            # We do NOT stop the queue manager here as it is an injected dependency
-            # and should be managed by the creator (OpenVikingService).
-
-            # Then close the base backend
-            await super().close()
-
-        except Exception as e:
-            logger.error(f"Error closing VikingDB manager: {e}")
 
     @property
     def is_closing(self) -> bool:
@@ -123,7 +110,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             True if enqueued successfully, False otherwise
         """
         if not embedding_msg:
-            logger.warning("Embedding message is None, skipping enqueuing")
+            logger.info("Embedding message is None, skipping enqueuing")
             return False
 
         if not self._queue_manager:
@@ -134,10 +121,10 @@ class VikingDBManager(VikingVectorIndexBackend):
             if not embedding_queue:
                 raise RuntimeError("Embedding queue not initialized")
             await embedding_queue.enqueue(embedding_msg)
-            logger.debug(f"Enqueued embedding message: {embedding_msg.id}")
+            logger.debug("Enqueued embedding message: %s", type(embedding_msg.id).__name__)
             return True
         except Exception as e:
-            logger.error(f"Error enqueuing embedding message: {e}")
+            logger.error("Error enqueuing embedding message: %s", type(e).__name__)
             return False
 
     async def get_embedding_queue_size(self) -> int:
@@ -154,7 +141,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             embedding_queue = self._queue_manager.get_queue("embedding")
             return await embedding_queue.size()
         except Exception as e:
-            logger.error(f"Error getting embedding queue size: {e}")
+            logger.info("Error getting embedding queue size: %s", type(e).__name__)
             return 0
 
 
@@ -462,6 +449,7 @@ class VikingDBManagerProxy:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         return await self._manager.search_by_keywords_in_tenant(
             self._ctx,
@@ -472,6 +460,7 @@ class VikingDBManagerProxy:
             level=level,
             limit=limit,
             offset=offset,
+            keywords_args=keywords_args,
         )
 
     async def filter_in_tenant(
@@ -513,7 +502,7 @@ class VikingDBManagerProxy:
     async def delete_account_data(self, account_id: str) -> int:
         return await self._manager.delete_account_data(account_id, ctx=self._ctx)
 
-    async def delete_uris(self, uris: List[str]) -> None:
+    async def delete_uris(self, uris: List[str]) -> int:
         return await self._manager.delete_uris(self._ctx, uris)
 
     async def copy_uri_mapping(

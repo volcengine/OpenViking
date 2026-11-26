@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""CLI system endpoint tests (health, status, wait)."""
+"""CLI health and status endpoint tests."""
 
 import pytest
 from conftest import ov
@@ -15,10 +15,10 @@ class TestSystemHealth:
             f"ov health should exit 0, got {r['exit_code']}: {r['stderr'][:300]}"
         )
         data = r["json"]
-        if data is not None:
-            assert data.get("ok") is True or "healthy" in str(data).lower(), (
-                f"health check should indicate healthy, got: {r['stdout'][:200]}"
-            )
+        assert data is not None, f"health should return JSON, got: {r['stdout'][:200]}"
+        assert data["ok"] is True
+        assert data["result"]["healthy"] is True
+        assert data["result"]["status"] == "ok"
 
 
 class TestSystemStatus:

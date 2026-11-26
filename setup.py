@@ -600,6 +600,7 @@ setup(
             "bin/ov.exe",
             "server/account_stores/sql/*.sql",
             "server/account_stores/sql/changes/*.sql",
+            "server/account_stores/sql/postgres/*.sql",
             "service/sql/*.sql",
             "service/sql/changes/*.sql",
             "server/static/**/*",

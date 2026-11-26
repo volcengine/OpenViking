@@ -1776,24 +1776,47 @@ async def test_search_memory_peer_ids_use_explicit_peer_uris(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_openviking_grep_keeps_explicit_resource_uri(monkeypatch):
+@pytest.mark.parametrize(
+    "limit, expected_count, capped, backend_limit_reached",
+    [
+        (None, 10, True, None),
+        (1, 1, True, None),
+        (17, 17, True, None),
+        (30, 17, False, None),
+        (10, 1, True, True),
+        (10, 0, True, True),
+        (10, 1, False, False),
+        (10, 0, False, False),
+    ],
+)
+@pytest.mark.parametrize("as_object", [False, True])
+async def test_openviking_grep_keeps_explicit_resource_uri(
+    monkeypatch, limit, expected_count, capped, backend_limit_reached, as_object
+):
     tool = VikingGrepTool()
     calls = []
 
     class _FakeClient:
         admin_user_id = "admin"
 
-        async def grep(self, uri, pattern, case_insensitive=False, user_id=None):
-            calls.append((uri, pattern, case_insensitive, user_id))
-            return {
+        async def grep(self, uri, pattern, case_insensitive=False, node_limit=10, user_id=None):
+            calls.append((uri, pattern, case_insensitive, node_limit, user_id))
+            response = {
                 "matches": [
                     {
                         "uri": "viking://resources/doc.md",
-                        "line": 3,
-                        "content": "hello admin scoped grep",
+                        "line": i + 1,
+                        "content": f"hello admin scoped grep {i}",
                     }
+                    for i in range(
+                        min(node_limit, 17) if backend_limit_reached is None else expected_count
+                    )
                 ]
             }
+
+            if backend_limit_reached is not None:
+                response["limit_reached"] = backend_limit_reached
+            return SimpleNamespace(**response) if as_object else response
 
     async def _fake_get_client(_tool_context):
         return _FakeClient()
@@ -1805,11 +1828,45 @@ async def test_openviking_grep_keeps_explicit_resource_uri(monkeypatch):
         uri="viking://resources/",
         pattern="hello",
         case_insensitive=True,
+        **({"limit": limit} if limit is not None else {}),
     )
 
-    assert calls == [("viking://resources/", "hello", True, None)]
-    assert "Found 1 match for pattern 'hello':" in result
-    assert "viking://resources/doc.md" in result
+    assert calls == [("viking://resources/", "hello", True, limit or 10, None)]
+    if expected_count:
+        assert (
+            f"Found {expected_count} match{'es' if expected_count != 1 else ''} for pattern 'hello':"
+            in result
+        )
+    else:
+        assert "No matches found" in result
+    assert ("more matches may exist" in result) is capped
+    if capped:
+        assert "Capped scopes: viking://resources/" in result
+    if expected_count:
+        assert f"hello admin scoped grep {expected_count - 1}" in result
+        assert "viking://resources/doc.md" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_object", [False, True])
+async def test_openviking_grep_reports_candidate_limit_without_matches(monkeypatch, as_object):
+    tool = VikingGrepTool()
+    capped_uri = "viking://resources/capped/"
+    complete_uri = "viking://resources/complete/"
+
+    async def grep(uri, *args, **kwargs):
+        result = {"matches": [], "candidate_limit_reached": uri == capped_uri}
+        return SimpleNamespace(**result) if as_object else result
+
+    monkeypatch.setattr(tool, "_get_client", AsyncMock(return_value=SimpleNamespace(grep=grep)))
+    monkeypatch.setattr(tool, "_fs_retrieval_uris", lambda *_: [capped_uri, complete_uri])
+
+    result = await tool.execute(SimpleNamespace(workspace_id="workspace"), pattern="needle")
+
+    assert result.startswith("No matches returned for pattern: 'needle'")
+    assert f"Candidate search may have been capped in: {capped_uri}" in result
+    assert complete_uri not in result
+    assert "Result limit reached" not in result
 
 
 @pytest.mark.asyncio
@@ -2434,7 +2491,10 @@ async def test_openviking_tool_uses_authenticated_actor_instead_of_display_sende
 
 
 @pytest.mark.asyncio
-async def test_openviking_grep_default_memory_expands_current_peer(monkeypatch):
+@pytest.mark.parametrize("limit, matches_per_scope", [(10, 0), (2, 2), (3, 2)])
+async def test_openviking_grep_default_memory_expands_current_peer(
+    monkeypatch, limit, matches_per_scope
+):
     tool = VikingGrepTool()
     calls = []
 
@@ -2449,25 +2509,37 @@ async def test_openviking_grep_default_memory_expands_current_peer(monkeypatch):
             )
             return uris
 
-        async def grep(self, uri, pattern, case_insensitive=False, user_id=None):
-            calls.append((uri, pattern, case_insensitive, user_id))
-            return {"matches": []}
+        async def grep(self, uri, pattern, case_insensitive=False, node_limit=10, user_id=None):
+            calls.append((uri, pattern, case_insensitive, node_limit, user_id))
+            return {
+                "matches": [
+                    {"uri": uri + "doc.md", "line": i + 1, "content": "hello peer"}
+                    for i in range(matches_per_scope)
+                ]
+            }
 
     async def _fake_get_client(_tool_context):
         return _FakeClient()
 
     monkeypatch.setattr(tool, "_get_client", _fake_get_client)
 
-    await tool.execute(
+    result = await tool.execute(
         SimpleNamespace(workspace_id="workspace", sender_id="sender-0"),
         uri="viking://~/memories/",
         pattern="hello",
+        limit=limit,
     )
 
     assert calls == [
-        ("viking://~/memories/", "hello", False, None),
-        ("viking://user/default/peers/sender-0/memories/", "hello", False, None),
+        ("viking://~/memories/", "hello", False, limit, None),
+        ("viking://user/default/peers/sender-0/memories/", "hello", False, limit, None),
     ]
+
+    assert ("more matches may exist" in result) is (matches_per_scope >= limit)
+    if matches_per_scope:
+        assert f"Found {2 * matches_per_scope} matches" in result
+    else:
+        assert result == "No matches found for pattern: 'hello'"
 
 
 @pytest.mark.asyncio
@@ -2758,16 +2830,29 @@ async def test_openviking_request_connection_client_is_closed_after_tool_call(mo
 @pytest.mark.asyncio
 async def test_experience_reminder_follows_direct_case_experience_links(monkeypatch, tmp_path):
     from openviking.session.memory.dataclass import MemoryFile, StoredLink
+    from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
     from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+    from openviking.system_assets import builtin_memory_templates_dir
 
     case_uri = "viking://user/admin/memories/cases/case1.md"
-    exp_uri = "viking://user/admin/memories/experiences/exp1.md"
+    exp_uri = "viking://user/admin/memories/experiences/exp 10%#(1).md"
     direct_exp_uri = "viking://user/admin/memories/experiences/direct.md"
-    MemoryFileUtils.write(
+    registry = MemoryTypeRegistry(load_schemas=False)
+    registry.load_from_yaml(str(builtin_memory_templates_dir() / "cases.yaml"))
+    case_schema = registry.get("cases")
+    assert case_schema is not None
+    case_content = MemoryFileUtils.write(
         MemoryFile(
             uri=case_uri,
-            content="# case1\n\n## Linked Experiences\n- exp1",
+            content="",
             memory_type="cases",
+            extra_fields={
+                "case_name": "case1",
+                "task_signature": "task",
+                "input": "{}",
+                "rubric": "{}",
+                "evidence": "",
+            },
             links=[
                 StoredLink(
                     from_uri=case_uri,
@@ -2778,7 +2863,8 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
                     description="",
                 ).model_dump()
             ],
-        )
+        ),
+        content_template=case_schema.content_template,
     )
 
     class _FakeClient:
@@ -2802,7 +2888,7 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
         async def read_content(self, uri, level="read"):
             self.read_calls.append((uri, level))
             if uri == case_uri:
-                return "# case1\n\n## Linked Experiences\n- [exp1](../experiences/exp1.md)"
+                return case_content
             if uri == exp_uri:
                 return "linked exp content"
             if uri == direct_exp_uri:
@@ -2836,6 +2922,7 @@ async def test_experience_reminder_follows_direct_case_experience_links(monkeypa
     assert fake_client.search_calls == [("hello", "viking://user/admin/memories/cases/", 1)]
     assert fake_client.search_experience_calls == []
     assert (case_uri, "read") in fake_client.read_calls
+    assert (exp_uri, "read") in fake_client.read_calls
     assert "linked exp content" in content
     assert "direct exp content" not in content
     assert exp_uri in uris

@@ -19,7 +19,7 @@ const profiles = {
   empty: {
     title: '还没有上下文配置',
     description:
-      '每个网关密钥都需要一份上下文配置。推荐设置会为每条新消息召回记忆、保存对话、为长对话生成摘要，并让模型使用只读的 OpenViking 工具，之后可以随时修改。',
+      '每个网关密钥都需要一份上下文配置。推荐设置会为每条新消息召回记忆、保存对话、为长对话生成摘要，并让模型使用全部 OpenViking 工具，之后可以随时修改。',
     readOnly: '等待网关管理员添加上下文配置。',
   },
   summary: {
@@ -65,7 +65,7 @@ const profiles = {
   clientOverrides: {
     label: '允许客户端覆盖设置',
     description:
-      '客户端可以用 X-OpenViking-Context 请求头为新对话修改下面的任意设置，包括预算和会修改数据的工具。配置需要保持原样时，请关闭此项。',
+      '客户端可以用 X-OpenViking-Context 请求头为新对话修改下面的任意设置，包括预算；工具只能再排除，不能多提供。配置需要保持原样时，请关闭此项。',
   },
   recall: {
     title: '召回记忆',
@@ -76,10 +76,15 @@ const profiles = {
       description:
         '新对话开始时，向模型提供你的 OpenViking 用户画像。此设置独立于记忆召回。',
     },
+    soul: {
+      label: '会话开头提供 soul.md',
+      description:
+        '新对话开始时，向模型提供你保存在 OpenViking 的 soul.md，也就是你给模型的长期指令，并告诉模型遵循它。soul.md 全文提供，不占开头内容预算。',
+    },
     profileMaxTokens: {
       label: '开头内容预算',
       description:
-        '限制开头的画像、记忆目录和技能目录总量。目录需要启用读取工具。这份预算独立于召回，设为 0 时三项都不提供。',
+        '限制开头的画像、记忆目录和技能目录总量。目录需要启用读取工具。这份预算独立于召回，设为 0 时三项都不提供。soul.md 不计入。',
     },
     showRecall: {
       label: '显示召回摘要',
@@ -117,6 +122,13 @@ const profiles = {
       description:
         '召回用最新一条用户消息作为检索文本，超出这个长度的部分会被截掉。',
     },
+    peerScope: {
+      label: 'Peer 范围',
+      description:
+        '除用户自己的记忆外，召回和 OpenViking 工具能看到哪些 Peer 的记忆。',
+      all: '所有 Peer，当前 Peer 优先',
+      actor: '仅当前 Peer',
+    },
     quotas: {
       label: '按分类限量',
       description: '为每个分类设置最多附加的条数。只检索数量大于 0 的分类。',
@@ -135,18 +147,18 @@ const profiles = {
     description:
       '把已完成的轮次写入 OpenViking 会话，让 OpenViking 从中提取记忆。',
     idleSeconds: {
-      label: '最新回复等待时长',
+      label: '空闲提交时间',
       description:
-        '下一条消息到达时，上一轮会立即保存。最新一轮回复会先等待这段时间，如果没有后续消息，就保存下来，OpenViking 随即开始提取记忆。',
+        '超过这段时间没有轮次结束时，已保存的内容会全部提交并提取记忆。网关把提交交给 OpenViking（openviking_auto_commit）时，小于 300 秒的值按 300 秒处理，且 OpenViking 服务端需要开启会话自动提交。',
     },
     commitTokens: {
       label: '提交阈值',
       description:
-        '已保存但未提交的对话达到这个量时提交一次。OpenViking 在提交时提取记忆。',
+        '一轮结束时，未提交的消息达到这个 Token 数就会提交并提取记忆，最近的消息继续留在会话中。',
     },
     keepRecentMessages: {
       label: '保留最近消息',
-      description: '每次提交至少在会话中留下最近这么多条消息，按整轮计算。',
+      description: '达到提交阈值而提交时，在会话中保留最近多少条消息。',
     },
   },
   longConversations: {
@@ -195,7 +207,7 @@ const profiles = {
     available: {
       label: '工具',
       description:
-        '推荐设置勾选只读工具，会修改数据的工具不勾选。以后新增的工具会自动启用。上游也需要允许使用 OpenViking 工具。',
+        '推荐设置勾选全部工具，包括会修改数据的工具。以后新增的工具会自动启用。上游也需要允许使用 OpenViking 工具。',
     },
     empty: '签发网关密钥后即可加载工具清单。',
     loadFailed: '无法加载 OpenViking 工具',

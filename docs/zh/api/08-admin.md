@@ -60,6 +60,35 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
 
+## 账号内冻结列表
+
+管理员可以维护账号内冻结列表，登记本 account 普通 USER（包括以 USER 身份运行的 agent）的文件路径。列表持久保存，最多包含十条。操作只读写账号授权元信息，不读取目标文件，也不授予管理员读取该 user 数据的权限。
+
+```bash
+ov admin freeze-file acme agent-a skills/example/SKILL.md
+ov admin frozen-file-status acme agent-a skills/example/SKILL.md
+ov admin unfreeze-file acme agent-a skills/example/SKILL.md
+```
+
+这三个 CLI 命令也接受 `viking://user/agent-a/skills/example/SKILL.md` 这样的完整 user URI，自动转换为相对路径。URI 中的 user 必须与命令的 `user-id` 一致，否则 CLI 会报错。转换保留原始路径，不解码转义或消除 `..`；服务端继续校验相对路径。
+
+ROOT 可以使用 `--sudo` 管理指定 account。普通 USER 和 GLOBAL 无权管理账号内冻结列表；新增冻结只允许 USER 目标。服务端接收的路径相对于目标 user 根目录，采用 GLOBAL 的严格字面路径语法：不支持通配符、URI、编码转义、`..` 或内部存储文件名，单段不得超过 255 字节。匹配、状态查询和解冻均区分大小写：`a.md` 和 `A.md` 是独立条目。
+
+冻结路径可以尚不存在。状态仅表示路径是否在账号内冻结列表中，不暴露文件存在性、内容、大小或摘要。重复冻结、解冻是幂等的；目标 user 已删除或变更角色后仍可清除旧规则。
+
+写入、追加、删除、移动、覆盖、后台写入和版本恢复会检查账号内冻结列表。删除或移动包含冻结路径的目录、向与冻结路径相交的目标子树复制也会拒绝。读取权限保持原样；解冻不会授予原本没有的权限。业务租约、`bypass_acl` 和关闭自动 PathLock 都不能解除这层保护。经授权的身份注销通过专用清理任务删除该 user 的全部数据，包括冻结文件。
+
+规则在首次写入检查时加载，并在同一个请求或后台执行中复用；普通读取和鉴权不加载规则。FileStore 的 watcher 正常运行时直接读取内存列表，不等待变更锁；否则 FileStore 和直接 SQL provider 将成功读取的空快照缓存 60 秒，Redis/MySQL 则使用配置的缓存 TTL，缓存经 SQL 确认的本地空快照。空快照命中时不做存储 IO 或路径匹配，命中不会延长有效期。每个 provider 最多保留 1,024 个账号的空快照，当前实例的冻结/解冻操作尝试会清除目标账号快照。非空列表沿用既有刷新/缓存机制。执行中已加载的规则快照允许继续使用。空快照过期后，规则读取或解析失败会阻止写入，不会被解释为空列表；缓存传播延迟是预期行为。
+
+| 方法 | 路径 | 参数 |
+|------|------|------|
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file?path={path}` | 必填 query: `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | JSON: `{"path":"skills/example/SKILL.md","frozen":true}` |
+
+响应 `result` 包含 `account_id`、`user_id`、`path`、`frozen`。该状态与 `stat.isLocked` 的短期并发租约状态独立。变更被拒绝时返回 `PERMISSION_DENIED`，`details.reason` 为 `admin_file_frozen`。
+
+MySQL/PostgreSQL 部署需在升级运行时启动前执行一次 `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql`。新建 MySQL 库先执行 `sql/init.sql`，再按顺序执行 `sql/changes/` 中的迁移；新建 PostgreSQL 库先执行 `sql/postgres/init.sql`，再执行 `0002_account_frozen_files.sql`（之前的列表索引已在 PostgreSQL 初始化 SQL 中）。已有库只执行尚未应用的迁移。开源与商业部署均需在现有 DBA/部署流程中记录该迁移，运行时不自动加列。外部账号存储 provider 需要实现对应元信息能力后才能使用管理命令。
+
 ## 用户组
 
 用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。`group_id` 由调用者创建时指定，使用与 `user_id` 相同的标识符规则，是 account 内唯一且稳定的标识；不存在单独的组名。组内只能加入当前 account 已存在的用户，不支持嵌套组。
@@ -98,6 +127,44 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme/groups/engineeri
 Python SDK 提供对应的 `admin_create_group`、`admin_list_groups`、`admin_list_group_members`、`admin_add_group_member`、`admin_remove_group_member` 和 `admin_delete_group`；Go SDK 使用相同名称的 PascalCase 方法。
 
 ## API 参考
+
+### metric_inventory
+
+流式导出供离线报表使用的元数据清单。即使只扫描一个账号，也要求 **ROOT** 认证。清单包含账号作用域、用户标识与角色、文件元数据、技能元数据及向量记录元数据；不包含文件正文、向量值或凭证。
+
+**HTTP API**
+
+```http
+GET /api/v1/admin/metric-inventory?account_id=acme&page_size=500
+X-API-Key: your-root-api-key
+```
+
+| 查询参数     | 类型    | 默认值 | 说明                                                     |
+| ------------ | ------- | ------ | -------------------------------------------------------- |
+| `account_id` | string  | 不传   | 可选的完整账号 ID；不传时扫描所有已注册账号。            |
+| `page_size`  | integer | `500`  | 内部扫描批次大小，范围 `1` 至 `1000`，不限制导出总行数。 |
+
+响应为流式 `application/x-ndjson`，每行一个 JSON 对象，不使用常规的 `status` / `result` 包装。每个对象带有 `event_name`，其值为 `inventory_scope`、`inventory_user`、`inventory_file`、`inventory_skill`、`inventory_vector_record`，或最终的 `inventory_batch_end` 标记。
+
+```bash
+curl --no-buffer 'http://localhost:1933/api/v1/admin/metric-inventory?account_id=acme&page_size=500' \
+  -H 'X-API-Key: your-root-api-key'
+```
+
+最后一行说明扫描是否完成：
+
+```json
+{
+  "event_name": "inventory_batch_end",
+  "status": "complete",
+  "row_count": 0,
+  "scan_started_at": 1794268800000,
+  "scan_finished_at": 1794268800010,
+  "consistency": "scan_window"
+}
+```
+
+以上标记仅为示例。导出描述一个扫描时间窗口，不是原子快照；`row_count` 为最终标记之前已输出的行数。扫描失败（包括指定的 `account_id` 不存在）时，最终标记的 `status` 为 `"failed"`，且没有 `consistency` 字段。开始流式响应后，仅有 HTTP 成功状态不足以证明扫描完整；消费方必须收到最终 `complete` 标记，才能替换现有清单。缺失最终标记或收到失败标记均表示导出不完整。
 
 ### account / user 存在性查询
 
@@ -230,7 +297,7 @@ ROOT 可管理任意 Account；ADMIN 仅可管理自己 Account 的模板；普�
 
 | 方法 | 路径 | 用途 |
 |------|------|------|
-| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出六类开放模板、完整默认值及生效值 |
+| GET | `/api/v1/admin/accounts/{account_id}/memory-templates` | 列出四类开放模板、完整默认值及生效值 |
 | GET | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 查询单个模板 |
 | PUT | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 补齐并发布单个模板 |
 | DELETE | `/api/v1/admin/accounts/{account_id}/memory-templates/{memory_type}` | 删除该模板覆盖，恢复部署默认值 |
@@ -244,7 +311,7 @@ ROOT 可管理任意 Account；ADMIN 仅可管理自己 Account 的模板；普�
 需要恢复该类型的部署默认值时，调用 DELETE。
 
 内核接收原有 Memory YAML 结构对应的 JSON 对象，并在接口层强制校验以下白名单。
-仅开放下列六类模板；Experience、Cases、Trajectories 等其他类型不开放查询或编辑，
+仅开放下列四类模板；Experience、Cases、Trajectories 等其他类型不开放查询或编辑，
 不支持通过接口新增、删除或重命名 Memory Type。DELETE 仅移除自定义覆盖，不删除模板类型。
 
 | 模板 | 可编辑项 | 用途 |
@@ -253,19 +320,17 @@ ROOT 可管理任意 Account；ADMIN 仅可管理自己 Account 的模板；普�
 | `events` | `description`；`fields.event_name.description`、`fields.summary.description`；`content_template` | 事件范围、原子性与排除项；名称语言、粒度和格式；摘要事实、日期和语言；Summary、时间、ChatLog 的标题、顺序和展示方式 |
 | `preferences` | `description`；`fields.topic.description`、`fields.content.description` | 偏好、习惯、反感及与 Profile/Event 的边界；主题粒度、语言和命名；正文语义、条目和 Markdown 要求 |
 | `entities` | `description`；`fields.category.description`、`fields.name.description`、`fields.content.description` | 实体与关系范围；分类法、语言和粒度；实体命名；卡片事实、章节、语言和长度 |
-| `soul` | `description`；`fields.core_truths.description`、`fields.boundaries.description`、`fields.vibe.description`、`fields.continuity.description`；`content_template` | 核心原则、边界、气质和连续性的抽取表达；四个字段的标题、顺序和固定文案 |
-| `identity` | `description`；`fields.creature.description`、`fields.name.description`、`fields.vibe.description`、`fields.avatar.description`、`fields.emoji.description`、`fields.introduction.description`；`content_template` | 身份信息范围；身份、名称、气质、头像、Emoji、自我介绍的字段要求；正文标签、顺序和固定文案 |
 
 表中 `fields.<name>.description` 表示在 `fields` 数组中按 `name` 定位并修改
 `description`，不是替换整个字段。JSON 属性名统一小写（`description`，不是
 `Description`）。Profile 的 `fields.content` 仅开放其 description，不开放字段本身。
 
-除白名单说明文字和三个正文模板外，所有配置均锁定为部署默认值，包括：
+除白名单说明文字和 Events 正文模板外，所有配置均锁定为部署默认值，包括：
 `memory_type`、`enabled`、`operation_mode`、`stage`、`peer_enabled`、
 `directory`、`filename_template`、所有字段的名称/类型/`merge_op`/`init_value`、
 `embedding_template` 和 `overview_template`，以及未开放的字段说明。
 例如 Profile 保留 `profile.md` 和 content 的 `merge_op=patch`；Events 保留
-`add_only` 以及 `goal/ranges` 的说明；Identity 的 Name immutable 规则不变。
+`add_only` 以及 `goal/ranges` 的说明。
 Profile、Preferences、Entities 不开放 `content_template`。
 改写 topic/category/name/event_name 的生成说明仍可能间接影响未来的目录或文件名，
 但不允许修改目录/文件名模板本身。
@@ -374,13 +439,11 @@ Registry；无关类型变更不会触发拆批。不同 Schema 分开合并、�
 允许修改标题、顺序、固定文案，按条件显示/隐藏字段。不要求保留默认标题或输出全部字段；
 但隐藏字段不等于停止抽取/删除该字段，也不会删除原始 Session 或系统保存的字段元数据。
 Events 的默认 embedding 模板引用正文，因此正文变化也可能影响后续检索输入。
-路径、文件名、字段定义、merge_op（包括 Identity name 的 immutable）仍锁定。
+路径、文件名、字段定义、merge_op 仍锁定。
 
 | 类型 | 正文中可引用的字段 |
 | --- | --- |
 | events | event_name、goal、summary、ranges |
-| soul | core_truths、boundaries、vibe、continuity |
-| identity | name、creature、vibe、emoji、avatar、introduction |
 
 `language` 属于说明模板的变量，不属于上述正文变量。
 正文不要引用其他 Account/User、请求上下文或任意 Python 对象。
@@ -413,7 +476,7 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 
 模板 UTF-8 大小 ≤ 64 KiB，AST 节点 ≤ 2048，渲染正文 ≤ 1 MiB（不含系统追加元数据）。
 与部署默认值不同的 Account 正文在发布时和抽取加载时验证，运行时使用受限 Jinja 环境，只提供白名单字段/方法。
-内置 Events、Soul、Identity 正文也满足受限语法；仅修改标题、末尾换行或 CRLF 换行后仍可校验发布。这些改动不会绕过校验，也不会被标记为部署原样正文。
+内置 Events 正文也满足受限语法；仅修改标题、末尾换行或 CRLF 换行后仍可校验发布。这些改动不会绕过校验，也不会被标记为部署原样正文。
 受限路径渲染失败会报告错误并停止该次文件写入，不走旧的空正文 fallback。
 原样继承的正文继续使用部署渲染器，包括原有错误/fallback 语义，不受上述受限渲染器的源码、AST、正文输出上限约束；
 完整账户 YAML 仍受 1 MiB 上限约束。
@@ -428,17 +491,6 @@ Events 的默认 embedding 模板引用正文，因此正文变化也可能影�
 
 ```json
 {"content_template": "# {{ event_name.strip() }}\n\n## 事件摘要\n{{ summary.strip() or '待补充' }}"}
-```
-
-示例：Soul 的分节展示：
-
-```jinja
-{% for title, text in [('核心价值', core_truths), ('边界', boundaries), ('气质', vibe), ('连续性', continuity)] %}
-{% if text.strip() %}
-## {{ title }}
-{{ text.strip() }}
-{% endif %}
-{% endfor %}
 ```
 
 ### Runtime Configuration
@@ -491,7 +543,7 @@ cuVS 调优和自定义适配器参数。
 本地模型路径、融合/视频参数和 `allow_metadata_override` 不在 Account API 范围内。
 每次更新都在持久化前联合校验有效 Embedding 和 VectorDB，失败保留原配置。
 
-显式 `embedding: {}` 是合法配置，表示未声明 Account 模型模式或运行策略。
+显式 `embedding: {}` 表示未声明 Account 模型模式或运行策略。
 作为 PATCH 提交时，`{}` 会与现有配置合并，不会清空已有值。未配置 Account
 模型模式时使用 Cluster 模型绑定。显式 Account VectorDB 配置会替换 Cluster
 的连接与鉴权字段，即使后端类型相同也不会拼接；仅支持 `http`、`volcengine`、
@@ -513,10 +565,11 @@ Feishu 时使用完整 Cluster 配置；一旦设置，`app_id`、`app_secret`�
 `request_timeout` 来自 Account 配置或 Feishu 默认值，只有 `domain` 仍由
 Cluster 管理。GitHub 和 ACL 不回退到 Cluster。
 
-VLM 业务解析器在 Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
+Account 未配置 VLM 时使用 Cluster VLM。Account 已配置时，
 模型身份、服务端点和凭证仅来自 Account，部分运行参数按业务规则使用 Cluster
 配置。Account 设置 `timeout` 时覆盖 Cluster 的值，未设置或重置后使用 Cluster
-的值。Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
+的值。清除 Account VLM 时，Cluster VLM 必须有效。
+Query Planner 的选择顺序为 Account `query_planner`、Account `vlm`、
 Cluster `query_planner`、Cluster `vlm`；这是 VLM 业务规则，不是配置框架的隐式继承。
 
 PATCH 会先做结构校验，再构造合并后的配置：未知路径和运行时配置面之外的字段会被拒绝。
@@ -921,7 +974,7 @@ Account 路由，ROOT 代表某个 Account 执行业务时也遵守这一规则�
 
 ROOT 可读写任意 User 的配置，ADMIN 可读写所属 account 内非 GLOBAL User 的配置，
 USER 仅可读写自己的配置：URL 中的 `account_id` 和 `user_id` 必须同时匹配认证身份。
-User 配置接口支持 `add_targets`、`memory_policy` 和 `ttl`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
+User 配置接口支持 `add_targets`、`memory_policy`、`ttl` 和 `privacy`。顶层统一的 `memory_types` 控制允许抽取的记忆类型。
 用户记忆根据每条 Message 的 `peer_id` 自动写入 Self 或 Peer；Agent 记忆始终只写入
 Self。
 
@@ -971,6 +1024,17 @@ DELETE /api/v1/user-settings/add-locations
 
 `ttl` 仍返回用户显式设置的值，不在此接口补全其他层级的 TTL。
 
+`privacy` 在 GET/PATCH 响应中返回生效配置：
+
+| 字段 | 说明 | 内置默认值 |
+|---|---|---|
+| `privacy.mode` | `off`、`registered`、`auto` 或 `auto_strict`，详见[隐私配置](../concepts/13-privacy.md#使用方法) | `off` |
+| `privacy.restore` | 是否在 `raw=true` 读取 Skill、Session 时还原占位符 | `true` |
+| `privacy.custom_rules` | 自定义规则数组；每项提供唯一的 `id`，以及 `prefix` + `min_length` 或 `regex` | `[]` |
+| `privacy.never_mask` | 不参与自动发现和按值匹配的精确字符串值 | `[]` |
+
+例如 PATCH `{"privacy":{"mode":"auto"}}` 开启 Skill、Session 的自动发现与保护。规则中的 `min_length` 是前缀后至少需要的字符数，`regex` 使用 Rust 正则语法。省略字段表示保留，`null` 恢复继承，数组整体替换（`[]` 表示清空）；`{"privacy":null}` 清除所有用户隐私设置。
+
 ---
 
 ### create_account
@@ -1001,14 +1065,14 @@ DELETE /api/v1/user-settings/add-locations
 | account_id | str | 是 | - | 工作区 ID；新建文件存储账户不超过 255 个 UTF-8 字节 |
 | admin_user_id | str | 是 | - | 首个管理员用户 ID |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 首个管理员用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 | settings | object | 否 | `null` | Account 运行时初始配置。仅 ROOT 可提交；支持 `feishu`、`github`、`acl`、`agent_evolution`、`vlm`、`query_planner`、`embedding` 和 `vectordb`。其中 `vectordb` 及 Embedding 创建期字段只能在这里设置 |
 
 **说明：**
 - 文件存储账户创建时，超过 255 个 UTF-8 字节的 `account_id` 会在写入账户注册表前返回 `INVALID_ARGUMENT`。新持久化的 user ID 在所有账户存储 Provider 中最多 255 个字符。trusted 模式会在加入自动注册队列前拒绝超长的新 user ID 和新建的超长账户，避免无效身份阻塞其他身份注册；已有的超长 File user 和 account 仍可读取。
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。
 - 省略 `seed` 时随机生成 API Key。运行确定性示例前，将 `OV_KEY_SEED` 设为安全生成的秘密值；Go 示例还需导入 `os`。不要使用短字符串或可预测内容作为 seed。
-- `settings` 在账号和目录创建前完成结构与有效 Embedding/VectorDB 联合校验。校验失败不会留下 Account、用户或配置文件。
+- 创建要求 Account 配置或 Cluster 回退后有效的 VLM、Embedding、VectorDB。校验不发送模型请求或申请远端资源，失败不会留下 Account、用户或配置文件。
 - Account `vlm`、`query_planner`、`embedding` 和 `vectordb` 是 ROOT-only 配置；字段 schema、生命周期和校验见上文 [Account Configuration 接口参考](#account-configuration-接口参考)。当前 Python SDK、CLI 及其他 SDK 的创建账号封装尚未暴露 `settings` 参数，使用此能力请直接调用 HTTP API。
 - 不再支持 account 级 namespace 隔离配置。用户记忆使用 user-scoped namespace，一对多外部参与者通过 `peer_id` 表达。
 - `user_config.add_targets.resource_uri` 必须是资源目录 URI：`viking://resources` 或 `viking://resources/...`、`viking://~/resources` 或 `viking://~/resources/...`、`viking://~/peers/{peer_id}/resources` 或 `viking://~/peers/{peer_id}/resources/...`。
@@ -1399,7 +1463,7 @@ ov --sudo task status <task_id>
 | user_id | str | 是 | - | 用户 ID |
 | role | str | 否 | "user" | 要分配的角色。`ROOT` 和同 account 的 `ADMIN` 可直接注册 `"user"` 或 `"admin"`；只有 `ROOT` 可以注册 `"global"`。ROOT 身份只来自 `server.root_api_key`。 |
 | seed | str | 否 | `null` | 可选的确定性 API Key seed。传入后，key secret 为 `sha256(user_id + "\0" + seed)` |
-| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri` 和 `memory_policy` |
+| user_config | object | 否 | `null` | 新用户的初始配置。支持 `add_targets.resource_uri`、`add_targets.skill_uri`、`memory_policy` 和 `privacy` |
 
 **说明：**
 - 在 `trusted` 模式下，只创建身份和角色，不生成个人密钥、密钥哈希或密钥索引；响应不包含 `user_key`，`seed` 不参与处理。

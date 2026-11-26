@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Shared constants, helpers, and singleton management for VikingFS."""
 
-import os
 from typing import TYPE_CHECKING, Any, Dict, Optional, TypeVar
 
 from openviking_cli.exceptions import (
@@ -158,33 +157,6 @@ def _is_directory_not_empty_error(message: str) -> bool:
     )
 
 
-def _get_cpu_count() -> int:
-    """Return the number of CPUs available to this process.
-
-    Tries process_cpu_count (Python 3.13+, cgroup-aware),
-    falls back to sched_getaffinity (Linux),
-    then os.cpu_count (may report host CPUs in containers).
-    """
-    if hasattr(os, "process_cpu_count"):
-        return os.process_cpu_count() or 1
-    try:
-        return len(os.sched_getaffinity(0))
-    except (AttributeError, NotImplementedError):
-        return os.cpu_count() or 1
-
-
-def _get_abstract_worker_count() -> int:
-    default = max(4, min(12, min(32, _get_cpu_count() + 4) // 2))
-    env_val = os.getenv("OPENVIKING_FILE_OPS_CONCURRENCY")
-    if env_val is not None:
-        try:
-            return max(1, int(env_val))
-        except ValueError:
-            pass
-    return max(1, default)
-
-
-_ABSTRACT_WORKER_COUNT = _get_abstract_worker_count()
 _DEFAULT_GREP_FILE_CONCURRENCY = 32
 
 
@@ -267,7 +239,7 @@ def _enable_viking_fs_recorder(viking_fs) -> None:
 
     global _instance
     _instance = RecordingVikingFS(viking_fs)
-    logger.info("[VikingFS] IO Recorder enabled")
+    logger.info("IO Recorder enabled")
 
 
 def enable_viking_fs_recorder() -> None:

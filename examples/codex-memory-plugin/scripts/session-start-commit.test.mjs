@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { readRequestBody, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { expectExit, readRequestBody, runHookScript, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
 import { enqueue } from "./shared/pending-queue.mjs";
+import { PEER_PIN_VERSION } from "./session-state.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -28,30 +28,13 @@ function writeEndedMarker(dir, id, ts) {
   return writeFile(join(dir, `${id}.ended.${ts}`), String(ts));
 }
 
-function runSessionStart(input, env) {
-  return new Promise((resolve, reject) => {
-    const cleanEnv = { ...process.env };
-    for (const key of Object.keys(cleanEnv)) {
-      if (key.startsWith("OPENVIKING_")) delete cleanEnv[key];
-    }
-    const child = spawn(process.execPath, [join(SCRIPT_DIR, "session-start-commit.mjs")], {
-      env: { ...cleanEnv, ...env },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`session-start-commit exited ${code}: ${stderr}`));
-        return;
-      }
-      resolve({ output: JSON.parse(stdout.trim()), stderr });
-    });
-    child.stdin.end(JSON.stringify(input));
-  });
+async function runSessionStart(input, env) {
+  const result = expectExit(await runHookScript(join(SCRIPT_DIR, "session-start-commit.mjs"), {
+    input,
+    env,
+    inheritOpenVikingEnv: false,
+  }));
+  return { output: JSON.parse(result.stdout.trim()), stderr: result.stderr };
 }
 
 function baseEnv(baseUrl, stateDir) {
@@ -61,6 +44,7 @@ function baseEnv(baseUrl, stateDir) {
     OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
     OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
     OPENVIKING_CODEX_STATE_DIR: stateDir,
+    OPENVIKING_PENDING_DIR: join(stateDir, "pending"),
     OPENVIKING_RECALL_COMPRESS_DETECT_ON_STARTUP: "0",
     OPENVIKING_TIMEOUT_MS: "5000",
     OPENVIKING_CAPTURE_TIMEOUT_MS: "5000",
@@ -541,7 +525,12 @@ function sweepHandler(requests, { onBatch, batchStatus = 200 } = {}) {
     const url = new URL(req.url, "http://127.0.0.1");
     if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
       const body = await readRequestBody(req);
-      requests.push({ method: req.method, path: url.pathname, body });
+      requests.push({
+        method: req.method,
+        path: url.pathname,
+        actorPeerId: req.headers["x-openviking-actor-peer"] || "",
+        body,
+      });
       await onBatch?.(body);
       if (batchStatus !== 200) {
         res.writeHead(batchStatus, { "Content-Type": "application/json" });
@@ -555,50 +544,68 @@ function sweepHandler(requests, { onBatch, batchStatus = 200 } = {}) {
   };
 }
 
-test("the sweep catches up the recorded transcript before committing", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-sweep-catchup-"));
-  const transcriptPath = join(stateDir, "orphan.jsonl");
-  const requests = [];
-  try {
-    const now = Date.now();
-    await writeFile(transcriptPath, [
-      turn("user", "first request"),
-      turn("assistant", "first reply"),
-      turn("user", "second request"),
-    ].join("\n"));
-    await writeFile(join(stateDir, "orphan.json"), JSON.stringify({
-      codexSessionId: "orphan",
-      ovSessionId: "cx-orphan",
-      transcriptPath,
-      capturedTurnCount: 1,
-      createdAt: now - 5_000,
-      lastUpdatedAt: now,
-    }));
-    await writeEndedMarker(stateDir, "orphan", now);
+for (const oldPeer of ["", "project-a"]) {
+  for (const newPeer of ["", "project-b"]) {
+    test(`the sweep preserves peer ${JSON.stringify(oldPeer)} when startup uses ${JSON.stringify(newPeer)}`, async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-sweep-catchup-"));
+      const transcriptPath = join(stateDir, "orphan.jsonl");
+      const requests = [];
+      try {
+        const now = Date.now();
+        await writeFile(transcriptPath, [
+          turn("user", "first request"),
+          turn("assistant", "first reply"),
+          turn("user", "second request"),
+        ].join("\n"));
+        await writeFile(join(stateDir, "orphan.json"), JSON.stringify({
+          codexSessionId: "orphan",
+          ovSessionId: "cx-orphan",
+          transcriptPath,
+          workspacePeerId: oldPeer,
+          peerPinVersion: PEER_PIN_VERSION,
+          capturedTurnCount: 1,
+          createdAt: now - 5_000,
+          lastUpdatedAt: now,
+        }));
+        await writeEndedMarker(stateDir, "orphan", now);
 
-    await withMockOpenViking(sweepHandler(requests), async (baseUrl) => {
-      const { output } = await runSessionStart(
-        { session_id: "new-session", source: "startup", cwd: "/tmp/codex-sweep-catchup" },
-        { ...baseEnv(baseUrl, stateDir), OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1" },
-      );
-      assert.match(output.systemMessage, /cx-orphan is committed/);
+        await withMockOpenViking(sweepHandler(requests), async (baseUrl) => {
+          const { output } = await runSessionStart(
+            { session_id: "new-session", source: "startup", cwd: "/tmp/codex-sweep-catchup" },
+            {
+              ...baseEnv(baseUrl, stateDir),
+              OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+              OPENVIKING_PEER_ID: newPeer,
+            },
+          );
+          assert.match(output.systemMessage, /cx-orphan is committed/);
+        });
+
+        const sent = requests
+          .filter((r) => r.path === "/api/v1/sessions/cx-orphan/messages/batch")
+          .flatMap((r) => r.body?.messages ?? []);
+        assert.equal(sent.length, 2);
+        assert.equal(sent[0].parts?.[0]?.text ?? sent[0].content, "first reply");
+        assert.ok(sent.every((message) => (message.peer_id || "") === oldPeer));
+        const sessionRequests = requests.filter((r) => r.path.startsWith("/api/v1/sessions/cx-orphan/"));
+        assert.ok(sessionRequests.some((r) => r.path.endsWith("/commit")));
+        assert.ok(sessionRequests.every((r) => r.actorPeerId === oldPeer));
+        const profileRequests = requests.filter((r) => r.path === "/api/v1/content/read");
+        assert.ok(profileRequests.length > 0);
+        assert.ok(profileRequests.every((r) => r.actorPeerId === newPeer));
+        const newState = JSON.parse(await readFile(join(stateDir, "new-session.json"), "utf-8"));
+        assert.equal(newState.workspacePeerId, newPeer);
+
+        const state = JSON.parse(await readFile(join(stateDir, "orphan.json"), "utf-8"));
+        assert.equal(state.ovSessionId, null);
+        assert.equal(state.capturedTurnCount, 3);
+        assert.equal(await endedMarkerExists(stateDir, "orphan"), false);
+      } finally {
+        await rm(stateDir, { recursive: true, force: true });
+      }
     });
-
-    const sent = requests
-      .filter((r) => r.path === "/api/v1/sessions/cx-orphan/messages/batch")
-      .flatMap((r) => r.body?.messages ?? []);
-    assert.equal(sent.length, 2);
-    assert.equal(sent[0].parts?.[0]?.text ?? sent[0].content, "first reply");
-    assert.ok(requests.some((r) => r.path === "/api/v1/sessions/cx-orphan/commit"));
-
-    const state = JSON.parse(await readFile(join(stateDir, "orphan.json"), "utf-8"));
-    assert.equal(state.ovSessionId, null);
-    assert.equal(state.capturedTurnCount, 3);
-    assert.equal(await endedMarkerExists(stateDir, "orphan"), false);
-  } finally {
-    await rm(stateDir, { recursive: true, force: true });
   }
-});
+}
 
 test("the sweep catches up an ended session that PreCompact already released", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-sweep-released-"));
@@ -809,6 +816,72 @@ test("a turn queued during an outage is replayed at the next SessionStart", asyn
   } finally {
     if (savedPendingDir === undefined) delete process.env.OPENVIKING_PENDING_DIR;
     else process.env.OPENVIKING_PENDING_DIR = savedPendingDir;
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("compact adds only the session-history pointer and touches neither state nor server", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-session-start-"));
+  const requests = [];
+  try {
+    await withMockOpenViking(profileHandler(requests), async (baseUrl) => {
+      const input = { session_id: "compacted-thread", source: "compact", cwd: "/tmp/codex-compact", hook_event_name: "SessionStart" };
+      const { output } = await runSessionStart(input, baseEnv(baseUrl, stateDir));
+      const context = output.hookSpecificOutput.additionalContext;
+      assert.match(context, /^<openviking-context source="session-history">\n/);
+      assert.match(context, /full record of this session as cx-compacted-thread, including what the compaction summary replaced/);
+      assert.match(context, /pass session="cx-compacted-thread"/);
+      assert.doesNotMatch(context, /source="session-start"/);
+
+      const off = await runSessionStart(input, { ...baseEnv(baseUrl, stateDir), OPENVIKING_SESSION_HISTORY_POINTER: "0" });
+      assert.deepEqual(off.output, {});
+      const noCapture = await runSessionStart(input, { ...baseEnv(baseUrl, stateDir), OPENVIKING_AUTO_CAPTURE: "0" });
+      assert.deepEqual(noCapture.output, {});
+    });
+    assert.deepEqual(requests, []);
+    assert.deepEqual((await readdir(stateDir)).filter((name) => name.startsWith("compacted-thread")), []);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("resume adds the session-history pointer after the rest, also when the server is unreachable", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-session-start-"));
+  const requests = [];
+  const input = { session_id: "resumed-thread", source: "resume", cwd: "/tmp/codex-resume-pointer", hook_event_name: "SessionStart" };
+  try {
+    await withMockOpenViking(profileHandler(requests, { archiveOverview: "Earlier work. ".repeat(400) }), async (baseUrl) => {
+      const maxBytes = 3000;
+      const { output } = await runSessionStart(input, {
+        ...baseEnv(baseUrl, stateDir),
+        OPENVIKING_RESUME_ARCHIVE_INJECT: "1",
+        OPENVIKING_SESSION_START_MAX_BYTES: String(maxBytes),
+      });
+      const context = output.hookSpecificOutput.additionalContext;
+      assert.match(context, /^<openviking-context source="session-start">/);
+      assert.match(context, /source="session-resume"/);
+      assert.match(context, /\n\n<openviking-context source="session-history">\n[^]*<\/openviking-context>$/);
+      assert.match(context, /full record of this session as cx-resumed-thread, including anything an earlier compaction summarized/);
+      assert.ok(Buffer.byteLength(context, "utf8") <= maxBytes, `context is ${Buffer.byteLength(context, "utf8")} bytes`);
+
+      const off = await runSessionStart(input, { ...baseEnv(baseUrl, stateDir), OPENVIKING_SESSION_HISTORY_POINTER: "0" });
+      assert.doesNotMatch(off.output.hookSpecificOutput?.additionalContext || "", /source="session-history"/);
+    });
+
+    await withMockOpenViking((req, res) => {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", error: "unavailable" }));
+    }, async (baseUrl) => {
+      const { output } = await runSessionStart(input, baseEnv(baseUrl, stateDir));
+      const context = output.hookSpecificOutput.additionalContext;
+      assert.match(context, /^<openviking-context source="session-history">\n/);
+      assert.match(context, /pass session="cx-resumed-thread"/);
+      assert.doesNotMatch(context, /source="session-start"/);
+
+      const off = await runSessionStart(input, { ...baseEnv(baseUrl, stateDir), OPENVIKING_SESSION_HISTORY_POINTER: "0" });
+      assert.deepEqual(off.output, {});
+    });
+  } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
 });
