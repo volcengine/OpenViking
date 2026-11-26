@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const DEFAULT = Object.freeze({ channel: 'stream', strategy: 'mention' });
-const strategies = new Map([['stream', ['mention']], ['dws', ['mention', 'ambient']]]);
+const strategies = new Map([['stream', ['mention']], ['dws', ['ambient', 'reply-only']]]);
 const id = (value) => typeof value === 'string' && value.length > 0 && value === value.trim();
 
 export async function loadPolicy(dataDir) {
@@ -28,6 +28,9 @@ export function parsePolicy(value) {
   if (!groups || typeof groups !== 'object' || Array.isArray(groups)) throw new Error('Expected DingTalk groups keyed by openConversationId');
   const routes = new Map();
   for (const [group, route] of Object.entries(groups)) {
+    if (route?.channel === 'dws' && route.strategy === 'mention') {
+      throw new Error('DingTalk DWS strategy "mention" was renamed to "reply-only"');
+    }
     const valid = route?.channel === 'off' ? !Object.hasOwn(route, 'strategy')
       : strategies.get(route?.channel)?.includes(route.strategy);
     if (!id(group) || !valid) {

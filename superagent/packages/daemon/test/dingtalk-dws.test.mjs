@@ -25,13 +25,17 @@ const fixture = {
 };
 
 test('DingTalk policy keeps default Stream and validates each explicit group route', () => {
-  const policy = parsePolicy({ dws: config, groups: { [group]: { channel: 'dws', strategy: 'ambient' }, disabled: { channel: 'off' } } });
-  assert.deepEqual(policy.dwsGroups, [group]);
+  const policy = parsePolicy({ dws: config, groups: { [group]: { channel: 'dws', strategy: 'ambient' }, disabled: { channel: 'off' }, quoted: { channel: 'dws', strategy: 'reply-only' } } });
+  assert.deepEqual(policy.dwsGroups, [group, 'quoted']);
+  assert.equal(policy.route('quoted').strategy, 'reply-only');
   assert.equal(policy.route('legacy').channel, 'stream');
   assert.equal(policy.route('disabled').channel, 'off');
   assert.throws(() => parsePolicy({ groups: { invalid: { channel: 'stream', strategy: 'ambient' } } }));
   assert.throws(() => parsePolicy({ groups: { invalid: { channel: 'off', strategy: 'mention' } } }));
-  assert.throws(() => parsePolicy({ groups: { invalid: { channel: 'dws', strategy: 'mention' } } }));
+  assert.throws(() => parsePolicy({ groups: { invalid: { channel: 'dws', strategy: 'mention' } } }),
+    /strategy "mention" was renamed to "reply-only"/);
+  assert.throws(() => parsePolicy({ groups: { invalid: { channel: 'stream', strategy: 'reply-only' } } }),
+    /Invalid DingTalk group channel or strategy/);
   assert.throws(() => parsePolicy({ defaultChannel: 'off' }), /requires an enabled/);
   assert.throws(() => parsePolicy({ groups: { invalid: { channel: ['stream'], strategy: 'mention' } } }), /Invalid DingTalk group/);
 });
@@ -110,7 +114,7 @@ test('DWS gate releases context on a direct event and stored ambient becomes con
   gate.stage({ id: 'direct' }, group, 'direct');
   assert.deepEqual(received, ['context', 'direct']);
   state.stage({ id: 'waiting' }, group, 'ambient');
-  state.reconcileGroup(group, { channel: 'dws', strategy: 'mention' });
+  state.reconcileGroup(group, { channel: 'dws', strategy: 'reply-only' });
   assert.equal(state.pendingGroup(group)[0].kind, 'context');
   state.reconcileGroup(group, { channel: 'stream', strategy: 'mention' });
   assert.deepEqual(state.pendingGroup(group), []);
@@ -175,7 +179,7 @@ test('DWS can use the personal identity in every visible group without starting 
     '--message-id', fixture.message_id, '--content', '-', '--body-stdin', '--idempotency-key', 'core-reply-key', '--wait-delivery', '--yes', '--format', 'json']);
   await client.sendMessage({ chat_id: chatId(group), content: { text: '--help' }, idempotency_key: 'core-send-key' });
   assert.deepEqual(calls[2], ['--profile', config.profile, 'chat', '+messages-send', '--as', 'user', '--group', group,
-    '--text', '-', '--body-stdin', '--idempotency-key', 'core-send-key', '--wait-delivery', '--yes', '--format', 'json']);
+    '--markdown', '-', '--body-stdin', '--idempotency-key', 'core-send-key', '--wait-delivery', '--yes', '--format', 'json']);
   await assert.rejects(client.sendMessage({ chat_id: chatId('disabled'), content: { text: 'blocked' } }), /disabled/);
   assert.equal(calls.length, 3);
   assert.deepEqual(bodies.slice(1), ['reply', '--help']);
@@ -187,7 +191,7 @@ test('DWS keeps same-group order around a pending send while another group can r
   const otherGroup = 'second-test-group';
   await writeFile(path.join(directory, 'dingtalk-policy.json'), JSON.stringify({
     defaultChannel: 'off', groups: {
-      [group]: { channel: 'dws', strategy: 'ambient' }, [otherGroup]: { channel: 'dws', strategy: 'mention' },
+      [group]: { channel: 'dws', strategy: 'ambient' }, [otherGroup]: { channel: 'dws', strategy: 'reply-only' },
     },
     dws: { ...config, sendAs: 'user', userOpenId },
   }));

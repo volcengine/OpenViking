@@ -70,7 +70,7 @@ export class DingTalkState {
 
   reconcileGroup(group, route) {
     if (route.channel !== 'dws') this.db.prepare("DELETE FROM pending WHERE group_id = ? AND kind <> 'stream'").run(group);
-    else if (route.strategy === 'mention') this.db.prepare("UPDATE pending SET kind = 'context' WHERE group_id = ? AND kind = 'ambient'").run(group);
+    else if (route.strategy === 'reply-only') this.db.prepare("UPDATE pending SET kind = 'context' WHERE group_id = ? AND kind = 'ambient'").run(group);
   }
 
   pruneContext(group, before, maxLines) {

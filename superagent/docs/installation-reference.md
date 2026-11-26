@@ -225,20 +225,23 @@ Copy the exact `corpId:userId` selector from DWS. Display names and
 organization-only selectors may resolve to a different account over time;
 pending messages are scoped to the configured selector.
 
-Unlisted groups keep Stream mention-only reception. Set "defaultChannel": "off" in the policy to apply only explicitly configured group routes in a pilot.
+By default, unlisted groups keep Stream mention-only reception. Set
+`"defaultChannel": "off"` to use only explicit group routes when `allGroups`
+is disabled.
 An explicit DWS route
 opens one targeted group subscription. Change that group's route to
 `{"channel":"stream","strategy":"mention"}` and restart the instance to roll
 it back. `{"channel":"off"}` blocks both inbound processing and robot sends for
 that group. The route is checked again before forwarding persisted messages.
 
-With DWS `ambient`, ordinary messages are staged and released in batches.
-With DWS `mention`, they remain context until an addressed event is released.
-The flattened 1.0.69 schema provides structured quoted-sender identity and no
-structured bot mention list. The current addressed path recognizes replies
-quoting the bot in the same group. Explicit bot mentions require a verified
-provider field before they can trigger immediate release. Both strategies use
-robot OpenAPI by default. In this mode, a reply is a new group message.
+DWS `ambient` lets ordinary group text trigger model processing through
+ReleaseGate batches. DWS `reply-only` stages ordinary text as context and
+triggers processing on a same-group quote of the configured sender identity
+(the robot by default, or the authorized user with `sendAs: "user"`). Stream
+`mention` continues to use actual robot mentions. DWS 1.0.69 exposes structured
+quote data and omits structured mentions from its flattened events. DWS
+currently processes text content only. There is no independent per-group
+model-call limit or outbound rate limit in this Connector.
 
 For opt-in personal sending, add `"sendAs": "user"` and `"userOpenId"` to
 the `dws` object. Set `userOpenId` to the authenticated account's open
@@ -246,13 +249,21 @@ DingTalk ID as represented in DWS events. Personal sends and quoted replies
 reuse the Core idempotency key and wait for a DWS receipt. Confirmed Agent
 sends are matched to incoming echoes by message ID. Other messages from the
 same account are staged as context. A failed DWS user send stays on the user
-route. Stream groups retain robot sending.
+route. Personal proactive messages and timers use Markdown, and quoted
+replies use plain text. Robot sends and replies are new group messages.
+Personal automation is subject to DingTalk account and messaging controls.
+Stream groups retain robot sending.
 
 Set `"allGroups": true` under `dws` to subscribe to all group messages visible
 to this profile with one consumer. This setting authorizes the instance to
 process unlisted groups in DWS ambient mode. Explicit `off` and `stream`
-routes still apply. Leave `allGroups` disabled to limit DWS to explicitly
-configured DWS groups. Pending DWS messages belong to the configured profile
+routes still apply. Use a dedicated account that joins only internal groups
+authorized for processing and storage. The DWS events contain no reliable
+external-group marker, so operators enforce this boundary through account
+membership. Admitted messages may be stored in local SQLite and synced to
+the instance's configured OpenViking memory. Leave `allGroups` disabled to
+limit DWS to explicitly configured DWS groups. Pending DWS messages belong to
+the configured profile
 and are discarded when the profile changes. A personal-only configuration
 with zero Stream routes uses the DWS profile and requires no robot credentials
 at runtime. The installation UI still provisions DingTalk as a secondary

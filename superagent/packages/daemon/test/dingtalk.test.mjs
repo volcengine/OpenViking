@@ -289,7 +289,7 @@ test('DingTalk routes each group through its chosen inbound channel while keepin
   const robotOpenId = 'robot-open-id';
   fs.writeFileSync(path.join(directory, 'dingtalk-policy.json'), JSON.stringify({
     dws: { profile: 'corp:user', tenantId: 'corp-fixture', robotOpenId },
-    groups: { [groupId]: { channel: 'dws', strategy: 'mention' }, [blockedGroup]: { channel: 'off' } },
+    groups: { [groupId]: { channel: 'dws', strategy: 'reply-only' }, [blockedGroup]: { channel: 'off' } },
   }));
   t.mock.method(DWClient.prototype, 'connect', function () { this.connected = true; });
   t.mock.method(DWClient.prototype, 'disconnect', function () { this.connected = false; });
@@ -333,7 +333,7 @@ test('DingTalk keeps the other channel active through DWS restart and Stream rec
   const { client, directory, beforeCleanup } = setupClient(t, registry);
   fs.writeFileSync(path.join(directory, 'dingtalk-policy.json'), JSON.stringify({
     dws: { profile: 'corp:user', tenantId: 'corp-fixture', robotOpenId: 'robot-open-id' },
-    groups: { [groupId]: { channel: 'dws', strategy: 'mention' } },
+    groups: { [groupId]: { channel: 'dws', strategy: 'reply-only' } },
   }));
   t.mock.method(DWClient.prototype, 'connect', function () { this.connected = true; });
   t.mock.method(DWClient.prototype, 'disconnect', function () { this.connected = false; });

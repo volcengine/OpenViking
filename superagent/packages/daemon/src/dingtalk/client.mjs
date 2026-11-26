@@ -92,6 +92,11 @@ export class DingTalkClient {
     const pendingGroups = new Set(this.state.pendingKinds().map(({ group_id: group }) => group));
     for (const group of pendingGroups) this.state.reconcileGroup(group, this.policy.route(group));
     if (this.policy.dws) {
+      if (this.policy.dws.allGroups) {
+        this.logger.warn('dingtalk_dws_all_groups_enabled', {
+          message: 'Unlisted visible groups use ambient processing. Admitted messages may be stored in SQLite and synced to OpenViking memory.',
+        });
+      }
       const state = this.state;
       this.gate = new DingTalkGate(state, (group) => this.drainDws(group), (error) => {
         this.logger.warn('dingtalk_dws_release_failed', { error: safeError(error) });

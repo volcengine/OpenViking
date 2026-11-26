@@ -160,7 +160,7 @@ export class DwsSubscription {
 export async function sendDws(registry, { cliBin, profile }, { group, message, text, key, cwd, timeoutMs }) {
   const command = message ? '+messages-reply' : '+messages-send';
   const args = ['--profile', profile, 'chat', command, '--as', 'user', '--group', group,
-    ...(message ? ['--message-id', message, '--content', '-'] : ['--text', '-']),
+    ...(message ? ['--message-id', message, '--content', '-'] : ['--markdown', '-']),
     '--body-stdin', '--idempotency-key', key, '--wait-delivery', '--yes', '--format', 'json'];
   const result = await registry.run(cliBin, args, { cwd, timeoutMs, input: text });
   if (result.timedOut) throw new Error('DingTalk DWS send timed out before confirming delivery');
