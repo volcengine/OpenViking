@@ -67,6 +67,17 @@ export async function upgradeCommand(args, { stdout = process.stdout, stderr = p
     : [result.app].filter(Boolean);
   const commit = typeof result.commit === 'string' ? ` at ${result.commit.slice(0, 12)}` : '';
   const publication = result.published ? 'published and ' : '';
-  stdout.write(`${publication}${apps.join(', ')} ${apps.length === 1 ? 'is' : 'are'} ready${commit} (${result.release})\n`);
+  const skipped = new Set(Array.isArray(result.skipped) ? result.skipped : []);
+  const restarted = apps.filter((app) => !skipped.has(app));
+  const unchanged = apps.filter((app) => skipped.has(app));
+  // The updater leaves an app that already runs this release alone, so it is
+  // reported apart from the apps it restarted.
+  const ready = restarted.length > 0
+    ? `${restarted.join(', ')} ${restarted.length === 1 ? 'is' : 'are'} ready`
+    : 'nothing was restarted';
+  const kept = unchanged.length > 0
+    ? `; ${unchanged.join(', ')} already ${unchanged.length === 1 ? 'runs' : 'run'} it and ${unchanged.length === 1 ? 'was' : 'were'} not restarted`
+    : '';
+  stdout.write(`${publication}${ready}${commit} (${result.release})${kept}\n`);
   return 0;
 }
