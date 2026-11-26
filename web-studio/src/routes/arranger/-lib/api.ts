@@ -440,38 +440,19 @@ export async function removeResource(
 
 export async function loadLiveMounts(rootUri: string): Promise<LiveMountIndex> {
   try {
-    const serverResult = await getOvResult<unknown>(
-      getOvClient().instance.get('/api/v1/mcps', {
+    const mountResult = await getOvResult<unknown>(
+      getOvClient().instance.get('/api/v1/mcps/mounts', {
         baseURL: apiBaseUrl(),
       }),
     )
-    const servers = parseMcpServers(serverResult)
-    const settled = await Promise.allSettled(
-      servers.map(async ({ name, root_uri }) => {
-        const mountResult = await getOvResult<unknown>(
-          getOvClient().instance.get('/api/v1/mcps/mounts', {
-            baseURL: apiBaseUrl(),
-            params: { mcp: name, target_uri: root_uri },
-          }),
-        )
-        return parseMcpMounts(mountResult)
-      }),
-    )
     const mounts = new Map<string, LiveContextMount>()
-    for (const item of settled) {
-      if (item.status !== 'fulfilled') continue
-      for (const mount of item.value) {
-        if (isWithinRoot(mount.node_uri, rootUri)) {
-          mounts.set(normalizeVikingUri(mount.node_uri), mount)
-        }
+    for (const mount of parseMcpMounts(mountResult)) {
+      if (isWithinRoot(mount.node_uri, rootUri)) {
+        mounts.set(normalizeVikingUri(mount.node_uri), mount)
       }
     }
-    const failed = settled.find(
-      (item): item is PromiseRejectedResult => item.status === 'rejected',
-    )
     return {
-      complete: !failed,
-      error: failed ? normalizeOvClientError(failed.reason).message : undefined,
+      complete: true,
       mounts,
     }
   } catch (error) {

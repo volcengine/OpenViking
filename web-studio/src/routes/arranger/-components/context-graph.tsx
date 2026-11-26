@@ -22,12 +22,15 @@ import '@xyflow/react/dist/style.css'
 
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 import { cn } from '#/shared/lib/utils'
+import type { LiveContextMount } from '../-lib/model'
+import { getLiveMountStatus, mountStatusStyles } from '../-lib/mount-status'
 import { normalizeVikingUri, parentVikingUri } from '../-lib/uri'
+import { LiveMountStatusBadge } from './mount-status'
 
 type GraphData = {
   entry: VikingFsEntry
   expanded: boolean
-  isLive: boolean
+  liveMount?: LiveContextMount
   label: string
   onToggle: (uri: string) => void
 }
@@ -35,7 +38,7 @@ type GraphData = {
 type ContextGraphProps = {
   entries: VikingFsEntry[]
   expanded: Set<string>
-  isLive: (uri: string) => boolean
+  liveMounts: Map<string, LiveContextMount>
   onSelect: (entry: VikingFsEntry) => void
   onToggle: (uri: string) => void
   root: VikingFsEntry
@@ -45,7 +48,7 @@ type ContextGraphProps = {
 function ResourceNode({ data, selected }: NodeProps) {
   const { t } = useTranslation('arranger')
   const value = data as GraphData
-  const Icon: LucideIcon = value.isLive
+  const Icon: LucideIcon = value.liveMount
     ? CableIcon
     : value.entry.isDir
       ? FolderIcon
@@ -61,10 +64,15 @@ function ResourceNode({ data, selected }: NodeProps) {
       <Icon
         className={cn(
           'size-4 shrink-0',
-          value.isLive ? 'text-emerald-600' : 'text-muted-foreground',
+          value.liveMount
+            ? mountStatusStyles[getLiveMountStatus(value.liveMount)].icon
+            : 'text-muted-foreground',
         )}
       />
       <span className="min-w-0 flex-1 truncate">{value.label}</span>
+      {value.liveMount && (
+        <LiveMountStatusBadge mount={value.liveMount} compact />
+      )}
       {value.entry.isDir && (
         <button
           type="button"
@@ -99,7 +107,7 @@ const nodeTypes = { resource: ResourceNode }
 export function ContextGraph({
   entries,
   expanded,
-  isLive,
+  liveMounts,
   onSelect,
   onToggle,
   root,
@@ -137,7 +145,7 @@ export function ContextGraph({
           data: {
             entry,
             expanded: expanded.has(entry.uri),
-            isLive: isLive(entry.uri),
+            liveMount: liveMounts.get(id),
             label: entry.name || entry.uri,
             onToggle,
           } satisfies GraphData,
@@ -149,7 +157,7 @@ export function ContextGraph({
         }
       }),
     }
-  }, [entries, expanded, isLive, onToggle, root, selectedUri])
+  }, [entries, expanded, liveMounts, onToggle, root, selectedUri])
 
   return (
     <ReactFlow

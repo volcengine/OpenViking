@@ -11,7 +11,10 @@ const arranger = {
     liveDescription:
       '选择 MCP 工具并预置确定参数，Agent 读取节点时按需获取最新数据。',
     liveTitle: '实时上下文',
-    pathHint: '例如 viking://resources/arranger，路径会保留在 URL 中。',
+    pathHint:
+      '输入要编排的目录 URI，已输入的路径会保存在此浏览器中，方便下次选择。',
+    pathPlaceholder: '请输入 Viking URI，例如 viking://resources/arranger',
+    pathHistory: '选择历史路径',
     pathTitle: '选择要编排的目录',
     staticDescription:
       '直接组织目录、Markdown 和已有资源，确认后手动保存到 OpenViking。',
@@ -59,6 +62,20 @@ const arranger = {
     toolUri: '工具 URI',
   },
   live: {
+    statusLabels: {
+      VALID: '正常',
+      REVIEW: '需复核',
+      INVALID: '参数失效',
+      REMOVED: '工具已移除',
+      UNKNOWN: '状态未知',
+    },
+    statusDescriptions: {
+      VALID: '工具输入定义与挂载时一致。',
+      REVIEW: '工具输入定义已变化，预置参数仍有效，请确认是否需要重新挂载。',
+      INVALID: '预置参数不再符合当前工具输入定义，请编辑挂载参数。',
+      REMOVED: '本地工具定义已不存在，请重新选择工具或移除此挂载。',
+      UNKNOWN: '无法确认挂载状态，请检查工具定义和读取权限。',
+    },
     badge: '实时',
     boundTool: '绑定工具',
     destructiveHint: '可能修改数据',

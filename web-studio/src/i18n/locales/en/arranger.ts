@@ -12,7 +12,9 @@ const arranger = {
       'Choose an MCP tool and preset known arguments so agents can fetch current data when reading the node.',
     liveTitle: 'Live context',
     pathHint:
-      'For example, viking://resources/arranger. The path is preserved in the URL.',
+      'Enter a directory URI. Paths are saved in this browser for selection next time.',
+    pathPlaceholder: 'Enter a Viking URI, e.g. viking://resources/arranger',
+    pathHistory: 'Choose a recent path',
     pathTitle: 'Choose a directory to arrange',
     staticDescription:
       'Organize directories, Markdown, and existing resources, then save changes to OpenViking manually.',
@@ -60,6 +62,24 @@ const arranger = {
     toolUri: 'Tool URI',
   },
   live: {
+    statusLabels: {
+      VALID: 'Valid',
+      REVIEW: 'Review',
+      INVALID: 'Invalid arguments',
+      REMOVED: 'Tool removed',
+      UNKNOWN: 'Unknown',
+    },
+    statusDescriptions: {
+      VALID: 'The tool input definition matches the mounted version.',
+      REVIEW:
+        'The input definition changed, but preset arguments remain valid. Review whether to remount.',
+      INVALID:
+        'Preset arguments no longer match the current input definition. Edit the mount arguments.',
+      REMOVED:
+        'The local tool definition no longer exists. Choose another tool or remove the mount.',
+      UNKNOWN:
+        'The mount status could not be determined. Check the tool definition and read permissions.',
+    },
     badge: 'Live',
     boundTool: 'Bound tool',
     destructiveHint: 'May modify data',

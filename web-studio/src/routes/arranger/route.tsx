@@ -84,6 +84,10 @@ import { ResourceUploadProvider } from '#/features/workbench/resources/hooks/use
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
 import { LiveContextInspector } from './-components/live-context'
+import { LiveMountStatusBadge } from './-components/mount-status'
+import { PathInput } from './-components/path-input'
+import { getLiveMountStatus, mountStatusStyles } from './-lib/mount-status'
+import { readPathHistory, rememberPath } from './-lib/path-history'
 import { SchemaArgumentsForm } from './-components/schema-arguments-form'
 import {
   createDirectory,
@@ -164,8 +168,17 @@ function ArrangerWorkbench() {
   const navigate = useNavigate({ from: Route.fullPath })
   const search = Route.useSearch()
   const queryClient = useQueryClient()
-  const [pathDraft, setPathDraft] = useState(
-    search.uri || 'viking://resources/arranger',
+  const [pathDraft, setPathDraft] = useState(search.uri || '')
+  const [pathHistory, setPathHistory] = useState(() => ({
+    scope: identityScopeKey,
+    paths: readPathHistory(identityScopeKey),
+  }))
+  const recentPaths = useMemo(
+    () =>
+      pathHistory.scope === identityScopeKey
+        ? pathHistory.paths
+        : readPathHistory(identityScopeKey),
+    [identityScopeKey, pathHistory],
   )
   const rootUri = useMemo(() => {
     try {
@@ -258,6 +271,10 @@ function ArrangerWorkbench() {
     setDirectoryLimits({})
   }, [rootUri, identityScopeKey])
 
+  useEffect(() => {
+    setPathDraft(search.uri || '')
+  }, [search.uri, identityScopeKey])
+
   const refresh = useCallback(async () => {
     await queryClient.invalidateQueries({
       queryKey: ['arranger', identityScopeKey, rootUri],
@@ -281,6 +298,11 @@ function ArrangerWorkbench() {
   const submitPath = () => {
     try {
       const uri = normalizeVikingUri(pathDraft)
+      setPathHistory({
+        scope: identityScopeKey,
+        paths: rememberPath(identityScopeKey, uri, recentPaths),
+      })
+      setPathDraft(uri)
       void navigate({
         search: (previous) => ({
           ...previous,
@@ -326,6 +348,7 @@ function ArrangerWorkbench() {
           <div className="space-y-2">
             <Label>{t('start.pathTitle')}</Label>
             <PathInput
+              history={recentPaths}
               value={pathDraft}
               onChange={setPathDraft}
               onSubmit={submitPath}
@@ -376,6 +399,7 @@ function ArrangerWorkbench() {
           </p>
         </div>
         <PathInput
+          history={recentPaths}
           value={pathDraft}
           onChange={setPathDraft}
           onSubmit={submitPath}
@@ -552,7 +576,7 @@ function ArrangerWorkbench() {
                   entries={filteredEntries}
                   expanded={expanded}
                   selectedUri={selected?.uri}
-                  isLive={(uri) => liveIndex.mounts.has(uri)}
+                  liveMounts={liveIndex.mounts}
                   onSelect={choose}
                   onToggle={toggleExpanded}
                 />
@@ -673,37 +697,6 @@ function ArrangerWorkbench() {
   )
 }
 
-function PathInput({
-  onChange,
-  onSubmit,
-  value,
-}: {
-  onChange: (value: string) => void
-  onSubmit: () => void
-  value: string
-}) {
-  const { t } = useTranslation('arranger')
-  return (
-    <form
-      className="flex min-w-0 flex-1 gap-2"
-      onSubmit={(event) => {
-        event.preventDefault()
-        onSubmit()
-      }}
-    >
-      <Input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        aria-label={t('pathLabel')}
-        className="min-w-0 font-mono text-xs"
-      />
-      <Button type="submit" size="sm">
-        {t('actions.load')}
-      </Button>
-    </form>
-  )
-}
-
 function CenteredStatus({
   icon: Icon,
   label,
@@ -752,74 +745,82 @@ function ContextTree({
     return grouped
   }, [entries])
 
-  const renderEntry = (entry: VikingFsEntry, depth: number) => (
-    <div key={entry.uri}>
-      <div
-        className={cn(
-          'flex h-8 w-full items-center gap-1.5 pr-2 text-left text-xs hover:bg-muted',
-          selectedUri === entry.uri && 'bg-muted font-medium',
-        )}
-        style={{ paddingLeft: `${8 + depth * 14}px` }}
-      >
-        {entry.isDir ? (
+  const renderEntry = (entry: VikingFsEntry, depth: number) => {
+    const liveMount = liveIndex.mounts.get(normalizeVikingUri(entry.uri))
+    return (
+      <div key={entry.uri}>
+        <div
+          className={cn(
+            'flex h-8 w-full items-center gap-1.5 pr-2 text-left text-xs hover:bg-muted',
+            selectedUri === entry.uri && 'bg-muted font-medium',
+          )}
+          style={{ paddingLeft: `${8 + depth * 14}px` }}
+        >
+          {entry.isDir ? (
+            <button
+              type="button"
+              className="flex h-8 w-5 shrink-0 items-center justify-center rounded-sm hover:bg-muted-foreground/10"
+              aria-label={t(
+                expanded.has(entry.uri)
+                  ? 'actions.collapseDirectory'
+                  : 'actions.expandDirectory',
+                { name: entry.name },
+              )}
+              aria-expanded={expanded.has(entry.uri)}
+              onClick={() => onToggle(entry.uri)}
+            >
+              {expanded.has(entry.uri) ? (
+                <ChevronDownIcon className="size-3.5" />
+              ) : (
+                <ChevronRightIcon className="size-3.5" />
+              )}
+            </button>
+          ) : (
+            <span className="w-5 shrink-0" />
+          )}
           <button
             type="button"
-            className="flex h-8 w-5 shrink-0 items-center justify-center rounded-sm hover:bg-muted-foreground/10"
-            aria-label={t(
-              expanded.has(entry.uri)
-                ? 'actions.collapseDirectory'
-                : 'actions.expandDirectory',
-              { name: entry.name },
-            )}
-            aria-expanded={expanded.has(entry.uri)}
-            onClick={() => onToggle(entry.uri)}
+            className="flex h-8 min-w-0 flex-1 items-center gap-1.5 text-left"
+            onClick={() => onSelect(entry)}
+            onDoubleClick={() => {
+              if (entry.isDir) onToggle(entry.uri)
+            }}
           >
-            {expanded.has(entry.uri) ? (
-              <ChevronDownIcon className="size-3.5" />
+            {liveMount ? (
+              <CableIcon
+                className={cn(
+                  'size-4 shrink-0',
+                  mountStatusStyles[getLiveMountStatus(liveMount)].icon,
+                )}
+              />
+            ) : entry.isDir ? (
+              <FolderIcon className="size-4 shrink-0 text-amber-600" />
             ) : (
-              <ChevronRightIcon className="size-3.5" />
+              <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
             )}
+            <span className="truncate">{entry.name}</span>
           </button>
-        ) : (
-          <span className="w-5 shrink-0" />
+        </div>
+        {entry.isDir && expanded.has(entry.uri) && (
+          <>
+            {(children.get(normalizeVikingUri(entry.uri)) || []).map((child) =>
+              renderEntry(child, depth + 1),
+            )}
+            {directoriesWithMore.has(entry.uri) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-7 h-7 text-xs"
+                onClick={() => onLoadMore(entry.uri)}
+              >
+                {t('actions.loadMore')}
+              </Button>
+            )}
+          </>
         )}
-        <button
-          type="button"
-          className="flex h-8 min-w-0 flex-1 items-center gap-1.5 text-left"
-          onClick={() => onSelect(entry)}
-          onDoubleClick={() => {
-            if (entry.isDir) onToggle(entry.uri)
-          }}
-        >
-          {liveIndex.mounts.has(entry.uri) ? (
-            <CableIcon className="size-4 shrink-0 text-emerald-600" />
-          ) : entry.isDir ? (
-            <FolderIcon className="size-4 shrink-0 text-amber-600" />
-          ) : (
-            <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
-          )}
-          <span className="truncate">{entry.name}</span>
-        </button>
       </div>
-      {entry.isDir && expanded.has(entry.uri) && (
-        <>
-          {(children.get(normalizeVikingUri(entry.uri)) || []).map((child) =>
-            renderEntry(child, depth + 1),
-          )}
-          {directoriesWithMore.has(entry.uri) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-7 h-7 text-xs"
-              onClick={() => onLoadMore(entry.uri)}
-            >
-              {t('actions.loadMore')}
-            </Button>
-          )}
-        </>
-      )}
-    </div>
-  )
+    )
+  }
 
   return <div className="py-2">{renderEntry(root, 0)}</div>
 }
@@ -859,6 +860,25 @@ function ResourceInspector({
           <p className="break-all font-mono text-[11px] text-muted-foreground">
             {entry.uri}
           </p>
+          {liveMount && (
+            <div className="space-y-1.5">
+              <LiveMountStatusBadge mount={liveMount} />
+              {getLiveMountStatus(liveMount) !== 'VALID' && (
+                <>
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    {t(
+                      `live.statusDescriptions.${getLiveMountStatus(liveMount)}`,
+                    )}
+                  </p>
+                  {liveMount.reason && (
+                    <p className="break-words text-xs leading-5">
+                      {liveMount.reason}
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
           {!isRoot && (
             <div className="flex flex-wrap gap-1 pt-1">
               {liveMount && (

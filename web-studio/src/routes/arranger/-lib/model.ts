@@ -1,5 +1,12 @@
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 
+export type LiveMountStatus =
+  | 'VALID'
+  | 'REVIEW'
+  | 'INVALID'
+  | 'REMOVED'
+  | 'UNKNOWN'
+
 export type LiveContextMount = {
   node_uri: string
   tool_uri: string
@@ -12,6 +19,8 @@ export type LiveContextMount = {
   description?: string
   timeout_seconds?: number
   tags?: string[]
+  status?: LiveMountStatus
+  reason?: string
 }
 
 export type JsonSchema = {
