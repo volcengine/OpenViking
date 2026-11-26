@@ -69,8 +69,8 @@ describe("plugin bypass session patterns", () => {
     );
   });
 
-  it("bypasses before_reset without calling commitOVSession", async () => {
-    const { handlers, registerContextEngine } = setupPlugin({
+  it("commits only eligible sessions on before_reset", async () => {
+    const { handlers, logger, registerContextEngine } = setupPlugin({
       bypassSessionPatterns: ["agent:*:cron:**"],
     });
 
@@ -91,5 +91,10 @@ describe("plugin bypass session patterns", () => {
     );
 
     expect(engine.commitOVSession).not.toHaveBeenCalled();
+
+    const session = { sessionId: "interactive-session", sessionKey: "agent:main:main" };
+    await hook!({}, session);
+    expect(engine.commitOVSession).toHaveBeenCalledExactlyOnceWith(session);
+    expect(logger.info).toHaveBeenCalledWith("openviking: committed OV session on reset for session=interactive-session");
   });
 });

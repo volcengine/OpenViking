@@ -573,6 +573,57 @@ test("api-request-blob lines are not captured as conversation turns", () => {
   ]);
 });
 
+function ccRecord(role, content, flags = {}) {
+  return { type: role, sessionId: "s1", ...flags, message: { role, content } };
+}
+
+test("host-authored user records are skipped, and a cursor from before the upgrade still lines up", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-host-records-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const batches = [];
+  try {
+    await writeFile(transcriptPath, [
+      ccRecord("user", "first question"),
+      ccRecord("assistant", "first answer"),
+      ccRecord("user", "<local-command-caveat>The command below was run</local-command-caveat>", { isMeta: true }),
+      // Not yet captured:
+      ccRecord("user", "This session is being continued from a previous conversation.", { isCompactSummary: true }),
+      ccRecord("user", [{ type: "text", text: "Base directory for this skill: /skills/review" }], { isMeta: true }),
+      ccRecord("user", "second question"),
+      ccRecord("assistant", "second answer"),
+    ].map((record) => JSON.stringify(record)).join("\n"));
+    // Written by the previous plugin version, which counted the caveat among the turns it had sent.
+    const stateDir = join(root, "openviking-cc-capture-state");
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, "upgrade.json"), JSON.stringify({ capturedTurnCount: 3 }));
+
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+        writeJson(res, { status: "ok", result: { added: batches.at(-1).messages.length } });
+      } else {
+        writeJson(res, { status: "ok", result: {} });
+      }
+    }, async (baseUrl) => {
+      await runAutoCapture(
+        { session_id: "upgrade", transcript_path: transcriptPath, cwd: root },
+        { ...hookEnv(root, baseUrl), OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP: "0" },
+      );
+    });
+
+    const sent = batches.flatMap((batch) => batch.messages).map((message) => [
+      message.role,
+      message.parts.filter((p) => p.type === "text").map((p) => p.text).join(""),
+    ]);
+    assert.deepEqual(sent, [["user", "second question"], ["assistant", "second answer"]]);
+    const state = JSON.parse(await readFile(join(stateDir, "upgrade.json"), "utf-8"));
+    assert.equal(state.capturedTurnCount, 7);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a subagent stopping again pushes and commits only its new turns", async () => {
   const root = await mkdtemp(join(tmpdir(), "ov-cc-subagent-cursor-"));
   const transcriptPath = join(root, "subagent.jsonl");

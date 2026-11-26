@@ -567,6 +567,7 @@ class OpenVikingService:
         """Bind account capabilities without taking ownership of the auth plugin."""
         from openviking.ttl.wiring import build_ttl_adapter, install_ttl_hook, set_ttl_adapter
 
+        self._viking_fs.set_frozen_file_reader(getattr(manager, "get_frozen_files", None))
         self._compile_service.lifecycle.resolve_groups = (
             manager.get_user_group_ids if manager is not None else None
         )
@@ -590,6 +591,7 @@ class OpenVikingService:
             self._compile_scheduler.set_identity_resolver(None, None)
         if self._viking_fs is not None:
             self._viking_fs.set_deletion_guard(None)
+            self._viking_fs.set_frozen_file_reader(None)
         get_task_tracker().set_deletion_guard(None)
         if self._watch_manager is not None:
             self._watch_manager.set_deletion_guard(None)

@@ -195,9 +195,12 @@ test("real hook processes use the input cwd and retain that connection on later 
         write();
         const childEnv = {
           ...env, HOME: dir, USERPROFILE: dir, OPENVIKING_WRITE_PATH_ASYNC: "0",
+          TMPDIR: dir, TMP: dir, TEMP: dir,
           OPENVIKING_PENDING_DIR: join(dir, "pending"), OPENVIKING_STATE_DIR: join(dir, "state"),
           OPENVIKING_HOOK_STATE_DIR: join(dir, "hook-state"),
         };
+        const transcript = join(dir, "claude.jsonl");
+        writeFileSync(transcript, JSON.stringify({ type: "user", message: { role: "user", content: "Remember the project settings." } }) + "\n");
         const cases = [
           ["claude-code", "../claude-code-memory-plugin/scripts/pre-compact.mjs", []],
           ["codex", "../codex-memory-plugin/scripts/pre-compact-capture.mjs", []],
@@ -212,11 +215,21 @@ test("real hook processes use the input cwd and retain that connection on later 
                 cwd: personal,
                 argv: harness === "cursor" && cwd === personal ? ["beforeSubmitPrompt", "cursor"] : argv,
                 env: childEnv,
-                input: { cwd, prompt: "Recall the project conventions", session_id: `${harness}-pinned`, conversation_id: `${harness}-pinned`, source: "startup" },
+                input: {
+                  cwd, prompt: "Recall the project conventions", session_id: `${harness}-pinned`,
+                  conversation_id: `${harness}-pinned`, source: "startup",
+                  ...(harness === "claude-code" ? { transcript_path: transcript } : {}),
+                },
               }));
               assert.ok(requests.length > 0, result.stderr);
               assert.ok(requests.every((req) => req.headers.authorization === "Bearer work-key"));
               assert.ok(requests.every((req) => req.headers["x-openviking-account"] === "work"));
+              if (harness === "claude-code") {
+                const writes = requests.filter((r) => r.method === "POST" && /\/(messages\/batch|commit)$/.test(r.path));
+                const session = "/api/v1/sessions/cc-claude-code-pinned";
+                assert.deepEqual(writes.map((r) => r.path), cwd === work
+                  ? [`${session}/messages/batch`, `${session}/commit`] : [`${session}/commit`]);
+              }
             }
           });
         }

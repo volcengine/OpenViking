@@ -19,6 +19,13 @@ ZCode does not expose `PreCompact`, `SessionEnd`, or subagent lifecycle hooks. T
 
 Prerequisites: Node.js 18+, a running OpenViking server, and ZCode.
 
+For a managed connection, select **OpenViking Managed Service**, then:
+
+- **Volcengine:** enter your service API key. The installer supplies the URL.
+- **BytePlus:** enter your instance's full HTTPS service URL, then its API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older installers use **Custom URL** for BytePlus.
+
 ```bash
 curl -fsSL https://openviking.ai/install | bash
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
@@ -60,6 +67,13 @@ transcript decoding, output formatting, and commit policy:
 
 Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
 
+For a managed connection, select **OpenViking Managed Service**, then:
+
+- **Volcengine:** enter your service API key. The installer supplies the URL.
+- **BytePlus:** enter your instance's full HTTPS service URL, then its API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older installers use **Custom URL** for BytePlus.
+
 ```bash
 curl -fsSL https://openviking.ai/install | bash
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
@@ -98,6 +112,8 @@ The plugin also carries the OpenViking MCP server and 5 skills (`openviking-memo
 ### Install
 
 Prerequisites: Node.js 18+, a running OpenViking server, and the Antigravity app or `agy`.
+
+This noninteractive command uses the connection saved in `~/.openviking/ovcli.conf`. Configure it first with `ov config`: select **OpenViking Managed Service**, then **Volcengine** (service API key) or **BytePlus** (full HTTPS service URL and API key). See [BytePlus setup](../guides/27-byteplus-setup.md#connect-the-cli).
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity

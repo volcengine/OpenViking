@@ -6,7 +6,14 @@
 
 前置条件：macOS 或 Linux、Node.js 18+，以及 `qodercli`（或国内版 `qoderclicn`）在 `PATH` 中的 Qoder CLI。安装过程中会引导配置 OpenViking 连接信息；询问要接入哪些 Agent 时选择 **Qoder CLI**。
 
-安装器询问连接方式时，火山引擎云服务用户请选择 **火山引擎 OpenViking 云服务** 并填写 API Key。服务运行在本机时选择 **自建 / 本地**（`http://127.0.0.1:1933`）；远程自建服务请选择 **自定义 URL / 保持当前** 并填写其 URL。
+连接托管实例时，选择 **OpenViking 托管服务**，再选择服务商：
+
+- **Volcengine**：输入服务 API Key，安装器会提供服务地址。
+- **BytePlus**：先输入实例的完整 HTTPS 服务地址，再输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+
+旧版安装器连接 BytePlus 时使用**自定义 URL**。
+
+服务运行在本机时选择 **自建 / 本地**（`http://127.0.0.1:1933`）。远程自建服务选择**自定义 URL**并填写其地址；已有连接时，此选项显示为**自定义 URL / 保持当前**。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -39,7 +46,8 @@ curl -fsSL https://openviking.ai/install | bash
 
 - **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
 - **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。
-- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Bash 命令中包含这种 URI 时照常执行，并附加一条指向同一组工具的提示，`ov` 调用与字面量 `viking://` 参数照常可用。
+- **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Bash 命令中包含这种 URI 时照常执行，并附加一条指向同一组工具的提示，`ov` 调用与字面量 `viking://` 参数照常可用。`mcp_call` 上的第二个 `PreToolUse` 条目在 `session_history` 调用没传 `session` 参数时补上当前会话。
+- 压缩或恢复之后，**SessionStart** 还会追加一段简短说明，给出会话的 OpenViking id 以及用来查回之前确切细节的 `session_history` MCP 工具。
 - **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。
 
 hook 与 MCP 从 `~/.openviking/ovcli.conf` 读取同一份凭据，不会在服务端、账号或用户上各说各话。`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.qoder` 下（见[插件配置](../configuration/02-client.md#插件配置)）。会话在 OpenViking 中记为 `qd-<session id>`。

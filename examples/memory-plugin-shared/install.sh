@@ -3220,7 +3220,7 @@ install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>...
   cp "$config/runtime-index.mjs" "$root/hosts/index.mjs" || { rm -rf "$bundle"; return 1; }
   for host_module in "$root"/hosts/*.mjs; do
     case "$(basename "$host_module")" in
-      index.mjs|incremental-turn-capture.mjs|"$host.mjs"|"$host-turns.mjs") ;;
+      index.mjs|incremental-turn-capture.mjs|history-session.mjs|"$host.mjs"|"$host-turns.mjs") ;;
       *) rm -f "$host_module" ;;
     esac
   done
@@ -4080,7 +4080,7 @@ EOF
       "$(t 'quit DeepSeek Harness Desktop with ⌘Q if it is open, reopen it and start a new conversation' '如 DeepSeek Harness Desktop 已打开，用 ⌘Q 退出后重新打开，再新建对话')" \
       "$(t 're-run this installer, or update it on the Plugins page' '重新运行本安装脚本，或在“插件”页更新')" \
       "\"$DSH_DESKTOP_CLI\" plugin --profile desktop ls" \
-      "$(t "with Desktop quit, \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE; or Plugins page → $DSH_PACKAGE → Uninstall" "退出 Desktop 后运行 \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE；或在“插件”页 → $DSH_PACKAGE → 卸载")"
+      "$(t "with Desktop quit, \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE; or Plugins page → $DSH_PACKAGE → Uninstall" "退出 Desktop 后运行 \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm ${DSH_PACKAGE}；或在“插件”页 → $DSH_PACKAGE → 卸载")"
   elif contains_harness dsh-desktop; then
     next_steps "DeepSeek Harness Desktop" \
       "$(t "open DeepSeek Harness Desktop: Plugins → Add plugin → enter $DSH_PACKAGE → Install, then turn it on if its switch is off" "打开 DeepSeek Harness Desktop：插件 → 添加插件 → 输入 $DSH_PACKAGE → 安装，开关未打开时再打开")" \

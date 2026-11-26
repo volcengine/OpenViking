@@ -231,6 +231,80 @@ async def lightweight_admin_client(lightweight_admin_app):
         yield c
 
 
+async def test_admin_frozen_files_reach_native_fs_and_background(
+    admin_app, admin_service, admin_client, monkeypatch
+):
+    import openviking.server.account_stores.models as account_models
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    account_id = _uid()
+    manager = admin_app.state.api_key_manager
+    admin_key = await manager.create_account(account_id, "admin")
+    user_key = await manager.register_user(account_id, "agent")
+    other_key = await manager.create_account(_uid(), "admin")
+    fs = admin_service.viking_fs
+    fs.set_frozen_file_reader(manager.get_frozen_files)
+    user = UserIdentifier(account_id, "agent")
+    uri = "viking://user/agent/skills/example/SKILL.md"
+    await fs.write_file(uri, "original", ctx=RequestContext(user, Role.USER))
+    with monkeypatch.context() as patch:
+        refresh = AsyncMock(side_effect=OSError("account metadata unavailable"))
+        patch.setattr(manager._store, "_refresh_accounts_for_management_read", refresh)
+        await fs.write_file(uri, "original", ctx=RequestContext(user, Role.USER))
+        refresh.assert_not_awaited()
+        patch.setattr(account_models, "monotonic", lambda: float("inf"))
+        with pytest.raises(OSError, match="account metadata unavailable"):
+            await fs.write_file(uri, "replacement", ctx=RequestContext(user, Role.USER))
+        assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "original"
+    url = f"/api/v1/admin/accounts/{account_id}/users/agent/frozen-file"
+    result = await admin_client.put(
+        url,
+        headers={"X-API-Key": admin_key},
+        json={"path": "skills/example/SKILL.md", "frozen": True},
+    )
+    assert result.status_code == 200, result.text
+    status = await admin_client.get(
+        url, headers={"X-API-Key": admin_key}, params={"path": "skills/example/SKILL.md"}
+    )
+    assert status.json()["result"]["frozen"] is True
+    assert set(status.json()["result"]) == {"account_id", "user_id", "path", "frozen"}
+    status = await admin_client.get(
+        url, headers={"X-API-Key": admin_key}, params={"path": "skills/example/skill.md"}
+    )
+    assert status.json()["result"]["frozen"] is False
+    for key in (user_key, other_key):
+        denied = await admin_client.put(
+            url,
+            headers={"X-API-Key": key},
+            json={"path": "skills/example/SKILL.md", "frozen": False},
+        )
+        assert denied.status_code == 403
+    for role in (Role.USER, Role.ROOT):
+        with pytest.raises(PermissionDeniedError):
+            await fs.write_file(uri, "replacement", ctx=RequestContext(user, role))
+    with pytest.raises(PermissionDeniedError):
+        await fs.rm(
+            "viking://user/agent/skills", recursive=True, ctx=RequestContext(user, Role.USER)
+        )
+    with pytest.raises(PermissionDeniedError):
+        await fs.mv(
+            "viking://user/agent/skills/example",
+            "viking://user/agent/skills/moved",
+            ctx=RequestContext(user, Role.USER),
+        )
+    assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "original"
+    with pytest.raises(PermissionDeniedError):
+        await fs.read_file(uri, ctx=RequestContext(UserIdentifier(account_id, "admin"), Role.ADMIN))
+    result = await admin_client.put(
+        url,
+        headers={"X-API-Key": admin_key},
+        json={"path": "skills/example/SKILL.md", "frozen": False},
+    )
+    assert result.status_code == 200, result.text
+    await fs.write_file(uri, "updated", ctx=RequestContext(user, Role.USER))
+    assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "updated"
+
+
 @pytest_asyncio.fixture(scope="function")
 async def admin_service(service):
     """Use the shared service fixture with local fake models."""
@@ -3517,11 +3591,12 @@ async def test_remove_user(
     monkeypatch.setattr(gateway_module, "delete_data", delete_gateway_data)
     monkeypatch.setattr(admin_app.state.deletion_service, "_gateway_app", gateway)
     acct = _uid()
-    await admin_client.post(
+    created = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
     resp = await admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
@@ -3531,6 +3606,8 @@ async def test_remove_user(
     bob_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
     private_uri = "viking://user/bob/memories/private.md"
     await admin_service.viking_fs.write_file(private_uri, "private", ctx=bob_ctx)
+    admin_service.viking_fs.set_frozen_file_reader(admin_app.state.api_key_manager.get_frozen_files)
+    await admin_app.state.api_key_manager.set_frozen_file(acct, "bob", "memories/private.md", True)
     alice_upload_uri = "viking://upload/1800000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     bob_upload_uri = "viking://upload/1800000000000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     upload_ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ROOT)
@@ -3547,7 +3624,7 @@ async def test_remove_user(
         user_id="bob",
     )
     resp = await admin_client.delete(
-        f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
+        f"/api/v1/admin/accounts/{acct}/users/bob", headers=admin_headers
     )
     assert resp.status_code == 202
     task_id = resp.json()["result"]["task_id"]

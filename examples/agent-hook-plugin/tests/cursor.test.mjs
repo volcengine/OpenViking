@@ -46,6 +46,7 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
     "sessionStart",
     "beforeSubmitPrompt",
     "beforeReadFile",
+    "preToolUse",
     "afterMCPExecution",
     "stop",
     "preCompact",

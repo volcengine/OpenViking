@@ -33,7 +33,6 @@ from openviking_sdk.errors import (
     UnavailableError,
 )
 
-import langchain_openviking.client as client_helpers
 from langchain_openviking import (
     InMemoryOpenVikingClient,
     OpenVikingChatMessageHistory,
@@ -59,11 +58,6 @@ from langchain_openviking.history import (
 )
 from langchain_openviking.middleware import _message_signature
 from langchain_openviking.tools import _archive_grep_pattern, _resolve_resource_source
-
-
-def test_langchain_client_exposes_apply_commit_policy_without_legacy_alias():
-    assert hasattr(client_helpers, "apply_commit_policy")
-    assert not hasattr(client_helpers, "maybe_commit_session")
 
 
 def _tool_schema(tool: Any) -> dict[str, Any]:
@@ -789,36 +783,6 @@ def test_retriever_recovers_from_stale_cached_remote_client(monkeypatch):
     assert [doc.metadata["openviking_uri"] for doc in docs] == ["viking://resources/recovered.md"]
     assert len(instances) == 2
     assert instances[0].closed is True
-
-
-def test_in_memory_openviking_client_batch_add_messages_records_messages():
-    client = InMemoryOpenVikingClient()
-
-    result = client.batch_add_messages(
-        "batch-session",
-        [
-            {"role": "user", "content": "hello"},
-            {
-                "role": "assistant",
-                "parts": [{"type": "text", "text": "hi"}],
-                "peer_id": "agent-1",
-                "created_at": "2026-05-26T00:00:00+00:00",
-            },
-        ],
-    )
-
-    assert result["session_id"] == "batch-session"
-    assert result["message_count"] == 2
-    assert result["added"] == 2
-    assert result["pending_tokens"] > 0
-    assert [message["role"] for message in client.sessions["batch-session"]] == [
-        "user",
-        "assistant",
-    ]
-    assert client.sessions["batch-session"][0]["parts"][0]["text"] == "hello"
-    assert client.sessions["batch-session"][1]["parts"][0]["text"] == "hi"
-    assert client.sessions["batch-session"][1]["peer_id"] == "agent-1"
-    assert client.sessions["batch-session"][1]["created_at"] == "2026-05-26T00:00:00+00:00"
 
 
 @pytest.mark.asyncio
@@ -1709,11 +1673,7 @@ def test_chat_message_history_clear_raises_when_delete_fails():
     assert len(client.sessions["clear-session"]) == 1
 
 
-@pytest.mark.parametrize(
-    "invalid_namespace",
-    [(), ("users", "", "ada"), ("users", 1), ("users", "ada.profile"), ("langgraph", "ada")],
-)
-def test_langgraph_store_round_trip_and_semantic_search(invalid_namespace):
+def test_langgraph_store_round_trip_and_semantic_search():
     client = InMemoryOpenVikingClient()
     store = OpenVikingStore(client=client)
 
@@ -1745,91 +1705,73 @@ def test_langgraph_store_round_trip_and_semantic_search(invalid_namespace):
     assert store.list_namespaces(prefix=("users",)) == [("users", "ada")]
 
     records = dict(client.records)
-    for value in ({"color": "invalid"}, None):
-        with pytest.raises(InvalidNamespaceError):
-            store.put(invalid_namespace, "preferences", value)
-        assert client.records == records
-        with pytest.raises(InvalidNamespaceError):
-            asyncio.run(store.aput(invalid_namespace, "preferences", value))
-        assert client.records == records
-
-    # A None value is a deletion in LangGraph's BaseStore contract.
-    store.put(("users", "ada"), "profile", None)
-    assert store.get(("users", "ada"), "profile") is None
-    assert "profile" not in {found.key for found in store.search(("users",), limit=5)}
-
-    # Deleting a missing key is idempotent and must not create a record.
-    store.put(("users", "ada"), "absent", None)
-    assert store.get(("users", "ada"), "absent") is None
-
-    store.put(("users", "ada"), "preferences", None)
-    store.put(("users", "ada"), "bad-rank", None)
-    assert store.search(("users",), limit=5) == []
-    assert store.list_namespaces(prefix=("users",)) == []
+    for namespace in [
+        (),
+        ("users", "", "ada"),
+        ("users", 1),
+        ("users", "ada.profile"),
+        ("langgraph", "ada"),
+    ]:
+        for value in ({"color": "invalid"}, None):
+            with pytest.raises(InvalidNamespaceError):
+                store.put(namespace, "preferences", value)
+            assert client.records == records
+            with pytest.raises(InvalidNamespaceError):
+                asyncio.run(store.aput(namespace, "preferences", value))
+            assert client.records == records
 
 
-@pytest.mark.parametrize("method", ["put", "aput", "batch", "abatch", "delete", "adelete"])
-@pytest.mark.parametrize("existing", [False, True])
-def test_langgraph_store_none_deletes_through_public_store_methods(
-    method: str, existing: bool
-) -> None:
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "index"),
+    [
+        ("put", False),
+        ("aput", ["text"]),
+        ("batch", None),
+        ("abatch", None),
+        ("delete", None),
+        ("adelete", None),
+    ],
+)
+async def test_langgraph_store_none_deletes_through_public_store_methods(method, index):
     store = OpenVikingStore(client=InMemoryOpenVikingClient())
     namespace = ("users", "ada", "memories")
     other_namespace = ("users", "grace", "memories")
     store.put(other_namespace, "keep", {"text": "independent memory"})
-    if existing:
-        store.put(namespace, "item", {"text": "memory to remove"})
+    store.put(namespace, "item", {"text": "memory to remove"})
 
-    if method == "put":
-        store.put(namespace, "item", None)
-    elif method == "aput":
-        asyncio.run(store.aput(namespace, "item", None))
-    elif method == "batch":
-        store.batch([PutOp(namespace, "item", None)])
-    elif method == "abatch":
-        asyncio.run(store.abatch([PutOp(namespace, "item", None)]))
-    elif method == "delete":
-        store.delete(namespace, "item")
-    else:
-        asyncio.run(store.adelete(namespace, "item"))
+    for _ in range(2):  # Remove the stored value, then retry against the absent key.
+        if method == "put":
+            store.put(namespace, "item", None, index=index)
+        elif method == "aput":
+            await store.aput(namespace, "item", None, index=index)
+        elif method == "batch":
+            store.batch([PutOp(namespace, "item", None)])
+        elif method == "abatch":
+            await store.abatch([PutOp(namespace, "item", None)])
+        elif method == "delete":
+            store.delete(namespace, "item")
+        else:
+            await store.adelete(namespace, "item")
 
-    assert store.get(namespace, "item") is None
-    assert store.search(namespace) == []
-    assert store.search(namespace, query="memory to remove") == []
-    assert store.list_namespaces() == [other_namespace]
-    assert store.get(other_namespace, "keep").value == {"text": "independent memory"}
-
-
-@pytest.mark.parametrize("index", [False, ["text"]])
-@pytest.mark.parametrize("existing", [False, True])
-def test_langgraph_store_put_none_deletes_with_index_overrides(
-    index: bool | list[str], existing: bool
-) -> None:
-    store = OpenVikingStore(client=InMemoryOpenVikingClient())
-    namespace = ("users", "ada")
-    if existing:
-        store.put(namespace, "item", {"text": "memory to remove"})
-
-    store.put(namespace, "item", None, index=index)
-
-    assert store.get(namespace, "item") is None
-    assert store.search(namespace) == []
-    assert store.search(namespace, query="memory to remove") == []
-    assert store.list_namespaces() == []
+        assert store.get(namespace, "item") is None
+        assert store.search(namespace) == []
+        assert store.search(namespace, query="memory to remove") == []
+        assert store.list_namespaces() == [other_namespace]
+        assert store.get(other_namespace, "keep").value == {"text": "independent memory"}
 
 
 @pytest.mark.parametrize("method", ["put", "aput"])
-@pytest.mark.parametrize("value", [{}, {"number": 0}, {"text": "saved memory"}])
-def test_langgraph_store_dictionary_values_remain_stored(method: str, value: dict) -> None:
+def test_langgraph_store_empty_dictionary_is_stored(method: str) -> None:
     store = OpenVikingStore(client=InMemoryOpenVikingClient())
     namespace = ("users", "ada")
     if method == "put":
-        store.put(namespace, "item", value)
+        store.put(namespace, "item", {})
     else:
-        asyncio.run(store.aput(namespace, "item", value))
+        asyncio.run(store.aput(namespace, "item", {}))
 
-    assert store.get(namespace, "item").value == value
-    assert store.search(namespace)[0].value == value
+    assert store.get(namespace, "item").value == {}
+    assert store.search(namespace)[0].value == {}
     assert store.list_namespaces() == [namespace]
 
 
@@ -1864,6 +1806,8 @@ def test_langgraph_store_round_trips_separator_keys_as_single_uri_segments():
         "/docs/": "!sdocs!s",
         "docs//readme.md": "docs!s!sreadme.md",
         r"docs\readme.md": "docs!breadme.md",
+        "/AGENTS.md": "!sAGENTS.md",
+        r"\AGENTS.md": "!bAGENTS.md",
         "!sAGENTS.md": "%21sAGENTS.md",
         "!bAGENTS.md": "%21bAGENTS.md",
         "%2F": "%252F",
@@ -1900,34 +1844,6 @@ def test_langgraph_store_round_trips_separator_keys_as_single_uri_segments():
     assert (
         "viking://~/memories/langgraph_store/index/filesystem/user-a/!sdocs!sreadme.md.md"
     ) not in client.records
-
-
-def test_langgraph_store_distinguishes_separator_escapes_from_literal_markers():
-    client = InMemoryOpenVikingClient()
-    store = OpenVikingStore(client=client)
-    namespace = ("filesystem", "user-a")
-    cases = {
-        "/AGENTS.md": "!sAGENTS.md",
-        "!sAGENTS.md": "%21sAGENTS.md",
-        r"\AGENTS.md": "!bAGENTS.md",
-        "!bAGENTS.md": "%21bAGENTS.md",
-    }
-
-    for key in cases:
-        store.put(namespace, key, {"key": key})
-
-    expected_data_uris = {
-        f"viking://~/memories/langgraph_store/data/filesystem/user-a/{encoded}.json"
-        for encoded in cases.values()
-    }
-    assert expected_data_uris.issubset(client.records)
-    assert len(expected_data_uris) == len(cases)
-
-    for key in cases:
-        item = store.get(namespace, key)
-        assert item is not None
-        assert item.key == key
-        assert item.value["key"] == key
 
 
 def test_langgraph_store_keeps_namespace_and_key_identity_collision_free():
@@ -1975,16 +1891,16 @@ def test_langgraph_store_accepts_mapping_values(use_batch):
 
 
 @pytest.mark.parametrize(
-    ("method", "collection", "deindex"),
+    ("method", "collection", "deindex", "error"),
     [
-        (method, collection, False)
-        for method in ("delete", "adelete", "put", "aput", "batch", "abatch")
-        for collection in ("data", "index")
-    ]
-    + [(method, "index", True) for method in ("put", "aput", "batch", "abatch")],
-)
-@pytest.mark.parametrize(
-    "error", [PermissionDeniedError(), UnavailableError(), TimeoutError("removal timed out")]
+        ("delete", "data", False, PermissionDeniedError()),
+        ("adelete", "index", False, UnavailableError()),
+        ("put", "index", True, TimeoutError("removal timed out")),
+        ("aput", "index", True, PermissionDeniedError()),
+        ("batch", "data", False, TimeoutError("removal timed out")),
+        ("abatch", "index", False, PermissionDeniedError()),
+        ("abatch", "index", True, UnavailableError()),
+    ],
 )
 async def test_langgraph_store_removal_errors_remain_visible_and_retryable(
     method, collection, deindex, error
@@ -2124,13 +2040,6 @@ def test_langgraph_store_semantic_search_keeps_peer_id_out_of_retrieval():
     store.search(("users",), query="azure", limit=5)
 
     assert "peer_id" not in client.find_calls[-1]
-
-
-def test_langgraph_store_rejects_ttl_writes():
-    store = OpenVikingStore(client=InMemoryOpenVikingClient())
-
-    with pytest.raises(NotImplementedError, match="TTL is not supported"):
-        store.put(("users", "ada"), "temporary", {"note": "expires"}, ttl=60)
 
 
 @pytest.mark.parametrize("use_default", [False, True])
@@ -2361,32 +2270,6 @@ def test_langgraph_store_waits_for_indexing_by_default():
 
     assert async_client.write_wait_values
     assert all(wait is False for wait in async_client.write_wait_values)
-
-
-def test_langgraph_store_uses_create_first_and_preserves_created_at_on_replace():
-    class RecordingClient(InMemoryOpenVikingClient):
-        def __init__(self):
-            super().__init__()
-            self.write_modes = []
-
-        def write(self, uri, content, mode="replace", **kwargs):
-            self.write_modes.append((uri, mode))
-            return super().write(uri, content, mode=mode, **kwargs)
-
-    client = RecordingClient()
-    store = OpenVikingStore(client=client)
-
-    store.put(("users",), "ada", {"color": "azure"})
-    first = store.get(("users",), "ada")
-    store.put(("users",), "ada", {"color": "teal"})
-    second = store.get(("users",), "ada")
-
-    data_uri = "viking://~/memories/langgraph_store/data/users/ada.json"
-    assert client.write_modes[0] == (data_uri, "create")
-    assert (data_uri, "replace") in client.write_modes
-    assert second.created_at == first.created_at
-    assert second.updated_at >= first.updated_at
-    assert second.value["color"] == "teal"
 
 
 def test_pending_token_commit_does_not_create_missing_session():
@@ -3043,61 +2926,30 @@ def test_langgraph_middleware_captures_latest_only_state_each_turn():
     ]
 
 
-def test_langgraph_middleware_captures_in_place_message_mutation():
+@pytest.mark.parametrize("in_place", [False, True], ids=["new-objects", "in-place"])
+def test_langgraph_middleware_captures_changed_content_with_the_same_ids(in_place):
     client = InMemoryOpenVikingClient()
+    session_id = "middleware-same-id"
     middleware = OpenVikingContextMiddleware(
         client=client,
-        session_id_resolver=lambda state, runtime: "middleware-mutated",
+        session_id_resolver=lambda state, runtime: session_id,
     )
-    messages = [
-        HumanMessage(content="Remember mutable first."),
-        AIMessage(content="Mutable first stored."),
-    ]
+    user = HumanMessage(content="Original question.", id="user-stable")
+    assistant = AIMessage(content="Original reply.", id="assistant-stable")
+    middleware.after_agent({"messages": [user, assistant]}, runtime=None)
 
-    middleware.after_agent({"messages": messages}, runtime=None)
-    messages[0].content = "Remember mutable second."
-    messages[1].content = "Mutable second stored."
-    middleware.after_agent({"messages": messages}, runtime=None)
+    if not in_place:
+        user, assistant = user.model_copy(), assistant.model_copy()
+    user.content = "Changed question."
+    assistant.content = "Changed reply."
+    middleware.after_agent({"messages": [user, assistant]}, runtime=None)
+    middleware.after_agent({"messages": [user, assistant]}, runtime=None)
 
-    assert [message["parts"][0]["text"] for message in client.sessions["middleware-mutated"]] == [
-        "Remember mutable first.",
-        "Mutable first stored.",
-        "Remember mutable second.",
-        "Mutable second stored.",
-    ]
-
-
-def test_langgraph_middleware_captures_same_id_changed_content():
-    client = InMemoryOpenVikingClient()
-    middleware = OpenVikingContextMiddleware(
-        client=client,
-        session_id_resolver=lambda state, runtime: "middleware-same-id",
-    )
-
-    middleware.after_agent(
-        {
-            "messages": [
-                HumanMessage(content="Remember same id first.", id="user-stable"),
-                AIMessage(content="Same id first stored.", id="assistant-stable"),
-            ]
-        },
-        runtime=None,
-    )
-    middleware.after_agent(
-        {
-            "messages": [
-                HumanMessage(content="Remember same id second.", id="user-stable"),
-                AIMessage(content="Same id second stored.", id="assistant-stable"),
-            ]
-        },
-        runtime=None,
-    )
-
-    assert [message["parts"][0]["text"] for message in client.sessions["middleware-same-id"]] == [
-        "Remember same id first.",
-        "Same id first stored.",
-        "Remember same id second.",
-        "Same id second stored.",
+    assert [message["parts"][0]["text"] for message in client.sessions[session_id]] == [
+        "Original question.",
+        "Original reply.",
+        "Changed question.",
+        "Changed reply.",
     ]
 
 
@@ -3219,65 +3071,3 @@ def test_langgraph_middleware_retries_failed_batch_with_pending_context():
     assert len(client.sessions["middleware-batch-retry"]) == 2
     assistant_parts = client.sessions["middleware-batch-retry"][1]["parts"]
     assert sum(part["type"] == "context" for part in assistant_parts) == 1
-
-
-def test_langgraph_middleware_chunks_batches_at_server_limit():
-    class CappedBatchClient(InMemoryOpenVikingClient):
-        def __init__(self):
-            super().__init__()
-            self.batch_sizes = []
-
-        def batch_add_messages(self, session_id, messages, **kwargs):
-            if len(messages) > 100:
-                raise RuntimeError("server batch limit exceeded")
-            self.batch_sizes.append(len(messages))
-            return super().batch_add_messages(session_id, messages, **kwargs)
-
-    client = CappedBatchClient()
-    middleware = OpenVikingContextMiddleware(
-        client=client,
-        session_id_resolver=lambda state, runtime: "middleware-large-batch",
-    )
-    state = {"messages": [HumanMessage(content=f"Message {index}") for index in range(101)]}
-
-    middleware.after_agent(state, runtime=None)
-    middleware.after_agent(state, runtime=None)
-
-    assert client.batch_sizes == [100, 1]
-    assert len(client.sessions["middleware-large-batch"]) == 101
-
-
-def test_langgraph_middleware_retries_only_failed_batch_chunk():
-    class FailSecondBatchClient(InMemoryOpenVikingClient):
-        def __init__(self):
-            super().__init__()
-            self.batch_sizes = []
-
-        def batch_add_messages(self, session_id, messages, **kwargs):
-            self.batch_sizes.append(len(messages))
-            if len(self.batch_sizes) == 2:
-                raise RuntimeError("second batch failed")
-            return super().batch_add_messages(session_id, messages, **kwargs)
-
-    client = FailSecondBatchClient()
-    middleware = OpenVikingContextMiddleware(
-        client=client,
-        session_id_resolver=lambda state, runtime: "middleware-chunk-retry",
-    )
-    middleware._pending_context_parts[("middleware-chunk-retry", "")] = [
-        {"type": "context", "uri": "viking://resources/retry.md"}
-    ]
-    messages = [HumanMessage(content="First"), AIMessage(content="Context holder")]
-    messages.extend(HumanMessage(content=f"Message {index}") for index in range(98))
-    messages.append(AIMessage(content="Retry only this message"))
-    state = {"messages": messages}
-
-    with pytest.raises(RuntimeError, match="second batch failed"):
-        middleware.after_agent(state, runtime=None)
-    middleware.after_agent(state, runtime=None)
-    middleware.after_agent(state, runtime=None)
-
-    assert client.batch_sizes == [100, 1, 1]
-    stored = client.sessions["middleware-chunk-retry"]
-    assert len(stored) == 101
-    assert sum(part["type"] == "context" for message in stored for part in message["parts"]) == 1

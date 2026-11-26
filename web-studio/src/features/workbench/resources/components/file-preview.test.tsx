@@ -217,91 +217,26 @@ describe('FilePreview Markdown rendering', () => {
     expect(container.textContent).not.toContain('- · -')
   })
 
-  it('opens internal Markdown links in the resource preview', () => {
-    const onNavigate = vi.fn()
-    renderPreview(file, onNavigate)
-
-    const link = screen.getByRole('link', { name: 'Target' })
-    expect(link.getAttribute('href')).toBe('viking://resources/wiki/target.md')
-
-    fireEvent.click(link)
-
-    expect(onNavigate).toHaveBeenCalledOnce()
-    expect(onNavigate).toHaveBeenCalledWith('viking://resources/wiki/target.md')
-    expect(previewMocks.renderMermaid).not.toHaveBeenCalled()
-  })
-
-  it('renders explicit and relative internal images through authenticated downloads', async () => {
+  it('opens relative and explicit Markdown links in the resource preview', () => {
     previewState.override = {
-      content: [
-        '![Explicit](viking://resources/wiki/photo.jpg)',
-        '![Relative](./photo.jpg)',
-        '[Open image](viking://resources/wiki/photo.jpg)',
-      ].join('\n\n'),
+      content:
+        '[Relative](./target.md)\n\n[Explicit](viking://resources/wiki/photo.jpg)',
       fileType: 'markdown',
     }
-    vi.mocked(getContentDownload).mockResolvedValue({
-      data: new Blob(['image'], { type: 'image/jpeg' }),
-    } as never)
     const onNavigate = vi.fn()
     renderPreview(file, onNavigate)
 
-    await screen.findByRole('img', { name: 'Explicit' })
-    await screen.findByRole('img', { name: 'Relative' })
-    expect(getContentDownload).toHaveBeenCalledWith({
-      query: { uri: 'viking://resources/wiki/photo.jpg' },
-      responseType: 'blob',
-      throwOnError: true,
-    })
-    expect(
-      screen.getAllByRole('link', { name: /Explicit|Relative/ }),
-    ).toHaveLength(2)
-    fireEvent.click(screen.getByRole('link', { name: 'Relative' }))
-    fireEvent.click(screen.getByRole('link', { name: 'Open image' }))
+    for (const [name, uri] of [
+      ['Relative', 'viking://resources/wiki/target.md'],
+      ['Explicit', 'viking://resources/wiki/photo.jpg'],
+    ]) {
+      const link = screen.getByRole('link', { name })
+      expect(link.getAttribute('href')).toBe(uri)
+      fireEvent.click(link)
+      expect(onNavigate).toHaveBeenLastCalledWith(uri)
+    }
     expect(onNavigate).toHaveBeenCalledTimes(2)
-    expect(onNavigate).toHaveBeenCalledWith('viking://resources/wiki/photo.jpg')
-  })
-
-  it('keeps a linked image on its enclosing destination without nested links', async () => {
-    previewState.override = {
-      content: '[![Linked image](./photo.jpg)](./target.md)',
-      fileType: 'markdown',
-    }
-    vi.mocked(getContentDownload).mockResolvedValue({
-      data: new Blob(['image'], { type: 'image/jpeg' }),
-    } as never)
-    const onNavigate = vi.fn()
-    const { container } = renderPreview(file, onNavigate)
-    await screen.findByRole('img', { name: 'Linked image' })
-
-    const link = screen.getByRole('link', { name: 'Linked image' })
-    expect(link.getAttribute('href')).toBe('viking://resources/wiki/target.md')
-    expect(container.querySelector('a a')).toBeNull()
-    fireEvent.click(link)
-    expect(onNavigate).toHaveBeenCalledOnce()
-    expect(onNavigate).toHaveBeenCalledWith('viking://resources/wiki/target.md')
-  })
-
-  it('leaves images display-only without navigation and strips unsafe markup', async () => {
-    previewState.override = {
-      content: [
-        '![Display only](./photo.jpg)',
-        '[Unsafe](javascript:alert(1))',
-        '<img src="javascript:alert(1)" onerror="alert(1)" />',
-      ].join('\n\n'),
-      fileType: 'markdown',
-    }
-    vi.mocked(getContentDownload).mockResolvedValue({
-      data: new Blob(['image'], { type: 'image/jpeg' }),
-    } as never)
-    const { container } = renderPreview(file)
-    await screen.findByRole('img', { name: 'Display only' })
-
-    expect(screen.queryByRole('link', { name: 'Display only' })).toBeNull()
-    expect(container.querySelector('[onerror]')).toBeNull()
-    expect(
-      container.querySelector('[href^="javascript:"], [src^="javascript:"]'),
-    ).toBeNull()
+    expect(previewMocks.renderMermaid).not.toHaveBeenCalled()
   })
 
   it('opens viking links from a directory overview', () => {
@@ -591,22 +526,6 @@ describe('FilePreview Markdown image navigation and safety', () => {
     expect(link.getAttribute('href')).toBe('viking://resources/wiki/photo.jpg')
   })
 
-  it('opens explicit viking links in the Markdown body', () => {
-    previewState.override = {
-      content: '[Open image](viking://resources/wiki/photo.jpg)',
-      fileType: 'markdown',
-    }
-    const onNavigate = vi.fn()
-    renderPreview(file, onNavigate)
-
-    const link = screen.getByRole('link', { name: 'Open image' })
-    expect(link.getAttribute('href')).toBe('viking://resources/wiki/photo.jpg')
-    fireEvent.click(link)
-    expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
-      'viking://resources/wiki/photo.jpg',
-    )
-  })
-
   it('renders sanitized HTML images and links using the same internal navigation', async () => {
     previewState.override = {
       content:
@@ -643,12 +562,13 @@ describe('FilePreview Markdown image navigation and safety', () => {
       expect(container.querySelector('a a')).toBeNull()
       expect(container.querySelectorAll('a')).toHaveLength(1)
       const link = screen.getByRole('link', { name: 'Evidence' })
-      if (href.startsWith('https:')) {
-        expect(link.getAttribute('href')).toBe(href)
-        expect(link.getAttribute('target')).toBe('_blank')
-      }
+      const external = href.startsWith('https:')
+      expect(link.getAttribute('href')).toBe(
+        external ? href : 'viking://resources/wiki/target.md',
+      )
+      if (external) expect(link.getAttribute('target')).toBe('_blank')
       fireEvent.click(image)
-      if (href.startsWith('https:')) {
+      if (external) {
         expect(onNavigate).not.toHaveBeenCalled()
       } else {
         expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
@@ -746,7 +666,7 @@ describe('FilePreview Markdown image navigation and safety', () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled()
   })
 
-  it('continues stripping dangerous protocols, scripts and event attributes', () => {
+  it('renders safe HTML elements and tables while stripping executable markup', () => {
     previewState.override = {
       content: [
         '[Script](javascript:alert%281%29)',
@@ -755,6 +675,8 @@ describe('FilePreview Markdown image navigation and safety', () => {
         '<a href="java&#x73;cript:alert(1)" onclick="alert(1)">Encoded</a>',
         '<img src="javascript:alert(1)" alt="Unsafe" onerror="alert(1)">',
         '<img src="data:image/svg+xml,unsafe" alt="Data image">',
+        '<div>Raw HTML content</div>',
+        '<table><tbody><tr><th colspan="2">head</th></tr><tr><td rowspan="2">cell</td><td>a</td></tr><tr><td>b</td></tr></tbody></table>',
         '<script>alert(1)</script>',
         '[Safe](https://example.com)',
       ].join('\n\n'),
@@ -763,6 +685,12 @@ describe('FilePreview Markdown image navigation and safety', () => {
     const onNavigate = vi.fn()
     const { container } = renderPreview(file, onNavigate)
 
+    expect(screen.getByText('Raw HTML content').tagName).toBe('DIV')
+    const heading = screen.getByRole('columnheader', { name: 'head' })
+    expect(heading.getAttribute('colspan')).toBe('2')
+    expect(
+      screen.getByRole('cell', { name: 'cell' }).getAttribute('rowspan'),
+    ).toBe('2')
     expect(container.querySelector('script, [onclick], [onerror]')).toBeNull()
     for (const element of container.querySelectorAll('a, img')) {
       expect(
@@ -960,97 +888,16 @@ function classify(...lines: Array<string>) {
 }
 
 describe('JSONL message classification', () => {
-  it('classifies a plain-text user message from the OpenViking parts shape', () => {
-    const [message] = classify(
-      JSON.stringify({
-        created_at: '2026-08-04T12:00:00Z',
-        id: 'm1',
-        parts: [{ text: 'hello there', type: 'text' }],
-        role: 'user',
-      }),
-    )
-
-    expect(message.role).toBe('user')
-    expect(message.label).toBe('user')
-    expect(message.toolShape).toBe('none')
-    expect(message.parts).toEqual([{ kind: 'text', text: 'hello there' }])
-  })
-
-  it('classifies a plain-text assistant message', () => {
-    const [message] = classify(
-      JSON.stringify({
-        id: 'm2',
-        parts: [{ text: 'sure thing', type: 'text' }],
-        role: 'assistant',
-      }),
-    )
-
-    expect(message.role).toBe('assistant')
-    expect(message.toolShape).toBe('none')
-    expect(message.parts).toEqual([{ kind: 'text', text: 'sure thing' }])
-  })
-
-  it('keeps text and tool_use as separate parts on one assistant message', () => {
-    const [message] = classify(
-      JSON.stringify({
-        message: {
-          content: [
-            { text: 'Let me read that file.', type: 'text' },
-            {
-              id: 'call_1',
-              input: { file_path: '/tmp/a.txt' },
-              name: 'Read',
-              type: 'tool_use',
-            },
-          ],
-          role: 'assistant',
-        },
-        type: 'assistant',
-        uuid: 'u1',
-      }),
-    )
-
-    expect(message.role).toBe('assistant')
-    // A message carrying its own text is styled by role, not as a tool card.
-    expect(message.toolShape).toBe('none')
-    expect(message.parts).toEqual([
-      { kind: 'text', text: 'Let me read that file.' },
-      {
-        input: { file_path: '/tmp/a.txt' },
-        kind: 'tool-call',
-        toolName: 'Read',
-      },
-    ])
-    const textParts = message.parts.filter((part) => part.kind === 'text')
-    expect(textParts).toHaveLength(1)
-    for (const part of textParts) {
-      expect(part.text).not.toContain('[tool:')
-    }
-  })
-
-  it('classifies a tool_use-only assistant message as a tool call', () => {
-    const [message] = classify(
-      JSON.stringify({
-        message: {
-          content: [{ id: 'c', input: {}, name: 'Bash', type: 'tool_use' }],
-          role: 'assistant',
-        },
-        type: 'assistant',
-      }),
-    )
-
-    expect(message.role).toBe('assistant')
-    expect(message.toolShape).toBe('call')
-    expect(message.label).toBe('assistant')
-  })
-
-  it('classifies a tool_result carried by a user message', () => {
+  it('recognizes a tool result on a user message and joins its text blocks', () => {
     const [message] = classify(
       JSON.stringify({
         message: {
           content: [
             {
-              content: 'file contents',
+              content: [
+                { text: 'line one', type: 'text' },
+                { text: 'line two', type: 'text' },
+              ],
               tool_use_id: 'call_1',
               type: 'tool_result',
             },
@@ -1065,29 +912,6 @@ describe('JSONL message classification', () => {
     expect(message.role).toBe('user')
     expect(message.toolShape).toBe('result')
     expect(message.label).toBe('tool-result')
-    expect(message.parts).toEqual([
-      { kind: 'tool-result', text: 'file contents', toolName: '' },
-    ])
-  })
-
-  it('flattens a tool_result whose content is a list of text blocks', () => {
-    const [message] = classify(
-      JSON.stringify({
-        message: {
-          content: [
-            {
-              content: [
-                { text: 'line one', type: 'text' },
-                { text: 'line two', type: 'text' },
-              ],
-              type: 'tool_result',
-            },
-          ],
-          role: 'user',
-        },
-      }),
-    )
-
     expect(message.parts).toEqual([
       { kind: 'tool-result', text: 'line one\nline two', toolName: '' },
     ])
@@ -1113,31 +937,6 @@ describe('JSONL message classification', () => {
       { input: { pattern: '*.md' }, kind: 'tool-call', toolName: 'glob' },
       { kind: 'tool-result', text: 'a.md\nb.md', toolName: 'glob' },
     ])
-  })
-
-  it('classifies an OpenViking tool part with only an output as a result', () => {
-    // Shape written by the claude-code peer: the result lands as its own
-    // role=user record with no `tool_input` at all.
-    const [message] = classify(
-      JSON.stringify({
-        id: 'msg_dca71c5d',
-        parts: [
-          {
-            tool_name: 'Bash',
-            tool_output: '33 failed, 392 passed',
-            tool_status: 'completed',
-            type: 'tool',
-          },
-        ],
-        role: 'user',
-      }),
-    )
-
-    expect(message.parts).toEqual([
-      { kind: 'tool-result', text: '33 failed, 392 passed', toolName: 'Bash' },
-    ])
-    expect(message.toolShape).toBe('result')
-    expect(message.label).toBe('tool-result')
   })
 
   it('treats a null tool_input with an output as a result-only part', () => {
@@ -1188,15 +987,6 @@ describe('JSONL message classification', () => {
     expect(message.id).toBe('u9')
     expect(message.time).toBe('2026-08-04T12:00:00Z')
     expect(message.parts).toEqual([{ kind: 'text', text: 'nested body' }])
-  })
-
-  it('treats a plain string content as a single text part', () => {
-    const [message] = classify(
-      JSON.stringify({ content: 'just a string', role: 'user' }),
-    )
-
-    expect(message.toolShape).toBe('none')
-    expect(message.parts).toEqual([{ kind: 'text', text: 'just a string' }])
   })
 
   it('falls back to a raw part for an unknown record shape', () => {

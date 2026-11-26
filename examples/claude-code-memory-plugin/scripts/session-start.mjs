@@ -17,6 +17,12 @@
  *      CC's own compact summary; for "resume" it supplements the history restored by CC.
  *      This optional injection is disabled by default.
  *
+ * On resume/compact a separate <openviking-context source="session-history">
+ * block follows, pointing the model at the session's full record in OV
+ * (OPENVIKING_SESSION_HISTORY_POINTER=0 turns it off). Every source also
+ * records the session as this Claude Code process's current one, for the MCP
+ * proxy (lib/session-binding.mjs).
+ *
  * The composed payload is mirrored to ~/.openviking/last_inject.md for audit.
  */
 
@@ -32,6 +38,7 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { replayPending } from "./lib/pending-queue.mjs";
+import { bindCurrentSession } from "./lib/session-binding.mjs";
 import {
   buildProfileBlock,
   estimateTokens,
@@ -41,6 +48,7 @@ import {
 import { statePath, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -98,20 +106,31 @@ runHookStage({
   loadConfig,
   input: { tolerant: true },
   envelope: approve,
-  onSkip: (reason) => log("skip", { reason }),
+  // A bypassed session is still the current one: the proxy must not keep
+  // filling in the session it replaced. A disabled plugin writes nothing.
+  onSkip: (reason, stage) => {
+    if (reason === "bypass") bindCurrentSession(stage.sessionId, process.env, stage.cfg.connectionScope);
+    log("skip", { reason });
+  },
 }, async ({ cfg, input, cwd, sessionId }) => {
   const fetchJSON = makeFetchJSON(cfg);
+  bindCurrentSession(sessionId, process.env, cfg.connectionScope);
   const source = input.source || "startup";
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", { source, sessionId, peerSource: effectivePeer.source });
 
   const willInjectProfile = !cfg.noAutoInject;
   const willInjectArchive = cfg.resumeArchiveInject && (source === "resume" || source === "compact") && !!sessionId;
+  // Needs nothing from the server, so it goes out even when the rest cannot.
+  const historyPointer = cfg.sessionHistoryPointer && cfg.autoCapture
+    && (source === "resume" || source === "compact") && sessionId
+    ? formatSessionHistoryPointer(deriveOvSessionId(sessionId), { event: source })
+    : "";
 
   const health = await fetchJSON("/health");
   if (!health.ok) {
     logError("health_check", "server unreachable");
-    return;
+    return historyPointer || undefined;
   }
 
   // Pending replay is independent from profile/archive injection. A user may
@@ -128,12 +147,13 @@ runHookStage({
 
   if (!willInjectProfile && !willInjectArchive) {
     log("skip", { reason: "no_injection_planned", source, noAutoInject: cfg.noAutoInject });
-    return;
+    return historyPointer || undefined;
   }
 
   // 1. Archive injection — resume/compact only, requires session_id. Under a
   // byte cap it takes up to half, and the profile gets the rest.
   const maxBytes = cfg.sessionStartMaxBytes || 0;
+  const pointerBytes = historyPointer ? Buffer.byteLength(historyPointer, "utf8") + 1 : 0;
   let archiveSection = null;
   let ovSessionId = null;
   if (willInjectArchive) {
@@ -148,7 +168,7 @@ runHookStage({
   if (!cfg.noAutoInject) {
     try {
       const profileMaxBytes = maxBytes > 0
-        ? Math.max(1, maxBytes - Buffer.byteLength(archiveSection || "", "utf8") - 100)
+        ? Math.max(1, maxBytes - Buffer.byteLength(archiveSection || "", "utf8") - pointerBytes - 100)
         : 0;
       profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, effectivePeer.peerId, {
         ...cfg,
@@ -184,11 +204,14 @@ runHookStage({
   if (archiveSection) sections.push(archiveSection);
 
   if (sections.length === 0) {
-    log("no_inject", { source, profile: !!profile, archive: !!archiveSection });
-    return;
+    log("no_inject", { source, profile: !!profile, archive: !!archiveSection, pointer: !!historyPointer });
+    return historyPointer || undefined;
   }
 
-  const composed = `<openviking-context source="${source}">\n${sections.join("\n")}\n</openviking-context>`;
+  const composed = [
+    `<openviking-context source="${source}">\n${sections.join("\n")}\n</openviking-context>`,
+    historyPointer,
+  ].filter(Boolean).join("\n");
   writeLastInject(composed);
 
   if (cfg.debug) {
@@ -213,6 +236,7 @@ runHookStage({
       droppedEnt: profile.droppedEnt,
     },
     archive: Boolean(archiveSection),
+    pointer: Boolean(historyPointer),
   });
   return composed;
 }).catch((err) => { logError("uncaught", err); approve(); });

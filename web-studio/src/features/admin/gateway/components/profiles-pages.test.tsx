@@ -674,57 +674,31 @@ describe('profile editor', () => {
     expect(api.listTools).toHaveBeenCalledTimes(2)
   })
 
-  it('shows tool calls by default and saves the switch', async () => {
-    renderAt('/admin/gateway/profiles/p2')
-    await screen.findByDisplayValue('Chat')
-    fireEvent.click(sectionSwitch('tools'))
-    const showCalls = screen.getByRole('switch', {
-      name: 'profiles.tools.showCalls.label',
-    })
-    expect(showCalls.getAttribute('aria-checked')).toBe('true')
-
-    fireEvent.click(showCalls)
-    fireEvent.click(saveButton())
-
-    await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
-    expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
-      gateway_tools: true,
-      show_tool_calls: false,
-    })
-  })
-
-  it('hides the recall summary by default and saves the switch', async () => {
-    renderAt('/admin/gateway/profiles/p2')
-    await screen.findByDisplayValue('Chat')
-    const showRecall = screen.getByRole('switch', {
-      name: 'profiles.recall.showRecall.label',
-    })
-    expect(showRecall.getAttribute('aria-checked')).toBe('false')
-
-    fireEvent.click(showRecall)
-    fireEvent.click(saveButton())
-
-    await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
-    expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
-      recall: false,
-      show_recall: true,
-    })
-  })
-
-  it('recalls every peer by default and saves the current-peer scope', async () => {
-    // Profiles saved before the setting existed lack the field.
+  it('loads legacy profile display and peer defaults and saves changes together', async () => {
     const { recall_peer_scope: _, ...legacy } = chat
     api.listProfiles.mockResolvedValue([legacy as Profile])
     renderAt('/admin/gateway/profiles/p2')
     await screen.findByDisplayValue('Chat')
     expect(saveButton().disabled).toBe(true)
+
+    fireEvent.click(sectionSwitch('tools'))
+    const showCalls = screen.getByRole('switch', {
+      name: 'profiles.tools.showCalls.label',
+    })
+    const showRecall = screen.getByRole('switch', {
+      name: 'profiles.recall.showRecall.label',
+    })
+    expect(showCalls.getAttribute('aria-checked')).toBe('true')
+    expect(showRecall.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(showCalls)
+    fireEvent.click(showRecall)
+
     fireEvent.click(sectionSwitch('recall'))
     fireEvent.click(screen.getAllByText('field.advanced')[0])
     const scope = screen.getByRole('combobox', {
       name: 'profiles.recall.peerScope.label',
     })
     expect(scope.textContent).toContain('profiles.recall.peerScope.all')
-
     fireEvent.click(scope)
     const option = await screen.findByRole('option', {
       name: 'profiles.recall.peerScope.actor',
@@ -735,6 +709,10 @@ describe('profile editor', () => {
 
     await waitFor(() => expect(api.saveProfile).toHaveBeenCalledTimes(1))
     expect(api.saveProfile.mock.calls[0][2]).toMatchObject({
+      gateway_tools: true,
+      show_tool_calls: false,
+      recall: true,
+      show_recall: true,
       recall_peer_scope: 'actor',
     })
   })

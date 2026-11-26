@@ -63,7 +63,7 @@ export function getAgentConnectInstructions(
       () => text.hermesCustomIntro,
     );
     template = template.replace(
-      /^3\. (?:选择|Choose) \*\*OpenViking Service \(VolcEngine Cloud\)\*\*[。.][ \t]*$/m,
+      /^3\. (?:选择|Choose) \*\*(?:OpenViking Service \(VolcEngine Cloud\)|OpenViking Managed Service)\*\*(?:[。.]|[，,][^\r\n]*)[ \t]*$/m,
       () => text.hermesCustomStep,
     );
   }
