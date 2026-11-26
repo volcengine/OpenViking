@@ -644,6 +644,11 @@ class OpenVikingConfig(BaseModel):
         try:
             # Make a copy to avoid modifying the original
             config_copy = config.copy()
+            expiry = config_copy.get("expiry")
+            if isinstance(expiry, dict) and "redis" in expiry:
+                raise ValueError(
+                    "expiry.redis is no longer supported; use expiry.cache.instance"
+                )
 
             parser_types = [
                 "pdf",

@@ -61,7 +61,11 @@ Scheduling controls are stored separately from Runtime arguments. A non-null sch
 
 With only the frequency, the server assigns a fixed time between 00:00 and 03:59. Weekly schedules also get a fixed `weekday` (1=Monday through 7=Sunday) when omitted. Supplying only `hour` (0–23) assigns a fixed minute within that hour, so `hour: 10` runs between 10:00 and 10:59. Supplying only `minute` (0–59) sets the hour to zero. Read the configuration's `update_schedule` to see the assigned values.
 
-Scheduled execution requires `compile_api.scheduler_enabled=true` and the configured Redis expiry service. Credentials are encrypted and revalidated, including current group permissions, at each trigger. Disabled or unavailable scheduling returns an error; creation never submits an execution as a fallback. A disabled schedule has `next_triggered_slot: null`.
+Scheduled execution requires `compile_api.scheduler_enabled=true` and a Redis
+CacheRuntime selected by `expiry.cache.instance`. Credentials are encrypted and
+revalidated, including current group permissions, at each trigger. Disabled or
+unavailable scheduling returns an error; creation never submits an execution
+as a fallback. A disabled schedule has `next_triggered_slot: null`.
 
 ### Execute Compile
 

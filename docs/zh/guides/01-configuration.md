@@ -2244,17 +2244,34 @@ openviking-server --config /path/to/ov.conf
 
 ```json
 {
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://redis-cache.example.com:6379"]
+        }
+      },
+      "expiry": {
+        "provider": "redis",
+        "params": {
+          "mode": "cluster",
+          "endpoints": ["redis://redis-proxy.example.com:6379"],
+          "username": "openviking",
+          "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD",
+          "default_ttl_seconds": 0
+        }
+      }
+    }
+  },
   "expiry": {
     "service_name": "openviking-documents",
     "publisher_separate_process": true,
     "shard_count": 128,
     "session_consumer_concurrency": 8,
-    "redis": {
-      "mode": "cluster",
-      "endpoints": ["redis://redis-proxy.example.com:6379"],
-      "username": "openviking",
-      "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD"
-    }
+    "cache": {"instance": "expiry"},
+    "request_budget_seconds": 5,
+    "max_inflight_requests": 128
   }
 }
 ```
@@ -2265,13 +2282,38 @@ openviking-server --config /path/to/ov.conf
 | `publisher_separate_process` | bool | `scheduler` 节点由父进程托管 publisher 子进程；为 `false` 时在各 `scheduler` 进程内运行 | `true` |
 | `shard_count` | int | expiry 逻辑分片数；所有共享同一 namespace 的实例必须一致，取值范围为 `1..512` | `128` |
 | `session_consumer_concurrency` | int | 每个 `queue_worker` 进程中 Session expiry callback 的并发数，必须大于 `0` | `8` |
-| `redis.mode` | string | Redis 部署模式：`standalone` 或 `cluster` | `standalone` |
-| `redis.endpoints` | string array | Redis 地址；集群模式可以只配置一个统一 proxy 地址 | `[]` |
-| `redis.username` | string | Redis ACL 用户名 | `""` |
-| `redis.password_env` | string | 保存 Redis 密码的环境变量名；变量不存在时启动失败 | `""` |
-| `redis.password` | string | 兼容用明文密码；建议使用 `password_env`，两者互斥 | `""` |
+| `cache.instance` | string | expiry 状态使用的命名 Redis CacheRuntime | 启用 expiry 时必填 |
+| `request_budget_seconds` | number | 单次 expiry Store 操作的总预算；必须短于 owner 续约周期 | `5` |
+| `max_inflight_requests` | int | 同时执行的 expiry Store 操作上限 | `128` |
 
-启用 Redis idle auto commit 时必须配置 `service_name` 和 Redis 地址。用户名与密码只能使用上述独立字段，不能写入 endpoint URI。`publisher_separate_process=true` 时，`scheduler` 启动会拉起一个内部 publisher 子进程，关闭时停止它，子进程异常退出时一并退出。publisher 不提供公共 CLI 入口。
+所选 `cache.instances.<instance>` 必须使用 `provider="redis"`，并设置
+`params.default_ttl_seconds=0`。expiry 状态是持久调度状态，只有其 Lua 脚本会为
+metadata 和 owner lease 设置 TTL。
+
+启用 Redis idle auto commit 时必须配置 `service_name` 和 `cache.instance`。Redis
+地址、认证、连接池和超时配置位于
+`cache.instances.<instance>.params`；endpoint URI 不能包含认证信息。默认
+`publisher_separate_process=true` 时，`openviking-server` 会在开始服务前拉起一个
+内部 publisher 子进程，在服务关闭时停止它，并在子进程异常退出时一并退出。
+publisher 不再暴露为公共 CLI 命令。
+
+不支持 `expiry.redis`。将连接字段迁移到
+`cache.instances.<instance>.params`，将 `request_budget_seconds` 和
+`max_inflight_requests` 迁移到 `expiry`，再通过 `expiry.cache.instance` 选择实例。
+
+| 旧字段 | 新字段 | 转换规则 |
+| --- | --- | --- |
+| `expiry.redis.mode` | `cache.instances.<instance>.params.mode` | 直接复制。 |
+| `expiry.redis.endpoints` | `cache.instances.<instance>.params.endpoints` | 补充 `redis://` 或 `rediss://`；裸 `host:port` 会被拒绝。 |
+| `expiry.redis.tls` | endpoint scheme | 保留显式 `redis://` 或 `rediss://` scheme；仅将 `tls=true` 的裸 endpoint 转为 `rediss://`。 |
+| `expiry.redis.username` | `cache.instances.<instance>.params.username` | 直接复制。 |
+| `expiry.redis.password_env` | `cache.instances.<instance>.params.password_env` | 直接复制。 |
+| `expiry.redis.password` | `cache.instances.<instance>.params.password` | 直接复制；新部署建议使用 `password_env`。 |
+| `expiry.redis.connect_timeout_seconds` | `connect_timeout_ms` | 乘以 1000。 |
+| `expiry.redis.socket_timeout_seconds` | `command_timeout_ms` | 乘以 1000。 |
+| `expiry.redis.max_connections` | `pool_size` | 直接复制。 |
+| `expiry.redis.request_budget_seconds` | `expiry.request_budget_seconds` | 直接复制。 |
+| `expiry.redis.max_inflight_requests` | `expiry.max_inflight_requests` | 直接复制。 |
 
 ##### 单 session 自动 commit 策略
 
