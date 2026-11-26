@@ -329,12 +329,14 @@ pub(super) async fn dispatch(
                 }
                 McpCommands::Mounts {
                     mcp,
+                    status,
                     tool,
                     target_uri,
                 } => {
                     commands::mcps::mounts(
                         &client,
-                        &mcp,
+                        mcp.as_deref(),
+                        &status,
                         tool.as_deref(),
                         target_uri.as_deref(),
                         ctx.output_format,

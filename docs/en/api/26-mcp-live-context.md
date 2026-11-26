@@ -16,7 +16,7 @@ This module registers Streamable HTTP MCP servers, synchronizes and searches the
 - Server names may contain only letters, numbers, `_`, and `-`, up to 64 characters. Tool names must be valid OpenViking filenames.
 - Secret HTTP header values submitted at registration are stored in the caller's Privacy. Registry and API `headers` contain ordinary values and relative Privacy references, never plaintext secrets.
 - Tool definitions can live in the user space at `viking://~/tools/<server>/<tool>.json` or in the account-shared space at `viking://agent/tools/<server>/<tool>.json`. Invocation and mount arguments are validated against the tool's `inputSchema`.
-- `target_uri` accepts only `viking://~/tools` or `viking://agent/tools`. Registration defaults to the user space. When omitted, `show`, `status`, `sync`, `remove`, and `mounts` look in the private space first and fall back to the shared space only when the name is absent. Private servers take precedence when both spaces contain the name. An explicit target restricts the operation to that space without fallback. List and search merge both spaces and retain same-named servers.
+- `target_uri` accepts only `viking://~/tools` or `viking://agent/tools`. Registration defaults to the user space. When omitted, `show`, `status`, `sync`, `remove`, and `mounts` with an `mcp` filter look in the private space first and fall back to the shared space only when the name is absent. Private servers take precedence when both spaces contain the name. An explicit target restricts the operation to that space without fallback. List and search merge both spaces and retain same-named servers.
 - Name-based responses identify the selected space through `root_uri`. Once a private server is found, permission errors, missing credentials, or connection failures do not cause fallback to a shared server.
 - Both tools roots are managed directories. Do not mutate them with ordinary `mkdir`, `rm`, `cp`, or `mv`; use the MCP management APIs.
 - A live context node URI must be a Viking URI available to the current account and end in `.md`.
@@ -593,16 +593,36 @@ Mount responses do not include `tags` because vector indexing may still be async
 
 ### List mounts
 
-`GET /api/v1/mcps/mounts` requires `mcp`, accepts an optional `tool`, and uses `target_uri` to select the same-named server's space. Without a target, it selects the private server first and falls back to the shared server when absent, returning mounts only from the selected space. An explicit target restricts the query to that space. The server must still be registered.
+`GET /api/v1/mcps/mounts` accepts optional `mcp` and `tool` filters. Without `mcp`, it lists all readable mounts from the current user's private space and the shared space, including nodes retained after server removal. Set `target_uri` to restrict the query to one space. The `tool` filter can be used independently.
+When `mcp` is provided without a target, lookup selects the private server first and falls back to the shared server only when absent; duplicate names return only the private server's mounts. An explicit target restricts lookup to that space, and the selected server must still be registered. Responses use `root_uris` for both spaces and `root_uri` for a single space.
 Returned `tags` are read from the vector index; the mount database does not keep a separate copy.
 
+Mount status is computed from local tool definitions without contacting the upstream MCP or persisting a status file. Each tool definition is read once per request. Preset arguments are validated only when the input revision changes, using the same classification as `sync`. Status reflects the most recently synchronized local definitions.
+
+| Status | Meaning |
+|--------|---------|
+| `VALID` | The local tool input revision matches the mounted revision |
+| `REVIEW` | The input revision changed and preset arguments still match the new schema |
+| `INVALID` | The input revision changed and preset arguments no longer match the new schema |
+| `REMOVED` | The local tool definition no longer exists |
+| `UNKNOWN` | The local definition cannot be read or is corrupt, so its status cannot be determined |
+
+Set `status=INVALID` (CLI: `--status INVALID`) to filter by status. Multiple values are comma-separated, for example `status=INVALID,REMOVED,UNKNOWN`; omitting the parameter returns all statuses. Supported values are `VALID`, `REVIEW`, `INVALID`, `REMOVED`, and `UNKNOWN`, case-insensitively. Each item includes `status` and `reason`. `total` counts returned nodes, `matched_total` counts readable nodes matching the MCP, tool, and space filters, and `counts` summarizes their statuses. Status filtering does not change `matched_total` or `counts`.
+
 ```python
+result = client.list_mcp_mounts()
 result = client.list_mcp_mounts("weather", tool="current")
 ```
 
 ```bash
+ov mcps mounts
+ov mcps mounts -p viking://agent/tools
 ov mcps mounts --mcp weather --tool current
+ov mcps mounts --status INVALID
+ov mcps mounts --status INVALID,REMOVED,UNKNOWN
 ```
+
+TypeScript callers can use `client.listMCPMounts()` to list all mounts. Go callers can use `client.ListMCPMounts(ctx, "", "")` to omit the MCP and tool filters.
 
 ```json
 {
@@ -618,10 +638,14 @@ ov mcps mounts --mcp weather --tool current
       "title": "Beijing live weather",
       "description": "Query current weather in Beijing",
       "timeout_seconds": 60,
+      "status": "VALID",
+      "reason": "Tool input revision matches the mounted definition",
       "tags": ["source=mcp"],
       "created_at": "2026-10-21T08:30:00+00:00"
     }],
-    "total": 1
+    "total": 1,
+    "matched_total": 1,
+    "counts": {"VALID": 1, "REVIEW": 0, "INVALID": 0, "REMOVED": 0, "UNKNOWN": 0}
   }
 }
 ```

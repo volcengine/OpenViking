@@ -99,6 +99,84 @@ mod credential_tests {
     }
 }
 
+#[cfg(test)]
+mod mount_tests {
+    use super::*;
+    use crate::cli::McpCommands;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct McpTestCli {
+        #[command(subcommand)]
+        command: McpCommands,
+    }
+
+    #[test]
+    fn parses_multiple_mount_statuses_and_defaults_to_all() {
+        for (args, expected) in [
+            (vec!["ov", "mounts"], vec![]),
+            (
+                vec!["ov", "mounts", "--status", "invalid,REMOVED,UNKNOWN"],
+                vec!["INVALID", "REMOVED", "UNKNOWN"],
+            ),
+        ] {
+            let cli = McpTestCli::try_parse_from(args).unwrap();
+            let McpCommands::Mounts { status, .. } = cli.command else {
+                panic!("expected mounts");
+            };
+            assert_eq!(
+                status
+                    .iter()
+                    .map(|value| value.to_uppercase())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_and_empty_mount_statuses() {
+        for status in ["BOGUS", "", "INVALID,"] {
+            assert!(McpTestCli::try_parse_from(["ov", "mounts", "--status", status]).is_err());
+        }
+    }
+
+    #[test]
+    fn invalid_mounts_show_state_reason_and_unfiltered_counts() {
+        let response = json!({"result": {
+            "mounts": [{
+                "node_uri": "viking://resources/weather.md",
+                "tool_uri": "viking://agent/tools/weather/current.json",
+                "status": "INVALID",
+                "reason": "Required argument is missing",
+            }],
+            "total": 1,
+            "matched_total": 3,
+            "counts": {"VALID": 2, "INVALID": 1},
+        }});
+        let rendered = render_mounts_for_table(&response, OutputFormat::Table).unwrap();
+        assert!(rendered.contains("3 live context mounts · 1 shown"));
+        assert!(rendered.contains("INVALID: 1"));
+        assert!(rendered.contains("VALID: 2"));
+        assert!(rendered.contains("   status: INVALID"));
+        assert!(rendered.contains("   reason: Required argument is missing"));
+    }
+
+    #[test]
+    fn empty_invalid_filter_keeps_summary() {
+        let response = json!({"result": {
+            "mounts": [],
+            "total": 0,
+            "matched_total": 2,
+            "counts": {"VALID": 2, "INVALID": 0},
+        }});
+        let rendered = render_mounts_for_table(&response, OutputFormat::Table).unwrap();
+        assert!(rendered.contains("2 live context mounts · 0 shown"));
+        assert!(rendered.contains("VALID: 2"));
+        assert!(rendered.contains("No matching live context mounts found."));
+    }
+}
+
 fn validate_server_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name.len() > 64
@@ -663,14 +741,21 @@ pub async fn unmount(
 
 pub async fn mounts(
     client: &HttpClient,
-    mcp: &str,
+    mcp: Option<&str>,
+    status: &[String],
     tool: Option<&str>,
     target_uri: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    validate_server_name(mcp)?;
-    let mut params = vec![("mcp".to_string(), mcp.to_string())];
+    let mut params = Vec::new();
+    if let Some(mcp) = mcp {
+        validate_server_name(mcp)?;
+        params.push(("mcp".to_string(), mcp.to_string()));
+    }
+    if !status.is_empty() {
+        params.push(("status".to_string(), status.join(",").to_uppercase()));
+    }
     if let Some(tool) = tool {
         params.push(("tool".to_string(), tool.to_string()));
     }
@@ -692,21 +777,39 @@ fn render_mounts_for_table(response: &Value, output_format: OutputFormat) -> Opt
     }
     let payload = response_payload(response);
     let mounts = payload.get("mounts")?.as_array()?;
-    if mounts.is_empty() {
-        return Some(theme::muted("No live context mounts found.").to_string());
-    }
-
     let total = payload
         .get("total")
         .and_then(Value::as_u64)
         .unwrap_or(mounts.len() as u64);
-    let noun = if total == 1 { "mount" } else { "mounts" };
+    let matched_total = payload
+        .get("matched_total")
+        .and_then(Value::as_u64)
+        .unwrap_or(total);
+    let noun = if matched_total == 1 {
+        "mount"
+    } else {
+        "mounts"
+    };
     let mut lines = vec![
-        theme::heading(format!("{total} live context {noun}"))
-            .bold()
-            .to_string(),
-        String::new(),
+        theme::heading(format!(
+            "{matched_total} live context {noun} · {total} shown"
+        ))
+        .bold()
+        .to_string(),
     ];
+    if let Some(counts) = payload.get("counts").and_then(Value::as_object) {
+        let summary = counts
+            .iter()
+            .map(|(status, count)| format!("{status}: {count}"))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        lines.push(summary);
+    }
+    lines.push(String::new());
+    if mounts.is_empty() {
+        lines.push(theme::muted("No matching live context mounts found.").to_string());
+        return Some(lines.join("\n"));
+    }
     for (index, mount) in mounts.iter().enumerate() {
         let mount = mount.as_object()?;
         let node_uri = mount.get("node_uri")?.as_str()?;
@@ -720,6 +823,15 @@ fn render_mounts_for_table(response: &Value, output_format: OutputFormat) -> Opt
             theme::heading(node_uri).bold()
         ));
         lines.push(format!("   {}", theme::sky_value(tool_uri).bold()));
+        let status = mount.get("status").and_then(Value::as_str);
+        if status != Some("VALID") {
+            if let Some(status) = status {
+                lines.push(format!("   status: {status}"));
+            }
+            if let Some(reason) = mount.get("reason").and_then(Value::as_str) {
+                lines.push(format!("   reason: {reason}"));
+            }
+        }
         if let Some(created_at) = mount.get("created_at").and_then(Value::as_str) {
             lines.push(format!(
                 "   {}",

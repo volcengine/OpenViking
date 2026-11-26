@@ -118,15 +118,34 @@ pub(crate) enum McpCommands {
         #[arg(short = 'w', long)]
         wait: bool,
     },
-    /// List live context nodes mounted from an MCP server
+    /// List all live context mounts, optionally filtered by MCP server
     Mounts {
-        /// Registered MCP server name
+        /// Filter by MCP server name; defaults to all servers
         #[arg(long = "mcp", value_name = "name")]
-        mcp: String,
+        mcp: Option<String>,
+        /// Filter by one or more comma-separated mount statuses; defaults to all
+        #[arg(
+            long,
+            value_name = "status",
+            value_delimiter = ',',
+            value_parser = ["VALID", "REVIEW", "INVALID", "REMOVED", "UNKNOWN"],
+            ignore_case = true,
+            hide_possible_values = true,
+            long_help = concat!(
+                "Filter by comma-separated statuses (case-insensitive); defaults to all.\n\n",
+                "Available statuses:\n",
+                "  VALID    Tool input definition matches the mounted version\n",
+                "  REVIEW   Tool input definition changed; preset arguments are still valid\n",
+                "  INVALID  Tool input definition changed; preset arguments are no longer valid\n",
+                "  REMOVED  Local tool definition no longer exists\n",
+                "  UNKNOWN  Local tool definition cannot be read or is corrupt"
+            )
+        )]
+        status: Vec<String>,
         /// Optional MCP tool name
         #[arg(long = "tool", value_name = "tool")]
         tool: Option<String>,
-        /// Restrict to this tools root; defaults to private first, then shared
+        /// Restrict to this tools root; without --mcp, defaults to both spaces
         #[arg(short = 'p', long = "uri", value_name = "uri")]
         target_uri: Option<String>,
     },

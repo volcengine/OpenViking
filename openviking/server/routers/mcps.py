@@ -171,12 +171,15 @@ async def batch_unmount_mcp_tools(
 
 @router.get("/mounts")
 async def list_mcp_mounts(
-    mcp: str = Query(),
+    mcp: str | None = Query(default=None),
     tool: str | None = Query(default=None),
     target_uri: str | None = Query(default=None),
+    status: str | None = Query(default=None, description="Comma-separated mount statuses"),
     ctx: RequestContext = Depends(get_request_context),
 ):
     kwargs = {"target_uri": target_uri} if target_uri is not None else {}
+    if status is not None:
+        kwargs["status"] = status
     result = await get_service().mcps.mounts(mcp, tool, ctx, **kwargs)
     return Response(status="ok", result=result)
 

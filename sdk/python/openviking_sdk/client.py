@@ -1209,11 +1209,13 @@ class AsyncHTTPClient:
 
     async def list_mcp_mounts(
         self,
-        mcp: str,
+        mcp: Optional[str] = None,
         tool: Optional[str] = None,
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:
-        params: Dict[str, Any] = {"mcp": mcp}
+        params: Dict[str, Any] = {}
+        if mcp is not None:
+            params["mcp"] = mcp
         if tool is not None:
             params["tool"] = tool
         if target_uri is not None:
@@ -3091,7 +3093,7 @@ class SyncHTTPClient:
 
     def list_mcp_mounts(
         self,
-        mcp: str,
+        mcp: Optional[str] = None,
         tool: Optional[str] = None,
         target_uri: Optional[str] = None,
     ) -> Dict[str, Any]:

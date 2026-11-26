@@ -457,9 +457,9 @@ export class OpenVikingClient {
       },
     });
   }
-  /** List live context mounts for one MCP server and optional tool. */
+  /** List live context mounts, optionally filtered by MCP server and tool. */
   listMCPMounts(
-    mcp: string,
+    mcp?: string,
     tool?: string,
     targetUri?: string,
   ): Promise<JsonObject> {

@@ -15,7 +15,7 @@
 - Server 名称只能包含字母、数字、`_` 和 `-`，最长 64 个字符。工具名必须能作为 OpenViking 文件名使用。
 - 注册时提交的机密 HTTP Header 值保存至当前用户 Privacy，注册表和 API 中的 `headers` 只包含普通值和相对 Privacy 引用，不包含机密明文。
 - 工具目录可以位于用户空间 `viking://~/tools/<server>/<tool>.json`，也可以位于账号共享空间 `viking://agent/tools/<server>/<tool>.json`。调用和挂载参数会按工具的 `inputSchema` 校验。
-- `target_uri` 只接受 `viking://~/tools` 或 `viking://agent/tools`。注册未指定时使用用户空间；`show`、`status`、`sync`、`remove` 和 `mounts` 未指定时先找个人 MCP，个人不存在才找公共 MCP，同名时操作个人 MCP。显式指定后只操作目标空间，未找到时不回退。列出和检索未指定时合并两个空间，同名 Server 均保留。
+- `target_uri` 只接受 `viking://~/tools` 或 `viking://agent/tools`。注册未指定时使用用户空间；`show`、`status`、`sync`、`remove` 和指定 `mcp` 的 `mounts` 未指定时先找个人 MCP，个人不存在才找公共 MCP，同名时操作个人 MCP。显式指定后只操作目标空间，未找到时不回退。列出和检索未指定时合并两个空间，同名 Server 均保留。
 - 按名称操作的响应通过 `root_uri` 标识实际命中的空间。已找到个人 MCP 后，权限不足、凭证缺失或连接失败不会回退到公共 MCP。
 - 两个 tools 目录都是受管目录，不能通过普通 `mkdir`、`rm`、`cp` 或 `mv` 修改，应使用 MCP 管理接口。
 - 实时上下文节点 URI 必须是当前账号可访问的 Viking URI，并以 `.md` 结尾。
@@ -595,16 +595,36 @@ ov mcps mount \
 
 ### 查询挂载
 
-`GET /api/v1/mcps/mounts` 的 `mcp` 查询参数必填，`tool` 可选，`target_uri` 用于选择同名 Server 所属空间；未指定时先找个人 MCP，个人不存在才找公共 MCP，挂载结果仅来自命中空间。指定后只查询目标空间。Server 必须仍处于已注册状态。
+`GET /api/v1/mcps/mounts` 的 `mcp` 和 `tool` 查询参数均可选。不传 `mcp` 时列出当前用户个人空间和公共空间的全部可读挂载节点，包括 Server 删除后仍保留的节点；传入 `target_uri` 后只查询该空间。`tool` 可以独立筛选工具名。
+传入 `mcp` 时，未指定 `target_uri` 则先找个人 MCP，个人不存在才找公共 MCP，同名时只返回个人 MCP 的挂载。显式指定后只查询目标空间；此时 Server 必须仍处于已注册状态。查询两个空间时响应返回 `root_uris`，查询单一空间时返回 `root_uri`。
 响应中的 `tags` 从向量索引读取，挂载数据库不再保存独立副本。
 
+查询会根据本地工具定义动态计算状态，不连接上游 MCP，也不保存状态文件。同一个工具定义在一次查询中只读取一次；只有 input revision 变化时才重新校验预设参数，和 `sync` 共用判断逻辑。状态反映最近一次同步到本地的工具定义。
+
+| 状态 | 含义 |
+|------|------|
+| `VALID` | 本地工具 input revision 与挂载时一致 |
+| `REVIEW` | input revision 已变化，预设参数仍符合新 schema |
+| `INVALID` | input revision 已变化，预设参数不再符合新 schema |
+| `REMOVED` | 本地工具定义已不存在 |
+| `UNKNOWN` | 本地工具定义无法读取或损坏，无法判断状态 |
+
+`status=INVALID`（CLI：`--status INVALID`）按状态筛选，支持逗号分隔的多个值，例如 `status=INVALID,REMOVED,UNKNOWN`；省略时返回全部状态。支持 `VALID`、`REVIEW`、`INVALID`、`REMOVED`、`UNKNOWN`，大小写不敏感。每项包含 `status` 和 `reason`。`total` 为返回的节点数，`matched_total` 为按 MCP、工具、空间和权限筛选后的节点总数，`counts` 为这些节点的各状态统计；状态筛选不改变 `matched_total` 和 `counts`。
+
 ```python
+result = client.list_mcp_mounts()
 result = client.list_mcp_mounts("weather", tool="current")
 ```
 
 ```bash
+ov mcps mounts
+ov mcps mounts -p viking://agent/tools
 ov mcps mounts --mcp weather --tool current
+ov mcps mounts --status INVALID
+ov mcps mounts --status INVALID,REMOVED,UNKNOWN
 ```
+
+TypeScript 使用 `client.listMCPMounts()` 查询全部挂载；Go 使用 `client.ListMCPMounts(ctx, "", "")` 省略 MCP 和工具筛选。
 
 ```json
 {
@@ -620,10 +640,14 @@ ov mcps mounts --mcp weather --tool current
       "title": "北京实时天气",
       "description": "查询北京当前天气",
       "timeout_seconds": 60,
+      "status": "VALID",
+      "reason": "Tool input revision matches the mounted definition",
       "tags": ["source=mcp"],
       "created_at": "2026-10-21T08:30:00+00:00"
     }],
-    "total": 1
+    "total": 1,
+    "matched_total": 1,
+    "counts": {"VALID": 1, "REVIEW": 0, "INVALID": 0, "REMOVED": 0, "UNKNOWN": 0}
   }
 }
 ```

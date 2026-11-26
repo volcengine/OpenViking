@@ -251,9 +251,12 @@ func (c *Client) BatchUnmountMCPTools(ctx context.Context, nodeURIs []string, op
 	return result, err
 }
 
-// ListMCPMounts lists live context mounts for one MCP server and optional tool.
+// ListMCPMounts lists live context mounts; empty mcp and tool strings omit those filters.
 func (c *Client) ListMCPMounts(ctx context.Context, mcp string, tool string, targetURI ...string) (map[string]any, error) {
-	query := url.Values{"mcp": []string{mcp}}
+	query := url.Values{}
+	if mcp != "" {
+		query.Set("mcp", mcp)
+	}
 	if tool != "" {
 		query.Set("tool", tool)
 	}

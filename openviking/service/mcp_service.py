@@ -65,6 +65,7 @@ _TOOL_URI_RE = re.compile(
 _AGENT_TOOLS_ROOT = "viking://agent/tools"
 _REGISTRY_VERSION = 1
 _DEFAULT_TIMEOUT_SECONDS = 30.0
+_MOUNT_STATUSES = ("VALID", "REVIEW", "INVALID", "REMOVED", "UNKNOWN")
 _MOUNT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS live_context_nodes (
     node_uri TEXT PRIMARY KEY,
@@ -870,43 +871,34 @@ class MCPService:
                     current["input_revision"] if current is not None else None
                 ),
             }
-            if current is None:
-                affected.append(
-                    {
-                        **item,
-                        "status": "REMOVED",
-                        "reason": "Tool is no longer provided by the MCP server",
-                    }
-                )
-                continue
-            if row["input_revision"] == current["input_revision"]:
-                continue
-
-            try:
-                arguments = json.loads(row["args_json"])
-                if not isinstance(arguments, dict):
-                    raise ValueError("mounted arguments are not a JSON object")
-                self._validate_tool_arguments(current, arguments)
-            except (InvalidArgumentError, RuntimeError, ValueError) as exc:
-                affected.append(
-                    {
-                        **item,
-                        "status": "INVALID",
-                        "reason": f"Tool input revision changed; {exc}",
-                    }
-                )
-            else:
-                affected.append(
-                    {
-                        **item,
-                        "status": "REVIEW",
-                        "reason": (
-                            "Tool input revision changed; mounted arguments remain valid "
-                            "under the current input schema"
-                        ),
-                    }
-                )
+            state = self._mount_status(row, current)
+            if state["status"] != "VALID":
+                affected.append({**item, **state})
         return affected
+
+    def _mount_status(self, row: sqlite3.Row, current: dict[str, Any] | None) -> dict[str, str]:
+        """Classify a mount using the local tool definition, without contacting its server."""
+        if current is None:
+            return {"status": "REMOVED", "reason": "Tool is no longer provided by the MCP server"}
+        if row["input_revision"] == current["input_revision"]:
+            return {
+                "status": "VALID",
+                "reason": "Tool input revision matches the mounted definition",
+            }
+        try:
+            arguments = json.loads(row["args_json"])
+            if not isinstance(arguments, dict):
+                raise ValueError("mounted arguments are not a JSON object")
+            self._validate_tool_arguments(current, arguments)
+        except (InvalidArgumentError, RuntimeError, ValueError) as exc:
+            return {"status": "INVALID", "reason": f"Tool input revision changed; {exc}"}
+        return {
+            "status": "REVIEW",
+            "reason": (
+                "Tool input revision changed; mounted arguments remain valid "
+                "under the current input schema"
+            ),
+        }
 
     @staticmethod
     def _validate_node_uri(uri: str, ctx: RequestContext) -> str:
@@ -1820,43 +1812,88 @@ class MCPService:
 
     async def mounts(
         self,
-        mcp_name: str,
+        mcp_name: str | None,
         tool_name: str | None,
         ctx: RequestContext,
         *,
         target_uri: str | None = None,
+        status: str | None = None,
     ) -> dict[str, Any]:
-        tools_root, _ = await self._resolve_server_registry(mcp_name, ctx, target_uri)
+        statuses = (
+            None if status is None else {value.strip().upper() for value in status.split(",")}
+        )
+        if statuses is not None and not statuses.issubset(_MOUNT_STATUSES):
+            raise InvalidArgumentError(
+                "Invalid mount status; expected comma-separated values from "
+                + ", ".join(_MOUNT_STATUSES),
+                details={"field": "status", "allowed": list(_MOUNT_STATUSES)},
+            )
+        if mcp_name is not None:
+            tools_root, _ = await self._resolve_server_registry(mcp_name, ctx, target_uri)
+            roots = (tools_root,)
+        else:
+            roots = (
+                (self._resolve_tools_root(ctx, target_uri),)
+                if target_uri is not None
+                else self._tools_roots(ctx)
+            )
         if tool_name is not None and not self._valid_tool_name(tool_name):
             raise InvalidArgumentError("Invalid MCP tool name")
 
         connection = await self._open_mount_database(ctx)
         try:
-            query = "SELECT * FROM live_context_nodes WHERE mcp_name = ? AND tool_uri LIKE ?"
-            parameters: tuple[str, ...] = (
-                mcp_name,
-                f"{tools_root}/{mcp_name}/%",
-            )
+            conditions = ["(" + " OR ".join("instr(tool_uri, ?) = 1" for _ in roots) + ")"]
+            parameters = [f"{root}/" for root in roots]
+            if mcp_name is not None:
+                conditions.append("mcp_name = ?")
+                parameters.append(mcp_name)
             if tool_name is not None:
-                query += " AND tool_name = ?"
-                parameters = (
-                    mcp_name,
-                    f"{tools_root}/{mcp_name}/%",
-                    tool_name,
-                )
-            query += " ORDER BY tool_name, node_uri"
+                conditions.append("tool_name = ?")
+                parameters.append(tool_name)
+            query = (
+                "SELECT * FROM live_context_nodes WHERE "
+                + " AND ".join(conditions)
+                + " ORDER BY mcp_name, tool_name, node_uri"
+            )
             rows = connection.execute(query, parameters).fetchall()
         finally:
             self._close_mount_database(connection)
 
         rows = await self._readable_mount_rows(rows, ctx)
+        tools: dict[str, dict[str, Any] | None] = {}
+        errors: dict[str, str] = {}
+        for row in rows:
+            uri = row["tool_uri"]
+            if uri in tools or uri in errors:
+                continue
+            try:
+                tools[uri] = await self._read_tool_document(
+                    uri, row["mcp_name"], row["tool_name"], ctx
+                )
+            except NotFoundError:
+                tools[uri] = None
+            except (OpenVikingError, RuntimeError, OSError) as exc:
+                errors[uri] = f"Cannot inspect the local tool definition ({type(exc).__name__})"
+
+        counts = dict.fromkeys(_MOUNT_STATUSES, 0)
+        selected: list[tuple[sqlite3.Row, dict[str, str]]] = []
+        for row in rows:
+            uri = row["tool_uri"]
+            state = (
+                {"status": "UNKNOWN", "reason": errors[uri]}
+                if uri in errors
+                else self._mount_status(row, tools[uri])
+            )
+            counts[state["status"]] += 1
+            if statuses is None or state["status"] in statuses:
+                selected.append((row, state))
         tags_by_uri = await self._service.fs.get_tags_many(
-            [row["node_uri"] for row in rows],
+            [row["node_uri"] for row, _ in selected],
             ctx,
             check_access=False,
         )
         items = []
-        for row in rows:
+        for row, state in selected:
             data = json.loads(row["data"])
             items.append(
                 {
@@ -1871,13 +1908,20 @@ class MCPService:
                     "timeout_seconds": data["timeout_seconds"],
                     "tags": tags_by_uri.get(row["node_uri"], []),
                     "created_at": row["created_at"],
+                    **state,
                 }
             )
-        return {
-            "root_uri": tools_root,
+        result = {
             "mounts": items,
             "total": len(items),
+            "matched_total": len(rows),
+            "counts": counts,
         }
+        if len(roots) == 1:
+            result["root_uri"] = roots[0]
+        else:
+            result["root_uris"] = list(roots)
+        return result
 
     @staticmethod
     def _parse_live_context_node(content: str) -> tuple[str, dict[str, Any], int] | None:
