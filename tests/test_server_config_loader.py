@@ -57,6 +57,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
                     "host": "0.0.0.0",
                     "port": 1944,
                     "workers": 2,
+                    "enable_task_history_cleanup": False,
                     "executor_threads": 48,
                     "timeout_keep_alive": 120,
                     "auth_mode": "trusted",
@@ -75,6 +76,7 @@ def test_load_server_config_preserves_supported_fields(tmp_path):
     assert config.host == "0.0.0.0"
     assert config.port == 1944
     assert config.workers == 2
+    assert config.enable_task_history_cleanup is False
     assert config.executor_threads == 48
     assert config.timeout_keep_alive == 120
     assert config.auth_mode == "trusted"
@@ -90,6 +92,7 @@ def test_load_server_config_defaults(tmp_path):
 
     config = load_server_config(str(config_path))
 
+    assert config.enable_task_history_cleanup is True
     assert config.timeout_keep_alive == 5
     assert config.executor_threads == 64
 

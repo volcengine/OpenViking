@@ -138,8 +138,8 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
         sessions = Sessions()
 
     class TaskTracker:
-        def start_cleanup_loop(self):
-            return None
+        def start_cleanup_loop(self, *, cleanup_history):
+            assert cleanup_history is False
 
         def stop_cleanup_loop(self):
             return None
@@ -162,7 +162,9 @@ async def test_app_reuses_and_closes_usage_reporter(monkeypatch):
     monkeypatch.setattr("openviking.server.app.get_task_tracker", lambda: TaskTracker())
     monkeypatch.setattr("openviking.server.mcp_endpoint.mcp_lifespan", mcp_lifespan)
 
-    config = ServerConfig.model_validate({"agent_evolution": {"enabled": True}})
+    config = ServerConfig.model_validate(
+        {"agent_evolution": {"enabled": True}, "enable_task_history_cleanup": False}
+    )
     app = create_app(config=config, service=Service())
     async with app.router.lifespan_context(app):
         pass

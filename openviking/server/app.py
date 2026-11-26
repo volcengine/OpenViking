@@ -435,7 +435,7 @@ def create_app(
 
         # Start TaskTracker cleanup loop
         task_tracker = get_task_tracker()
-        task_tracker.start_cleanup_loop()
+        task_tracker.start_cleanup_loop(cleanup_history=config.enable_task_history_cleanup)
 
         # Initialize tracing and OTLP log export from server.observability.
         from openviking.telemetry import tracer_module

@@ -225,7 +225,9 @@ async def test_lifespan_shutdown_ignores_cancelled_service_close(monkeypatch):
     monkeypatch.setattr("openviking.server.app.OpenVikingService", _Service)
     monkeypatch.setattr(
         "openviking.server.app.get_task_tracker",
-        lambda: SimpleNamespace(start_cleanup_loop=lambda: None, stop_cleanup_loop=lambda: None),
+        lambda: SimpleNamespace(
+            start_cleanup_loop=lambda *, cleanup_history: None, stop_cleanup_loop=lambda: None
+        ),
     )
     app = create_app(config=ServerConfig())
 

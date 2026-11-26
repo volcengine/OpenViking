@@ -391,6 +391,10 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    enable_task_history_cleanup: bool = Field(
+        default=True,
+        description="Periodically delete expired Task and Compile history on this node.",
+    )
     executor_threads: int = Field(
         default=64,
         ge=0,

@@ -795,6 +795,29 @@ async def test_sanitize_preserves_safe_error():
 # ── TTL / Eviction ──
 
 
+@pytest.mark.parametrize("cleanup_history", [True, False])
+async def test_periodic_history_cleanup(tracker, monkeypatch, cleanup_history):
+    compile_cleanup = AsyncMock(return_value=0)
+    # End the loop after one sweep reaches the Task store.
+    task_cleanup = AsyncMock(side_effect=asyncio.CancelledError)
+    tracker.compile_history_cleanup = compile_cleanup
+    monkeypatch.setattr(tracker._store, "delete_expired", task_cleanup)
+    monkeypatch.setattr(tracker, "CLEANUP_INTERVAL", 0)
+
+    tracker.start_cleanup_loop(cleanup_history=cleanup_history)
+    try:
+        if cleanup_history:
+            await asyncio.wait_for(tracker._cleanup_task, timeout=1)
+            compile_cleanup.assert_awaited_once()
+            task_cleanup.assert_awaited_once()
+        else:
+            assert tracker._cleanup_task is None
+            compile_cleanup.assert_not_awaited()
+            task_cleanup.assert_not_awaited()
+    finally:
+        tracker.stop_cleanup_loop()
+
+
 @pytest.mark.parametrize("already_missing", [False, True])
 async def test_evict_expired_completed(already_missing):
     agfs = _FakeAgfs()

@@ -297,7 +297,6 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
             await remote.unregister_running_task("task")
 
     worker = asyncio.create_task(execute())
-    polling = None
     try:
         await asyncio.wait_for(started.wait(), 1)
         await getattr(tracker, cancel_method)("task", **OWNER)
@@ -305,18 +304,15 @@ async def test_remote_inline_execution_observes_terminal_cancellation(
         assert await tracker.get_work_state("task", work_ids[0], **OWNER) is WorkState.CANCELLED
         assert not worker.done()
         monkeypatch.setattr("openviking.service.task_tracker._CANCEL_POLL_INTERVAL", 0)
-        polling = asyncio.create_task(remote._cancel_poll_loop())
+        remote.start_cleanup_loop(cleanup_history=False)
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(worker, 1)
         assert remote._work_index.active_tasks_by_owner() == {}
         assert (await tracker.get("task", **OWNER)).status is TaskStatus.CANCELLED
     finally:
         worker.cancel()
-        if polling is not None:
-            polling.cancel()
-        await asyncio.gather(
-            worker, *([polling] if polling is not None else []), return_exceptions=True
-        )
+        remote.stop_cleanup_loop()
+        await asyncio.gather(worker, return_exceptions=True)
 
 
 @pytest.fixture

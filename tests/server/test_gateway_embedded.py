@@ -195,7 +195,9 @@ async def test_server_lifespan_routes_defaults_and_cors(tmp_path, monkeypatch, m
     monkeypatch.setattr(
         server_module,
         "get_task_tracker",
-        lambda: SimpleNamespace(start_cleanup_loop=lambda: None, stop_cleanup_loop=lambda: None),
+        lambda: SimpleNamespace(
+            start_cleanup_loop=lambda *, cleanup_history: None, stop_cleanup_loop=lambda: None
+        ),
     )
 
     async def initialize(app, _service, config):
