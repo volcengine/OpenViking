@@ -552,6 +552,39 @@ test("subagent capture sanitizes injected text before filtering and sending", as
   }
 });
 
+test("skipSubagentSessions approves without capturing subagent turns", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-skip-subagents-"));
+  const transcriptPath = join(root, "subagent.jsonl");
+  const requests = [];
+  try {
+    await writeTranscript(transcriptPath);
+    await withMockOpenViking(async (req, res) => {
+      requests.push({ method: req.method, url: req.url });
+      writeJson(res, { status: "ok", result: {} });
+    }, async (baseUrl) => {
+      const env = {
+        ...hookEnv(root, baseUrl),
+        OPENVIKING_SKIP_SUBAGENT_SESSIONS: "1",
+      };
+      const input = {
+        session_id: "parent-skip-subagents",
+        agent_id: "child-skip-subagents",
+        agent_transcript_path: transcriptPath,
+        cwd: root,
+      };
+
+      const started = await runHook("subagent-start.mjs", input, env);
+      const stopped = await runHook("subagent-stop.mjs", input, env);
+      assert.equal(JSON.parse(started.stdout).decision, "approve");
+      assert.equal(JSON.parse(stopped.stdout).decision, "approve");
+    });
+
+    assert.deepEqual(requests, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("api-request-blob lines are not captured as conversation turns", () => {
   const question = { role: "user", content: [{ type: "text", text: "what does the cursor track?" }] };
   const answer = { role: "assistant", content: [{ type: "text", text: "the number of captured turns" }] };
