@@ -28,14 +28,13 @@ from openviking.retrieve.context_assembler.params import (
 from openviking.retrieve.rerank_scoring import Reranker, RerankScores
 from openviking.retrieve.skill_results import package_abstract, skill_root_uri
 from openviking.server.identity import RequestContext
+from openviking.storage.abstract_overview import ABSTRACT_OVERVIEW_FILENAMES, directory_sidecar_uri
 from openviking.utils.search_filters import merge_context_type_filter
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-LEVEL_SUFFIXES = (".abstract.md", ".overview.md")
 
 
 @dataclass
@@ -139,9 +138,9 @@ def origin_for_uri(uri: str, actor_peer_id: Optional[str], user_root: str) -> st
 def strip_level_suffix(uri: str) -> Tuple[str, bool]:
     """Return ``(node_uri, is_directory)`` for a possibly sidecar-suffixed URI."""
     trimmed = uri.rstrip("/")
-    for suffix in LEVEL_SUFFIXES:
-        if trimmed.endswith(f"/{suffix}"):
-            return trimmed[: -(len(suffix) + 1)], True
+    node_uri, separator, filename = trimmed.rpartition("/")
+    if separator and filename in ABSTRACT_OVERVIEW_FILENAMES:
+        return node_uri, True
     return trimmed, False
 
 
@@ -273,10 +272,12 @@ async def gather_candidates(
                     abstract = ""
                 uri = base_uri = f"{root}/SKILL.md"
                 is_directory = False
-            elif not is_directory and level in (0, 1):
+            elif not is_directory:
                 # Filter-only hits carry node URIs. Restore the sidecar URI for exclusions.
-                uri = f"{base_uri}/{LEVEL_SUFFIXES[level]}"
-                is_directory = True
+                sidecar_uri = directory_sidecar_uri(uri, level)
+                if sidecar_uri != uri:
+                    uri = sidecar_uri
+                    is_directory = True
             # Caller exclusions cover a subtree; ledger-cooled URIs are served
             # entries, so a cooled directory must not hide files added under it.
             if (

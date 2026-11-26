@@ -37,7 +37,12 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-ABSTRACT_OVERVIEW_FILENAMES = frozenset({".abstract.md", ".overview.md"})
+_SIDECAR_SUFFIX_BY_LEVEL = {
+    ContextLevel.ABSTRACT: "/.abstract.md",
+    ContextLevel.OVERVIEW: "/.overview.md",
+}
+_SIDECAR_SUFFIXES = tuple(_SIDECAR_SUFFIX_BY_LEVEL.values())
+ABSTRACT_OVERVIEW_FILENAMES = frozenset(suffix[1:] for suffix in _SIDECAR_SUFFIXES)
 EMBEDDING_METADATA_FIELDS = ("directory",)
 _METADATA_ORDER = ("directory", "source", "generated_by", "freshness")
 _MARKDOWN_URI_SAFE_ASCII = frozenset(
@@ -83,6 +88,16 @@ def is_abstract_overview_uri(uri: str) -> bool:
     """Return whether uri names one of the two generated sidecars."""
 
     return uri.rstrip("/").rsplit("/", 1)[-1] in ABSTRACT_OVERVIEW_FILENAMES
+
+
+def directory_sidecar_uri(uri: str, level: int) -> str:
+    """Reconstruct the sidecar URI for a directory-level retrieval result."""
+    suffix = _SIDECAR_SUFFIX_BY_LEVEL.get(level)
+    if not uri or suffix is None or uri.endswith(_SIDECAR_SUFFIXES):
+        return uri
+    if not uri.endswith("://"):
+        uri = uri.rstrip("/")
+    return uri + suffix
 
 
 def _normalize_directory_uri(dir_uri: str) -> str:

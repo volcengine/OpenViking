@@ -22,7 +22,11 @@ from openviking.observability.reporting.token_sources import bind_dashboard_toke
 from openviking.retrieve.rerank_scoring import RerankScores, finite_score, rerank_scores
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext
-from openviking.storage.abstract_overview import AbstractOverviewFormatError, body_for_preview
+from openviking.storage.abstract_overview import (
+    AbstractOverviewFormatError,
+    body_for_preview,
+    directory_sidecar_uri,
+)
 from openviking.storage.expr import FilterExpr
 from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 from openviking.telemetry import get_current_telemetry
@@ -67,7 +71,6 @@ class HierarchicalRetriever:
     """Global retriever with dense and sparse vector support."""
 
     RERANK_CANDIDATE_MULTIPLIER = 2
-    LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
         self,
@@ -327,7 +330,7 @@ class HierarchicalRetriever:
         for c in candidates:
             final_score = self._finite_score(c.get("_final_score", c.get("_score", 0.0)))
             level = c.get("level", 2)
-            display_uri = self._append_level_suffix(c.get("uri", ""), level)
+            display_uri = directory_sidecar_uri(c.get("uri", ""), level)
             abstract = c.get("abstract", "")
             if level in {ContextLevel.ABSTRACT, ContextLevel.OVERVIEW}:
                 # New records persist body-only rerank scalars, but imported or
@@ -371,17 +374,3 @@ class HierarchicalRetriever:
             )
         results.sort(key=lambda x: x.score, reverse=True)
         return results
-
-    @classmethod
-    def _append_level_suffix(cls, uri: str, level: int) -> str:
-        """Return user-facing URI with L0/L1 suffix reconstructed by level."""
-        suffix = cls.LEVEL_URI_SUFFIX.get(level)
-        if not uri or not suffix:
-            return uri
-        if uri.endswith(f"/{suffix}"):
-            return uri
-        if uri.endswith("/.abstract.md") or uri.endswith("/.overview.md"):
-            return uri
-        if uri.endswith("/") and not uri.endswith("://"):
-            uri = uri.rstrip("/")
-        return f"{uri}/{suffix}"
