@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -264,8 +265,12 @@ class SessionManager:
             created_at = None
             session_key_from_metadata = None
 
-            with open(path, encoding="utf-8") as f:
+            appendable = False
+            with open(path, "rb") as f:
                 for line in f:
+                    # A newline commits an appended record, including its UTF-8 payload.
+                    if appendable and not line.endswith(b"\n"):
+                        break
                     line = line.strip()
                     if not line:
                         continue
@@ -273,6 +278,7 @@ class SessionManager:
                     data = json.loads(line)
 
                     if data.get("_type") == "metadata":
+                        appendable = data.get("append_messages") is True
                         metadata = data.get("metadata", {})
                         created_at = (
                             datetime.fromisoformat(data["created_at"])
@@ -290,12 +296,15 @@ class SessionManager:
 
             effective_key = session_key_from_metadata if session_key_from_metadata else session_key
 
-            return Session(
+            session = Session(
                 key=effective_key,
                 messages=messages,
                 created_at=created_at or datetime.now(),
                 metadata=metadata,
             )
+            if appendable:
+                session.updated_at = datetime.fromtimestamp(path.stat().st_mtime)
+            return session
         except Exception as e:
             raise RuntimeError(f"Failed to load session from {path}: {e}") from e
 
@@ -308,7 +317,55 @@ class SessionManager:
                 session.metadata = self._merge_metadata(latest.metadata, session.metadata)
             self._save_unlocked(session)
 
-    def _save_unlocked(self, session: Session) -> None:
+    async def append_messages(
+        self,
+        session_key: SessionKey,
+        messages: list[dict[str, Any]],
+        *,
+        skip_heartbeat: bool = False,
+    ) -> None:
+        """Append messages in order under the session lock and update the cached history."""
+        if not messages:
+            return
+        batch = Session(key=session_key)
+        for message in messages:
+            batch.add_message(**message)
+        payload = "".join(json.dumps(m, ensure_ascii=False) + "\n" for m in batch.messages).encode()
+        path = self._get_session_path(session_key)
+        async with self._get_lock(session_key):
+            if not path.exists():
+                session = self.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
+                # Publish the header and first messages together before exposing the session on disk.
+                session.messages.extend(batch.messages)
+                try:
+                    self._save_unlocked(session, appendable=True)
+                except Exception:
+                    del session.messages[-len(batch.messages) :]
+                    raise
+                return
+
+            with path.open("a+b") as stream:
+                stream.seek(-1, os.SEEK_END)
+                if stream.read(1) != b"\n":
+                    # Discard only the unterminated record left by an interrupted append.
+                    stream.seek(0)
+                    for line in stream:
+                        if not line.endswith(b"\n"):
+                            stream.truncate(stream.tell() - len(line))
+                original_size = stream.seek(0, os.SEEK_END)
+                fd = stream.fileno()
+                try:
+                    if os.write(fd, payload) != len(payload):
+                        raise OSError("Incomplete session append")
+                except OSError:
+                    os.ftruncate(fd, original_size)
+                    raise
+                cached = self._cache.get(session_key)
+                if cached is not None:
+                    cached.messages.extend(batch.messages)
+                    cached.updated_at = datetime.fromtimestamp(os.fstat(fd).st_mtime)
+
+    def _save_unlocked(self, session: Session, *, appendable: bool = False) -> None:
         """Persist a session while holding the per-session lock."""
         path = self._get_session_path(session.key)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -323,6 +380,8 @@ class SessionManager:
                     "updated_at": session.updated_at.isoformat(),
                     "metadata": session.metadata,
                 }
+                if appendable:
+                    metadata_line["append_messages"] = True
                 f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
 
                 for msg in session.messages:
@@ -338,6 +397,8 @@ class SessionManager:
         if legacy_path is not None:
             legacy_path.unlink(missing_ok=True)
 
+        if appendable:
+            session.updated_at = datetime.fromtimestamp(path.stat().st_mtime)
         self._cache[session.key] = session
 
     async def update_session(
@@ -426,7 +487,7 @@ class SessionManager:
 
         for path in self.sessions_dir.glob("*.jsonl"):
             try:
-                with open(path, encoding="utf-8") as f:
+                with open(path, "rb") as f:
                     first_line = f.readline().strip()
                     if first_line:
                         data = json.loads(first_line)
@@ -441,7 +502,11 @@ class SessionManager:
                             session_info = {
                                 "key": session_key,
                                 "created_at": data.get("created_at"),
-                                "updated_at": data.get("updated_at"),
+                                "updated_at": datetime.fromtimestamp(
+                                    path.stat().st_mtime
+                                ).isoformat()
+                                if data.get("append_messages") is True
+                                else data.get("updated_at"),
                                 "metadata": metadata,
                                 "path": str(path),
                             }

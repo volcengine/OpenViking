@@ -318,9 +318,9 @@ class BotCompileService:
                     instruction = normalized_request.model_dump_json(
                         by_alias=True, exclude={"conversation_id"}, exclude_none=True
                     )
-                    await self.agent_loop.sessions.update_session(
+                    await self.agent_loop.sessions.append_messages(
                         task.conversation_key,
-                        lambda session: session.add_message("user", instruction, task_id=task_id),
+                        [{"role": "user", "content": instruction, "task_id": task_id}],
                         skip_heartbeat=True,
                     )
                 except Exception as exc:

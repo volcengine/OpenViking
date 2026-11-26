@@ -1,5 +1,6 @@
 """Regression tests for portable Bot session persistence paths."""
 
+import asyncio
 import json
 import os
 import unicodedata
@@ -147,6 +148,48 @@ def test_legacy_session_is_loaded_then_lazily_migrated_on_save(tmp_path):
     assert SessionManager(tmp_path / "bot").get_or_create(key).messages[0]["content"] == (
         "legacy history"
     )
+
+
+async def test_append_messages_shares_lock_and_preserves_history(tmp_path):
+    key = SessionKey(type="compile", channel_id="owner", chat_id="history")
+    manager = SessionManager(tmp_path)
+    message = {"role": "assistant", "content": "first"}
+    await manager.append_messages(key, [message])
+    session = manager.get_or_create(key)
+    path = manager._get_session_path(key)
+    prefix, inode = path.read_bytes(), path.stat().st_ino
+
+    async with manager._get_lock(key):
+        pending = asyncio.create_task(
+            manager.append_messages(key, [{**message, "content": "second"}])
+        )
+        await asyncio.sleep(0)
+        assert not pending.done()
+    await pending
+
+    assert path.stat().st_ino == inode and path.read_bytes().startswith(prefix)
+    assert [m["content"] for m in session.messages] == ["first", "second"]
+
+
+async def test_interrupted_append_recovers_complete_lines(tmp_path, monkeypatch):
+    manager = SessionManager(tmp_path)
+    key = SessionKey(type="compile", channel_id="owner", chat_id="interrupted")
+    message = {"role": "user", "content": "complete"}
+    await manager.append_messages(key, [message])
+    path = manager._get_session_path(key)
+    prefix = path.read_bytes()
+    write = os.write
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "write", lambda fd, data: write(fd, data[:5]))
+        with pytest.raises(OSError, match="Incomplete session append"):
+            await manager.append_messages(key, [message])
+    assert path.read_bytes() == prefix
+
+    with path.open("ab") as stream:
+        stream.write(b'{"content":"\xe4\xb8')
+    await manager.append_messages(key, [{**message, "content": "recovered"}])
+    history = SessionManager(tmp_path).get_or_create(key).messages
+    assert [m["content"] for m in history] == ["complete", "recovered"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows cannot create the legacy colon filename")

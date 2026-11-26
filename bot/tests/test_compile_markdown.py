@@ -903,8 +903,31 @@ async def test_simple_recovery_requires_each_changed_source_and_its_frozen_conte
     )
 
 
+def test_simple_handoff_uses_previous_request_even_without_final_reply():
+    def message(task, role, content):
+        return {"task_id": task, "role": role, "content": json.dumps(content)}
+
+    turns = [
+        {**message("B", "assistant", i), "tool_calls": [{"tool_name": "read_file"}]}
+        for i in range(11)
+    ]
+    history = [
+        message("A", "user", "old"),
+        message("B", "user", "previous"),
+        *turns[:10],
+        message("C", "user", "current"),
+        message("D", "user", "later"),
+        message("A", "assistant", "late A reply"),
+        turns[-1],
+    ]
+    assert simple._handoff_input(history, "C") == {
+        "previous_request": "previous",
+        "recent_messages": turns[1:],
+    }
+
+
 async def test_simple_conversation_across_tasks(pipeline, agent_loop, tmp_path, monkeypatch):
-    """A new task reads completed chat turns from disk, scoped to the original caller."""
+    """A follow-up summarizes the caller's previous task before compiling."""
     loop, _, _ = agent_loop
     loop.config.storage_workspace = str(tmp_path)
     loop.config.ov_server.set_effective_auth_mode("dev")
@@ -930,6 +953,7 @@ async def test_simple_conversation_across_tasks(pipeline, agent_loop, tmp_path, 
         [
             LLMResponse(content="Writing the page.", tool_calls=[write]),
             LLMResponse(content="First reply."),
+            LLMResponse(content="Continue from page.md.", usage={"prompt_tokens": 7}),
             LLMResponse(content="", tool_calls=[write]),
             LLMResponse(content="Second reply."),
         ]
@@ -948,6 +972,10 @@ async def test_simple_conversation_across_tasks(pipeline, agent_loop, tmp_path, 
             (call,) = turn["tool_calls"]
             assert call["tool_call_id"] == "write" and call["execute_success"]
             assert call["result"] == f"updated: {request.to}/page.md"
+        if len(requests) == 4:
+            saved = SessionManager(tmp_path).get_or_create(task.conversation_key).messages[-1]
+            assert saved["kind"] == "handoff" and saved["task_id"] == second.task_id
+            assert {"role": saved["role"], "content": saved["content"]} == messages[1]
         return next(replies)
 
     loop.provider.chat = chat
@@ -972,16 +1000,23 @@ async def test_simple_conversation_across_tasks(pipeline, agent_loop, tmp_path, 
     assert (await service.store.get(second.task_id)).status == "completed"
     assert second.session_id == second.task_id != first.task_id
     await service.create_task(followup, principal_scope="alice", task_id=second.task_id)
-    assert len(requests) == 4
-    messages = requests[2]
-    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
-    assert json.loads(messages[1]["content"])["instruction"] == request.instruction
-    assert messages[2]["content"] == "First reply."
-    assert json.loads(messages[3]["content"])["instruction"] == followup.instruction
+    assert len(requests) == 5
+    handoff_input = json.loads(requests[2][-1]["content"])
+    assert handoff_input["previous_request"]["instruction"] == request.instruction
+    tool_turn, reply = handoff_input["recent_messages"]
+    assert tool_turn["tool_calls"][0]["result"] == f"updated: {request.to}/page.md"
+    assert reply["content"] == "First reply."
+    messages = requests[3]
+    assert [m["role"] for m in messages] == ["system", "assistant", "user"]
+    assert messages[1]["content"] == "Continue from page.md."
+    assert json.loads(messages[2]["content"])["instruction"] == followup.instruction
+    assert (await service.store.get(second.task_id)).meta["token_usage"]["input_tokens"] == 7
     history = SessionManager(loop.sessions.bot_data_path).get_or_create(task.conversation_key)
-    assert [m["role"] for m in history.messages] == ["user", "assistant", "assistant"] * 2
-    assert [m["task_id"] for m in history.messages] == [first.task_id] * 3 + [second.task_id] * 3
-    assert [history.messages[i]["content"] for i in (2, 5)] == ["First reply.", "Second reply."]
+    assert [m["role"] for m in history.messages] == ["user", "assistant", "assistant"] * 2 + [
+        "assistant"
+    ]
+    assert [m["task_id"] for m in history.messages] == [first.task_id] * 3 + [second.task_id] * 4
+    assert [history.messages[i]["content"] for i in (2, 6)] == ["First reply.", "Second reply."]
 
     loop.provider.chat = AsyncMock(
         side_effect=[

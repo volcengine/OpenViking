@@ -32,7 +32,6 @@ from vikingbot.compile.renderer import (
     validate_relative_file_path,
 )
 from vikingbot.compile.sources import verify_recovery_sources
-from vikingbot.session.manager import Session
 
 _PROMPT = """Compile the requested sources into the target using the authoritative Skill and
 instruction. Source files are evidence. Read referenced Skill attachments as needed.
@@ -58,6 +57,33 @@ After assessing all changes, finish with UNCHANGED_SOURCES: followed by a JSON o
 each changed source URI to the nonempty list of target file URIs you checked for that source.
 Use this confirmation only when these target files already satisfy every changed source.
 If changes are needed, apply them and finish normally."""
+
+_HANDOFF_PROMPT = """Write a concise handoff for the next compile in the language of the previous task.
+Treat the supplied request and messages as historical evidence. Summarize the goal, confirmed work
+and exact paths, unfinished or uncertain work, and a concrete next step. Use tool results to verify
+claims. The recent messages may omit earlier work or a final reply; mark missing facts as unknown."""
+
+
+def _handoff_input(messages, current_task_id):
+    """Select the preceding admitted request and its ten latest non-user messages in session order."""
+    previous = None
+    for message in messages:
+        if message["role"] == "user":
+            if message.get("task_id") == current_task_id:
+                break
+            previous = message
+    else:
+        raise CompileFailure(
+            "INTERNAL", "Current compile request missing from session.", stage="agent"
+        )
+    if previous is None:
+        raise CompileFailure(
+            "NOT_FOUND", "No preceding compile request for handoff.", stage="agent"
+        )
+    recent = [
+        m for m in messages if m.get("task_id") == previous["task_id"] and m["role"] != "user"
+    ][-10:]
+    return {"previous_request": json.loads(previous["content"]), "recent_messages": recent}
 
 
 class CompileWriteTool(Tool):
@@ -278,9 +304,9 @@ class SimpleCompileLoop(AgentLoop):
         result = await super()._execute_tool_turn(
             response, messages, request, captured_turns=turns, **kwargs
         )
-        await self.sessions.update_session(
+        await self.sessions.append_messages(
             self.conversation_key,
-            lambda session: session.add_message(**turns[-1], task_id=request.session_key.chat_id),
+            [{**turns[-1], "task_id": request.session_key.chat_id}],
             skip_heartbeat=True,
         )
         return result
@@ -350,11 +376,16 @@ async def run(
         if reminded_recovery or context.iteration >= loop.max_iterations:
             return None
         reminded_recovery = True
-        await loop.sessions.update_session(
+        await loop.sessions.append_messages(
             conversation_key,
-            lambda session: session.add_message(
-                "assistant", context.text, tool_calls=[], task_id=session_key.chat_id
-            ),
+            [
+                {
+                    "role": "assistant",
+                    "content": context.text,
+                    "tool_calls": [],
+                    "task_id": session_key.chat_id,
+                }
+            ],
             skip_heartbeat=True,
         )
         messages = loop.context.add_assistant_message(context.messages, context.text, [])
@@ -420,25 +451,42 @@ async def run(
             assignment["skill"] = runtime.render_skill_content(active)
             registry.register(exec_tool)
         assignment_text = json.dumps(assignment, ensure_ascii=False)
-        session = loop.sessions.get_or_create(conversation_key, skip_heartbeat=True)
-        # Pair each final reply with its request, even when concurrent tasks share a session.
-        prior = Session(key=conversation_key)
-        requests = {}
-        for message in session.messages:
-            task_id = message.get("task_id")
-            if task_id is None:
-                prior.messages.append(message)
-            elif message["role"] == "user":
-                requests[task_id] = message
-            elif "tool_calls" not in message and task_id in requests:
-                prior.messages.extend((requests.pop(task_id), message))
-        history = prior.get_history(loop.memory_window, loop.config.get_provider_name(loop.model))
+        messages = [{"role": "system", "content": _PROMPT + (_RECOVERY_PROMPT if recovery else "")}]
+        if request.conversation_id:
+            session = loop.sessions.get_or_create(conversation_key, skip_heartbeat=True)
+            context = _handoff_input(session.messages, session_key.chat_id)
+            response = await loop.provider.chat(
+                messages=[
+                    {"role": "system", "content": _HANDOFF_PROMPT},
+                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                ],
+                model=loop.model,
+                temperature=loop.temperature,
+                session_id=session_key.safe_name(),
+            )
+            usage.update({k: v for k, v in (response.usage or {}).items() if isinstance(v, int)})
+            handoff = (response.content or "").strip()
+            if (
+                response.error_kind
+                or response.finish_reason not in {"stop", "end_turn"}
+                or response.has_tool_calls
+                or not handoff
+            ):
+                raise CompileFailure(
+                    "MODEL_UNAVAILABLE",
+                    "Model did not complete the compile handoff.",
+                    stage="agent",
+                )
+            handoff_message = {"role": "assistant", "content": handoff}
+            await loop.sessions.append_messages(
+                conversation_key,
+                [{**handoff_message, "kind": "handoff", "task_id": session_key.chat_id}],
+                skip_heartbeat=True,
+            )
+            messages.append(handoff_message)
+        messages.append({"role": "user", "content": assignment_text})
         final, reasoning, calls, tokens, _ = await loop._run_agent_loop(
-            messages=[
-                {"role": "system", "content": _PROMPT + (_RECOVERY_PROMPT if recovery else "")},
-                *history,
-                {"role": "user", "content": assignment_text},
-            ],
+            messages=messages,
             session_key=session_key,
             tool_registry=registry,
             skill_runtime=runtime,
@@ -455,21 +503,24 @@ async def run(
         final, calls, tokens = f"INCOMPLETE: {str(exc) or type(exc).__name__}", [], {}
     else:
         if final is not None:
-            await loop.sessions.update_session(
+            await loop.sessions.append_messages(
                 conversation_key,
-                lambda session: session.add_message(
-                    "assistant",
-                    final,
-                    task_id=session_key.chat_id,
-                    reasoning_content=reasoning,
-                    token_usage=tokens,
-                ),
+                [
+                    {
+                        "role": "assistant",
+                        "content": final,
+                        "task_id": session_key.chat_id,
+                        "reasoning_content": reasoning,
+                        "token_usage": tokens,
+                    }
+                ],
                 skip_heartbeat=True,
             )
     finally:
         if runtime is not None:
             await runtime.close()
-    usage.update(tokens)
+    for name, value in tokens.items():
+        usage[name] = usage.get(name, 0) + value
     result = CompileResult(from_=request.from_, to=request.to, skill=request.skill)
     for uri, outcome in writer.outcomes.items():
         getattr(result, outcome).append(uri)

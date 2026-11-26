@@ -97,7 +97,7 @@ POST /api/v1/compile
 
 VikingBot Simple 模式接受正整数 `args.loop_turn`，将本次任务的最大轮数设为 `max(150, loop_turn)`，任务可以提前完成。例如 `--args '{"loop_turn":300}'` 允许最多 300 轮。省略或传入其他类型、非正数时沿用服务默认上限（通常为 150 轮）。Complex 模式忽略此参数。
 
-VikingBot Simple 模式在 Runtime 受理任务时创建本地对话，默认会话 ID 为本次任务 ID。后续运行传入 `--args '{"session-id":"cmp_…"}'` 即可读取当前调用者在该会话中已保存的提问和回复，再追加本次编译指令。每次运行返回独立的任务 ID，供查询和取消使用。
+VikingBot Simple 模式在 Runtime 受理任务时创建本地对话，默认会话 ID 为本次任务 ID。后续运行传入 `--args '{"session-id":"cmp_…"}'` 时，Runtime 会先调用一次模型，使用同一会话中紧邻本次受理的上一任务请求及其最近最多 10 条后续消息生成交接摘要，再带着摘要执行本次编译。每次运行返回独立的任务 ID，供查询和取消使用。
 
 每次成功受理均返回 `202 Accepted` 和通用 TaskRecord：
 
