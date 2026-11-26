@@ -14,7 +14,7 @@ async fn make_snapshot_log_store() -> Arc<dyn SnapshotLogStore> {
     let dir = tempfile::tempdir().unwrap().keep();
     let db_path = dir.join("snapshot-log.db");
     Arc::new(
-        SqliteSnapshotLogStore::connect(db_path.to_str().unwrap())
+        SqliteSnapshotLogStore::connect("test-service", db_path.to_str().unwrap())
             .await
             .unwrap(),
     )
@@ -324,4 +324,47 @@ async fn test_snapshot_log_store_rejects_non_root_commit_when_empty() {
         .await
         .unwrap()
         .is_none());
+}
+
+/// Verify two services sharing one SQLite file keep independent index progress.
+#[tokio::test]
+async fn test_snapshot_log_service_name_isolates_shared_sqlite_db() {
+    let dir = tempfile::tempdir().unwrap().keep();
+    let path = dir.join("snapshot-log-isolation.db").to_str().unwrap().to_string();
+
+    let store_a = SqliteSnapshotLogStore::connect("svc-a", &path).await.unwrap();
+    let store_b = SqliteSnapshotLogStore::connect("svc-b", &path).await.unwrap();
+
+    let root_row = vec![SnapshotLogRow {
+        path: "/".into(),
+        commit_oid: "1111111111111111111111111111111111111111".into(),
+    }];
+    store_a
+        .append_rows_if_latest("acct", "main", None, &root_row)
+        .await
+        .unwrap();
+
+    // service b must not see service a's indexed progress.
+    assert!(store_b
+        .load_latest_indexed_commit("acct", "main")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store_a
+        .load_latest_indexed_commit("acct", "main")
+        .await
+        .unwrap()
+        .is_some());
+
+    // The same account/branch/commit under another service is not a unique-key conflict.
+    store_b
+        .append_rows_if_latest("acct", "main", None, &root_row)
+        .await
+        .unwrap();
+
+    // Illegal service_name values are rejected before touching the database.
+    assert!(SqliteSnapshotLogStore::connect("bad name", &path)
+        .await
+        .is_err());
+    assert!(SqliteSnapshotLogStore::connect("", &path).await.is_err());
 }
