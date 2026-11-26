@@ -53,7 +53,7 @@ def test_queue_limit_default_and_override(store_type, limit):
     if limit is not None:
         params["auth_max_waiters"] = limit
     store = store_type(service_name="test", params=params)
-    assert store._auth_max_waiters == (8 if limit is None else limit)
+    assert store._auth_max_waiters == (40 if limit is None else limit)
 
 
 def test_unlimited_mysql_pool_requires_finite_pool_for_explicit_queue_limit():

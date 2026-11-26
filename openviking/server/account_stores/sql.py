@@ -310,7 +310,7 @@ class SQLAccountStore(AccountStore):
         capacity = cast(int, engine_options["pool_size"])
         if explicit_max_waiters and capacity <= 0:
             raise InvalidArgumentError("auth_max_waiters requires a positive maxsize")
-        self._auth_max_waiters = auth_max_waiters if explicit_max_waiters else 4 * max(0, capacity)
+        self._auth_max_waiters = auth_max_waiters if explicit_max_waiters else 20 * max(0, capacity)
         self._sql_runtime = runtime or get_shared_sql_runtime()
         self._sql_lease = False
         self._engine: AsyncEngine | None = None
