@@ -1,23 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createOvClient } from '../../client/client.js';
-import { isOvClientError } from '../../client/errors.js';
-import { OV_PATHS } from '../../client/paths.js';
 import { useOvClient, useOvSignal } from '../../client/provider.js';
 import type { OvClient, OvRequestOptions } from '../../client/types.js';
-import type {
-  VikingBotReference,
-  VikingBotReferences,
-} from '../../components/viking-bot/index.js';
+import type { VikingBotReferences } from '../../components/viking-bot/index.js';
 import type { ConsoleChatOptions } from './types.js';
 import { useDirectoryTree } from '../../shared/directory-tree/use-directory-tree.js';
+import { mentionSearchRows, MENTION_ROOT } from './mention-search.js';
 import {
-  compileSkillQueries,
-  mentionPattern,
-  mentionSearchRows,
-  MENTION_ROOT,
-} from './mention-search.js';
-
-const emptyReferences: readonly VikingBotReference[] = [];
+  referenceSearchInput,
+  searchReferenceMatches,
+} from './references/search.js';
+import { useReferenceSelection } from './references/use-reference-selection.js';
 
 export function useConversationReferences({
   enabled,
@@ -65,47 +58,14 @@ export function useConversationReferences({
       enabled,
     ],
   );
-  const [selected, setSelected] = useState<{
-    scope: typeof scope;
-    items: readonly VikingBotReference[];
-  }>();
-  const onChange = useCallback(
-    (items: readonly VikingBotReference[]) => setSelected({ scope, items }),
-    [scope],
-  );
-  const onSelectionChange = enabled ? selection?.onChange : undefined;
-  const clearReferences = useCallback(
-    (sent?: readonly VikingBotReference[]) => {
-      if (onSelectionChange) {
-        if (!sent) onSelectionChange([]);
-        return;
-      }
-      setSelected((current) => {
-        if (current?.scope !== scope) return current;
-        if (!sent) return undefined;
-        const items = current.items.filter((item) => !sent.includes(item));
-        return items.length === current.items.length
-          ? current
-          : { scope, items };
-      });
-    },
-    [scope, onSelectionChange],
-  );
+  const { selected, onChange, clearReferences, prepareReferenceClear } =
+    useReferenceSelection(scope, enabled ? selection : undefined);
   const [openCount, setOpenCount] = useState(0);
   const onOpenChange = useCallback((open: boolean) => {
     setOpenCount((count) => (open ? count + 1 : Math.max(0, count - 1)));
   }, []);
   const [query, setQuery] = useState('');
-  const trimmedQuery = query.trim();
-  const keyword = trimmedQuery
-    .replace(/^viking:\/\//i, '')
-    .split('/')
-    .filter(Boolean)
-    .join('/');
-  const searchKey =
-    keyword && searchSkills && /^viking:\/\//i.test(trimmedQuery)
-      ? `${MENTION_ROOT}${keyword}`
-      : keyword;
+  const { keyword, searchKey } = referenceSearchInput(query, searchSkills);
   const opened = enabled && openCount > 0;
   const tree = useDirectoryTree({
     client: opened ? client : null,
@@ -124,7 +84,9 @@ export function useConversationReferences({
     result: typeof search;
     uris: Set<string>;
   }>();
-  // Picker and scope changes cancel the old request, including its debounce.
+  // Syncs the open picker and query with remote glob results after a debounce.
+  // Picker and scope changes can happen outside input events, so an Effect owns the request.
+  // Query/scope changes or unmount clear the timer and abort the old request.
   useEffect(() => {
     if (!opened || !searchKey) return;
     const controller = new AbortController();
@@ -132,40 +94,7 @@ export function useConversationReferences({
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
     const timer = setTimeout(() => {
-      const queries = searchSkills
-        ? compileSkillQueries(searchKey)
-        : [
-            {
-              uri: MENTION_ROOT,
-              pattern: mentionPattern(searchKey),
-              node_limit: 100,
-            },
-          ];
-      void Promise.all(
-        queries.map(async (body) => {
-          try {
-            const { matches } = await scope.client.request<{
-              matches: unknown;
-            }>({
-              method: 'POST',
-              path: OV_PATHS.searchGlob,
-              body,
-              options: { ...scope.options, signal: requestSignal },
-            });
-            if (!Array.isArray(matches))
-              throw new Error('Invalid file search response');
-            return matches;
-          } catch (error) {
-            if (
-              searchSkills &&
-              isOvClientError(error) &&
-              (error.code === 'NOT_FOUND' || error.statusCode === 404)
-            )
-              return [];
-            throw error;
-          }
-        }),
-      )
+      void searchReferenceMatches(scope, searchKey, requestSignal, searchSkills)
         .then((results) => {
           if (requestSignal.aborted) return;
           const matches = results.flat();
@@ -189,7 +118,8 @@ export function useConversationReferences({
       controller.abort();
     };
   }, [opened, searchKey, scope, signal, attempt, searchSkills]);
-  if (!enabled) return { references: undefined, clearReferences };
+  if (!enabled)
+    return { references: undefined, clearReferences, prepareReferenceClear };
 
   const result =
     search?.scope === scope && search.key === searchKey ? search : undefined;
@@ -219,10 +149,8 @@ export function useConversationReferences({
             expanded: row.hasChildren ? !hidden?.has(row.uri) : undefined,
           }))
       : tree.rows,
-    selected:
-      selection?.selected ??
-      (selected?.scope === scope ? selected.items : emptyReferences),
-    onChange: onSelectionChange ?? onChange,
+    selected,
+    onChange,
     onOpenChange,
     onQueryChange: setQuery,
     onExpand: (uri) => void expandDirectory(uri),
@@ -235,5 +163,10 @@ export function useConversationReferences({
     isLoading: keyword ? !result : !tree.isReady && tree.isInitializing,
     error: keyword ? result?.error : tree.error?.message,
   };
-  return { references, clearReferences, expandDirectory };
+  return {
+    references,
+    clearReferences,
+    prepareReferenceClear,
+    expandDirectory,
+  };
 }

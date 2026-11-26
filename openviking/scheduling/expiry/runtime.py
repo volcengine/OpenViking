@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Expiry lifecycle and dedicated Redis event loop."""
+"""Expiry lifecycle and dedicated scheduling event loop."""
 
 from __future__ import annotations
 
@@ -12,7 +12,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Coroutine, TypeVar
 
+from openviking.pyagfs.protocols import CacheRuntimeHandleProtocol
+
 from .api import ExpiryScheduler
+from .cache_runtime_store import CacheRuntimeExpiryStore
 from .config import ExpiryConfig
 from .consumer import ExpiryConsumer
 from .keys import HASH_NAME, HASH_SEED, IDENTITY_ENCODING, ExpiryKeys, encode_component
@@ -20,7 +23,6 @@ from .leases import ShardLeaseCoordinator
 from .metrics import ExpiryMetrics
 from .models import NamespaceSpec, StoreOperationError
 from .publisher import ExpiryPublisher
-from .redis_store import RedisExpiryStore
 from .registry import HandlerRegistry
 from .service import ExpiryRuntimeState, _ExpirySchedulerFacade
 from .shard_runner import ShardRunner
@@ -41,7 +43,7 @@ class ExpiryRuntimeRoles:
 
 
 @dataclass(eq=False)
-class _RedisRequest:
+class _ExpiryRequest:
     # Unlike run_coroutine_threadsafe's Future, this future is completed only
     # when the Redis-loop task AND its operation have actually terminated.
     finished: concurrent.futures.Future = field(default_factory=concurrent.futures.Future)
@@ -49,7 +51,7 @@ class _RedisRequest:
     task: asyncio.Task | None = None  # Read and written only on the Redis loop.
 
 
-class RedisLoopExecutor:
+class ExpiryExecutor:
     def __init__(self, *, max_inflight: int, request_budget_seconds: float) -> None:
         self._max_inflight = max_inflight
         self._request_budget_seconds = request_budget_seconds
@@ -58,7 +60,7 @@ class RedisLoopExecutor:
         self._gate: asyncio.Semaphore | None = None
         self._accepting = False
         self._ready = threading.Event()
-        self._requests: set[_RedisRequest] = set()
+        self._requests: set[_ExpiryRequest] = set()
         self._requests_lock = threading.Lock()
         self._stop_requested = False
 
@@ -70,12 +72,12 @@ class RedisLoopExecutor:
         self._ready.clear()
         self._stop_requested = False
         self._thread = threading.Thread(
-            target=self._thread_main, name="openviking-redis-expiry", daemon=True
+            target=self._thread_main, name="openviking-expiry", daemon=True
         )
         self._thread.start()
         ready = await asyncio.to_thread(self._ready.wait, 5.0)
         if not ready or self._loop is None:
-            raise RuntimeError("Expiry Redis loop failed to start")
+            raise RuntimeError("Expiry loop failed to start")
         with self._requests_lock:
             self._accepting = True
 
@@ -97,7 +99,7 @@ class RedisLoopExecutor:
             raise
 
     async def quiesce(self, timeout_seconds: float) -> None:
-        """Reject new work and observe actual remote termination before closing Redis."""
+        """Reject new work and observe actual remote termination before shutdown."""
         with self._requests_lock:
             self._accepting = False
             requests = list(self._requests)
@@ -153,12 +155,12 @@ class RedisLoopExecutor:
 
     def _submit(
         self, operation: Callable[[], Awaitable[T]], *, cleanup: bool = False
-    ) -> _RedisRequest:
+    ) -> _ExpiryRequest:
         with self._requests_lock:
             loop = self._loop
             if (not cleanup and not self._accepting) or loop is None or self._stop_requested:
-                raise StoreOperationError("not_started", "Redis expiry I/O loop is not running")
-            request = _RedisRequest()
+                raise StoreOperationError("not_started", "Expiry I/O loop is not running")
+            request = _ExpiryRequest()
             # Register before scheduling: shutdown must also see not-yet-started I/O.
             self._requests.add(request)
 
@@ -180,7 +182,7 @@ class RedisLoopExecutor:
                 raise
         return request
 
-    def _cancel(self, request: _RedisRequest) -> None:
+    def _cancel(self, request: _ExpiryRequest) -> None:
         if request.cancelled.is_set():
             return
         request.cancelled.set()
@@ -193,7 +195,7 @@ class RedisLoopExecutor:
         if loop is not None:
             loop.call_soon_threadsafe(cancel_request)
 
-    def _request_done(self, request: _RedisRequest, task: asyncio.Task) -> None:
+    def _request_done(self, request: _ExpiryRequest, task: asyncio.Task) -> None:
         if task.cancelled():
             request.finished.set_exception(asyncio.CancelledError())
         else:
@@ -223,7 +225,7 @@ class RedisLoopExecutor:
     @staticmethod
     def _not_stopped() -> StoreOperationError:
         return StoreOperationError(
-            "shard_not_stopped", "Redis expiry work or its I/O thread has not terminated"
+            "shard_not_stopped", "Expiry work or its I/O thread has not terminated"
         )
 
     def _thread_main(self) -> None:
@@ -246,7 +248,7 @@ class RedisLoopExecutor:
     async def _execute(self, operation: Callable[[], Awaitable[T]]) -> T:
         gate = self._gate
         if gate is None:
-            raise StoreOperationError("not_started", "Redis expiry I/O loop is not ready")
+            raise StoreOperationError("not_started", "Expiry I/O loop is not ready")
 
         async def guarded() -> T:
             async with gate:
@@ -260,7 +262,7 @@ class RedisLoopExecutor:
                 await self._join(task)
                 raise StoreOperationError(
                     "redis_timeout",
-                    "Redis expiry request exceeded its budget",
+                    "Expiry request exceeded its budget",
                     retryable=True,
                     outcome_unknown=True,
                 )
@@ -278,6 +280,7 @@ class ExpiryRuntime:
         self,
         config: ExpiryConfig,
         *,
+        cache_runtime: CacheRuntimeHandleProtocol,
         roles: ExpiryRuntimeRoles,
         metrics: ExpiryMetrics | None = None,
     ) -> None:
@@ -285,11 +288,11 @@ class ExpiryRuntime:
         self._roles = roles
         self._metrics = metrics or ExpiryMetrics()
         self._keys = ExpiryKeys(encode_component(config.service_name))
-        self._io = RedisLoopExecutor(
-            max_inflight=config.redis.max_inflight_requests,
-            request_budget_seconds=config.redis.request_budget_seconds,
+        self._io = ExpiryExecutor(
+            max_inflight=config.max_inflight_requests,
+            request_budget_seconds=config.request_budget_seconds,
         )
-        self._store = RedisExpiryStore(config.redis, self._keys, self._io, self._metrics)
+        self._store = CacheRuntimeExpiryStore(cache_runtime, self._keys, self._io, self._metrics)
         self._registry = HandlerRegistry()
         self._state = ExpiryRuntimeState()
         self._facade = _ExpirySchedulerFacade(
@@ -332,7 +335,7 @@ class ExpiryRuntime:
         # Keep the actual startup operation visible if it resists cancellation.
         # The caller's cancellation must not make close assume it has stopped.
         startup = asyncio.create_task(self._initialize_storage())
-        startup.add_done_callback(RedisLoopExecutor._consume_exception)
+        startup.add_done_callback(ExpiryExecutor._consume_exception)
         self._storage_start_task = startup
         try:
             await asyncio.shield(startup)
@@ -341,10 +344,14 @@ class ExpiryRuntime:
                 startup.cancel()
             try:
                 await self.close()
-            except BaseException:
+            except BaseException as exc:
                 # Preserve the original failure/cancellation. Ownership and the
                 # startup task remain available for a later close retry.
-                logger.warning("Expiry partial startup cleanup did not complete", exc_info=True)
+                logger.info(
+                    "expiry startup cleanup incomplete; retaining ownership error_type=%s",
+                    type(exc).__name__,
+                    extra={"degraded": True, "error_type": type(exc).__name__},
+                )
             raise
         self._storage_start_task = None
         self._storage_started = True
@@ -433,13 +440,13 @@ class ExpiryRuntime:
             for task in pending:
                 task.cancel()
             if pending:
-                await asyncio.wait(pending, timeout=self._config.redis.request_budget_seconds)
+                await asyncio.wait(pending, timeout=self._config.request_budget_seconds)
             for name, task in list(self._tasks.items()):
                 if task.done():
                     if not task.cancelled():
                         task.exception()
                     self._tasks.pop(name, None)
-        settled = await self._shard_runner.wait_pending(self._config.redis.request_budget_seconds)
+        settled = await self._shard_runner.wait_pending(self._config.request_budget_seconds)
         if self._tasks or not settled:
             raise StoreOperationError(
                 "shard_not_stopped", "Expiry work is still running; dependencies remain open"
@@ -450,7 +457,7 @@ class ExpiryRuntime:
         if not self._storage_owned:
             return
         await self._settle_storage_start()
-        # Stop admission and check real Redis-loop tasks, not just their
+        # Stop admission and check real executor tasks, not just their
         # application-loop wrappers, before closing any dependency.
         await self._io.quiesce(self._config.shutdown_timeout_seconds)
         if not self._storage_closed:

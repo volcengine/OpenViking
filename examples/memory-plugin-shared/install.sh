@@ -56,8 +56,8 @@
 #   trae-cli   the same through the TraeCode CLI, then removes the hooks an older
 #              installer added to ~/.trae/cli/hooks.json and ~/.trae/traecli.toml
 #   cursor     ~/.cursor/hooks.json, ~/.cursor/mcp.json, ~/.cursor/rules, ~/.cursor/skills
-#   trae       ~/.trae/hooks.json and TRAE's mcp.json (trae-cn: ~/.trae-cn, TRAE CN)
-#   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json
+#   trae       ~/.trae/hooks.json, TRAE's mcp.json, ~/.trae/skills (trae-cn: ~/.trae-cn, TRAE CN)
+#   zcode      ~/.zcode/cli/config.json, ~/.zcode/hooks.json, ~/.zcode/mcp.json, ~/.zcode/skills
 #   kimicode   ~/.kimi-code/plugins
 #   codebuddy  a local marketplace registered with codebuddy, installed from ~/.codebuddy/plugins
 #   qoder      a local marketplace registered with qodercli (or qoderclicn), installed from ~/.qoder/plugins (or ~/.qoder-cn/plugins)
@@ -171,6 +171,8 @@ SOURCE_ARG=""
 DIST_ARG=""
 LANG_ARG=""
 URL_ARG=""
+VOLCENGINE_SERVICE_URL="https://api.vikingdb.cn-beijing.volces.com/openviking"
+BYTEPLUS_SERVICE_URL="https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking"
 API_KEY_ARG="__OPENVIKING_UNSET__"
 ACCOUNT_ARG="__OPENVIKING_UNSET__"
 USER_ARG="__OPENVIKING_UNSET__"
@@ -318,14 +320,16 @@ if [ "$YES" -ne 1 ] && ( exec 3</dev/tty ) 2>/dev/null; then
   INTERACTIVE=1
 fi
 
-read_tty() { # read_tty <varname> [-s]
-  local __var="$1" __val=""
+read_tty() { # read_tty <varname> [-s] [required]
+  local __var="$1" __val="" __eof=0
   if [ "${2:-}" = "-s" ]; then
-    if IFS= read -rs __val <&3 2>/dev/null; then printf '\n'; else __val=""; fi
+    if IFS= read -rs __val <&3 2>/dev/null; then printf '\n'; else __val=""; __eof=1; fi
   else
-    IFS= read -r __val <&3 || __val=""
+    IFS= read -r __val <&3 || { __val=""; __eof=1; }
   fi
   eval "$__var=\$__val"
+  if [ "${3:-}" = "required" ] && [ "$__eof" -eq 1 ]; then return 1; fi
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -710,12 +714,55 @@ json_merge_ovcli() {
   local file="$1" url="$2" key="$3" account="$4" user="$5"
   # Not as arguments: any user can read those in the process list, and one of
   # the values is the API key.
-  OVCLI_URL="$url" OVCLI_API_KEY="$key" OVCLI_ACCOUNT="$account" OVCLI_USER="$user" node - "$file" <<'NODE'
+  OVCLI_URL="$url" OVCLI_API_KEY="$key" OVCLI_ACCOUNT="$account" OVCLI_USER="$user" OVCLI_LANG="$UI_LANG" node - "$file" <<'NODE'
 const fs = require("node:fs");
 const file = process.argv[2];
 const { OVCLI_URL: url, OVCLI_API_KEY: apiKey, OVCLI_ACCOUNT: account, OVCLI_USER: user } = process.env;
-let c = {};
-try { c = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+const read = (path) => {
+  try { return JSON.parse(fs.readFileSync(path, "utf8")) || {}; } catch { return {}; }
+};
+const endpoint = (value) => typeof value === "string" ? value.trim().replace(/\/+$/, "") : "";
+const c = read(file);
+if (url && endpoint(c.url) !== endpoint(url)) {
+  const home = require("node:os").homedir();
+  const legacyPath = process.env.OPENVIKING_CONFIG_FILE?.trim() || `${home}/.openviking/ov.conf`;
+  const legacy = read(legacyPath.replace(/^~\//, `${home}/`));
+  const server = legacy.server || {};
+  const legacyHost = typeof server.host === "string" && server.host.trim()
+    ? server.host.trim().replace("0.0.0.0", "127.0.0.1") : "127.0.0.1";
+  const legacyPort = Number.isFinite(Number(server.port)) ? Math.floor(Number(server.port)) : 1933;
+  const legacyUrl = typeof server.url === "string" && server.url.trim()
+    ? server.url.trim() : `http://${legacyHost}:${legacyPort}`;
+  const legacyKey = server.root_api_key || legacy.api_key || Object.values(legacy).some(section => section?.apiKey);
+  const envKey = process.env.OPENVIKING_BEARER_TOKEN?.trim() || process.env.OPENVIKING_API_KEY?.trim();
+  const envUrl = process.env.OPENVIKING_URL?.trim() || process.env.OPENVIKING_BASE_URL?.trim();
+  const hasNewKey = apiKey && apiKey.trim() && apiKey !== "__OPENVIKING_KEEP__";
+  if (!hasNewKey && ((legacyKey && endpoint(legacyUrl) !== endpoint(url)) || (envKey && !envUrl))) {
+    console.error(process.env.OVCLI_LANG === "zh"
+      ? "新连接可能沿用其他服务的密钥。请填写新连接的 API Key，为环境变量中的密钥指定对应 URL，或使用单独的连接配置。"
+      : "The new connection could reuse a key from another server. Set its API key and pair any environment key with its own URL, or use a separate connection configuration.");
+    process.exit(1);
+  }
+  if (envKey && !envUrl) {
+    // Saving a file does not change environment precedence in the caller's agents.
+    console.warn(process.env.OVCLI_LANG === "zh"
+      ? "未指定 URL 的环境变量密钥可能覆盖已保存的 API Key，并被发送到新服务。启动 Agent 前，请清除该环境变量或为此密钥指定其服务地址。"
+      : "An environment key without a URL can override the saved API key and be sent to the new server. Before starting your agent, unset it or pair it with its own server URL.");
+  }
+  // Do not migrate authentication settings to a different or unknown server.
+  for (const field of ["api_key", "root_api_key", "account", "account_id", "user", "user_id",
+    "actor_peer_id", "peer_id", "agent_id", "extra_header", "extra_headers", "gateway_token",
+    "auth_mode", "ldap_username", "ldap_password", "oidc_token"]) {
+    delete c[field];
+  }
+  if (c.plugin && typeof c.plugin === "object") {
+    for (const section of [c.plugin, ...Object.values(c.plugin)]) {
+      if (section && typeof section === "object") {
+        for (const field of ["apiKey", "accountId", "userId", "authMode", "auth_mode"]) delete section[field];
+      }
+    }
+  }
+}
 if (url) c.url = url;
 if (apiKey !== "__OPENVIKING_KEEP__") c.api_key = apiKey;
 if (account !== "__OPENVIKING_KEEP__") {
@@ -1599,20 +1646,32 @@ EOF
 # ---------------------------------------------------------------------------
 
 prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KEEP__)
-  local current_url="$1" current_key="$2" url_input reply def=2 custom hidden
+  local current_url="$1" current_key="$2" url_input reply def=2 custom hidden provider="" provider_def=1
   custom="$(t 'Custom URL' '自定义 URL')"
   if [ -n "$current_url" ]; then
     custom="$(t 'Custom URL / keep current' '自定义 URL / 保持当前')  [$current_url]"
   else
     def=0
   fi
-  tui_menu "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')" "$def" \
-    "$(t 'Self-hosted / local' '自建 / 本地')  [http://127.0.0.1:1933]" \
-    "$(t 'Volcengine OpenViking Cloud' '火山引擎 OpenViking 云服务')  [api.vikingdb.cn-beijing.volces.com]" \
+  local options=(
+    "$(t 'Self-hosted / local' '自建 / 本地')  [http://127.0.0.1:1933]"
+    "$(t 'OpenViking Managed Service' 'OpenViking 托管服务')"
     "$custom"
+  )
+  tui_menu "$(t 'Where do you connect to OpenViking?' '连接到哪个 OpenViking 服务？')" "$def" "${options[@]}"
   case "$TUI_MENU_CHOICE" in
     0) WIZ_URL="http://127.0.0.1:1933" ;;
-    1) WIZ_URL="https://api.vikingdb.cn-beijing.volces.com/openviking" ;;
+    1)
+      [ "$UI_LANG" != "zh" ] || provider_def=0
+      tui_menu "$(t 'Cloud provider' '云服务商')" "$provider_def" "Volcengine" "BytePlus"
+      if [ "$TUI_MENU_CHOICE" -eq 0 ]; then
+        provider="volcengine"
+        WIZ_URL="$VOLCENGINE_SERVICE_URL"
+      else
+        provider="byteplus"
+        WIZ_URL="$BYTEPLUS_SERVICE_URL"
+      fi
+      ;;
     *)
       ask "$(t 'Server URL' '服务地址') [${current_url:-http://127.0.0.1:1933}]: "
       read_tty url_input
@@ -1620,29 +1679,58 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
       ;;
   esac
 
+  # A blank answer may keep a key only for the endpoint that supplied it.
+  if ! same_connection_url "$WIZ_URL" "$current_url"; then
+    current_key=""
+  fi
   hidden="$(t 'typing is not shown' '输入内容不会显示')"
-  if [ -n "$current_key" ]; then
-    ask "$(t "API key [Enter = keep $(mask_secret "$current_key"), '-' = clear; $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空；$hidden]: ")"
-  elif [ "$TUI_MENU_CHOICE" -eq 1 ]; then
-    info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
-    info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
-    ask "$(t "API key ($hidden): " "API key（${hidden}）: ")"
-  else
-    ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；${hidden}）: ")"
+  if [ -n "$provider" ]; then
+    current_key="$(printf '%s' "$current_key" | node -e 'process.stdout.write(require("fs").readFileSync(0, "utf8").trim())')"
+    info "$(t 'Server' '服务器'): $WIZ_URL"
   fi
-  read_tty reply -s
-  if [ "$reply" = "-" ]; then
-    WIZ_KEY=""
-  elif [ -n "$reply" ]; then
-    WIZ_KEY="$reply"
-  else
-    # Not `[ -z ... ] && ...`: as the function's last command a false test makes
-    # prompt_connection return 1, and `set -e` aborts the whole installer.
-    WIZ_KEY="__OPENVIKING_KEEP__"
-    if [ -z "$current_key" ]; then
-      WIZ_KEY=""
+  while :; do
+    if [ -n "$current_key" ]; then
+      if [ -n "$provider" ]; then
+        ask "$(t "API key [Enter = keep $(mask_secret "$current_key"); $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")；$hidden]: ")"
+      else
+        ask "$(t "API key [Enter = keep $(mask_secret "$current_key"), '-' = clear; $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空；$hidden]: ")"
+      fi
+    elif [ -n "$provider" ]; then
+      if [ "$provider" = "volcengine" ]; then
+        info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
+        info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
+      fi
+      ask "$(t "API key ($hidden): " "API key（${hidden}）: ")"
+    else
+      ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；${hidden}）: ")"
     fi
-  fi
+    if [ -n "$provider" ]; then
+      if ! read_tty reply -s required; then
+        info "$(t 'Cancelled; nothing was changed.' '已取消，未做任何修改。')"
+        exit 0
+      fi
+      reply="$(printf '%s' "$reply" | node -e 'process.stdout.write(require("fs").readFileSync(0, "utf8").trim())')"
+    else
+      read_tty reply -s
+    fi
+    if [ "$reply" = "-" ]; then
+      WIZ_KEY=""
+    elif [ -n "$reply" ]; then
+      WIZ_KEY="$reply"
+    else
+      # Not `[ -z ... ] && ...`: as the function's last command a false test makes
+      # prompt_connection return 1, and `set -e` aborts the whole installer.
+      WIZ_KEY="__OPENVIKING_KEEP__"
+      if [ -z "$current_key" ]; then
+        WIZ_KEY=""
+      fi
+    fi
+    if [ -n "$provider" ] && [ -z "$WIZ_KEY" ]; then
+      err "$(t 'An API key is required for the managed service.' '托管服务需要 API Key。')"
+    else
+      break
+    fi
+  done
 }
 
 # What the credentials step settled on. Nothing is written until the plan is
@@ -1655,6 +1743,21 @@ PROBE_CODE=""
 
 cred_value() { # cred_value <chosen> <stored>
   if [ "$1" = "__OPENVIKING_KEEP__" ]; then printf '%s' "$2"; else printf '%s' "$1"; fi
+}
+
+same_connection_url() {
+  local left="$1" right="$2"
+  # An absent URL does not identify the server an existing key came from.
+  [ -n "$left" ] && [ -n "$right" ] || return 1
+  while [ "${left%/}" != "$left" ]; do left="${left%/}"; done
+  while [ "${right%/}" != "$right" ]; do right="${right%/}"; done
+  [ "$left" = "$right" ]
+}
+
+clear_inherited_credentials() {
+  if [ "$CRED_KEY" = "__OPENVIKING_KEEP__" ]; then CRED_KEY=""; fi
+  if [ "$CRED_ACCOUNT" = "__OPENVIKING_KEEP__" ]; then CRED_ACCOUNT=""; fi
+  if [ "$CRED_USER" = "__OPENVIKING_KEEP__" ]; then CRED_USER=""; fi
 }
 
 gather_credentials() {
@@ -1695,7 +1798,13 @@ gather_credentials() {
     fi
   fi
   if [ -z "$CRED_URL" ]; then
+    # Keeping an implicit connection must not pin its saved key to a new URL.
+    # The clients still resolve their usual default when no URL is saved.
+    if [ -n "$CUR_KEY" ]; then return 0; fi
     CRED_URL="http://127.0.0.1:1933"
+  fi
+  if ! same_connection_url "$CRED_URL" "$CUR_URL"; then
+    clear_inherited_credentials
   fi
 }
 
@@ -1730,6 +1839,10 @@ probe_server() { # probe_server <url> <key> <account> <user> -> PROBE_RESULT, PR
 
 check_server() {
   local key def
+  if [ -z "$CRED_URL" ]; then
+    info "$(t 'Kept the existing connection. Skipping the server check because there is no explicit server URL.' '已沿用现有连接。未明确设置服务地址，跳过连接检查。')"
+    return 0
+  fi
   command -v curl >/dev/null 2>&1 || return 0
   while :; do
     key="$(cred_value "$CRED_KEY" "$CUR_KEY")"
@@ -1755,6 +1868,11 @@ check_server() {
       "$(t 'Continue anyway' '仍然继续')"
     [ "$TUI_MENU_CHOICE" -eq 0 ] || return 0
     prompt_connection "$CRED_URL" "$key"
+    if ! same_connection_url "$WIZ_URL" "$CRED_URL"; then
+      CRED_KEY=""
+      CRED_ACCOUNT=""
+      CRED_USER=""
+    fi
     CRED_URL="$WIZ_URL"
     [ "$WIZ_KEY" = "__OPENVIKING_KEEP__" ] || CRED_KEY="$WIZ_KEY"
   done
@@ -2714,32 +2832,53 @@ agent_remove_trae_cli_configs() { # agent_remove_trae_cli_configs <hooks> <traec
   mv "$tmp" "$config_path"
 }
 
+# The skills a host without a plugin format reads from the user's own skills
+# directory. Each copy is tracked, so a skill the user wrote or edited under the
+# same name is left alone on upgrade and uninstall.
+HOST_SKILLS="openviking-memory openviking-skills ov-experience-memory openviking-rule-search ov-memory-doctor"
+
+install_host_skills() { # install_host_skills <client> <source-dir> <skills-dir>
+  local client="$1" source="$2" dest="$3" lib skill
+  lib="$(require_install_lib_dir)" || return 1
+  mkdir -p "$dest"
+  for skill in $HOST_SKILLS; do
+    "$NODE_BIN" "$lib/owned-skill.mjs" install \
+      "$source/$skill" "$dest/$skill" "$OV_HOME/$client-skill-ownership/$skill.json" || return 1
+  done
+}
+
+uninstall_host_skills() { # uninstall_host_skills <client> <skills-dir>
+  local client="$1" dest="$2" lib skill
+  lib="$(install_lib_dir)" || lib=""
+  for skill in $HOST_SKILLS; do
+    if [ -f "$lib/owned-skill.mjs" ]; then
+      "$NODE_BIN" "$lib/owned-skill.mjs" uninstall "" \
+        "$dest/$skill" "$OV_HOME/$client-skill-ownership/$skill.json"
+    else
+      warn "Preserved $client skill without ownership runtime: $dest/$skill"
+    fi
+  done
+}
+
 uninstall_agent_integrations() {
   if contains_harness cursor; then
-    local skill ownership_lib
     agent_remove_json_configs "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)"
     rm -f "$HOME/.cursor/rules/openviking-memory.mdc"
-    ownership_lib="$(install_lib_dir)" || ownership_lib=""
-    for skill in openviking-memory openviking-skills ov-experience-memory openviking-rule-search; do
-      if [ -f "$ownership_lib/owned-skill.mjs" ]; then
-        "$NODE_BIN" "$ownership_lib/owned-skill.mjs" uninstall "" \
-          "$HOME/.cursor/skills/$skill" "$OV_HOME/cursor-skill-ownership/$skill.json"
-      else
-        warn "Preserved Cursor skill without ownership runtime: $HOME/.cursor/skills/$skill"
-      fi
-    done
+    uninstall_host_skills cursor "$HOME/.cursor/skills"
     rm -rf "$OV_HOME/agent-integrations/cursor"
     info "$(t 'Removed the Cursor OpenViking integration.' '已移除 Cursor OpenViking 集成。')"
   fi
   if contains_harness trae; then
     agent_remove_json_configs "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)"
+    uninstall_host_skills trae "$HOME/.trae/skills"
     rm -rf "$OV_HOME/agent-integrations/trae"
-    info "$(t 'Removed TRAE OpenViking hooks and MCP config.' '已移除 TRAE OpenViking hooks 与 MCP 配置。')"
+    info "$(t 'Removed TRAE OpenViking hooks, MCP config and skills.' '已移除 TRAE OpenViking hooks、MCP 配置与 skill。')"
   fi
   if contains_harness trae-cn; then
     agent_remove_json_configs "$HOME/.trae-cn/hooks.json" "$(trae_mcp_path trae-cn)"
+    uninstall_host_skills trae-cn "$HOME/.trae-cn/skills"
     rm -rf "$OV_HOME/agent-integrations/trae-cn"
-    info "$(t 'Removed TRAE CN OpenViking hooks and MCP config.' '已移除 TRAE CN OpenViking hooks 与 MCP 配置。')"
+    info "$(t 'Removed TRAE CN OpenViking hooks, MCP config and skills.' '已移除 TRAE CN OpenViking hooks、MCP 配置与 skill。')"
   fi
   if contains_harness trae-cli; then
     local trae_home="${TRAE_HOME:-$HOME/.trae}"
@@ -2788,8 +2927,9 @@ fs.renameSync(tmp, configPath);
 CLEAN_NODE
     # Clean up intermediate files generated by agent_write_json_configs
     rm -f "$HOME/.zcode/hooks.json" "$HOME/.zcode/mcp.json" 2>/dev/null
+    uninstall_host_skills zcode "$HOME/.zcode/skills"
     rm -rf "$OV_HOME/agent-integrations/zcode"
-    info "$(t 'Removed ZCode OpenViking hooks and MCP config.' '已移除 ZCode OpenViking hooks 与 MCP 配置。')"
+    info "$(t 'Removed ZCode OpenViking hooks, MCP config and skills.' '已移除 ZCode OpenViking hooks、MCP 配置与 skill。')"
   fi
   if contains_harness kimicode; then
     local kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}" kimicode_lib kimicode_installed
@@ -2900,20 +3040,15 @@ trae_mcp_path() { # trae_mcp_path <client-id>
 
 install_cursor() {
   step_heading "$(t 'Cursor integration' 'Cursor 集成')"
-  local root hooks_path mcp_path skill ownership_lib legacy_plugins
+  local root hooks_path mcp_path legacy_plugins
   ensure_bundle
   root="$(assemble_agent_integration cursor cursor)" || return 1
   hooks_path="$HOME/.cursor/hooks.json"
   mcp_path="$(cursor_mcp_path)"
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor "$NODE_BIN"
-  mkdir -p "$HOME/.cursor/rules" "$HOME/.cursor/skills"
+  mkdir -p "$HOME/.cursor/rules"
   cp "$root/hosts/cursor/rules/openviking-memory.mdc" "$HOME/.cursor/rules/openviking-memory.mdc"
-  ownership_lib="$(require_install_lib_dir)" || return 1
-  for skill in openviking-memory openviking-skills ov-experience-memory openviking-rule-search; do
-    "$NODE_BIN" "$ownership_lib/owned-skill.mjs" install \
-      "$root/hosts/cursor/skills/$skill" "$HOME/.cursor/skills/$skill" \
-      "$OV_HOME/cursor-skill-ownership/$skill.json" || return 1
-  done
+  install_host_skills cursor "$root/hosts/cursor/skills" "$HOME/.cursor/skills" || return 1
   info "$(t 'Cursor hooks installed:' 'Cursor hooks 已安装：') $hooks_path"
   info "$(t 'Cursor MCP installed:' 'Cursor MCP 已安装：') $mcp_path"
   info "$(t 'Cursor Rule and Skill installed under ~/.cursor.' 'Cursor Rule 与 Skill 已安装到 ~/.cursor。')"
@@ -2948,26 +3083,31 @@ install_zcode() {
   # Merge the generated hooks.json and mcp.json into config.json so ZCode picks them up.
   zcode_merge_config "$config_path" "$hooks_path" "$mcp_path" \
     || { warn "$(t 'Failed to merge ZCode config' 'ZCode 配置合并失败')"; return 1; }
+  install_host_skills zcode "$root/hosts/zcode/skills" "$HOME/.zcode/skills" || return 1
   info "$(t 'ZCode hooks installed:' 'ZCode hooks 已安装：') $config_path (hooks.events)"
   info "$(t 'ZCode MCP installed:' 'ZCode MCP 已安装：') $config_path (mcp.servers)"
+  info "$(t 'ZCode skills installed:' 'ZCode skill 已安装：') $HOME/.zcode/skills"
 }
 
-# Antigravity loads plugins from directories, each a plugin.json and a
-# hooks.json whose top-level keys name the hooks. The directory is the
-# installer's alone, so it is written whole instead of merged into user files.
+# Antigravity loads plugins from directories: a plugin.json, a hooks.json whose
+# top-level keys name the hooks, an mcp_config.json and a skills directory. The
+# directory is the installer's alone, so it is written whole instead of merged
+# into user files.
 install_antigravity() {
   step_heading "$(t 'Antigravity integration' 'Antigravity 集成')"
-  local root plugin_dir lib
+  local root plugin_dir lib user_mcp
   ensure_bundle
   root="$(assemble_agent_integration antigravity antigravity)" || return 1
   plugin_dir="$(antigravity_plugin_dir)"
   lib="$(require_install_lib_dir)" || return 1
-  "$NODE_BIN" --input-type=module - "$root" "$plugin_dir" "$NODE_BIN" "$SOURCE_MODE" "$lib/host-json-config.mjs" <<'NODE' || return 1
+  user_mcp="$(antigravity_config_dir)/mcp_config.json"
+  "$NODE_BIN" --input-type=module - "$root" "$plugin_dir" "$NODE_BIN" "$SOURCE_MODE" "$lib" "$user_mcp" <<'NODE' || return 1
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-const [root, pluginDir, nodeBin, sourceMode, helper] = process.argv.slice(2);
-const { readJson, ownsHook } = await import(pathToFileURL(helper).href);
+const [root, pluginDir, nodeBin, sourceMode, lib, userMcpPath] = process.argv.slice(2);
+const { readJson, ownsHook } = await import(pathToFileURL(path.join(lib, "host-json-config.mjs")).href);
+const { stripJsonc } = await import(pathToFileURL(path.join(lib, "jsonc-edit.mjs")).href);
 const hostDir = path.join(root, "hosts", "antigravity");
 const version = readJson(path.join(root, "plugin.json")).version;
 const existing = path.join(pluginDir, "hooks.json");
@@ -2984,11 +3124,23 @@ const render = (command) => {
   const args = (match[2] || "").replaceAll("__OPENVIKING_CLIENT_ID__", "antigravity");
   return `${env} ${quote(nodeBin)} ${quote(path.join(root, match[1]))}${args} # openviking-memory`;
 };
+// PreToolUse groups its handlers under a matcher; the other events list them flat.
+const renderHandler = (handler) => (Array.isArray(handler.hooks)
+  ? { ...handler, hooks: handler.hooks.map(renderHandler) }
+  : { ...handler, command: render(handler.command) });
 const template = readJson(path.join(hostDir, "hooks.json"));
 const hooks = Object.fromEntries(Object.entries(template).map(([name, events]) => [name,
-  Object.fromEntries(Object.entries(events).map(([event, handlers]) => [event,
-    handlers.map((handler) => ({ ...handler, command: render(handler.command) }))])),
+  Object.fromEntries(Object.entries(events).map(([event, handlers]) => [event, handlers.map(renderHandler)])),
 ]));
+// A server the user registered for OpenViking stays the only one: a second
+// would hand the model every tool twice. The manual steps this installer
+// replaced named no key for it, so any name that mentions OpenViking counts.
+let userHasServer = false;
+try {
+  const servers = JSON.parse(stripJsonc(fs.readFileSync(userMcpPath, "utf8"))).mcpServers || {};
+  userHasServer = Object.keys(servers).some((name) => /openviking/iu.test(name));
+} catch {}
+const capabilities = userHasServer ? ["hooks", "skills"] : ["hooks", "mcp", "skills"];
 // Stage beside plugins/, not in it, so an interrupted run leaves no second
 // plugin for Antigravity to load; the config directory keeps the rename on
 // one filesystem.
@@ -2997,6 +3149,24 @@ fs.rmSync(tmp, { recursive: true, force: true });
 fs.mkdirSync(tmp, { recursive: true });
 fs.copyFileSync(path.join(hostDir, "plugin.json"), path.join(tmp, "plugin.json"));
 fs.writeFileSync(path.join(tmp, "hooks.json"), JSON.stringify(hooks, null, 2) + "\n", { mode: 0o600 });
+fs.cpSync(path.join(hostDir, "skills"), path.join(tmp, "skills"), { recursive: true });
+if (!userHasServer) {
+  // MCP commands run without a shell and expand no environment variables, so
+  // every value is written out in full.
+  fs.writeFileSync(path.join(tmp, "mcp_config.json"), JSON.stringify({
+    mcpServers: {
+      openviking: {
+        command: nodeBin,
+        args: [path.join(root, "servers", "mcp-proxy.mjs")],
+        env: {
+          OPENVIKING_INTEGRATION_ID: "openviking-memory",
+          OPENVIKING_INTEGRATION_VERSION: version,
+          OPENVIKING_HOOK_SOURCE: "antigravity",
+        },
+      },
+    },
+  }, null, 2) + "\n", { mode: 0o600 });
+}
 fs.rmSync(pluginDir, { recursive: true, force: true });
 fs.mkdirSync(path.dirname(pluginDir), { recursive: true });
 fs.renameSync(tmp, pluginDir);
@@ -3010,13 +3180,17 @@ fs.writeFileSync(manifestPath, JSON.stringify({
   client: "antigravity",
   installMode: "managed-native",
   source: sourceMode,
-  capabilities: ["hooks"],
+  capabilities,
   hooksConfig: path.join(pluginDir, "hooks.json"),
+  ...(userHasServer ? {} : { mcpConfig: path.join(pluginDir, "mcp_config.json") }),
   installedAt: previous.installedAt || now,
   updatedAt: now,
 }, null, 2) + "\n");
 NODE
   info "$(t 'Antigravity plugin installed:' 'Antigravity 插件已安装：') $plugin_dir"
+  if [ ! -f "$plugin_dir/mcp_config.json" ]; then
+    info "$(t 'Kept the openviking MCP server you already configured; the plugin adds no second one:' '保留你已配置的 openviking MCP 服务，插件不再重复添加：') $user_mcp"
+  fi
 }
 
 install_kimicode() {
@@ -3037,6 +3211,11 @@ install_kimicode() {
     return 1
   }
   cp "$root/hosts/kimicode/runtime-index.mjs" "$root/hosts/index.mjs" || {
+    rm -rf "$bundle"
+    return 1
+  }
+  # The manifest names ./skills/, resolved from the plugin root.
+  cp -R "$root/hosts/kimicode/skills" "$bundle/skills" || {
     rm -rf "$bundle"
     return 1
   }
@@ -3159,7 +3338,7 @@ install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>...
   cp "$config/runtime-index.mjs" "$root/hosts/index.mjs" || { rm -rf "$bundle"; return 1; }
   for host_module in "$root"/hosts/*.mjs; do
     case "$(basename "$host_module")" in
-      index.mjs|incremental-turn-capture.mjs|"$host.mjs"|"$host-turns.mjs") ;;
+      index.mjs|incremental-turn-capture.mjs|history-session.mjs|"$host.mjs"|"$host-turns.mjs") ;;
       *) rm -f "$host_module" ;;
     esac
   done
@@ -3240,8 +3419,10 @@ install_trae_variant() { # install_trae_variant <trae|trae-cn>
   hooks_path="$HOME/.$client_id/hooks.json"
   mcp_path="$(trae_mcp_path "$client_id")"
   agent_write_json_configs trae "$hooks_path" "$mcp_path" "$root" "$client_id" "$NODE_BIN"
+  install_host_skills "$client_id" "$root/hosts/trae/skills" "$HOME/.$client_id/skills" || return 1
   info "$client_id hooks: $hooks_path"
   info "$client_id MCP: $mcp_path"
+  info "$client_id skills: $HOME/.$client_id/skills"
 }
 
 # ---------------------------------------------------------------------------
@@ -3372,21 +3553,23 @@ install_pi() {
 # ---------------------------------------------------------------------------
 
 # Cursor, TRAE, TRAE CN and ZCode run the same hook runtime; they differ only
-# in where their hooks and MCP entries live and in the session-start event name.
+# in where their hooks, MCP entries and skills live and in the session-start
+# event name.
 validate_hook_host() { # validate_hook_host <client>
   local client="$1" root="$OV_HOME/agent-integrations/$1" shared="$OV_HOME/agent-integrations/memory-plugin-shared/lib"
-  local hooks mcp event file complete=1
+  local hooks mcp event file skill complete=1
   set -- "$root/scripts/hook.mjs" "$root/scripts/uri-guard.mjs" "$root/integration.json" "$shared/agent-hook-runtime.mjs"
   case "$client" in
     cursor)
       hooks="$HOME/.cursor/hooks.json"; mcp="$(cursor_mcp_path)"; event=sessionStart
-      set -- "$@" "$root/plugin.json" "$shared/uri-guard.mjs" "$HOME/.cursor/rules/openviking-memory.mdc" \
-        "$HOME/.cursor/skills/openviking-memory/SKILL.md" "$HOME/.cursor/skills/openviking-skills/SKILL.md" \
-        "$HOME/.cursor/skills/ov-experience-memory/SKILL.md" "$HOME/.cursor/skills/openviking-rule-search/SKILL.md"
+      set -- "$@" "$root/plugin.json" "$shared/uri-guard.mjs" "$HOME/.cursor/rules/openviking-memory.mdc"
       ;;
     zcode) hooks="$HOME/.zcode/cli/config.json"; mcp="$hooks"; event=session-start ;;
     *) hooks="$HOME/.$client/hooks.json"; mcp="$(trae_mcp_path "$client")"; event=session-start ;;
   esac
+  for skill in $HOST_SKILLS; do
+    set -- "$@" "$HOME/.$client/skills/$skill/SKILL.md"
+  done
   for file in "$@"; do
     [ -f "$file" ] || complete=0
   done
@@ -3403,7 +3586,7 @@ validate_hook_host() { # validate_hook_host <client>
     warn "$client: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
     return 1
   fi
-  info "$client: $(t 'hooks and MCP are configured' 'hooks 与 MCP 已配置')"
+  info "$client: $(t 'hooks, MCP and skills are configured' 'hooks、MCP 与 skill 已配置')"
 }
 
 validate_install() {
@@ -3463,6 +3646,7 @@ EOF
       && [ -f "$kimi_root/agent-integrations/kimicode/scripts/hook.mjs" ] \
       && [ -f "$kimi_root/agent-integrations/kimicode/scripts/uri-guard.mjs" ] \
       && [ -f "$kimi_root/agent-integrations/kimicode/servers/mcp-proxy.mjs" ] \
+      && [ -f "$kimi_root/skills/openviking-memory/SKILL.md" ] \
       && [ -f "$kimi_root/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ]; then
       "$NODE_BIN" --check "$kimi_root/agent-integrations/kimicode/scripts/hook.mjs" \
         || { ok=0; agent_fatal=1; }
@@ -3471,7 +3655,14 @@ EOF
         warn "kimicode: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
         ok=0; agent_fatal=1
       fi
-      info "kimicode: $(t 'native plugin installed (Hooks + MCP)' '原生插件已安装（Hooks + MCP）')"
+      info "kimicode: $(t 'native plugin installed (Hooks + MCP + skills)' '原生插件已安装（Hooks + MCP + skills）')"
+      # An upgrade keeps the plugin switched off if the user switched it off.
+      if "$NODE_BIN" -e '
+const plugins = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).plugins || [];
+process.exit(plugins.some((plugin) => plugin?.id === "openviking-memory" && plugin.enabled === false) ? 0 : 1);
+' "$kimi_home/plugins/installed.json" 2>/dev/null; then
+        warn "kimicode: $(t 'the plugin is switched off in Kimi Code and stays off; switch it on there to use it' '插件在 Kimi Code 中处于关闭状态，升级后仍保持关闭；需要在 Kimi Code 中打开才会生效')"
+      fi
     else
       warn "kimicode: $(t 'native plugin installation is incomplete' '原生插件安装不完整')"
       ok=0; agent_fatal=1
@@ -3489,16 +3680,23 @@ if (typeof command !== "string" || !command.includes("OPENVIKING_INTEGRATION_ID=
 process.stdout.write(command);
 ' "$ag_hooks" 2>/dev/null)" || ag_command=""
     if [ -f "$(antigravity_plugin_dir)/plugin.json" ] \
+      && [ -f "$(antigravity_plugin_dir)/skills/openviking-memory/SKILL.md" ] \
       && [ -f "$ag_root/scripts/hook.mjs" ] \
+      && [ -f "$ag_root/scripts/uri-guard.mjs" ] \
+      && [ -f "$ag_root/servers/mcp-proxy.mjs" ] \
       && [ -f "$ag_root/integration.json" ] \
       && [ -f "$OV_HOME/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ] \
       && [ -n "$ag_command" ]; then
-      "$NODE_BIN" --check "$ag_root/scripts/hook.mjs" || { ok=0; agent_fatal=1; }
+      "$NODE_BIN" --check "$ag_root/scripts/hook.mjs" \
+        && "$NODE_BIN" --check "$ag_root/scripts/uri-guard.mjs" \
+        && "$NODE_BIN" --check "$ag_root/servers/mcp-proxy.mjs" || { ok=0; agent_fatal=1; }
       if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 sh -c "$ag_command" >/dev/null; then
         warn "antigravity: $(t 'installed Hook runtime failed its smoke test' '已安装的 Hook 运行时 smoke test 失败')"
         ok=0; agent_fatal=1
+      elif [ -f "$(antigravity_plugin_dir)/mcp_config.json" ]; then
+        info "antigravity: $(t 'plugin installed (Hooks + MCP + skills)' '插件已安装（Hooks + MCP + skills）')"
       else
-        info "antigravity: $(t 'plugin installed (Hooks)' '插件已安装（Hooks）')"
+        info "antigravity: $(t 'plugin installed (Hooks + skills; MCP from your own config)' '插件已安装（Hooks + skills；MCP 沿用你自己的配置）')"
       fi
     else
       warn "antigravity: $(t 'plugin installation is incomplete' '插件安装不完整')"
@@ -3710,6 +3908,13 @@ plan_paths() { # plan_paths <label> <path...>
   plan_item "$label: $out"
 }
 
+plan_host_paths() { # plan_host_paths <label> <skills-dir> <path...>: the paths, then each skill it installs
+  local label="$1" skills="$2" skill
+  shift 2
+  for skill in $HOST_SKILLS; do set -- "$@" "$skills/$skill"; done
+  plan_paths "$label" "$@"
+}
+
 claude_plan_legacy() {
   local leftovers
   leftovers="$(claude_legacy_leftovers)"
@@ -3738,7 +3943,7 @@ print_plan() {
   user="$(cred_value "$CRED_USER" "$CUR_USER")"
   step_heading "$(t 'Review' '确认安装内容')"
   print_selection
-  info "$(t 'Server:' '服务地址：') $CRED_URL"
+  info "$(t 'Server:' '服务地址：') ${CRED_URL:-$(t '(existing settings)' '（沿用现有设置）')}"
   info "API key: $(mask_secret "$(cred_value "$CRED_KEY" "$CUR_KEY")")"
   if [ -n "$account" ]; then info "account: $account"; fi
   if [ -n "$user" ]; then info "user: $user"; fi
@@ -3794,18 +3999,20 @@ EOF
     plan_item "$bundle ($(t 'plugin bundle download' '下载插件包'))"
   fi
   if contains_harness cursor; then
-    plan_paths Cursor "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)" "$HOME/.cursor/rules/openviking-memory.mdc" \
-      "$HOME/.cursor/skills/openviking-memory" "$HOME/.cursor/skills/openviking-skills" \
-      "$HOME/.cursor/skills/ov-experience-memory" "$HOME/.cursor/skills/openviking-rule-search" "$OV_HOME/agent-integrations/cursor"
+    plan_host_paths Cursor "$HOME/.cursor/skills" "$HOME/.cursor/hooks.json" "$(cursor_mcp_path)" \
+      "$HOME/.cursor/rules/openviking-memory.mdc" "$OV_HOME/agent-integrations/cursor"
   fi
   if contains_harness trae; then
-    plan_paths TRAE "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)" "$OV_HOME/agent-integrations/trae"
+    plan_host_paths TRAE "$HOME/.trae/skills" "$HOME/.trae/hooks.json" "$(trae_mcp_path trae)" \
+      "$OV_HOME/agent-integrations/trae"
   fi
   if contains_harness trae-cn; then
-    plan_paths "TRAE CN" "$HOME/.trae-cn/hooks.json" "$(trae_mcp_path trae-cn)" "$OV_HOME/agent-integrations/trae-cn"
+    plan_host_paths "TRAE CN" "$HOME/.trae-cn/skills" "$HOME/.trae-cn/hooks.json" "$(trae_mcp_path trae-cn)" \
+      "$OV_HOME/agent-integrations/trae-cn"
   fi
   if contains_harness zcode; then
-    plan_paths ZCode "$HOME/.zcode/cli/config.json" "$HOME/.zcode/hooks.json" "$(zcode_mcp_path)" "$OV_HOME/agent-integrations/zcode"
+    plan_host_paths ZCode "$HOME/.zcode/skills" "$HOME/.zcode/cli/config.json" "$HOME/.zcode/hooks.json" \
+      "$(zcode_mcp_path)" "$OV_HOME/agent-integrations/zcode"
   fi
   if contains_harness antigravity; then
     plan_paths Antigravity "$(antigravity_plugin_dir)" "$OV_HOME/agent-integrations/antigravity"
@@ -3957,26 +4164,33 @@ EOF
     next_steps "$label" "$(t "restart $label" "重启 $label")" "$rerun" "$doctor" "$uninstall $client"
   done
   if contains_harness kimicode; then
-    next_steps "Kimi Code" "$(t 'start a new session (not /reload)' '新建会话（不要用 /reload）')" "$rerun" "" "$uninstall kimicode"
+    doctor="node $(short_path "${KIMI_CODE_HOME:-$HOME/.kimi-code}/plugins/managed/openviking-memory/agent-integrations/kimicode/scripts/ov-memory-doctor.mjs")"
+    next_steps "Kimi Code" "$(t 'start a new session (not /reload)' '新建会话（不要用 /reload）')" "$rerun" "$doctor" "$uninstall kimicode"
   fi
   if contains_harness antigravity; then
-    next_steps Antigravity "$(t 'start a new conversation in the Antigravity app or agy' '在 Antigravity app 或 agy 中新开一个对话')" "$rerun" "" "$uninstall antigravity"
+    doctor="node $(short_path "$OV_HOME/agent-integrations/antigravity/scripts/ov-memory-doctor.mjs")"
+    next_steps Antigravity "$(t 'start a new conversation in the Antigravity app or agy' '在 Antigravity app 或 agy 中新开一个对话')" "$rerun" "$doctor" "$uninstall antigravity"
   fi
   if contains_harness codebuddy; then
-    next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "" "$uninstall codebuddy"
+    doctor="node $(short_path "$OV_HOME/agent-integrations/codebuddy/marketplace/openviking-memory/agent-integrations/codebuddy/scripts/ov-memory-doctor.mjs")"
+    next_steps "CodeBuddy Code" "$(t 'run /reload-plugins or start a new session' '运行 /reload-plugins 或新建会话')" "$rerun" "$doctor" "$uninstall codebuddy"
   fi
   if contains_harness qoder; then
-    next_steps "Qoder CLI" "$(t "start a new $(qoder_clis | sed 's/ / or /') session" "新建一个 $(qoder_clis | sed 's/ / 或 /') 会话")" "$rerun" "" "$uninstall qoder"
+    doctor="node $(short_path "$OV_HOME/agent-integrations/qoder/marketplace/openviking-memory/agent-integrations/qoder/scripts/ov-memory-doctor.mjs")"
+    next_steps "Qoder CLI" "$(t "start a new $(qoder_clis | sed 's/ / or /') session" "新建一个 $(qoder_clis | sed 's/ / 或 /') 会话")" "$rerun" "$doctor" "$uninstall qoder"
   fi
   if contains_harness opencode && command -v opencode >/dev/null 2>&1; then
-    next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" "" \
+    next_steps OpenCode "$(t 'restart OpenCode' '重启 OpenCode')" "$rerun" \
+      "node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs" \
       "$(t "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js, then remove mcp.openviking from $(short_path "$(opencode_config_file)")" "rm -rf ~/.config/opencode/plugins/openviking ~/.config/opencode/plugins/openviking.js，再删除 $(short_path "$(opencode_config_file)") 中的 mcp.openviking")"
   fi
   if contains_harness pi && command -v pi >/dev/null 2>&1; then
-    next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" "" "rm -rf ~/.pi/agent/extensions/openviking"
+    next_steps pi "$(t 'restart pi' '重启 pi')" "$rerun" \
+      "node ~/.pi/agent/extensions/openviking/scripts/ov-memory-doctor.mjs" "rm -rf ~/.pi/agent/extensions/openviking"
   fi
   if contains_harness dsh && have_npm_dsh; then
-    next_steps "DeepSeek Harness" "$(t "start a new dsh session: dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" "新开一个 dsh 会话：dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}")" "$rerun" "" \
+    next_steps "DeepSeek Harness" "$(t "start a new dsh session: dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}" "新开一个 dsh 会话：dsh --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}")" "$rerun" \
+      "node $(short_path "$(dsh_home)/profiles/${DSH_PROFILE:-$DSH_PROFILE_DEFAULT}/node_modules/$DSH_PACKAGE/scripts/ov-memory-doctor.mjs")" \
       "dsh plugin --profile ${DSH_PROFILE:-$DSH_PROFILE_DEFAULT} rm $DSH_PACKAGE"
   fi
   if contains_harness dsh-desktop && [ "$DSH_DESKTOP_INSTALLED" -eq 1 ]; then
@@ -3984,7 +4198,7 @@ EOF
       "$(t 'quit DeepSeek Harness Desktop with ⌘Q if it is open, reopen it and start a new conversation' '如 DeepSeek Harness Desktop 已打开，用 ⌘Q 退出后重新打开，再新建对话')" \
       "$(t 're-run this installer, or update it on the Plugins page' '重新运行本安装脚本，或在“插件”页更新')" \
       "\"$DSH_DESKTOP_CLI\" plugin --profile desktop ls" \
-      "$(t "with Desktop quit, \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE; or Plugins page → $DSH_PACKAGE → Uninstall" "退出 Desktop 后运行 \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE；或在“插件”页 → $DSH_PACKAGE → 卸载")"
+      "$(t "with Desktop quit, \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm $DSH_PACKAGE; or Plugins page → $DSH_PACKAGE → Uninstall" "退出 Desktop 后运行 \"$DSH_DESKTOP_CLI\" plugin --profile desktop rm ${DSH_PACKAGE}；或在“插件”页 → $DSH_PACKAGE → 卸载")"
   elif contains_harness dsh-desktop; then
     next_steps "DeepSeek Harness Desktop" \
       "$(t "open DeepSeek Harness Desktop: Plugins → Add plugin → enter $DSH_PACKAGE → Install, then turn it on if its switch is off" "打开 DeepSeek Harness Desktop：插件 → 添加插件 → 输入 $DSH_PACKAGE → 安装，开关未打开时再打开")" \

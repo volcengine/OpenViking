@@ -53,6 +53,7 @@ Optional sections use their defaults when omitted. Unknown fields in `ov.conf` a
 |---|---|---|---|
 | `default_account` | string | `"default"` | Default account for the service context |
 | `default_user` | string | `"default"` | Default user for the service context |
+| `enable_default_resources` | boolean | `true` | Supply omitted local Embedding/VectorDB and preset default Account directories; see [resource configuration](../guides/01-configuration.md) |
 | `embedding` | object | built-in local dense model | Dense, sparse, and hybrid embedding; defaults to `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | empty config | Content understanding, summaries, and memory extraction; configure a working model before using these capabilities |
 | `query_planner` | object / `null` | `null` | Model for retrieval intent analysis and recall rewriting. Falls back to `vlm` when omitted or empty; recall rewrite in `auto` mode requires a configured cluster `query_planner` or an account-level `query_planner` or `vlm` override |
@@ -315,6 +316,15 @@ Search and Find requests default to `limit: 10`; override the limit on each API 
 | `parse_output.mode` | `agfs`, `local` | `agfs` | Backend for intermediate parser artifacts |
 | `parse_output.local_root` | path or `null` | system temp directory | Root directory used by local parser artifacts |
 | `skip_process_lock` | boolean | `false` | Skip the workspace process lock; use only when accepting concurrent-write risk |
+| `watch_store.provider` | `file`, `mysql`, `postgres` | `file` | Watch metadata and run occupancy; relational providers share persistent rows |
+
+PostgreSQL Watch storage requires `openviking[postgres]` and the provisioned
+`openviking/service/sql/001_watch_tasks_postgres.sql` schema. Configure
+`storage.watch_store.params` with connection fields and a shared
+`credential_encryption_key` (base64-encoded 32 bytes). It is independent of
+Task/Work, Account, PathLock and vector storage. See
+[Watch store configuration](../guides/01-configuration.md#watch-store) for the
+complete example, TLS settings and deployment requirements.
 
 For same-machine path locking on a local disk without recursive business-directory scans, set
 `storage.agfs.pathlock` to `{"provider":"sqlite"}`. The database defaults to
@@ -500,10 +510,8 @@ This setting controls queue-job concurrency. It is separate from `vlm.media.max_
 | Field | Type | Default | Description |
 |---|---|---:|---|
 | `max_concurrent` | integer | `4` | Number of complete AddResource jobs consumed concurrently; must be greater than `0`; requires a server restart after changes |
-| `file_operation_concurrency` | integer | `16` | Maximum concurrent file-level commit and fallback comparison operations within one AddResource job; must be greater than `0`; requires a server restart after changes |
-| `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, prepared, and enqueued within one directory AddResource job when `processing_mode="vectors_only"`; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
-`max_concurrent` controls independent AddResource jobs. `file_operation_concurrency` controls file commit and fallback comparison work within one AddResource job, while `file_vectorization_concurrency` controls files within one vectors-only directory job.
+`max_concurrent` controls independent AddResource jobs. File-level work within each job uses an internal bounded concurrency limit.
 
 ### `queue_workers.reindex`
 
@@ -561,6 +569,62 @@ native components. Rust has no `CRITICAL` level, so that threshold still maps to
 security-operation audit persistence remains a separate feature backlog. SDK imports do not take ownership of
 the host root logger. See the [logging policy](https://github.com/volcengine/OpenViking/blob/main/docs/repository/LOGGING.md) for content rules.
 
+## Usage/Audit PostgreSQL Settings
+
+`server.observability.usage_audit.backend` accepts `sqlite` (default) and `postgres`.
+PostgreSQL shares Token, retrieval, context-write and HTTP audit projections across
+server instances, preserving the Console API and viewer timezone behavior.
+
+```json
+{
+  "server": {
+    "observability": {
+      "usage_audit": {
+        "backend": "postgres",
+        "postgres": {
+          "host": "localhost",
+          "port": 5432,
+          "user": "openviking_runtime",
+          "password": "<password>",
+          "database": "openviking",
+          "schema": "openviking_usage_audit",
+          "maxsize": 10,
+          "connect_timeout": 10,
+          "lock_timeout_ms": 1000,
+          "sslmode": "prefer"
+        }
+      }
+    }
+  }
+}
+```
+
+Install `openviking[postgres]`. An administrator must provision
+`openviking/observability/usage_audit/sql/001_usage_audit_postgres.sql` once.
+Startup validates the schema; it never creates or migrates tables. For a custom
+schema, replace the schema name throughout the SQL script. Names must be lowercase
+SQL identifiers of 1–63 characters. The runtime role needs schema `USAGE`,
+table `SELECT/INSERT/UPDATE/DELETE`, and sequence `USAGE/SELECT`.
+Connection settings also accept `sslrootcert`, `sslcert`, and `sslkey`; DSNs are
+not accepted. Set `verify-ca` or `verify-full` according to production TLS requirements.
+
+The schema is now v2. For a preview v1 schema, stop all writers, have an administrator
+run `openviking/observability/usage_audit/sql/002_usage_audit_deletion_fence.sql`,
+then restart all instances with the new code; do not mix old writers.
+`lock_timeout_ms` defaults to `1000` (range `1..60000`) and bounds each database lock
+wait in write/delete transactions. Timeout rolls back the batch; the best-effort
+worker drops that batch. Deletion persists account/user generation fences to reject
+older events queued on other instances. Events admitted for that scope before a
+remote writer refreshes its generation are also conservatively dropped. Each write
+refreshes the generation; subsequently admitted events, including recreated identity
+IDs, can be stored normally. This decision does not depend on machine clocks.
+
+Retention settings match SQLite; `0` disables the corresponding limit. Changing
+backends does not migrate historical data. Events still use an in-process queue,
+without restart recovery or exactly-once delivery. This setting only shares
+Usage/Audit projections; configure other storage and distributed locks separately.
+See the [module guide](https://github.com/volcengine/OpenViking/blob/main/openviking/observability/usage_audit/README.md).
+
 ## Compile API Settings
 
 | Field | Type | Default | Description |
@@ -571,14 +635,6 @@ the host root logger. See the [logging policy](https://github.com/volcengine/Ope
 | `poll_interval_ms` | integer | `30000` | External task polling interval |
 
 When `base_url` is configured, OV sends the current user's OV API key in `X-API-Key`. It sends `X-Gateway-Token` only when `gateway_token` is configured.
-
-## Reindex Settings
-
-### `reindex`
-
-| Field | Type | Default | Description |
-|---|---|---:|---|
-| `file_vectorization_concurrency` | integer | `8` | Number of files concurrently read, fingerprinted, and prepared by one resource/skill reindex task; must be greater than `0`; values above the internal safety limit of `64` are capped; requires a server restart after changes |
 
 ## HTTP Server Settings
 

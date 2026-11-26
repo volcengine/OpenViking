@@ -8,7 +8,7 @@ This page is for admins who set up context profiles and upstreams, and for users
 
 ## What compaction does {#long-conversations}
 
-[Compaction](../guides/15-gateway.md#key-terms) keeps a conversation inside the model's context window, the most tokens one request can hold, and it is on by default. When a conversation nears the window, the same model writes a summary of the conversation so far, and from then on the summary replaces everything before the cut. The history shown in the client does not change. When saving is on and the model has the OpenViking `grep` and `read` tools, the summary ends with directions for [finding what was cut](#finding-what-was-cut).
+[Compaction](../guides/15-gateway.md#key-terms) keeps a conversation inside the model's context window, the most tokens one request can hold, and it is on by default. When a conversation nears the window, the same model writes a summary of the conversation so far, and from then on the summary replaces everything before the cut. The history shown in the client does not change. When saving is on and the model has the OpenViking `session_history` tool (or, without it, `grep` and `read`), the summary ends with directions for [finding what was cut](#finding-what-was-cut).
 
 In Studio: **Profiles** → **Long conversations**.
 
@@ -58,7 +58,8 @@ The request contains the conversation up to the cut, plus an instruction for the
 - files, paths and identifiers;
 - errors and how they were fixed;
 - open items;
-- key facts from the latest tool results.
+- key facts from the latest tool results;
+- when the conversation has the `session_history` tool, a closing list of exact strings to search for later: file paths, error messages, commands, identifiers and the user's own wording of requirements.
 
 The summary is plain text of at most **Summary length** (8,000) tokens. Thinking counts against the output cap, and some models (such as DeepSeek V4.1) think by default even when the request has no thinking settings, so the gateway always allows 16,000 tokens of output on top of the summary length; when the client sets an explicit thinking budget, it adds that budget instead. The provider bills this request like any other. The whole request may take at most `summary_timeout_seconds` ([configuration](13-configuration.md#gateway-fields); by default `upstream_timeout_seconds`, 600 seconds); after that it counts as a failed summary. Its time does not count against `prepare_timeout_seconds`.
 
@@ -79,12 +80,20 @@ Every later request that resends this history, including housekeeping and token-
 
 ### Finding what was cut {#finding-what-was-cut}
 
-The conversation itself is still saved in OpenViking. When **Save conversations** is on and the conversation has the `openviking_grep` and `openviking_read` tools, the summary ends with directions:
+The conversation itself is still saved in OpenViking. When **Save conversations** is on, the summary ends with directions that depend on the conversation's tools:
 
-- the conversation's OpenViking session (`viking://user/<user_id>/sessions/<session_id>/`) and where its messages are stored;
-- how to search them: grep the session for a specific pattern to get line numbers, then read the lines around a match.
+- **With `openviking_session_history`** (OpenViking servers whose MCP tools include `session_history`): what is saved (user and assistant messages and tool calls with their complete outputs, but not thinking, images or the gateway's own OpenViking tool calls), and how to search it for exact words, which prints the matching lines with their id and offset, and read an item from such an offset.
+- **Otherwise, with `openviking_grep` and `openviking_read`**: the conversation's OpenViking session (`viking://user/<user_id>/sessions/<session_id>/`) and where its messages are stored, and how to search them: grep the session for a specific pattern to get line numbers, then read the lines around a match.
 
 When a cut falls in the middle of a turn, the part before it is saved to OpenViking right away, so the model can search it within the same turn.
+
+`session_history` is offered like any other OpenViking tool and is turned off under **Tools** (see [Choose tools](04-openviking-tools.md#choose-tools)); it is not offered when **Save conversations** is off. A conversation keeps the tools it started with, so conversations that began before the server had the tool keep the grep directions. When the model leaves out the tool's `session` argument or leaves it blank, the gateway fills in the OpenViking sessions that hold this conversation's saved messages, newest first: the current one once anything has been saved to it, then up to five sessions the conversation was saved to before. A client's own compaction keeps the conversation in the same session; earlier sessions come only from [Resync conversation…](10-overview-and-requests.md#resync-a-conversation) or from an earlier gateway version. A `session` the model passes is sent unchanged. If nothing from the conversation is saved yet, for example during its first turn, the gateway answers the call itself, without asking OpenViking: there is nothing to look up yet, so the model works from what is in its context.
+
+A turn is written to OpenViking when its reply ends, so while a turn runs its latest messages are not saved yet. Unsaved messages that are still in the model's context need no warning. A summary or a new window replaces messages that are not saved yet only when a write was missed: the write at a cut inside a turn failed or was skipped because OpenViking was unavailable, or an earlier turn's save failed. When the gateway filled in `session` and that happened, the result ends with one line from the gateway: "Gateway note: the last *N* messages before your current context window are not saved yet and may be missing from this result." Messages that `openviking_new_context` cut earlier in the same request count too. When the gateway does not know how far this history is saved, because the last saved message is not in the request's history (the client compacted, edited or trimmed it) or because a resync started a new session that nothing has been written to yet, it adds no line. The line is added after any cut to **Result size**, so it is never lost.
+
+**History budget per window.** Like every OpenViking tool round, `session_history` results stay in the model's context until the next cut. Once the results in the current window add up to a fifth of the context window, or 8,000 tokens if that is more (enough for a search and a read even in a small window), further `session_history` calls in that window are answered with one line instead: earlier results are still in context, and more lookups are possible after the next compaction (or, with agent-managed windows, after the model starts a new window). The gateway measures this from the tool rounds it already stores for the window.
+
+**Upgrade order.** Upgrade the gateway before the OpenViking server that adds `session_history`, or together with it. An older gateway offers the server's new tool to new conversations as `openviking_session_history` too, but without the default session, the note and the budget; until that gateway is upgraded, put `session_history` in the profile's `disabled_tools` (uncheck it under **Tools**). A newer gateway with an older server keeps today's grep directions.
 
 ## See compaction in the request log {#see-compaction-in-the-request-log}
 
@@ -151,7 +160,7 @@ When the model calls `openviking_new_context`, the gateway replaces the conversa
 1. that this is window N, started by the model, and that the user did not write it;
 2. the reason, notes and next steps;
 3. the user's latest message, word for word;
-4. how to search earlier windows (under the same conditions as for [compaction](#finding-what-was-cut));
+4. how to search earlier windows (under the same conditions as for [compaction](#finding-what-was-cut)); with `session_history`, it also asks the model to put the ids of messages a later window will need in its notes;
 5. the conversation's opening gateway note.
 
 Later requests rebuild the same window from the client's history. The content before the reset is saved to OpenViking right away and stays searchable; the reason and notes appear only in the header and are not saved to OpenViking. Each reset costs one provider cache miss but needs no summary request.

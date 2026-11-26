@@ -55,7 +55,7 @@ test('failed background search refresh retains cached results alongside retry fe
       activeIndex: 0,
       hits: state.result?.resources ?? [],
       loading: state.loading,
-      error: state.error,
+      failure: state.failure,
       text: resolveLabels(undefined, 'en-US'),
       onHighlight() {},
       onOpen() {},

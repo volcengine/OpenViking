@@ -70,11 +70,27 @@ ScopeCascade 不走共享 Client，没有 `requestOptions`，也不需要 Provid
 | monitoring         | 前端质量和异常的接入配置，见[前端监控](../guide/monitoring)                                          | `OpenVikingMonitoringOptions \| false`        | 继承上级，根默认关闭     |
 | queryClient        | 复用宿主的 TanStack Query v5 客户端，省略时继承上层或创建内部实例                                    | `QueryClient`                                 | 按 Provider 生命周期创建 |
 | requestConcurrency | 按接口路径设置最大在途请求数，值为正整数，逐接口覆盖并继承                                           | `Partial<Record<OvPath, number>>`             | `{ [OV_PATHS.fsLs]: 3 }` |
+| userRootMode       | 目录树的用户根展示方式；`current` 直接展示已解析的当前用户，`all` 沿用目录接口结果                   | `'all' \| 'current'`                          | 继承上级，默认 `'all'`   |
 | children           | 使用这套请求配置的子树                                                                               | `ReactNode`                                   | -                        |
 
 - 身份字段 `apiKey`、`accountId`、`userId` 和 `resourceId` 也可以传函数，每次请求重新求值，因此能读到轮换后的凭证。
 - `fetch`、`signal` 和函数形式的身份字段按引用比较，变化会创建新的 Client，使用它的区块随之重置，请保持它们的引用稳定。
 - Provider 挂载时不发请求，也不读取浏览器里保存的凭证。
+
+### 当前用户目录
+
+个人工作台只需要展示当前用户时，设置 `userRootMode="current"`，并通过 Provider 的 `userId` 或区块的 `requestOptions.userId` 提供身份：
+
+```tsx
+<OpenVikingProvider userId={userId} userRootMode="current">
+  <FileBrowser />
+  <Console />
+</OpenVikingProvider>
+```
+
+文件树、搜索范围目录选择器和 Console 引用目录树会在本地生成 `viking://user/{userId}` 节点；展开具体用户目录时才请求其内容。身份字段仍按请求配置规则解析，支持继承、局部覆盖和异步函数；没有用户 ID 时继续请求原生目录接口。
+
+嵌套 Provider 省略此字段时继承上层，可显式设为 `all` 恢复原生列举。不同模式的用户根缓存分别保存。此选项只影响目录树，原始 Client 和 Console 命令请求仍直接调用原生 API。
 
 ### 查询缓存与并发
 

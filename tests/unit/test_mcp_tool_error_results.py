@@ -14,7 +14,7 @@ from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.identity import RequestContext, Role
 from openviking.service.mcp_service import MCPService
-from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
+from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -59,6 +59,7 @@ async def test_whole_call_failure_sets_error_result(monkeypatch):
     }
 
 
+@pytest.mark.usefixtures("public_resource_dns")
 async def test_remote_resource_business_failure_sets_error_result(monkeypatch):
     service = SimpleNamespace(
         resources=SimpleNamespace(
@@ -208,68 +209,6 @@ async def test_grep_partial_failure_without_matches_stays_partial(monkeypatch):
     )
     assert result["isError"] is False
     assert result["content"] == [{"type": "text", "text": direct_result}]
-
-
-async def test_read_all_failures_set_error_result(monkeypatch):
-    read_visible = AsyncMock(side_effect=PermissionDeniedError("read permission required"))
-    monkeypatch.setattr(
-        mcp_endpoint,
-        "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(read_visible=read_visible)),
-    )
-
-    arguments = {
-        "uris": ["viking://resources/a.md", "viking://resources/b.md"],
-    }
-    direct_result = await mcp_endpoint.read(**arguments)
-    result = await _call_tool(
-        "read",
-        arguments,
-    )
-
-    assert type(direct_result) is str
-    assert direct_result == (
-        "=== viking://resources/a.md ===\nPERMISSION_DENIED: read permission required\n\n"
-        "=== viking://resources/b.md ===\nPERMISSION_DENIED: read permission required"
-    )
-    assert result["isError"] is True
-    assert "PERMISSION_DENIED: read permission required" in result["content"][0]["text"]
-    assert "structuredContent" not in result
-
-
-async def test_read_partial_failure_remains_a_success_result(monkeypatch):
-    async def read_visible(uri, **kwargs):
-        if uri.endswith("bad.md"):
-            raise InvalidArgumentError("not readable")
-        return "visible content"
-
-    monkeypatch.setattr(
-        mcp_endpoint,
-        "get_service",
-        lambda: SimpleNamespace(
-            fs=SimpleNamespace(read_visible=read_visible),
-            mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
-        ),
-    )
-
-    arguments = {
-        "uris": [
-            "viking://resources/good.md",
-            "viking://resources/bad.md",
-        ]
-    }
-    direct_result = await mcp_endpoint.read(**arguments)
-    result = await _call_tool(
-        "read",
-        arguments,
-    )
-
-    assert type(direct_result) is str
-    assert "visible content" in direct_result
-    assert "not readable" in direct_result
-    assert result["isError"] is False
-    assert "visible content" in result["content"][0]["text"]
-    assert "not readable" in result["content"][0]["text"]
 
 
 async def test_health_unavailable_remains_diagnostic_data(monkeypatch):

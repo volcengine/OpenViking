@@ -23,7 +23,7 @@ POST /api/v1/compile/create
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `compile_name` | string | Yes | Caller-selected configuration name; returned unchanged |
-| `from` | string[] | Yes | Non-empty source directory list |
+| `from` | string[] | Yes | 1 to 100 distinct source directories, counted after URI resolution |
 | `to` | string | Yes | Output directory, writable by the caller and disjoint from the sources |
 | `skill` | string | Yes | Readable Skill directory or its `SKILL.md` URI |
 | `instruction` | string | No | Additional instructions; null uses the Skill's default behavior |
@@ -61,7 +61,11 @@ Scheduling controls are stored separately from Runtime arguments. A non-null sch
 
 With only the frequency, the server assigns a fixed time between 00:00 and 03:59. Weekly schedules also get a fixed `weekday` (1=Monday through 7=Sunday) when omitted. Supplying only `hour` (0–23) assigns a fixed minute within that hour, so `hour: 10` runs between 10:00 and 10:59. Supplying only `minute` (0–59) sets the hour to zero. Read the configuration's `update_schedule` to see the assigned values.
 
-Scheduled execution requires `compile_api.scheduler_enabled=true` and the configured Redis expiry service. Credentials are encrypted and revalidated, including current group permissions, at each trigger. Disabled or unavailable scheduling returns an error; creation never submits an execution as a fallback. A disabled schedule has `next_triggered_slot: null`.
+Scheduled execution requires `compile_api.scheduler_enabled=true` and a Redis
+CacheRuntime selected by `expiry.cache.instance`. Credentials are encrypted and
+revalidated, including current group permissions, at each trigger. Disabled or
+unavailable scheduling returns an error; creation never submits an execution
+as a fallback. A disabled schedule has `next_triggered_slot: null`.
 
 ### Execute Compile
 
@@ -202,6 +206,11 @@ A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `f
 
 No-op runs may reuse the start snapshot. Failure and cancellation do not advance the successful source baseline. Execution plans and necessary recovery checkpoints remain private Task state; public configuration, runs and tasks never expose execution credentials.
 
+VikingBot reports `result.completion_status: "partial"` when known source, worker or write
+failures remain after execution. Confirmed output is retained, and a named Compile keeps
+its previous source baseline so unchanged missed inputs remain eligible for the next run.
+The marker is omitted otherwise; its absence does not prove semantic coverage or successful indexing.
+
 The only Compile business files are:
 
 ```text
@@ -215,7 +224,7 @@ Configurations are stored in account and user directories. Public APIs locate co
 
 State contains exactly `from`, `to`, `skill`, `instruction`, `args`, `auto_update`, `update_schedule`, `task_first_create_time`, `last_run_time`, `last_triggered_slot`, `next_triggered_slot`, `progress`, `updated_by`, and `execution_context`. `progress` stores the successful incremental baseline, including the successful request's `model_name` (an empty string when unspecified); `execution_context` stores internal execution context and encrypted arguments.
 
-Successful Compile finalization publishes output snapshots and advances the incremental baseline. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
+Successful Compile finalization publishes output snapshots. A complete delivery with at least one target file added, modified, or deleted advances the incremental baseline. Incremental recovery after partial delivery can also advance the baseline with zero target changes when it accounts for every added or modified source and verifies its read contents against the frozen source snapshot. A zero-change run with unverified sources, deletions, or full scans retains the baseline. Rollback schedules index rebuilding for restored and deleted paths without waiting for the rebuild to finish.
 
 ### Check Compile availability
 

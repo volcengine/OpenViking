@@ -812,6 +812,7 @@ pub(super) async fn dispatch(
             tags,
             read_content,
             events_time_decay_protection,
+            args,
         } => {
             handlers::handle_search(
                 query,
@@ -829,6 +830,7 @@ pub(super) async fn dispatch(
                 tags,
                 read_content,
                 events_time_decay_protection,
+                args,
                 ctx,
             )
             .await

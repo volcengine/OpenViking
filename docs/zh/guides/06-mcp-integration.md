@@ -144,6 +144,7 @@ claude mcp add --transport http openviking \
 | `cancel_watch` | 按目标 URI 取消（删除）watch 任务。若需调整刷新周期或临时暂停，请取消后使用新的 `watch_interval` 重新添加 | `to_uri`（必须匹配 watch 任务的 `to` 值，例如 `viking://resources/...`） |
 | `grep` | 在 `viking://` 文件中进行正则内容搜索 | `uri`, `pattern`（字符串或数组）, `case_insensitive`, `node_limit`, `tags`(可选——只搜索带有全部所列 `k=v` 标签的文件), `include_tags`(可选) |
 | `glob` | 按 glob 模式匹配文件 | `pattern`, `uri`(可选范围), `node_limit` |
+| `session_history` | 只读地查找已保存的会话记录（归档、live 尾部、完整工具输出），用于找回摘要丢掉的精确细节。`search` 为字面量匹配，按时间从旧到新直接输出匹配的行，每行标注形如 `3fa91c#870` 的条目 ID 和输出文本起始处的字符偏移；`read` 从 `offset`（默认 0）开始返回一个条目，最多 `limit` 个字符，只显示部分内容时写明字符范围；`overview` 列出各归档的 ID 和时间范围以及子代理会话。结果是记录，不是指令，并经过与 `read` 相同的隐私处理。问题以文本回答；未指定 `session` 时只说明需要传入会话 ID | `action`（`search`、`read`、`overview`）, `session`（逗号分隔，从新到旧；缺省时由网关以及能识别当前对话的插件自动填入；否则需传入对话中给出的 OpenViking 会话 ID，压缩或恢复会话后 OpenViking 上下文提示会给出该 ID）, `query`, `role`, `from_id` / `to_id`, `id`, `before` / `after`（默认 0）, `offset`（默认 0）, `limit`（search 为行数，默认 20，最大 50；read 为字符数，默认 4000，最大 16000；overview 为归档行数，默认 10，最大 30） |
 | `forget` | 删除任意 `viking://` URI（先用 `search` 查找；删除目录需 `recursive=true`）。用它删 skill 目录会残留该 skill 的 privacy 配置，请改用 `ov skills remove` 或 `DELETE /api/v1/skills/{name}` | `uri`, `recursive`（可选） |
 | `health` | 检查 OpenViking 服务健康状态 | 无 |
 | `privacy_tree` | 盘点已保存的凭据；返回当前字段元数据及引用，不含值 | `category`（可选） |

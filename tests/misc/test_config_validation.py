@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from openviking.scheduling.expiry.config import ExpiryConfig
 from openviking.utils.agfs_utils import (
     RagfsBindingConfig,
     _cache_shares_redis_backend,
@@ -21,7 +22,10 @@ from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking_cli.utils.config.cache_config import CacheConfig
 from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfig,
+    is_valid_openviking_config,
+)
 from openviking_cli.utils.config.storage_config import StorageConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VolcengineConfig
 from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -37,6 +41,43 @@ def test_postgres_pathlock_binding_without_redis(tmp_path):
     assert binding["pathlock"]["postgres_dsn_env"] == "OV_POSTGRES_DSN"
     assert binding["service_name"] == "pg-community"
     assert not binding["cache"]["enabled"]
+
+
+def test_postgres_queuefs_binding_without_redis(tmp_path):
+    config = AGFSConfig(
+        path=str(tmp_path),
+        queuefs={
+            "backend": "postgres",
+            "postgres_dsn_env": "OV_QUEUE_PG_DSN",
+            "postgres_lease_seconds": 45,
+        },
+    )
+    binding = RagfsBindingConfig(agfs=config, service_name="pg-queues").to_binding_dict()
+    plugins = _generate_plugin_config(config, tmp_path, service_name="pg-queues")
+    assert plugins["queuefs"]["config"] == {
+        "backend": "postgres",
+        "service_name": "pg-queues",
+        "postgres_dsn_env": "OV_QUEUE_PG_DSN",
+        "postgres_lease_seconds": 45,
+    }
+    assert not binding["cache"]["enabled"]
+    assert "db_path" not in plugins["queuefs"]["config"]
+
+
+@pytest.mark.parametrize("value", [None, "", "  ", "dsn-url://secret", "9ENV", "非ASCII", 42])
+def test_postgres_queuefs_requires_dsn_environment_name(value):
+    with pytest.raises(ValueError):
+        AGFSConfig(queuefs={"backend": "postgres", "postgres_dsn_env": value})
+
+
+@pytest.mark.parametrize("seconds", [0, 9, 86401, "invalid"])
+def test_postgres_queuefs_rejects_invalid_lease(seconds):
+    with pytest.raises(ValueError):
+        AGFSConfig(queuefs={
+            "backend": "postgres",
+            "postgres_dsn_env": "OV_QUEUE_PG_DSN",
+            "postgres_lease_seconds": seconds,
+        })
 
 
 @pytest.mark.parametrize("value", [None, "", "  ", 42])
@@ -1397,29 +1438,21 @@ def test_vlm_validation():
     print("Test VLM config validation")
     print("=" * 60)
 
-    # Test 1: VLM not configured (optional)
-    print("\n1. Test VLM not configured (optional)...")
-    try:
-        _ = VLMConfig()
-        print("   Pass (VLM is optional)")
-    except ValueError as e:
-        print(f"   Fail: {e}")
+    embedding = {"dense": {"provider": "local", "model": "bge-small-zh-v1.5-f16"}}
+    config = OpenVikingConfig.from_dict({"embedding": embedding})
+    with pytest.raises(ValueError, match="A VLM is required"):
+        is_valid_openviking_config(config)
 
-    # Test 2: VLM partial config (has model but no api_key)
-    print("\n2. Test VLM partial config...")
-    try:
-        _ = VLMConfig(model="gpt-4")
-        print("   Should fail but passed")
-    except ValueError as e:
-        print(f"   Correctly raised exception: {e}")
+    with pytest.raises(ValueError, match="api_key"):
+        VLMConfig(model="gpt-4")
 
-    # Test 3: VLM complete config
-    print("\n3. Test VLM complete config...")
-    try:
-        _ = VLMConfig(model="gpt-4", api_key="fake-api-key-for-testing", provider="openai")
-        print("   Pass")
-    except ValueError as e:
-        print(f"   Fail: {e}")
+    config = OpenVikingConfig.from_dict(
+        {
+            "embedding": embedding,
+            "vlm": {"provider": "openai", "model": "gpt-4", "api_key": "test-key"},
+        }
+    )
+    assert is_valid_openviking_config(config)
 
     # Test 4: VLM Provider/Backend sync
     print("\n4. Test VLM Provider/Backend sync...")
@@ -1472,8 +1505,8 @@ def _mysql_watch_store_config(watch_params):
 
 def test_watch_store_defaults_to_file_and_rejects_unknown_providers():
     assert OpenVikingConfig.from_dict({}).storage.watch_store.provider == "file"
-    with pytest.raises(ValueError, match="'file' or 'mysql'"):
-        OpenVikingConfig.from_dict({"storage": {"watch_store": {"provider": "sqlite"}}})
+    with pytest.raises(ValueError, match="'file', 'mysql', 'postgres' or 'sqlite'"):
+        OpenVikingConfig.from_dict({"storage": {"watch_store": {"provider": "unknown"}}})
 
 
 def test_mysql_watch_store_requires_credential_encryption_key():
@@ -1514,13 +1547,18 @@ def test_coordination_cache_activates_shared_runtime_without_cachefs():
     assert not binding["cache"]["enabled"]
 
 
+@pytest.mark.parametrize("store_provider", ["mysql", "postgres"])
 @pytest.mark.parametrize("leader_provider", ["cache", "auto", None])
-def test_legacy_watch_cache_selects_coordination_and_activates_shared_runtime(leader_provider):
+def test_legacy_watch_cache_selects_coordination_and_activates_shared_runtime(
+    leader_provider, store_provider
+):
     data = (
         _mysql_watch_store_config({"credential_encryption_key": "a" * 43 + "="})
         if leader_provider != "cache"
         else {}
     )
+    if leader_provider != "cache":
+        data["storage"]["watch_store"]["provider"] = store_provider
     if leader_provider is not None:
         data["watch_leader_provider"] = leader_provider
     with pytest.raises(ValueError, match="top-level cache"):
@@ -1612,6 +1650,10 @@ def _redis_cache(endpoints=None):
 
 def test_cache_shared_redis_backend_detection():
     cache = _redis_cache()
+    cache["instances"]["expiry"] = {
+        "provider": "redis",
+        "params": {"endpoints": ["redis://127.0.0.1:6380"]},
+    }
 
     assert _cache_shares_redis_backend(
         cache,
@@ -1626,7 +1668,7 @@ def test_cache_shared_redis_backend_detection():
     assert _cache_shares_redis_backend(
         cache,
         {"cachefs": {"backend": "cache"}},
-        {"redis": {"endpoints": ["redis://127.0.0.1:6379"]}},
+        {"cache": {"instance": "default"}},
     )
     assert not _cache_shares_redis_backend(
         cache,
@@ -1645,54 +1687,33 @@ def test_cache_shared_redis_backend_uses_default_cache_endpoint():
     )
 
 
-def test_cache_shares_redis_backend_with_scheme_less_expiry_endpoint():
-    """`ExpiryRedisConfig` accepts bare `host:port` endpoints and resolves them at runtime."""
+def test_cache_shares_redis_backend_with_named_expiry_instance():
+    """Expiry compares CacheFS with the selected named cache instance."""
     cache = _redis_cache()
+    cache["instances"]["expiry"] = {
+        "provider": "redis",
+        "params": {"endpoints": ["redis://127.0.0.1:6379"]},
+    }
 
     assert _cache_shares_redis_backend(
         cache,
         {"cachefs": {"backend": "cache"}},
-        {"redis": {"endpoints": ["127.0.0.1:6379"]}},
-    )
-    assert _cache_shares_redis_backend(
-        cache,
-        {"cachefs": {"backend": "cache"}},
-        {"redis": {"endpoints": ["127.0.0.1:6379"], "tls": True}},
-    )
-    assert _cache_shares_redis_backend(
-        _redis_cache(["rediss://127.0.0.1:6379"]),
-        {"cachefs": {"backend": "cache"}},
-        {"redis": {"endpoints": ["127.0.0.1:6379"], "tls": True}},
-    )
-    assert not _cache_shares_redis_backend(
-        cache,
-        {"cachefs": {"backend": "cache"}},
-        {"redis": {"endpoints": ["127.0.0.2:6379"]}},
-    )
-    assert not _cache_shares_redis_backend(
-        cache,
-        {"cachefs": {"backend": "cache"}},
-        {"redis": {"endpoints": ["127.0.0.1:6380"]}},
-    )
-    assert not _cache_shares_redis_backend(
-        cache,
-        {"cachefs": {"backend": "cache"}},
-        {"redis": {"endpoints": []}},
+        {"cache": {"instance": "expiry"}},
     )
     assert not _cache_shares_redis_backend(cache, {"cachefs": {"backend": "cache"}}, None)
 
 
 def test_cache_shares_redis_backend_compares_service_identity():
     """One host and port identifies one Redis service, whatever the transport scheme."""
+    cache = _redis_cache(["redis://Redis.Local:6379"])
+    cache["instances"]["expiry"] = {
+        "provider": "redis",
+        "params": {"endpoints": ["rediss://redis.local:6379"]},
+    }
     assert _cache_shares_redis_backend(
-        _redis_cache(["redis://Redis.Local:6379"]),
+        cache,
         {"cachefs": {"backend": "cache"}},
-        {"redis": {"endpoints": ["redis.local:6379"]}},
-    )
-    assert _cache_shares_redis_backend(
-        _redis_cache(["redis://127.0.0.1:6379"]),
-        {"cachefs": {"backend": "cache"}},
-        {"redis": {"endpoints": ["rediss://127.0.0.1:6379"]}},
+        {"cache": {"instance": "expiry"}},
     )
 
 
@@ -1738,8 +1759,8 @@ def test_redis_service_keys_normalizes_endpoints():
     assert _redis_service_keys(["redis://[::1"]) == set()
 
 
-def test_shared_redis_ttl_follows_the_expiry_redis_endpoint(tmp_path):
-    """A bare expiry endpoint still marks the cache Redis as a shared service."""
+def test_shared_redis_ttl_follows_the_expiry_cache_instance(tmp_path):
+    """The selected expiry cache instance marks one CacheFS Redis as shared."""
     config = OpenVikingConfig.from_dict(
         {
             "storage": {
@@ -1748,8 +1769,18 @@ def test_shared_redis_ttl_follows_the_expiry_redis_endpoint(tmp_path):
                     "cachefs": {"backend": "cache", "shared_redis_ttl_seconds": 600},
                 },
             },
-            "cache": _redis_cache(),
-            "expiry": {"redis": {"endpoints": ["127.0.0.1:6379"]}},
+            "cache": {
+                "instances": {
+                    "default": {
+                        "provider": "redis",
+                        "params": {
+                            "endpoints": ["redis://127.0.0.1:6379"],
+                            "default_ttl_seconds": 0,
+                        },
+                    }
+                }
+            },
+            "expiry": {"cache": {"instance": "default"}},
         }
     )
 
@@ -1759,7 +1790,7 @@ def test_shared_redis_ttl_follows_the_expiry_redis_endpoint(tmp_path):
     assert binding.to_binding_dict()["cache"]["cachefs"]["shared_redis_ttl_seconds"] == 600
 
 
-def test_shared_redis_ttl_is_disabled_for_an_isolated_expiry_redis(tmp_path):
+def test_shared_redis_ttl_is_disabled_for_an_isolated_expiry_cache(tmp_path):
     config = OpenVikingConfig.from_dict(
         {
             "storage": {
@@ -1768,8 +1799,22 @@ def test_shared_redis_ttl_is_disabled_for_an_isolated_expiry_redis(tmp_path):
                     "cachefs": {"backend": "cache", "shared_redis_ttl_seconds": 600},
                 },
             },
-            "cache": _redis_cache(),
-            "expiry": {"redis": {"endpoints": ["127.0.0.1:6380"]}},
+            "cache": {
+                "instances": {
+                    "default": {
+                        "provider": "redis",
+                        "params": {"endpoints": ["redis://127.0.0.1:6379"]},
+                    },
+                    "expiry": {
+                        "provider": "redis",
+                        "params": {
+                            "endpoints": ["redis://127.0.0.1:6380"],
+                            "default_ttl_seconds": 0,
+                        },
+                    },
+                }
+            },
+            "expiry": {"cache": {"instance": "expiry"}},
         }
     )
 
@@ -1777,3 +1822,84 @@ def test_shared_redis_ttl_is_disabled_for_an_isolated_expiry_redis(tmp_path):
 
     assert binding.shared_redis_backend is False
     assert binding.to_binding_dict()["cache"]["cachefs"]["shared_redis_ttl_seconds"] == 0
+
+
+def test_expiry_uses_named_redis_runtime_without_cachefs(tmp_path):
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {"workspace": str(tmp_path), "agfs": {}},
+            "cache": {
+                "instances": {
+                    "default": {"provider": "redis", "params": {}},
+                    "expiry": {
+                        "provider": "redis",
+                        "params": {"default_ttl_seconds": 0},
+                    },
+                }
+            },
+            "memory": {"session_auto_commit": {"enabled": True, "idle_backend": "redis"}},
+            "expiry": {"service_name": "test", "cache": {"instance": "expiry"}},
+        }
+    )
+
+    binding, _ = build_runtime_ragfs_binding_config(config)
+
+    assert binding.to_binding_dict()["cache"]["runtime_enabled"] is True
+
+
+def test_directory_ttl_required_runtime_enables_binding_without_cachefs(tmp_path):
+    """Enable CacheRuntime when Directory TTL is the only cache consumer."""
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {"workspace": str(tmp_path), "agfs": {}},
+            "cache": {
+                "instances": {
+                    "default": {"provider": "redis", "params": {}},
+                    "ttl": {"provider": "redis", "params": {}},
+                }
+            },
+        }
+    )
+
+    binding, _ = build_runtime_ragfs_binding_config(
+        config,
+        required_cache_instances={"Directory TTL": "ttl"},
+    )
+
+    assert binding.to_binding_dict()["cache"]["runtime_enabled"] is True
+
+
+def test_directory_ttl_rejects_non_redis_required_runtime(tmp_path):
+    """Reject a dynamic Runtime selected for Redis-scripted Directory TTL."""
+    config = OpenVikingConfig.from_dict(
+        {
+            "storage": {"workspace": str(tmp_path), "agfs": {}},
+            "cache": {
+                "instances": {
+                    "default": {"provider": "redis", "params": {}},
+                    "ttl": {
+                        "provider": "dynamic",
+                        "params": {"library": "/tmp/openviking-cache-provider.dylib"},
+                    },
+                }
+            },
+        }
+    )
+
+    binding, _ = build_runtime_ragfs_binding_config(
+        config,
+        required_cache_instances={"Directory TTL": "ttl"},
+    )
+
+    with pytest.raises(ValueError, match="Directory TTL requires cache instance 'ttl'"):
+        binding.to_binding_dict()
+
+
+def test_expiry_rejects_legacy_redis_configuration():
+    with pytest.raises(ValueError, match="redis"):
+        OpenVikingConfig.from_dict({"expiry": {"redis": {"endpoints": ["redis://localhost:6379"]}}})
+
+
+def test_expiry_cache_instance_name_matches_named_cache_contract():
+    with pytest.raises(ValueError, match="cache.instance"):
+        ExpiryConfig(cache={"instance": "invalid instance"})

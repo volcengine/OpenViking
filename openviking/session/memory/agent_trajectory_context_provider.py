@@ -113,6 +113,8 @@ class AgentTrajectoryContextProvider(SessionExtractContextProvider):
         else:
             self._sync_skill_provider_state()
             messages = await self._skill_provider.prefetch()
+            if self._include_trajectories:
+                messages[0] = self._build_conversation_message()
         if len(self.case_candidates) > 1:
             candidates = [
                 {key: case[key] for key in ("id", "name", "task_signature", "input")}

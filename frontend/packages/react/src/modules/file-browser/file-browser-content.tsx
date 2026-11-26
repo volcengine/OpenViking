@@ -1,19 +1,13 @@
 import { useExposureRef } from '../../shared/analytics/use-exposure.js';
 import { LocaleProvider, useLocale } from '../../shared/locale-context.js';
-import { forwardRef, useMemo, useState, type CSSProperties } from 'react';
+import { forwardRef, useMemo } from 'react';
 
 import { ResizableHandle } from '../../shared/primitives/resizable/index.js';
 import { FileBrowserPreviewPane } from './file-browser-preview-pane.js';
-import {
-  SIDE_BY_SIDE_MIN_WIDTH,
-  TREE_DEFAULT_WIDTH,
-  TREE_MIN_WIDTH,
-  resolveTreeMaxWidth,
-} from './file-browser-layout.js';
 import { FileBrowserTreePane } from './file-browser-tree-pane.js';
 import { FileBrowserSearch } from './file-browser-search.js';
 import { resolveLabels, resolvePaneLabels } from './file-browser-labels.js';
-import { useContainerWidth } from './use-container-width.js';
+import { useFileBrowserLayout } from './use-file-browser-layout.js';
 import { useFileBrowserSearchDialog } from './use-file-browser-search-dialog.js';
 import { useFileBrowser } from './use-file-browser.js';
 import { useFileBrowserAcl } from './use-file-browser-acl.js';
@@ -59,6 +53,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     renderDashboard,
     acl,
     readOnly,
+    hideDeniedEntries,
     previewActions,
     onUriChange,
     onSelect,
@@ -76,21 +71,13 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   const locale = useLocale(localeProp);
   const { currentUri, isControlled, reportedUri, changeUri } =
     useFileBrowserUri(uri, defaultUri, onUriChange);
-  const [preferredTreeWidth, setPreferredTreeWidth] =
-    useState(TREE_DEFAULT_WIDTH);
-  const { ref: layoutRef, width } = useContainerWidth<HTMLDivElement>();
-  const stacked = width > 0 && width < SIDE_BY_SIDE_MIN_WIDTH;
+  const {
+    ref: layoutRef,
+    stacked,
+    divider,
+    layoutStyle,
+  } = useFileBrowserLayout(locale);
   const text = resolveLabels(labels, locale, stacked);
-
-  // 上限随容器变化：宿主把整个模块塞进窄栏时，树不能继续按 520px 抢地方。当前
-  // 宽度再夹一次而不是丢掉，容器重新变宽时树会回到拖动过的位置。
-  //
-  // The cap follows the container: a host squeezing the module into a narrow column
-  // must not have the tree keep claiming 520px. The current width is re-clamped
-  // rather than discarded, so the tree returns to where it was dragged once the
-  // container widens again.
-  const treeMaxWidth = resolveTreeMaxWidth(width);
-  const treeWidth = Math.min(preferredTreeWidth, treeMaxWidth);
 
   // Keep preview and summary copy stable until locale or host overrides change.
   const { summaryLabels, previewLabels } = useMemo(
@@ -99,6 +86,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   );
   const browser = useFileBrowser({
     rootUri,
+    hideDeniedEntries,
     locale,
     dashboardKinds,
     experienceDataSource,
@@ -126,6 +114,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
     locale,
     labels: labels?.acl,
     requestOptions,
+    refreshGeneration: browser.refreshGeneration,
     refresh: browser.actions.refresh,
   });
   const pack = usePackImportPicker(layoutRef, text, locale, permissions);
@@ -140,9 +129,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
   );
 
   const search = useFileBrowserSearchDialog(layoutRef);
-  const baseClass = stacked
-    ? 'ov-file-browser ov-file-browser--stacked'
-    : 'ov-file-browser';
+  const baseClass = `ov-file-browser${stacked ? ' ov-file-browser--stacked' : ''}`;
 
   const exposure = useExposureRef('file_browser_show', layoutRef);
   return (
@@ -152,15 +139,7 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
         ref={exposure}
         className={[baseClass, rest.className].filter(Boolean).join(' ')}
         {...search.shortcut}
-        style={
-          {
-            ...rest.style,
-            // 分隔条是独立一列，树宽只作用在自己身上，两者相加才是左栏占用。
-            // The divider is its own column: the tree width applies to the tree alone
-            // and the two together are what the left side occupies.
-            '--ov-file-browser-tree-width': `${treeWidth}px`,
-          } as CSSProperties
-        }
+        style={{ ...rest.style, ...layoutStyle }}
       >
         <div className="ov-file-browser__tree">
           <FileBrowserTreePane
@@ -189,16 +168,14 @@ export const FileBrowserContent: FileBrowserComponent = forwardRef<
           />
         </div>
 
-        {!stacked ? (
+        {divider && (
           <ResizableHandle
+            key={divider.orientation}
+            {...divider}
             label={text.resizeTree}
-            min={TREE_MIN_WIDTH}
-            max={treeMaxWidth}
-            value={treeWidth}
-            onResize={setPreferredTreeWidth}
             className="ov-file-browser__resizer"
           />
-        ) : null}
+        )}
 
         <FileBrowserPreviewPane
           browser={browser}

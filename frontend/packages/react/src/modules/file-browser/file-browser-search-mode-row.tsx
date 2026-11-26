@@ -22,7 +22,7 @@ export function FileBrowserSearchModeRow({
         </>
       ) : null}
       <span className="ov-file-browser-search__mode-chip">{mode}</span>
-      <span>{text.searchVia}</span>
+      <span>{text.searchModeHints[mode]}</span>
       <FileBrowserSearchModeMenu
         value={mode}
         text={text}

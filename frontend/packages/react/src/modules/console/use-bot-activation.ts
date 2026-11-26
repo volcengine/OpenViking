@@ -6,7 +6,12 @@ import type {
 
 export type BotActivationState =
   | {
-      status: ConsoleBotActivationStatus | 'disabled' | 'checking' | 'starting';
+      status:
+        | ConsoleBotActivationStatus
+        | 'disabled'
+        | 'checking'
+        | 'cancelled'
+        | 'starting';
     }
   | { status: 'collection-error'; error: unknown }
   | { status: 'load-error'; error: unknown }
@@ -21,14 +26,14 @@ function createBotActivation({
   enabled: boolean;
   signal?: AbortSignal;
 }) {
-  let state: BotActivationState = {
-    status:
-      !enabled || (activation && scopeSignal?.aborted)
-        ? 'disabled'
-        : activation
-          ? 'checking'
-          : 'ready',
-  };
+  const initialState = activation?.initialState;
+  let state: BotActivationState;
+  if (!enabled) state = { status: 'disabled' };
+  else if (!activation) state = { status: 'ready' };
+  else if (scopeSignal?.aborted) state = { status: 'cancelled' };
+  else if (initialState?.status === 'error') {
+    state = { status: 'load-error', error: initialState.error };
+  } else state = { status: initialState?.status ?? 'checking' };
   let active = false;
   let request: AbortController | undefined;
   const listeners = new Set<() => void>();
@@ -49,12 +54,13 @@ function createBotActivation({
       'collection-error';
     const readStatus = async () => {
       failure = 'collection-error';
+      update({ status: 'checking' });
+      signal.throwIfAborted();
       const eligible = await activation.isEligible(signal);
       signal.throwIfAborted();
       failure = 'load-error';
       return eligible === true ? activation.getStatus(signal) : 'disabled';
     };
-    update({ status: operation === 'load' ? 'checking' : 'starting' });
     try {
       if (operation === 'retry-start') {
         // A rejected response may still have started the bot on the backend.
@@ -67,6 +73,8 @@ function createBotActivation({
       }
       if (operation !== 'load') {
         failure = 'start-error';
+        update({ status: 'starting' });
+        signal.throwIfAborted();
         await activation.start(signal);
         if (!current()) return;
       }
@@ -93,18 +101,28 @@ function createBotActivation({
     connect() {
       if (!enabled || !activation) return;
       active = true;
-      const disable = () => {
+      const suspend = () => {
         cancel();
-        update({ status: 'disabled' });
+        // Cancellation invalidates this scope, not the library's eligibility.
+        // Show a settled cancellation notice until the host supplies a fresh signal.
+        update({ status: 'cancelled' });
       };
-      if (scopeSignal?.aborted) disable();
+      if (scopeSignal?.aborted) suspend();
       else {
-        scopeSignal?.addEventListener('abort', disable, { once: true });
-        void run('load');
+        scopeSignal?.addEventListener('abort', suspend, { once: true });
+        // A disconnected store retains its pending state even after cleanup
+        // aborts the request. Recheck the server without issuing another start.
+        if (
+          !initialState ||
+          state.status === 'starting' ||
+          state.status === 'checking'
+        ) {
+          void run('load');
+        }
       }
       return () => {
         active = false;
-        scopeSignal?.removeEventListener('abort', disable);
+        scopeSignal?.removeEventListener('abort', suspend);
         cancel();
       };
     },

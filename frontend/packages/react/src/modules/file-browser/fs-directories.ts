@@ -3,6 +3,7 @@ import { useCallback, useMemo } from 'react';
 
 import { toEntryRow } from '../../shared/directory-tree/rows.js';
 import type { DirState } from '../../shared/directory-tree/types.js';
+import { isoTimestamp } from './fs-stat.js';
 /**
  * 树已知的目录 URI 集合：根目录，加上每一层已加载条目里标记为目录的那些。
  *
@@ -109,10 +110,25 @@ export function useTreeMetadata(
     },
     [metadataRows, identifyUri],
   );
+  const listedUpdatedAtOf = (uri: string | null) => {
+    if (!uri) return;
+    const name = identifyUri(uri);
+    for (const dir of Object.values(dirs)) {
+      const entry = dir.entries.find((item) => identifyUri(item.uri) === name);
+      if (entry) return isoTimestamp(entry.modTime);
+    }
+  };
   const resourceTypeOf = (uri: string | null) => {
     if (uri === null) return 'file';
     if (directoryUris.has(identifyUri(uri))) return 'directory';
     return isKnownFile(uri) ? 'file' : 'unknown';
   };
-  return { directoryUris, metadataRows, accessOf, identifyUri, resourceTypeOf };
+  return {
+    directoryUris,
+    metadataRows,
+    accessOf,
+    identifyUri,
+    resourceTypeOf,
+    listedUpdatedAtOf,
+  };
 }

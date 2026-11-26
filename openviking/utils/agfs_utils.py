@@ -7,7 +7,7 @@ RAGFS Client utilities for creating and configuring RAGFS clients.
 import asyncio
 import multiprocessing
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Thread
 from typing import Any, Callable, Dict
@@ -36,6 +36,7 @@ class RagfsBindingConfig:
     log: Dict[str, Any] | None = None
     service_name: str = DEFAULT_SERVICE_NAME
     shared_redis_backend: bool = False
+    required_cache_instances: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate the service name used by cache-backed modules."""
@@ -76,14 +77,27 @@ class RagfsBindingConfig:
         if coordination["provider"] != "cache":
             coordination.pop("instance", None)
         backups = getattr(self.agfs, "backups", None)
+        required_runtime_instances = bool(self.required_cache_instances)
         uses_runtime = (
             cachefs_backend == "cache"
             or queue_backend == "cache"
             or pathlock_uses_cache
             or coordination["provider"] == "cache"
             or _get_config_value(backups, "provider", "filesystem") == "cache"
+            or required_runtime_instances
         )
         if self.cache is not None:
+            for consumer, instance in self.required_cache_instances.items():
+                selected_cache = _require_cache_instance(self.cache, instance, consumer)
+                if _get_config_value(selected_cache, "provider") != "redis":
+                    raise ValueError(
+                        f"{consumer} requires cache instance '{instance}' to use provider='redis'"
+                    )
+                if consumer == "Expiry" and _cache_default_ttl_seconds(selected_cache) != 0:
+                    raise ValueError(
+                        f"Expiry requires cache instance '{instance}' "
+                        "to set default_ttl_seconds=0"
+                    )
             if cachefs_backend == "cache":
                 _require_cache_instance(self.cache, cachefs_instance, "CacheFS")
             if queue_backend == "cache":
@@ -130,8 +144,9 @@ class RagfsBindingConfig:
         else:
             if uses_runtime:
                 raise ValueError(
-                    "top-level cache config is required when CacheFS, QueueFS, cache-backed PathLock, "
-                    "coordination, or cache-backed multi-write uses the shared Runtime"
+                    "top-level cache config is required when CacheFS, QueueFS, cache-backed "
+                    "PathLock, coordination, cache-backed multi-write, or a required cache "
+                    "consumer uses the shared Runtime"
                 )
             cache_config = _disabled_cache_config(self.service_name)
         binding_config: Dict[str, Any] = {
@@ -180,6 +195,14 @@ def _require_cache_instance(cache_config: Any, instance: str, consumer: str) -> 
     if configured is None:
         raise ValueError(f"{consumer} references unknown cache instance '{instance}'")
     return configured
+
+
+def _cache_default_ttl_seconds(instance: Any) -> int:
+    """Return one cache instance's Redis default TTL after config defaults apply."""
+    from openviking_cli.utils.config.agfs_config import RedisCacheConfig
+
+    params = dict(_get_config_value(instance, "params", {}))
+    return RedisCacheConfig.model_validate(params).default_ttl_seconds
 
 
 def _build_named_cache_config(
@@ -244,12 +267,9 @@ def _run_coro_blocking(coro: Any) -> Any:
 def _redis_service_keys(endpoints: Any, tls: bool = False) -> set[str]:
     """Normalize Redis endpoints into comparable service keys.
 
-    Endpoints may be full URLs (``redis://host:port``) or bare ``host:port``
-    addresses. ``ExpiryRedisConfig`` accepts both and resolves bare addresses
-    with its ``tls`` flag at runtime, so bare addresses are resolved the same
-    way here. The transport scheme is not part of the key: one host and port
-    identifies one Redis service, and Redis applies ``maxmemory`` and the
-    eviction policy to the whole service.
+    The transport scheme is not part of the key: one host and port identifies
+    one Redis service, and Redis applies ``maxmemory`` and the eviction policy
+    to the whole service.
     """
     if not endpoints:
         return set()
@@ -326,12 +346,13 @@ def _cache_shares_redis_backend(cache_config: Any, agfs_config: Any, expiry_conf
         "multi-write",
     ):
         return True
-    expiry_redis = _get_config_value(expiry_config, "redis")
-    expiry_keys = _redis_service_keys(
-        _get_config_value(expiry_redis, "endpoints"),
-        tls=bool(_get_config_value(expiry_redis, "tls", False)),
+    expiry_cache = _get_config_value(expiry_config, "cache")
+    expiry_instance = _get_config_value(expiry_cache, "instance")
+    return (
+        isinstance(expiry_instance, str)
+        and bool(expiry_instance)
+        and shares_instance({"instance": expiry_instance}, "Expiry")
     )
-    return bool(cache_keys & expiry_keys)
 
 
 def _dump_openviking_config(config: Any) -> Dict[str, Any]:
@@ -349,7 +370,11 @@ def _dump_openviking_config(config: Any) -> Dict[str, Any]:
     return dumped
 
 
-def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig, Any | None]:
+def build_runtime_ragfs_binding_config(
+    config: Any,
+    *,
+    required_cache_instances: dict[str, str] | None = None,
+) -> tuple[RagfsBindingConfig, Any | None]:
     """Build the runtime AGFS binding config from storage and encryption settings."""
     from openviking.crypto.config import bootstrap_encryption
 
@@ -360,6 +385,11 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
     cache_config = _get_config_value(config, "cache")
     expiry_config = _get_config_value(config, "expiry")
     shared_redis_backend = _cache_shares_redis_backend(cache_config, agfs_config, expiry_config)
+    required = dict(required_cache_instances or {})
+    expiry_cache = _get_config_value(expiry_config, "cache")
+    expiry_instance = _get_config_value(expiry_cache, "instance")
+    if isinstance(expiry_instance, str) and expiry_instance:
+        required["Expiry"] = expiry_instance
 
     log_config = _get_config_value(config, "log")
     log_level = _get_config_value(log_config, "level", "INFO")
@@ -384,6 +414,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
             shared_redis_backend=shared_redis_backend,
+            required_cache_instances=required,
         ), None
 
     root_key = _run_coro_blocking(encryptor.provider.get_root_key())
@@ -399,6 +430,7 @@ def build_runtime_ragfs_binding_config(config: Any) -> tuple[RagfsBindingConfig,
             log=binding_log,
             service_name=_get_config_value(config, "service_name", DEFAULT_SERVICE_NAME),
             shared_redis_backend=shared_redis_backend,
+            required_cache_instances=required,
         ),
         encryptor,
     )
@@ -463,9 +495,15 @@ def _build_queuefs_plugin_config(
 
         plugin_config["db_path"] = queue_db_path
 
-    if backend == "cache":
+    if backend in {"cache", "postgres"}:
         plugin_config["service_name"] = service_name
+    if backend == "cache":
         plugin_config["instance"] = getattr(queuefs_config, "instance", "default")
+    if backend == "postgres":
+        plugin_config["postgres_dsn_env"] = getattr(queuefs_config, "postgres_dsn_env", None)
+        plugin_config["postgres_lease_seconds"] = getattr(
+            queuefs_config, "postgres_lease_seconds", 60
+        )
 
     return plugin_config
 

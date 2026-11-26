@@ -2,7 +2,7 @@ import type { TaskSnapshot } from '../../shared/task-tracking/types.js';
 export type CommandConsoleTask = TaskSnapshot;
 import type { ErrorFallback } from '../../shared/error-boundary/types.js';
 import type { Locale } from '../../shared/locale.js';
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode, Ref } from 'react';
 import type {
   CommandConsoleCommandDefinition,
   CommandConsoleCommandGroup,
@@ -48,6 +48,11 @@ export interface CommandConsoleSearchResultItem {
    * Secondary label, for example a path or file type.
    */
   metaLabel?: string;
+  /**
+   * 结果标签，较长时换行显示。
+   * Result tags that wrap when needed.
+   */
+  tags?: readonly string[];
   /**
    * 标题旁的内容层级标签。
    * Content level label next to the title.
@@ -489,6 +494,8 @@ export interface CommandConsoleLabels {
   quickStart?: string;
   /** 无返回结果时的提示。Message for an empty command result. */
   noResult?: string;
+  /** 代码输出滚动区域的无障碍名称。Accessible name for the code output scroll region. */
+  codeOutput?: string;
   /** 刚刚发送的时间文案。Time label for a just-sent record. */
   justNow?: string;
   /** 命令帮助的标题与操作提示。Command-help heading and hint. */
@@ -515,12 +522,14 @@ export interface CommandConsoleLabels {
   formatHoursAgo?: (hours: number) => string;
 }
 
-/** 空态快捷入口。One empty-state shortcut. */
+/** 命令快捷入口。One command shortcut. */
 export interface CommandConsoleQuickCommand {
   /** 匹配 commands 的名称，复用其说明。Name matched in commands to reuse its copy. */
   name: string;
   /** 原样填入的完整命令；空字符串清空输入，不回退到命令前缀。Full input text; an empty string clears the input without a prefix fallback. */
   value: string;
+  /** 输入框上方的按钮文案，默认使用 name。Label above the input, defaults to name. */
+  compactLabel?: string;
 }
 
 /**
@@ -573,10 +582,11 @@ export interface CommandConsoleProps extends Omit<
    */
   emptyState?: ReactNode;
   /**
-   * 内置空态快捷入口；name 按顺序匹配 commands 并复用 summary/description，
+   * 内置空态和有记录时输入框上方的快捷入口；name 按顺序匹配 commands，
    * 未命中的名称跳过，重复名称只保留首次出现。
    * 点击后原样填入 value 并聚焦，不添加前缀、不提交；空字符串清空输入。
-   * Built-in empty-state shortcuts. Names resolve copy from commands in order;
+   * Shortcuts in the built-in empty state and above the input when records
+   * are present. Names resolve copy from commands in order;
    * unknown names are skipped and repeats keep their first occurrence.
    * Selection fills value verbatim and focuses without adding a prefix or
    * submitting. An empty value clears the input.
@@ -586,6 +596,8 @@ export interface CommandConsoleProps extends Omit<
   commands?: readonly CommandConsoleCommandDefinition[];
   /** 宿主提供的分组名称与顺序；未声明的组按目录顺序追加。 */
   commandGroups?: readonly CommandConsoleCommandGroup[];
+  /** 获取实际命令输入框，可用于程序聚焦。Accesses the command textarea for programmatic focus. */
+  inputRef?: Ref<HTMLTextAreaElement>;
   /**
    * 输入值变化时触发，包括接受命令或示例；行内占位不改变值，也不提交。省略时输入框
    * 只读，用于展示历史记录。

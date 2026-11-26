@@ -3,7 +3,7 @@ import { renderConversationFeedback } from './conversation-feedback.js';
 import { renderConversationHistory } from './conversation-history.js';
 import { useLocale } from '../../shared/locale-context.js';
 import type { ReactNode, SetStateAction } from 'react';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { useVikingBotChat } from './chat/use-viking-bot-chat.js';
 import { useMemoryCommit } from './chat/use-memory-commit.js';
 import { useVikingBotSessions } from './chat/use-viking-bot-sessions.js';
@@ -11,12 +11,15 @@ import { useHitl } from './hitl/use-hitl.js';
 import { useAttachmentUpload } from './chat/use-attachment-upload.js';
 import { compileQuickInputProps } from './compile-quick-inputs.js';
 import { useConversationReferences } from './use-conversation-references.js';
+import { useReplaceReference } from './references/use-reference-selection.js';
+import { useDraftRequestOwner } from './use-conversation-draft.js';
 import {
   conversationSessions,
   useSessionActionScope,
   useSessionSelection,
 } from './conversation-sessions.js';
 import type { VikingBotProps } from '../../components/viking-bot/types.js';
+import { withSessionDebugContext } from '../../components/viking-bot/message-debug.js';
 import type { ConsoleProps } from './types.js';
 
 /** Console owns chat requests and sessions. */
@@ -27,6 +30,7 @@ export function useConversation(
 ): Partial<VikingBotProps> & { feedback?: ReactNode } {
   const { conversation, chatOptions, scopeKey, requestOptions, locale, modes } =
     props;
+  const referenceSelection = chatOptions?.referenceSelection;
   const conversationLocale = useLocale(conversation?.locale ?? locale);
   const feedbackLocale = useLocale(chatOptions?.locale ?? locale);
   const validation = useLocalDraftValidation(
@@ -45,12 +49,13 @@ export function useConversation(
     requestOptions: chatOptions?.requestOptions ?? requestOptions,
   };
   const chat = useVikingBotChat(options);
-  const { references, clearReferences } = useConversationReferences({
-    enabled: enabled && !conversation?.references,
-    requestOptions: options.requestOptions,
-    scopeKey: options.scopeKey,
-    selection: chatOptions?.referenceSelection,
-  });
+  const { references, clearReferences, prepareReferenceClear } =
+    useConversationReferences({
+      enabled: enabled && !conversation?.references,
+      requestOptions: options.requestOptions,
+      scopeKey: options.scopeKey,
+      selection: referenceSelection,
+    });
   const hitl = useHitl(
     chat,
     enabled && conversation?.interaction === undefined,
@@ -89,14 +94,7 @@ export function useConversation(
     clearReferences();
     setDraft('');
   }, [clearUploads, clearReferences, setDraft]);
-  const owner = useMemo(() => ({ send: chat.send, active: true }), [chat.send]);
-  // Draft callbacks belong to the same controller as the request, including unmount.
-  useEffect(() => {
-    owner.active = true;
-    return () => {
-      owner.active = false;
-    };
-  }, [owner]);
+  const owner = useDraftRequestOwner(chat.send);
   const { activeId, select, switching } = useSessionSelection({
     chat,
     host: hostSessions,
@@ -111,22 +109,28 @@ export function useConversation(
     locale: conversationLocale,
     options,
   });
-  if (!enabled) {
-    const scoped = hostSessions && { ...hostSessions, scopeKey: sessionScope };
-    return scoped
-      ? { ...conversation, sessions: scoped }
-      : (conversation ?? {});
-  }
+  const debugContext = withSessionDebugContext(
+    conversation?.debugContext,
+    enabled ? chat.sessionId : hostSessions?.currentId,
+  );
   const isSending =
     switching || chat.status === 'streaming' || chat.status === 'loading';
+  const busy = isSending || chat.isSubmitting;
+  const available = conversation?.isAvailable !== false;
+  useReplaceReference(referenceSelection, !!references && available && !busy);
+  if (!enabled) {
+    const scoped = hostSessions && { ...hostSessions, scopeKey: sessionScope };
+    return { ...conversation, debugContext, sessions: scoped };
+  }
   return {
     ...conversation,
+    debugContext,
     ...uploads.props,
     ...compileQuickInputProps({
       conversation,
       locale: conversationLocale,
       managedDraft,
-      busy: isSending || chat.isSubmitting,
+      busy,
       setDraft,
     }),
     references: conversation?.references ?? references,
@@ -150,9 +154,10 @@ export function useConversation(
       if (!validation.validate(draft)) return;
       const token = ++submission.current;
       const followingUp = chat.status === 'streaming';
+      const clearSubmitted = prepareReferenceClear(draft.references ?? []);
       if (!followingUp) {
         if (uploads.props) uploads.removeSent(draft.attachments);
-        clearReferences(draft.references ?? []);
+        clearSubmitted();
       }
       setDraft((current) =>
         current.trim() === draft.text.trim() ? '' : current,
@@ -165,7 +170,7 @@ export function useConversation(
           return;
         }
         if (followingUp && uploads.props) uploads.removeSent(draft.attachments);
-        if (followingUp) clearReferences(draft.references ?? []);
+        if (followingUp) clearSubmitted();
         if (!followingUp) void sessions.refresh();
       });
     },

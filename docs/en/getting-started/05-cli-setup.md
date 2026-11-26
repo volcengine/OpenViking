@@ -11,8 +11,8 @@ Prepare the following tools and connection details:
 | Requirement | How to obtain it |
 | --- | --- |
 | Node.js and npm | Install an LTS release from the [Node.js website](https://nodejs.org/en/download); npm is included. If `ov` already works, proceed to [Connect](#connect). |
-| An OpenViking service | Use a provisioned Volcengine service or a running self-hosted service. To set one up, follow [Set up the service](02-quickstart.md#set-up-the-service). |
-| Access credentials | Use the cloud console's API key, or a User/Admin key from your self-hosted service administrator. Default local mode without authentication can leave the key empty. |
+| An OpenViking service | Use a provisioned BytePlus or Volcengine service, or a running self-hosted service. To set one up, follow [Set up the service](02-quickstart.md#set-up-the-service). |
+| Access credentials | Use your managed instance's OpenViking API key, or a User/Admin key from your self-hosted service administrator. Default local mode without authentication can leave the key empty. |
 | An accessible source | Use existing content, or [import the Lighthouse sample](02-quickstart.md#import-the-sample) after connecting. |
 
 After installing Node.js, open a new terminal and check that Node.js and npm are available:
@@ -64,7 +64,8 @@ Enter the details for your service, save the connection, and activate it. If a m
 | --- | --- | --- |
 | Default local service | Custom | URL: `http://127.0.0.1:1933`; leave the key empty in default local mode without authentication. |
 | Remote self-hosted service | Custom | Use the service URL and User/Admin key provided by the administrator. |
-| Volcengine managed service | OpenViking Service | Use the wizard's service address and enter the API key from the console. |
+| BytePlus managed service | OpenViking Managed Service → BytePlus | Enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md). |
+| Volcengine managed service | OpenViking Managed Service → Volcengine | Use the wizard's service address and enter the API key from the console. |
 
 Choose a recognizable connection name, such as `local` or `cloud`. The service URL points to the OpenViking data service; model API endpoints are configured on the server.
 

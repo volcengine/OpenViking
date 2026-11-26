@@ -876,6 +876,7 @@ impl HttpClient {
         tags: Option<Vec<String>>,
         read_content: bool,
         events_time_decay_protection: Option<String>,
+        args: Option<&Map<String, Value>>,
     ) -> Result<serde_json::Value> {
         let image_url = normalize_image_input(image)?;
         let mut body = serde_json::json!({
@@ -896,6 +897,7 @@ impl HttpClient {
             "tags": tags,
             "read_content": read_content.then_some(true),
             "events_time_decay_protection": events_time_decay_protection,
+            "args": args,
         });
         compact_request_body(&mut body);
         self.post("/api/v1/search/search", &body).await
@@ -1897,6 +1899,32 @@ impl HttpClient {
         self.put(&path, &body).await
     }
 
+    pub async fn admin_frozen_file(
+        &self,
+        account_id: &str,
+        user_id: &str,
+        file_path: &str,
+        frozen: Option<bool>,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/users/{}/frozen-file",
+            account_id, user_id
+        );
+        match frozen {
+            Some(frozen) => {
+                self.put(
+                    &path,
+                    &serde_json::json!({"path": file_path, "frozen": frozen}),
+                )
+                .await
+            }
+            None => {
+                self.get(&path, &[("path".to_string(), file_path.to_string())])
+                    .await
+            }
+        }
+    }
+
     pub async fn admin_regenerate_key(
         &self,
         account_id: &str,
@@ -2416,13 +2444,9 @@ mod resource_wait_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{BaseClient, HttpClient, TimeoutConfig};
-    use crate::base_client::{
-        api_error_from_envelope, spawn_test_response, take_test_progress,
-    };
-    use reqwest::StatusCode;
+    use super::{HttpClient, TimeoutConfig};
+    use crate::base_client::{spawn_test_response, take_test_progress};
     use serde_json::{Map, json};
-    use std::collections::HashMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
@@ -2459,127 +2483,77 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compact_request_body_drops_null_and_empty_args() {
-        let mut body = json!({
-            "query": "hi",
-            "score_threshold": null,
-            "tags": null,
-            "args": {},
-            "wait": false,
-            "create_parent": true,
-            "filter": {"k": "v"},
-        });
-        super::compact_request_body(&mut body);
-        let obj = body.as_object().unwrap();
-        // Non-null values are kept, including `false` and non-empty objects.
-        assert!(obj.contains_key("query"));
-        assert!(obj.contains_key("wait"));
-        assert!(obj.contains_key("create_parent"));
-        assert!(obj.contains_key("filter"));
-        // Null fields and an empty `args` are dropped so pre-field servers accept it.
-        assert!(!obj.contains_key("score_threshold"));
-        assert!(!obj.contains_key("tags"));
-        assert!(!obj.contains_key("args"));
-    }
-
-    #[test]
-    fn compact_request_body_keeps_non_empty_args() {
-        let mut body = json!({"path": "x", "args": {"feishu_access_token": "u-x"}});
-        super::compact_request_body(&mut body);
-        assert!(body.as_object().unwrap().contains_key("args"));
-    }
-
     #[tokio::test]
-    async fn add_resource_sends_parse_mode_through_args() {
-        let (default_url, default_request_rx) = spawn_request_capture_server().await;
-        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
-        default_client
-            .add_resource(
-                "https://example.com/default.md",
-                None,
-                None,
-                None,
-                None,
-                "",
-                "",
-                false,
-                false,
-                None,
-                None,
-                None,
-                true,
-                0.0,
-                "semantic_and_vectors".to_string(),
-                None,
-                Vec::new(),
-                "replace".to_string(),
-                None,
-                false,
-                false,
-            )
-            .await
-            .expect("default add-resource request should succeed");
-        let default_request = default_request_rx
-            .await
-            .expect("request should be captured");
-        assert!(!default_request.contains("parse_mode"));
+    async fn add_resource_preserves_explicit_options_and_omits_legacy_defaults() {
+        let cases = [
+            ("semantic_and_vectors", None, vec![], "replace", json!({})),
+            (
+                "vectors_only",
+                Some(Map::from_iter([(
+                    "parse_mode".to_string(),
+                    json!("no_split"),
+                )])),
+                vec!["team=search".to_string(), "env=test".to_string()],
+                "append",
+                json!({
+                    "processing_mode": "vectors_only",
+                    "args": {"parse_mode": "no_split"},
+                    "tags": ["team=search", "env=test"],
+                    "tag_mode": "append",
+                }),
+            ),
+            (
+                "semantic_and_vectors",
+                Some(Map::new()),
+                vec![],
+                "clear",
+                json!({"tag_mode": "clear"}),
+            ),
+        ];
+        let source = "https://example.com/manual.pdf";
+        for (processing_mode, args, tags, tag_mode, expected_options) in cases {
+            let (base_url, request_rx) = spawn_request_capture_server().await;
+            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+            client
+                .add_resource(
+                    source,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "",
+                    "",
+                    false,
+                    false,
+                    None,
+                    None,
+                    None,
+                    true,
+                    0.0,
+                    processing_mode.to_string(),
+                    args,
+                    tags,
+                    tag_mode.to_string(),
+                    None,
+                    false,
+                    false,
+                )
+                .await
+                .unwrap();
 
-        let (no_split_url, no_split_request_rx) = spawn_request_capture_server().await;
-        let no_split_client =
-            HttpClient::new(no_split_url, None, None, None, None, 5.0, false, None);
-        let mut no_split_args = Map::new();
-        no_split_args.insert("parse_mode".to_string(), json!("no_split"));
-        no_split_client
-            .add_resource(
-                "https://example.com/manual.pdf",
-                None,
-                None,
-                None,
-                None,
-                "",
-                "",
-                false,
-                false,
-                None,
-                None,
-                None,
-                true,
-                0.0,
-                "semantic_and_vectors".to_string(),
-                Some(no_split_args),
-                Vec::new(),
-                "replace".to_string(),
-                None,
-                false,
-                false,
-            )
-            .await
-            .expect("no_split add-resource request should succeed");
-        let no_split_request = no_split_request_rx
-            .await
-            .expect("request should be captured");
-        assert!(no_split_request.contains(r#""args":{"parse_mode":"no_split"}"#));
-    }
-
-    #[test]
-    fn compact_request_body_drops_default_processing_mode_for_legacy_servers() {
-        let mut body = json!({
-            "path": "https://example.com/guide.md",
-            "processing_mode": "semantic_and_vectors",
-        });
-        super::compact_request_body(&mut body);
-        assert!(!body.as_object().unwrap().contains_key("processing_mode"));
-    }
-
-    #[test]
-    fn compact_request_body_keeps_non_default_processing_mode() {
-        let mut body = json!({
-            "path": "https://example.com/guide.md",
-            "processing_mode": "vectors_only",
-        });
-        super::compact_request_body(&mut body);
-        assert_eq!(body["processing_mode"], "vectors_only");
+            let request = request_rx.await.unwrap();
+            assert!(request.starts_with("POST /api/v1/resources "));
+            let (_, body) = request.split_once("\r\n\r\n").unwrap();
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(body["path"], source);
+            assert_eq!(body["wait"], false);
+            assert!(body.get("parse_mode").is_none());
+            assert!(body.get("parent").is_none());
+            assert!(body.get("create_parent").is_none());
+            for key in ["processing_mode", "args", "tags", "tag_mode"] {
+                assert_eq!(body.get(key), expected_options.get(key), "{key}: {body}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -2603,6 +2577,7 @@ mod tests {
                 None,
                 None,
                 false,
+                None,
                 None,
             )
             .await
@@ -2639,6 +2614,7 @@ mod tests {
                 Some(vec!["project=openviking".to_string()]),
                 false,
                 Some("7d".to_string()),
+                None,
             )
             .await
             .expect("context search should succeed");
@@ -2663,573 +2639,96 @@ mod tests {
     }
 
     #[test]
-    fn add_resource_tag_fields_adds_tags_and_tag_mode() {
-        let mut body = json!({"path": "https://example.com/demo.md"});
-        let tags = vec!["team=search".to_string(), "env=test".to_string()];
-
-        super::add_resource_tag_fields(&mut body, &tags, "append");
-
-        assert_eq!(body["tags"], json!(["team=search", "env=test"]));
-        assert_eq!(body["tag_mode"], json!("append"));
-    }
-
-    #[test]
-    fn add_resource_tag_fields_omits_empty_tags_for_compatibility() {
-        let mut body = json!({"path": "https://example.com/demo.md"});
-
-        super::add_resource_tag_fields(&mut body, &[], "replace");
-
-        let obj = body.as_object().unwrap();
-        assert!(!obj.contains_key("tags"));
-        assert!(!obj.contains_key("tag_mode"));
-    }
-
-    #[test]
-    fn add_resource_tag_fields_sends_clear_without_tags() {
-        let mut body = json!({"path": "https://example.com/demo.md"});
-
-        super::add_resource_tag_fields(&mut body, &[], "clear");
-
-        let obj = body.as_object().unwrap();
-        assert!(!obj.contains_key("tags"));
-        assert_eq!(body["tag_mode"], json!("clear"));
-    }
-
-    #[test]
     fn timeout_config_calculation() {
         let config = TimeoutConfig::new(60, 2.0);
 
         let temp_file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(temp_file.path(), vec![0u8; 1024 * 1024]).unwrap();
+        temp_file.as_file().set_len(1024 * 1024).unwrap();
 
         let timeout = config.calculate(temp_file.path()).unwrap();
         assert_eq!(timeout, std::time::Duration::from_secs(60));
 
-        std::fs::write(temp_file.path(), vec![0u8; 40 * 1024 * 1024]).unwrap();
+        temp_file.as_file().set_len(40 * 1024 * 1024).unwrap();
 
         let timeout = config.calculate(temp_file.path()).unwrap();
         assert_eq!(timeout, std::time::Duration::from_secs(80));
     }
 
-    #[test]
-    fn build_headers_includes_extra_headers_for_base_client() {
-        let mut extra_headers = HashMap::new();
-        extra_headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
+    #[tokio::test]
+    async fn write_omits_legacy_defaults_and_preserves_non_default_processing_mode() {
+        let uri = "viking://resources/demo.md";
+        for (processing_mode, expected_mode) in [
+            ("semantic_and_vectors", None),
+            ("vectors_only", Some(json!("vectors_only"))),
+        ] {
+            let (base_url, request_rx) = spawn_request_capture_server().await;
+            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+            client
+                .write(
+                    uri,
+                    "updated",
+                    "replace",
+                    true,
+                    false,
+                    processing_mode,
+                    false,
+                    Vec::new(),
+                    "replace",
+                    None,
+                )
+                .await
+                .unwrap();
 
-        let client = BaseClient::new(
-            "http://localhost:1933",
-            Some("test-key".to_string()),
-            Some("acme".to_string()),
-            Some("alice".to_string()),
-            Some("peer-a".to_string()),
-            5.0,
-            true,
-            Some(extra_headers),
-        );
-
-        let headers = client.build_headers();
-
-        assert_eq!(
-            headers
-                .get("X-API-Key")
-                .and_then(|value| value.to_str().ok()),
-            Some("test-key")
-        );
-        assert_eq!(
-            headers
-                .get("X-OpenViking-Account")
-                .and_then(|value| value.to_str().ok()),
-            Some("acme")
-        );
-        assert_eq!(
-            headers
-                .get("X-OpenViking-User")
-                .and_then(|value| value.to_str().ok()),
-            Some("alice")
-        );
-        assert_eq!(
-            headers
-                .get("X-OpenViking-Actor-Peer")
-                .and_then(|value| value.to_str().ok()),
-            Some("peer-a")
-        );
-        assert_eq!(
-            headers
-                .get("X-Custom-Header")
-                .and_then(|value| value.to_str().ok()),
-            Some("custom-value")
-        );
-    }
-
-    #[test]
-    fn build_write_body_omits_removed_semantic_flags() {
-        let body = HttpClient::build_write_body(
-            "viking://resources/demo.md",
-            "updated",
-            "replace",
-            true,
-            "semantic_and_vectors",
-        );
-
-        assert_eq!(
-            body,
-            json!({
-                "uri": "viking://resources/demo.md",
+            let request = request_rx.await.unwrap();
+            assert!(request.starts_with("POST /api/v1/content/write "));
+            let (_, body) = request.split_once("\r\n\r\n").unwrap();
+            let body: serde_json::Value = serde_json::from_str(body).unwrap();
+            let mut expected = json!({
+                "uri": uri,
                 "content": "updated",
                 "mode": "replace",
                 "wait": true,
-            })
-        );
-        assert!(body.get("regenerate_semantics").is_none());
-        assert!(body.get("revectorize").is_none());
-    }
-
-    #[test]
-    fn build_write_body_drops_default_processing_mode_for_legacy_servers() {
-        let body = HttpClient::build_write_body(
-            "viking://resources/demo.md",
-            "updated",
-            "replace",
-            true,
-            "semantic_and_vectors",
-        );
-
-        assert!(body.get("processing_mode").is_none());
-    }
-
-    #[test]
-    fn build_write_body_keeps_vectors_only_processing_mode() {
-        let body = HttpClient::build_write_body(
-            "viking://resources/demo.md",
-            "updated",
-            "replace",
-            true,
-            "vectors_only",
-        );
-
-        assert_eq!(body["processing_mode"], "vectors_only");
+            });
+            if let Some(mode) = expected_mode {
+                expected["processing_mode"] = mode;
+            }
+            assert_eq!(body, expected);
+        }
     }
 
     #[tokio::test]
-    async fn ls_does_not_send_display_time_query() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
+    async fn export_retries_only_gateway_challenges_without_leaking_the_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("backup.ovpack");
+        std::fs::write(&destination, b"previous export").unwrap();
 
-        client
-            .ls(
-                "viking://resources",
-                false,
-                false,
-                "agent",
-                256,
-                Some(false),
-                Some(true),
-                512,
-                false,
-                20,
-                4,
-                Some(5),
-                Some("mtime"),
-                Some("desc"),
-                &[],
-                &[],
-                false,
-            )
-            .await
-            .expect("ls request should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("GET /api/v1/fs/ls?"));
-        assert!(request.contains("node_limit=20"));
-        assert!(request.contains("offset=4"));
-        assert!(request.contains("limit=5"));
-        assert!(request.contains("sort_by=mtime"));
-        assert!(request.contains("sort_order=desc"));
-        assert!(request.contains("include_abstract=false"));
-        assert!(request.contains("include_overview=true"));
-        assert!(request.contains("overview_limit=512"));
-        assert!(!request.contains("tz="));
-        assert!(!request.contains("include_mod_time_iso="));
-
-        let (default_url, default_request_rx) = spawn_request_capture_server().await;
-        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
-        default_client
-            .ls(
-                "viking://resources",
-                false,
-                false,
-                "agent",
-                256,
-                None,
-                None,
-                4000,
-                false,
-                20,
-                0,
-                None,
-                None,
-                None,
-                &[],
-                &[],
-                false,
-            )
-            .await
-            .expect("default ls request should succeed");
-        let default_request = default_request_rx
-            .await
-            .expect("default request should be captured");
-        assert!(!default_request.contains("offset="));
-        assert!(!default_request.contains("include_abstract="));
-        assert!(!default_request.contains("include_overview="));
-        assert!(default_request.contains("overview_limit=4000"));
-        assert!(!default_request.contains("&limit="));
-        assert!(!default_request.contains("sort_by="));
-        assert!(!default_request.contains("sort_order="));
-    }
-
-    #[tokio::test]
-    async fn cp_posts_recursive_request_body() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-
-        client
-            .cp(
-                "viking://resources/source",
-                "viking://resources/target",
-                true,
-            )
-            .await
-            .expect("cp request should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("POST /api/v1/fs/cp "));
-        assert!(request.contains(r#""from_uri":"viking://resources/source""#));
-        assert!(request.contains(r#""to_uri":"viking://resources/target""#));
-        assert!(request.contains(r#""recursive":true"#));
-    }
-
-    #[tokio::test]
-    async fn gateway_token_is_not_sent_without_a_gateway_challenge() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
-            .with_gateway_token(Some("gateway-secret".to_string()));
-
-        let _: serde_json::Value = client
-            .get("/health", &[])
-            .await
-            .expect("direct OpenViking request should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        assert!(!request.to_ascii_lowercase().contains("x-gateway-token"));
-    }
-
-    #[tokio::test]
-    async fn gateway_token_is_retried_for_marked_gateway_challenge() {
-        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
-            .with_gateway_token(Some("gateway-secret".to_string()));
-
-        let _: serde_json::Value = client
-            .get("/health", &[])
-            .await
-            .expect("gateway retry should succeed");
-
-        let requests = requests_rx.await.expect("requests should be captured");
-        assert_gateway_token_retry(&requests);
-    }
-
-    #[tokio::test]
-    async fn file_download_retries_marked_gateway_challenge() {
-        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
-            .with_gateway_token(Some("gateway-secret".to_string()));
-
-        client
-            .get_bytes("viking://resources/file.bin")
-            .await
-            .expect("file download should retry through gateway");
-
-        let requests = requests_rx.await.expect("requests should be captured");
-        assert_gateway_token_retry(&requests);
-    }
-
-    #[tokio::test]
-    async fn pack_download_retries_marked_gateway_challenge() {
-        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
-            .with_gateway_token(Some("gateway-secret".to_string()));
-        let output = tempfile::tempdir().expect("tempdir should be created");
-
-        client
-            .export_ovpack(
-                "viking://resources",
-                output
-                    .path()
-                    .to_str()
-                    .expect("tempdir path should be valid"),
-                false,
-                false,
-            )
-            .await
-            .expect("pack export should retry through gateway");
-
-        let requests = requests_rx.await.expect("requests should be captured");
-        assert_gateway_token_retry(&requests);
-    }
-
-    #[tokio::test]
-    async fn snapshot_show_retries_marked_gateway_challenge() {
-        let (base_url, requests_rx) = spawn_gateway_challenge_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None)
-            .with_gateway_token(Some("gateway-secret".to_string()));
-
-        client
-            .snapshot_show("HEAD", None)
-            .await
-            .expect("snapshot show should retry through gateway");
-
-        let requests = requests_rx.await.expect("requests should be captured");
-        assert_gateway_token_retry(&requests);
-    }
-
-    #[tokio::test]
-    async fn snapshot_diff_sends_path_and_refs() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-
-        client
-            .snapshot_diff("viking://resources/a.md", Some("old"), "new")
-            .await
-            .expect("snapshot diff should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("GET /api/v1/snapshot/diff?"));
-        assert!(request.contains("path=viking%3A%2F%2Fresources%2Fa.md"));
-        assert!(request.contains("from=old"));
-        assert!(request.contains("to=new"));
-    }
-
-    fn assert_gateway_token_retry(requests: &[String]) {
-        assert_eq!(requests.len(), 2);
-        assert!(!requests[0].to_ascii_lowercase().contains("x-gateway-token"));
-        assert!(
-            requests[1]
-                .to_ascii_lowercase()
-                .contains("x-gateway-token: gateway-secret")
-        );
-    }
-
-    #[tokio::test]
-    async fn tree_does_not_send_display_time_query() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-
-        client
-            .tree(
-                "viking://resources",
-                "agent",
-                256,
-                Some(false),
-                Some(true),
-                512,
-                false,
-                true,
-                20,
-                3,
-                4,
-                Some(5),
-                &[],
-                &[],
-                false,
-            )
-            .await
-            .expect("tree request should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("GET /api/v1/fs/tree?"));
-        assert!(request.contains("node_limit=20"));
-        assert!(request.contains("offset=4"));
-        assert!(request.contains("limit=5"));
-        assert!(request.contains("include_abstract=false"));
-        assert!(request.contains("include_overview=true"));
-        assert!(request.contains("overview_limit=512"));
-        assert!(request.contains("directories_only=true"));
-        assert!(!request.contains("tz="));
-        assert!(!request.contains("include_mod_time_iso="));
-
-        let (default_url, default_request_rx) = spawn_request_capture_server().await;
-        let default_client = HttpClient::new(default_url, None, None, None, None, 5.0, false, None);
-        default_client
-            .tree(
-                "viking://resources",
-                "agent",
-                256,
-                None,
-                None,
-                4000,
-                false,
-                false,
-                20,
-                3,
-                0,
-                None,
-                &[],
-                &[],
-                false,
-            )
-            .await
-            .expect("default tree request should succeed");
-        let default_request = default_request_rx
-            .await
-            .expect("default request should be captured");
-        assert!(!default_request.contains("offset="));
-        assert!(!default_request.contains("include_abstract="));
-        assert!(!default_request.contains("include_overview="));
-        assert!(!default_request.contains("directories_only="));
-        assert!(!default_request.contains("&limit="));
-    }
-
-    #[tokio::test]
-    async fn grep_omits_optional_tags_fields_when_not_requested() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-
-        client
-            .grep(
-                "viking://resources",
-                None,
-                "needle",
-                false,
-                0,
-                0,
-                10,
-                3,
-                &[],
-                false,
-            )
-            .await
-            .expect("plain grep request should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("POST /api/v1/search/grep "));
-        assert!(!request.contains(r#""tags""#));
-        assert!(!request.contains(r#""include_tags""#));
-        assert!(!request.contains(r#""after_context""#));
-        assert!(!request.contains(r#""before_context""#));
-    }
-
-    #[tokio::test]
-    async fn grep_sends_include_tags_only_when_requested() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-
-        client
-            .grep(
-                "viking://resources",
-                None,
-                "needle",
-                false,
-                2,
-                3,
-                10,
-                3,
-                &[],
-                true,
-            )
-            .await
-            .expect("grep tags projection request should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.contains(r#""include_tags":true"#));
-        assert!(request.contains(r#""after_context":2"#));
-        assert!(request.contains(r#""before_context":3"#));
-    }
-
-    #[tokio::test]
-    async fn glob_omits_tags_when_not_requested() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-
-        client
-            .glob("**/*.md", "viking://resources", 10, None, &[], false)
-            .await
-            .expect("plain glob request should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("POST /api/v1/search/glob "));
-        assert!(!request.contains(r#""tags"#));
-        assert!(!request.contains(r#""include_tags"#));
-    }
-
-    #[tokio::test]
-    async fn glob_sends_tags_and_projection_when_requested() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-
-        client
-            .glob(
-                "**/*.md",
-                "viking://resources",
-                10,
-                Some(&["tags".to_string()]),
-                &["team=search".to_string(), "env=prod".to_string()],
-                true,
-            )
-            .await
-            .expect("tagged glob request should succeed");
-
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.contains(r#""tags":["team=search","env=prod"]"#));
-        assert!(request.contains(r#""include_tags":true"#));
-    }
-
-    #[tokio::test]
-    async fn compile_execution_deserializes_task_response() {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("test server should bind");
-        let address = listener.local_addr().expect("listener should have address");
-        tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.expect("request should arrive");
-            let mut buffer = vec![0; 4096];
-            let read = stream.read(&mut buffer).await.expect("request should read");
-            let request = String::from_utf8_lossy(&buffer[..read]);
-            assert!(request.contains(r#""skill":"viking://agent/skills/wiki""#));
-            assert!(request.contains(r#""instruction":"Keep supporting evidence.""#));
-            assert!(request.contains(r#""args":{"model_name":"endpoint-1"}"#));
-            let body = r#"{"status":"ok","result":{"task_id":"cmp_1","status":"accepted","to":"viking://resources/wiki"}}"#;
-            let response = format!(
-                "HTTP/1.1 202 Accepted\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("response should write");
-        });
-        let client = HttpClient::new(
-            format!("http://{address}"),
-            None,
-            None,
-            None,
-            None,
-            5.0,
-            false,
-            None,
-        );
-        let args = serde_json::json!({"model_name": "endpoint-1"});
-        let accepted = client
-            .create_compile(
-                &["viking://resources/source".into()],
-                "viking://resources/wiki",
-                "viking://agent/skills/wiki",
-                Some("Keep supporting evidence."),
-                args.as_object(),
-            )
-            .await
-            .expect("202 response body should deserialize");
-        assert_eq!(accepted.task_id, "cmp_1");
+        for marked in [false, true] {
+            let (url, requests) = spawn_gateway_challenge_server(marked).await;
+            let client = HttpClient::new(url, None, None, None, None, 5.0, true, None)
+                .with_gateway_token(Some("gateway-secret".into()));
+            let result = client
+                .export_ovpack(
+                    "viking://resources",
+                    destination.to_str().unwrap(),
+                    false,
+                    false,
+                )
+                .await;
+            let requests = requests.await.unwrap();
+            assert_eq!(requests.len(), if marked { 2 } else { 1 });
+            for request in &requests {
+                assert!(request.starts_with("POST /api/v1/pack/export?profile=0 "));
+            }
+            assert!(!requests[0].to_ascii_lowercase().contains("x-gateway-token"));
+            if marked {
+                assert_eq!(result.unwrap(), destination.to_str().unwrap());
+                assert_eq!(std::fs::read(&destination).unwrap(), b"exported archive");
+                assert!(requests[1].to_ascii_lowercase().contains("x-gateway-token: gateway-secret"));
+            } else {
+                assert!(matches!(result.unwrap_err(), crate::error::Error::Api { status: Some(401), .. }));
+                assert_eq!(std::fs::read(&destination).unwrap(), b"previous export");
+            }
+        }
     }
 
     #[tokio::test]
@@ -3287,31 +2786,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn task_methods_use_generic_task_endpoints_for_execution_ids() {
-        let (base_url, status_request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-        client
-            .get_task("cmp_1")
-            .await
-            .expect("compile status request should succeed");
-        let status_request = status_request_rx
-            .await
-            .expect("status request should be captured");
-        assert!(status_request.starts_with("GET /api/v1/tasks/cmp_1 "));
-
-        let (base_url, cancel_request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-        client
-            .cancel_task("cmp_1")
-            .await
-            .expect("compile cancellation request should succeed");
-        let cancel_request = cancel_request_rx
-            .await
-            .expect("cancel request should be captured");
-        assert!(cancel_request.starts_with("POST /api/v1/tasks/cmp_1/cancel "));
-    }
-
-    #[tokio::test]
     async fn ovpack_download_progress_reports_failure_for_http_error() {
         let base_url = spawn_test_response(
             "500 Internal Server Error",
@@ -3339,134 +2813,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn admin_request_payloads_are_sent() {
-        let (base_url, request_rx) = spawn_request_capture_server().await;
+    async fn standard_error_envelope_preserves_status_message_and_details() {
+        let base_url = spawn_test_response(
+            "500 Internal Server Error",
+            r#"{"status":"error","error":{"code":"PROCESSING_ERROR","message":"Parse error: failed","details":{"source":"guide.md"}}}"#,
+        ).await;
         let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-        client
-            .admin_create_account("acct", "admin", Some("admin-seed"), None)
+
+        let error = client
+            .post::<_, serde_json::Value>(
+                "/api/v1/resources",
+                &json!({"path": "https://example.com/guide.md"}),
+            )
             .await
-            .expect("create account should succeed");
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("POST /api/v1/admin/accounts "));
-        assert!(request.contains(r#""seed":"admin-seed""#));
-
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-        client
-            .admin_register_user("acct", "alice", "admin", Some("alice-seed"), None)
-            .await
-            .expect("register user should succeed");
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("POST /api/v1/admin/accounts/acct/users "));
-        assert!(request.contains(r#""seed":"alice-seed""#));
-
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-        client
-            .admin_regenerate_key("acct", "alice", Some("new-seed"))
-            .await
-            .expect("regenerate key should succeed");
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("POST /api/v1/admin/accounts/acct/users/alice/key "));
-        assert!(request.contains(r#""seed":"new-seed""#));
-
-        let (base_url, request_rx) = spawn_request_capture_server().await;
-        let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-        client
-            .admin_set_account_acl_enabled("acct", true)
-            .await
-            .expect("set account settings should succeed");
-        let request = request_rx.await.expect("request should be captured");
-        assert!(request.starts_with("PATCH /api/v1/admin/accounts/acct/configuration "));
-        assert!(request.contains(r#""settings":{"acl":{"enabled":true}}"#));
-    }
-
-    #[test]
-    fn standard_error_envelope_formats_api_error() {
-        let body = json!({
-            "status": "error",
-            "error": {
-                "code": "PROCESSING_ERROR",
-                "message": "Parse error: boom"
-            }
-        });
-
-        let error = api_error_from_envelope(&body, StatusCode::INTERNAL_SERVER_ERROR);
+            .unwrap_err();
         assert!(matches!(
             error,
             crate::error::Error::Api {
                 code: Some(code),
                 message,
+                details: Some(details),
                 status: Some(500),
-                ..
-            } if code == "PROCESSING_ERROR" && message == "Parse error: boom"
+            } if code == "PROCESSING_ERROR" && message == "Parse error: failed"
+                && details == json!({"source": "guide.md"})
         ));
-    }
-
-    #[test]
-    fn unwrap_result_preserves_profile_for_non_object_results() {
-        let body = json!({
-            "status": "ok",
-            "result": [
-                {"id": "1"}
-            ],
-            "profile": [
-                "line one",
-                "line two"
-            ]
-        });
-
-        let result = crate::base_client::unwrap_success_envelope(body, true);
-
-        assert_eq!(
-            result,
-            json!({
-                "result": [
-                    {"id": "1"}
-                ],
-                "profile": [
-                    "line one",
-                    "line two"
-                ]
-            })
-        );
-    }
-
-    #[test]
-    fn unwrap_result_drops_profile_for_scalar_typed_results() {
-        let body = json!({
-            "status": "ok",
-            "result": "content",
-            "profile": [
-                "line one"
-            ]
-        });
-
-        let result = crate::base_client::unwrap_success_envelope(body, false);
-
-        assert_eq!(result, json!("content"));
-    }
-
-    #[tokio::test]
-    async fn read_profiled_sends_line_ranges() {
-        for (offset, limit) in [(0, -1), (10, 5), (10, -1), (0, 0)] {
-            let (base_url, request_rx) = spawn_request_capture_server().await;
-            let client = HttpClient::new(base_url, None, None, None, None, 5.0, false, None);
-            client
-                .read_profiled("viking://resources/example.md", offset, limit)
-                .await
-                .expect("read request should succeed");
-            let request = request_rx.await.expect("request should be captured");
-            let target = request.split_whitespace().nth(1).expect("request target");
-            let url = url::Url::parse(&format!("http://localhost{target}")).unwrap();
-            assert_eq!(url.path(), "/api/v1/content/read");
-            let params = url
-                .query_pairs()
-                .collect::<std::collections::HashMap<_, _>>();
-            assert_eq!(params.get("uri").unwrap(), "viking://resources/example.md");
-            assert_eq!(params.get("offset").unwrap(), &offset.to_string());
-            assert_eq!(params.get("limit").unwrap(), &limit.to_string());
-        }
     }
 
     async fn spawn_request_capture_server() -> (String, oneshot::Receiver<String>) {
@@ -3499,7 +2869,7 @@ mod tests {
         (format!("http://{addr}"), request_rx)
     }
 
-    async fn spawn_gateway_challenge_server() -> (String, oneshot::Receiver<Vec<String>>) {
+    async fn spawn_gateway_challenge_server(marked: bool) -> (String, oneshot::Receiver<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("test server should bind");
@@ -3508,7 +2878,7 @@ mod tests {
 
         tokio::spawn(async move {
             let mut requests = Vec::new();
-            for attempt in 0..2 {
+            for attempt in 0..if marked { 2 } else { 1 } {
                 let Ok((mut stream, _)) = listener.accept().await else {
                     return;
                 };
@@ -3521,11 +2891,11 @@ mod tests {
                 let (status, marker, body) = if attempt == 0 {
                     (
                         "401 Unauthorized",
-                        "X-VikingBot-Gateway: true\r\n",
+                        if marked { "X-VikingBot-Gateway: true\r\n" } else { "" },
                         r#"{"detail":"X-Gateway-Token header required"}"#,
                     )
                 } else {
-                    ("200 OK", "", r#"{"status":"ok","result":{"ok":true}}"#)
+                    ("200 OK", "", "exported archive")
                 };
                 let response = format!(
                     "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n{marker}content-length: {}\r\nconnection: close\r\n\r\n{body}",

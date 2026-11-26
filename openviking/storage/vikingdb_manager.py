@@ -41,7 +41,7 @@ class VikingDBManager(VikingVectorIndexBackend):
 
     def __init__(
         self,
-        vectordb_config: VectorDBBackendConfig,
+        vectordb_config: VectorDBBackendConfig | None,
         queue_manager: Optional[QueueManager] = None,
     ):
         """
@@ -449,6 +449,7 @@ class VikingDBManagerProxy:
         level: Optional[List[int]] = None,
         limit: int = 10,
         offset: int = 0,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         return await self._manager.search_by_keywords_in_tenant(
             self._ctx,
@@ -459,6 +460,7 @@ class VikingDBManagerProxy:
             level=level,
             limit=limit,
             offset=offset,
+            keywords_args=keywords_args,
         )
 
     async def filter_in_tenant(
@@ -500,7 +502,7 @@ class VikingDBManagerProxy:
     async def delete_account_data(self, account_id: str) -> int:
         return await self._manager.delete_account_data(account_id, ctx=self._ctx)
 
-    async def delete_uris(self, uris: List[str]) -> None:
+    async def delete_uris(self, uris: List[str]) -> int:
         return await self._manager.delete_uris(self._ctx, uris)
 
     async def copy_uri_mapping(

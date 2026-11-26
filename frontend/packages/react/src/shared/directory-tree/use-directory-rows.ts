@@ -7,6 +7,7 @@ import {
 } from '../resource-uri.js';
 import type { DirectoryQueries } from './directory-queries.js';
 import { flattenTree } from './rows.js';
+import { directoryView } from './entry-visibility.js';
 import type { DirectoryExpansionEdit, DirState } from './types.js';
 
 const homeRelativePath = (uri: string) =>
@@ -27,6 +28,7 @@ export function useDirectoryRows({
   session,
   rootUri,
   dirs,
+  hideDeniedEntries: hide,
   expanded,
   collapsed,
   pendingEdits,
@@ -37,6 +39,7 @@ export function useDirectoryRows({
   session?: DirectoryQueries;
   rootUri: string;
   dirs: Record<string, DirState>;
+  hideDeniedEntries?: boolean;
   expanded: ReadonlySet<string>;
   collapsed: ReadonlySet<string>;
   pendingEdits: readonly DirectoryExpansionEdit[];
@@ -77,7 +80,7 @@ export function useDirectoryRows({
         observers.set(key, equivalents);
       }
 
-      const view = { ...dirs };
+      const view = directoryView(dirs, hide);
       const sources = new Map<string, string>();
       for (const dir of Object.values(dirs)) {
         for (const entry of dir.entries) {
@@ -129,7 +132,7 @@ export function useDirectoryRows({
           // Only retain cached children here. Paging controls belong to the
           // raw URI observer once it is attached to the new listed spelling.
           view[uri] = {
-            entries: dirs[source]?.entries ?? [],
+            entries: view[source]?.entries ?? [],
             ready: false,
             loading: true,
             hasMore: false,
@@ -178,7 +181,7 @@ export function useDirectoryRows({
         homeCandidate: [...ambiguous].find((uri) => visible.has(uri)),
         foldCandidate: [...ambiguousFolds].find((uri) => visible.has(uri)),
       };
-    }, [rootUri, dirs, expanded, collapsed, pendingEdits, identifyUri]);
+    }, [rootUri, dirs, hide, expanded, collapsed, pendingEdits, identifyUri]);
 
   const rootLoading = dirs[rootUri]?.loading ?? false;
   const lookupCandidate =

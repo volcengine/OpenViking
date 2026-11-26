@@ -62,6 +62,7 @@ logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = frozenset({"accepted", "pending", "running", "committing"})
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+_MAX_SOURCE_DIRECTORIES = 100
 
 # Sentinel --skill value that routes a Compile request to in-process memory
 # consolidation instead of the VikingBot agent path. It is not a real Skill URI.
@@ -108,14 +109,13 @@ class CompileInputs(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self) -> "CompileInputs":
-        sources: list[str] = []
+        sources: dict[str, None] = {}
         for source in self.from_:
             normalized = source.strip().rstrip("/")
             if not normalized:
                 raise ValueError("from must not contain empty values")
-            if normalized not in sources:
-                sources.append(normalized)
-        self.from_ = sources
+            sources[normalized] = None
+        self.from_ = list(sources)
         if self.to is not None:
             self.to = self.to.strip().rstrip("/")
         self.skill = self.skill.strip().rstrip("/")
@@ -396,16 +396,28 @@ class CompileAPIClient:
         detail = body.get("detail") if isinstance(body, dict) else None
         error = body.get("error") if isinstance(body, dict) else None
         source = detail if isinstance(detail, dict) else error if isinstance(error, dict) else {}
-        if response.status_code == 424:
+        status = response.status_code
+        runtime_not_found = status == 404 and path in {
+            "/runtime/v1/tasks",
+            "/runtime/v1/tasks/status",
+            "/runtime/v1/tasks/cancel",
+        }
+        if status == 424 or runtime_not_found:
             request_id = (
                 body.get("request_id") if isinstance(body, dict) else None
             ) or headers.get("X-Tt-Logid")
             detail_message = source.get("message") or (detail if isinstance(detail, str) else None)
-            reason = f"HTTP 424 {path}: {detail_message or 'Compile dependency failed'}"
+            default_message = (
+                "Compile Runtime resource not found"
+                if runtime_not_found
+                else "Compile dependency failed"
+            )
+            reason = f"HTTP {status} {path}: {detail_message or default_message}"
             if request_id and str(request_id) not in reason:
                 reason += f" (request_id={request_id})"
+            default_code = "NOT_FOUND" if runtime_not_found else "CompileDependencyFailed"
             raise CompileDependencyFailure(
-                str(source.get("code") or "CompileDependencyFailed"), reason, transient=False
+                str(source.get("code") or default_code), reason, http_status=status
             )
         default_code = "UNAVAILABLE" if response.status_code >= 500 else "INVALID_ARGUMENT"
         code = str(source.get("code") or default_code)
@@ -764,9 +776,13 @@ class CompileService:
         task: TaskRecord,
         snapshot: ExternalTaskSnapshot,
     ) -> ExternalTaskSnapshot:
-        """Return the finalized snapshot; Runtime archival errors only produce a warning."""
+        """Finalize local output and skip archival after a Runtime session 404."""
         session_id = task.auth.get("external_task_id")
-        if session_id and snapshot.status in _TERMINAL_STATUSES:
+        if (
+            session_id
+            and snapshot.status in _TERMINAL_STATUSES
+            and task.meta.get("compile_runtime_http_status") != 404
+        ):
             try:
                 await self._client().archive(
                     session_id,
@@ -1220,11 +1236,21 @@ class CompileService:
     ) -> CompileInputs | CompileRequest:
         """Validate inputs for new admissions without revalidating recovered submissions."""
         request = self._normalize_request_uris(request, ctx)
+        if len(request.from_) > _MAX_SOURCE_DIRECTORIES:
+            raise InvalidArgumentError(
+                f"Compile --from supports at most {_MAX_SOURCE_DIRECTORIES} distinct source directories. "
+                "Move the source directories into the same folder and use that folder's URI for --from."
+            )
         assert request.to is not None
         parts = uri_parts(request.to)
         if parts[:1] == ["user"] and parts[2:4] == ["memories", "experiences"]:
             raise InvalidArgumentError(
                 "Compile target must not be inside the user memories/experiences subtree"
+            )
+        if {"viking://resources", "viking://user"}.intersection(request.from_):
+            raise InvalidArgumentError(
+                "Compile --from rejects viking://resources and viking://user. Use a "
+                "subdirectory such as viking://resources/test or viking://user/default/resources."
             )
         for uri in request.from_:
             try:

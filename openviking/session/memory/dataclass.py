@@ -256,6 +256,9 @@ class MemoryTypeSchema(BaseModel):
     overview_template: Optional[str] = Field(
         None, description="Overview template for auto-generating .overview.md files"
     )
+    abstract_template: Optional[str] = Field(
+        None, exclude=True, description="Deployment template for the first directory abstract"
+    )
 
     def requires_messages(self) -> bool:
         """Whether rendering this type uses original conversation messages."""

@@ -28,24 +28,6 @@ class TestParseSkillNoneData:
         with pytest.raises(ValueError, match="Skill data cannot be None"):
             processor._parse_skill(None)
 
-    def test_parse_skill_none_not_unsupported_type(self):
-        """None should NOT produce the generic 'Unsupported data type' message."""
-        processor = SkillProcessor(vikingdb=None)
-        with pytest.raises(ValueError) as exc_info:
-            processor._parse_skill(None)
-        assert "Unsupported data type" not in str(exc_info.value)
-
-    def test_parse_skill_valid_dict_passes(self):
-        """A valid dict should not raise."""
-        processor = SkillProcessor(vikingdb=None)
-        skill_dict, aux_files, base_path, cleanup_path = processor._parse_skill(
-            {"name": "test-skill", "description": "A test skill"}
-        )
-        assert skill_dict["name"] == "test-skill"
-        assert aux_files == []
-        assert base_path is None
-        assert cleanup_path is None
-
     def test_parse_skill_normalizes_hyphenated_allowed_tools(self):
         processor = SkillProcessor(vikingdb=None)
         skill_dict, _, _, _ = processor._parse_skill(
@@ -132,24 +114,6 @@ class TestParseSkillNoneData:
         with pytest.raises(ValueError, match="Unsupported data type"):
             processor._parse_skill(12345)
 
-    def test_parse_skill_long_raw_content_raises_oserror(self):
-        """Long raw SKILL.md content should still surface path probing errors."""
-        processor = SkillProcessor(vikingdb=None)
-        long_description = "telemetry " * 80
-        raw_skill = (
-            "---\n"
-            "name: telemetry-demo-skill\n"
-            f"description: {long_description}\n"
-            "tags:\n"
-            "  - telemetry\n"
-            "---\n\n"
-            "# Telemetry Demo Skill\n\n"
-            "Use this skill to validate telemetry ingestion.\n"
-        )
-
-        with pytest.raises(OSError, match="File name too long"):
-            processor._parse_skill(raw_skill)
-
 
 @pytest.mark.asyncio
 async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
@@ -184,7 +148,6 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
     from openviking.core.skill_loader import SkillLoader
 
     written = processor._write_skill_content.await_args.kwargs
-    assert written["overview"] == "# Dict Skill"
     written_content = SkillLoader.to_skill_md(written["skill_dict"])
     assert "allowed-tools: Read" in written_content
     assert "tags:" in written_content

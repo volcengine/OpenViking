@@ -260,7 +260,7 @@ class VolcEngineVLM(OpenAIVLM):
             self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
             raise
         elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        self._handle_chat_completion(response, duration_seconds=elapsed)
         if tools is not None:
             result = self._build_vlm_response(response, has_tools=True)
             if not tools:
@@ -324,7 +324,7 @@ class VolcEngineVLM(OpenAIVLM):
                 self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
                 raise
             elapsed = time.perf_counter() - t0
-            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            self._handle_chat_completion(response, duration_seconds=elapsed)
             if tools is not None:
                 result = self._build_vlm_response(response, has_tools=True)
                 if not tools:
@@ -506,7 +506,7 @@ class VolcEngineVLM(OpenAIVLM):
             self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
             raise
         elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        self._handle_chat_completion(response, duration_seconds=elapsed)
         if tools is not None:
             result = self._build_vlm_response(response, has_tools=True)
             if not tools:
@@ -560,7 +560,7 @@ class VolcEngineVLM(OpenAIVLM):
             self.record_failed_call(duration_seconds=time.perf_counter() - t0, error=error)
             raise
         elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        self._handle_chat_completion(response, duration_seconds=elapsed)
         if tools is not None:
             result = self._build_vlm_response(response, has_tools=True)
             if not tools:

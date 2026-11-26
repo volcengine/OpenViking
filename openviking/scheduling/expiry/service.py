@@ -16,10 +16,10 @@ from .api import (
     HandlerOptions,
     ItemIdentity,
 )
+from .cache_runtime_store import CacheRuntimeExpiryStore
 from .keys import encode_item_id, shard_for
 from .metrics import ExpiryMetrics
 from .models import StoreOperationError, validate_identity, validate_report
-from .redis_store import RedisExpiryStore
 from .registry import HandlerRegistry
 
 
@@ -32,7 +32,7 @@ class ExpiryRuntimeState:
 class _ExpirySchedulerFacade:
     def __init__(
         self,
-        store: RedisExpiryStore,
+        store: CacheRuntimeExpiryStore,
         registry: HandlerRegistry,
         state: ExpiryRuntimeState,
         *,

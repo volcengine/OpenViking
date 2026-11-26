@@ -8,16 +8,16 @@ import asyncio
 import time
 import uuid
 
+from .cache_runtime_store import CacheRuntimeExpiryStore
 from .config import ExpiryConfig
 from .metrics import ExpiryMetrics
 from .models import OwnerRole, ShardLease, StoreOperationError, task_is_cancelling
-from .redis_store import RedisExpiryStore
 
 
 class ShardLeaseCoordinator:
     def __init__(
         self,
-        store: RedisExpiryStore,
+        store: CacheRuntimeExpiryStore,
         config: ExpiryConfig,
         metrics: ExpiryMetrics,
     ) -> None:

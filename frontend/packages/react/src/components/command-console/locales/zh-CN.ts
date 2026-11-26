@@ -21,6 +21,7 @@ const messages = {
   emptyDescription: 'CLI 直接操作上下文',
   quickStart: '快速体验：',
   noResult: '暂无返回结果',
+  codeOutput: '命令输出',
   justNow: '刚刚',
   formatMinutesAgo: (minutes) => `${minutes} 分钟前`,
   formatHoursAgo: (hours) => `${hours} 小时前`,

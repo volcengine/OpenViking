@@ -1,4 +1,5 @@
 import { useId, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Radio } from '../../../shared/primitives/radio/radio.js';
 import { CustomChoiceInput } from './custom-choice-input.js';
 import type { VikingBotInteractionFieldContext } from './field-types.js';
@@ -10,6 +11,7 @@ interface Props {
   controlProps?: VikingBotInteractionFieldContext<string>['controlProps'];
   request: Extract<VikingBotInteractionRequest, { kind: 'choice' | 'repair' }>;
   value?: string;
+  selectedIcon?: ReactNode;
   labels: InteractionLabels;
   locale: Locale;
   disabled: boolean;
@@ -22,6 +24,7 @@ export function ChoiceInput({
   request,
   controlProps,
   value,
+  selectedIcon,
   labels,
   locale,
   disabled,
@@ -64,7 +67,9 @@ export function ChoiceInput({
           }}
         >
           <span className="ov-viking-bot__interaction-index" aria-hidden="true">
-            {index + 1}
+            {selectedIcon && !custom && value === option.value
+              ? selectedIcon
+              : index + 1}
           </span>
           <span className="ov-viking-bot__interaction-option-content">
             <span>{option.label}</span>

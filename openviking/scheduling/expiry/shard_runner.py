@@ -275,7 +275,7 @@ class ShardRunner:
             release = asyncio.create_task(self._leases.release(lease))
             try:
                 done, _ = await asyncio.wait(
-                    {release}, timeout=self._config.redis.request_budget_seconds
+                    {release}, timeout=self._config.request_budget_seconds
                 )
             except BaseException:
                 lease.lost.set()
@@ -328,7 +328,7 @@ class ShardRunner:
 
                 task.add_done_callback(pending_done)
         try:
-            done, _ = await asyncio.wait(tasks, timeout=self._config.redis.request_budget_seconds)
+            done, _ = await asyncio.wait(tasks, timeout=self._config.request_budget_seconds)
         except asyncio.CancelledError as exc:
             if any(not task.done() for task in tasks):
                 raise self._not_stopped(scope) from exc
@@ -347,13 +347,13 @@ class ShardRunner:
                 item_type=item_type or "",
                 outcome=role.value,
             )
-            logger.warning(
-                "expiry shard execution left orphaned tasks role=%s item_type=%s "
-                "shard_id=%d count=%d",
+            logger.info(
+                "expiry shard cleanup deferred role=%s item_type=%s shard_id=%d count=%d",
                 role.value,
                 item_type or "",
                 shard_id,
                 orphaned,
+                extra={"degraded": True, "total": orphaned},
             )
         if orphaned and not allow_orphans:
             raise self._not_stopped(scope)

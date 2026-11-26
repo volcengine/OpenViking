@@ -1,6 +1,7 @@
 import type { ShellLabels } from '../file-browser-labels.js';
 
 const messages = {
+  previewAiGenerated: 'AI generated',
   formatCharacterCount: (count) =>
     `${count.toLocaleString('en-US')} ${count === 1 ? 'character' : 'characters'}`,
   formatPreviewUpdatedAt: (time) => `Updated on ${time}`,
@@ -20,22 +21,28 @@ const messages = {
   searchHint: 'Enter a keyword to search context files or directories',
   searchEmpty: 'No matching resources',
   searchFailed: 'Failed to run the search',
+  searchInvalidPattern:
+    'Invalid regular expression. Use ^test.* to match test at the start of a line, or \\* to find a literal asterisk.',
+  searchErrorDetails: 'Error details',
   searchModePlaceholders: {
     find: 'Search files or directories',
     search: 'Enter a question that needs conversation context',
-    grep: 'Enter a regular expression or exact text',
+    grep: 'Enter a content regex, e.g. test.*',
     glob: 'Enter a file pattern, e.g. **/*.md',
   },
   searchModeHints: {
     find: 'Semantic retrieval by vector similarity',
     search: 'Semantic retrieval with context',
-    grep: 'Full-text retrieval',
-    glob: 'Retrieve file names by pattern',
+    grep: 'Search content with a regular expression',
+    glob: 'Match file names with wildcards',
   },
   searchAdvanced: 'Advanced',
   searchClear: 'Clear',
   searchScopes: 'Directory',
   searchPickScope: 'Choose a directory',
+  searchAllScopes: 'All directories',
+  searchCancelScopes: 'Cancel',
+  searchConfirmScopes: 'Confirm',
   searchScopesUnsupported: 'The current scope cannot be filtered by directory',
   searchLevels: 'Content',
   searchLevelLabels: ['L0 Summary', 'L1 Overview', 'L2 Full text'],
@@ -48,7 +55,7 @@ const messages = {
   searchFilterUnsupported: 'This filter is unavailable for the current mode',
   searchResultCount: (count) =>
     `${count} ${count === 1 ? 'result' : 'results'}`,
-  searchVia: 'Vector retrieval',
+  searchVia: 'Retrieval mode',
   searchSwitchMode: 'Switch',
   searchAdvancedLabel: 'Advanced filters',
   searchAdvancedLabelWithCount: (label, count) => `${label} (${count})`,

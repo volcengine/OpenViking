@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from threading import Lock
 from typing import Any, BinaryIO, Dict, List, Union
 
 from openviking.service.task_tracker_concurrency import run_to_completion
@@ -92,6 +93,8 @@ class AsyncAGFSClient:
 
     def __init__(self, client: AGFSSyncClientProtocol):
         self._client = client
+        self._cache_runtimes: dict[str, CacheRuntimeHandleProtocol] = {}
+        self._cache_runtime_lock = Lock()
 
     def cache_runtime(self, instance: str = "default") -> CacheRuntimeHandleProtocol:
         """Return the configured cache Runtime selected by instance.
@@ -100,7 +103,12 @@ class AsyncAGFSClient:
         ``instance`` uses ``default``; an unknown configured name raises
         ``ValueError``.
         """
-        return self._client.cache_runtime(instance)
+        with self._cache_runtime_lock:
+            runtime = self._cache_runtimes.get(instance)
+            if runtime is None:
+                runtime = self._client.cache_runtime(instance)
+                self._cache_runtimes[instance] = runtime
+            return runtime
 
     def leader_candidate(
         self,
@@ -321,6 +329,22 @@ class AsyncAGFSClient:
                 stream=True,
                 fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, auto_pathlock),
                 allow_same_mount_fast_path=allow_same_mount_fast_path,
+            )
+        )
+
+    async def _copy_file(self, src_path: str, dst_path: str, *, fs_ctx: Dict[str, str]) -> None:
+        """Copy a prevalidated file under a lease after its parent is prepared."""
+        from .helpers import _copy_file
+
+        await run_to_completion(
+            lambda: asyncio.to_thread(
+                _copy_file,
+                self._client,
+                src_path,
+                dst_path,
+                stream=True,
+                fs_ctx=_fs_ctx_with_auto_pathlock(src_path, fs_ctx, True),
+                parent_prepared=True,
             )
         )
 
@@ -656,4 +680,5 @@ class AsyncAGFSClient:
         return await self.run(
             "pathlock_observe",
             _fs_ctx_or_default("/", fs_ctx),
+            **({"account_scope": True} if fs_ctx is not None else {}),
         )

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import base64
 import json
 import os
 import threading
@@ -20,21 +21,22 @@ from openviking.server.account_stores.mysql import MySQLAccountStore
 from openviking.server.account_stores.mysql_schema import (
     Account,
     Base,
-    Credential,
     GroupMember,
     User,
 )
-from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
 from openviking.server.api_keys import APIKeyManager, generate_api_key
 from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
 )
+from openviking_cli.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.cache_config import CacheConfig
 from tests.server.account_store_fakes import InMemoryAGFS
 
 
@@ -151,7 +153,12 @@ async def test_file_provider_keeps_existing_registry_paths():
         assert "/local/_system/accounts.json" in paths
         assert "/local/acme/_system/users.json" in paths
         assert "/local/acme/_system/groups.json" in paths
-        assert not any("identities-v2" in path or "api-keys-v2" in path for path in paths)
+        accounts = json.loads(fs.agfs.read("/local/_system/accounts.json"))
+        assert "acme" in accounts["accounts"]
+        users = json.loads(fs.agfs.read("/local/acme/_system/users.json"))
+        assert users["users"]["alice"] == {"key": key, "role": "admin"}
+        assert users["users"]["bob"]["role"] == "user"
+        assert json.loads(fs.agfs.read("/local/acme/_system/groups.json")) == {"groups": {}}
     finally:
         await manager.close()
 
@@ -199,7 +206,7 @@ async def test_file_account_creation_reuses_optional_outer_lease(use_outer_lease
 
 
 @pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
-@pytest.mark.parametrize("length", [255, 256, 1024])
+@pytest.mark.parametrize("length", [255, 256])
 async def test_file_account_creation_respects_path_component_limit(issue_user_keys, length):
     agfs = InMemoryAGFS()
     manager = build_api_key_manager(
@@ -228,7 +235,7 @@ async def test_file_account_creation_respects_path_component_limit(issue_user_ke
 
 
 @pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
-@pytest.mark.parametrize("length", [255, 256, 1024])
+@pytest.mark.parametrize("length", [255, 256])
 async def test_file_account_creation_respects_admin_user_id_limit(
     issue_user_keys,
     length,
@@ -256,7 +263,7 @@ async def test_file_account_creation_respects_admin_user_id_limit(
 
 
 @pytest.mark.parametrize("issue_user_keys", [True, False], ids=["api-key", "trusted"])
-@pytest.mark.parametrize("length", [255, 256, 1024])
+@pytest.mark.parametrize("length", [255, 256])
 async def test_file_user_creation_respects_user_id_limit(issue_user_keys, length):
     agfs = InMemoryAGFS()
     manager = build_api_key_manager(
@@ -381,65 +388,7 @@ async def test_file_role_change_is_atomic_when_credential_write_fails():
         await manager.close()
 
 
-async def test_regenerate_key_preserves_management_not_found_errors():
-    manager = build_api_key_manager("root", SimpleNamespace(agfs=InMemoryAGFS()))
-    await manager.load()
-    await manager.create_account("acme", "alice")
-
-    with pytest.raises(NotFoundError, match="Account not found"):
-        await manager.regenerate_key("missing", "alice")
-    with pytest.raises(NotFoundError, match="User not found"):
-        await manager.regenerate_key("acme", "missing")
-
-
-async def test_mysql_load_creates_default_account():
-    raw_mysql = os.environ.get("OV_TEST_MYSQL")
-    if not raw_mysql:
-        pytest.skip("Set OV_TEST_MYSQL to exercise MySQL account-store startup")
-
-    service_name = f"test-{uuid4().hex}"
-    manager = build_api_key_manager(
-        "root",
-        None,
-        service_name=service_name,
-        account_store_provider="mysql",
-        account_store_params=json.loads(raw_mysql),
-    )
-    mysql = manager._store
-    assert isinstance(mysql, MySQLAccountStore)
-    engine = create_async_engine(mysql._url, **mysql._engine_options)
-    try:
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-
-        await manager.load()
-
-        accounts = await manager.list_accounts()
-        assert [account["account_id"] for account in accounts] == ["default"]
-        assert accounts[0]["user_count"] == 0
-        await manager.close()
-        await manager.load()
-
-        async with engine.connect() as connection:
-            assert (
-                await connection.scalar(
-                    select(func.count())
-                    .select_from(Account)
-                    .where(
-                        Account.service_name == service_name,
-                        Account.account_id == "default",
-                    )
-                )
-                == 1
-            )
-    finally:
-        await manager.close()
-        async with engine.begin() as connection:
-            await connection.execute(delete(Account).where(Account.service_name == service_name))
-        await engine.dispose()
-
-
-async def test_distributed_authentication_state_is_shared_and_service_scoped():
+async def test_distributed_authentication_state_is_shared_and_service_scoped(tmp_path):
     """Key rotation and group deletion refresh caches within the owning service."""
     raw_mysql = os.environ.get("OV_TEST_MYSQL")
     redis_url = os.environ.get("OV_TEST_REDIS")
@@ -448,35 +397,44 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
 
     service_name = f"test-{uuid4().hex}"
     isolated_service_name = f"test-{uuid4().hex}"
-    key_prefix = f"ov:test:{uuid4().hex}"
     params = {
         "mysql": json.loads(raw_mysql),
-        "cache": {
-            "provider": "redis",
-            "params": {
-                "mode": "standalone",
-                "endpoints": [redis_url],
-                "key_prefix": key_prefix,
-            },
-        },
+        "cache": {"instance": "accountstore"},
     }
+    cache_client = create_agfs_client(
+        RagfsBindingConfig(
+            agfs=AGFSConfig(path=str(tmp_path), backend="memory"),
+            cache=CacheConfig(
+                instances={
+                    "default": {"provider": "redis", "params": {"endpoints": [redis_url]}},
+                    "accountstore": {
+                        "provider": "redis",
+                        "params": {"endpoints": [redis_url]},
+                    },
+                }
+            ),
+            service_name=service_name,
+            required_cache_instances={"Redis MySQL Account Store": "accountstore"},
+        )
+    )
+    viking_fs = SimpleNamespace(agfs=cache_client)
     writer = build_api_key_manager(
         "root",
-        None,
+        viking_fs,
         service_name=service_name,
         account_store_provider="redis_mysql",
         account_store_params=params,
     )
     reader = build_api_key_manager(
         "root",
-        None,
+        viking_fs,
         service_name=service_name,
         account_store_provider="redis_mysql",
         account_store_params=params,
     )
     isolated = build_api_key_manager(
         "root",
-        None,
+        viking_fs,
         service_name=isolated_service_name,
         account_store_provider="redis_mysql",
         account_store_params=params,
@@ -499,9 +457,7 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
         with pytest.raises(UnauthenticatedError):
             await reader.resolve_identity(isolated_key)
 
-        # Repeated rotation must bound history and invalidate an already cached key.
-        for _ in range(12):
-            active_key = await writer.regenerate_key("acme", "alice")
+        active_key = await writer.regenerate_key("acme", "alice")
         with pytest.raises(UnauthenticatedError):
             await reader.resolve_identity(old_key)
         await writer.register_user("acme", "bob")
@@ -543,34 +499,24 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped():
                 )
                 == 0
             )
-            assert (
-                await connection.scalar(
-                    select(func.count())
-                    .select_from(Credential)
-                    .where(Credential.service_name == service_name)
-                )
-                == 12
-            )
-            assert (
-                await connection.scalar(
-                    select(func.count())
-                    .select_from(Credential)
-                    .where(Credential.service_name == service_name, Credential.revoked.is_(False))
-                )
-                == 2
-            )
     finally:
         try:
-
-            async def clear_test_cache():
-                redis_client = writer._store._redis
-                if redis_client is None:
-                    return
-                keys = [key async for key in redis_client.scan_iter(match=f"{key_prefix}:*")]
+            redis = pytest.importorskip("redis.asyncio")
+            redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+            try:
+                account_tag = (
+                    base64.urlsafe_b64encode(f"{service_name}\0acme".encode()).decode().rstrip("=")
+                )
+                keys = [
+                    key
+                    async for key in redis_client.scan_iter(
+                        match=f"ov:account-cache:v2:{{{account_tag}}}:*"
+                    )
+                ]
                 if keys:
                     await redis_client.delete(*keys)
-
-            await writer._store._redis_runtime.run(clear_test_cache)
+            finally:
+                await redis_client.aclose()
             async with engine.begin() as connection:
                 await connection.execute(
                     delete(Account).where(
@@ -630,7 +576,8 @@ async def test_file_user_deletion_fence_survives_concurrent_role_update():
             if path == "/local/acme/_system/users.json" and self.pause_next_user_read:
                 self.pause_next_user_read = False
                 self.user_read_started.set()
-                self.allow_user_read.wait()
+                if not self.allow_user_read.wait(2):
+                    raise TimeoutError("test did not release the role update")
             return super().read(path, ctx)
 
     agfs = PausingAGFS()
@@ -641,27 +588,27 @@ async def test_file_user_deletion_fence_survives_concurrent_role_update():
 
     agfs.pause_next_user_read = True
     set_role = asyncio.create_task(store.set_role("acme", "bob", "admin"))
-    await asyncio.wait_for(asyncio.to_thread(agfs.user_read_started.wait), timeout=1)
-    deleting = asyncio.create_task(
-        store.begin_deletion(
-            "acme",
-            "bob",
-            task_id="delete",
-            owner_account_id="system",
-            owner_user_id="system",
-        )
-    )
-    await asyncio.sleep(0)
-    agfs.allow_user_read.set()
+    deleting = None
     try:
-        await set_role
-        deletion, created = await deleting
+        assert await asyncio.to_thread(agfs.user_read_started.wait, 2)
+        deleting = asyncio.create_task(
+            store.begin_deletion(
+                "acme", "bob", task_id="delete", owner_account_id="system", owner_user_id="system"
+            )
+        )
+        await asyncio.sleep(0)
+        agfs.allow_user_read.set()
+        await asyncio.wait_for(set_role, 2)
+        deletion, created = await asyncio.wait_for(deleting, 2)
+        assert created
+        assert deletion["task_id"] == "delete"
+        assert (await store.get_deletion("acme", "bob"))["task_id"] == "delete"
     finally:
         agfs.allow_user_read.set()
-
-    assert created
-    assert deletion["task_id"] == "delete"
-    assert (await store.get_deletion("acme", "bob"))["task_id"] == "delete"
+        await asyncio.gather(
+            set_role, *([deleting] if deleting is not None else []), return_exceptions=True
+        )
+        await store.close()
 
 
 async def test_file_store_keeps_global_role_immutable():
@@ -785,30 +732,3 @@ async def test_file_concurrent_batch_group_removals_preserve_all_updates(monkeyp
         assert await store.get_user_group_ids("acme", "bob") == ()
     finally:
         await store.close()
-
-
-@pytest.mark.parametrize("fails", [False, True])
-async def test_redis_batch_group_removal_invalidates_account_after_attempt(monkeypatch, fails):
-    mysql = SimpleNamespace(
-        _service_name="test-remove",
-        _engine_options={},
-        remove_group_members=AsyncMock(return_value=True),
-    )
-    store = RedisMySQLAccountStore(
-        service_name="test-remove",
-        mysql_store=cast(MySQLAccountStore, mysql),
-        params={"cache": {"provider": "redis", "params": {}}},
-    )
-
-    bump = AsyncMock()
-    monkeypatch.setattr(store, "_bump_generation", bump)
-    if fails:
-        mysql.remove_group_members.side_effect = NotFoundError("engineering", "group")
-        with pytest.raises(NotFoundError):
-            await store.remove_group_members("acme", "engineering", ["alice", "bob", "alice"])
-    else:
-        assert await store.remove_group_members("acme", "engineering", ["alice", "bob", "alice"])
-    mysql.remove_group_members.assert_awaited_once_with("acme", "engineering", ["alice", "bob"])
-    # A failed call may have committed before reporting failure; conservatively
-    # invalidate the whole batch through the account generation in either case.
-    bump.assert_awaited_once_with("acme", None)

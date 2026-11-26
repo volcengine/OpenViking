@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { expectExit, runHookScript } from "../../memory-plugin-shared/testing/support.mjs";
 import { antigravityTranscriptPath, resolveAntigravityTurnStep } from "../hosts/antigravity.mjs";
+import { evaluateHostUriGuard } from "../scripts/uri-guard.mjs";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const hookEntry = join(pluginRoot, "scripts", "hook.mjs");
@@ -32,8 +33,27 @@ async function runHook(event, input, env) {
 test("Antigravity hooks.json uses named hooks with the dispatcher's event names", () => {
   const hooks = JSON.parse(readFileSync(join(pluginRoot, "hosts", "antigravity", "hooks.json"), "utf8"));
   const handlers = hooks["openviking-memory"];
-  assert.deepEqual(Object.keys(handlers), ["SessionStart", "PreInvocation", "Stop"]);
+  assert.deepEqual(Object.keys(handlers), ["SessionStart", "PreInvocation", "PreToolUse", "Stop"]);
   assert.match(handlers.PreInvocation[0].command, /hook\.mjs pre-invocation __OPENVIKING_CLIENT_ID__$/);
+  assert.match(handlers.PreToolUse[0].hooks[0].command, /uri-guard\.mjs __OPENVIKING_CLIENT_ID__$/);
+});
+
+test("Antigravity denies a file tool whose location is a viking:// URI", () => {
+  const guard = (name, args) => evaluateHostUriGuard("antigravity", { toolCall: { name, args } });
+  const uri = "viking://user/default/memories/profile.md";
+
+  const read = guard("read_file", { Path: uri });
+  assert.equal(read.decision, "deny");
+  assert.match(read.reason, /read\(uri="viking:\/\/user\/default\/memories\/profile\.md"\)/);
+  assert.match(guard("write_to_file", { TargetFile: uri, CodeContent: "x" }).reason, /OpenViking MCP write/);
+  assert.match(guard("list_dir", { DirectoryPath: "viking://resources/" }).reason, /glob or list/);
+
+  // A body or a command line that mentions a URI is data, and no decision is
+  // returned for a call that may proceed.
+  assert.deepEqual(guard("write_to_file", { TargetFile: "/tmp/a.md", CodeContent: `see ${uri}` }), {});
+  assert.deepEqual(guard("run_command", { CommandLine: `echo ${uri}` }), {});
+  assert.deepEqual(guard("read_file", { Path: "/tmp/notes.txt" }), {});
+  assert.deepEqual(evaluateHostUriGuard("antigravity", {}), {});
 });
 
 test("Antigravity recalls once per turn and captures only new transcript text", async () => {

@@ -575,6 +575,7 @@ export class OpenVikingClient {
       tags: options.tags,
       include_provenance: options.includeProvenance,
       read_content: options.readContent,
+      args: kind === "search" ? (options as SearchOptions).args : undefined,
     });
     return this.request("POST", `/api/v1/search/${kind}`, {
       body: mergeExtra(body, options.extra),

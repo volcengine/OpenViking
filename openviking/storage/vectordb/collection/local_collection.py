@@ -739,6 +739,9 @@ class LocalCollection(ICollection):
         output_fields: Optional[List[str]] = None,
         mode: Optional[str] = None,
         fields: Optional[List[str]] = None,
+        bm25_k1: Optional[float] = None,
+        bm25_b: Optional[float] = None,
+        advance: Optional[Dict[str, Any]] = None,
     ) -> SearchResult:
         """Local backend does not generate vectors from keywords.
 

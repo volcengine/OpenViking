@@ -1,5 +1,7 @@
 import { Button } from '../../../shared/primitives/button/button.js';
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, type RefObject } from 'react';
+import { Modal } from '../../../shared/primitives/modal/modal.js';
+import type { Locale } from '../../../shared/locale.js';
 import type { AclText } from './acl-labels.js';
 import { restoreDiff } from './acl-model.js';
 import type { AclModel } from './use-acl-report.js';
@@ -7,9 +9,13 @@ import type { AclModel } from './use-acl-report.js';
 export function AclConfirmation({
   model,
   text,
+  locale,
+  triggerRef,
 }: {
   model: AclModel;
   text: AclText;
+  locale: Locale;
+  triggerRef: RefObject<HTMLElement | null>;
 }) {
   const cancel = useRef<HTMLButtonElement>(null);
   const titleId = useId();
@@ -22,7 +28,7 @@ export function AclConfirmation({
   useEffect(() => {
     cancel.current?.focus();
   }, []);
-  return (
+  const content = (
     <section
       className="ov-file-browser-acl__confirmation"
       aria-labelledby={titleId}
@@ -65,5 +71,21 @@ export function AclConfirmation({
         </Button>
       </div>
     </section>
+  );
+  return restore ? (
+    content
+  ) : (
+    <Modal
+      open
+      title={text.stopTitle}
+      closeLabel={text.cancel}
+      triggerRef={triggerRef}
+      locale={locale}
+      className="ov-file-browser-acl-stop"
+      maskClosable={false}
+      onClose={model.phase === 'saving' ? undefined : model.cancel}
+    >
+      {content}
+    </Modal>
   );
 }

@@ -346,7 +346,8 @@ async def test_root_compile_updates_two_types_through_real_loop_and_updater(
     language_config.vlm = SimpleNamespace(get_vlm_instance=lambda: vlm)
     monkeypatch.setattr("openviking.session.memory.memory_updater.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
-        "openviking.session.memory.memory_updater.MemoryUpdater.generate_overview", AsyncMock()
+        "openviking.session.memory.memory_updater.MemoryUpdater._submit_directory_changes",
+        AsyncMock(),
     )
     monkeypatch.setattr(
         "openviking.session.memory.memory_updater.MemoryUpdater._sync_resource_refs_for_result",
@@ -489,7 +490,6 @@ def language_config(monkeypatch):
         "openviking.session.memory.session_extract_context_provider",
         "openviking.session.memory.extract_loop",
         "openviking.session.memory.utils.language",
-        "openviking_cli.utils.config",
     ):
         monkeypatch.setattr(f"{module}.get_openviking_config", lambda: config)
     monkeypatch.setattr("openviking.service.memory_compile.get_default_registry", lambda: registry)
@@ -730,26 +730,18 @@ async def test_provider_binds_isolation_before_prefetch(peer_id):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("snapshot_failure", [None, "start", "finish"])
 @pytest.mark.parametrize(
-    "change, has_error, has_operations, expected_status",
+    "change, has_error, has_operations, expected_status, snapshot_failure",
     [
-        (None, True, True, TaskStatus.FAILED),
-        ("written", True, True, TaskStatus.COMPLETED),
-        ("edited", True, True, TaskStatus.COMPLETED),
-        ("deleted", True, True, TaskStatus.COMPLETED),
-        ("written", False, True, TaskStatus.COMPLETED),
-        (None, False, True, TaskStatus.COMPLETED),
-        (None, False, False, TaskStatus.COMPLETED),
-    ],
-    ids=[
-        "all-failed",
-        "partial-add",
-        "partial-edit",
-        "partial-delete",
-        "success",
-        "no-op",
-        "no-operations",
+        pytest.param(None, True, True, TaskStatus.FAILED, None, id="all-failed-None"),
+        pytest.param("written", True, True, TaskStatus.COMPLETED, None, id="partial-add-None"),
+        pytest.param("edited", True, True, TaskStatus.COMPLETED, None, id="partial-edit-None"),
+        pytest.param("deleted", True, True, TaskStatus.COMPLETED, None, id="partial-delete-None"),
+        pytest.param("written", False, True, TaskStatus.COMPLETED, None, id="success-None"),
+        pytest.param("written", False, True, TaskStatus.COMPLETED, "start", id="success-start"),
+        pytest.param("written", False, True, TaskStatus.COMPLETED, "finish", id="success-finish"),
+        pytest.param(None, False, True, TaskStatus.COMPLETED, None, id="no-op-None"),
+        pytest.param(None, False, False, TaskStatus.COMPLETED, None, id="no-operations-None"),
     ],
 )
 async def test_compile_task_apply_outcomes(
@@ -851,6 +843,17 @@ async def test_compile_task_apply_outcomes(
         assert [call[0] for call in calls.mock_calls] == ["snapshot", "extract", "snapshot"]
     finalize.assert_not_awaited()
     assert all(call.kwargs["paths"] == [directory] for call in commit.await_args_list)
+    snapshot_failures = [
+        record
+        for record in caplog.records
+        if "memory compile snapshot failed; continuing" in record.getMessage()
+    ]
+    if snapshot_failure:
+        [failure] = snapshot_failures
+        assert failure.degraded is True
+        assert f"phase={snapshot_failure}" in failure.getMessage()
+    else:
+        assert not snapshot_failures
     assert not await tracker.has_work(
         task.task_id,
         account_id=ctx.account_id,

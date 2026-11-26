@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 
 _UTF8_FLAG = 0x800
@@ -81,6 +82,13 @@ def _safe_zip_member_path(filename: str) -> Path:
     return Path(*safe_parts)
 
 
+def iter_safe_zip_members(zipf: zipfile.ZipFile) -> Iterator[tuple[Path, zipfile.ZipInfo]]:
+    """Yield normalized relative paths and member metadata without extracting data."""
+    normalize_zip_filenames(zipf)
+    for member in zipf.infolist():
+        yield _safe_zip_member_path(member.filename), member
+
+
 def safe_extract_zip(zipf: zipfile.ZipFile, dest_dir: Path) -> None:
     """Extract ZIP archive with Zip Slip protection.
 
@@ -90,9 +98,7 @@ def safe_extract_zip(zipf: zipfile.ZipFile, dest_dir: Path) -> None:
     forward slash semantics before extraction.
     """
     dest_dir = Path(dest_dir).resolve()
-    normalize_zip_filenames(zipf)
-    for member in zipf.infolist():
-        safe_rel_path = _safe_zip_member_path(member.filename)
+    for safe_rel_path, member in iter_safe_zip_members(zipf):
         member_path = (dest_dir / safe_rel_path).resolve()
         # Ensure the resolved path is inside dest_dir
         if not str(member_path).startswith(str(dest_dir) + os.sep):

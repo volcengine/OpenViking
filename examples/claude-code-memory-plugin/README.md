@@ -178,7 +178,7 @@ Upgrading from the path-derived peer needs no action: memories written under the
 | `OPENVIKING_RECALL_PEER_SCOPE`          | `all`        | `all` can recall other project memories with a score penalty; `actor` only sees global plus the current project |
 | `OPENVIKING_RECALL_MAX_TOKENS`         | `1600`       | Token budget for the server-assembled context block (independent of local compression limits) |
 | `OPENVIKING_RECALL_DEDUP_TURNS`        | `5`          | Cross-turn cooldown: URIs served in the last N turns are skipped          |
-| `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | (off) | Event memories keep their score for this period (`7d`, `12h`) and decay after it, so older events stop outranking recent ones. Sent as `events_time_decay_protection`. |
+| `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | `30d` | Auto recall keeps event scores unchanged for this long after the event record was updated and decays them afterward. Set `off` to disable decay, or set another period such as `7d` or `12h`. |
 | `OPENVIKING_RECALL_QUERY_EXPANSION`    | `auto`       | `auto` lets the server widen short prompts using session context; `off` disables it |
 | `OPENVIKING_RECALL_COMPRESS`           | `auto`       | Digest compression: `off`, `client` (host CLI), `server`, or `auto` (local first, server fallback) |
 | `OPENVIKING_RECALL_COMPRESS_MAX_BULLETS` | `6`        | Digest bullet ceiling                                                     |
@@ -213,8 +213,9 @@ Recall covers skills as well as memories: the server-assembled context block can
 | `OPENVIKING_SKILL_CATALOG`               | `true`    | Add the `<available-skills>` catalog to the session-start block          |
 | `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`  | `1200`    | Token budget for `<available-skills>` (0–20000), not taken from the profile budget; `0` drops the catalog |
 | `OPENVIKING_SESSION_START_MAX_BYTES`    | `9500`    | Byte cap on the whole SessionStart context so it stays under Claude Code's 10,000-character inline limit; the archive takes up to half on resume/compact; `0` removes the cap |
+| `OPENVIKING_SESSION_HISTORY_POINTER`    | `true`    | On resume/compact, add a short note naming the session's OV id and how to look up exact details with the server's `session_history` MCP tool; the MCP proxy fills that tool's `session` with the current session |
 
-In `ovcli.conf` the same knobs are `noAutoInject`, `profileTokenBudget`, `skillCatalog`, and `skillCatalogTokenBudget`, under `plugin` or `plugin.claude_code`.
+In `ovcli.conf` the same knobs are `noAutoInject`, `profileTokenBudget`, `skillCatalog`, `skillCatalogTokenBudget`, and `sessionHistoryPointer`, under `plugin` or `plugin.claude_code`.
 
 Every `SessionStart` (`startup`, `clear`, `resume`, `compact`) injects one `<openviking-context>` block: `<user-profile>`, `<available-memories>`, and `<available-skills>`, followed on `resume`/`compact` by the latest archive overview. The skill catalog comes from one `GET /api/v1/skills?node_limit=200` call. It lists your own skills first, then the ones shared with the account under `viking://agent/skills`, leaving out any shared skill with the same name as one of yours. Each description is cut to about 40 tokens, and tags such as `<openviking-context>` inside it are escaped. When the full catalog does not fit its budget, it lists names only, ending with `... +N more, search OpenViking skills to find the rest` if the names run over too; when not even one name fits, it becomes the single line `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`. With no skills, or on a server without `GET /api/v1/skills`, the catalog is left out.
 
@@ -243,6 +244,7 @@ The bundled `openviking-skills` skill tells Claude what to do with the catalog: 
 | `OPENVIKING_WRITE_PATH_ASYNC`          | `true`       | Detach write hooks into a background worker so CC isn't blocked on commit RTT |
 | `OPENVIKING_BYPASS_SESSION`            | `false`      | One-shot: `1`/`true` skips every hook in the current process             |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS`   | `""`         | CSV of glob patterns matched against `session_id` or `cwd`               |
+| `OPENVIKING_SKIP_SUBAGENT_SESSIONS`    | `false`      | `1`/`true` skips SubagentStart / SubagentStop, so subagent transcripts are never captured or committed |
 | `OPENVIKING_MEMORY_ENABLED`            | (auto)       | `0`/`false`/`no`=force off; `1`/`true`/`yes`=force on                    |
 | `OPENVIKING_DEBUG`                     | `false`      | `1`/`true`=write hook logs to `~/.openviking/logs/cc-hooks.log`          |
 | `OPENVIKING_DEBUG_LOG`                 | `~/.openviking/logs/cc-hooks.log` | Override log path                                   |

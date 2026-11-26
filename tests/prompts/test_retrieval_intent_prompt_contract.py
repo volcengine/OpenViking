@@ -12,6 +12,7 @@ from openviking.prompts.manager import PromptManager
         "retrieval.intent_analysis",
         "retrieval.ov_intent_analysis_sft_v4",
         "retrieval.ov_intent_analysis_sft_v7",
+        "retrieval.ov_intent_analysis_rl",
     ],
 )
 def test_intent_prompts_use_compact_queries_contract(prompt_id: str):
@@ -50,3 +51,30 @@ def test_default_intent_prompt_matches_v4_contract():
     assert manager.render("retrieval.intent_analysis", variables) == manager.render(
         "retrieval.ov_intent_analysis_sft_v4", variables
     )
+
+
+def test_rl_intent_prompt_renders_optional_scope_constraints():
+    manager = PromptManager(templates_dir=PromptManager._get_bundled_templates_dir())
+    base_vars = {
+        "compression_summary": "The user is working on OpenViking retrieval.",
+        "recent_messages": "[user]: Improve semantic search.",
+        "current_message": "Use the style we discussed earlier.",
+        "context_type": "",
+        "target_abstract": "",
+    }
+
+    unscoped = manager.render("retrieval.ov_intent_analysis_rl", base_vars)
+    assert "Restricted Context Type:" not in unscoped
+    assert "Target Directory Abstract:" not in unscoped
+
+    scoped = manager.render(
+        "retrieval.ov_intent_analysis_rl",
+        {
+            **base_vars,
+            "context_type": "resource",
+            "target_abstract": "OpenViking retrieval documentation.",
+        },
+    )
+    assert "Restricted Context Type: resource" in scoped
+    assert "Target Directory Abstract: OpenViking retrieval documentation." in scoped
+    assert 'context_type="resource"' in scoped
