@@ -1,11 +1,11 @@
 # Lark 消息格式
 
-`send_message` / `reply_message` 在飞书上支持 Markdown、图片/文件附件、原始卡片与标准单选卡片（微信只支持 Markdown 文本和 `file_path`）。每次调用只能提供一种正文；daemon 统一做 decision_id 新鲜度、runtime authority、幂等和 outbox 投递账本检查。
+`send_message` / `reply_message` 在飞书上支持 Markdown、图片/文件附件、语音条、视频、原始卡片与标准单选卡片（微信只支持 Markdown 文本和 `file_path`）。每次调用只能提供一种正文；daemon 统一做 decision_id 新鲜度、runtime authority、幂等和 outbox 投递账本检查。
 
 ## 发送 Markdown、图片与文件
 
 - 普通文字使用 `markdown`，底层 `--markdown` 转成 post。
-- 本地附件使用 `file_path`，例如 `reports/result.pdf`；相对于 Agent workspace，非空且最多 20 MiB。jpg/png/gif/webp/bmp 作为图片发送，其他（PDF、Word、Excel 等）作为文件发送。不允许 URL、绝对路径、`..` 或逃出 workspace 的符号链接。上传使用经过校验的文件快照。
+- 本地附件使用 `file_path`，例如 `reports/result.pdf`；相对于 Agent workspace，非空且最多 20 MiB。jpg/png/gif/webp/bmp 作为图片发送，音频作为语音条发送（见下），`.mp4`/`.mov` 作为视频发送，其他（PDF、Word、Excel 等）作为文件发送。不允许 URL、绝对路径、`..` 或逃出 workspace 的符号链接。上传使用经过校验的文件快照。
 - 已上传的 IM 文件可以使用可信工具返回的 `file_key`。它不是云文档 token。
 - 文件消息没有文字说明区，不能同时带 markdown 或 mentions。一次决策只发送所需附件。
 - 话题内使用 `reply_message`，设置 `reply_in_thread: true`。`send_message` 创建群内独立消息。
@@ -20,6 +20,25 @@
 ```
 
 已有飞书云文档可以通过 Markdown 分享链接；创建、编辑云文档不是 IM 文件上传。
+
+## 发送语音
+
+飞书只把 Opus 音频显示为语音条（可播放、可转文字的语音气泡）。`file_path` 指向音频文件时，daemon 按扩展名决定怎么发：
+
+- `.opus`、`.ogg`：直接作为语音条发送，要求是 Ogg Opus；`.ogg` 里是 Vorbis 等其他编码时飞书会拒收，错误里会说明。
+- `.mp3`、`.wav`、`.m4a`、`.aac`、`.flac`、`.amr`、`.wma`、`.aiff`、`.oga`：先用 ffmpeg 转成 48 kHz 单声道 Opus 再发，转码在冻结快照的私有临时目录里进行，结束后清理。没有 ffmpeg 或转码失败时不回退成文件发送，错误直接给出可自己执行的 ffmpeg 命令。
+- 其他扩展名照旧，作为文件附件发送。所以要把音频原样当附件发，先打包成压缩包（或放进文档）再发，不要指望用音频扩展名。
+
+```json
+{
+  "message_id": "<真实 om_ 消息 ID>",
+  "decision_id": "<最新入站 event= ID>",
+  "reply_in_thread": true,
+  "file_path": "artifacts/reply.opus"
+}
+```
+
+语音条没有文字说明区，一次决策只发一条语音；要附带说明就另发一条 `markdown`。文本转语音不在 daemon 里做：需要语音回复时，先用工作区里可用的 TTS 工具生成音频文件再 `file_path` 发送，生成 `.opus` 最省事。
 
 ## 卡片与用户选择
 
@@ -82,4 +101,4 @@ daemon 先完整校验并冻结图片到私有临时目录，在 authority、新
 
 ## 暂不支持的发送类型
 
-音频、视频、表情包、群/个人名片等消息类型还不能通过投递工具发送。消息类动作只能走投递工具，不能改用 lark-cli；用户要求时说明暂不支持。
+表情包、群/个人名片等消息类型还不能通过投递工具发送。消息类动作只能走投递工具，不能改用 lark-cli；用户要求时说明暂不支持。

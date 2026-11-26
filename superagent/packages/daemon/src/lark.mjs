@@ -14,6 +14,7 @@ import { prepareLarkMediaDirectory } from './lark-media.mjs';
 import { MAX_CARD_IMAGE_BYTES, cardImageFormat, checkCardImageTemplate, replaceCardImages, validImageKey } from './card-images.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 import { isLarkVideo, videoCover } from './lark-video.mjs';
+import { isLarkAudio, needsOpusConversion, toOpus } from './lark-audio.mjs';
 import { LarkImageCache } from './lark-image-cache.mjs';
 import {
   DOC_COMMENT_EVENT, WHOLE_COMMENT_TYPES, commentContent, commentMessageId, commentPeople, docChatId, isDocChatId,
@@ -323,6 +324,7 @@ export class LarkClient {
       data = await this.im([...target, '--markdown', renderMentions(content.text, content.mentions), ...suffix], 'send message');
     } else if (content.type === 'file') {
       if (isLarkVideo(content.path)) return deliveredMessage(await this.deliverVideo(target, content, suffix));
+      if (isLarkAudio(content.path)) return deliveredMessage(await this.deliverVoice(target, content, suffix));
       // lark-cli accepts only cwd-relative upload paths.
       const flag = IMAGE_TYPES[path.extname(content.path).toLowerCase()] ? '--image' : '--file';
       data = await this.im([...target, flag, `./${path.basename(content.path)}`, ...suffix], 'send attachment',
@@ -353,6 +355,27 @@ export class LarkClient {
       }
     } finally {
       fs.rmSync(work, { recursive: true, force: true });
+    }
+  }
+
+  // Sends audio as a voice message: a bubble Lark can transcribe, not a file
+  // attachment. lark-cli takes only Opus, so another container (mp3, wav, m4a,
+  // ...) is converted with ffmpeg first, from the frozen file's own directory.
+  async deliverVoice(target, content, suffix) {
+    const dir = path.dirname(content.path);
+    const work = needsOpusConversion(content.path) ? fs.mkdtempSync(path.join(dir, '.voice-')) : null;
+    try {
+      const audio = work
+        ? `./${path.relative(dir, await toOpus(this.registry, content.path, work, this.logger)).split(path.sep).join('/')}`
+        : `./${path.basename(content.path)}`;
+      try {
+        return await this.im([...target, '--audio', audio, ...suffix], 'send voice message', { cwd: dir });
+      } catch (error) {
+        throw new Error(`${error.message}; Lark shows a voice message only for Ogg Opus (.opus, or Ogg Opus .ogg), `
+          + 'so convert the audio to .opus and retry; to send the bytes unchanged, attach them in a document instead');
+      }
+    } finally {
+      if (work) fs.rmSync(work, { recursive: true, force: true });
     }
   }
 

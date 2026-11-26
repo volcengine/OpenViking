@@ -11,6 +11,7 @@ import { safeError } from '../logger.mjs';
 import { connectorManifest, parseProtocolLine, requestMessage } from './protocol.mjs';
 import { mentionTarget } from '../runtime-input.mjs';
 import { LARK_VIDEO_PREP_MS, isLarkVideo } from '../lark-video.mjs';
+import { LARK_AUDIO_PREP_MS, needsOpusConversion } from '../lark-audio.mjs';
 
 const defaultWorkerPath = fileURLToPath(new URL('./worker.mjs', import.meta.url));
 // Backoff between restarts of one failed Connector; the last delay repeats.
@@ -324,6 +325,9 @@ export class ConnectorProcess {
     } else if (this.type === 'lark' && input.content?.type === 'file' && isLarkVideo(input.content.path)) {
       // Cover extraction runs before the CLI send.
       timeoutMs += LARK_VIDEO_PREP_MS + 1000;
+    } else if (this.type === 'lark' && input.content?.type === 'file' && needsOpusConversion(input.content.path)) {
+      // Re-encoding to the Opus a voice message needs runs before the CLI send.
+      timeoutMs += LARK_AUDIO_PREP_MS + 1000;
     }
     return this.request('action', { name, input }, timeoutMs);
   }

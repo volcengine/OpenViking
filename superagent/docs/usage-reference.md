@@ -225,7 +225,7 @@ Protocol references: [RFC 9051](https://www.rfc-editor.org/rfc/rfc9051.html) for
 
 ## Attachments and cards
 
-`send_message` / `reply_message` accept exactly one of `markdown`, `file_path`, `file_key`, `card`, or `choices`. WeChat, Telegram, Slack, QQ, and OneBot support only `markdown` and `file_path`. DingTalk supports `markdown` in groups. Files are workspace-relative and at most 20 MiB; images are sent as images. Inline Card 1.0/2.0 is limited to 30 KiB. Thread files/cards use replies with `reply_in_thread: true`.
+`send_message` / `reply_message` accept exactly one of `markdown`, `file_path`, `file_key`, `card`, or `choices`. WeChat, Telegram, Slack, QQ, and OneBot support only `markdown` and `file_path`. DingTalk supports `markdown` in groups. Files are workspace-relative and at most 20 MiB; images are sent as images. On Lark, `file_path` audio (.opus/.ogg as they are, mp3/wav/m4a and similar converted with ffmpeg) is sent as a voice message, and .mp4/.mov as a video. Inline Card 1.0/2.0 is limited to 30 KiB. Thread files/cards use replies with `reply_in_thread: true`.
 
 `choices` sends a single-choice button question and returns immediately. After a click, the daemon validates answerer, expiry, and duplicate submissions, delivers a new input, and best-effort updates the card. Question state and thread routes persist in SQLite. Ordinary cards also enter the agent, showing `[card]` when text is unavailable. See [message formats](../packages/daemon/agent/lark-message-formats.md). Outbound schemas are runtime-independent; only Agent-tool cards register callbacks.
 
