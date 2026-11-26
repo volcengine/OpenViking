@@ -425,7 +425,7 @@ What this means in practice:
 
 | Integration | Subagent handling |
 |---|---|
-| Claude Code | Each subagent gets its own session, `cc-<id>__subagent-<agent_id>`. `SubagentStop` sends its transcript and commits |
+| Claude Code | Each subagent gets its own session, `cc-<id>__subagent-<agent_id>`. `SubagentStop` sends its transcript and commits. Set `OPENVIKING_SKIP_SUBAGENT_SESSIONS=1` to skip both subagent hooks |
 | Codex, TraeCode CLI 2.0 | Subagent output is folded into the main session |
 | OpenCode | Subagents get `oc-<parent>__subagent-<child>` sessions. Session-start context is skipped for them; recall is not |
 | DSH | Each subagent is a separate `dsh-<id>` session with no link to its parent, and each gets its own session-start context |
