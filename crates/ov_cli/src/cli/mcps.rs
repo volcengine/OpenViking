@@ -2,9 +2,24 @@
 
 use clap::Subcommand;
 
+const MCP_CONFIG_EXAMPLE: &str = r#"JSON argument example:
+  '{
+    "mcpServers": {
+      "mcp_server_example": {
+        "url": "https://mcp.example.com/mcp",
+        "headers": {
+          "Authorization": "Bearer <token>"
+        }
+      }
+    }
+  }'
+
+Pass the quoted JSON as one argument. Replace the URL and <token> with your MCP server values."#;
+
 #[derive(Subcommand)]
 pub(crate) enum McpCommands {
     /// Register a Streamable HTTP MCP server
+    #[command(after_long_help = MCP_CONFIG_EXAMPLE)]
     Add {
         /// MCP configuration JSON containing an mcpServers object
         #[arg(value_name = "json")]
@@ -50,6 +65,7 @@ pub(crate) enum McpCommands {
         target_uri: Option<String>,
     },
     /// Validate connectivity and tool discovery
+    #[command(after_long_help = MCP_CONFIG_EXAMPLE)]
     Validate {
         /// MCP configuration JSON containing an mcpServers object
         #[arg(value_name = "json")]
