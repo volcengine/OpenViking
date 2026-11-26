@@ -42,8 +42,10 @@ export const codebuddy = {
     return null;
   },
   // SessionStart context is dropped after a compaction and a --resume, so they
-  // leave the note for the next UserPromptSubmit. `/compact` after `-c` fired
-  // no PreCompact, hence SessionStart(compact) too (DESIGN.md §12).
+  // leave the note, and after a compaction the profile, for the next
+  // UserPromptSubmit. `/compact` after `-c` fired no PreCompact, hence
+  // SessionStart(compact) too (DESIGN.md §12).
+  compactionDropsProfile: true,
   historyPointer: {
     sessionDefault: true,
     defer: (event, input) => {

@@ -85,34 +85,31 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
             )
         try:
             message_id = await call_next(ctx)
-        except asyncio.CancelledError:
-            if ctx.committed:
-                record_enqueued_work(ctx.queue, metadata.work_id)
-            elif registration is WorkRegistration.CREATED:
-                await run_to_completion(
-                    lambda: self._tracker.discard_work(
-                        metadata.task_id,
-                        metadata.work_id,
-                        account_id=metadata.account_id,
-                        user_id=metadata.user_id,
-                    )
-                )
-            raise
         except BaseException as exc:
             if ctx.committed:
                 record_enqueued_work(ctx.queue, metadata.work_id)
             elif registration is WorkRegistration.CREATED:
-                failure_message = str(exc) or type(exc).__name__
-                await run_to_completion(
-                    lambda: self._tracker.mark_work_failed(
-                        metadata.task_id,
-                        metadata.work_id,
-                        failure_message,
-                        account_id=metadata.account_id,
-                        user_id=metadata.user_id,
+                if isinstance(exc, asyncio.CancelledError):
+                    await run_to_completion(
+                        lambda: self._tracker.discard_work(
+                            metadata.task_id,
+                            metadata.work_id,
+                            account_id=metadata.account_id,
+                            user_id=metadata.user_id,
+                        )
                     )
-                )
-                record_enqueued_work(ctx.queue, metadata.work_id)
+                else:
+                    failure_message = str(exc) or type(exc).__name__
+                    await run_to_completion(
+                        lambda: self._tracker.mark_work_failed(
+                            metadata.task_id,
+                            metadata.work_id,
+                            failure_message,
+                            account_id=metadata.account_id,
+                            user_id=metadata.user_id,
+                        )
+                    )
+                    record_enqueued_work(ctx.queue, metadata.work_id)
             # Existing Work may still own a delivery; leave its outcome to
             # the consumer rather than changing it on an enqueue failure.
             raise
@@ -233,6 +230,13 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                 metadata.task_id,
                 metadata.work_id,
                 delta=1,
+                account_id=metadata.account_id,
+                user_id=metadata.user_id,
+            )
+        elif isinstance(result.value, dict) and result.value.get("skipped"):
+            await self._tracker.discard_work(
+                metadata.task_id,
+                metadata.work_id,
                 account_id=metadata.account_id,
                 user_id=metadata.user_id,
             )

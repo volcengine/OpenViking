@@ -14,6 +14,7 @@ description: |
   - Tool calls with no meaningful outcome
 directory: "viking://user/{{ user_space }}/memories/tools"
 filename_template: "{{ tool_name }}.md"
+abstract_template: "Experience with individual tools, including useful parameters and recurring failures."
 enabled: false
 content_template: |
   Tool: {{ tool_name }}

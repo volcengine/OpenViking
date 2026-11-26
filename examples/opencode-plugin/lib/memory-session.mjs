@@ -175,6 +175,10 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return getOrCreateSession(opencodeSessionId).ovSessionId
   }
 
+  function getCompactedAt(opencodeSessionId) {
+    return sessions.get(opencodeSessionId)?.compactedAt
+  }
+
   // The OV session id once per compaction of this session, "" otherwise.
   function takeHistoryPointer(opencodeSessionId) {
     const state = sessions.get(opencodeSessionId)
@@ -367,6 +371,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     waitForBackground,
     handleEvent,
     getMappedSessionId,
+    getCompactedAt,
     takeHistoryPointer,
     commitSession,
     flushAll,

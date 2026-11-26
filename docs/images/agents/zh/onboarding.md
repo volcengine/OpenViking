@@ -53,7 +53,8 @@
 - **OpenViking 在这段对话之前就已安装**（能看到 `<openviking-context>` 块，或者有 `health` 等 OpenViking 工具）：先用 `ov health` 或 `health` 工具查连接，记下返回的用户名，告诉用户连的是哪个服务、哪个用户，问他沿用还是更换。
   - 沿用：做步骤 2 到 4，然后直接进入[重启之后](#重启之后)。不需要重启。
   - 更换：插件正在保存这段对话，所以不要让用户把新 key 发到这里。请他在自己的终端里运行控制台给的安装命令（或下面那条），再开一个新会话，请 Agent 按 https://docs.openviking.net/agents/zh/onboarding.md 继续。如果控制台有一键提示词，也可以使用。旧配置会被备份，云端数据不会被清空。
-- **还没有任何连接，用户也没给安装命令**：请用户提供服务地址和 API key（火山引擎：在 OpenViking 控制台的用户管理 → API Key 里；BytePlus 使用实例的 HTTPS 服务地址和 API Key），然后运行下面的命令，`<值>` 取[附录 A](#附录-a各宿主说明)的 `--harness` 列，再从步骤 1 开始。`cli` 一定要带上：后面检查连接、读回内容和添加文件都要用 `ov` 命令。
+- **用户选择了 BytePlus，但还没有连接**：请让用户在自己的终端按照 [BytePlus 接入指南](https://docs.openviking.ai/zh/guides/27-byteplus-setup#连接-agent) 操作，并勾选 CLI。不要让用户把 API Key 发到聊天中。用户确认安装完成且连接正常后，从步骤 1 开始。
+- **还没有任何连接，用户也没给安装命令**：先确认用户要连接的服务。如果是 BytePlus，按上一条操作。其他服务请用户提供服务地址和 API key（火山引擎：在 OpenViking 控制台的用户管理 → API Key 里），然后运行下面的命令，`<值>` 取[附录 A](#附录-a各宿主说明)的 `--harness` 列，再从步骤 1 开始。`cli` 一定要带上：后面检查连接、读回内容和添加文件都要用 `ov` 命令。
 
   ```bash
   curl -fsSL https://openviking.ai/install | bash -s -- --yes --lang zh --harness <值>,cli --url <服务地址> --api-key <用户的 key>

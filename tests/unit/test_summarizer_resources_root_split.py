@@ -147,7 +147,7 @@ async def test_resources_root_empty_import_is_error():
 
 
 @pytest.mark.asyncio
-async def test_flat_file_refresh_enqueues_incremental_parent_summary():
+async def test_flat_file_refresh_enqueues_file_processing():
     queue = _DummyQueue()
     qm = _DummyQueueManager(queue)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
@@ -165,11 +165,7 @@ async def test_flat_file_refresh_enqueues_incremental_parent_summary():
             skip_vectorization=False,
         )
 
-    assert result == {
-        "status": "success",
-        "enqueued_count": 1,
-        "semantic_action": "refresh_now",
-    }
+    assert result == {"status": "success", "enqueued_count": 1}
     assert len(queue.msgs) == 1
     msg = queue.msgs[0]
     assert msg.uri == "viking://resources"
@@ -210,10 +206,6 @@ async def test_content_write_groups_files_without_coalescing_file_work():
         )
 
     assert result["enqueued_count"] == 2
-    assert result["parent_actions"] == {
-        "viking://resources/docs": "refresh_now",
-        "viking://resources/src": "refresh_now",
-    }
     assert len(queue.msgs) == 2
     assert all(not msg.coalesce_key for msg in queue.msgs)
     messages = {msg.uri: msg for msg in queue.msgs}

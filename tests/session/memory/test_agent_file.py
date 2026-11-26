@@ -69,7 +69,7 @@ async def test_extraction_applies_memory_changes_and_preserves_agent_files(tmp_p
 
     updater = MemoryUpdater(registry=registry)
     updater._viking_fs = fs
-    updater.generate_overview = AsyncMock()
+    updater._submit_directory_changes = AsyncMock()
     result = await updater.apply_operations(resolved, ctx, extract_context=extract_context)
     assert result.errors == []
     assert not await fs.exists(profile_uri, ctx=ctx)

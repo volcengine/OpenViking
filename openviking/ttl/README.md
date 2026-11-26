@@ -2,7 +2,7 @@
 
 TTL is optional and disabled by default. The first implementation requires Redis;
 there is no Redis-free backend. The implementation and tests ship with OpenViking.
-It uses the existing expiry Redis client and storage/configuration lifecycle.
+Directory indexes and scheduled TTL work use named RAGFS CacheRuntime instances.
 
 Install OpenViking with the `expiry` extra, then merge into your server config:
 
@@ -11,16 +11,31 @@ Install OpenViking with the `expiry` extra, then merge into your server config:
   "server": {
     "ttl_adapter": {
       "enabled": true,
+      "cache": {"instance": "ttl"},
       "config": {
-        "resource_id": "stable-library-id",
-        "redis": {"mode": "standalone", "endpoints": ["redis://127.0.0.1:6379"]}
+        "resource_id": "stable-library-id"
+      }
+    }
+  },
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {"endpoints": ["redis://127.0.0.1:6379"]}
+      },
+      "ttl": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://127.0.0.1:6379"],
+          "default_ttl_seconds": 0
+        }
       }
     }
   },
   "expiry": {
     "service_name": "stable-library-id",
     "publisher_separate_process": false,
-    "redis": {"mode": "standalone", "endpoints": ["redis://127.0.0.1:6379"]}
+    "cache": {"instance": "ttl"}
   },
   "ttl": {"sessions": 30, "user_events": 60, "peer_events": 60}
 }
@@ -30,17 +45,17 @@ Use a stable ResourceID across restarts; each Redis scope also includes the
 OpenViking Account ID. Production credentials and Redis durability are deployment
 configuration. The regular OV Docker image already includes the expiry extra.
 No external Python class path, wheel or overlay image is needed.
-`ttl_adapter.config.redis` stores directory indexes; `expiry.redis` stores the
-shared scheduler's tasks. The example uses the same Redis and runs the publisher
-in-process. If auto commit already configures expiry, retain that configuration
-and its publisher deployment. TTL also requires `expiry.service_name` and
-`expiry.redis.endpoints`.
+`ttl_adapter.cache.instance` stores directory indexes; `expiry.cache.instance`
+stores shared scheduler tasks. The example uses the same RAGFS-managed Redis
+Runtime and runs the publisher in-process. If auto commit already configures
+expiry, retain that configuration and its publisher deployment. TTL also requires
+`expiry.service_name` and selected `cache.instances.<instance>.params`.
 
 An omitted or disabled `server.ttl_adapter` installs no write hook, starts no TTL
-worker and loads no TTL Redis client. Explicit policy writes then return
+worker and does not select a TTL CacheRuntime. Explicit policy writes then return
 `501 UNIMPLEMENTED`: `Redis-backed TTL is not enabled in this deployment.`
 With the adapter enabled, writes only enqueue in-memory candidates. The
-registration worker loads policy and drops disabled candidates before Redis I/O.
+registration worker loads policy and drops disabled candidates before CacheRuntime I/O.
 UserConfig cold reads stay off the business write path. A reader uses
 `config.writer=false`: expiry display is
 available, but it never scans or recycles. TTL is soft: searches and reads keep
@@ -60,7 +75,7 @@ conditional index cleanup; lock conflicts retain the registration for retry.
 
 TTL adds no Session existence preflight or missing-file rule. Session APIs keep
 their existing lookup behavior; TTL does not add guards to stale Session objects
-or delayed writes. Redis reporting remains asynchronous and acquires no path locks.
+or delayed writes. CacheRuntime reporting remains asynchronous and acquires no path locks.
 
 User TTL lives in `settings/user_config.json` and uses the existing
 `GET/PATCH /api/v1/admin/accounts/{account_id}/users/{user_id}/settings` API:

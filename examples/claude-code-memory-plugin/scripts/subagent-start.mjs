@@ -47,8 +47,9 @@ function stateFile(subagentId) {
 runHookStage({
   loadConfig,
   input: { tolerant: true },
-  // Paired with subagent-stop.mjs (a write path): when capture is off the
-  // stop hook will skip, so there's no point stashing start state either.
+  // Paired with subagent-stop.mjs (a write path): when capture is off or
+  // subagent sessions are skipped the stop hook will skip, so there's no
+  // point stashing start state either.
   gates: { enabled: (cfg) => cfg.autoCapture && !cfg.skipSubagentSessions },
   envelope: approve,
   onSkip: (reason) => log("skip", { reason }),
