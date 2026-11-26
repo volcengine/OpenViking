@@ -133,6 +133,42 @@ test('macOS: a plist that could not be loaded is taken back out', async (t) => {
   assert.equal(autostartEnabled({ env: { PATH: '/usr/bin' }, homeDir: directory, platform }), false);
 });
 
+test('Linux: a refused update preserves the installed systemd unit', async (t) => {
+  const directory = home(t);
+  const platform = { ...posix, loginService: 'systemd' };
+  const unit = path.join(directory, '.config', 'systemd', 'user', 'superagent.service');
+  fs.mkdirSync(path.dirname(unit), { recursive: true });
+  const original = '[Service]\nEnvironment=PATH=/opt/previous/bin\n';
+  fs.writeFileSync(unit, original);
+  await assert.rejects(run(directory, platform, 'enable', async (command, args) => {
+    if (command === 'loginctl') return { stdout: 'yes\n' };
+    if (args.includes('enable')) throw new Error('Failed to enable unit: Access denied');
+    return { stdout: '' };
+  }), /Access denied/);
+  assert.equal(fs.readFileSync(unit, 'utf8'), original);
+});
+
+test('macOS: a refused update restores the old LaunchAgent and loads it again', async (t) => {
+  const directory = home(t);
+  const platform = { ...posix, loginService: 'launchd' };
+  const plist = path.join(directory, 'Library', 'LaunchAgents', 'com.superagent.agent.plist');
+  fs.mkdirSync(path.dirname(plist), { recursive: true });
+  const original = '<plist><dict><key>Label</key><string>com.superagent.agent</string></dict></plist>';
+  fs.writeFileSync(plist, original);
+  const loaded = [];
+  await assert.rejects(run(directory, platform, 'enable', async (command, args) => {
+    assert.equal(command, 'launchctl');
+    if (args[0] === 'bootstrap') {
+      const candidate = fs.readFileSync(plist, 'utf8');
+      if (candidate !== original) throw new Error('Bootstrap failed');
+      loaded.push(candidate);
+    }
+    return { stdout: '' };
+  }), /Bootstrap failed/);
+  assert.equal(fs.readFileSync(plist, 'utf8'), original);
+  assert.deepEqual(loaded, [original]);
+});
+
 test('Windows: a Startup-folder script that starts superagent hidden, with no service and no elevation', async (t) => {
   const directory = home(t);
   const launcher = path.join(directory, '.ov-superagent', 'bin', 'ov-superagent.cmd');
