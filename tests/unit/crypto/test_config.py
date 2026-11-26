@@ -4,6 +4,9 @@
 Unit tests for crypto configuration.
 """
 
+import os
+import stat
+
 import pytest
 
 from openviking.crypto.config import bootstrap_encryption, validate_encryption_config
@@ -23,18 +26,7 @@ async def test_bootstrap_encryption_disabled():
 
 @pytest.mark.asyncio
 async def test_bootstrap_encryption_local_file(tmp_path):
-    """Test bootstrap_encryption with local file provider."""
-    # Create temporary key file with hex format and correct permissions
-    import os
-    import secrets
-
-    key_file = tmp_path / "master.key"
-    # Generate valid 32-byte key in hex format
-    root_key = secrets.token_bytes(32)
-    key_file.write_text(root_key.hex())
-    # Set correct permissions (0o600)
-    os.chmod(key_file, 0o600)
-
+    key_file = tmp_path / "keys" / "master.key"
     config = {
         "encryption": {
             "enabled": True,
@@ -42,20 +34,27 @@ async def test_bootstrap_encryption_local_file(tmp_path):
             "local": {"key_file": str(key_file)},
         }
     }
-
     encryptor = await bootstrap_encryption(config)
     assert encryptor is not None
+    ciphertext = await encryptor.encrypt("account", b"persisted data")
+
+    assert len(bytes.fromhex(key_file.read_text())) == 32
+    if os.name != "nt":
+        assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+
+    reopened = await bootstrap_encryption(config)
+    assert reopened is not None
+    assert await reopened.decrypt("account", ciphertext) == b"persisted data"
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_encryption_inline_local_root_key(tmp_path, monkeypatch):
+async def test_bootstrap_encryption_inline_local_root_key():
     """The local provider can use the existing 32-byte key directly from config."""
-    monkeypatch.setenv("HOME", str(tmp_path))
     root_key = bytes(range(32))
     encryption = EncryptionConfig(
         enabled=True,
         provider="local",
-        local={"root_key": root_key.hex()},
+        local=LocalEncryptionProviderConfig(root_key=root_key.hex()),
     )
 
     encryptor = await bootstrap_encryption({"encryption": encryption.model_dump()})
@@ -97,9 +96,7 @@ def test_local_root_key_must_be_32_byte_hex(root_key):
     is_valid, errors = validate_encryption_config(config)
 
     assert not is_valid
-    assert errors == [
-        "encryption.local.root_key must be a 64-character hexadecimal string"
-    ]
+    assert errors == ["encryption.local.root_key must be a 64-character hexadecimal string"]
     assert str(root_key) not in errors[0]
 
 
