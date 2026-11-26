@@ -6,7 +6,8 @@
 const fs = require('node:fs');
 const { homeDir: platformHomeDir } = require('./packages/daemon/src/platform/index.mjs');
 const { capabilities } = require('./packages/daemon/src/capabilities.mjs');
-const { ecosystemSearchPath, pm2Options } = require('./packages/updater/src/pm2-platform.mjs');
+const { ecosystemSearchPath, pm2Bin, pm2Options } = require('./packages/updater/src/pm2-platform.mjs');
+const { defaultUpdaterEndpoint } = require('./packages/updater/src/targets.mjs');
 const path = require('node:path');
 const {
   CONTROL_ENV_MAX_BYTES,
@@ -78,6 +79,8 @@ function buildEcosystem(sourceEnv = process.env) {
       OV_SUPERAGENT_HTTP_ENABLED: 'true',
       OV_SUPERAGENT_CHANNEL: agent.channel,
       OV_SUPERAGENT_CONNECTORS_JSON: JSON.stringify(agent.connectors),
+      OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON: agent.externalConnectors?.length
+        ? JSON.stringify(agent.externalConnectors) : undefined,
       OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON: agent.emailAccounts.length > 0 ? JSON.stringify(agent.emailAccounts) : undefined,
       OV_SUPERAGENT_PORT: String(agent.port),
       // Empty for an instance without the lark connector, so a profile in
@@ -157,10 +160,12 @@ function buildEcosystem(sourceEnv = process.env) {
           NODE_ENV: 'production',
           OV_SUPERAGENT_CONFIG: deployment.manifestPath,
           OV_SUPERAGENT_UPDATER_RELEASE_LINK: path.join(baseDir, 'current'),
-          OV_SUPERAGENT_UPDATER_SOCKET: path.join(baseDir, 'updater.sock'),
+          OV_SUPERAGENT_UPDATER_SOCKET: defaultUpdaterEndpoint(homeDir),
           // The updater drives the same pm2 daemon the ov-superagent command uses.
           PM2_HOME: sourceEnv.PM2_HOME || path.join(baseDir, 'pm2'),
-          PM2_BIN: path.join(releaseDir, 'bin', 'pm2'),
+          // bin\pm2 on POSIX, bin\pm2.cmd on Windows: the updater's PM2 comes
+          // from the release it drives either way.
+          PM2_BIN: pm2Bin(releaseDir),
           PATH: ecosystemSearchPath(sourceEnv, fallbackPath),
         },
       }] : []),

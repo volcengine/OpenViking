@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { codingShell } from './platform/index.mjs';
 
 // The release's dependency is also the supported version for an explicit PI_BIN.
 // Updating Pi is a reviewed package/lockfile change, never an implicit @latest.
@@ -38,6 +39,15 @@ export function piCommand(piBin, args) {
   return piBin === managedPiBin()
     ? { command: process.execPath, args: [piBin, ...args] }
     : { command: piBin, args };
+}
+
+// Pi enables the bash tool by default; on Windows that resolves to the System32
+// WSL launcher and fails when WSL is not installed. The powershell tool is Pi's
+// Windows equivalent (it prefers pwsh 7). Use the same platform coding shell as
+// the Durable runtime, so both managed runtimes make one decision: bash on
+// POSIX, powershell on Windows. The +/- form keeps the other default tools.
+export function piToolArgs(shell = codingShell) {
+  return shell === 'powershell' ? ['--tools', '+powershell,-bash'] : [];
 }
 
 export function assertPiVersion(output) {

@@ -8,14 +8,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn as nodeSpawn } from './platform/index.mjs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
-import { assembleConversationPolicy } from './conversation-policy.mjs';
+import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition, isModelUnavailableError } from './runtime-catalog.mjs';
 import { claudeIsolationSettings, isOpenViking } from './ov-isolation.mjs';
@@ -83,7 +83,7 @@ export class ClaudeAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, { logger });
     this.developerInstructionsText = this.systemPrompt;
     this.model = options.model
       ?? store.getSetting?.('claude_model')
@@ -148,10 +148,7 @@ export class ClaudeAgent {
   }
 
   get policyHash() {
-    return createHash('sha256')
-      .update(this.developerInstructionsText).update('\0')
-      .update(this.config.workspace).update('\0')
-      .update('claude-stream-json-v1').digest('hex');
+    return policyHashOf(this.developerInstructionsText, this.config.workspace, 'claude-stream-json-v1');
   }
 
   get state() {

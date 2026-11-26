@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -83,7 +84,7 @@ test('only a manifest the daemon accepts is saved; the previous one is kept as .
   const filePath = path.join(home, '.ov-superagent', 'config.json');
   const first = withInstance(null, agent('primary'));
   writeManifest(filePath, first);
-  assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
   assert.deepEqual(readManifest({ HOME: home }).value, first);
 
   const overlapping = withInstance(first, agent('agent2', { port: 3739, workspace: '/srv/superagent/data/primary/inner' }));

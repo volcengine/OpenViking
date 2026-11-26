@@ -3,7 +3,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { conversationKeyFor, eventIdentity, normalizeEvent } from '../event.mjs';
-import { registerCard } from '../card-messages.mjs';
+import { editCard, registerCard } from '../card-messages.mjs';
 import {
   cancelApproval, claimApproval, createApproval, editApproval, finishApproval, getApproval, supersedeApprovals,
 } from '../approvals.mjs';
@@ -78,7 +78,7 @@ const HANDLERS = {
 // tools and reads. Never a delivery, a decision, a timer or a memory write:
 // the router is the only outlet.
 const WORKER_TOOLS = new Set([
-  'task_check', 'task_report', 'task_handback', 'list_chats', 'list_chat_members', 'list_chat_messages', 'search_messages',
+  'task_check', 'task_report', 'task_handback', 'task_list', 'list_chats', 'list_chat_members', 'list_chat_messages', 'search_messages',
   'list_thread_messages', 'get_message_media', 'read_email', 'read_meeting_note', 'read_openviking_session_context',
   'get_time', 'openviking_find', 'openviking_search', 'openviking_read', 'openviking_list',
 ]);
@@ -297,8 +297,14 @@ export class ActionService {
     return { text: `${task.id} is ${task.status}.`, data: { task_id: task.id, status: task.status } };
   }
 
-  async taskList(input) {
+  async taskList(input, caller = {}) {
     const tasks = this.requireTasks();
+    // A worker looks up what its requester asked for, where a progress
+    // question from them would (tasks.requesterScope), and nothing else.
+    if (caller.task) {
+      const lines = tasks.listForWorker(caller.task, { taskId: input.task_id ?? null, query: input.query ?? '' });
+      return { text: lines.length ? lines.join('\n') : 'No such task asked for by your requester here.', data: { count: lines.length } };
+    }
     let requester = null;
     if (input.for_event) {
       const found = this.inputEvents(input.for_event);
@@ -559,28 +565,45 @@ export class ActionService {
 
   // Daemon-authored reply (slash command result, failure notice) on an event's
   // own reply route. Never carries model output; keyed once per event+purpose.
-  async replyToEvent(event, text, purpose) {
+  // With a card, the reply is that card where the route takes cards, else the
+  // text; a card that is refused is followed by the text.
+  async replyToEvent(event, text, purpose, { card = null } = {}) {
     if (!event?.replyRoute) return { ok: false, stage: 'no-target' };
-    const trace = { purpose, connector: event.connectorInstance, action: event.replyRoute.action, inboundSeq: event.seq };
-    try {
-      const result = await this.deliver({
-        caller: { trace },
-        connector: event.connectorInstance,
-        action: event.replyRoute.action,
-        input: { ...event.replyRoute.input, content: { type: 'markdown', text } },
-        key: actionKey('daemon', purpose, eventIdentity(event)),
-        summary: text,
-        scope: { chatId: event.chatId, threadId: event.threadId, convKey: event.conversationKey },
-        inboundSeq: event.seq ?? null,
-        // Non-chat history is rendered from the event it answers.
-        metadata: event.chatId ? {} : { event: event.envelope },
-      });
-      this.logger.info('daemon_reply', { ...trace, outcome: result.duplicate ? 'duplicate' : result.dry_run ? 'dry_run' : 'ok' });
-      return { ok: true };
-    } catch (error) {
-      this.logger.warn('daemon_reply', { ...trace, outcome: 'failed', error: safeError(error) });
-      return { ok: false, stage: 'send', error };
+    const send = async (content, as) => {
+      const trace = { purpose, connector: event.connectorInstance, action: event.replyRoute.action, inboundSeq: event.seq,
+        contentType: content.type };
+      try {
+        const result = await this.deliver({
+          caller: { trace },
+          connector: event.connectorInstance,
+          action: event.replyRoute.action,
+          input: { ...event.replyRoute.input, content },
+          key: actionKey('daemon', as, eventIdentity(event)),
+          summary: text,
+          scope: { chatId: event.chatId, threadId: event.threadId, convKey: event.conversationKey },
+          inboundSeq: event.seq ?? null,
+          // Non-chat history is rendered from the event it answers.
+          metadata: event.chatId ? {} : { event: event.envelope },
+        });
+        this.logger.info('daemon_reply', { ...trace, outcome: result.duplicate ? 'duplicate' : result.dry_run ? 'dry_run' : 'ok' });
+        // A card is registered where it landed, so a choice made on it comes
+        // back as this daemon's (card-messages.mjs, resolveCardAction).
+        const warning = this.rememberCard(content, result, { connector: event.connectorInstance, chatId: event.chatId,
+          seen: [event.messageId ? this.store.eventByMessageId(event.messageId, event.connectorInstance) : null] });
+        if (warning) this.logger.warn('daemon_reply_card_unregistered', trace);
+        return { ok: true };
+      } catch (error) {
+        this.logger.warn('daemon_reply', { ...trace, outcome: 'failed', error: safeError(error) });
+        return { ok: false, stage: 'send', error };
+      }
+    };
+    const takesCards = this.actionSpec(event.connectorInstance, event.replyRoute.action, event.chatId)?.content?.includes('card');
+    if (card && takesCards) {
+      const sent = await send({ type: 'card', card }, purpose);
+      if (sent.ok) return sent;
+      return send({ type: 'markdown', text }, `${purpose}:text`);
     }
+    return send({ type: 'markdown', text }, purpose);
   }
 
   // Daemon-authored operational notice to the owner's primary IM. Unlike the
@@ -1299,7 +1322,7 @@ export class ActionService {
     }
     this.logger.info('approval_settled', { ...trace, outcome: settled.state, edited: settled.edited ?? false });
     try {
-      await this.connectors.updateCard(cardId, settledApprovalCard(draft, settled));
+      await editCard(this.connectors, cardId, settledApprovalCard(draft, settled));
     } catch (error) {
       this.logger.warn('approval_card_update_failed', { error: safeError(error) });
     }

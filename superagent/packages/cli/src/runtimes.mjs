@@ -10,7 +10,7 @@ import { safeError } from '../../daemon/src/logger.mjs';
 import { prepareAgyGeminiDir } from '../../daemon/src/ov-isolation.mjs';
 import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
 import { assertSupportedOpencodeVersion } from '../../daemon/src/opencode-runtime.mjs';
-import { DSH_DEFAULT_MODEL, assertSupportedDshVersion } from '../../daemon/src/dsh-runtime.mjs';
+import { DSH_DEFAULT_MODEL, assertSupportedDshVersion, dshVersionText } from '../../daemon/src/dsh-runtime.mjs';
 import { t } from './i18n.mjs';
 import { probeAcp, probeAgyAcp, probeAppServer, probeDsh } from './runtime-probe.mjs';
 
@@ -35,8 +35,8 @@ function locateBinary(candidate, env) {
 
 async function run(execFileImpl, command, args, env) {
   try {
-    const { stdout } = await execFileImpl(command, args, { env, timeout: 20_000 });
-    return { ok: true, stdout: String(stdout) };
+    const { stdout, stderr } = await execFileImpl(command, args, { env, timeout: 20_000 });
+    return { ok: true, stdout: String(stdout), stderr: String(stderr ?? '') };
   } catch (error) {
     return { ok: false, stdout: String(error?.stdout ?? ''), stderr: String(error?.stderr ?? '') };
   }
@@ -117,7 +117,7 @@ const DURABLE_PROVIDER_KEYS = [
 
 function providerSecrets(env) {
   const file = String(env.OV_SUPERAGENT_SECRETS_FILE || '').trim()
-    || (env.HOME ? path.join(env.HOME, '.ov-superagent', 'secrets.env') : '');
+    || ((env.HOME || env.USERPROFILE) ? path.join(env.HOME || env.USERPROFILE, '.ov-superagent', 'secrets.env') : '');
   if (!file) return {};
   let raw = '';
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return {}; }
@@ -235,12 +235,27 @@ export async function detectDsh({
       : t('未安装：需要 dsh 0.2.x 和 Node 24.9+', 'Not installed: requires dsh 0.2.x and Node 24.9+');
     return result;
   }
-  const version = await run(execFileImpl, bin, ['--version'], env);
+  let version = await run(execFileImpl, bin, ['--version'], env);
+  for (let attempt = 0; attempt < 2 && version.ok && !version.stdout.trim(); attempt += 1) {
+    // DSH Desktop's Electron launcher occasionally answers nothing on a cold
+    // start (the same binary prints a version on the next try); retry twice
+    // with a short pause before calling the install broken.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    version = await run(execFileImpl, bin, ['--version'], env);
+  }
   if (!version.ok) {
     result.note = t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
     return result;
   }
-  try { assertSupportedDshVersion(version.stdout); } catch (error) { result.note = error.message; return result; }
+  // Electron sometimes logs the version instead of printing it, and sometimes
+  // answers nothing at all. Take the version from either stream when present;
+  // when it is not, let the bridge handshake below (the real gate) decide
+  // instead of rejecting the runtime on an empty string.
+  const versionText = dshVersionText(version.stdout, version.stderr);
+  if (versionText) {
+    try { assertSupportedDshVersion(versionText); } catch (error) { result.note = error.message; return result; }
+  }
+  const versionLabel = versionText || t('版本未知', 'unknown version');
   const secrets = providerSecrets(env);
   const credential = env.DEEPSEEK_API_KEY || secrets.DEEPSEEK_API_KEY;
   const probeEnv = { ...env, ...secrets, ...(credential ? { DEEPSEEK_API_KEY: credential } : {}) };
@@ -258,8 +273,8 @@ export async function detectDsh({
   result.available = true;
   const via = handshake.route || handshake.fallbackRoute || DSH_DEFAULT_MODEL;
   if (handshake.route) {
-    result.note = t(`SDK bridge 兼容（${version.stdout.trim()}），model route ${via}`,
-      `SDK bridge compatible (${version.stdout.trim()}), model route ${via}`);
+    result.note = t(`SDK bridge 兼容（${versionLabel}），model route ${via}`,
+      `SDK bridge compatible (${versionLabel}), model route ${via}`);
     return result;
   }
   // No route served a model. This probe runs in a throwaway DSH home, so it can
@@ -267,8 +282,8 @@ export async function detectDsh({
   // what was actually verified (the protocol) instead of claiming the instance
   // has no model.
   const detail = handshake.note ? `（${handshake.note}）` : '';
-  result.note = t(`SDK bridge 兼容（${version.stdout.trim()}）；model 目录由 DSH 自己管理（ov-superagent dsh model list），本机内置 route ${via} 需要 DEEPSEEK_API_KEY${detail}`,
-    `SDK bridge compatible (${version.stdout.trim()}); model routes belong to DSH itself (ov-superagent dsh model list), and the built-in route ${via} needs DEEPSEEK_API_KEY${detail}`);
+  result.note = t(`SDK bridge 兼容（${versionLabel}）；model 目录由 DSH 自己管理（ov-superagent dsh model list），本机内置 route ${via} 需要 DEEPSEEK_API_KEY${detail}`,
+    `SDK bridge compatible (${versionLabel}); model routes belong to DSH itself (ov-superagent dsh model list), and the built-in route ${via} needs DEEPSEEK_API_KEY${detail}`);
   return result;
 }
 
@@ -325,12 +340,18 @@ async function agyLoginCheck(execFileImpl, bin, env) {
   try {
     isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-agy-detect-'));
     prepareAgyGeminiDir(path.join(isolated, '.gemini'), env);
-    return await run(execFileImpl, bin, ['models'], { ...env, HOME: isolated, USERPROFILE: isolated });
-  } catch (error) {
-    return { ok: false, stdout: '', stderr: safeError(error) };
+    const filtered = await run(execFileImpl, bin, ['models'], { ...env, HOME: isolated, USERPROFILE: isolated });
+    if (filtered.ok) return filtered;
+  } catch {
+    // Fall through to the real home below.
   } finally {
     if (isolated) fs.rmSync(isolated, { recursive: true, force: true });
   }
+  // Some installs keep the sign-in outside ~/.gemini (the OS keychain or the
+  // Windows profile), which a replaced HOME/USERPROFILE hides. The runtime
+  // itself keeps the real home and passes --gemini-dir, so the real home is
+  // what decides whether agy is signed in.
+  return run(execFileImpl, bin, ['models'], env);
 }
 
 // Antigravity runs over ACP; an explicit AGY_BIN is authoritative. Handshake
@@ -371,7 +392,8 @@ async function detectAgy({ env, execFileImpl, probe }) {
     return result;
   }
   result.available = true;
-  result.note = t(`protocol 兼容（${version.stdout.trim()}），已登录`,
-    `ACP compatible (${version.stdout.trim()}), logged in`);
+  const versionLabel = version.stdout.trim();
+  result.note = t(`protocol 兼容（${versionLabel}），已登录`,
+    `ACP compatible (${versionLabel}), logged in`);
   return result;
 }

@@ -4,13 +4,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { GoBack, Prompter } from '../src/prompt.mjs';
-import { OWNER_MESSAGE_SCOPES, connectLark, expandHome, larkMessageListener, larkScopes, offerAutostart, registerApp, setupCommand } from '../src/setup.mjs';
+import { OWNER_MESSAGE_SCOPES, configureDurable, connectLark, expandHome, larkMessageListener, larkScopes, offerAutostart, registerApp, setupCommand } from '../src/setup.mjs';
 import { superagentCommand } from '../src/manifest.mjs';
 import { stripAnsi } from '../src/ui.mjs';
 import { connectTelegram } from '../src/telegram.mjs';
@@ -141,6 +142,8 @@ test('a first setup: Feishu + Weixin, Codex, OpenViking; scans run only after ev
     explicitSilence: true,
     // The first AI colleague on Feishu stores the owner's meeting notes.
     meetingNotes: true,
+    // A new instance on a runtime workers run on hands longer work to them.
+    scheduler: 'workers',
     model: 'codex:',
   }]);
   // Under an API key the key is the instance's identity; the copy names no peer.
@@ -502,7 +505,18 @@ test('adding OneBot to an existing instance connects only it, next to nothing el
   assert.match(h.written(), /接入QQ（OneBot）（需要 WebSocket 地址、access token 和私聊口令）/);
   assert.match(h.written(), /接下来接入：QQ（OneBot） WebSocket 地址 \+ access token \+ 私聊口令绑定/);
   assert.match(h.written(), /主渠道：飞书 → QQ（OneBot）/);
-  assert.ok(h.written().includes('它会跟进所在的每个群，在 ~/.ov-superagent/data/asd/onebot/config.json 里可以把群改成 "mention" 或 "off"'));
+  assert.match(h.written(), /它会跟进所在的每个群，在 ~[\\/]\.ov-superagent[\\/]data[\\/]asd[\\/]onebot[\\/]config\.json 里可以把群改成 "mention" 或 "off"/);
+});
+
+test('adding DingTalk requires an owner-capable primary and connects only the new group bot', async (t) => {
+  const h = harness(t, ['2', '5', '8', '1,8', '11']);
+  const before = existing(h, {});
+  h.options.connect.dingtalk = async ({ plan }) => { h.calls.push(['dingtalk', plan.dataDir]); };
+  assert.equal(await setupCommand(h.options), 0);
+  assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'dingtalk'], channel: 'lark' }]);
+  assert.deepEqual(h.calls, [['dingtalk', before.dataDir], ['restart', 'asd']]);
+  assert.match(h.written(), /钉钉群机器人需要另选一个支持 owner 私聊的主渠道/);
+  assert.match(h.written(), /接下来接入：钉钉 AppKey \+ AppSecret/);
 });
 
 test('setup detects a primary command that changed the manifest while it was connecting an IM', async (t) => {
@@ -577,7 +591,7 @@ test('mailboxes come with an IM, are checked before the scans and saved with the
     [{ id: 'email-gmail', config: file('email-gmail') }, { id: 'email-qq', config: file('email-qq') }]]);
   assert.deepEqual(taken, [[], ['alice.example@gmail.com']]);
   assert.equal(JSON.parse(fs.readFileSync(file('email-qq'), 'utf8')).address, '10001@qq.com');
-  assert.equal(fs.statSync(file('email-gmail')).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(file('email-gmail')).mode & 0o777, 0o600);
   assert.match(h.written(), /邮箱\s+alice\.example@gmail\.com、10001@qq\.com\n/);
   assert.deepEqual(h.calls.map(([kind]) => kind), ['email', 'email', 'weixin', 'start', 'restart', ...(capabilities.updater ? ['start'] : [])]);
 
@@ -654,7 +668,7 @@ test('changing an instance lists every setting; only the ones opened change', as
   const [after] = h.manifest().agents;
   assert.deepEqual(after, { ...before, connectors: ['lark', 'weixin'], channel: 'weixin' });
   // The list shows every value; what was changed is marked.
-  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+保持现在的 soul\n  3\) 工作目录\s+~\/ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~\/\.ov-superagent\/ov\/asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 保存\n  12\) 放弃修改/);
+  assert.match(h.written(), /1\) 机器人名字\s+ASD\n  2\) 角色\s+保持现在的 soul\n  3\) 工作目录\s+~[\\/]ws\n  4\) Agent 运行时\s+Codex\n  5\) 接入的 IM\s+飞书\n  6\) 飞书应用\s+现在的应用\n  7\) 主渠道\s+飞书\n  8\) 邮箱\s+没有接\n  9\) OpenViking\s+~[\\/]\.ov-superagent[\\/]ov[\\/]asd\.json\n  10\) 其他设置\s+开着：自然写作\n  11\) 保存\n  12\) 放弃修改/);
   assert.match(h.written(), /5\) 接入的 IM\s+飞书、微信（已改）[\s\S]*7\) 主渠道\s+微信（已改）\n[\s\S]*11\) 保存（2 项改动）/);
   assert.match(h.written(), /将修改 ASD（asd）：\n  接入微信（需要扫码）\n  主渠道：飞书 → 微信\n/);
   assert.deepEqual(h.calls.map((call) => call.slice(0, 2)), [['weixin', before.dataDir], ['restart', 'asd']]);
@@ -669,6 +683,34 @@ test('changing an instance lists every setting; only the ones opened change', as
     assert.deepEqual(idle.manifest().agents, [config]);
     assert.deepEqual(idle.calls, []);
   }
+});
+
+test('an external connector keeps its id in the wizard and can be the only IM', async (t) => {
+  const external = { id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: [], prompt: null };
+  const shown = harness(t, ['2', '12']);
+  existing(shown, {
+    channel: 'mattermost', connectors: ['mattermost'], externalConnectors: [external], profile: undefined,
+  });
+  assert.equal(await setupCommand(shown.options), 0);
+  assert.match(shown.written(), /7\) 主渠道\s+mattermost/);
+  assert.doesNotMatch(shown.written(), /主渠道\s+undefined/);
+
+  //                    change  IMs  none  save
+  const h = harness(t, ['2',    '5', '0',  '11']);
+  const before = existing(h, {
+    connectors: ['lark', 'mattermost'], externalConnectors: [external],
+  });
+  assert.equal(await setupCommand(h.options), 0);
+  assert.match(h.written(), /0 为全不选/);
+  assert.match(h.written(), /主渠道原来是飞书，它不再接入，改成mattermost/);
+  assert.match(h.written(), /主渠道：飞书 → mattermost/);
+  assert.doesNotMatch(h.written(), /undefined/);
+  const [after] = h.manifest().agents;
+  assert.equal(after.channel, 'mattermost');
+  assert.deepEqual(after.connectors, ['mattermost']);
+  assert.deepEqual(after.externalConnectors, [external]);
+  assert.equal(after.profile, undefined);
+  assert.equal(before.profile, 'superagent-asd');
 });
 
 test('changing an instance runtime saves the setup selector before restarting it', async (t) => {
@@ -854,7 +896,7 @@ test('quitting to log in to Codex or Claude Code is not a failure', async (t) =>
   const h = terminalHarness(t, { runtimes: none });
   // Pi can still be offered, so the question is reached before the answer matters.
   h.options.connect.pi = async () => {};
-  const driving = h.drive([['现在怎么办', DOWN, '\r']]);
+  const driving = h.drive([['现在怎么办', DOWN, DOWN, '\r']]);
   // The installer chains this exit code into its own: a deliberate pause must
   // not make the install look like it failed.
   assert.equal(await setupCommand(h.options), 0);
@@ -1722,7 +1764,7 @@ test('English setup offers OneBot as a QQ of its own, last in the list, and says
   assert.doesNotMatch(h.written(), /[一-鿿]|undefined/);
   assert.match(h.written(), /QQ \(OneBot\).*an ordinary QQ account logged in to NapCat, LLOneBot or Lagrange/);
   assert.match(h.written(), /Next, connecting: QQ \(OneBot\) WebSocket address \+ access token \+ a code in a private message/);
-  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; it follows every group it is in, and \S+\/onebot\/config\.json can set a group to "mention" or "off"/);
+  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; it follows every group it is in, and \S+[\\/]onebot[\\/]config\.json can set a group to "mention" or "off"/);
 });
 
 test('setup says what an existing OneBot policy file decides instead of the default', async (t) => {
@@ -1733,7 +1775,7 @@ test('setup says what an existing OneBot policy file decides instead of the defa
     fs.writeFileSync(path.join(plan.dataDir, 'onebot', 'config.json'), '{"groups": {"*": "off"}}\n');
   };
   assert.equal(await setupCommand(h.options), 0);
-  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; groups \S+\/onebot\/config\.json does not name are "off", and a group it names follows its own entry/);
+  assert.match(h.written(), /QQ \(OneBot\): Message the account in a private QQ chat; groups \S+[\\/]onebot[\\/]config\.json does not name are "off", and a group it names follows its own entry/);
   assert.doesNotMatch(h.written(), /follows every group/);
 });
 
@@ -1791,7 +1833,7 @@ test('in English, changing an instance: the list, what a setting says, the chang
   assert.deepEqual(h.manifest().agents, [{ ...before, connectors: ['lark', 'weixin'], channel: 'weixin' }]);
   const text = h.written();
   assert.doesNotMatch(text, /[一-鿿]/);
-  assert.match(text, /1\) Bot name\s+ASD\n  2\) Role\s+Keep the current soul\n  3\) Workspace\s+~\/ws\n[\s\S]*  6\) Feishu\/Lark app\s+the current app\n[\s\S]*  10\) Other settings\s+on: Natural writing\n  11\) Save\n  12\) Discard changes/);
+  assert.match(text, /1\) Bot name\s+ASD\n  2\) Role\s+Keep the current soul\n  3\) Workspace\s+~[\\/]ws\n[\s\S]*  6\) Feishu\/Lark app\s+the current app\n[\s\S]*  10\) Other settings\s+on: Natural writing\n  11\) Save\n  12\) Discard changes/);
   // What a setting says shows above the list drawn after it.
   assert.doesNotMatch(text, /No OpenViking found|Stop using it/);
   assert.match(text, /11\) Save \(2 changes\)/);
@@ -1947,4 +1989,37 @@ test('expandHome expands home prefixes without changing literal paths', () => {
   for (const literal of ['~other/workspace', 'workspace', path.join(home, 'existing')]) {
     assert.equal(expandHome(literal, home), literal);
   }
+});
+
+test('setup writes a Durable provider key to secrets.env and keeps the other keys', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-durable-key-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'secrets.env');
+  fs.writeFileSync(file, 'OPENAI_API_KEY=keep-me\n');
+  const prompter = {
+    select: async (_question, choices) => choices[0].value,
+    secret: async () => 'sk-test',
+    success() {},
+    warn() {},
+  };
+  assert.equal(await configureDurable({ prompter, env: { OV_SUPERAGENT_SECRETS_FILE: file } }), true);
+  const saved = fs.readFileSync(file, 'utf8');
+  assert.match(saved, /^DEEPSEEK_API_KEY=sk-test$/m);
+  assert.match(saved, /^OPENAI_API_KEY=keep-me$/m);
+  const blank = { ...prompter, secret: async () => '  ' };
+  assert.equal(await configureDurable({ prompter: blank, env: { OV_SUPERAGENT_SECRETS_FILE: file } }), false);
+  assert.match(fs.readFileSync(file, 'utf8'), /^DEEPSEEK_API_KEY=sk-test$/m);
+});
+test('Durable setup writes secrets under USERPROFILE when HOME is unset', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-userprofile-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const prompter = {
+    select: async (question, choices) => choices[0].value,
+    secret: async () => 'sk-userprofile',
+    success() {},
+    warn() {},
+  };
+  assert.equal(await configureDurable({ prompter, env: { USERPROFILE: dir } }), true);
+  const file = path.join(dir, '.ov-superagent', 'secrets.env');
+  assert.match(fs.readFileSync(file, 'utf8'), /^DEEPSEEK_API_KEY=sk-userprofile$/m);
 });

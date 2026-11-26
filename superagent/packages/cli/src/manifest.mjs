@@ -49,9 +49,14 @@ export function superagentHome(env = process.env) {
 
 // setup persists the default so users can inspect/change it. A global or
 // per-instance explicit choice wins; the durable data directory never moves.
+// The comparison is on the manifest's own path semantics: `/root` is resolved
+// as a POSIX path even when setup runs on Windows, where the host resolver
+// would turn it into a drive-relative `C:\root...` and lose the match. A
+// Windows data directory is compared as written and never gets `/tmp`.
 export function withDefaultTempDir(agent, env = {}) {
   if (agent.tempDir != null || String(env.OV_SUPERAGENT_TEMP_DIR ?? '').trim()) return agent;
-  const dataDir = path.resolve(agent.dataDir);
+  const raw = String(agent.dataDir ?? '');
+  const dataDir = raw.startsWith('/') ? path.posix.resolve(raw) : raw;
   if (dataDir !== '/root' && !dataDir.startsWith('/root/')) return agent;
   return { ...agent, tempDir: `/tmp/superagent-${agent.id}` };
 }

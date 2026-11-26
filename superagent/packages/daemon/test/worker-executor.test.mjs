@@ -10,12 +10,13 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { FORK_MAX_BYTES, WorkerExecutor } from '../src/worker-executor.mjs';
 import { PI_MCP_EXTENSION } from '../src/pi-runtime.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
+import { installNodeCommand } from './fake-executable.mjs';
 
 // A CLI stand-in: records its argv, cwd and the agent env, then prints the
 // JSON lines the test gives it and exits with the given code.
 function fakeCli(dir, name, lines, code = 0) {
-  const file = path.join(dir, name);
-  fs.writeFileSync(file, `#!/usr/bin/env node
+  const file = installNodeCommand(dir, name, { commonjs: true, body: `#!/usr/bin/env node
 const fs = require('node:fs');
 fs.appendFileSync(${JSON.stringify(path.join(dir, `${name}.calls`))}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(),
   mcp: process.env.PERSONAL_AGENT_MCP_CONFIG ?? null, authority: process.env.PERSONAL_AGENT_AUTHORITY ?? null,
@@ -23,7 +24,7 @@ fs.appendFileSync(${JSON.stringify(path.join(dir, `${name}.calls`))}, JSON.strin
   shellMax: process.env.PERSONAL_AGENT_SHELL_MAX_S ?? null }) + '\\n');
 for (const line of ${JSON.stringify(lines)}) process.stdout.write(JSON.stringify(line) + '\\n');
 ${code ? `process.stderr.write('upstream said HTTP 429'); process.exit(${code});` : ''}
-`, { mode: 0o755 });
+` });
   return file;
 }
 
@@ -37,7 +38,7 @@ function setup(t) {
   t.after(() => { if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; });
   const config = {
     dataDir: path.join(dir, 'data'), workspace: path.join(dir, 'workspace'), sendTimeoutMs: 30_000,
-    actionSocketPath: path.join(dir, 'data', 'actions.sock'), actionMcpPath: '/core/actions/mcp.mjs',
+    actionSocketPath: localSocketPath(path.join(dir, 'data')), actionMcpPath: '/core/actions/mcp.mjs',
     agentName: 'Vika', profile: 'test-profile',
   };
   const task = (fields = {}) => ({ id: 't1', runtime: 'pi', session_id: '6d0f2a51-0000-4000-8000-000000000001', native_session: null,
@@ -69,6 +70,22 @@ describe('WorkerExecutor', () => {
     assert.equal(result.transient, true);
   });
 
+  it('selects the platform shell tool in a Pi worker argv', async (t) => {
+    const { dir, config, task } = setup(t);
+    config.piBin = fakeCli(dir, 'pi', [
+      { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }] } },
+      { type: 'agent_settled' },
+    ]);
+    const executor = new WorkerExecutor({ config, settings: () => ({ runtime: 'pi', model: null, effort: null }) });
+    await executor.start({ task: task(), prompt: 'p', authority: 'x' }).done;
+    const argv = calls(dir, 'pi')[0].argv;
+    if (process.platform === 'win32') {
+      assert.ok(argv.includes('+powershell,-bash'), 'worker selects the PowerShell tool');
+      assert.equal(argv.includes('+bash,-powershell'), false);
+    } else {
+      assert.equal(argv.includes('--tools'), false, 'POSIX keeps Pi bash default');
+    }
+  });
   it('runs a Pi worker turn in json print mode in its own session, with the worker authority and policy', async (t) => {
     const { dir, config, task } = setup(t);
     config.piBin = fakeCli(dir, 'pi', [
@@ -97,6 +114,30 @@ describe('WorkerExecutor', () => {
     const policy = fs.readFileSync(arg('--append-system-prompt'), 'utf8');
     assert.match(policy, /\n## Shell\n\n- Search file contents with .*rg.* rather than `grep -r`/);
     assert.match(policy, /A shell command without a `timeout` of its own is stopped after 5 minutes, and none runs longer than 60/);
+  });
+
+  it('reads the owner\'s and the requester\'s preferences for every turn into its policy, and runs on without them', async (t) => {
+    const { dir, config, task } = setup(t);
+    config.piBin = fakeCli(dir, 'pi', [{ type: 'agent_settled' }]);
+    const asked = [];
+    let preferences = { owner: '## 例子\n- 解释技术概念时举一个例子', requester: '## 称呼\n- 叫我老刘' };
+    const executor = new WorkerExecutor({ config, settings: () => ({ runtime: 'pi', model: null, effort: null }),
+      preferences: async (current) => { asked.push(current.id); if (preferences instanceof Error) throw preferences; return preferences; } });
+    const policyOf = (index) => {
+      const call = calls(dir, 'pi')[index];
+      return fs.readFileSync(call.argv[call.argv.indexOf('--append-system-prompt') + 1], 'utf8');
+    };
+    await executor.start({ task: task(), prompt: '[task t1] 解释下 BM25', authority: 'worker-token' }).done;
+    assert.match(policyOf(0), /\n## Standing preferences\n[\s\S]*<memory who="owner" type="preferences">\n### 例子\n- 解释技术概念时举一个例子\n<\/memory>\n<memory who="requester" type="preferences">\n### 称呼\n- 叫我老刘\n<\/memory>/);
+    preferences = { owner: '## 例子\n- 例子要能跑', requester: null };
+    await executor.start({ task: task({ turns: 2 }), prompt: 'Continue', authority: 'worker-token' }).done;
+    assert.match(policyOf(1), /- 例子要能跑/);
+    assert.doesNotMatch(policyOf(1), /叫我老刘|who="requester"/);
+    preferences = new Error('OpenViking down');
+    const result = await executor.start({ task: task({ turns: 3 }), prompt: 'Continue', authority: 'worker-token' }).done;
+    assert.equal(result.error, null);
+    assert.doesNotMatch(policyOf(2), /## Standing preferences/);
+    assert.deepEqual(asked, ['t1', 't1', 't1']);
   });
 
   it('starts a task that follows a Pi task from a copy of that task\'s session, unless it is gone or too large', async (t) => {
@@ -147,11 +188,10 @@ describe('WorkerExecutor', () => {
 
   it('says when the session a Claude Code or Codex turn resumed is gone, so the task starts a new one', async (t) => {
     const { dir, config, task } = setup(t);
-    const cli = (name, lines, stderr, code) => {
-      const file = path.join(dir, name);
-      fs.writeFileSync(file, `#!/usr/bin/env node\nfor (const line of ${JSON.stringify(lines)}) process.stdout.write(JSON.stringify(line) + '\\n');\nprocess.stderr.write(${JSON.stringify(stderr)});\nprocess.exit(${code});\n`, { mode: 0o755 });
-      return file;
-    };
+    const cli = (name, lines, stderr, code) => installNodeCommand(dir, name, {
+      commonjs: true,
+      body: `#!/usr/bin/env node\nfor (const line of ${JSON.stringify(lines)}) process.stdout.write(JSON.stringify(line) + '\\n');\nprocess.stderr.write(${JSON.stringify(stderr)});\nprocess.exit(${code});\n`,
+    });
     config.claudeBin = cli('claude', [{ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 0 }], 'No conversation found with session ID: x', 0);
     config.codexBin = cli('codex', [], 'Error: thread/resume: thread/resume failed: no rollout found for thread id th_gone (code -32600)', 1);
     config.traexBin = cli('traex', [], 'Error: thread/resume: thread/resume failed: no rollout found for thread id th_gone (code -32600)', 1);
@@ -358,8 +398,7 @@ describe('WorkerExecutor', () => {
     assert.deepEqual(['pi', 'codex', 'claude', 'durable', 'opencode', 'volc'].map((id) => executor.supports(id)),
       [true, true, true, false, false, false]);
     assert.throws(() => executor.start({ task: task({ runtime: 'durable' }), prompt: 'p', authority: 'x' }), /workers do not run on durable/);
-    const slow = path.join(dir, 'slow-pi');
-    fs.writeFileSync(slow, '#!/usr/bin/env node\nsetTimeout(() => {}, 60_000);\n', { mode: 0o755 });
+    const slow = installNodeCommand(dir, 'slow-pi', { commonjs: true, body: '#!/usr/bin/env node\nsetTimeout(() => {}, 60_000);\n' });
     config.piBin = slow;
     const handle = executor.start({ task: task(), prompt: 'p', authority: 'x' });
     setTimeout(() => handle.stop(), 300);

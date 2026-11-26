@@ -10,11 +10,15 @@ import { Harness } from './harness.mjs';
 import { MessageInbox } from './inbox.mjs';
 import { TaskManager } from './tasks.mjs';
 import { WorkerExecutor } from './worker-executor.mjs';
+import { WorkerSettings } from './worker-settings.mjs';
 import { formatInboundLine, resolveReplyTarget } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
-import { executeCommand } from './commands.mjs';
+import { executeCommand, statusHeadline } from './commands.mjs';
+import { settingsModels } from './settings-models.mjs';
+import { SETTINGS_CARD, applySettings, redrawn, settingsCard, settledCard, statusCard, workerStatusLine } from './settings-card.mjs';
 import { executePrimaryCommand } from './primary-channel.mjs';
-import { executeTasksCommand, taskStatusLine } from './task-commands.mjs';
+import { executeTasksCommand, refreshesCard, taskStatusLine } from './task-commands.mjs';
+import { executeWorkersCommand } from './worker-commands.mjs';
 import { ConnectorManager } from './connectors/process.mjs';
 import { ActionService } from './actions/service.mjs';
 import { startActionApi, stopActionApi } from './actions/api.mjs';
@@ -27,7 +31,7 @@ import { InstanceLock } from './lock.mjs';
 import { pruneLarkMedia } from './lark-media.mjs';
 import { safeChatLookupError, safeError } from './logger.mjs';
 import { approvalNote } from './actions/approval.mjs';
-import { resolveCardAction, settledChoiceCard } from './card-messages.mjs';
+import { CARD_BUSY, CARD_TOO_OLD, editCard, resolveCardAction, settledChoiceCard } from './card-messages.mjs';
 import { LARK_MESSAGE_EVENT_KINDS, resolveLarkMessageEvent } from './lark-message-events.mjs';
 import { IdleLivenessExtension } from './extensions/idle-liveness.mjs';
 import { OVSessionClient, OVSessionContext } from './ov-session-context.mjs';
@@ -85,6 +89,10 @@ export class PersonalAgentDaemon {
     this.startedAt = Date.now();
     this.ready = false;
     this.shuttingDown = false;
+    // The /tasks cards being redrawn by their refresh button (refreshCard).
+    this.cardRefreshes = new Map();
+    // How long a card edit Lark refused for the lock waits to try again (editCard).
+    this.cardEditWaitMs = 1000;
     this.shutdownPromise = null;
     this.maintenanceTimer = null;
     this.runId = randomUUID();
@@ -120,6 +128,16 @@ export class PersonalAgentDaemon {
       this.logger.warn('activity_persist_failed', { kind, error: safeError(error) });
       return false;
     }
+  }
+
+  // A worker turn's Standing preferences: the owner's, and those of whoever
+  // asked for the task's current round, found from the line that asked as
+  // the router's recall finds them. Null without OpenViking.
+  async workerPreferences(task) {
+    if (!this.recall || !this.tasks) return null;
+    const round = this.tasks.roundOf(task);
+    const event = round?.origin_seq != null ? this.store.inboundBySeq(round.origin_seq) : null;
+    return this.recall.preferencesFor(event, { owner: event ? this.connectors.isOwner(event) : false });
   }
 
   // A config or credential OV rejects needs the owner, so startup stops. An
@@ -299,6 +317,8 @@ export class PersonalAgentDaemon {
         },
         // A runtime switch builds a new policy: with the soul as it is now.
         refreshPolicy: () => loadSoul(this.config, ovClient, { logger: this.logger }),
+        // What a /runtime switch cut off, still undecided, goes on in the runtime that stays.
+        resumeInterrupted: (cut) => this.decisionPolicy?.resumeInterrupted(cut) ?? null,
         persistRuntimePreference: this.config.manifestPath && this.config.instanceId
           ? (runtime) => updateRuntimePreference(this.config, runtime)
           : null,
@@ -325,15 +345,29 @@ export class PersonalAgentDaemon {
         maxAgeMs: this.config.maxEventAgeMs,
       }) : null;
       this.actions.attachInbox(this.inbox);
+      // Preferences are always shown; the per-line search only with ovAutoRecall.
+      // One recall serves the router's lines (Harness) and the workers'
+      // policies, so a changed preference reaches both.
+      this.recall = this.config.openVikingConfigPath
+        ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
+          store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
+        : null;
       // The workers scheduler: tasks the router hands to worker sessions on
       // its own runtime. Their reports come back through the inbox.
       if (this.config.scheduler === 'workers') {
+        const router = () => ({ runtime: this.agentRuntime.runtime, model: this.agentRuntime.model, effort: this.agentRuntime.effort });
         const executor = new WorkerExecutor({
           config: this.config,
           logger: this.logger.child({ component: 'worker' }),
-          settings: () => ({ runtime: this.agentRuntime.runtime, model: this.agentRuntime.model, effort: this.agentRuntime.effort }),
+          settings: router,
+          preferences: (task) => this.workerPreferences(task),
+        });
+        // What workers run on, apart from the router (/workers).
+        this.workerSettings = new WorkerSettings({
+          store: this.store, config: this.config, router, logger: this.logger.child({ component: 'worker-settings' }),
         });
         this.tasks = new TaskManager({
+          runtimes: this.workerSettings,
           db: this.store.db,
           config: this.config,
           executor,
@@ -348,7 +382,7 @@ export class PersonalAgentDaemon {
           logger: this.logger.child({ component: 'tasks' }),
           recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
         });
-        this.actions.attachTasks(this.tasks, { runtime: () => this.agentRuntime.runtime, supports: (id) => executor.supports(id) });
+        this.actions.attachTasks(this.tasks, { runtime: () => this.workerSettings.forNewWork(), supports: (id) => executor.supports(id) });
       }
       this.harness = new Harness({
         inbox: this.inbox,
@@ -360,15 +394,17 @@ export class PersonalAgentDaemon {
         runtime: this.agentRuntime,
         roster: this.roster,
         liveness: this.liveness,
-        // Preferences are always shown; the per-line search only with ovAutoRecall.
-        recall: this.config.openVikingConfigPath
-          ? new OVRecall({ configPath: this.config.openVikingConfigPath, autoRecall: this.config.ovAutoRecall,
-            store: this.store, logger: this.logger.child({ component: 'ov-recall' }) })
-          : null,
+        recall: this.recall,
         prepareEvent: (event) => event.source !== 'lark' ? event
           : event.kind === 'message.action' ? resolveCardAction(this.store.db, event, this.config.profile)
             : LARK_MESSAGE_EVENT_KINDS.has(event.kind) ? resolveLarkMessageEvent(this.store.db, event) : event,
         eventHandler: (event) => {
+          // A choice on the Runtime and model card: the Core redraws or
+          // applies it (handleSettingsCard); it never reaches the model.
+          if (event.messageType === 'card_action' && event.data?.interaction?.value?.[SETTINGS_CARD]) {
+            return (accepted) => { void this.handleSettingsCard(accepted)
+              .catch((error) => this.logger.error('settings_card_failed', { error: safeError(error) })); };
+          }
           // The owner answered an approval card: the Core sends or drops the
           // draft itself, off the ingress queue (an SMTP send may be slow).
           // The model then hears what actually went out.
@@ -393,7 +429,7 @@ export class PersonalAgentDaemon {
         onInboundChat: (chatId) => this.chatNames.schedule(chatId),
         afterEvent: (event) => {
           const card = settledChoiceCard(event);
-          if (card) return this.connectors.updateCard(event.parentId, card);
+          if (card) return editCard(this.connectors, event.parentId, card, { waitMs: this.cardEditWaitMs });
         },
         isOwner: (event) => this.connectors.isOwner(event),
         mentionTarget: (event) => this.connectors.mentionTarget(event),
@@ -507,6 +543,15 @@ export class PersonalAgentDaemon {
       text: `slash command ${String(event.content).trim()}`,
       dedupeKey: `command:${event.messageId}`,
     });
+    // A press of a /tasks card's refresh button is answered off this queue.
+    if (refreshesCard(event)) {
+      void this.refreshCard({ command, event, inbound, label, at: Date.now() });
+      return;
+    }
+    await this.replyCommand(await this.runCommand(command, event, inbound, label), event, inbound);
+  }
+
+  async runCommand(command, event, inbound, label) {
     let outcome;
     try {
       outcome = await executeCommand(command, this.agentRuntime, {
@@ -514,10 +559,20 @@ export class PersonalAgentDaemon {
           event, config: this.config, connectors: this.connectors,
         }),
         tasks: (parsed) => executeTasksCommand(parsed, { event, connectors: this.connectors, tasks: this.tasks }),
-        statusExtra: () => taskStatusLine(this.tasks),
+        workers: (parsed) => executeWorkersCommand(parsed, {
+          event, connectors: this.connectors, settings: this.workerSettings ?? null, tasks: this.tasks, router: this.agentRuntime,
+        }),
+        statusExtra: () => [workerStatusLine(this.workerSettings ?? null), taskStatusLine(this.tasks)].filter(Boolean).join('\n'),
+        // On Lark /runtime and /status answer with a card too (settings-card.mjs).
+        // The workers' settings are the owner's to change, as with /workers.
+        runtimeCard: async (snapshot) => settingsCard({ snapshot: await settingsModels(snapshot, [snapshot.runtime, this.workerSettings?.preferred()], this.config), settings: this.connectors.isOwner(event) ? this.workerSettings ?? null : null,
+          saved: (runtime) => this.routerSaved(runtime) }),
+        statusCard: (snapshot) => statusCard({ ...statusHeadline(snapshot), snapshot, settings: this.workerSettings ?? null,
+          tasksLine: taskStatusLine(this.tasks), slots: this.tasks?.overview({ recent: 0 }).slots ?? null }),
       });
     } catch (error) {
-      outcome = { ok: false, text: `命令执行失败：${safeError(error)}` };
+      const resumed = error?.resumedInputs > 0 ? `\n被打断的 ${error.resumedInputs} 条消息已交回当前 Runtime` : '';
+      outcome = { ok: false, text: `命令执行失败：${safeError(error)}${resumed}` };
     }
     this.recordSystemActivity('command.executed', {
       summary: `${label} → ${outcome.text.split('\n')[0]}`,
@@ -526,7 +581,12 @@ export class PersonalAgentDaemon {
       inboundSeq: inbound?.seq,
       metadata: { chatType: event.chatType },
     });
-    const sent = await this.actions.replyToEvent({ ...event, seq: inbound?.seq }, outcome.text, 'command-reply');
+    return outcome;
+  }
+
+  // A command may answer with a card too (/tasks); the text goes where it cannot.
+  async replyCommand(outcome, event, inbound) {
+    const sent = await this.actions.replyToEvent({ ...event, seq: inbound?.seq }, outcome.text, 'command-reply', { card: outcome.card ?? null });
     if (!sent.ok) {
       this.recordSystemActivity('command.reply_failed', {
         summary: safeChatLookupError(sent.error),
@@ -535,6 +595,102 @@ export class PersonalAgentDaemon {
         inboundSeq: inbound?.seq,
       });
     }
+  }
+
+  // The refresh button on a /tasks card redraws that card in place, off the
+  // ingress queue: waiting for Lark to take an edit of the card (editCard)
+  // never holds up a message. Only the newest press on a card is drawn. A press
+  // made while the card is being drawn takes the place of any still waiting,
+  // and the drawing stops waiting for the card, since a newer press will draw it.
+  refreshCard(press) {
+    const cardId = press.event.parentId;
+    const drawing = this.cardRefreshes.get(cardId);
+    if (drawing) {
+      if (drawing.next) this.logRefresh(drawing.next, 'replaced');
+      drawing.next = press;
+      return drawing.done;
+    }
+    const state = { next: press };
+    this.cardRefreshes.set(cardId, state);
+    state.done = (async () => {
+      while (state.next && !this.shuttingDown) {
+        const current = state.next;
+        state.next = null;
+        await this.drawRefresh(current, () => state.next !== null)
+          .catch((error) => this.logRefresh(current, 'failed', { error: safeError(error) }));
+      }
+    })().finally(() => this.cardRefreshes.delete(cardId));
+    return state.done;
+  }
+
+  // One press: the command runs now, so the card shows the tasks as they are
+  // when it is drawn. A press only ever edits its card: the answer goes as a
+  // reply only when it has no card, or when Lark says the card is too old to
+  // edit. A card still busy at the last try is being pressed again; any other
+  // refusal is logged, and nothing is sent.
+  async drawRefresh(press, superseded) {
+    const { command, event, inbound, label } = press;
+    const outcome = await this.runCommand(command, event, inbound, label);
+    if (!outcome.card) {
+      await this.replyCommand(outcome, event, inbound);
+      return this.logRefresh(press, 'replied');
+    }
+    try {
+      const edit = await editCard(this.connectors, event.parentId, outcome.card, { superseded, waitMs: this.cardEditWaitMs });
+      this.logRefresh(press, edit.superseded ? 'superseded' : 'redrawn', { tries: edit.tries });
+    } catch (error) {
+      const reason = safeError(error);
+      const tooOld = CARD_TOO_OLD.test(reason);
+      this.logRefresh(press, CARD_BUSY.test(reason) ? 'busy' : tooOld ? 'too_old' : 'failed', { error: reason });
+      if (tooOld) await this.replyCommand(outcome, event, inbound);
+    }
+  }
+
+  // What became of each press, and how long after it: redrawn, superseded or
+  // replaced by a newer press, replied (no card), still busy at the last try,
+  // too old (sent as a new card), or failed (nothing sent).
+  logRefresh(press, outcome, fields = {}) {
+    const level = ['redrawn', 'superseded', 'replaced', 'replied'].includes(outcome) ? 'info' : 'warn';
+    this.logger[level]('command_card_refresh', { command: press.label, outcome, ms: Date.now() - press.at, ...fields });
+  }
+
+  // The model and effort the router last had on a runtime, which it takes
+  // again when switched back there (agent-runtime.mjs).
+  routerSaved(runtime) {
+    return { model: this.store.getSetting(`${runtime}_model`) || '', effort: this.store.getSetting(`${runtime}_effort`) || '' };
+  }
+
+  // A choice on the Runtime and model card, made in the direct chat it was
+  // sent to: a runtime chosen above the form redraws the card; the form
+  // submitted applies what changed, as the commands it stands for; cancel
+  // closes it. The card is updated in place.
+  async handleSettingsCard(event) {
+    if (event.chatType !== 'p2p') return;
+    const interaction = event.data.interaction;
+    const action = interaction.value[SETTINGS_CARD];
+    const settings = this.connectors.isOwner(event) ? this.workerSettings ?? null : null;
+    let snapshot = await this.agentRuntime.snapshot({ catalog: 'refresh' }).catch(() => this.agentRuntime.snapshot({ catalog: 'cached' }));
+    let card = null;
+    if (action === 'cancel') card = settledCard({ cancelled: true, snapshot, settings });
+    else if (action === 'runtime') {
+      const draft = { ...interaction.value.draft, [interaction.value.side]: interaction.option };
+      snapshot = await settingsModels(snapshot, [draft.router, draft.worker === 'router' ? draft.router : draft.worker], this.config);
+      card = redrawn({ interaction, snapshot, settings, saved: (runtime) => this.routerSaved(runtime) });
+    }
+    else if (action === 'apply') {
+      const run = (name, arg) => executeCommand({ name, arg }, this.agentRuntime).catch((error) => ({ ok: false, text: safeError(error) }));
+      const runWorkers = (arg) => executeWorkersCommand({ name: 'workers', arg }, {
+        event, connectors: this.connectors, settings: this.workerSettings ?? null, tasks: this.tasks, router: this.agentRuntime,
+      });
+      const result = await applySettings({ interaction, snapshot, settings, run, runWorkers });
+      snapshot = await this.agentRuntime.snapshot({ catalog: 'cached' });
+      card = settledCard({ ...result, snapshot, settings });
+      this.recordSystemActivity('command.executed', {
+        summary: `/runtime card → ${result.stale ? 'stale' : result.steps.map((step) => `${step.ok ? '✓' : '✗'} ${step.label}`).join(', ') || 'no change'}`,
+        status: result.stale || result.steps.some((step) => !step.ok) ? 'FAILED' : 'OK', conversationKey: event.conversationKey,
+      });
+    }
+    if (card) await editCard(this.connectors, event.parentId, card, { waitMs: this.cardEditWaitMs });
   }
 
   runMaintenance() {

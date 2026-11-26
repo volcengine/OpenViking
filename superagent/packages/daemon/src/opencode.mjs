@@ -7,14 +7,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn as nodeSpawn } from './platform/index.mjs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
-import { assembleConversationPolicy } from './conversation-policy.mjs';
+import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { prepareOpencodeConfigHome } from './ov-isolation.mjs';
@@ -107,7 +107,7 @@ export class OpencodeAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, { logger });
     this.model = options.model
       ?? store.getSetting?.(this.modelSettingKey)
       ?? options.initialModel
@@ -159,10 +159,7 @@ export class OpencodeAgent {
   get resolvedModel() { return this.model || this.sessionModel || ''; }
 
   get policyHash() {
-    return createHash('sha256')
-      .update(this.systemPrompt).update('\0')
-      .update(this.config.workspace).update('\0')
-      .update(this.policyVersion).digest('hex');
+    return policyHashOf(this.systemPrompt, this.config.workspace, this.policyVersion);
   }
 
   get state() {

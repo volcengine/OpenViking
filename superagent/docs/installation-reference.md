@@ -16,7 +16,7 @@ Both platforms use the same [installation and setup guide](../install.md).
 curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/install.sh | sh
 ```
 
-This installs the version in `superagent/latest` (currently `0.5.5-preview`; until a stable release ships, `latest` follows previews). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/releases/<version>/install.sh | sh -s -- --version <version>`.
+This installs the version in `superagent/latest` (currently `0.5.6-preview`; until a stable release ships, `latest` follows previews). To pin a version, use `curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/releases/<version>/install.sh | sh -s -- --version <version>`.
 
 The installer detects Linux or macOS and x64 or arm64 (including WSL2), downloads the matching archive, verifies SHA-256, extracts it to `~/.ov-superagent/releases/<version>`, adds `~/.ov-superagent/bin` to your shell PATH, and enters `ov-superagent setup`. Only sh, curl, tar, and sha256sum (or shasum) are required. The package supplies pinned Node, PM2, lark-cli, and Pi without modifying existing Node, npm, PM2, or git installations. Before switching, it runs the new bundled Node; incompatible system libraries or CPU architecture leave the previous installation intact. musl systems such as Alpine are unsupported.
 
@@ -187,6 +187,16 @@ ov-superagent login onebot [instance]
 
 Use this to change the address or token, or to rebind the owner. A failed or cancelled login keeps the previous account.
 
+### DingTalk group setup
+
+Enable a Stream-mode bot on an internal DingTalk app, grant it permission to send group messages, and publish it in the organization. Add it to a trusted internal group where members are allowed to send tasks to the agent.
+
+Select **DingTalk (group bot)** and an owner-capable IM in `ov-superagent setup`. Keep the owner-capable IM as the primary `channel`. For example, a Feishu/Lark instance uses `"channel": "lark", "connectors": ["lark", "dingtalk"]`. DingTalk handles mentions and replies in the originating group. The primary IM handles owner direct messages, proactive owner notices, email approvals and `/primary`.
+
+Setup prompts for the app's AppKey, AppSecret (hidden input) and optional RobotCode (defaults to AppKey). It validates the credentials and writes `<dataDir>/dingtalk.json` for the daemon's account. For manual provisioning, create that private file with `clientId`, `clientSecret` and an optional `robotCode`, then include `dingtalk` in `connectors`. To rotate credentials, run `ov-superagent login dingtalk [instance]` for the existing instance.
+
+Mention the bot in a group text message to test delivery. Group replies are Markdown, and native timers can send Markdown to the original group. See [DingTalk](connector-protocol.md#dingtalk) for message ids and persistence.
+
 ## Managing instances with setup
 
 The runtime list always includes Codex, Claude Code, Pi, Durable, TraeX, OpenCode, Antigravity and DSH, including runtimes that are not currently usable. Selecting one reports whether it is not installed, not logged in, protocol-incompatible or missing a usable model, then exits without saving. For DSH, setup also chooses isolated/shared configuration and checks the skill roots to enable. Ctrl+C cancels setup directly; the Windows launcher exits with the CLI's status rather than asking to terminate a batch job.
@@ -215,20 +225,20 @@ ov-superagent pi                                        # Open bundled Pi, e.g. 
 
 ## Upgrade and rollback
 
-On Windows, `ov-superagent upgrade` and the automatic updater are not supported yet. Stop OpenViking SuperAgent with `ov-superagent stop`, rerun the PowerShell installer from [One-command installation](#one-command-installation), then run `ov-superagent restart`. The installer retains the previous release for [manual rollback](windows-preview.md#configure-and-test).
-
-On macOS / Linux:
+`ov-superagent upgrade` works on macOS, Linux and Windows:
 
 ```bash
 ov-superagent upgrade <instance-id>
 ov-superagent upgrade all        # Also rolls shared Web and removes instances deleted from the manifest
 ```
 
-The command asks `superagent-updater` to read the release host's `latest`, download the platform archive, verify manifest SHA-256 and size, and smoke-test bundled Node, managed Pi, and `ov-superagent --version`. Only then does it switch `~/.ov-superagent/current`, retaining the previous version as `~/.ov-superagent/rollback`. It restarts target instances one at a time and waits for `/ready`; failed instances revert to their previous release. The updater restarts itself last. User machines do not run `npm ci` or tests and need no git; packaging already ran tests. Repeating an upgrade to the same version reuses it. This flow requires a published `latest` endpoint; the pinned preview above does not make that endpoint available.
+On macOS / Linux the command asks `superagent-updater` to read the release host's `latest`, download the platform archive, verify manifest SHA-256 and size, and smoke-test bundled Node, managed Pi, and `ov-superagent --version`. Only then does it switch `~/.ov-superagent/current`, retaining the previous version as `~/.ov-superagent/rollback`. It restarts target instances one at a time and waits for `/ready`; failed instances revert to their previous release. The updater restarts itself last. User machines do not run `npm ci` or tests and need no git; packaging already ran tests. Repeating an upgrade to the same version reuses it. This flow requires a published `latest` endpoint; the pinned preview above does not make that endpoint available.
+
+On Windows, releases are ZIP previews with their own channel (`.../superagent/windows-preview/latest`), so the updater does not fetch them itself: it runs the `install-preview.ps1` that ships inside the installed release, with `-NoSetup`. That installer verifies the ZIP SHA-256, rejects unsafe archive entries, checks the bundled runtime, unpacks into `~\.ov-superagent\releases\<version>`, and moves `current`/`rollback` with recovery, so a failed download, verification or unpack leaves the running release untouched. The updater then restarts the target instances one at a time and waits for `/ready`. If a release installs but an instance cannot start, the publication is switched back to the previous version and the instances that had already moved are restarted from it, so `current`, `rollback` and the next `restart` all name the release that was working. Windows follows the preview channel: `upgrade` installs the newest Windows preview, not the stable macOS/Linux `latest`. The installer keeps every installed release under `~\.ov-superagent\releases`, and the deployment lock is the installer's own, so a manual install and an upgrade never overlap while the lock is held - that covers downloading, verifying, unpacking and switching `current`/`rollback`; the instance restarts that follow run after the installer exits and take no lock. A Windows install made before `upgrade` existed ships no updater, so it needs one manual install of a release that has it before `upgrade` works; and when an instance cannot start after a publication, the rollback switches back to the release still on disk, so it works without the channel or the network.
 
 The updater is a separate process, so it can finish even when the bot's own process restarts.
 
-Rollback: `ln -sfn "$(readlink ~/.ov-superagent/rollback)" ~/.ov-superagent/current && ov-superagent restart`.
+Rollback on macOS / Linux: `ln -sfn "$(readlink ~/.ov-superagent/rollback)" ~/.ov-superagent/current && ov-superagent restart`. On Windows, rerun the installer with the version named by `~\.ov-superagent\rollback`: `& ([scriptblock]::Create((irm https://ovrelease.tos-cn-beijing.volces.com/superagent/install.ps1))) -Version <version> -NoSetup`, then `ov-superagent restart`.
 
 ```bash
 ov-superagent status
@@ -263,7 +273,7 @@ Published `install.sh` and each archive record the download base used by the upd
 
 ## Multiple agents
 
-Add entries to `agents` in `config.json`, each with separate ID, port, dataDir, workspace, OV configuration, and (for Feishu) profile. They share release, Web, and updater. `channel` preserves single-Connector compatibility; optional `connectors` can start `lark`, `weixin`, `telegram`, `slack`, `qq`, `onebot`, and `email` together, with at least one chat IM for email. Omitting both selects Feishu. The easiest path is another `ov-superagent setup`; after manual edits, run `ov-superagent start <new-instance>` and `ov-superagent restart web`. The updater rereads the manifest per request and needs no restart.
+Add entries to `agents` in `config.json`, each with separate ID, port, dataDir, workspace, OV configuration, and (for Feishu) profile. They share release, Web, and updater. `channel` preserves single-Connector compatibility; optional `connectors` can start `lark`, `weixin`, `telegram`, `slack`, `qq`, `onebot`, `dingtalk`, and `email` together, with at least one chat IM for email. An id declared in `externalConnectors` may be listed in `connectors` too, and may be `channel`. Omitting both selects Feishu. See [External Connector](external-connector.md). The easiest path is another `ov-superagent setup`; after manual edits, run `ov-superagent start <new-instance>` and `ov-superagent restart web`. The updater rereads the manifest per request and needs no restart.
 
 OpenViking SuperAgent owns OpenViking memory, the same for every runtime. The daemon syncs the conversation into the instance's own OV user, naming each line's speaker in `from=` and attaching no peer; extraction keeps profile, entities and events, each event once. Preferences are not extracted: when the agent calls `openviking_remember`, the Core writes the preference into the directory of the person who sent that message, `memories/preferences/owner/` for the owner and `memories/preferences/<name>~<id>/` for anyone else (the id comes from the channel identity, so namesakes stay apart). Before forwarding direct chats, mentioned group messages, document comments, and non-chat events such as mail, the daemon attaches the owner's preferences (the owner's standing rules) and the sender's; set `agents[].ovAutoRecall` to `true` in `config.json` (default `false`, not in setup) to also run one semantic search per such line. OV outages do not stop messaging; new sessions can skip history temporarily while synchronization retries.
 

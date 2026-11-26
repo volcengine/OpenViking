@@ -2,12 +2,16 @@
 
 How accepted inputs reach the model. Set per instance with `agents[].scheduler`
 in `config.json` (`OV_SUPERAGENT_SCHEDULER` in the daemon env), read once at start.
+`ov-superagent setup` writes it for a new instance: `workers` on Pi, Codex,
+TraeX or Claude Code, `legacy` on other runtimes. An instance without it runs
+`legacy`, and editing an instance in setup keeps what it has; to change it,
+edit `config.json` and restart the instance.
 
 | Value | Behaviour |
 |---|---|
 | `legacy` (default) | Every input goes into the running turn as soon as it arrives (Codex/TraeX `turn/steer`, Pi `steer`, ...); an idle runtime starts a turn with it. Group lines that arrive within 400 ms start one turn together. |
 | `inbox` | While the model works, inputs wait and the model is told they are there; it reads them at a checkpoint. |
-| `workers` | The inbox, and the main session becomes a router: it hands longer work to worker sessions on the same runtime and relays their results. |
+| `workers` | The inbox, and the main session becomes a router: it hands longer work to worker sessions (on the router's runtime unless `/workers` sets another) and relays their results. |
 
 With `legacy`, the prompt, the tool list, the policyHash and the database schema
 are exactly what they were before the setting existed.
@@ -93,7 +97,8 @@ With `workers`, the main session is a **router**. It still reads every input,
 through the inbox above, and answers what is quick. A request that needs real
 work (running or changing code, investigating, research, writing a document)
 becomes a **task** (`packages/daemon/src/tasks.mjs`), and a **worker** does it:
-a separate session on the router's own runtime. The worker never talks to
+a separate session, on the runtime the workers' settings name (the router's
+unless the owner set another with `/workers`). The worker never talks to
 people; it reports, and the router relays the report where the request was
 made. The router stays the only outlet, so every check on the delivery path
 (authority, freshness fence, thread placement, bot fuse, approvals, outbox
@@ -119,7 +124,37 @@ claims so the inputs can be replayed. `task_reports` is the append-only list of
 reports.
 
 Status: `queued` (waiting for a slot), `running`, `waiting` (a question for a
-person), `blocked`, and the ended `done`, `dropped`, `failed`, `stopped`.
+person), and the ended `done`, `blocked`, `dropped`, `failed`, `stopped`.
+
+`waiting` is the only status that keeps a task live without a worker on it:
+its worker asked one thing a person can answer or do (decide, tell, grant an
+access, confirm), and goes on in the same round when they do. A round its
+worker cannot finish for a missing access or prerequisite that no one can
+clear now ends `blocked`, like one that `failed`: the requester is told what
+is missing, and the input that clears it reopens the task for a round. A
+`blocked` task used to stay live until someone wrote to it again. Nothing
+aged it: on one long-running instance six sat for up to twelve days with no
+worker, counted as in progress by `/tasks`, kept in every input's working set
+and holding their directories, one of them blocked only because its worker
+could not edit a pull request's description after the work was done. A
+daemon that starts on such tasks ends each, with its round, when its worker
+last moved it.
+
+A `waiting` task can wait as long: nobody may ever answer. With nothing for
+`OV_SUPERAGENT_TASK_DORMANT_DAYS` (5 by default: a question asked on a Friday
+is still near on Monday; 0 turns it off) it is **dormant**. It stays live: an
+answer still goes on in the same round, and its directory stays held. But it
+leaves the working set, so it no longer takes one of the three places in
+every nearby input's `[daemon tasks]` line, nor counts as waiting for its
+requester on everything they say in a direct chat. A reply to its messages
+or a line in its thread still finds it, as do `task_list` with `for_event`,
+`query` or its id; the default `task_list` names the dormant tasks in one
+line, and `/tasks` lists them apart, in one line at the end. The router is
+told that a question nobody answered for days drops out of its hints, and to
+look an answer that comes that late up with `for_event`. Of tasks with equal
+weight in a hint, the one that moved last comes first, not the one created
+first: a live task created days ago no longer goes before one that ended
+minutes ago.
 
 ### A task is one result, pushed forward in rounds
 
@@ -163,8 +198,8 @@ pull request, a document), and it takes only what is about that result:
   person waiting behind it. People's talk, a remark on a result included,
   never reopens a task. The `[daemon tasks]` line lists the tasks near an
   input (same thread as any of their rounds, a reply to their messages,
-  waiting for this person), what each is doing (`working`, `waiting for …`,
-  `done 12m ago, 3 rounds`) and the first 40 characters of what its current
+  waiting for this person), what each is doing (`working`, `waiting for … for
+  2d`, `done 12m ago, 3 rounds`) and the first 40 characters of what its current
   round asks (`now on:`) or its last one asked (`last asked:`): a title is
   written when a task is created and says nothing of its later rounds. A
   reply to a message the router sent for a task counts as a reply to that
@@ -173,8 +208,8 @@ pull request, a document), and it takes only what is about that result:
   message (about 4% of relayed results in replays were otherwise not linked).
   "Same requester" is no longer a reason, and similar words only rank what an
   exact signal found, or point the owner across chats. Similar words look only
-  at the working set (live tasks and the 32 that ended last, about a day of
-  tasks online); the exact signals reach past it: the task a line replies to,
+  at the working set (live tasks but the dormant ones, and the 32 that ended
+  last, about a day of tasks online); the exact signals reach past it: the task a line replies to,
   and the latest ten tasks asked in its thread, however long ago. Every one of
   these reads goes through an index (the working set by end time, a message's
   task, a thread's tasks), so a hint costs about the same with 100 000 tasks as
@@ -182,12 +217,14 @@ pull request, a document), and it takes only what is about that result:
   100 000). The rule for a working task is the one from before rounds,
   unchanged.
 - **An ended task takes a new request as a round.** `owner` input to a task
-  that is `done`, `dropped` or `failed` reopens it for its next round
+  that is `done`, `blocked`, `dropped` or `failed` reopens it for its next round
   (`task_rounds`); `context` reopens nothing, and a `stopped` task stays
   stopped (work on it again is a new task that follows it). A round records
   where it was asked and by whom: its report says `round=N`, its origin is that
   round's message, so the answer goes there and an answer there settles that
-  round's report. A delivery that names the task (`task_ids`) settles the
+  round's report. A round that reopens a task which ended `blocked` or
+  `failed` is told so, with why, and to check first whether that still
+  stands. A delivery that names the task (`task_ids`) settles the
   reports of the round it answers, never the task's other rounds: the round
   it was decided on (its origin, or another input of it), else the rounds
   asked where it went; only an answer given where no round was asked settles
@@ -238,7 +275,7 @@ pull request, a document), and it takes only what is about that result:
 | `task_create` | A task from the named input lines (`trigger_ids`, the first one is the origin), a title, an optional note, and `follows` when it builds on a task's result as a separate one. |
 | `task_route` | Lines for a task: `owner` (something on the result it works toward or delivered; for an ended task, a new round) or `context` (background for a task at work). Refused for a stopped task, and `context` for an ended one. |
 | `task_stop` | Stops a task and its worker; only when the requester or the owner asks. |
-| `task_list` | The working set (every live task and the 32 most recently ended), one task in detail, the tasks one person asked for (`for_event`), or a search over titles. Each line says how long a task has been working and whether its latest result was sent (how long ago, as which message). |
+| `task_list` | The working set (every live task but the dormant ones, named in one line, and the 32 most recently ended), one task in detail, the tasks one person asked for (`for_event`), or a search over titles, dormant tasks included. Each line says how long a task has been working and whether its latest result was sent (how long ago, as which message). |
 
 Routing an input to a task records it as decided (`decisions`, `silent`), so the
 turn-end check does not ask again; the relayed result records the delivery over
@@ -246,7 +283,7 @@ it.
 
 ### Workers
 
-A worker turn is one run of the router's runtime CLI in its non-interactive
+A worker turn is one run of its task's runtime CLI in its non-interactive
 mode, resuming the task's own session (`worker-executor.mjs`):
 
 | Runtime | Turn | First turn of a task that follows one on the same runtime |
@@ -283,7 +320,8 @@ directory, measured:
 
 No process runs between turns, so an idle task holds nothing; Durable,
 OpenCode and Ark have no worker mode, and `task_create` tells the router to
-handle the request itself there. A task keeps the runtime it started on.
+handle the request itself when workers are set to run there. A task keeps its
+runtime while it works (see Runtime, model and effort).
 Three turns run at once, plus one slot only a follow-up to an existing task may
 take. Each task works in a directory under `<workspace>/tasks/` (see Task
 directories).
@@ -302,10 +340,24 @@ its own directory first, and never over a whole home directory, `/`, or the
 OpenViking SuperAgent installation and data. Its working directory is its task
 directory, but nothing else confines it.
 
-A worker's policy is `agent/worker.md` plus the instance Role. Its first input
-is the brief: the original input lines, who asked and where, the router's note
-and its directory. Its Core tools are `task_check` (lines routed to it since it
-last looked), `task_report` and the reads (chat and thread history, search,
+A worker's policy is `agent/worker.md`, the router's rules that hold for its
+work too, its shell rules, the instance Role, the writing rules, and its
+Standing preferences. The shared rules are lines of `core.md`, `openviking.md`
+and the instance's connector sections that end with `<!-- worker -->` (the
+information boundary, the ordinary work a request authorizes, reading
+OpenViking, the mailbox), under the headings they sit under there; the router
+reads the same lines without the marker. Standing preferences are the owner's
+and the current round's requester's, read from OpenViking for every turn as
+the router's recall reads them after a line (`OVRecall.preferencesFor`); a
+turn goes on without them when OpenViking is slow or down.
+
+Its first input is the brief: the original input lines, who asked and where,
+how a reply reads there (the origin connector's lines marked
+`<!-- draft -->`: plain text, length, quoting), the router's note, the task it
+follows, the requester's earlier tasks in that chat (in a direct chat, all of
+theirs), and its directory. Its Core tools are `task_check` (lines routed to it
+since it last looked), `task_report`, `task_list` (only what its requester asked
+for, scoped like that list) and the reads (chat and thread history, search,
 media, mail, OpenViking reads); never a delivery, a decision, a timer or a
 memory write. Its authority token is valid for its turn only.
 
@@ -327,6 +379,88 @@ summary/draft and artifacts, and an instruction to check existing work before
 repeating outside actions. A preallocated session ID or turn counter alone is
 never evidence that Claude can resume a session. Recovery can repeat work;
 outside actions are not guaranteed to run exactly once.
+
+
+### Runtime, model and effort
+
+Workers have settings of their own, apart from the router's
+(`worker-settings.mjs`, kept in SQLite): the runtime, and per runtime the
+model and effort. The owner sets them with `/workers` in a direct chat
+(`/workers runtime pi`, `/workers model <name>` or `<runtime>:<name>`,
+`/workers effort high`, `/workers fallback claude`, `… default` / `router` to
+go back). Unset, they follow the router, as workers did before: the router's
+runtime, and its model and effort when the worker runs on the same runtime
+(the CLI's own default on another). So the router can run where workers
+cannot (DSH, Ark) and hand work to workers on Codex, or the two can use
+different models on one runtime.
+
+A task takes its runtime, model and effort when it starts, and keeps them as
+long as its session goes on. Changing a setting, or the router's runtime,
+never moves a task that can carry on where it is: tasks at work finish where
+they started, and a task that reopens for a new round goes on in its session,
+on its runtime, model and effort. Only a new task, or a round whose session
+cannot go on (gone, too large, or never checkpointed), takes the settings of
+the moment; such a round starts a fresh session anyway, from a handover when
+that is another runtime. The one exception is a runtime that cannot serve:
+
+- **Out of quota.** A turn that fails with a used-up quota, usage or billing
+  limit (Codex "You've hit your usage limit", Claude Code "5-hour limit
+  reached", `insufficient_quota`, an overdue balance, a 402) marks its runtime
+  out for 30 minutes, for every task. The task moves at once, without a retry
+  on that runtime. While a runtime is out, new tasks and new rounds start on
+  the fallback, and a queued task about to take a turn there moves before it
+  runs. After the pause, the first task to try the runtime finds out whether
+  it is back. Setting a runtime with `/workers runtime` or `/workers fallback`
+  lifts its pause.
+- **Still failing.** A turn that fails for a passing reason (5xx, overloaded,
+  a reset connection, a dropped stream: what the CLI calls transient or the
+  router's failure policy calls recoverable) runs again on its runtime twice,
+  as before; if it still fails, the task moves.
+
+A task that must move goes to the runtime workers are set to, when that is
+another one, else to the fallback: `/workers fallback`, by default the
+router's `fallbackRuntime` when workers can run there. Never to a runtime that
+is out itself. One round moves at most twice for failures, so two failing
+runtimes are not tried back and forth; with nowhere to go, the failure is
+reported as before. A failure another runtime would share (a cancelled turn,
+a rejected key, a bad request) moves nothing. A turn whose worker filed its
+final report before the failure is complete: the report stands, and the
+runtime is only marked out.
+
+### Handover
+
+One runtime cannot resume another's session. A task that moves (a new round
+whose session cannot go on, on the runtime workers use now, or a runtime that
+cannot serve) records a
+handover (`task_handovers`): where it was (runtime, model, the session its last
+turn ran in and that session's file) and why it moves. Its next turn starts a
+new session on the new runtime, in the same task directory, from a brief that
+begins with the handover:
+
+```
+[handover] You take this task over from a worker that ran on codex (gpt-5.6-sol). codex cannot serve any more for now: its quota or usage limit is used up ("You've hit your usage limit. …").
+You run on pi, in the same directory (<workspace>/tasks/t12), with whatever that worker left there. Before you go on, check where the work stands (files, git status and branches) and what was already done outside the directory (commits, pushes, pull requests, comments, documents); do not repeat an outside action that was already done.
+The last messages of that worker's session, oldest first (clipped; tool output left out):
+| [input] [task t12] …
+| [worker] Implemented slugify; tests pass. Pushing the branch next.
+| [tool calls] exec_command {"cmd":"git push -u origin slugify"}
+Its whole session, if you need more of it: ~/.codex/sessions/2026/11/19/rollout-…-<thread>.jsonl (Codex rollout JSONL: …). It is long: search or read only the parts you need.
+The task record follows.
+[task t12] …   (the rebuilt brief: every round's request, context, note, directory, summary, last answer, artifacts)
+```
+
+The last messages (`worker-transcript.mjs`) are read from the end of the
+session file each runtime keeps (Pi in `<dataDir>/workers/<task>/`, Codex and
+TraeX rollouts in their homes, Claude Code under `~/.claude/projects/`): the
+inputs the worker got, its own words, and one line per tool call; at most
+eight entries and 6,000 characters. Tool output and reasoning are left out:
+they are long, and the directory holds the real state. The whole file stays
+where it is, for the new worker to read when it needs more; earlier sessions
+of the task are named too. Until a turn on the new runtime completes, every
+brief carries the handover (a failed first turn, or a restart, does not lose
+it); after that the new session carries on as any other.
+
+`/tasks t12` shows a task's runtime, model and effort, and its handovers.
 
 ### Task directories
 
@@ -355,6 +489,20 @@ follows one whose directory was deleted starts from its report, as when its
 session cannot be forked; one whose parent lost its dependency folders is told
 to install again what it needs.
 
+A directory whose git repositories hold work that exists nowhere else is not
+deleted whole for its age: changes not committed (untracked files included),
+or commits on a branch, a tag, a detached HEAD or the stash that no
+remote-tracking branch has (a repository with no remote has nothing pushed).
+That is often the very work a `blocked` task could not push. Its dependency
+folders still go after 3 days; the directory goes only past the budget,
+after every directory without such work, with a `task_dir_removed_unsaved`
+warning. A repository git cannot answer for (a timeout, an error) counts as
+holding such work; a `.git` git does not take for a repository counts as
+none. The sweep asks git only about the directories it may delete whole,
+read-only (`git status`, `git log --all --not --remotes`), with no optional
+locks, no `core.fsmonitor`, and never about a repository above the one it
+names.
+
 The daemon sweeps a minute after it starts and every hour. Measuring runs in
 the background; choosing what to delete and moving it to a trash folder next
 to it happen in one step, so a task never starts in, or reads, a directory
@@ -379,7 +527,13 @@ draft:
 `round=` appears once a task has had more than one round; the origin is that
 round's. Worker text is quoted (`| `), so it cannot pass for an input line. The router
 receives the full stored draft (up to the 20,000-character reporting limit)
-and relays it with `reply_message` to the origin `msg=`.
+and relays it with `reply_message` to the origin `msg=`, as written: the worker
+wrote it with the same preferences, writing rules and channel limits, and what
+happened since reaches the worker as input. The router adds only the line a
+`working=1` report asks for, joins reports answered in one place, sends a draft
+the channel refuses for its length as a file, and holds back one that would
+break the information boundary (the requester hears it waits for the owner's
+check, and the owner gets the draft with `notify_owner`).
 
 Ending a task and selecting its final report for delivery are committed together
 in SQLite (`task_report_deliveries`). The inbox row, report's delivery timestamp
@@ -443,13 +597,44 @@ the reply text, so a rewritten reply is a new message).
   action. Selected final reports still awaiting the inbox are delivered again
   through their idempotent receipt.
 
-The owner sees the tasks with `/tasks` in a direct chat (live ones, recent
-ended ones, slots, whether each result reached the requester), one task with
-`/tasks t12`, and stops one with `/tasks stop t12`; `/status` counts the tasks
-at work. The Core answers these without the model.
+The owner sees the tasks with `/tasks` in a direct chat (how many are running,
+queued, waiting for a reply and dormant; the tasks with a worker on them, then
+the questions waiting, the latest first; recent ended ones; the dormant ones
+in one line; slots; whether each result reached the requester). On Lark the
+overview is a card (Card JSON 2.0, Lark 7.20 or later): a table per group of
+tasks, with the status as a coloured tag, every @ of what people wrote shown
+as ＠ (Lark refuses a bot message with an email address in it); elsewhere,
+and when Lark refuses the card, it is the text. A group shows by its name
+(clipped), a direct chat as `飞书私聊` / `微信私聊` (it has no name). At the
+end of the card a dropdown lists every task it shows: choosing one sends that
+task's card, exactly as `/tasks t12` would. The choice comes back as a card
+callback on a card this daemon registered when it sent it, and runs as that
+command only in a direct chat, only `/tasks` and only a task id, with the
+owner checks of a typed command and without the model. `/tasks t12` is a card
+too: its facts, its requests round by round, the user's additions and extra
+context (each with its round, its kind and whether its worker has read it),
+its results (one per round, plus any a newer addition superseded) and its
+runtime moves; the text says the same. Both cards end with when they were
+drawn and a 刷新 button: it runs the `/tasks` (or `/tasks t12`) that drew the
+card, as a card callback under the same rules, and redraws that card in place
+rather than send a new one, off the queue the Core takes messages in: waiting
+on Lark holds up no message. For a few seconds after a click on a card, Lark
+refuses an edit of it (230099 with ErrCode 11310 "card action is lock" or 200800
+"create universal card fail"): the Core makes the edit again a second later, up
+to four tries, for every card it edits. Only the newest press on a card is
+drawn: a press made while the card is being drawn takes the place of any still
+waiting, and the drawing stops waiting for the card. A press only ever edits
+its card. Only when Lark says the card is too old to edit (230031, 14 days) does
+the answer go as a new card; a card still busy at the last try is being pressed
+again, and any other refusal is logged, with nothing sent. Each press logs what
+became of it (`command_card_refresh`). The owner stops a task with
+`/tasks stop t12`; `/status` counts the tasks
+at work. `/workers` shows and sets what workers run on (see Runtime, model and
+effort). The Core answers these without the model.
 
 Activities: `task.created` (with `parent`), `task.reopened` (round, the
 status it had, what it found of its directory and session),
 `task.turn_started`, `task.turn_completed` (with usage), `task.reported`,
 `task.handed_back`, `task.round_handed_back`, `task.report_unrelayed`,
-`task.ended`, `task.dirs_cleaned` (what a sweep deleted and freed).
+`task.ended`, `task.dirs_cleaned` (what a sweep deleted and freed),
+`task.runtime_switched` (from, to, why, whether a session was handed over).

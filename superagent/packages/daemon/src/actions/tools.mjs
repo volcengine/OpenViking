@@ -248,7 +248,7 @@ export const TOOLS = [
     name: 'task_list',
     router: true,
     title: 'List tasks',
-    description: 'The open tasks and the most recently ended ones, one line each: id, status, title, requester, where, how long it has been working, and whether its latest result was sent (how long ago, as which msg=). With task_id, that task in detail (latest summary, waiting question, artifacts, the reply sent or a draft never sent). With for_event, the tasks the sender of that message asked for. With query, tasks with similar titles, ended ones included. Use it to answer questions about progress without starting work.',
+    description: 'The open tasks and the most recently ended ones, one line each: id, status, title, requester, where, how long it has been working, and whether its latest result was sent (how long ago, as which msg=). With task_id, that task in detail (latest summary, waiting question, artifacts, the reply sent or a draft never sent). With for_event, the tasks the sender of that message asked for. With query, tasks with similar titles, ended ones included. Use it to answer questions about progress without starting work. A worker sees only what its requester asked for (in a group, there): with task_id, that task in detail with its directory.',
     inputSchema: schema({
       task_id: { type: 'string', pattern: '^t[0-9]{1,6}$' },
       for_event: { type: 'string', pattern: REF, maxLength: REF_MAX_LENGTH, description: 'event= of a message: the tasks its sender asked for, newest first, ended ones included. In a group only those asked in that chat; in a direct chat all of theirs.' },
@@ -281,7 +281,7 @@ export const TOOLS = [
     name: 'task_report',
     worker: true,
     title: 'Report on this task',
-    description: 'Report your task\'s outcome to the agent, which relays it to the requester. Finish every turn with it. done: draft is the reply, ready to send. needs_user: question is the one thing a person must decide. blocked, dropped, failed: why, in summary. progress: an interim note that does not end the task.',
+    description: 'Report your task\'s outcome to the agent, which relays it to the requester. Finish every turn with it. done: draft is the reply, ready to send. needs_user: question is the one thing a person must decide, tell you or do (say who, and what) before you go on; the task waits for the answer. blocked (a missing access or prerequisite no one can clear now; it ends the task, and the request that clears it takes the task up again), dropped, failed: why, in summary. progress: an interim note that does not end the task.',
     inputSchema: schema({
       state: { type: 'string', enum: ['progress', 'done', 'needs_user', 'blocked', 'dropped', 'failed'] },
       summary: { type: 'string', maxLength: 4_000, description: 'What you did and found, with evidence. For the agent, not the requester.' },

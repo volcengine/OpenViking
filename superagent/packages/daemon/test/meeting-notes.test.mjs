@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -100,7 +101,7 @@ function lark({ note = {}, documents = {}, search = [[MEETING]], notes = { [MEET
 
 async function sync(t, { script = {} } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meeting-notes-'));
-  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  t.after(() => removeTempDir(dataDir));
   const ov = await fakeOV(t);
   const cli = lark(script);
   const log = recorder();
@@ -313,7 +314,7 @@ describe('meeting notes in OpenViking', () => {
 describe('Connector worker logs', () => {
   it('go on in the daemon log; anything that is not a log record stays in the crash tail', async (t) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-logs-'));
-    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    t.after(() => removeTempDir(dir));
     const worker = path.join(dir, 'worker.mjs');
     fs.writeFileSync(worker, `
       process.stderr.write(JSON.stringify({ time: 'x', level: 'info', message: 'meeting_note_stored', connector: 'lark', note: 'ref' }) + '\\n');

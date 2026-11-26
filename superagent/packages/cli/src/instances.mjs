@@ -20,6 +20,7 @@ export const IM_LABELS = Object.freeze({
   qq: 'QQ',
   slack: 'Slack',
   // A QQ account through OneBot, told apart from the official QQ bot.
+  get dingtalk() { return t('钉钉（群机器人）', 'DingTalk (group bot)'); },
   get onebot() { return t('QQ（OneBot）', 'QQ (OneBot)'); },
 });
 
@@ -31,9 +32,14 @@ export function connectorsOf(agent) {
   return agent.connectors ?? [agent.channel ?? 'lark'];
 }
 
+// Built-in IMs have a display name. An external connector is shown as its id.
+export function imLabel(connector) {
+  return IM_LABELS[connector] ?? connector;
+}
+
 export function imList(connectors, mailboxes = 0) {
   return list(connectors.map((connector) => (connector === 'email' && mailboxes > 1
-    ? `${IM_LABELS.email}×${mailboxes}` : IM_LABELS[connector] ?? connector)));
+    ? `${IM_LABELS.email}×${mailboxes}` : imLabel(connector))));
 }
 
 // The loaded manifest, or null while OpenViking SuperAgent has no instance yet.

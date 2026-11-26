@@ -13,12 +13,16 @@ test('manifest and release helpers use the same explicit HOME override', () => {
   const targets = new URL('../../updater/src/targets.mjs', import.meta.url).href;
   const script = `
     import { superagentHome, manifestPath } from ${JSON.stringify(manifest)};
-    import { defaultReleaseLink, defaultSocketPath } from ${JSON.stringify(targets)};
-    console.log(JSON.stringify([superagentHome(), manifestPath(), defaultReleaseLink(), defaultSocketPath()]));
+    import { defaultReleaseLink, defaultUpdaterEndpoint } from ${JSON.stringify(targets)};
+    console.log(JSON.stringify([superagentHome(), manifestPath(), defaultReleaseLink(), defaultUpdaterEndpoint()]));
   `;
   const env = { ...process.env, HOME: home, USERPROFILE: profile };
   delete env.OV_SUPERAGENT_CONFIG;
   const actual = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { env, encoding: 'utf8' }));
-  assert.deepEqual(actual, [path.join(home, '.ov-superagent'), path.join(home, '.ov-superagent', 'config.json'),
-    path.join(home, '.ov-superagent', 'current'), path.join(home, '.ov-superagent', 'updater.sock')]);
+  const [dir, config, releaseLink, updaterEndpoint] = actual;
+  assert.deepEqual([dir, config, releaseLink], [path.join(home, '.ov-superagent'),
+    path.join(home, '.ov-superagent', 'config.json'), path.join(home, '.ov-superagent', 'current')]);
+  // Windows has no socket files: the updater endpoint is a stable named pipe.
+  if (process.platform === 'win32') assert.match(updaterEndpoint, /^\\\\\.\\pipe\\superagent-updater-[0-9a-f]{24}$/);
+  else assert.equal(updaterEndpoint, path.join(home, '.ov-superagent', 'updater.sock'));
 });

@@ -43,6 +43,7 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'OV_SUPERAGENT_TASK_DIR_PRUNE_DAYS',
   'OV_SUPERAGENT_TASK_DIR_REMOVE_DAYS',
   'OV_SUPERAGENT_TASK_DIR_BUDGET_GB',
+  'OV_SUPERAGENT_TASK_DORMANT_DAYS',
   'OV_SUPERAGENT_CODEX_EFFORT',
   'OV_SUPERAGENT_TRAEX_EFFORT',
   'OV_SUPERAGENT_CLAUDE_EFFORT',
@@ -100,6 +101,7 @@ const AGENT_FIELDS = Object.freeze([
   'displayName',
   'channel',
   'connectors',
+  'externalConnectors',
   'profile',
   'larkMessageAccess',
   'larkOwnerOpenId',
@@ -220,10 +222,19 @@ function manifestString(value, name, { maxLength = 128 } = {}) {
   return normalized;
 }
 
+// Only paths a manifest declares itself keep POSIX semantics when a manifest
+// written for a POSIX deployment is read on Windows; resolving them with the
+// host rules would produce a `C:\root...`. A path this process derives locally
+// (the OpenViking plugin state, a lock file) is joined with the host's rules.
+const POSIX_MANIFEST_FIELDS = Object.freeze(['dataDir', 'tempDir', 'workspace', 'ovConfig', 'config']);
+
 function manifestAbsolutePath(value, name) {
   const normalized = manifestString(value, name, { maxLength: 4096 });
   if (!path.isAbsolute(normalized)) throw new Error(`${name} must be an absolute path`);
-  return path.normalize(normalized);
+  const field = name.slice(name.lastIndexOf('.') + 1);
+  return POSIX_MANIFEST_FIELDS.includes(field) && normalized.startsWith('/')
+    ? path.posix.normalize(normalized)
+    : path.normalize(normalized);
 }
 
 function optionalManifestString(value, name) {
@@ -253,6 +264,59 @@ function parseDaemonEnv(value, ignored) {
   return Object.freeze(result);
 }
 
+const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk']);
+const BUILTIN_CHANNELS = Object.freeze(['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
+// Internal event sources. `timer` is how a reminder is delivered; an external
+// program must not take that name and inherit its exemptions.
+const RESERVED_CONNECTOR_IDS = Object.freeze(['timer']);
+const EXTERNAL_CONNECTOR_ID = /^[a-z][a-z0-9-]{0,63}$/;
+
+// The operator's rules for one external IM. The path is checked here so a typo
+// fails in the manifest, not as a bare read error while the runtime starts.
+function readablePromptFile(filePath, label) {
+  let info;
+  try {
+    info = fs.statSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`${label} does not exist`);
+    throw new Error(`${label} cannot be read`);
+  }
+  if (!info.isFile()) throw new Error(`${label} must be a regular file`);
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+  } catch {
+    throw new Error(`${label} cannot be read`);
+  }
+}
+
+// A Connector the operator supplies: an absolute command that speaks protocol
+// 0.2. Its id is listed in `connectors` like a built-in one.
+function manifestExternalConnectors(value, label, ignored) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  const ids = new Set();
+  return value.map((entry, index) => {
+    const entryLabel = `${label}[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`${entryLabel} must be an object`);
+    ignoreUnknownFields(entry, ['id', 'command', 'args', 'prompt'], `${entryLabel}.`, ignored);
+    const id = manifestString(entry.id, `${entryLabel}.id`, { maxLength: 64 });
+    if (!EXTERNAL_CONNECTOR_ID.test(id)) throw new Error(`${entryLabel}.id is invalid`);
+    if (BUILTIN_CONNECTORS.includes(id)) throw new Error(`${entryLabel}.id must not reuse a built-in connector`);
+    if (RESERVED_CONNECTOR_IDS.includes(id)) throw new Error(`${entryLabel}.id is reserved`);
+    if (ids.has(id)) throw new Error(`${label} has two connectors called ${id}`);
+    ids.add(id);
+    const command = manifestAbsolutePath(entry.command, `${entryLabel}.command`);
+    let args = [];
+    if (entry.args !== undefined) {
+      if (!Array.isArray(entry.args) || entry.args.length > 16) throw new Error(`${entryLabel}.args is invalid`);
+      args = entry.args.map((arg, argIndex) => manifestString(arg, `${entryLabel}.args[${argIndex}]`, { maxLength: 256 }));
+    }
+    const prompt = entry.prompt == null ? null : manifestAbsolutePath(entry.prompt, `${entryLabel}.prompt`);
+    if (prompt !== null) readablePromptFile(prompt, `${entryLabel}.prompt`);
+    return Object.freeze({ id, command, args: Object.freeze(args), prompt });
+  });
+}
+
 function parseAgent(value, index, ignored) {
   const label = `agents[${index}]`;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -275,6 +339,8 @@ function parseAgent(value, index, ignored) {
     && (!Number.isSafeInteger(value.fallbackReturnAfterMs) || value.fallbackReturnAfterMs < 0 || value.fallbackReturnAfterMs > 86_400_000)) {
     throw new Error(`${label}.fallbackReturnAfterMs must be an integer between 0 and 86400000`);
   }
+  const externalConnectors = manifestExternalConnectors(value.externalConnectors, `${label}.externalConnectors`, ignored);
+  const externalIds = new Set(externalConnectors.map((item) => item.id));
   let connectors = null;
   if (value.connectors !== undefined) {
     if (!Array.isArray(value.connectors) || value.connectors.length === 0) {
@@ -284,20 +350,26 @@ function parseAgent(value, index, ignored) {
       manifestString(connector, `${label}.connectors[${connectorIndex}]`, { maxLength: 64 })
     )))];
     if (connectors.length !== value.connectors.length
-      || connectors.some((connector) => !['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot'].includes(connector))) {
-      throw new Error(`${label}.connectors must contain unique lark, weixin, email, telegram, slack, qq or onebot values`);
+      || connectors.some((connector) => !BUILTIN_CONNECTORS.includes(connector) && !externalIds.has(connector))) {
+      throw new Error(`${label}.connectors must contain unique built-in connectors or externalConnectors ids`);
     }
   }
   // The primary IM: where notices to the owner go. A mailbox is never one.
   const channel = value.channel === undefined
-    ? (connectors?.find((connector) => connector !== 'email') ?? 'lark')
+    ? (connectors?.find((connector) => connector !== 'email' && connector !== 'dingtalk') ?? 'lark')
     : manifestString(value.channel, `${label}.channel`);
-  if (!['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot'].includes(channel)) {
-    throw new Error(`${label}.channel must be lark, weixin, telegram, slack, qq or onebot`);
+  if (channel === 'dingtalk') {
+    throw new Error(`${label}.channel requires an owner-capable IM; add dingtalk to connectors as a secondary channel`);
+  }
+  if (!BUILTIN_CHANNELS.includes(channel) && !externalIds.has(channel)) {
+    throw new Error(`${label}.channel must be a built-in IM or an external connector`);
   }
   connectors ??= [channel];
   if (!connectors.includes(channel)) {
     throw new Error(`${label}.connectors must include ${label}.channel`);
+  }
+  if (externalConnectors.some((item) => !connectors.includes(item.id))) {
+    throw new Error(`${label}.externalConnectors is not listed in ${label}.connectors`);
   }
   const volcSessionId = optionalManifestString(value.volcSessionId, `${label}.volcSessionId`);
   const volcEnvironmentId = optionalManifestString(
@@ -324,6 +396,9 @@ function parseAgent(value, index, ignored) {
   }
   if (connectors.includes('weixin') && model === 'ark') {
     throw new Error(`${label} using the weixin connector cannot use the ark runtime`);
+  }
+  if (externalConnectors.length > 0 && model === 'ark') {
+    throw new Error(`${label} using an external connector cannot use the ark runtime`);
   }
   const emailAccounts = manifestEmailAccounts(value.emailAccounts, `${label}.emailAccounts`, ignored);
   if (connectors.includes('email') !== (emailAccounts.length > 0)) {
@@ -405,6 +480,7 @@ function parseAgent(value, index, ignored) {
     displayName: manifestString(value.displayName, `${label}.displayName`, { maxLength: 40 }),
     channel,
     connectors: Object.freeze(connectors),
+    externalConnectors: Object.freeze(externalConnectors),
     profile: connectors.includes('lark') ? manifestString(value.profile, `${label}.profile`) : null,
     larkMessageAccess: connectors.includes('lark') ? value.larkMessageAccess ?? 'owner' : null,
     larkOwnerOpenId: connectors.includes('lark') ? value.larkOwnerOpenId ?? null : null,
@@ -622,6 +698,8 @@ function selectDeploymentAgent(deployment, id = deployment.defaultInstance) {
 // directory, shared by every process of the OS user, so even an inert plugin
 // gets its own directories under the instance's data directory.
 function openVikingAgentEnv(agent) {
+  // The OpenViking plugin state is local to the daemon that runs it, not a
+  // directory named by the manifest: join it with the host's rules.
   const state = path.join(agent.dataDir, 'openviking');
   return {
     OPENVIKING_CLI_CONFIG_FILE: agent.ovConfig,
@@ -689,6 +767,9 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   delete env.OV_SUPERAGENT_ROLE;
   env.OV_SUPERAGENT_CHANNEL = agent.channel;
   env.OV_SUPERAGENT_CONNECTORS_JSON = JSON.stringify(agent.connectors);
+  if (agent.externalConnectors.length > 0) {
+    env.OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON = JSON.stringify(agent.externalConnectors);
+  } else delete env.OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON;
   if (agent.emailAccounts.length > 0) env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON = JSON.stringify(agent.emailAccounts);
   else delete env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON;
   if (agent.volcSessionId) {

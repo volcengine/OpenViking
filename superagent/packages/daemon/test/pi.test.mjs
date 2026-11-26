@@ -9,13 +9,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { after, describe, it } from 'node:test';
-import { managedPiBin, PI_VERSION, PI_MCP_EXTENSION, PI_MCP_STATUS } from '../src/pi-runtime.mjs';
+import { managedPiBin, piToolArgs, PI_VERSION, PI_MCP_EXTENSION, PI_MCP_STATUS } from '../src/pi-runtime.mjs';
 import { assembleConversationPolicy } from '../src/conversation-policy.mjs';
 import {
   PI_EFFORTS,
   PiAgent,
   sanitizePiEnv,
 } from '../src/pi.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -35,7 +36,7 @@ const baseConfig = {
   connectors: ['lark'],
   larkCliBin: '/fake/lark-cli',
   slackCliBin: '/fake-slack/slack',
-  actionSocketPath: path.join(root, 'data', 'actions.sock'),
+  actionSocketPath: localSocketPath(path.join(root, 'data')),
   actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
   sendTimeoutMs: 5_000,
   maxReplyChars: 1_000,
@@ -65,6 +66,11 @@ class FakeChild extends EventEmitter {
     this.emit('exit', code, signal);
   }
   kill(signal = 'SIGTERM') { this.finish(signal === 'SIGKILL' ? 137 : 0, signal); }
+}
+
+async function waitForExit(child, timeoutMs = 2_000) {
+  const started = Date.now();
+  while (child.exitCode === null && Date.now() - started < timeoutMs) await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 const helpFlags = [
@@ -373,7 +379,7 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.ok(args.includes('--session-id'));
     const env = calls.at(-1).options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
-    assert.ok(calls.every((call) => call.options.env.PATH.startsWith('/fake:/fake-slack:')));
+    assert.ok(calls.every((call) => call.options.env.PATH.startsWith(['/fake', '/fake-slack', ''].join(path.delimiter))));
     assert.equal(env.PERSONAL_AGENT_SOCKET, baseConfig.actionSocketPath);
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);
     assert.equal(env.LARK_APP_SECRET, undefined);
@@ -443,6 +449,7 @@ describe('PiAgent persistent rpc runtime', () => {
     await assert.rejects(agent.start(), /Pi startup timed out/);
     assert.equal(agent.connected, false);
     assert.equal(store.global().sessionReady, false);
+    await waitForExit(persistent[0]);
     assert.notEqual(persistent[0].exitCode, null);
   });
 
@@ -453,6 +460,7 @@ describe('PiAgent persistent rpc runtime', () => {
     await assert.rejects(agent.start(), /interactive dialog during startup/);
     assert.equal(agent.connected, false);
     assert.equal(store.global().sessionReady, false);
+    await waitForExit(persistent[0]);
     assert.notEqual(persistent[0].exitCode, null);
     assert.ok(!parsedWrites(persistent[0]).some(({ type }) => type === 'extension_ui_response'),
       'Pi cannot read a dialog answer before session_start returns');
@@ -491,7 +499,12 @@ describe('PiAgent persistent rpc runtime', () => {
     await agent.stop();
   });
 
-  it('skips an oversized tool result echo and finishes the turn, but still fails on an oversized line it needs', async () => {
+  it('skips an oversized tool result echo and finishes the turn, but still fails on an oversized line it needs', {
+    // The second half proves the child was terminated after a line it needed
+    // was too large. Windows terminates a tree through taskkill, which a fake
+    // pid cannot exercise, so the exit state is only observable on POSIX.
+    skip: process.platform === 'win32' ? 'a fake child cannot be terminated through taskkill' : false,
+  }, async () => {
     // A get_message_media result with a large image, echoed on one stdout line
     // and delivered in pipe-sized chunks.
     const emitLine = (child, value) => {
@@ -741,4 +754,9 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.equal(environment.SESSION_ID, undefined);
     assert.equal(environment.LARKSUITE_CLI_PROFILE, 'fixed-profile');
   });
+});
+
+it('Pi uses the platform shell: PowerShell on Windows, bash elsewhere', () => {
+  assert.deepEqual(piToolArgs('powershell'), ['--tools', '+powershell,-bash']);
+  assert.deepEqual(piToolArgs('bash'), []);
 });

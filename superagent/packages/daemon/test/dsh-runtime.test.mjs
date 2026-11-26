@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import {
   DSH_BRIDGE_CLI_METHODS, DSH_BRIDGE_DAEMON_METHODS, DSH_BRIDGE_PATH, DSH_DEFAULT_MODEL,
   DSH_EFFORTS, DSH_NOT_READY_CODE, assertDshNodeVersion, assertSupportedDshVersion,
@@ -135,8 +136,10 @@ test('the model settings document is DSH home profiles/sdk/cordis.patch.yml', t 
 
 test('private DSH environment removes inherited DSH settings and pins Node', t => {
   const root = temp(t);
+  // The host's own PATH delimiter: `;` on Windows, `:` elsewhere.
+  const inheritedPath = ['/bin', '/usr/bin'].join(path.delimiter);
   const env = sanitizeDshEnv({
-    PATH: '/bin:/usr/bin', DSH_HOME: '/other', DSH_PROFILE: 'web',
+    PATH: inheritedPath, DSH_HOME: '/other', DSH_PROFILE: 'web',
     DEEPSEEK_API_KEY: 'not-printed', OV_SUPERAGENT_INSTANCE_ID: 'do-not-inherit',
   }, { dataDir: root, execPath: '/node24/bin/node', actions: { socketPath: '/tmp/actions.sock', authority: 'token' } });
   assert.equal(env.DSH_HOME, path.join(root, 'dsh', 'home'));
@@ -146,10 +149,10 @@ test('private DSH environment removes inherited DSH settings and pins Node', t =
   assert.equal(env.DSH_PROFILE, undefined);
   assert.equal(env.DEEPSEEK_API_KEY, 'not-printed');
   assert.equal(env.OV_SUPERAGENT_INSTANCE_ID, undefined);
-  assert.equal(env.PATH, '/node24/bin:/bin:/usr/bin');
+  assert.equal(env.PATH, ['/node24/bin', '/bin', '/usr/bin'].join(path.delimiter));
   for (const directory of Object.values(prepareDshEnvironment(root))) {
     if (typeof directory !== 'string') continue;
-    assert.equal(fs.statSync(directory).mode & 0o077, 0);
+    if (supportsFileModes) assert.equal(fs.statSync(directory).mode & 0o077, 0);
   }
   assert.throws(() => sanitizeDshEnv({}, {}), /dataDir/);
 });
@@ -172,7 +175,7 @@ test('shared DSH environment uses host homes without creating or chmodding them'
 test('patch file is private JSON-compatible YAML with an absolute bridge', t => {
   const patchPath = writeDshPatch({ dataDir: temp(t), policy: 'hello', mcp: null });
   assert.equal(patchPath.endsWith(path.join('dsh', 'run', 'patch.yml')), true);
-  assert.equal(fs.statSync(patchPath).mode & 0o077, 0);
+  if (supportsFileModes) assert.equal(fs.statSync(patchPath).mode & 0o077, 0);
   const patch = JSON.parse(fs.readFileSync(patchPath, 'utf8'));
   assert.equal(patch.find(row => row.insert).insert[0].name, DSH_BRIDGE_PATH);
   assert.deepEqual(dshCommand({ bin: '/dsh', patchPath }), { command: '/dsh', args: ['--profile', 'sdk', '--patch', patchPath] });

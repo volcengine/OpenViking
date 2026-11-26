@@ -4,7 +4,7 @@
 
 Set up your machine (local or a cloud VM) with the software, projects, and tools you need. OpenViking SuperAgent connects your agent to OpenViking and instant messaging: send a task in chat, let your agent work on your machine, and receive the results in the same conversation. OpenViking provides knowledge, memory, and context across sessions.
 
-OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ (an official bot, or a personal account through OneBot), and email. The CLI command is `ov-superagent`.
+OpenViking SuperAgent supports runtimes such as Codex, Claude Code, DeepSeek Harness, and Pi, and connects to Feishu / Lark, WeChat, Telegram, Slack, QQ (an official bot, or a personal account through OneBot), DingTalk groups, and email. The CLI command is `ov-superagent`.
 
 [Quick start](install.md) · [Features and architecture](docs/usage-reference.md) · [Configuration example](config.example.json) · [Contributing](../CONTRIBUTING.md)
 
@@ -66,6 +66,8 @@ The release-process guide is currently in Chinese.
 | Installation, model sign-in, first connection | [Installation](install.md) |
 | Chat channels, email, attachments, and cards | [Feature reference](docs/usage-reference.md#chat-channels-and-email) |
 | QQ groups through a personal account (OneBot) | [OneBot Connector](docs/onebot-connector.md) |
+| DingTalk internal group mentions, replies and reminders | [DingTalk setup](docs/installation-reference.md#dingtalk-group-setup) |
+| An IM you connect yourself | [External Connector](docs/external-connector.md) |
 | Permissions, sign-in, upgrades, rollback, and development | [Configuration and operations](docs/installation-reference.md) |
 | Context archival and recovery | [OV session context](docs/ov-session-context.md) |
 | Adding message sources | [Connector protocol](docs/connector-protocol.md) |

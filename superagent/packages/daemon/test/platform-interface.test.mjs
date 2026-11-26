@@ -26,7 +26,8 @@ test('all OS implementations and the facade implement exactly the declared inter
 
 test('preview product support has one immutable policy, independent of adapter selection', () => {
   assert.deepEqual(capabilitiesFor({ ...posix, hostPlatformId: 'linux-x64' }), { updater: true, autostart: true, connectors: { email: true } });
-  assert.deepEqual(capabilitiesFor(windows), { updater: false, autostart: true, connectors: { email: true } });
+  // Windows x64 upgrades through the PowerShell installer its ZIP preview ships.
+  assert.deepEqual(capabilitiesFor({ ...windows, hostPlatformId: 'win32-x64' }), { updater: true, autostart: true, connectors: { email: true } });
   assert.deepEqual(capabilitiesFor(termux), { updater: false, autostart: true, connectors: { email: true } });
   assert.equal(capabilitiesFor({ ...posix, hostPlatformId: 'unknown-arm64' }).updater, false);
   const unsupported = capabilitiesFor({ ...windows, hostPlatformId: 'win32-arm64' });

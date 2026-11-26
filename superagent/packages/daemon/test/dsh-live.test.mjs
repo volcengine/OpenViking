@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { after, before, describe, test } from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import {
   DSH_BRIDGE_CLI_METHODS, DSH_BRIDGE_ID, DSH_BRIDGE_VERSION, DSH_NOT_READY_CODE,
   bridgeHelloSupports, isDshNotReady, retryDshNotReady,
@@ -378,7 +379,7 @@ describe('live dsh bridge v2 without a provider key', { skip: liveSkip }, () => 
 
     const file = credentialsPath(root.root);
     assert.ok(fs.existsSync(file), `${file} must exist after credentials/set`);
-    assert.equal(fs.statSync(file).mode & 0o777, 0o600, 'a credentials document is owner-only');
+    if (supportsFileModes) assert.equal(fs.statSync(file).mode & 0o777, 0o600, 'a credentials document is owner-only');
     const text = fs.readFileSync(file, 'utf8');
     assert.match(text, /^version: 1$/m);
     assert.match(text, /DEEPSEEK_API_KEY: live-test-secret/);

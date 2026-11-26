@@ -65,6 +65,26 @@ function releaseShimInvocation(resolved, args) {
   return { command: node, args: [entrypoint, ...args] };
 }
 
+// DeepSeek Harness Desktop installs its CLI as an Electron launcher:
+//   "%~dp0..\..\..\..\DeepSeek Harness.exe" --expose-internals "%~dp0..\..\..\app.asar\dsh\node_modules\@deepseek-ai\dsh-desktop-host\lib\cli.js" %*
+// It is not an npm shim, but the layout is fixed and both files it names exist
+// next to the shim. Launch them directly with ELECTRON_RUN_AS_NODE, so model and
+// user arguments still never pass through cmd.exe.
+function desktopCliInvocation(resolved, args) {
+  let shim;
+  try { shim = fs.readFileSync(resolved, 'utf8'); } catch { return null; }
+  if (!shim.includes('--expose-internals')) return null;
+  const match = shim.match(/"([^"\r\n]*%~dp0[^"\r\n]*DeepSeek Harness\.exe)"\s+--expose-internals\s+"([^"\r\n]*%~dp0[^"\r\n]*app\.asar[\\/]dsh[\\/]node_modules[\\/]@deepseek-ai[\\/]dsh-desktop-host[\\/]lib[\\/]cli\.js)"/i);
+  if (!match) return null;
+  const absolute = (token) => path.resolve(path.dirname(resolved), token.replace(/^%~dp0/i, ''));
+  const executable = absolute(match[1]);
+  const entrypoint = absolute(match[2]);
+  // The entrypoint lives inside app.asar, which is a file on disk: Electron
+  // mounts it, so only the executable can be checked with fs here.
+  if (!fs.existsSync(executable)) return null;
+  return { command: executable, args: ['--expose-internals', entrypoint, ...args], env: { ELECTRON_RUN_AS_NODE: '1' } };
+}
+
 // Run npm's Node entrypoint directly. Never interpolate model/user arguments
 // into cmd.exe: its expansion rules differ from CreateProcess argument quoting.
 export function executableInvocation(command, args, { env = process.env } = {}) {
@@ -72,6 +92,8 @@ export function executableInvocation(command, args, { env = process.env } = {}) 
   if (/\.(?:cmd|bat)$/i.test(resolved)) {
     const release = releaseShimInvocation(resolved, args);
     if (release) return release;
+    const desktop = desktopCliInvocation(resolved, args);
+    if (desktop) return desktop;
     const shim = fs.readFileSync(resolved, 'utf8');
     const relativeEntrypoint = npmShimEntrypoint(shim);
     if (!relativeEntrypoint) throw new Error(`Unsupported Windows command shim: ${resolved}. Configure the native .exe or Node entrypoint.`);
@@ -92,7 +114,8 @@ export function executableInvocation(command, args, { env = process.env } = {}) 
 export function spawn(command, args = [], options = {}) {
   if (!Array.isArray(args)) { options = args ?? {}; args = []; }
   const invocation = executableInvocation(command, args, { env: options?.env });
-  return nodeSpawn(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
+  const env = invocation.env ? { ...(options?.env ?? process.env), ...invocation.env } : options?.env;
+  return nodeSpawn(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(env) });
 }
 
 export function execFile(command, args, options, callback) {
@@ -100,16 +123,35 @@ export function execFile(command, args, options, callback) {
   else if (!Array.isArray(args)) { callback = typeof options === 'function' ? options : callback; options = args ?? options ?? {}; args = []; }
   if (typeof options === 'function') { callback = options; options = {}; }
   const invocation = executableInvocation(command, args, { env: options?.env });
-  return nodeExecFile(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) }, callback);
+  const env = invocation.env ? { ...(options?.env ?? process.env), ...invocation.env } : options?.env;
+  return nodeExecFile(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(env) }, callback);
 }
 
 // Random for each daemon process: only the returned endpoint is passed to clients.
 // This reduces guessing/squatting; Node does not expose pipe-owner verification.
 const pipeNonce = randomBytes(24).toString('hex');
-export function localSocketPath(directory, name = 'actions') {
-  const identity = path.win32.resolve(directory).toLowerCase() + '\0' + os.homedir();
+
+// Who is running, as the OS sees it. Two Windows accounts on one machine then
+// derive different pipe names for the same install path, so one account can never
+// attach to the other's endpoint by knowing where it is installed.
+function accountIdentity() {
+  const name = typeof os.userInfo === 'function'
+    ? (() => { try { return os.userInfo().username; } catch { return ''; } })()
+    : '';
+  return name || process.env.USERNAME || process.env.USER || '';
+}
+
+// `shared` names the endpoint from the install directory and the account, so a
+// client and the process serving it can agree on it without passing the name (the
+// updater outlives any one CLI call). A same-named pipe already bound by another
+// process makes listen fail instead of being reused. The name is per-account, but
+// it does not by itself prove who answers, so an upgrade request also carries the
+// per-install token the updater writes (targets.mjs, server.mjs).
+export function localSocketPath(directory, name = 'actions', { shared = false } = {}) {
+  const identity = path.win32.resolve(directory).toLowerCase()
+    + `\0${shared ? `user:${accountIdentity()}` : os.homedir()}`;
   const digest = createHash('sha256').update(identity).digest('hex').slice(0, 24);
-  return `\\\\.\\pipe\\superagent-${name}-${digest}-${pipeNonce}`;
+  return `\\\\.\\pipe\\superagent-${name}-${digest}${shared ? '' : `-${pipeNonce}`}`;
 }
 
 export function isNamedPipe(value) {
@@ -119,7 +161,8 @@ export function isNamedPipe(value) {
 execFile[promisify.custom] = (command, args, options = {}) => {
   if (!Array.isArray(args)) { options = args ?? options; args = []; }
   const invocation = executableInvocation(command, args, { env: options?.env });
-  return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(options?.env) });
+  const env = invocation.env ? { ...(options?.env ?? process.env), ...invocation.env } : options?.env;
+  return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(env) });
 };
 
 export const spawnDetached = false;
@@ -138,10 +181,37 @@ export function onShutdown(handler) {
     });
   });
 }
+// Signal 0 tests for a running process on every host: Windows returns ESRCH for a
+// pid that is not one. Anything else (EPERM on a live process we may not inspect)
+// counts as alive, so an inconclusive check keeps the taskkill path.
+function hasLivePid(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== 'ESRCH';
+  }
+}
+
 export function terminateProcessTree(child, signal = 'SIGTERM') {
   if (!child?.pid || child.exitCode != null || child.signalCode != null) return;
+  // taskkill needs a live pid. For one that is already gone (a child that exited
+  // before the caller noticed, or a fake fixture) it reports the failure one
+  // spawn later, and the handle fallback then lands after the caller's
+  // escalation window: an escalation that times out faster than that spawn sends
+  // SIGKILL without ever sending SIGTERM. There is no tree left to walk, so
+  // signal the handle in this tick instead of through a process that cannot act.
+  if (!hasLivePid(child.pid)) {
+    try { child.kill(signal); } catch {}
+    return;
+  }
   const killer = spawn('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
   killer.on('error', () => { try { child.kill(signal); } catch {} });
+  // taskkill also exits non-zero when it refuses a pid that still exists (access
+  // denied, or the process went away while it started); fall back to the handle
+  // so callers still observe an exit. This reaches the direct child only, which
+  // is all a pid that taskkill refused can be expected to leave behind.
+  killer.once('exit', (code) => { if (code !== 0) { try { child.kill(signal); } catch {} } });
   killer.unref();
 }
 export function assertPrivateDirectory(directory) {

@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -51,7 +52,7 @@ test('OpenViking: the user config wins, its credentials prove who the user is', 
   assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), {
     url: 'https://ov.example', api_key: 'key-1', account: 'acme', plugin: { recall: true },
   });
-  assert.equal(fs.statSync(target).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(target).mode & 0o777, 0o600);
   assert.equal(JSON.parse(fs.readFileSync(detected.configPath, 'utf8')).actor_peer_id, 'source-actor');
 });
 
@@ -329,7 +330,17 @@ test('TraeX: falls back to a compatible alias, but never overrides an explicit b
 
 test('TraeX: resolves and deduplicates aliases before probing or pinning a binary', async (t) => {
   const f = traexFixture(t, ['actual']);
-  for (const name of ['traex', 'traecli']) fs.symlinkSync(path.join(f.bin, 'actual'), path.join(f.bin, name));
+  try {
+    for (const name of ['traex', 'traecli']) fs.symlinkSync(path.join(f.bin, 'actual'), path.join(f.bin, name));
+  } catch (error) {
+    // Creating a symlink needs a privilege Windows does not grant by default;
+    // the alias resolution itself is covered on hosts that allow it.
+    if (error.code === 'EPERM' || error.code === 'EACCES') {
+      t.skip('creating symlinks needs a Windows developer mode or elevation');
+      return;
+    }
+    throw error;
+  }
   f.options.probe = async (bin) => { f.probed.push(bin); return { compatible: false }; };
   const runtime = await f.detect();
   assert.deepEqual(f.probed, [fs.realpathSync(path.join(f.bin, 'actual'))]);
@@ -445,6 +456,29 @@ test('Antigravity: the login check runs agy models with OpenViking filtered out'
   assert.equal(seen.token, 'token');
   assert.equal(fs.existsSync(seen.home), false);
   assert.equal(fs.readFileSync(path.join(gemini, 'config', 'mcp_config.json'), 'utf8'), owner);
+});
+
+test('Antigravity: a sign-in only the real home can see still counts as logged in', async (t) => {
+  const bin = agyFixture(t);
+  const home = tempDir(t, 'superagent-agy-home-');
+  const homes = [];
+  const runtime = (await detectRuntimes({
+    env: { PATH: bin, HOME: home }, piBin: '/managed/pi.js',
+    agyProbe: async () => ({ compatible: true }),
+    execFileImpl: async (command, args, options) => {
+      if (command.endsWith('agy') && args[0] === 'models') {
+        homes.push(options.env.HOME);
+        if (options.env.HOME !== home) {
+          throw Object.assign(new Error('exit 1'), { stdout: '', stderr: 'Error: Please sign in to view available models.\n' });
+        }
+      }
+      return { stdout: args[0] === '--version' ? '1.5.3\n' : '' };
+    },
+  })).find(({ id }) => id === 'agy');
+  assert.equal(runtime.available, true);
+  assert.equal(homes.length, 2);
+  assert.notEqual(homes[0], home);
+  assert.equal(homes[1], home);
 });
 
 test('Antigravity: another ACP agent behind agy is reported and not offered', async (t) => {

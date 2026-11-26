@@ -264,3 +264,42 @@ describe('loop-stopped turn recovery', () => {
     assert.doesNotMatch(submitted[0].text, /undecided=/);
   });
 });
+
+describe('inputs a /runtime switch cut off', () => {
+  it('hands on every undecided one in order, untagged, and leaves the answered ones answered', async (t) => {
+    const { store, policy, submitted, ingest, silence } = setup(t);
+    const answered = ingest({ messageId: 'om_answered12345', chatId: 'oc_done12345678' });
+    silence(answered);
+    const first = ingest({ messageId: 'om_first12345678', chatId: 'oc_work12345678' });
+    const second = ingest({ messageId: 'om_second1234567', chatId: 'oc_work12345678' });
+    const mail = store.ingest(mailEvent({ uid: 11 })).inbound;
+
+    const plan = policy.resumeInterrupted({ inboundSeqs: [mail.seq, second.seq, answered.seq, first.seq, second.seq],
+      from: 'codex', to: 'pi' });
+    // Unlike a loop stop, the older line of a scope is shown too: the new
+    // session never saw it.
+    assert.deepEqual(plan.items.map((item) => item.seq), [first.seq, second.seq, mail.seq]);
+    assert.doesNotMatch(plan.items[0].text, /undecided=1/);
+    assert.equal(submitted.length, 0, 'the switch delivers them itself');
+    assert.match(plan.notice, /It sent nothing after the first of these inputs\.$/);
+  });
+
+  it('quotes what the stopped turn already sent, and not when the switch failed', async (t) => {
+    const { store, policy, ingest } = setup(t);
+    ingest({ messageId: 'om_before1234567', chatId: 'oc_work12345678' });
+    store.appendCognitionJournal({ kind: 'outbound', chatId: 'oc_work12345678', text: 'answered the earlier one' });
+    const cut = ingest({ messageId: 'om_cutoff1234567', chatId: 'oc_work12345678' });
+    store.appendCognitionJournal({ kind: 'outbound', chatId: 'oc_work12345678', text: 'on it, cloning the repo' });
+    store.appendCognitionJournal({ kind: 'outbound', status: 'PENDING', chatId: 'oc_work12345678', text: 'cloned' });
+
+    const lines = policy.resumeInterrupted({ inboundSeqs: [cut.seq], from: 'pi', to: 'codex' }).notice.split('\n');
+    assert.equal(lines[1], 'What it sent after the first of these inputs:');
+    assert.match(lines[2], /from=me\] on it, cloning the repo$/);
+    assert.match(lines[3], /from=me outcome=uncertain\] cloned$/);
+    assert.equal(lines.length, 5, 'nothing sent before the first input');
+    // The old runtime's own session has what it sent.
+    const failed = policy.resumeInterrupted({ inboundSeqs: [cut.seq], from: 'pi', to: 'codex', failed: true });
+    assert.match(failed.notice, /switch to codex failed, so you stay on pi/);
+    assert.doesNotMatch(failed.notice, /cloning/);
+  });
+});

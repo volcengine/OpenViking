@@ -7,7 +7,15 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import nodeTest from 'node:test';
+// The Windows preview does not ship the updater (docs/windows.md), so its
+// suite has no Windows behavior to measure. Keep the same cases for POSIX.
+const test = (name, ...rest) => {
+  const fn = rest.pop();
+  const options = typeof rest[0] === 'object' && rest[0] !== null ? rest[0] : {};
+  const skip = process.platform === 'win32' ? 'the Windows preview does not ship the updater' : false;
+  return nodeTest(name, { ...options, ...(skip ? { skip } : {}) }, fn);
+};
 import { publishLatestRelease } from '../src/publisher.mjs';
 
 const BASE = 'https://releases.example/superagent';

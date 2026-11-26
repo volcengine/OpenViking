@@ -57,7 +57,7 @@ Follow the wizard:
 
 For Feishu, scan a QR code to create or select an app, or enter its App ID and App Secret manually. An existing app must use a long connection and must not also be monitored by another bot service. Setup asks whether to allow reading messages as your user; review [message access](docs/usage-reference.md#message-access) before authorizing.
 
-Other channel setup: [WeChat](docs/installation-reference.md#wechat-setup) · [QQ](docs/installation-reference.md#qq-setup) · [Telegram](docs/installation-reference.md#telegram-setup) · [Slack](docs/installation-reference.md#slack-setup) · [QQ over OneBot](docs/installation-reference.md#onebot-setup).
+Other channel setup: [WeChat](docs/installation-reference.md#wechat-setup) · [QQ](docs/installation-reference.md#qq-setup) · [Telegram](docs/installation-reference.md#telegram-setup) · [Slack](docs/installation-reference.md#slack-setup) · [QQ over OneBot](docs/installation-reference.md#onebot-setup) · [DingTalk](docs/installation-reference.md#dingtalk-group-setup).
 
 ## Verify and manage
 
@@ -71,7 +71,7 @@ Open `http://127.0.0.1:3737` to view activity. Send a specific task in a direct 
 
 - Add or edit instances and channels, or remove an instance: `ov-superagent setup`.
 - Renew expired authentication: `ov-superagent login <channel> [instance]`.
-- Upgrade on macOS / Linux: `ov-superagent upgrade primary`. On Windows, stop OpenViking SuperAgent, rerun the PowerShell installer, then run `ov-superagent restart`; automatic upgrades are not supported yet. See [upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback).
+- Upgrade: `ov-superagent upgrade primary`. It works on macOS / Linux and on Windows, where it installs the newest Windows preview through the PowerShell installer the release ships. See [upgrade and rollback](docs/installation-reference.md#upgrade-and-rollback).
 - Enable startup at login: `ov-superagent autostart enable`. On Linux, use `loginctl enable-linger` if the service must continue after logout; on Windows it adds a per-user Startup-folder entry, with no service or administrator.
 - Change the interface language: `ov-superagent --lang zh` or `ov-superagent --lang en`.
 

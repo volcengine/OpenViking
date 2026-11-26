@@ -12,7 +12,7 @@ import { sanitizePiEnv } from './pi.mjs';
 import { sanitizeClaudeEnv } from './claude.mjs';
 import { sanitizeCodexEnv } from './codex.mjs';
 import { sanitizeTraexEnv } from './traex.mjs';
-import { PI_MCP_EXTENSION, PI_SHELL_MAX_S, piCommand, piShellTimeoutEnv } from './pi-runtime.mjs';
+import { PI_MCP_EXTENSION, PI_SHELL_MAX_S, piCommand, piShellTimeoutEnv, piToolArgs } from './pi-runtime.mjs';
 import { claudeIsolationSettings, codexConfigFile, codexIsolationArgs, piIsolationArgs, traexConfigFile } from './ov-isolation.mjs';
 import { safeError } from './logger.mjs';
 import { TASK_INPUT_EVENTS, taskInputHookCommand } from './task-input-hook.mjs';
@@ -222,6 +222,7 @@ const RUNTIMES = {
         '--approve',
         ...isolation,
         '--extension', PI_MCP_EXTENSION,
+        ...piToolArgs(),
         ...(model ? ['--model', model] : []),
         prompt,
       ];
@@ -296,12 +297,37 @@ const RUNTIMES = {
 };
 
 export class WorkerExecutor {
-  constructor({ config, logger = null, settings = () => ({}), spawn = nodeSpawn }) {
-    Object.assign(this, { config, logger, settings, spawn });
+  // settings(): the router's { runtime, model, effort }, which a task without
+  // a model of its own follows on the router's runtime (tasks from before
+  // workers had settings of their own). preferences(task): the owner's and
+  // the requester's preferences for the turn's policy (daemon.mjs), or null.
+  constructor({ config, logger = null, settings = () => ({}), spawn = nodeSpawn, preferences = null }) {
+    Object.assign(this, { config, logger, settings, spawn, preferences });
+  }
+
+  // Read for every turn, so a preference changed while the task works counts
+  // from its next turn. A turn goes on without them when OpenViking is slow or
+  // down: the recall bounds the read and never rejects.
+  async preferencesFor(task) {
+    try {
+      return this.preferences ? await this.preferences(task) : null;
+    } catch (error) {
+      this.logger?.warn?.('worker_preferences_failed', { task: task.id, error: safeError(error) });
+      return null;
+    }
   }
 
   supports(runtime) {
     return WORKER_RUNTIMES.includes(runtime);
+  }
+
+  // The file a runtime keeps one of a task's sessions in, if it is still
+  // there: what a worker that takes the task over on another runtime reads.
+  transcriptFile(runtime, taskId, sessionId) {
+    if (!sessionId || !WORKER_RUNTIMES.includes(runtime)) return null;
+    const file = sessionFile(this.config, process.env, runtime, taskId, sessionId);
+    // The file itself, not a link to it: the path is handed to another worker.
+    try { return file ? fs.realpathSync(file) : null; } catch { return null; }
   }
 
   // Whether a task's last session can go on into a new round: 'kept',
@@ -315,8 +341,12 @@ export class WorkerExecutor {
     try { return fs.statSync(file).size > maxBytes ? 'large' : 'kept'; } catch { return 'deleted'; }
   }
 
-  // The model and effort of the router's runtime, when the task runs on it.
+  // The model and effort a task took when it started, reopened or moved to
+  // another runtime (worker-settings.mjs; '' is the CLI's own default). A
+  // task from before that follows the router's, when it runs on the router's
+  // runtime.
   modelFor(task) {
+    if (task.model != null || task.effort != null) return { model: task.model || null, effort: task.effort || null };
     const { runtime, model, effort } = this.settings();
     if (runtime !== task.runtime) return { model: null, effort: null };
     return { model: model && model !== runtime ? model : null, effort: effort || null };
@@ -331,7 +361,7 @@ export class WorkerExecutor {
       const scratch = path.join(this.config.dataDir, 'workers', task.id);
       fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
       fs.mkdirSync(task.workdir, { recursive: true });
-      const policy = assembleWorkerPolicy(this.config, { runtime: task.runtime });
+      const policy = assembleWorkerPolicy(this.config, { runtime: task.runtime, preferences: await this.preferencesFor(task) });
       const policyFile = path.join(scratch, 'worker-policy.md');
       fs.writeFileSync(policyFile, policy, { mode: 0o600 });
       const { model, effort } = this.modelFor(task);

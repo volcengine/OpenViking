@@ -9,7 +9,7 @@ import { classifyModelError, resolveRuntimeModelTarget } from './runtime-catalog
 // attempted within this window (prevents switch churn if the user moves back).
 export const MODEL_FALLBACK_COOLDOWN_MS = 5 * 60 * 1_000;
 
-function classifyRuntimeFailure(error, modelError) {
+export function classifyRuntimeFailure(error, modelError) {
   const message = String(error?.message ?? error ?? '');
   if (/\b(?:cancelled|canceled|abort|permission denied|unauthorized|forbidden|invalid api key|tool (?:error|failed)|business error)\b/i.test(message)) {
     return { blocked: true, recoverable: false };

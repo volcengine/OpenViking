@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -12,9 +13,10 @@ import { MAX_FILE_BYTES } from '../src/actions/content.mjs';
 import { Harness } from '../src/harness.mjs';
 import { normalizeEvent as normalizeConnectorEvent, deterministicFilter } from '../src/event.mjs';
 import { normalizeLarkMessage, normalizeLarkEvent } from '../src/connectors/lark-events.mjs';
-import { resolveCardAction, settledChoiceCard } from '../src/card-messages.mjs';
+import { editCard, resolveCardAction, settledChoiceCard } from '../src/card-messages.mjs';
 import { fakeConnectors, larkConnectors, larkSuccess as success } from './action-fixture.mjs';
 import { chatEvent } from './event-fixture.mjs';
+import { fileLink } from './symlink-fixture.mjs';
 
 const logger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
 const profile = 'test-profile';
@@ -52,7 +54,7 @@ function fixture(t, { thread = false, run } = {}) {
     config: { profile, workspace, tempDir, maxReplyChars: 30_000 }, store, connectors, logger,
   });
   const call = (tool, input) => service.call(tool, input, { authority });
-  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(() => { store.close(); removeTempDir(directory); });
   return { directory, workspace, tempDir, databasePath, store, service, call, calls: connectors.calls };
 }
 
@@ -98,11 +100,11 @@ it('sends a document snapshot from the workspace into the original thread and cl
 it('rejects traversal, URLs, escaped symlinks, directories, oversized files, and mixed bodies before sending', async (t) => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.directory, 'outside.pdf'), 'private');
-  fs.symlinkSync(path.join(f.directory, 'outside.pdf'), path.join(f.workspace, 'link.pdf'));
+  const linked = fileLink(path.join(f.directory, 'outside.pdf'), path.join(f.workspace, 'link.pdf'));
   fs.mkdirSync(path.join(f.workspace, 'folder'));
   const fd = fs.openSync(path.join(f.workspace, 'large.pdf'), 'w');
   fs.ftruncateSync(fd, MAX_FILE_BYTES + 1); fs.closeSync(fd);
-  for (const file_path of ['../outside.pdf', '/tmp/outside.pdf', 'https://example.com/a', 'link.pdf', 'folder', 'large.pdf']) {
+  for (const file_path of ['../outside.pdf', '/tmp/outside.pdf', 'https://example.com/a', ...(linked ? ['link.pdf'] : []), 'folder', 'large.pdf']) {
     await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent, file_path }));
   }
   await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent,
@@ -254,7 +256,7 @@ it('registers a cross-channel card where it landed, not where the decision came 
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
   const store = new Store(path.join(directory, 'state.sqlite3'), logger);
-  t.after(() => { store.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(() => { store.close(); removeTempDir(directory); });
   store.initializeCognition('pi', authority);
   const groupMessage = normalizeEvent({ type: 'im.message.receive_v1', event_id: 'evt-group',
     message_id: 'om_groupmsg123456', chat_id: chatId, chat_type: 'group', message_type: 'text',
@@ -292,4 +294,45 @@ it('validates card structure, size, mentions and choice keys without invoking th
     { choices: { ...question, timeout_seconds: 1 } },
   ]) await assert.rejects(() => f.call('send_message', { chat_id: chatId, decision_id: decisionEvent, ...body }));
   assert.equal(f.calls.length, 0);
+});
+
+// What the Lark connector throws when Lark refuses the edit of a card just clicked.
+const LOCKED = new Error('lark-cli update answered card failed: Failed to create card content, ext=ErrCode: 11310; ErrMsg: card action is lock; ');
+const UNIVERSAL = new Error('lark-cli update answered card failed: { "code": 230099, "message": "Failed to create card content, ext=ErrCode: 200800; ErrMsg: create universal card fail; " }');
+
+function cardEdits(outcomes) {
+  const calls = [];
+  return { calls, connectors: { async updateCard(messageId, card) {
+    calls.push({ messageId, card });
+    const outcome = outcomes[calls.length - 1];
+    if (outcome) throw outcome;
+    return { ok: true };
+  } } };
+}
+
+it('edits a card again while a click on it keeps it busy, up to four tries', async () => {
+  const card = { elements: [] };
+  const unlocked = cardEdits([LOCKED, UNIVERSAL]);
+  assert.deepEqual(await editCard(unlocked.connectors, 'om_locked1234567', card, { waitMs: 0 }), { tries: 3, superseded: false });
+  assert.equal(unlocked.calls.length, 3);
+
+  const stuck = cardEdits([LOCKED, LOCKED, LOCKED, LOCKED, LOCKED]);
+  await assert.rejects(editCard(stuck.connectors, 'om_locked1234567', card, { waitMs: 0 }), /ErrCode: 11310/);
+  assert.equal(stuck.calls.length, 4);
+
+  const old = cardEdits([new Error('message too old to edit')]);
+  await assert.rejects(editCard(old.connectors, 'om_locked1234567', card, { waitMs: 0 }), /too old/);
+  assert.equal(old.calls.length, 1, 'any other refusal is final');
+});
+
+it('stops waiting out the lock when a newer edit of the card is coming', async () => {
+  let newer = false;
+  const edits = cardEdits([LOCKED, LOCKED]);
+  const pending = editCard(edits.connectors, 'om_locked1234567', {}, { waitMs: 5, superseded: () => newer });
+  setTimeout(() => { newer = true; }, 1);
+  assert.deepEqual(await pending, { tries: 1, superseded: true });
+  assert.equal(edits.calls.length, 1);
+  const now = cardEdits([LOCKED]);
+  assert.deepEqual(await editCard(now.connectors, 'om_locked1234567', {}, { superseded: () => true }), { tries: 1, superseded: true },
+    'a newer edit already waiting: no wait at all');
 });

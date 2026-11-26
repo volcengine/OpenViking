@@ -22,6 +22,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { startActionApi, stopActionApi } from '../src/actions/api.mjs';
 import { createMcpHandler } from '../src/actions/mcp.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { Store } from '../src/store.mjs';
 import { fileURLToPath } from 'node:url';
@@ -67,7 +68,7 @@ function setup(t) {
 
 async function serve(t) {
   const state = setup(t);
-  const socketPath = path.join(state.directory, 'actions.sock');
+  const socketPath = localSocketPath(state.directory, 'actions');
   const server = await startActionApi({ socketPath, service: state.service, logger });
   t.after(() => stopActionApi(server));
   const endpoint = { socketPath, authority: TOKEN, client: 'mcp' };

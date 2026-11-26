@@ -25,17 +25,19 @@ export default function personalAgentMcp(pi) {
   // A router (workers scheduler) hands longer work to tasks: its own shell
   // commands are capped and may not sleep, and each run gets a few calls of
   // its own work tools; past them, the work belongs to a task. A capped
-  // command alone does not stop many short ones in a row.
+  // command alone does not stop many short ones in a row. Pi exposes either the
+  // bash tool or the powershell tool, so both obey the same rules.
   const shellLimit = Number(process.env.PERSONAL_AGENT_SHELL_LIMIT_S);
   const workBudget = Number(process.env.PERSONAL_AGENT_WORK_TOOL_BUDGET);
   const budget = new RouterToolBudget(workBudget);
+  const shellTool = (name) => name === 'bash' || name === 'powershell';
   if (shellLimit > 0) {
     pi.on('agent_start', () => { budget.reset(); });
     pi.on('tool_call', (event) => {
       const reason = budget.check(event.toolName);
       if (reason) return { block: true, reason };
-      if (event.toolName !== 'bash' || !event.input) return undefined;
-      if (/(^|[\s;&|(`])sleep\s/.test(String(event.input.command ?? ''))) {
+      if (!shellTool(event.toolName) || !event.input) return undefined;
+      if (/(^|[\s;&|(`])(?:sleep|Start-Sleep|Wait-(?:Event|Process|Job|Debugger))\b/i.test(String(event.input.command ?? ''))) {
         return { block: true, reason: 'Your own shell may not sleep or wait; hand work that waits to a task (task_create).' };
       }
       const timeout = Number(event.input.timeout);
@@ -45,14 +47,14 @@ export default function personalAgentMcp(pi) {
   }
   // A session that does the work itself (a worker, or a router that hands
   // nothing off) may run long commands, but one that never ends must not hold
-  // it: Pi's bash has no default timeout. A command without one gets the
+  // it: Pi's shell tools have no default timeout. A command without one gets the
   // default; one that asks for more than the most gets the most. Neither cuts
   // short a timeout the model chose within it, nor refuses sleep.
   const shellDefault = Number(process.env.PERSONAL_AGENT_SHELL_DEFAULT_S);
   const shellMax = Number(process.env.PERSONAL_AGENT_SHELL_MAX_S);
   if (!(shellLimit > 0) && shellDefault > 0) {
     pi.on('tool_call', (event) => {
-      if (event.toolName !== 'bash' || !event.input) return undefined;
+      if (!shellTool(event.toolName) || !event.input) return undefined;
       const timeout = Number(event.input.timeout);
       const chosen = timeout > 0 ? timeout : shellDefault;
       event.input.timeout = shellMax > 0 ? Math.min(chosen, shellMax) : chosen;

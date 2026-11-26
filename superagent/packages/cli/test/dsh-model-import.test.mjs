@@ -45,6 +45,7 @@ import { deriveKeyRef, importPlan } from '../src/dsh-model.mjs';
 // missing symbol instead of taking every other case down with a load error.
 import * as dshModelModule from '../src/dsh-model.mjs';
 import { setLanguage } from '../src/i18n.mjs';
+import { installNodeCommand } from '../../daemon/test/fake-executable.mjs';
 
 const BIN = fileURLToPath(new URL('../bin/ov-superagent.mjs', import.meta.url));
 
@@ -827,8 +828,7 @@ function fixture(t, { state = null } = {}) {
   }, null, 2)}\n`);
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-dsh-'));
   t.after(() => fs.rmSync(fakeDir, { recursive: true, force: true }));
-  const script = path.join(fakeDir, 'dsh');
-  fs.writeFileSync(script, FAKE_DSH, { mode: 0o755 });
+  const script = installNodeCommand(fakeDir, 'dsh', { body: FAKE_DSH });
   const stateDir = path.join(fakeDir, 'state');
   fs.mkdirSync(stateDir, { mode: 0o700 });
   const statePath = path.join(stateDir, 'state.json');

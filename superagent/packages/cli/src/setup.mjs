@@ -30,6 +30,7 @@ import {
   collectDshModelDraft, dshSettingsDocument, validateDshModelDraft, writeDshModelDraft,
 } from './dsh-model-wizard.mjs';
 import { resolveRuntimeModelTarget } from '../../daemon/src/runtime-catalog.mjs';
+import { WORKER_RUNTIMES } from '../../daemon/src/worker-executor.mjs';
 import {
   DSH_HOME_SHARED, defaultDshSkillRoots, dshHomePath, dshSkillDirectories, dshSkillRootChoices,
 } from '../../daemon/src/dsh-config.mjs';
@@ -43,11 +44,12 @@ import { LANGUAGES, languageChoice, list, saveLanguage, setLanguage, t } from '.
 import { releaseInfo } from './version.mjs';
 import { EmailCancelled, askEmail, emailAccountPath, emailInstanceId, mailboxesOf, writeEmailAccount } from './email.mjs';
 import { GoBack } from './prompt.mjs';
-import { IM_LABELS, connectorsOf, ignoredFieldsNotice, imList, primaryMeaning } from './instances.mjs';
+import { IM_LABELS, connectorsOf, ignoredFieldsNotice, imLabel, imList, primaryMeaning } from './instances.mjs';
 import { connectTelegram } from './telegram.mjs';
 import { connectQQ } from './qq.mjs';
 import { connectSlack } from './slack.mjs';
 import { connectOneBot, groupDefault, policyPath } from './onebot.mjs';
+import { connectDingTalk } from './dingtalk.mjs';
 
 // `ov-superagent setup`: add, change or remove an instance. A new instance is asked
 // question by question; a change is a list of every setting with its current
@@ -58,6 +60,13 @@ import { connectOneBot, groupDefault, policyPath } from './onebot.mjs';
 // It is also the one place that connects an IM; `ov-superagent login` only renews.
 
 const PERMISSIONS = new URL('../../../permission.json', import.meta.url);
+
+// A home directory may contain spaces; a command shown for copy/paste must
+// quote its path. superagentCommand returns the bare name when bin is on PATH.
+function displayCommand(env) {
+  const command = superagentCommand(env);
+  return /\s/.test(command) ? `"${command}"` : command;
+}
 
 function resolveLarkCli(env) {
   const bundled = bundledLarkCli({ env });
@@ -103,10 +112,12 @@ const imChoices = () => [
     hint: t('腾讯官方机器人；需要 AppID / AppSecret 和本人私聊验证码', 'official Tencent bot; needs AppID / AppSecret and a private-chat verification code') },
   { label: IM_LABELS.onebot, value: 'onebot',
     hint: t('用 NapCat、LLOneBot 或 Lagrange 登录的普通 QQ 号；需要 WebSocket 地址、access token 和私聊口令', 'an ordinary QQ account logged in to NapCat, LLOneBot or Lagrange; needs the WebSocket address, an access token and a code in a private message') },
+  { label: IM_LABELS.dingtalk, value: 'dingtalk',
+    hint: t('Stream 群机器人，需要另选一个主渠道', 'Stream group bot; pick an owner-capable primary IM as well') },
 ].filter(choice => capabilities.connectors[choice.value] !== false);
 
 // IMs connected by pasting tokens rather than scanning a code.
-const TOKEN_IMS = ['telegram', 'slack', 'qq', 'onebot'];
+const TOKEN_IMS = ['telegram', 'slack', 'qq', 'onebot', 'dingtalk'];
 
 // Where the Feishu/Lark bot app comes from. The same scan page can create an
 // app or pick one the scanner owns or administers. A test tenant cannot scan
@@ -230,6 +241,7 @@ const policyRefusal = (appId, error, { made = false, typed = false } = {}) => t(
 );
 
 const ims = (state) => state.connectors.filter((connector) => connector !== 'email');
+const primaryIms = (state) => ims(state).filter((connector) => connector !== 'dingtalk');
 
 // Which instance to change, or a new one. An instance whose Feishu/Lark app
 // lacks what this release needs says so; its 飞书应用 setting completes it.
@@ -290,6 +302,7 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     workspace: current?.workspace ?? path.join(homeDir, 'superagent-workspace', id),
     runtime: kept ?? runtimes.find((runtime) => runtime.available && (!current || runtime.model === current.model)),
     connectors,
+    externalConnectors: current?.externalConnectors ?? [],
     channel: current?.channel ?? connectors[0],
     ovConfig: current?.ovConfig,
     // A DSH route this run adds, kept in memory until the instance is saved;
@@ -481,10 +494,11 @@ function note(ctx, text) {
 
 // A primary IM that was dropped moves to what is left, Feishu first.
 function keepChannel(ctx, state) {
-  if (ims(state).includes(state.channel)) return;
-  const next = ims(state).includes('lark') ? 'lark' : ims(state)[0];
-  note(ctx, t(`主渠道原来是${IM_LABELS[state.channel]}，它不再接入，改成${IM_LABELS[next]}`,
-    `The primary channel was ${IM_LABELS[state.channel]}, which is no longer connected; it is now ${IM_LABELS[next]}`));
+  const choices = primaryIms(state);
+  if (choices.includes(state.channel)) return;
+  const next = choices.includes('lark') ? 'lark' : choices[0];
+  note(ctx, t(`主渠道原来是${imLabel(state.channel)}，它不再接入，改成${imLabel(next)}`,
+    `The primary channel was ${imLabel(state.channel)}, which is no longer connected; it is now ${imLabel(next)}`));
   state.channel = next;
 }
 
@@ -522,9 +536,20 @@ async function askIms(ctx, state) {
   let connectors;
   for (;;) {
     const choices = imChoices();
+    // An instance whose only IM is an external program can confirm this step
+    // without ticking a built-in one. The default still requires one.
+    const custom = (state.externalConnectors ?? []).map((item) => item.id);
     connectors = await ctx.prompter.multiselect(t('接入哪些 IM', 'Which IMs to connect'), choices,
-      { initial: choices.map(({ value }, index) => (state.connectors.includes(value) ? index : -1)).filter((index) => index >= 0) });
-    if (connectors.some((connector) => connector !== 'email')) break;
+      { initial: choices.map(({ value }, index) => (state.connectors.includes(value) ? index : -1)).filter((index) => index >= 0),
+        min: custom.length > 0 ? 0 : 1 });
+    if (primaryIms({ connectors }).length || custom.length > 0) {
+      connectors = [...connectors, ...custom.filter((id) => !connectors.includes(id))];
+      break;
+    }
+    if (connectors.includes('dingtalk')) {
+      ctx.prompter.warn(t('钉钉群机器人需要另选一个支持 owner 私聊的主渠道。', 'DingTalk needs a separate primary IM with owner direct messages.'));
+      continue;
+    }
     ctx.prompter.warn(t('邮箱不能单独接：新邮件提醒和回信确认要发到飞书、微信、Telegram、Slack 或 QQ，再选一个。',
       'Email cannot be the only one: its alerts and reply approvals go to Feishu/Lark, WeChat, Telegram, Slack or QQ, so pick one of those too.'));
   }
@@ -600,18 +625,18 @@ async function askLarkApp(ctx, state) {
 // The primary IM is its own question, Feishu unless it is left out; with a
 // single IM there is nothing to ask.
 async function askChannel(ctx, state) {
-  const choices = ims(state);
+  const choices = primaryIms(state);
   if (choices.length > 1) {
     const preferred = [state.channel, 'lark'].find((im) => choices.includes(im)) ?? choices[0];
     state.channel = await ctx.prompter.select(t(`主渠道（${primaryMeaning()}）`, `Primary channel (${primaryMeaning()})`),
-      choices.map((connector) => ({ label: IM_LABELS[connector], value: connector })),
+      choices.map((connector) => ({ label: imLabel(connector), value: connector })),
       { initial: choices.indexOf(preferred), label: t('主渠道', 'Primary channel') });
     return;
   }
   state.channel = choices[0];
   if (ctx.menu) {
-    note(ctx, t(`只接了${IM_LABELS[state.channel]}，主渠道只能是它；要换，先在「接入的 IM」里多接一个`,
-      `Only ${IM_LABELS[state.channel]} is connected, so it is the primary channel; to change that, connect another IM first`));
+    note(ctx, t(`只接了${imLabel(state.channel)}，主渠道只能是它；要换，先在「接入的 IM」里多接一个`,
+      `Only ${imLabel(state.channel)} is connected, so it is the primary channel; to change that, connect another IM first`));
   }
 }
 
@@ -759,7 +784,7 @@ const SETTINGS = [
   { key: 'ims', label: () => t('接入的 IM', 'Connected IMs'), ask: askIms, shown: (state) => imList(state.connectors) },
   { key: 'larkApp', label: () => t('飞书应用', 'Feishu/Lark app'), ask: askLarkApp,
     shown: (state, { current, larkNeeds }) => larkAppShown(state, current, larkNeeds) },
-  { key: 'channel', label: () => t('主渠道', 'Primary channel'), ask: askChannel, shown: (state) => IM_LABELS[state.channel] },
+  { key: 'channel', label: () => t('主渠道', 'Primary channel'), ask: askChannel, shown: (state) => imLabel(state.channel) },
   { key: 'mailboxes', label: () => t('邮箱', 'Mailboxes'), ask: askMailboxes,
     shown: (state) => (mailboxList(state).length ? list(mailboxList(state).map(addressOf)) : t('没有接', 'none')) },
   { key: 'ovConfig', label: () => 'OpenViking', ask: (ctx) => ctx.editOV(),
@@ -1361,6 +1386,53 @@ export async function loginPi({ prompter, env }) {
   });
 }
 
+// The built-in Durable needs one provider key, not a login screen. Setup saves
+// it to the same secrets.env the daemon reads, so the runtime is usable in this
+// run and on every later start.
+const DURABLE_PROVIDERS = [
+  { value: 'DEEPSEEK_API_KEY', label: 'DeepSeek' },
+  { value: 'OPENAI_API_KEY', label: 'OpenAI' },
+  { value: 'ANTHROPIC_API_KEY', label: 'Anthropic' },
+  { value: 'ARK_API_KEY', label: '火山方舟 Ark' },
+];
+
+function durableSecretsFile(env) {
+  const configured = String(env.OV_SUPERAGENT_SECRETS_FILE || '').trim();
+  if (configured) return configured;
+  return (env.HOME || env.USERPROFILE) ? path.join(env.HOME || env.USERPROFILE, '.ov-superagent', 'secrets.env') : '';
+}
+
+function saveDurableProviderKey(env, name, value) {
+  const file = durableSecretsFile(env);
+  if (!file) throw new Error(t('找不到 HOME，无法保存密钥', 'HOME is not set, so the key cannot be saved'));
+  let text = '';
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const lines = text.split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith(`${name}=`));
+  lines.push(`${name}=${value}`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${lines.join('\n')}\n`, { mode: 0o600 });
+  try { fs.chmodSync(file, 0o600); } catch {}
+  return file;
+}
+
+export async function configureDurable({ prompter, env }) {
+  const provider = await prompter.select(t('内置的 Durable 用哪个模型提供方', 'Which provider should the built-in Durable use'),
+    DURABLE_PROVIDERS, { back: false });
+  const key = String(await prompter.secret(t('粘贴 API key（不回显，只写入 secrets.env）',
+    'Paste the API key (hidden; saved only to secrets.env)')) || '').trim();
+  if (!key) {
+    prompter.warn(t('没有填 key，Durable 仍然不可用', 'No key entered, so Durable is still unavailable'));
+    return false;
+  }
+  const file = saveDurableProviderKey(env, provider, key);
+  prompter.success(t(`密钥已写入 ${file}`, `Key saved to ${file}`));
+  return true;
+}
+
 export function greet({ larkCliBin, profile, userId, text }) {
   return new LarkCli(larkCliBin).sendText({ profile, userId, text });
 }
@@ -1479,25 +1551,33 @@ async function ensureRuntime({ prompter, env, detect, connect, live }, runtimes)
     prompter.warn(t('没有可用的 agent 运行时：', 'No agent runtime can run yet:'));
     const labelWidth = Math.max(...detected.map((runtime) => width(runtime.label)));
     for (const runtime of detected) prompter.write(`      ${padEnd(runtime.label, labelWidth)}  ${runtime.note}\n`);
-    const later = t(`登录好其中一个后，重新运行 ${superagentCommand(env)} setup。`, `Log in to one of them, then run ${superagentCommand(env)} setup again.`);
+    const later = t(`登录好其中一个后，重新运行 ${displayCommand(env)} setup。`, `Log in to one of them, then run ${displayCommand(env)} setup again.`);
     if (!prompter.tty || !connect.pi) {
       prompter.info(later);
       return { stopped: 'unavailable' };
     }
-    const next = await prompter.select(t('现在怎么办', 'What now'), [
-      { label: t('用内置的 Pi，现在登录一个模型', 'Use the built-in Pi and log in to a model now'), value: 'pi',
-        hint: t('在 Pi 里输入 /login，登录后 /quit 回到这里', 'type /login in Pi, then /quit to come back') },
-      { label: t('先退出，我去登录 Codex 或 Claude Code', 'Quit; I will log in to Codex or Claude Code'), value: 'quit' },
-    ], { back: false });
+    const choices = [];
+    if (connect.pi) {
+      choices.push({ label: t('用内置的 Pi，现在登录一个模型', 'Use the built-in Pi and log in to a model now'), value: 'pi',
+        hint: t('在 Pi 里输入 /login，登录后 /quit 回到这里', 'type /login in Pi, then /quit to come back') });
+    }
+    choices.push({ label: t('用内置的 Durable，现在填一个模型密钥', 'Use the built-in Durable and enter a model key now'), value: 'durable',
+      hint: t('填一个 provider 的 API key，写进 secrets.env', 'enter one provider API key; saved to secrets.env') });
+    choices.push({ label: t('先退出，我去登录 Codex 或 Claude Code', 'Quit; I will log in to Codex or Claude Code'), value: 'quit' });
+    const next = await prompter.select(t('现在怎么办', 'What now'), choices, { back: false });
     if (next === 'quit') {
       prompter.info(later);
       return { stopped: 'quit' };
     }
-    // Pi takes the whole screen while it runs.
-    live?.release();
-    await connect.pi({ prompter, env });
-    live?.resume();
-    prompter.redraw();
+    if (next === 'pi') {
+      // Pi takes the whole screen while it runs.
+      live?.release();
+      await connect.pi({ prompter, env });
+      live?.resume();
+      prompter.redraw();
+    } else {
+      await configureDurable({ prompter, env });
+    }
     detected = await step(prompter, t('再看一次有哪些 agent', 'Looking for agents again'), () => detect.runtimes({ env }),
       (again) => (again.some((runtime) => runtime.available)
         ? found(again.filter((runtime) => runtime.available).map((runtime) => runtime.label)) : t('还是没有能用的 agent', 'Still no usable agent')));
@@ -1553,7 +1633,7 @@ function manifestModel(state, current) {
 // draft in hand; the hint no longer prints field values, because the wizard
 // will ask for them.
 function dshModelHint({ env, state }) {
-  const cli = superagentCommand(env);
+  const cli = displayCommand(env);
   const instance = state.id ? ` --instance ${state.id}` : '';
   return t(
     `补一个 model route：${cli} dsh model${instance}\n`
@@ -1698,6 +1778,7 @@ function connectionSteps(prompter, connectors, { saving = false, larkSource = 's
     if (im === 'qq') return t('QQ AppID / AppSecret + 私聊验证码绑定', 'QQ AppID / AppSecret + private-chat verification code');
     if (im === 'slack') return t('Slack 新建或选已有 App + 两个 token + 私聊口令绑定', 'Slack app (new or existing) + two tokens + a code in a direct message');
     if (im === 'onebot') return t(`${IM_LABELS.onebot} WebSocket 地址 + access token + 私聊口令绑定`, `${IM_LABELS.onebot} WebSocket address + access token + a code in a private message`);
+    if (im === 'dingtalk') return t('钉钉 AppKey + AppSecret', 'DingTalk AppKey + AppSecret');
     const scans = scansOf(im, larkSource, larkAccess);
     return t(`${IM_LABELS[im]} ${scans} 次`, `${IM_LABELS[im]} ${scans} ${scans === 1 ? 'scan' : 'scans'}`);
   });
@@ -1772,7 +1853,7 @@ async function setupFlow({
   dshModels = null,
   configureOV = configureOpenViking,
   soul = null,
-  connect = { lark: connectLark, weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, email: askEmail, greet, pi: loginPi },
+  connect = { lark: connectLark, weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, dingtalk: connectDingTalk, email: askEmail, greet, pi: loginPi },
   control = { start: startCommand, restart: restartCommand, autostart: autostartCommand },
   listen = larkMessageListener,
   allocate = allocatePort,
@@ -1782,7 +1863,7 @@ async function setupFlow({
   registrations,
 }) {
   const out = (text) => prompter.write(text);
-  const cli = superagentCommand(env);
+  const cli = displayCommand(env);
   // The manifest is read before detection: a binary path pinned there is what the
   // daemon runs, so the probe has to see it too.
   const { path: configPath, value: manifest, ignored } = readManifest(env);
@@ -1938,6 +2019,11 @@ async function setupFlow({
     delete agent.ovRecallScope;
     delete agent.ovRemember;
     Object.assign(agent, state.switches);
+    // How inputs reach the model (agents[].scheduler), chosen once, for a new
+    // instance: workers on a runtime workers run on, legacy elsewhere. An edit
+    // keeps what the instance has, set here or by hand. The manifest's own
+    // default stays legacy, so an instance set up before is never switched.
+    if (!current) agent.scheduler = WORKER_RUNTIMES.includes(state.runtime?.id) ? 'workers' : 'legacy';
     if (emailAccounts.length) agent.emailAccounts = emailAccounts;
     else delete agent.emailAccounts;
     return withDefaultTempDir(agent, { OV_SUPERAGENT_TEMP_DIR: env.OV_SUPERAGENT_TEMP_DIR ?? manifest?.env?.OV_SUPERAGENT_TEMP_DIR });
@@ -1981,7 +2067,7 @@ async function setupFlow({
     state.switches.meetingNotes = defaultMeetingNotes(state, ctx.agents, current);
     const addresses = mailPlan(state).added;
     const channels = ims(state).length > 1
-      ? t(`${imList(ims(state))}，主渠道：${IM_LABELS[state.channel]}`, `${imList(ims(state))}; primary: ${IM_LABELS[state.channel]}`)
+      ? t(`${imList(ims(state))}，主渠道：${imLabel(state.channel)}`, `${imList(ims(state))}; primary: ${imLabel(state.channel)}`)
       : imList(ims(state));
     table(prompter, t(`将添加实例 ${state.id}`, `New instance ${state.id}`), [
       [t('机器人', 'Bot'), `${state.displayName} · ${state.runtime.label}`],
@@ -2096,7 +2182,11 @@ async function setupFlow({
         await connect.qq({ plan, prompter, fetchImpl, canGoBack: prompter.tty && !bound });
         bound = true;
       }
-      if (newIms.includes('onebot')) await connect.onebot({ plan, prompter, canGoBack: prompter.tty && !bound });
+      if (newIms.includes('onebot')) {
+        await connect.onebot({ plan, prompter, canGoBack: prompter.tty && !bound });
+        bound = true;
+      }
+      if (newIms.includes('dingtalk')) await connect.dingtalk({ plan, prompter, canGoBack: prompter.tty && !bound });
       break;
     } catch (error) {
       if (!(error instanceof GoBack)) throw error;
@@ -2250,6 +2340,8 @@ async function setupFlow({
     next.push(['Slack', t('私聊机器人发任务；要它参与频道，在频道里 /invite 它；命令前加个空格（ /new）',
       'Message the bot directly; /invite it to channels it should join; put a space before commands ( /new)')]);
   }
+  if (newIms.includes('dingtalk')) next.push([IM_LABELS.dingtalk,
+    t('把机器人添加到企业内部群，再 @ 它发送文本。', 'Add the bot to an internal group and mention it in a text message.')]);
   if (newIms.includes('onebot')) {
     const policy = shortenHome(policyPath(plan.dataDir), homeDir);
     // What is in force: the default, or what a policy file the owner wrote says.
@@ -2336,10 +2428,11 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
     const policy = POLICY_SWITCHES.has(key);
     changes.push(t(`${label}：${arrow}${policy ? '（模型会开一次新的会话）' : ''}`, `${label}: ${arrow}${policy ? ' (the model starts a new session)' : ''}`));
   }
-  for (const im of ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']) {
+  for (const im of ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk']) {
     if (!was.includes(im) && after.connectors.includes(im)) {
       changes.push(im === 'qq' ? t('接入QQ（需要 AppID / AppSecret 和私聊验证码）', 'Connect QQ (needs AppID / AppSecret and a private-chat verification code)')
         : im === 'onebot' ? t(`接入${IM_LABELS[im]}（需要 WebSocket 地址、access token 和私聊口令）`, `Connect ${IM_LABELS[im]} (needs the WebSocket address, an access token and a code)`)
+        : im === 'dingtalk' ? t('接入钉钉（需要 Stream 群机器人的 AppKey 和 AppSecret）', 'Connect DingTalk (needs the Stream bot AppKey and AppSecret)')
         : im === 'telegram' ? t(`接入${IM_LABELS[im]}（需要 Bot token 和 Start 绑定）`, `Connect ${IM_LABELS[im]} (needs a bot token and Start)`)
         : im === 'slack' ? t(`接入${IM_LABELS[im]}（需要新建或选已有 App、两个 token 和私聊口令绑定）`, `Connect ${IM_LABELS[im]} (needs a new or existing app, two tokens and a code)`)
           : t(`接入${IM_LABELS[im]}（需要扫码）`, `Connect ${IM_LABELS[im]} (needs a scan)`));
@@ -2353,7 +2446,7 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
     changes.push(t(`换飞书应用：${larkAppShown(state, before)}（需要扫码）`, `Another Feishu/Lark app: ${larkAppShown(state, before)} (needs a scan)`));
   }
   if ((before.channel ?? was[0]) !== after.channel) {
-    changes.push(`${t('主渠道：', 'Primary channel: ')}${IM_LABELS[before.channel ?? was[0]]} → ${IM_LABELS[after.channel]}`);
+    changes.push(`${t('主渠道：', 'Primary channel: ')}${imLabel(before.channel ?? was[0])} → ${imLabel(after.channel)}`);
   }
   for (const address of mailboxes.added) changes.push(t(`接入邮箱 ${address}`, `Add mailbox ${address}`));
   for (const address of mailboxes.updated) changes.push(t(`更新邮箱 ${address} 的密码`, `New password for ${address}`));

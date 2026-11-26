@@ -17,6 +17,12 @@ function home(t) {
   return directory;
 }
 
+// A path is data in the unit, not a pattern: escape the separators and other
+// metacharacters so the assertion still matches when the test host is Windows.
+function literal(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function run(homeDir, platform, action, exec = async () => ({ stdout: '' })) {
   const calls = [];
   let output = '';
@@ -37,9 +43,9 @@ test('Linux: a systemd user unit that runs ov-superagent start with the enabling
   });
   assert.equal(enabled.code, 0);
   const unit = fs.readFileSync(path.join(directory, '.config', 'systemd', 'user', 'superagent.service'), 'utf8');
-  assert.match(unit, new RegExp(`ExecStart=${directory}/\\.ov-superagent/bin/ov-superagent start`));
+  assert.match(unit, new RegExp(`ExecStart=${literal(path.join(directory, '.ov-superagent', 'bin', 'ov-superagent'))} start`));
   assert.match(unit, /Environment=PATH=\/opt\/agents\/bin:\/usr\/bin/);
-  assert.match(unit, new RegExp(`PIDFile=${directory}/\\.ov-superagent/pm2/pm2\\.pid`));
+  assert.match(unit, new RegExp(`PIDFile=${literal(path.join(directory, '.ov-superagent', 'pm2', 'pm2.pid'))}`));
   assert.deepEqual(enabled.calls, [
     ['loginctl', 'show-user', '501', '--property=Linger', '--value'],
     ['loginctl', 'enable-linger', '501'],

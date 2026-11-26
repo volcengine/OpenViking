@@ -18,13 +18,17 @@ import {
 
 const execFile = promisify(execFileCallback);
 export const RELEASE_METADATA = 'release.json';
+// A Windows preview package describes itself in windows-preview.json; both files
+// name the version, platform and commit the updater reports.
+export const WINDOWS_RELEASE_METADATA = 'windows-preview.json';
+const RELEASE_METADATA_FILES = [RELEASE_METADATA, WINDOWS_RELEASE_METADATA];
 
 function isInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
 }
 
-async function currentRelease(baseDir) {
+export async function currentRelease(baseDir) {
   // `baseDir` may be reached through a symlink (for example /home ->
   // /srv/home); compare canonical paths.
   const releasesRoot = await realpath(path.join(baseDir, 'releases')).catch((error) => {
@@ -42,18 +46,29 @@ async function currentRelease(baseDir) {
 
 export async function readReleaseMetadata(release) {
   if (!release) return null;
-  try {
-    return JSON.parse(await readFile(path.join(release, RELEASE_METADATA), 'utf8'));
-  } catch (error) {
-    if (error?.code === 'ENOENT' || error instanceof SyntaxError) return null;
-    throw error;
+  for (const name of RELEASE_METADATA_FILES) {
+    try {
+      return JSON.parse(await readFile(path.join(release, name), 'utf8'));
+    } catch (error) {
+      if (error?.code === 'ENOENT' || error instanceof SyntaxError) continue;
+      throw error;
+    }
   }
+  return null;
 }
+
+// A directory link needs a type on Windows: a junction, which is what the
+// PowerShell installer writes and what needs no privilege to create. POSIX takes
+// no type at all.
+const DIRECTORY_LINK = process.platform === 'win32' ? 'junction' : undefined;
 
 async function atomicSymlink(target, linkPath) {
   const temporary = `${linkPath}.pending-${process.pid}-${Date.now()}`;
-  await symlink(target, temporary);
+  await symlink(target, temporary, DIRECTORY_LINK);
   try {
+    // Windows cannot rename a directory link over an existing one, so the old
+    // link goes first - the same two steps the PowerShell installer takes.
+    if (DIRECTORY_LINK) await rm(linkPath, { force: true });
     await rename(temporary, linkPath);
   } catch (error) {
     await rm(temporary, { force: true });

@@ -7,7 +7,7 @@
 export const ROUTER_WORK_TOOL_BUDGET = 6;
 export const ROUTER_SHELL_LIMIT_S = 30;
 const WORK_TOOLS = new Set([
-  'bash', 'shell', 'shell_command', 'exec_command',
+  'bash', 'powershell', 'shell', 'shell_command', 'exec_command',
   'read', 'read_file', 'edit', 'edit_file', 'write', 'write_file', 'apply_patch',
   'multiedit', 'notebookedit', 'grep', 'grep_files', 'find', 'glob', 'ls', 'list_dir',
   'websearch', 'webfetch', 'view_image',

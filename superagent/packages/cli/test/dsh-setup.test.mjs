@@ -78,6 +78,7 @@ test('DSH pins its binary like every other runtime and probes with the manifest 
   const manifest = h.manifest();
   assert.deepEqual(manifest.env, { DSH_BIN: '/opt/dsh/bin/dsh' });
   assert.equal(manifest.agents[0].model, 'dsh');
+  assert.equal(manifest.agents[0].scheduler, 'legacy', 'workers do not run on DSH');
   assert.equal(manifest.agents[0].dshHomeMode, 'isolated');
   assert.deepEqual(manifest.agents[0].dshSkillRoots, [
     'workspace-dsh', 'project-agents', 'data-dsh', 'data-agents',

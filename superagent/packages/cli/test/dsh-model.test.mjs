@@ -4,12 +4,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { addModelOps, modelIdProblem, parseModelId } from '../src/dsh-model.mjs';
 import { setLanguage } from '../src/i18n.mjs';
+import { installNodeCommand } from '../../daemon/test/fake-executable.mjs';
 
 // The CLI runs are spawned with OV_SUPERAGENT_LANG=en; the in-process builder assertions
 // below read the messages directly, so the test process speaks English too.
@@ -267,8 +269,7 @@ function fixture(t, { agents = ['primary'], state = null } = {}) {
 
   const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-dsh-'));
   t.after(() => fs.rmSync(fakeDir, { recursive: true, force: true }));
-  const script = path.join(fakeDir, 'dsh');
-  fs.writeFileSync(script, FAKE_DSH, { mode: 0o755 });
+  const script = installNodeCommand(fakeDir, 'dsh', { body: FAKE_DSH });
   const stateDir = path.join(fakeDir, 'state');
   fs.mkdirSync(stateDir, { mode: 0o700 });
   const statePath = path.join(stateDir, 'state.json');
@@ -403,7 +404,7 @@ test('list shows declared routes, catalogue models and credential state', (t) =>
 
   const text = run(f, ['list', '--instance', 'primary']);
   assert.equal(text.status, 0);
-  assert.match(text.stdout, /instance primary \(.*data\/primary\)/);
+  assert.match(text.stdout, /instance primary \(.*data[\\/]primary\)/);
   assert.match(text.stdout, /deepseek {2}DeepSeek Gateway {2}openai-completions {2}http:\/\/127\.0\.0\.1:8080\/v1/);
   assert.match(text.stdout, /deepseek\/deepseek-chat {2}DeepSeek Chat {2}\[text, image\]/);
   assert.match(text.stdout, /key DEEPSEEK_API_KEY {2}credential ready/);
@@ -817,7 +818,7 @@ test('repair backs up a hand-broken document, writes the minimal one, then verif
   assert.match(result.stdout, /Verified: 0 route\(s\), revision 0/);
   // JSON is a YAML subset: the recovery document is one legal entry row.
   assert.equal(fs.readFileSync(document, 'utf8'), '[{"id":"llm-pi-ai"}]\n');
-  assert.equal(fs.statSync(document).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(document).mode & 0o777, 0o600);
   const backups = fs.readdirSync(path.dirname(document)).filter((name) => name.includes('.bak-'));
   assert.equal(backups.length, 1);
   assert.equal(fs.readFileSync(path.join(path.dirname(document), backups[0]), 'utf8'), broken);
@@ -905,8 +906,7 @@ test('repair changes nothing when the probe cannot answer', (t) => {
   assert.deepEqual(fs.readdirSync(path.dirname(document)).filter((name) => name.endsWith('.tmp')), []);
 
   // A DSH that starts and exits before answering at all.
-  const exiting = path.join(path.dirname(f.script), 'dsh-exit');
-  fs.writeFileSync(exiting, '#!/usr/bin/env node\nprocess.exit(0);\n', { mode: 0o755 });
+  const exiting = installNodeCommand(path.dirname(f.script), 'dsh-exit', { body: '#!/usr/bin/env node\nprocess.exit(0);\n' });
   const before = f.calls().length;
   const crashed = run(f, ['repair'], { env: { DSH_BIN: exiting } });
   assert.notEqual(crashed.status, 0, output(crashed));
@@ -944,7 +944,7 @@ test('repair rewrites the document only when the probe answers descriptor null',
   assert.match(result.stdout, /Before repair: the llm-pi-ai entry is not writable/);
   assert.match(result.stdout, /Verified: 0 route\(s\), revision 0/);
   assert.equal(fs.readFileSync(document, 'utf8'), '[{"id":"llm-pi-ai"}]\n');
-  assert.equal(fs.statSync(document).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(document).mode & 0o777, 0o600);
   const backups = backupsIn(path.dirname(document));
   assert.equal(backups.length, 1, 'exactly one backup of the original');
   assert.ok(fs.readFileSync(path.join(path.dirname(document), backups[0])).equals(original),
@@ -991,7 +991,11 @@ test('repair accepts a settings answer that says the document is unreadable', (t
 // document, a stray temporary, or a partial backup. The backup happens before
 // the atomic rename, so a directory that refuses new files leaves the original
 // document exactly as it was.
-test('a failed backup or write leaves the document untouched', (t) => {
+test('a failed backup or write leaves the document untouched', {
+  // chmod does not make a directory refuse new files on Windows, so the write
+  // cannot be failed that way there.
+  skip: process.platform === 'win32' ? 'a read-only directory needs POSIX permissions' : false,
+}, (t) => {
   const f = fixture(t);
   const document = settingsDocument(f);
   const directory = path.dirname(document);
@@ -1211,11 +1215,12 @@ test('the model id is validated with the shared grammar', () => {
 
 // A stand-in that records which executable ran and then exits, so a test can
 // prove *which* binary the control process resolved without speaking the
-// protocol. `process.argv[1]` is the path actually executed.
+// protocol. `FAKE_EXECUTABLE_SELF` is what the Windows shim reports for itself;
+// on POSIX `process.argv[1]` is the script the product started.
 const RECORDING_DSH = `#!/usr/bin/env node
 import fs from 'node:fs';
 fs.appendFileSync(process.env.P21_MARKER, JSON.stringify({
-  self: fs.realpathSync(process.argv[1]),
+  self: fs.realpathSync(process.env.FAKE_EXECUTABLE_SELF ?? process.argv[1]),
   argv: process.argv.slice(2),
   codexBin: process.env.CODEX_BIN ?? null,
 }) + '\\n');
@@ -1223,9 +1228,7 @@ process.exit(3);
 `;
 
 function recordingFake(directory, name) {
-  const script = path.join(directory, name);
-  fs.writeFileSync(script, RECORDING_DSH, { mode: 0o755 });
-  return fs.realpathSync(script);
+  return fs.realpathSync(installNodeCommand(directory, name, { body: RECORDING_DSH }));
 }
 
 // P2-1: `DSH_BIN` is the one DSH key the deployment manifest carries
