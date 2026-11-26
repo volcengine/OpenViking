@@ -15,7 +15,7 @@ Both are also served from `docs.openviking.net`, which is usually faster from ma
 
 ## BytePlus
 
-Follow the [BytePlus setup guide](../guides/27-byteplus-setup.md#connect-an-agent) for your agent. If you use the shared installer, select **OpenViking Managed Service → BytePlus** and enter your instance’s HTTPS service URL and API key. Older installers use **Custom URL**. The prompts below are for Volcengine and use its service URL.
+Follow the [BytePlus setup guide](../guides/27-byteplus-setup.md#connect-an-agent) for your agent. If you use the shared installer, select **OpenViking Managed Service → BytePlus** and confirm the service URL before entering your API key. Older installers use **Custom URL**. The prompts below are for Volcengine and use its service URL.
 
 ## Volcengine prompt
 

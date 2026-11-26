@@ -14,7 +14,7 @@ The installer asks for the harness and OpenViking credentials:
 2. Select **OpenViking Managed Service**, then **Volcengine** or **BytePlus**.
 
    - **Volcengine:** enter your service API key. The installer supplies the URL.
-   - **BytePlus:** enter your instance's full HTTPS service URL, then its API key. See [BytePlus setup](https://docs.openviking.ai/en/guides/27-byteplus-setup).
+   - **BytePlus:** confirm the service URL, then enter your API key. See [BytePlus setup](https://docs.openviking.ai/en/guides/27-byteplus-setup).
 
    Older installers use **Custom URL** for BytePlus. Use the API key for the selected instance:
 

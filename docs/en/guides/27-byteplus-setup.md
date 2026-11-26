@@ -5,12 +5,14 @@
 ## What you need
 
 - An OpenViking instance on BytePlus.
-- The HTTPS service URL for that instance and its OpenViking API key. Use the full service URL, including any path. Do not use a Volcengine URL or key.
+- Your instance's OpenViking API key. Do not use a Volcengine key.
+
+The default service URL is `https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking`. If the URL field is blank, enter this full URL. If BytePlus gives you a different URL, use that instead.
 
 ## Connect the CLI
 
 1. [Install the `ov` CLI](../getting-started/05-cli-setup.md#install).
-2. Run `ov config`. Add a connection, select **OpenViking Managed Service**, then **BytePlus**. Enter the service URL and API key. Save the connection and select it as active.
+2. Run `ov config`. Add a connection, select **OpenViking Managed Service**, then **BytePlus**. Confirm the service URL and enter your API key. Save the connection and select it as active.
 3. Run `ov health` to check the connection. To import and search a sample document, continue from [Import the sample](../getting-started/02-quickstart.md#import-the-sample).
 
 If your CLI does not show the managed-service menu, use **Custom** with the same URL and API key.
@@ -25,6 +27,6 @@ Run the installer on the machine that runs your agent:
 curl -fsSL https://openviking.ai/install | bash
 ```
 
-Select your agent. If the installer finds an existing connection, choose **Reconfigure**. Select **OpenViking Managed Service**, then **BytePlus**, and enter the service URL and API key. Older installers use **Custom URL**.
+Select your agent. If the installer finds an existing connection, choose **Reconfigure**. Select **OpenViking Managed Service**, then **BytePlus**. Confirm the service URL and enter your API key. If BytePlus is not listed, select **Custom URL** and enter the same URL and key.
 
 The installer updates the shared `~/.openviking/ovcli.conf`. The CLI and other integrations that read this file also switch to the new connection. Check the active URL with `ov config show` before restarting your agent.

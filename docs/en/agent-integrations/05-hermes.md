@@ -32,7 +32,7 @@ Then choose a connection in **Hermes's own setup menu**:
 - **OpenViking Managed Service** lets you choose **Volcengine** or **BytePlus**.
   Volcengine uses a fixed service URL and an API key from its
   [managed service](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes).
-  BytePlus asks for your instance's HTTPS service URL and OpenViking API key.
+  For BytePlus, confirm the service URL, then enter your OpenViking API key.
   See [BytePlus setup](../guides/27-byteplus-setup.md).
 - **Custom** connects using a service URL and credentials. It can also reuse
   a saved `ovcli.conf`.

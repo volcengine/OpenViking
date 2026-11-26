@@ -61,6 +61,7 @@ except ImportError:  # Hermes releases before process-home pinning
 
 _DEFAULT_ENDPOINT = "http://127.0.0.1:1933"
 _OPENVIKING_SERVICE_ENDPOINT = "https://api.vikingdb.cn-beijing.volces.com/openviking"
+_BYTEPLUS_SERVICE_ENDPOINT = "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking"
 _DEFAULT_AGENT = ""
 _OPENVIKING_USER_AGENT = f"openviking-memory-hermes/{_HERMES_VERSION}"
 _OVCLI_CONFIG_ENV = "OPENVIKING_CLI_CONFIG_FILE"
@@ -1196,7 +1197,11 @@ def _validate_openviking_reachability(endpoint: str) -> tuple[bool, str]:
         if message is not None:
             return (not message), message
     except Exception as e:
-        if _status_code_from_error(e) is not None:
+        status = _status_code_from_error(e)
+        if status == 401 and endpoint == _BYTEPLUS_SERVICE_ENDPOINT:
+            # BytePlus requires a key for /health; setup validates with that key before saving.
+            return True, ""
+        if status is not None:
             return False, f"OpenViking server responded with {_format_openviking_exception(e)}."
         return False, f"OpenViking server is not reachable at {endpoint}: {_format_openviking_exception(e)}"
     return False, f"OpenViking server is not reachable at {endpoint}."

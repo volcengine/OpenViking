@@ -63,7 +63,7 @@ ov config
 | --- | --- | --- |
 | 本机默认服务 | 自定义（Custom） | URL 为 `http://127.0.0.1:1933`；默认无鉴权模式下密钥留空 |
 | 远程自建服务 | 自定义（Custom） | 使用管理员提供的服务 URL 和 User/Admin Key |
-| BytePlus 云服务 | OpenViking 托管服务 → BytePlus | 输入 BytePlus OpenViking 实例的服务地址和 API Key，详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md) |
+| BytePlus 云服务 | OpenViking 托管服务 → BytePlus | 确认服务地址并输入 API Key，详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md) |
 | 火山引擎云服务 | OpenViking 托管服务 → Volcengine | 使用向导提供的服务地址，输入控制台取得的 API Key |
 
 可以将连接命名为 `local`、`cloud` 等便于识别的名称。服务 URL 指向 OpenViking 数据服务；模型的 API 地址配置在服务端。

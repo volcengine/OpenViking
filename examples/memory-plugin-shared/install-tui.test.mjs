@@ -923,7 +923,7 @@ while [ "$idx" -lt "$(tui_selectable_count)" ]; do printf '%s\\n' "$(tui_item_at
 });
 
 
-test("BytePlus is available without a preset and asks for a fresh URL and key", () => {
+test("BytePlus accepts its default URL without reusing another provider's key", () => {
   const result = runInstallerPrelude(`
 MENU_ANSWERS="1 1"
 tui_menu() {
@@ -933,16 +933,16 @@ tui_menu() {
   set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"
 }
 INTERACTIVE=1
-exec 3< <(printf '\\nhttps://byteplus.example/openviking\\nbyteplus-test-key\\n')
+exec 3< <(printf '\\nbyteplus-test-key\\n')
 prompt_connection "$VOLCENGINE_SERVICE_URL" "volcengine-test-key"
 printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 `);
+  const url = "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking";
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /OpenViking Managed Service/);
   assert.match(result.stdout, /choices:Volcengine BytePlus/);
-  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|byteplus-test-key/);
+  assert.ok(result.stdout.includes(`connection:${url}|byteplus-test-key`));
   assert.doesNotMatch(result.stdout, /volcengine-test-key/);
-  assert.match(result.stderr, /full HTTPS service URL/);
 });
 
 test("BytePlus rejects HTTP and an empty API key before settling on a connection", () => {

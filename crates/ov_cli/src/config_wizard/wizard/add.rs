@@ -127,7 +127,7 @@ pub(super) async fn run_add_config(store: &ConfigStore, ui: &mut LiveRegion) -> 
                         url = if provider == ManagedProvider::Volcengine {
                             OPENVIKING_SERVICE_URL.to_string()
                         } else {
-                            byteplus_service_url().unwrap_or_default().to_string()
+                            byteplus_service_url().to_string()
                         };
                         name = None;
                         api_key = None;

@@ -15,9 +15,12 @@ use crate::{
 
 pub const OPENVIKING_SERVICE_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
 
-/// A verified release URL is an optional default for the BytePlus URL prompt.
-pub(super) fn byteplus_service_url() -> Option<&'static str> {
-    validate_byteplus_endpoint(option_env!("OPENVIKING_BYTEPLUS_SERVICE_URL")?)
+const BYTEPLUS_SERVICE_URL: &str = "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking";
+
+pub(super) fn byteplus_service_url() -> &'static str {
+    option_env!("OPENVIKING_BYTEPLUS_SERVICE_URL")
+        .and_then(validate_byteplus_endpoint)
+        .unwrap_or(BYTEPLUS_SERVICE_URL)
 }
 
 pub(super) fn normalize_byteplus_service_url(input: &str) -> Option<String> {
@@ -1299,8 +1302,20 @@ mod tests {
     }
 
     #[test]
+    fn byteplus_prompt_has_a_valid_default() {
+        let default = "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking";
+        assert_eq!(super::validate_byteplus_endpoint(default), Some(default));
+        let build_override = option_env!("OPENVIKING_BYTEPLUS_SERVICE_URL")
+            .and_then(super::validate_byteplus_endpoint);
+        assert_eq!(
+            super::byteplus_service_url(),
+            build_override.unwrap_or(default)
+        );
+    }
+
+    #[test]
     fn byteplus_endpoint_does_not_change_saved_custom_profiles() {
-        let url = super::byteplus_service_url().unwrap_or("https://byteplus.example/openviking");
+        let url = super::byteplus_service_url();
         let draft = ConfigDraft {
             name: "byteplus".into(),
             kind: ConfigKind::Custom,

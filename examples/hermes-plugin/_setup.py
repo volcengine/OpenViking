@@ -152,7 +152,8 @@ def _prompt_endpoint(prompt, select, cancelled, *, byteplus: bool = False) -> st
     while True:
         try:
             label = "BytePlus service URL" if byteplus else "OpenViking server URL"
-            value = ov._clean_config_value(prompt(label, default="" if byteplus else ov._DEFAULT_ENDPOINT))
+            default = ov._BYTEPLUS_SERVICE_ENDPOINT if byteplus else ov._DEFAULT_ENDPOINT
+            value = ov._clean_config_value(prompt(label, default=default))
             if byteplus and (not value.lower().startswith("https://") or "?" in value or "#" in value):
                 raise ov._OpenVikingEndpointError(
                     "Enter the full HTTPS service URL for your BytePlus instance, without a query or fragment."

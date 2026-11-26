@@ -29,7 +29,7 @@ hermes
 - **OpenViking Managed Service** 提供 **Volcengine** 和 **BytePlus** 两个选项。
   Volcengine 使用固定的服务地址和
   [托管服务](https://www.volcengine.com/product/openviking-service?utm_source=opensource_docs&utm_medium=referral&utm_campaign=agent-integrations_05-hermes)的 API Key。
-  BytePlus 需要输入实例的 HTTPS 服务地址和 OpenViking API Key。
+  BytePlus 用户先确认服务地址，再输入 OpenViking API Key。
   详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
 - **Custom** 使用服务地址和凭据连接 OpenViking，也可以复用已保存的 `ovcli.conf`。
 - **Quick Local** 安装本地服务和 embedding 模型，复用受支持的 Hermes LLM 抽取记忆。

@@ -5,7 +5,7 @@
 Volcengine 用户在 [OpenViking 控制台](https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing)
 开通[托管服务](https://www.volcengine.com/product/openviking-service)，然后从**用户管理**的 **API Key** 中创建密钥。
 
-BytePlus 用户准备实例的 HTTPS 服务地址和 OpenViking API Key。
+BytePlus 用户请准备好 OpenViking API Key。
 详见 [BytePlus 接入指南](https://docs.openviking.ai/zh/guides/27-byteplus-setup)。
 
 ## 安装和配置
@@ -27,7 +27,7 @@ hermes memory setup openviking
 2. 若出现配置来源选项，选择 **Create new OpenViking profile**。也可以复用已保存的
    `ovcli.conf`。
 3. 选择 **OpenViking Managed Service**，再选择 **Volcengine** 或 **BytePlus**。
-4. BytePlus 用户先输入 HTTPS 服务地址，再输入 API Key。Volcengine 用户只需
+4. BytePlus 用户先确认服务地址，再输入 API Key。Volcengine 用户只需
    输入 API Key，向导会提供服务地址。
 5. 选择保存位置。**Keep in Hermes only** 保存到 Hermes 的 `.env`。
    **Mirror to OpenViking store** 保存到本地 `ovcli.conf.<name>` 并关联到 Hermes。
