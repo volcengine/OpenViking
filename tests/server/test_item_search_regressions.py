@@ -33,7 +33,9 @@ class EnabledAcl:
 
 
 @pytest.mark.asyncio
-async def test_api_key_item_declarations_use_normal_directory_records(service, client, tmp_path):
+async def test_api_key_item_declarations_use_normal_directory_records(
+    service, client, tmp_path, monkeypatch
+):
     import asyncio
 
     from openviking.storage.vector_ids import vector_record_id
@@ -44,7 +46,7 @@ async def test_api_key_item_declarations_use_normal_directory_records(service, c
     from openviking.storage.vectordb_adapters.volcengine_adapter import VolcengineCollectionAdapter
     from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
     from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
-    from tests.storage.test_vikingdb_catalog import RecordAPI
+    from tests.storage.test_vikingdb_catalog import RecordAPI, Response
 
     owner = ctx()
     vectors = service.vikingdb_manager
@@ -62,11 +64,24 @@ async def test_api_key_item_declarations_use_normal_directory_records(service, c
     )
 
     uri = "viking://resources/item-root"
+    root_id = vector_record_id(owner.account_id, uri, 0)
+    original_request = api.do_req
+
+    def reject_root_upsert(method, path, *, req_body):
+        if path.endswith("/upsert") and any(row["id"] == root_id for row in req_body["data"]):
+            return Response({}, status=400)
+        return original_request(method, path, req_body=req_body)
+
+    with monkeypatch.context() as failure:
+        failure.setattr(api, "do_req", reject_root_upsert)
+        with pytest.raises(OpenVikingError, match="Item root indexing did not persist"):
+            await asyncio.wait_for(service.fs.mkdir(uri, ctx=owner, as_item=True), timeout=20)
+    assert not await service.viking_fs.exists(uri, ctx=owner)
+
     result = await asyncio.wait_for(
         service.fs.mkdir(uri, ctx=owner, as_item=True, item_attrs={"kind": "case"}),
         timeout=20,
     )
-    root_id = vector_record_id(owner.account_id, uri, 0)
     assert [row["id"] for row in api.rows.values() if row["uri"] == "/resources/item-root"] == [
         root_id
     ]

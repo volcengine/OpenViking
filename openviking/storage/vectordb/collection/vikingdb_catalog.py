@@ -127,7 +127,11 @@ class VikingDBCatalog:
             ]
             if mode == "shadow":
                 declarations = declarations[:1]
-            row = {"uri": uri, "item_uuids": [d["item_uuids"][0] for d in declarations]}
+            row = {
+                "uri": uri,
+                "item_uuids": [d["item_uuids"][0] for d in declarations],
+                "has_root_record": _id(scope, uri) in rows,
+            }
             if include_items:
                 row["items"] = [
                     {

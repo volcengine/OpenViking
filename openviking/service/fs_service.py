@@ -104,6 +104,7 @@ from openviking_cli.exceptions import (
     NotInitializedError,
     OpenVikingError,
     PermissionDeniedError,
+    ProcessingError,
     ResourceExhaustedError,
 )
 from openviking_cli.utils import VikingURI, get_logger
@@ -656,7 +657,7 @@ class FSService:
                     lease_ref=lease,
                 )
             # A prior attempt may have written the summary but failed to enqueue it.
-            levels = await vectorize_directory_meta(
+            return await vectorize_directory_meta(
                 uri=directory_uri,
                 abstract=abstract,
                 overview="",
@@ -665,11 +666,34 @@ class FSService:
                 ingest_options=ingest_options,
                 include_overview=False,
             )
-            if ingest_options.item_root:
+
+        async def create_item_directory(ingest_options, lease, item_uuid):
+            await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease)
+            initialization_error = None
+            try:
+                levels = await initialize(ingest_options, lease)
                 if ContextLevel.ABSTRACT.value not in levels:
-                    raise RuntimeError("Item root indexing was not enqueued")
+                    raise ProcessingError("Item root indexing was not enqueued")
+            except Exception as exc:
+                initialization_error = exc
+            try:
                 await wait_for_enqueued_work("Embedding")
-                await require_existing_item_root(viking_fs._get_vector_store(), directory_uri, ctx)
+                result = await viking_fs._get_vector_store().catalog_execute(
+                    {"op": "resolve", "uris": [directory_uri]}, ctx=ctx
+                )
+                (root,) = result["data"]
+                if not root["has_root_record"]:
+                    await viking_fs.remove_files(
+                        directory_uri, recursive=True, ctx=ctx, lease_ref=lease
+                    )
+            except Exception as exc:
+                if initialization_error is not None:
+                    raise initialization_error from exc
+                raise
+            if initialization_error is not None:
+                raise initialization_error
+            if not root["has_root_record"] or root.get("item_uuid") != item_uuid:
+                raise ProcessingError("Item root indexing did not persist the declaration")
 
         async with self._hold_watch_scope(
             [self._tree_lock_request(directory_uri, ctx)], [directory_uri], ctx
@@ -707,27 +731,28 @@ class FSService:
                     )
                 )
             item_root = declaration.pop("_item_root", None) if declaration else None
-            if file_only and item_root:
-                raise InvalidArgumentError("A new Item requires indexing its directory root")
-            await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease, exist_ok=item_replay)
-            if not file_only:
-                initialize_directory = partial(
-                    initialize,
-                    IngestOptions(acl_update=acl_update, item_root=item_root),
-                    lease,
-                    preserve_existing=item_replay,
-                )
-                if item_root:
-                    await run_tracked_operation(
+            ingest_options = IngestOptions(acl_update=acl_update, item_root=item_root)
+            if item_root:
+                if file_only:
+                    raise InvalidArgumentError("A new Item requires indexing its directory root")
+                # Keep the creation and its rollback under the lease if the client disconnects.
+                await run_to_completion(
+                    partial(
+                        run_tracked_operation,
                         "mkdir",
                         account_id=ctx.account_id,
                         user_id=ctx.user.user_id,
-                        operation=initialize_directory,
+                        operation=partial(
+                            create_item_directory, ingest_options, lease, item_root["item_uuids"][0]
+                        ),
                         wait=True,
                         resource_id=directory_uri,
                     )
-                else:
-                    await initialize_directory()
+                )
+            else:
+                await viking_fs.mkdir(uri, ctx=ctx, lease_ref=lease, exist_ok=item_replay)
+                if not file_only:
+                    await initialize(ingest_options, lease, preserve_existing=item_replay)
             return declaration
 
     def _tree_lock_request(self, uri: str, ctx: RequestContext) -> Dict[str, str]:
