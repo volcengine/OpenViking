@@ -408,3 +408,50 @@ describe('Lark subscriber process group', () => {
     }
   });
 });
+
+describe('an unconfirmed Lark answer', () => {
+  const client = (result) => new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli',
+    projectDir: '/project', tempDir: '/tmp', sendTimeoutMs: 5000 }, {
+    async run() { return result; },
+  }, quietLogger);
+
+  it('tells a retryable API error from a definitive one, so a send may be repeated', async () => {
+    const retryable = await client({ code: 0, timedOut: false, stderr: '', stdout: JSON.stringify({
+      ok: false, error: { code: 2200, message: 'internal error', retryable: true } }) })
+      .sendMessage({ chat_id: 'oc_chat12345678', content: { type: 'markdown', text: 'hi' }, idempotency_key: 'k' })
+      .then(() => null, (error) => error);
+    assert.match(retryable.message, /internal error/);
+    assert.equal(retryable.retryable, true);
+
+    const denied = await client({ code: 0, timedOut: false, stderr: '', stdout: JSON.stringify({
+      ok: false, error: { code: 230002, message: 'bot is not in the chat' } }) })
+      .sendMessage({ chat_id: 'oc_chat12345678', content: { type: 'markdown', text: 'hi' }, idempotency_key: 'k' })
+      .then(() => null, (error) => error);
+    assert.equal(denied.retryable, false);
+
+    const lost = await client({ code: null, timedOut: true, stderr: '', stdout: '' })
+      .sendMessage({ chat_id: 'oc_chat12345678', content: { type: 'markdown', text: 'hi' }, idempotency_key: 'k' })
+      .then(() => null, (error) => error);
+    assert.equal(lost.retryable, true);
+  });
+
+  it('reads a chat back from a point in time, and a thread newest first', async () => {
+    const calls = [];
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli',
+      projectDir: '/project', tempDir: '/tmp', sendTimeoutMs: 5000 }, {
+      async run(_command, args) {
+        calls.push(args);
+        return { code: 0, timedOut: false, stderr: '', stdout: JSON.stringify({ ok: true,
+          data: { messages: [{ message_id: 'om_listed1234567', chat_id: 'oc_chat12345678', msg_type: 'post',
+            create_time: '2026-11-26 14:50', sender: { id: 'cli_app123456789', name: 'openviking' }, content: 'hi' }] } }) };
+      },
+    }, quietLogger);
+    const listed = await lark.listChatMessages({ chat_id: 'oc_chat12345678', limit: 50, start: '2026-11-26T06:47:00.000Z' });
+    assert.equal(listed.messages[0].message_id, 'om_listed1234567');
+    assert.deepEqual(calls[0].slice(3), ['+chat-messages-list', '--as', 'bot', '--chat-id', 'oc_chat12345678',
+      '--sort', 'desc', '--page-size', '50', '--format', 'json', '--start', '2026-11-26T06:47:00.000Z']);
+    await lark.listThreadMessages({ thread_id: 'om_target1234567', limit: 50, order: 'desc' });
+    assert.deepEqual(calls[1].slice(3), ['+threads-messages-list', '--as', 'bot', '--thread', 'om_target1234567',
+      '--order', 'desc', '--page-size', '50', '--format', 'json']);
+  });
+});

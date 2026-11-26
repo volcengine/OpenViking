@@ -9,7 +9,7 @@ import path from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { EDITABLE_CHARS, approvalCard, approvalNote, approvedText } from '../src/actions/approval.mjs';
-import { ActionService } from '../src/actions/service.mjs';
+import { ActionService, messageMatchesDelivery } from '../src/actions/service.mjs';
 import { startActionApi, stopActionApi } from '../src/actions/api.mjs';
 import { createMcpHandler } from '../src/actions/mcp.mjs';
 import { TOOLS, publicTool } from '../src/actions/tools.mjs';
@@ -37,7 +37,7 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   ovTools = null, openVikingConfigPath = undefined,
   owners = { lark: OWNER }, channel = 'lark', profile = undefined, explicitSilence = false, stagedReplies = false,
   larkMessageAccess = 'owner', onNoProgress = null, connectors: given = null, serverFence = false,
-  scheduler = undefined } = {}) {
+  scheduler = undefined, sendRetries = undefined, sendRetryDelayMs = 0 } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'actions-'));
   const workspace = path.join(directory, 'workspace');
   fs.mkdirSync(workspace);
@@ -48,7 +48,8 @@ function setup(t, { ids = ['lark'], run = null, roster = null, liveness = null, 
   const record = (level) => (message, fields = {}) => logs.push({ level, message, ...fields });
   const service = new ActionService({
     config: { workspace, tempDir: path.join(directory, 'tmp'), maxReplyChars: 1_000, channel, profile, explicitSilence, stagedReplies,
-      larkMessageAccess, serverFence, ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}),
+      larkMessageAccess, serverFence, sendRetryDelayMs, ...(sendRetries !== undefined ? { sendRetries } : {}),
+      ...(openVikingConfigPath !== undefined ? { openVikingConfigPath } : {}),
       ...(scheduler !== undefined ? { scheduler } : {}) },
     store, connectors, roster, liveness, meetingEnabled, ovClient, ovTools, onNoProgress,
     logger: { debug() {}, info: record('info'), warn: record('warn'), error: record('error'), child() { return this; } },
@@ -2198,5 +2199,196 @@ describe('workers scheduler', () => {
     store.ingest(chatEvent({ messageId: 'om_durableTask123', chatType: 'group' }));
     await assert.rejects(call('task_create', { trigger_ids: ['message:om_durableTask123'], title: 'x' }),
       (error) => error.code === 'unsupported' && /Workers run on pi, codex, traex or claude; this runtime is durable/.test(error.message));
+  });
+});
+
+// A create_time as lark-cli renders it: the daemon's own time zone, to the minute.
+function larkStamp(ms) {
+  const date = new Date(ms);
+  const two = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`;
+}
+
+describe('an uncertain delivery', () => {
+  const ANSWER = '我核过了：watch 任务到点后会先取源、再比对最终文件字节的 md5，内容没变时这一轮的更新计划是空的，'
+    + '不写文件树、不生成摘要、也不写向量。';
+  const retryableError = () => Object.assign(
+    new Error('lark-cli send message failed: { "code": 2200, "message": "internal error" }'), { retryable: true });
+
+  it('repeats a retryable failure with the same idempotency key until one attempt gets through', async (t) => {
+    let attempts = 0;
+    const run = () => {
+      attempts += 1;
+      if (attempts < 3) throw retryableError();
+      return { message_id: 'om_recovered123456' };
+    };
+    const { store, call, connectors, inbound, logs } = setup(t, { run, sendRetries: 2, sendRetryDelayMs: 0 });
+    inbound({ messageId: 'om_decision123456', chatId: 'oc_chat12345678' });
+    const sent = await call('send_message', { chat_id: 'oc_chat12345678', markdown: ANSWER, decision_id: 'message:om_decision123456' });
+    assert.match(sent.text, /^Delivered message to chat_id=oc_chat12345678\. message_id=om_recovered123456/);
+    assert.equal(connectors.calls.length, 3);
+    assert.equal(new Set(connectors.calls.map(({ input }) => input.idempotency_key)).size, 1);
+    assert.deepEqual(store.stats().outbox, { SENT: 1 });
+    assert.equal(logs.filter(({ message }) => message === 'delivery_retry').length, 2);
+  });
+
+  it('does not repeat an error the provider says is not retryable, and names the outbox to check', async (t) => {
+    let attempts = 0;
+    const run = () => {
+      attempts += 1;
+      throw Object.assign(new Error('lark-cli send message failed: { "code": 99991400, "retryable": false }'), { retryable: false });
+    };
+    const { store, call, inbound } = setup(t, { run, sendRetries: 2, sendRetryDelayMs: 0 });
+    inbound({ messageId: 'om_decision123456', chatId: 'oc_chat12345678' });
+    const error = await call('send_message', { chat_id: 'oc_chat12345678', markdown: ANSWER, decision_id: 'message:om_decision123456' })
+      .then(() => null, (failure) => failure);
+    assert.equal(error.code, 'delivery_uncertain');
+    assert.match(error.message, /may still have been delivered/);
+    assert.match(error.message, /check_delivery outbox_id=\d+/);
+    assert.equal(attempts, 1);
+    const row = store.db.prepare('SELECT id, status FROM outbox').get();
+    assert.equal(row.status, 'UNCERTAIN');
+    assert.match(error.message, new RegExp(`outbox_id=${row.id}\\b`));
+  });
+
+  it('settles an uncertain delivery as sent when the chat holds the message, and ignores older copies', async (t) => {
+    const listed = [];
+    const run = (_connector, action, input) => {
+      if (action === 'message.send') throw new Error('lark-cli send message failed: { "code": 2200 }');
+      if (action === 'chat.messages') {
+        listed.push(input);
+        return { has_more: true, messages: [
+          { message_id: 'om_oldCopy123456', chat_id: input.chat_id, msg_type: 'post', create_time: larkStamp(Date.now() - 3 * 60 * 60_000),
+            sender: { id: 'cli_app123456789', name: 'openviking' }, content: ANSWER },
+          { message_id: 'om_current1234567', chat_id: input.chat_id, msg_type: 'post', create_time: larkStamp(Date.now()),
+            sender: { id: 'cli_app123456789', name: 'openviking' }, content: `${ANSWER}\n` },
+        ] };
+      }
+      throw new Error(`unexpected ${action}`);
+    };
+    const { store, call, inbound } = setup(t, { run, sendRetries: 0 });
+    inbound({ messageId: 'om_decision123456', chatId: 'oc_chat12345678' });
+    const failure = await call('send_message', { chat_id: 'oc_chat12345678', markdown: ANSWER, decision_id: 'message:om_decision123456' })
+      .then(() => null, (error) => error);
+    const id = Number(/outbox_id=(\d+)/.exec(failure.message)[1]);
+    const checked = await call('check_delivery', { outbox_id: String(id) });
+    assert.match(checked.text, /^Confirmed chat_id=oc_chat12345678: outbox_id=\d+ is message_id=om_current1234567/);
+    assert.deepEqual(checked.data, { status: 'SENT', message_id: 'om_current1234567', chat_id: 'oc_chat12345678' });
+    assert.equal(listed[0].chat_id, 'oc_chat12345678');
+    assert.match(listed[0].start, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const row = store.db.prepare('SELECT status, remote_message_id FROM outbox WHERE id = ?').get(id);
+    assert.deepEqual([row.status, row.remote_message_id], ['SENT', 'om_current1234567']);
+    assert.equal(store.cognitionJournal().filter((item) => item.messageId === 'om_current1234567').length, 1);
+    // A settled delivery is answered from the outbox, without another read.
+    const again = await call('check_delivery', { outbox_id: String(id) });
+    assert.match(again.text, /was delivered as message_id=om_current1234567/);
+    assert.equal(listed.length, 1);
+  });
+
+  it('reports what the chat holds instead of guessing when no message matches', async (t) => {
+    const run = (_connector, action, input) => {
+      if (action === 'message.send') throw new Error('lark-cli send message failed: { "code": 2200 }');
+      if (action === 'chat.messages') {
+        return { has_more: false, messages: [
+          { message_id: 'om_other1234567', chat_id: input.chat_id, msg_type: 'post', create_time: larkStamp(Date.now()),
+            sender: { id: 'cli_app123456789', name: 'openviking' }, content: '另一条完全不同的回复，不是这句要核的内容。' },
+        ] };
+      }
+      throw new Error(`unexpected ${action}`);
+    };
+    const { store, call, inbound } = setup(t, { run, sendRetries: 0 });
+    inbound({ messageId: 'om_decision123456', chatId: 'oc_chat12345678' });
+    const failure = await call('send_message', { chat_id: 'oc_chat12345678', markdown: ANSWER, decision_id: 'message:om_decision123456' })
+      .then(() => null, (error) => error);
+    const id = Number(/outbox_id=(\d+)/.exec(failure.message)[1]);
+    const checked = await call('check_delivery', { outbox_id: String(id) });
+    assert.equal(checked.data.status, 'UNCONFIRMED');
+    assert.match(checked.text, /^Not confirmed: none of the 1 bot message\(s\)/);
+    assert.match(checked.text, /om_other1234567/);
+    assert.match(checked.text, /Sending the same content again is safe/);
+    assert.equal(store.db.prepare('SELECT status FROM outbox WHERE id = ?').get(id).status, 'UNCERTAIN');
+  });
+
+  it('says plainly that a delivery never landed when the chat has nothing from the bot', async (t) => {
+    const run = (_connector, action) => {
+      if (action === 'message.send') throw new Error('lark-cli send message failed: { "code": 2200 }');
+      if (action === 'chat.messages') return { has_more: false, messages: [] };
+      throw new Error(`unexpected ${action}`);
+    };
+    const { call, inbound } = setup(t, { run, sendRetries: 0 });
+    inbound({ messageId: 'om_decision123456', chatId: 'oc_chat12345678' });
+    const failure = await call('send_message', { chat_id: 'oc_chat12345678', markdown: ANSWER, decision_id: 'message:om_decision123456' })
+      .then(() => null, (error) => error);
+    const id = /outbox_id=(\d+)/.exec(failure.message)[1];
+    const checked = await call('check_delivery', { outbox_id: id });
+    assert.equal(checked.data.status, 'NOT_DELIVERED');
+    assert.match(checked.text, /did not land/);
+  });
+
+  it('reads a thread reply back where it landed, and leaves the attempt alone when the read fails', async (t) => {
+    const calls = [];
+    let readable = true;
+    const run = (_connector, action, input) => {
+      calls.push({ action, input });
+      if (action === 'message.reply') throw new Error('lark-cli send message failed: { "code": 2200 }');
+      if (action === 'thread.messages') {
+        if (!readable) throw new Error('lark-cli list thread messages failed: { "code": 2200 }');
+        return { has_more: false, messages: [
+          { message_id: 'om_threadReply123', chat_id: input.chat_id, msg_type: 'post', create_time: larkStamp(Date.now()),
+            sender: { id: 'cli_app123456789', name: 'openviking' }, content: ANSWER },
+        ] };
+      }
+      throw new Error(`unexpected ${action}`);
+    };
+    const { store, call, inbound } = setup(t, { run, sendRetries: 0 });
+    inbound({ messageId: 'om_target1234567', chatId: 'oc_chat12345678' });
+    const reply = { message_id: 'om_target1234567', reply_in_thread: true, markdown: ANSWER, decision_id: 'message:om_target1234567' };
+    const failure = await call('reply_message', reply).then(() => null, (error) => error);
+    const id = Number(/outbox_id=(\d+)/.exec(failure.message)[1]);
+
+    readable = false;
+    const failed = await call('check_delivery', { outbox_id: String(id) }).then((value) => value, (error) => error);
+    assert.equal(failed.code, 'check_failed');
+    assert.match(failed.message, /stays uncertain/);
+    assert.equal(store.db.prepare('SELECT status FROM outbox WHERE id = ?').get(id).status, 'UNCERTAIN');
+
+    readable = true;
+    const checked = await call('check_delivery', { outbox_id: String(id) });
+    assert.match(checked.text, /Confirmed the thread of message_id=om_target1234567/);
+    const read = calls.findLast(({ action }) => action === 'thread.messages');
+    assert.deepEqual([read.input.thread_id, read.input.order], ['om_target1234567', 'desc']);
+  });
+
+  it('registers a card that is read back as delivered, so a press on it still answers', async (t) => {
+    const card = { schema: '2.0', header: { title: { tag: 'plain_text', content: '核对结果' } },
+      body: { elements: [{ tag: 'markdown', content: '按钮在这里。' }] } };
+    const run = (_connector, action, input) => {
+      if (action === 'message.send') throw new Error('lark-cli send card failed: { "code": 2200 }');
+      if (action === 'chat.messages') return { has_more: false, messages: [
+        { message_id: 'om_cardDelivered1', chat_id: input.chat_id, msg_type: 'interactive', create_time: larkStamp(Date.now()),
+          sender: { id: 'cli_app123456789', name: 'openviking' }, content: '<card title="核对结果">\n按钮在这里。\n</card>' }] };
+      throw new Error(`unexpected ${action}`);
+    };
+    const { store, call, inbound } = setup(t, { run, sendRetries: 0, profile: 'test-profile' });
+    inbound({ messageId: 'om_decision123456', chatId: 'oc_chat12345678' });
+    const failure = await call('send_message', { chat_id: 'oc_chat12345678', card, decision_id: 'message:om_decision123456' })
+      .then(() => null, (error) => error);
+    const id = Number(/outbox_id=(\d+)/.exec(failure.message)[1]);
+    const checked = await call('check_delivery', { outbox_id: String(id) });
+    assert.equal(checked.data.status, 'SENT');
+    const registered = store.db.prepare('SELECT scope_json FROM lark_cards WHERE message_id = ?').get('om_cardDelivered1');
+    assert.equal(JSON.parse(registered.scope_json).conversation.id, 'oc_chat12345678');
+  });
+
+  it('matches a card by its title and a person\'s lookalike message not at all', () => {
+    const card = { header: { title: { tag: 'plain_text', content: '时间衰减：插件默认变了，服务端默认没变' } },
+      body: { elements: [{ tag: 'markdown', content: '核完了：这条在插件层成立。' }] } };
+    assert.equal(messageMatchesDelivery({ type: 'card', card }, {
+      msg_type: 'interactive', content: '<card title="时间衰减：插件默认变了，服务端默认没变" subtitle="分两层看">\n核完了：这条在插件层成立。\n</card>',
+    }), true);
+    assert.equal(messageMatchesDelivery({ type: 'card', card }, {
+      msg_type: 'interactive', content: '<card title="另一个标题">\n核完了：这条在插件层成立。\n</card>',
+    }), false);
+    assert.equal(messageMatchesDelivery({ type: 'markdown', text: ANSWER }, { msg_type: 'post', content: ANSWER }), true);
   });
 });

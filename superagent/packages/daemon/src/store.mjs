@@ -1525,6 +1525,20 @@ export class Store {
     });
   }
 
+  // One reserved delivery by its id: what it tried to send, where, and how it
+  // stands. Used to check an uncertain attempt against the provider itself.
+  outboxEntry(id) {
+    const row = this.db.prepare('SELECT * FROM outbox WHERE id = ?').get(id);
+    if (!row) return null;
+    return {
+      id: number(row.id), connector: row.connector, action: row.action, status: row.status,
+      payload: row.payload_json ? JSON.parse(row.payload_json) : null, summary: row.summary,
+      chat_id: row.chat_id, conv_key: row.conv_key, attempt_count: number(row.attempt_count),
+      remote_message_id: row.remote_message_id, result: row.result_json ? JSON.parse(row.result_json) : null,
+      last_error: row.last_error, created_at_ms: number(row.created_at_ms), updated_at_ms: number(row.updated_at_ms),
+    };
+  }
+
   // Reserve one external action together with its outbound journal row and
   // activity. An existing key reports its state instead; an UNCERTAIN one is
   // reclaimed only when the provider honours the idempotency key.
