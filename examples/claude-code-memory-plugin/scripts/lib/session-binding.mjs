@@ -7,7 +7,8 @@
  * SessionStart, which fires for every one of those, records the current id
  * under the Claude Code process id: hooks see it as CLAUDE_PID, the proxy as
  * its parent pid. One file per Claude Code process means concurrent sessions
- * never write the same file.
+ * never write the same file. The binding also records the connection scope so
+ * a proxy can omit the default when a new session belongs to another tenant.
  *
  * The proxy trusts a record only when it is from this process's lifetime: it
  * names the session the proxy was started in, or it was written after the
@@ -51,11 +52,11 @@ function validPid(value) {
 }
 
 /** SessionStart side: record `sessionId` as the current session of this Claude Code process. */
-export function bindCurrentSession(sessionId, env = process.env) {
+export function bindCurrentSession(sessionId, env = process.env, connectionScope = "") {
   const pid = validPid(env.CLAUDE_PID);
   const id = String(sessionId || "").trim();
   if (!pid || !id) return false;
-  writeJsonState(bindingName(pid), { session_id: id });
+  writeJsonState(bindingName(pid), { session_id: id, connectionScope });
   removeStaleBindings();
   return true;
 }
@@ -64,12 +65,12 @@ export function bindCurrentSession(sessionId, env = process.env) {
  * Proxy side: the OV session id of the current session of Claude Code process
  * `pid`, or "" when it cannot be told.
  */
-export function currentOvSessionId({ pid, startedAt, env = process.env } = {}) {
+export function currentOvSessionId({ pid, startedAt, env = process.env, connectionScope = "" } = {}) {
   const key = validPid(pid);
   if (!key) return "";
   const binding = readJsonState(bindingName(key));
   const id = typeof binding?.session_id === "string" ? binding.session_id.trim() : "";
-  if (!id) return "";
+  if (!id || (binding.connectionScope || "") !== connectionScope) return "";
   const startSession = String(env.CLAUDE_CODE_SESSION_ID || "").trim();
   const fresh = typeof binding.ts === "number" && binding.ts >= startedAt;
   if (id !== startSession && !fresh) return "";

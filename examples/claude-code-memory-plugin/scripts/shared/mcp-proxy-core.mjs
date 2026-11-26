@@ -146,7 +146,7 @@ export function createOpenVikingMcpProxy({
   loggerFactory,
   fetchImpl = globalThis.fetch,
   localToolProvider = null,
-  // (params) => the OV session id of the host session making this tools/call,
+  // (params, config) => the OV session id of the host session making this tools/call,
   // or "" when the harness cannot tell; fills `session_history`'s `session`.
   defaultHistorySession = null,
 } = {}) {
@@ -220,7 +220,7 @@ export function createOpenVikingMcpProxy({
     const name = message.params?.name;
     if (!localTools().some((tool) => tool?.name === name)) return null;
     reloadIfCredentialFilesChanged("local_tool_call");
-    return localToolProvider.callTool(message.params, { config: proxyConfig });
+    return localToolProvider.callTool(withDefaultHistorySession(message).params, { config: proxyConfig });
   }
 
   // A `session` the model passed is kept as is, even one this proxy would not
@@ -238,7 +238,7 @@ export function createOpenVikingMcpProxy({
     if (given != null && (typeof given !== "string" || given.trim())) return message;
     let session = "";
     try {
-      session = String(defaultHistorySession(message.params) || "").trim();
+      session = String(defaultHistorySession(message.params, proxyConfig) || "").trim();
     } catch (err) {
       logError("default_history_session", err);
     }
@@ -359,7 +359,8 @@ export function createOpenVikingMcpProxy({
       const res = await fetchImpl(proxyConfig.mcpUrl, {
         method: "POST",
         headers: headersForRequest(includeSession),
-        body: JSON.stringify(message),
+        // A retry may have reloaded credentials for a different tenant.
+        body: JSON.stringify(withDefaultHistorySession(message)),
         signal: controller.signal,
       });
       const text = await res.text();
@@ -460,7 +461,6 @@ export function createOpenVikingMcpProxy({
       return;
     }
 
-    message = withDefaultHistorySession(message);
     const expectsResponse = isRequest(message);
     if (message.method === "initialize") {
       initializeRequest = cloneMessage(message);

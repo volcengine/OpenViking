@@ -212,6 +212,7 @@ export function buildMcpProxyConfig({
   debugLogPath = "",
   credentialSource = "auto",
   credentialPath = "",
+  connectionScope = "",
   watchedPaths = [],
   extraHeaders = null,
   env = process.env,
@@ -235,6 +236,7 @@ export function buildMcpProxyConfig({
     debugLogPath,
     credentialSource: credentialSource || "auto",
     credentialPath: credentialPath || "",
+    connectionScope,
     watchedPaths: uniq([...watchedPaths, ...defaultCredentialPaths(env)]),
     extraHeaders: resolvedExtraHeaders,
   };
@@ -270,6 +272,7 @@ export function toMcpProxyConfig(cfg, {
     debugLogPath,
     credentialSource: cfg.credentialSource,
     credentialPath: cfg.credentialPath || "",
+    connectionScope: cfg.connectionScope,
     watchedPaths: [cfg.cliPath, cfg.ovPath],
     env,
   });

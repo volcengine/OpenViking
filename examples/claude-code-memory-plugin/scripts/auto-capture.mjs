@@ -48,7 +48,7 @@ if (!isPluginEnabled()) {
 
 const baseCfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
-const fetchJSON = makeFetchJSON(baseCfg, "captureTimeoutMs");
+let fetchJSON;
 
 const STATE_DIR = join(tmpdir(), "openviking-cc-capture-state");
 
@@ -500,6 +500,7 @@ async function main({ cfg, input, cwd }) {
 // at its request timeouts; the holder keeps the lock fresh, so only a crashed
 // one goes stale. A capture that cannot get it leaves the turns to the next.
 async function captureLocked(stage) {
+  fetchJSON = makeFetchJSON(stage.cfg, "captureTimeoutMs");
   const sessionId = stage.input.session_id;
   if (!sessionId) return main(stage);
   const ran = await withAgentHookLock("claude-code", sessionId, async () => ({ value: await main(stage) }), {

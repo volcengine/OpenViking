@@ -8,11 +8,7 @@ import {
 import {
   deriveHarnessSessionId,
 } from "./shared/session-model.mjs"
-import {
-  deferCommitBehindPendingWrites,
-  enqueue,
-  replayPending,
-} from "./shared/pending-queue.mjs"
+import { createPendingQueue } from "./shared/pending-queue.mjs"
 import {
   sendSessionMessages,
 } from "./shared/batch-send.mjs"
@@ -29,6 +25,9 @@ import {
 const STALE_SESSION_STATE_MS = 7 * 24 * 60 * 60 * 1000
 
 export function createMemorySessionManager({ config, pluginRoot }) {
+  const pending = createPendingQueue(config.connectionScope)
+  const { enqueue, replayPending } = pending
+  if (config.connectionScope) pluginRoot = path.join(pluginRoot, "connections", config.connectionScope)
   const sessions = new Map()
   const statePath = path.join(pluginRoot, "openviking-session-state.json")
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
@@ -489,12 +488,12 @@ export function createMemorySessionManager({ config, pluginRoot }) {
         added += 1
       }
     } else {
-      const res = await sendSessionMessages(
+      const res = await pending.run(() => sendSessionMessages(
         (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 10000, ...options }),
         state.ovSessionId,
         toSend.map((item) => item.body),
         { enqueueOnRetryable: true },
-      )
+      ))
       added = res.sent + res.queued
       for (const item of toSend.slice(0, added)) {
         item.message.captured = true
@@ -534,7 +533,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
   async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
     const body = { keep_recent_count: 0 }
-    const deferred = await deferCommitBehindPendingWrites(
+    const deferred = await pending.deferCommitBehindPendingWrites(
       (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
       ovSessionId,
       body,

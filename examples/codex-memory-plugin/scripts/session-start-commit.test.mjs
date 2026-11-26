@@ -5,8 +5,9 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { expectExit, readRequestBody, runHookScript, withMockOpenViking, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
-import { enqueue } from "./shared/pending-queue.mjs";
+import { expectExit, readRequestBody, runHookScript, withMockOpenViking, withPendingDir, writeJson } from "../../memory-plugin-shared/testing/support.mjs";
+import { resolveConnection } from "./shared/credentials.mjs";
+import { createPendingQueue, enqueue } from "./shared/pending-queue.mjs";
 import { PEER_PIN_VERSION } from "./session-state.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -770,6 +771,85 @@ test("a marker that disappears under the lock falls back to the idle rule", asyn
     assert.equal(live.filter(Boolean).length, 1, "the other twin stays live for a later sweep");
   } finally {
     await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("resume and startup recovery retain the session tenant, explicit peer and capture cursor", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-codex-tenant-resume-"));
+  const work = join(root, "work");
+  const personal = join(root, "personal");
+  await mkdir(work);
+  await mkdir(personal);
+  const readState = async id => JSON.parse(await readFile(join(root, `${id}.json`), "utf8"));
+  try {
+    await withPendingDir(async pendingDir => {
+      const posted = [];
+      await withMockOpenViking(async (req, res) => {
+        if (req.method === "POST") posted.push({ path: req.url, body: await readRequestBody(req) });
+        writeJson(res, { status: "ok", result: {} });
+      }, async (baseUrl, requests) => {
+        const env = {
+          ...baseEnv(baseUrl, root),
+          OPENVIKING_CREDENTIAL_SOURCE: "auto",
+          OPENVIKING_HOME: join(root, "home"),
+          OPENVIKING_PENDING_DIR: pendingDir,
+          OPENVIKING_NO_AUTO_INJECT: "1",
+          OPENVIKING_PEER_ID: "explicit-peer",
+        };
+        await writeFile(env.OPENVIKING_CLI_CONFIG_FILE, JSON.stringify({
+          url: baseUrl, api_key: "personal-key", account: "personal",
+          connections: [{ path: work, api_key: "work-key", account: "work" }],
+        }));
+        const scope = cwd => resolveConnection("codex", { env, cwd }).connectionScope;
+        const workScope = scope(work);
+        const personalScope = scope(personal);
+        const workQueue = createPendingQueue(workScope);
+        const personalQueue = createPendingQueue(personalScope);
+        await runSessionStart({ source: "startup", session_id: "resumed", cwd: work }, env);
+        const initial = await readState("resumed");
+        assert.equal(initial.workspacePeerId, "explicit-peer");
+        assert.equal(initial.connectionScope, workScope);
+        await writeFile(join(root, "resumed.json"), JSON.stringify({
+          ...initial, ovSessionId: "cx-resumed", capturedTurnCount: 3,
+        }));
+        await writeEndedMarker(root, "resumed", Date.now() - 1_000);
+        for (const [queue, content] of [[workQueue, "work message"], [personalQueue, "personal message"]]) {
+          assert.equal((await queue.enqueue("addMessage", "cx-resumed", { role: "user", content })).ok, true);
+        }
+
+        requests.length = 0;
+        await runSessionStart({ source: "resume", session_id: "resumed", cwd: personal }, env);
+        const resumed = await readState("resumed");
+        assert.equal(resumed.workspacePeerId, "explicit-peer");
+        assert.equal(resumed.connectionScope, workScope);
+        assert.equal(resumed.ovSessionId, "cx-resumed");
+        assert.equal(resumed.capturedTurnCount, 3);
+        assert.equal(await endedMarkerExists(root, "resumed"), false);
+        assert.deepEqual(posted.map(req => req.body.content), ["work message"]);
+        assert.ok(requests.length > 0);
+        assert.ok(requests.every(req => req.headers.authorization === "Bearer work-key"));
+        assert.ok(requests.every(req => req.headers["x-openviking-account"] === "work"));
+        assert.equal((await workQueue.listPending()).length, 0);
+        assert.equal((await personalQueue.listPending()).length, 1);
+
+        for (const [id, connectionScope] of [["work-ended", workScope], ["personal-ended", personalScope]]) {
+          await writeFile(join(root, `${id}.json`), JSON.stringify({
+            ...initial, codexSessionId: id, ovSessionId: `cx-${id}`, connectionScope,
+          }));
+          await writeEndedMarker(root, id, Date.now() - 1_000);
+        }
+        const foreignState = await readFile(join(root, "personal-ended.json"), "utf8");
+        posted.length = 0;
+        await runSessionStart({ source: "startup", session_id: "next-work", cwd: work }, env);
+        assert.deepEqual(posted.map(req => req.path), ["/api/v1/sessions/cx-work-ended/commit"]);
+        assert.equal((await readState("work-ended")).ovSessionId, null);
+        assert.equal(await readFile(join(root, "personal-ended.json"), "utf8"), foreignState);
+        assert.equal(await endedMarkerExists(root, "personal-ended"), true);
+        assert.equal((await personalQueue.listPending()).length, 1);
+      });
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

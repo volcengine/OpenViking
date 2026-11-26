@@ -43,7 +43,7 @@ const LOCK_WAIT_MS = (() => {
 
 const HOOK_STARTED_AT = Date.now();
 
-const { fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId });
+let fetchJSONRes, fetchJSON;
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -55,6 +55,7 @@ function noop(message) {
 
 async function compact(sessionId, transcriptPath, trigger, cwd, heartbeat) {
   const state = await loadState(sessionId);
+  if (cfg.connectionScope) state.connectionScope = cfg.connectionScope;
   activePeerId = cfg.peerId || state.workspacePeerId || resolveEffectivePeerId({ cfg, cwd }).peerId;
   log("start", { sessionId, transcriptPath, trigger, hasPeer: Boolean(activePeerId) });
 
@@ -145,6 +146,7 @@ runHookStage({
   onSkip: (reason) => log("skip", { stage: "init", reason }),
 }, async (stage) => {
   cfg = stage.cfg;
+  ({ fetchJSONRes, fetchJSON } = makeFetchJSON(cfg, { getActorPeerId: () => activePeerId }));
   const sessionId = stage.sessionId;
   if (!sessionId) {
     log("skip", { stage: "init", reason: "no session_id" });

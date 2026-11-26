@@ -45,7 +45,10 @@ function runAutoCapture(input, env) {
 function hookEnv(root, baseUrl) {
   return {
     HOME: root,
+    USERPROFILE: root,
     TMPDIR: root,
+    TEMP: root,
+    TMP: root,
     OPENVIKING_AUTO_CAPTURE: "1",
     OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
     OPENVIKING_MEMORY_ENABLED: "1",
@@ -416,7 +419,7 @@ test("the workspace that decides capture is the payload's, not the hook process'
     const env = (baseUrl) => {
       const base = hookEnv(root, baseUrl);
       delete base.OPENVIKING_AUTO_CAPTURE;
-      return { ...base, HOME: home, OPENVIKING_HOME: join(home, ".openviking") };
+      return { ...base, HOME: home, USERPROFILE: home, OPENVIKING_HOME: join(home, ".openviking") };
     };
 
     await withMockOpenViking(async (req, res) => {

@@ -45,7 +45,6 @@ const { log, logError } = createLogger("pre-compact");
 // After the catch-up wait, health + commit share what is left of the hook's
 // 30s; a commit that does not make it is queued and replayed later.
 const AFTER_CATCH_UP_TIMEOUT_MS = 4000;
-const fetchJSON = makeFetchJSON({ ...loadConfig(), timeoutMs: AFTER_CATCH_UP_TIMEOUT_MS });
 
 const CATCH_UP_WAIT_MS = (() => {
   const v = Number(process.env.OPENVIKING_CC_PRECOMPACT_CATCH_UP_WAIT_MS);
@@ -95,7 +94,7 @@ runHookStage({
   gates: { enabled: (cfg) => cfg.autoCapture },
   envelope: approve,
   onSkip: (reason) => log("skip", { reason }),
-}, async ({ sessionId, raw }) => {
+}, async ({ cfg, sessionId, raw }) => {
   if (!sessionId) {
     log("skip", { reason: "no session_id" });
     return;
@@ -103,6 +102,7 @@ runHookStage({
 
   log("catch_up", await catchUpTranscript(raw));
 
+  const fetchJSON = makeFetchJSON({ ...cfg, timeoutMs: AFTER_CATCH_UP_TIMEOUT_MS });
   const ovSessionId = deriveOvSessionId(sessionId);
   const health = await fetchJSON("/health");
   if (!health.ok && isRetryableFailure(health)) {

@@ -56,7 +56,6 @@ if (!isPluginEnabled()) {
 }
 
 const { log, logError } = createLogger("session-start");
-const fetchJSON = makeFetchJSON(loadConfig());
 
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -110,11 +109,12 @@ runHookStage({
   // A bypassed session is still the current one: the proxy must not keep
   // filling in the session it replaced. A disabled plugin writes nothing.
   onSkip: (reason, stage) => {
-    if (reason === "bypass") bindCurrentSession(stage?.sessionId);
+    if (reason === "bypass") bindCurrentSession(stage.sessionId, process.env, stage.cfg.connectionScope);
     log("skip", { reason });
   },
 }, async ({ cfg, input, cwd, sessionId }) => {
-  bindCurrentSession(sessionId);
+  const fetchJSON = makeFetchJSON(cfg);
+  bindCurrentSession(sessionId, process.env, cfg.connectionScope);
   const source = input.source || "startup";
   const effectivePeer = getEffectivePeerId(cfg, { sessionId, cwd });
   log("start", { source, sessionId, peerSource: effectivePeer.source });

@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SyncManager, describeCommitError } from "../sync.ts";
 import { OVClient } from "../client.ts";
-import { enqueue, listPending } from "../shared/pending-queue.mjs";
+import { createPendingQueue, enqueue, listPending } from "../shared/pending-queue.mjs";
 
 function config(overrides = {}) {
   return {
@@ -44,6 +44,35 @@ async function withPendingDir(fn) {
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+test("offline capture and commit replay in order within the selected connection", async () => {
+  await withPendingDir(async () => {
+    let healthy = false;
+    const sent = [];
+    const c = client({ fetchJSON: async (_path, init) => {
+      if (!healthy) return { ok: false, status: 503 };
+      sent.push(JSON.parse(init.body));
+      return { ok: true, result: {} };
+    } });
+    const first = new SyncManager(c, config({ takeoverEnabled: false, connectionScope: "work" }));
+    const second = new SyncManager(c, config({ takeoverEnabled: false, connectionScope: "personal" }));
+    await first.ensureSession("same-session");
+    await second.ensureSession("same-session");
+    const branch = (text) => [{ type: "message", message: { role: "user", content: text } }];
+    const work = "Work-only project guidance captured while offline.";
+    const personal = "Personal-only project guidance captured while offline.";
+    assert.equal((await first.syncBranch(branch(work))).queued, 1);
+    assert.equal((await second.syncBranch(branch(personal))).queued, 1);
+    assert.equal(await first.commit({ keepRecentCount: 3 }), null);
+    healthy = true;
+    await first.replayPending();
+    assert.equal(sent.length, 2);
+    assert.ok(JSON.stringify(sent[0]).includes(work));
+    assert.ok(!JSON.stringify(sent[0]).includes(personal));
+    assert.deepEqual(sent[1], { keep_recent_count: 3 });
+    assert.equal((await createPendingQueue("personal").listPending()).length, 1);
+  });
+});
 
 test("syncBranch returns added token accounting and delivered status", async () => {
   await withPendingDir(async () => {
@@ -458,9 +487,10 @@ test("non-retryable batch failure drops the payloads but still advances the sync
 });
 
 test("retry queue write failure records a permanent capture gap", async () => {
-  const previous = process.env.OPENVIKING_PENDING_DIR;
-  process.env.OPENVIKING_PENDING_DIR = "/dev/null/unwritable";
-  try {
+  await withPendingDir(async (dir) => {
+    const blocker = join(dir, "not-a-directory");
+    await writeFile(blocker, "");
+    process.env.OPENVIKING_PENDING_DIR = join(blocker, "unwritable");
     const { c } = batchClient({ respond: () => ({ ok: false, status: 500, error: { message: "offline" } }) });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
@@ -471,10 +501,7 @@ test("retry queue write failure records a permanent capture gap", async () => {
     assert.equal(result.permanentFailures, 1);
     assert.equal(sync.droppedCount, 1);
     assert.equal(sync.syncedCount, 1);
-  } finally {
-    if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR;
-    else process.env.OPENVIKING_PENDING_DIR = previous;
-  }
+  });
 });
 
 test("takeover startup replay records a non-retryable current-session gap", async () => {

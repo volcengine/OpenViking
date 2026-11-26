@@ -8,7 +8,7 @@ import { join } from "node:path"
 import { createMemorySessionManager } from "../lib/memory-session.mjs"
 import { contextMessageEvents } from "../lib/v2-events.mjs"
 import { initLogger } from "../lib/utils.mjs"
-import { listPending } from "../lib/shared/pending-queue.mjs"
+import { createPendingQueue, listPending } from "../lib/shared/pending-queue.mjs"
 import { withPendingDir } from "../../memory-plugin-shared/testing/support.mjs"
 
 async function withTempDir(prefix, fn) {
@@ -877,6 +877,25 @@ test("commit of a session the server no longer has drops the stale local mapping
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }
+})
+
+test("a scoped commit replays its own messages and leaves same-session legacy writes queued", async () => {
+  await withPendingDir(async (dir) => {
+    await withCaptureServer(async ({ endpoint, requests }) => {
+      const config = { ...baseConfig(endpoint), connectionScope: "work" }
+      const manager = createMemorySessionManager({ config, pluginRoot: dir })
+      const sid = "oc-same-session"
+      await createPendingQueue().enqueue("addMessage", sid, { role: "user", content: "legacy" })
+      await createPendingQueue("work").enqueue("addMessage", sid, { role: "user", content: "work" })
+
+      assert.equal((await manager.commitSession(sid)).status, "accepted")
+      assert.deepEqual(requests.map(({ url, body }) => [url, JSON.parse(body)]), [
+        [`/api/v1/sessions/${sid}/messages`, { role: "user", content: "work" }],
+        [`/api/v1/sessions/${sid}/commit`, { keep_recent_count: 0 }],
+      ])
+      assert.deepEqual((await listPending()).map(({ entry }) => entry.payload.content), ["legacy"])
+    })
+  })
 })
 
 test("a closing session whose messages got queued commits behind them", async () => {

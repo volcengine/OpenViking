@@ -25,9 +25,11 @@ export function readProxyConfig(env = process.env) {
 
 // A disabled plugin no longer records the session at SessionStart, so what it
 // recorded earlier may name a session that /clear has since replaced.
-export function currentHistorySession({ pid = process.ppid, startedAt = 0, env = process.env } = {}) {
-  if (!isPluginEnabled() || loadConfig(undefined, { env }).enabled === false) return "";
-  return currentOvSessionId({ pid, startedAt, env });
+export function currentHistorySession({ pid = process.ppid, startedAt = 0, env = process.env, connectionScope } = {}) {
+  if (!isPluginEnabled()) return "";
+  const cfg = loadConfig(undefined, { env });
+  if (cfg.enabled === false) return "";
+  return currentOvSessionId({ pid, startedAt, env, connectionScope: connectionScope ?? cfg.connectionScope });
 }
 
 function isDirectRun() {
@@ -44,6 +46,6 @@ if (isDirectRun()) {
   createOpenVikingMcpProxy({
     readConfig: readProxyConfig,
     loggerFactory: createLogger,
-    defaultHistorySession: () => currentHistorySession({ startedAt }),
+    defaultHistorySession: (_params, config) => currentHistorySession({ startedAt, connectionScope: config.connectionScope }),
   }).start();
 }

@@ -183,6 +183,7 @@ test("the shared mapper carries every connection field a loader resolved", () =>
     debugLogPath: "/tmp/codex.log",
     credentialSource: "ovcli",
     credentialPath: "/cfg/ovcli.conf",
+    connectionScope: "personal-scope",
     cliPath: "/cfg/ovcli.conf",
     ovPath: "",
   };
@@ -202,6 +203,7 @@ test("the shared mapper carries every connection field a loader resolved", () =>
       debugLogPath: "/tmp/codex.log",
       credentialSource: "ovcli",
       credentialPath: "/cfg/ovcli.conf",
+      connectionScope: "personal-scope",
       watchedPaths: ["/cfg/ovcli.conf"],
       extraHeaders: {},
     },

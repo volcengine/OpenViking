@@ -19,7 +19,10 @@ const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 function hookEnv(root, baseUrl) {
   return {
     HOME: root,
+    USERPROFILE: root,
     TMPDIR: root,
+    TMP: root,
+    TEMP: root,
     OPENVIKING_AUTO_CAPTURE: "1",
     OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
     OPENVIKING_MEMORY_ENABLED: "1",

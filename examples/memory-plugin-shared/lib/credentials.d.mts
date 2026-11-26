@@ -39,11 +39,16 @@ export interface Connection extends CredentialFiles {
   hasApiKey: boolean;
   apiKeySource: string;
   credentialPath: string;
+  connectionPath: string;
+  connectionFields: string[];
+  connectionScope: string;
 }
 
 export function resolveConnection(
   harness: string,
   options?: {
+    cwd?: string;
+    sessionId?: string;
     env?: Record<string, string | undefined>;
     files?: CredentialFiles | null;
     hostInput?: ConnectionHostInput;
@@ -54,6 +59,7 @@ export function resolveConnection(
 export function buildProxyConnection(
   harness: string,
   options?: {
+    cwd?: string;
     env?: Record<string, string | undefined>;
     manifestUrl?: string | URL;
     version?: string;
@@ -72,6 +78,9 @@ export function buildProxyConnection(
   credentialSource: string;
   apiKeySource: string;
   credentialPath: string;
+  connectionPath: string;
+  connectionFields: string[];
+  connectionScope: string;
   hasApiKey: boolean;
   cliPath: string;
   ovPath: string;
