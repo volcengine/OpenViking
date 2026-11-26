@@ -8,9 +8,11 @@ npm i -g @openviking/cli && ov config
 ```
 
 
-### 步骤2：按提示填写 OpenViking Base URL 和 API Key
+### 步骤2：配置连接
 
-- Base URL: 复制以下 Base URL 到你的终端
+选择托管服务预设后，向导会自动设置 Base URL。
+
+- Base URL：如果向导要求填写地址，请将以下地址复制到终端：
 ```text
 {{OPENVIKING_BASE_URL}}
 ```
