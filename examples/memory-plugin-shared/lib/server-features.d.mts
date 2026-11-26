@@ -1,4 +1,4 @@
-export type ServerFeature = "working_memory_opt_in";
+export type ServerFeature = "working_memory_opt_in" | "privacy_seal";
 
 export const SERVER_FEATURES: Readonly<Record<ServerFeature, string>>;
 

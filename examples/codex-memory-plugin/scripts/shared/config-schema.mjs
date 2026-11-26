@@ -189,6 +189,10 @@ export const KNOBS = [
     capability: "session",
   },
   { name: "skipSubagentSessions", type: "bool", default: false, env: "OPENVIKING_SKIP_SUBAGENT_SESSIONS", capability: "session" },
+  // Plugin sealing; no workspace key, so a committed file cannot switch it off.
+  { name: "sealSecrets", type: "bool", default: false, env: "OPENVIKING_SEAL_SECRETS", capability: "session" },
+  // With sealSecrets on, tool results are enrolled too.
+  { name: "enrollToolSecrets", type: "bool", default: false, env: "OPENVIKING_ENROLL_TOOL_SECRETS", capability: "session" },
   { name: "repoContext", type: "bool", default: true, capability: "session" },
   { name: "repoContextCacheTtlMs", type: "int", default: 60000, min: 1000, max: 3600000, capability: "session" },
 
