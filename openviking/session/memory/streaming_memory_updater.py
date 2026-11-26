@@ -244,15 +244,19 @@ class StreamingMemoryUpdater:
         self, request: MemoryUpdateRequest
     ) -> list[tuple[DirectoryMergePlan, DirectoryMergeResult]]:
         registry = request.memory_registry or self.registry or get_default_registry()
-        return [
-            (
-                plan,
-                await merge_memory_directories(
+        outcomes = []
+        incomplete_targets: set[str] = set()
+        for plan in request.operations.directory_merges:
+            if plan.operation == "rename" and plan.source_uri in incomplete_targets:
+                outcome = DirectoryMergeResult(status="skipped_incomplete_merge")
+            else:
+                outcome = await merge_memory_directories(
                     plan, registry=registry, vikingdb=self.vikingdb, ctx=request.ctx
-                ),
-            )
-            for plan in request.operations.directory_merges
-        ]
+                )
+            if plan.operation == "merge" and outcome.status != "merged":
+                incomplete_targets.add(plan.target_uri)
+            outcomes.append((plan, outcome))
+        return outcomes
 
     async def _submit_grouped_merge_request(
         self,

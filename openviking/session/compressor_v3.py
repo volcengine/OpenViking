@@ -336,6 +336,8 @@ class SessionCompressorV3:
         archive_uri: str = "",
         *,
         moved_away: set[str] | None = None,
+        transient: set[str] | None = None,
+        before_directory_moves: dict[str, MemoryFile] | None = None,
     ) -> dict[str, Any]:
         adds: list[dict[str, Any]] = []
         updates: list[dict[str, Any]] = []
@@ -367,7 +369,9 @@ class SessionCompressorV3:
                     adds.append(entry)
 
         for uri in result.deleted_uris:
-            deleted = delete_by_uri.get(uri)
+            if transient and uri in transient:
+                continue
+            deleted = (before_directory_moves or {}).get(uri) or delete_by_uri.get(uri)
             deletes.append(
                 {
                     "uri": uri,
@@ -863,14 +867,19 @@ class SessionCompressorV3:
                 moved_away=moved_away,
             )
 
-        contexts = [
-            context
-            for context in _contexts_from_update_result(result)
-            if context.uri not in moved_away
-        ]
+        contexts = _contexts_from_update_result(result, moved_away=moved_away)
         if directory_results:
             diffs = [memory_diff] if memory_diff is not None else []
             reports = []
+            # A card first created by this Commit and then moved has one final add.
+            before_directory_moves = {
+                old.uri: old
+                for op in patch_operations.upsert_operations
+                if (old := op.old_memory_file_content)
+                and old.uri in op.uris
+                and old.uri in moved_away
+            }
+            transient = set(result.written_uris) - before_directory_moves.keys()
             for plan, migration in directory_results:
                 reports.append(
                     {
@@ -886,15 +895,23 @@ class SessionCompressorV3:
                         "errors": len(migration.result.errors),
                     }
                 )
-                contexts.extend(_contexts_from_update_result(migration.result))
+                contexts.extend(
+                    _contexts_from_update_result(
+                        migration.result, moved_away=moved_away, transient=transient
+                    )
+                )
                 diffs.append(
                     await self._build_memory_diff(
                         result=migration.result,
                         operations=migration.operations,
                         viking_fs=viking_fs,
                         ctx=ctx,
+                        moved_away=moved_away,
+                        transient=transient,
+                        before_directory_moves=before_directory_moves,
                     )
                 )
+                transient.update(migration.result.written_uris)
             memory_diff = _merge_memory_diffs(diffs, archive_uri=archive_uri or "")
             memory_diff["directory_merges"] = reports
 
@@ -1527,14 +1544,19 @@ class _V3AppliedMemory:
     memory_diff: dict[str, Any] | None = None
 
 
-def _contexts_from_update_result(result: Any) -> list[Context]:
+def _contexts_from_update_result(
+    result: Any, *, moved_away: set[str] | None = None, transient: set[str] | None = None
+) -> list[Context]:
     contexts = []
     for uri in result.written_uris:
-        contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
+        if not moved_away or uri not in moved_away:
+            contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
     for uri in result.edited_uris:
-        contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
+        if not moved_away or uri not in moved_away:
+            contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
     for uri in result.deleted_uris:
-        contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
+        if not transient or uri not in transient:
+            contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
     return contexts
 
 

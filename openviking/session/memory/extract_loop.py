@@ -1116,6 +1116,9 @@ class ExtractLoop:
         renames = {plan.target_uri: plan for plan in plans if plan.operation == "rename"}
         if not renames:
             return
+        merge_targets = {
+            plan.source_uri: plan.target_uri for plan in plans if plan.operation == "merge"
+        }
         for operation in operations:
             if len(operation.uris) != 1:
                 continue
@@ -1124,14 +1127,17 @@ class ExtractLoop:
             if plan is None or plan.memory_type != operation.memory_type:
                 continue
             old_card = operation.old_memory_file_content
-            if old_card and (old_card.uri or "").rpartition("/")[0] != plan.source_uri:
-                continue
+            source = plan.source_uri
+            if old_card:
+                source = (old_card.uri or "").rpartition("/")[0]
+                if source != plan.source_uri and merge_targets.get(source) != plan.source_uri:
+                    continue
             field = "category" if plan.memory_type == "entities" else "user"
-            operation.uris = [f"{plan.source_uri}/{filename}"]
+            operation.uris = [f"{source}/{filename}"]
             if old_card:
                 operation.memory_fields.pop(field, None)
             else:
-                operation.memory_fields[field] = plan.source_uri.rsplit("/", 1)[1]
+                operation.memory_fields[field] = source.rsplit("/", 1)[1]
 
     async def _updated_uri_for_existing_operation(
         self,

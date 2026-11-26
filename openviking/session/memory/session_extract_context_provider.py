@@ -232,10 +232,10 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
 ## Existing Memory Directories
 - Maintain the directory list in this Commit. Reuse a relevant, equivalent category's exact inventory name, even when its language differs from the requested output language. Use the requested language for new category names and card content.
-- Before creating a card you have not read, use shallow `ls` to check its category and equivalent siblings in the same root. Read any matching card and keep distinct entities and facts separate.
-- Merge clearly equivalent, relevant sibling directories into one existing directory. Rename only when the conversation establishes a clearer name for the same category and the name is unused. A language change alone does not warrant a rename.
+- Before creating a card you have not read, use `ls` to check its category and relevant siblings in the same root. Read any matching card and keep distinct entities and facts separate.
+- Use the cards to judge whether relevant sibling directories belong in one category, even if their names look different. Merge into an existing directory whose name fits the combined cards if possible. If none of the names fits, merge into one of the existing directories, then rename it to a clearer, unused name in the same output. A language change alone does not warrant a rename.
 - Consolidate preferences only when the names are verifiable formatting aliases of the scoped owner ID.
-- Directory operations follow card writes. For a merge, update matching source cards in place and write new cards to the target. For a rename, write all cards to the source.
+- Directory operations follow card writes. Update existing cards in place and write new cards to the surviving existing directory, using its current name.
 - Include relevant directory operations even without card changes and keep them when revising the final output after a read.
 """
         contains_resource_uri = self._conversation_contains_resource_uri()
@@ -638,7 +638,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             plan = self._resolve_directory_merge(request)
             if plan is None or any(
                 existing.source_uri in {plan.source_uri, plan.target_uri}
-                or existing.target_uri == plan.source_uri
+                or (
+                    existing.target_uri == plan.source_uri
+                    and (existing.operation != "merge" or plan.operation != "rename")
+                )
                 or (
                     existing.target_uri == plan.target_uri
                     and "rename" in {existing.operation, plan.operation}

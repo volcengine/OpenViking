@@ -22,7 +22,7 @@ from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
 from openviking.session.memory.tools import verified_preference_directory_owner
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-from openviking.session.memory.utils.uri import generate_uri
+from openviking.session.memory.utils.uri import generate_uri, render_template
 from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.acl import AclAction
 from openviking.storage.expr import And, Eq
@@ -246,7 +246,7 @@ async def _prepare_operations(
     if plan.operation == "merge":
         return report
     moving = {op.old_memory_file_content.uri for op in report.operations.upsert_operations}
-    await _record_remaining(fs, plan, source_entries, ctx, report, moving=moving)
+    await _record_remaining(fs, plan, schema, source_entries, ctx, report, moving=moving)
     if report.remaining or report.result.errors:
         report.status = "blocked"
         return report
@@ -277,7 +277,9 @@ async def _linked_paths(fs, operations: ResolvedOperations, root: str, ctx) -> s
     return paths
 
 
-async def _is_discardable_sidecar(fs, uri: str, name: str, ctx: RequestContext) -> bool:
+async def _is_discardable_sidecar(
+    fs, uri: str, name: str, schema: MemoryTypeSchema, ctx: RequestContext
+) -> bool:
     raw = await fs.read_file(uri, ctx=ctx)
     if not raw.strip():
         return True
@@ -285,17 +287,30 @@ async def _is_discardable_sidecar(fs, uri: str, name: str, ctx: RequestContext) 
         return json.loads(raw) in ([], {})
     document = parse_abstract_overview(raw)
     generated_by = document.metadata.get("generated_by", {})
-    return (
-        not document.legacy
-        and not document.is_manual_abstract
-        and (
-            generated_by.get("component") == "SemanticProcessor"
-            or generated_by == {"component": "MemoryUpdater", "trigger": "memory_update"}
-        )
+    if document.legacy:
+        return False
+    generated_by_semantics = generated_by.get("component") == "SemanticProcessor"
+    if document.is_manual_abstract:
+        if name != ".abstract.md" or not generated_by_semantics or not schema.abstract_template:
+            return False
+        # The semantic processor also marks memory template presets as manual.
+        # Keep any edit to that preset and only discard the reproducible text.
+        category = uri.rsplit("/", 2)[1]
+        preset = render_template(
+            schema.abstract_template,
+            {
+                "memory_type": schema.memory_type,
+                "directory_name": category,
+                "subdirectory": category,
+            },
+        ).strip()
+        return bool(preset) and document.body.strip() == preset
+    return generated_by_semantics or generated_by == (
+        {"component": "MemoryUpdater", "trigger": "memory_update"}
     )
 
 
-async def _record_remaining(fs, plan, entries, ctx, report, *, moving=frozenset()) -> None:
+async def _record_remaining(fs, plan, schema, entries, ctx, report, *, moving=frozenset()) -> None:
     report.remaining = []
     for name, is_dir in sorted(entries.items()):
         uri = f"{plan.source_uri}/{name}"
@@ -303,14 +318,14 @@ async def _record_remaining(fs, plan, entries, ctx, report, *, moving=frozenset(
             continue
         if not is_dir and name in _DERIVED_FILES:
             try:
-                if await _is_discardable_sidecar(fs, uri, name, ctx):
+                if await _is_discardable_sidecar(fs, uri, name, schema, ctx):
                     continue
             except Exception as exc:
                 report.result.add_error(uri, exc)
         report.remaining.append(uri)
 
 
-async def _finish_source(fs, plan, source_path, ctx, lease, report) -> None:
+async def _finish_source(fs, plan, schema, source_path, ctx, lease, report) -> None:
     try:
         entries = await _entries(fs, source_path, ctx)
     except Exception as exc:
@@ -318,7 +333,7 @@ async def _finish_source(fs, plan, source_path, ctx, lease, report) -> None:
             report.pruned = True
             return
         raise
-    await _record_remaining(fs, plan, entries, ctx, report)
+    await _record_remaining(fs, plan, schema, entries, ctx, report)
     if not report.remaining and not report.result.errors:
         await fs.rm(plan.source_uri, recursive=True, ctx=ctx, lease_ref=lease)
         report.pruned = True
@@ -446,7 +461,7 @@ async def merge_memory_directories(
                     if not report.operations.upsert_operations:
                         await fs.mkdir(plan.target_uri, ctx=ctx, lease_ref=lease)
                 await _apply_cards(updater, report, ctx, stop_on_error=rename)
-                await _finish_source(fs, plan, source_path, ctx, lease, report)
+                await _finish_source(fs, plan, schema, source_path, ctx, lease, report)
                 break
         else:
             raise RuntimeError("Directory merge could not stabilize linked-memory lock coverage")

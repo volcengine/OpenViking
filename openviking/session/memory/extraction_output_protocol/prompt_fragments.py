@@ -36,14 +36,22 @@ PYTHON_COMMIT_RULE = (
     "If there are no changes, return only sdk.commit()."
 )
 PYTHON_METHODS_HEADER = ("", "Available write methods for this extraction:")
+DIRECTORY_CATEGORY_RULES = (
+    "- Compare the cards in candidate directories. Merge siblings whose contents fit one useful "
+    "category, even if their names differ or cover only part of the combined category.",
+    "- Keep the destination name if it describes the combined cards. Otherwise, include one "
+    "rename of that destination to an unused sibling in the same final output.",
+)
 PYTHON_DIRECTORY_MERGE_RULES = (
     "",
     "## Directory Operations",
-    "- sdk.merge_dirs(source_uri='...', target_uri='...') merges equivalent siblings into an "
+    *DIRECTORY_CATEGORY_RULES,
+    "- sdk.merge_dirs(source_uri='...', target_uri='...') merges related siblings into an "
     "existing target.",
     "- sdk.rename_dir(source_uri='...', target_uri='...') renames a directory to an unused sibling URI. "
     "Write cards in the source category until the rename. Let rename_dir change the category.",
     "- Use standalone calls with literal URIs, even when these are the only changes. "
+    "Put any rename of a merge destination after all merge calls. "
     "Directory operations run after card writes.",
 )
 PYTHON_ADD_ONLY_PREAMBLE = (

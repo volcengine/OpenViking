@@ -56,8 +56,20 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
             if unavailable
             else ""
         )
+        directory_rules = (
+            "\n".join(
+                (
+                    "## Directory Operations",
+                    *prompts.DIRECTORY_CATEGORY_RULES,
+                    "- In directory_merges, list the merges first and any rename of a merge "
+                    "destination after them.\n",
+                )
+            )
+            if context.supports_directory_merges
+            else ""
+        )
         return (
-            creation_rule + "## Output Format\n"
+            creation_rule + directory_rules + "## Output Format\n"
             "The final output of the model must strictly follow the JSON Schema format shown below:\n"
             f"```json\n{schema}\n```"
         )
