@@ -40,9 +40,7 @@ async def wait_for_mineru_ready(
                 payload = payload if isinstance(payload, dict) else {}
                 if token:
                     code = payload.get("code")
-                    if response.status_code == 404 or (
-                        response.status_code == 200 and code in (0, -60012)
-                    ):
+                    if response.status_code == 200 and code in (0, -60012):
                         return
                     last_error = f"unexpected response: HTTP {response.status_code}, code={code!r}"
                 else:

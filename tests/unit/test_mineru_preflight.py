@@ -101,16 +101,22 @@ async def test_network_error_raises(patch_httpx):
 
 
 @pytest.mark.asyncio
-async def test_hosted_preflight_accepts_missing_batch_and_rejects_expired_token(patch_httpx):
+async def test_hosted_preflight_distinguishes_missing_batch_from_bad_endpoint(patch_httpx):
+    status_code = 200
     code = -60012
 
     def handler(url):
         assert url.startswith(f"{ENDPOINT}/extract-results/batch/")
-        return _FakeResponse(payload={"code": code})
+        return _FakeResponse(status_code=status_code, payload={"code": code})
 
     patch_httpx(handler)
 
     await wait_for_mineru_ready(ENDPOINT, token="test-token")
     code = "A0211"
     with pytest.raises(RuntimeError, match="A0211"):
+        await wait_for_mineru_ready(ENDPOINT, timeout=0.05, token="test-token")
+
+    status_code = 404
+    code = None
+    with pytest.raises(RuntimeError, match="HTTP 404"):
         await wait_for_mineru_ready(ENDPOINT, timeout=0.05, token="test-token")

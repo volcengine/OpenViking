@@ -69,8 +69,14 @@ async def test_registry_applies_parser_config_when_storing_document_sections(
         Image.new("RGB", (32, 32)).save(image, format="PNG")
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as result_zip:
-            result_zip.writestr("full.md", "Hosted result\n\n![Figure](images/figure.png)")
-            result_zip.writestr("images/figure.png", image.getvalue())
+            result_zip.writestr(
+                "result/full.md",
+                "Hosted result\n\nKeep figure.png and images/figure.png in the text.\n\n"
+                "![Figure](<./images/figure.png>)\n\n![Other](other/figure.png)",
+            )
+            result_zip.writestr("result/images/figure.png", image.getvalue())
+            result_zip.writestr("result/layout.json", '{"unused": true}')
+            result_zip.writestr("thumbnail/images/figure.png", b"unrelated image")
         mineru_available = True
 
         def respond(request: httpx.Request) -> httpx.Response:
@@ -84,6 +90,10 @@ async def test_registry_applies_parser_config_when_storing_document_sections(
 
             assert request.headers["Authorization"] == "Bearer test-token"
             if request.url.path.endswith("/file-urls/batch"):
+                if not mineru_available:
+                    return httpx.Response(
+                        200, json={"code": -60009, "msg": "Task submission queue is full"}
+                    )
                 return httpx.Response(
                     200,
                     json={
@@ -91,9 +101,9 @@ async def test_registry_applies_parser_config_when_storing_document_sections(
                         "data": {"batch_id": "batch", "file_urls": ["https://files.example/pdf"]},
                     },
                 )
+            if request.url.path.endswith("/file_parse"):
+                return httpx.Response(404)
             assert request.url.path == "/api/v4/extract-results/batch/batch"
-            if not mineru_available:
-                return httpx.Response(503)
             entry = {"state": "done", "full_zip_url": "https://files.example/result.zip"}
             return httpx.Response(200, json={"code": 0, "data": {"extract_result": [entry]}})
 
@@ -107,10 +117,23 @@ async def test_registry_applies_parser_config_when_storing_document_sections(
         assert hosted.meta["pdf_strategy_effective"] == "mineru"
         assert hosted.artifact_ref is not None
         hosted_root = Path(hosted.artifact_ref.root)
-        assert any("Hosted result" in file.read_text() for file in hosted_root.rglob("*.md"))
+        hosted_markdown = "\n".join(
+            file.read_text(encoding="utf-8") for file in hosted_root.rglob("*.md")
+        )
+        assert "Hosted result" in hosted_markdown
+        assert "Keep figure.png and images/figure.png in the text." in hosted_markdown
+        assert "![Figure](<report/images/figure.png>)" in hosted_markdown
+        assert "![Other](other/figure.png)" in hosted_markdown
         assert next(hosted_root.rglob("figure.png")).read_bytes() == image.getvalue()
 
         mineru_available = False
+        config.strategy = "mineru"
+        rejected = await registry.parse(source, parse_output_store=store)
+        assert rejected.artifact_ref is None
+        assert rejected.warnings == [
+            "Failed to parse PDF: MinerU returned code -60009: Task submission queue is full"
+        ]
+        config.strategy = "auto"
     else:
         source.write_text("<article>" + "".join(f"<p>{line}</p>" for line in lines) + "</article>")
 

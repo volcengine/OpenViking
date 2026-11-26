@@ -17,7 +17,6 @@ import base64
 import hashlib
 import io
 import re
-import tempfile
 import threading
 import time
 import zipfile
@@ -37,9 +36,10 @@ from openviking.parse.base import (
     create_parse_result,
     lazy_import,
 )
+from openviking.parse.image_rewrite import rewrite_image_targets, unwrap_link_destination
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.time_utils import parse_iso_datetime
-from openviking.utils.zip_safe import safe_extract_zip
+from openviking.utils.zip_safe import iter_safe_zip_members
 from openviking_cli.exceptions import InvalidArgumentError, OpenVikingError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.parser_config import PDFConfig
@@ -737,29 +737,20 @@ class PDFParser(BaseParser):
             raise ValueError("MinerU endpoint not configured")
 
         base = self.config.mineru_endpoint.rstrip("/")
-        url = base if base.endswith("/file_parse") else f"{base}/file_parse"
         meta = {
             "strategy": "mineru",
             "endpoint": self.config.mineru_endpoint,
             "api_version": None,
         }
         token = self.config.mineru_token
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
         async with httpx.AsyncClient(timeout=self.config.mineru_timeout) as client:
-            batch_id = None
             if token:
-                try:
-                    batch_id = await self._mineru_upload_batch(client, base, headers, pdf_path)
-                except Exception as exc:
-                    # An authenticated self-hosted endpoint can still serve /file_parse.
-                    logger.info(
-                        "MinerU batch submission failed; trying /file_parse error_type=%s",
-                        type(exc).__name__,
-                    )
-            if batch_id is not None:
+                headers = {"Authorization": f"Bearer {token}"}
+                batch_id = await self._mineru_upload_batch(client, base, headers, pdf_path)
                 markdown, images = await self._mineru_batch_result(client, base, headers, batch_id)
                 meta.update(api_version="v4", task_id=batch_id)
             else:
+                url = base if base.endswith("/file_parse") else f"{base}/file_parse"
                 data = dict(self.config.mineru_bodys or {}, return_images=True)
                 logger.debug("Calling MinerU API endpoint=%s", safe_uri_for_log(url))
                 with pdf_path.open("rb") as pdf:
@@ -767,7 +758,6 @@ class PDFParser(BaseParser):
                         url,
                         files={"files": (pdf_path.name, pdf, "application/pdf")},
                         data=data,
-                        headers=headers,
                     )
                 response.raise_for_status()
                 result = response.json()
@@ -867,21 +857,22 @@ class PDFParser(BaseParser):
 
     @staticmethod
     def _read_mineru_archive(content: bytes) -> tuple[str, dict[str, bytes]]:
-        with (
-            tempfile.TemporaryDirectory(prefix="mineru-") as tmp,
-            zipfile.ZipFile(io.BytesIO(content)) as archive,
-        ):
-            root = Path(tmp)
-            safe_extract_zip(archive, root)
-            markdown = next((path for path in root.rglob("full.md") if path.is_file()), None)
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            members = {
+                path: member
+                for path, member in iter_safe_zip_members(archive)
+                if not member.filename.endswith(("/", "\\"))
+            }
+            markdown = next((path for path in members if path.name == "full.md"), None)
             if markdown is None:
                 raise ValueError("MinerU result archive has no Markdown file")
+            images_dir = markdown.parent / "images"
             images = {
-                path.name: path.read_bytes()
-                for path in (markdown.parent / "images").glob("*")
-                if path.is_file()
+                path.name: archive.read(member)
+                for path, member in members.items()
+                if path.parent == images_dir
             }
-            return markdown.read_text(encoding="utf-8", errors="replace"), images
+            return archive.read(members[markdown]).decode("utf-8", errors="replace"), images
 
     @staticmethod
     def _store_mineru_images(
@@ -906,7 +897,11 @@ class PDFParser(BaseParser):
                 target = storage.save_image(
                     resource_name, data, filename=path.stem, extension=path.suffix or ".png"
                 )
-                refs[path.name] = target.relative_to(storage.media_dir).as_posix()
+                relative_target = target.relative_to(storage.media_dir).as_posix()
+                refs[path.as_posix()] = relative_target
+                if path.parent == Path("."):
+                    # MinerU can key the image by basename while linking under images/.
+                    refs.setdefault(f"images/{path.name}", relative_target)
             except Exception as exc:
                 failed += 1
                 logger.debug(
@@ -917,10 +912,16 @@ class PDFParser(BaseParser):
         if failed:
             logger.info("MinerU image extraction incomplete failed=%d degraded=true", failed)
         if refs:
-            filenames = "|".join(re.escape(name) for name in sorted(refs, key=len, reverse=True))
-            pattern = re.compile(r"(?<![\w/.-])(?:[\w.-]+/)*(" + filenames + r")(?![\w.-])")
-            markdown = pattern.sub(lambda match: refs[match[1]], markdown)
-        return markdown, len(refs)
+
+            def resolve_target(reference: str) -> str | None:
+                path = unwrap_link_destination(reference)
+                target = refs.get(Path(path).as_posix())
+                if target is not None and path != reference.strip():
+                    return f"<{target}>"
+                return target
+
+            markdown, _ = rewrite_image_targets(markdown, resolve_target)
+        return markdown, len(set(refs.values()))
 
     def _format_table_markdown(self, table: List[List[Optional[str]]]) -> str:
         """
