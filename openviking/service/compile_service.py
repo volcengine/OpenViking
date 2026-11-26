@@ -162,10 +162,7 @@ class CompileRequest(BaseModel):
     to: str | None = None
     skill: str | None = None
     instruction: str | None = None
-    args: dict[str, Any] | None = Field(
-        default=None,
-        description="Named runs use only owner_user_id; other args are ignored.",
-    )
+    args: dict[str, Any] | None = None
 
     @property
     def is_memory_mode(self) -> bool:
@@ -180,7 +177,7 @@ class CompileRequest(BaseModel):
         if "compile_name" in data:
             if set(data) - {"compile_name", "args"}:
                 raise ValueError(
-                    "To run a saved configuration, send compile_name and optional args.owner_user_id "
+                    "To run a saved configuration, send compile_name and optional args "
                     "to POST /api/v1/compile. "
                     "Save the execution inputs with compile_name using POST /api/v1/compile/create. "
                     "See https://docs.openviking.ai/en/api/23-agent-runtime"
@@ -195,7 +192,14 @@ class CompileRequest(BaseModel):
                     error = validate_user_id(args["owner_user_id"])
                     if error:
                         raise ValueError(f"Invalid args.owner_user_id: {error}")
-                data = {**data, "args": {k: args[k] for k in ("owner_user_id",) if k in args}}
+                if "session-id" in args and (
+                    not isinstance(args["session-id"], str) or not args["session-id"].strip()
+                ):
+                    raise ValueError("args.session-id must be a non-empty string")
+                data = {
+                    **data,
+                    "args": {k: args[k] for k in ("owner_user_id", "session-id") if k in args},
+                }
             return data
         inputs = CompileInputs.model_validate(data)
         if "owner_user_id" in (inputs.args or {}):
@@ -711,6 +715,10 @@ class CompileService:
             # Omitted and explicit self owners share a retry identity.
             if owner_user_id != ctx.user.user_id:
                 submitted["args"] = {"owner_user_id": owner_user_id}
+            if "session-id" in (request.args or {}):
+                conversation_id = request.args["session-id"]
+                inputs.args = {**(inputs.args or {}), "session-id": conversation_id}
+                submitted.setdefault("args", {})["session-id"] = conversation_id
         else:
             record = None
             inputs = self._normalize_request_uris(request, ctx)

@@ -17,8 +17,9 @@ from fastapi import Path as ApiPath
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from openviking.core.namespace import canonical_user_root
+from openviking.core.namespace_constants import SYSTEM_EXAMPLE_SKILLS_ROOT
 from openviking.core.path_variables import resolve_path_variables
-from openviking.core.skill_loader import validate_skill_format
+from openviking.core.skill_loader import SkillLoader, validate_skill_format
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.models.embedder.base import query_embed_cache_scope
 from openviking.retrieve.skill_results import skill_root_uri
@@ -490,18 +491,25 @@ async def _read_skill_detail(
     """Read one Skill; integrity requests observe a storage-locked package snapshot."""
 
     async def read_fields() -> Dict[str, Any]:
-        abstract = await service.fs.abstract(root_uri, ctx=ctx)
-        result = _skill_summary_from_meta(skill_name, root_uri, _parse_abstract_meta(abstract))
-        if level is None or level == 0:
-            result["abstract"] = abstract
-        if level is None or level == 1:
-            result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
+        content = None
+        if root_uri.startswith(f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/"):
+            # System examples are file-only: their metadata lives in SKILL.md.
+            content = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
+            result = _skill_summary_from_meta(skill_name, root_uri, SkillLoader.parse(content))
+        else:
+            abstract = await service.fs.abstract(root_uri, ctx=ctx)
+            result = _skill_summary_from_meta(skill_name, root_uri, _parse_abstract_meta(abstract))
+            if level is None or level == 0:
+                result["abstract"] = abstract
+            if level is None or level == 1:
+                result["overview"] = await service.fs.overview(root_uri, ctx=ctx)
         if (
             level == 2
             or include_content is True
             or (level is None and include_content is not False)
         ):
-            content = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
+            if content is None:
+                content = await service.fs.read(_skill_md_uri(root_uri), ctx=ctx)
             result["content"] = content
             result["content_sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
             if include_integrity:
@@ -728,14 +736,17 @@ async def get_skill(
     level: Optional[int] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Show one installed agent skill."""
+    """Read an installed Skill or an explicitly requested system example."""
     if level is not None and level not in {0, 1, 2}:
         raise InvalidArgumentError(
             "Skill show level must be 0, 1, or 2",
             details={"field": "level", "allowed": [0, 1, 2]},
         )
     service = get_service()
-    root_uri = await _require_skill(service, _ctx, skill_name, target_uri)
+    if target_uri and target_uri.rstrip("/") == SYSTEM_EXAMPLE_SKILLS_ROOT:
+        root_uri = f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/{_validate_skill_name(skill_name)}"
+    else:
+        root_uri = await _require_skill(service, _ctx, skill_name, target_uri)
     result = await _read_skill_detail(
         service,
         _ctx,

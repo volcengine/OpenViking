@@ -8,6 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from vikingbot.channels.openapi_models import OpenVikingConnection
+from vikingbot.config.schema import SessionKey
 
 DEFAULT_COMPILE_INSTRUCTION = (
     "Follow the loaded Skill's instructions to transform the provided source materials "
@@ -77,6 +78,8 @@ class SanitizedCompileRequest(BaseModel):
     changes: dict[str, Any] | None = None
     # Effective per-task Simple round limit; None uses the service's configured limit.
     loop_turn: int | None = Field(default=None, ge=DEFAULT_SIMPLE_AGENT_ITERATIONS)
+    # First task ID of an existing Simple conversation, or None to start one.
+    conversation_id: str | None = None
 
 
 def has_directory_plan(changes: dict[str, Any] | None) -> bool:
@@ -133,6 +136,15 @@ class CompileTask(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
     result: CompileResult | None = None
     error: CompileErrorInfo | None = None
+
+    @property
+    def conversation_key(self) -> SessionKey:
+        """Locate Simple chat history within the authenticated caller's namespace."""
+        return SessionKey(
+            type="compile",
+            channel_id=self.principal_scope,
+            chat_id=self.sanitized_request.conversation_id or self.task_id,
+        )
 
     def public_dict(self, *, include_recovery_proof: bool = False) -> dict[str, Any]:
         data = self.model_dump(exclude={"principal_scope", "sanitized_request"}, exclude_none=True)

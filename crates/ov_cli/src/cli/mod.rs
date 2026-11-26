@@ -1141,7 +1141,7 @@ pub(crate) enum Commands {
         /// Additional instructions for this Compile task
         #[arg(long, value_name = "text")]
         instruction: Option<String>,
-        /// JSON args; named runs use only owner_user_id
+        /// Optional run arguments as a JSON object
         #[arg(long, value_name = "json")]
         args: Option<String>,
     },

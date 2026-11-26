@@ -768,6 +768,7 @@ async def run_simple_compile(pipeline, agent_loop, request, calls, *replies):
         None,
         AsyncMock(),
         {},
+        conversation_key=session_key,
     )
 
 
@@ -900,6 +901,106 @@ async def test_simple_recovery_requires_each_changed_source_and_its_frozen_conte
     assert task.public_dict(include_recovery_proof=True)["result"].get("recovery_proof") == (
         result.recovery_proof
     )
+
+
+async def test_simple_conversation_across_tasks(pipeline, agent_loop, tmp_path, monkeypatch):
+    """A new task reads completed chat turns from disk, scoped to the original caller."""
+    loop, _, _ = agent_loop
+    loop.config.storage_workspace = str(tmp_path)
+    loop.config.ov_server.set_effective_auth_mode("dev")
+    loop.config.sandbox.backends.direct.allow_compile_exec = False
+    service = BotCompileService(agent_loop=loop)
+    request = CompileRequest.model_validate(pipeline.request.model_dump(exclude_none=True))
+    client = pipeline.client
+    client.attrs = AsyncMock(side_effect=lambda uri: {"uri": uri})
+    client.stat = AsyncMock(side_effect=lambda uri: {"uri": uri, "isDir": True})
+    client.read_raw = AsyncMock(
+        side_effect=lambda uri: pipeline.skill if uri.endswith("SKILL.md") else ""
+    )
+    client.write = AsyncMock(return_value={"uri": request.to + "/page.md", "content_updated": True})
+    client.close = AsyncMock()
+    monkeypatch.setattr(
+        "vikingbot.compile.service.VikingClient.create", AsyncMock(return_value=client)
+    )
+    write = ToolCallRequest(
+        "write", "openviking_write", {"path": "page.md", "content": "output"}, 0
+    )
+    requests = []
+    replies = iter(
+        [
+            LLMResponse(content="Writing the page.", tool_calls=[write]),
+            LLMResponse(content="First reply."),
+            LLMResponse(content="", tool_calls=[write]),
+            LLMResponse(content="Second reply."),
+        ]
+    )
+
+    async def chat(messages, **kwargs):
+        # The loop appends tools in place after the provider returns.
+        requests.append(list(messages))
+        if len(requests) == 2:
+            recorded = SessionManager(loop.sessions.bot_data_path).get_or_create(
+                task.conversation_key
+            )
+            user, turn = recorded.messages
+            assert json.loads(user["content"])["instruction"] == request.instruction
+            assert turn["content"] == "Writing the page."
+            (call,) = turn["tool_calls"]
+            assert call["tool_call_id"] == "write" and call["execute_success"]
+            assert call["result"] == f"updated: {request.to}/page.md"
+        return next(replies)
+
+    loop.provider.chat = chat
+    first = await service.create_task(request, principal_scope="alice")
+    task = await service.store.get(first.task_id)
+    initial = SessionManager(loop.sessions.bot_data_path).get_or_create(task.conversation_key)
+    assert [(m["role"], m["task_id"]) for m in initial.messages] == [("user", first.task_id)]
+    await asyncio.gather(*service._tasks)
+    assert (await service.store.get(first.task_id)).status == "completed"
+
+    loop.sessions = SessionManager(loop.sessions.bot_data_path)
+    followup = request.model_copy(
+        update={"instruction": "Revise the first reply.", "args": {"session-id": first.task_id}}
+    )
+    with pytest.raises(CompileFailure, match="conversation not found"):
+        await service.create_task(followup, principal_scope="bob")
+    missing = followup.model_copy(update={"args": {"session-id": "cmp_" + "x" * 300}})
+    with pytest.raises(CompileFailure, match="conversation not found"):
+        await service.create_task(missing, principal_scope="alice")
+    second = await service.create_task(followup, principal_scope="alice")
+    await asyncio.gather(*service._tasks)
+    assert (await service.store.get(second.task_id)).status == "completed"
+    assert second.session_id == second.task_id != first.task_id
+    await service.create_task(followup, principal_scope="alice", task_id=second.task_id)
+    assert len(requests) == 4
+    messages = requests[2]
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
+    assert json.loads(messages[1]["content"])["instruction"] == request.instruction
+    assert messages[2]["content"] == "First reply."
+    assert json.loads(messages[3]["content"])["instruction"] == followup.instruction
+    history = SessionManager(loop.sessions.bot_data_path).get_or_create(task.conversation_key)
+    assert [m["role"] for m in history.messages] == ["user", "assistant", "assistant"] * 2
+    assert [m["task_id"] for m in history.messages] == [first.task_id] * 3 + [second.task_id] * 3
+    assert [history.messages[i]["content"] for i in (2, 5)] == ["First reply.", "Second reply."]
+
+    loop.provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(
+                content="Checking inputs.",
+                tool_calls=[ToolCallRequest("ls", "openviking_list", {"uri": request.from_[0]}, 0)],
+            ),
+            RuntimeError("Model unavailable"),
+        ]
+    )
+    interrupted = await service.create_task(request, principal_scope="alice")
+    await asyncio.gather(*service._tasks)
+    failed = await service.store.get(interrupted.task_id)
+    assert failed.status == "failed"
+    fresh = SessionManager(loop.sessions.bot_data_path)
+    assert fresh.has_persisted(failed.conversation_key)
+    user, turn = fresh.get_or_create(failed.conversation_key).messages
+    assert user["role"] == "user" and turn["content"] == "Checking inputs."
+    assert turn["tool_calls"][0]["tool_call_id"] == "ls"
 
 
 @pytest.mark.parametrize("exec_enabled", [True, False])

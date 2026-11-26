@@ -2013,7 +2013,7 @@ class AsyncHTTPClient:
     ) -> Dict[str, Any]:
         """Queue saved or full inputs and return a task_id for querying or cancellation.
 
-        Named runs use only options.args.owner_user_id; other args are ignored.
+        Use options.args to configure the run.
         """
         if compile_name is not None:
             if not compile_name:

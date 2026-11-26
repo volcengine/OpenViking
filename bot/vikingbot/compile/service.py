@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import shutil
 import time
 import uuid
@@ -285,6 +286,17 @@ class BotCompileService:
                 created_at=now,
                 updated_at=now,
             )
+            if normalized_request.conversation_id:
+                try:
+                    exists = self.agent_loop.sessions.has_persisted(task.conversation_key)
+                except OSError as exc:
+                    if exc.errno != errno.ENAMETOOLONG:
+                        raise
+                    exists = False
+                if not exists:
+                    raise CompileFailure(
+                        "NOT_FOUND", "Compile conversation not found.", stage="queued"
+                    )
             try:
                 await self.store.create(task)
             except FileExistsError:
@@ -301,6 +313,22 @@ class BotCompileService:
                     status="accepted",
                     to=existing.sanitized_request.to,
                 )
+            if task.meta["mode"] == "simple":
+                try:
+                    instruction = normalized_request.model_dump_json(
+                        by_alias=True, exclude={"conversation_id"}, exclude_none=True
+                    )
+                    await self.agent_loop.sessions.update_session(
+                        task.conversation_key,
+                        lambda session: session.add_message("user", instruction, task_id=task_id),
+                        skip_heartbeat=True,
+                    )
+                except Exception as exc:
+                    failure = CompileFailure(
+                        "INTERNAL", "Cannot persist compile conversation.", stage="queued"
+                    )
+                    await self._fail(task_id, failure)
+                    raise failure from exc
             runner = asyncio.create_task(
                 self._run_admitted_task(
                     task_id,
@@ -458,6 +486,15 @@ class BotCompileService:
         connection: Mapping[str, Any],
     ) -> SanitizedCompileRequest:
         args = request.args or {}
+        conversation_id = None
+        if self.config.compile.mode == "simple" and "session-id" in args:
+            conversation_id = args["session-id"]
+            if not isinstance(conversation_id, str) or not conversation_id.strip():
+                raise CompileFailure(
+                    "INVALID_ARGUMENT",
+                    "args.session-id must be a non-empty string.",
+                    stage="queued",
+                )
         loop_turn = None
         requested_turns = args.get("loop_turn")
         if (
@@ -570,6 +607,7 @@ class BotCompileService:
                 "skill": canonical_skill,
                 "changes": changes,
                 "loop_turn": loop_turn,
+                "conversation_id": conversation_id,
             }
         )
 
@@ -742,7 +780,8 @@ class BotCompileService:
         try:
             await self._set_state(task_id, status="running", stage="collecting_context")
             client = await VikingClient.create(connection=connection, config=self.config)
-            simple_mode = (await self.store.get(task_id)).meta["mode"] == "simple"
+            task = await self.store.get(task_id)
+            simple_mode = task.meta["mode"] == "simple"
             if simple_mode and target_type == "skill":
                 raise CompileFailure(
                     "INVALID_ARGUMENT",
@@ -774,13 +813,16 @@ class BotCompileService:
                 )
             if simple_mode:
                 await self._set_state(task_id, status="running", stage="agent")
-                loop = AgentLoop(
+                loop = simple.SimpleCompileLoop(
+                    conversation_key=task.conversation_key,
                     bus=self.agent_loop.bus,
                     provider=_CompileProvider(self.agent_loop.provider, self._model_slots),
                     workspace=workspace,
                     model=self.agent_loop.model,
                     temperature=self.agent_loop.temperature,
                     max_iterations=request.loop_turn or self.limits.simple_agent_iterations,
+                    memory_window=self.agent_loop.memory_window,
+                    session_manager=self.agent_loop.sessions,
                     sandbox_manager=sandbox_manager,
                     config=task_config,
                 )
@@ -804,6 +846,7 @@ class BotCompileService:
                     connection,
                     save_progress,
                     agent_usage,
+                    conversation_key=task.conversation_key,
                     exec_enabled=self._compile_capabilities().exec_enabled,
                 )
 

@@ -15,6 +15,7 @@ from starlette.responses import PlainTextResponse
 from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import patch_user_config
+from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -56,6 +57,22 @@ async def _add_skill(client, name: str = "api-skill", description: str = "API sk
     )
     assert response.status_code == 200, response.text
     return response.json()["result"]
+
+
+async def test_system_compile_skill_includes_script_integrity(client):
+    root = "viking://system/compile/example-skills"
+    response = await client.get(
+        "/api/v1/skills/llm-wiki",
+        params={"target_uri": root, "include_content": True, "include_integrity": True},
+    )
+    assert response.status_code == 200, response.text
+    skill = response.json()["result"]
+    assert skill["root_uri"] == f"{root}/llm-wiki"
+    assert skill["revision"]
+    assert skill["content_sha256"] == hashlib.sha256(skill["content"].encode()).hexdigest()
+    script = next(f for f in skill["files"] if f["path"] == "scripts/write_wiki.py")
+    data = (SYSTEM_ASSETS_DIR / "compile/example-skills/llm-wiki" / script["path"]).read_bytes()
+    assert (script["size"], script["sha256"]) == (len(data), hashlib.sha256(data).hexdigest())
 
 
 async def test_skills_api_list_honors_node_limit(client):

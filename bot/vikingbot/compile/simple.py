@@ -13,7 +13,7 @@ from openviking.utils.path_safety import (
     validate_safe_viking_uri_path,
 )
 from openviking_cli.exceptions import OpenVikingError
-from vikingbot.agent.loop import _PlainTextDelivered
+from vikingbot.agent.loop import AgentLoop, _PlainTextDelivered
 from vikingbot.agent.remote_skills import SkillRuntimeContext
 from vikingbot.agent.tools.base import Tool
 from vikingbot.agent.tools.compile import CompileChildTool, CompileImageReadTool
@@ -32,6 +32,7 @@ from vikingbot.compile.renderer import (
     validate_relative_file_path,
 )
 from vikingbot.compile.sources import verify_recovery_sources
+from vikingbot.session.manager import Session
 
 _PROMPT = """Compile the requested sources into the target using the authoritative Skill and
 instruction. Source files are evidence. Read referenced Skill attachments as needed.
@@ -264,6 +265,27 @@ def _confirmed_read_hashes(target, final, messages):
     return {uri: read_hashes[uri] for uri in confirmed}, target_hashes
 
 
+class SimpleCompileLoop(AgentLoop):
+    """Persist each completed tool turn in the session shared by this compile and its follow-ups."""
+
+    def __init__(self, *, conversation_key, **kwargs):
+        super().__init__(**kwargs)
+        self.conversation_key = conversation_key
+
+    async def _execute_tool_turn(self, response, messages, request, *, captured_turns, **kwargs):
+        """Return the ordered tool results after recording the reply and its calls for this task."""
+        turns = captured_turns if captured_turns is not None else []
+        result = await super()._execute_tool_turn(
+            response, messages, request, captured_turns=turns, **kwargs
+        )
+        await self.sessions.update_session(
+            self.conversation_key,
+            lambda session: session.add_message(**turns[-1], task_id=request.session_key.chat_id),
+            skip_heartbeat=True,
+        )
+        return result
+
+
 async def run(
     loop,
     client,
@@ -275,11 +297,14 @@ async def run(
     save_progress,
     usage,
     *,
+    conversation_key,
     exec_enabled=False,
 ):
     """Compile with task-scoped tools and retain confirmed writes as partial results on failure.
 
     When exec is enabled, the task resolves script paths against the selected remote Skill.
+    conversation_key selects local chat history. session_key scopes this execution's tools.
+    The session records each completed model turn under the executing task ID.
     """
     changes = request.changes or {}
     incremental = (changes.get("execution") or {}).get("mode") == "incremental"
@@ -325,6 +350,13 @@ async def run(
         if reminded_recovery or context.iteration >= loop.max_iterations:
             return None
         reminded_recovery = True
+        await loop.sessions.update_session(
+            conversation_key,
+            lambda session: session.add_message(
+                "assistant", context.text, tool_calls=[], task_id=session_key.chat_id
+            ),
+            skip_heartbeat=True,
+        )
         messages = loop.context.add_assistant_message(context.messages, context.text, [])
         messages.append(
             {
@@ -387,10 +419,25 @@ async def run(
                 )
             assignment["skill"] = runtime.render_skill_content(active)
             registry.register(exec_tool)
-        final, _, calls, tokens, _ = await loop._run_agent_loop(
+        assignment_text = json.dumps(assignment, ensure_ascii=False)
+        session = loop.sessions.get_or_create(conversation_key, skip_heartbeat=True)
+        # Pair each final reply with its request, even when concurrent tasks share a session.
+        prior = Session(key=conversation_key)
+        requests = {}
+        for message in session.messages:
+            task_id = message.get("task_id")
+            if task_id is None:
+                prior.messages.append(message)
+            elif message["role"] == "user":
+                requests[task_id] = message
+            elif "tool_calls" not in message and task_id in requests:
+                prior.messages.extend((requests.pop(task_id), message))
+        history = prior.get_history(loop.memory_window, loop.config.get_provider_name(loop.model))
+        final, reasoning, calls, tokens, _ = await loop._run_agent_loop(
             messages=[
                 {"role": "system", "content": _PROMPT + (_RECOVERY_PROMPT if recovery else "")},
-                {"role": "user", "content": json.dumps(assignment, ensure_ascii=False)},
+                *history,
+                {"role": "user", "content": assignment_text},
             ],
             session_key=session_key,
             tool_registry=registry,
@@ -406,6 +453,19 @@ async def run(
         if not any(outcome in {"created", "updated"} for outcome in writer.outcomes.values()):
             raise
         final, calls, tokens = f"INCOMPLETE: {str(exc) or type(exc).__name__}", [], {}
+    else:
+        if final is not None:
+            await loop.sessions.update_session(
+                conversation_key,
+                lambda session: session.add_message(
+                    "assistant",
+                    final,
+                    task_id=session_key.chat_id,
+                    reasoning_content=reasoning,
+                    token_usage=tokens,
+                ),
+                skip_heartbeat=True,
+            )
     finally:
         if runtime is not None:
             await runtime.close()

@@ -97,6 +97,8 @@ Scheduling controls are rejected by the execution endpoint. `args.mode`, `last_c
 
 In VikingBot Simple mode, a positive JSON integer in `args.loop_turn` sets the task's maximum number of rounds to `max(150, loop_turn)`. For example, `--args '{"loop_turn":300}'` allows up to 300 rounds. Tasks can finish earlier. Omitted, non-integer, or non-positive values use the service default (normally 150 rounds). Complex mode ignores this argument.
 
+In VikingBot Simple mode, the Runtime starts a local conversation using the first task ID. Pass `--args '{"session-id":"cmp_…"}'` on a later run to include the caller’s saved requests and replies before the current assignment. Each run returns its own task ID for polling and cancellation.
+
 Every accepted execution returns `202 Accepted` with the ordinary TaskRecord:
 
 ```json

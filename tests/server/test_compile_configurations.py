@@ -145,7 +145,7 @@ def test_execution_request_rejects_ambiguous_or_legacy_controls(payload, errors,
 
 
 def test_named_execution_guides_mixed_requests_before_validating_inputs():
-    with pytest.raises(ValidationError, match="send compile_name and optional args.owner_user_id"):
+    with pytest.raises(ValidationError, match="send compile_name and optional args to POST"):
         CompileRequest.model_validate({"compile_name": "jj", "from": None})
 
 
@@ -155,12 +155,20 @@ def test_named_execution_rejects_invalid_owner(owner):
         CompileRequest.model_validate({"compile_name": "wiki", "args": {"owner_user_id": owner}})
 
 
-@pytest.mark.parametrize("owner", [{}, {"owner_user_id": "alice"}])
-def test_named_execution_ignores_non_owner_args(owner):
+@pytest.mark.parametrize("selection", [{}, {"owner_user_id": "alice"}, {"session-id": "cmp_first"}])
+def test_named_execution_keeps_only_owner_and_conversation(selection):
     request = CompileRequest.model_validate(
-        {"compile_name": "wiki", "args": {**owner, "model_name": "ignored", "mode": "full"}}
+        {"compile_name": "wiki", "args": {**selection, "model_name": "ignored", "mode": "full"}}
     )
-    assert request.args == owner
+    assert request.args == selection
+
+
+@pytest.mark.parametrize("conversation_id", [None, " ", {"id": "cmp_first"}])
+def test_named_execution_rejects_invalid_conversation(conversation_id):
+    with pytest.raises(ValidationError, match="args.session-id"):
+        CompileRequest.model_validate(
+            {"compile_name": "wiki", "args": {"session-id": conversation_id}}
+        )
 
 
 @pytest.mark.parametrize(
@@ -450,7 +458,7 @@ async def test_delegated_execution_owner_actor_and_retries(service, app, client,
             },
         )
         assert created.status_code == 200, created.text
-    payload = {"compile_name": name, "args": {"owner_user_id": "alice"}}
+    payload = {"compile_name": name, "args": {"owner_user_id": "alice", "session-id": "cmp_first"}}
     headers = {"Idempotency-Key": "compile-delegated-owner"}
     response = await client.post(
         "/api/v1/compile",
@@ -464,10 +472,18 @@ async def test_delegated_execution_owner_actor_and_retries(service, app, client,
     assert run["status"] == "completed", run["error"]
     assert run["actor"] == "executor" and run["params"]["instruction"] == "alice"
     assert runtime.calls[0]["args"]["model_name"] == "saved"
+    assert runtime.calls[0]["args"]["session-id"] == "cmp_first"
+    assert "session-id" not in (await store.get(ctx.account_id, "alice", name))["args"]
     assert "owner_user_id" not in runtime.calls[0]["args"]
     repeated = await client.post("/api/v1/compile", json=payload, headers=headers)
     assert repeated.status_code == 202, repeated.text
     assert repeated.json()["result"]["task_id"] == task_id
+    changed_session = await client.post(
+        "/api/v1/compile",
+        json={**payload, "args": {**payload["args"], "session-id": "cmp_other"}},
+        headers=headers,
+    )
+    assert changed_session.status_code == 409, changed_session.text
     conflict = await client.post(
         "/api/v1/compile",
         json={"compile_name": name, "args": {"owner_user_id": "bob"}},

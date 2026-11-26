@@ -221,8 +221,8 @@ export type CompileRequest =
       to?: never;
       skill?: never;
       instruction?: never;
-      /** Only owner_user_id is used; other keys are ignored. */
-      args?: JsonObject & { owner_user_id?: string };
+      /** Optional arguments for this run. */
+      args?: JsonObject & { owner_user_id?: string; "session-id"?: string };
     };
 /** Retrieval tag update options. */
 export interface SetTagsOptions {

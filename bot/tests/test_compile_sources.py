@@ -531,7 +531,7 @@ async def test_compile_resizes_when_full_resolution_encoding_exceeds_budget(
         assert preview.size == (900, 500)
 
 
-async def test_simple_compile_multi_read_preserves_images_and_per_uri_errors(runtime):
+async def test_simple_compile_multi_read_preserves_images_and_per_uri_errors(runtime, tmp_path):
     from vikingbot.compile import simple
 
     pipeline, _ = runtime
@@ -571,17 +571,25 @@ async def test_simple_compile_multi_read_preserves_images_and_per_uri_errors(run
         await writer.execute(context, path="findings.md", content=f"[Source]({URI})")
         return "Done.", None, [], {}, 1
 
-    loop = SimpleNamespace(config=Config(), max_iterations=5, _run_agent_loop=run_agent)
+    loop = SimpleNamespace(
+        config=Config(),
+        model="test-model",
+        memory_window=50,
+        sessions=SessionManager(tmp_path),
+        max_iterations=5,
+        _run_agent_loop=run_agent,
+    )
     result = await simple.run(
         loop,
         client,
         pipeline.request,
         pipeline.request.from_,
         pipeline.skill,
-        None,
+        SessionKey(type="compile", channel_id="test", chat_id="read"),
         {},
         AsyncMock(),
         {},
+        conversation_key=SessionKey(type="compile", channel_id="test", chat_id="read"),
     )
     assert result.created == [target]
 
