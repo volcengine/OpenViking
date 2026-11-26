@@ -15,7 +15,7 @@ Agent 按一份简短的指南执行。指南以纯 Markdown 发布，任何 Age
 
 ## BytePlus
 
-按 [BytePlus 接入指南](../guides/27-byteplus-setup.md#连接-agent)配置你的 Agent。如果使用通用安装器，选择 **OpenViking 托管服务 → BytePlus**，输入实例的 HTTPS 服务地址和 API Key。旧版安装器使用**自定义 URL**。下方提示词使用火山引擎的服务地址。
+按 [BytePlus 接入指南](../guides/27-byteplus-setup.md#连接-agent)配置你的 Agent。如果使用通用安装器，选择 **OpenViking 托管服务 → BytePlus**，输入 API Key。如果安装器要求填写地址或未列出 BytePlus，请参阅接入指南。下方提示词使用火山引擎的服务地址。
 
 ## 火山引擎提示词
 

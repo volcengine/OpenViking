@@ -15,29 +15,13 @@ use crate::{
 
 pub const OPENVIKING_SERVICE_URL: &str = "https://api.vikingdb.cn-beijing.volces.com/openviking";
 
-/// A verified release URL is an optional default for the BytePlus URL prompt.
-pub(super) fn byteplus_service_url() -> Option<&'static str> {
-    validate_byteplus_endpoint(option_env!("OPENVIKING_BYTEPLUS_SERVICE_URL")?)
-}
+pub(super) const BYTEPLUS_SERVICE_URL: &str = "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking";
 
-pub(super) fn normalize_byteplus_service_url(input: &str) -> Option<String> {
-    let url = Url::parse(input.trim()).ok()?;
-    validate_byteplus_endpoint(url.as_str()).map(str::to_string)
-}
-
-fn validate_byteplus_endpoint(endpoint: &str) -> Option<&str> {
-    let endpoint = endpoint.trim_end_matches('/');
-    let parsed = Url::parse(endpoint).ok()?;
-    (parsed.scheme() == "https"
-        && parsed.host_str().is_some()
-        && parsed.username().is_empty()
-        && parsed.password().is_none()
-        && parsed.query().is_none()
-        && parsed.fragment().is_none()
-        // Require the same canonical literal that the client will use.
-        && parsed.as_str().trim_end_matches('/') == endpoint
-        && endpoint != OPENVIKING_SERVICE_URL)
-        .then_some(endpoint)
+fn managed_service_url(url: &str) -> Option<&str> {
+    match url.trim_end_matches('/') {
+        url @ (OPENVIKING_SERVICE_URL | BYTEPLUS_SERVICE_URL) => Some(url),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,10 +39,15 @@ impl ConfigKind {
     }
 
     pub(crate) fn from_config(config: &Config) -> Self {
-        if config.url.trim_end_matches('/') == OPENVIKING_SERVICE_URL {
-            Self::OpenVikingService
-        } else {
-            Self::Custom
+        match managed_service_url(&config.url) {
+            // Keep existing BytePlus profiles with an explicit root key on the custom edit path.
+            Some(BYTEPLUS_SERVICE_URL)
+                if config.root_api_key.as_deref().is_some_and(|key| !key.trim().is_empty()) =>
+            {
+                Self::Custom
+            }
+            Some(_) => Self::OpenVikingService,
+            None => Self::Custom,
         }
     }
 }
@@ -590,11 +579,11 @@ pub fn build_config(draft: &ConfigDraft) -> Result<Config> {
     match draft.kind {
         ConfigKind::OpenVikingService => {
             let api_key = non_empty_option(draft.api_key.as_deref()).ok_or_else(|| {
-                Error::Config(
-                    "OpenViking Service (VolcEngine Cloud) configs require an API key".to_string(),
-                )
+                Error::Config("OpenViking managed service configs require an API key".to_string())
             })?;
-            config.url = OPENVIKING_SERVICE_URL.to_string();
+            config.url = managed_service_url(&draft.url)
+                .ok_or_else(|| Error::Config("Unknown OpenViking managed service URL".to_string()))?
+                .to_string();
             config.api_key = Some(api_key);
             config.root_api_key = None;
             config.account = account;
@@ -1250,57 +1239,45 @@ mod tests {
     }
 
     #[test]
-    fn openviking_service_config_uses_fixed_url_and_requires_api_key() {
-        let missing_key = ConfigDraft {
-            name: "ov-service".to_string(),
-            kind: ConfigKind::OpenVikingService,
-            url: String::new(),
-            api_key: None,
-            root_api_key: None,
-            account: None,
-            user: None,
-        };
-        assert!(build_config(&missing_key).is_err());
+    fn managed_service_profiles_keep_the_selected_url_and_require_an_api_key() {
+        for url in [OPENVIKING_SERVICE_URL, super::BYTEPLUS_SERVICE_URL] {
+            let missing_key = ConfigDraft {
+                name: "ov-service".to_string(),
+                kind: ConfigKind::OpenVikingService,
+                url: url.to_string(),
+                api_key: None,
+                root_api_key: None,
+                account: None,
+                user: None,
+            };
+            assert!(build_config(&missing_key).is_err());
 
-        let draft = ConfigDraft {
-            api_key: Some("viking-key".to_string()),
-            ..missing_key
-        };
-        let config = build_config(&draft).expect("ov-service config should build");
-
-        assert_eq!(config.url, OPENVIKING_SERVICE_URL);
-        assert_eq!(config.api_key.as_deref(), Some("viking-key"));
-    }
-
-    #[test]
-    fn byteplus_endpoint_must_be_a_distinct_canonical_https_url() {
-        let fixture = "https://byteplus.example/openviking";
-        assert_eq!(super::validate_byteplus_endpoint(fixture), Some(fixture));
-        let with_slash = format!("{fixture}/");
-        assert_eq!(
-            super::validate_byteplus_endpoint(&with_slash),
-            Some(fixture)
-        );
-        for url in [
-            "https://API.vikingdb.cn-beijing.volces.com:443/openviking",
-            OPENVIKING_SERVICE_URL,
-            "http://byteplus.example/openviking",
-            "https://byteplus.example/openviking ",
-            "https://byteplus.example/openviking?",
-            "https://byteplus.example/openviking#",
-            "https://user:password@byteplus.example/openviking",
-            "https://byteplus.example/openviking?token=value",
-            "https://byteplus.example/openviking#section",
-            "byteplus.example/openviking",
-            "",
-        ] {
-            assert_eq!(super::validate_byteplus_endpoint(url), None, "{url}");
+            let draft = ConfigDraft {
+                api_key: Some("viking-key".to_string()),
+                ..missing_key
+            };
+            let config = build_config(&draft).expect("managed config should build");
+            let reopened: Config = serde_json::from_str(&serde_json::to_string(&config).unwrap())
+                .expect("saved profile should reopen");
+            assert_eq!(
+                ConfigKind::from_config(&reopened),
+                ConfigKind::OpenVikingService
+            );
+            assert_eq!(reopened.url, url);
+            assert_eq!(reopened.api_key.as_deref(), Some("viking-key"));
+            assert!(
+                build_config(&ConfigDraft {
+                    url: "https://other.example/openviking".into(),
+                    ..draft
+                })
+                .is_err()
+            );
         }
     }
 
     #[test]
     fn byteplus_endpoint_does_not_change_saved_custom_profiles() {
-        let url = super::byteplus_service_url().unwrap_or("https://byteplus.example/openviking");
+        let url = super::BYTEPLUS_SERVICE_URL;
         let draft = ConfigDraft {
             name: "byteplus".into(),
             kind: ConfigKind::Custom,
@@ -1317,34 +1294,6 @@ mod tests {
         assert_eq!(reopened.url, url);
         assert_eq!(reopened.api_key.as_deref(), Some("byteplus-test-key"));
         assert_eq!(reopened.root_api_key.as_deref(), Some("separate-root-key"));
-    }
-
-    #[test]
-    fn manual_byteplus_url_normalizes_https_and_rejects_unsafe_addresses() {
-        for input in [
-            "https://byteplus.example/openviking",
-            "HTTPS://BYTEPLUS.EXAMPLE:443/openviking/",
-            " https://byteplus.example/openviking/ ",
-        ] {
-            assert_eq!(
-                super::normalize_byteplus_service_url(input),
-                Some("https://byteplus.example/openviking".to_string())
-            );
-        }
-        for input in [
-            "http://byteplus.example/openviking",
-            "https://user:password@byteplus.example/openviking",
-            "https://byteplus.example/openviking?key=value",
-            "https://byteplus.example/openviking#fragment",
-            "https://byteplus.example/openviking?",
-            OPENVIKING_SERVICE_URL,
-            "",
-        ] {
-            assert!(
-                super::normalize_byteplus_service_url(input).is_none(),
-                "{input}"
-            );
-        }
     }
 
     #[test]

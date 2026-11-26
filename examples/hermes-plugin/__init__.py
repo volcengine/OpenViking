@@ -61,6 +61,7 @@ except ImportError:  # Hermes releases before process-home pinning
 
 _DEFAULT_ENDPOINT = "http://127.0.0.1:1933"
 _OPENVIKING_SERVICE_ENDPOINT = "https://api.vikingdb.cn-beijing.volces.com/openviking"
+_BYTEPLUS_SERVICE_ENDPOINT = "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking"
 _DEFAULT_AGENT = ""
 _OPENVIKING_USER_AGENT = f"openviking-memory-hermes/{_HERMES_VERSION}"
 _OVCLI_CONFIG_ENV = "OPENVIKING_CLI_CONFIG_FILE"

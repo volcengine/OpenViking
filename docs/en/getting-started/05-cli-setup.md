@@ -64,7 +64,7 @@ Enter the details for your service, save the connection, and activate it. If a m
 | --- | --- | --- |
 | Default local service | Custom | URL: `http://127.0.0.1:1933`; leave the key empty in default local mode without authentication. |
 | Remote self-hosted service | Custom | Use the service URL and User/Admin key provided by the administrator. |
-| BytePlus managed service | OpenViking Managed Service → BytePlus | Use the service URL and API key for your BytePlus instance. See [BytePlus setup](../guides/27-byteplus-setup.md). |
+| BytePlus managed service | OpenViking Managed Service → BytePlus | Enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md). |
 | Volcengine managed service | OpenViking Managed Service → Volcengine | Use the wizard's service address and enter the API key from the console. |
 
 Choose a recognizable connection name, such as `local` or `cloud`. The service URL points to the OpenViking data service; model API endpoints are configured on the server.
