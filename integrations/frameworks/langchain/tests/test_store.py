@@ -191,9 +191,15 @@ def test_store_preserves_created_at_and_reports_index_write_errors(
     class Client(InMemoryOpenVikingClient):
         fail = False
 
+        def __init__(self):
+            super().__init__()
+            self.data_write_modes = []
+
         def write(
             self, uri: str, content: str, mode: str = "replace", wait: bool = False, **kwargs
         ):
+            if "/data/" in uri:
+                self.data_write_modes.append(mode)
             if self.fail and "/index/" in uri:
                 error = create_error if mode == "create" else replace_error
                 if error is not None:
@@ -232,6 +238,8 @@ def test_store_preserves_created_at_and_reports_index_write_errors(
     after = store.get(("memory",), "note")
     assert after.value == {"version": 2}
     assert after.created_at == before.created_at
+    assert after.updated_at >= before.updated_at
+    assert client.data_write_modes == ["create", "replace"]
     if expected_error is None:
         assert any(
             '"version": 2' in text for uri, text in client.records.items() if "/index/" in uri

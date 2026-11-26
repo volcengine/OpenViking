@@ -202,6 +202,8 @@ class RedisMySQLAccountStore(AccountStore):
         self._service_name = normalized_service_name
         self._cache_runtime = cache_runtime
         self._ttl_seconds = int(runtime_ttl)
+        self._mysql._empty_frozen_files.ttl_seconds = self._ttl_seconds
+        self._mysql._empty_frozen_files.clear()
         self._redis_runtime = get_shared_redis_runtime()
         self._redis_lease = False
         self._closing = False
@@ -739,6 +741,33 @@ class RedisMySQLAccountStore(AccountStore):
 
     async def get_account(self, account_id: str) -> AccountSummary | None:
         return await self._read_mysql(lambda: self._mysql.get_account(account_id))
+
+    async def get_frozen_files(self, account_id: str) -> tuple[str, ...]:
+        if not self._closing and self._mysql._empty_frozen_files.contains(account_id):
+            return ()
+
+        def read_nonempty(payload):
+            hit, value = self._read_nullable(payload)
+            # Cached empty payloads must be confirmed by SQL before caching locally.
+            return hit and bool(value), value
+
+        value = await self._read_through(
+            account_id,
+            self._key(account_id, "frozen_files"),
+            lambda: self._mysql.get_frozen_files(account_id),
+            read_payload=read_nonempty,
+        )
+        from openviking.server.account_stores.models import validate_frozen_files
+
+        return validate_frozen_files(value)
+
+    async def set_frozen_file(
+        self, account_id: str, user_id: str, path: str, frozen: bool
+    ) -> tuple[str, ...]:
+        return await self._mutate_account(
+            account_id,
+            lambda: self._mysql.set_frozen_file(account_id, user_id, path, frozen),
+        )
 
     async def create_account(
         self,

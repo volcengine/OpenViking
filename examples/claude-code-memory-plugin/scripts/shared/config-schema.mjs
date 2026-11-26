@@ -168,6 +168,9 @@ export const KNOBS = [
   { name: "resumeArchiveInject", type: "bool", default: false, env: "OPENVIKING_RESUME_ARCHIVE_INJECT", capability: "session" },
   { name: "resumeArchiveTokenBudget", type: "int", default: 32000, min: 0, max: 128000, env: "OPENVIKING_RESUME_ARCHIVE_TOKEN_BUDGET", capability: "session" },
   { name: "resumeArchiveMaxChars", type: "int", default: 6000, min: 1000, max: 200000, env: "OPENVIKING_RESUME_ARCHIVE_MAX_CHARS", capability: "session" },
+  // After a host compaction, tell the model where the full record of the
+  // session is and how to look things up in it.
+  { name: "sessionHistoryPointer", type: "bool", default: true, env: "OPENVIKING_SESSION_HISTORY_POINTER", capability: "session" },
   { name: "skillExperience", type: "bool", default: false, env: "OPENVIKING_SKILL_EXPERIENCE", capability: "session" },
   { name: "skillExperienceLimit", type: "int", default: 3, min: 1, max: 50, env: "OPENVIKING_SKILL_EXPERIENCE_LIMIT", capability: "session" },
   { name: "skillCatalog", type: "bool", default: true, env: "OPENVIKING_SKILL_CATALOG", capability: "session" },
@@ -186,6 +189,10 @@ export const KNOBS = [
     capability: "session",
   },
   { name: "skipSubagentSessions", type: "bool", default: false, env: "OPENVIKING_SKIP_SUBAGENT_SESSIONS", capability: "session" },
+  // Plugin sealing; no workspace key, so a committed file cannot switch it off.
+  { name: "sealSecrets", type: "bool", default: false, env: "OPENVIKING_SEAL_SECRETS", capability: "session" },
+  // With sealSecrets on, tool results are enrolled too.
+  { name: "enrollToolSecrets", type: "bool", default: false, env: "OPENVIKING_ENROLL_TOOL_SECRETS", capability: "session" },
   { name: "repoContext", type: "bool", default: true, capability: "session" },
   { name: "repoContextCacheTtlMs", type: "int", default: 60000, min: 1000, max: 3600000, capability: "session" },
 

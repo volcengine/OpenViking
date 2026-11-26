@@ -20,6 +20,7 @@ from pydantic import (
     model_validator,
 )
 
+from openviking.scheduling.expiry.config import ExpiryCacheConfig
 from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.oidc_config import OIDCConfig
 from openviking.server.identity import AuthMode
@@ -372,15 +373,28 @@ class UsageReporterConfig(BaseModel):
 
 
 class TTLAdapterConfig(BaseModel):
-    """Opt-in Redis-backed directory TTL configuration.
+    """Opt-in CacheRuntime-backed directory TTL configuration.
 
-    Uses the built-in implementation, supplied with its ResourceID, Redis
-    connection and writer/reader role through ``config``. No external Python
-    package is required. Unset or disabled leaves all TTL hooks inactive.
+    Uses the built-in implementation, supplied with its ResourceID and
+    writer/reader role through ``config``. ``cache`` selects the RAGFS-owned
+    named Runtime. Unset or disabled leaves all TTL hooks inactive.
     """
 
     enabled: bool = False
+    cache: ExpiryCacheConfig = Field(
+        default_factory=lambda: ExpiryCacheConfig(instance="default")
+    )
     config: Dict[str, object] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_legacy_redis_config(self) -> "TTLAdapterConfig":
+        """Require directory TTL Redis settings to live in the selected Runtime."""
+        if "redis" in self.config:
+            raise ValueError(
+                "ttl_adapter.config.redis is not supported; configure "
+                "cache.instances.<name>.params and ttl_adapter.cache.instance"
+            )
+        return self
 
     @property
     def writer_enabled(self) -> bool:
@@ -468,6 +482,10 @@ class ServerConfig(BaseModel):
     workers: int = Field(default=1, ge=1)
     roles: List[Literal["api", "queue_worker", "scheduler"]] = Field(
         default_factory=lambda: ["api", "queue_worker", "scheduler"], min_length=1
+    )
+    enable_task_history_cleanup: bool = Field(
+        default=True,
+        description="Periodically delete expired Task and Compile history on this node.",
     )
     executor_threads: int = Field(
         default=64,

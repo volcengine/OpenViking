@@ -160,7 +160,14 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>OpenViking Service を使う（Volcengine がホスト）</strong></summary>
 
-同じ OpenViking サービスを Volcengine が代わりに運用します。最初の 50 ファイルは無料です。[Volcengine の製品ページ](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme)で利用を開始したら、コンソールの「User Management → API Key」で API キーを作成してください。サーバーのアドレスは `https://api.vikingdb.cn-beijing.volces.com/openviking` です。エージェントを接続するときに、このアドレスと API キーを使います。
+同じ OpenViking サービスを Volcengine が代わりに運用します。最初の 50 ファイルは無料です。[Volcengine の製品ページ](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme)で利用を開始したら、コンソールの「User Management → API Key」で API キーを作成してください。セットアップウィザードで Volcengine を選ぶと、サービス URL は自動で設定されます。手動で設定する場合は `https://api.vikingdb.cn-beijing.volces.com/openviking` を使います。
+
+</details>
+
+<details>
+<summary><strong>OpenViking Service を使う（BytePlus がホスト）</strong></summary>
+
+[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) はアジア太平洋（ジョホール）で OpenViking をホストしています。セットアップウィザードでインスタンスの API キーを入力します。BytePlus を選ぶと、サービス URL は自動で設定されます。CLI とエージェントの設定は [BytePlus セットアップガイド（英語）](https://docs.openviking.ai/en/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme)を参照してください。
 
 </details>
 
@@ -208,7 +215,7 @@ API キーは、私がそのサーバーで自分用に作成した user key で
 <details>
 <summary><strong>自分でターミナルでインストール</strong></summary>
 
-インストーラーを実行し、表示に従ってツールとサーバーを選びます。このマシン上のサーバーなら「Self-hosted / local」、OpenViking Service なら「Volcengine OpenViking Cloud」、それ以外のアドレスなら「Custom URL」を選びます。認証が有効なら、root key ではなく user key を入力してください。
+インストーラーを実行し、ツールとサーバーを選びます。マネージドインスタンスでは「OpenViking Managed Service」、次に「BytePlus」または「Volcengine」を選びます。このマシン上のサーバーは「Self-hosted / local」、その他のサーバーは「Custom URL」を選びます。旧版インストーラーで BytePlus に接続する場合は「Custom URL」を使います。認証が有効なら、root key ではなく user key を入力してください。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -347,7 +354,7 @@ ov chat   # 別のターミナルで実行
 <img src="../images/commercial-saas.png" alt="マネージド SaaS 版" width="100%" />
 
 <h3>☁️ マネージド SaaS 版</h3>
-<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。中国以外でのホスティングは <a href="https://www.byteplus.com">BytePlus</a> で予定されています。</p>
+<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> がホスティングと運用を担当します。個人向けと企業向けのプラン、オープンソース環境からの移行ツールを提供します。プランと制限は<a href="https://docs.volcengine.com/docs/84313/2374478">サービス文書</a>を参照してください。<a href="https://openviking.ai/byteplus?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">BytePlus</a> はアジア太平洋（ジョホール）で OpenViking をホストしています。</p>
 
 </td>
 <td width="50%" valign="top">

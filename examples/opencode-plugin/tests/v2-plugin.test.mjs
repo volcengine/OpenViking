@@ -269,6 +269,23 @@ test("captureV2Context advances a per-session cursor and preserves tool parts", 
   assert.deepEqual(events, [])
 })
 
+test("a trailing assistant message can be captured when its content becomes available", async () => {
+  const events = []
+  const assistant = { id: "msg_assistant", type: "assistant", content: [] }
+  const messages = [{ id: "msg_user", type: "user", text: "question" }, assistant]
+  const ctx = { session: { context: async () => messages }, storage: new Map() }
+  const manager = { handleEvent: async (event) => events.push(event) }
+
+  await captureV2Context(ctx, manager, new Map(), "ses_1")
+  assert.deepEqual(events.filter((event) => event.type === "message.updated").map((event) => event.properties.info.id), ["msg_user"])
+
+  events.length = 0
+  assistant.content = [{ type: "text", text: "answer" }]
+  await captureV2Context(ctx, manager, new Map(), "ses_1")
+  assert.deepEqual(events.filter((event) => event.type === "message.updated").map((event) => event.properties.info.id), ["msg_assistant"])
+  assert.equal(events.at(-1).properties.part.text, "answer")
+})
+
 test("v2 prompt, context, after-tool, and event failures are contained", async () => {
   const { runtime } = runtimeFixture({
     recall: { buildRelevantMemories: async () => { throw new Error("recall failed") } },

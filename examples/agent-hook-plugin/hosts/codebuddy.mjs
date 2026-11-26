@@ -41,6 +41,35 @@ export const codebuddy = {
     }
     return null;
   },
+  // SessionStart context is dropped after a compaction and a --resume, so they
+  // leave the note, and after a compaction the profile, for the next
+  // UserPromptSubmit. `/compact` after `-c` fired no PreCompact, hence
+  // SessionStart(compact) too (DESIGN.md §12).
+  compactionDropsProfile: true,
+  historyPointer: {
+    sessionDefault: true,
+    defer: (event, input) => {
+      if (event === "pre-compact") return "compact";
+      if (event !== "session-start") return "";
+      return input.source === "compact" || input.source === "resume" ? input.source : "";
+    },
+  },
+  // Every MCP call's `_meta` names the session in W3C baggage; inside a
+  // subagent the baggage keeps the parent's id, which is the session the hooks
+  // capture, while `workbuddy.ai/conversationId` names the subagent's own.
+  historySessionFromMeta(meta) {
+    for (const entry of String(meta.baggage || "").split(",")) {
+      const [key, ...value] = entry.split("=");
+      if (key.trim() !== "codebuddy.session_id") continue;
+      try {
+        return decodeURIComponent(value.join("=").split(";")[0].trim());
+      } catch {
+        return "";
+      }
+    }
+    const id = meta["workbuddy.ai/conversationId"];
+    return typeof id === "string" ? id.trim() : "";
+  },
   guard(input = {}) {
     // Deny-only in effect: the hooks.json matcher leaves the shell tools out,
     // and CodeBuddy's PreToolUse has no advisory channel for a notice anyway

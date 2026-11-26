@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="1142" viewBox="0 0 1500 1142" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', sans-serif">
+<rect x="0" y="0" width="1500" height="1142" rx="20" fill="#FFFFFF"/>
+<text x="40" y="46" font-size="26" font-weight="700" fill="#1F2329" text-anchor="start">One new token through one turn: the provider sees a reference, your tool gets the value</text>
+<text x="40" y="75" font-size="15" font-weight="400" fill="#646A73" text-anchor="start">The sealing layer is the OpenViking Gateway; it uses OpenViking’s seal endpoint and detection rules</text>
+<rect x="40" y="96" width="1420" height="160" rx="0" fill="#F5F9FF" stroke="none" stroke-width="0"/>
+<text x="105" y="148" font-size="17" font-weight="700" fill="#3370FF" text-anchor="middle">You and</text>
+<text x="105" y="170" font-size="17" font-weight="700" fill="#3370FF" text-anchor="middle">your tools</text>
+<text x="105" y="196" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Work with the</text>
+<text x="105" y="215" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">real value</text>
+<rect x="40" y="256" width="1420" height="144" rx="0" fill="#F7F3FF" stroke="none" stroke-width="0"/>
+<text x="105" y="302" font-size="17" font-weight="700" fill="#7F3BF5" text-anchor="middle">Sealing</text>
+<text x="105" y="324" font-size="17" font-weight="700" fill="#7F3BF5" text-anchor="middle">layer</text>
+<text x="105" y="350" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">OpenViking</text>
+<text x="105" y="369" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Gateway</text>
+<rect x="40" y="400" width="1420" height="176" rx="0" fill="#F1EBFF" stroke="none" stroke-width="0"/>
+<text x="105" y="452" font-size="17" font-weight="700" fill="#6425D0" text-anchor="middle">OpenViking</text>
+<text x="105" y="478" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Privacy vault,</text>
+<text x="105" y="497" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">per user;</text>
+<text x="105" y="516" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">detection rules</text>
+<text x="105" y="535" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">live here</text>
+<rect x="40" y="576" width="1420" height="260" rx="0" fill="#FFF8F0" stroke="none" stroke-width="0"/>
+<text x="105" y="687.5" font-size="17" font-weight="700" fill="#FF8800" text-anchor="middle">Model</text>
+<text x="105" y="709.5" font-size="17" font-weight="700" fill="#FF8800" text-anchor="middle">provider</text>
+<text x="105" y="735.5" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">Sees references</text>
+<rect x="40" y="96" width="1420" height="740" rx="0" fill="none" stroke="#E5E6EB" stroke-width="1"/>
+<path d="M 40 256 L 1460 256" fill="none" stroke="#E5E6EB" stroke-width="1" stroke-linejoin="round"/>
+<path d="M 40 400 L 1460 400" fill="none" stroke="#E5E6EB" stroke-width="1" stroke-linejoin="round"/>
+<path d="M 40 576 L 1460 576" fill="none" stroke="#E5E6EB" stroke-width="1" stroke-linejoin="round"/>
+<path d="M 170 96 L 170 836" fill="none" stroke="#E5E6EB" stroke-width="1" stroke-linejoin="round"/>
+<path d="M 170 576 L 1460 576" fill="none" stroke="#8F959E" stroke-width="2" stroke-linejoin="round" stroke-dasharray="7 5"/>
+<rect x="248" y="553" width="381" height="46" rx="14" fill="#FFFFFF" stroke="#8F959E" stroke-width="1.5"/>
+<text x="438.5" y="571.5" font-size="14" font-weight="700" fill="#646A73" text-anchor="middle">While sealing is in effect, registered and</text>
+<text x="438.5" y="590.5" font-size="14" font-weight="700" fill="#646A73" text-anchor="middle">recognised secrets cross here only as references</text>
+<rect x="196" y="112" width="300" height="128" rx="10" fill="#FFFFFF" stroke="#3370FF" stroke-width="1.8"/>
+<text x="214" y="144" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">You paste a new token</text>
+<circle cx="198" cy="114" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="198" y="119.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+<text x="214" y="170" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">“Here is my new GitHub token</text>
+<rect x="214" y="182.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="264" y="200" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<text x="320" y="200" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">, use it from now on”</text>
+<rect x="880" y="112" width="360" height="128" rx="10" fill="#FFFFFF" stroke="#3370FF" stroke-width="1.8"/>
+<text x="898" y="144" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">Your tool runs</text>
+<text x="898" y="174" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">curl … Bearer</text>
+<rect x="998.98" y="156.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="1048.98" y="174" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<text x="898" y="206" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">Output: …</text>
+<rect x="974.61" y="188.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="1024.61" y="206" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<text x="1080.61" y="206" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">…</text>
+<rect x="196" y="272" width="300" height="96" rx="10" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.8"/>
+<text x="214" y="304" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">Stored and replaced</text>
+<circle cx="198" cy="274" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="198" y="279.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">2</text>
+<text x="214" y="328" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">Sends the text to OpenViking,</text>
+<text x="214" y="350" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">which stores the new token</text>
+<rect x="600" y="272" width="440" height="96" rx="10" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.8"/>
+<text x="618" y="304" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">The tool runs with the real value</text>
+<circle cx="602" cy="274" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="602" y="279.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">6</text>
+<text x="618" y="328" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">Gets the value for the reference from</text>
+<text x="618" y="350" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">OpenViking and hands it to your tool</text>
+<rect x="1080" y="272" width="364" height="96" rx="10" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.8"/>
+<text x="1098" y="304" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">Output is sealed again</text>
+<circle cx="1082" cy="274" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="1082" y="279.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">7</text>
+<text x="1098" y="328" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">The token is stored now, so the</text>
+<text x="1098" y="350" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">output reaches the model as a reference</text>
+<rect x="260" y="428" width="236" height="108" rx="10" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.8" stroke-dasharray="6 4"/>
+<text x="278" y="460" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">Temporary entry</text>
+<text x="278" y="484" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">auto/github-k3j2m8</text>
+<rect x="278" y="496.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="328" y="514" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<rect x="650" y="428" width="300" height="108" rx="10" fill="#FFFFFF" stroke="#6425D0" stroke-width="1.8"/>
+<text x="668" y="460" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">Saved entry</text>
+<text x="668" y="484" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">credential/github · token</text>
+<rect x="668" y="496.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="718" y="514" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<rect x="196" y="620" width="300" height="196" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
+<text x="214" y="652" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">The model gets the</text>
+<text x="214" y="673" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">reference and a note</text>
+<circle cx="198" cy="622" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="198" y="627.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">3</text>
+<text x="214" y="699" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">“…new GitHub token</text>
+<rect x="214" y="711.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="281" y="729" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<text x="354" y="729" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">, use it…”</text>
+<text x="214" y="757" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">Note: save it under a proper name</text>
+<rect x="516" y="620" width="274" height="196" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
+<text x="534" y="652" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">The model saves it</text>
+<circle cx="518" cy="622" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="518" y="627.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">4</text>
+<text x="534" y="678" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">privacy_upsert, value =</text>
+<rect x="534" y="690.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="601" y="708" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<text x="534" y="734" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">→ credential/github</text>
+<text x="534" y="758" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">The reference goes to</text>
+<text x="534" y="780" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">OpenViking as it is; OpenViking</text>
+<text x="534" y="802" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">stores the value behind it</text>
+<rect x="810" y="620" width="270" height="128" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
+<text x="828" y="652" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">The model writes a tool</text>
+<text x="828" y="673" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">call with the reference</text>
+<circle cx="812" cy="622" r="13" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="812" y="627.5" font-size="15" font-weight="700" fill="#FFFFFF" text-anchor="middle">5</text>
+<text x="828" y="699" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">curl … Bearer</text>
+<rect x="828" y="711.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="895" y="729" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<rect x="1100" y="620" width="344" height="128" rx="10" fill="#FFFFFF" stroke="#FF8800" stroke-width="1.8"/>
+<text x="1118" y="652" font-size="16" font-weight="700" fill="#1F2329" text-anchor="start">The model reads the output</text>
+<text x="1118" y="682" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">Output: …</text>
+<rect x="1194.61" y="664.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="1261.61" y="682" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<text x="1334.61" y="682" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">…</text>
+<text x="1118" y="710" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">The reference the model already uses</text>
+<polygon points="300,272 294.5,262 305.5,262" fill="#F54A45"/>
+<path d="M 300 240 L 300 262" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="320,428 314.5,418 325.5,418" fill="#F54A45"/>
+<path d="M 320 368 L 320 418" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="440,368 445.5,378 434.5,378" fill="#14A8A0"/>
+<path d="M 440 428 L 440 378" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<text x="330" y="388" font-size="14" font-weight="400" fill="#D83931" text-anchor="start">your text</text>
+<text x="450" y="388" font-size="14" font-weight="400" fill="#0B7E78" text-anchor="start">text with reference</text>
+<polygon points="232,620 226.5,610 237.5,610" fill="#14A8A0"/>
+<path d="M 232 368 L 232 610" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="700,536 705.5,546 694.5,546" fill="#14A8A0"/>
+<path d="M 700 620 L 700 546" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<rect x="706" y="555" width="198.52" height="42" rx="4" fill="#FFFFFF" stroke="none" stroke-width="0"/>
+<text x="710" y="571.5" font-size="14" font-weight="400" fill="#0B7E78" text-anchor="start">privacy_upsert tool call,</text>
+<text x="710" y="590.5" font-size="14" font-weight="400" fill="#0B7E78" text-anchor="start">passed through unchanged</text>
+<polygon points="650,482 640,487.5 640,476.5" fill="#F54A45"/>
+<path d="M 496 482 L 640 482" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<text x="573" y="472" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">value moved</text>
+<text x="573" y="505" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">temporary entry</text>
+<text x="573" y="524" font-size="14" font-weight="400" fill="#646A73" text-anchor="middle">removed</text>
+<polygon points="1000,368 1005.5,378 994.5,378" fill="#14A8A0"/>
+<path d="M 1000 620 L 1000 378" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="760,428 754.5,418 765.5,418" fill="#14A8A0"/>
+<path d="M 760 368 L 760 418" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="840,368 845.5,378 834.5,378" fill="#F54A45"/>
+<path d="M 840 428 L 840 378" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<text x="750" y="388" font-size="14" font-weight="400" fill="#0B7E78" text-anchor="end">reference</text>
+<text x="850" y="388" font-size="14" font-weight="400" fill="#D83931" text-anchor="start">real value</text>
+<polygon points="960,240 965.5,250 954.5,250" fill="#F54A45"/>
+<path d="M 960 272 L 960 250" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="1180,272 1174.5,262 1185.5,262" fill="#F54A45"/>
+<path d="M 1180 240 L 1180 262" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<polygon points="1300,620 1294.5,610 1305.5,610" fill="#14A8A0"/>
+<path d="M 1300 368 L 1300 610" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<text x="40" y="880" font-size="18" font-weight="700" fill="#1F2329" text-anchor="start">What a reference looks like</text>
+<text x="760" y="880" font-size="18" font-weight="700" fill="#1F2329" text-anchor="start">Limits</text>
+<rect x="40" y="896" width="700" height="174" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="62" y="930" font-size="14.5" font-weight="700" fill="#0B7E78" text-anchor="start">{{ov_privacy:alice:viking://~/privacy/credential/github#/values/token}}</text>
+<text x="62" y="960" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">Owner, entry and field. It is not the secret itself: it is bound to its owner,</text>
+<text x="62" y="984" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">and only alice’s OpenViking identity can resolve it.</text>
+<rect x="760" y="896" width="700" height="174" rx="12" fill="#F5F6F7" stroke="#8F959E" stroke-width="1.5"/>
+<text x="782" y="930" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">A new token is stored only if OpenViking’s detector recognises it.</text>
+<text x="782" y="954" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">Only whole values are matched; a cut or re-encoded value goes out as it is.</text>
+<text x="782" y="978" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">A new token seen only in tool output is stored only with the extra option</text>
+<text x="782" y="1002" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">“Also store secrets found in tool output”.</text>
+<text x="782" y="1026" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">Step 7 seals this output because the token is already stored.</text>
+<text x="782" y="1050" font-size="14.5" font-weight="400" fill="#1F2329" text-anchor="start">When sealing cannot be done, the request is refused, never sent unsealed.</text>
+<polygon points="70,1107 60,1112.5 60,1101.5" fill="#F54A45"/>
+<path d="M 40 1107 L 60 1107" fill="none" stroke="#F54A45" stroke-width="2" stroke-linejoin="round"/>
+<rect x="78" y="1094.5" width="100" height="24" rx="12" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
+<text x="128" y="1112" font-size="14" font-weight="700" fill="#D83931" text-anchor="middle">ghp_Ab12…</text>
+<text x="188" y="1112" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">Real value</text>
+<polygon points="321.12,1107 311.12,1112.5 311.12,1101.5" fill="#14A8A0"/>
+<path d="M 291.12 1107 L 311.12 1107" fill="none" stroke="#14A8A0" stroke-width="2" stroke-linejoin="round"/>
+<rect x="329.12" y="1094.5" width="134" height="24" rx="12" fill="#E3F6F5" stroke="#14A8A0" stroke-width="1.5"/>
+<text x="396.12" y="1112" font-size="14" font-weight="700" fill="#0B7E78" text-anchor="middle">{{ov_privacy:…}}</text>
+<text x="473.12" y="1112" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">Reference</text>
+<circle cx="588.2" cy="1107" r="12" fill="#7F3BF5" stroke="none" stroke-width="0"/>
+<text x="588.2" y="1112" font-size="14" font-weight="700" fill="#FFFFFF" text-anchor="middle">1</text>
+<text x="610.2" y="1112" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">Step order</text>
+</svg>

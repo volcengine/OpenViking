@@ -10,6 +10,7 @@ from collections import defaultdict
 from typing import Sequence
 
 from .api import SUPPORTED_ITEM_TYPES, ExpiryError
+from .cache_runtime_store import CacheRuntimeExpiryStore
 from .config import ExpiryConfig
 from .keys import decode_item_id
 from .metrics import ExpiryMetrics
@@ -21,7 +22,6 @@ from .models import (
     StoreOperationError,
     bucket_minute_ms,
 )
-from .redis_store import RedisExpiryStore
 from .shard_runner import ShardExecution, ShardRunner
 
 
@@ -35,7 +35,7 @@ async def _wait_until_next_round(stop: asyncio.Event, delay: float) -> None:
 class ExpiryPublisher:
     def __init__(
         self,
-        store: RedisExpiryStore,
+        store: CacheRuntimeExpiryStore,
         runner: ShardRunner,
         config: ExpiryConfig,
         metrics: ExpiryMetrics,

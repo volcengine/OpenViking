@@ -228,6 +228,7 @@ filtered or truncated the original Pi transcript.
 | `skillCatalog`           | `true`     | Add the `<available-skills>` catalog to the profile block. Env: `OPENVIKING_SKILL_CATALOG` |
 | `skillCatalogTokenBudget`| `1200`     | Separate token budget for the skill catalog (0–20000; `0` turns it off). Env: `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` |
 | `resumeContextBudget`    | `32000`    | Token budget for archive overview on session resume                      |
+| `sessionHistoryPointer`  | `true`     | After a compaction or resume, add a note naming the session's OV id and how to look up exact details with `openviking_session_history`. Env: `OPENVIKING_SESSION_HISTORY_POINTER` |
 
 The profile block is built at session start and added to pi's system prompt on every turn. Its `<available-skills>` catalog comes from one `GET /api/v1/skills`: your own skills first, then the ones shared under `viking://agent/skills`, leaving out a shared skill that has the same name as one of yours, with each description cut to about 40 tokens. When the descriptions do not fit `skillCatalogTokenBudget`, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, a one-line count. With no skills, or on a server without that endpoint, it is left out. The model reads a skill's `SKILL.md` with `viking_read` before following it.
 
@@ -240,6 +241,27 @@ The profile block is built at session start and added to pi's system prompt on e
 | `debugLogPath`           | `""`       | Write JSON Lines debug records to this path; empty disables the log      |
 
 Bypass now runs through the same matcher every other OpenViking harness uses, so the patterns are real globs: `*` stops at a path separator and `**` crosses them. A bare path used to match its subdirectories as a prefix, and no longer does — write `"/tmp/scratch**"` where `"/tmp/scratch"` used to be enough.
+
+### Secret sealing
+
+| Field                    | Default    | Description                                                              |
+|--------------------------|------------|--------------------------------------------------------------------------|
+| `sealSecrets`            | `false`    | Keep secrets the OpenViking server knows out of what the model sees, and give tools the real values. Env: `OPENVIKING_SEAL_SECRETS` |
+| `enrollToolSecrets`      | `false`    | With `sealSecrets` on, also store new secrets found in tool results (not only in what you type). Env: `OPENVIKING_ENROLL_TOOL_SECRETS` |
+
+None has a workspace key, so a repository's committed `.openviking/config.json` cannot turn them off; set them in `ovcli.conf`'s `plugin.pi` (or `plugin`) section or through the environment. Sealing needs OpenViking server 0.5.7 or newer (a development build such as `0.5.7.dev44` counts as 0.5.7): on the first hook that needs it, the extension reads the server's version from `/health` once for the session and compares it with the feature table it ships (`shared/server-features.json`).
+
+With `sealSecrets` on, the extension calls the server at three points:
+
+- **What you type** (`input`): registered secrets are replaced with their references (`{{ov_privacy:…}}`), and tokens the server's detector recognises are stored under `viking://~/privacy/auto/…` and replaced too. pi stores and sends the sealed text. When a new secret was stored this way, the model gets a note for that turn telling it to save the secret under a proper name. Empty input is left alone; text starting with `/` is sealed as well, because everything that reaches `input` (skill and template arguments included) goes to the model. When sealing cannot be done, the message is not sent and you are told why.
+- **Tool results** (`tool_result`): every text block, the persisted `details` and `structuredContent` are sealed (with `enroll` only when `enrollToolSecrets` is on); images are left as they are. When sealing cannot be done, the result is replaced with a short "withheld" text and marked as an error, so the model never sees the original.
+- **Tool arguments** (`tool_call`): a reference the model wrote is replaced with the real value for the tool that runs, after the server resolved it and a round trip through the seal endpoint gave the same reference back. pi keeps what the model wrote in the session. OpenViking's own tools (`openviking_*`), agent-spawning tools (`subagent`, `agent`) and any string containing an `ov privacy` command get the references as written. A reference the server does not know is left as it is; any other failure blocks the call with a reason.
+
+Sealing cannot be done when the server is older than 0.5.7, its `/health` fails (the version is unknown), or a seal or resolve call fails (unreachable, an error, a bad answer, a timeout). Each of these stops at the points above. The message pi shows names the reason (for a version, the required and the actual one) and what to do: upgrade or reach the server, or turn `sealSecrets` off. To a server that is too old or whose version is unknown, no seal or resolve call is made at all. The version is read again for the next message, so sealing resumes once the server can seal.
+
+The model is also told, in the system prompt of every turn, how references work. The session file holds references, not the values.
+
+Not covered, because it reaches the model without passing these events: the system prompt and context files (`AGENTS.md`), the text of skills and prompt templates (`/skill:…`, `/template` expand after `input`), recall blocks injected from OpenViking, compaction and branch summaries pi asks the model for, and history written before sealing was turned on. A bypassed directory does no sealing either. A tool this extension did not register counts as OpenViking's only when its name contains `openviking`, so an OpenViking MCP server bridged in under another name gets the values in place of the references in its arguments.
 
 ## Architecture
 
@@ -268,15 +290,18 @@ The extension's TypeScript files are loaded by pi's `jiti` transpiler without a 
 
 MCP initialization and tool discovery share a 5-second deadline. Each tool call uses `timeoutMs` (15 seconds by default), including any reconnection. Credentials and connection settings are reloaded before calls; a transport failure is returned immediately and the next call reconnects. Calls are never automatically replayed. Cancellation ends the client's wait and cannot undo a write already accepted by the server.
 
-Arguments are checked against the server's original schema before pi's own validation. Invalid nulls, scalar-to-array substitutions and stringified JSON are rejected rather than repaired. Text results share a 50 KiB / 2000-line limit across all content blocks.
+When the model calls `openviking_session_history` without `session`, the extension fills it with the current session's OV id. Arguments are checked against the server's original schema before pi's own validation. Invalid nulls, scalar-to-array substitutions and stringified JSON are rejected rather than repaired. Text results share a 50 KiB / 2000-line limit across all content blocks.
 
 ### Event Flow
 
 | Pi Event               | Extension Action                                                                 |
 |------------------------|----------------------------------------------------------------------------------|
 | `session_start`        | Health check → derive OV session → build profile context → restore takeover state |
-| `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall              |
+| `input`                | With `sealSecrets`: seal the typed text; stop it when sealing fails              |
+| `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall; with `sealSecrets`, add the sealing paragraph and the turn's enrollment note |
 | `context`              | Run current-prompt recall after UI rendering, then inject takeover and recall context |
+| `tool_call`            | URI guard, then with `sealSecrets`: put the real values in for references         |
+| `tool_result`          | With `sealSecrets`: seal the result (or withhold it), then the viking:// notice   |
 | `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
 | `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages |
 | `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
@@ -408,6 +433,7 @@ pi-coding-agent-extension/
 ├── lib/mcp-result.mjs   # pi content conversion and output limit
 ├── lib/takeover-core.mjs # Pure context-takeover state machine
 ├── lib/recall-ledger.mjs # Injected recall blocks, replayed to keep prompt caches warm
+├── lib/seal-adapter.mjs # Secret sealing on input, tool_call and tool_result (shared/seal-core.mjs)
 ├── index.ts             # Extension entry point (event handlers + /viking command)
 ├── scripts/ov-memory-doctor.mjs # Client-side doctor (install, config, connection)
 ├── skills/              # generated by memory-plugin-shared/sync.mjs

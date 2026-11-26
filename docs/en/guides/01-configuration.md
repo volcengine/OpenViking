@@ -1113,7 +1113,7 @@ needs those platform-specific URL semantics. Add other Git hosts to
 
 ### pdf
 
-PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+PDF parsing configuration. `local` parses on this machine, `mineru` requires remote parsing to succeed, and `auto` sends PDFs to the configured MinerU endpoint first and falls back to local parsing on failure. With no endpoint, `auto` parses locally.
 
 ```json
 {
@@ -1134,10 +1134,11 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 |-----------|------|-------------|
 | `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
 | `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
-| `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
-| `mineru_bodys` | dict | MinerU API multipart form fields |
+| `mineru_timeout` | float | Timeout in seconds for requests and hosted result polling (default `300.0`) |
+| `mineru_bodys` | dict | Additional MinerU request fields (self-hosted form or hosted JSON) |
+| `mineru_token` | str | Bearer token for the hosted MinerU v4 API |
 
-**MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+For self-hosted MinerU, use its base URL. OpenViking sends the PDF to `/file_parse`. For hosted MinerU, set `mineru_endpoint` to `https://mineru.net/api/v4` and provide `mineru_token`. OpenViking uses the v4 upload and result APIs.
 
 ### External parser API (`parser_api`) {#parser-api}
 
@@ -2192,6 +2193,16 @@ When config files are at the default path, OpenViking loads them automatically �
 > the two values identical and rotate both files together. The normal
 > tenant-scoped `api_key` remains a separate user/admin credential.
 
+### Task history cleanup on read replicas {#task-history-cleanup}
+
+The startup option `server.enable_task_history_cleanup` defaults to `true`.
+When enabled, the node cleans up expired Task and Compile history every five minutes.
+On a read replica, set it to `false` in `ov.conf` and restart the service.
+Running tasks can still receive cancellation signals.
+
+For each shared Task store and Compile history store, keep cleanup enabled on
+at least one node with write access to that store.
+
 ### Reload boundary
 
 The server reads `ov.conf` during process startup and does not watch the file
@@ -2287,17 +2298,34 @@ All nodes sharing expiry state must use the same stable `service_name`. It ident
 
 ```json
 {
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://redis-cache.example.com:6379"]
+        }
+      },
+      "expiry": {
+        "provider": "redis",
+        "params": {
+          "mode": "cluster",
+          "endpoints": ["redis://redis-proxy.example.com:6379"],
+          "username": "openviking",
+          "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD",
+          "default_ttl_seconds": 0
+        }
+      }
+    }
+  },
   "expiry": {
     "service_name": "openviking-documents",
     "publisher_separate_process": true,
     "shard_count": 128,
     "session_consumer_concurrency": 8,
-    "redis": {
-      "mode": "cluster",
-      "endpoints": ["redis://redis-proxy.example.com:6379"],
-      "username": "openviking",
-      "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD"
-    }
+    "cache": {"instance": "expiry"},
+    "request_budget_seconds": 5,
+    "max_inflight_requests": 128
   }
 }
 ```
@@ -2308,13 +2336,40 @@ All nodes sharing expiry state must use the same stable `service_name`. It ident
 | `publisher_separate_process` | bool | On `scheduler` nodes, supervise publisher in a child process; when `false`, run it inside each `scheduler` process | `true` |
 | `shard_count` | int | Number of logical expiry shards; all instances sharing a namespace must use the same value, in the range `1..512` | `128` |
 | `session_consumer_concurrency` | int | Concurrent Session expiry callbacks per `queue_worker` process; must be greater than `0` | `8` |
-| `redis.mode` | string | Redis deployment mode: `standalone` or `cluster` | `standalone` |
-| `redis.endpoints` | string array | Redis endpoints; a cluster may use one proxy endpoint | `[]` |
-| `redis.username` | string | Redis ACL username | `""` |
-| `redis.password_env` | string | Environment variable containing the Redis password; startup fails if it is not set | `""` |
-| `redis.password` | string | Legacy plaintext password; prefer `password_env`; mutually exclusive with it | `""` |
+| `cache.instance` | string | Named Redis CacheRuntime selected for expiry state | required when expiry is enabled |
+| `request_budget_seconds` | number | Total budget for one expiry Store operation; must be shorter than owner renewal | `5` |
+| `max_inflight_requests` | int | Maximum concurrent expiry Store operations | `128` |
 
-`service_name` and Redis endpoints are required when Redis idle auto commit is enabled. Credentials must use the dedicated fields above and cannot be embedded in endpoint URIs. With `publisher_separate_process=true`, `scheduler` startup launches one internal publisher, stops it during shutdown, and exits if that child fails unexpectedly. This publisher is not exposed as a public CLI command.
+The selected `cache.instances.<instance>` must use `provider="redis"` and set
+`params.default_ttl_seconds=0`. Expiry state is durable scheduling state, so
+only its Lua scripts set TTLs for metadata and owner leases.
+
+`service_name` and `cache.instance` are required when Redis idle auto commit is
+enabled. Redis endpoints, credentials, pool size, and timeouts belong in
+`cache.instances.<instance>.params`; credentials cannot be embedded in endpoint
+URIs. With the default `publisher_separate_process=true`, `openviking-server`
+starts one internal publisher before serving traffic, stops it during shutdown,
+and exits if that child fails unexpectedly. This publisher is not exposed as a
+public CLI command.
+
+`expiry.redis` is not supported. Move its connection fields to
+`cache.instances.<instance>.params`, move `request_budget_seconds` and
+`max_inflight_requests` directly under `expiry`, then set
+`expiry.cache.instance` to that instance name.
+
+| Old field | New field | Migration |
+| --- | --- | --- |
+| `expiry.redis.mode` | `cache.instances.<instance>.params.mode` | Copy the value. |
+| `expiry.redis.endpoints` | `cache.instances.<instance>.params.endpoints` | Add `redis://` or `rediss://`; bare `host:port` values are rejected. |
+| `expiry.redis.tls` | endpoint scheme | Preserve an explicit `redis://` or `rediss://` scheme; use `rediss://` only when converting a bare endpoint with `tls=true`. |
+| `expiry.redis.username` | `cache.instances.<instance>.params.username` | Copy the value. |
+| `expiry.redis.password_env` | `cache.instances.<instance>.params.password_env` | Copy the value. |
+| `expiry.redis.password` | `cache.instances.<instance>.params.password` | Copy the value; prefer `password_env` for new deployments. |
+| `expiry.redis.connect_timeout_seconds` | `connect_timeout_ms` | Multiply by 1000. |
+| `expiry.redis.socket_timeout_seconds` | `command_timeout_ms` | Multiply by 1000. |
+| `expiry.redis.max_connections` | `pool_size` | Copy the value. |
+| `expiry.redis.request_budget_seconds` | `expiry.request_budget_seconds` | Copy the value. |
+| `expiry.redis.max_inflight_requests` | `expiry.max_inflight_requests` | Copy the value. |
 
 ##### Per-session Auto Commit Policy
 
@@ -2431,7 +2486,8 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 | `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode. In `trusted` mode it is required on every deployment, including localhost; it does not become the source of user identity | `null` |
 | `account_store.provider` | str | Complete Account store provider. Built-in values are `"file"`, `"mysql"`, `"postgres"`, and `"redis_mysql"`; it owns account, user, group, and API-key records. `"file"` preserves the existing AGFS JSON registry and owns its process-local lookup indexes. `"postgres"` uses PostgreSQL directly. `"redis_mysql"` keeps MySQL authoritative and adds a shared Redis cache for authentication and request identity reads. | `"file"` |
 | `account_store.params` | object | Provider-specific startup parameters. Framework-owned filesystem and File-provider API-key hashing dependencies cannot be overridden here. | `{}` |
-| `account_store.params.read_only` | bool | File provider only. Load an existing writer-created registry without locks, bootstrap, or credential migrations, and reject identity mutations. Keep the replica's data mount read-only and set `reconcile_system_assets_on_startup=false`; enable `api_key_watch_enabled` to observe writer changes. A missing registry prevents startup. | `false` |
+| `account_store.params.read_only` | bool | File provider only. Load an existing writer-created registry without locks, bootstrap, or credential migrations, and reject identity mutations. Keep the replica's data mount read-only and set `reconcile_system_assets_on_startup=false`; enable `api_key_watch_enabled` to observe writer changes. A missing registry prevents startup. Configure [task history cleanup](#task-history-cleanup) separately. | `false` |
+| `enable_task_history_cleanup` | bool | Periodically delete expired Task and Compile history on this node. | `true` |
 | `profile_enabled` | bool | Whether to allow request-scoped cProfile via `profile=1` on HTTP requests. When disabled, the server ignores that query parameter. When enabled, the CLI can display the returned `profile`, while the Python HTTP client currently triggers profiling but does not automatically attach the top-level `profile` field to most SDK return values. | `false` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 | `public_base_url` | str | Public-facing base URL emitted in MCP-issued upload instructions. Resolution order: env var `OPENVIKING_PUBLIC_BASE_URL` → this field → `X-Forwarded-Host`/`X-Forwarded-Proto` request headers → `Host` request header → listen-address fallback. Set this (or the env var) when the server runs behind a reverse proxy that does not forward `X-Forwarded-*` headers. | `null` |
@@ -2464,10 +2520,10 @@ deployment boundary when multiple OpenViking clusters share a database. Changing
 `service_name` selects a different logical account-store partition.
 
 The provider never creates or migrates database tables. Create the normalized
-tables in `openviking/server/account_stores/sql/init.sql` through your normal
-DBA or deployment process before starting the server. Future reviewed schema
-changes are stored as ordered SQL files in
-`openviking/server/account_stores/sql/changes/`. The five `ov_accounts*` table
+tables in `openviking/server/account_stores/sql/init.sql`, then apply the ordered
+migrations in `openviking/server/account_stores/sql/changes/` through your normal
+DBA or deployment process before starting the server. Existing databases apply
+only migrations not yet recorded by that process. The five `ov_accounts*` table
 names are fixed; use distinct top-level `service_name` values rather than
 separate table prefixes to isolate OpenViking clusters that share a database.
 
@@ -2493,8 +2549,10 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 For PostgreSQL Account Store, install `pip install 'openviking[postgres]'` and
 select the `postgres` provider. It connects through psycopg 3 and SQLAlchemy;
 Redis and pgvector are not required. Provision
-`openviking/server/account_stores/sql/postgres/init.sql` with your migration role
-before startup. The runtime never creates or migrates tables. Grant the runtime
+`openviking/server/account_stores/sql/postgres/init.sql`, then apply
+`openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql` with
+your migration role before startup. Existing databases apply this migration once.
+The runtime never creates or migrates tables. Grant the runtime
 role schema `USAGE`, `SELECT, INSERT, UPDATE, DELETE` on the five `ov_accounts*`
 tables, and `USAGE, SELECT` on their three primary-key sequences. Table ownership
 and schema `CREATE` are not required. A new deployment creates the `default`

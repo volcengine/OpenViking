@@ -98,6 +98,23 @@ export function resolveAntigravityTurnStep(jsonl, initialNumSteps, lastUserInput
   return lastUserStep + 1;
 }
 
+/**
+ * The step index of the latest compaction. Antigravity has no compaction hook;
+ * each compaction writes a `CHECKPOINT` step, and the context before it, the
+ * session-start profile included, is gone.
+ */
+export function latestAntigravityCheckpoint(jsonl) {
+  let latest;
+  for (const line of String(jsonl || "").split("\n")) {
+    if (!line.includes('"CHECKPOINT"')) continue;
+    try {
+      const step = JSON.parse(line);
+      if (step.type === "CHECKPOINT" && step.source === "SYSTEM") latest = step.step_index;
+    } catch { /* a partial last line */ }
+  }
+  return latest;
+}
+
 /** The user requests and text replies of finished steps after `afterStep`. */
 export function buildAntigravityTurns(jsonl, afterStep = -1) {
   const turns = [];
@@ -168,8 +185,9 @@ export const antigravity = {
     let turnStep;
     if (input.transcriptPath) {
       try {
-        turnStep = resolveAntigravityTurnStep(
-          readFileSync(antigravityTranscriptPath(input.transcriptPath), "utf8"), input.initialNumSteps, text);
+        const jsonl = readFileSync(antigravityTranscriptPath(input.transcriptPath), "utf8");
+        turnStep = resolveAntigravityTurnStep(jsonl, input.initialNumSteps, text);
+        input.latestCompaction = latestAntigravityCheckpoint(jsonl);
       } catch {
         turnStep = undefined;
       }

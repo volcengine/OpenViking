@@ -36,6 +36,12 @@ def _fs(*, acl_manager=None) -> VikingFS:
     return VikingFS(agfs=SimpleNamespace(), acl_manager=acl_manager)
 
 
+def test_global_acl_bypass_rejects_mixed_targets():
+    targets = ["viking://resources/team", "viking://user/other/memories"]
+    with pytest.raises(PermissionDeniedError):
+        _fs().authorize_read(_ctx(Role.GLOBAL, bypass_acl=True), targets)
+
+
 @pytest.mark.parametrize("role", [Role.USER, Role.ADMIN, Role.ROOT])
 @pytest.mark.parametrize(
     "uri",
@@ -202,6 +208,8 @@ async def test_system_writes_allow_root_and_limit_admin_to_custom_assets(action,
         "viking://system/memory/memory_templates",
         SYSTEM_MEMORY_BUILTIN_ROOT,
         f"{SYSTEM_MEMORY_BUILTIN_ROOT}/profile.yaml",
+        "viking://system/semantic/templates/builtin",
+        "viking://system/semantic/templates/builtin/directory_overview.md.j2",
         SYSTEM_EXAMPLE_SKILLS_ROOT,
         f"{SYSTEM_EXAMPLE_SKILLS_ROOT}/daily-report/SKILL.md",
         SYSTEM_MEMORY_CUSTOM_ROOT,

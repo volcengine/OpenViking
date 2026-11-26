@@ -719,7 +719,7 @@ async def test_restore_apply_advances_head_with_forward_commit(
 
 
 async def test_restore_without_project_dir_restores_full_account_tree(
-    client_with_resource_and_blob, service
+    client_with_resource_and_blob, service, monkeypatch
 ):
     from openviking.server.identity import RequestContext, Role
     from openviking_cli.session.user_id import UserIdentifier
@@ -736,11 +736,15 @@ async def test_restore_without_project_dir_restores_full_account_tree(
     assert c2_resp.status_code == 200, c2_resp.text
     c2_oid = c2_resp.json()["result"]["commit_oid"]
 
+    service.viking_fs.set_frozen_file_reader(AsyncMock(return_value=()))
+    preflight = AsyncMock(wraps=service.viking_fs._ensure_restore_plan_access)
+    monkeypatch.setattr(service.viking_fs, "_ensure_restore_plan_access", preflight)
     restore_resp = await client.post(
         "/api/v1/snapshot/restore",
         json={"source_commit": c1_oid},
     )
     assert restore_resp.status_code == 200, restore_resp.text
+    preflight.assert_not_awaited()
     result = restore_resp.json()["result"]
     assert result["result"] == "applied"
     assert result["source_commit"] == c1_oid

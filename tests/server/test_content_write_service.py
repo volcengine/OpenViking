@@ -3,7 +3,9 @@
 
 """Service-level tests for content write coordination."""
 
+import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -11,9 +13,12 @@ from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import MemoryFile
 from openviking.session.memory.utils import MemoryFileUtils
 from openviking.session.memory.utils.content_visibility import visible_content
+from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.acl import AclMode
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+from openviking.storage.vector_ids import vector_record_id
+from openviking.utils.tags import build_search_tags_filter
 from openviking_cli.exceptions import (
     InvalidArgumentError,
     PermissionDeniedError,
@@ -21,23 +26,77 @@ from openviking_cli.exceptions import (
 from openviking_cli.session.user_id import UserIdentifier
 
 
+async def test_global_write_indexes_shared_file_with_conflict_tags(service):
+    ctx = RequestContext(user=service.user, role=Role.GLOBAL)
+    parent = "viking://resources/team/deployment"
+    uri = f"{parent}/conflict.md"
+    tags = ["has_conflict=true", "conflict_num=1"]
+    await service.fs.write(uri, "Conflicting steps.", ctx, mode="create", wait=True, tags=tags)
+    found = await service.search.find(
+        "", ctx, target_uri=parent, filter=build_search_tags_filter(tags), level=[2]
+    )
+    assert [entry.uri for entry in found.resources] == [uri]
+
+
 @pytest.mark.asyncio
-async def test_write_updates_memory_file_and_parent_overview(service, monkeypatch):
+@pytest.mark.parametrize("overview_failure", [None, "enqueue", "write"])
+async def test_write_updates_memory_file_and_parent_overview(
+    service, monkeypatch, overview_failure
+):
     from openviking.observability.events import get_event_bus
     from openviking.observability.reporting import runtime
     from openviking.service.task_store import TaskStatus
     from openviking.service.task_tracker import get_task_tracker
+    from openviking.storage.queuefs import get_queue_manager
 
+    load_model = AsyncMock(side_effect=AssertionError("memory write must not call a text model"))
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticProcessor._get_vlm_config",
+        load_model,
+    )
     ctx = RequestContext(user=service.user, role=Role.USER)
-    memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/preferences"
+    memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/preferences/alice"
     memory_uri = f"{memory_dir}/theme.md"
 
-    await service.viking_fs.write_file(memory_uri, "Original preference", ctx=ctx)
+    await service.viking_fs.write_file(
+        memory_uri,
+        MemoryFileUtils.write(
+            MemoryFile(
+                uri=memory_uri,
+                memory_type="preferences",
+                content="Original preference",
+                extra_fields={"user": "alice", "topic": "Theme"},
+            )
+        ),
+        ctx=ctx,
+    )
 
     overview_uri = f"{memory_dir}/.overview.md"
-    abstract_uri = f"{memory_dir}/.abstract.md"
-    initial_overview = await service.viking_fs.read_file(overview_uri, ctx=ctx)
-    initial_abstract = await service.viking_fs.read_file(abstract_uri, ctx=ctx)
+    memory_id = vector_record_id(ctx.account_id, memory_uri, level=2)
+    manager = get_queue_manager()
+    semantic_queue = manager.get_queue(manager.SEMANTIC)
+    queue_storage_write = semantic_queue._async_agfs.write
+    l2_visible_on_refresh_submit = []
+
+    async def observe_overview_enqueue(path, payload, *args, **kwargs):
+        if path == f"{semantic_queue.path}/enqueue" and json.loads(payload)["uri"] == memory_dir:
+            l2_visible_on_refresh_submit.append(
+                await service.vikingdb_manager.exists(memory_id, ctx=ctx)
+            )
+            if overview_failure == "enqueue":
+                raise OSError("semantic queue storage unavailable")
+        return await queue_storage_write(path, payload, *args, **kwargs)
+
+    monkeypatch.setattr(semantic_queue._async_agfs, "write", observe_overview_enqueue)
+    if overview_failure == "write":
+        write_file = service.viking_fs.write_file
+
+        async def reject_overview(uri, *args, **kwargs):
+            if uri == overview_uri:
+                raise OSError("overview storage unavailable")
+            return await write_file(uri, *args, **kwargs)
+
+        monkeypatch.setattr(service.viking_fs, "write_file", reject_overview)
 
     monkeypatch.setattr(runtime, "_reporter", object())
     events = []
@@ -64,19 +123,44 @@ async def test_write_updates_memory_file_and_parent_overview(service, monkeypatc
     assert task is not None
     assert task.status == TaskStatus.COMPLETED
     assert task.resource_id == memory_uri
+    assert "task_id" not in result
     assert writes[0].payload["memory_type"] == "preferences"
     assert writes[0].payload["change_type"] == "modified"
 
     assert result["context_type"] == "memory"
     assert result["semantic_status"] == "skipped"
     assert result["vector_status"] == "complete"
-    assert result["overview_status"] == "complete"
-    assert result["queue_status"]["Embedding"]["processed"] >= 1
+    assert result["overview_status"] == ("failed" if overview_failure == "enqueue" else "queued")
+    assert l2_visible_on_refresh_submit == [True]
+    await service.resources.wait_processed()
+    assert await service.vikingdb_manager.exists(memory_id, ctx=ctx)
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
     assert visible_content(stored, uri=memory_uri) == "Updated preference"
+    load_model.assert_not_awaited()
+    if overview_failure:
+        assert not await service.viking_fs.exists(overview_uri, ctx=ctx)
+        return
     overview = await service.viking_fs.read_file(overview_uri, ctx=ctx)
-    assert overview and overview != initial_overview
-    assert await service.viking_fs.read_file(abstract_uri, ctx=ctx) == initial_abstract
+    assert "[Theme](./theme.md)" in overview
+    abstract_uri = f"{memory_dir}/.abstract.md"
+    raw_abstract = await service.viking_fs.read_file(abstract_uri, ctx=ctx)
+    l0 = parse_abstract_overview(raw_abstract)
+    assert "Long-term preferences for alice" in l0.body
+    assert l0.is_manual_abstract
+    abstract_id = vector_record_id(ctx.account_id, memory_dir, level=0)
+    assert await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
+
+    await service.vikingdb_manager.strict_delete([abstract_id], ctx=ctx)
+    assert not await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
+    result = await service.fs.write(
+        memory_uri, content="Another preference", ctx=ctx, mode="replace", wait=True
+    )
+    assert result["overview_status"] == "queued"
+    await service.resources.wait_processed()
+    assert await service.vikingdb_manager.exists(abstract_id, ctx=ctx)
+    assert await service.viking_fs.read_file(abstract_uri, ctx=ctx) == raw_abstract
+    assert await service.viking_fs.read_file(overview_uri, ctx=ctx) == overview
+    load_model.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -509,13 +593,15 @@ async def test_memory_create_refreshes_nested_schema_overview(service):
         wait=True,
     )
 
+    await service.resources.wait_processed()
     overview = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     assert result["root_uri"] == memory_dir
     assert "(./不二周助-link-test.md)" in overview
 
 
 @pytest.mark.asyncio
-async def test_memory_rm_refreshes_nested_schema_overview(service):
+@pytest.mark.parametrize("has_preset_abstract", [False, True])
+async def test_memory_rm_refreshes_nested_schema_overview(service, has_preset_abstract):
     ctx = RequestContext(user=service.user, role=Role.USER)
     memory_dir = f"viking://user/{ctx.user.user_space_name()}/memories/entities/动漫角色"
     deleted_uri = f"{memory_dir}/不二周助-delete-test.md"
@@ -536,14 +622,46 @@ async def test_memory_rm_refreshes_nested_schema_overview(service):
         wait=True,
     )
 
+    await service.resources.wait_processed()
     before = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     assert "[不二周助-delete-test.md](./不二周助-delete-test.md)" in before
 
     await service.fs.rm(deleted_uri, ctx=ctx, wait=True)
 
+    await service.resources.wait_processed()
     after = await service.viking_fs.read_file(f"{memory_dir}/.overview.md", ctx=ctx)
     assert "不二周助-delete-test" not in after
     assert "[越前龙马-keep-test.md](./越前龙马-keep-test.md)" in after
+
+    abstract_uri = f"{memory_dir}/.abstract.md"
+    overview_uri = f"{memory_dir}/.overview.md"
+    abstract_id = vector_record_id(ctx.account_id, memory_dir, level=0)
+    overview_id = vector_record_id(ctx.account_id, memory_dir, level=1)
+    index = service.vikingdb_manager
+    if has_preset_abstract:
+        preset_abstract = await service.viking_fs.read_file(abstract_uri, ctx=ctx)
+        assert parse_abstract_overview(preset_abstract).is_manual_abstract
+    else:
+        # main previously wrote only L1 for these directories.
+        await service.viking_fs.rm(abstract_uri, ctx=ctx, no_vector=True)
+        await index.strict_delete([abstract_id], ctx=ctx)
+
+    assert await index.exists(overview_id, ctx=ctx)
+    await service.fs.rm(kept_uri, ctx=ctx, wait=True)
+
+    await service.resources.wait_processed()
+    assert await service.viking_fs.exists(memory_dir, ctx=ctx)
+    assert not await service.viking_fs.exists(kept_uri, ctx=ctx)
+    assert not await service.viking_fs.exists(overview_uri, ctx=ctx)
+    assert not await index.exists(overview_id, ctx=ctx)
+    assert await index.exists(abstract_id, ctx=ctx) is has_preset_abstract
+    if has_preset_abstract:
+        abstract = parse_abstract_overview(await service.viking_fs.read_file(abstract_uri, ctx=ctx))
+        assert abstract.body == parse_abstract_overview(preset_abstract).body
+        assert abstract.is_manual_abstract
+        assert abstract.metadata["freshness"]["pending_child_changes"] == 0
+    else:
+        assert not await service.viking_fs.exists(abstract_uri, ctx=ctx)
 
 
 class _FakePathLock:

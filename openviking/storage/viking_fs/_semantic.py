@@ -582,7 +582,11 @@ class _SemanticMixin:
             if text
         ]
         await self._ensure_access_many(
-            [uri, *(summary_uri for _, summary_uri, _ in summaries)],
+            [
+                uri,
+                *(summary_uri for _, summary_uri, _ in summaries),
+                *([f"{uri}/{content_filename}"] if content else []),
+            ],
             ctx,
             action=AclAction.WRITE,
         )
@@ -616,7 +620,8 @@ class _SemanticMixin:
                             "generated_by": {
                                 "component": "VikingFS.write_context",
                                 "trigger": "context_write",
-                            }
+                            },
+                            **({"maintenance": "manual"} if level == ContextLevel.ABSTRACT else {}),
                         },
                     ),
                     ctx=ctx,

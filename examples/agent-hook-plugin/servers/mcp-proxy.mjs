@@ -4,7 +4,7 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
 
-import { loadAgentHookConfig } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+import { deriveAgentSessionId, loadAgentHookConfig } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { createLogger } from "../../memory-plugin-shared/lib/debug-log.mjs";
 import { toMcpProxyConfig } from "../../memory-plugin-shared/lib/mcp-proxy-config.mjs";
 import { createOpenVikingMcpProxy } from "../../memory-plugin-shared/lib/mcp-proxy-core.mjs";
@@ -20,6 +20,20 @@ export function readProxyConfig(env = process.env) {
   return toMcpProxyConfig(cfg, { env });
 }
 
+/**
+ * How a host that names the calling session in each tool call's `_meta` fills
+ * `session_history`'s `session`: the OV id its hooks capture that session
+ * into. Null for a host whose calls do not say.
+ */
+export function historySessionFor(clientId) {
+  const host = HOSTS[clientId];
+  if (!host?.historySessionFromMeta) return null;
+  return (params) => {
+    const id = host.historySessionFromMeta(params?._meta || {});
+    return id ? deriveAgentSessionId(host.prefix, { session_id: id }) : "";
+  };
+}
+
 function isDirectRun() {
   if (!process.argv[1]) return false;
   try {
@@ -30,5 +44,9 @@ function isDirectRun() {
 }
 
 if (isDirectRun()) {
-  createOpenVikingMcpProxy({ readConfig: readProxyConfig, loggerFactory: createLogger }).start();
+  createOpenVikingMcpProxy({
+    readConfig: readProxyConfig,
+    loggerFactory: createLogger,
+    defaultHistorySession: historySessionFor(process.env.OPENVIKING_HOOK_SOURCE || ""),
+  }).start();
 }

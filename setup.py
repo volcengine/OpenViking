@@ -591,7 +591,7 @@ setup(
     ),
     cmdclass=cmdclass,
     package_data={
-        "openviking_gateway": ["client-rules.json"],
+        "openviking_gateway": ["client-rules.json", "server-features.json"],
         "openviking.scheduling.expiry": ["lua/*.lua"],
         "openviking": [
             "lib/ragfs_python*.so",

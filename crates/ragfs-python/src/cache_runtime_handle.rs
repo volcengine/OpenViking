@@ -7,7 +7,7 @@ use pyo3::types::{PyBytes, PyList};
 use ragfs::cache_runtime::{
     CacheError, CacheResult, CacheRuntime, Expiration, ListDirection, ListInsertPosition,
     ListInsertRequest, ListMoveRequest, ScriptRequest, ScriptValue, SetCondition, SetOptions,
-    SetResult,
+    SetResult, ScoredMember, ScoreRange, ZAddCondition, ZAddOptions,
 };
 use std::collections::HashMap;
 use std::future::Future;
@@ -67,6 +67,24 @@ fn set_options(
     })
 }
 
+/// Build ZADD options from the public Python keyword arguments.
+fn zadd_options(if_not_exists: bool, if_greater: bool) -> PyResult<ZAddOptions> {
+    if if_not_exists && if_greater {
+        return Err(PyValueError::new_err(
+            "only_if_not_exists and only_if_greater are mutually exclusive",
+        ));
+    }
+    Ok(ZAddOptions {
+        condition: if if_not_exists {
+            ZAddCondition::Nx
+        } else if if_greater {
+            ZAddCondition::Gt
+        } else {
+            ZAddCondition::None
+        },
+    })
+}
+
 /// Parse an optional non-negative list pop count.
 fn optional_count(count: Option<i64>) -> PyResult<Option<u64>> {
     count
@@ -83,6 +101,17 @@ fn score_limit(limit: i64) -> PyResult<u32> {
         .ok()
         .filter(|limit| *limit > 0)
         .ok_or_else(|| PyValueError::new_err("limit must be a positive 32-bit integer"))
+}
+
+/// Parse a non-negative sorted-set range limit.
+fn score_range_limit(limit: i64) -> PyResult<u32> {
+    u32::try_from(limit)
+        .map_err(|_| PyValueError::new_err("limit must be a non-negative 32-bit integer"))
+}
+
+/// Parse a non-negative sorted-set range offset.
+fn score_range_offset(offset: i64) -> PyResult<u64> {
+    u64::try_from(offset).map_err(|_| PyValueError::new_err("offset must be non-negative"))
 }
 
 /// Parse the documented LINSERT position.
@@ -305,16 +334,47 @@ impl PyCacheRuntimeHandle {
         self.future(py, async move { runtime.hget(&key, &field).await.map(|value| value.map(|v| v.to_vec())) })
     }
 
-    /// Store a hash field and return whether it was newly added.
+    /// Return every hash field as a Python bytes dictionary.
+    fn hgetall<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        self.future(py, async move {
+            runtime.hgetall(&key).await.map(|values| {
+                values
+                    .into_iter()
+                    .map(|(field, value)| (field, value.to_vec()))
+                    .collect::<HashMap<_, _>>()
+            })
+        })
+    }
+
+    /// Store hash fields and return the number of newly added fields.
     fn hset<'py>(
         &self,
         py: Python<'py>,
         key: String,
-        field: String,
-        value: Vec<u8>,
+        values: HashMap<String, Vec<u8>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
-        self.future(py, async move { runtime.hset(&key, &field, Bytes::from(value)).await })
+        let values = values
+            .into_iter()
+            .map(|(field, value)| (field, Bytes::from(value)))
+            .collect();
+        self.future(py, async move { runtime.hset(&key, values).await })
+    }
+
+    /// Store only hash fields that do not already exist.
+    fn hsetnx<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+        values: HashMap<String, Vec<u8>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        let values = values
+            .into_iter()
+            .map(|(field, value)| (field, Bytes::from(value)))
+            .collect();
+        self.future(py, async move { runtime.hsetnx(&key, values).await })
     }
 
     /// Return whether member belongs to the set at key.
@@ -345,16 +405,36 @@ impl PyCacheRuntimeHandle {
         self.future(py, async move { runtime.scard(&key).await })
     }
 
-    /// Add or update a sorted-set member and return whether it was newly added.
+    /// Add sorted-set members and return the number newly added.
+    #[pyo3(signature = (key, entries, *, only_if_not_exists=false, only_if_greater=false))]
     fn zadd<'py>(
         &self,
         py: Python<'py>,
         key: String,
-        score: f64,
-        member: String,
+        entries: Vec<(f64, String)>,
+        only_if_not_exists: bool,
+        only_if_greater: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let options = zadd_options(only_if_not_exists, only_if_greater)?;
+        let runtime = Arc::clone(&self.runtime);
+        let entries = entries
+            .into_iter()
+            .map(|(score, member)| ScoredMember { member, score })
+            .collect();
+        self.future(py, async move {
+            runtime.zadd_with_options(&key, entries, options).await
+        })
+    }
+
+    /// Read multiple sorted-set scores while preserving member order.
+    fn zmscore<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+        members: Vec<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
-        self.future(py, async move { runtime.zadd(&key, score, &member).await })
+        self.future(py, async move { runtime.zmscore(&key, &members).await })
     }
 
     /// Return sorted-set members matching pattern.
@@ -370,7 +450,8 @@ impl PyCacheRuntimeHandle {
         self.future(py, async move { runtime.zscan_match(&key, &pattern, count).await })
     }
 
-    /// Return sorted-set members in the inclusive score range.
+    /// Return sorted-set members and scores within one bounded score range.
+    #[pyo3(signature = (key, min_score, max_score, limit, *, offset=0, min_exclusive=false, max_exclusive=false))]
     fn zrangebyscore<'py>(
         &self,
         py: Python<'py>,
@@ -378,14 +459,46 @@ impl PyCacheRuntimeHandle {
         min_score: f64,
         max_score: f64,
         limit: i64,
+        offset: i64,
+        min_exclusive: bool,
+        max_exclusive: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let limit = score_limit(limit)?;
+        let range = ScoreRange {
+            min: min_score,
+            min_exclusive,
+            max: max_score,
+            max_exclusive,
+            offset: score_range_offset(offset)?,
+            limit: score_range_limit(limit)?,
+        };
         let runtime = Arc::clone(&self.runtime);
         self.future(py, async move {
             runtime
-                .zrangebyscore(&key, min_score, max_score, limit)
+                .zrangebyscore(&key, range)
                 .await
+                .map(|values| {
+                    values
+                        .into_iter()
+                        .map(|entry| (entry.member, entry.score))
+                        .collect::<Vec<_>>()
+                })
         })
+    }
+
+    /// Return the number of members in one sorted set.
+    fn zcard<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        self.future(py, async move { runtime.zcard(&key).await })
+    }
+
+    /// Return the primary provider server clock for a key in milliseconds.
+    fn server_time_for_key<'py>(
+        &self,
+        py: Python<'py>,
+        key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        self.future(py, async move { runtime.server_time_for_key(&key).await })
     }
 
     /// Remove members from a sorted set and return the number removed.
