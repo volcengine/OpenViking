@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 from collections import Counter
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -32,6 +33,7 @@ from openviking.retrieve.context_assembler.tiers import tier_window
 from openviking.retrieve.rerank_scoring import Reranker
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.token_estimation import estimate_text_tokens
+from openviking_cli.exceptions import NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
@@ -814,6 +816,87 @@ async def test_exclude_uris_directory_prefix_excludes_subtree():
     uris = [e.uri for e in result.entries]
     assert f"{USER_ROOT}/memories/events/old.md" not in uris
     assert f"{USER_ROOT}/memories/preferences/lang.md" in uris
+
+
+async def test_directory_levels_share_a_node_and_can_be_excluded_by_sidecar():
+    folder = f"{USER_ROOT}/memories/events/launch"
+    abstract_uri = f"{folder}/.abstract.md"
+    overview_uri = f"{folder}/.overview.md"
+    child_uri = f"{folder}/notes.md"
+    service = _service(
+        hits=[
+            {"uri": folder, "score": 0.9, "level": 0},
+            {"uri": overview_uri, "score": 0.8, "level": 1},
+            {"uri": child_uri, "score": 0.7, "level": 2},
+        ],
+        bodies={overview_uri: "Launch overview.", child_uri: "Child notes."},
+    )
+    ctx = _ctx()
+    params = AssembleParams(
+        query="launch",
+        quotas={"events": 3},
+        detail="overview",
+        peer_scope="actor",
+    )
+
+    result = await assemble_context(service=service, ctx=ctx, params=params)
+    assert [(entry.uri, entry.detail, entry.text) for entry in result.entries] == [
+        (folder, "overview", "Launch overview."),
+        (child_uri, "overview", "Child notes."),
+    ]
+
+    result = await assemble_context(
+        service=service,
+        ctx=ctx,
+        params=replace(params, exclude_uris=[abstract_uri, overview_uri]),
+    )
+    assert [(entry.uri, entry.text) for entry in result.entries] == [(child_uri, "Child notes.")]
+    assert result.stats["excluded"] == 2
+
+
+@pytest.mark.parametrize("read_error", [NotFoundError, PermissionDeniedError])
+@pytest.mark.parametrize(
+    ("abstract", "expected_detail", "expected_text"),
+    [
+        pytest.param("Launch abstract.", "abstract", "Launch abstract.", id="fits"),
+        pytest.param("", "uri", "", id="missing"),
+        pytest.param("Long abstract. " * 300, "uri", "", id="over-budget"),
+    ],
+)
+async def test_unreadable_directory_overview_degrades_within_budget(
+    read_error, abstract, expected_detail, expected_text
+):
+    folder = f"{USER_ROOT}/peers/teammate/memories/events/launch"
+    overview_uri = f"{folder}/.overview.md"
+    other_uri = f"{USER_ROOT}/memories/events/other.md"
+
+    async def read(uri, *, ctx):
+        if uri == overview_uri:
+            raise read_error(uri)
+        assert uri == other_uri
+        return "Other event."
+
+    service = _service(
+        hits=[
+            {"uri": folder, "score": 0.9, "level": 0, "abstract": abstract},
+            {"uri": other_uri, "score": 0.7, "level": 2},
+        ],
+        bodies={},
+    )
+    service.fs.read = AsyncMock(side_effect=read)
+    ctx = _ctx()
+    result = await assemble_context(
+        service=service,
+        ctx=ctx,
+        params=AssembleParams(query="launch", detail="overview", max_tokens=180),
+    )
+
+    assert {entry.uri: (entry.detail, entry.text) for entry in result.entries} == {
+        folder: (expected_detail, expected_text),
+        other_uri: ("overview", "Other event."),
+    }
+    service.fs.read.assert_any_await(overview_uri, ctx=replace(ctx, actor_peer_id=None))
+    service.fs.read.assert_any_await(other_uri, ctx=ctx)
 
 
 async def test_a_cooled_directory_does_not_hide_files_added_under_it(monkeypatch):

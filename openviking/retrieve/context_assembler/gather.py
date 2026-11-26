@@ -77,8 +77,8 @@ def _abstract(item: Any) -> str:
 
 def _level(item: Any) -> int:
     try:
-        return int(_get_attr(item, "level", 2) or 2)
-    except (TypeError, ValueError):
+        return int(_get_attr(item, "level", 2))
+    except (TypeError, ValueError, OverflowError):
         return 2
 
 
@@ -259,6 +259,7 @@ async def gather_candidates(
             if base_uri.endswith("/profile.md") or base_uri in preset_dirs:
                 continue
             category = category_for(item, bucket)
+            level = _level(item)
             abstract = _abstract(item)
             if category == "skills":
                 # Every file and directory level of a package carries its own
@@ -272,6 +273,10 @@ async def gather_candidates(
                     abstract = ""
                 uri = base_uri = f"{root}/SKILL.md"
                 is_directory = False
+            elif not is_directory and level in (0, 1):
+                # Filter-only hits carry node URIs. Restore the sidecar URI for exclusions.
+                uri = f"{base_uri}/{LEVEL_SUFFIXES[level]}"
+                is_directory = True
             # Caller exclusions cover a subtree; ledger-cooled URIs are served
             # entries, so a cooled directory must not hide files added under it.
             if (
@@ -291,7 +296,7 @@ async def gather_candidates(
                     category=category,
                     score=score,
                     ranked_score=score - penalty,
-                    level=_level(item),
+                    level=level,
                     abstract=abstract,
                     origin=origin,
                     is_directory=is_directory,
