@@ -2776,3 +2776,92 @@ async def test_tree_include_abstract_skips_not_ready_placeholders(service):
     assert "  - name: pdf description: Fill PDF forms" in result
     assert "not ready" not in result
     assert {"  scripts/", "  references/", "  SKILL.md (5 B)"} <= set(result.splitlines())
+
+
+async def test_privacy_upsert_description_is_a_label_shown_by_the_tree(service):
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    privacy = service.privacy_configs
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    description_schema = tools["privacy_upsert"].inputSchema["properties"]["description"]
+
+    def tools_schema_max_length():
+        return next(
+            item["maxLength"]
+            for item in [description_schema, *description_schema.get("anyOf", [])]
+            if "maxLength" in item
+        )
+
+    async def upsert(**arguments):
+        result = await mcp_endpoint.mcp.call_tool(
+            "privacy_upsert", {"category": "credential", "target_key": "github", **arguments}
+        )
+        assert not isinstance(result, CallToolResult), result
+        return result
+
+    async def tree_targets():
+        tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {"category": "credential"})
+        return {target["target_key"]: target for target in tree[1]["categories"][0]["targets"]}
+
+    await upsert(values={"pat": "description-secret-1"}, description="GitHub PAT for acme")
+    meta = await privacy.get_meta(DEFAULT_CTX, "credential", "github")
+    assert meta.labels == {"description": "GitHub PAT for acme"}
+
+    # Other labels survive a description change; value-only updates keep both.
+    await privacy.patch_values(
+        DEFAULT_CTX, "credential", "github", {}, labels={**meta.labels, "env": "prod"}
+    )
+    await upsert(values={"pat": "description-secret-2"})
+    meta = await privacy.get_meta(DEFAULT_CTX, "credential", "github")
+    assert meta.labels == {"description": "GitHub PAT for acme", "env": "prod"}
+    await upsert(values={"pat": "description-secret-2"}, description="Rotated acme PAT")
+    meta = await privacy.get_meta(DEFAULT_CTX, "credential", "github")
+    assert meta.labels == {"description": "Rotated acme PAT", "env": "prod"}
+
+    await privacy.upsert(DEFAULT_CTX, "credential", "plain", {"token": "plain-secret-1"})
+    targets = await tree_targets()
+    assert targets["github"]["description"] == "Rotated acme PAT"
+    assert "env" not in json.dumps(targets["github"])
+    assert "description" not in targets["plain"]
+
+    assert tools_schema_max_length() == 500
+    with pytest.raises(ToolError):
+        await mcp_endpoint.mcp.call_tool(
+            "privacy_upsert",
+            {
+                "category": "credential",
+                "target_key": "github",
+                "values": {"pat": "description-secret-3"},
+                "description": "x" * 501,
+            },
+        )
+    current = await privacy.get_current(DEFAULT_CTX, "credential", "github")
+    assert current.values["pat"] == "description-secret-2"
+
+
+async def test_privacy_tree_leaves_auto_out_unless_named(client, service):
+    privacy = service.privacy_configs
+    await privacy.upsert(DEFAULT_CTX, "credential", "github", {"pat": "tree-named-secret-1"})
+    await privacy.insert_values(
+        DEFAULT_CTX, "auto", "github-tree01", {"token": "tree-auto-secret-1"}
+    )
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    assert 'category="auto"' in tools["privacy_tree"].description
+
+    tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {})
+    assert [node["category"] for node in tree[1]["categories"]] == ["credential"]
+    named = await mcp_endpoint.mcp.call_tool("privacy_tree", {"category": "auto"})
+    [node] = named[1]["categories"]
+    assert node["category"] == "auto"
+    assert [target["target_key"] for target in node["targets"]] == ["github-tree01"]
+    assert "tree-auto-secret-1" not in json.dumps(named[1])
+
+    # The HTTP tree route keeps listing everything.
+    response = await client.get(
+        "/api/v1/privacy-configs/tree", headers={"X-OpenViking-User": DEFAULT_CTX.user.user_id}
+    )
+    assert response.status_code == 200, response.text
+    assert [node["category"] for node in response.json()["result"]["categories"]] == [
+        "auto",
+        "credential",
+    ]

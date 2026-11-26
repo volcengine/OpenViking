@@ -162,7 +162,14 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>Use OpenViking Service (hosted by Volcengine)</strong></summary>
 
-The same OpenViking service, run for you by Volcengine. The first 50 files are free. Activate it on the [Volcengine product page](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme), then create an API key in the console under User Management → API Key. The server address is `https://api.vikingdb.cn-beijing.volces.com/openviking`; you'll need it and the API key when you connect your agent.
+The same OpenViking service, run for you by Volcengine. The first 50 files are free. Activate it on the [Volcengine product page](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme), then create an API key in the console under User Management → API Key. The Volcengine setup option sets the service URL automatically. For manual setup, use `https://api.vikingdb.cn-beijing.volces.com/openviking`.
+
+</details>
+
+<details>
+<summary><strong>Use OpenViking Service (hosted by BytePlus)</strong></summary>
+
+[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) hosts OpenViking in Asia Pacific (Johor). Enter your instance's API key in the setup wizard. The BytePlus option sets the service URL automatically. See the [BytePlus setup guide](https://docs.openviking.ai/en/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme) for CLI and agent setup.
 
 </details>
 
@@ -210,7 +217,7 @@ Before you send it, replace `<SERVER_URL>` with your server's address and `<API_
 <details>
 <summary><strong>Install it yourself</strong></summary>
 
-Run the installer, then pick the tools and a server when asked: Self-hosted / local for a server on this machine, Volcengine OpenViking Cloud for OpenViking Service, or Custom URL for any other address. If auth is on, enter a user key, not the root key.
+Run the installer, then pick the tools and a server. Choose **OpenViking Managed Service**, then **BytePlus** or **Volcengine**, for a managed instance. Use **Self-hosted / local** for a server on this machine or **Custom URL** for another server. Older installers use **Custom URL** for BytePlus. If auth is on, enter a user key, not the root key.
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -349,7 +356,7 @@ The server supports [accounts and user isolation](https://docs.openviking.ai/en/
 <img src="docs/images/commercial-saas.png" alt="Managed SaaS" width="100%" />
 
 <h3>☁️ Managed SaaS</h3>
-<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> hosts and operates OpenViking. Personal and Enterprise plans cover individual and team use, with migration tooling for open-source deployments. See the <a href="https://docs.volcengine.com/docs/84313/2374478">service documentation</a> for plans and limits. Hosting outside China is planned on <a href="https://www.byteplus.com">BytePlus</a>.</p>
+<p><a href="https://www.volcengine.com/product/openviking-service?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">Volcano Engine</a> hosts and operates OpenViking. Personal and Enterprise plans cover individual and team use, with migration tooling for open-source deployments. See the <a href="https://docs.volcengine.com/docs/84313/2374478">service documentation</a> for plans and limits. <a href="https://openviking.ai/byteplus?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme">BytePlus</a> hosts OpenViking in Asia Pacific (Johor).</p>
 
 </td>
 <td width="50%" valign="top">

@@ -231,6 +231,80 @@ async def lightweight_admin_client(lightweight_admin_app):
         yield c
 
 
+async def test_admin_frozen_files_reach_native_fs_and_background(
+    admin_app, admin_service, admin_client, monkeypatch
+):
+    import openviking.server.account_stores.models as account_models
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    account_id = _uid()
+    manager = admin_app.state.api_key_manager
+    admin_key = await manager.create_account(account_id, "admin")
+    user_key = await manager.register_user(account_id, "agent")
+    other_key = await manager.create_account(_uid(), "admin")
+    fs = admin_service.viking_fs
+    fs.set_frozen_file_reader(manager.get_frozen_files)
+    user = UserIdentifier(account_id, "agent")
+    uri = "viking://user/agent/skills/example/SKILL.md"
+    await fs.write_file(uri, "original", ctx=RequestContext(user, Role.USER))
+    with monkeypatch.context() as patch:
+        refresh = AsyncMock(side_effect=OSError("account metadata unavailable"))
+        patch.setattr(manager._store, "_refresh_accounts_for_management_read", refresh)
+        await fs.write_file(uri, "original", ctx=RequestContext(user, Role.USER))
+        refresh.assert_not_awaited()
+        patch.setattr(account_models, "monotonic", lambda: float("inf"))
+        with pytest.raises(OSError, match="account metadata unavailable"):
+            await fs.write_file(uri, "replacement", ctx=RequestContext(user, Role.USER))
+        assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "original"
+    url = f"/api/v1/admin/accounts/{account_id}/users/agent/frozen-file"
+    result = await admin_client.put(
+        url,
+        headers={"X-API-Key": admin_key},
+        json={"path": "skills/example/SKILL.md", "frozen": True},
+    )
+    assert result.status_code == 200, result.text
+    status = await admin_client.get(
+        url, headers={"X-API-Key": admin_key}, params={"path": "skills/example/SKILL.md"}
+    )
+    assert status.json()["result"]["frozen"] is True
+    assert set(status.json()["result"]) == {"account_id", "user_id", "path", "frozen"}
+    status = await admin_client.get(
+        url, headers={"X-API-Key": admin_key}, params={"path": "skills/example/skill.md"}
+    )
+    assert status.json()["result"]["frozen"] is False
+    for key in (user_key, other_key):
+        denied = await admin_client.put(
+            url,
+            headers={"X-API-Key": key},
+            json={"path": "skills/example/SKILL.md", "frozen": False},
+        )
+        assert denied.status_code == 403
+    for role in (Role.USER, Role.ROOT):
+        with pytest.raises(PermissionDeniedError):
+            await fs.write_file(uri, "replacement", ctx=RequestContext(user, role))
+    with pytest.raises(PermissionDeniedError):
+        await fs.rm(
+            "viking://user/agent/skills", recursive=True, ctx=RequestContext(user, Role.USER)
+        )
+    with pytest.raises(PermissionDeniedError):
+        await fs.mv(
+            "viking://user/agent/skills/example",
+            "viking://user/agent/skills/moved",
+            ctx=RequestContext(user, Role.USER),
+        )
+    assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "original"
+    with pytest.raises(PermissionDeniedError):
+        await fs.read_file(uri, ctx=RequestContext(UserIdentifier(account_id, "admin"), Role.ADMIN))
+    result = await admin_client.put(
+        url,
+        headers={"X-API-Key": admin_key},
+        json={"path": "skills/example/SKILL.md", "frozen": False},
+    )
+    assert result.status_code == 200, result.text
+    await fs.write_file(uri, "updated", ctx=RequestContext(user, Role.USER))
+    assert await fs.read_file(uri, ctx=RequestContext(user, Role.USER)) == "updated"
+
+
 @pytest_asyncio.fixture(scope="function")
 async def admin_service(service):
     """Use the shared service fixture with local fake models."""
@@ -2060,10 +2134,9 @@ async def test_create_user_paths_accept_initial_user_config(
 async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updates(
     lightweight_admin_client, lightweight_admin_app, monkeypatch
 ):
-    import fakeredis.aioredis
-
     from openviking.ttl import wiring
     from openviking.ttl.runtime import DirectoryTTL
+    from openviking.ttl.tests.test_support import FakeredisCacheRuntime
     from openviking_cli.exceptions import PermissionDeniedError
     from openviking_cli.utils.config.open_viking_config import set_openviking_config
 
@@ -2140,9 +2213,12 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     rejected = await client.patch(url, json={"ttl": {"sessions": 7}}, headers=user_headers)
     assert rejected.status_code == 501 and fs.files == before
 
-    engine = DirectoryTTL(resource_id="settings-contract", timezone_name="UTC")
+    engine = DirectoryTTL(
+        resource_id="settings-contract",
+        cache_runtime=FakeredisCacheRuntime(),
+        timezone_name="UTC",
+    )
     engine.bind_runtime(service, lightweight_admin_app.state.api_key_manager)
-    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr(wiring, "_adapter", engine)
     previous_config = get_openviking_config()
     try:
@@ -2253,7 +2329,11 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         # Enabling retention must persist recovery intent before changing UserConfig.
         before = dict(fs.files)
         with monkeypatch.context() as failure:
-            failure.setattr(engine, "client", AsyncMock(side_effect=OSError("Redis unavailable")))
+            failure.setattr(
+                engine.cache_runtime,
+                "hsetnx",
+                AsyncMock(side_effect=OSError("Redis unavailable")),
+            )
             rejected = await client.patch(
                 url, json={"ttl": {"user_events": 7}}, headers=root_headers()
             )
@@ -2668,11 +2748,10 @@ async def test_delete_account(
 async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
     admin_client, admin_service, admin_app, monkeypatch
 ):
-    import fakeredis.aioredis
-
     from openviking.scheduling.expiry.api import CallbackRequest, ItemIdentity
     from openviking.ttl import wiring
     from openviking.ttl.runtime import DirectoryTTL
+    from openviking.ttl.tests.test_support import FakeredisCacheRuntime
 
     acct = _uid()
     resp = await admin_client.post(
@@ -2681,20 +2760,20 @@ async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
         headers=root_headers(),
     )
     user_key = resp.json()["result"]["user_key"]
-    engine = DirectoryTTL(resource_id="account-cleanup")
+    cache_runtime = FakeredisCacheRuntime()
+    engine = DirectoryTTL(resource_id="account-cleanup", cache_runtime=cache_runtime)
     engine.bind_runtime(admin_service, admin_app.state.api_key_manager)
-    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     scheduler = Mock(report=AsyncMock(), unregister=AsyncMock())
     engine.install_expiry(scheduler)
     monkeypatch.setattr(wiring, "_adapter", engine)
     prefix = engine.prefix(acct)
     other = engine.prefix("other") + "sessions"
-    await engine.redis.zadd(prefix + "sessions", {"viking://user/alice/sessions/s": 1})
-    await engine.redis.hset(prefix + "backfill:initial", "roots", "[]")
-    await engine.redis.set(prefix + "backfill:initial:done", "1")
-    await engine.redis.zadd(other, {"viking://user/alice/sessions/kept": 1})
-    unlink = engine.redis.unlink
-    monkeypatch.setattr(engine.redis, "unlink", AsyncMock(side_effect=OSError("Redis unavailable")))
+    await cache_runtime.redis.zadd(prefix + "sessions", {"viking://user/alice/sessions/s": 1})
+    await cache_runtime.redis.hset(prefix + "backfill:initial", "roots", "[]")
+    await cache_runtime.redis.set(prefix + "backfill:initial:done", "1")
+    await cache_runtime.redis.zadd(other, {"viking://user/alice/sessions/kept": 1})
+    unlink = cache_runtime.unlink
+    monkeypatch.setattr(cache_runtime, "unlink", AsyncMock(side_effect=OSError("Redis unavailable")))
     delete_config = AsyncMock(side_effect=OSError("provider unavailable"))
     monkeypatch.setattr(admin_service.runtime_config_manager, "delete_account", delete_config)
     try:
@@ -2702,7 +2781,7 @@ async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
         assert resp.status_code == 202
         failed = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
         assert failed["status"] == "failed" and "Redis unavailable" in failed["error"]
-        assert await engine.redis.zcard(prefix + "sessions") == 1
+        assert await cache_runtime.redis.zcard(prefix + "sessions") == 1
         denied = await admin_client.get(
             "/api/v1/fs/ls?uri=viking://", headers={"X-API-Key": user_key}
         )
@@ -2715,7 +2794,7 @@ async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
         )
         assert conflict.status_code == 409
 
-        monkeypatch.setattr(engine.redis, "unlink", unlink)
+        monkeypatch.setattr(cache_runtime, "unlink", unlink)
         retry = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
         failed = await _wait_for_task(admin_client, retry.json()["result"]["task_id"])
         assert failed["status"] == "failed" and "provider unavailable" in failed["error"]
@@ -2726,14 +2805,14 @@ async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
         assert completed["status"] == "completed"
         assert await admin_app.state.api_key_manager.get_deletion(acct) is None
         assert delete_config.await_count == 2
-        assert not [key async for key in engine.redis.scan_iter(match=prefix + "*")]
-        assert await engine.redis.zcard(other) == 1
+        assert not [key async for key in cache_runtime.redis.scan_iter(match=prefix + "*")]
+        assert await cache_runtime.redis.zcard(other) == 1
 
         # A delivery already in flight cannot revive maintenance for the deleted account.
         callback = CallbackRequest(ItemIdentity("ttl", acct, "_system", "maintenance"))
         assert (await engine.handle(callback)).reason == "account_deleted"
         scheduler.report.assert_not_awaited()
-        assert not [key async for key in engine.redis.scan_iter(match=prefix + "*")]
+        assert not [key async for key in cache_runtime.redis.scan_iter(match=prefix + "*")]
     finally:
         await engine.aclose()
 
@@ -3517,11 +3596,12 @@ async def test_remove_user(
     monkeypatch.setattr(gateway_module, "delete_data", delete_gateway_data)
     monkeypatch.setattr(admin_app.state.deletion_service, "_gateway_app", gateway)
     acct = _uid()
-    await admin_client.post(
+    created = await admin_client.post(
         "/api/v1/admin/accounts",
         json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
+    admin_headers = {"X-API-Key": created.json()["result"]["user_key"]}
     resp = await admin_client.post(
         f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
@@ -3531,6 +3611,8 @@ async def test_remove_user(
     bob_ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
     private_uri = "viking://user/bob/memories/private.md"
     await admin_service.viking_fs.write_file(private_uri, "private", ctx=bob_ctx)
+    admin_service.viking_fs.set_frozen_file_reader(admin_app.state.api_key_manager.get_frozen_files)
+    await admin_app.state.api_key_manager.set_frozen_file(acct, "bob", "memories/private.md", True)
     alice_upload_uri = "viking://upload/1800000000000-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     bob_upload_uri = "viking://upload/1800000000000-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     upload_ctx = RequestContext(user=UserIdentifier(acct, "alice"), role=Role.ROOT)
@@ -3547,7 +3629,7 @@ async def test_remove_user(
         user_id="bob",
     )
     resp = await admin_client.delete(
-        f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
+        f"/api/v1/admin/accounts/{acct}/users/bob", headers=admin_headers
     )
     assert resp.status_code == 202
     task_id = resp.json()["result"]["task_id"]

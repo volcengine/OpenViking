@@ -48,6 +48,7 @@ from .protocols import (
     unwrap_client,
 )
 from .records import RecordKind as K
+from .sealing import SESSION_NOTE, secret_note
 from .state_store import get_state
 from .storage import KernelStore, digest
 from .tool_catalog import reply_block_reason, select_tools, tool_block_reason
@@ -102,6 +103,10 @@ class Prepared:
     reply_lead: str = ""
     # The OpenViking peer this conversation is with; None leaves OpenViking unscoped.
     peer: str | None = None
+    # The current profile seals secrets, and the temporary references in this turn's user
+    # text, which the turn's injection notes.
+    sealed: bool = False
+    temporary: list[str] = field(default_factory=list)
 
 
 class Budget:
@@ -241,6 +246,8 @@ class MemoryKernel:
         summarize=None,
         peer=None,
         budget=None,
+        sealed=False,
+        temporary=(),
     ):
         """Build the upstream body; ``summarize(prepared, body)`` sends a summary request.
 
@@ -303,6 +310,7 @@ class MemoryKernel:
             owner,
             body_chain,
             counting,
+            sealed,
         )
         kind = "count" if counting else kind
         result = {**body, adapter.field: [dict(m) for m in sent]}
@@ -329,6 +337,8 @@ class MemoryKernel:
             thinking=thinking,
             thinking_as_text=as_text,
             peer=peer,
+            sealed=sealed,
+            temporary=list(temporary),
             metrics={
                 "kind": kind,
                 "replay_hits": 0,
@@ -427,6 +437,7 @@ class MemoryKernel:
         owner,
         body_chain,
         counting=False,
+        sealed=False,
     ):
         """The root with the session's gateway tools and why there are none."""
         policy = root["policy"]
@@ -455,6 +466,10 @@ class MemoryKernel:
             decision = await self.store.replay.put(scope, sid, K.TOOLS, "", value)
             records[K.TOOLS, ""] = decision
         tools, reason = decision["tools"], decision.get("tool_skip_reason", "")
+        if sealed:
+            # Sealed sessions never offer the value behind a reference, even ones whose
+            # tools were chosen before sealing was on.
+            tools = [t for t in tools if t["function"]["name"] != PREFIX + "privacy_resolve"]
         closed = records.get((K.TOOLS_CLOSED, ""))
         # Client OpenViking tools may appear late, as when MCP servers connect after the
         # first turn. Until the model has called a gateway tool, they turn gateway tools
@@ -593,8 +608,10 @@ class MemoryKernel:
         overhead = token_estimate(block("gateway-recall", lead + "\n"))
         # The search entries a recall returned, for the notice.
         entries = []
-        # Whether this turn's opening tells the model about the gateway tools.
+        # Whether this turn's opening tells the model about the gateway tools, and about
+        # secret references.
         noted = False
+        seal_noted = False
 
         async def retrieve():
             if not reserved:
@@ -628,21 +645,29 @@ class MemoryKernel:
                 return {**decision, "reason": getattr(error, "reason", "recall_timeout")}
 
         async def opening():
-            nonlocal noted
+            nonlocal noted, seal_noted
             if existing:
                 late = request.records.get((K.TOOLS, ""), {}).get("late")
-                if not (late and tools) or any(v.get("tools_noted") for _, v in existing):
+                noted = bool(late and tools) and not any(v.get("tools_noted") for _, v in existing)
+                # Sealing turned on for a session that started without it.
+                seal_noted = request.sealed and not any(v.get("seal_noted") for _, v in existing)
+                if not (noted or seal_noted):
                     return "", []
-                noted = True
-                return block("gateway-session-start", gateway_note(policy, tools)), []
+                note = gateway_note(
+                    policy, tools if noted else [], sealed=SESSION_NOTE if seal_noted else ""
+                )
+                return block("gateway-session-start", note), []
             noted = bool(tools)
+            seal_noted = request.sealed
             profile = await build_profile(self.viking, credential["openviking_key"], policy, tools)
             request.metrics["profile_reason"] = profile["reason"]
             # After client-side compaction, the capture document still names the earlier sessions.
             hint = history_hint(
                 credential["user_id"], lineage(request.capture.value), tools, policy.capture
             )
-            note = gateway_note(policy, tools, "soul" in profile["parts"])
+            note = gateway_note(
+                policy, tools, "soul" in profile["parts"], SESSION_NOTE if request.sealed else ""
+            )
             text = block(
                 "gateway-session-start",
                 "\n\n".join(part for part in (note, hint, profile["text"]) if part),
@@ -655,11 +680,15 @@ class MemoryKernel:
             degrade(request.metrics, "recall_failed", primary=False)
         status, reminder = status_line(request, policy)
         recalled = block("gateway-recall", "\n\n".join(p for p in (decision["text"], status) if p))
+        # Recorded with the turn, so later turns replay the note byte for byte.
+        temporary = block("gateway-secrets", secret_note(request.temporary))
         # The opening block is immutable with recall but has its own budget, and
         # the window status line costs nothing.
-        decision["text"] = "\n\n".join(part for part in (start, recalled) if part)
+        decision["text"] = "\n\n".join(part for part in (start, recalled, temporary) if part)
         if noted:
             decision["tools_noted"] = True
+        if seal_noted:
+            decision["seal_noted"] = True
         if reminder:
             decision["reminder"] = reminder
         if policy.show_recall:
@@ -921,7 +950,10 @@ class MemoryKernel:
             # Messages after the cut are new client input that hidden history never expands.
             if messages[len(span) :] != kept:
                 raise SummaryError("cut_not_found")
-            instruction = summary_instruction(policy.summary_max_tokens, in_progress)
+            lookup = policy.capture and any(
+                t["function"]["name"] == "openviking_session_history" for t in request.root["tools"]
+            )
+            instruction = summary_instruction(policy.summary_max_tokens, in_progress, lookup)
             limit = policy.summary_max_tokens
             try:
                 response = await summarize(

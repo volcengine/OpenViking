@@ -12,6 +12,7 @@ import asyncio
 import inspect
 import os
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.directories import DirectoryInitializer
@@ -258,15 +259,43 @@ class OpenVikingService:
         from openviking.server.dependencies import get_server_config
 
         config_file = OpenVikingConfigSingleton.get_config_file()
-        account_store_cache_instance = None
+        required_cache_instances: dict[str, str] = {}
         server_config = get_server_config()
         if server_config is not None:
             account_store = server_config.account_store
+            ttl_adapter = getattr(server_config, "ttl_adapter", None)
         elif config_file is not None:
             server = load_json_config(config_file).get("server")
             account_store = server.get("account_store") if isinstance(server, dict) else None
+            raw_ttl_adapter = server.get("ttl_adapter") if isinstance(server, dict) else None
+            if raw_ttl_adapter is None:
+                ttl_adapter = None
+            elif not isinstance(raw_ttl_adapter, dict):
+                raise ValueError("server.ttl_adapter must be an object")
+            else:
+                from pydantic import TypeAdapter
+
+                from openviking.scheduling.expiry.config import ExpiryCacheConfig
+
+                ttl_config = raw_ttl_adapter.get("config", {})
+                if not isinstance(ttl_config, dict):
+                    raise ValueError("server.ttl_adapter.config must be an object")
+                if "redis" in ttl_config:
+                    raise ValueError(
+                        "ttl_adapter.config.redis is not supported; configure "
+                        "cache.instances.<name>.params and ttl_adapter.cache.instance"
+                    )
+                ttl_adapter = SimpleNamespace(
+                    enabled=TypeAdapter(bool).validate_python(
+                        raw_ttl_adapter.get("enabled", False)
+                    ),
+                    cache=ExpiryCacheConfig.model_validate(
+                        raw_ttl_adapter.get("cache", {"instance": "default"})
+                    ),
+                )
         else:
             account_store = None
+            ttl_adapter = None
         provider = (
             account_store.get("provider")
             if isinstance(account_store, dict)
@@ -280,11 +309,15 @@ class OpenVikingService:
         if provider == "redis_mysql":
             from openviking.server.account_stores.redis_mysql import RedisMySQLAccountStore
 
-            account_store_cache_instance = RedisMySQLAccountStore.cache_instance_from_params(params)
+            required_cache_instances["Redis MySQL Account Store"] = (
+                RedisMySQLAccountStore.cache_instance_from_params(params)
+            )
+        if ttl_adapter is not None and ttl_adapter.enabled:
+            required_cache_instances["Directory TTL"] = ttl_adapter.cache.instance
 
         binding_config, self._encryptor = build_runtime_ragfs_binding_config(
             self._config,
-            account_store_cache_instance=account_store_cache_instance,
+            required_cache_instances=required_cache_instances,
         )
         return binding_config
 
@@ -451,6 +484,12 @@ class OpenVikingService:
         """Get VikingFS instance."""
         return self._viking_fs
 
+    def cache_runtime(self, instance: str) -> Any:
+        """Return the initialized named RAGFS CacheRuntime."""
+        if self._agfs_client is None:
+            raise RuntimeError("AGFS client not initialized")
+        return self._agfs_client.cache_runtime(instance)
+
     @property
     def vikingdb_manager(self) -> Optional[VikingDBManager]:
         """Get VikingDBManager instance."""
@@ -567,6 +606,7 @@ class OpenVikingService:
         """Bind account capabilities without taking ownership of the auth plugin."""
         from openviking.ttl.wiring import build_ttl_adapter, install_ttl_hook, set_ttl_adapter
 
+        self._viking_fs.set_frozen_file_reader(getattr(manager, "get_frozen_files", None))
         self._compile_service.lifecycle.resolve_groups = (
             manager.get_user_group_ids if manager is not None else None
         )
@@ -576,7 +616,13 @@ class OpenVikingService:
                 manager.get_user_group_ids if manager is not None else None,
             )
         if self._server_config is not None:
-            self._ttl_adapter = build_ttl_adapter(self._server_config.ttl_adapter)
+            ttl_config = self._server_config.ttl_adapter
+            cache_runtime = (
+                self.cache_runtime(ttl_config.cache.instance)
+                if ttl_config is not None and ttl_config.enabled
+                else None
+            )
+            self._ttl_adapter = build_ttl_adapter(ttl_config, cache_runtime=cache_runtime)
             set_ttl_adapter(self._ttl_adapter)
             if self._ttl_adapter is not None:
                 self._ttl_adapter.bind_runtime(self, manager)
@@ -590,6 +636,7 @@ class OpenVikingService:
             self._compile_scheduler.set_identity_resolver(None, None)
         if self._viking_fs is not None:
             self._viking_fs.set_deletion_guard(None)
+            self._viking_fs.set_frozen_file_reader(None)
         get_task_tracker().set_deletion_guard(None)
         if self._watch_manager is not None:
             self._watch_manager.set_deletion_guard(None)
@@ -905,8 +952,11 @@ class OpenVikingService:
             from openviking.scheduling.expiry.runtime import ExpiryRuntime, ExpiryRuntimeRoles
 
             expiry_config.validate_for_runtime()
+            if self._agfs_client is None or expiry_config.cache is None:
+                raise RuntimeError("Expiry requires an initialized RAGFS CacheRuntime")
             self._expiry_runtime = ExpiryRuntime(
                 expiry_config,
+                cache_runtime=self._agfs_client.cache_runtime(expiry_config.cache.instance),
                 roles=ExpiryRuntimeRoles(
                     report=True,
                     publish=scheduler and not expiry_config.publisher_separate_process,
@@ -939,7 +989,9 @@ class OpenVikingService:
 
         if queue_worker and should_preflight_mineru and pdf_config.mineru_endpoint:
             try:
-                await wait_for_mineru_ready(pdf_config.mineru_endpoint)
+                await wait_for_mineru_ready(
+                    pdf_config.mineru_endpoint, token=pdf_config.mineru_token
+                )
                 logger.info(
                     "MinerU preflight passed",
                     extra={"target_id": safe_uri_for_log(pdf_config.mineru_endpoint)},
@@ -997,7 +1049,11 @@ class OpenVikingService:
             await self._expiry_runtime.start_roles()
         if self._runtime_config_manager is not None:
             self._runtime_config_manager.start_refresh_loop()
-        get_task_tracker().start_cleanup_loop()
+        get_task_tracker().start_cleanup_loop(
+            cleanup_history=(
+                self._server_config is None or self._server_config.enable_task_history_cleanup
+            )
+        )
         if scheduler:
             await self.start_scheduler()
         if queue_worker:

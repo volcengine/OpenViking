@@ -10,4 +10,5 @@ local limit = integer_arg(ARGV[5], 1, 4096)
 local items, next_value = page_after(
     KEYS[1], lower, upper, after_score, ARGV[4], limit
 )
+if #items == 0 then return '{"items":[],"next":false}' end
 return cjson.encode({items=items, next=next_value})

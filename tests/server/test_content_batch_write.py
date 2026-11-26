@@ -22,7 +22,6 @@ from openviking.storage.context_update_plan import (
     FileRefreshIntent,
 )
 from openviking.storage.queuefs.queue_middleware import EnqueueReceipt
-from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.storage.viking_fs import VikingFS
 from openviking.telemetry.context import bind_telemetry
 from openviking.telemetry.operation import OperationTelemetry
@@ -410,11 +409,6 @@ async def test_batch_accepts_more_than_256_operations(monkeypatch):
     vfs = _VFS(root)
     coordinator = ContentWriteCoordinator(vfs)
 
-    async def refresh(**kwargs):
-        del kwargs
-        return None
-
-    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
     def operations(prefix, count):
@@ -456,7 +450,6 @@ async def test_batch_create_replace_and_upsert_overwrite_or_create(monkeypatch):
     async def refresh(**kwargs):
         del kwargs
 
-    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
     result = await coordinator.batch_write(
         root_uri=root,
@@ -572,7 +565,6 @@ async def test_batch_missing_append_creates_its_initial_body(monkeypatch):
     async def refresh(**kwargs):
         del kwargs
 
-    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
     result = await coordinator.batch_write(
@@ -662,7 +654,6 @@ async def test_batch_resource_files_compile_independent_rnfv_plans(
         return {
             "status": "success",
             "enqueued_count": 1,
-            "parent_actions": {f"{root}/docs": "refresh_now"},
         }
 
     monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", build_snapshot)
@@ -747,9 +738,7 @@ async def test_batch_existing_files_defer_full_vector_reads_to_embedding_worker(
     monkeypatch.setattr(
         content_write_module.Summarizer,
         "refresh_file_parents",
-        AsyncMock(
-            return_value={"enqueued_count": 1, "parent_actions": {f"{root}/docs": "refresh_now"}}
-        ),
+        AsyncMock(return_value={"enqueued_count": 1}),
     )
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
@@ -792,9 +781,7 @@ async def test_batch_same_content_with_missing_abstract_enqueues_file_refresh(
                 for item in uris
             }
 
-    refresh_file_parents = AsyncMock(
-        return_value={"enqueued_count": 1, "parent_actions": {f"{root}/docs": "refresh_now"}}
-    )
+    refresh_file_parents = AsyncMock(return_value={"enqueued_count": 1})
     monkeypatch.setattr(
         content_write_module.Summarizer,
         "refresh_file_parents",
@@ -977,7 +964,6 @@ async def test_batch_resource_plan_allows_clear_tags_without_tags(monkeypatch):
 
     monkeypatch.setattr(content_write_module, "build_rnfv_snapshot", build_snapshot)
     monkeypatch.setattr(coordinator, "_build_deferred_batch_file_plan", build_plan)
-    monkeypatch.setattr(coordinator, "_refresh_batch", AsyncMock(return_value=None))
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
     await coordinator.batch_write(
@@ -1229,11 +1215,6 @@ async def test_batch_replace_memory_preserves_metadata(monkeypatch):
     vfs = _VFS(root, {memory_uri: original})
     coordinator = ContentWriteCoordinator(vfs)
 
-    async def refresh(**kwargs):
-        del kwargs
-        return None
-
-    monkeypatch.setattr(coordinator, "_refresh_batch", refresh)
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
 
     result = await coordinator.batch_write(
@@ -1253,37 +1234,6 @@ async def test_batch_replace_memory_preserves_metadata(monkeypatch):
     assert result["updated"] == [memory_uri]
     assert stored.content == "Updated preference"
     assert stored.extra_fields == expected.extra_fields
-
-
-@pytest.mark.asyncio
-async def test_batch_reports_skipped_directory_and_queued_file_vectors(monkeypatch):
-    root = "viking://resources/wide"
-    page = f"{root}/page.md"
-    coordinator = ContentWriteCoordinator(_VFS(root))
-
-    async def enqueue(**kwargs):
-        del kwargs
-        return FreshnessAction.NOOP
-
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh_changes", enqueue)
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-
-    result = await coordinator.batch_write(
-        root_uri=root,
-        operations=[
-            {
-                "uri": page,
-                "content": "content",
-                "mode": "create",
-            }
-        ],
-        ctx=ctx,
-        wait=False,
-    )
-
-    assert result["semantic_status"] == "queued"
-    assert result["vector_status"] == "queued"
-    assert result["queue_status"] is None
 
 
 @pytest.mark.asyncio
@@ -1381,53 +1331,33 @@ async def test_batch_partial_failure_refreshes_successful_files_and_retry_is_saf
 
 
 @pytest.mark.asyncio
-async def test_batch_refresh_groups_resource_and_memory_work(monkeypatch):
-    coordinator = ContentWriteCoordinator(_VFS("viking://resources/wiki"), vikingdb=object())
-    semantic_calls = []
-    overview_calls = []
-    embedding_calls = []
-
-    async def resolve_root(uri, **kwargs):
-        del uri, kwargs
-        return "viking://resources/wiki"
-
-    async def enqueue(**kwargs):
-        semantic_calls.append(kwargs)
-        return FreshnessAction.MARK_PENDING
-
-    async def overview(**kwargs):
-        overview_calls.append(kwargs)
-
-    async def embedding(**kwargs):
-        embedding_calls.append(kwargs)
-        return False
-
-    monkeypatch.setattr(coordinator, "_resolve_root_uri", resolve_root)
-    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh_changes", enqueue)
-    monkeypatch.setattr(content_write_module.MemoryUpdater, "refresh_schema_overview", overview)
-    monkeypatch.setattr(content_write_module.MemoryUpdater, "refresh_file_embedding", embedding)
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
-    outcome = await coordinator._refresh_batch(
-        refresh_kinds={
-            "viking://resources/wiki/a.md": "added",
-            "viking://resources/wiki/b.md": "modified",
-            "viking://user/default/memories/preferences/wiki/a.md": "added",
-            "viking://user/default/memories/preferences/wiki/b.md": "modified",
-        },
-        ctx=ctx,
-        wait=False,
-        telemetry_id="",
+@pytest.mark.parametrize("namespace", ["resources", "memories/preferences"])
+async def test_batch_refreshes_directory_after_editing_its_abstract(service, namespace):
+    ctx = RequestContext(user=service.user, role=Role.USER)
+    root = f"viking://user/{ctx.user.user_space_name()}/{namespace}/mixed-batch"
+    abstract = f"{root}/.abstract.md"
+    overview = f"{root}/.overview.md"
+    added = f"{root}/theme.md"
+    await service.fs.mkdir(root, ctx=ctx)
+    await service.resources.wait_processed()
+    result = await asyncio.wait_for(
+        service.fs.batch_write(
+            root_uri=root,
+            operations=[
+                {"uri": abstract, "content": "Directory purpose.", "mode": "replace"},
+                {"uri": added, "content": "Prefers a dark theme.", "mode": "create"},
+            ],
+            ctx=ctx,
+            wait=True,
+        ),
+        timeout=10,
     )
-    assert len(semantic_calls) == 1
-    assert semantic_calls[0]["changes"] == {
-        "added": ["viking://resources/wiki/a.md"],
-        "modified": ["viking://resources/wiki/b.md"],
-    }
-    assert len(overview_calls) == 1
-    assert overview_calls[0]["strict"] is True
-    assert len(embedding_calls) == 2
-    assert outcome.statuses(wait=False) == ("deferred", "queued")
-    assert all(call["strict"] is True for call in embedding_calls)
+
+    assert result["created"] == [added]
+    assert result["updated"] == [abstract]
+    await asyncio.wait_for(service.resources.wait_processed(), timeout=10)
+    assert "Directory purpose." in await service.viking_fs.read_file(abstract, ctx=ctx)
+    assert "theme.md" in await service.viking_fs.read_file(overview, ctx=ctx)
 
 
 @pytest.mark.asyncio
