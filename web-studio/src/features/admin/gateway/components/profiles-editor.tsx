@@ -207,6 +207,8 @@ function ProfileEditorForm({
       ...PROFILE_DEFAULTS,
       name: current.name,
       client_overrides: current.client_overrides,
+      seal_secrets: current.seal_secrets,
+      enroll_tool_secrets: current.enroll_tool_secrets,
       capture_memory_types: current.capture_memory_types,
     }))
     toast.success(t('profiles.toast.reset'))
@@ -326,6 +328,25 @@ function ProfileEditorForm({
                       checked={draft.client_overrides}
                       onCheckedChange={(client_overrides) =>
                         update({ client_overrides })
+                      }
+                    />
+                    <ToggleRow
+                      id="profile-seal_secrets"
+                      label={t('profiles.sealSecrets.label')}
+                      description={t('profiles.sealSecrets.description')}
+                      checked={draft.seal_secrets}
+                      onCheckedChange={(seal_secrets) =>
+                        update({ seal_secrets })
+                      }
+                    />
+                    <ToggleRow
+                      id="profile-enroll_tool_secrets"
+                      label={t('profiles.enrollToolSecrets.label')}
+                      description={t('profiles.enrollToolSecrets.description')}
+                      checked={draft.enroll_tool_secrets}
+                      disabled={!draft.seal_secrets}
+                      onCheckedChange={(enroll_tool_secrets) =>
+                        update({ enroll_tool_secrets })
                       }
                     />
                   </CardContent>

@@ -67,7 +67,7 @@ By default, a fixed order selects a restorable reference. Set `OPENVIKING_PRIVAC
 
 ## Seal Texts
 
-Replace the caller's registered values (in the `credential` and `auto` categories) in caller-supplied texts with their canonical references, and optionally store new tokens it recognizes, for example before the texts are sent to a model provider. The result does not depend on the user's privacy `mode`; it also works when `mode` is `off`. Intended for clients such as the gateway and agent plugins.
+Replace the caller's registered values (in the `credential` and `auto` categories) in caller-supplied texts with their canonical references, and optionally store new tokens it recognizes, for example before the texts are sent to a model provider. The result does not depend on the user's privacy `mode`; it also works when `mode` is `off`. Intended for clients such as the gateway and agent plugins. For the gateway, see [Seal secrets](../gateway/14-seal-secrets.md).
 
 ```text
 POST /api/v1/privacy-configs/seal
@@ -757,3 +757,4 @@ ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credent
 - [Privacy Configs](../concepts/13-privacy.md) - Sensitive value extraction and restore
 - [File System](03-filesystem.md) - `read`/`write`/`ls`
 - [System](07-system.md) - System status and observability
+- [Secret sealing in the gateway](../gateway/14-seal-secrets.md) - Seal secrets in model requests
