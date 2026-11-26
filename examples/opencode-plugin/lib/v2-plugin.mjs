@@ -4,6 +4,7 @@ import { isRecallEnabled } from "./shared/recall-core.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
 import { fillHistorySession } from "./session-history.mjs"
+import { keepNewestStartContext } from "./session-inject.mjs"
 import { log } from "./utils.mjs"
 
 const METADATA_KEY = "openviking"
@@ -246,6 +247,7 @@ export function injectV2Context(event, repoContext) {
       metadata: { [METADATA_KEY]: true },
     })
   }
+  keepNewestStartContext(event.messages.map((message) => message.content))
 }
 
 // The plugin event stream carries every location served by the process, and

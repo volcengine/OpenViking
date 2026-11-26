@@ -84,6 +84,17 @@ function withDeferredPointer(state, kind) {
   return next ? { ...state, historyPointer: next } : state;
 }
 
+// On a host whose compaction drops the profile the session started with, the
+// next prompt sends it again. Written with the deferred note, under its lock.
+function profileDropped(ctx) {
+  return Boolean(host.compactionDropsProfile)
+    && ["inject", "defer"].some((which) => host.historyPointer?.[which]?.(event, ctx.input) === "compact");
+}
+
+function withCompaction(ctx, state) {
+  return profileDropped(ctx) ? { ...state, profileStale: true } : state;
+}
+
 function historyPointer(ctx, kind) {
   if (!kind) return "";
   const { sessionDefault, tool } = host.historyPointer;
@@ -96,10 +107,13 @@ async function sessionStart(ctx) {
     const now = Date.now();
     const injected = pointerFor(state, historyPointerKind(ctx, "inject"));
     const pointer = historyPointer(ctx, injected);
-    let next = withDeferredPointer(state, ctx.deferredPointer);
+    let next = withCompaction(ctx, withDeferredPointer(state, ctx.deferredPointer));
     if (injected) next = { ...next, historyPointerSent: true };
-    // A resume and the compaction it runs can start within the window.
-    if (now - Number(state.lastSessionStartAt || 0) < 2000) {
+    // A resume and the compaction it runs can start within the window. A
+    // SessionStart(compact) that reaches the model (Qoder) is the only profile
+    // after that compaction, so it is never skipped.
+    const answersCompaction = host.historyPointer?.inject?.(event, ctx.input) === "compact";
+    if (now - Number(state.lastSessionStartAt || 0) < 2000 && !answersCompaction) {
       if (next !== state) await writeHookState(clientId, ctx.nativeSessionId, next);
       return pointer;
     }
@@ -132,13 +146,20 @@ async function promptSubmit(ctx) {
     if (duplicateEvent) return "";
     const parts = [];
     let profileInjected = Boolean(state.profileInjected);
-    if (host.profileStage === "first-prompt" && !profileInjected) {
+    // A host without a compaction hook (Antigravity) names its latest one here.
+    const { latestCompaction } = input;
+    let profileStale = Boolean(state.profileStale)
+      || (latestCompaction !== undefined && latestCompaction !== state.profileCompaction);
+    if (profileStale || (host.profileStage === "first-prompt" && !profileInjected)) {
       const profile = await buildAgentProfile(ctx.fetchJSON, ctx.cfg, ctx.cwd).catch((error) => {
         logError("profile", error);
         return null;
       });
-      if (profile) parts.push(contextBlock("session-start", profile));
-      profileInjected = Boolean(profile);
+      if (profile) {
+        parts.push(contextBlock("session-start", profile));
+        profileInjected = true;
+        profileStale = false;
+      }
     }
     const recallBlock = state.promptHash === promptHash && state.recallBlock
       ? state.recallBlock
@@ -158,6 +179,8 @@ async function promptSubmit(ctx) {
       promptEventId,
       promptAt: now,
       recallBlock,
+      profileStale,
+      ...(latestCompaction !== undefined ? { profileCompaction: latestCompaction } : {}),
       ...(host.profileStage === "first-prompt" ? { profileInjected } : {}),
       ...(host.tracksPendingPrompt ? { pendingPrompt: { prompt, hash: promptHash, at: now } } : {}),
     });
@@ -166,14 +189,22 @@ async function promptSubmit(ctx) {
 }
 
 async function capture(ctx) {
-  if (host.capturesOnlyWhenEnabled && !isCaptureEnabled(ctx.cfg)) return "";
+  if (host.capturesOnlyWhenEnabled && !isCaptureEnabled(ctx.cfg)) {
+    if (profileDropped(ctx)) {
+      await withAgentHookLock(clientId, ctx.nativeSessionId, async () => {
+        const state = await readHookState(clientId, ctx.nativeSessionId);
+        await writeHookState(clientId, ctx.nativeSessionId, withCompaction(ctx, state));
+      });
+    }
+    return "";
+  }
   // A terminal event that loses the lock to a slow Stop would drop the final
   // commit, so a detached one keeps waiting up to the stale-lock age.
   const terminal = host.detachesCapture && (event === "session-end" || event === "pre-compact");
   for (let attempt = 0; attempt < (terminal ? 12 : 1); attempt += 1) {
     const done = await withAgentHookLock(clientId, ctx.nativeSessionId, async (stateFile) => {
       const read = await readHookState(clientId, ctx.nativeSessionId);
-      const state = withDeferredPointer(read, ctx.deferredPointer);
+      const state = withCompaction(ctx, withDeferredPointer(read, ctx.deferredPointer));
       ctx.stateFile = stateFile;
       const next = await host.capture(ctx, state, event);
       if (next || state !== read) await writeHookState(clientId, ctx.nativeSessionId, next || state);
