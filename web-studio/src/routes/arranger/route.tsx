@@ -1502,7 +1502,10 @@ function ActionDialog({
             action.kind === 'file' ||
             action.kind === 'rename' ||
             action.kind === 'mount') && (
-            <Field label={t('fields.name')} required>
+            <Field
+              label={t(action.kind === 'mount' ? 'fields.fileName' : 'fields.name')}
+              required
+            >
               <div className="relative">
                 <Input
                   value={
@@ -1747,6 +1750,7 @@ function ActionDialog({
                     <Textarea
                       value={description}
                       onChange={(event) => setDescription(event.target.value)}
+                      placeholder={t('fields.descriptionPlaceholder')}
                       className="min-h-20"
                     />
                   </Field>

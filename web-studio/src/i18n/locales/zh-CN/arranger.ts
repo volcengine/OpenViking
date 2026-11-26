@@ -1,7 +1,7 @@
 const arranger = {
   title: '编排',
   description:
-    '将业务知识与实时数据组织成 Agent 可直接读取的上下文，减少工具选择和参数推理中的试错。',
+    '将业务知识与实时数据组织成 Agent 可直接读取的上下文，减少工具选择和参数推理中的试错。适用于智能运维、智能投研等场景。',
   shortDescription: '组织静态知识与实时数据',
   pathLabel: '根 Viking URI',
   loading: '正在加载上下文',
@@ -45,6 +45,8 @@ const arranger = {
   fields: {
     arguments: '预置参数',
     description: '描述',
+    descriptionPlaceholder: '可填写工具使用指引、查询说明或注意事项。',
+    fileName: '文件名称',
     mountNamePlaceholder: 'status',
     name: '名称',
     optional: '选填',
@@ -62,6 +64,7 @@ const arranger = {
     toolUri: '工具 URI',
   },
   live: {
+    directoryWarning: '此目录下存在异常实时上下文节点，请展开目录检查节点状态。',
     statusLabels: {
       VALID: '正常',
       REVIEW: '需复核',
@@ -159,7 +162,8 @@ const arranger = {
     },
     mount: {
       title: '挂载实时上下文',
-      description: '将 MCP 工具绑定为 Markdown 上下文节点。',
+      description:
+        '将 MCP 工具挂载为实时上下文节点，可供实时查询，并为 Agent 使用 MCP 提供指引。',
     },
     move: {
       title: '移动资源',
@@ -212,7 +216,7 @@ const arranger = {
   validation: {
     invalidArguments: '请检查工具参数中的必填项和数据格式。',
     invalidTimeout: '超时必须是大于 0 的数字。',
-    mountRequired: '请填写名称、工具和标题。',
+    mountRequired: '请填写文件名称、工具和标题。',
     destinationInsideSource: '目标路径不能与源路径相同或位于源路径内部。',
     destinationOutsideRoot: '目标位置必须位于当前加载的根目录内。',
     noRelativePathSegments: '不允许使用相对路径段。',

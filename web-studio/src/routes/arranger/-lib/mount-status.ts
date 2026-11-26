@@ -1,4 +1,5 @@
 import type { LiveContextMount, LiveMountStatus } from './model'
+import { isWithinRoot, normalizeVikingUri, parentVikingUri } from './uri'
 
 export const mountStatusStyles: Record<
   LiveMountStatus,
@@ -29,4 +30,25 @@ export const mountStatusStyles: Record<
 export function getLiveMountStatus(mount: LiveContextMount): LiveMountStatus {
   const status = mount.status
   return status && Object.hasOwn(mountStatusStyles, status) ? status : 'UNKNOWN'
+}
+
+export function getAbnormalMountDirectories(
+  mounts: ReadonlyMap<string, LiveContextMount>,
+  rootUri: string,
+): Set<string> {
+  const root = normalizeVikingUri(rootUri)
+  const directories = new Set<string>()
+  for (const [uri, mount] of mounts) {
+    if (getLiveMountStatus(mount) === 'VALID' || !isWithinRoot(uri, root)) {
+      continue
+    }
+    let parent = parentVikingUri(uri)
+    while (isWithinRoot(parent, root)) {
+      if (directories.has(parent)) break
+      directories.add(parent)
+      if (parent === root) break
+      parent = parentVikingUri(parent)
+    }
+  }
+  return directories
 }

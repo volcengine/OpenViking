@@ -23,14 +23,19 @@ import '@xyflow/react/dist/style.css'
 import type { VikingFsEntry } from '#/shared/types/viking-fs'
 import { cn } from '#/shared/lib/utils'
 import type { LiveContextMount } from '../-lib/model'
-import { getLiveMountStatus, mountStatusStyles } from '../-lib/mount-status'
+import {
+  getAbnormalMountDirectories,
+  getLiveMountStatus,
+  mountStatusStyles,
+} from '../-lib/mount-status'
 import { normalizeVikingUri, parentVikingUri } from '../-lib/uri'
-import { LiveMountStatusBadge } from './mount-status'
+import { DirectoryMountWarning } from './mount-status'
 
 type GraphData = {
   entry: VikingFsEntry
   expanded: boolean
   liveMount?: LiveContextMount
+  hasAbnormalMounts: boolean
   label: string
   onToggle: (uri: string) => void
 }
@@ -48,6 +53,16 @@ type ContextGraphProps = {
 function ResourceNode({ data, selected }: NodeProps) {
   const { t } = useTranslation('arranger')
   const value = data as GraphData
+  const status = value.liveMount ? getLiveMountStatus(value.liveMount) : undefined
+  const title = status
+    ? [
+        t(`live.statusLabels.${status}`),
+        t(`live.statusDescriptions.${status}`),
+        status !== 'VALID' && value.liveMount?.reason,
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : undefined
   const Icon: LucideIcon = value.liveMount
     ? CableIcon
     : value.entry.isDir
@@ -55,6 +70,7 @@ function ResourceNode({ data, selected }: NodeProps) {
       : FileTextIcon
   return (
     <div
+      title={title}
       className={cn(
         'flex h-11 w-44 items-center gap-2 rounded-md border bg-background px-3 text-xs shadow-sm',
         selected && 'border-primary ring-2 ring-primary/15',
@@ -64,15 +80,13 @@ function ResourceNode({ data, selected }: NodeProps) {
       <Icon
         className={cn(
           'size-4 shrink-0',
-          value.liveMount
-            ? mountStatusStyles[getLiveMountStatus(value.liveMount)].icon
+          status
+            ? mountStatusStyles[status].icon
             : 'text-muted-foreground',
         )}
       />
       <span className="min-w-0 flex-1 truncate">{value.label}</span>
-      {value.liveMount && (
-        <LiveMountStatusBadge mount={value.liveMount} compact />
-      )}
+      {value.hasAbnormalMounts && <DirectoryMountWarning />}
       {value.entry.isDir && (
         <button
           type="button"
@@ -114,6 +128,7 @@ export function ContextGraph({
   selectedUri,
 }: ContextGraphProps) {
   const { edges, nodes } = useMemo(() => {
+    const abnormalDirectories = getAbnormalMountDirectories(liveMounts, root.uri)
     const graph = new dagre.graphlib.Graph()
     graph.setDefaultEdgeLabel(() => ({}))
     graph.setGraph({ rankdir: 'LR', nodesep: 24, ranksep: 64 })
@@ -146,6 +161,7 @@ export function ContextGraph({
             entry,
             expanded: expanded.has(entry.uri),
             liveMount: liveMounts.get(id),
+            hasAbnormalMounts: entry.isDir && abnormalDirectories.has(id),
             label: entry.name || entry.uri,
             onToggle,
           } satisfies GraphData,

@@ -1,7 +1,7 @@
 const arranger = {
   title: 'Arrange',
   description:
-    'Organize business knowledge and live data into context that agents can read directly, with less tool and argument guesswork.',
+    'Organize business knowledge and live data into context that agents can read directly, with less tool and argument guesswork. Suitable for AI-assisted operations, investment research, and other scenarios.',
   shortDescription: 'Organize static knowledge and live data',
   pathLabel: 'Root Viking URI',
   loading: 'Loading context',
@@ -45,6 +45,8 @@ const arranger = {
   fields: {
     arguments: 'Preset arguments',
     description: 'Description',
+    descriptionPlaceholder: 'Add tool usage guidance, query instructions, or notes.',
+    fileName: 'File name',
     mountNamePlaceholder: 'status',
     name: 'Name',
     optional: 'Optional',
@@ -62,6 +64,8 @@ const arranger = {
     toolUri: 'Tool URI',
   },
   live: {
+    directoryWarning:
+      'This directory contains live context nodes that need attention. Expand it to check their status.',
     statusLabels: {
       VALID: 'Valid',
       REVIEW: 'Review',
@@ -168,7 +172,8 @@ const arranger = {
     },
     mount: {
       title: 'Mount live context',
-      description: 'Bind an MCP tool to a Markdown context node.',
+      description:
+        'Mount an MCP tool as a live context node for real-time queries and provide guidance for agents using MCP.',
     },
     move: {
       title: 'Move resource',
@@ -230,7 +235,7 @@ const arranger = {
   validation: {
     invalidArguments: 'Check required tool arguments and their data formats.',
     invalidTimeout: 'Timeout must be a number greater than 0.',
-    mountRequired: 'Name, tool, and title are required.',
+    mountRequired: 'File name, tool, and title are required.',
     destinationInsideSource:
       'The destination cannot be the source or a path inside it.',
     destinationOutsideRoot: 'The destination must stay inside the loaded root.',
