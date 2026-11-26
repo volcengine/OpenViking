@@ -106,7 +106,7 @@ class MemoryConfig(BaseModel):
     )
     archive_source_selection_enabled: bool = Field(
         default=False,
-        description="Record model-selected ranges from archived messages during memory extraction.",
+        description="Select and index original passages during Session memory extraction.",
     )
     session_skill_extraction_enabled: bool = Field(
         default=False,

@@ -28,6 +28,7 @@ from typing import (
 
 from openviking.concurrency import FILE_TASK_CONCURRENCY, bounded_map
 from openviking.core.namespace import (
+    canonical_session_root,
     resolve_uri,
     uri_parts,
     visible_roots,
@@ -45,6 +46,11 @@ from openviking.storage.acl import (
     AclUpdate,
     acl_filter,
     is_acl_uri,
+)
+from openviking.storage.archive_source import (
+    ARCHIVE_SOURCE_RECORD_TYPE,
+    archive_source_exclusion,
+    archive_source_hit,
 )
 from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, Range, RawDSL
 from openviking.storage.scope_filter import build_scope_filter, merge_filters
@@ -2045,6 +2051,34 @@ class VikingVectorIndexBackend:
     # Tenant-Aware 方法（保持向后兼容）
     # =========================================================================
 
+    async def search_archive_sources(
+        self,
+        *,
+        query_vector: List[float] | None,
+        sparse_query_vector: Dict[str, float] | None = None,
+        limit: int = 10,
+        ctx: RequestContext,
+    ) -> List[Dict[str, Any]]:
+        """Search only source passages from the caller's own Session archives."""
+        if not query_vector and not sparse_query_vector:
+            raise InvalidArgumentError("Archive source search requires a dense or sparse vector")
+        scope_filter = merge_filters(
+            Eq("type", ARCHIVE_SOURCE_RECORD_TYPE),
+            Eq("account_id", ctx.account_id),
+            Eq("owner_user_id", ctx.user.user_id),
+            PathScope("uri", canonical_session_root(ctx), depth=-1),
+            self._tenant_filter(ctx, acl_enabled=await self._acl_enabled(ctx)),
+        )
+        backend = await self._get_backend_for_context(ctx)
+        records = await backend.query(
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=scope_filter,
+            limit=limit,
+            output_fields=["uri", "name", "abstract"],
+        )
+        return [archive_source_hit(record) for record in records]
+
     async def search_in_tenant(
         self,
         ctx: RequestContext,
@@ -2068,6 +2102,7 @@ class VikingVectorIndexBackend:
             level=level,
             acl_enabled=acl_enabled,
         )
+        scope_filter = merge_filters(scope_filter, archive_source_exclusion(context_type))
         if events_time_decay_protection is not None:
             parse_duration_ms(
                 events_time_decay_protection, parameter_name="events_time_decay_protection"
@@ -2131,7 +2166,7 @@ class VikingVectorIndexBackend:
             query=query,
             mode="bm25",
             fields=["content"],
-            filter=scope_filter,
+            filter=merge_filters(scope_filter, archive_source_exclusion(context_type)),
             limit=limit,
             offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
@@ -2172,7 +2207,7 @@ class VikingVectorIndexBackend:
                 "A query-less lookup needs a filter or a target directory to scope by."
             )
         return await self.filter(
-            filter=scope_filter,
+            filter=merge_filters(scope_filter, archive_source_exclusion(context_type)),
             limit=limit,
             offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,

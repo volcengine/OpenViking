@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Mapping, Optional, Tuple
 
 from openviking.server.identity import RequestContext
+from openviking.storage.archive_source import make_archive_source_record
 from openviking.storage.expr import FilterExpr
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
@@ -126,6 +127,33 @@ class VikingDBManager(VikingVectorIndexBackend):
         except Exception as e:
             logger.error("Error enqueuing embedding message: %s", type(e).__name__)
             return False
+
+    async def enqueue_archive_source(
+        self,
+        *,
+        archive_uri: str,
+        message_id: str,
+        start: int,
+        end: int,
+        excerpt: str,
+        ctx: RequestContext,
+    ) -> str:
+        """Queue only the original excerpt as input to the account's embedding model."""
+        record = make_archive_source_record(
+            archive_uri=archive_uri,
+            message_id=message_id,
+            start=start,
+            end=end,
+            excerpt=excerpt,
+            ctx=ctx,
+        )
+        message = EmbeddingMsg(
+            message=excerpt,
+            context_data={**record, "_upsert_record_id": record["id"]},
+        )
+        if not await self.enqueue_embedding_msg(message):
+            raise RuntimeError("Failed to queue archive source embedding")
+        return record["id"]
 
     async def get_embedding_queue_size(self) -> int:
         """

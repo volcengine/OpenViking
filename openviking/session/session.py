@@ -2647,6 +2647,10 @@ class Session:
         """Phase 2: Extract memories and enqueue semantic work in the background."""
         from openviking.service.task_tracker import get_task_tracker
         from openviking.service.task_work_index import get_task_context
+        from openviking.session.archive_source_recall import (
+            ARCHIVE_SOURCE_CANDIDATES,
+            enqueue_archive_sources,
+        )
         from openviking.telemetry import OperationTelemetry, bind_telemetry
         from openviking.telemetry.registry import register_telemetry, unregister_telemetry
 
@@ -2848,14 +2852,14 @@ class Session:
                         }
                         if source_candidates:
                             meta = await self._archives.read_meta(archive_uri)
-                            saved = list(meta.get("archive_source_candidates") or [])
+                            saved = list(meta.get(ARCHIVE_SOURCE_CANDIDATES) or [])
                             for candidate in source_candidates:
                                 if (
                                     candidate["message_id"] in archived_message_ids
                                     and candidate not in saved
                                 ):
                                     saved.append(candidate)
-                            updates["archive_source_candidates"] = saved
+                            updates[ARCHIVE_SOURCE_CANDIDATES] = saved
                         await self._merge_archive_meta(archive_uri, updates)
 
                     async def _run_recorded_memory_step(
@@ -2866,7 +2870,7 @@ class Session:
                     ) -> Any:
                         result = await _run_retryable_phase2_step(operation_name, fn)
                         candidates = (
-                            result.get("archive_source_candidates")
+                            result.get(ARCHIVE_SOURCE_CANDIDATES)
                             if isinstance(result, dict)
                             else None
                         )
@@ -3025,6 +3029,21 @@ class Session:
                                 "memory and session skill extraction skipped (disabled by config or memory_policy)"
                             )
                         await _run_archive_summary()
+
+                    if (
+                        memory_extraction_enabled
+                        and self_memory_enabled
+                        and ov_config.memory.archive_source_selection_enabled
+                        and self._viking_fs
+                    ):
+                        meta = await self._archives.read_meta(archive_uri)
+                        await enqueue_archive_sources(
+                            self._viking_fs,
+                            archive_uri,
+                            messages,
+                            meta.get(ARCHIVE_SOURCE_CANDIDATES) or [],
+                            self.ctx,
+                        )
 
                     # A recovered Phase 2 run may have already completed the
                     # long-term step before a sibling step failed. Reuse its
