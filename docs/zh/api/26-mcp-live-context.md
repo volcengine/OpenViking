@@ -15,7 +15,8 @@
 - Server 名称只能包含字母、数字、`_` 和 `-`，最长 64 个字符。工具名必须能作为 OpenViking 文件名使用。
 - 注册时提交的机密 HTTP Header 值保存至当前用户 Privacy，注册表和 API 中的 `headers` 只包含普通值和相对 Privacy 引用，不包含机密明文。
 - 工具目录可以位于用户空间 `viking://~/tools/<server>/<tool>.json`，也可以位于账号共享空间 `viking://agent/tools/<server>/<tool>.json`。调用和挂载参数会按工具的 `inputSchema` 校验。
-- `target_uri` 只接受 `viking://~/tools` 或 `viking://agent/tools`。注册及名称型操作未指定时使用用户空间；列出和检索未指定时合并两个空间。同名 Server 可以同时存在于两个空间。
+- `target_uri` 只接受 `viking://~/tools` 或 `viking://agent/tools`。注册未指定时使用用户空间；`show`、`status`、`sync`、`remove` 和 `mounts` 未指定时先找个人 MCP，个人不存在才找公共 MCP，同名时操作个人 MCP。显式指定后只操作目标空间，未找到时不回退。列出和检索未指定时合并两个空间，同名 Server 均保留。
+- 按名称操作的响应通过 `root_uri` 标识实际命中的空间。已找到个人 MCP 后，权限不足、凭证缺失或连接失败不会回退到公共 MCP。
 - 两个 tools 目录都是受管目录，不能通过普通 `mkdir`、`rm`、`cp` 或 `mv` 修改，应使用 MCP 管理接口。
 - 实时上下文节点 URI 必须是当前账号可访问的 Viking URI，并以 `.md` 结尾。
 - `wait` 只控制目录或节点写入是否等待后台处理完成，不是 MCP 工具调用超时。`timeout_seconds` 是每次实时工具调用的超时时间。
@@ -221,7 +222,7 @@ ov mcps add -p viking://agent/tools --wait '{"mcpServers":{"weather":{"url":"htt
 
 ### 列出、查看和检查状态
 
-`GET /api/v1/mcps` 未指定 `target_uri` 时合并用户空间和共享空间的 Server，每项用 `root_uri` 标识所属空间。`GET /api/v1/mcps/{name}` 和 `GET /api/v1/mcps/status?name=...` 默认操作用户空间；使用同名共享 Server 时必须指定 `target_uri=viking://agent/tools`。连接失败仍是成功的 HTTP 响应，但 `result.status` 为 `error`。
+`GET /api/v1/mcps` 未指定 `target_uri` 时合并用户空间和共享空间的 Server，每项用 `root_uri` 标识所属空间。`GET /api/v1/mcps/{name}` 和 `GET /api/v1/mcps/status?name=...` 默认先找用户空间，未找到才找共享空间；因此仅存在公共 MCP 时，`ov mcps show weather` 无需额外参数。同名时默认操作个人 MCP，指定 `target_uri=viking://agent/tools` 可操作公共 MCP。连接失败仍是成功的 HTTP 响应，但 `result.status` 为 `error`。
 
 **SDK 与 CLI**
 
@@ -306,7 +307,7 @@ curl -H "X-API-Key: your-key" \
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `wait` | boolean | 否 | `false` | 是否等待工具目录处理完成；也可以省略整个请求体 |
-| `target_uri` | string | 否 | `viking://~/tools` | Server 所属 tools 根目录 |
+| `target_uri` | string | 否 | 个人优先，公共回退 | 指定后只操作该 tools 根目录 |
 
 **SDK、HTTP 与 CLI**
 
@@ -361,7 +362,7 @@ ov mcps sync -p viking://agent/tools --wait weather
 
 ### 删除 Server
 
-`DELETE /api/v1/mcps/{name}` 删除指定空间中的注册信息和工具目录。它不删除已挂载的实时上下文节点；这些节点之后无法执行，应先查询并卸载挂载。
+`DELETE /api/v1/mcps/{name}` 删除命中空间中的注册信息和工具目录。未指定 `target_uri` 时个人优先，个人不存在才删除公共 MCP；指定后只操作目标空间。它不删除已挂载的实时上下文节点；这些节点之后无法执行，应先查询并卸载挂载。
 
 ```python
 result = client.remove_mcp("weather", target_uri="viking://agent/tools")
@@ -594,7 +595,7 @@ ov mcps mount \
 
 ### 查询挂载
 
-`GET /api/v1/mcps/mounts` 的 `mcp` 查询参数必填，`tool` 可选，`target_uri` 用于选择同名 Server 所属空间；未指定时使用用户空间。Server 必须仍处于已注册状态。
+`GET /api/v1/mcps/mounts` 的 `mcp` 查询参数必填，`tool` 可选，`target_uri` 用于选择同名 Server 所属空间；未指定时先找个人 MCP，个人不存在才找公共 MCP，挂载结果仅来自命中空间。指定后只查询目标空间。Server 必须仍处于已注册状态。
 响应中的 `tags` 从向量索引读取，挂载数据库不再保存独立副本。
 
 ```python

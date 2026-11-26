@@ -16,7 +16,8 @@ This module registers Streamable HTTP MCP servers, synchronizes and searches the
 - Server names may contain only letters, numbers, `_`, and `-`, up to 64 characters. Tool names must be valid OpenViking filenames.
 - Secret HTTP header values submitted at registration are stored in the caller's Privacy. Registry and API `headers` contain ordinary values and relative Privacy references, never plaintext secrets.
 - Tool definitions can live in the user space at `viking://~/tools/<server>/<tool>.json` or in the account-shared space at `viking://agent/tools/<server>/<tool>.json`. Invocation and mount arguments are validated against the tool's `inputSchema`.
-- `target_uri` accepts only `viking://~/tools` or `viking://agent/tools`. Registration and name-based operations default to the user space; list and search merge both spaces when omitted. The same server name may exist in both spaces.
+- `target_uri` accepts only `viking://~/tools` or `viking://agent/tools`. Registration defaults to the user space. When omitted, `show`, `status`, `sync`, `remove`, and `mounts` look in the private space first and fall back to the shared space only when the name is absent. Private servers take precedence when both spaces contain the name. An explicit target restricts the operation to that space without fallback. List and search merge both spaces and retain same-named servers.
+- Name-based responses identify the selected space through `root_uri`. Once a private server is found, permission errors, missing credentials, or connection failures do not cause fallback to a shared server.
 - Both tools roots are managed directories. Do not mutate them with ordinary `mkdir`, `rm`, `cp`, or `mv`; use the MCP management APIs.
 - A live context node URI must be a Viking URI available to the current account and end in `.md`.
 - `wait` controls whether catalog or node writes wait for background processing. It is not a tool-call timeout. `timeout_seconds` is the timeout for each live tool invocation.
@@ -222,7 +223,7 @@ With `wait=false`, the registration result may also contain the underlying catal
 
 ### List, inspect, and check status
 
-Without `target_uri`, `GET /api/v1/mcps` merges user and shared servers and identifies each entry with `root_uri`. `GET /api/v1/mcps/{name}` and `GET /api/v1/mcps/status?name=...` default to the user space; pass `target_uri=viking://agent/tools` for a same-named shared server. A connection failure still has a successful HTTP envelope, but `result.status` is `error`.
+Without `target_uri`, `GET /api/v1/mcps` merges user and shared servers and identifies each entry with `root_uri`. `GET /api/v1/mcps/{name}` and `GET /api/v1/mcps/status?name=...` look in the user space first and fall back to the shared space when absent, so `ov mcps show weather` needs no extra parameter for a shared-only server. Private servers take precedence for duplicate names; pass `target_uri=viking://agent/tools` to select the shared server explicitly. A connection failure still has a successful HTTP envelope, but `result.status` is `error`.
 
 **SDK and CLI**
 
@@ -307,7 +308,7 @@ On a connection failure, `result` is `{"name":"weather","status":"error","error"
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `wait` | boolean | No | `false` | Wait for tool catalog processing; the whole body may be omitted |
-| `target_uri` | string | No | `viking://~/tools` | Server's tools root |
+| `target_uri` | string | No | Private first, then shared | Restrict the operation to this tools root when specified |
 
 **SDK, HTTP, and CLI**
 
@@ -362,7 +363,7 @@ ov mcps sync -p viking://agent/tools --wait weather
 
 ### Remove a server
 
-`DELETE /api/v1/mcps/{name}` removes the registry entry and catalog from the selected space. It does not remove mounted live context nodes. Those nodes can no longer execute, so list and unmount them first.
+`DELETE /api/v1/mcps/{name}` removes the registry entry and catalog from the selected space. Without `target_uri`, it selects the private server first and removes the shared server only when the private name is absent. An explicit target restricts deletion to that space. It does not remove mounted live context nodes. Those nodes can no longer execute, so list and unmount them first.
 
 ```python
 result = client.remove_mcp("weather", target_uri="viking://agent/tools")
@@ -592,7 +593,7 @@ Mount responses do not include `tags` because vector indexing may still be async
 
 ### List mounts
 
-`GET /api/v1/mcps/mounts` requires `mcp`, accepts an optional `tool`, and uses `target_uri` to select the same-named server's space. It defaults to the user space. The server must still be registered.
+`GET /api/v1/mcps/mounts` requires `mcp`, accepts an optional `tool`, and uses `target_uri` to select the same-named server's space. Without a target, it selects the private server first and falls back to the shared server when absent, returning mounts only from the selected space. An explicit target restricts the query to that space. The server must still be registered.
 Returned `tags` are read from the vector index; the mount database does not keep a separate copy.
 
 ```python

@@ -21,7 +21,7 @@ pub(crate) enum McpCommands {
         /// MCP server name
         #[arg(value_name = "name")]
         name: String,
-        /// Resolve the server under a specific tools root URI
+        /// Restrict to this tools root; defaults to private first, then shared
         #[arg(short = 'p', long = "uri", value_name = "uri")]
         target_uri: Option<String>,
     },
@@ -60,7 +60,7 @@ pub(crate) enum McpCommands {
         /// MCP server name
         #[arg(value_name = "name")]
         name: String,
-        /// Resolve the server under a specific tools root URI
+        /// Restrict to this tools root; defaults to private first, then shared
         #[arg(short = 'p', long = "uri", value_name = "uri")]
         target_uri: Option<String>,
     },
@@ -72,7 +72,7 @@ pub(crate) enum McpCommands {
         /// Wait until tool processing is complete
         #[arg(short = 'w', long)]
         wait: bool,
-        /// Resolve the server under a specific tools root URI
+        /// Restrict to this tools root; defaults to private first, then shared
         #[arg(short = 'p', long = "uri", value_name = "uri")]
         target_uri: Option<String>,
     },
@@ -81,7 +81,7 @@ pub(crate) enum McpCommands {
         /// Registered MCP server name
         #[arg(value_name = "name")]
         name: String,
-        /// Resolve the server under a specific tools root URI
+        /// Restrict to this tools root; defaults to private first, then shared
         #[arg(short = 'p', long = "uri", value_name = "uri")]
         target_uri: Option<String>,
     },
@@ -126,7 +126,7 @@ pub(crate) enum McpCommands {
         /// Optional MCP tool name
         #[arg(long = "tool", value_name = "tool")]
         tool: Option<String>,
-        /// Resolve the server under a specific tools root URI
+        /// Restrict to this tools root; defaults to private first, then shared
         #[arg(short = 'p', long = "uri", value_name = "uri")]
         target_uri: Option<String>,
     },

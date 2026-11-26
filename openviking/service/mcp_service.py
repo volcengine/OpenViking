@@ -288,6 +288,25 @@ class MCPService:
                 server.pop("tools", None)
         return registry
 
+    async def _resolve_server_registry(
+        self,
+        name: str,
+        ctx: RequestContext,
+        target_uri: str | None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Resolve a server by name, preferring the user's registry unless scoped explicitly."""
+        name = self._validate_server_name(name)
+        roots = (
+            (self._resolve_tools_root(ctx, target_uri),)
+            if target_uri is not None
+            else self._tools_roots(ctx)
+        )
+        for tools_root in roots:
+            registry = await self._load(ctx, tools_root)
+            if name in registry["servers"]:
+                return tools_root, registry
+        raise NotFoundError(name, "MCP server")
+
     @staticmethod
     def _validate_server_name(name: str) -> str:
         if not _SERVER_NAME_RE.fullmatch(name):
@@ -1033,12 +1052,8 @@ class MCPService:
         *,
         target_uri: str | None = None,
     ) -> dict[str, Any]:
-        tools_root = self._resolve_tools_root(ctx, target_uri)
-        name = self._validate_server_name(name)
         async with self._lock(ctx.account_id):
-            registry = await self._load(ctx, tools_root)
-            if name not in registry["servers"]:
-                raise NotFoundError(name, "MCP server")
+            tools_root, registry = await self._resolve_server_registry(name, ctx, target_uri)
             await self._ensure_server_write(registry["servers"][name], ctx, tools_root)
             await self._service.fs.rm(
                 f"{tools_root}/{name}",
@@ -1091,12 +1106,8 @@ class MCPService:
         *,
         target_uri: str | None = None,
     ) -> dict[str, Any]:
-        tools_root = self._resolve_tools_root(ctx, target_uri)
-        name = self._validate_server_name(name)
-        registry = await self._load(ctx, tools_root)
-        server = registry["servers"].get(name)
-        if server is None:
-            raise NotFoundError(name, "MCP server")
+        tools_root, registry = await self._resolve_server_registry(name, ctx, target_uri)
+        server = registry["servers"][name]
         tools = await self._catalog(name, ctx, tools_root)
         return {
             **self._public_server(server, len(tools), tools_root),
@@ -1181,12 +1192,8 @@ class MCPService:
         *,
         target_uri: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        tools_root = self._resolve_tools_root(ctx, target_uri)
-        name = self._validate_server_name(name)
-        registry = await self._load(ctx, tools_root)
-        server = registry["servers"].get(name)
-        if server is None:
-            raise NotFoundError(name, "MCP server")
+        _, registry = await self._resolve_server_registry(name, ctx, target_uri)
+        server = registry["servers"][name]
         return server, server.get("headers", {})
 
     async def validate(
@@ -1214,9 +1221,9 @@ class MCPService:
         target_uri: str | None = None,
         wait: bool = False,
     ) -> dict[str, Any]:
-        tools_root = self._resolve_tools_root(ctx, target_uri)
         async with self._lock(ctx.account_id):
-            server, _ = await self._registered(name, ctx, target_uri=tools_root)
+            tools_root, registry = await self._resolve_server_registry(name, ctx, target_uri)
+            server = registry["servers"][name]
             await self._ensure_server_write(server, ctx, tools_root)
             await self._ensure_server_read(name, ctx, tools_root)
             headers = await self._connection_headers(server, ctx)
@@ -1302,12 +1309,8 @@ class MCPService:
         *,
         target_uri: str | None = None,
     ) -> dict[str, Any]:
-        tools_root = self._resolve_tools_root(ctx, target_uri)
-        name = self._validate_server_name(name)
-        registry = await self._load(ctx, tools_root)
-        server = registry["servers"].get(name)
-        if server is None:
-            raise NotFoundError(name, "MCP server")
+        tools_root, registry = await self._resolve_server_registry(name, ctx, target_uri)
+        server = registry["servers"][name]
         await self._ensure_server_read(name, ctx, tools_root)
         headers = await self._connection_headers(server, ctx)
         try:
@@ -1823,9 +1826,7 @@ class MCPService:
         *,
         target_uri: str | None = None,
     ) -> dict[str, Any]:
-        tools_root = self._resolve_tools_root(ctx, target_uri)
-        mcp_name = self._validate_server_name(mcp_name)
-        await self._registered(mcp_name, ctx, target_uri=tools_root)
+        tools_root, _ = await self._resolve_server_registry(mcp_name, ctx, target_uri)
         if tool_name is not None and not self._valid_tool_name(tool_name):
             raise InvalidArgumentError("Invalid MCP tool name")
 
