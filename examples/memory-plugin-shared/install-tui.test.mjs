@@ -923,101 +923,57 @@ while [ "$idx" -lt "$(tui_selectable_count)" ]; do printf '%s\\n' "$(tui_item_at
 });
 
 
-test("BytePlus accepts its default URL without reusing another provider's key", () => {
-  const result = runInstallerPrelude(`
-MENU_ANSWERS="1 1"
-tui_menu() {
-  printf 'menu:%s\\n' "$1"
-  shift 2
-  printf 'choices:%s\\n' "$*"
-  set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"
+const managedProviders = [
+  ["Volcengine", 0, "https://api.vikingdb.cn-beijing.volces.com/openviking"],
+  ["BytePlus", 1, "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking"],
+];
+
+for (const [provider, index, url] of managedProviders) {
+  test(`${provider} uses its fixed URL and needs a key for that URL`, () => {
+    const result = runInstallerPrelude(`
+MENU_ANSWERS="1 ${index}"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf '   \\n-\\nreplacement-key\\n')
+prompt_connection https://previous.example/openviking old-key
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr.match(/API key is required/g)?.length, 2);
+    assert.ok(result.stdout.includes(`connection:${url}|replacement-key`));
+    assert.doesNotMatch(result.stdout, /Enter = keep|service URL:/i);
+  });
+
+  test(`${provider} can keep its own key but cancels on EOF`, () => {
+    for (const input of ["", "\n"]) {
+      const result = runInstallerPrelude(`
+MENU_ANSWERS="1 ${index}"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf '%b' ${JSON.stringify(input)})
+prompt_connection '${url}/' saved-key
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+      assert.equal(result.status, 0, result.stderr);
+      if (input) assert.ok(result.stdout.includes(`connection:${url}|__OPENVIKING_KEEP__`));
+      else {
+        assert.match(result.stdout, /Cancelled; nothing was changed/);
+        assert.doesNotMatch(result.stdout, /connection:/);
+      }
+    }
+  });
 }
-INTERACTIVE=1
-exec 3< <(printf '\\nbyteplus-test-key\\n')
-prompt_connection "$VOLCENGINE_SERVICE_URL" "volcengine-test-key"
-printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
-`);
-  const url = "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking";
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /OpenViking Managed Service/);
-  assert.match(result.stdout, /choices:Volcengine BytePlus/);
-  assert.ok(result.stdout.includes(`connection:${url}|byteplus-test-key`));
-  assert.doesNotMatch(result.stdout, /volcengine-test-key/);
-});
 
-test("BytePlus rejects HTTP and an empty API key before settling on a connection", () => {
+test("Custom URL remains editable without reusing a key from another server", () => {
   const result = runInstallerPrelude(`
-MENU_ANSWERS="1 1"
-tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
-INTERACTIVE=1
-exec 3< <(printf 'http://byteplus.example/openviking\\nhttps://byteplus.example:443/openviking\\n   \\nnew-key\\n')
-prompt_connection "" ""
-printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
-`);
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /full HTTPS service URL/);
-  assert.match(result.stderr, /API key is required/);
-  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|new-key/);
-});
-
-test("a BytePlus preset remains editable and cannot reuse another server's key", () => {
-  const result = runInstallerPrelude(`
-BYTEPLUS_SERVICE_URL=https://byteplus.example/openviking
-MENU_ANSWERS="1 1"
-tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+tui_menu() { TUI_MENU_CHOICE=2; }
 INTERACTIVE=1
 exec 3< <(printf 'https://other.example/openviking\\nreplacement-key\\n')
-prompt_connection "$BYTEPLUS_SERVICE_URL" "old-byteplus-key"
+prompt_connection "$BYTEPLUS_SERVICE_URL" old-byteplus-key
 printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 `);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /connection:https:\/\/other.example\/openviking\|replacement-key/);
-  assert.doesNotMatch(result.stdout, /old-byteplus-key/);
-});
-
-test("EOF at a required BytePlus URL or key cancels without saving", () => {
-  const url = "https://byteplus.example/openviking";
-  for (const [input, currentUrl, currentKey] of [["", "", ""], [`${url}\n`, "", ""], [`${url}\n`, url, "saved-key"]]) {
-    const result = runInstallerPrelude(`
-MENU_ANSWERS="1 1"
-tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
-INTERACTIVE=1
-exec 3< <(printf '%b' ${JSON.stringify(input)})
-prompt_connection ${JSON.stringify(currentUrl)} ${JSON.stringify(currentKey)}
-printf 'connection-would-be-saved\\n'
-`);
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /Cancelled; nothing was changed/);
-    assert.doesNotMatch(result.stdout, /connection-would-be-saved/);
-    if (input) assert.match(result.stdout, /API key/);
-  }
-});
-
-test("BytePlus can keep a key explicitly for the same service URL", () => {
-  const result = runInstallerPrelude(`
-MENU_ANSWERS="1 1"
-tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
-INTERACTIVE=1
-exec 3< <(printf 'https://byteplus.example/openviking/\\n\\n')
-prompt_connection https://byteplus.example/openviking saved-key
-printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
-`);
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|__OPENVIKING_KEEP__/);
-});
-
-test("a whitespace-only saved BytePlus key cannot be kept", () => {
-  const result = runInstallerPrelude(`
-MENU_ANSWERS="1 1"
-tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
-INTERACTIVE=1
-exec 3< <(printf 'https://byteplus.example/openviking\\n\\nreplacement-key\\n')
-prompt_connection https://byteplus.example/openviking '   '
-printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
-`);
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /API key is required/);
-  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|replacement-key/);
   assert.doesNotMatch(result.stdout, /Enter = keep/);
 });
 

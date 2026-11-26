@@ -12,7 +12,6 @@ import os
 import sys
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
 from . import quick_local
 
@@ -146,31 +145,13 @@ def _confirm_replace_existing_profile(path: Path, values: dict, select, cancelle
     return {1: True, 0: False}.get(choice, _SETUP_CANCELLED)
 
 
-def _prompt_endpoint(prompt, select, cancelled, *, byteplus: bool = False) -> str | object:
+def _prompt_endpoint(prompt, select, cancelled) -> str | object:
     """Ask for a server URL until it normalizes and answers /health."""
     ov = _ov()
     while True:
         try:
-            label = "BytePlus service URL" if byteplus else "OpenViking server URL"
-            default = ov._BYTEPLUS_SERVICE_ENDPOINT if byteplus else ov._DEFAULT_ENDPOINT
-            value = ov._clean_config_value(prompt(label, default=default))
-            if byteplus and (not value.lower().startswith("https://") or "?" in value or "#" in value):
-                raise ov._OpenVikingEndpointError(
-                    "Enter the full HTTPS service URL for your BytePlus instance, without a query or fragment."
-                )
+            value = ov._clean_config_value(prompt("OpenViking server URL", default=ov._DEFAULT_ENDPOINT))
             endpoint = ov._normalize_openviking_url(value)
-            if byteplus:
-                candidate = urlparse(endpoint)
-                volcengine = urlparse(ov._OPENVIKING_SERVICE_ENDPOINT)
-                if (
-                    candidate.hostname == volcengine.hostname
-                    and candidate.port in (None, 443)
-                    and candidate.path.rstrip("/") == volcengine.path.rstrip("/")
-                ):
-                    raise ov._OpenVikingEndpointError(
-                        "This is the Volcengine service URL. Choose Volcengine or enter "
-                        "your BytePlus instance's HTTPS service URL."
-                    )
         except ov._OpenVikingEndpointError as exc:
             if _retry_or_cancel_manual_setup(select, "  Invalid OpenViking endpoint", str(exc), cancelled) is _SETUP_CANCELLED:
                 return _SETUP_CANCELLED
@@ -205,11 +186,11 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: Opti
     """Loop until a validated connection dict is built, or _SETUP_CANCELLED.
     ``continue`` re-enters the loop with ``api_key_type`` / ``prefilled_api_key`` carried over."""
     ov = _ov()
-    if service == "Volcengine":
-        endpoint = ov._OPENVIKING_SERVICE_ENDPOINT
+    if service in ("Volcengine", "BytePlus"):
+        endpoint = ov._BYTEPLUS_SERVICE_ENDPOINT if service == "BytePlus" else ov._OPENVIKING_SERVICE_ENDPOINT
         _say(f"OpenViking Service endpoint: {endpoint}")
     else:
-        endpoint = _prompt_endpoint(prompt, select, cancelled, byteplus=service == "BytePlus")
+        endpoint = _prompt_endpoint(prompt, select, cancelled)
         if endpoint is _SETUP_CANCELLED:
             return _SETUP_CANCELLED
 
@@ -259,8 +240,6 @@ def _prompt_manual_connection_values(prompt, select, cancelled, *, service: Opti
 
             values["api_key_type"] = api_key_type
             prompt_label = "OpenViking API key" if service else f"OpenViking {api_key_type} API key"
-            if service == "BytePlus":
-                prompt_label = "BytePlus OpenViking API key"
             if prefilled_api_key:
                 values["api_key"], prefilled_api_key = prefilled_api_key, ""
             else:
@@ -503,8 +482,8 @@ def _run_create_profile_setup(*, prompt, select, cancelled, config: dict, provid
             or "en"
         )
         provider_choice = select("  Cloud provider",
-                                 [("Volcengine", "use the fixed service URL and your API key"),
-                                  ("BytePlus", "enter your HTTPS service URL and API key")],
+                                 [("Volcengine", "use your Volcengine OpenViking API key"),
+                                  ("BytePlus", "use your BytePlus OpenViking API key")],
                                  default=0 if language.strip().lower().startswith("zh") else 1,
                                  cancel_returns=cancelled)
         if provider_choice == cancelled:

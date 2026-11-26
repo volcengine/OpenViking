@@ -1197,11 +1197,7 @@ def _validate_openviking_reachability(endpoint: str) -> tuple[bool, str]:
         if message is not None:
             return (not message), message
     except Exception as e:
-        status = _status_code_from_error(e)
-        if status == 401 and endpoint == _BYTEPLUS_SERVICE_ENDPOINT:
-            # BytePlus requires a key for /health; setup validates with that key before saving.
-            return True, ""
-        if status is not None:
+        if _status_code_from_error(e) is not None:
             return False, f"OpenViking server responded with {_format_openviking_exception(e)}."
         return False, f"OpenViking server is not reachable at {endpoint}: {_format_openviking_exception(e)}"
     return False, f"OpenViking server is not reachable at {endpoint}."

@@ -1645,19 +1645,6 @@ EOF
 # ovcli.conf wizard
 # ---------------------------------------------------------------------------
 
-normalize_byteplus_service_url() {
-  printf '%s' "$1" | node -e '
-    const input = require("fs").readFileSync(0, "utf8").trim().replace(/\/+$/, "");
-    try {
-      const url = new URL(input);
-      if (url.protocol !== "https:" || !url.hostname || url.username || url.password ||
-          url.search || url.hash || input.includes("?") || input.includes("#") ||
-          url.href.replace(/\/+$/, "") === "https://api.vikingdb.cn-beijing.volces.com/openviking") process.exit(1);
-      process.stdout.write(url.href.replace(/\/+$/, ""));
-    } catch { process.exit(1); }
-  '
-}
-
 prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KEEP__)
   local current_url="$1" current_key="$2" url_input reply def=2 custom hidden provider="" provider_def=1
   custom="$(t 'Custom URL' '自定义 URL')"
@@ -1682,17 +1669,7 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
         WIZ_URL="$VOLCENGINE_SERVICE_URL"
       else
         provider="byteplus"
-        while :; do
-          ask "$(t 'BytePlus service URL' 'BytePlus 服务地址')${BYTEPLUS_SERVICE_URL:+ [$BYTEPLUS_SERVICE_URL]}: "
-          if ! read_tty url_input "" required; then
-            info "$(t 'Cancelled; nothing was changed.' '已取消，未做任何修改。')"
-            exit 0
-          fi
-          if WIZ_URL="$(normalize_byteplus_service_url "${url_input:-$BYTEPLUS_SERVICE_URL}")"; then
-            break
-          fi
-          err "$(t 'Enter the full HTTPS service URL for your BytePlus instance, without login credentials, a query or a fragment.' '请输入 BytePlus 实例的完整 HTTPS 服务地址，不要包含登录凭据、查询参数或片段。')"
-        done
+        WIZ_URL="$BYTEPLUS_SERVICE_URL"
       fi
       ;;
     *)
@@ -1707,23 +1684,27 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
     current_key=""
   fi
   hidden="$(t 'typing is not shown' '输入内容不会显示')"
-  if [ "$provider" = "byteplus" ]; then
+  if [ -n "$provider" ]; then
     current_key="$(printf '%s' "$current_key" | node -e 'process.stdout.write(require("fs").readFileSync(0, "utf8").trim())')"
     info "$(t 'Server' '服务器'): $WIZ_URL"
   fi
   while :; do
     if [ -n "$current_key" ]; then
-      ask "$(t "API key [Enter = keep $(mask_secret "$current_key"), '-' = clear; $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空；$hidden]: ")"
-    elif [ "$provider" = "volcengine" ]; then
-      info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
-      info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
+      if [ -n "$provider" ]; then
+        ask "$(t "API key [Enter = keep $(mask_secret "$current_key"); $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")；$hidden]: ")"
+      else
+        ask "$(t "API key [Enter = keep $(mask_secret "$current_key"), '-' = clear; $hidden]: " "API key [回车 = 保留 $(mask_secret "$current_key")，输入 '-' 清空；$hidden]: ")"
+      fi
+    elif [ -n "$provider" ]; then
+      if [ "$provider" = "volcengine" ]; then
+        info "$(t 'Get an API key in the OpenViking console, under User Management → API Key:' '在 OpenViking 控制台的「用户管理 → API Key」获取密钥：')"
+        info "  https://console.volcengine.com/vikingdb/openviking/region:openviking+cn-beijing"
+      fi
       ask "$(t "API key ($hidden): " "API key（${hidden}）: ")"
-    elif [ "$provider" = "byteplus" ]; then
-      ask "$(t "BytePlus OpenViking API key ($hidden): " "BytePlus OpenViking API key（${hidden}）: ")"
     else
       ask "$(t "API key (press Enter if the server needs none; $hidden): " "API key（服务未开启鉴权可直接回车；${hidden}）: ")"
     fi
-    if [ "$provider" = "byteplus" ]; then
+    if [ -n "$provider" ]; then
       if ! read_tty reply -s required; then
         info "$(t 'Cancelled; nothing was changed.' '已取消，未做任何修改。')"
         exit 0
@@ -1744,8 +1725,8 @@ prompt_connection() { # sets WIZ_URL / WIZ_KEY (WIZ_KEY may stay __OPENVIKING_KE
         WIZ_KEY=""
       fi
     fi
-    if [ "$provider" = "byteplus" ] && [ -z "$WIZ_KEY" ]; then
-      err "$(t 'An API key is required for the BytePlus instance.' 'BytePlus 实例需要 API Key。')"
+    if [ -n "$provider" ] && [ -z "$WIZ_KEY" ]; then
+      err "$(t 'An API key is required for the managed service.' '托管服务需要 API Key。')"
     else
       break
     fi

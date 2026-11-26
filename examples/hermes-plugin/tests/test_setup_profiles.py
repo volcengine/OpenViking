@@ -234,17 +234,16 @@ def test_peer_paths_match_original_hermes_pr(external_provider, platform, sender
 
 
 @pytest.mark.parametrize(
-    "cloud, url_input, endpoint",
+    "cloud, endpoint",
     [
-        ("Volcengine", None, "https://api.vikingdb.cn-beijing.volces.com/openviking"),
-        ("BytePlus", None, "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking"),
-        ("BytePlus", " https://byteplus.example/openviking/ ", "https://byteplus.example/openviking"),
+        ("Volcengine", "https://api.vikingdb.cn-beijing.volces.com/openviking"),
+        ("BytePlus", "https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking"),
     ],
 )
 @pytest.mark.parametrize("route", ["hermes", "mirror"])
 @pytest.mark.parametrize("profile", ["personal", "shared"])
 def test_managed_provider_setup_saves_only_the_selected_connection(
-    external_provider, monkeypatch, cloud, url_input, endpoint, route, profile
+    external_provider, monkeypatch, cloud, endpoint, route, profile
 ):
     home, provider, module, config, setup = setup_state(external_provider, monkeypatch)
     monkeypatch.setenv("OPENVIKING_LANG", "en")
@@ -256,8 +255,6 @@ def test_managed_provider_setup_saves_only_the_selected_connection(
         prompts.append((label, kwargs))
         if "profile name" in label:
             return "managed-profile"
-        if label == "BytePlus service URL":
-            return kwargs["default"] if url_input is None else url_input
         assert "API key" in label
         assert kwargs["secret"] is True
         return " new-key "
@@ -278,6 +275,10 @@ def test_managed_provider_setup_saves_only_the_selected_connection(
 
     monkeypatch.setattr(setup, "_prompt", prompt)
     monkeypatch.setattr(module, "_validate_openviking_setup_values", validate)
+    def unexpected_probe(*_):
+        pytest.fail("Managed presets must wait for the API key before probing")
+
+    monkeypatch.setattr(module, "_validate_openviking_reachability", unexpected_probe)
     patch_menu(monkeypatch, select)
     provider.post_setup(str(home), config)
 
@@ -290,8 +291,7 @@ def test_managed_provider_setup_saves_only_the_selected_connection(
     cloud_menu = next(menu for menu in menus if menu[0] == "  Cloud provider")
     assert [label.partition(" - ")[0] for label in cloud_menu[1]] == ["Volcengine", "BytePlus"]
     assert cloud_menu[2]["default"] == 1
-    url_prompts = [kwargs for label, kwargs in prompts if label == "BytePlus service URL"]
-    assert url_prompts == ([{"default": module._BYTEPLUS_SERVICE_ENDPOINT}] if cloud == "BytePlus" else [])
+    assert all("URL" not in label for label, _ in prompts)
     saved = yaml.safe_load((home / "config.yaml").read_text())
     settings = saved["memory"]["openviking"]
     assert settings["recall_scope"] == ("shared" if profile == "shared" else "peer")
@@ -311,30 +311,10 @@ def test_managed_provider_setup_saves_only_the_selected_connection(
     assert "old-key" not in (home / ".env").read_text()
 
 
-@pytest.mark.parametrize(
-    "endpoint, status, reachable",
-    [
-        ("https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking", 401, True),
-        ("https://api.vikingdb.ap-southeast-1.bytepluses.com/openviking", 503, False),
-        ("https://byteplus.example/openviking", 401, False),
-    ],
-)
-def test_byteplus_pre_key_health_check(external_provider, monkeypatch, endpoint, status, reachable):
-    _, _, module, _ = external_provider("byteplus-health")
-
-    def health_payload(_client):
-        raise module._OpenVikingHTTPError(f"HTTP {status}", status)
-
-    monkeypatch.setattr(module._VikingClient, "health_payload", health_payload)
-    assert module._validate_openviking_reachability(endpoint)[0] is reachable
-
-
-@pytest.mark.parametrize(
-    "stage",
-    ["provider", "empty_url", "http_url", "userinfo_url", "query_url", "fragment_url", "volcengine_url", "volcengine_default_port", "volcengine_caps_host", "empty_key", "invalid_key", "save"],
-)
-def test_cancelled_byteplus_setup_preserves_profiles_and_credentials(
-    external_provider, monkeypatch, stage
+@pytest.mark.parametrize("cloud", ["Volcengine", "BytePlus"])
+@pytest.mark.parametrize("stage", ["provider", "empty_key", "invalid_key", "save"])
+def test_cancelled_managed_setup_preserves_profiles_and_credentials(
+    external_provider, monkeypatch, cloud, stage
 ):
     home, provider, module, config, setup = setup_state(external_provider, monkeypatch)
     before = copy.deepcopy(config)
@@ -342,21 +322,8 @@ def test_cancelled_byteplus_setup_preserves_profiles_and_credentials(
     contents = {path: path.read_bytes() for path in paths}
     monkeypatch.setenv("OPENVIKING_API_KEY", "old-key")
     prompts, checks = [], []
-    urls = {
-        "empty_url": "",
-        "http_url": "http://byteplus.example/openviking",
-        "userinfo_url": "https://user:password@byteplus.example/openviking",
-        "query_url": "https://byteplus.example/openviking?",
-        "fragment_url": "https://byteplus.example/openviking#",
-        "volcengine_url": module._OPENVIKING_SERVICE_ENDPOINT,
-        "volcengine_default_port": "https://api.vikingdb.cn-beijing.volces.com:443/openviking/",
-        "volcengine_caps_host": "HTTPS://API.VIKINGDB.CN-BEIJING.VOLCES.COM/openviking",
-    }
-
     def prompt(label, **kwargs):
         prompts.append(label)
-        if label == "BytePlus service URL":
-            return urls.get(stage, "https://byteplus.example/openviking")
         assert "API key" in label
         return "   " if stage == "empty_key" else "new-key"
 
@@ -364,7 +331,7 @@ def test_cancelled_byteplus_setup_preserves_profiles_and_credentials(
         return {
             "  OpenViking usage profile": 0,
             "  OpenViking connection": 0,
-            "  Cloud provider": setup._CANCELLED if stage == "provider" else 1,
+            "  Cloud provider": setup._CANCELLED if stage == "provider" else int(cloud == "BytePlus"),
         }.get(title, setup._CANCELLED)
 
     def validate(values, **kwargs):
@@ -379,8 +346,8 @@ def test_cancelled_byteplus_setup_preserves_profiles_and_credentials(
     assert all(path.read_bytes() == contents[path] for path in paths)
     assert os.environ["OPENVIKING_API_KEY"] == "old-key"
     assert not list(module._default_ovcli_config_path().parent.glob("ovcli.conf.managed*"))
-    if stage in {"provider", *urls}:
-        assert all("API key" not in label for label in prompts)
+    if stage == "provider":
+        assert not prompts
     if stage not in {"invalid_key", "save"}:
         assert checks == []
 
@@ -420,35 +387,32 @@ def test_managed_provider_default_uses_the_user_language(
         endpoints.append(values["endpoint"])
         return True, "", "user"
 
-    monkeypatch.setattr(
-        setup, "_prompt",
-        lambda label, **kwargs: "https://byteplus.example/openviking"
-        if label == "BytePlus service URL" else "new-key",
-    )
+    monkeypatch.setattr(setup, "_prompt", lambda label, **kwargs: "new-key")
     monkeypatch.setattr(module, "_validate_openviking_setup_values", validate)
     patch_menu(monkeypatch, select)
     provider.post_setup(str(home), config)
     assert defaults == [expected_provider]
     assert endpoints == [
         module._OPENVIKING_SERVICE_ENDPOINT
-        if expected_provider == 0 else "https://byteplus.example/openviking"
+        if expected_provider == 0 else module._BYTEPLUS_SERVICE_ENDPOINT
     ]
     assert config == before
 
 
-def test_byteplus_url_and_key_retry_validate_only_the_replacement_key(
-    external_provider, monkeypatch
+@pytest.mark.parametrize("cloud", ["Volcengine", "BytePlus"])
+def test_managed_key_retry_validates_only_the_replacement_key(
+    external_provider, monkeypatch, cloud
 ):
     home, provider, module, config, setup = setup_state(external_provider, monkeypatch)
-    urls = iter(["http://byteplus.example", "HTTPS://BYTEPLUS.EXAMPLE:443/openviking/"])
     keys = iter([" \t ", "replacement-key"])
     checks = []
 
     def prompt(label, **kwargs):
-        return next(urls) if label == "BytePlus service URL" else next(keys)
+        assert "API key" in label
+        return next(keys)
 
     def select(title, options, **kwargs):
-        return 1 if title == "  Cloud provider" else 0
+        return int(title == "  Cloud provider" and cloud == "BytePlus")
 
     def validate(values, **kwargs):
         checks.append(dict(values))
@@ -459,6 +423,8 @@ def test_byteplus_url_and_key_retry_validate_only_the_replacement_key(
     patch_menu(monkeypatch, select)
     provider.post_setup(str(home), config)
     assert len(checks) == 1
-    assert checks[0]["endpoint"] == "HTTPS://BYTEPLUS.EXAMPLE:443/openviking"
+    assert checks[0]["endpoint"] == (
+        module._BYTEPLUS_SERVICE_ENDPOINT if cloud == "BytePlus" else module._OPENVIKING_SERVICE_ENDPOINT
+    )
     assert checks[0]["api_key"] == "replacement-key"
     assert os.environ["OPENVIKING_API_KEY"] == "replacement-key"

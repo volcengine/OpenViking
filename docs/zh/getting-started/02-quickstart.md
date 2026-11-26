@@ -12,7 +12,7 @@
 
 | 运行方式 | 适合的情况 | 需要准备 |
 | --- | --- | --- |
-| **BytePlus 云服务** | 希望使用亚太地区（柔佛）的托管服务 | Node.js/npm、BytePlus OpenViking 服务地址和 API Key，以及能在本机执行终端命令的 Agent |
+| **BytePlus 云服务** | 希望使用亚太地区（柔佛）的托管服务 | Node.js/npm、BytePlus OpenViking API Key，以及能在本机执行终端命令的 Agent |
 | **火山引擎云服务** | 希望使用托管服务，并在已有 Agent 中提问 | Node.js/npm、火山引擎账号，以及能在本机执行终端命令的 Agent |
 | **本地服务** | 希望在自己的电脑上运行，并直接使用内置 Agent VikingBot | Node.js/npm、uv、Python，以及模型访问凭据 |
 
@@ -67,7 +67,7 @@ uv python install 3.13
 
 ### BytePlus 云服务
 
-准备 BytePlus OpenViking 实例的服务地址和 API Key，详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。准备一个能在本机执行终端命令的 Agent，再继续[连接 CLI](#连接-cli)。
+准备 BytePlus OpenViking 实例的 API Key，详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。准备一个能在本机执行终端命令的 Agent，再继续[连接 CLI](#连接-cli)。
 
 <a id="火山引擎托管服务"></a>
 
@@ -141,7 +141,7 @@ ov config
 
 | 运行方式 | 连接类型 | 填写内容 |
 | --- | --- | --- |
-| BytePlus 云服务 | OpenViking 托管服务 → BytePlus | 确认服务地址并输入 API Key |
+| BytePlus 云服务 | OpenViking 托管服务 → BytePlus | 输入 API Key |
 | 火山引擎云服务 | OpenViking 托管服务 → Volcengine | 按向导使用服务地址，输入控制台取得的 API Key |
 | 本地服务 | **自定义（Custom）** | URL 填写 `http://127.0.0.1:1933`；默认本机模式的密钥留空 |
 

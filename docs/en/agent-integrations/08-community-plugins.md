@@ -22,7 +22,7 @@ Prerequisites: Node.js 18+, a running OpenViking server, and ZCode.
 For a managed connection, select **OpenViking Managed Service**, then:
 
 - **Volcengine:** enter your service API key. The installer supplies the URL.
-- **BytePlus:** confirm the service URL, then enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+- **BytePlus:** enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
 
 Older installers use **Custom URL** for BytePlus.
 
@@ -70,7 +70,7 @@ Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
 For a managed connection, select **OpenViking Managed Service**, then:
 
 - **Volcengine:** enter your service API key. The installer supplies the URL.
-- **BytePlus:** confirm the service URL, then enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+- **BytePlus:** enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
 
 Older installers use **Custom URL** for BytePlus.
 
@@ -113,7 +113,7 @@ The plugin also carries the OpenViking MCP server and 5 skills (`openviking-memo
 
 Prerequisites: Node.js 18+, a running OpenViking server, and the Antigravity app or `agy`.
 
-This noninteractive command uses the connection saved in `~/.openviking/ovcli.conf`. Configure it first with `ov config`: select **OpenViking Managed Service**, then **Volcengine** (service API key) or **BytePlus** (confirm the service URL and enter your API key). See [BytePlus setup](../guides/27-byteplus-setup.md#connect-the-cli).
+This noninteractive command uses the connection saved in `~/.openviking/ovcli.conf`. Configure it first with `ov config`: select **OpenViking Managed Service**, then **Volcengine** (service API key) or **BytePlus** (enter your API key). See [BytePlus setup](../guides/27-byteplus-setup.md#connect-the-cli).
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity

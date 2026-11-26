@@ -80,7 +80,7 @@ One installer covers Claude Code, Codex, Cursor, TRAE / TRAE CN, ZCode, OpenCode
 For a managed connection, select **OpenViking Managed Service**, then:
 
 - **Volcengine:** enter your service API key. The installer supplies the URL.
-- **BytePlus:** confirm the service URL, then enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+- **BytePlus:** enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
 
 Older installers use **Custom URL** for BytePlus.
 

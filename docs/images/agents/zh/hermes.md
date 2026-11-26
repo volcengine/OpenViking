@@ -27,7 +27,7 @@ hermes memory setup openviking
 2. 若出现配置来源选项，选择 **Create new OpenViking profile**。也可以复用已保存的
    `ovcli.conf`。
 3. 选择 **OpenViking Managed Service**，再选择 **Volcengine** 或 **BytePlus**。
-4. BytePlus 用户先确认服务地址，再输入 API Key。Volcengine 用户只需
+4. BytePlus 用户输入 API Key。Volcengine 用户只需
    输入 API Key，向导会提供服务地址。
 5. 选择保存位置。**Keep in Hermes only** 保存到 Hermes 的 `.env`。
    **Mirror to OpenViking store** 保存到本地 `ovcli.conf.<name>` 并关联到 Hermes。

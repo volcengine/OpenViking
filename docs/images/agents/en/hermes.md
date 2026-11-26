@@ -31,7 +31,7 @@ In the wizard:
 2. If prompted, choose **Create new OpenViking profile**. You can also reuse
    a saved `ovcli.conf`.
 3. Choose **OpenViking Managed Service**, then **Volcengine** or **BytePlus**.
-4. For BytePlus, confirm the service URL, then enter your API key. For Volcengine,
+4. For BytePlus, enter your API key. For Volcengine,
    enter the API key; the wizard supplies the service URL.
 5. Choose where to save the connection. **Keep in Hermes only** saves it in
    the Hermes `.env`. **Mirror to OpenViking store** saves a local

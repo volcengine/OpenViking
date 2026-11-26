@@ -15,7 +15,7 @@ OpenCode 与 Claude Code、Codex 共用同一个安装器。它会询问要安�
 连接托管实例时，选择 **OpenViking 托管服务**，再选择服务商：
 
 - **Volcengine**：输入服务 API Key，安装器会提供服务地址。
-- **BytePlus**：先确认服务地址，再输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+- **BytePlus**：输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
 
 旧版安装器连接 BytePlus 时使用**自定义 URL**。
 

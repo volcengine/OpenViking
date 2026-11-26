@@ -12,7 +12,7 @@ Choose where to run OpenViking, then prepare the corresponding tools:
 
 | Option | When to choose it | What to prepare |
 | --- | --- | --- |
-| **BytePlus cloud service** | Use a managed service in Asia Pacific (Johor) | Node.js/npm, a BytePlus OpenViking service URL and API key, and an agent that can run terminal commands on your machine |
+| **BytePlus cloud service** | Use a managed service in Asia Pacific (Johor) | Node.js/npm, a BytePlus OpenViking API key, and an agent that can run terminal commands on your machine |
 | **Volcengine cloud service** | Use a managed service and ask questions through an existing agent | Node.js/npm, a Volcengine account, and an agent that can run terminal commands on your machine |
 | **Local service** | Run OpenViking on your computer with its built-in agent, VikingBot | Node.js/npm, uv, Python, and model credentials |
 
@@ -67,7 +67,7 @@ Complete one of the following paths, then continue to [Connect the CLI](#connect
 
 ### BytePlus cloud service
 
-Use the service URL and API key for your BytePlus OpenViking instance. See the [BytePlus setup guide](../guides/27-byteplus-setup.md) for prerequisites. Prepare an agent that can run terminal commands on your machine, then continue to [Connect the CLI](#connect-the-cli).
+Have the API key for your BytePlus OpenViking instance ready. See the [BytePlus setup guide](../guides/27-byteplus-setup.md) for prerequisites. Prepare an agent that can run terminal commands on your machine, then continue to [Connect the CLI](#connect-the-cli).
 
 <a id="managed-service-on-volcengine"></a>
 
@@ -141,7 +141,7 @@ Add a connection using the settings for your chosen path, then save and activate
 
 | Option | Connection type | Settings |
 | --- | --- | --- |
-| BytePlus cloud service | OpenViking Managed Service → BytePlus | Confirm the service URL and enter your API key |
+| BytePlus cloud service | OpenViking Managed Service → BytePlus | Enter your API key |
 | Volcengine cloud service | OpenViking Managed Service → Volcengine | Use the service address provided by the wizard and enter the API key from the console |
 | Local service | **Custom** | Set the URL to `http://127.0.0.1:1933`; leave the key empty for default local mode |
 
