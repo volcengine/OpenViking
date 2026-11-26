@@ -560,6 +560,14 @@ runtimes return when a router turn ends:
   settled: it went out on purpose, past the catch-up turns.
 
 So a report is neither lost to a failed router turn nor relayed twice after one.
+Settling runs at the answer, so it covers a report offered first and answered
+after. The reverse order is the router's own reply before the report was filed:
+there is no delivery to settle yet, and the report would answer the same input
+twice. Such a report is still relayed, marked `already_answered=1 outbox=<id>
+at=<how long before>` when a sent reply exists on its origin no later than the
+report: the router relays only what the report adds to or corrects in that
+reply, or settles it with `stay_silent`. The report is never dropped, since it
+may be the correction.
 The settlement records how (`settled_by`: the tool, or `unrelayed`) and, for a
 delivery, its outbox row, which is what `task_list` and `/tasks` show.
 

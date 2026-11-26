@@ -47,7 +47,8 @@ function setup(t, options = {}) {
   const db = new DatabaseSync(':memory:');
   // The joins TaskManager reads for message links.
   db.exec(`CREATE TABLE connector_events (seq INTEGER PRIMARY KEY, message_id TEXT);
-    CREATE TABLE outbox (id INTEGER PRIMARY KEY, inbound_seq INTEGER, remote_message_id TEXT);`);
+    CREATE TABLE outbox (id INTEGER PRIMARY KEY, inbound_seq INTEGER, remote_message_id TEXT,
+      status TEXT DEFAULT 'SENT', sent_at_ms INTEGER);`);
   const executor = fakeExecutor();
   const relayed = [];
   const activities = [];
@@ -198,6 +199,55 @@ describe('TaskManager', () => {
     executor.turns[0].finish({ text: '' });
     await settle();
     assert.equal(executor.turns.length, 1, 'inputs it read need no catch-up turn');
+  });
+
+  it('marks a report whose origin already got an answer before it was filed, and nothing else', async (t) => {
+    const { db, tasks, executor, relayed } = setup(t);
+    tasks.create({ rows: [row({ content: '0.5.6 发了吗' })], title: 'X', runtime: 'pi' });
+    const origin = tasks.roundOf(tasks.get('t1'), 1);
+    const answer = (sentAt) => db.prepare("INSERT INTO outbox(inbound_seq, remote_message_id, status, sent_at_ms) VALUES (?, 'om_sent', 'SENT', ?)")
+      .run(origin.origin_seq, sentAt).lastInsertRowid;
+
+    // A reply before the report, and over: the requester saw it.
+    answer(Date.now() - 5 * 60_000);
+    tasks.report('t1', { state: 'done', draft: '先答的那条' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    assert.match(relayed[0].item.text, /^\[task report\] task=t1 state=done .* already_answered=1 outbox=\d+ at=5m\n/);
+    assert.match(relayed[0].item.text, /You already replied on this origin 5m ago \(outbox \d+\), before this report/);
+    assert.equal(relayed[0].item.text.split('\n').filter((line) => line.startsWith('[task report]')).length, 1,
+      'the report still goes out: it may correct the earlier answer');
+    assert.match(relayed[0].item.text, /\| 先答的那条/, 'its text is unchanged');
+  });
+
+  it('does not mark a report on an origin answered after it, or an answer on another input', async (t) => {
+    const { db, tasks, executor, relayed } = setup(t);
+    tasks.create({ rows: [row({ content: '查一下 X' })], title: 'X', runtime: 'pi' });
+    tasks.create({ rows: [row({ chat_id: 'oc_b', content: '查一下 Y' })], title: 'Y', runtime: 'pi' });
+    const first = tasks.roundOf(tasks.get('t1'), 1);
+    const second = tasks.roundOf(tasks.get('t2'), 1);
+    // An answer on t2's origin, and one on t1's filed after its report.
+    db.prepare("INSERT INTO outbox(inbound_seq, remote_message_id, status, sent_at_ms) VALUES (?, 'om_other', 'SENT', ?)")
+      .run(second.origin_seq, Date.now() - 60_000);
+    db.prepare("INSERT INTO outbox(inbound_seq, remote_message_id, status, sent_at_ms) VALUES (?, 'om_late', 'SENT', ?)")
+      .run(first.origin_seq, Date.now() + 60_000);
+    tasks.report('t1', { state: 'done', draft: 'X 慢是因为缺索引' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    assert.doesNotMatch(relayed[0].item.text, /already_answered/, 'a later answer is the settleReports path');
+    assert.doesNotMatch(relayed[0].item.text, /You already replied/);
+  });
+
+  it('does not mark a report when the answer on its origin was not sent', async (t) => {
+    const { db, tasks, executor, relayed } = setup(t);
+    tasks.create({ rows: [row({ content: '查一下 X' })], title: 'X', runtime: 'pi' });
+    const origin = tasks.roundOf(tasks.get('t1'), 1);
+    db.prepare("INSERT INTO outbox(inbound_seq, remote_message_id, status, sent_at_ms) VALUES (?, 'om_failed', 'FAILED', ?)")
+      .run(origin.origin_seq, Date.now() - 60_000);
+    tasks.report('t1', { state: 'done', draft: 'answer' });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    assert.doesNotMatch(relayed[0].item.text, /already_answered/, 'a failed send was never seen');
   });
 
   it('reopens an ended task for a new round: its session goes on, and the answer goes where that round was asked', async (t) => {
@@ -692,7 +742,7 @@ describe('TaskManager', () => {
 
   it('answers a progress question: what one person asked for, how long it has worked and what became of its result', async (t) => {
     const { tasks, executor, db } = setup(t);
-    db.exec('ALTER TABLE outbox ADD COLUMN chat_id TEXT; ALTER TABLE outbox ADD COLUMN payload_json TEXT; ALTER TABLE outbox ADD COLUMN sent_at_ms INTEGER;');
+    db.exec('ALTER TABLE outbox ADD COLUMN chat_id TEXT; ALTER TABLE outbox ADD COLUMN payload_json TEXT;');
     tasks.create({ rows: [row({ content: '查一下 X' })], title: '查 X', runtime: 'pi' });
     tasks.create({ rows: [row({ chat_id: 'oc_b', content: '查一下 Y' })], title: '查 Y', runtime: 'pi' });
     tasks.create({ rows: [row({ sender_id: 'ou_bob', content: '查一下 Z' })], title: '查 Z', runtime: 'pi' });

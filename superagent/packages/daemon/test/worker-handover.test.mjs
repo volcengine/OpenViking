@@ -114,7 +114,8 @@ function setup(t, { router = { runtime: 'codex', model: 'gpt-5.6-sol', effort: '
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const db = new DatabaseSync(':memory:');
   db.exec(`CREATE TABLE connector_events (seq INTEGER PRIMARY KEY, message_id TEXT);
-    CREATE TABLE outbox (id INTEGER PRIMARY KEY, inbound_seq INTEGER, remote_message_id TEXT);`);
+    CREATE TABLE outbox (id INTEGER PRIMARY KEY, inbound_seq INTEGER, remote_message_id TEXT,
+      status TEXT DEFAULT 'SENT', sent_at_ms INTEGER);`);
   const sessions = new Map();
   const executor = fakeExecutor(sessions);
   const relayed = [];
