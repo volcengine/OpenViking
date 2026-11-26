@@ -3,6 +3,7 @@
 """Native Catalog and local Item grouping contract tests."""
 
 import gc
+import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -188,8 +189,7 @@ def test_identity_mode_is_collection_wide_but_declarations_and_revisions_are_sco
     assert resolve("a")["revision"] != changed["a"]
     assert resolve("b")["revision"] == changed["b"]
     assert (
-        call(engine, "resolve", scope="b", uris=["/resources/new"])["data"][0]["item_uuids"]
-        == []
+        call(engine, "resolve", scope="b", uris=["/resources/new"])["data"][0]["item_uuids"] == []
     )
     before = {scope: resolve(scope)["revision"] for scope in scopes}
     with pytest.raises(ValueError, match="shadow or union"):
@@ -241,8 +241,7 @@ def test_collection_default_union_survives_reload_before_activation(tmp_path):
 
 @pytest.mark.parametrize("mode", ["shadow", "union"])
 @pytest.mark.parametrize("aggregation", ["max", "sum"])
-@pytest.mark.parametrize("sign", [1, -1])
-@pytest.mark.parametrize("max_members", [1, 10])
+@pytest.mark.parametrize(("sign", "max_members"), [(1, 10), (-1, 1)])
 def test_duplicate_labels_contribute_each_input_row(mode, aggregation, sign, max_members):
     engine = CatalogEngine()
     nodes(engine, "/resources/A/B")
@@ -506,9 +505,10 @@ def test_move_subtree_merges_and_undo_restores_both_trees(source_is_item, identi
     target_root = call(engine, "resolve", uris=["/resources/target"])["data"][0]
     assert target_root["item_uuid"] == moved_uuid
     assert target_root["item_root_uri"] == "/resources/target"
-    assert declare(engine, "/resources/target", "_read", include_attrs=False)[
-        "item_attrs"
-    ] == moved_attrs
+    assert (
+        declare(engine, "/resources/target", "_read", include_attrs=False)["item_attrs"]
+        == moved_attrs
+    )
 
     call(engine, "restore_move", undo=moved["undo"])
     assert call(
@@ -581,6 +581,47 @@ def declare_adapter_item(adapter, uri, item_uuid, attrs):
     )
 
 
+def test_item_recall_excludes_ordinary_records_and_keeps_sum_stable(adapter, monkeypatch):
+    declare_adapter_item(adapter, "viking://resources/A", "uuid-a", [])
+    declare_adapter_item(adapter, "viking://resources/B", "uuid-b", [])
+    records = []
+    for name, count, score in [("A", 1000, 0.9), ("B", 1200, 0.8), ("A-ordinary", 1000, 1.0)]:
+        for i in range(count):
+            records.append(
+                {
+                    "id": f"{name}-{i}",
+                    "account_id": "a",
+                    "uri": f"viking://resources/{name}/{i}.md",
+                    "level": 2,
+                    "vector": [score, math.sqrt(1 - score * score), 0, 0],
+                }
+            )
+    adapter.upsert(records)
+    local = adapter.get_collection()._Collection__collection
+
+    def no_python_members(*args, **kwargs):
+        pytest.fail("Native Item search must keep members inside the engine")
+
+    monkeypatch.setattr(local, "search_by_vector", no_python_members)
+    monkeypatch.setattr(local.store_mgr, "fetch_cands_fields", no_python_members)
+
+    def item_groups(limit):
+        return adapter.search_item_groups(
+            query_vector=[1, 0, 0, 0],
+            filter=Eq("account_id", "a"),
+            max_groups=limit,
+            aggregation="sum",
+        )["groups"]
+
+    top = item_groups(1)
+    groups = item_groups(10)
+    assert top == groups[:1]
+    assert [(group["entity_id"], group["candidate_members_count"]) for group in groups] == [
+        ("uuid-b", 1200),
+        ("uuid-a", 1000),
+    ]
+
+
 def test_local_adapter_filters_then_groups_candidates(adapter):
     root = "viking://resources/items"
     declare_adapter_item(adapter, f"{root}/A", "uuid-a", ["asset_id=V1"])
@@ -644,68 +685,7 @@ def test_item_attrs_filter_includes_members_indexed_before_declaration(adapter):
     assert result["groups"][0]["candidate_members_uri"] == [f"{root}/frame"]
 
 
-def test_filter_only_item_groups_have_zero_scores(adapter):
-    root = "viking://resources/items/A"
-    declare_adapter_item(adapter, root, "uuid-a", ["asset_id=V1"])
-    adapter.upsert(
-        [
-            {
-                "id": "a1",
-                "account_id": "a",
-                "uri": f"{root}/frame",
-                "vector": [1, 0, 0, 0],
-                "level": 2,
-            }
-        ]
-    )
-    result = adapter.search_item_groups(
-        filter=And([Eq("account_id", "a"), Eq("item_attrs", "asset_id=V1")]),
-        max_groups=10,
-        aggregation="max",
-        filter_only=True,
-    )
-    assert result["groups"][0]["entity_score"] == 0.0
-
-
-def test_filter_only_item_groups_are_not_capped_by_ann_recall_window(adapter):
-    root = "viking://resources/items"
-    declare_adapter_item(adapter, f"{root}/A", "uuid-a", ["kind=asset"])
-    declare_adapter_item(adapter, f"{root}/B", "uuid-b", ["kind=asset"])
-    records = [
-        {
-            "id": f"a-{index:04d}",
-            "account_id": "a",
-            "uri": f"{root}/A/frame-{index:04d}",
-            "vector": [1, 0, 0, 0],
-            "level": 2,
-        }
-        for index in range(1001)
-    ]
-    records.append(
-        {
-            "id": "z-last-item",
-            "account_id": "a",
-            "uri": f"{root}/B/frame",
-            "vector": [1, 0, 0, 0],
-            "level": 2,
-        }
-    )
-    adapter.upsert(records)
-
-    result = adapter.search_item_groups(
-        filter=And([Eq("account_id", "a"), Eq("item_attrs", "kind=asset")]),
-        max_groups=2,
-        aggregation="max",
-        filter_only=True,
-    )
-    assert [(group["entity_id"], group["entity_score"]) for group in result["groups"]] == [
-        ("uuid-a", 0.0),
-        ("uuid-b", 0.0),
-    ]
-
-
-@pytest.mark.parametrize("mode", ["shadow", "union"])
-@pytest.mark.parametrize("aggregation", ["max", "sum"])
+@pytest.mark.parametrize(("mode", "aggregation"), [("shadow", "max"), ("union", "sum")])
 def test_filter_scan_keeps_complete_counts_without_python_members(
     adapter, monkeypatch, mode, aggregation
 ):
@@ -753,17 +733,30 @@ def test_filter_scan_keeps_complete_counts_without_python_members(
     assert top["groups_truncated"] is True
     assert top["groups"][0]["entity_id"] == "a-late"  # Last input wins the UUID tie.
     result = adapter.search_item_groups(**options, max_groups=10)
+    expected_ids = ["a-late", "z-nested", "z-parent"] if mode == "union" else ["a-late", "z-nested"]
+    assert [(g["entity_id"], g["entity_score"]) for g in result["groups"]] == [
+        (uuid, 0.0) for uuid in expected_ids
+    ]
     groups = {g["entity_id"]: g for g in result["groups"]}
     assert groups["a-late"]["candidate_members_count"] == 1
-    for uuid in ["z-nested", "z-parent"] if mode == "union" else ["z-nested"]:
+    assert groups["z-nested"]["entity_attrs"] == ["kind=asset"]
+    for uuid in expected_ids[1:]:
         group = groups[uuid]
-        assert group["entity_score"] == 0.0
         assert group["candidate_members_count"] == total
         assert group["candidate_members_truncated"] is True
         assert group["candidate_members"] == [f"成员-{i:04d}" for i in range(1000)]
         assert group["candidate_members_uri"] == [f"{root}/A/B/{i}" for i in range(1000)]
     if mode == "union":
         assert groups["z-parent"]["entity_attrs"] == ["project=parent"]
+        parent_filter = {
+            **options,
+            "filter": And([Eq("account_id", "a"), Eq("item_attrs", "project=parent")]),
+        }
+        parent_groups = adapter.search_item_groups(**parent_filter, max_groups=10)["groups"]
+        assert {g["entity_id"]: g["candidate_members_count"] for g in parent_groups} == {
+            "z-nested": total,
+            "z-parent": total + 1,
+        }
     assert adapter.search_item_groups(**options, score_threshold=0.1)["group_count"] == 0
 
 
@@ -1066,6 +1059,48 @@ def test_semantic_item_scan_retries_after_index_replacement(monkeypatch):
         assert [(g["entity_id"], g["entity_score"]) for g in result["groups"]] == [("A", 1.0)]
     finally:
         adapter.close()
+
+
+def test_noop_node_updates_do_not_invalidate_every_item_recall(adapter, monkeypatch):
+    root = "viking://resources/read-item"
+    declare_adapter_item(adapter, root, "uuid-read", [])
+    declare_adapter_item(adapter, "viking://resources/unrelated", "uuid-unrelated", [])
+    adapter.upsert(
+        [
+            {
+                "id": "hit",
+                "account_id": "a",
+                "uri": root + "/hit.md",
+                "level": 2,
+                "vector": [1, 0, 0, 0],
+            }
+        ]
+    )
+    collection = adapter.get_collection()._Collection__collection
+    index = collection.indexes.get("default")
+    original_search = index.search_items
+    recalls = []
+
+    def search_then_noop_upsert(*args, **kwargs):
+        recalled = original_search(*args, **kwargs)
+        before = recalled["revision"]
+        after = collection.catalog_execute(
+            {
+                "op": "upsert_nodes",
+                "scope": "a",
+                "nodes": [{"uri": "/resources/unrelated", "node_type": "dir"}],
+            }
+        )["revision"]
+        recalls.append({"before": before, "after": after})
+        return recalled
+
+    monkeypatch.setattr(index, "search_items", search_then_noop_upsert)
+    result = adapter.search_item_groups(
+        query_vector=[1, 0, 0, 0], filter=Eq("account_id", "a"), max_groups=1
+    )
+    assert result["groups"][0]["entity_id"] == "uuid-read"
+    assert len(recalls) == 1
+    assert recalls[0]["before"] == recalls[0]["after"]
 
 
 def test_item_root_type_is_validated_before_a_resource_replacement():

@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Item identity, resource lifecycle, and retrieval regressions."""
 
-import math
 import shutil
 from types import SimpleNamespace
 
@@ -10,9 +9,6 @@ import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.acl import AclManager
-from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.expr import And, Eq
-from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -29,77 +25,6 @@ async def stored_files(fs, root, owner):
         root, ctx=owner, show_all_hidden=True, node_limit=None, level_limit=None
     )
     return [entry["uri"] for entry in entries if not entry.get("isDir")]
-
-
-@pytest.fixture
-def local_adapter(tmp_path):
-    adapter = LocalCollectionAdapter("context", str(tmp_path / "vectors"), "default")
-    adapter.create_collection(
-        "context",
-        CollectionSchemas.context_collection("context", 4),
-        distance="cosine",
-        sparse_weight=0,
-        index_name="default",
-    )
-    yield adapter
-    adapter.close()
-
-
-def declare(adapter, uri, uuid, attrs=None):
-    adapter.catalog_execute(
-        {"op": "upsert_nodes", "scope": "a", "nodes": [{"uri": uri, "node_type": "dir"}]}
-    )
-    adapter.catalog_execute(
-        {
-            "op": "declare_item",
-            "scope": "a",
-            "uri": uri,
-            "item_uuids": [uuid],
-            "item_attrs": attrs or [],
-        }
-    )
-
-
-def test_item_recall_excludes_ordinary_records_and_keeps_sum_stable(local_adapter, monkeypatch):
-    adapter = local_adapter
-    declare(adapter, "viking://resources/A", "uuid-a")
-    declare(adapter, "viking://resources/B", "uuid-b")
-    records = []
-    for name, count, score in [("A", 1000, 0.9), ("B", 1200, 0.8), ("A-ordinary", 1000, 1.0)]:
-        for i in range(count):
-            records.append(
-                {
-                    "id": f"{name}-{i}",
-                    "account_id": "a",
-                    "uri": f"viking://resources/{name}/{i}.md",
-                    "level": 2,
-                    "vector": [score, math.sqrt(1 - score * score), 0, 0],
-                }
-            )
-    adapter.upsert(records)
-    local = adapter.get_collection()._Collection__collection
-
-    def no_python_members(*args, **kwargs):
-        pytest.fail("Native Item search must keep members inside the engine")
-
-    monkeypatch.setattr(local, "search_by_vector", no_python_members)
-    monkeypatch.setattr(local.store_mgr, "fetch_cands_fields", no_python_members)
-
-    def item_groups(limit):
-        return adapter.search_item_groups(
-            query_vector=[1, 0, 0, 0],
-            filter=Eq("account_id", "a"),
-            max_groups=limit,
-            aggregation="sum",
-        )["groups"]
-
-    top = item_groups(1)
-    groups = item_groups(10)
-    assert top == groups[:1]
-    assert [(group["entity_id"], group["candidate_members_count"]) for group in groups] == [
-        ("uuid-b", 1200),
-        ("uuid-a", 1000),
-    ]
 
 
 class EnabledAcl:
@@ -443,78 +368,6 @@ async def test_add_resource_rejects_declaring_a_file_before_commit(service, tmp_
     assert not resolved["data"][0].get("item_uuid")
 
 
-def test_filter_only_respects_bounded_candidate_evidence(local_adapter):
-    adapter = local_adapter
-    root = "viking://resources/one-large-item"
-    declare(adapter, root, "uuid-large", ["kind=asset"])
-    adapter.upsert(
-        [
-            {
-                "id": f"member-{i}",
-                "account_id": "a",
-                "uri": f"{root}/{i}.md",
-                "level": 2,
-                "vector": [1, 0, 0, 0],
-            }
-            for i in range(2000)
-        ]
-    )
-    result = adapter.search_item_groups(
-        filter=And([Eq("account_id", "a"), Eq("item_attrs", "kind=asset")]),
-        max_groups=1,
-        aggregation="max",
-        filter_only=True,
-    )
-    group = result["groups"][0]
-    assert len(group["candidate_members_uri"]) <= 1000
-    assert group["candidate_members_count"] == 2000
-    assert group["candidate_members_truncated"] is True
-
-
-def test_union_filters_members_then_returns_all_ancestor_items(local_adapter):
-    adapter = local_adapter
-    root = "viking://resources/A"
-    declare(adapter, root, "uuid-a", ["project=P1"])
-    declare(adapter, root + "/B", "uuid-b", ["asset=V1"])
-    adapter.upsert(
-        [
-            {
-                "id": "a",
-                "account_id": "a",
-                "uri": root + "/a.md",
-                "level": 2,
-                "vector": [1, 0, 0, 0],
-            },
-            {
-                "id": "b",
-                "account_id": "a",
-                "uri": root + "/B/b.md",
-                "level": 2,
-                "vector": [1, 0, 0, 0],
-            },
-        ]
-    )
-    adapter.catalog_execute({"op": "configure", "scope": "a", "item_identity_mode": "union"})
-    result = adapter.search_item_groups(
-        filter=And([Eq("account_id", "a"), Eq("item_attrs", "asset=V1")]),
-        max_groups=10,
-        aggregation="sum",
-        filter_only=True,
-    )
-    groups = result["groups"]
-    assert [(g["entity_id"], g["entity_attrs"]) for g in groups] == [
-        ("uuid-a", ["project=P1"]),
-        ("uuid-b", ["asset=V1"]),
-    ]
-    assert all(g["candidate_members_uri"] == [root + "/B/b.md"] for g in groups)
-    parent_filter = adapter.search_item_groups(
-        filter=And([Eq("account_id", "a"), Eq("item_attrs", "project=P1")]),
-        max_groups=10,
-        filter_only=True,
-    )
-    assert [g["candidate_members_count"] for g in parent_filter["groups"]] == [2, 1]
-
-
 @pytest.mark.asyncio
 async def test_inherited_item_import_reuses_source_cleanup(service, tmp_path):
     from openviking.parse.accessors.base import LocalResource, SourceType
@@ -726,46 +579,3 @@ async def test_inherited_import_needs_no_source_preservation_lookup(
     if source_has_original:
         saved = [await service.viking_fs.read_file_bytes(uri, ctx=owner) for uri in files]
         assert source.read_bytes() in saved
-
-
-def test_noop_node_updates_do_not_invalidate_every_item_recall(local_adapter, monkeypatch):
-    adapter = local_adapter
-    root = "viking://resources/read-item"
-    declare(adapter, root, "uuid-read")
-    declare(adapter, "viking://resources/unrelated", "uuid-unrelated")
-    adapter.upsert(
-        [
-            {
-                "id": "hit",
-                "account_id": "a",
-                "uri": root + "/hit.md",
-                "level": 2,
-                "vector": [1, 0, 0, 0],
-            }
-        ]
-    )
-    collection = adapter.get_collection()._Collection__collection
-    index = collection.indexes.get("default")
-    original_search = index.search_items
-    recalls = []
-
-    def search_then_noop_upsert(*args, **kwargs):
-        recalled = original_search(*args, **kwargs)
-        before = recalled["revision"]
-        after = collection.catalog_execute(
-            {
-                "op": "upsert_nodes",
-                "scope": "a",
-                "nodes": [{"uri": "/resources/unrelated", "node_type": "dir"}],
-            }
-        )["revision"]
-        recalls.append({"before": before, "after": after})
-        return recalled
-
-    monkeypatch.setattr(index, "search_items", search_then_noop_upsert)
-    result = adapter.search_item_groups(
-        query_vector=[1, 0, 0, 0], filter=Eq("account_id", "a"), max_groups=1
-    )
-    assert result["groups"][0]["entity_id"] == "uuid-read"
-    assert len(recalls) == 1
-    assert recalls[0]["before"] == recalls[0]["after"]

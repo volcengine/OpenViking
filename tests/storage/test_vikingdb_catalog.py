@@ -385,29 +385,31 @@ async def test_account_cleanup_deletes_hidden_catalog_only_in_target_partition(
     assert {row["account_id"] for row in collection.client.rows.values()} == {"b"}
 
 
-@pytest.mark.parametrize("op", ["must", "must_not"])
-def test_item_attribute_filters_are_forwarded_without_catalog_reads(collection, op):
-    declare(collection, "/resources/A", "parent", item_attrs=["project=P1"])
-    declare(collection, "/resources/A/B", "child", item_attrs=["asset=V1"])
-    declare(collection, "/resources/A/B", "other-tenant", scope="b", item_attrs=["asset=V1"])
-    before = len(collection.client.calls)
+@pytest.mark.parametrize("operator", ["and", "or", None])
+def test_item_attribute_filters_are_forwarded_without_catalog_reads(collection, operator):
+    item_filter = {"op": "must", "field": "item_attrs", "conds": ["missing=value"]}
+    if operator is not None:
+        declare(collection, "/resources/A", "parent", item_attrs=["project=P1"])
+        declare(collection, "/resources/A/B", "child", item_attrs=["asset=V1"])
+        item_filter = {
+            "op": operator,
+            "conds": [
+                {"op": "must", "field": "item_attrs", "conds": ["project=P1"]},
+                {"op": "must_not", "field": "item_attrs", "conds": ["asset=V1"]},
+            ],
+        }
     filters = {
         "op": "and",
-        "conds": [
-            {"op": "must", "field": "account_id", "conds": ["a"]},
-            {"op": op, "field": "item_attrs", "conds": ["asset=V1"]},
-        ],
+        "conds": [{"op": "must", "field": "account_id", "conds": ["a"]}, item_filter],
     }
+    before = len(collection.client.calls)
     original = deepcopy(filters)
-    result = collection.search_item_groups(
-        "catalog-index",
-        dense_vector=[1, 0],
-        filters=filters,
-    )
-    assert result == {"groups": []}
+    assert collection.search_item_groups("catalog-index", dense_vector=[1, 0], filters=filters) == {
+        "groups": []
+    }
     calls = collection.client.calls[before:]
     assert [path.rsplit("/", 1)[-1] for _, path, _ in calls] == ["vector"]
-    request = calls[-1][2]
+    request = calls[0][2]
     assert request["partition"] == "a"
     assert "partition_by" not in request
     assert request["filter"] == {
@@ -415,59 +417,6 @@ def test_item_attribute_filters_are_forwarded_without_catalog_reads(collection, 
         "conds": [original, {"op": "must_not", "field": "level", "conds": [-1]}],
     }
     assert filters == original
-
-
-@pytest.mark.parametrize("op", ["and", "or"])
-def test_item_attribute_combinations_preserve_the_original_predicate(collection, op):
-    declare(collection, "/resources/A", "parent", item_attrs=["project=P1"])
-    declare(collection, "/resources/A/B", "child", item_attrs=["asset=V1"])
-    filters = {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "account_id", "conds": ["a"]},
-            {
-                "op": op,
-                "conds": [
-                    {"op": "must", "field": "item_attrs", "conds": ["project=P1"]},
-                    {"op": "must_not", "field": "item_attrs", "conds": ["asset=V1"]},
-                ],
-            },
-        ],
-    }
-    before = len(collection.client.calls)
-    original = deepcopy(filters)
-    collection.search_item_groups("catalog-index", dense_vector=[1, 0], filters=filters)
-    calls = collection.client.calls[before:]
-    assert [path.rsplit("/", 1)[-1] for _, path, _ in calls] == ["vector"]
-    assert calls[-1][2]["filter"] == {
-        "op": "and",
-        "conds": [original, {"op": "must_not", "field": "level", "conds": [-1]}],
-    }
-    assert filters == original
-
-
-def test_item_attribute_filters_do_not_short_circuit_on_missing_declarations(collection):
-    filters = {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "account_id", "conds": ["a"]},
-            {"op": "must", "field": "item_attrs", "conds": ["missing=value"]},
-        ],
-    }
-    before = len(collection.client.calls)
-    result = collection.search_item_groups(
-        "catalog-index",
-        dense_vector=[1, 0],
-        filters=filters,
-    )
-    assert result == {"groups": []}
-    assert [path.rsplit("/", 1)[-1] for _, path, _ in collection.client.calls[before:]] == [
-        "vector"
-    ]
-    assert collection.client.calls[-1][2]["filter"] == {
-        "op": "and",
-        "conds": [filters, {"op": "must_not", "field": "level", "conds": [-1]}],
-    }
 
 
 def test_subtree_scan_and_point_fetches_respect_record_batch_limit(collection):

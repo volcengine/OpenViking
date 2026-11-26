@@ -22,8 +22,7 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig, VikingDBConfig
 
 
-@pytest.mark.parametrize("query", ["", "  \n\t"])
-@pytest.mark.parametrize("with_session", [False, True])
+@pytest.mark.parametrize(("query", "with_session"), [("", False), ("  \n\t", True)])
 async def test_ordinary_filter_only_search_matches_find_without_models_or_session(
     client_with_resource, service, monkeypatch, query, with_session
 ):

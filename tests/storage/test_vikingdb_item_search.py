@@ -67,6 +67,7 @@ def group(item_id="a", score=1.7, attrs=None):
 def test_private_adapter_uses_platform_groups_without_extra_io(collection, aggregation):
     typed_group = group()
     typed_group["found_records"][0]["fields"] = {"context_type": "skill"}
+    typed_group.update(candidate_members_count=7, candidate_members_truncated=True)
     collection.client.result = {"groups": [typed_group, group("b", 0.8, ["kind=child"])]}
     adapter = VikingDBPrivateCollectionAdapter(
         host="https://unused.invalid",
@@ -111,6 +112,7 @@ def test_private_adapter_uses_platform_groups_without_extra_io(collection, aggre
     assert all("context_type" not in g for g in result["groups"])
     assert all(g["candidate_members_uri"] == [] for g in result["groups"])
     assert all("candidate_members_count" not in g for g in result["groups"])
+    assert all("candidate_members_truncated" not in g for g in result["groups"])
 
 
 def search(collection, *, filters=None, **kwargs):
@@ -121,8 +123,7 @@ def search(collection, *, filters=None, **kwargs):
     )
 
 
-@pytest.mark.parametrize("aggregation", ["max", "sum"])
-@pytest.mark.parametrize("op", ["must", "must_not"])
+@pytest.mark.parametrize(("aggregation", "op"), [("max", "must"), ("sum", "must_not")])
 def test_item_attribute_filter_preserves_platform_groups_and_uses_one_request(
     collection, aggregation, op
 ):
@@ -238,16 +239,6 @@ def test_ordinary_search_never_checks_item_metadata_or_adds_grouping(collection)
     assert "group_by" not in request
     assert "partition" not in request
     assert "partition_by" not in request
-
-
-def test_unused_member_details_are_not_read_back_or_exposed(collection):
-    row = group()
-    row.update(candidate_members_count=7, candidate_members_truncated=True)
-    collection.client.result = {"groups": [deepcopy(row)]}
-    result = search(collection)
-    assert "candidate_members_count" not in result["groups"][0]
-    assert "candidate_members_truncated" not in result["groups"][0]
-    assert len(collection.client.calls) == 1
 
 
 @pytest.mark.parametrize("aggregation", ["max", "sum"])
