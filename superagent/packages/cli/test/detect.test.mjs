@@ -458,6 +458,29 @@ test('Antigravity: the login check runs agy models with OpenViking filtered out'
   assert.equal(fs.readFileSync(path.join(gemini, 'config', 'mcp_config.json'), 'utf8'), owner);
 });
 
+test('Antigravity: a sign-in only the real home can see still counts as logged in', async (t) => {
+  const bin = agyFixture(t);
+  const home = tempDir(t, 'superagent-agy-home-');
+  const homes = [];
+  const runtime = (await detectRuntimes({
+    env: { PATH: bin, HOME: home }, piBin: '/managed/pi.js',
+    agyProbe: async () => ({ compatible: true }),
+    execFileImpl: async (command, args, options) => {
+      if (command.endsWith('agy') && args[0] === 'models') {
+        homes.push(options.env.HOME);
+        if (options.env.HOME !== home) {
+          throw Object.assign(new Error('exit 1'), { stdout: '', stderr: 'Error: Please sign in to view available models.\n' });
+        }
+      }
+      return { stdout: args[0] === '--version' ? '1.5.3\n' : '' };
+    },
+  })).find(({ id }) => id === 'agy');
+  assert.equal(runtime.available, true);
+  assert.equal(homes.length, 2);
+  assert.notEqual(homes[0], home);
+  assert.equal(homes[1], home);
+});
+
 test('Antigravity: another ACP agent behind agy is reported and not offered', async (t) => {
   const bin = agyFixture(t);
   const runtime = (await detectRuntimes({

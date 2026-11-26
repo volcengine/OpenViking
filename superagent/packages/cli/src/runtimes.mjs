@@ -340,12 +340,18 @@ async function agyLoginCheck(execFileImpl, bin, env) {
   try {
     isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-agy-detect-'));
     prepareAgyGeminiDir(path.join(isolated, '.gemini'), env);
-    return await run(execFileImpl, bin, ['models'], { ...env, HOME: isolated, USERPROFILE: isolated });
-  } catch (error) {
-    return { ok: false, stdout: '', stderr: safeError(error) };
+    const filtered = await run(execFileImpl, bin, ['models'], { ...env, HOME: isolated, USERPROFILE: isolated });
+    if (filtered.ok) return filtered;
+  } catch {
+    // Fall through to the real home below.
   } finally {
     if (isolated) fs.rmSync(isolated, { recursive: true, force: true });
   }
+  // Some installs keep the sign-in outside ~/.gemini (the OS keychain or the
+  // Windows profile), which a replaced HOME/USERPROFILE hides. The runtime
+  // itself keeps the real home and passes --gemini-dir, so the real home is
+  // what decides whether agy is signed in.
+  return run(execFileImpl, bin, ['models'], env);
 }
 
 // Antigravity runs over ACP; an explicit AGY_BIN is authoritative. Handshake
