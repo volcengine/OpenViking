@@ -23,12 +23,12 @@ discarded on that failure; transport cursors and uncertain writes remain durable
 and the idle checkpoint retries. Recovery does not inject history into an
 already-running native transcript.
 
-Recall (`ov-recall.mjs`) is the same for every runtime. For a direct chat, a
-line that @mentions the agent, a document comment, or an event outside chats
-such as mail, the daemon reads OV on the ingress path before the line reaches
-the runtime and appends what it found: the owner's preferences (the owner's
-standing instructions, which govern the agent everywhere), and when someone
-else wrote the line, that person's preferences. Each person's preferences are
+Recall (`ov-recall.mjs`) is the same for every runtime. After every line the
+daemon appends `[daemon preferences …]`: the owner's preferences (the owner's
+standing instructions, which govern the agent everywhere, including whether to
+speak in a group at all), and when a person other than the owner wrote the
+line, that person's preferences. Another bot's line, a reaction and a recall
+carry the owner's only. Each person's preferences are
 a directory the Core names and finds by key (`ov-person.mjs`), never by a
 display name: `memories/preferences/owner/` for the owner on every channel,
 `memories/preferences/<name>~<id>/` for anyone else, where `<id>` is 12 hex
@@ -39,7 +39,11 @@ tree, paged through to the end. Topics show newest first and whole, up to
 3000 characters for the owner and 1500 for anyone else; the ones that do not
 fit are named, with where to read them. With
 `agents[].ovAutoRecall` (default `false`, a config-file option) one context
-search (`/api/v1/search/search`, mode `context`) on the line also runs; once
+search (`/api/v1/search/search`, mode `context`) on the line also runs, shown
+as `[daemon recall …]`, but only where the agent is likely to answer (a direct
+chat, a line that @mentions it, a document comment, an event outside chats such
+as mail), since it reads OV on the ingress path every later line waits behind;
+once
 OV has this epoch's session the search names it, so OV's dedup ledger (a file
 of its own, not a session message) keeps entries from coming back turn after
 turn. Everything else the model looks up with the Core's `openviking_*`

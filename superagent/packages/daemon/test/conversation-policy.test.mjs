@@ -314,7 +314,8 @@ describe('the instance role', () => {
     for (const config of [{ connectors: ['lark'] }, { connectors: ['lark'], soulText: '<!-- nothing yet -->\n' }]) {
       const text = assembleConversationPolicy(config);
       assert.match(text, /## Role\n\nYour soul [^\n]*viking:\/\/~\/memories\/soul\.md[^\n]*\n\nRole boundary:/);
-      assert.match(text, /The Role decides when you speak\. Where it says nothing, use these defaults:/);
+      assert.match(text, /In a group, most messages are not for you\. Settle whom each one is for/);
+      assert.match(text, /The Role decides which of these you take up; where it says nothing, stay silent\./);
     }
     const custom = assembleConversationPolicy({ connectors: ['lark'], soulUri: 'viking://~/memories/team/soul.md' });
     assert.match(custom, /kept in OpenViking at `viking:\/\/~\/memories\/team\/soul\.md`/);

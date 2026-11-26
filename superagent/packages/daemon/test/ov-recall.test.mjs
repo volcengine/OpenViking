@@ -113,9 +113,10 @@ test('a line from someone else shows the owner\'s standing preferences and the s
   assert.deepEqual(search.body, { query: '评审格式？', mode: 'context', score_threshold: 0.35, max_tokens: 1600 });
   const zuwei = personDirectory(chatEvent({ senderId: 'ou_zuwei' }));
   assert.equal(block, [
-    '[daemon recall msg=om-9: OpenViking memory that may bear on this line]',
+    '[daemon preferences msg=om-9: standing preferences for this line]',
     '<memory who="owner" type="preferences">\n## 信息披露\n- 外部群里不透露公司内部信息\n</memory>',
     '<memory who="sender" type="preferences">\n## 回复风格\n- 回复先给结论\n\n## 评审格式\n- 评审建议用表格\n</memory>',
+    '[daemon recall msg=om-9: OpenViking memory that may bear on this line]',
     `<memory who="${zuwei}" type="preferences" uri="${entries()[0].uri}">\n叫他祖尉\n</memory>`,
     `<memory who="owner" type="preferences" uri="${entries()[1].uri}">\n外部群里不透露\n</memory>`,
     `<memory type="entities" uri="${entries()[2].uri}">\nSuperAgent 是 OV 的数字员工\n</memory>`,
@@ -160,9 +161,16 @@ test('the owner\'s own line shows the owner\'s preferences once; the line search
   const ov = fakeOV({ entries: entries(), files: withAlias(files()) });
   const recall = new OVRecall({ configPath: configFile(t), fetchImpl: ov.fetchImpl, logger, store: sessionStore() });
   const block = await recall.forEvent(chatEvent({ senderId: 'ou_owner', chatId: 'oc-group', messageId: 'om-1', content: '我的会议' }), { owner: true });
-  assert.equal(block, '[daemon recall msg=om-1: OpenViking memory that may bear on this line]\n'
+  assert.equal(block, '[daemon preferences msg=om-1: standing preferences for this line]\n'
     + '<memory who="owner" type="preferences">\n## 信息披露\n- 外部群里不透露公司内部信息\n</memory>');
   assert.equal(ov.calls.some(({ url }) => url.includes('/search/')), false, 'no search without ovAutoRecall');
+  // Opted in, a line can still leave out the sender's preferences and the search.
+  const searching = new OVRecall({ configPath: configFile(t), fetchImpl: ov.fetchImpl, logger, store: sessionStore(), autoRecall: true });
+  const calls = ov.calls.length;
+  const bare = await searching.forEvent(zhiheng, { sender: false, search: false });
+  assert.equal(bare, '[daemon preferences msg=om-9: standing preferences for this line]\n'
+    + '<memory who="owner" type="preferences">\n## 信息披露\n- 外部群里不透露公司内部信息\n</memory>');
+  assert.equal(ov.calls.slice(calls).some(({ url }) => url.includes('/search/')), false, 'no search when the line opts out');
 });
 
 test('a mail sender is found by address, whatever its case; reads are kept a while and dropped when a preference changes', async (t) => {
@@ -268,7 +276,7 @@ test('the dedup ledger is used once OV has the mirrored session, never before', 
   );
 });
 
-test('the harness recalls only where the agent is likely to answer, and puts the block after the line', async (t) => {
+test('the harness shows preferences after every line and searches only where the agent is likely to answer', async (t) => {
   const store = new Store(':memory:', logger);
   store.initializeCognition('codex', 'owner');
   const delivered = [];
@@ -278,7 +286,7 @@ test('the harness recalls only where the agent is likely to answer, and puts the
     runtime: { snapshot: () => ({ session: { connected: true }, work: { turnInProgress: false } }),
       submit: (items) => { delivered.push(...items); return { accepted: true }; } },
     roster: { warm: async () => {} },
-    recall: { forEvent: async (event, { owner }) => { asked.push([event.messageId, owner]); return `[daemon recall msg=${event.messageId}: …]`; } },
+    recall: { forEvent: async (event, scope) => { asked.push([event.messageId, scope]); return `[daemon preferences msg=${event.messageId}: …]`; } },
     isOwner: (event) => event.senderId === 'ou_owner',
     mentionTarget: (event) => (event.content.includes('@SuperAgent') ? 'me' : null),
   });
@@ -291,9 +299,15 @@ test('the harness recalls only where the agent is likely to answer, and puts the
   ]) harness.handleConnectorEvent(chatEvent(fields).envelope);
   await harness.ingressBarrier;
   await harness.groupBurst.flushAll();
-  // Group chatter not addressed to the agent and another bot's line get none.
-  assert.deepEqual(asked, [['om-dm', true], ['om-mention', false]]);
+  // Every line gets the owner's preferences. Another bot's line leaves out the
+  // sender's; group chatter not addressed to the agent leaves out the search.
+  assert.deepEqual(asked, [
+    ['om-dm', { owner: true, sender: true, search: true }],
+    ['om-mention', { owner: false, sender: true, search: true }],
+    ['om-chatter', { owner: false, sender: true, search: false }],
+    ['om-bot', { owner: false, sender: false, search: false }],
+  ]);
   const dm = delivered.find((item) => item.text.includes('msg=om-dm'));
-  assert.match(dm.text, /msg=om-dm[^\n]*\] hello\n\[daemon recall msg=om-dm: …\]$/);
-  assert.ok(delivered.some((item) => item.text.includes('午饭吃啥') && !item.text.includes('daemon recall')));
+  assert.match(dm.text, /msg=om-dm[^\n]*\] hello\n\[daemon preferences msg=om-dm: …\]$/);
+  assert.ok(delivered.some((item) => item.text.includes('午饭吃啥') && item.text.includes('[daemon preferences msg=om-chatter')));
 });

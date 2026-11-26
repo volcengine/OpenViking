@@ -618,9 +618,13 @@ export class TaskManager {
   // sent for it: outbox rows attributed to the origin of one of its rounds, and
   // the message that relayed one of its reports (the delivery that settled it,
   // whatever input the router decided it on).
-  taskForMessage(messageId) {
+  // The task a message belongs to: one it was input to, or one whose request
+  // or report the agent sent as it. `ownOnly` asks only about the agent's own
+  // messages: a thread's root is every reply's parent, so a person's request
+  // that opened a thread says nothing about whom a later reply there is for.
+  taskForMessage(messageId, { ownOnly = false } = {}) {
     if (!messageId) return null;
-    const viaInput = this.db.prepare(`SELECT i.task_id FROM task_inputs i JOIN connector_events e ON e.seq = i.seq
+    const viaInput = ownOnly ? null : this.db.prepare(`SELECT i.task_id FROM task_inputs i JOIN connector_events e ON e.seq = i.seq
       WHERE e.message_id = ? ORDER BY i.id DESC LIMIT 1`).get(messageId);
     if (viaInput) return viaInput.task_id;
     const viaOrigin = this.db.prepare(`SELECT r.task_id AS id FROM task_rounds r JOIN outbox o ON o.inbound_seq = r.origin_seq
@@ -640,7 +644,11 @@ export class TaskManager {
       hit.weight += weight;
       hits.set(task.id, hit);
     };
-    const replyTask = this.taskForMessage(event.parentId);
+    // In a thread every reply's parent is the root: only a root the agent
+    // sent itself makes the reply one to its task's message.
+    const replyTask = this.taskForMessage(event.parentId, {
+      ownOnly: Boolean(event.threadRootId) && event.parentId === event.threadRootId,
+    });
     const query = bigrams(event.content);
     // The working set, and past it the tasks an exact signal names: the one
     // this line replies to and those asked in its thread, however long ago.
@@ -1456,6 +1464,8 @@ export class TaskManager {
     return [
       `[task report] task=${task.id}${round} state=${report.state} title="${oneLine(clip(task.title, 80))}" requester=${metadataTag(origin.requester_name ?? task.requester_name ?? 'unknown')}${report.structured ? '' : ' unstructured=1'}${working ? ' working=1' : ''}${again ? ' undelivered=1' : ''}`,
       `origin: ${origin.origin_chat ? `chat=${chatTag(metadataTag(origin.origin_chat), origin.origin_thread)} ` : ''}source=${origin.origin_source} msg=${metadataTag(origin.origin_message ?? '')} event=${metadataTag(origin.origin_event ?? '')}`,
+      // The router's own routing note, such as where the result goes.
+      ...(task.note ? [`note: ${oneLine(task.note)}`] : []),
       ...(working ? [`The requester kept adding to ${task.id} while its worker wrote this, and the worker is on their latest input now: relay this as the result so far with task_ids=["${task.id}"], and say the rest follows in a later [task report].`] : []),
       ...(again ? [`You were shown this report before and have not answered for ${task.id}: relay it now with task_ids=["${task.id}"], or, if a reply you already sent covers it, call stay_silent on its origin event= with task_ids=["${task.id}"].`] : []),
       ...(report.summary ? ['summary:', quoted(clip(report.summary, SUMMARY_CHARS))] : []),

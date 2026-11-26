@@ -10,12 +10,13 @@ import { OV_PREFERENCES, directoryPerson, findPersonDirectory, personDirectory, 
 // Core keeps for that person (preferences/owner/, preferences/<name>~<id>/;
 // ov-person.mjs), found by its key, never by a name.
 //
-// Always, when OV holds them:
+// Preferences, as `[daemon preferences …]`, when OV holds them:
 // - the owner's preferences: the owner's standing instructions, which govern
-//   the agent everywhere (what it may tell whom, how it answers);
+//   the agent everywhere (what it may tell whom, whether and how it answers);
 // - the sender's preferences, when the sender is someone else.
-// With agents[].ovAutoRecall, also one context search on the line itself.
-// Anything else the agent looks up with the openviking_* tools.
+// With agents[].ovAutoRecall, also one context search on the line itself, as
+// `[daemon recall …]`. Anything else the agent looks up with the openviking_*
+// tools.
 //
 // Bounded like the roster warm-up beside it: past the deadline, or on any
 // failure, the line goes on with what arrived in time. The policy (core.md)
@@ -63,16 +64,18 @@ export class OVRecall {
     return this.connectionValue;
   }
 
-  // The recall block to show after an event's line, or '' when there is none.
-  // Never rejects.
-  async forEvent(event, { owner = false } = {}) {
+  // The blocks to show after an event's line, or '' when there are none:
+  // preferences, then what the search found. `sender: false` leaves out the
+  // sender's preferences (another bot's line, a reaction), `search: false`
+  // the search. Never rejects.
+  async forEvent(event, { owner = false, sender: withSender = true, search: withSearch = true } = {}) {
     const query = String(event.content ?? '').trim();
-    const sender = owner ? null : personId(event);
+    const sender = owner || !withSender ? null : personId(event);
     const senderDirectory = sender ? personDirectory(event) : null;
     const [ownerPreferences, senderPreferences, entries] = await this.bounded([
       this.preferences({ owner: true }),
       sender ? this.preferences({ id: sender, directory: senderDirectory }) : null,
-      this.autoRecall && query.length >= MIN_QUERY_CHARS ? this.search(query) : null,
+      withSearch && this.autoRecall && query.length >= MIN_QUERY_CHARS ? this.search(query) : null,
     ]);
     return this.render(event, { sender, ownerPreferences, senderPreferences, entries: entries ?? [] });
   }
@@ -216,13 +219,15 @@ export class OVRecall {
   }
 
   render(event, { sender, ownerPreferences, senderPreferences, entries }) {
-    const memories = [];
+    const line = event.messageId ? `msg=${event.messageId}` : `event=${event.eventId}`;
+    const preferences = [];
     if (ownerPreferences) {
-      memories.push(`<memory who="owner" type="preferences">\n${ownerPreferences}\n</memory>`);
+      preferences.push(`<memory who="owner" type="preferences">\n${ownerPreferences}\n</memory>`);
     }
     if (senderPreferences) {
-      memories.push(`<memory who="sender" type="preferences">\n${senderPreferences}\n</memory>`);
+      preferences.push(`<memory who="sender" type="preferences">\n${senderPreferences}\n</memory>`);
     }
+    const memories = [];
     for (const entry of entries) {
       if (!entry.uri) continue;
       const who = this.who(entry.uri, { sender });
@@ -231,8 +236,9 @@ export class OVRecall {
       const text = String(entry.text ?? '').trim();
       memories.push(text ? `<memory ${attributes}>\n${text}\n</memory>` : `<memory ${attributes} />`);
     }
-    if (!memories.length) return '';
-    const line = event.messageId ? `msg=${event.messageId}` : `event=${event.eventId}`;
-    return [`[daemon recall ${line}: OpenViking memory that may bear on this line]`, ...memories].join('\n');
+    return [
+      ...(preferences.length ? [`[daemon preferences ${line}: standing preferences for this line]`, ...preferences] : []),
+      ...(memories.length ? [`[daemon recall ${line}: OpenViking memory that may bear on this line]`, ...memories] : []),
+    ].join('\n');
   }
 }

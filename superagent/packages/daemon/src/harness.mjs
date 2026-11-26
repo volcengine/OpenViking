@@ -8,14 +8,30 @@ import { BOT_SENDERS, formatInboundLine, resolveReplyTarget, eventDeliveryItem, 
 import { opaqueRef, safeError } from './logger.mjs';
 import { parseProtocolLine } from './connectors/protocol.mjs';
 
-// Recall (ov-recall.mjs) reads OV on the ingress path, which every later
-// line waits behind, so only where the agent is likely to answer: direct
-// chats, lines that @mention it, document comments, and events outside chats
-// such as mail. Never for another bot's line or a card click.
-function wantsRecall(event, mention) {
-  if (BOT_SENDERS.has(event.senderType) || ['card_action', 'recall', 'reaction'].includes(event.messageType)) return false;
-  if (!event.chatId) return true;
-  return event.chatType === 'p2p' || event.chatType === 'doc_comment' || mention === 'me' || mention === 'mixed';
+// What recall (ov-recall.mjs) shows after a line. The owner's preferences go
+// with every line: they are the owner's standing instructions, and whether to
+// speak at all is decided on lines that address no one. The sender's go with
+// what a person wrote. Both are cached, so a line rarely waits on OV for
+// them. The context search reads OV on the ingress path, which every later
+// line waits behind, so it runs only where the agent is likely to answer:
+// direct chats, lines that @mention it, document comments, and events outside
+// chats such as mail.
+function recallScope(event, mention) {
+  const fromPerson = !BOT_SENDERS.has(event.senderType) && !['recall', 'reaction'].includes(event.messageType);
+  const likelyAnswered = !event.chatId || event.chatType === 'p2p' || event.chatType === 'doc_comment'
+    || mention === 'me' || mention === 'mixed';
+  return { sender: fromPerson, search: fromPerson && event.messageType !== 'card_action' && likelyAnswered };
+}
+
+// Whom a line calls, as far as the daemon can tell, for the event_delivered
+// log: me (an @mention or a quote of the agent's message), owner (the owner
+// wrote it), other (it @mentions or quotes someone else) or none. Whether it
+// continues someone's exchange is the model's reading, not counted here.
+function addressing({ owner, mention, replyTo }) {
+  if (mention === 'me' || mention === 'mixed' || replyTo?.kind === 'me') return 'me';
+  if (owner) return 'owner';
+  if (mention === 'other' || replyTo?.kind === 'user') return 'other';
+  return 'none';
 }
 
 // What an inbox notice says about a waiting input: where it is and who wrote
@@ -197,12 +213,15 @@ export class Harness {
     if (handler) {
       return this.enqueueIngress(() => handler(event));
     }
+    const owner = this.isOwner(event);
+    const mention = this.mentionTarget(event);
     this.logger.info('event_delivered', {
       seq: result.inbound.seq,
       messageRef: opaqueRef(event.messageId),
       chatRef: opaqueRef(event.chatId),
       conversationRef: opaqueRef(event.conversationKey),
       chatType: event.chatType,
+      ...(event.chatId ? { addressed: addressing({ owner, mention, replyTo: resolveReplyTarget(this.store, event) }) } : {}),
     });
     this.enqueueIngress(async () => {
       const idleHint = event.chatId && event.replyRoute && this.liveness?.beforeInbound(event, result.inbound, {
@@ -213,10 +232,8 @@ export class Harness {
       // slow or failing lark-cli only degrades the label back to the id stub.
       // A document has no members to list: its Connector names the commenter.
       if (event.source === 'lark' && event.chatId && event.chatType !== 'doc_comment') await this.roster?.warm(event.chatId);
-      const owner = this.isOwner(event);
-      const mention = this.mentionTarget(event);
       // Bounded like the warm-up above, and never rejects.
-      const recall = this.recall && wantsRecall(event, mention) ? await this.recall.forEvent(event, { owner }) : '';
+      const recall = this.recall ? await this.recall.forEvent(event, { owner, ...recallScope(event, mention) }) : '';
       await this.runtime.prepareInputContext?.();
       const line = formatInboundLine(event, null, {
         ...(idleHint ?? {}),
