@@ -268,7 +268,7 @@ class _AnyDocMarkdownRenderer:
         if code:
             rendered = self._render_code_span(core.replace("\n", " "), context=context)
         else:
-            use_html = (bold or italic) and any(
+            use_html = (bold or italic or strike) and any(
                 unicodedata.category(char).startswith(("P", "S")) for char in (core[0], core[-1])
             )
             opening = ""
