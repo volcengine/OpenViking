@@ -6,6 +6,7 @@
 // reaches codex. Any unambiguous prefix of a command name works (/h → /help,
 // /m gpt-5.5 → /model gpt-5.5); effort levels match by prefix too.
 
+import { CARD_COMMAND } from './task-commands.mjs';
 import {
   DEFAULT_RUNTIME_ID,
   MODEL_ID_MAX_LENGTH,
@@ -23,7 +24,7 @@ import {
 // Default vocabulary for callers; command validation uses current model metadata.
 export const EFFORT_LEVELS = getRuntimeDefinition(DEFAULT_RUNTIME_ID).efforts;
 
-const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary'];
+const COMMANDS = ['new', 'help', 'status', 'runtime', 'model', 'effort', 'primary', 'tasks', 'workers'];
 
 function settingsAdjustmentText(result) {
   const lines = [];
@@ -50,6 +51,18 @@ export function matchPrefix(token, candidates) {
 // or null when the message is not eligible (it then flows to codex as a normal
 // message).
 export function commandCandidate(event) {
+  // A choice on a card the Core answered a command with runs the command it
+  // names, in the direct chat the card is in: the task picked in /tasks opens
+  // as /tasks <id>, and a card's refresh button runs the /tasks it was drawn
+  // by. Only that command, with no argument or a task id: never text anyone
+  // wrote.
+  if (event.kind === 'message.action' && event.messageType === 'card_action') {
+    const { value, option } = event.data?.interaction ?? {};
+    if (event.chatType !== 'p2p' || !event.chatId || !event.replyRoute || value?.[CARD_COMMAND] !== '/tasks') return null;
+    const arg = value.refresh === true ? value.arg : option;
+    if (value.refresh === true && arg === '') return '/tasks';
+    return /^t[0-9]{1,6}$/.test(arg ?? '') ? `/tasks ${arg}` : null;
+  }
   if (event.kind !== 'message.created' || !event.chatId || !event.messageId
     || !event.replyRoute || !['text', 'post'].includes(event.messageType)) return null;
   const text = String(event.content ?? '').trim();
@@ -85,6 +98,8 @@ export function helpText(snapshot) {
     '/status — 查看模型是否在工作以及持续时间',
     '/primary — 将当前 IM 设为主 IM（仅限 owner 私聊，无需重启）',
     '/primary status — 查看当前主 IM（仅限 owner 私聊）',
+    '/tasks [编号 | stop 编号] — 查看或停止后台任务（workers 调度，仅限 owner 私聊）',
+    '/workers [runtime | model | effort | fallback …] — 查看或设置后台 worker 的 Runtime、模型、推理档位和备用 Runtime，与 router 分开（workers 调度，仅限 owner 私聊）',
     '/runtime [名称] — 查看或切换 Runtime（可简写 /run）',
     '/model [名称] — 查看或切换当前 Runtime 的模型，保留会话',
   ];
@@ -112,7 +127,8 @@ function durationText(milliseconds) {
   return minuteRemainder ? `${hours} 小时 ${minuteRemainder} 分` : `${hours} 小时`;
 }
 
-export function statusText(snapshot, nowMs = Date.now()) {
+// What the agent is doing, in one line: the head of /status.
+export function statusHeadline(snapshot, nowMs = Date.now()) {
   const status = snapshot.work ?? snapshot.workStatus ?? {
     working: Boolean(snapshot.turnInProgress),
     startedAtMs: null,
@@ -127,12 +143,18 @@ export function statusText(snapshot, nowMs = Date.now()) {
       ? `状态：模型工作中，已持续 ${durationText(nowMs - status.startedAtMs)}`
       : '状态：模型工作中';
   } else if (!status.connected) headline = '状态：Runtime 未连接';
+  return { headline, queued: status.queued ?? 0 };
+}
+
+export function statusText(snapshot, nowMs = Date.now()) {
+  const { headline, queued } = statusHeadline(snapshot, nowMs);
   const lines = [
     headline,
     `Runtime：${snapshot.runtime ?? 'codex'}`,
     `模型：${snapshot.model || '（默认）'}`,
+    ...(snapshot.effort ? [`推理档位：${snapshot.effort}`] : []),
   ];
-  if ((status.queued ?? 0) > 0) lines.push(`排队消息：${status.queued}`);
+  if (queued > 0) lines.push(`排队消息：${queued}`);
   return lines.join('\n');
 }
 
@@ -183,9 +205,17 @@ function modelMenuLines(models, runtime) {
 // Executes a runtime or Core command. Returns { ok, text }; the caller replies
 // on the incoming route and records the outcome. Core controls receive their
 // own event/config context and do not wait for or change the model session.
-export async function executeCommand(command, runtime, { primary } = {}) {
+// `runtimeCard(snapshot)` and `statusCard(snapshot)` answer /runtime (with no
+// argument) and /status with a card too, where the caller can send one.
+export async function executeCommand(command, runtime, { primary, tasks, workers, statusExtra = () => '', runtimeCard = null, statusCard = null } = {}) {
   if (command.name === 'primary') {
     return primary ? primary(command) : { ok: false, text: '当前环境不支持 /primary。' };
+  }
+  if (command.name === 'tasks') {
+    return tasks ? tasks(command) : { ok: false, text: '当前环境不支持 /tasks。' };
+  }
+  if (command.name === 'workers') {
+    return workers ? workers(command) : { ok: false, text: '当前环境不支持 /workers。' };
   }
   const cached = await runtime.snapshot({ catalog: 'cached' });
   if (!command.name) {
@@ -197,7 +227,9 @@ export async function executeCommand(command, runtime, { primary } = {}) {
 
   if (command.name === 'help') return { ok: true, text: helpText(cached) };
 
-  if (command.name === 'status') return { ok: true, text: statusText(cached) };
+  if (command.name === 'status') {
+    return { ok: true, text: [statusText(cached), statusExtra()].filter(Boolean).join('\n'), ...(statusCard ? { card: statusCard(cached) } : {}) };
+  }
 
   if (command.name === 'new') {
     const result = await runtime.transition({ kind: 'new-session' });
@@ -211,7 +243,14 @@ export async function executeCommand(command, runtime, { primary } = {}) {
   if (command.name === 'runtime') {
     const options = RUNTIME_IDS.map((id) => id === 'volc' ? 'volc（ark）' : id).join('、');
     if (!command.arg) {
-      return { ok: true, text: `当前 Runtime：${cached.runtime}\n可选：${options}\n用法：/runtime <名称>（可简写 /run）` };
+      let card;
+      if (runtimeCard) {
+        // The card offers the router's live models: refresh the catalogue.
+        let current = cached;
+        try { current = await runtime.snapshot({ catalog: 'refresh' }); } catch { /* offline: cached options */ }
+        card = await runtimeCard(current);
+      }
+      return { ok: true, text: `当前 Runtime：${cached.runtime}\n可选：${options}\n用法：/runtime <名称>（可简写 /run）`, ...(card ? { card } : {}) };
     }
     const matches = matchPrefix(command.arg.toLowerCase(), Object.keys(RUNTIME_ALIASES));
     const targets = [...new Set(matches.map((alias) => RUNTIME_ALIASES[alias]))];
@@ -219,12 +258,15 @@ export async function executeCommand(command, runtime, { primary } = {}) {
       return { ok: false, text: `未知或有歧义的 Runtime：${command.arg}\n可选：${options}` };
     }
     const applied = await runtime.transition({ kind: 'select-runtime', runtime: targets[0],
-      expectedRuntime: cached.runtime, expectedRevision: cached.revision });
+      expectedRuntime: cached.runtime, expectedRevision: cached.revision, resumeInterrupted: true });
     if (applied.ok === false) return { ok: false, text: 'Runtime 已变更，请重试 /runtime' };
     const adjustment = settingsAdjustmentText(applied);
+    const resumed = applied.resumedInputs > 0
+      ? `\n被打断的 ${applied.resumedInputs} 条消息由 ${applied.runtime} 接着处理，不用重发`
+      : '';
     return { ok: true, text: (applied.unchanged
       ? `当前已是 Runtime：${applied.runtime}（会话保留）`
-      : `已切换 Runtime：${applied.runtime}。会尝试从 OV 接上历史对话；隐藏思考和未落盘的工具过程不会继承`) + adjustment };
+      : `已切换 Runtime：${applied.runtime}。会尝试从 OV 接上历史对话；隐藏思考和未落盘的工具过程不会继承`) + resumed + adjustment };
   }
 
   let current = cached;

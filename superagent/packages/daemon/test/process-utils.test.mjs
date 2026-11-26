@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { bundledLarkCli } from '../src/lark-cli-bin.mjs';
+import { bundledRipgrep, RIPGREP_VERSION } from '../src/ripgrep-bin.mjs';
 import { bundledSlackCli, SLACK_CLI_VERSION } from '../src/slack/cli.mjs';
 import { agentCliCommands } from '../src/agent-clis.mjs';
 import { sanitizeCodexEnv } from '../src/codex.mjs';
@@ -16,9 +17,15 @@ import { sanitizeClaudeEnv } from '../src/claude.mjs';
 import { sanitizePiEnv } from '../src/pi.mjs';
 import { sanitizeTraexEnv } from '../src/traex.mjs';
 import { sanitizeAgentChildEnv, sanitizeNonArkChildEnv } from '../src/process-utils.mjs';
-import { supportsShellScripts } from '../src/platform/index.mjs';
+import { findExecutable, hostPlatformId, supportsShellScripts, systemEnvironmentKeys } from '../src/platform/index.mjs';
 
-const posixShell = { skip: !supportsShellScripts && 'requires POSIX /bin/sh fixtures' };
+const nativeShell = findExecutable('sh');
+const posixShell = { skip: !supportsShellScripts && 'requires POSIX shell fixtures' };
+const isTermux = hostPlatformId.startsWith('termux-');
+// Keep Android's loader settings even in fixtures with an intentionally isolated PATH.
+const loaderEnv = Object.fromEntries(systemEnvironmentKeys
+  .filter((key) => process.env[key] !== undefined)
+  .map((key) => [key, process.env[key]]));
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-agent-cli-'));
@@ -32,11 +39,12 @@ function fixture(t) {
 
 function executable(file, output) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' '${output}'\n`, { mode: 0o755 });
+  fs.writeFileSync(file, `#!${nativeShell}\nprintf '%s\\n' '${output}'\n`, { mode: 0o755 });
 }
 
 function shell(command, env, cwd) {
-  const result = spawnSync('/bin/sh', ['-c', command], { env, cwd, encoding: 'utf8' });
+  assert.ok(path.isAbsolute(nativeShell), 'requires an absolute native sh on PATH');
+  const result = spawnSync(nativeShell, ['-c', command], { env: { ...loaderEnv, ...env }, cwd, encoding: 'utf8' });
   assert.ifError(result.error);
   return result;
 }
@@ -137,15 +145,20 @@ test('CLI discovery preserves the agent credential boundary and leaves connector
 });
 
 const bundled = bundledLarkCli();
-test('the installed bundled CLI runs --version in an agent shell', {
+test('the installed Lark CLI runs --version in an agent shell', {
   skip: posixShell.skip || (!path.isAbsolute(bundled) && 'run scripts/install-lark-cli.mjs to install the pinned binary'),
 }, (t) => {
   const { root, workspace, systemBin } = fixture(t);
   const env = sanitizeAgentChildEnv({ HOME: root, PATH: systemBin });
   const result = shell('command -v lark-cli && lark-cli --version', env, workspace);
-  const { version } = createRequire(import.meta.url)('@larksuite/cli/package.json');
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), `${bundled}\nlark-cli version ${version}`);
+  if (isTermux) {
+    assert.equal(bundled, findExecutable('lark-cli'));
+    assert.ok(result.stdout.startsWith(`${bundled}\nlark-cli version `), result.stdout);
+  } else {
+    const { version } = createRequire(import.meta.url)('@larksuite/cli/package.json');
+    assert.equal(result.stdout.trim(), `${bundled}\nlark-cli version ${version}`);
+  }
 });
 
 test('the installed Slack CLI runs version in an agent shell', {
@@ -157,6 +170,22 @@ test('the installed Slack CLI runs version in an agent shell', {
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.startsWith(`${bundledSlackCli()}\n`));
   assert.ok(result.stdout.includes(SLACK_CLI_VERSION), result.stdout);
+});
+
+test('the installed ripgrep is the rg of an agent shell', {
+  skip: posixShell.skip || (!fs.existsSync(bundledRipgrep()) && 'run scripts/install-ripgrep.mjs to install the pinned binary'),
+}, (t) => {
+  const { root, workspace, systemBin } = fixture(t);
+  executable(path.join(systemBin, 'rg'), 'global');
+  const env = sanitizeAgentChildEnv({ HOME: root, PATH: systemBin });
+  const result = shell('command -v rg && rg --version', env, workspace);
+  assert.equal(result.status, 0, result.stderr);
+  if (isTermux) {
+    assert.equal(bundledRipgrep(), findExecutable('rg'));
+    assert.ok(result.stdout.startsWith(`${bundledRipgrep()}\nripgrep `), result.stdout);
+  } else {
+    assert.ok(result.stdout.startsWith(`${bundledRipgrep()}\nripgrep ${RIPGREP_VERSION} `), result.stdout);
+  }
 });
 
 test('Windows runtime PATH preserves inherited mixed-case Path before adding CLI prefixes', { skip: process.platform !== 'win32' }, () => {

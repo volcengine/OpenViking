@@ -11,6 +11,17 @@ import { bundledLarkCli } from './lark-cli-bin.mjs';
 import { managedPiBin } from './pi-runtime.mjs';
 import { OV_SOUL_URI } from './conversation-policy.mjs';
 import { defaultDshSkillRoots, dshSkillRootChoices } from './dsh-config.mjs';
+import { RUNTIME_IDS } from './runtime-catalog.mjs';
+
+// A deployment manifest may name its storage directories with POSIX paths even
+// when setup reads it on Windows. Only those manifest settings keep POSIX
+// semantics; a path this daemon derives locally (database, lock, default temp)
+// is joined with the host's rules.
+const MANIFEST_DIR_ENV = Object.freeze([
+  'OV_SUPERAGENT_DATA_DIR', 'OV_SUPERAGENT_WORKSPACE', 'OV_SUPERAGENT_TEMP_DIR',
+]);
+const manifestDirEnv = (name, value) => (MANIFEST_DIR_ENV.includes(name) && String(value).startsWith('/')
+  ? path.posix.resolve(value) : path.resolve(value));
 
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,6 +72,13 @@ function soulUriEnv() {
   return uri;
 }
 
+function openIdEnv(name) {
+  const value = (process.env[name] ?? '').trim();
+  if (!value) return null;
+  if (!/^ou_[A-Za-z0-9_-]+$/.test(value)) throw new Error(`${name} must be a Feishu/Lark open_id (ou_...)`);
+  return value;
+}
+
 function csvEnv(name) {
   return new Set(
     (process.env[name] ?? '')
@@ -89,6 +107,68 @@ function jsonStringArrayEnv(name, fallback = []) {
     throw new Error(`${name} must be a JSON string array`);
   }
   return value;
+}
+
+const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk']);
+const BUILTIN_CHANNELS = Object.freeze(['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
+// Internal event sources. `timer` is how a reminder is delivered.
+const RESERVED_CONNECTOR_IDS = Object.freeze(['timer']);
+const EXTERNAL_CONNECTOR_ID = /^[a-z][a-z0-9-]{0,63}$/;
+
+function readablePromptFile(filePath, label) {
+  let info;
+  try {
+    info = fs.statSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`${label} does not exist`);
+    throw new Error(`${label} cannot be read`);
+  }
+  if (!info.isFile()) throw new Error(`${label} must be a regular file`);
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+  } catch {
+    throw new Error(`${label} cannot be read`);
+  }
+}
+
+// A program the operator starts in place of a built-in Connector. It speaks
+// protocol 0.2 on stdio. Credentials stay in that program, not in this env.
+function externalConnectorsEnv() {
+  const raw = process.env.OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON;
+  if (raw === undefined || raw === '') return Object.freeze([]);
+  let value;
+  try { value = JSON.parse(raw); } catch {
+    throw new Error('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON must be a JSON array');
+  }
+  if (!Array.isArray(value)) throw new Error('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON must be a JSON array');
+  const ids = new Set();
+  return Object.freeze(value.map((entry, index) => {
+    const label = `OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`${label} must be an object`);
+    const id = String(entry.id ?? '');
+    if (!EXTERNAL_CONNECTOR_ID.test(id)) throw new Error(`${label}.id is invalid`);
+    if (ids.has(id)) throw new Error(`OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON has two connectors called ${id}`);
+    if (BUILTIN_CONNECTORS.includes(id)) throw new Error(`${label}.id must not reuse a built-in connector`);
+    if (RESERVED_CONNECTOR_IDS.includes(id)) throw new Error(`${label}.id is reserved`);
+    ids.add(id);
+    const command = String(entry.command ?? '').trim();
+    if (!path.isAbsolute(command)) throw new Error(`${label}.command must be an absolute path`);
+    const args = entry.args ?? [];
+    if (!Array.isArray(args) || args.length > 16 || args.some((arg) => typeof arg !== 'string' || !arg || arg.length > 256
+      || /[\u0000-\u001f\u007f]/.test(arg))) {
+      throw new Error(`${label}.args is invalid`);
+    }
+    const prompt = entry.prompt == null || entry.prompt === '' ? null : String(entry.prompt).trim();
+    if (prompt !== null && !path.isAbsolute(prompt)) throw new Error(`${label}.prompt must be an absolute path`);
+    const promptPath = prompt === null ? null : path.normalize(prompt);
+    if (promptPath !== null) readablePromptFile(promptPath, `${label}.prompt`);
+    return Object.freeze({
+      id,
+      command: path.normalize(command),
+      args: Object.freeze([...args]),
+      prompt: promptPath,
+    });
+  }));
 }
 
 function assertLoopbackHost(host) {
@@ -143,27 +223,37 @@ function pathsOverlap(left, right) {
 }
 
 export function getConfig() {
-  const dataDir = path.resolve(
-    process.env.OV_SUPERAGENT_DATA_DIR || path.join(os.homedir(), '.ov-superagent', 'data'),
-  );
+  const configuredDataDir = process.env.OV_SUPERAGENT_DATA_DIR
+    || path.join(os.homedir(), '.ov-superagent', 'data');
+  const dataDir = manifestDirEnv('OV_SUPERAGENT_DATA_DIR', configuredDataDir);
+  const primaryRuntime = process.env.OV_SUPERAGENT_PRIMARY_RUNTIME
+    ? enumEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', '', RUNTIME_IDS) : '';
+  const fallbackRuntime = enumEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'codex', RUNTIME_IDS);
   const configuredTempDir = (process.env.OV_SUPERAGENT_TEMP_DIR ?? '').trim();
   if (configuredTempDir && !path.isAbsolute(configuredTempDir)) {
     throw new Error('OV_SUPERAGENT_TEMP_DIR must be an absolute path');
   }
-  const workspace = path.resolve(
-    process.env.OV_SUPERAGENT_WORKSPACE
-      || path.join(os.homedir(), 'Documents', 'work', 'superagent-workspace'),
-  );
+  const configuredWorkspace = process.env.OV_SUPERAGENT_WORKSPACE
+    || path.join(os.homedir(), 'Documents', 'work', 'superagent-workspace');
+  const workspace = manifestDirEnv('OV_SUPERAGENT_WORKSPACE', configuredWorkspace);
   const host = process.env.OV_SUPERAGENT_HOST || '127.0.0.1';
   assertLoopbackHost(host);
-  const channel = enumEnv('OV_SUPERAGENT_CHANNEL', 'lark', ['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
+  const externalConnectors = externalConnectorsEnv();
+  const externalIds = new Set(externalConnectors.map((item) => item.id));
+  const channel = process.env.OV_SUPERAGENT_CHANNEL || 'lark';
+  if (!BUILTIN_CHANNELS.includes(channel) && !externalIds.has(channel)) {
+    throw new Error('OV_SUPERAGENT_CHANNEL must be a built-in IM or a configured external connector');
+  }
   const configuredConnectors = jsonStringArrayEnv('OV_SUPERAGENT_CONNECTORS_JSON');
   const connectors = configuredConnectors.length > 0 ? [...new Set(configuredConnectors)] : [channel];
-  if (connectors.some((connector) => !['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot'].includes(connector))) {
+  if (connectors.some((connector) => !BUILTIN_CONNECTORS.includes(connector) && !externalIds.has(connector))) {
     throw new Error('OV_SUPERAGENT_CONNECTORS_JSON contains an unsupported connector');
   }
   if (!connectors.includes(channel)) {
     throw new Error('OV_SUPERAGENT_CONNECTORS_JSON must include OV_SUPERAGENT_CHANNEL');
+  }
+  if (externalConnectors.some((item) => !connectors.includes(item.id))) {
+    throw new Error('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON has a connector that is not listed in OV_SUPERAGENT_CONNECTORS_JSON');
   }
   // Each mailbox's account and client password, in a file only the daemon user can read.
   const emailAccounts = connectors.includes('email') ? emailAccountsEnv() : [];
@@ -204,7 +294,7 @@ export function getConfig() {
     dataDir,
     databasePath: path.join(dataDir, 'superagent.sqlite3'),
     lockPath: path.join(dataDir, 'daemon.lock'),
-    tempDir: configuredTempDir ? path.normalize(configuredTempDir) : path.join(dataDir, 'tmp'),
+    tempDir: configuredTempDir ? manifestDirEnv('OV_SUPERAGENT_TEMP_DIR', configuredTempDir) : path.join(dataDir, 'tmp'),
     workspace,
     promptDir,
     soulUri: soulUriEnv(),
@@ -224,11 +314,13 @@ export function getConfig() {
     upgradeTarget: process.env.OV_SUPERAGENT_UPGRADE_TARGET || process.env.OV_SUPERAGENT_INSTANCE_ID || '',
     channel,
     connectors: Object.freeze(connectors),
+    externalConnectors,
     connectorWorkerPath: path.join(sourceDir, 'connectors', 'worker.mjs'),
     actionSocketPath: localSocketPath(dataDir),
     actionMcpPath: path.join(sourceDir, 'actions', 'mcp.mjs'),
     larkCliBin: cliBin(process.env.LARK_CLI_BIN || bundledLarkCli()),
     slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),
+    ripgrepBin: cliBin(process.env.RIPGREP_BIN || undefined),
     emailAccounts,
     weixinLongPollTimeoutMs: intEnv('OV_SUPERAGENT_WEIXIN_LONG_POLL_TIMEOUT_MS', 35_000, {
       min: 5_000,
@@ -241,6 +333,9 @@ export function getConfig() {
     opencodeBin: process.env.OPENCODE_BIN || 'opencode',
     agyBin: process.env.AGY_BIN || 'agy',
     initialModel: process.env.OV_SUPERAGENT_MODEL || '',
+    primaryRuntime,
+    fallbackRuntime,
+    fallbackReturnAfterMs: intEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', 600_000, { min: 0, max: 86_400_000 }),
     codexEffort: enumEnv('OV_SUPERAGENT_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
     traexEffort: enumEnv('OV_SUPERAGENT_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
     claudeModel: process.env.OV_SUPERAGENT_CLAUDE_MODEL || '',
@@ -298,8 +393,9 @@ export function getConfig() {
       min: 30_000,
       max: 3_600_000,
     }),
-    // Codex model the daemon auto-switches to when a claude turn fails.
-    fallbackModel: process.env.FALLBACK_MODEL || 'gpt-5.6-sol',
+    // Only Codex uses the legacy model default; other backends keep their own
+    // saved/configured model and effort unless explicitly overridden.
+    fallbackModel: process.env.FALLBACK_MODEL || (fallbackRuntime === 'codex' ? 'gpt-5.6-sol' : ''),
     host,
     port: intEnv('OV_SUPERAGENT_PORT', 3738, { min: 1, max: 65535 }),
     httpEnabled: boolEnv('OV_SUPERAGENT_HTTP_ENABLED', true),
@@ -337,9 +433,28 @@ export function getConfig() {
     // OnIt and interim findings before its final delivery.
     stagedReplies: boolEnv('OV_SUPERAGENT_STAGED_REPLIES', false),
     ovCommitOnly: boolEnv('EXPERIMENTAL_OV_COMMIT_ONLY', false),
+    // agents[].scheduler: legacy puts every input into the running turn at
+    // once; inbox holds inputs while the model works, notifies it, and lets it
+    // read them at a checkpoint (inbox.mjs); workers adds worker sessions
+    // the main session hands longer work to (tasks.mjs). Read at start only.
+    scheduler: enumEnv('OV_SUPERAGENT_SCHEDULER', 'legacy', ['legacy', 'inbox', 'workers']),
+    // Directories of ended worker tasks (<workspace>/tasks): dependency
+    // folders are deleted after the first number of days, the whole directory
+    // and its worker sessions after the second; past the budget (GB) the
+    // oldest go first. 0 turns each off.
+    taskDirPruneDays: intEnv('OV_SUPERAGENT_TASK_DIR_PRUNE_DAYS', 3, { min: 0, max: 3_650 }),
+    taskDirRemoveDays: intEnv('OV_SUPERAGENT_TASK_DIR_REMOVE_DAYS', 14, { min: 0, max: 3_650 }),
+    taskDirBudgetGb: intEnv('OV_SUPERAGENT_TASK_DIR_BUDGET_GB', 20, { min: 0, max: 1_000_000 }),
+    // A task waiting for a person's answer with nothing for this many days
+    // leaves the working set the router's task hints draw on: only a reply
+    // to its messages, its thread or its id still finds it. 0 turns it off.
+    taskDormantDays: intEnv('OV_SUPERAGENT_TASK_DORMANT_DAYS', 5, { min: 0, max: 3_650 }),
     // agents[].larkMessageAccess: `bot` keeps every Lark read (history and
     // search) inside the chats the bot has joined, read as the bot.
     larkMessageAccess: enumEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'owner', ['owner', 'bot']),
+    // agents[].larkOwnerOpenId: the owner of a bot-only instance, which has no
+    // user login to tell them by (setup keeps who confirmed the app's scan).
+    larkOwnerOpenId: openIdEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID'),
     // Opt-in per instance (agents[].meetingNotes), on one instance at most:
     // the owner's Feishu/Lark meeting notes are stored in OV.
     meetingNotes: boolEnv('OV_SUPERAGENT_MEETING_NOTES', false) && connectors.includes('lark'),

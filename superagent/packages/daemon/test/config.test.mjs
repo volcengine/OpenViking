@@ -26,6 +26,26 @@ afterEach(() => {
 });
 
 describe('configuration safety', { concurrency: false }, () => {
+  it('validates primary, backup and failback timeout without changing backend model defaults', () => {
+    setEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', undefined);
+    setEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', undefined);
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', undefined);
+    setEnv('FALLBACK_MODEL', undefined);
+    assert.equal(getConfig().primaryRuntime, '');
+    assert.equal(getConfig().fallbackRuntime, 'codex');
+    assert.equal(getConfig().fallbackReturnAfterMs, 600_000);
+    setEnv('OV_SUPERAGENT_PRIMARY_RUNTIME', 'traex');
+    setEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'pi');
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', '2000');
+    assert.equal(getConfig().primaryRuntime, 'traex');
+    assert.equal(getConfig().fallbackModel, '');
+    assert.equal(getConfig().fallbackReturnAfterMs, 2000);
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', '-1');
+    assert.throws(() => getConfig(), /FALLBACK_RETURN_AFTER_MS/);
+    setEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', '600000');
+    setEnv('OV_SUPERAGENT_FALLBACK_RUNTIME', 'missing');
+    assert.throws(() => getConfig(), /FALLBACK_RUNTIME/);
+  });
   it('resolves relative CLI overrides against the connector cwd while preserving names and absolute paths', () => {
     const absolute = path.resolve(projectDir, '/opt/custom tools/renamed-cli');
     for (const [envKey, configKey] of [['LARK_CLI_BIN', 'larkCliBin'], ['SLACK_CLI_BIN', 'slackCliBin']]) {
@@ -71,16 +91,72 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /unsupported connector/);
   });
 
+  it('accepts an external connector program as a channel without treating it as a built-in', () => {
+    setEnv('OV_SUPERAGENT_CHANNEL', 'mattermost');
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["mattermost","lark"]');
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([
+      { id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'] },
+    ]));
+    const config = getConfig();
+    assert.equal(config.channel, 'mattermost');
+    assert.deepEqual(config.connectors, ['mattermost', 'lark']);
+    assert.deepEqual(config.externalConnectors, [{
+      id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'], prompt: null,
+    }]);
+    setEnv('OV_SUPERAGENT_CHANNEL', 'lark');
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["lark"]');
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'lark', command: '/bin/true' }]));
+    assert.throws(() => getConfig(), /built-in/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: 'ovsa-discord' }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["discord"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'discord');
+    assert.throws(() => getConfig(), /absolute path/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: '/usr/local/bin/ovsa-discord' }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["lark"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'lark');
+    assert.throws(() => getConfig(), /not listed/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([
+      { id: 'discord', command: '/usr/local/bin/ovsa-discord' },
+      { id: 'discord', command: '/usr/local/bin/ovsa-other' },
+    ]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["discord"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'discord');
+    assert.throws(() => getConfig(), /two connectors called discord/);
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'timer', command: '/bin/true' }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["timer"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'timer');
+    assert.throws(() => getConfig(), /reserved/);
+    const missing = path.join(os.tmpdir(), 'ovsa-missing-prompt.md');
+    setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: '/usr/local/bin/ovsa-discord', prompt: missing }]));
+    setEnv('OV_SUPERAGENT_CONNECTORS_JSON', '["discord"]');
+    setEnv('OV_SUPERAGENT_CHANNEL', 'discord');
+    assert.throws(() => getConfig(), /prompt does not exist/);
+    const promptDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ovsa-prompt-'));
+    const prompt = path.join(promptDir, 'rules.md');
+    fs.writeFileSync(prompt, 'rules');
+    try {
+      setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: '/usr/local/bin/ovsa-discord', prompt }]));
+      assert.equal(getConfig().externalConnectors[0].prompt, prompt);
+      setEnv('OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON', JSON.stringify([{ id: 'discord', command: '/usr/local/bin/ovsa-discord', prompt: promptDir }]));
+      assert.throws(() => getConfig(), /regular file/);
+    } finally {
+      fs.rmSync(promptDir, { recursive: true, force: true });
+    }
+  });
+
   it('moves temporary files independently of persistent data and ignores TMPDIR', () => {
     setEnv('OV_SUPERAGENT_DATA_DIR', '/root/.local/share/superagent-primary');
     setEnv('OV_SUPERAGENT_WORKSPACE', '/work/superagent-primary');
     setEnv('OV_SUPERAGENT_TEMP_DIR', undefined);
     setEnv('TMPDIR', '/tmp/system-temp');
     const original = getConfig();
-    assert.equal(original.tempDir, '/root/.local/share/superagent-primary/tmp');
+    // The manifest's data directory keeps its POSIX form, but the default temp
+    // directory is a local path this host joins itself.
+    assert.equal(original.dataDir, '/root/.local/share/superagent-primary');
+    assert.equal(original.tempDir, path.join(original.dataDir, 'tmp'));
     setEnv('OV_SUPERAGENT_TEMP_DIR', '/tmp/superagent-primary/');
     const configured = getConfig();
-    assert.equal(path.resolve(configured.tempDir), '/tmp/superagent-primary');
+    assert.equal(configured.tempDir.startsWith('/') ? path.posix.resolve(configured.tempDir) : path.resolve(configured.tempDir), '/tmp/superagent-primary');
     for (const field of ['dataDir', 'databasePath', 'lockPath', 'workspace']) {
       assert.equal(configured[field], original[field]);
     }
@@ -153,6 +229,17 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /OV_SUPERAGENT_STAGED_REPLIES must be a boolean/);
     setEnv('OV_SUPERAGENT_STAGED_REPLIES', undefined);
   });
+  it('keeps the legacy scheduler unless the instance picks the inbox', () => {
+    setEnv('OV_SUPERAGENT_SCHEDULER', undefined);
+    assert.equal(getConfig().scheduler, 'legacy');
+    setEnv('OV_SUPERAGENT_SCHEDULER', 'inbox');
+    assert.equal(getConfig().scheduler, 'inbox');
+    setEnv('OV_SUPERAGENT_SCHEDULER', 'workers');
+    assert.equal(getConfig().scheduler, 'workers');
+    setEnv('OV_SUPERAGENT_SCHEDULER', 'parallel');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_SCHEDULER must be one of: legacy, inbox, workers/);
+    setEnv('OV_SUPERAGENT_SCHEDULER', undefined);
+  });
   it('searches OV per line only on an instance that opts in; preferences need no switch', () => {
     setEnv('OV_SUPERAGENT_OV_AUTO_RECALL', undefined);
     assert.equal(getConfig().ovAutoRecall, false);
@@ -170,6 +257,15 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', 'everyone');
     assert.throws(() => getConfig(), /OV_SUPERAGENT_LARK_MESSAGE_ACCESS must be one of: owner, bot/);
     setEnv('OV_SUPERAGENT_LARK_MESSAGE_ACCESS', undefined);
+  });
+  it('knows a bot-only owner only by a well-formed open_id', () => {
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', undefined);
+    assert.equal(getConfig().larkOwnerOpenId, null);
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', 'ou_owner12345678');
+    assert.equal(getConfig().larkOwnerOpenId, 'ou_owner12345678');
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', 'someone');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_LARK_OWNER_OPEN_ID must be a Feishu\/Lark open_id/);
+    setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', undefined);
   });
   it('stores meeting notes only on an instance that opts in and has Feishu/Lark', () => {
     setEnv('OV_SUPERAGENT_MEETING_NOTES', undefined);

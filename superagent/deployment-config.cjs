@@ -13,7 +13,8 @@ const INSTANCE_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const RESERVED_INSTANCE_IDS = Object.freeze(['all', 'web', 'updater']);
 const CONTROL_ENV_MAX_BYTES = 262_144;
 const DEPLOYMENT_MANIFEST_MAX_BYTES = 1_048_576;
-const TOP_LEVEL_FIELDS = Object.freeze(['version', 'defaultInstance', 'env', 'agents']);
+const TOP_LEVEL_FIELDS = Object.freeze(['version', 'defaultInstance', 'env', 'agents', 'web']);
+const WEB_FIELDS = Object.freeze(['host']);
 const DAEMON_ENV_FIELDS = Object.freeze([
   'LARK_CLI_BIN',
   'CODEX_BIN',
@@ -39,6 +40,10 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'OV_SUPERAGENT_TIMER_OCCURRENCE_CHECK_DELAY_MS',
   'OV_SUPERAGENT_TIMER_STORAGE',
   'OV_SUPERAGENT_RETENTION_MS',
+  'OV_SUPERAGENT_TASK_DIR_PRUNE_DAYS',
+  'OV_SUPERAGENT_TASK_DIR_REMOVE_DAYS',
+  'OV_SUPERAGENT_TASK_DIR_BUDGET_GB',
+  'OV_SUPERAGENT_TASK_DORMANT_DAYS',
   'OV_SUPERAGENT_CODEX_EFFORT',
   'OV_SUPERAGENT_TRAEX_EFFORT',
   'OV_SUPERAGENT_CLAUDE_EFFORT',
@@ -55,6 +60,9 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'OV_SUPERAGENT_VOLC_REQUEST_TIMEOUT_MS',
   'OV_SUPERAGENT_VOLC_STREAM_IDLE_TIMEOUT_MS',
   'FALLBACK_MODEL',
+  'OV_SUPERAGENT_PRIMARY_RUNTIME',
+  'OV_SUPERAGENT_FALLBACK_RUNTIME',
+  'OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS',
   'OV_SUPERAGENT_HISTORY_LIMIT',
 ]);
 // Read from the operator environment only: forwarded to the daemon and updater
@@ -93,8 +101,10 @@ const AGENT_FIELDS = Object.freeze([
   'displayName',
   'channel',
   'connectors',
+  'externalConnectors',
   'profile',
   'larkMessageAccess',
+  'larkOwnerOpenId',
   'port',
   'dataDir',
   'tempDir',
@@ -104,8 +114,12 @@ const AGENT_FIELDS = Object.freeze([
   'soulUri',
   'explicitSilence',
   'stagedReplies',
+  'scheduler',
   'naturalWriting',
   'model',
+  'primaryRuntime',
+  'fallbackRuntime',
+  'fallbackReturnAfterMs',
   'dshHomeMode',
   'dshSkillRoots',
   'volcSessionId',
@@ -116,13 +130,20 @@ const AGENT_FIELDS = Object.freeze([
 // The roles shipped with the release (packages/daemon/agent/roles/<name>.md),
 // which setup can seed the instance's soul in OpenViking with.
 const ROLE_PRESETS = Object.freeze(['colleague', 'assistant', 'qa']);
-// agents[].larkMessageAccess: `owner` reads with the owner's visibility,
-// `bot` only in the chats the bot has joined.
+// agents[].larkMessageAccess: `owner` adds the owner's user access to the
+// bot's; `bot` has no user access, only what is shared with the app and the
+// chats the bot has joined.
 const LARK_MESSAGE_ACCESS = Object.freeze(['owner', 'bot']);
 // agents[].soulUri: where the instance's soul is kept (a viking:// address or an
 // absolute local file path), when not
 // at the default viking://~/memories/soul.md.
 const SOUL_URI = /^viking:\/\/[^\s%\\?#]+$/;
+// How inputs reach the model (agents[].scheduler). legacy: every input goes
+// into the running turn as soon as it arrives. inbox: while the model works,
+// inputs wait and it gets a notice; it reads them, oldest first, at a
+// checkpoint (message_check), or they start the next turn. workers: the inbox,
+// and the main session hands longer work to worker sessions (tasks).
+const SCHEDULERS = Object.freeze(['legacy', 'inbox', 'workers']);
 // Each mailbox is its own email Connector instance; the id is how the model
 // and the logs tell them apart.
 const EMAIL_INSTANCE_ID = /^email-[a-z0-9][a-z0-9-]{0,39}$/;
@@ -163,12 +184,12 @@ function resolveSecretsFilePath(env = process.env) {
   return path.join(path.normalize(home), '.ov-superagent', 'secrets.env');
 }
 
-function loadSecretsFile(env = process.env) {
+function loadSecretsFile(env = process.env, fields = DAEMON_SECRET_ENV_FIELDS) {
   const secretsPath = resolveSecretsFilePath(env);
   if (!secretsPath) return {};
   let raw;
   try { raw = fs.readFileSync(secretsPath, 'utf8'); } catch { return {}; }
-  const allowed = new Set(DAEMON_SECRET_ENV_FIELDS);
+  const allowed = new Set(fields);
   const result = {};
   for (const line of raw.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -201,10 +222,19 @@ function manifestString(value, name, { maxLength = 128 } = {}) {
   return normalized;
 }
 
+// Only paths a manifest declares itself keep POSIX semantics when a manifest
+// written for a POSIX deployment is read on Windows; resolving them with the
+// host rules would produce a `C:\root...`. A path this process derives locally
+// (the OpenViking plugin state, a lock file) is joined with the host's rules.
+const POSIX_MANIFEST_FIELDS = Object.freeze(['dataDir', 'tempDir', 'workspace', 'ovConfig', 'config']);
+
 function manifestAbsolutePath(value, name) {
   const normalized = manifestString(value, name, { maxLength: 4096 });
   if (!path.isAbsolute(normalized)) throw new Error(`${name} must be an absolute path`);
-  return path.normalize(normalized);
+  const field = name.slice(name.lastIndexOf('.') + 1);
+  return POSIX_MANIFEST_FIELDS.includes(field) && normalized.startsWith('/')
+    ? path.posix.normalize(normalized)
+    : path.normalize(normalized);
 }
 
 function optionalManifestString(value, name) {
@@ -234,6 +264,59 @@ function parseDaemonEnv(value, ignored) {
   return Object.freeze(result);
 }
 
+const BUILTIN_CONNECTORS = Object.freeze(['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk']);
+const BUILTIN_CHANNELS = Object.freeze(['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot']);
+// Internal event sources. `timer` is how a reminder is delivered; an external
+// program must not take that name and inherit its exemptions.
+const RESERVED_CONNECTOR_IDS = Object.freeze(['timer']);
+const EXTERNAL_CONNECTOR_ID = /^[a-z][a-z0-9-]{0,63}$/;
+
+// The operator's rules for one external IM. The path is checked here so a typo
+// fails in the manifest, not as a bare read error while the runtime starts.
+function readablePromptFile(filePath, label) {
+  let info;
+  try {
+    info = fs.statSync(filePath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(`${label} does not exist`);
+    throw new Error(`${label} cannot be read`);
+  }
+  if (!info.isFile()) throw new Error(`${label} must be a regular file`);
+  try {
+    fs.accessSync(filePath, fs.constants.R_OK);
+  } catch {
+    throw new Error(`${label} cannot be read`);
+  }
+}
+
+// A Connector the operator supplies: an absolute command that speaks protocol
+// 0.2. Its id is listed in `connectors` like a built-in one.
+function manifestExternalConnectors(value, label, ignored) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  const ids = new Set();
+  return value.map((entry, index) => {
+    const entryLabel = `${label}[${index}]`;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`${entryLabel} must be an object`);
+    ignoreUnknownFields(entry, ['id', 'command', 'args', 'prompt'], `${entryLabel}.`, ignored);
+    const id = manifestString(entry.id, `${entryLabel}.id`, { maxLength: 64 });
+    if (!EXTERNAL_CONNECTOR_ID.test(id)) throw new Error(`${entryLabel}.id is invalid`);
+    if (BUILTIN_CONNECTORS.includes(id)) throw new Error(`${entryLabel}.id must not reuse a built-in connector`);
+    if (RESERVED_CONNECTOR_IDS.includes(id)) throw new Error(`${entryLabel}.id is reserved`);
+    if (ids.has(id)) throw new Error(`${label} has two connectors called ${id}`);
+    ids.add(id);
+    const command = manifestAbsolutePath(entry.command, `${entryLabel}.command`);
+    let args = [];
+    if (entry.args !== undefined) {
+      if (!Array.isArray(entry.args) || entry.args.length > 16) throw new Error(`${entryLabel}.args is invalid`);
+      args = entry.args.map((arg, argIndex) => manifestString(arg, `${entryLabel}.args[${argIndex}]`, { maxLength: 256 }));
+    }
+    const prompt = entry.prompt == null ? null : manifestAbsolutePath(entry.prompt, `${entryLabel}.prompt`);
+    if (prompt !== null) readablePromptFile(prompt, `${entryLabel}.prompt`);
+    return Object.freeze({ id, command, args: Object.freeze(args), prompt });
+  });
+}
+
 function parseAgent(value, index, ignored) {
   const label = `agents[${index}]`;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -248,6 +331,16 @@ function parseAgent(value, index, ignored) {
     throw new Error(`${label}.port must be an integer between 1 and 65535`);
   }
   const model = manifestString(value.model, `${label}.model`);
+  const runtimeIds = ['codex', 'traex', 'claude', 'pi', 'durable', 'opencode', 'agy', 'dsh', 'volc'];
+  for (const field of ['primaryRuntime', 'fallbackRuntime']) {
+    if (value[field] !== undefined && !runtimeIds.includes(value[field])) throw new Error(`${label}.${field} must name a supported runtime`);
+  }
+  if (value.fallbackReturnAfterMs !== undefined
+    && (!Number.isSafeInteger(value.fallbackReturnAfterMs) || value.fallbackReturnAfterMs < 0 || value.fallbackReturnAfterMs > 86_400_000)) {
+    throw new Error(`${label}.fallbackReturnAfterMs must be an integer between 0 and 86400000`);
+  }
+  const externalConnectors = manifestExternalConnectors(value.externalConnectors, `${label}.externalConnectors`, ignored);
+  const externalIds = new Set(externalConnectors.map((item) => item.id));
   let connectors = null;
   if (value.connectors !== undefined) {
     if (!Array.isArray(value.connectors) || value.connectors.length === 0) {
@@ -257,20 +350,26 @@ function parseAgent(value, index, ignored) {
       manifestString(connector, `${label}.connectors[${connectorIndex}]`, { maxLength: 64 })
     )))];
     if (connectors.length !== value.connectors.length
-      || connectors.some((connector) => !['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot'].includes(connector))) {
-      throw new Error(`${label}.connectors must contain unique lark, weixin, email, telegram, slack, qq or onebot values`);
+      || connectors.some((connector) => !BUILTIN_CONNECTORS.includes(connector) && !externalIds.has(connector))) {
+      throw new Error(`${label}.connectors must contain unique built-in connectors or externalConnectors ids`);
     }
   }
   // The primary IM: where notices to the owner go. A mailbox is never one.
   const channel = value.channel === undefined
-    ? (connectors?.find((connector) => connector !== 'email') ?? 'lark')
+    ? (connectors?.find((connector) => connector !== 'email' && connector !== 'dingtalk') ?? 'lark')
     : manifestString(value.channel, `${label}.channel`);
-  if (!['lark', 'weixin', 'telegram', 'slack', 'qq', 'onebot'].includes(channel)) {
-    throw new Error(`${label}.channel must be lark, weixin, telegram, slack, qq or onebot`);
+  if (channel === 'dingtalk') {
+    throw new Error(`${label}.channel requires an owner-capable IM; add dingtalk to connectors as a secondary channel`);
+  }
+  if (!BUILTIN_CHANNELS.includes(channel) && !externalIds.has(channel)) {
+    throw new Error(`${label}.channel must be a built-in IM or an external connector`);
   }
   connectors ??= [channel];
   if (!connectors.includes(channel)) {
     throw new Error(`${label}.connectors must include ${label}.channel`);
+  }
+  if (externalConnectors.some((item) => !connectors.includes(item.id))) {
+    throw new Error(`${label}.externalConnectors is not listed in ${label}.connectors`);
   }
   const volcSessionId = optionalManifestString(value.volcSessionId, `${label}.volcSessionId`);
   const volcEnvironmentId = optionalManifestString(
@@ -298,6 +397,9 @@ function parseAgent(value, index, ignored) {
   if (connectors.includes('weixin') && model === 'ark') {
     throw new Error(`${label} using the weixin connector cannot use the ark runtime`);
   }
+  if (externalConnectors.length > 0 && model === 'ark') {
+    throw new Error(`${label} using an external connector cannot use the ark runtime`);
+  }
   const emailAccounts = manifestEmailAccounts(value.emailAccounts, `${label}.emailAccounts`, ignored);
   if (connectors.includes('email') !== (emailAccounts.length > 0)) {
     throw new Error(`${label}.emailAccounts and the email connector must be configured together`);
@@ -309,14 +411,21 @@ function parseAgent(value, index, ignored) {
   if (!connectors.includes('lark') && value.profile !== undefined) {
     throw new Error(`${label}.profile is only used by the lark connector`);
   }
-  // Whose visibility Lark reads use: the owner's (search and history across
-  // their chats, the default) or only the bot's own chats. Chosen when the app
-  // is connected; the permissions it asks for follow it.
+  // Whether the bot also has the owner's user access (the default) or only its
+  // own. Chosen when the app is connected; the permissions it asks for follow it.
   if (!connectors.includes('lark') && value.larkMessageAccess !== undefined) {
     throw new Error(`${label}.larkMessageAccess is only used by the lark connector`);
   }
   if (value.larkMessageAccess !== undefined && !LARK_MESSAGE_ACCESS.includes(value.larkMessageAccess)) {
     throw new Error(`${label}.larkMessageAccess must be ${LARK_MESSAGE_ACCESS.join(' or ')}`);
+  }
+  // The owner of a bot-only bot, which has no user login to tell them by.
+  if (!connectors.includes('lark') && value.larkOwnerOpenId !== undefined) {
+    throw new Error(`${label}.larkOwnerOpenId is only used by the lark connector`);
+  }
+  if (value.larkOwnerOpenId !== undefined
+    && (typeof value.larkOwnerOpenId !== 'string' || !/^ou_[A-Za-z0-9_-]+$/.test(value.larkOwnerOpenId))) {
+    throw new Error(`${label}.larkOwnerOpenId must be a Feishu/Lark open_id (ou_...)`);
   }
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
@@ -334,11 +443,22 @@ function parseAgent(value, index, ignored) {
   if (value.stagedReplies !== undefined && typeof value.stagedReplies !== 'boolean') {
     throw new Error(`${label}.stagedReplies must be a boolean`);
   }
+  if (value.scheduler !== undefined && !SCHEDULERS.includes(value.scheduler)) {
+    throw new Error(`${label}.scheduler must be ${SCHEDULERS.join(' or ')}`);
+  }
+  // The inbox is read with a Core tool, which Ark has not got.
+  if (value.scheduler !== undefined && value.scheduler !== 'legacy' && model === 'ark') {
+    throw new Error(`${label}.scheduler ${value.scheduler} needs a runtime with Core tools; ark has none`);
+  }
   if (value.meetingNotes !== undefined && typeof value.meetingNotes !== 'boolean') {
     throw new Error(`${label}.meetingNotes must be a boolean`);
   }
   if (value.meetingNotes && !connectors.includes('lark')) {
     throw new Error(`${label}.meetingNotes requires the lark connector`);
+  }
+  // Meeting notes are read as the owner; a bot-only instance has no user access.
+  if (value.meetingNotes && value.larkMessageAccess === 'bot') {
+    throw new Error(`${label}.meetingNotes needs the owner's user access, which larkMessageAccess bot does not have`);
   }
   const dshHomeMode = value.dshHomeMode ?? 'isolated';
   if (!['isolated', 'shared'].includes(dshHomeMode)) {
@@ -360,8 +480,10 @@ function parseAgent(value, index, ignored) {
     displayName: manifestString(value.displayName, `${label}.displayName`, { maxLength: 40 }),
     channel,
     connectors: Object.freeze(connectors),
+    externalConnectors: Object.freeze(externalConnectors),
     profile: connectors.includes('lark') ? manifestString(value.profile, `${label}.profile`) : null,
     larkMessageAccess: connectors.includes('lark') ? value.larkMessageAccess ?? 'owner' : null,
+    larkOwnerOpenId: connectors.includes('lark') ? value.larkOwnerOpenId ?? null : null,
     port: value.port,
     dataDir: manifestAbsolutePath(value.dataDir, `${label}.dataDir`),
     tempDir: value.tempDir == null ? null : manifestAbsolutePath(value.tempDir, `${label}.tempDir`),
@@ -373,8 +495,12 @@ function parseAgent(value, index, ignored) {
     // explicit false opts out.
     explicitSilence: value.explicitSilence ?? model !== 'ark',
     stagedReplies: value.stagedReplies ?? false,
+    scheduler: value.scheduler ?? 'legacy',
     naturalWriting: value.naturalWriting ?? true,
     model,
+    primaryRuntime: value.primaryRuntime ?? null,
+    fallbackRuntime: value.fallbackRuntime ?? null,
+    fallbackReturnAfterMs: value.fallbackReturnAfterMs ?? null,
     dshHomeMode,
     dshSkillRoots: Object.freeze([...dshSkillRoots]),
     volcSessionId,
@@ -457,6 +583,30 @@ function assertIsolatedAgentStorage(agents) {
   }
 }
 
+const WEB_HOSTS = new Set(['127.0.0.1', '0.0.0.0', '::']);
+
+function parseWebSettings(value, ignored) {
+  if (value === undefined || value === null) return Object.freeze({ host: '127.0.0.1' });
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('deployment manifest web must be an object');
+  }
+  ignoreUnknownFields(value, WEB_FIELDS, 'web.', ignored);
+  const host = value.host === undefined ? '127.0.0.1' : manifestString(value.host, 'deployment manifest web.host', { maxLength: 253 });
+  // Each of these also answers on 127.0.0.1, where the CLI and updater probe /ready.
+  if (!WEB_HOSTS.has(host)) {
+    throw new Error('deployment manifest web.host must be 127.0.0.1, 0.0.0.0 or ::');
+  }
+  return Object.freeze({ host });
+}
+
+// The Web's API key lives in secrets.env; empty overrides any key in pm2's own environment.
+function webProcessEnv(deployment, sourceEnv = process.env) {
+  return {
+    OV_SUPERAGENT_WEB_HOST: deployment.web.host,
+    OV_SUPERAGENT_WEB_API_KEY: loadSecretsFile(sourceEnv, ['OV_SUPERAGENT_WEB_API_KEY']).OV_SUPERAGENT_WEB_API_KEY || '',
+  };
+}
+
 function loadDeploymentManifest(env) {
   env = env ?? process.env;
   const manifestPath = resolveDeploymentManifestPath(env);
@@ -486,6 +636,7 @@ function loadDeploymentManifest(env) {
   }
   const defaultInstance = manifestString(value.defaultInstance, 'deployment manifest defaultInstance');
   const daemonEnv = parseDaemonEnv(value.env, ignored);
+  const web = parseWebSettings(value.web, ignored);
   const agents = value.agents.map((agent, index) => parseAgent(agent, index, ignored));
   assertUniqueAgentFields(agents);
   assertIsolatedAgentStorage(agents);
@@ -494,6 +645,7 @@ function loadDeploymentManifest(env) {
     defaultInstance,
     env: daemonEnv,
     agents: Object.freeze(agents),
+    web,
     manifestPath,
     // Paths such as `env.OV_SUPERAGENT_OLD_SETTING` or `agents[0].oldField`, for a warning.
     ignoredFields: Object.freeze(ignored),
@@ -546,6 +698,8 @@ function selectDeploymentAgent(deployment, id = deployment.defaultInstance) {
 // directory, shared by every process of the OS user, so even an inert plugin
 // gets its own directories under the instance's data directory.
 function openVikingAgentEnv(agent) {
+  // The OpenViking plugin state is local to the daemon that runs it, not a
+  // directory named by the manifest: join it with the host's rules.
   const state = path.join(agent.dataDir, 'openviking');
   return {
     OPENVIKING_CLI_CONFIG_FILE: agent.ovConfig,
@@ -580,6 +734,11 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
     OV_SUPERAGENT_WORKSPACE: agent.workspace,
     OV_SUPERAGENT_MODEL: agent.model,
   });
+  for (const [field, key] of [['primaryRuntime', 'OV_SUPERAGENT_PRIMARY_RUNTIME'], ['fallbackRuntime', 'OV_SUPERAGENT_FALLBACK_RUNTIME'], ['fallbackReturnAfterMs', 'OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS']]) {
+    if (agent[field] !== null) env[key] = String(agent[field]);
+    else if (deployment.env[key] !== undefined) env[key] = deployment.env[key];
+    else delete env[key];
+  }
   if (agent.tempDir) env.OV_SUPERAGENT_TEMP_DIR = agent.tempDir;
   if (agent.profile) {
     env.OV_SUPERAGENT_LARK_PROFILE = agent.profile;
@@ -590,12 +749,16 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
     delete env.LARKSUITE_CLI_PROFILE;
     delete env.OV_SUPERAGENT_LARK_MESSAGE_ACCESS;
   }
+  // Set or removed, so another instance's owner never leaks in.
+  if (agent.larkOwnerOpenId) env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID = agent.larkOwnerOpenId;
+  else delete env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID;
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
   env.OV_SUPERAGENT_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';
   env.OV_SUPERAGENT_EXPLICIT_SILENCE = agent.explicitSilence ? 'true' : 'false';
   env.OV_SUPERAGENT_NATURAL_WRITING = agent.naturalWriting ? 'true' : 'false';
   env.OV_SUPERAGENT_STAGED_REPLIES = agent.stagedReplies ? 'true' : 'false';
+  env.OV_SUPERAGENT_SCHEDULER = agent.scheduler;
   env.OV_SUPERAGENT_MEETING_NOTES = agent.meetingNotes ? 'true' : 'false';
   env.OV_SUPERAGENT_DSH_HOME_MODE = agent.dshHomeMode;
   env.OV_SUPERAGENT_DSH_SKILL_ROOTS = JSON.stringify(agent.dshSkillRoots);
@@ -604,6 +767,9 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   delete env.OV_SUPERAGENT_ROLE;
   env.OV_SUPERAGENT_CHANNEL = agent.channel;
   env.OV_SUPERAGENT_CONNECTORS_JSON = JSON.stringify(agent.connectors);
+  if (agent.externalConnectors.length > 0) {
+    env.OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON = JSON.stringify(agent.externalConnectors);
+  } else delete env.OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON;
   if (agent.emailAccounts.length > 0) env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON = JSON.stringify(agent.emailAccounts);
   else delete env.OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON;
   if (agent.volcSessionId) {
@@ -639,6 +805,8 @@ module.exports = {
   DAEMON_SHELL_ENV_FIELDS,
   DEPLOYMENT_MANIFEST_MAX_BYTES,
   TOP_LEVEL_FIELDS,
+  parseWebSettings,
+  webProcessEnv,
   applyDeploymentAgentEnv,
   applyDeploymentDaemonEnv,
   deploymentDaemonEnvOverrides,

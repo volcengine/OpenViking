@@ -4,6 +4,7 @@
 import { spawnDetached, processOptions } from '../platform/index.mjs';
 
 import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { sanitizeNonArkChildEnv, terminateProcessTree } from '../process-utils.mjs';
 import { safeError } from '../logger.mjs';
@@ -46,18 +47,35 @@ function appendTail(current, chunk, limit = 8_000) {
 // The Connector processes an instance runs: one per IM, and one per mailbox
 // (an email instance is `email-<name>`). `type` picks the worker's client.
 export function connectorInstances(config) {
-  return config.connectors.flatMap((type) => (type === 'email'
-    ? (config.emailAccounts ?? []).map(({ id, configFile }) => ({ id, type, emailConfigFile: configFile }))
-    : [{ id: type, type }]));
+  const external = new Map((config.externalConnectors ?? []).map((item) => [item.id, item]));
+  return config.connectors.flatMap((type) => {
+    if (type === 'email') {
+      return (config.emailAccounts ?? []).map(({ id, configFile }) => ({ id, type, emailConfigFile: configFile }));
+    }
+    const custom = external.get(type);
+    if (!custom) return [{ id: type, type }];
+    return [{ id: type, type, command: custom.command, args: [...(custom.args ?? [])] }];
+  });
 }
 
-function childConfig(config, instance) {
-  return {
+export function childConfig(config, instance) {
+  const shared = {
     channel: instance.type,
     instance: instance.id,
     projectDir: config.projectDir,
     dataDir: config.dataDir,
     tempDir: config.tempDir,
+    retentionMs: config.retentionMs,
+    maxEventBytes: config.maxEventBytes,
+    sendTimeoutMs: config.sendTimeoutMs,
+    dryRun: config.dryRun,
+    logLevel: config.logLevel,
+  };
+  // The external program owns its own credentials. Built-in fields such as the
+  // Lark profile never cross into its config.
+  if (instance.command) return shared;
+  return {
+    ...shared,
     profile: config.profile,
     larkCliBin: config.larkCliBin,
     slackCliBin: config.slackCliBin,
@@ -67,15 +85,12 @@ function childConfig(config, instance) {
     emailConfigFile: instance.emailConfigFile ?? null,
     // The Lark Connector of the instance that stores meeting notes.
     meetingNotes: instance.type === 'lark' && Boolean(config.meetingNotes),
+    // A bot-only Lark bot has no user login to tell its owner by.
+    larkOwnerOpenId: instance.type === 'lark' ? config.larkOwnerOpenId ?? null : null,
     // A mailbox stores each mail in OV before reporting it; so does the Lark
     // Connector each meeting note.
     openVikingConfigPath: instance.type === 'email' || (instance.type === 'lark' && config.meetingNotes)
       ? config.openVikingConfigPath || null : null,
-    retentionMs: config.retentionMs,
-    maxEventBytes: config.maxEventBytes,
-    sendTimeoutMs: config.sendTimeoutMs,
-    dryRun: config.dryRun,
-    logLevel: config.logLevel,
   };
 }
 
@@ -119,10 +134,17 @@ export class ConnectorProcess {
     this.stderrTail = '';
     this.stderrBuffer = '';
     this.reportedError = null;
-    const workerPath = this.config.connectorWorkerPath || defaultWorkerPath;
+    const externalCommand = this.instance.command;
+    if (externalCommand !== undefined && !path.isAbsolute(externalCommand)) {
+      throw new Error(`connector ${this.id} command must be an absolute path`);
+    }
+    const command = externalCommand || process.execPath;
+    const args = externalCommand
+      ? [...(this.instance.args ?? [])]
+      : [this.config.connectorWorkerPath || defaultWorkerPath, this.type];
     const env = sanitizeNonArkChildEnv(process.env);
     env.PERSONAL_AGENT_CONNECTOR_CONFIG = JSON.stringify(childConfig(this.config, this.instance));
-    const child = this.registry.register(spawn(process.execPath, [workerPath, this.type], {
+    const child = this.registry.register(spawn(command, args, {
       cwd: this.config.projectDir,
       env,
       shell: false,

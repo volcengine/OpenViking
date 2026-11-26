@@ -16,7 +16,6 @@ export function resolveLarkMessageEvent(db, event) {
   const target = event.data.target_message_id;
   const instance = event.connectorInstance;
   const ignore = () => ({ ...event, data: { ...event.data, supported: false } });
-  if (event.actor?.type === 'app') return ignore();
   const inbound = event.kind !== 'message.recalled' ? null : db.prepare(`SELECT chat_id, chat_type, tenant_key, thread_id, thread_root_id, sender_id, sender_type
     FROM connector_events WHERE connector_instance = ? AND message_id = ? AND kind = 'message.created'
     ORDER BY seq DESC LIMIT 1`).get(instance, target);

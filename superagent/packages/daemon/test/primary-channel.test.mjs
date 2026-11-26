@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
 import { ActionService } from '../src/actions/service.mjs';
 import { Harness } from '../src/harness.mjs';
@@ -88,7 +89,28 @@ test('every IM switches live through ingress/outbox and survive config reload wi
     assert.equal(sent.connector, source);
     assert.equal(sent.input.chat_id, f.owners[source].target.chat_id);
   }
-  assert.equal(fs.statSync(f.manifestPath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(f.manifestPath).mode & 0o777, 0o600);
+});
+
+test('an external connector can become the primary IM', async (t) => {
+  const f = fixture(t);
+  const agent = f.manifest.agents[1];
+  agent.connectors = [...agent.connectors, 'mattermost'];
+  agent.externalConnectors = [{ id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost' }];
+  writeManifest(f.manifestPath, f.manifest);
+  f.daemon.config.connectors = agent.connectors;
+  f.daemon.config.externalConnectors = agent.externalConnectors;
+  const builtin = f.connectors.manifests();
+  f.connectors.manifests = () => [...builtin, ['mattermost', { actions: { 'message.send': { content: ['markdown'] } } }]];
+  f.connectors.owners.mattermost = { id: 'mattermost-owner', target: { chat_id: 'mattermost-dm' } };
+  const result = await f.receive('mattermost', '/primary');
+  assert.match(result.text, /立即生效，无需重启/);
+  assert.equal(f.daemon.config.channel, 'mattermost');
+  assert.equal(f.saved().agents[1].channel, 'mattermost');
+  const restarted = {};
+  applyDeploymentAgentEnv(restarted, loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: f.manifestPath }), 'second');
+  assert.equal(restarted.OV_SUPERAGENT_CHANNEL, 'mattermost');
+  assert.match((await f.receive('mattermost', '/primary status')).text, /当前主 IM：mattermost/);
 });
 
 test('a repeated selection and a duplicate event do not rewrite the manifest or send another reply', async (t) => {

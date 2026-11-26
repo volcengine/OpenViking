@@ -7,7 +7,8 @@ const artifactPlatforms = createRequire(import.meta.url)('../../updater/artifact
 // Product support policy lives here, rather than in the OS implementations.
 export function capabilitiesFor(implementation) {
   return Object.freeze({
-    updater: implementation.supportsShellScripts && artifactPlatforms[implementation.hostPlatformId]?.sourceOnly !== true,
+    updater: implementation.supportsShellScripts && !!artifactPlatforms[implementation.hostPlatformId]
+      && artifactPlatforms[implementation.hostPlatformId].sourceOnly !== true,
     autostart: implementation.loginService !== null,
     connectors: Object.freeze({ email: true }),
   });

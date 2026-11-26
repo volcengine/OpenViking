@@ -10,6 +10,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { probeAcp, probeAgyAcp, probeAppServer } from '../src/runtime-probe.mjs';
 
+// Windows terminates a process instead of delivering SIGKILL, so the probe's
+// timeout is observed as an exit rather than a signal there.
+const killed = process.platform === 'win32'
+  ? (child) => child.exitCode !== null
+  : (child) => child.signalCode === 'SIGKILL';
+
 function fixture(t, script) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-app-server-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -18,7 +24,9 @@ function fixture(t, script) {
   const children = [];
   const closed = [];
   const spawnImpl = (...args) => {
-    const child = spawn(...args);
+    // Run this JS fixture through the test interpreter. A freshly created
+    // executable's platform launch latency is not part of the protocol bound.
+    const child = spawn(process.execPath, [args[0], ...args[1]], args[2]);
     children.push(child);
     closed.push(once(child, 'close'));
     return child;
@@ -45,7 +53,7 @@ test('probe initializes stdio and exits without creating a thread or running a t
   const requests = fs.readFileSync(path.join(f.dir, 'requests'), 'utf8').trim().split('\n');
   assert.equal(requests[0], 'initialize');
   assert.ok(requests.every((method) => ['initialize', 'initialized'].includes(method)));
-  assert.equal(f.children[0].signalCode, 'SIGKILL');
+  assert.ok(killed(f.children[0]), 'the probe terminates an unresponsive child');
 });
 
 test('probe rejects a CLI that exits successfully without speaking app-server', async (t) => {
@@ -72,7 +80,7 @@ test('probe times out and terminates an unresponsive CLI', async (t) => {
   assert.equal(result.compatible, false);
   assert.match(result.reason, /timed out/);
   await Promise.all(f.closed);
-  assert.equal(f.children[0].signalCode, 'SIGKILL');
+  assert.ok(killed(f.children[0]), 'the probe terminates an unresponsive child');
 });
 
 test('probe rejects a JSON-RPC initialize error', async (t) => {
@@ -115,7 +123,7 @@ test('ACP probe sends only initialize to `acp` and accepts an OpenCode answer', 
   assert.deepEqual(requests.map((request) => request.method), ['initialize']);
   assert.equal(requests[0].jsonrpc, '2.0');
   assert.equal(requests[0].params.protocolVersion, 1);
-  assert.equal(f.children[0].signalCode, 'SIGKILL');
+  assert.ok(killed(f.children[0]), 'the probe terminates an unresponsive child');
 });
 
 function agyServer(result) {

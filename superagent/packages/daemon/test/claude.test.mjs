@@ -3,6 +3,7 @@
 
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import { describe, it } from 'node:test';
@@ -150,7 +151,7 @@ async function waitFor(predicate, timeoutMs = 500) {
   throw new Error('timed out waiting for condition');
 }
 
-function harness({ loggedIn = true, store = makeStore(), agentOptions = {}, help = helpFlags } = {}) {
+function harness({ config = baseConfig, loggedIn = true, store = makeStore(), agentOptions = {}, help = helpFlags } = {}) {
   const calls = [];
   const persistent = [];
   const spawn = (_bin, args, options) => {
@@ -174,7 +175,7 @@ function harness({ loggedIn = true, store = makeStore(), agentOptions = {}, help
     return child;
   };
   const failures = [];
-  const agent = new ClaudeAgent(baseConfig, store, quietLogger, {
+  const agent = new ClaudeAgent(config, store, quietLogger, {
     spawn,
     startTimeoutMs: 100,
     startStabilityMs: 1,
@@ -391,7 +392,7 @@ describe('ClaudeAgent persistent stream-json runtime', () => {
     assert.ok(args.includes('--session-id'));
     assert.ok(!args.includes('--resume'));
     assert.ok(calls.every((call) => call.options.env.LARKSUITE_CLI_PROFILE === 'test-profile'));
-    assert.ok(calls.every((call) => call.options.env.PATH.startsWith('/fake:/fake-slack:')));
+    assert.ok(calls.every((call) => call.options.env.PATH.startsWith(['/fake', '/fake-slack', ''].join(path.delimiter))));
 
     agent.deliver('[chat=oc_now12345678 msg=om_now12345678] current request', 7);
     const first = JSON.parse(persistent[0].writes[0]);
@@ -811,3 +812,15 @@ it('Claude owns the bounded-argv prompt file and removes it with its runtime fil
     assert.equal(fs.existsSync(directory), false);
   }
 });
+
+for (const scheduler of ['workers', 'legacy']) {
+  it(`Claude installs the router hook only for workers scheduling (${scheduler})`, async () => {
+    const { agent, calls } = harness({ config: { ...baseConfig, scheduler } });
+    try {
+      await agent.start();
+      const args = calls.at(-1).args;
+      const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+      assert.equal(Boolean(settings.hooks?.PreToolUse), scheduler === 'workers');
+    } finally { await agent.stop(); }
+  });
+}

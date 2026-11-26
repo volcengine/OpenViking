@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix } from './cognition.mjs';
 import { adaptRuntime } from './runtime-adapter.mjs';
 import { createRuntimeFactories } from './runtime-factory.mjs';
-import { metadataTag } from './runtime-input.mjs';
+import { metadataTag, receiptIds, withReceiptIds } from './runtime-input.mjs';
 import { docCommentNotice } from './conversation-policy.mjs';
 import { DOC_COMMENT_CONVERSATION } from './lark-doc-comments.mjs';
 import {
@@ -51,6 +51,12 @@ function selectorNamesModel(value) {
   return !isDirectRuntimeAlias(raw);
 }
 
+// The conversation an input belongs to, for a runtime that serves one
+// conversation per session.
+function scopeOf(item) {
+  return item?.scope?.key ?? item?.scopeKey ?? item?.scope?.conversationKey ?? item?.conversationKey;
+}
+
 // The provider route a model id is on. The first slash splits it: a route name
 // cannot contain one while a model id may (dsh's `openrouter/deepseek/deepseek-chat`).
 function routeOf(model) {
@@ -71,17 +77,24 @@ export class AgentRuntime {
     this.onTurnStopped = options.onTurnStopped ?? null;
     this.onAvailable = options.onAvailable ?? null;
     this.onAuthorityChanged = options.onAuthorityChanged ?? null;
+    this.onRuntimeSelected = options.onRuntimeSelected ?? null;
     this.persistRuntimePreference = options.persistRuntimePreference ?? null;
     // Rereads what the policy is assembled from (the soul) before a runtime
     // switch constructs the new backend.
     this.refreshPolicy = options.refreshPolicy ?? null;
     this.recordActivity = options.recordActivity ?? null;
+    // Which inputs a /runtime switch cut off go on, as what: ({ inboundSeqs,
+    // from, to, failed }) => { items, notice } | null (DecisionPolicy).
+    this.resumeInterrupted = options.resumeInterrupted ?? null;
     this.clock = options.clock ?? (() => Date.now());
     this.loopCancelGraceMs = options.loopCancelGraceMs ?? LOOP_CANCEL_GRACE_MS;
     this.loopResetWindowMs = options.loopResetWindowMs ?? LOOP_RESET_WINDOW_MS;
     // The loop stop in flight, and the sessions lately stopped in place.
     this.loopBreak = null;
     this.loopStops = [];
+    // The backend a /runtime switch is retiring, and the inputs its turns and
+    // queue held when they were cut off (_beginCut).
+    this.cut = null;
     this.factories = createRuntimeFactories(config, store, logger, options);
     this.backend = null;
     this.stagedBackend = null;
@@ -89,6 +102,8 @@ export class AgentRuntime {
     this.switching = false;
     this.transitioning = false;
     this.pendingTransitions = 0;
+    this.admissionHolds = new Set();
+    this.stopController = new AbortController();
     this.transitionBarrier = Promise.resolve();
     this.stopping = false;
     this.revision = 0;
@@ -108,7 +123,7 @@ export class AgentRuntime {
   }
   get state() {
     const state = this.backend?.state ?? { connected: false, activeTurn: 0, queued: 0 };
-    return { ...state, connected: state.connected && this.pendingTransitions === 0 };
+    return { ...state, connected: state.connected && this.pendingTransitions === 0 && this.admissionHolds.size === 0 };
   }
   get turnInProgress() { return this.pendingTransitions > 0 || Boolean(this.backend?.turnInProgress); }
   get workStatus() {
@@ -125,12 +140,14 @@ export class AgentRuntime {
     };
   }
 
-  _backendOptions(overrides = {}) {
+  // `source.backend` is the adapter these options end up in, so a turn end
+  // says which backend it came from (a retiring one, during a switch).
+  _backendOptions(overrides = {}, source = {}) {
     const cognition = this.store.getCognitionState();
     return {
-      onTurnFailed: (info) => this._turnEnded('failed', info),
-      onTurnSucceeded: (info) => this._turnEnded('succeeded', info),
-      onTurnAbandoned: (info) => this._turnEnded('abandoned', info),
+      onTurnFailed: (info) => this._turnEnded('failed', info, source.backend),
+      onTurnSucceeded: (info) => this._turnEnded('succeeded', info, source.backend),
+      onTurnAbandoned: (info) => this._turnEnded('abandoned', info, source.backend),
       onAvailable: this.onAvailable,
       authorityToken: cognition.authorityToken,
       cognitionEpoch: cognition.epoch,
@@ -139,7 +156,8 @@ export class AgentRuntime {
   }
 
   _instantiate(runtime, overrides = {}) {
-    const implementation = this.factories[runtime](this._backendOptions(overrides));
+    const source = {};
+    const implementation = this.factories[runtime](this._backendOptions(overrides, source));
     // Whether a route the caller did not name may be adopted is the coordinator's
     // decision, and a transport is a plain object at this point: publish it before
     // start so a handshake that cannot start on its configured route knows whether
@@ -156,7 +174,8 @@ export class AgentRuntime {
         this.logger.warn('runtime_fallback_policy_unsettable', { runtime });
       }
     }
-    return adaptRuntime(runtime, implementation);
+    source.backend = adaptRuntime(runtime, implementation);
+    return source.backend;
   }
 
   _authorityChanged(cognition) {
@@ -176,11 +195,15 @@ export class AgentRuntime {
 
   async start() {
     this.stopping = false;
+    this.stopController = new AbortController();
     let cognition = this.store.getCognitionState();
     const persistedRuntime = RUNTIME_IDS.includes(cognition.runtime)
       ? cognition.runtime
       : DEFAULT_RUNTIME_ID;
-    const configuredSelector = String(this.config.initialModel || '').trim();
+    const initialSelector = String(this.config.initialModel || '').trim();
+    const configuredSelector = this.config.primaryRuntime
+      && resolveRuntimeModelTarget(initialSelector).runtime !== this.config.primaryRuntime
+      ? `${this.config.primaryRuntime}:` : initialSelector || (this.config.primaryRuntime ? `${this.config.primaryRuntime}:` : '');
     const freshTarget = resolveRuntimeModelTarget(configuredSelector);
     const freshCognition = this.store.hasCognitionRuntime?.() === false;
     this._assertConnectorSupport(freshTarget.runtime);
@@ -229,21 +252,29 @@ export class AgentRuntime {
     if (runtime === 'volc' && this.config.connectors.includes('weixin')) {
       throw new Error('Weixin is not supported on the Volc runtime');
     }
+    if (runtime === 'volc' && (this.config.externalConnectors ?? []).some((item) => this.config.connectors.includes(item.id))) {
+      throw new Error('An external connector is not supported on the Volc runtime');
+    }
   }
 
   prepareInputContext() { return this.backend?.prepareInputContext?.(); }
 
   submit(items, { admission = 'enqueue' } = {}) {
     if (this.stopping) return { accepted: false, reason: 'stopping' };
+    if (this.admissionHolds.size > 0) return { accepted: false, reason: 'switching' };
     if (this.pendingTransitions > 0) return { accepted: false, reason: 'switching' };
     if (!this.backend) return { accepted: false, reason: 'not-started' };
+    return this._deliver(items, { admission });
+  }
+
+  // The admission checks are submit()'s; a transition that hands inputs on
+  // (a switch resuming what it cut off) delivers while admission is closed.
+  _deliver(items, { admission = 'enqueue' } = {}) {
     if (!Array.isArray(items) || items.length === 0) {
       return { accepted: false, reason: 'empty-batch' };
     }
-    const definition = getRuntimeDefinition(this.runtime);
-    if (definition?.capabilities.scopePolicy === 'single-conversation') {
-      const scopes = new Set(items.map((item) => item?.scope?.key ?? item?.scopeKey
-        ?? item?.scope?.conversationKey ?? item?.conversationKey));
+    if (this._singleConversation()) {
+      const scopes = new Set(items.map(scopeOf));
       if (scopes.has(undefined) || scopes.has(null) || scopes.has('') || scopes.size !== 1) {
         return { accepted: false, reason: 'invalid-scope' };
       }
@@ -251,16 +282,54 @@ export class AgentRuntime {
     return this.backend.submit(withDocCommentRules(items, this.config), { admission });
   }
 
+  _singleConversation() {
+    return getRuntimeDefinition(this.runtime)?.capabilities.scopePolicy === 'single-conversation';
+  }
+
   _interrupt() { return this.backend?.interrupt() ?? Promise.resolve(); }
+
+  // Keep new ingress in its caller-owned queue while a timed failback drains
+  // already accepted work. Releasing one hold never releases another owner.
+  holdAdmission() {
+    const token = Symbol('runtime-admission');
+    this.admissionHolds.add(token);
+    return () => {
+      if (!this.admissionHolds.delete(token)) return;
+      if (!this.stopping && this.admissionHolds.size === 0 && this.pendingTransitions === 0) {
+        try { this.onAvailable?.(); } catch (error) {
+          this.logger.warn('runtime_available_notification_failed', { error: error.message });
+        }
+      }
+    };
+  }
+
+  async _waitForIdle() {
+    const signal = this.stopController.signal;
+    if (signal.aborted) throw new Error('agent runtime is stopping');
+    let onStop;
+    const stopped = new Promise((resolve, reject) => {
+      onStop = () => reject(new Error('agent runtime stopped during idle wait'));
+      signal.addEventListener('abort', onStop, { once: true });
+    });
+    try { await Promise.race([this.whenIdle(), stopped]); }
+    finally { signal.removeEventListener('abort', onStop); }
+  }
 
   // Every transport's turn end passes here. The turn a loop stop ended goes
   // to onTurnStopped whatever the transport saw (a cancelled prompt reports as
   // failed on some, a replaced session as abandoned): nobody is told it
   // failed, and what it held is recovered there.
-  _turnEnded(kind, info) {
+  _turnEnded(kind, info, from = null) {
     if (this.loopBreak) {
       this._stopEnded(kind, info);
       return;
+    }
+    // A turn of the backend a /runtime switch is retiring ends because of the
+    // switch, not because the work failed: what it held goes on in the runtime
+    // that stays (_resumeCut), and nobody gets a failure notice for it.
+    if (this.cut && from && from === this.cut.backend && kind !== 'succeeded') {
+      this.cut.add(info);
+      kind = 'abandoned';
     }
     // A failed turn may have died on the model rather than on the work. Record
     // which, so whoever reads the failure can tell an unknown model from a
@@ -518,7 +587,17 @@ export class AgentRuntime {
       }
       if (request.kind === 'select-runtime') {
         if (getRuntimeDefinition(request.runtime)?.id !== this.runtime) await this.refreshPolicy?.();
-        const result = await this._selectRuntime(request.runtime, request.model);
+        // Admission is closed synchronously by transition(), before waiting.
+        // Unlike manual switches, failback must never interrupt accepted work.
+        if (request.whenIdle) await this._waitForIdle();
+        if (request.expectedRuntime && request.expectedRuntime !== this.runtime) {
+          return { ok: false, kind: request.kind, reason: 'runtime-changed' };
+        }
+        const result = await this._selectRuntime(request.runtime, request.model, {
+          persistPreference: request.persistPreference !== false,
+          resumeInterrupted: request.resumeInterrupted === true,
+        });
+        if (request.persistPreference !== false && result.ok !== false) this.onRuntimeSelected?.(this.runtime);
         return { ok: true, kind: request.kind, ...result };
       }
       if (request.kind === 'select-effort') {
@@ -658,7 +737,7 @@ export class AgentRuntime {
       unchanged: unchanged && !effortChanged, effort, previousEffort, effortChanged };
   }
 
-  async _selectRuntime(value, requestedModel, { persistPreference = true } = {}) {
+  async _selectRuntime(value, requestedModel, { persistPreference = true, resumeInterrupted = false } = {}) {
     const definition = getRuntimeDefinition(value);
     if (!definition) throw new Error(`Unknown runtime: ${value}`);
     this._assertConnectorSupport(definition.id);
@@ -672,7 +751,7 @@ export class AgentRuntime {
       ?? (this.config[`${definition.id}Model`] || undefined)
       ?? (initial.runtime === definition.id ? initial.model : definition.defaultModel));
     return this._hardSwitch({ runtime: definition.id, model, canonical: model || definition.canonicalDefault,
-      allowModelFallback: requestedModel === undefined, persistPreference });
+      allowModelFallback: requestedModel === undefined, persistPreference, resumeInterrupted });
   }
 
   async _hardSwitch(target) {
@@ -685,6 +764,9 @@ export class AgentRuntime {
     let modelFallback = null;
     let effort;
     let previousEffort;
+    // A manual switch does not leave the work it interrupts to history: the
+    // inputs it cuts off go on in the runtime that stays (_resumeCut).
+    const cut = target.resumeInterrupted && previous ? this._beginCut(previous) : null;
     try {
       // Never wait for a stuck in-flight turn: interrupt/abandon it. Its
       // inbound rows are already in the cognition journal, synced to OV, whose
@@ -867,9 +949,13 @@ export class AgentRuntime {
       this._authorityChanged({ runtime: target.runtime, epoch: cognition.epoch, authorityToken });
       this.stagedBackend = null;
       staged = null;
+      if (cut) await this._collectCut(cut);
       try { await previous?.stop(); } catch (error) {
         this.logger.warn('retired_runtime_stop_failed', { runtime: previousRuntime, error: error.message });
       }
+      // Whatever the retired backend reports from here on is no longer the
+      // switch's to hand on.
+      this._endCut(cut);
       try {
         this.store.appendCognitionJournal({
           kind: 'control',
@@ -882,6 +968,7 @@ export class AgentRuntime {
         // caller retry a completed authority hand-off.
         this.logger.warn('runtime_switch_journal_write_failed', { error: error.message });
       }
+      const resumedInputs = cut ? this._resumeCut(cut, { from: previousRuntime, to: target.runtime }) : 0;
       return {
         runtimeChanged: true,
         runtime: target.runtime,
@@ -892,15 +979,103 @@ export class AgentRuntime {
         effortChanged: previousEffort !== this.effort,
         syncedThroughSeq: catchup.throughSeq,
         catchupPending: true,
+        resumedInputs,
       };
     } catch (error) {
       try { await staged?.stop(); } catch {}
       previous?.cancelSession?.();
+      // The switch failed after the previous runtime's turn was interrupted:
+      // that runtime stays, and so does the work, where it was.
+      if (cut && this.cut === cut && this.backend === previous) {
+        this._endCut(cut);
+        error.resumedInputs = this._resumeCut(cut, { from: previousRuntime, to: target.runtime, failed: true });
+      }
       throw error;
     } finally {
+      this._endCut(cut);
       if (this.stagedBackend === staged) this.stagedBackend = null;
       this.switching = false;
     }
+  }
+
+  // From the interrupt on, the turn ends the retiring backend reports are the
+  // switch's: their inputs are collected here instead of being lost to history.
+  _beginCut(backend) {
+    const inboundSeqs = new Set();
+    this.cut = {
+      backend,
+      inboundSeqs,
+      add(info) {
+        for (const seq of info?.inboundSeqs ?? []) if (seq !== null && seq !== undefined) inboundSeqs.add(seq);
+      },
+    };
+    return this.cut;
+  }
+
+  _endCut(cut) {
+    if (cut && this.cut === cut) this.cut = null;
+  }
+
+  // What the retiring backend still holds once authority has moved on: a turn
+  // it started after the interrupt (a steer that lost the race falls back to a
+  // new turn), and inputs in its queue, which its stop() would drop. Task
+  // receipts among them go back to the tasks, which offer them again.
+  async _collectCut(cut) {
+    const backend = cut.backend;
+    if (backend.turnInProgress) {
+      try { await backend.interrupt(); } catch (error) {
+        this.logger.warn('retired_runtime_interrupt_failed', { error: error.message });
+      }
+    }
+    const queued = backend.takeQueued();
+    cut.add({ inboundSeqs: queued.map((item) => item?.seq) });
+    const receipts = receiptIds(queued);
+    if (receipts.length > 0) {
+      try { this.onTurnAbandoned?.(withReceiptIds({ inboundSeqs: [] }, receipts)); } catch (error) {
+        this.logger.warn('turn_abandon_notify_failed', { error: error.message });
+      }
+    }
+  }
+
+  // Hands the inputs a switch cut off to the runtime that stays, ahead of
+  // anything that arrived meanwhile: admission is still closed, so they start
+  // its first turn, behind a one-time notice. Which ones go on, and the
+  // notice, are the decision ledger's (resumeInterrupted). Returns how many.
+  _resumeCut(cut, { from, to, failed = false }) {
+    const inboundSeqs = [...cut.inboundSeqs].sort((a, b) => a - b);
+    if (inboundSeqs.length === 0 || this.stopping || !this.backend) return 0;
+    let plan = null;
+    try {
+      plan = this.resumeInterrupted?.({ inboundSeqs, from, to, failed }) ?? null;
+    } catch (error) {
+      this.logger.warn('runtime_switch_resume_failed', { error: error.message });
+      return 0;
+    }
+    const items = plan?.items ?? [];
+    if (items.length === 0) return 0;
+    // A runtime that serves one conversation per session takes them a
+    // conversation at a time, in order.
+    const batches = this._singleConversation()
+      ? [...Map.groupBy(items, scopeOf).values()]
+      : [items];
+    if (plan.notice) this.backend.setTurnNotice(plan.notice);
+    let resumed = 0;
+    for (const batch of batches) {
+      let result;
+      try { result = this._deliver(batch, { admission: 'enqueue' }); } catch (error) {
+        result = { accepted: false, reason: error.message };
+      }
+      if (result?.accepted !== true) {
+        this.logger.warn('runtime_switch_resume_rejected', { runtime: this.runtime, reason: result?.reason });
+        continue;
+      }
+      resumed += batch.length;
+    }
+    if (resumed === 0) this.backend.setTurnNotice(null);
+    this.logger.info('runtime_switch_inputs_resumed', {
+      runtime: this.runtime, from, to, failed, resumed, cut: inboundSeqs.length,
+    });
+    return resumed;
   }
 
   _selectEffort(effort, options) { return this.backend.selectEffort(effort, options); }
@@ -960,6 +1135,7 @@ export class AgentRuntime {
 
   async stop() {
     this.stopping = true;
+    this.stopController.abort();
     const transitionPending = this.pendingTransitions > 0;
     const stopBackends = async () => {
       const backends = [...new Set([this.backend, this.stagedBackend].filter(Boolean))];

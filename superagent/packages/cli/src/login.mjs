@@ -7,6 +7,7 @@ import { connectTelegram } from './telegram.mjs';
 import { connectQQ } from './qq.mjs';
 import { connectSlack } from './slack.mjs';
 import { connectOneBot } from './onebot.mjs';
+import { connectDingTalk } from './dingtalk.mjs';
 import { askEmail, mailboxesOf, writeEmailAccount } from './email.mjs';
 import { t } from './i18n.mjs';
 import { IM_LABELS, chooseInstance, loadInstances } from './instances.mjs';
@@ -14,7 +15,7 @@ import { LarkCli } from './lark-cli.mjs';
 import { which } from './runtimes.mjs';
 import { completeLarkApp, connectWeixin, larkScopes, reauthorizeOwner, weixinFirstMessage } from './setup.mjs';
 
-// `ov-superagent login <lark|weixin|email|telegram|slack|qq|onebot> [instance]`: authorize again what an
+// `ov-superagent login <lark|weixin|email|telegram|slack|qq|onebot|dingtalk> [instance]`: authorize again what an
 // instance already has, after a login expired or a password changed. For
 // Feishu/Lark it first checks the app has what OpenViking SuperAgent needs, and an owner or
 // administrator of the app can add what it lacks with one scan.
@@ -22,14 +23,14 @@ import { completeLarkApp, connectWeixin, larkScopes, reauthorizeOwner, weixinFir
 // instance may be left out when there is only one, and is chosen otherwise.
 
 const usage = () => t(
-  '用法：ov-superagent login <lark|weixin|email|telegram|slack|qq|onebot> [实例]\n'
+  '用法：ov-superagent login <lark|weixin|email|telegram|slack|qq|onebot|dingtalk> [实例]\n'
   + '  登录过期或改了密码后重新授权；要接入新的 IM，运行 ov-superagent setup 修改实例。只有一个实例时可以不写实例名。\n',
-  'Usage: ov-superagent login <lark|weixin|email|telegram|slack|qq|onebot> [instance]\n'
+  'Usage: ov-superagent login <lark|weixin|email|telegram|slack|qq|onebot|dingtalk> [instance]\n'
   + '  Authorize again after a login expired or a password changed; to connect a new IM, change the instance with ov-superagent setup. With one instance the name can be left out.\n',
 );
 
 function larkCliBin(env, deployment) {
-  const bundled = bundledLarkCli();
+  const bundled = bundledLarkCli({ env });
   return env.LARK_CLI_BIN || deployment.env?.LARK_CLI_BIN || (bundled === 'lark-cli' ? which('lark-cli', env) : bundled);
 }
 
@@ -47,10 +48,10 @@ async function restart({ agent, prompter, env, control }) {
 export async function loginCommand([connector, requested, ...extra], {
   prompter,
   env = process.env,
-  connect = { weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, email: askEmail },
+  connect = { weixin: connectWeixin, telegram: connectTelegram, slack: connectSlack, qq: connectQQ, onebot: connectOneBot, dingtalk: connectDingTalk, email: askEmail },
   control = { restart: restartCommand, stop: stopCommand },
 } = {}) {
-  if (!['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot'].includes(connector) || extra.length) {
+  if (!['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'onebot', 'dingtalk'].includes(connector) || extra.length) {
     prompter.write(usage());
     return 2;
   }
@@ -82,6 +83,14 @@ export async function loginCommand([connector, requested, ...extra], {
     }
     if (!await restart({ agent, prompter, env, control })) return 1;
     prompter.write(t(`\n${agent.displayName}（${agent.id}）的 ${label} 已更新。\n`, `\n${label} is updated for ${agent.displayName} (${agent.id}).\n`));
+    return 0;
+  }
+
+  if (connector === 'dingtalk') {
+    await connect.dingtalk({ plan: agent, prompter });
+    if (!await restart({ agent, prompter, env, control })) return 1;
+    prompter.write(t(`\n${agent.displayName}（${agent.id}）的钉钉群机器人密钥已更新。\n`,
+      `\nDingTalk credentials are updated for ${agent.displayName} (${agent.id}).\n`));
     return 0;
   }
 

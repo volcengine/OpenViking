@@ -4,17 +4,91 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { actionEndpoint, listTools } from './actions/client.mjs';
+import { actionEndpoint, callTool, listTools } from './actions/client.mjs';
 import { PI_MCP_STATUS } from './pi-runtime.mjs';
+import { RouterToolBudget } from './router-tool-budget.mjs';
 
 // Loaded explicitly only by the daemon's Pi process. Nothing is written to
 // ~/.pi or the workspace, and no tools are reimplemented in this extension.
+// Pi's own tools that do work, as against the Core tools a router routes with.
+// A worker's working directory as its system prompt names it: the same for
+// every task, so that one task's session copied into another keeps its prefix.
+export const WORKER_CWD = 'the task directory your brief names ("Your directory: …"); your shell and file tools start there';
+
 export default function personalAgentMcp(pi) {
   const config = JSON.parse(process.env.PERSONAL_AGENT_MCP_CONFIG);
   pi.registerMcpServer('personal_agent', { ...config, exposure: 'direct' });
 
   let stopped = false;
   pi.on('session_shutdown', () => { stopped = true; });
+
+  // A router (workers scheduler) hands longer work to tasks: its own shell
+  // commands are capped and may not sleep, and each run gets a few calls of
+  // its own work tools; past them, the work belongs to a task. A capped
+  // command alone does not stop many short ones in a row. Pi exposes either the
+  // bash tool or the powershell tool, so both obey the same rules.
+  const shellLimit = Number(process.env.PERSONAL_AGENT_SHELL_LIMIT_S);
+  const workBudget = Number(process.env.PERSONAL_AGENT_WORK_TOOL_BUDGET);
+  const budget = new RouterToolBudget(workBudget);
+  const shellTool = (name) => name === 'bash' || name === 'powershell';
+  if (shellLimit > 0) {
+    pi.on('agent_start', () => { budget.reset(); });
+    pi.on('tool_call', (event) => {
+      const reason = budget.check(event.toolName);
+      if (reason) return { block: true, reason };
+      if (!shellTool(event.toolName) || !event.input) return undefined;
+      if (/(^|[\s;&|(`])(?:sleep|Start-Sleep|Wait-(?:Event|Process|Job|Debugger))\b/i.test(String(event.input.command ?? ''))) {
+        return { block: true, reason: 'Your own shell may not sleep or wait; hand work that waits to a task (task_create).' };
+      }
+      const timeout = Number(event.input.timeout);
+      event.input.timeout = timeout > 0 ? Math.min(timeout, shellLimit) : shellLimit;
+      return undefined;
+    });
+  }
+  // A session that does the work itself (a worker, or a router that hands
+  // nothing off) may run long commands, but one that never ends must not hold
+  // it: Pi's shell tools have no default timeout. A command without one gets the
+  // default; one that asks for more than the most gets the most. Neither cuts
+  // short a timeout the model chose within it, nor refuses sleep.
+  const shellDefault = Number(process.env.PERSONAL_AGENT_SHELL_DEFAULT_S);
+  const shellMax = Number(process.env.PERSONAL_AGENT_SHELL_MAX_S);
+  if (!(shellLimit > 0) && shellDefault > 0) {
+    pi.on('tool_call', (event) => {
+      if (!shellTool(event.toolName) || !event.input) return undefined;
+      const timeout = Number(event.input.timeout);
+      const chosen = timeout > 0 ? timeout : shellDefault;
+      event.input.timeout = shellMax > 0 ? Math.min(chosen, shellMax) : chosen;
+      return undefined;
+    });
+  }
+  // A worker (workers scheduler) gets what is routed to its task while it
+  // works, as the router gets its inputs: after each model step and before
+  // its run settles, new task inputs join the session as one message and the
+  // run goes on, so a follow-up never waits for the turn to end.
+  if (process.env.PERSONAL_AGENT_TASK_INPUTS === '1') {
+    const pull = async () => {
+      if (stopped) return undefined;
+      let result;
+      try { result = await callTool(actionEndpoint('mcp'), 'task_check', {}); } catch { return undefined; }
+      if (!result?.data?.count) return undefined;
+      return {
+        entries: [{ type: 'custom_message', customType: 'task_input', display: true,
+          content: `[task input] ${result.text}\nHandle what changes or answers your task; hand back with task_handback what does not belong to it.` }],
+        continue: true,
+      };
+    };
+    pi.on('turn_end', pull);
+    pi.on('agent_before_settle', pull);
+    // Every worker's system prompt names the same working directory. A task
+    // that follows another starts from a copy of that task's session, in its
+    // own directory; Pi records the new directory as a later system update,
+    // but folds it into the first system message for providers without
+    // mid-conversation system messages, and then nothing of the copied
+    // history is in the provider's prefix cache. The brief names the task's
+    // directory, and its shell and file tools start there.
+    pi.on('before_agent_start', (event) => { event.systemPromptOptions.cwd = WORKER_CWD; });
+  }
+
   pi.on('session_start', (_event, ctx) => {
     stopped = false;
     // Other session_start handlers (including built-in MCP) must run before

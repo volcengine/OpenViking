@@ -4,8 +4,8 @@
 
 // Builds the release archives the installer and updater download: one
 // superagent-<version>-<platform>.tar.gz per platform, each holding the committed
-// code, its production dependencies, the pinned lark-cli and Slack CLI binaries and the
-// official Node it runs on, plus a release manifest with their SHA-256s.
+// code, its production dependencies, the pinned lark-cli, Slack CLI and ripgrep binaries
+// and the official Node it runs on, plus a release manifest with their SHA-256s.
 //
 //   node scripts/build-release.mjs [--ref HEAD] [--platform linux-x64 ...|--all]
 //                                  [--out dist] [--version X] [--download-base URL]
@@ -23,6 +23,7 @@ import {
   PLATFORMS, artifactName, assertSha256, assertVersion, checksumFor, download, fetchText, hostPlatform, platform, sha256File,
 } from '../packages/updater/src/artifacts.mjs';
 import { installLarkCliBinary } from './release/lark-cli.mjs';
+import { installRipgrepBinary } from './release/ripgrep.mjs';
 import { installSlackCliBinary } from './release/slack-cli.mjs';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
@@ -107,9 +108,10 @@ async function buildPlatform({ stage, platformId, version, commit, nodeVersion, 
   say(`fetching lark-cli for ${platformId} ...`);
   await installLarkCliBinary({ packageDir: path.join(root, 'node_modules', '@larksuite', 'cli'), platformId });
   const slack = await installSlackCliBinary({ root, platformId });
+  const ripgrep = await installRipgrepBinary({ root, platformId });
 
   const metadata = {
-    name: 'superagent', version, commit, platform: platformId, node: nodeVersion, slackCli: slack.version,
+    name: 'superagent', version, commit, platform: platformId, node: nodeVersion, slackCli: slack.version, ripgrep: ripgrep.version,
     builtAt: new Date().toISOString(), ...(downloadBase ? { downloadBase: downloadBase.replace(/\/+$/, '') } : {}),
   };
   fs.writeFileSync(path.join(root, 'release.json'), `${JSON.stringify(metadata, null, 2)}\n`);

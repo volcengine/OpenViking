@@ -3,12 +3,34 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 // Separate from the stable release/updater protocol. Run on Windows x64.
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { assertSha256, checksumFor, download, fetchText, sha256File } from '../packages/updater/src/artifacts.mjs';
+
+// Same walk and byte layout as the installer's release digest: relative path,
+// NUL, byte length, NUL, bytes. windows-preview.json carries the result, so it
+// is excluded from its own digest.
+function treeDigest(root) {
+  const hash = createHash('sha256');
+  const walk = (directory) => {
+    const entries = fs.readdirSync(directory, { withFileTypes: true })
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      const full = path.join(directory, entry.name);
+      const relative = path.relative(root, full).split(path.sep).join('/');
+      if (relative === 'windows-preview.json') continue;
+      if (entry.isDirectory()) { walk(full); continue; }
+      const data = fs.readFileSync(full);
+      hash.update(relative); hash.update('\0'); hash.update(String(data.length)); hash.update('\0'); hash.update(data);
+    }
+  };
+  walk(root);
+  return hash.digest('hex');
+}
 
 if (process.platform !== 'win32' || process.arch !== 'x64') {
   throw new Error('Build Windows previews on a Windows x64 runner');
@@ -43,6 +65,7 @@ try {
   run(node, [path.join(root, 'runtime', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
     'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], root);
   run(node, [path.join(root, 'scripts', 'install-lark-cli.mjs')], root);
+  run(node, [path.join(root, 'scripts', 'install-ripgrep.mjs')], root);
   // npm workspace junctions point at the staging directory. Materialize only
   // these known links before ZIP creation, so the extracted tree is portable.
   for (const workspace of pkg.workspaces) {
@@ -54,11 +77,13 @@ try {
     fs.cpSync(workspaceDir, link, { recursive: true });
   }
   fs.copyFileSync(path.join(root, 'scripts', 'windows', 'superagent-preview.ps1'), path.join(root, 'superagent-preview.ps1'));
-  const metadata = { name: 'superagent', version, commit, platform: 'win32-x64', channel: 'windows-preview',
-    node: pkg.superagent.node, builtAt: new Date().toISOString() };
-  fs.writeFileSync(path.join(root, 'windows-preview.json'), `${JSON.stringify(metadata, null, 2)}\n`);
   // Ship the repository license alongside this source-containing preview.
   fs.writeFileSync(path.join(root, 'LICENSE'), git('show', 'HEAD:LICENSE'));
+  // A reinstall compares this digest, so an equal-length change in the installed
+  // tree is still a conflict without hashing 24k files through PowerShell.
+  const metadata = { name: 'superagent', version, commit, platform: 'win32-x64', channel: 'windows-preview',
+    node: pkg.superagent.node, builtAt: new Date().toISOString(), treeSha256: treeDigest(root) };
+  fs.writeFileSync(path.join(root, 'windows-preview.json'), `${JSON.stringify(metadata, null, 2)}\n`);
   run('pwsh', ['-NoProfile', '-File', path.join(root, 'superagent-preview.ps1'), '-Action', 'check'], root);
   fs.mkdirSync(out, { recursive: true });
   const archive = path.join(out, `${name}.zip`);

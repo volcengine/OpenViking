@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { createHash, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -104,6 +105,13 @@ function requestIsSameOrigin(request, expectedPort) {
   }
 }
 
+const API_KEY_HEADER = /^Bearer (\S+)$/i;
+
+// Hashing both sides makes the comparison constant-time whatever the presented length.
+function digest(value) {
+  return createHash('sha256').update(value, 'utf8').digest();
+}
+
 function parseRequestTarget(rawTarget) {
   if (typeof rawTarget !== 'string'
     || Buffer.byteLength(rawTarget, 'utf8') > MAX_REQUEST_TARGET_BYTES) {
@@ -173,6 +181,7 @@ export class ActivityWebServer {
     this.config = config;
     this.logger = logger;
     this.instances = new Map(config.instances.map((instance) => [instance.id, instance]));
+    this.apiKeyDigest = config.apiKey ? digest(config.apiKey) : null;
     this.httpServer = null;
     this.staticFiles = null;
     this.stopPromise = null;
@@ -213,7 +222,8 @@ export class ActivityWebServer {
   async handleRequest(request, response) {
     const address = this.address();
     const expectedPort = typeof address === 'object' && address ? address.port : this.config.port;
-    if (!requestIsSameOrigin(request, expectedPort)) {
+    // A Bearer key is never sent ambiently, so with one any Host/Origin is fine.
+    if (!this.apiKeyDigest && !requestIsSameOrigin(request, expectedPort)) {
       sendJson(response, 403, { error: 'forbidden' });
       return;
     }
@@ -235,6 +245,14 @@ export class ActivityWebServer {
       return;
     }
 
+    // Static files (including the login screen) stay public.
+    // The updater probes /ready from this machine without the key; it gets the status only.
+    const probeOnly = Boolean(this.apiKeyDigest) && !this.hasApiKey(request) && this.isLocalReadyProbe(request, url);
+    if (this.apiKeyDigest && !probeOnly && !this.hasApiKey(request)) {
+      sendJson(response, 401, { error: 'unauthorized' }, { 'www-authenticate': 'Bearer' });
+      return;
+    }
+
     if (url.pathname === '/api/instances' && url.search === '') {
       sendJson(response, 200, {
         defaultInstance: this.config.defaultInstance,
@@ -253,11 +271,20 @@ export class ActivityWebServer {
         sendJson(response, 404, { error: 'not_found' });
         return;
       }
-      await this.proxy(request, response, selected.instance, `${url.pathname}${url.search}`);
+      await this.proxy(request, response, selected.instance, `${url.pathname}${url.search}`, { statusOnly: probeOnly });
       return;
     }
 
     sendJson(response, 404, { error: 'not_found' });
+  }
+
+  hasApiKey(request) {
+    const presented = API_KEY_HEADER.exec(request.headers.authorization ?? '')?.[1];
+    return Boolean(presented) && timingSafeEqual(digest(presented), this.apiKeyDigest);
+  }
+
+  isLocalReadyProbe(request, url) {
+    return url.pathname === '/ready' && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress);
   }
 
   isSafePageQuery(url) {
@@ -284,7 +311,7 @@ export class ActivityWebServer {
     return { instance };
   }
 
-  proxy(clientRequest, clientResponse, instance, upstreamPath) {
+  proxy(clientRequest, clientResponse, instance, upstreamPath, { statusOnly = false } = {}) {
     return new Promise((resolve) => {
       let completed = false;
       let timedOut = false;
@@ -327,6 +354,10 @@ export class ActivityWebServer {
             && upstreamResponse.statusCode <= 599
             ? upstreamResponse.statusCode
             : 502;
+          if (statusOnly) {
+            sendJson(clientResponse, status, { ready: status >= 200 && status < 300 });
+            return;
+          }
           sendBuffer(
             clientResponse,
             status,

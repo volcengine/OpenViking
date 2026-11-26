@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getConfig, projectDir } from '../src/config.mjs';
 import { createLogger } from '../src/logger.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
@@ -195,7 +195,9 @@ function fakeLarkSource(dir) {
 // logged to INPUT_LOG with the turn id as text) | 'reply-loop' (the same with
 // the identical reply_message "mock reply" in place of stay_silent, for an
 // instance without explicitSilence).
-const ACTION_CLIENT = fileURLToPath(new URL('../src/actions/client.mjs', import.meta.url));
+// The fixture is generated source that imports this module: a URL, not a bare
+// path. `D:\...` reads as the `d:` scheme to ESM and fails on a Windows host.
+const ACTION_CLIENT = pathToFileURL(fileURLToPath(new URL('../src/actions/client.mjs', import.meta.url))).href;
 
 function fakeCodexSource(dir, { behavior, failBlob }) {
   return `
@@ -207,12 +209,41 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
     const BEHAVIOR = ${JSON.stringify(behavior)};
     const FAIL_BLOB = ${JSON.stringify(failBlob)};
     fs.appendFileSync(SPAWN_LOG, JSON.stringify(process.argv.slice(2)) + '\\n');
+    // 'codex exec' is a worker turn (workers scheduler): it reports the
+    // request's text back as its draft, then ends the turn.
+    if (process.argv[2] === 'exec') {
+      const prompt = process.argv.at(-1);
+      fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'exec', text: prompt }) + '\\n');
+      const request = /\\] (TASK[^\\n]*)/.exec(prompt)?.[1] ?? 'no request';
+      const emit = (payload) => process.stdout.write(JSON.stringify(payload) + '\\n');
+      callTool(actionEndpoint('fake-codex-worker'), 'task_report', { state: 'done', summary: 'checked', draft: 'worker result for: ' + request })
+        .catch((error) => fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n'))
+        .finally(() => {
+          emit({ type: 'thread.started', thread_id: 'th-worker' });
+          emit({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } });
+          emit({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } });
+          process.exit(0);
+        });
+    }
     const send = (payload) => process.stdout.write(JSON.stringify(payload) + '\\n');
     const rl = readline.createInterface({ input: process.stdin });
     let turnSeq = 0;
     const interrupted = new Set();
     const steered = new Set();
     const turnTexts = new Map();
+    // 'inbox': a turn whose input says LONG stays open; an inbox notice makes
+    // it call message_check, and the lines that follow get one reply that
+    // ends the turn. Any other turn replies to its newest line at once.
+    let heldTurn = null;
+    const logError = (error) => fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-error', text: String(error.message) }) + '\\n');
+    const replyToNewest = (text) => {
+      const decision = [...text.matchAll(/ event=(\\S+)/g)].at(-1)?.[1];
+      const target = [...text.matchAll(/ msg=(\\S+)/g)].at(-1)?.[1];
+      if (!decision) return Promise.resolve();
+      return callTool(actionEndpoint('fake-codex'), 'reply_message', { decision_id: decision, message_id: target, markdown: 'mock reply' })
+        .catch(logError);
+    };
+    const complete = (turnId) => send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'completed' } } });
     rl.on('line', (line) => {
       let msg;
       try { msg = JSON.parse(line); } catch { return; }
@@ -232,7 +263,7 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
       }
       if (msg.method === 'turn/start') {
         const text = msg.params.input.map((part) => part.text).join('');
-        fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/start', text }) + '\\n');
+        fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/start', text, pid: process.pid }) + '\\n');
         send({ id: msg.id, result: {} });
         const turnId = 'turn-' + (++turnSeq);
         turnTexts.set(turnId, text);
@@ -293,6 +324,29 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
             silence('loop wording ' + calls).then(() => setTimeout(loop, 10));
           };
           loop();
+        } else if (BEHAVIOR === 'workers') {
+          // The router: a TASK line becomes a task; a task report is relayed
+          // where the request was made.
+          const endpoint = actionEndpoint('fake-codex');
+          let work = Promise.resolve();
+          if (text.includes('[task report]')) {
+            const [, msg, event] = /origin: .*msg=(\\S+) event=(\\S+)/.exec(text) ?? [];
+            const draft = text.split('\\n').filter((line) => line.startsWith('| ')).map((line) => line.slice(2)).join('\\n');
+            work = callTool(endpoint, 'reply_message', { message_id: msg, decision_id: event, markdown: draft });
+          } else if (/TASK/.test(text)) {
+            const decision = [...text.matchAll(/ event=(\\S+)/g)].at(-1)?.[1];
+            work = callTool(endpoint, 'task_create', { trigger_ids: [decision], title: 'mock task' });
+          }
+          work.catch(logError).then(() => complete(turnId));
+        } else if (BEHAVIOR === 'inbox') {
+          if (/LONG/.test(text)) heldTurn = turnId;
+          else replyToNewest(text).then(() => complete(turnId));
+        } else if (BEHAVIOR === 'switch') {
+          // A turn whose input says HOLD works until it is interrupted; the
+          // same input handed on by a /runtime switch (behind its notice) is
+          // answered at once.
+          if (/HOLD/.test(text) && !/\\[daemon notice\\] \\/runtime switched/.test(text)) heldTurn = turnId;
+          else replyToNewest(text).then(() => complete(turnId));
         } else if (BEHAVIOR === 'fail') {
           send({ method: 'turn/completed', params: { turn: { id: turnId, status: 'failed', error: { message: FAIL_BLOB } } } });
         }
@@ -304,9 +358,23 @@ function fakeCodexSource(dir, { behavior, failBlob }) {
         steered.add(msg.params.expectedTurnId);
         turnTexts.set(msg.params.expectedTurnId, (turnTexts.get(msg.params.expectedTurnId) ?? '') + '\\n' + text);
         send({ id: msg.id, result: {} });
+        if (BEHAVIOR === 'inbox' && heldTurn) {
+          if (text.startsWith('[daemon inbox]')) {
+            callTool(actionEndpoint('fake-codex'), 'message_check', {})
+              .then((result) => fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'tool-result', text: result.text }) + '\\n'), logError);
+          } else if (/ event=/.test(text)) {
+            const turnId = heldTurn;
+            heldTurn = null;
+            replyToNewest(text).then(() => complete(turnId));
+          }
+        }
         return;
       }
       if (msg.method === 'turn/interrupt') {
+        if (BEHAVIOR === 'switch') {
+          fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/interrupt', text: msg.params.turnId, pid: process.pid }) + '\\n');
+          if (heldTurn === msg.params.turnId) heldTurn = null;
+        }
         if (BEHAVIOR === 'loop' || BEHAVIOR === 'reply-loop') {
           interrupted.add(msg.params.turnId);
           fs.appendFileSync(INPUT_LOG, JSON.stringify({ method: 'turn/interrupt', text: msg.params.turnId }) + '\\n');
@@ -361,6 +429,9 @@ export async function startMockEnv({
     workspace: path.join(dir, 'workspace'),
     larkCliBin: fakeLark,
     codexBin: fakeCodex,
+    // TraeX speaks Codex's app-server protocol: the same fake serves it, so
+    // a test can switch runtimes (each process logs its pid).
+    traexBin: fakeCodex,
     profile: 'test-profile',
     initialModel: '',
     claudeModel: '',
@@ -378,10 +449,14 @@ export async function startMockEnv({
       check: ovCheck,
       namespace: 'mock-namespace',
       messages: new Map(),
-      async create(sessionId) { return { session_id: sessionId, uri: `viking://session/${sessionId}` }; },
+      async create(sessionId) { this.messages.set(sessionId, []); return { session_id: sessionId, uri: `viking://session/${sessionId}` }; },
       async append(id, message) { const rows = this.messages.get(id) || []; rows.push({ ...message, parts: [{ type: 'text', text: message.content }] }); this.messages.set(id, rows); },
       async context(id) { return { latest_archive_overview: '', messages: this.messages.get(id) || [], stats: { totalArchives: 0 } }; },
-      async request() { return { pending_tokens: 0 }; },
+      async request(route) {
+        const id = decodeURIComponent(route.slice('/sessions/'.length));
+        if (!this.messages.has(id)) throw Object.assign(new Error('Session not found'), { httpStatus: 404 });
+        return { session_id: id, uri: `viking://session/${id}`, pending_tokens: 0 };
+      },
       ...ovClient,
     },
   });

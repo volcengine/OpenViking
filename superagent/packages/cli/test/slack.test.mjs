@@ -3,6 +3,7 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { supportsFileModes } from '../../daemon/src/platform/index.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -88,7 +89,7 @@ test('tokens are checked, hidden, and saved only after the owner sends the code'
   } finally { state.close(); }
   const manifestFile = path.join(f.dataDir, 'slack', 'app-manifest.json');
   assert.deepEqual(JSON.parse(fs.readFileSync(manifestFile, 'utf8')), appManifest('OpenViking SuperAgent'));
-  assert.equal(fs.statSync(manifestFile).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(manifestFile).mode & 0o777, 0o600);
   assert.match(f.text(), /https:\/\/api\.slack\.com\/apps\?new_app=1&manifest_json=/);
   assert.match(f.text(), /以 xoxb- 开头[\s\S]*私聊 superagent，发送 superagent-[a-z2-9]{8}[\s\S]*Slack 已接好（Acme）/);
   assert.ok(!f.text().includes(BOT_TOKEN) && !f.text().includes(APP_TOKEN));

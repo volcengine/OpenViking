@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { projectDir as daemonProjectDir } from '../src/config.mjs';
+import { capabilities } from '../src/capabilities.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -94,11 +95,11 @@ describe('module boundaries', () => {
     }
     assert.deepEqual(
       ecosystem.apps.map((app) => app.name),
-      ['superagent-alpha', 'superagent-beta', 'superagent-web', 'superagent-updater'],
+      ['superagent-alpha', 'superagent-beta', 'superagent-web', ...(capabilities.updater ? ['superagent-updater'] : [])],
     );
     const [alpha, beta, web, updater] = ecosystem.apps;
-    assert.match(alpha.script, /packages\/daemon\/src\/main\.mjs$/);
-    assert.match(web.script, /packages\/web\/src\/main\.mjs$/);
+    assert.match(alpha.script, /packages[\\/]daemon[\\/]src[\\/]main\.mjs$/);
+    assert.match(web.script, /packages[\\/]web[\\/]src[\\/]main\.mjs$/);
     assert.equal(alpha.env.OV_SUPERAGENT_PORT, '3738');
     assert.equal(alpha.env.OV_SUPERAGENT_TEMP_DIR, '/tmp/superagent-alpha');
     assert.equal(beta.env.OV_SUPERAGENT_TEMP_DIR, '/tmp/superagent-default');
@@ -130,6 +131,7 @@ describe('module boundaries', () => {
     assert.equal(beta.env.OV_SUPERAGENT_VOLC_ENVIRONMENT_ID, 'env-beta-self-hosted');
     assert.equal(web.env.OV_SUPERAGENT_WEB_HOST, '127.0.0.1');
     assert.equal(web.env.OV_SUPERAGENT_WEB_PORT, '3737');
+    assert.equal(web.env.OV_SUPERAGENT_WEB_API_KEY, '');
     assert.equal(web.env.OV_SUPERAGENT_WEB_DEFAULT_INSTANCE, 'beta');
     const effectiveWebEnv = Object.fromEntries(Object.entries({
       ...env,
@@ -145,25 +147,32 @@ describe('module boundaries', () => {
         { id: 'beta', label: 'Beta', host: '127.0.0.1', port: 3740 },
       ],
     );
-    assert.match(updater.script, /packages\/updater\/src\/main\.mjs$/);
-    assert.match(updater.env.OV_SUPERAGENT_UPDATER_SOCKET, /updater\.sock$/);
-    assert.equal(updater.env.OV_SUPERAGENT_CONFIG, manifestPath);
-    assert.equal(updater.env.OV_SUPERAGENT_LOG_LEVEL, 'debug');
-    assert.equal(updater.env.ARK_API_KEY, 'system-only-secret');
-    assert.equal(updater.env.OV_SUPERAGENT_DRY_RUN, undefined);
+    if (capabilities.updater) {
+      assert.match(updater.script, /packages[\\/]updater[\\/]src[\\/]main\.mjs$/);
+      assert.match(updater.env.OV_SUPERAGENT_UPDATER_SOCKET, /updater\.sock$/);
+      assert.equal(updater.env.OV_SUPERAGENT_CONFIG, manifestPath);
+      assert.equal(updater.env.OV_SUPERAGENT_LOG_LEVEL, 'debug');
+      assert.equal(updater.env.ARK_API_KEY, 'system-only-secret');
+      assert.equal(updater.env.OV_SUPERAGENT_DRY_RUN, undefined);
+    }
     assert.equal(web.env.OV_SUPERAGENT_LOG_LEVEL, undefined);
     const [manifestOnlyAlpha, , , manifestOnlyUpdater] = manifestOnlyEcosystem.apps;
     assert.equal(manifestOnlyAlpha.env.OV_SUPERAGENT_LOG_LEVEL, 'info');
     assert.equal(manifestOnlyAlpha.env.OV_SUPERAGENT_DRY_RUN, 'false');
-    assert.equal(manifestOnlyUpdater.env.OV_SUPERAGENT_LOG_LEVEL, undefined);
-    assert.equal(manifestOnlyUpdater.env.OV_SUPERAGENT_DRY_RUN, undefined);
-    // The updater reads its targets from the manifest per request, not a list
-    // frozen into its environment at start.
-    assert.equal(updater.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON, undefined);
+    if (capabilities.updater) {
+      assert.equal(manifestOnlyUpdater.env.OV_SUPERAGENT_LOG_LEVEL, undefined);
+      assert.equal(manifestOnlyUpdater.env.OV_SUPERAGENT_DRY_RUN, undefined);
+      // The updater reads its targets from the manifest per request, not a list
+      // frozen into its environment at start.
+      assert.equal(updater.env.OV_SUPERAGENT_UPDATER_TARGETS_JSON, undefined);
+      assert.equal(updater.wait_ready, true);
+    } else {
+      assert.equal(updater, undefined);
+      assert.equal(manifestOnlyUpdater, undefined);
+    }
     assert.equal(alpha.wait_ready, true);
     assert.equal(beta.wait_ready, true);
     assert.equal(web.wait_ready, true);
-    assert.equal(updater.wait_ready, true);
   });
 
   it('keeps the web module independent from SQLite and daemon source code', () => {

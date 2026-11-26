@@ -1,15 +1,38 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { SlackError, validToken } from './api.mjs';
+// Platform execFile, like every other CLI client: Windows starts a `.cmd` shim
+// or a Node entrypoint through its own interpreter, and cannot run an
+// extensionless script the way POSIX does.
+import { execFile, findExecutable, hostPlatformId, systemEnvironmentKeys } from '../platform/index.mjs';
+
+const RETRYABLE_REMOVE = new Set(['EPERM', 'EBUSY', 'ENOTEMPTY']);
+
+// A Windows temp directory can still be held by the child's handles right after
+// it exits; cleanup must not turn a completed query into a failure. Retry the
+// transient codes without blocking the daemon, then leave the directory to the
+// OS temp sweep rather than fail a read that already succeeded.
+async function removeTempDir(directory) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try { fs.rmSync(directory, { recursive: true, force: true }); return; }
+    catch (error) {
+      // A real permission failure is not ours to hide.
+      if (!RETRYABLE_REMOVE.has(error.code)) throw error;
+      await delay(50);
+    }
+  }
+}
 
 export const SLACK_CLI_VERSION = '4.10.0';
-export const bundledSlackCli = () => fileURLToPath(new URL('../../../../bin/slack', import.meta.url));
+export const bundledSlackCli = ({ host = hostPlatformId, env = process.env } = {}) => host.startsWith('termux-')
+  ? findExecutable('slack', env) || 'slack'
+  : fileURLToPath(new URL('../../../../bin/slack', import.meta.url));
 const READ_METHODS = new Set(['users.conversations', 'conversations.history', 'conversations.replies',
   'conversations.members', 'users.info']);
 
@@ -27,7 +50,7 @@ export class SlackCli {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-slack-cli-'));
     const env = {};
     for (const key of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'SystemRoot', 'SYSTEMROOT', 'TEMP', 'TMP', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
-      'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy']) {
+      'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'https_proxy', 'http_proxy', 'no_proxy', ...systemEnvironmentKeys]) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
     Object.assign(env, { SLACK_BOT_TOKEN: this.token, SLACK_DISABLE_TELEMETRY: 'true', NO_COLOR: '1' });
@@ -51,7 +74,7 @@ export class SlackCli {
       if (error || result?.ok !== true) throw new Error('Slack CLI query failed or returned invalid JSON');
       return result;
     } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
+      await removeTempDir(directory);
     }
   }
 }

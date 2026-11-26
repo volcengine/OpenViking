@@ -8,6 +8,7 @@
 
 const INSTANCES_API = '/api/instances';
 const ACTIVITY_API = '/api/activity';
+const API_KEY_STORAGE = 'superagent.web.apiKey';
 const PAGE_LIMIT = 100;
 const POLL_MS = 1000;
 const INITIAL_ROWS = 400;
@@ -40,9 +41,16 @@ const dom = {
   loadOlder: $('load-older'),
   followLive: $('follow-live'),
   notice: $('notice'),
+  login: $('login'),
+  loginForm: $('login-form'),
+  loginKey: $('login-key'),
+  loginError: $('login-error'),
+  loginSubmit: $('login-submit'),
+  logout: $('logout'),
 };
 
 const state = {
+  authRequired: false,
   instance: null,
   epoch: 'current',      // 'current' | number | null(全部)
   currentEpoch: null,
@@ -880,8 +888,81 @@ function activityUrl(params) {
   return url;
 }
 
+// ---------- API key：服务端配置了 key 时，所有 /api 请求带 Bearer ----------
+class AuthRequired extends Error {}
+
+function storedApiKey() {
+  try { return window.localStorage.getItem(API_KEY_STORAGE) || ''; } catch { return ''; }
+}
+
+function setStoredApiKey(value) {
+  try {
+    if (value) window.localStorage.setItem(API_KEY_STORAGE, value);
+    else window.localStorage.removeItem(API_KEY_STORAGE);
+  } catch { /* 存不了就只在本页生效 */ }
+}
+
+// probeKey：登录页试一把 key，原样返回响应，不清存储也不弹登录
+async function apiFetch(url, probeKey) {
+  const headers = { accept: 'application/json' };
+  const key = probeKey || storedApiKey();
+  if (key) headers.authorization = `Bearer ${key}`;
+  const response = await fetch(url, { headers });
+  if (probeKey) return response;
+  if (response.status === 401) {
+    setStoredApiKey('');
+    showLogin(Boolean(key));
+    throw new AuthRequired();
+  }
+  return response;
+}
+
+const KEY_REJECTED = 'API key 不正确或已更换，请重新输入。';
+
+function showLoginError(message) {
+  dom.loginError.textContent = message;
+  dom.loginError.hidden = !message;
+  if (message) dom.loginKey.setAttribute('aria-invalid', 'true');
+  else dom.loginKey.removeAttribute('aria-invalid');
+}
+
+function showLogin(rejected) {
+  state.authRequired = true;
+  dom.logout.hidden = true;
+  showLoginError(rejected ? KEY_REJECTED : '');
+  dom.login.hidden = false;
+  dom.loginKey.value = '';
+  dom.loginKey.focus();
+}
+
+// 先用这把 key 打一次 /api/instances：对了才保存并刷新，不对就留在登录页提示
+async function submitLogin() {
+  const key = dom.loginKey.value.trim();
+  if (!key) return;
+  dom.loginSubmit.disabled = true;
+  let error = '';
+  try {
+    const response = await apiFetch(INSTANCES_API, key);
+    if (response.ok) {
+      setStoredApiKey(key);
+      window.location.reload();
+      return;
+    }
+    error = response.status === 401 ? KEY_REJECTED : `服务器返回 HTTP ${response.status}，请稍后重试。`;
+  } catch {
+    error = '无法连接服务器，请检查网络后重试。';
+  }
+  dom.loginSubmit.disabled = false;
+  showLoginError(error);
+}
+
+function logout() {
+  setStoredApiKey('');
+  window.location.reload();
+}
+
 async function fetchActivity(params = {}) {
-  const response = await fetch(activityUrl(params), { headers: { accept: 'application/json' } });
+  const response = await apiFetch(activityUrl(params));
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }
@@ -933,6 +1014,7 @@ async function loadInitial() {
     state.loaded = true;
     render();
   } catch (error) {
+    if (error instanceof AuthRequired) return;
     showNotice(`无法连接 daemon：${error.message}`);
     dom.live.className = 'live bad';
     dom.liveText.textContent = '连接失败';
@@ -940,6 +1022,7 @@ async function loadInitial() {
 }
 
 async function poll() {
+  if (state.authRequired) return;
   if (state.polling || document.hidden || viewingHistorical()) return;
   if (!state.loaded) { void loadInitial(); return; }
   state.polling = true;
@@ -958,6 +1041,7 @@ async function poll() {
     if (added > 0) render();
     else { renderLive(); renderStats(); }
   } catch (error) {
+    if (error instanceof AuthRequired) return;
     showNotice(`无法连接 daemon：${error.message}`);
     dom.live.className = 'live bad';
     dom.liveText.textContent = '连接失败';
@@ -981,6 +1065,7 @@ async function loadOlder() {
       dom.feed.scrollTop = dom.feed.scrollHeight - before;
     }
   } catch (error) {
+    if (error instanceof AuthRequired) return;
     showNotice(`加载更早失败：${error.message}`);
   } finally {
     dom.loadOlder.disabled = false;
@@ -1008,7 +1093,7 @@ function stepSession(delta) {
 
 async function loadInstances() {
   try {
-    const data = await (await fetch(INSTANCES_API, { headers: { accept: 'application/json' } })).json();
+    const data = await (await apiFetch(INSTANCES_API)).json();
     dom.instance.replaceChildren(...data.instances.map((inst) => {
       const option = h('option', '', inst.label);
       option.value = inst.id;
@@ -1019,7 +1104,9 @@ async function loadInstances() {
     state.epoch = epochFromUrl();
     dom.instance.value = state.instance;
     dom.instance.disabled = data.instances.length < 2;
-  } catch {
+    dom.logout.hidden = !storedApiKey();
+  } catch (error) {
+    if (error instanceof AuthRequired) return;
     showNotice('实例列表读取失败');
   }
 }
@@ -1073,10 +1160,16 @@ document.addEventListener('keydown', (event) => {
   else if (event.key === 'l' || event.key === 'L' || event.key === 'End') jumpLatest();
   else if (event.key === 'p' || event.key === 'P') dom.privacy.click();
 });
+dom.loginForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!dom.loginSubmit.disabled) void submitLogin();
+});
+dom.logout.addEventListener('click', logout);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) void poll(); });
 
 (async () => {
   await loadInstances();
+  if (state.authRequired) return;
   syncUrl();
   await loadInitial();
   setInterval(() => void poll(), POLL_MS);

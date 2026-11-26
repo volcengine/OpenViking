@@ -30,6 +30,7 @@
         <span id="live-text">正在连接</span>
       </span>
       <button id="privacy-toggle" class="quiet" type="button" aria-pressed="false" title="模糊正文 (P)">隐藏正文</button>
+      <button id="logout" class="quiet" type="button" title="清除本机保存的 API key" hidden>退出</button>
     </header>
 
     <section id="strip" class="strip" aria-label="时间带：每段为一轮，点击跳转">
@@ -58,5 +59,23 @@
 
     <button id="follow-live" class="follow" type="button" hidden>↓ 最新</button>
     <div id="notice" class="notice" role="alert" hidden></div>
+
+    <div id="login" class="login" role="dialog" aria-modal="true" aria-labelledby="login-title" hidden>
+      <form id="login-form" class="login-card">
+        <div class="login-brand">
+          <svg class="login-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <rect width="32" height="32" rx="8" fill="currentColor"/>
+            <path d="M6 17h5l3-7 4 13 3-6h5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span>Agent Activity</span>
+        </div>
+        <h1 id="login-title" class="login-title">输入 API key 以继续</h1>
+        <p class="login-hint">在运行 SuperAgent 的机器上执行以下命令查看 key：<code>ov-superagent web auth --show</code></p>
+        <label class="login-label" for="login-key">API key</label>
+        <input id="login-key" class="login-key" type="password" placeholder="粘贴 API key" spellcheck="false" autocapitalize="off" aria-describedby="login-error">
+        <p id="login-error" class="login-error" role="alert" hidden></p>
+        <button id="login-submit" class="login-submit" type="submit">进入控制台</button>
+      </form>
+    </div>
   </body>
 </html>

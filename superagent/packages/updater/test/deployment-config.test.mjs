@@ -6,7 +6,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import test from 'node:test';
+import nodeTest from 'node:test';
+// The Windows preview does not ship the updater (docs/windows.md), so its
+// suite has no Windows behavior to measure. Keep the same cases for POSIX.
+const test = (name, ...rest) => {
+  const fn = rest.pop();
+  const options = typeof rest[0] === 'object' && rest[0] !== null ? rest[0] : {};
+  const skip = process.platform === 'win32' ? 'the Windows preview does not ship the updater' : false;
+  return nodeTest(name, { ...options, ...(skip ? { skip } : {}) }, fn);
+};
 
 const require = createRequire(import.meta.url);
 const {
@@ -14,10 +22,12 @@ const {
   deploymentDaemonEnvOverrides,
   applyDeploymentDaemonEnv,
   loadDeploymentManifest,
+  parseWebSettings,
   resolveDeploymentManifestPath,
   resolveSecretsFilePath,
   resolvedDeploymentDaemonEnv,
   selectDeploymentAgent,
+  webProcessEnv,
 } = require('../../../deployment-config.cjs');
 
 function validManifest() {
@@ -77,6 +87,21 @@ function withManifest(value, callback) {
 }
 
 test('loads any number of agents from one absolute deployment manifest', () => {
+  const value = validManifest();
+  value.agents[0].primaryRuntime = 'traex';
+  value.agents[0].fallbackRuntime = 'pi';
+  value.agents[0].fallbackReturnAfterMs = 600_000;
+  withManifest(value, (manifestPath) => {
+    const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
+    const env = { OV_SUPERAGENT_PRIMARY_RUNTIME: 'claude' };
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.OV_SUPERAGENT_PRIMARY_RUNTIME, 'traex');
+    assert.equal(env.OV_SUPERAGENT_FALLBACK_RUNTIME, 'pi');
+    assert.equal(env.OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS, '600000');
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_PRIMARY_RUNTIME, undefined);
+    assert.equal(env.OV_SUPERAGENT_FALLBACK_RUNTIME, undefined);
+  });
   withManifest(validManifest(), (manifestPath) => {
     const deployment = loadDeploymentManifest({
       OV_SUPERAGENT_CONFIG: manifestPath,
@@ -401,6 +426,62 @@ test('requires a complete per-agent self-hosted binding for Ark', () => {
   }
 });
 
+test('starts an external connector program and can make it the primary channel', () => {
+  const manifest = validManifest();
+  const external = { id: 'mattermost', command: '/usr/local/bin/ovsa-mattermost', args: ['--once'] };
+  Object.assign(manifest.agents[1], {
+    channel: 'mattermost',
+    connectors: ['mattermost'],
+    externalConnectors: [external],
+    profile: undefined,
+  });
+  delete manifest.agents[1].profile;
+  withManifest(manifest, (manifestPath) => {
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath };
+    const deployment = loadDeploymentManifest(env);
+    const agent = selectDeploymentAgent(deployment);
+    assert.equal(agent.channel, 'mattermost');
+    assert.deepEqual(agent.connectors, ['mattermost']);
+    assert.deepEqual(agent.externalConnectors, [{ ...external, prompt: null }]);
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_CHANNEL, 'mattermost');
+    assert.equal(env.OV_SUPERAGENT_CONNECTORS_JSON, '["mattermost"]');
+    assert.deepEqual(JSON.parse(env.OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON), [{ ...external, prompt: null }]);
+  });
+  for (const [name, mutate, error] of [
+    ['built-in id', (agent) => { agent.externalConnectors = [{ id: 'lark', command: '/bin/true' }]; }, /built-in/],
+    ['reserved id', (agent) => {
+      agent.externalConnectors = [{ id: 'timer', command: '/bin/true' }];
+      agent.connectors = ['timer'];
+      agent.channel = 'timer';
+      delete agent.profile;
+    }, /reserved/],
+    ['missing prompt', (agent) => {
+      agent.externalConnectors = [{ ...external, prompt: '/no/such/ovsa-prompt.md' }];
+      agent.connectors = ['mattermost'];
+      agent.channel = 'mattermost';
+      delete agent.profile;
+    }, /does not exist/],
+    ['relative command', (agent) => { agent.externalConnectors = [{ id: 'discord', command: 'ovsa-discord' }]; agent.connectors = ['lark', 'discord']; }, /absolute path/],
+    ['unused program', (agent) => { agent.externalConnectors = [{ id: 'discord', command: '/usr/local/bin/ovsa-discord' }]; }, /not listed/],
+    ['ark runtime', (agent) => {
+      agent.model = 'ark';
+      agent.volcSessionId = 'sesn-1';
+      agent.volcEnvironmentId = 'env-1';
+      agent.connectors = ['mattermost'];
+      agent.channel = 'mattermost';
+      agent.externalConnectors = [external];
+      delete agent.profile;
+    }, /ark runtime/],
+  ]) {
+    const next = validManifest();
+    mutate(next.agents[1]);
+    withManifest(next, (manifestPath) => {
+      assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), error, name);
+    });
+  }
+});
+
 test('connects mailboxes only together with the email connector, each account file once', () => {
   const manifest = validManifest();
   const mailboxes = [{ id: 'email-gmail', config: '/srv/superagent/secrets/beta-gmail.json' }, { id: 'email-qq', config: '/srv/superagent/secrets/beta-qq.json' }];
@@ -520,6 +601,25 @@ test('explicit silence is on by default except on Ark, an explicit false opts ou
   });
 });
 
+test('the scheduler is legacy unless an instance picks the inbox, and is always pinned in the daemon env', () => {
+  const manifest = validManifest();
+  manifest.agents[1].scheduler = 'inbox';
+  withManifest(manifest, (manifestPath) => {
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_SCHEDULER: 'inbox' };
+    const deployment = loadDeploymentManifest(env);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').scheduler, 'legacy');
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.OV_SUPERAGENT_SCHEDULER, 'legacy');
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_SCHEDULER, 'inbox');
+  });
+  const broken = validManifest();
+  broken.agents[0].scheduler = 'parallel';
+  withManifest(broken, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.scheduler must be legacy or inbox or workers/);
+  });
+});
+
 test('staged replies are opt-in per instance and always pinned in the daemon env', () => {
   const manifest = validManifest();
   manifest.agents[1].stagedReplies = true;
@@ -572,6 +672,31 @@ test('Lark message access is the owner\'s unless an instance keeps to the bot\'s
   });
 });
 
+test('a bot-only instance\'s owner is pinned in its daemon env, and never leaks into another instance', () => {
+  const manifest = validManifest();
+  Object.assign(manifest.agents[1], { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_owner12345678' });
+  withManifest(manifest, (manifestPath) => {
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_LARK_OWNER_OPEN_ID: 'ou_stale12345678' };
+    const deployment = loadDeploymentManifest(env);
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID, 'ou_owner12345678');
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').larkOwnerOpenId, null);
+    assert.equal(env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID, undefined);
+  });
+  const wrong = validManifest();
+  wrong.agents[0].larkOwnerOpenId = 'someone';
+  withManifest(wrong, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.larkOwnerOpenId must be a Feishu\/Lark open_id/);
+  });
+  const elsewhere = validManifest();
+  Object.assign(elsewhere.agents[2], { channel: 'weixin', connectors: ['weixin'], larkOwnerOpenId: 'ou_owner12345678' });
+  delete elsewhere.agents[2].profile;
+  withManifest(elsewhere, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[2\]\.larkOwnerOpenId is only used by the lark connector/);
+  });
+});
+
 test('meeting notes are opt-in for one Feishu/Lark instance at most, and always pinned in the daemon env', () => {
   const manifest = validManifest();
   manifest.agents[1].meetingNotes = true;
@@ -600,6 +725,13 @@ test('meeting notes are opt-in for one Feishu/Lark instance at most, and always 
   broken.agents[0].meetingNotes = 'yes';
   withManifest(broken, (manifestPath) => {
     assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.meetingNotes must be a boolean/);
+  });
+  // Meeting notes are read as the owner, which a bot-only instance cannot.
+  const botOnly = validManifest();
+  Object.assign(botOnly.agents[1], { larkMessageAccess: 'bot', meetingNotes: true });
+  withManifest(botOnly, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }),
+      /agents\[1\]\.meetingNotes needs the owner's user access, which larkMessageAccess bot does not have/);
   });
 });
 
@@ -783,4 +915,29 @@ test('a legacy pre-release home is neither an error nor read: the default is alw
   const config = path.join(home, '.vika', 'config.json');
   assert.equal(resolveDeploymentManifestPath({ HOME: home, OV_SUPERAGENT_CONFIG: config }), config);
   assert.equal(fs.readFileSync(config, 'utf8'), '{}', 'legacy data is left alone');
+});
+
+test('the shared Web takes its host from web.host and its key from secrets.env', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-web-secrets-'));
+  const secretsPath = path.join(directory, 'secrets.env');
+  try {
+    fs.writeFileSync(secretsPath, 'ARK_API_KEY=ark\nOV_SUPERAGENT_WEB_API_KEY=web-key-0123456789\n');
+    withManifest({ ...validManifest(), web: { host: '0.0.0.0' } }, (manifestPath) => {
+      const env = { HOME: '/Users/test', OV_SUPERAGENT_CONFIG: manifestPath, OV_SUPERAGENT_SECRETS_FILE: secretsPath };
+      const deployment = loadDeploymentManifest(env);
+      assert.deepEqual(webProcessEnv(deployment, env), { OV_SUPERAGENT_WEB_HOST: '0.0.0.0', OV_SUPERAGENT_WEB_API_KEY: 'web-key-0123456789' });
+      assert.equal(resolvedDeploymentDaemonEnv(deployment, env).OV_SUPERAGENT_WEB_API_KEY, undefined);
+    });
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('web.host only takes addresses that also answer on 127.0.0.1', () => {
+  for (const host of ['127.0.0.1', '0.0.0.0', '::']) {
+    assert.equal(parseWebSettings({ host }).host, host);
+  }
+  for (const host of ['localhost', '::1', '10.0.0.5', 'box.example.com', ':', 'example..com']) {
+    assert.throws(() => parseWebSettings({ host }), /web\.host must be/);
+  }
 });

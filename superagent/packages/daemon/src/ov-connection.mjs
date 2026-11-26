@@ -3,6 +3,9 @@
 
 import fs from 'node:fs';
 
+// Transport metadata is not part of the server's business result.
+export const OV_HTTP_STATUS = Symbol('ov-http-status');
+
 export class OVUnavailableError extends Error {
   constructor(message, httpStatus) {
     super(message);
@@ -67,6 +70,7 @@ export class OVConnection {
       if (text.length > 8_000_000) throw new Error();
       const data = JSON.parse(text);
       if (!response.ok || data.status !== 'ok') throw new Error();
+      Object.defineProperty(data, OV_HTTP_STATUS, { value: response.status });
       return data;
     } catch (error) {
       // Never expose credentials, URLs, or response bodies. A request that ran

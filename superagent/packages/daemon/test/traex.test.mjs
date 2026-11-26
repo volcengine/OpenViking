@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
+import { CodexAgent } from '../src/codex.mjs';
 import { TraexAgent } from '../src/traex.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -145,7 +147,7 @@ describe('TraexAgent app-server backend', () => {
     assert.doesNotMatch(rendered, /features\.apps=false/);
     assert.doesNotMatch(rendered, /--effort/);
     assert.equal(spawnCalls[0].options.env.LARKSUITE_CLI_PROFILE, 'test-profile');
-    assert.ok(spawnCalls[0].options.env.PATH.startsWith('/fake:/fake-slack:'));
+    assert.ok(spawnCalls[0].options.env.PATH.startsWith(['/fake', '/fake-slack', ''].join(path.delimiter)));
     assert.equal(spawnCalls[0].options.env.OPENVIKING_USAGE_VIEW, 'off');
     assert.equal(spawnCalls[0].options.env.PERSONAL_AGENT_SOCKET, '/tmp/traex-actions.sock');
     assert.equal(spawnCalls[0].options.env.PERSONAL_AGENT_AUTHORITY, 'traex-token');
@@ -232,4 +234,15 @@ describe('TraexAgent app-server backend', () => {
 
     assert.match(activities.at(-1).eventKey, /^traex:th-traex-1:turn-1:agent\.turn_completed:/);
   });
+});
+
+it('passes TraeX completion policy through the actual router constructor and handshake', async () => {
+  const { agent, children, spawnCalls } = newAgent(makeStore(), {}, { ...baseConfig, scheduler: 'workers' });
+  try {
+    const child = await handshake(agent, children);
+    const transmitted = JSON.stringify({ args: spawnCalls[0].args, requests: child.sent() });
+    assert.match(transmitted, /always end with a short, non-empty final answer/);
+    const codex = new CodexAgent(baseConfig, makeStore(), quietLogger);
+    assert.doesNotMatch(codex.systemPrompt, /## Internal turn completion/);
+  } finally { await agent.stop(); }
 });

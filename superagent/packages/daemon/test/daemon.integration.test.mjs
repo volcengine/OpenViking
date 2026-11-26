@@ -671,3 +671,113 @@ describe('/model immediate switch', () => {
     assert.match(replies[0].text, /已切到 gpt-x（下一轮生效，上下文保留）/);
   });
 });
+
+describe('/tasks card refresh', () => {
+  const LOCKED = () => new Error('lark-cli update answered card failed: Failed to create card content, ext=ErrCode: 11310; ErrMsg: card action is lock; ');
+
+  // updateCard answers with what `edit` returns or throws, call by call.
+  function setup(edit = async () => ({ ok: true })) {
+    const daemon = new PersonalAgentDaemon(
+      { dataDir: os.tmpdir(), lockPath: path.join(os.tmpdir(), 'unused-superagent-tasks-refresh.lock') },
+      createLogger('error', { test: 'tasks-refresh' }),
+    );
+    const logs = [];
+    const keep = (level) => (message, fields) => { if (message === 'command_card_refresh') logs.push({ level, ...fields }); };
+    daemon.logger = { debug() {}, info: keep('info'), warn: keep('warn'), error: keep('error'), child() { return this; } };
+    daemon.cardEditWaitMs = 0;
+    daemon.agentRuntime = { async snapshot() { return { runtime: 'pi', work: { working: false, connected: true } }; } };
+    daemon.store = { appendCognitionJournal() {}, recordActivity() { return true; } };
+    const ended = { id: 't1', status: 'done', title: '查 X', requester_name: 'Alice', origin_source: 'lark', origin_chat_type: 'p2p',
+      round: 1, turns: 1, created_at_ms: Date.now(), updated_at_ms: Date.now(), ended_at_ms: Date.now() };
+    let drawn = 0;
+    daemon.tasks = { overview: () => { drawn += 1; return { live: [], ended: [ended], total: 1, slots: { used: 0, of: 3, reserved: 0, reservedOf: 1 }, dormantDays: 5 }; } };
+    const updates = [];
+    const replies = [];
+    daemon.connectors = { isOwner: () => true, async updateCard(messageId) { updates.push(messageId); return edit(updates.length); } };
+    daemon.actions = { async replyToEvent(event, text, kind, { card }) { replies.push({ text, card }); return { ok: true }; } };
+    let presses = 0;
+    const press = (value = { superagent_command: '/tasks', arg: '', refresh: true }) => {
+      presses += 1;
+      return daemon.handleSlashCommand({ name: 'tasks', arg: '' }, {
+        ...chatEvent({ kind: 'message.action', messageType: 'card_action', chatType: 'p2p', chatId: 'oc_tasks12345678',
+          messageId: `ca_refresh12345${presses}`, parentId: 'om_card123456789', senderId: 'ou_owner12345678' }),
+        data: { interaction: { value } },
+      }, { seq: presses });
+    };
+    const settled = () => Promise.all([...daemon.cardRefreshes.values()].map((state) => state.done));
+    return { daemon, updates, replies, logs, press, settled, drawn: () => drawn };
+  }
+
+  // A promise the test settles when it chooses.
+  function gate() {
+    let open;
+    const promise = new Promise((resolve) => { open = resolve; });
+    return { promise, open };
+  }
+
+  it('redraws the card the button is on, off the ingress queue, and sends no message', async () => {
+    const lark = gate();
+    const { updates, replies, logs, press, settled } = setup(() => lark.promise);
+    await press();
+    // The press is answered before its edit, which waits on Lark until opened.
+    while (updates.length === 0) await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(updates, ['om_card123456789']);
+    lark.open({ ok: true });
+    await settled();
+    assert.deepEqual(replies, []);
+    assert.deepEqual(logs.map(({ outcome, tries }) => [outcome, tries]), [['redrawn', 1]]);
+  });
+
+  it('draws only the newest press on a card', async () => {
+    const lark = gate();
+    const { updates, logs, press, settled, drawn } = setup((call) => (call === 1 ? lark.promise : { ok: true }));
+    await press();
+    await press();
+    await press();
+    lark.open({ ok: true });
+    await settled();
+    assert.equal(updates.length, 2);
+    assert.equal(drawn(), 2, 'the press the newest replaced never ran');
+    assert.deepEqual(logs.map(({ outcome }) => outcome), ['replaced', 'redrawn', 'redrawn']);
+  });
+
+  it('stops waiting out the lock when a newer press comes, and the newer one draws the card', async () => {
+    const { daemon, updates, replies, logs, press, settled } = setup((call) => { if (call === 1) throw LOCKED(); return { ok: true }; });
+    daemon.cardEditWaitMs = 50;
+    await press();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await press();
+    await settled();
+    assert.equal(updates.length, 2);
+    assert.deepEqual(replies, []);
+    assert.deepEqual(logs.map(({ outcome, tries }) => [outcome, tries]), [['superseded', 1], ['redrawn', 1]]);
+  });
+
+  it('only ever edits its card, unless Lark says the card is too old to edit; a task picked always sends one', async () => {
+    const busy = setup(() => { throw LOCKED(); });
+    await busy.press();
+    await busy.settled();
+    assert.equal(busy.updates.length, 4);
+    assert.deepEqual(busy.replies, []);
+    assert.deepEqual(busy.logs.map(({ level, outcome }) => [level, outcome]), [['warn', 'busy']]);
+
+    const refused = setup(() => { throw new Error('lark-cli update answered card failed (230099): ext=ErrCode: 200621; ErrMsg: parse card json err; '); });
+    await refused.press();
+    await refused.settled();
+    assert.equal(refused.updates.length, 1);
+    assert.deepEqual(refused.replies, [], 'a refused edit sends no new card');
+    assert.deepEqual(refused.logs.map(({ outcome }) => outcome), ['failed']);
+
+    const old = setup(() => { throw new Error('lark-cli update answered card failed (230031): Message can only be modified within 14 days after sending.'); });
+    await old.press();
+    await old.settled();
+    assert.equal(old.replies.length, 1);
+    assert.equal(old.replies[0].card.header.title.content, '后台任务');
+    assert.deepEqual(old.logs.map(({ outcome }) => outcome), ['too_old']);
+
+    const picked = setup();
+    await picked.press({ superagent_command: '/tasks' });
+    assert.deepEqual(picked.updates, []);
+    assert.equal(picked.replies.length, 1);
+  });
+});

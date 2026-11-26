@@ -7,19 +7,21 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn as nodeSpawn } from './platform/index.mjs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { cognitionHistoryPrefix, CognitionLimitError } from './cognition.mjs';
 import { safeError as safe } from './logger.mjs';
 import { activityPayload } from './activity.mjs';
 import { sanitizeAgentChildEnv, terminateProcessTree } from './process-utils.mjs';
 import { agentCliCommands } from './agent-clis.mjs';
 import { agentToolEnv, agentToolServer } from './actions/api.mjs';
-import { assembleConversationPolicy } from './conversation-policy.mjs';
-import { assertPiVersion, piCommand, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
+import { assembleConversationPolicy, policyHashOf } from './conversation-policy.mjs';
+import { assertPiVersion, piCommand, piShellTimeoutEnv, piToolArgs, PI_MCP_EXTENSION, PI_MCP_STATUS } from './pi-runtime.mjs';
 import { piIsolationArgs } from './ov-isolation.mjs';
 import { deliveryItem, receiptIds, withReceiptIds, withTurnNotice } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { BoundedLineReader, lineTypeFromPrefix, stringFieldFromPrefix } from './line-reader.mjs';
+
+import { ROUTER_SHELL_LIMIT_S, ROUTER_WORK_TOOL_BUDGET } from './router-tool-budget.mjs';
 
 const MAX_LINE_BYTES = 5_000_000;
 const START_TIMEOUT_MS = 15_000;
@@ -28,6 +30,7 @@ const RECONNECT_CAP_MS = 30_000;
 const RPC_TIMEOUT_MS = 8_000;
 
 const PI_RUNTIME = getRuntimeDefinition('pi');
+export { ROUTER_SHELL_LIMIT_S, ROUTER_WORK_TOOL_BUDGET } from './router-tool-budget.mjs';
 export const PI_EFFORTS = PI_RUNTIME.efforts;
 
 // Pi events the daemon can lose when one is too long for MAX_LINE_BYTES. They
@@ -122,7 +125,7 @@ export class PiAgent {
     this.syncedThroughSeq = options.syncedThroughSeq ?? 0;
     this.deliveredThroughSeq = this.syncedThroughSeq;
 
-    this.systemPrompt = assembleConversationPolicy(config);
+    this.systemPrompt = assembleConversationPolicy(config, { runtime: 'pi', logger });
     this.developerInstructionsText = this.systemPrompt;
     this.model = options.model
       ?? store.getSetting?.('pi_model')
@@ -177,10 +180,7 @@ export class PiAgent {
   get threadId() { return this.sessionId; }
 
   get policyHash() {
-    return createHash('sha256')
-      .update(this.developerInstructionsText).update('\0')
-      .update(this.config.workspace).update('\0')
-      .update('pi-rpc-mcp-v2').digest('hex');
+    return policyHashOf(this.developerInstructionsText, this.config.workspace, 'pi-rpc-mcp-v2');
   }
 
   get state() {
@@ -340,6 +340,7 @@ export class PiAgent {
         '--approve',
         ...isolationArgs,
         '--extension', PI_MCP_EXTENSION,
+        ...piToolArgs(),
       ];
       if (model) args.push('--model', model);
 
@@ -347,6 +348,16 @@ export class PiAgent {
         ...agentToolServer(this.config, this.authorityToken),
         timeout: Math.max(10, Math.ceil(this.config.sendTimeoutMs / 1_000) + 5),
       });
+      // The router of the workers scheduler must not be held by its own
+      // shell: the extension caps its commands and refuses sleep.
+      if (this.config.scheduler === 'workers') {
+        env.PERSONAL_AGENT_SHELL_LIMIT_S = String(ROUTER_SHELL_LIMIT_S);
+        env.PERSONAL_AGENT_WORK_TOOL_BUDGET = String(ROUTER_WORK_TOOL_BUDGET);
+      } else {
+        // A router that does the work itself may run long commands, but one
+        // that never ends must not hold every chat (pi-runtime.mjs).
+        Object.assign(env, piShellTimeoutEnv());
+      }
 
       let child;
       try {

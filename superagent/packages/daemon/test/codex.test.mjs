@@ -3,6 +3,7 @@
 
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 import {
@@ -297,7 +298,7 @@ describe('formatting helpers', () => {
     assert.match(rendered, /plugins\.openviking-memory@openviking\.enabled=false/);
     assert.match(rendered, /features\.memories=false/);
     assert.equal(spawnOptions[0].env.LARKSUITE_CLI_PROFILE, 'test-profile');
-    assert.ok(spawnOptions[0].env.PATH.startsWith('/fake:/fake-slack:'));
+    assert.ok(spawnOptions[0].env.PATH.startsWith(['/fake', '/fake-slack', ''].join(path.delimiter)));
     assert.equal(spawnOptions[0].env.OPENVIKING_USAGE_VIEW, 'off');
     assert.equal(spawnOptions[0].env.PERSONAL_AGENT_SOCKET, '/data/actions.sock');
     assert.equal(spawnOptions[0].env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);
@@ -1407,3 +1408,18 @@ it('routes long developer instructions through Codex start/resume RPC only when 
   assert.equal(traex._usesRpcInstructions(), false, 'unverified TraeX protocol support is not inferred');
   assert.equal(traex._threadParams().developerInstructions, undefined);
 });
+
+for (const scheduler of ['workers', 'legacy']) {
+  it(`CodexAgent installs the router hook only for workers scheduling (${scheduler})`, async () => {
+    let args;
+    const children = [];
+    const agent = new CodexAgent({ ...baseConfig, scheduler }, makeStore(), quietLogger, {
+      spawn: (_bin, argv) => { args = argv; const child = new FakeChild(); children.push(child); return child; },
+    });
+    try {
+      const child = await handshake(agent, children);
+      assert.equal(args.some((arg) => arg.startsWith('hooks.PreToolUse=')), scheduler === 'workers');
+      assert.equal(child.ofMethod('thread/start')[0].params.config?.bypass_hook_trust, scheduler === 'workers' ? true : undefined);
+    } finally { await agent.stop(); }
+  });
+}

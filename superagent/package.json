@@ -1,6 +1,6 @@
 {
   "name": "superagent",
-  "version": "0.5.3-preview",
+  "version": "0.5.6-preview",
   "license": "AGPL-3.0",
   "private": true,
   "description": "A local personal agent core with connector processes and an activity web module.",
@@ -18,7 +18,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "setup": "npm ci --no-audit --no-fund && node scripts/install-lark-cli.mjs && node scripts/install-slack-cli.mjs && npm run check:pi && npm run check:durable",
+    "setup": "npm ci --no-audit --no-fund && node scripts/install-lark-cli.mjs && node scripts/install-slack-cli.mjs && node scripts/install-ripgrep.mjs && npm run check:pi && npm run check:durable",
     "pi": "pi",
     "check:pi": "node packages/daemon/scripts/check-pi.mjs",
     "check:durable": "node packages/daemon/scripts/check-durable.mjs",

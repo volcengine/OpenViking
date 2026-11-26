@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -47,7 +48,7 @@ describe('Store', () => {
 
   afterEach(() => {
     try { store.close(); } catch {}
-    fs.rmSync(directory, { recursive: true, force: true });
+    removeTempDir(directory);
   });
 
   it('records an accepted message DONE and deduplicates replay durably', () => {
@@ -592,7 +593,7 @@ describe('Store', () => {
 describe('decision ledger', () => {
   it('adds the table to an existing database, applies decision outcome priority, and prunes old decisions', (t) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-decisions-'));
-    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    t.after(() => removeTempDir(directory));
     const file = path.join(directory, 'state.sqlite3');
     // A database from before the ledger existed.
     const old = new Store(file, quietLogger);

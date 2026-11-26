@@ -10,6 +10,13 @@ _Avoid_: putting provider polling, webhooks, or long connections in Core
 The process that owns the shared AgentRuntime session, OpenViking session, inbox pipeline, and the outbound ActionService with its outbox.
 _Avoid_: naming Core after one provider (a Lark or Weixin bot) when discussing provider-neutral behavior
 
+**Runtime fallback**:
+`notices.mjs` owns the primary/backup policy and fixed return window. Automatic
+`AgentRuntime.transition` calls do not persist the runtime preference. Timed
+return closes ingress before waiting for accepted work; a failed return keeps
+admission held. Manual `/runtime` selection supersedes the window. Configuration
+and compatibility details are in `docs/usage-reference.md#automatic-runtime-fallback`.
+
 ## Language
 
 **Conversation policy**:

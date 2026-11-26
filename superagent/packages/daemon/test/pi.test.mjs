@@ -5,32 +5,38 @@ import { PI_BUILTIN_EXTENSIONS } from '../src/ov-isolation.mjs';
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { describe, it } from 'node:test';
-import { managedPiBin, PI_VERSION, PI_MCP_EXTENSION, PI_MCP_STATUS } from '../src/pi-runtime.mjs';
+import { after, describe, it } from 'node:test';
+import { managedPiBin, piToolArgs, PI_VERSION, PI_MCP_EXTENSION, PI_MCP_STATUS } from '../src/pi-runtime.mjs';
 import { assembleConversationPolicy } from '../src/conversation-policy.mjs';
 import {
   PI_EFFORTS,
   PiAgent,
   sanitizePiEnv,
 } from '../src/pi.mjs';
+import { localSocketPath } from '../src/platform/index.mjs';
 import { RuntimeAdapter } from '../src/runtime-adapter.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
+
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-pi-'));
+after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const baseConfig = {
   piBin: 'pi',
   piModel: 'openai/gpt-4o',
   piEffort: 'medium',
-  workspace: '/tmp/superagent-workspace',
+  workspace: path.join(root, 'workspace'),
   projectDir: '/release',
-  dataDir: '/tmp/superagent-pi-data',
-  databasePath: '/tmp/superagent-test.sqlite3',
+  dataDir: path.join(root, 'data'),
+  databasePath: path.join(root, 'test.sqlite3'),
   profile: 'test-profile',
   connectors: ['lark'],
   larkCliBin: '/fake/lark-cli',
   slackCliBin: '/fake-slack/slack',
-  actionSocketPath: '/tmp/superagent-pi-data/actions.sock',
+  actionSocketPath: localSocketPath(path.join(root, 'data')),
   actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs',
   sendTimeoutMs: 5_000,
   maxReplyChars: 1_000,
@@ -60,6 +66,11 @@ class FakeChild extends EventEmitter {
     this.emit('exit', code, signal);
   }
   kill(signal = 'SIGTERM') { this.finish(signal === 'SIGKILL' ? 137 : 0, signal); }
+}
+
+async function waitForExit(child, timeoutMs = 2_000) {
+  const started = Date.now();
+  while (child.exitCode === null && Date.now() - started < timeoutMs) await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 const helpFlags = [
@@ -344,6 +355,17 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.deepEqual(failures[0].receiptIds, ['receipt-stop']);
   });
 
+  it('caps a workers router\'s own shell instead of giving it the default timeout', async () => {
+    const { agent, calls } = harness({ config: { ...baseConfig, scheduler: 'workers' } });
+    await agent.start();
+    const { args, options: { env } } = calls.at(-1);
+    assert.deepEqual([env.PERSONAL_AGENT_SHELL_LIMIT_S, env.PERSONAL_AGENT_WORK_TOOL_BUDGET, env.PERSONAL_AGENT_SHELL_DEFAULT_S, env.PERSONAL_AGENT_SHELL_MAX_S],
+      ['30', '6', undefined, undefined]);
+    const runtimePrompt = fs.readFileSync(args[args.indexOf('--append-system-prompt') + 1], 'utf8');
+    assert.match(runtimePrompt, /keep commands within 30 seconds/);
+    assert.doesNotMatch(runtimePrompt, /stopped after 5 minutes/);
+  });
+
   it('preflights, starts pi --mode rpc, and prefixes the first real turn', async () => {
     const { agent, calls, persistent, store } = harness();
     await agent.start();
@@ -357,14 +379,19 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.ok(args.includes('--session-id'));
     const env = calls.at(-1).options.env;
     assert.equal(env.LARKSUITE_CLI_PROFILE, 'test-profile');
-    assert.ok(calls.every((call) => call.options.env.PATH.startsWith('/fake:/fake-slack:')));
-    assert.equal(env.PERSONAL_AGENT_SOCKET, '/tmp/superagent-pi-data/actions.sock');
+    assert.ok(calls.every((call) => call.options.env.PATH.startsWith(['/fake', '/fake-slack', ''].join(path.delimiter))));
+    assert.equal(env.PERSONAL_AGENT_SOCKET, baseConfig.actionSocketPath);
     assert.equal(env.PERSONAL_AGENT_AUTHORITY, agent.authorityToken);
     assert.equal(env.LARK_APP_SECRET, undefined);
     assert.equal(env.PI_LARK_TOOLS_CONFIG, undefined);
     const promptPath = args[args.indexOf('--append-system-prompt') + 1];
     const runtimePrompt = fs.readFileSync(promptPath, 'utf8');
-    assert.equal(runtimePrompt, assembleConversationPolicy(baseConfig));
+    assert.equal(runtimePrompt, assembleConversationPolicy(baseConfig, { runtime: 'pi' }));
+    // A router that does the work itself: a command without a timeout cannot
+    // hold every chat, and the model knows to give longer work its own.
+    assert.match(runtimePrompt, /stopped after 5 minutes, and none runs longer than 60/);
+    assert.deepEqual([env.PERSONAL_AGENT_SHELL_DEFAULT_S, env.PERSONAL_AGENT_SHELL_MAX_S, env.PERSONAL_AGENT_SHELL_LIMIT_S],
+      ['300', '3600', undefined]);
     assert.doesNotMatch(runtimePrompt, /Agent tools from bash|actions\/cli\.mjs/);
     assert.doesNotMatch(runtimePrompt, /lark-cli im \+messages-reply/);
     assert.equal(args[args.lastIndexOf('--extension') + 1], PI_MCP_EXTENSION);
@@ -422,6 +449,7 @@ describe('PiAgent persistent rpc runtime', () => {
     await assert.rejects(agent.start(), /Pi startup timed out/);
     assert.equal(agent.connected, false);
     assert.equal(store.global().sessionReady, false);
+    await waitForExit(persistent[0]);
     assert.notEqual(persistent[0].exitCode, null);
   });
 
@@ -432,6 +460,7 @@ describe('PiAgent persistent rpc runtime', () => {
     await assert.rejects(agent.start(), /interactive dialog during startup/);
     assert.equal(agent.connected, false);
     assert.equal(store.global().sessionReady, false);
+    await waitForExit(persistent[0]);
     assert.notEqual(persistent[0].exitCode, null);
     assert.ok(!parsedWrites(persistent[0]).some(({ type }) => type === 'extension_ui_response'),
       'Pi cannot read a dialog answer before session_start returns');
@@ -470,7 +499,12 @@ describe('PiAgent persistent rpc runtime', () => {
     await agent.stop();
   });
 
-  it('skips an oversized tool result echo and finishes the turn, but still fails on an oversized line it needs', async () => {
+  it('skips an oversized tool result echo and finishes the turn, but still fails on an oversized line it needs', {
+    // The second half proves the child was terminated after a line it needed
+    // was too large. Windows terminates a tree through taskkill, which a fake
+    // pid cannot exercise, so the exit state is only observable on POSIX.
+    skip: process.platform === 'win32' ? 'a fake child cannot be terminated through taskkill' : false,
+  }, async () => {
     // A get_message_media result with a large image, echoed on one stdout line
     // and delivered in pipe-sized chunks.
     const emitLine = (child, value) => {
@@ -720,4 +754,9 @@ describe('PiAgent persistent rpc runtime', () => {
     assert.equal(environment.SESSION_ID, undefined);
     assert.equal(environment.LARKSUITE_CLI_PROFILE, 'fixed-profile');
   });
+});
+
+it('Pi uses the platform shell: PowerShell on Windows, bash elsewhere', () => {
+  assert.deepEqual(piToolArgs('powershell'), ['--tools', '+powershell,-bash']);
+  assert.deepEqual(piToolArgs('bash'), []);
 });

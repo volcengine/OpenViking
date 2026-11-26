@@ -44,6 +44,21 @@ it('reports the owner as the user the profile is logged in as, or none without a
   assert.equal((await preflight({ code: 1, stdout: '', stderr: 'boom' })).owner, null);
 });
 
+it('a bot-only instance has no user login: its owner is the open_id setup kept', async () => {
+  const asked = [];
+  const client = new LarkClient({ profile: 'test-profile', larkCliBin: '/fake/lark-cli', projectDir: '/tmp', larkOwnerOpenId: 'ou_owner12345678' }, {
+    async run(_command, args) {
+      asked.push(args);
+      if (args.includes('auth')) return { code: 0, stdout: JSON.stringify({ identities: { user: { available: false } } }), stderr: '' };
+      if (args.includes('event')) return { code: 0, stdout: '--event-types --quiet', stderr: '' };
+      if (args.includes('im')) return { code: 0, stdout: '+chat-list +messages-reply +messages-send', stderr: '' };
+      return { code: 0, stdout: 'lark-cli 1.0.99', stderr: '' };
+    },
+  }, quietLogger);
+  assert.deepEqual((await client.preflight()).owner, { id: 'ou_owner12345678', target: { user_id: 'ou_owner12345678' } });
+  assert.equal(asked.some((args) => args.includes('auth')), false, 'no user login is looked for');
+});
+
 it('reports the bot itself from bot info, and runs on without it', async () => {
   const preflight = (info) => new LarkClient({ profile: 'test-profile', larkCliBin: '/fake/lark-cli', projectDir: '/tmp' }, {
     async run(_command, args) {

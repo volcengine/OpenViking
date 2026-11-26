@@ -14,6 +14,7 @@ const {
   loadDeploymentManifest,
   openVikingAgentEnv,
   resolvedDeploymentDaemonEnv,
+  webProcessEnv,
 } = require('./deployment-config.cjs');
 
 const releaseDir = __dirname;
@@ -77,6 +78,8 @@ function buildEcosystem(sourceEnv = process.env) {
       OV_SUPERAGENT_HTTP_ENABLED: 'true',
       OV_SUPERAGENT_CHANNEL: agent.channel,
       OV_SUPERAGENT_CONNECTORS_JSON: JSON.stringify(agent.connectors),
+      OV_SUPERAGENT_EXTERNAL_CONNECTORS_JSON: agent.externalConnectors?.length
+        ? JSON.stringify(agent.externalConnectors) : undefined,
       OV_SUPERAGENT_EMAIL_ACCOUNTS_JSON: agent.emailAccounts.length > 0 ? JSON.stringify(agent.emailAccounts) : undefined,
       OV_SUPERAGENT_PORT: String(agent.port),
       // Empty for an instance without the lark connector, so a profile in
@@ -134,7 +137,7 @@ function buildEcosystem(sourceEnv = process.env) {
         listen_timeout: 10000,
         env: {
           NODE_ENV: 'production',
-          OV_SUPERAGENT_WEB_HOST: '127.0.0.1',
+          ...webProcessEnv(deployment, sourceEnv),
           OV_SUPERAGENT_WEB_PORT: '3737',
           OV_SUPERAGENT_WEB_DEFAULT_INSTANCE: deployment.defaultInstance,
           OV_SUPERAGENT_WEB_INSTANCES: webTargetsJson,

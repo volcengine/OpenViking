@@ -1,4 +1,4 @@
-﻿# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 # Installer tests for install-preview.ps1. Each case runs the installer as a
 # child process, so the exit code, the text and the file system are all checked
@@ -193,7 +193,7 @@ try {
     if ($launcherText -notmatch '%~dp0') { throw "the launcher does not resolve its own location:`n$launcherText" }
     # Redirected output uses the console code page, which can turn the arrow into ?/^Z.
     if ($run.Output -notmatch 'OpenViking SuperAgent 0\.5\.0-windows-preview-test \S+ ') { throw "the install line is missing:`n$($run.Output)" }
-    if ($run.Output -notmatch 'next: run ov-superagent setup') { throw "no next step is named:`n$($run.Output)" }
+    if ($run.Output -notmatch 'next: run .*ov-superagent(?:\.cmd)? setup') { throw "no next step is named:`n$($run.Output)" }
     if (Test-Path -LiteralPath (Join-Path $testHome 'deploy.lock')) { throw 'the lock was not released' }
     if (-not (Test-Path -LiteralPath (Join-Path $testHome 'language'))) { throw '-Lang was not saved for later commands' }
     if ((Get-Content -LiteralPath (Join-Path $testHome 'language') -Raw).Trim() -ne 'en') { throw 'the saved language is not the one asked for' }
@@ -228,6 +228,11 @@ if (`$command.CommandType -eq 'Alias' -and `$command.Definition -eq (Join-Path `
     if ((Get-FileHash -LiteralPath (Join-Path $one 'superagent-preview.ps1')).Hash -ne $beforeHash) { throw 'existing release was overwritten' }
     if ((Resolve-LinkOrFile (Join-Path $testHome 'current')) -ne $one) { throw 'conflict changed current' }
 
+    # A byte change that keeps the same length must still be a conflict: the
+    # identity and shape checks alone would call this "already installed".
+    $equal = New-Fixture 'same-version-same-length' -Version '0.5.0-windows-preview-test' -Check 'param($ActioN)'
+    Expect-Failure 'release conflict with equal length' @('-File', $equal, '-NoSetup', '-Lang', 'en') 'Release conflict' | Out-Null
+    if ((Get-FileHash -LiteralPath (Join-Path $one 'superagent-preview.ps1')).Hash -ne $beforeHash) { throw 'existing release was overwritten by an equal-length package' }
     # A new package moves current and keeps the old release as rollback.
     $second = New-Fixture 'second' -Version '0.6.0-windows-preview-test'
     $run = Invoke-Installer -Arguments @('-File', $second, '-Lang', 'en')
@@ -252,7 +257,7 @@ if (`$command.CommandType -eq 'Alias' -and `$command.Definition -eq (Join-Path `
     $quiet = New-Fixture 'quiet' -Version '0.8.0-windows-preview-test'
     $run = Invoke-Installer -Arguments @('-File', $quiet, '-Lang', 'en', '-NoSetup') -Root $quietHome
     if ($run.Code -ne 0) { throw "-NoSetup failed:`n$($run.Output)" }
-    if ($run.Output -notmatch 'next: run ov-superagent setup') { throw "-NoSetup did not name the next step:`n$($run.Output)" }
+    if ($run.Output -notmatch 'next: run .*ov-superagent(?:\.cmd)? setup') { throw "-NoSetup did not name the next step:`n$($run.Output)" }
 
     # ---- the home is HOME when it is set, not %USERPROFILE% -----------------
     # OpenViking SuperAgent explicitly prefers HOME; Windows Node os.homedir() does not.

@@ -10,6 +10,7 @@ import { TelegramClient } from '../telegram/client.mjs';
 import { QQClient } from '../qq/client.mjs';
 import { SlackClient } from '../slack/client.mjs';
 import { OneBotClient } from '../onebot/client.mjs';
+import { DingTalkClient } from '../dingtalk/client.mjs';
 import { EmailClient } from '../email/client.mjs';
 import { MeetingNoteSync } from '../meeting/note-sync.mjs';
 import { getConnectorManifest } from './catalog.mjs';
@@ -75,7 +76,7 @@ const logger = workerLogger(config.logLevel);
 // Connector therefore also reaps lark-cli and any short-lived command child.
 const registry = new ProcessRegistry(logger, { detached: false });
 const Client = { weixin: WeixinClient, email: EmailClient, telegram: TelegramClient, slack: SlackClient, qq: QQClient,
-  onebot: OneBotClient }[connectorId] ?? LarkClient;
+  onebot: OneBotClient, dingtalk: DingTalkClient }[connectorId] ?? LarkClient;
 const client = new Client(config, registry, logger);
 // The Lark Connector of the instance that stores meeting notes scans for
 // them and stores them in OV; nothing of it reaches the Core (see

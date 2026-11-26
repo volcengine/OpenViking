@@ -3,14 +3,17 @@
 // The short-lived DSH control process: patch, handshake, settings and credentials calls, teardown.
 
 import assert from 'node:assert/strict';
+import { spawn } from '../src/platform/index.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import {
   CONTROL_PATCH_FILE, DshControlClient, DshControlError, controlPatchPath,
   withDshControl, writeControlPatch,
 } from '../src/dsh-control.mjs';
+import { installNodeCommand } from './fake-executable.mjs';
 
 // A stand-in for `dsh`: it speaks the superagent bridge surface this client uses,
 // keeps its state in FAKE_DSH_STATE, and appends every frame it receives so a
@@ -177,8 +180,9 @@ function readJsonLines(file) {
 function fakeDsh(t, { mode = 'normal', state = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-dsh-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const script = path.join(dir, 'dsh');
-  fs.writeFileSync(script, FAKE_DSH, { mode: 0o755 });
+  // A stand-in the product can start: a shebang script on POSIX, a Node
+  // entrypoint on Windows, where CreateProcess cannot run the former.
+  const script = installNodeCommand(dir, 'dsh', { body: FAKE_DSH });
   const stateDir = path.join(dir, 'state');
   fs.mkdirSync(stateDir, { mode: 0o700 });
   const statePath = path.join(stateDir, 'state.json');
@@ -221,7 +225,7 @@ test('the control patch carries the bridge only, never a provider or MCP section
   const patchPath = writeControlPatch({ dataDir, policy: 'model control' });
   assert.equal(patchPath, controlPatchPath(dataDir));
   assert.equal(path.basename(patchPath), CONTROL_PATCH_FILE);
-  assert.equal(fs.statSync(patchPath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(patchPath).mode & 0o777, 0o600);
   const patch = JSON.parse(fs.readFileSync(patchPath, 'utf8'));
   const rows = patch.filter((row) => row && typeof row === 'object');
   assert.ok(rows.some((row) => Array.isArray(row.insert)
@@ -321,13 +325,18 @@ test('NOT_READY is retried, other bridge errors are not', async (t) => {
 test('a request that exceeds its bound kills the process and reports why', async (t) => {
   const dataDir = instanceDataDir(t);
   const fake = fakeDsh(t, { mode: 'silent' });
+  let child;
+  const spawnImpl = (...args) => { child = spawn(...args); return child; };
   const startedAt = Date.now();
   await assert.rejects(
-    DshControlClient.open({ dataDir, bin: fake.script, env: fake.env, helloTimeoutMs: 250 }),
+    DshControlClient.open({ dataDir, bin: fake.script, env: fake.env, spawnImpl, helloTimeoutMs: 250 }),
     (error) => error instanceof DshControlError && /did not answer superagent\/hello within 250ms/.test(error.message),
   );
   assert.ok(Date.now() - startedAt < 5000, 'the bound, not the process, decides how long this takes');
-  const pid = fake.calls().find((call) => call.event === 'start').pid;
+  // The deadline may expire before the script writes its first log entry.
+  // Assert termination of the actual child, not that startup beat the deadline.
+  const pid = child.pid;
+  assert.ok(pid, 'the timed-out child was spawned');
   await waitUntil(() => !isAlive(pid), 'the timed-out process to be killed');
 });
 

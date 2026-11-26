@@ -137,6 +137,31 @@ describe('commandCandidate', () => {
   });
 });
 
+describe('commandCandidate on a card', () => {
+  const choice = (value, { option, chatType = 'p2p' } = {}) => ({
+    ...chatEvent({ kind: 'message.action', messageType: 'card_action', chatType, messageId: 'ca_choice', parentId: 'om_card123456789' }),
+    data: { interaction: { value, ...(option === undefined ? {} : { option }) } },
+  });
+
+  it('opens the task picked in the /tasks dropdown', () => {
+    assert.equal(commandCandidate(choice({ superagent_command: '/tasks' }, { option: 't12' })), '/tasks t12');
+    assert.equal(commandCandidate(choice({ superagent_command: '/tasks' }, { option: 'stop t12' })), null);
+    assert.equal(commandCandidate(choice({ superagent_command: '/tasks' })), null);
+  });
+
+  it('runs the /tasks a refresh button was drawn by, and nothing else', () => {
+    assert.equal(commandCandidate(choice({ superagent_command: '/tasks', arg: '', refresh: true })), '/tasks');
+    assert.equal(commandCandidate(choice({ superagent_command: '/tasks', arg: 't3', refresh: true })), '/tasks t3');
+    // The button names its argument; an option on it is ignored.
+    assert.equal(commandCandidate(choice({ superagent_command: '/tasks', arg: 't3', refresh: true }, { option: 't4' })), '/tasks t3');
+    for (const arg of ['stop t3', 't3 x', undefined, null, 3]) {
+      assert.equal(commandCandidate(choice({ superagent_command: '/tasks', arg, refresh: true })), null, String(arg));
+    }
+    assert.equal(commandCandidate(choice({ superagent_command: '/new', arg: '', refresh: true })), null);
+    assert.equal(commandCandidate(choice({ superagent_command: '/tasks', arg: '', refresh: true }, { chatType: 'group' })), null);
+  });
+});
+
 describe('matchPrefix', () => {
   it('lets an exact match win over longer candidates and reports ambiguity', () => {
     assert.deepEqual(matchPrefix('low', ['low', 'lower']), ['low']);

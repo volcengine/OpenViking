@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { removeTempDir } from './safe-rm.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -37,7 +38,7 @@ function completion(response, index, tool = null) {
   response.end('data: [DONE]\n\n');
 }
 
-async function fixture(t, { conflict = false, dialogs = false, openviking = false, isolation = false } = {}) {
+async function fixture(t, { conflict = false, dialogs = false, openviking = false, isolation = false, shell = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-mcp-'));
   const workspace = path.join(root, 'workspace');
   const agentDir = path.join(root, 'pi-config');
@@ -114,7 +115,13 @@ async function fixture(t, { conflict = false, dialogs = false, openviking = fals
     for await (const chunk of request) body += chunk;
     requests.push(JSON.parse(body));
     const index = requests.length;
-    if (isolation) {
+    if (shell) {
+      if (index === 1) {
+        completion(response, index, process.platform === 'win32'
+          ? { fullName: 'powershell', input: { command: 'Write-Output pi-shell-ok' } }
+          : { fullName: 'bash', input: { command: 'echo pi-shell-ok' } });
+      } else completion(response, index);
+    } else if (isolation) {
       const steps = [
         { name: 'openviking_find', input: { query: 'fixture memory' } },
         ...['configured_tool', 'packaged_tool', 'project_tool', 'project_configured_tool', 'project_packaged_tool',
@@ -143,7 +150,7 @@ async function fixture(t, { conflict = false, dialogs = false, openviking = fals
     model.closeAllConnections();
     await new Promise((resolve) => model.close(resolve));
     store.close();
-    fs.rmSync(root, { recursive: true, force: true });
+    removeTempDir(root);
   });
   await new Promise((resolve) => model.listen(0, '127.0.0.1', resolve));
   fs.writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify({ providers: { fixture: {
@@ -174,6 +181,22 @@ async function fixture(t, { conflict = false, dialogs = false, openviking = fals
   return { agent, config, options, store, connectors, logs, requests, incoming, failures, agentDir, workspace, mcpContents, isolated, ov };
 }
 
+test('real Pi executes the platform shell tool end to end', { timeout: 30_000 }, async (t) => {
+  const f = await fixture(t, { shell: true });
+  await f.agent.start();
+  f.agent.deliver('run one command', f.incoming.seq);
+  await f.agent.whenIdle();
+  assert.deepEqual(f.failures, []);
+  const names = f.requests[0].tools.map(({ function: tool }) => tool.name);
+  if (process.platform === 'win32') {
+    assert.ok(names.includes('powershell'), 'Pi is offered the PowerShell tool');
+    assert.equal(names.includes('bash'), false, 'Pi is not offered WSL bash');
+  } else {
+    assert.ok(names.includes('bash'), 'Pi is offered bash');
+  }
+  const results = JSON.stringify(f.requests.at(-1).messages.filter(({ role }) => role === 'tool'));
+  assert.match(results, /pi-shell-ok/);
+});
 test('real managed Pi discovers direct MCP tools, sees images, and obeys the Core freshness fence', { timeout: 30_000 }, async (t) => {
   const f = await fixture(t);
   await f.agent.start();

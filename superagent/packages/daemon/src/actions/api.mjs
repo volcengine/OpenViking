@@ -44,10 +44,10 @@ export async function startActionApi({ socketPath, service, logger }) {
   }
   const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && request.url === '/v1/tools') {
-      send(response, 200, { tools: service.tools() });
+      send(response, 200, { tools: service.tools({ authority: request.headers[AUTHORITY_HEADER] }) });
       return;
     }
-    if (request.method !== 'POST' || request.url !== '/v1/call') {
+    if (request.method !== 'POST' || !['/v1/call', '/v1/router-tool-check'].includes(request.url)) {
       send(response, 404, { ok: false, error: 'not found' });
       return;
     }
@@ -57,6 +57,11 @@ export async function startActionApi({ socketPath, service, logger }) {
       return;
     }
     try {
+      if (request.url === '/v1/router-tool-check') {
+        const result = service.checkRouterTool(body, { authority: request.headers[AUTHORITY_HEADER] });
+        send(response, 200, { ok: true, result });
+        return;
+      }
       const result = await service.call(body.tool, body.input ?? {}, {
         authority: request.headers[AUTHORITY_HEADER],
         via: request.headers[CLIENT_HEADER] === 'mcp' ? 'mcp' : 'unknown',

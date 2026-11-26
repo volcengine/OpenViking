@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { supportsFileModes } from '../src/platform/index.mjs';
 import { writeManifest } from '../src/deployment-manifest.mjs';
 import { runtimeManifestSelector, updateRuntimePreference } from '../src/runtime-preference.mjs';
 
@@ -69,7 +70,7 @@ test('a live runtime switch updates only its instance and survives config reload
   const env = {};
   applyDeploymentAgentEnv(env, loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: f.manifestPath }), 'second');
   assert.equal(env.OV_SUPERAGENT_MODEL, 'pi');
-  assert.equal(fs.statSync(f.manifestPath).mode & 0o777, 0o600);
+  if (supportsFileModes) assert.equal(fs.statSync(f.manifestPath).mode & 0o777, 0o600);
 });
 
 test('a repeated runtime selection does not rewrite the manifest', (t) => {
@@ -80,6 +81,21 @@ test('a repeated runtime selection does not rewrite the manifest', (t) => {
   updateRuntimePreference(f.config, 'pi');
   assert.equal(fs.statSync(f.manifestPath).ino, before.ino);
   assert.equal(fs.readFileSync(`${f.manifestPath}.bak`, 'utf8'), backup);
+});
+
+test('manual selection updates an explicit primary without changing its backup policy', (t) => {
+  const f = fixture(t);
+  const value = f.read();
+  value.agents[1].primaryRuntime = 'codex';
+  value.agents[1].fallbackRuntime = 'pi';
+  value.agents[1].fallbackReturnAfterMs = 1234;
+  writeManifest(f.manifestPath, value);
+  f.config.primaryRuntime = 'codex';
+  updateRuntimePreference(f.config, 'traex');
+  assert.equal(f.read().agents[1].primaryRuntime, 'traex');
+  assert.equal(f.config.primaryRuntime, 'traex');
+  assert.equal(f.read().agents[1].fallbackRuntime, 'pi');
+  assert.equal(f.read().agents[1].fallbackReturnAfterMs, 1234);
 });
 
 test('a repeated runtime selection preserves an explicit configured model', (t) => {
