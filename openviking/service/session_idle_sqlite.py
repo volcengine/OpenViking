@@ -36,10 +36,6 @@ class IdleRegistration:
 class SQLiteSessionIdleIndex:
     """Persist discovery hints, using versions to protect concurrent registrations."""
 
-    # Session path locks order saves and registration across handles/workers.
-    # No filesystem operations occur while holding a SQLite transaction.
-    report_under_lock = True
-
     def __init__(self, path: str, *, busy_timeout_ms: int = 5000) -> None:
         if path == ":memory:":
             raise ValueError("Session idle index requires a persistent SQLite path")
@@ -91,36 +87,6 @@ class SQLiteSessionIdleIndex:
                 await self._connection.close()
                 self._connection = None
 
-    async def report_after_append(self, snapshot: SessionExpirySnapshot) -> None:
-        """Best effort registration after the authoritative save, under its lock."""
-        try:
-            timeout = get_idle_timeout_seconds(snapshot.auto_commit_policy)
-            if timeout is None:
-                # Existing disabled registrations are removed lazily by the scanner.
-                return
-            next_check = compute_next_check_at(snapshot.last_message_at, timeout)
-            if next_check is None:
-                raise ValueError("Session last_message_at is invalid")
-            await self.register(
-                snapshot.account_id,
-                snapshot.user_id,
-                snapshot.session_id,
-                int(parse_iso_datetime(next_check).timestamp() * 1000),
-            )
-        except Exception as exc:
-            self.record_report_failure("report_failed", exc)
-
-    async def report_after_policy_update(self, snapshot: SessionExpirySnapshot) -> None:
-        await self.report_after_append(snapshot)
-
-    def record_report_failure(self, reason: str, exc: Exception | None = None) -> None:
-        logger.warning(
-            "session idle registration failed reason=%s error_type=%s",
-            reason,
-            type(exc).__name__ if exc else "unknown",
-            extra={"degraded": True, "operation": "session.idle_registration"},
-        )
-
     async def register(
         self, account_id: str, user_id: str, session_id: str, next_check_at_ms: int
     ) -> None:
@@ -162,3 +128,44 @@ class SQLiteSessionIdleIndex:
                 WHERE account_id=? AND user_id=? AND session_id=? AND registration_version=?""",
                 (next_check_at_ms, *registration.key, registration.registration_version),
             )
+
+
+class SQLiteIdleReporter:
+    """Register saved sessions in the idle index; failures never fail the save."""
+
+    # Session path locks order saves and registration across handles/workers.
+    # No filesystem operations occur while holding a SQLite transaction.
+    report_under_lock = True
+
+    def __init__(self, index: SQLiteSessionIdleIndex) -> None:
+        self._index = index
+
+    async def report_after_append(self, snapshot: SessionExpirySnapshot) -> None:
+        """Best effort registration after the authoritative save, under its lock."""
+        try:
+            timeout = get_idle_timeout_seconds(snapshot.auto_commit_policy)
+            if timeout is None:
+                # Existing disabled registrations are removed lazily by the scanner.
+                return
+            next_check = compute_next_check_at(snapshot.last_message_at, timeout)
+            if next_check is None:
+                raise ValueError("Session last_message_at is invalid")
+            await self._index.register(
+                snapshot.account_id,
+                snapshot.user_id,
+                snapshot.session_id,
+                int(parse_iso_datetime(next_check).timestamp() * 1000),
+            )
+        except Exception as exc:
+            self.record_report_failure("report_failed", exc)
+
+    async def report_after_policy_update(self, snapshot: SessionExpirySnapshot) -> None:
+        await self.report_after_append(snapshot)
+
+    def record_report_failure(self, reason: str, exc: Exception | None = None) -> None:
+        logger.warning(
+            "session idle registration failed reason=%s error_type=%s",
+            reason,
+            type(exc).__name__ if exc else "unknown",
+            extra={"degraded": True, "operation": "session.idle_registration"},
+        )

@@ -16,7 +16,7 @@ from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking.service.session_auto_commit import SessionAutoCommitScheduler
-from openviking.service.session_idle_sqlite import SQLiteSessionIdleIndex
+from openviking.service.session_idle_sqlite import SQLiteIdleReporter, SQLiteSessionIdleIndex
 from openviking.service.session_service import SessionService
 from openviking.session.session import SessionMeta
 from openviking_cli.exceptions import NotFoundError
@@ -145,14 +145,14 @@ async def test_candidate_cleanup_and_retry_use_authoritative_state(index, state)
     assert (ctx.account_id, ctx.user.user_id) == ("a", "u")
 
 
-def _session_with_index(index, monkeypatch, meta):
+def _session_with_reporter(reporter, monkeypatch, meta):
     uri = "viking://user/u/sessions/s"
     fs = _MetaVikingFS(uri, meta)
     ctx = RequestContext(user=UserIdentifier("a", "u"), role=Role.USER)
     service = SessionService(viking_fs=fs)
-    service.set_session_idle_index(index)
+    service.set_session_idle_reporter(reporter)
     session = service.session(ctx, "s", session_uri=uri)
-    assert session._expiry_reporter is index
+    assert session._expiry_reporter is reporter
     monkeypatch.setattr(session, "_rebuild_pending_tokens", AsyncMock())
     original_read = fs.read_file
 
@@ -167,7 +167,7 @@ def _session_with_index(index, monkeypatch, meta):
 @pytest.mark.asyncio
 async def test_policy_shortening_and_enabling_register_saved_state(index, monkeypatch):
     meta = _meta(timeout=None)
-    session, fs = _session_with_index(index, monkeypatch, meta)
+    session, fs = _session_with_reporter(SQLiteIdleReporter(index), monkeypatch, meta)
     await session.update_config(auto_commit_policy={"idle_timeout_seconds": 1000})
     later = (await index.due(2**62))[0]
     await session.update_config(auto_commit_policy={"idle_timeout_seconds": 5})
@@ -183,13 +183,14 @@ async def test_policy_shortening_and_enabling_register_saved_state(index, monkey
 
 @pytest.mark.asyncio
 async def test_append_registration_is_ordered_inside_session_lock(index, monkeypatch):
-    session, fs = _session_with_index(index, monkeypatch, _meta())
-    second, _ = _session_with_index(index, monkeypatch, _meta())
+    reporter = SQLiteIdleReporter(index)
+    session, fs = _session_with_reporter(reporter, monkeypatch, _meta())
+    second, _ = _session_with_reporter(reporter, monkeypatch, _meta())
     second._viking_fs = fs
     lock = asyncio.Lock()
     entered = asyncio.Event()
     release = asyncio.Event()
-    original_report = index.report_after_append
+    original_report = reporter.report_after_append
     snapshots = []
 
     @asynccontextmanager
@@ -210,7 +211,7 @@ async def test_append_registration_is_ordered_inside_session_lock(index, monkeyp
 
     monkeypatch.setattr(session, "_state_lock", state_lock)
     monkeypatch.setattr(second, "_state_lock", state_lock)
-    monkeypatch.setattr(index, "report_after_append", delayed_report)
+    monkeypatch.setattr(reporter, "report_after_append", delayed_report)
     msg = Message(id="m", role="user", parts=[TextPart("hello")])
     first_task = asyncio.create_task(session._append_messages_authoritatively([msg]))
     await asyncio.wait_for(entered.wait(), timeout=5)
@@ -225,7 +226,7 @@ async def test_append_registration_is_ordered_inside_session_lock(index, monkeyp
 
 @pytest.mark.asyncio
 async def test_registration_failure_does_not_fail_saved_append(index, monkeypatch):
-    session, fs = _session_with_index(index, monkeypatch, _meta())
+    session, fs = _session_with_reporter(SQLiteIdleReporter(index), monkeypatch, _meta())
     monkeypatch.setattr(index, "register", AsyncMock(side_effect=RuntimeError("database busy")))
     await session._append_messages_authoritatively(
         [Message(id="m", role="user", parts=[TextPart("hello")])]
@@ -236,7 +237,7 @@ async def test_registration_failure_does_not_fail_saved_append(index, monkeypatc
 
 @pytest.mark.asyncio
 async def test_failed_save_does_not_register(index, monkeypatch):
-    session, fs = _session_with_index(index, monkeypatch, _meta())
+    session, fs = _session_with_reporter(SQLiteIdleReporter(index), monkeypatch, _meta())
     monkeypatch.setattr(fs, "write_file", AsyncMock(side_effect=RuntimeError("write failed")))
     with pytest.raises(RuntimeError, match="write failed"):
         await session._append_messages_authoritatively(
@@ -248,7 +249,7 @@ async def test_failed_save_does_not_register(index, monkeypatch):
 @pytest.mark.asyncio
 async def test_existing_reporter_remains_outside_lock_and_policy_updates(monkeypatch):
     reporter = SimpleNamespace(report_after_append=AsyncMock(), record_report_failure=AsyncMock())
-    session, fs = _session_with_index(reporter, monkeypatch, _meta())
+    session, fs = _session_with_reporter(reporter, monkeypatch, _meta())
 
     async def report(snapshot):
         assert fs._async_agfs.acquired == fs._async_agfs.released
@@ -275,7 +276,7 @@ async def test_database_busy_failure_preserves_messages_and_next_report_recovers
     index = SQLiteSessionIdleIndex(path, busy_timeout_ms=10)
     await index.start()
     blocker = sqlite3.connect(path, isolation_level=None)
-    session, fs = _session_with_index(index, monkeypatch, _meta())
+    session, fs = _session_with_reporter(SQLiteIdleReporter(index), monkeypatch, _meta())
     try:
         blocker.execute("BEGIN IMMEDIATE")
         await session._append_messages_authoritatively(

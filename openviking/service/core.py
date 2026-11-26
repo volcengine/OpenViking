@@ -776,12 +776,15 @@ class OpenVikingService:
         ):
             idle_index: Optional["SQLiteSessionIdleIndex"] = None
             if session_auto_commit_config.idle_backend == "sqlite":
-                from openviking.service.session_idle_sqlite import SQLiteSessionIdleIndex
+                from openviking.service.session_idle_sqlite import (
+                    SQLiteIdleReporter,
+                    SQLiteSessionIdleIndex,
+                )
 
                 idle_index = SQLiteSessionIdleIndex(
                     str(Path(self._config.storage.workspace) / "_system" / "session_idle.db"),
                 )
-                self._session_service.set_session_idle_index(idle_index)
+                self._session_service.set_session_idle_reporter(SQLiteIdleReporter(idle_index))
             self._session_auto_commit_scheduler = SessionAutoCommitScheduler(
                 self._session_service,
                 session_auto_commit_config,
@@ -1121,7 +1124,7 @@ class OpenVikingService:
         if self._initialized or self._background_prepared:
             raise RuntimeError("Drain execution before releasing service storage")
         if self._session_auto_commit_scheduler is not None:
-            self._session_service.set_session_idle_index(None)
+            self._session_service.set_session_idle_reporter(None)
             await self._session_auto_commit_scheduler.close()
         vlm_resolver = getattr(self, "_vlm_resolver", None)
         self._compile_scheduler = None
