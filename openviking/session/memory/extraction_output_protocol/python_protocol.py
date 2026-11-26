@@ -14,7 +14,12 @@ from dataclasses import dataclass, field
 from typing import Any, get_args, get_origin
 
 from openviking.core.peer_id import safe_peer_id
-from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
+from openviking.session.memory.dataclass import (
+    DirectoryMergeRequest,
+    MemoryField,
+    MemoryFile,
+    MemoryTypeSchema,
+)
 from openviking.session.memory.extraction_output_protocol import prompt_fragments as prompts
 from openviking.session.memory.extraction_output_protocol.base import (
     ExtractionOutputContext,
@@ -129,7 +134,12 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         link_rules = (
             prompts.PYTHON_LINK_RULES if context.link_enabled else prompts.PYTHON_LINKS_DISABLED
         )
-        return "\n".join((*self._render_contract_preamble(context), *schema_rules, *link_rules))
+        directory_rules = (
+            prompts.PYTHON_DIRECTORY_MERGE_RULES if context.supports_directory_merges else ()
+        )
+        return "\n".join(
+            (*self._render_contract_preamble(context), *schema_rules, *directory_rules, *link_rules)
+        )
 
     @staticmethod
     def _render_contract_preamble(context: ExtractionOutputContext) -> tuple[str, ...]:
@@ -327,8 +337,8 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
             tool_guidance = (
                 " The memory SDK is write-only. Call the available native "
                 f"{'/'.join(self._inspection_tools)} tool now; "
-                "after its result is returned, update the system-provided object variable. "
-                "Do not emit sdk.search(), sdk.read(), or construct a memory URI in Python."
+                "use the tool result and then return the complete program. "
+                "Do not emit sdk.search(), sdk.read(), or sdk.ls()."
             )
         return (
             "Your previous output was not a valid restricted Python memory SDK program."
@@ -372,7 +382,8 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         return (
             "Some sdk.create_events(...) calls could not resolve a safe write target. "
             "Re-emit ONLY corrected create_events() calls for the failed items below; do not "
-            "emit any other memory type, delete, or link statements. The server has preserved "
+            "emit other memory operations, including deletes, links, or directory merges. "
+            "The server has preserved "
             "all successful operations from the previous program. "
             "For event ranges, pass ranges= with valid in-bounds message indexes that include the "
             "user-role message establishing the event so its owner can be resolved (e.g. "
@@ -647,6 +658,7 @@ class _PythonProgramCompiler:
         self.objects: dict[str, _MemoryObject] = {}
         self.values: dict[str, Any] = {}
         self.links: list[dict[str, Any]] = []
+        self.directory_merges: list[DirectoryMergeRequest] = []
         self._singleton_identities: set[tuple[str, tuple[tuple[str, Any], ...]]] = set()
         self._next_new_page_id = self._find_next_new_page_id(100)
         self._committed = False
@@ -967,6 +979,32 @@ class _PythonProgramCompiler:
             )
             self._next_new_page_id = self._find_next_new_page_id(self._next_new_page_id + 1)
             return obj
+        if method == "merge_dirs":
+            if not self.context.supports_directory_merges:
+                self._error(node, "sdk.merge_dirs() is unavailable in this extraction")
+            arguments = {item.arg: item.value for item in node.keywords}
+            if (
+                not statement
+                or node.args
+                or len(node.keywords) != 2
+                or arguments.keys() != {"source_uri", "target_uri"}
+            ):
+                self._error(
+                    node,
+                    "sdk.merge_dirs() requires a standalone call with source_uri= and target_uri=",
+                )
+            if any(
+                not isinstance(argument, ast.Constant) or not isinstance(argument.value, str)
+                for argument in arguments.values()
+            ):
+                self._error(node, "sdk.merge_dirs() requires literal directory URI strings")
+            self.directory_merges.append(
+                DirectoryMergeRequest(
+                    source_uri=arguments["source_uri"].value,
+                    target_uri=arguments["target_uri"].value,
+                )
+            )
+            return None
         if method == "commit":
             kwargs = self._eval_keywords(node)
             if node.args or kwargs or not statement:
@@ -980,7 +1018,7 @@ class _PythonProgramCompiler:
         self._error(
             node,
             f"unknown SDK method sdk.{method}()",
-            allow_tool_retry=method in ("read", "search"),
+            allow_tool_retry=method in ("read", "search", "ls"),
         )
 
     def _call_memory(
@@ -1248,6 +1286,8 @@ class _PythonProgramCompiler:
 
     def _build_operations(self) -> Any:
         payload: dict[str, Any] = {name: [] for name in self.context.operations_model.model_fields}
+        if self.directory_merges:
+            payload["directory_merges"] = self.directory_merges
         deleted_ids: set[int] = set()
         replacement_ids: dict[int, int] = {}
         for obj in self.objects.values():

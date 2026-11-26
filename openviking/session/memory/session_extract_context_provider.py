@@ -15,7 +15,11 @@ from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.message.part import TextPart, ToolPart
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
-from openviking.session.memory.dataclass import MemoryFile
+from openviking.session.memory.dataclass import (
+    DirectoryMergePlan,
+    DirectoryMergeRequest,
+    MemoryFile,
+)
 from openviking.session.memory.memory_isolation_handler import (
     MemoryIsolationHandler,
     RoleScope,
@@ -46,7 +50,6 @@ from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
     from openviking.config.vlm import VLMHandle
-    from openviking.session.memory.directory_maintenance import DirectoryMergePlan
     from openviking.session.memory.memory_updater import ExtractContext
 
 logger = get_logger(__name__)
@@ -113,7 +116,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._is_session_commit = is_session_commit
         self._directory_roots: dict[str, str] = {}
         self._directory_inventory: dict[str, dict[str, Any]] = {}
-        self.directory_merge_plans: list["DirectoryMergePlan"] = []
 
     @property
     def read_file_contents(self) -> Dict[str, MemoryFile]:
@@ -229,19 +231,20 @@ class SessionExtractContextProvider(ExtractContextProvider):
         tools = "read/search"
         tool_rule = "ONLY read and search tools are available - DO NOT use write tool"
         directory_rules = ""
-        if self._directory_maintenance_available():
+        if self.supports_directory_merges():
             tools = "the native tools supplied with this request"
-            tool_rule = "Use only the supplied inspection and proposal tools"
+            tool_rule = "Use the supplied tools for inspection and the output contract for changes"
             directory_rules = """
 
 ## Existing Memory Directories
 - Treat inventory entries as stored identifiers. Reuse the exact spelling of a semantically equivalent entity category from the same memory root, even when its language differs from the requested output language. Apply the output language rule to new category names and visible card content.
 - A shared category is no evidence that cards describe the same entity. Keep separate entities separate and preserve every distinct fact.
 - The prefetched inventory lists existing first-level directories. When needed, use shallow `ls` on a listed root or direct child to inspect their children.
-- When adding or updating a card, check its directory for equivalent siblings in the inventory. Inspect ambiguous pairs with `ls`. Use `merge_dirs(source_uri=..., target_uri=...)` for clearly equivalent sibling categories related to the current conversation, even if nobody asked to clean them up.
-- For preferences, propose a merge only when the source is a formatting alias of the scoped owner ID at the target. Similar preferences do not establish common ownership.
-- A proposed merge runs after normal card operations. Use the returned canonical directory for genuinely new cards. Read a matching source card and use its page reference to update it in place. It can then move with the directory. Inspect the source card names in the proposal before adding anything at the destination.
-- After inspection and any merge proposals, return the normal memory operations. Continue extracting applicable facts even if the directory tool rejects a proposal.
+- Before creating a card, inspect its existing category and any clearly equivalent sibling categories with `ls` if the card was not already read. Read an existing card with the matching name before deciding to create a new one. A missing search result alone does not mean a card is new.
+- If the conversation makes two existing sibling categories clearly equivalent and relevant, include a directory merge in the final operations even if you have no card changes. For example, if the conversation uses both “排障手册” and “troubleshooting_guide” for the same category and both exist under the same inventory root, choose one of those existing directories as the destination.
+- For preferences, include a merge only when the source is a formatting alias of the scoped owner ID at the target. Similar preferences do not establish common ownership.
+- Directory merges run after normal card operations. Use the chosen target directory for genuinely new cards. Inspect the source with `ls`, then read a matching source card and use its page reference to update it in place.
+- Return directory merges and ordinary card operations together in the final output. Keep any still-applicable directory merges when revising the output after a read.
 """
         contains_resource_uri = self._conversation_contains_resource_uri()
         resource_uri_handling = (
@@ -585,6 +588,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
     def _visible_directory_root(self, uri: str) -> str | None:
         root, _, _ = uri.rpartition("/")
+        if root not in self._directory_roots:
+            return None
         listing = self._directory_inventory.get(root)
         if listing and any(entry["uri"] == uri and entry["isDir"] for entry in listing["entries"]):
             return root
@@ -606,48 +611,45 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             self._directory_inventory[uri] = listing
         return listing
 
-    async def _propose_directory_merge(self, source_uri: str, target_uri: str) -> dict[str, Any]:
-        from openviking.session.memory.directory_maintenance import DirectoryMergePlan
-
+    def _resolve_directory_merge(self, request: DirectoryMergeRequest) -> DirectoryMergePlan | None:
         try:
-            source = validate_request_viking_uri(source_uri, self._ctx).rstrip("/")
-            target = validate_request_viking_uri(target_uri, self._ctx).rstrip("/")
+            source = validate_request_viking_uri(request.source_uri, self._ctx).rstrip("/")
+            target = validate_request_viking_uri(request.target_uri, self._ctx).rstrip("/")
         except InvalidURIError:
-            return {"error": "Invalid memory directory URI"}
+            return None
         root = self._visible_directory_root(source)
         if (
             not root
             or source.casefold() == target.casefold()
             or root != self._visible_directory_root(target)
         ):
-            return {
-                "error": "Both directories must be different visible siblings in one memory root"
-            }
+            return None
         memory_type = self._directory_roots[root]
         if memory_type == "preferences" and not verified_preference_directory_owner(
             source, target, self._ctx
         ):
-            return {"error": "The preference directory owners could not be independently verified"}
-        for plan in self.directory_merge_plans:
-            if plan.source_uri == source and plan.target_uri == target:
+            return None
+        return DirectoryMergePlan(memory_type=memory_type, source_uri=source, target_uri=target)
+
+    async def resolve_directory_merges(
+        self, requests: list[DirectoryMergeRequest]
+    ) -> list[DirectoryMergePlan]:
+        if not self.supports_directory_merges():
+            return []
+        plans: list[DirectoryMergePlan] = []
+        for request in requests:
+            if len(plans) >= _MAX_DIRECTORY_MERGE_PLANS:
                 break
-            if plan.source_uri in {source, target} or plan.target_uri == source:
-                return {"error": "Conflicting or chained directory merge proposal"}
-        else:
-            if len(self.directory_merge_plans) >= _MAX_DIRECTORY_MERGE_PLANS:
-                return {"error": "Too many directory merge proposals in this extraction"}
-            self.directory_merge_plans.append(
-                DirectoryMergePlan(memory_type=memory_type, source_uri=source, target_uri=target)
-            )
-        source_listing = await self._execute_directory_ls({"uri": source})
-        return {
-            "status": "proposed",
-            "canonical_directory": target.rsplit("/", 1)[-1],
-            "source_listing": source_listing,
-            "card_update_rule": (
-                "Update source cards at their current URIs. The merge runs after card updates."
-            ),
-        }
+            plan = self._resolve_directory_merge(request)
+            if plan is None or any(
+                existing.source_uri in {plan.source_uri, plan.target_uri}
+                or existing.target_uri == plan.source_uri
+                for existing in plans
+            ):
+                continue
+            plans.append(plan)
+            await self._execute_directory_ls({"uri": plan.source_uri})
+        return plans
 
     async def prefetch(self) -> List[Dict]:
         """
@@ -784,19 +786,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         self,
         tool_call,
     ) -> Any:
-        if tool_call.name in {"ls", "merge_dirs"} and self._directory_maintenance_available():
+        if tool_call.name == "ls" and self.supports_directory_merges():
             arguments = tool_call.arguments or {}
             if not isinstance(arguments, dict):
                 return {"error": "Directory tool arguments must be an object"}
-            if tool_call.name == "ls":
-                return await self._execute_directory_ls(arguments)
-            return await get_tool("merge_dirs").execute(
-                None,
-                source_uri=arguments.get("source_uri"),
-                target_uri=arguments.get("target_uri"),
-                propose=self._propose_directory_merge,
-            )
-        if tool_call.name in {"ls", "merge_dirs"} and tool_call.name not in self.get_tools():
+            return await self._execute_directory_ls(arguments)
+        if tool_call.name == "ls" and tool_call.name not in self.get_tools():
             return {"error": f"Unknown tool: {tool_call.name}"}
         tool = get_tool(tool_call.name)
         if not tool:
@@ -815,13 +810,15 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     def get_tools(self) -> List[str]:
         """获取可用的工具列表"""
         tools = [] if self._eager_prefetch else ["read"]
-        if self._directory_maintenance_available():
-            return ["read", "ls", "merge_dirs"]
+        if self.supports_directory_merges():
+            return ["read", "ls"]
         return tools
 
-    def directory_merge_source_for_target(self, uri: str) -> str | None:
+    def directory_merge_source_for_target(
+        self, uri: str, plans: list[DirectoryMergePlan]
+    ) -> str | None:
         parent, _, name = uri.rpartition("/")
-        for plan in self.directory_merge_plans:
+        for plan in plans:
             if plan.target_uri != parent:
                 continue
             listing = self._directory_inventory.get(plan.source_uri, {})
@@ -830,12 +827,15 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                     return entry["uri"]
         return None
 
-    def _directory_maintenance_available(self) -> bool:
-        return self._is_session_commit and any(
+    def supports_directory_merges(self) -> bool:
+        if not self._is_session_commit:
+            return False
+        schemas = self.get_memory_schemas(self._ctx)
+        return all(schema.memory_type != "directory_merges" for schema in schemas) and any(
             schema.memory_type in _DIRECTORY_MEMORY_TYPES
             and schema.operation_mode != "add_only"
             and schema.filename_has_variables()
-            for schema in self.get_memory_schemas(self._ctx)
+            for schema in schemas
         )
 
     def get_memory_schemas(self, ctx: RequestContext) -> List[Any]:

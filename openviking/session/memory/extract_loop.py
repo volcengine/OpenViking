@@ -225,6 +225,9 @@ class ExtractLoop:
             schemas,
             template_context={"language": output_language},
             consolidation=getattr(self.context_provider, "is_consolidation", False),
+            allow_directory_merges=(
+                getattr(self.context_provider, "supports_directory_merges", lambda: False)() is True
+            ),
             # include_decision_reasoning=(
             #     type(self.context_provider).__name__ != "PatchMergeContextProvider"
             # ),
@@ -1081,11 +1084,16 @@ class ExtractLoop:
             page_id_assignments,
             page_id_map,
         )
+        directory_merges = []
+        requests = getattr(operations, "directory_merges", ())
+        if requests and self._output_context and self._output_context.supports_directory_merges:
+            directory_merges = await self.context_provider.resolve_directory_merges(requests)
         resolved = ResolvedOperations(
             upsert_operations=upsert_operations,
             delete_file_contents=delete_file_contents,
             errors=errors,
             delete_replacements=delete_replacements,
+            directory_merges=directory_merges,
         )
 
         for op in upsert_operations:
@@ -1421,13 +1429,16 @@ class ExtractLoop:
 
     async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
         refetch_uris = {}
-        related_source = getattr(self.context_provider, "directory_merge_source_for_target", None)
         uris_to_read = {}
         for operation in operations.upsert_operations:
             for uri in operation.uris:
                 uris_to_read[uri] = None
-                if related_source and isinstance(source_uri := related_source(uri), str):
-                    uris_to_read[source_uri] = None
+                if operations.directory_merges:
+                    source_uri = self.context_provider.directory_merge_source_for_target(
+                        uri, operations.directory_merges
+                    )
+                    if source_uri:
+                        uris_to_read[source_uri] = None
         for uri in uris_to_read:
             if uri in self.context_provider.read_file_contents:
                 continue

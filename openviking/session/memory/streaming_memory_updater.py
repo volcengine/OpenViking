@@ -15,7 +15,7 @@ import re
 import threading
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Hashable
 
 from openviking.config.generation import get_output_language_override
@@ -26,6 +26,7 @@ from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session.memory.dataclass import (
+    DirectoryMergePlan,
     MemoryFile,
     MemoryOperationSkipCode,
     MemoryOperationSource,
@@ -34,6 +35,10 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
     SkippedMemoryOperation,
     StoredLink,
+)
+from openviking.session.memory.directory_maintenance import (
+    DirectoryMergeResult,
+    merge_memory_directories,
 )
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -127,6 +132,9 @@ class StreamingMemoryUpdateResult:
     apply_result: MemoryUpdateResult
     request_count: int
     metadata: dict[str, Any] = field(default_factory=dict)
+    directory_merge_results: list[tuple[DirectoryMergePlan, DirectoryMergeResult]] = field(
+        default_factory=list
+    )
 
 
 @dataclass(slots=True)
@@ -208,6 +216,16 @@ class StreamingMemoryUpdater:
         )
         self._last_result = result
         scoped_result = scope_memory_update_result_to_submitter(result, request)
+        # Directory plans belong to this submitter. Shared batches reconcile file
+        # operations across requests and hold file leases incompatible with a
+        # directory lease. Apply the plans only after all ordinary writes settle.
+        if request.operations.directory_merges and (
+            not request.strict_extract_errors or not scoped_result.apply_result.errors
+        ):
+            directory_results = await run_to_completion(
+                lambda: self._apply_directory_merges(request)
+            )
+            scoped_result = replace(scoped_result, directory_merge_results=directory_results)
         tracer.info(
             "StreamingMemoryUpdater submit finished "
             f"batch_id={result.metadata.get('batch_id')} "
@@ -223,6 +241,23 @@ class StreamingMemoryUpdater:
             console=self.config.trace_console,
         )
         return scoped_result
+
+    async def _apply_directory_merges(
+        self, request: MemoryUpdateRequest
+    ) -> list[tuple[DirectoryMergePlan, DirectoryMergeResult]]:
+        registry = request.memory_registry or self.registry or get_default_registry()
+        outcomes = []
+        for plan in request.operations.directory_merges:
+            try:
+                outcome = await merge_memory_directories(
+                    plan, registry=registry, vikingdb=self.vikingdb, ctx=request.ctx
+                )
+            except Exception as exc:
+                logger.warning("Memory directory merge failed error_type=%s", type(exc).__name__)
+                outcome = DirectoryMergeResult(status="failed")
+                outcome.result.add_error(plan.source_uri, exc)
+            outcomes.append((plan, outcome))
+        return outcomes
 
     async def _submit_grouped_merge_request(
         self,

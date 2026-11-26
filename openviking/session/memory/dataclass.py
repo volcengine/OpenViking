@@ -6,6 +6,7 @@ Core domain data classes for memory system.
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import (
@@ -22,7 +23,15 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, Field, PrivateAttr, WithJsonSchema, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    StrictStr,
+    WithJsonSchema,
+    model_validator,
+)
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
@@ -380,12 +389,31 @@ class ResolvedOperation(BaseModel):
         return self.old_memory_file_content is not None
 
 
+class DirectoryMergeRequest(BaseModel):
+    """Model output naming the source and destination of a directory merge."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_uri: StrictStr = Field(min_length=1, description="Existing redundant directory URI")
+    target_uri: StrictStr = Field(min_length=1, description="Existing canonical directory URI")
+
+
+@dataclass(frozen=True)
+class DirectoryMergePlan:
+    """Directory merge resolved against the extraction's allowed memory roots."""
+
+    memory_type: str
+    source_uri: str
+    target_uri: str
+
+
 class ResolvedOperations(BaseModel):
     upsert_operations: List[ResolvedOperation]
     delete_file_contents: List[MemoryFile]
     errors: List[str]
     resolved_links: List[StoredLink] = Field(default_factory=list)
     delete_replacements: Dict[str, str] = Field(default_factory=dict)
+    directory_merges: list[DirectoryMergePlan] = Field(default_factory=list)
 
     def has_errors(self) -> bool:
         return len(self.errors) > 0

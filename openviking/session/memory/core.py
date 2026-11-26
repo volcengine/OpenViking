@@ -9,9 +9,12 @@ Extract Context Provider - 抽象接口
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from openviking.server.identity import RequestContext
+
+if TYPE_CHECKING:
+    from openviking.session.memory.dataclass import DirectoryMergePlan, DirectoryMergeRequest
 
 
 class ExtractContextProvider(ABC):
@@ -33,7 +36,17 @@ class ExtractContextProvider(ABC):
         """
         return None
 
-    def directory_merge_source_for_target(self, uri: str) -> str | None:
+    def supports_directory_merges(self) -> bool:
+        return False
+
+    async def resolve_directory_merges(
+        self, requests: list["DirectoryMergeRequest"]
+    ) -> list["DirectoryMergePlan"]:
+        return []
+
+    def directory_merge_source_for_target(
+        self, uri: str, plans: list["DirectoryMergePlan"]
+    ) -> str | None:
         """Find an existing counterpart of a proposed write to a canonical directory."""
         return None
 

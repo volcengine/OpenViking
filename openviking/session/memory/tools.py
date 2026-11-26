@@ -506,39 +506,6 @@ class MemoryLsTool(MemoryTool):
         return text
 
 
-class MemoryMergeDirsTool(MemoryTool):
-    """Propose consolidation of sibling memory directories."""
-
-    @property
-    def name(self) -> str:
-        return "merge_dirs"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Propose merging a redundant memory directory into an existing equivalent sibling. "
-            "The proposal does not change any files during extraction."
-        )
-
-    @property
-    def parameters(self) -> Dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "source_uri": {"type": "string", "description": "Redundant directory URI"},
-                "target_uri": {"type": "string", "description": "Existing canonical directory URI"},
-            },
-            "required": ["source_uri", "target_uri"],
-            "additionalProperties": False,
-        }
-
-    async def execute(self, ctx: Optional["ToolContext"], **kwargs: Any) -> Any:
-        propose = kwargs.get("propose")
-        if propose is None:
-            return {"error": "Directory merge proposals are unavailable in this extraction"}
-        return await propose(kwargs.get("source_uri"), kwargs.get("target_uri"))
-
-
 # Tool registry
 MEMORY_TOOLS_REGISTRY: Dict[str, MemoryTool] = {}
 
@@ -557,4 +524,3 @@ def get_tool(name: str) -> Optional[MemoryTool]:
 register_tool(MemoryReadTool())
 register_tool(MemorySearchTool())
 register_tool(MemoryLsTool())
-register_tool(MemoryMergeDirsTool())

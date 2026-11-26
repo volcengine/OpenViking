@@ -36,6 +36,16 @@ PYTHON_COMMIT_RULE = (
     "If there are no changes, return only sdk.commit()."
 )
 PYTHON_METHODS_HEADER = ("", "Available write methods for this extraction:")
+PYTHON_DIRECTORY_MERGE_RULES = (
+    "",
+    "## Directory Merge Operations",
+    "- Declare each directory merge as sdk.merge_dirs(source_uri='...', target_uri='...') "
+    "using literal URIs of visible sibling directories from the supplied inventory.",
+    "- Use a standalone call before sdk.commit(). Directory merges are applied after the "
+    "ordinary card operations in the program.",
+    "- Include the merge in the program even when it is the only change. Use the native ls "
+    "tool to inspect a directory before the final program.",
+)
 PYTHON_ADD_ONLY_PREAMBLE = (
     *PYTHON_FORMAT_RULES,
     PYTHON_CONTENT_RULE,

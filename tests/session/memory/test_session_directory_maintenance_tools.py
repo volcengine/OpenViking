@@ -10,6 +10,7 @@ import pytest
 from openviking.models.vlm.base import ToolCall
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
+    DirectoryMergeRequest,
     MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
@@ -94,7 +95,10 @@ async def test_refetch_reads_existing_source_for_a_proposed_target_write():
         )
     )
     await provider.prefetch()
-    await _call(provider, "merge_dirs", source_uri=source, target_uri=target)
+    plans = await provider.resolve_directory_merges(
+        [DirectoryMergeRequest(source_uri=source, target_uri=target)]
+    )
+    assert len(plans) == 1
     provider.execute_tool = AsyncMock(side_effect=[{"error": "File not found"}, {"name": "Server"}])
     operations = ResolvedOperations(
         upsert_operations=[
@@ -102,6 +106,7 @@ async def test_refetch_reads_existing_source_for_a_proposed_target_write():
         ],
         delete_file_contents=[],
         errors=[],
+        directory_merges=plans,
     )
 
     loop = SimpleNamespace(context_provider=provider)
@@ -111,6 +116,17 @@ async def test_refetch_reads_existing_source_for_a_proposed_target_write():
     assert [call.args[0].arguments["uri"] for call in provider.execute_tool.await_args_list] == [
         target_card,
         source_card,
+    ]
+    provider.execute_tool.reset_mock(side_effect=True)
+    provider.execute_tool.return_value = {"error": "File not found"}
+    assert (
+        await ExtractLoop._check_unread_existing_files(
+            loop, operations.model_copy(update={"directory_merges": []})
+        )
+        == {}
+    )
+    assert [call.args[0].arguments["uri"] for call in provider.execute_tool.await_args_list] == [
+        target_card
     ]
 
 
@@ -140,14 +156,14 @@ async def test_prefetch_inventory_is_paged_scoped_and_excludes_denied_and_hidden
     assert inventory[_ENTITIES]["directories"] == [entry["name"] for entry in existing[:129]]
     assert fs.calls == [(_ENTITIES, 0), (_ENTITIES, 128), (_PREFERENCES, 0)]
     assert "even when its language differs" in provider.instruction()
-    assert set(provider.get_tools()) == {"read", "ls", "merge_dirs"}
+    assert set(provider.get_tools()) == {"read", "ls"}
 
     await _call(provider, "ls", uri=_ENTITIES)
     assert fs.calls == [(_ENTITIES, 0), (_ENTITIES, 128), (_PREFERENCES, 0)]
 
 
 @pytest.mark.asyncio
-async def test_native_tools_propose_only_visible_authorized_sibling_directories():
+async def test_final_output_merges_only_visible_authorized_sibling_directories():
     source = f"{_ENTITIES}/runbooks"
     target = f"{_ENTITIES}/runbook"
     fs = _ListingFS(
@@ -176,56 +192,45 @@ async def test_native_tools_propose_only_visible_authorized_sibling_directories(
         assert "error" in await _call(provider, "ls", uri=invalid)
     assert "error" in await _call(provider, "ls", uri=source, recursive=True)
 
-    accepted = await _call(provider, "merge_dirs", source_uri=source, target_uri=target)
-    assert accepted["status"] == "proposed"
-    assert accepted["canonical_directory"] == "runbook"
-    assert [entry["uri"] for entry in accepted["source_listing"]["entries"]] == [
-        f"{source}/server.md"
-    ]
-    assert provider.directory_merge_source_for_target(f"{target}/server.md") == (
-        f"{source}/server.md"
-    )
-    assert provider.directory_merge_source_for_target(f"{target}/new.md") is None
-    assert await _call(provider, "merge_dirs", source_uri=source, target_uri=target) == accepted
-    assert "error" in await _call(provider, "merge_dirs", source_uri=target, target_uri=source)
-    assert "error" in await _call(
-        provider, "merge_dirs", source_uri=f"{_ENTITIES}/private", target_uri=target
-    )
-    assert "error" in await _call(
-        provider, "merge_dirs", source_uri=source, target_uri=f"{_PREFERENCES}/alice"
-    )
-    assert "error" in await _call(
-        provider,
-        "merge_dirs",
-        source_uri=f"{_PREFERENCES}/bob",
-        target_uri=f"{_PREFERENCES}/alice",
-    )
-    assert "error" in await _call(
-        provider,
-        "merge_dirs",
-        source_uri=f"{_PREFERENCES}/Alice",
-        target_uri=f"{_PREFERENCES}/alice",
+    assert (
+        "Unknown tool"
+        in (await _call(provider, "merge_dirs", source_uri=source, target_uri=target))["error"]
     )
     preference_schema = provider._get_registry().get("preferences")
     legacy_file = generate_uri(
         preference_schema, {"user": " Alice", "topic": "editor"}, user_space="alice"
     )
     assert legacy_file == f"{_PREFERENCES}/ alice/editor.md"
-    preference_proposal = await _call(
-        provider,
-        "merge_dirs",
-        source_uri=legacy_file.rsplit("/", 1)[0],
-        target_uri=f"{_PREFERENCES}/alice",
+    preferences_target = f"{_PREFERENCES}/alice"
+    preferences_source = legacy_file.rsplit("/", 1)[0]
+    plans = await provider.resolve_directory_merges(
+        [
+            DirectoryMergeRequest(source_uri=old, target_uri=new)
+            for old, new in [
+                (source, target),
+                (source, target),
+                (target, source),
+                (f"{_ENTITIES}/private", target),
+                (source, preferences_target),
+                (f"{_PREFERENCES}/bob", preferences_target),
+                (f"{_PREFERENCES}/Alice", preferences_target),
+                (preferences_source, preferences_target),
+            ]
+        ]
     )
-    assert preference_proposal["status"] == "proposed"
-    assert [(plan.memory_type, plan.target_uri) for plan in provider.directory_merge_plans] == [
-        ("entities", target),
-        ("preferences", f"{_PREFERENCES}/alice"),
+    assert [(plan.memory_type, plan.source_uri, plan.target_uri) for plan in plans] == [
+        ("entities", source, target),
+        ("preferences", preferences_source, preferences_target),
     ]
+    assert provider.directory_merge_source_for_target(f"{target}/server.md", plans) == (
+        f"{source}/server.md"
+    )
+    assert provider.directory_merge_source_for_target(f"{target}/new.md", plans) is None
+    assert await provider.resolve_directory_merges([]) == []
 
 
 @pytest.mark.asyncio
-async def test_directory_tools_are_opt_in(monkeypatch):
+async def test_directory_actions_require_session_commit(monkeypatch):
     from openviking.session.memory import session_extract_context_provider as module
 
     monkeypatch.setattr(
@@ -243,10 +248,13 @@ async def test_directory_tools_are_opt_in(monkeypatch):
     await provider.prefetch()
     assert "Unknown tool" in (await _call(provider, "ls", uri=_ENTITIES))["error"]
     assert fs.calls == []
-    proposal = await _call(
-        provider,
-        "merge_dirs",
-        source_uri=f"{_ENTITIES}/runbooks",
-        target_uri=f"{_ENTITIES}/runbook",
+    assert (
+        await provider.resolve_directory_merges(
+            [
+                DirectoryMergeRequest(
+                    source_uri=f"{_ENTITIES}/runbooks", target_uri=f"{_ENTITIES}/runbook"
+                )
+            ]
+        )
+        == []
     )
-    assert "Unknown tool" in proposal["error"]

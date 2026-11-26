@@ -10,6 +10,7 @@ import pytest
 
 from openviking.session.memory.account_templates import memory_template_data
 from openviking.session.memory.dataclass import (
+    DirectoryMergeRequest,
     MemoryField,
     MemoryFile,
     MemoryTypeSchema,
@@ -125,6 +126,7 @@ def _context(
     *,
     files: list[MemoryFile] | None = None,
     link_enabled: bool = False,
+    allow_directory_merges: bool = False,
     role_scope: RoleScope | None = None,
     available_tools: tuple[str, ...] = ("read",),
     template_context: dict[str, str] | None = None,
@@ -132,7 +134,9 @@ def _context(
     config = SimpleNamespace(memory=SimpleNamespace(link_enabled=link_enabled))
     with patch("openviking_cli.utils.config.get_openviking_config", return_value=config):
         operations_model = SchemaModelGenerator(
-            schemas, template_context=template_context
+            schemas,
+            template_context=template_context,
+            allow_directory_merges=allow_directory_merges,
         ).create_structured_operations_model(role_scope)
     page_id_map = PageIdMap()
     read_file_contents = {}
@@ -187,6 +191,105 @@ def test_json_protocol_preserves_stable_parser_and_empty_contract():
         None,
         "No expected fields found; got fields: memory_operations",
     )
+
+
+@pytest.mark.parametrize("output_format", ["python", "json"])
+def test_directory_merges_share_the_operation_payload_with_cards(output_format):
+    source = "viking://user/alice/memories/entities/runbooks"
+    target = "viking://user/alice/memories/entities/runbook"
+    context = _context([_renameable_entity_schema()], allow_directory_merges=True)
+    protocol = create_extraction_output_protocol(output_format)
+    assert context.supports_directory_merges
+    if output_format == "python":
+        declare_merge = f"sdk.merge_dirs(source_uri={source!r}, target_uri={target!r})"
+        mixed = (
+            "sdk.create_entities(category='runbook', name='scm', content='SCM rules')\n"
+            f"{declare_merge}\nsdk.commit()"
+        )
+        merge_only = f"{declare_merge}\nsdk.commit()"
+        assert "sdk.merge_dirs(" in protocol.render_contract(context)
+    else:
+        merges = [{"source_uri": source, "target_uri": target}]
+        merge_only = json.dumps({"directory_merges": merges})
+        mixed = json.dumps(
+            {
+                "entities": [
+                    {"page_id": 100, "category": "runbook", "name": "scm", "content": "SCM rules"}
+                ],
+                "directory_merges": merges,
+            }
+        )
+        assert '"directory_merges"' in protocol.render_contract(context)
+
+    operations, error = protocol.parse(mixed, context)
+    assert error is None
+    assert operations.entities[0].name == "scm"
+    assert operations.directory_merges == [
+        DirectoryMergeRequest(source_uri=source, target_uri=target)
+    ]
+
+    operations, error = protocol.parse(merge_only, context)
+    assert error is None
+    assert not operations.entities
+    assert not operations.is_empty()
+
+
+@pytest.mark.parametrize(
+    "program",
+    [
+        "proposal = sdk.merge_dirs(source_uri='a', target_uri='b')",
+        "sdk.merge_dirs('a', 'b')",
+        "sdk.merge_dirs(source_uri='a', target_uri=2)",
+        "source = 'a'\nsdk.merge_dirs(source_uri=source, target_uri='b')",
+        "sdk.merge_dirs(source_uri='a', target_uri='b', source_uri='c')",
+    ],
+)
+def test_python_directory_merge_requires_a_standalone_call_with_literal_uris(program):
+    context = _context([_renameable_entity_schema()], allow_directory_merges=True)
+    protocol = create_extraction_output_protocol("python")
+
+    operations, error = protocol.parse(program, context)
+
+    assert operations is None
+    assert "sdk.merge_dirs()" in error
+
+
+def test_directory_merges_only_use_the_reserved_field_when_available():
+    schema = _renameable_entity_schema()
+    protocol = create_extraction_output_protocol("python")
+    normal = _context([schema])
+    assert not normal.supports_directory_merges
+    assert "directory_merges" not in normal.operations_model.model_fields
+    operations, error = protocol.parse("sdk.merge_dirs(source_uri='a', target_uri='b')", normal)
+    assert operations is None
+    assert "unavailable" in error
+
+    custom_schema = schema.model_copy(update={"memory_type": "directory_merges"})
+    custom = _context([schema, custom_schema], allow_directory_merges=True)
+    assert not custom.supports_directory_merges
+    assert "Directory Merge Operations" not in protocol.render_contract(custom)
+    operations, error = protocol.parse(
+        "sdk.create_directory_merges(category='custom', name='scm', content='SCM rules')",
+        custom,
+    )
+    assert error is None
+    assert operations.directory_merges[0].category == "custom"
+
+
+def test_json_directory_merge_does_not_coerce_an_invalid_endpoint():
+    context = _context([_renameable_entity_schema()], allow_directory_merges=True)
+    protocol = create_extraction_output_protocol("json")
+
+    operations, error = protocol.parse(
+        '{"entities": [{"page_id": 100, "category": "runbook", "name": "scm", '
+        '"content": "SCM rules"}], "directory_merges": '
+        '[{"source_uri": 42, "target_uri": "viking://user/alice/memories/entities/runbook"}]}',
+        context,
+    )
+
+    assert error is None
+    assert operations.entities[0].name == "scm"
+    assert operations.directory_merges == []
 
 
 def test_python_contract_and_bindings_expose_only_selected_schema_fields():

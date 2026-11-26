@@ -674,7 +674,9 @@ async def test_v3_extract_uses_patch_merge_without_directory_lock(monkeypatch, a
                 result.add_error(uri, MemoryReadError(uri, TimeoutError("read timeout")))
             else:
                 result.add_written(uri)
-            return SimpleNamespace(operations=request.operations, apply_result=result)
+            return SimpleNamespace(
+                operations=request.operations, apply_result=result, directory_merge_results=[]
+            )
 
     compressor = SessionCompressorV3(
         vikingdb=None,
@@ -800,6 +802,7 @@ async def test_v3_extract_trains_only_canonical_case_after_patch_merge(monkeypat
                     errors=[],
                 ),
                 apply_result=result,
+                directory_merge_results=[],
             )
 
     monkeypatch.setattr("openviking.session.compressor_v3.get_viking_fs", lambda: FakeFS())

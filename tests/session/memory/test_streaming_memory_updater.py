@@ -13,6 +13,7 @@ from openviking.core.context import ContextLevel
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory.dataclass import (
+    DirectoryMergePlan,
     MemoryField,
     MemoryFile,
     MemoryOperationSkipCode,
@@ -23,6 +24,7 @@ from openviking.session.memory.dataclass import (
     SkippedMemoryOperation,
     StoredLink,
 )
+from openviking.session.memory.directory_maintenance import DirectoryMergeResult
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import ExtractContext, MemoryUpdateResult
 from openviking.session.memory.merge_op.base import FieldType, MergeOp, SearchReplaceBlock, StrPatch
@@ -1677,6 +1679,25 @@ async def test_streaming_memory_updater_submit_waits_for_all_merge_groups(monkey
     )
     self_op = _note_op("multi_self")
     peer_op = _peer_note_op("multi_peer", "web-visitor-alice")
+    plan = DirectoryMergePlan(
+        "entities",
+        "viking://user/u/memories/entities/fault_record",
+        "viking://user/u/memories/entities/故障记录",
+    )
+    migration = DirectoryMergeResult(status="merged")
+    plan_calls = []
+
+    async def merge_directories(*args, **kwargs):
+        assert self_op.uris[0] in fs.files
+        assert peer_op.uris[0] in fs.files
+        assert not updater._apply_lock.locked()
+        plan_calls.append(args[0])
+        return migration
+
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.merge_memory_directories",
+        merge_directories,
+    )
 
     result = await updater.submit(
         MemoryUpdateRequest(
@@ -1684,6 +1705,7 @@ async def test_streaming_memory_updater_submit_waits_for_all_merge_groups(monkey
                 upsert_operations=[self_op, peer_op],
                 delete_file_contents=[],
                 errors=[],
+                directory_merges=[plan],
             ),
             messages=[Message(id="m1", role="user", parts=[TextPart("multi group")])],
             ctx=_ctx(),
@@ -1696,6 +1718,62 @@ async def test_streaming_memory_updater_submit_waits_for_all_merge_groups(monkey
     assert sorted(result.apply_result.written_uris) == sorted([self_op.uris[0], peer_op.uris[0]])
     assert self_op.uris[0] in fs.files
     assert peer_op.uris[0] in fs.files
+    assert plan_calls == [plan]
+    assert result.directory_merge_results == [(plan, migration)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ordinary_error", "strict", "runs"),
+    [(False, False, True), (True, False, True), (True, True, False)],
+)
+async def test_directory_merges_run_for_plan_only_and_respect_strict_errors(
+    monkeypatch, ordinary_error, strict, runs
+):
+    updater = StreamingMemoryUpdater(registry=_registry())
+    plan = DirectoryMergePlan(
+        "entities",
+        "viking://user/u/memories/entities/fault_record",
+        "viking://user/u/memories/entities/故障记录",
+    )
+    migration = DirectoryMergeResult(status="merged")
+    merge_directories = AsyncMock(return_value=migration)
+    monkeypatch.setattr(
+        "openviking.session.memory.streaming_memory_updater.merge_memory_directories",
+        merge_directories,
+    )
+    ordinary_result = MemoryUpdateResult()
+    ordinary_result.add_error("unknown", ValueError("ordinary update failed"))
+    operations = ResolvedOperations(
+        upsert_operations=[],
+        delete_file_contents=[],
+        errors=["ordinary update failed"] if ordinary_error else [],
+        directory_merges=[plan],
+    )
+    submit_ordinary = AsyncMock(
+        return_value=StreamingMemoryUpdateResult(
+            operations=operations, apply_result=ordinary_result, request_count=1
+        )
+    )
+    monkeypatch.setattr(StreamingMemoryUpdater, "_submit_grouped_merge_request", submit_ordinary)
+
+    ctx = _ctx()
+    result = await updater.submit(
+        MemoryUpdateRequest(
+            operations=operations,
+            messages=[],
+            ctx=ctx,
+            strict_extract_errors=strict,
+        )
+    )
+
+    assert submit_ordinary.await_count == int(ordinary_error)
+    assert merge_directories.await_count == int(runs)
+    assert result.directory_merge_results == ([(plan, migration)] if runs else [])
+    if runs:
+        merge_directories.assert_awaited_once_with(
+            plan, registry=updater.registry, vikingdb=None, ctx=ctx
+        )
 
 
 @pytest.mark.asyncio

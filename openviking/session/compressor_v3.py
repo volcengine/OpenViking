@@ -45,7 +45,6 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
     StoredLink,
 )
-from openviking.session.memory.directory_maintenance import merge_memory_directories
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.memory_updater import (
@@ -335,6 +334,8 @@ class SessionCompressorV3:
         viking_fs: Any,
         ctx: RequestContext,
         archive_uri: str = "",
+        *,
+        moved_away: set[str] | None = None,
     ) -> dict[str, Any]:
         adds: list[dict[str, Any]] = []
         updates: list[dict[str, Any]] = []
@@ -350,6 +351,8 @@ class SessionCompressorV3:
                 delete_by_uri.setdefault(old_file.uri, old_file)
 
         for uri in result.written_uris:
+            if moved_away and uri in moved_away:
+                continue
             op = upsert_by_uri.get(uri)
             memory_type = (
                 op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
@@ -368,6 +371,8 @@ class SessionCompressorV3:
                 adds.append({"uri": uri, "memory_type": memory_type, "after": ""})
 
         for uri in result.edited_uris:
+            if moved_away and uri in moved_away:
+                continue
             op = upsert_by_uri.get(uri)
             memory_type = (
                 op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
@@ -862,6 +867,10 @@ class SessionCompressorV3:
         if strict_extract_errors and result.errors:
             raise MemoryUpdateError(result)
 
+        directory_results = update_result.directory_merge_results
+        moved_away = {
+            uri for _, migration in directory_results for uri in migration.result.deleted_uris
+        }
         memory_diff = None
         if archive_uri and viking_fs and result is not None:
             memory_diff = await self._build_memory_diff(
@@ -870,30 +879,22 @@ class SessionCompressorV3:
                 viking_fs=viking_fs,
                 ctx=ctx,
                 archive_uri=archive_uri,
+                moved_away=moved_away,
             )
 
-        contexts = _contexts_from_update_result(result)
-        if context_provider.directory_merge_plans:
+        contexts = [
+            context
+            for context in _contexts_from_update_result(result)
+            if context.uri not in moved_away
+        ]
+        if directory_results:
             diffs = [memory_diff] if memory_diff is not None else []
-            for plan in context_provider.directory_merge_plans:
+            for plan, migration in directory_results:
                 report = {
                     "memory_type": plan.memory_type,
                     "source_uri": plan.source_uri,
                     "target_uri": plan.target_uri,
                 }
-                try:
-                    migration = await merge_memory_directories(
-                        plan, registry=registry, vikingdb=self.vikingdb, ctx=ctx
-                    )
-                except Exception as exc:
-                    # The ordinary extraction already completed. Keep directory
-                    # maintenance independently retryable in a later Commit.
-                    logger.warning(
-                        "Memory directory merge failed error_type=%s", type(exc).__name__
-                    )
-                    report.update(status="failed", error_type=type(exc).__name__)
-                    diffs.append({"directory_merges": [report]})
-                    continue
                 deleted = set(migration.result.deleted_uris)
                 report.update(
                     status=migration.status,
@@ -903,7 +904,6 @@ class SessionCompressorV3:
                     pruned=migration.pruned,
                     errors=len(migration.result.errors),
                 )
-                contexts = [context for context in contexts if context.uri not in deleted]
                 contexts.extend(_contexts_from_update_result(migration.result))
                 directory_diff = await self._build_memory_diff(
                     result=migration.result,

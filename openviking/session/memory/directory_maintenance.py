@@ -13,6 +13,9 @@ from openviking.core.namespace import classify_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
+from openviking.session.memory.dataclass import (
+    DirectoryMergePlan as DirectoryMergePlan,
+)
 from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
@@ -37,13 +40,6 @@ _IDENTITY_FIELDS = {"entities": ("category", "name"), "preferences": ("user", "t
 _SUMMARY_FILES = frozenset({".abstract.md", ".overview.md"})
 _LOCK_ATTEMPTS = 4
 _LOCK_TIMEOUT_SECONDS = 5
-
-
-@dataclass(frozen=True)
-class DirectoryMergePlan:
-    memory_type: str
-    source_uri: str
-    target_uri: str
 
 
 @dataclass
