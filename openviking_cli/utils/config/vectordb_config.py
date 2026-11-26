@@ -394,6 +394,19 @@ class CuVSConfig(BaseModel):
         return self
 
 
+class FilteredKnnOptions(BaseModel):
+    """Validated envelope-v1 request budgets; SQL is never configurable."""
+
+    mode: Literal["adaptive", "exact"] = "adaptive"
+    exact_threshold: int = Field(default=1000, ge=0, le=100000)
+    search_width: int = Field(default=100, ge=1, le=100000)
+    max_graph_visits: int = Field(default=20000, ge=1, le=1000000)
+    max_heap_fetches: int = Field(default=200000, ge=1, le=10000000)
+    eligible_memory_limit: int = Field(default=67108864, ge=1048576, le=4294967296)
+    recover: bool = False
+    model_config = {"extra": "forbid", "strict": True}
+
+
 class PgvectorConfig(BaseModel):
     """PostgreSQL + pgvector. Credentials are resolved from a DSN environment variable."""
 
@@ -405,6 +418,17 @@ class PgvectorConfig(BaseModel):
     m: int = Field(default=16, ge=2, le=100)
     ef_construction: int = Field(default=64, ge=4, le=1000)
     ef_search: int = Field(default=100, ge=1, le=1000)
+    filtered_knn: Literal["off", "auto", "required"] = "off"
+    filtered_knn_options: FilteredKnnOptions = Field(default_factory=FilteredKnnOptions)
+    unfiltered_hnsw: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "With filtered_knn enabled, use native HNSW for adaptive dense candidates "
+            "without an explicit filter. Disable to test filtered traversal and recovery. "
+            "Explicit filtered_knn_options.mode='exact' still uses exact candidates."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_pool(self):

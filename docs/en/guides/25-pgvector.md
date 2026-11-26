@@ -122,6 +122,71 @@ meaning.
 
 ## Directory filter tuning
 
+### Optional filtered KNN capability
+
+The same adapter can use the optional `ov_filtered_knn` envelope-v1 API in a
+compatible vector extension. Ordinary pgvector installations remain supported.
+Set `pgvector.filtered_knn` to `off` (default), `auto`, or `required`.
+
+`pgvector.unfiltered_hnsw` defaults to `false`, preserving enhanced traversal.
+When set to `true` and filtered KNN is enabled,
+adaptive dense candidates without an explicit predicate use native HNSW,
+avoiding complete eligibility-set construction. Hybrid and time-decay dense
+candidates share this routing. PostgreSQL still applies MVCC and RLS, while
+explicit tenant, ACL and path filters retain the filtered envelope. Explicit
+`filtered_knn_options.mode="exact"` also retains the envelope. Capability
+checks and the `required` contract still apply.
+
+Native candidates use `ef_search` (1–1000), rather than filtered search width,
+visit budgets or recovery. Set `unfiltered_hnsw=false` to test the enhanced
+unfiltered traversal. Compiled empty filter objects also use native routing;
+non-empty ASTs retain filtered routing.
+
+For bounded recovery experiments, disable `unfiltered_hnsw`, fix
+`search_width=2000`, set `recover=true`, and compare `max_graph_visits` of
+100000, 200000 and 400000 with the same heap and memory budgets. Recovery
+disables the heuristic stop but remains bounded by total visits, heap fetches
+and memory. A visit limit does not guarantee a particular recall.
+`auto` discovers extension membership, signatures, PostgreSQL version and
+permissions at connection time, then uses the capability for L2/cosine/IP HNSW
+indexes. Missing capabilities or unsupported indexes use native candidates.
+`required` rejects missing capabilities and unsupported dense index structures.
+Execution errors, permission failures and budget errors always propagate.
+
+The current capability supports PostgreSQL 17 and full-precision HNSW vectors
+up to 2000 dimensions. Dense, hybrid and time-decay share its candidate hook;
+sparse-only queries retain the existing posting path. Candidates and fields are
+read in one SQL statement. Per-query DEBUG logs include route, stop reason and budget
+statistics, including empty results.
+
+```json
+{
+  "index_type": "hnsw",
+  "filtered_knn": "auto",
+  "filtered_knn_options": {
+    "mode": "adaptive",
+    "exact_threshold": 1000,
+    "search_width": 100,
+    "max_graph_visits": 20000,
+    "max_heap_fetches": 200000,
+    "eligible_memory_limit": 67108864,
+    "recover": false
+  }
+}
+```
+
+`eligible_memory_limit` accepts 1 MiB–4 GiB on a 64-bit extension, in bytes
+(`4294967296` for 4 GiB); the default remains 64 MiB. This is a per-request
+aggregate checkpoint budget, allocated on demand. Temporary overshoot is possible;
+SPI executor memory and the final JSON envelope are not fully covered.
+32-bit extension builds retain a 1 GiB maximum.
+
+Options are strictly validated. `mode="exact"` forces exact candidate search;
+`exact_threshold=0` selects ANN for nonempty eligible sets. Search width is
+raised to the requested candidate budget. ANN may return partial qualified
+results with an explicit stop reason. Eligibility currently scans the complete
+filtered set; measure recall, scan cost and p99 before enabling in production.
+
 For normalized URI scopes on large collections, evaluate a composite B-tree
 expression index over tenant and path. See
 [pgvector directory filter indexes](26-pgvector-directory-filtering.md)

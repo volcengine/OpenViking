@@ -180,11 +180,18 @@ def test_4096_flat_roundtrip():
         {"index_type": "ivfflat"},
         {"dsn_env": ""},
         {"unknown_option": True},
+        {"unfiltered_hnsw": "false"},
+        {"unfiltered_hnsw": 1},
     ],
 )
 def test_invalid_pgvector_settings(settings):
     with pytest.raises(ValueError):
         PgvectorConfig(**settings)
+
+
+def test_unfiltered_hnsw_preserves_existing_default():
+    assert PgvectorConfig().unfiltered_hnsw is False
+    assert PgvectorConfig(unfiltered_hnsw=True).unfiltered_hnsw is True
 
 
 def test_missing_driver_dsn(monkeypatch):

@@ -14,7 +14,7 @@ import json
 import math
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from openviking.storage.vectordb.collection.result import SearchItemResult, SearchResult
 from openviking_cli.exceptions import (
@@ -33,6 +33,9 @@ from .sql import (
     _quote_identifier,
     _validate_vector,
 )
+
+if TYPE_CHECKING:
+    from .collection import OpenGaussCollection
 
 MAX_SPARSE_NONZERO = 4096
 MAX_SPARSE_TERM_BYTES = 256
@@ -449,6 +452,24 @@ class OpenGaussRetrievalMixin:
             [*params, vector_text, budget],
         )
 
+    def _dense_candidate_ctes(self, index_name, vector_text, budget, filters):
+        """Backend hook shared by dense recall and sparse/advanced reranking."""
+        collection = cast("OpenGaussCollection", self)
+        where, params = _build_where_clause(
+            collection._normalize_filter_date_times(filters), collection._array_fields
+        )
+        _, op = collection._resolve_distance_and_op(index_name)
+        sql, params = self._dense_candidate_query(
+            index_name, where, params, vector_text, op, budget
+        )
+        return [f"dense_candidates AS ({sql})"], params
+
+    def _candidate_query_sql(self, ctes, select):
+        return "WITH " + ", ".join(ctes) + " " + select
+
+    def _consume_candidate_rows(self, columns, rows, index_name):
+        return columns, rows
+
     def search_ranked(
         self,
         index_name: str,
@@ -522,10 +543,10 @@ class OpenGaussRetrievalMixin:
             for term, weight in sparse.items():
                 params.extend([term, weight])
         if has_dense:
-            dense_sql, dense_params = self._dense_candidate_query(
-                index_name, where, filter_params, vector_text, op, budget
+            dense_ctes, dense_params = self._dense_candidate_ctes(
+                index_name, vector_text, budget, filters
             )
-            ctes.append(f"dense_candidates AS ({dense_sql})")
+            ctes.extend(dense_ctes)
             params.extend(dense_params)
             candidate_selects.append("SELECT _ov_candidate_id FROM dense_candidates")
         if has_sparse:
@@ -567,11 +588,14 @@ class OpenGaussRetrievalMixin:
         )
         # A semi-join keeps the outer projection unambiguous even if a user
         # column is named _ov_candidate_id; candidates are never fetched first.
-        sql = (
-            "WITH " + ", ".join(ctes) + f" SELECT {projection}, "
-            f"{distance_sql} AS _ov_dense_distance, {sparse_sql} AS _ov_sparse_score, "
-            f"{time_sql} AS _ov_decay_time FROM {table} "
-            f'WHERE {table}."id" IN (SELECT candidates._ov_candidate_id FROM candidates)'
+        sql = self._candidate_query_sql(
+            ctes,
+            (
+                f"SELECT {projection}, "
+                f"{distance_sql} AS _ov_dense_distance, {sparse_sql} AS _ov_sparse_score, "
+                f"{time_sql} AS _ov_decay_time FROM {table} "
+                f'WHERE {table}."id" IN (SELECT candidates._ov_candidate_id FROM candidates)'
+            ),
         )
         cursor = self._cursor()
         try:
@@ -580,6 +604,7 @@ class OpenGaussRetrievalMixin:
             cursor.execute(sql, params)
             columns = [desc[0] for desc in cursor.description]
             rows = cursor.fetchall()
+            columns, rows = self._consume_candidate_rows(columns, rows, index_name)
             self._conn.commit()
         except Exception:
             self._conn.rollback()
