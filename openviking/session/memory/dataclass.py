@@ -14,6 +14,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Literal,
     Optional,
     Protocol,
     TypeVar,
@@ -390,21 +391,28 @@ class ResolvedOperation(BaseModel):
 
 
 class DirectoryMergeRequest(BaseModel):
-    """Model output naming the source and destination of a directory merge."""
+    """Model output naming the source and destination of a directory operation."""
 
     model_config = ConfigDict(extra="forbid")
 
-    source_uri: StrictStr = Field(min_length=1, description="Existing redundant directory URI")
-    target_uri: StrictStr = Field(min_length=1, description="Existing canonical directory URI")
+    source_uri: StrictStr = Field(min_length=1, description="Existing source directory URI")
+    target_uri: StrictStr = Field(
+        min_length=1, description="Existing directory URI for merge, unused sibling URI for rename"
+    )
+    operation: Literal["merge", "rename"] = Field(
+        default="merge",
+        description="Merge into an existing sibling, or rename to an unused sibling",
+    )
 
 
 @dataclass(frozen=True)
 class DirectoryMergePlan:
-    """Directory merge resolved against the extraction's allowed memory roots."""
+    """Directory operation resolved against the extraction's allowed memory roots."""
 
     memory_type: str
     source_uri: str
     target_uri: str
+    operation: Literal["merge", "rename"] = "merge"
 
 
 class ResolvedOperations(BaseModel):

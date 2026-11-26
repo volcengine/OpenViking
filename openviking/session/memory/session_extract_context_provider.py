@@ -237,14 +237,16 @@ class SessionExtractContextProvider(ExtractContextProvider):
             directory_rules = """
 
 ## Existing Memory Directories
+- Maintain the directory list as part of this Commit. Review the existing categories relevant to the current conversation before adding or updating cards.
 - Treat inventory entries as stored identifiers. Reuse the exact spelling of a semantically equivalent entity category from the same memory root, even when its language differs from the requested output language. Apply the output language rule to new category names and visible card content.
 - A shared category is no evidence that cards describe the same entity. Keep separate entities separate and preserve every distinct fact.
 - The prefetched inventory lists existing first-level directories. When needed, use shallow `ls` on a listed root or direct child to inspect their children.
 - Before creating a card, inspect its existing category and any clearly equivalent sibling categories with `ls` if the card was not already read. Read an existing card with the matching name before deciding to create a new one. A missing search result alone does not mean a card is new.
-- If the conversation makes two existing sibling categories clearly equivalent and relevant, include a directory merge in the final operations even if you have no card changes. For example, if the conversation uses both “排障手册” and “troubleshooting_guide” for the same category and both exist under the same inventory root, choose one of those existing directories as the destination.
-- For preferences, include a merge only when the source is a formatting alias of the scoped owner ID at the target. Similar preferences do not establish common ownership.
-- Directory merges run after normal card operations. Use the chosen target directory for genuinely new cards. Inspect the source with `ls`, then read a matching source card and use its page reference to update it in place.
-- Return directory merges and ordinary card operations together in the final output. Keep any still-applicable directory merges when revising the output after a read.
+- Merge two existing sibling directories only if they are clearly equivalent and relevant to the conversation. Choose one existing directory to keep. For example, if “排障手册” and “troubleshooting_guide” are used for the same category, reuse one of those names for the group.
+- Rename a directory when the conversation establishes a better name for the same category and that name is unused under the same root. Keep the original name when the only difference is the language of the current conversation.
+- For preferences, only consolidate directory names that the server can verify are formatting aliases of the scoped owner ID. Similar preferences do not establish common ownership.
+- Directory operations run after card writes. For a merge, use the existing target for genuinely new cards and update any matching source card in place. For a rename, use the current source directory for all ordinary card operations so the cards move together.
+- Return relevant directory operations even when there are no card changes. Include them with ordinary card operations in the final output and keep any still-applicable directory operations when revising after a read.
 """
         contains_resource_uri = self._conversation_contains_resource_uri()
         resource_uri_handling = (
@@ -618,18 +620,31 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         except InvalidURIError:
             return None
         root = self._visible_directory_root(source)
+        target_root, _, target_name = target.rpartition("/")
         if (
             not root
+            or target_root != root
+            or target_name.startswith(".")
             or source.casefold() == target.casefold()
-            or root != self._visible_directory_root(target)
         ):
+            return None
+        if request.operation == "rename":
+            entries = self._directory_inventory[root]["entries"]
+            if any(entry["name"].casefold() == target_name.casefold() for entry in entries):
+                return None
+        elif root != self._visible_directory_root(target):
             return None
         memory_type = self._directory_roots[root]
         if memory_type == "preferences" and not verified_preference_directory_owner(
             source, target, self._ctx
         ):
             return None
-        return DirectoryMergePlan(memory_type=memory_type, source_uri=source, target_uri=target)
+        return DirectoryMergePlan(
+            memory_type=memory_type,
+            source_uri=source,
+            target_uri=target,
+            operation=request.operation,
+        )
 
     async def resolve_directory_merges(
         self, requests: list[DirectoryMergeRequest]
@@ -644,6 +659,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             if plan is None or any(
                 existing.source_uri in {plan.source_uri, plan.target_uri}
                 or existing.target_uri == plan.source_uri
+                or (
+                    existing.target_uri == plan.target_uri
+                    and "rename" in {existing.operation, plan.operation}
+                )
                 for existing in plans
             ):
                 continue

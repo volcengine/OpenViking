@@ -194,38 +194,48 @@ def test_json_protocol_preserves_stable_parser_and_empty_contract():
 
 
 @pytest.mark.parametrize("output_format", ["python", "json"])
-def test_directory_merges_share_the_operation_payload_with_cards(output_format):
+@pytest.mark.parametrize("operation", ["merge", "rename"])
+def test_directory_operations_share_the_payload_with_cards(output_format, operation):
     source = "viking://user/alice/memories/entities/runbooks"
     target = "viking://user/alice/memories/entities/runbook"
+    category = "runbooks" if operation == "rename" else "runbook"
     context = _context([_renameable_entity_schema()], allow_directory_merges=True)
     protocol = create_extraction_output_protocol(output_format)
     assert context.supports_directory_merges
+    contract = protocol.render_contract(context)
+    assert "unused sibling" in contract
+    assert "source category" in contract
     if output_format == "python":
-        declare_merge = f"sdk.merge_dirs(source_uri={source!r}, target_uri={target!r})"
+        method = "rename_dir" if operation == "rename" else "merge_dirs"
+        declare_merge = f"sdk.{method}(source_uri={source!r}, target_uri={target!r})"
         mixed = (
-            "sdk.create_entities(category='runbook', name='scm', content='SCM rules')\n"
+            f"sdk.create_entities(category={category!r}, name='scm', content='SCM rules')\n"
             f"{declare_merge}\nsdk.commit()"
         )
         merge_only = f"{declare_merge}\nsdk.commit()"
-        assert "sdk.merge_dirs(" in protocol.render_contract(context)
+        assert f"sdk.{method}(" in contract
     else:
-        merges = [{"source_uri": source, "target_uri": target}]
+        request = {"source_uri": source, "target_uri": target}
+        if operation == "rename":
+            request["operation"] = "rename"
+        merges = [request]
         merge_only = json.dumps({"directory_merges": merges})
         mixed = json.dumps(
             {
                 "entities": [
-                    {"page_id": 100, "category": "runbook", "name": "scm", "content": "SCM rules"}
+                    {"page_id": 100, "category": category, "name": "scm", "content": "SCM rules"}
                 ],
                 "directory_merges": merges,
             }
         )
-        assert '"directory_merges"' in protocol.render_contract(context)
+        assert '"directory_merges"' in contract
 
     operations, error = protocol.parse(mixed, context)
     assert error is None
     assert operations.entities[0].name == "scm"
+    assert operations.entities[0].category == category
     assert operations.directory_merges == [
-        DirectoryMergeRequest(source_uri=source, target_uri=target)
+        DirectoryMergeRequest(source_uri=source, target_uri=target, operation=operation)
     ]
 
     operations, error = protocol.parse(merge_only, context)
@@ -237,21 +247,22 @@ def test_directory_merges_share_the_operation_payload_with_cards(output_format):
 @pytest.mark.parametrize(
     "program",
     [
-        "proposal = sdk.merge_dirs(source_uri='a', target_uri='b')",
-        "sdk.merge_dirs('a', 'b')",
-        "sdk.merge_dirs(source_uri='a', target_uri=2)",
-        "source = 'a'\nsdk.merge_dirs(source_uri=source, target_uri='b')",
-        "sdk.merge_dirs(source_uri='a', target_uri='b', source_uri='c')",
+        "proposal = sdk.{method}(source_uri='a', target_uri='b')",
+        "sdk.{method}('a', 'b')",
+        "sdk.{method}(source_uri='a', target_uri=2)",
+        "source = 'a'\nsdk.{method}(source_uri=source, target_uri='b')",
+        "sdk.{method}(source_uri='a', target_uri='b', source_uri='c')",
     ],
 )
-def test_python_directory_merge_requires_a_standalone_call_with_literal_uris(program):
+@pytest.mark.parametrize("method", ["merge_dirs", "rename_dir"])
+def test_python_directory_operation_requires_a_standalone_call_with_literal_uris(program, method):
     context = _context([_renameable_entity_schema()], allow_directory_merges=True)
     protocol = create_extraction_output_protocol("python")
 
-    operations, error = protocol.parse(program, context)
+    operations, error = protocol.parse(program.format(method=method), context)
 
     assert operations is None
-    assert "sdk.merge_dirs()" in error
+    assert f"sdk.{method}()" in error
 
 
 def test_directory_merges_only_use_the_reserved_field_when_available():
@@ -260,14 +271,15 @@ def test_directory_merges_only_use_the_reserved_field_when_available():
     normal = _context([schema])
     assert not normal.supports_directory_merges
     assert "directory_merges" not in normal.operations_model.model_fields
-    operations, error = protocol.parse("sdk.merge_dirs(source_uri='a', target_uri='b')", normal)
-    assert operations is None
-    assert "unavailable" in error
+    for method in ("merge_dirs", "rename_dir"):
+        operations, error = protocol.parse(f"sdk.{method}(source_uri='a', target_uri='b')", normal)
+        assert operations is None
+        assert "unavailable" in error
 
     custom_schema = schema.model_copy(update={"memory_type": "directory_merges"})
     custom = _context([schema, custom_schema], allow_directory_merges=True)
     assert not custom.supports_directory_merges
-    assert "Directory Merge Operations" not in protocol.render_contract(custom)
+    assert "Directory Operations" not in protocol.render_contract(custom)
     operations, error = protocol.parse(
         "sdk.create_directory_merges(category='custom', name='scm', content='SCM rules')",
         custom,
@@ -276,14 +288,25 @@ def test_directory_merges_only_use_the_reserved_field_when_available():
     assert operations.directory_merges[0].category == "custom"
 
 
-def test_json_directory_merge_does_not_coerce_an_invalid_endpoint():
+@pytest.mark.parametrize("overrides", [{"source_uri": 42}, {"operation": "delete"}])
+def test_json_directory_operation_discards_an_invalid_request(overrides):
     context = _context([_renameable_entity_schema()], allow_directory_merges=True)
     protocol = create_extraction_output_protocol("json")
+    request = {
+        "source_uri": "viking://user/alice/memories/entities/runbooks",
+        "target_uri": "viking://user/alice/memories/entities/runbook",
+        **overrides,
+    }
 
     operations, error = protocol.parse(
-        '{"entities": [{"page_id": 100, "category": "runbook", "name": "scm", '
-        '"content": "SCM rules"}], "directory_merges": '
-        '[{"source_uri": 42, "target_uri": "viking://user/alice/memories/entities/runbook"}]}',
+        json.dumps(
+            {
+                "entities": [
+                    {"page_id": 100, "category": "runbook", "name": "scm", "content": "SCM rules"}
+                ],
+                "directory_merges": [request],
+            }
+        ),
         context,
     )
 

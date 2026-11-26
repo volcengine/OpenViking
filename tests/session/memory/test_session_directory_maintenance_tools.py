@@ -230,6 +230,45 @@ async def test_final_output_merges_only_visible_authorized_sibling_directories()
 
 
 @pytest.mark.asyncio
+async def test_rename_uses_an_unused_sibling_name_and_reserves_the_target():
+    source = f"{_ENTITIES}/runbooks"
+    other = f"{_ENTITIES}/troubleshooting"
+    target = f"{_ENTITIES}/engineering_guides"
+    provider = _provider(
+        _ListingFS(
+            {
+                _ENTITIES: [
+                    _entry(_ENTITIES, "runbooks"),
+                    _entry(_ENTITIES, "troubleshooting"),
+                    _entry(_ENTITIES, "occupied.md", directory=False),
+                ]
+            }
+        )
+    )
+    await provider.prefetch()
+    requests = [
+        DirectoryMergeRequest(source_uri=source, target_uri=target),
+        *(
+            DirectoryMergeRequest(source_uri=src, target_uri=dst, operation="rename")
+            for src, dst in [
+                (source, other),
+                (source, f"{_ENTITIES}/occupied.md"),
+                (source, f"{_PREFERENCES}/alice"),
+                (source, f"{_ENTITIES}/parent/nested"),
+                (source, target),
+                (other, target),
+            ]
+        ),
+    ]
+
+    plans = await provider.resolve_directory_merges(requests)
+    assert [(plan.operation, plan.source_uri, plan.target_uri) for plan in plans] == [
+        ("rename", source, target)
+    ]
+    assert "Maintain the directory list" in provider.instruction()
+
+
+@pytest.mark.asyncio
 async def test_directory_actions_require_session_commit(monkeypatch):
     from openviking.session.memory import session_extract_context_provider as module
 

@@ -382,7 +382,7 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         return (
             "Some sdk.create_events(...) calls could not resolve a safe write target. "
             "Re-emit ONLY corrected create_events() calls for the failed items below; do not "
-            "emit other memory operations, including deletes, links, or directory merges. "
+            "emit other memory operations, including deletes, links, or directory operations. "
             "The server has preserved "
             "all successful operations from the previous program. "
             "For event ranges, pass ranges= with valid in-bounds message indexes that include the "
@@ -979,9 +979,9 @@ class _PythonProgramCompiler:
             )
             self._next_new_page_id = self._find_next_new_page_id(self._next_new_page_id + 1)
             return obj
-        if method == "merge_dirs":
+        if method in {"merge_dirs", "rename_dir"}:
             if not self.context.supports_directory_merges:
-                self._error(node, "sdk.merge_dirs() is unavailable in this extraction")
+                self._error(node, f"sdk.{method}() is unavailable in this extraction")
             arguments = {item.arg: item.value for item in node.keywords}
             if (
                 not statement
@@ -991,17 +991,18 @@ class _PythonProgramCompiler:
             ):
                 self._error(
                     node,
-                    "sdk.merge_dirs() requires a standalone call with source_uri= and target_uri=",
+                    f"sdk.{method}() requires a standalone call with source_uri= and target_uri=",
                 )
             if any(
                 not isinstance(argument, ast.Constant) or not isinstance(argument.value, str)
                 for argument in arguments.values()
             ):
-                self._error(node, "sdk.merge_dirs() requires literal directory URI strings")
+                self._error(node, f"sdk.{method}() requires literal directory URI strings")
             self.directory_merges.append(
                 DirectoryMergeRequest(
                     source_uri=arguments["source_uri"].value,
                     target_uri=arguments["target_uri"].value,
+                    operation="rename" if method == "rename_dir" else "merge",
                 )
             )
             return None

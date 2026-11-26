@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Apply scoped, non-overwriting memory directory merges."""
+"""Apply scoped, non-overwriting memory directory maintenance."""
 
 from __future__ import annotations
 
@@ -59,6 +59,8 @@ class DirectoryMergeResult:
 def _check_plan(
     plan: DirectoryMergePlan, registry: MemoryTypeRegistry, ctx: RequestContext
 ) -> tuple[MemoryTypeSchema, str, str | None]:
+    if plan.operation not in {"merge", "rename"}:
+        raise ValueError("Unsupported memory directory operation")
     schema = registry.get(plan.memory_type)
     if plan.memory_type not in _IDENTITY_FIELDS or schema is None or not schema.enabled:
         raise ValueError(f"Unsupported merge memory type: {plan.memory_type}")
@@ -103,6 +105,22 @@ async def _directory_stat(fs, uri: str, ctx: RequestContext) -> dict[str, Any] |
         return await fs.stat(uri, ctx=ctx, skip_count=True, include_vector_fields=False)
     except (NotFoundError, FileNotFoundError):
         return None
+
+
+async def _check_endpoints(fs, plan: DirectoryMergePlan, ctx: RequestContext) -> str | None:
+    source = await _directory_stat(fs, plan.source_uri, ctx)
+    if source is None:
+        return "source_missing"
+    if not source.get("isDir"):
+        raise ValueError("Memory directory maintenance requires a source directory")
+    target = await _directory_stat(fs, plan.target_uri, ctx)
+    if plan.operation == "rename":
+        return "target_exists" if target is not None else None
+    if target is None:
+        return "target_missing"
+    if not target.get("isDir"):
+        raise ValueError("Memory directory merge requires a destination directory")
+    return None
 
 
 async def _entries(fs, path: str, ctx: RequestContext) -> dict[str, dict[str, Any]]:
@@ -262,6 +280,21 @@ async def _is_discardable_sidecar(fs, uri: str, name: str, ctx: RequestContext) 
     )
 
 
+async def _record_remaining(fs, plan, entries, ctx, report, *, moving=frozenset()) -> None:
+    report.remaining = []
+    for name, entry in sorted(entries.items()):
+        uri = f"{plan.source_uri}/{name}"
+        if uri in moving:
+            continue
+        if not entry.get("isDir") and name in _SUMMARY_FILES | {".relations.json"}:
+            try:
+                if await _is_discardable_sidecar(fs, uri, name, ctx):
+                    continue
+            except Exception as exc:
+                report.result.add_error(uri, exc)
+        report.remaining.append(uri)
+
+
 async def _finish_source(fs, plan, source_path, ctx, lease, report) -> None:
     try:
         entries = await _entries(fs, source_path, ctx)
@@ -270,19 +303,23 @@ async def _finish_source(fs, plan, source_path, ctx, lease, report) -> None:
             report.pruned = True
             return
         raise
-
-    for name, entry in sorted(entries.items()):
-        uri = f"{plan.source_uri}/{name}"
-        if not entry.get("isDir") and name in _SUMMARY_FILES | {".relations.json"}:
-            try:
-                if await _is_discardable_sidecar(fs, uri, name, ctx):
-                    continue
-            except Exception as exc:
-                report.result.add_error(uri, exc)
-        report.remaining.append(uri)
+    await _record_remaining(fs, plan, entries, ctx, report)
     if not report.remaining and not report.result.errors:
         await fs.rm(plan.source_uri, recursive=True, ctx=ctx, lease_ref=lease)
         report.pruned = True
+
+
+async def _cleanup_empty_rename_target(fs, plan, target_path, ctx, lease, report) -> None:
+    if report.pruned or report.result.written_uris:
+        return
+    # Writing a card can create its parent before a failed write. The name was
+    # absent under this same lease, so we can remove a leftover empty directory.
+    try:
+        target = await _directory_stat(fs, plan.target_uri, ctx)
+        if target and target.get("isDir") and not await _entries(fs, target_path, ctx):
+            await fs.rm(plan.target_uri, recursive=True, ctx=ctx, lease_ref=lease)
+    except Exception as exc:
+        report.result.add_error(plan.target_uri, exc)
 
 
 def _combine_results(destination: MemoryUpdateResult, source: MemoryUpdateResult) -> None:
@@ -293,7 +330,9 @@ def _combine_results(destination: MemoryUpdateResult, source: MemoryUpdateResult
     destination.errors.extend(source.errors)
 
 
-async def _apply_cards(updater, report: DirectoryMergeResult, ctx: RequestContext) -> None:
+async def _apply_cards(
+    updater, report: DirectoryMergeResult, ctx: RequestContext, *, stop_on_error: bool = False
+) -> None:
     # Move one card at a time. A link to another card should point to its
     # current URI until that card's own move has actually succeeded.
     search_tags = {
@@ -311,6 +350,8 @@ async def _apply_cards(updater, report: DirectoryMergeResult, ctx: RequestContex
         _combine_results(report.result, applied)
         report.operations.delete_file_contents.extend(batch.delete_file_contents)
         report.operations.delete_replacements.update(batch.delete_replacements)
+        if stop_on_error and (applied.errors or not applied.deleted_uris):
+            break
     written_or_deleted = set(report.result.written_uris + report.result.deleted_uris)
     report.result.edited_uris = list(
         dict.fromkeys(uri for uri in report.result.edited_uris if uri not in written_or_deleted)
@@ -341,14 +382,9 @@ async def merge_memory_directories(
         fs._validate_transfer_paths(source_path, target_path)
         await fs._ensure_access(plan.source_uri, ctx, action=AclAction.MANAGE)
         await fs._ensure_access(plan.target_uri, ctx, action=AclAction.WRITE)
-        source_stat = await _directory_stat(fs, plan.source_uri, ctx)
-        if source_stat is None:
-            return DirectoryMergeResult(status="source_missing")
-        target_stat = await _directory_stat(fs, plan.target_uri, ctx)
-        if target_stat is None:
-            return DirectoryMergeResult(status="target_missing")
-        if not source_stat.get("isDir") or not target_stat.get("isDir"):
-            raise ValueError("Directory merge requires two existing directories")
+        rename = plan.operation == "rename"
+        if status := await _check_endpoints(fs, plan, ctx):
+            return DirectoryMergeResult(status=status)
 
         exact_paths: set[str] = set()
         updater = MemoryUpdater(
@@ -366,16 +402,10 @@ async def merge_memory_directories(
                 timeout_secs=_LOCK_TIMEOUT_SECONDS,
             )
             try:
-                source_stat = await _directory_stat(fs, plan.source_uri, ctx)
-                if source_stat is None:
-                    return DirectoryMergeResult(status="source_missing")
-                target_stat = await _directory_stat(fs, plan.target_uri, ctx)
-                if target_stat is None:
-                    return DirectoryMergeResult(status="target_missing")
-                if not source_stat.get("isDir") or not target_stat.get("isDir"):
-                    raise ValueError("Directory merge endpoints changed before applying")
+                if status := await _check_endpoints(fs, plan, ctx):
+                    return DirectoryMergeResult(status=status)
                 source_entries = await _entries(fs, source_path, ctx)
-                target_entries = await _entries(fs, target_path, ctx)
+                target_entries = {} if rename else await _entries(fs, target_path, ctx)
                 report = await _prepare_operations(
                     fs,
                     plan,
@@ -386,13 +416,45 @@ async def merge_memory_directories(
                     target_entries,
                     ctx,
                 )
+                if rename:
+                    moving = {
+                        op.old_memory_file_content.uri for op in report.operations.upsert_operations
+                    }
+                    await _record_remaining(fs, plan, source_entries, ctx, report, moving=moving)
+                    if report.remaining or report.result.errors:
+                        report.status = "blocked"
+                        return report
+                    await fs._ensure_file_changes_allowed(
+                        [plan.source_uri, plan.target_uri], ctx, recursive=True
+                    )
                 discovered = await _linked_paths(fs, report.operations, root, ctx)
                 if not discovered.issubset(exact_paths):
                     exact_paths.update(discovered)
                     continue
                 updater._transaction_handle = lease
-                await _apply_cards(updater, report, ctx)
-                await _finish_source(fs, plan, source_path, ctx, lease, report)
+                try:
+                    if rename and not report.operations.upsert_operations:
+                        directory_field, card_field = _IDENTITY_FIELDS[plan.memory_type]
+                        sample_uri = generate_uri(
+                            schema,
+                            {
+                                directory_field: plan.target_uri.rsplit("/", 1)[1],
+                                card_field: "directory_rename_probe",
+                            },
+                            user_space=user_space,
+                        )
+                        if sample_uri.rsplit("/", 1)[0] != plan.target_uri:
+                            raise ValueError(
+                                "Rename destination must match the memory URI template"
+                            )
+                        await fs.mkdir(plan.target_uri, ctx=ctx, lease_ref=lease)
+                    await _apply_cards(updater, report, ctx, stop_on_error=rename)
+                    await _finish_source(fs, plan, source_path, ctx, lease, report)
+                finally:
+                    if rename:
+                        await _cleanup_empty_rename_target(
+                            fs, plan, target_path, ctx, lease, report
+                        )
                 break
             finally:
                 await fs._async_agfs.pathlock_release(lease)
@@ -410,7 +472,10 @@ async def merge_memory_directories(
             )
 
             await enqueue_directory_refresh(root, 1, ctx=ctx)
-        report.status = "merged" if report.pruned else "partial"
+        if report.pruned:
+            report.status = "renamed" if rename else "merged"
+        else:
+            report.status = "partial"
     except Exception as exc:
         report.status = "failed"
         report.result.add_error(plan.source_uri, exc)

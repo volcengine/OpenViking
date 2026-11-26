@@ -351,8 +351,10 @@ class SchemaModelGenerator:
                 Field(
                     default_factory=list,
                     description=(
-                        "Merge existing equivalent sibling memory directories by visible URI. "
-                        "Apply directory merges after ordinary card operations."
+                        "Use operation='merge' for equivalent siblings when the target already "
+                        "exists, or operation='rename' to move to an unused sibling URI. "
+                        "For a planned rename, write updates and new cards in the original source "
+                        "category. Apply directory operations after ordinary card operations."
                     ),
                 ),
             )

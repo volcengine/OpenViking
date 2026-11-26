@@ -892,6 +892,7 @@ class SessionCompressorV3:
             for plan, migration in directory_results:
                 report = {
                     "memory_type": plan.memory_type,
+                    "operation": plan.operation,
                     "source_uri": plan.source_uri,
                     "target_uri": plan.target_uri,
                 }

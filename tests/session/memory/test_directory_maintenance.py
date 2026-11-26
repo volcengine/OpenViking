@@ -182,3 +182,239 @@ async def test_does_not_recreate_target_deleted_while_waiting_for_lease(
     assert await fs.stat(f"{src}/one.md", ctx=ctx)
     with pytest.raises(NotFoundError):
         await fs.stat(dst, ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_rename_moves_cards_and_updates_the_directory_field(directory_merge_fs):
+    fs, ctx, registry = directory_merge_fs
+    src = f"{ROOT}/entities/fault_record"
+    dst = f"{ROOT}/entities/故障记录"
+    await write_card(
+        fs,
+        ctx,
+        f"{src}/report.md",
+        "entities",
+        {"category": "fault_record", "name": "Report", "source": "original"},
+        "Preserved body",
+    )
+    plan = DirectoryMergePlan("entities", src, dst, operation="rename")
+
+    report = await merge_memory_directories(plan, registry=registry, vikingdb=None, ctx=ctx)
+
+    assert report.status == "renamed"
+    assert report.pruned
+    assert report.result.deleted_uris == [f"{src}/report.md"]
+    found = MemoryFileUtils.read(await fs.read_file(f"{dst}/report.md", ctx=ctx))
+    assert found.content == "Preserved body"
+    assert found.memory_type == "entities"
+    assert found.extra_fields["category"] == "故障记录"
+    assert found.extra_fields["name"] == "Report"
+    assert found.extra_fields["source"] == "original"
+    with pytest.raises(NotFoundError):
+        await fs.stat(src, ctx=ctx)
+
+    retry = await merge_memory_directories(plan, registry=registry, vikingdb=None, ctx=ctx)
+    assert retry.status == "source_missing"
+    assert not retry.result.written_uris
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_when", ["already_exists", "created_while_waiting"])
+async def test_rename_never_merges_into_an_existing_target(
+    directory_merge_fs, monkeypatch, target_when
+):
+    fs, ctx, registry = directory_merge_fs
+    src = f"{ROOT}/entities/fault_record"
+    dst = f"{ROOT}/entities/故障记录"
+    await write_card(
+        fs,
+        ctx,
+        f"{src}/source.md",
+        "entities",
+        {"category": "fault_record", "name": "Source"},
+        "Source body",
+    )
+    if target_when == "already_exists":
+        await fs.mkdir(dst, ctx=ctx)
+    else:
+        acquire = fs._async_agfs.pathlock_acquire_exact_tree_batch
+
+        async def acquire_after_target_appears(*args, **kwargs):
+            await fs.write_file(dst, "Existing file at target path", ctx=ctx)
+            return await acquire(*args, **kwargs)
+
+        monkeypatch.setattr(
+            fs._async_agfs, "pathlock_acquire_exact_tree_batch", acquire_after_target_appears
+        )
+
+    report = await merge_memory_directories(
+        DirectoryMergePlan("entities", src, dst, operation="rename"),
+        registry=registry,
+        vikingdb=None,
+        ctx=ctx,
+    )
+
+    assert report.status == "target_exists"
+    assert not report.result.written_uris
+    assert (await fs.read_file(f"{src}/source.md", ctx=ctx)).startswith("Source body")
+    if target_when == "already_exists":
+        assert await fs.ls(dst, ctx=ctx) == []
+    else:
+        assert await fs.read_file(dst, ctx=ctx) == "Existing file at target path"
+
+
+@pytest.mark.asyncio
+async def test_rename_blocks_before_writes_for_unknown_files_and_manual_sidecars(
+    directory_merge_fs,
+):
+    fs, ctx, registry = directory_merge_fs
+    src = f"{ROOT}/entities/fault_record"
+    dst = f"{ROOT}/entities/故障记录"
+    await write_card(
+        fs,
+        ctx,
+        f"{src}/report.md",
+        "entities",
+        {"category": "fault_record", "name": "Report"},
+        "Source body",
+    )
+    await fs.write_file(f"{src}/notes.txt", "Unknown data", ctx=ctx)
+    await fs.write_file(f"{src}/.overview.md", "Handwritten summary", ctx=ctx)
+
+    report = await merge_memory_directories(
+        DirectoryMergePlan("entities", src, dst, operation="rename"),
+        registry=registry,
+        vikingdb=None,
+        ctx=ctx,
+    )
+
+    assert report.status == "blocked"
+    assert report.remaining == [f"{src}/.overview.md", f"{src}/notes.txt"]
+    assert not report.result.written_uris
+    assert await fs.stat(f"{src}/report.md", ctx=ctx)
+    assert await fs.read_file(f"{src}/notes.txt", ctx=ctx) == "Unknown data"
+    assert await fs.read_file(f"{src}/.overview.md", ctx=ctx) == "Handwritten summary"
+    with pytest.raises(NotFoundError):
+        await fs.stat(dst, ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_rename_removes_empty_target_left_by_a_failed_card_write(
+    directory_merge_fs, monkeypatch
+):
+    fs, ctx, registry = directory_merge_fs
+    src = f"{ROOT}/entities/fault_record"
+    dst = f"{ROOT}/entities/故障记录"
+    await write_card(
+        fs,
+        ctx,
+        f"{src}/report.md",
+        "entities",
+        {"category": "fault_record", "name": "Report"},
+        "Source body",
+    )
+
+    async def fail_after_parent_created(uri, *args, **kwargs):
+        assert uri == f"{dst}/report.md"
+        assert (await fs.stat(dst, ctx=ctx))["isDir"]
+        raise OSError("simulated target write failure")
+
+    monkeypatch.setattr(fs, "_write_file_content", fail_after_parent_created)
+    report = await merge_memory_directories(
+        DirectoryMergePlan("entities", src, dst, operation="rename"),
+        registry=registry,
+        vikingdb=None,
+        ctx=ctx,
+    )
+
+    assert report.result.errors
+    assert not report.result.written_uris
+    assert report.remaining == [f"{src}/report.md"]
+    assert await fs.stat(f"{src}/report.md", ctx=ctx)
+    with pytest.raises(NotFoundError):
+        await fs.stat(dst, ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_rename_preserves_an_empty_directory(directory_merge_fs):
+    fs, ctx, registry = directory_merge_fs
+    src = f"{ROOT}/entities/fault_record"
+    dst = f"{ROOT}/entities/故障记录"
+    await fs.mkdir(src, ctx=ctx)
+
+    report = await merge_memory_directories(
+        DirectoryMergePlan("entities", src, dst, operation="rename"),
+        registry=registry,
+        vikingdb=None,
+        ctx=ctx,
+    )
+
+    assert report.status == "renamed"
+    assert report.pruned
+    assert (await fs.stat(dst, ctx=ctx))["isDir"]
+    with pytest.raises(NotFoundError):
+        await fs.stat(src, ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_empty_directory_rename_rejects_noncanonical_target(directory_merge_fs):
+    fs, ctx, registry = directory_merge_fs
+    src = f"{ROOT}/entities/fault_record"
+    dst = f"{ROOT}/entities/TargetCase"
+    await fs.mkdir(src, ctx=ctx)
+
+    result = await merge_memory_directories(
+        DirectoryMergePlan("entities", src, dst, operation="rename"),
+        registry=registry,
+        vikingdb=None,
+        ctx=ctx,
+    )
+
+    assert result.status == "failed"
+    assert (await fs.stat(src, ctx=ctx))["isDir"]
+    with pytest.raises(NotFoundError):
+        await fs.stat(dst, ctx=ctx)
+    with pytest.raises(NotFoundError):
+        await fs.stat(dst.lower(), ctx=ctx)
+
+
+@pytest.mark.asyncio
+async def test_partial_rename_keeps_both_cards_and_refuses_to_retry_into_target(
+    directory_merge_fs, monkeypatch
+):
+    fs, ctx, registry = directory_merge_fs
+    src = f"{ROOT}/entities/fault_record"
+    dst = f"{ROOT}/entities/故障记录"
+    for name, body in (("First", "First body"), ("Second", "Second body")):
+        await write_card(
+            fs,
+            ctx,
+            f"{src}/{name.lower()}.md",
+            "entities",
+            {"category": "fault_record", "name": name},
+            body,
+        )
+    write_file_content = fs._write_file_content
+
+    async def fail_second_card(uri, *args, **kwargs):
+        if uri == f"{dst}/second.md":
+            raise OSError("simulated failure on second card")
+        await write_file_content(uri, *args, **kwargs)
+
+    monkeypatch.setattr(fs, "_write_file_content", fail_second_card)
+    plan = DirectoryMergePlan("entities", src, dst, operation="rename")
+
+    result = await merge_memory_directories(plan, registry=registry, vikingdb=None, ctx=ctx)
+
+    assert result.status == "partial"
+    assert result.remaining == [f"{src}/second.md"]
+    assert result.result.written_uris == [f"{dst}/first.md"]
+    assert result.result.deleted_uris == [f"{src}/first.md"]
+    assert (await fs.read_file(f"{dst}/first.md", ctx=ctx)).startswith("First body")
+    assert (await fs.read_file(f"{src}/second.md", ctx=ctx)).startswith("Second body")
+
+    retry = await merge_memory_directories(plan, registry=registry, vikingdb=None, ctx=ctx)
+    assert retry.status == "target_exists"
+    assert not retry.result.written_uris
+    assert (await fs.read_file(f"{dst}/first.md", ctx=ctx)).startswith("First body")
+    assert (await fs.read_file(f"{src}/second.md", ctx=ctx)).startswith("Second body")
