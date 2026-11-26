@@ -395,14 +395,9 @@ class DirectoryMergeRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source_uri: StrictStr = Field(min_length=1, description="Existing source directory URI")
-    target_uri: StrictStr = Field(
-        min_length=1, description="Existing directory URI for merge, unused sibling URI for rename"
-    )
-    operation: Literal["merge", "rename"] = Field(
-        default="merge",
-        description="Merge into an existing sibling, or rename to an unused sibling",
-    )
+    source_uri: StrictStr = Field(min_length=1)
+    target_uri: StrictStr = Field(min_length=1)
+    operation: Literal["merge", "rename"] = "merge"
 
 
 @dataclass(frozen=True)

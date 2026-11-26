@@ -350,42 +350,21 @@ class SessionCompressorV3:
             if old_file and old_file.uri and old_file.uri not in op.uris:
                 delete_by_uri.setdefault(old_file.uri, old_file)
 
-        for uri in result.written_uris:
-            if moved_away and uri in moved_away:
-                continue
-            op = upsert_by_uri.get(uri)
-            memory_type = (
-                op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
-            )
-            old_file = op.old_memory_file_content if op else None
-            if old_file and (not old_file.uri or old_file.uri == uri):
-                updates.append(
-                    {
-                        "uri": uri,
-                        "memory_type": memory_type,
-                        "before": old_file.content,
-                        "after": "",
-                    }
+        for uris, edited in ((result.written_uris, False), (result.edited_uris, True)):
+            for uri in uris:
+                if moved_away and uri in moved_away:
+                    continue
+                op = upsert_by_uri.get(uri)
+                memory_type = (
+                    op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
                 )
-            else:
-                adds.append({"uri": uri, "memory_type": memory_type, "after": ""})
-
-        for uri in result.edited_uris:
-            if moved_away and uri in moved_away:
-                continue
-            op = upsert_by_uri.get(uri)
-            memory_type = (
-                op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
-            )
-            old_file = op.old_memory_file_content if op and op.old_memory_file_content else None
-            updates.append(
-                {
-                    "uri": uri,
-                    "memory_type": memory_type,
-                    "before": old_file.content if old_file else "",
-                    "after": "",
-                }
-            )
+                entry = {"uri": uri, "memory_type": memory_type, "after": ""}
+                old_file = op.old_memory_file_content if op else None
+                if edited or (old_file and (not old_file.uri or old_file.uri == uri)):
+                    entry["before"] = old_file.content if old_file else ""
+                    updates.append(entry)
+                else:
+                    adds.append(entry)
 
         for uri in result.deleted_uris:
             deleted = delete_by_uri.get(uri)
@@ -867,7 +846,9 @@ class SessionCompressorV3:
         if strict_extract_errors and result.errors:
             raise MemoryUpdateError(result)
 
-        directory_results = update_result.directory_merge_results
+        directory_results = (
+            update_result.directory_merge_results if operations.directory_merges else []
+        )
         moved_away = {
             uri for _, migration in directory_results for uri in migration.result.deleted_uris
         }
@@ -889,33 +870,33 @@ class SessionCompressorV3:
         ]
         if directory_results:
             diffs = [memory_diff] if memory_diff is not None else []
+            reports = []
             for plan, migration in directory_results:
-                report = {
-                    "memory_type": plan.memory_type,
-                    "operation": plan.operation,
-                    "source_uri": plan.source_uri,
-                    "target_uri": plan.target_uri,
-                }
-                deleted = set(migration.result.deleted_uris)
-                report.update(
-                    status=migration.status,
-                    moved=len(deleted),
-                    remaining=migration.remaining,
-                    conflicts=migration.conflicts,
-                    pruned=migration.pruned,
-                    errors=len(migration.result.errors),
+                reports.append(
+                    {
+                        "memory_type": plan.memory_type,
+                        "operation": plan.operation,
+                        "source_uri": plan.source_uri,
+                        "target_uri": plan.target_uri,
+                        "status": migration.status,
+                        "moved": len(set(migration.result.deleted_uris)),
+                        "remaining": migration.remaining,
+                        "conflicts": migration.conflicts,
+                        "pruned": migration.pruned,
+                        "errors": len(migration.result.errors),
+                    }
                 )
                 contexts.extend(_contexts_from_update_result(migration.result))
-                directory_diff = await self._build_memory_diff(
-                    result=migration.result,
-                    operations=migration.operations,
-                    viking_fs=viking_fs,
-                    ctx=ctx,
-                    archive_uri=archive_uri or "",
+                diffs.append(
+                    await self._build_memory_diff(
+                        result=migration.result,
+                        operations=migration.operations,
+                        viking_fs=viking_fs,
+                        ctx=ctx,
+                    )
                 )
-                directory_diff["directory_merges"] = [report]
-                diffs.append(directory_diff)
             memory_diff = _merge_memory_diffs(diffs, archive_uri=archive_uri or "")
+            memory_diff["directory_merges"] = reports
 
         canonical_cases = await _canonical_cases_from_update_result(
             operations=patch_operations,

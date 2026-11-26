@@ -10,7 +10,6 @@ import pytest
 
 from openviking.session.memory.account_templates import memory_template_data
 from openviking.session.memory.dataclass import (
-    DirectoryMergeRequest,
     MemoryField,
     MemoryFile,
     MemoryTypeSchema,
@@ -126,7 +125,6 @@ def _context(
     *,
     files: list[MemoryFile] | None = None,
     link_enabled: bool = False,
-    allow_directory_merges: bool = False,
     role_scope: RoleScope | None = None,
     available_tools: tuple[str, ...] = ("read",),
     template_context: dict[str, str] | None = None,
@@ -134,9 +132,7 @@ def _context(
     config = SimpleNamespace(memory=SimpleNamespace(link_enabled=link_enabled))
     with patch("openviking_cli.utils.config.get_openviking_config", return_value=config):
         operations_model = SchemaModelGenerator(
-            schemas,
-            template_context=template_context,
-            allow_directory_merges=allow_directory_merges,
+            schemas, template_context=template_context
         ).create_structured_operations_model(role_scope)
     page_id_map = PageIdMap()
     read_file_contents = {}
@@ -191,128 +187,6 @@ def test_json_protocol_preserves_stable_parser_and_empty_contract():
         None,
         "No expected fields found; got fields: memory_operations",
     )
-
-
-@pytest.mark.parametrize("output_format", ["python", "json"])
-@pytest.mark.parametrize("operation", ["merge", "rename"])
-def test_directory_operations_share_the_payload_with_cards(output_format, operation):
-    source = "viking://user/alice/memories/entities/runbooks"
-    target = "viking://user/alice/memories/entities/runbook"
-    category = "runbooks" if operation == "rename" else "runbook"
-    context = _context([_renameable_entity_schema()], allow_directory_merges=True)
-    protocol = create_extraction_output_protocol(output_format)
-    assert context.supports_directory_merges
-    contract = protocol.render_contract(context)
-    assert "unused sibling" in contract
-    assert "source category" in contract
-    if output_format == "python":
-        method = "rename_dir" if operation == "rename" else "merge_dirs"
-        declare_merge = f"sdk.{method}(source_uri={source!r}, target_uri={target!r})"
-        mixed = (
-            f"sdk.create_entities(category={category!r}, name='scm', content='SCM rules')\n"
-            f"{declare_merge}\nsdk.commit()"
-        )
-        merge_only = f"{declare_merge}\nsdk.commit()"
-        assert f"sdk.{method}(" in contract
-    else:
-        request = {"source_uri": source, "target_uri": target}
-        if operation == "rename":
-            request["operation"] = "rename"
-        merges = [request]
-        merge_only = json.dumps({"directory_merges": merges})
-        mixed = json.dumps(
-            {
-                "entities": [
-                    {"page_id": 100, "category": category, "name": "scm", "content": "SCM rules"}
-                ],
-                "directory_merges": merges,
-            }
-        )
-        assert '"directory_merges"' in contract
-
-    operations, error = protocol.parse(mixed, context)
-    assert error is None
-    assert operations.entities[0].name == "scm"
-    assert operations.entities[0].category == category
-    assert operations.directory_merges == [
-        DirectoryMergeRequest(source_uri=source, target_uri=target, operation=operation)
-    ]
-
-    operations, error = protocol.parse(merge_only, context)
-    assert error is None
-    assert not operations.entities
-    assert not operations.is_empty()
-
-
-@pytest.mark.parametrize(
-    "program",
-    [
-        "proposal = sdk.{method}(source_uri='a', target_uri='b')",
-        "sdk.{method}('a', 'b')",
-        "sdk.{method}(source_uri='a', target_uri=2)",
-        "source = 'a'\nsdk.{method}(source_uri=source, target_uri='b')",
-        "sdk.{method}(source_uri='a', target_uri='b', source_uri='c')",
-    ],
-)
-@pytest.mark.parametrize("method", ["merge_dirs", "rename_dir"])
-def test_python_directory_operation_requires_a_standalone_call_with_literal_uris(program, method):
-    context = _context([_renameable_entity_schema()], allow_directory_merges=True)
-    protocol = create_extraction_output_protocol("python")
-
-    operations, error = protocol.parse(program.format(method=method), context)
-
-    assert operations is None
-    assert f"sdk.{method}()" in error
-
-
-def test_directory_merges_only_use_the_reserved_field_when_available():
-    schema = _renameable_entity_schema()
-    protocol = create_extraction_output_protocol("python")
-    normal = _context([schema])
-    assert not normal.supports_directory_merges
-    assert "directory_merges" not in normal.operations_model.model_fields
-    for method in ("merge_dirs", "rename_dir"):
-        operations, error = protocol.parse(f"sdk.{method}(source_uri='a', target_uri='b')", normal)
-        assert operations is None
-        assert "unavailable" in error
-
-    custom_schema = schema.model_copy(update={"memory_type": "directory_merges"})
-    custom = _context([schema, custom_schema], allow_directory_merges=True)
-    assert not custom.supports_directory_merges
-    assert "Directory Operations" not in protocol.render_contract(custom)
-    operations, error = protocol.parse(
-        "sdk.create_directory_merges(category='custom', name='scm', content='SCM rules')",
-        custom,
-    )
-    assert error is None
-    assert operations.directory_merges[0].category == "custom"
-
-
-@pytest.mark.parametrize("overrides", [{"source_uri": 42}, {"operation": "delete"}])
-def test_json_directory_operation_discards_an_invalid_request(overrides):
-    context = _context([_renameable_entity_schema()], allow_directory_merges=True)
-    protocol = create_extraction_output_protocol("json")
-    request = {
-        "source_uri": "viking://user/alice/memories/entities/runbooks",
-        "target_uri": "viking://user/alice/memories/entities/runbook",
-        **overrides,
-    }
-
-    operations, error = protocol.parse(
-        json.dumps(
-            {
-                "entities": [
-                    {"page_id": 100, "category": "runbook", "name": "scm", "content": "SCM rules"}
-                ],
-                "directory_merges": [request],
-            }
-        ),
-        context,
-    )
-
-    assert error is None
-    assert operations.entities[0].name == "scm"
-    assert operations.directory_merges == []
 
 
 def test_python_contract_and_bindings_expose_only_selected_schema_fields():

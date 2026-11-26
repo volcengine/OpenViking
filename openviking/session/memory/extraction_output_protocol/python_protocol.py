@@ -381,10 +381,8 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         details = json.dumps(issues, ensure_ascii=False, indent=2)
         return (
             "Some sdk.create_events(...) calls could not resolve a safe write target. "
-            "Re-emit ONLY corrected create_events() calls for the failed items below; do not "
-            "emit other memory operations, including deletes, links, or directory operations. "
-            "The server has preserved "
-            "all successful operations from the previous program. "
+            "Re-emit ONLY corrected create_events() calls for the failed items below. "
+            "The server has preserved all successful operations from the previous program. "
             "For event ranges, pass ranges= with valid in-bounds message indexes that include the "
             "user-role message establishing the event so its owner can be resolved (e.g. "
             'ranges="3-5"). Do not target a disallowed or ambiguous peer. Keep the same event_name '

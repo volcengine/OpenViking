@@ -39,14 +39,12 @@ PYTHON_METHODS_HEADER = ("", "Available write methods for this extraction:")
 PYTHON_DIRECTORY_MERGE_RULES = (
     "",
     "## Directory Operations",
-    "- Use sdk.merge_dirs(source_uri='...', target_uri='...') for equivalent sibling directories "
-    "when the target already exists.",
-    "- Use sdk.rename_dir(source_uri='...', target_uri='...') to rename an existing directory "
-    "to an unused sibling URI. Write updates and new cards for a planned rename in the original "
-    "source category. The directory moves after the card operations.",
-    "- Use literal directory URI strings and standalone calls before sdk.commit(). Include a "
-    "directory operation in the program even when it is the only change.",
-    "- Use the native ls tool to inspect directories before the final program.",
+    "- sdk.merge_dirs(source_uri='...', target_uri='...') merges equivalent siblings into an "
+    "existing target.",
+    "- sdk.rename_dir(source_uri='...', target_uri='...') renames a directory to an unused sibling URI. "
+    "Write new and updated cards for a planned rename in the source category.",
+    "- Use standalone calls with literal URIs, even when these are the only changes. "
+    "Directory operations run after card writes.",
 )
 PYTHON_ADD_ONLY_PREAMBLE = (
     *PYTHON_FORMAT_RULES,

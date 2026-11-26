@@ -20,11 +20,7 @@ from openviking.session.memory.dataclass import (
     DirectoryMergeRequest,
     MemoryFile,
 )
-from openviking.session.memory.memory_isolation_handler import (
-    MemoryIsolationHandler,
-    RoleScope,
-    peer_user_space,
-)
+from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
     get_default_registry,
@@ -37,7 +33,6 @@ from openviking.session.memory.tools import (
     verified_preference_directory_owner,
 )
 from openviking.session.memory.utils.resource_refs import contains_resource_uri
-from openviking.session.memory.utils.uri import render_template
 from openviking.session.memory.vision_message_normalizer import (
     replace_image_parts_with_descriptions,
 )
@@ -98,7 +93,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
         )
         self._output_language = self._detect_language()
         self._registry = memory_registry  # Lazy defaults if no account snapshot was supplied.
-        self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
         self._isolation_handler = isolation_handler
         self._read_file_contents: Dict[str, MemoryFile] = {}
@@ -237,16 +231,12 @@ class SessionExtractContextProvider(ExtractContextProvider):
             directory_rules = """
 
 ## Existing Memory Directories
-- Maintain the directory list as part of this Commit. Review the existing categories relevant to the current conversation before adding or updating cards.
-- Treat inventory entries as stored identifiers. Reuse the exact spelling of a semantically equivalent entity category from the same memory root, even when its language differs from the requested output language. Apply the output language rule to new category names and visible card content.
-- A shared category is no evidence that cards describe the same entity. Keep separate entities separate and preserve every distinct fact.
-- The prefetched inventory lists existing first-level directories. When needed, use shallow `ls` on a listed root or direct child to inspect their children.
-- Before creating a card, inspect its existing category and any clearly equivalent sibling categories with `ls` if the card was not already read. Read an existing card with the matching name before deciding to create a new one. A missing search result alone does not mean a card is new.
-- Merge two existing sibling directories only if they are clearly equivalent and relevant to the conversation. Choose one existing directory to keep. For example, if “排障手册” and “troubleshooting_guide” are used for the same category, reuse one of those names for the group.
-- Rename a directory when the conversation establishes a better name for the same category and that name is unused under the same root. Keep the original name when the only difference is the language of the current conversation.
-- For preferences, only consolidate directory names that the server can verify are formatting aliases of the scoped owner ID. Similar preferences do not establish common ownership.
-- Directory operations run after card writes. For a merge, use the existing target for genuinely new cards and update any matching source card in place. For a rename, use the current source directory for all ordinary card operations so the cards move together.
-- Return relevant directory operations even when there are no card changes. Include them with ordinary card operations in the final output and keep any still-applicable directory operations when revising after a read.
+- Maintain the directory list in this Commit. Reuse a relevant, equivalent category's exact inventory name, even when its language differs from the requested output language. Use the requested language for new category names and card content.
+- Before creating a card you have not read, use shallow `ls` to check its category and equivalent siblings in the same root. Read any matching card and keep distinct entities and facts separate.
+- Merge clearly equivalent, relevant sibling directories into one existing directory. Rename only when the conversation establishes a clearer name for the same category and the name is unused. A language change alone does not warrant a rename.
+- Consolidate preferences only when the names are verifiable formatting aliases of the scoped owner ID.
+- Directory operations follow card writes. For a merge, update matching source cards in place and write new cards to the target. For a rename, write all cards to the source.
+- Include relevant directory operations even without card changes and keep them when revising the final output after a read.
 """
         contains_resource_uri = self._conversation_contains_resource_uri()
         resource_uri_handling = (
@@ -540,11 +530,13 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             return call_id + 1
         return call_id
 
-    async def _list_memory_directory(self, uri: str) -> dict[str, Any]:
+    async def _directory_listing(self, uri: str) -> dict[str, Any]:
+        if uri in self._directory_inventory:
+            return self._directory_inventory[uri]
         try:
-            return await list_memory_directory_entries(self.create_tool_context(), uri)
+            listing = await list_memory_directory_entries(self.create_tool_context(), uri)
         except (NotFoundError, FileNotFoundError):
-            return {"entries": [], "truncated": False}
+            listing = {"entries": [], "truncated": False}
         except Exception as exc:
             logger.info(
                 "memory directory listing failed error_type=%s",
@@ -552,14 +544,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 extra={"degraded": True},
             )
             return {"error": "Directory listing unavailable"}
+        self._directory_inventory[uri] = listing
+        return listing
 
     def _register_directory_root(self, uri: str, memory_type: str) -> None:
-        if (
-            not self._is_session_commit
-            or self._isolation_handler is None
-            or memory_type not in _DIRECTORY_MEMORY_TYPES
-        ):
-            return
         scope = classify_uri(uri)
         if (
             scope.scope == "user"
@@ -575,12 +563,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     async def _build_directory_inventory(self) -> dict[str, Any]:
         inventory = {}
         for uri, memory_type in sorted(self._directory_roots.items()):
-            listing = self._directory_inventory.get(uri)
-            if listing is None:
-                listing = await self._list_memory_directory(uri)
-                if "error" in listing:
-                    continue
-                self._directory_inventory[uri] = listing
+            listing = await self._directory_listing(uri)
+            if "error" in listing:
+                continue
             inventory[uri] = {
                 "memory_type": memory_type,
                 "directories": [entry["name"] for entry in listing["entries"] if entry["isDir"]],
@@ -589,11 +574,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return inventory
 
     def _visible_directory_root(self, uri: str) -> str | None:
-        root, _, _ = uri.rpartition("/")
-        if root not in self._directory_roots:
-            return None
-        listing = self._directory_inventory.get(root)
-        if listing and any(entry["uri"] == uri and entry["isDir"] for entry in listing["entries"]):
+        root = uri.rpartition("/")[0]
+        entries = self._directory_inventory.get(root, {}).get("entries", ())
+        if root in self._directory_roots and any(
+            entry["uri"] == uri and entry["isDir"] for entry in entries
+        ):
             return root
         return None
 
@@ -606,12 +591,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             return {"error": "Invalid memory directory URI"}
         if uri not in self._directory_roots and self._visible_directory_root(uri) is None:
             return {"error": "List an allowed memory root or one of its visible direct directories"}
-        if uri in self._directory_inventory:
-            return self._directory_inventory[uri]
-        listing = await self._list_memory_directory(uri)
-        if "error" not in listing:
-            self._directory_inventory[uri] = listing
-        return listing
+        return await self._directory_listing(uri)
 
     def _resolve_directory_merge(self, request: DirectoryMergeRequest) -> DirectoryMergePlan | None:
         try:
@@ -667,7 +647,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             ):
                 continue
             plans.append(plan)
-            await self._execute_directory_ls({"uri": plan.source_uri})
+            await self._directory_listing(plan.source_uri)
         return plans
 
     async def prefetch(self) -> List[Dict]:
@@ -687,53 +667,19 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
 
-        # 触发 registry 加载，过滤掉 agent stage 的 schema（trajectory/experience 由执行提取处理）
-        schemas = [
-            s
-            for s in self._get_registry().list_all(include_disabled=False)
-            if getattr(s, "stage", "user") == "user"
-        ]
-        if self._isolation_handler:
-            schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
-
-        # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
-        ls_dirs = set()  # directories to ls (for multi-file schemas)
-        read_files = set()  # files to read directly (for single-file schemas)
-
-        rolescope: RoleScope = self._isolation_handler.get_read_scope()
-
-        for schema in schemas:
-            if not schema.directory:
+        search_dirs = set()
+        read_files = set()
+        maintain_directories = self.supports_directory_merges()
+        for schema in self.get_memory_schemas(self._ctx):
+            if not schema.directory or schema.operation_mode == "add_only":
                 continue
-
-            # 根据 operation_mode 决定是否需要 ls 和读取其他文件
-            if schema.operation_mode == "add_only":
-                continue
-
-            schema_dirs = set()
-            if self._isolation_handler:
-                schema_dirs.update(self._isolation_handler.render_schema_directories(schema))
-            else:
-                for user_id in rolescope.user_ids:
-                    dir_path = render_template(
-                        schema.directory,
-                        {"user_space": user_id},
-                    )
-                    schema_dirs.add(dir_path)
-                    for peer_id in rolescope.peer_ids:
-                        dir_path = render_template(
-                            schema.directory,
-                            {"user_space": peer_user_space(user_id, peer_id)},
-                        )
-                        schema_dirs.add(dir_path)
-            if schema.filename_has_variables():
-                for dir_path in schema_dirs:
-                    ls_dirs.add(dir_path)
-                    self._register_directory_root(dir_path, schema.memory_type)
-            else:
-                for dir_path in schema_dirs:
-                    file_uri = f"{dir_path}/{schema.filename_template}"
-                    read_files.add(file_uri)
+            for directory in self._isolation_handler.render_schema_directories(schema):
+                if schema.filename_has_variables():
+                    search_dirs.add(directory)
+                    if maintain_directories and schema.memory_type in _DIRECTORY_MEMORY_TYPES:
+                        self._register_directory_root(directory, schema.memory_type)
+                else:
+                    read_files.add(f"{directory}/{schema.filename_template}")
 
         if self._directory_roots:
             inventory = await self._build_directory_inventory()
@@ -747,17 +693,11 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 )
 
         call_id_seq = 0
-        # Step 2: Execute search for each ls directory (instead of ls)
-
-        # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
-        # 为 overview 读取创建一个基本的 tool_ctx
-
-        # 在每个之前 ls 的目录内执行 search（替换原来的 ls操作）
         files_to_read_from_search = []  # 收集需要读取的文件（eager_prefetch 模式）
 
         # 批量 search：所有目录一次搜索
-        if ls_dirs:
-            dir_list = list(ls_dirs)
+        if search_dirs:
+            dir_list = list(search_dirs)
             search_query = self._build_prefetch_search_query()
             if not search_query:
                 search_query = "conversation"
@@ -828,10 +768,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 
     def get_tools(self) -> List[str]:
         """获取可用的工具列表"""
-        tools = [] if self._eager_prefetch else ["read"]
         if self.supports_directory_merges():
             return ["read", "ls"]
-        return tools
+        return [] if self._eager_prefetch else ["read"]
 
     def directory_merge_source_for_target(
         self, uri: str, plans: list[DirectoryMergePlan]

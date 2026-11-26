@@ -351,10 +351,9 @@ class SchemaModelGenerator:
                 Field(
                     default_factory=list,
                     description=(
-                        "Use operation='merge' for equivalent siblings when the target already "
-                        "exists, or operation='rename' to move to an unused sibling URI. "
-                        "For a planned rename, write updates and new cards in the original source "
-                        "category. Apply directory operations after ordinary card operations."
+                        "Use operation='merge' for equivalent siblings with an existing target, or "
+                        "operation='rename' with an unused sibling URI. Directory operations run after "
+                        "card writes. For a planned rename, write cards in the source category."
                     ),
                 ),
             )
@@ -396,10 +395,7 @@ class SchemaModelGenerator:
                     else:
                         # Single value (not None)
                         return False
-            return not (
-                getattr(self, "delete_ids", [])
-                or (directory_merges_enabled and self.directory_merges)
-            )
+            return not (getattr(self, "delete_ids", []) or getattr(self, "directory_merges", []))
 
         def to_legacy_operations(self) -> Dict[str, Any]:
             """Convert new per-type structure to legacy write_uris/edit_uris format."""

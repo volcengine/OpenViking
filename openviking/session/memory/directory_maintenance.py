@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
     from openviking.session.memory.dataclass import MemoryTypeSchema
 
 _IDENTITY_FIELDS = {"entities": ("category", "name"), "preferences": ("user", "topic")}
-_SUMMARY_FILES = frozenset({".abstract.md", ".overview.md"})
+_DERIVED_FILES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
 _LOCK_ATTEMPTS = 4
 _LOCK_TIMEOUT_SECONDS = 5
 
@@ -123,23 +124,23 @@ async def _check_endpoints(fs, plan: DirectoryMergePlan, ctx: RequestContext) ->
     return None
 
 
-async def _entries(fs, path: str, ctx: RequestContext) -> dict[str, dict[str, Any]]:
+async def _entries(fs, path: str, ctx: RequestContext) -> dict[str, bool]:
     # A browseable listing can omit ACL-filtered, hidden or internal files.
     # The caller has authorized the directory, and each card is authorized on use.
     entries = await fs._ls_entries(path, filter_internal=False, ctx=ctx)
     return {
-        entry["name"]: fs._normalize_ls_entry(dict(entry))
+        entry["name"]: bool(fs._normalize_ls_entry(dict(entry)).get("isDir"))
         for entry in entries
         if entry["name"] != MULTIWRITE_PATH_LOCK_FILE
         and not entry["name"].startswith(MULTIWRITE_EXACT_LOCK_FILE_PREFIX)
     }
 
 
-def _card_names(entries: dict[str, dict[str, Any]]) -> list[str]:
+def _card_names(entries: dict[str, bool]) -> list[str]:
     return sorted(
         name
-        for name, entry in entries.items()
-        if not entry.get("isDir") and not name.startswith(".") and name.endswith(".md")
+        for name, is_dir in entries.items()
+        if not is_dir and not name.startswith(".") and name.endswith(".md")
     )
 
 
@@ -180,14 +181,14 @@ async def _prepare_operations(
     schema: MemoryTypeSchema,
     user_space: str,
     preference_owner: str | None,
-    source_entries: dict[str, dict[str, Any]],
-    target_entries: dict[str, dict[str, Any]],
+    source_entries: dict[str, bool],
+    target_entries: dict[str, bool],
     ctx: RequestContext,
 ) -> DirectoryMergeResult:
     report = DirectoryMergeResult()
     target_names = {name.casefold() for name in target_entries}
     identity_field, leaf_field = _IDENTITY_FIELDS[plan.memory_type]
-    target_name = plan.target_uri.rsplit("/", 1)[1]
+    target_identity = {identity_field: plan.target_uri.rsplit("/", 1)[1]}
     source_cards = _card_names(source_entries)
     prepared_preferences: dict[str, MemoryFile] = {}
     if preference_owner is not None:
@@ -225,7 +226,7 @@ async def _prepare_operations(
                 preference_owner is None
                 and generate_uri(schema, fields, user_space=user_space) != source_uri
             ) or generate_uri(
-                schema, {**fields, identity_field: target_name}, user_space=user_space
+                schema, fields | target_identity, user_space=user_space
             ) != target_uri:
                 continue
             tags = await _get_search_tags(store, source_uri, ctx)
@@ -236,12 +237,26 @@ async def _prepare_operations(
         report.operations.upsert_operations.append(
             ResolvedOperation(
                 old_memory_file_content=old_file,
-                memory_fields={identity_field: target_name},
+                memory_fields=target_identity,
                 memory_type=plan.memory_type,
                 uris=[target_uri],
                 search_tags=tags or None,
             )
         )
+    if plan.operation == "merge":
+        return report
+    moving = {op.old_memory_file_content.uri for op in report.operations.upsert_operations}
+    await _record_remaining(fs, plan, source_entries, ctx, report, moving=moving)
+    if report.remaining or report.result.errors:
+        report.status = "blocked"
+        return report
+    await fs._ensure_file_changes_allowed([plan.source_uri, plan.target_uri], ctx, recursive=True)
+    if not moving:
+        sample = generate_uri(
+            schema, target_identity | {leaf_field: "directory_rename_probe"}, user_space
+        )
+        if sample.rsplit("/", 1)[0] != plan.target_uri:
+            raise ValueError("Rename destination must match the memory URI template")
     return report
 
 
@@ -282,11 +297,11 @@ async def _is_discardable_sidecar(fs, uri: str, name: str, ctx: RequestContext) 
 
 async def _record_remaining(fs, plan, entries, ctx, report, *, moving=frozenset()) -> None:
     report.remaining = []
-    for name, entry in sorted(entries.items()):
+    for name, is_dir in sorted(entries.items()):
         uri = f"{plan.source_uri}/{name}"
         if uri in moving:
             continue
-        if not entry.get("isDir") and name in _SUMMARY_FILES | {".relations.json"}:
+        if not is_dir and name in _DERIVED_FILES:
             try:
                 if await _is_discardable_sidecar(fs, uri, name, ctx):
                     continue
@@ -401,7 +416,8 @@ async def merge_memory_directories(
                 [root_path],
                 timeout_secs=_LOCK_TIMEOUT_SECONDS,
             )
-            try:
+            async with AsyncExitStack() as cleanup:
+                cleanup.push_async_callback(fs._async_agfs.pathlock_release, lease)
                 if status := await _check_endpoints(fs, plan, ctx):
                     return DirectoryMergeResult(status=status)
                 source_entries = await _entries(fs, source_path, ctx)
@@ -416,48 +432,22 @@ async def merge_memory_directories(
                     target_entries,
                     ctx,
                 )
-                if rename:
-                    moving = {
-                        op.old_memory_file_content.uri for op in report.operations.upsert_operations
-                    }
-                    await _record_remaining(fs, plan, source_entries, ctx, report, moving=moving)
-                    if report.remaining or report.result.errors:
-                        report.status = "blocked"
-                        return report
-                    await fs._ensure_file_changes_allowed(
-                        [plan.source_uri, plan.target_uri], ctx, recursive=True
-                    )
+                if report.status == "blocked":
+                    return report
                 discovered = await _linked_paths(fs, report.operations, root, ctx)
                 if not discovered.issubset(exact_paths):
                     exact_paths.update(discovered)
                     continue
                 updater._transaction_handle = lease
-                try:
-                    if rename and not report.operations.upsert_operations:
-                        directory_field, card_field = _IDENTITY_FIELDS[plan.memory_type]
-                        sample_uri = generate_uri(
-                            schema,
-                            {
-                                directory_field: plan.target_uri.rsplit("/", 1)[1],
-                                card_field: "directory_rename_probe",
-                            },
-                            user_space=user_space,
-                        )
-                        if sample_uri.rsplit("/", 1)[0] != plan.target_uri:
-                            raise ValueError(
-                                "Rename destination must match the memory URI template"
-                            )
+                if rename:
+                    cleanup.push_async_callback(
+                        _cleanup_empty_rename_target, fs, plan, target_path, ctx, lease, report
+                    )
+                    if not report.operations.upsert_operations:
                         await fs.mkdir(plan.target_uri, ctx=ctx, lease_ref=lease)
-                    await _apply_cards(updater, report, ctx, stop_on_error=rename)
-                    await _finish_source(fs, plan, source_path, ctx, lease, report)
-                finally:
-                    if rename:
-                        await _cleanup_empty_rename_target(
-                            fs, plan, target_path, ctx, lease, report
-                        )
+                await _apply_cards(updater, report, ctx, stop_on_error=rename)
+                await _finish_source(fs, plan, source_path, ctx, lease, report)
                 break
-            finally:
-                await fs._async_agfs.pathlock_release(lease)
         else:
             raise RuntimeError("Directory merge could not stabilize linked-memory lock coverage")
 

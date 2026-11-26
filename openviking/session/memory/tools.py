@@ -30,40 +30,32 @@ _LLM_HIDDEN_MEMORY_FIELDS = {
     "last_update_trace_id",
 }
 
-_DIRECTORY_LIST_PAGE_SIZE = 128
 _DIRECTORY_LIST_MAX_ENTRIES = 512
 
 
 async def list_memory_directory_entries(ctx: "ToolContext", uri: str) -> dict[str, Any]:
-    """List visible direct children, advancing by the number of VFS rows."""
+    """Return a bounded list of visible direct children."""
+    rows = await ctx.viking_fs.ls(
+        uri,
+        include_abstract=False,
+        include_overview=False,
+        node_limit=_DIRECTORY_LIST_MAX_ENTRIES + 1,
+        sort_by="name",
+        ctx=ctx.request_ctx,
+        offset=0,
+    )
     entries = []
-    for offset in range(0, _DIRECTORY_LIST_MAX_ENTRIES, _DIRECTORY_LIST_PAGE_SIZE):
-        page = await ctx.viking_fs.ls(
-            uri,
-            output="original",
-            include_abstract=False,
-            include_overview=False,
-            show_all_hidden=False,
-            node_limit=_DIRECTORY_LIST_PAGE_SIZE,
-            sort_by="name",
-            ctx=ctx.request_ctx,
-            offset=offset,
-        )
-        for entry in page:
-            name = entry.get("name", "")
-            entry_uri = entry.get("uri", "").rstrip("/")
-            is_directory = bool(entry.get("isDir"))
-            if (
-                not name
-                or name.startswith(".")
-                or entry.get("access") in {"denied", "container"}
-                or entry_uri.rpartition("/") != (uri, "/", name)
-            ):
-                continue
-            entries.append({"name": name, "uri": entry_uri, "isDir": is_directory})
-        if len(page) < _DIRECTORY_LIST_PAGE_SIZE:
-            return {"entries": entries, "truncated": False}
-    return {"entries": entries, "truncated": True}
+    for entry in rows[:_DIRECTORY_LIST_MAX_ENTRIES]:
+        name = entry.get("name", "")
+        entry_uri = entry.get("uri", "").rstrip("/")
+        if (
+            name
+            and not name.startswith(".")
+            and entry.get("access") not in {"denied", "container"}
+            and entry_uri.rpartition("/") == (uri, "/", name)
+        ):
+            entries.append({"name": name, "uri": entry_uri, "isDir": bool(entry.get("isDir"))})
+    return {"entries": entries, "truncated": len(rows) > _DIRECTORY_LIST_MAX_ENTRIES}
 
 
 def verified_preference_directory_owner(

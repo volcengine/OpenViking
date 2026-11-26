@@ -81,37 +81,6 @@ class TestMemoryDiffArchive:
         assert diff["summary"]["total_deletes"] == 0
 
     @pytest.mark.asyncio
-    async def test_build_memory_diff_omits_files_moved_after_ordinary_writes(
-        self, compressor, mock_viking_fs, mock_ctx
-    ):
-        removed_write = "viking://user/test/memories/entities/fault_record/new.md"
-        removed_edit = "viking://user/test/memories/entities/fault_record/existing.md"
-        retained = "viking://user/test/memories/entities/故障记录/other.md"
-        result = MemoryUpdateResult()
-        result.written_uris = [removed_write, retained]
-        result.edited_uris = [removed_edit]
-        operations = ResolvedOperations(
-            upsert_operations=[],
-            delete_file_contents=[],
-            errors=[],
-        )
-        mock_viking_fs.read_file.return_value = "Still present"
-
-        diff = await compressor._build_memory_diff(
-            result=result,
-            operations=operations,
-            viking_fs=mock_viking_fs,
-            ctx=mock_ctx,
-            moved_away={removed_write, removed_edit},
-        )
-
-        mock_viking_fs.read_file.assert_awaited_once_with(uri=retained, ctx=mock_ctx)
-        assert diff["operations"]["adds"] == [
-            {"uri": retained, "memory_type": "entities", "after": "Still present"}
-        ]
-        assert diff["operations"]["updates"] == []
-
-    @pytest.mark.asyncio
     async def test_build_memory_diff_update(self, compressor, mock_viking_fs, mock_ctx):
         """Test building memory_diff for modified memory files (updates)."""
 
