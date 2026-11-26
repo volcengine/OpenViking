@@ -196,7 +196,7 @@ def _supports_nested_repository_path(parsed: ParseResult) -> bool:
     )
 
 
-def _looks_like_commit_sha(ref: str) -> bool:
+def is_git_commit_sha(ref: str) -> bool:
     """Return True if ref looks like a git commit SHA (7-40 hex chars)."""
     return 7 <= len(ref) <= 40 and all(c in "0123456789abcdefABCDEF" for c in ref)
 
@@ -462,7 +462,7 @@ def parse_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
             ref = unquote(browse_parts[1])
             if not ref:
                 return None
-            if _looks_like_commit_sha(ref):
+            if is_git_commit_sha(ref):
                 return _build_url_git_result(
                     parsed,
                     repo_parts,
@@ -478,7 +478,7 @@ def parse_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
         if (
             len(browse_parts) == 2
             and browse_parts[0] == "commit"
-            and _looks_like_commit_sha(browse_parts[1])
+            and is_git_commit_sha(browse_parts[1])
         ):
             return _build_url_git_result(
                 parsed,
@@ -496,7 +496,7 @@ def parse_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
         ref = unquote(path_parts[3])
         if not ref:
             return None
-        if _looks_like_commit_sha(ref):
+        if is_git_commit_sha(ref):
             return _build_url_git_result(
                 parsed,
                 path_parts[:2],
@@ -511,7 +511,7 @@ def parse_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
         )
 
     # Exact commit routes are accepted only when the pin is SHA-shaped.
-    if len(path_parts) == 4 and path_parts[2] == "commit" and _looks_like_commit_sha(path_parts[3]):
+    if len(path_parts) == 4 and path_parts[2] == "commit" and is_git_commit_sha(path_parts[3]):
         return _build_url_git_result(
             parsed,
             path_parts[:2],
@@ -549,7 +549,7 @@ def parse_git_repo_url(url: str) -> Optional[ParsedGitRepoURL]:
         ref = unquote(path_parts[3])
         if not ref:
             return None
-        if _looks_like_commit_sha(ref):
+        if is_git_commit_sha(ref):
             return _build_url_git_result(
                 parsed,
                 path_parts[:2],

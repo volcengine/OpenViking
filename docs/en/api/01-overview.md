@@ -449,6 +449,7 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | Search within a tool result |
 | GET | `/api/v1/sessions/{session_id}/context` | Get assembled context |
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | Get a session archive |
+| POST | `/api/v1/sessions/history` | Search, read or overview the saved history (model-facing text) |
 | DELETE | `/api/v1/sessions/{session_id}` | Delete a session |
 | POST | `/api/v1/sessions/{session_id}/commit` | Archive a session and extract memory |
 | POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | Retry a failed or ownerless session archive |
@@ -556,6 +557,8 @@ This catalog follows the routes actually mounted by the server. Each group headi
 | PATCH | `/api/v1/user-settings/add-locations` | Update current-user add locations (deprecated) |
 | DELETE | `/api/v1/user-settings/add-locations` | Clear current-user add-location overrides (deprecated) |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | Remove a user |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | Get membership in the account frozen file list; required query `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | Freeze or unfreeze a USER file |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | Change a user's role between USER and ADMIN |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | Regenerate a user key |
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | Create a group |

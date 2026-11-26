@@ -414,7 +414,7 @@ async def test_distributed_authentication_state_is_shared_and_service_scoped(tmp
                 }
             ),
             service_name=service_name,
-            account_store_cache_instance="accountstore",
+            required_cache_instances={"Redis MySQL Account Store": "accountstore"},
         )
     )
     viking_fs = SimpleNamespace(agfs=cache_client)

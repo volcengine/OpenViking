@@ -61,6 +61,32 @@ async def _list_users(manager, account_id, **filters):
 # ---- Root key tests ----
 
 
+async def test_frozen_files_persist_merge_and_enforce_limit(manager, manager_service):
+    """Peer writers merge under the registry guard; failed changes preserve rules."""
+    from openviking_cli.exceptions import InvalidArgumentError
+
+    await manager.create_account("frozen-files", "admin")
+    await manager.register_user("frozen-files", "agent")
+    peer = build_api_key_manager(root_key=ROOT_KEY, viking_fs=manager_service.viking_fs)
+    await peer.load()
+    try:
+        await asyncio.gather(
+            manager.set_frozen_file("frozen-files", "agent", "skills/a.md", True),
+            peer.set_frozen_file("frozen-files", "agent", "skills/A.md", True),
+        )
+        assert await manager.get_frozen_files("frozen-files") == (
+            "viking://user/agent/skills/A.md",
+            "viking://user/agent/skills/a.md",
+        )
+        for i in range(8):
+            await manager.set_frozen_file("frozen-files", "agent", f"memories/{i}.md", True)
+        with pytest.raises(InvalidArgumentError):
+            await manager.set_frozen_file("frozen-files", "agent", "skills/overflow.md", True)
+        assert len(await peer.get_frozen_files("frozen-files")) == 10
+    finally:
+        await peer.close()
+
+
 async def test_resolve_root_key(manager: APIKeyManager):
     """Root key should resolve to ROOT role."""
     identity = await manager.resolve_identity(ROOT_KEY)

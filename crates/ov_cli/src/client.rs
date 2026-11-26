@@ -1899,6 +1899,32 @@ impl HttpClient {
         self.put(&path, &body).await
     }
 
+    pub async fn admin_frozen_file(
+        &self,
+        account_id: &str,
+        user_id: &str,
+        file_path: &str,
+        frozen: Option<bool>,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/users/{}/frozen-file",
+            account_id, user_id
+        );
+        match frozen {
+            Some(frozen) => {
+                self.put(
+                    &path,
+                    &serde_json::json!({"path": file_path, "frozen": frozen}),
+                )
+                .await
+            }
+            None => {
+                self.get(&path, &[("path".to_string(), file_path.to_string())])
+                    .await
+            }
+        }
+    }
+
     pub async fn admin_regenerate_key(
         &self,
         account_id: &str,

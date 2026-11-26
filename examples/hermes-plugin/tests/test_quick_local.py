@@ -1180,7 +1180,7 @@ def test_cloud_custom_menu_positions_are_unchanged(monkeypatch):
     )
     assert result is setup_flow._SETUP_CANCELLED
     assert [option[0] for option in seen] == [
-        "OpenViking Service (VolcEngine Cloud)",
+        "OpenViking Managed Service",
         "Custom",
         "Quick Local",
     ]

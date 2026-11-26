@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock
 
 import httpx
 
+from openviking.utils.summarizer import Summarizer
+
 
 def _dav_display_names(xml_bytes: bytes) -> list[str]:
     root = ET.fromstring(xml_bytes)
@@ -113,16 +115,17 @@ async def test_webdav_put_create_get_and_replace_text_file(
     assert get_resp.text == "# Notes\n\nhello"
     assert get_resp.headers["content-length"] == str(len(get_resp.content))
 
-    refresh = service.resources.summarize
+    refresh = Summarizer.refresh_file_parent
+    scheduled_refresh = False
 
-    async def check_persisted_before_refresh(uris, *, ctx, **kwargs):
-        [uri] = uris
-        assert uri == "viking://resources/scratch/notes.md"
-        assert await service.viking_fs.read_file(uri, ctx=ctx) == "# Notes\n\nupdated"
-        return await refresh(uris, ctx=ctx, **kwargs)
+    async def check_persisted_before_refresh(summarizer, *, file_uri, ctx, **kwargs):
+        nonlocal scheduled_refresh
+        assert file_uri == "viking://resources/scratch/notes.md"
+        assert await service.viking_fs.read_file(file_uri, ctx=ctx) == "# Notes\n\nupdated"
+        scheduled_refresh = True
+        return await refresh(summarizer, file_uri=file_uri, ctx=ctx, **kwargs)
 
-    summarized = AsyncMock(side_effect=check_persisted_before_refresh)
-    monkeypatch.setattr(service.resources, "summarize", summarized)
+    monkeypatch.setattr(Summarizer, "refresh_file_parent", check_persisted_before_refresh)
 
     replace_resp = await client.request(
         "PUT",
@@ -130,12 +133,15 @@ async def test_webdav_put_create_get_and_replace_text_file(
         content="# Notes\n\nupdated".encode("utf-8"),
     )
     assert replace_resp.status_code == 204
-    summarized.assert_awaited_once()
+    assert scheduled_refresh
 
     get_resp = await client.get("/webdav/resources/scratch/notes.md")
     assert get_resp.status_code == 200
     assert get_resp.text == "# Notes\n\nupdated"
     assert get_resp.headers["content-length"] == str(len(get_resp.content))
+    await service.resources.wait_processed()
+    overview = await service.viking_fs.read_file("viking://resources/scratch/.overview.md")
+    assert "notes.md" in overview
 
 
 async def test_webdav_put_rejects_non_utf8_content(client: httpx.AsyncClient):

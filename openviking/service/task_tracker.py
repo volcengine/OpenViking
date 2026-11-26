@@ -171,6 +171,18 @@ def set_task_tracker(tracker: Optional["TaskTracker"]) -> None:
         _instance = tracker
 
 
+async def wait_for_enqueued_work(
+    queue_name: str, *, stop_waiting: Optional[Callable[[], bool]] = None
+) -> None:
+    """Wait for work submitted by the current operation to the given queue."""
+    from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
+
+    context = get_task_context()
+    work_ids = get_enqueued_work_ids(queue_name)
+    if context is not None and work_ids:
+        await get_task_tracker().wait_for_work(context.task_id, work_ids, stop_waiting=stop_waiting)
+
+
 async def run_tracked_operation(
     task_type: str,
     *,

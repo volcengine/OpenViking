@@ -65,6 +65,7 @@ class HiddenToolLoop:
         # A request without gateway tools comes here only to show the recall notice: every
         # call is the client's, nothing runs, and the reply takes as long as it takes.
         self.allowed = executor.allowed if prepared.tools_active else set()
+        self.adapter.gateway_tools = self.allowed
         seconds = self.policy.get("tool_total_seconds")
         self.deadline = time.monotonic() + seconds if prepared.tools_active and seconds else None
         self.adapter.lead_with(prepared.reply_lead)
@@ -205,6 +206,13 @@ class HiddenToolLoop:
                     yield event
             if skipped:
                 result = {"role": "tool", "tool_call_id": call["id"], "content": REFUSED}
+            elif call.get("invalid_arguments"):
+                result = {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": "Invalid tool arguments. Send a valid JSON object.",
+                    "failed": True,
+                }
             elif crowded:
                 result = {
                     "role": "tool",
@@ -215,6 +223,7 @@ class HiddenToolLoop:
             else:
                 result = await self.executor.execute(call)
             window = result.pop("cut", window)
+            skipped = result.pop("skipped", False) or skipped
             if show:
                 events = self.adapter.notice(tool_tail(result.get("failed", False), skipped))
             results.append(result)

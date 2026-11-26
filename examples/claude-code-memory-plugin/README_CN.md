@@ -181,8 +181,9 @@ claude
 | `OPENVIKING_SKILL_CATALOG`               | `true`    | 在会话启动块里加入 `<available-skills>` skill 清单                 |
 | `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`  | `1200`    | `<available-skills>` 的 token 预算（0–20000），不占用户画像的预算；设为 `0` 即不注入清单 |
 | `OPENVIKING_SESSION_START_MAX_BYTES`    | `9500`    | SessionStart 注入的总字节上限，保证低于 Claude Code 10,000 字符的内联限制；resume/compact 时归档最多占一半；`0` 取消上限 |
+| `OPENVIKING_SESSION_HISTORY_POINTER`    | `true`    | resume/compact 时附一段简短说明，给出本会话的 OV 会话 id 以及如何用服务端的 `session_history` MCP 工具查原始细节；MCP 代理会把该工具的 `session` 自动填成当前会话 |
 
-在 `ovcli.conf` 里，这几项对应 `plugin` 或 `plugin.claude_code` 下的 `noAutoInject`、`profileTokenBudget`、`skillCatalog` 和 `skillCatalogTokenBudget`。
+在 `ovcli.conf` 里，这几项对应 `plugin` 或 `plugin.claude_code` 下的 `noAutoInject`、`profileTokenBudget`、`skillCatalog`、`skillCatalogTokenBudget` 和 `sessionHistoryPointer`。
 
 每次 `SessionStart`（`startup`、`clear`、`resume`、`compact`）都会注入一个 `<openviking-context>` 块，依次包含 `<user-profile>`、`<available-memories>` 和 `<available-skills>`；`resume`/`compact` 时后面还会接上最新的 archive overview。skill 清单来自一次 `GET /api/v1/skills?node_limit=200` 调用：先列你自己的 skill，再列账号内共享在 `viking://agent/skills` 下的 skill，与你自己某个 skill 同名的共享 skill 不再列出。每条描述截到约 40 个 token，描述里出现的 `<openviking-context>` 等注入块标签会被转义。完整清单超出预算时只列名称，名称也放不全时以 `... +N more, search OpenViking skills to find the rest` 收尾；连一个名称都放不下时，整块缩成一行 `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`。没有任何 skill，或服务端不支持 `GET /api/v1/skills` 时，不注入清单。
 
@@ -211,6 +212,7 @@ claude
 | `OPENVIKING_WRITE_PATH_ASYNC`          | `true`        | 把写 hook detach 到后台 worker，避免 CC 等待 commit RTT            |
 | `OPENVIKING_BYPASS_SESSION`            | `false`       | 一次性：`1`/`true`=当前进程所有 hook 直接放行                      |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS`   | `""`          | CSV 的 glob 模式，匹配 `session_id` 或 `cwd`                       |
+| `OPENVIKING_SKIP_SUBAGENT_SESSIONS`    | `false`       | `1`/`true`=跳过 SubagentStart / SubagentStop，子代理 transcript 不捕获、不提交 |
 | `OPENVIKING_MEMORY_ENABLED`            | (auto)        | `0`/`false`/`no`=强制禁用；`1`/`true`/`yes`=强制启用               |
 | `OPENVIKING_DEBUG`                     | `false`       | `1`/`true`=向 `~/.openviking/logs/cc-hooks.log` 输出 debug 日志    |
 | `OPENVIKING_DEBUG_LOG`                 | `~/.openviking/logs/cc-hooks.log` | 覆盖日志路径                                  |

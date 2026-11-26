@@ -157,8 +157,10 @@ pub(crate) fn report_for_clap_error(args: &[OsString], clap_output: &str) -> Err
     }
 
     let unknown = parse_unknown_subcommand(clap_output);
-    let suggestion = parse_clap_subcommand_suggestion(clap_output)
-        .map(|suggested| qualified_suggestion(args, &suggested));
+    let suggestion = unknown.as_deref().and_then(|unknown| {
+        let suggested = parse_clap_subcommand_suggestion(clap_output, unknown)?;
+        qualified_suggestion(args, unknown, &suggested)
+    });
     let mut actions = Vec::new();
     if let Some(suggestion) = suggestion.as_ref() {
         actions.push(ErrorAction::new(
@@ -837,15 +839,37 @@ fn parse_unknown_subcommand(clap_output: &str) -> Option<String> {
     })
 }
 
-fn parse_clap_subcommand_suggestion(clap_output: &str) -> Option<String> {
+fn parse_clap_subcommand_suggestion(clap_output: &str, unknown: &str) -> Option<String> {
     clap_output.lines().find_map(|line| {
         let trimmed = line.trim();
         if trimmed.contains("similar subcommand") {
-            first_single_quoted(trimmed)
+            // Prefer the fewest character edits, retaining clap's ranking for ties.
+            trimmed
+                .rsplit('\'')
+                .skip(1)
+                .step_by(2)
+                .min_by_key(|candidate| command_edit_distance(unknown, candidate))
+                .map(ToString::to_string)
         } else {
             None
         }
     })
+}
+
+fn command_edit_distance(left: &str, right: &str) -> usize {
+    let mut row = (0..=right.chars().count()).collect::<Vec<_>>();
+    for (i, left_char) in left.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, right_char) in right.chars().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (row[j] + 1)
+                .min(above + 1)
+                .min(diagonal + usize::from(left_char != right_char));
+            diagonal = above;
+        }
+    }
+    row.last().copied().unwrap_or_default()
 }
 
 fn first_single_quoted(value: &str) -> Option<String> {
@@ -855,23 +879,15 @@ fn first_single_quoted(value: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
-fn qualified_suggestion(args: &[OsString], suggested_leaf: &str) -> String {
-    let mut parts = args
+fn qualified_suggestion(args: &[OsString], unknown: &str, suggested_leaf: &str) -> Option<String> {
+    let index = args
         .iter()
+        .enumerate()
         .skip(1)
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        parts.push(suggested_leaf.to_string());
-    } else if let Some(last) = parts.last_mut() {
-        *last = suggested_leaf.to_string();
-    }
-
-    if parts.is_empty() {
-        "ov".to_string()
-    } else {
-        format!("ov {}", parts.join(" "))
-    }
+        .find_map(|(index, arg)| (arg == unknown).then_some(index))?;
+    let mut corrected = args.to_vec();
+    corrected[index] = suggested_leaf.into();
+    Some(display_command(&corrected))
 }
 
 fn first_error_line(clap_output: &str) -> String {
@@ -1023,6 +1039,49 @@ Usage: ov [OPTIONS] <COMMAND>
         assert!(rendered.contains("Unknown command: configure"));
         assert!(rendered.contains("Did you mean: ov config"));
         assert!(rendered.contains("ov --help"));
+    }
+
+    #[test]
+    fn admin_command_typo_suggests_status_and_preserves_parameters() {
+        let args = os_args(&[
+            "ov",
+            "--sudo",
+            "admin",
+            "freeze-file-status",
+            "default",
+            "shengmaojia",
+            "viking://user/shengmaojia/GLOBAL_POLICY.md",
+        ]);
+        let clap_output = "\
+error: unrecognized subcommand 'freeze-file-status'
+
+  tip: some similar subcommands exist: 'unfreeze-file', 'frozen-file-status', 'freeze-file'
+
+Usage: ov admin <COMMAND>
+";
+        let report = report_for_clap_error(&args, clap_output);
+        let expected = "ov --sudo admin frozen-file-status default shengmaojia viking://user/shengmaojia/GLOBAL_POLICY.md";
+
+        assert_eq!(report.suggestion.as_deref(), Some(expected));
+        assert_eq!(report.actions[0].command, expected);
+    }
+
+    #[test]
+    fn top_level_command_typo_preserves_trailing_arguments() {
+        let args = os_args(&["ov", "configure", "show", "--compact=false"]);
+        let clap_output = "\
+error: unrecognized subcommand 'configure'
+
+  tip: a similar subcommand exists: 'config'
+
+Usage: ov [OPTIONS] <COMMAND>
+";
+        let report = report_for_clap_error(&args, clap_output);
+
+        assert_eq!(
+            report.suggestion.as_deref(),
+            Some("ov config show --compact=false")
+        );
     }
 
     #[test]

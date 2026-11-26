@@ -1202,7 +1202,9 @@ async def test_persistent_store_writes_task_record_json(monkeypatch):
     monkeypatch.setattr(
         storage_config.logger, "info", lambda message, **kwargs: messages.append(message)
     )
-    config = StorageConfig.model_validate({"task_tracker": {"backend": "memory"}})
+    config = StorageConfig.model_validate(
+        {"task_tracker": {"backend": "memory"}, "task_store": {"provider": "file"}}
+    )
     assert any("task_tracker' is deprecated and ignored" in message for message in messages)
 
     agfs = _FakeAgfs()

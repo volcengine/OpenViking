@@ -81,7 +81,7 @@ local function page_after(key, lower, upper, last_score, last_member, limit)
     if count > limit then
         items[count] = nil
         count = count - 1
-        next_value = {items[count][2], items[count][1]}
+        next_value = {items[count][1], items[count][2]}
     end
     return items, next_value
 end

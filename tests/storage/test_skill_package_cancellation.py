@@ -26,6 +26,7 @@ from openviking.storage.queuefs.named_queue import NamedQueue
 from openviking.storage.queuefs.process_result import ProcessOutcome
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor, SemanticTreeStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.queuefs.semantic_ops.directory_generation import DirectoryGeneration
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking_cli.session.user_id import UserIdentifier
 from tests.storage.test_collection_schemas import _DummyConfig, _DummyEmbedder
@@ -39,7 +40,9 @@ def _ctx():
 
 def _processor():
     processor = SemanticProcessor()
-    processor._generate_overview = AsyncMock(return_value="overview")
+    processor._generate_directory_semantics = AsyncMock(
+        return_value=DirectoryGeneration(overview="overview", abstract="abstract")
+    )
     processor._skill_root_semantics = AsyncMock(return_value=("overview", "abstract"))
     processor._vectorize_single_file = AsyncMock(return_value=True)
     processor._vectorize_directory = AsyncMock()
@@ -222,9 +225,7 @@ async def test_active_skill_embedding_cancel_settles_only_after_write_exit(
         await asyncio.sleep(0.03)
         if during_write:
             assert not worker.done()
-            assert await tracker.has_work(
-                task.task_id, account_id="acc", user_id="alice"
-            )
+            assert await tracker.has_work(task.task_id, account_id="acc", user_id="alice")
             assert not writes
         else:
             await asyncio.wait_for(worker, 1)
@@ -233,9 +234,7 @@ async def test_active_skill_embedding_cancel_settles_only_after_write_exit(
         release.set()
         result = await asyncio.wait_for(worker, 1)
         assert result.outcome is ProcessOutcome.CANCELLED
-        assert not await tracker.has_work(
-            task.task_id, account_id="acc", user_id="alice"
-        )
+        assert not await tracker.has_work(task.task_id, account_id="acc", user_id="alice")
     assert len(writes) == int(during_write)
 
 
