@@ -96,6 +96,21 @@ test('Linux: no systemd unit is installed until Linger becomes yes', async (t) =
   assert.equal(enabled.calls.some(([command]) => command === 'systemctl'), false);
 });
 
+test('Linux: a refused enable takes the unit back out, so the next setup asks again', async (t) => {
+  const directory = home(t);
+  const platform = { ...posix, loginService: 'systemd' };
+  const unit = path.join(directory, '.config', 'systemd', 'user', 'superagent.service');
+  const enabled = () => autostartEnabled({ env: { PATH: '/usr/bin' }, homeDir: directory, platform });
+  assert.equal(enabled(), false, 'nothing is set up yet');
+  await assert.rejects(run(directory, platform, 'enable', async (command, args) => {
+    if (command === 'loginctl') return { stdout: 'yes\n' };
+    if (command === 'systemctl' && args.includes('enable')) throw new Error('Failed to enable unit: Access denied');
+    return { stdout: '' };
+  }));
+  assert.equal(fs.existsSync(unit), false, 'no unit is left behind for the next run to read as on');
+  assert.equal(enabled(), false, 'setup asks again instead of reporting it as on');
+});
+
 test('macOS: a LaunchAgent bootstrapped into the user GUI domain', async (t) => {
   const directory = home(t);
   const enabled = await run(directory, { ...posix, loginService: 'launchd' }, 'enable');
@@ -104,6 +119,18 @@ test('macOS: a LaunchAgent bootstrapped into the user GUI domain', async (t) => 
   assert.match(plist, /<key>RunAtLoad<\/key><true\/>/);
   assert.deepEqual(enabled.calls.at(-1), ['launchctl', 'bootstrap', 'gui/501', path.join(directory, 'Library', 'LaunchAgents', 'com.superagent.agent.plist')]);
   assert.equal((await run(directory, { ...posix, loginService: 'launchd' }, 'bogus')).code, 2);
+});
+
+test('macOS: a plist that could not be loaded is taken back out', async (t) => {
+  const directory = home(t);
+  const platform = { ...posix, loginService: 'launchd' };
+  const plist = path.join(directory, 'Library', 'LaunchAgents', 'com.superagent.agent.plist');
+  await assert.rejects(run(directory, platform, 'enable', async (command, args) => {
+    if (command === 'launchctl' && args[0] === 'bootstrap') throw new Error('Bootstrap failed: 5: Input/output error');
+    return { stdout: '' };
+  }));
+  assert.equal(fs.existsSync(plist), false, 'no plist is left behind for the next run to read as on');
+  assert.equal(autostartEnabled({ env: { PATH: '/usr/bin' }, homeDir: directory, platform }), false);
 });
 
 test('Windows: a Startup-folder script that starts superagent hidden, with no service and no elevation', async (t) => {

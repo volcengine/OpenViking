@@ -20,6 +20,18 @@ const ESC = '\x1b[';
 const NOTHING_TYPED = () => t('没有收到输入，再输一次（每个字符会显示成 *）', 'Nothing came through; type it again (each character shows as *)');
 const atLeast = (min) => t(`至少选 ${min} 项`, `Choose at least ${min}`);
 
+// The yes/no answer both terminals read: Enter takes the value in brackets, yes
+// and no are accepted in any case, and anything else is asked again with one
+// message - so the coloured and the plain question cannot drift apart.
+function yesNoAnswer(value, initial) {
+  if (value === '') return initial;
+  if (/^y(es)?$/i.test(value)) return true;
+  if (/^n(o)?$/i.test(value)) return false;
+  return null;
+}
+
+const NOT_YES_NO = (value) => t(`「${value}」不是 y 或 n：输入 y 或 n 再回车`, `"${value}" is not y or n: type y or n, then Enter`);
+
 export class PromptAborted extends Error {
   constructor() {
     super('setup cancelled');
@@ -36,6 +48,16 @@ export class GoBack extends Error {
   }
 }
 
+// Nothing was typed before the question's time was up; the caller decides what
+// to do without an answer. Not an error in the flow: it means the keys never
+// arrived, as when the terminal stops delivering them.
+export class NoAnswer extends Error {
+  constructor() {
+    super('no answer');
+    this.name = 'NoAnswer';
+  }
+}
+
 export class Prompter {
   constructor({ input = process.stdin, output = process.stdout, env = process.env } = {}) {
     this.input = input;
@@ -47,6 +69,8 @@ export class Prompter {
     this.fancy = this.tty && Boolean(output.isTTY) && this.s.enabled;
     this.lines = null;
     this.transcript = [];
+    // Bytes read for a line question that the next one has not used yet.
+    this.pendingInput = '';
     // The first row of the questions' region, when something above it is
     // pinned (setup's banner); null when the questions just scroll.
     this.pageTop = null;
@@ -144,10 +168,16 @@ export class Prompter {
   }
 
   // Resolves with the result of onKey once it returns something other than
-  // undefined; raw mode is held only for the duration of one question.
-  keys(onKey, { back = true } = {}) {
+  // undefined; raw mode is held only for the duration of one question. A
+  // question that passes `timeoutMs` gives up with NoAnswer when nothing
+  // arrives: the terminal itself can stop delivering keys, and a question at
+  // the end of a flow must not be able to hold the owner there.
+  keys(onKey, { back = true, timeoutMs = 0 } = {}) {
     return new Promise((resolve, reject) => {
+      let timer = null;
       const finish = (error, value) => {
+        if (timer) clearTimeout(timer);
+        timer = null;
         this.input.off('keypress', handler);
         this.input.setRawMode(false);
         this.input.pause();
@@ -163,9 +193,62 @@ export class Prompter {
           finish(error);
         }
       };
+      // The listener comes first: keys already waiting are delivered as soon as
+      // the stream is resumed, and none of them may be dropped.
+      this.input.on('keypress', handler);
+      if (timeoutMs > 0) timer = setTimeout(() => finish(new NoAnswer()), timeoutMs);
       this.input.setRawMode(true);
       this.input.resume();
-      this.input.on('keypress', handler);
+    });
+  }
+
+  // One line in the terminal's own line mode: the console echoes what is typed,
+  // Backspace edits it, and Enter delivers the line, so nothing here depends on
+  // the terminal translating every key into a keypress event. An IME composing
+  // or a paste arrives as text, and a terminal whose raw keys go nowhere still
+  // delivers the line Enter completes.
+  lineAnswer({ timeoutMs = 0 } = {}) {
+    if (!this.tty) return this.nextLine();
+    const take = () => {
+      const end = this.pendingInput.search(/\r\n|\r|\n/);
+      if (end < 0) return null;
+      const value = this.pendingInput.slice(0, end);
+      this.pendingInput = this.pendingInput.slice(end).replace(/^(\r\n|\r|\n)/, '');
+      return value;
+    };
+    // A chunk can carry more than one line (a paste, or keys typed while the
+    // previous answer was being handled): the rest waits for the next question.
+    const buffered = take();
+    if (buffered !== null) return Promise.resolve(buffered);
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      const finish = (error, value) => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        this.input.off('data', onData);
+        this.input.off('end', onEnd);
+        process.off('SIGINT', onSigint);
+        this.input.pause();
+        if (error) { this.pendingInput = ''; reject(error); } else resolve(value);
+      };
+      const onData = (chunk) => {
+        const text = String(chunk);
+        if (text.includes('\x03')) { finish(new PromptAborted()); return; }
+        this.pendingInput += text;
+        const line = take();
+        if (line === null) return;
+        finish(null, line);
+      };
+      const onEnd = () => finish(new PromptAborted());
+      const onSigint = () => finish(new PromptAborted());
+      this.input.on('data', onData);
+      this.input.on('end', onEnd);
+      process.once('SIGINT', onSigint);
+      if (timeoutMs > 0) timer = setTimeout(() => finish(new NoAnswer()), timeoutMs);
+      // Listeners first: bytes typed while the previous question had the stream
+      // paused are delivered the moment it resumes, and nothing may drop them.
+      this.input.setRawMode(false);
+      this.input.resume();
     });
   }
 
@@ -185,7 +268,10 @@ export class Prompter {
     const stop = () => {
       this.input.off('keypress', handler);
       this.input.setRawMode(false);
-      this.input.pause();
+      // Deliberately no pause(): on Windows a read resumed after one that was
+      // paused can go quiet, and the next question then takes nothing while the
+      // console still echoes the keys - the answer only counts once anything
+      // else is typed. The question that follows takes the stream over anyway.
       settle(false);
     };
     this.input.setRawMode(true);
@@ -316,29 +402,106 @@ export class Prompter {
     }
   }
 
-  async confirm(question, initial = true) {
+  // y/n is typed and then submitted, as text() is: the key shows on screen and
+  // only Enter answers, so a slip of the finger can be corrected. ← and → act
+  // while nothing is typed, as they do in a text field.
+  //
+  // `line` reads the answer through the terminal's own line editing instead of
+  // raw key events. The last question of a setup passes it: raw keys depend on
+  // the terminal turning every key into a keypress, and when that stops working
+  // the owner is left at a question nothing can answer. A line always arrives
+  // once Enter is pressed, whatever the terminal did with the keys before.
+  async confirm(question, initial = true, { timeoutMs = 0, line = false } = {}) {
     if (this.fancy) {
       this.asked += 1;
       const hint = initial ? 'Y/n' : 'y/N';
       const prompt = `${this.s.accent(SYMBOLS.active)} ${this.s.bold(question)} ${this.s.gray(`(${hint})`)} ${this.s.accent('›')} `;
+      if (line) {
+        for (;;) {
+          this.draw(prompt);
+          let typed;
+          try {
+            typed = await this.lineAnswer({ timeoutMs });
+          } catch (error) {
+            if (!(error instanceof NoAnswer)) throw error;
+            // The terminal never gave a line: the caller decides, and says so.
+            this.fold(rowsOf(prompt, this.columns), question, this.s.gray(t('（没有回答）', '(no answer)')));
+            return null;
+          }
+          const value = typed.trim();
+          const answer = yesNoAnswer(value, initial);
+          if (answer !== null) {
+            // The console drew the typed line and Enter moved below it.
+            this.fold(rowsOf(`${prompt}${typed}`, this.columns), question, answer ? t('是', 'yes') : t('否', 'no'), { below: true });
+            return answer;
+          }
+          // Not y/n: say what is expected and ask again (the typed line stays
+          // above, as the console drew it - nothing here answered).
+          this.write(`  ${this.s.yellow(SYMBOLS.warn)} ${NOT_YES_NO(value)}\n`);
+        }
+      }
       this.draw(prompt);
-      const answer = await this.keys((str, key) => {
-        if (key.name === 'left') return this.back();
-        if (key.name === 'return' || key.name === 'enter' || (key.name === 'right' && this.navigable)) return initial;
-        if (/^y$/i.test(str ?? '')) return true;
-        if (/^n$/i.test(str ?? '')) return false;
-        return undefined;
-      }).catch((error) => {
+      let typed = '';
+      let answer;
+      try {
+        answer = await this.keys((str, key) => {
+          if (key.name === 'left' && !typed) return this.back();
+          const forward = key.name === 'right' && !typed && this.navigable;
+          // Enter with nothing typed takes the value in brackets.
+          if (forward || key.name === 'return' || key.name === 'enter') return typed ? /^y/i.test(typed) : initial;
+          if (key.name === 'backspace') {
+            if (typed) { typed = ''; this.draw('\b \b'); }
+            return undefined;
+          }
+          // The last y/n typed wins, so the answer can be changed before Enter.
+          if (str && !key.ctrl && !key.meta && /^[yn]$/i.test(str)) {
+            if (typed) this.draw('\b \b');
+            typed = str;
+            this.draw(str);
+          }
+          return undefined;
+        }, { timeoutMs });
+      } catch (error) {
+        // Nothing arrived in time: the question is over, the caller says what
+        // it does without an answer.
+        if (error instanceof NoAnswer) {
+          this.fold(rowsOf(`${prompt}${typed}`, this.columns), question, this.s.gray(t('（没有回答）', '(no answer)')));
+          return null;
+        }
         this.abandon(error, rowsOf(prompt, this.columns), question);
         throw error;
-      });
-      this.fold(rowsOf(prompt, this.columns), question, answer ? t('是', 'yes') : t('否', 'no'));
+      }
+      this.fold(rowsOf(`${prompt}${typed}`, this.columns), question, answer ? t('是', 'yes') : t('否', 'no'));
       return answer;
     }
-    const answer = await this.text(`${question} ${initial ? '[Y/n]' : '[y/N]'}`, {
-      validate: (value) => (value === '' || /^(y|yes|n|no)$/i.test(value) ? null : t('请输入 y 或 n', 'Type y or n')),
-    });
-    return answer === '' ? initial : /^y/i.test(answer);
+    // Plain output (no colours) still ends on a line the console completes when
+    // the caller asks for one: the answer arrives on Enter, and two minutes
+    // without one ends the question the same way. Piped input has no keys to
+    // wait for and reads lines already; every other question keeps its keys,
+    // which is what ← and → need to go back and to take the value shown.
+    const hint = initial ? '[Y/n]' : '[y/N]';
+    if (!line || !this.tty) {
+      const answer = await this.text(`${question} ${hint}`, {
+        validate: (value) => (value === '' || /^(y|yes|n|no)$/i.test(value) ? null : t('请输入 y 或 n', 'Type y or n')),
+      });
+      return answer === '' ? initial : /^y/i.test(answer);
+    }
+    const prompt = `? ${question} ${hint}: `;
+    for (;;) {
+      this.draw(prompt);
+      let typed;
+      try {
+        typed = await this.lineAnswer({ timeoutMs });
+      } catch (error) {
+        if (!(error instanceof NoAnswer)) throw error;
+        this.draw('\n');
+        return null;
+      }
+      const value = typed.trim();
+      const answer = yesNoAnswer(value, initial);
+      if (answer !== null) return answer;
+      this.write(`  ${NOT_YES_NO(value)}\n`);
+    }
   }
 
   // choices: [{ label, value, hint?, disabled? }]. `back: false` for a

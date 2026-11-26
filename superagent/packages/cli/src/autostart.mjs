@@ -149,7 +149,14 @@ export async function autostartCommand([action, ...extra], {
     fs.mkdirSync(path.join(homeDir, '.ov-superagent', 'logs'), { recursive: true });
     fs.writeFileSync(file, launchAgent({ homeDir, pathValue }));
     await execFileImpl('launchctl', ['bootout', `gui/${uid}`, file]).catch(() => {});
-    await execFileImpl('launchctl', ['bootstrap', `gui/${uid}`, file]);
+    try {
+      await execFileImpl('launchctl', ['bootstrap', `gui/${uid}`, file]);
+    } catch (error) {
+      // Written but not loaded: leave nothing behind, or the next setup would
+      // read the plist and report autostart as on.
+      fs.rmSync(file, { force: true });
+      throw error;
+    }
     output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
     return 0;
   }
@@ -172,8 +179,17 @@ export async function autostartCommand([action, ...extra], {
   }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, systemdUnit({ homeDir, pathValue }));
-  await execFileImpl('systemctl', ['--user', 'daemon-reload']);
-  await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
+  try {
+    await execFileImpl('systemctl', ['--user', 'daemon-reload']);
+    await execFileImpl('systemctl', ['--user', 'enable', 'superagent.service']);
+  } catch (error) {
+    // The unit is on disk but the system would not enable it (a refused user
+    // service, a policy, a missing session bus): take it back out, or the next
+    // setup reads the file and reports autostart as on when it is not.
+    fs.rmSync(file, { force: true });
+    await execFileImpl('systemctl', ['--user', 'daemon-reload']).catch(() => {});
+    throw error;
+  }
   output.write(t(`开机自启已开启（${file}）\n`, `Autostart is on (${file})\n`));
   return 0;
 }

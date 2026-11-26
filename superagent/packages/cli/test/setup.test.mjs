@@ -35,7 +35,7 @@ test('setup reports autostart success only when the command completes it', async
     success: (text) => reports.push(['success', text]),
     warn: (text) => reports.push(['warn', text]),
   };
-  await offerAutostart({
+  const failed = await offerAutostart({
     prompter, env: {}, homeDir: '/tmp/home', cli: 'ov-superagent',
     control: { autostart: async (args, { output }) => {
       assert.deepEqual(args, ['enable']);
@@ -43,15 +43,77 @@ test('setup reports autostart success only when the command completes it', async
       return 1;
     } },
   });
-  assert.deepEqual(reports, [['warn', 'run sudo loginctl enable-linger "$USER"']]);
+  assert.equal(failed, 'failed', 'the caller is told it did not take');
+  assert.deepEqual(reports, [['warn', 'run sudo loginctl enable-linger "$USER"\n重试：ov-superagent autostart enable']]);
 
   reports.length = 0;
-  await offerAutostart({
+  const enabled = await offerAutostart({
     prompter, env: {}, homeDir: '/tmp/home', cli: 'ov-superagent',
     control: { autostart: async () => 0 },
   });
+  assert.equal(enabled, 'on');
   assert.equal(reports.length, 1);
   assert.equal(reports[0][0], 'success');
+});
+
+test('setup uses the shown default when the autostart answer never arrives', async () => {
+  const reports = [];
+  const calls = [];
+  const prompter = {
+    confirm: async () => null,
+    success: (text) => reports.push(['success', text]),
+    info: (text) => reports.push(['info', text]),
+    warn: (text) => reports.push(['warn', text]),
+  };
+  await offerAutostart({
+    prompter, env: {}, homeDir: '/tmp/home', cli: 'ov-superagent',
+    control: { autostart: async (args) => { calls.push(args); return 0; } },
+  });
+  assert.deepEqual(calls, [['enable']], 'the default in brackets is what happens');
+  assert.deepEqual(reports.map(([kind]) => kind), ['warn', 'success']);
+  assert.match(reports[0][1], /没收到回答，按默认处理.*ov-superagent autostart disable/);
+});
+
+test('changing an instance also offers autostart when it is off, and the summary says where it stands', async (t) => {
+  const h = terminalHarness(t);
+  existing(h, {});
+  const asked = [];
+  h.options.control.autostart = async (args, { output }) => {
+    asked.push(args);
+    output.write('开机自启已开启\n');
+    return 0;
+  };
+  const driving = h.drive([
+    // 修改 ASD, then its bot name, then Save (10 rows of settings).
+    ['要做什么', DOWN, '\r'],
+    ['修改 ASD', '\r'],
+    ['机器人名字（已经建好的飞书应用名不会跟着改）', 'X', '\r'],
+    ['修改 ASD', DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, '\r'],
+    ['开机后自动启动', 'y', '\r'],
+  ]);
+  assert.equal(await setupCommand(h.options), 0);
+  await driving;
+  assert.deepEqual(asked, [['enable']], 'the question is not only for a new instance');
+  assert.equal(h.manifest().agents[0].displayName, 'X');
+  assert.deepEqual(h.calls, [['restart', 'asd']]);
+  assert.match(h.screen(), /开机自启：开 · 想关：.* autostart disable/, 'the summary reports what setup just did');
+});
+
+test('a failed autostart enable is what the summary reports, with the command that retries it', async (t) => {
+  const h = terminalHarness(t);
+  existing(h, {});
+  h.options.control.autostart = async () => 1;
+  const driving = h.drive([
+    ['要做什么', DOWN, '\r'],
+    ['修改 ASD', '\r'],
+    ['机器人名字（已经建好的飞书应用名不会跟着改）', 'X', '\r'],
+    ['修改 ASD', DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN, '\r'],
+    ['开机后自动启动', 'y', '\r'],
+  ]);
+  assert.equal(await setupCommand(h.options), 0);
+  await driving;
+  assert.match(h.screen(), /重试：.* autostart enable/, 'the failure says how to retry');
+  assert.match(h.screen(), /开机自启：开失败 · 重试：.* autostart enable/, 'the summary does not claim it is on');
 });
 
 function harness(t, answers, { ov = { configPath: null, url: 'http://127.0.0.1:1933', usable: true }, runtimes = RUNTIMES, failStart = false, soulText = '' } = {}) {

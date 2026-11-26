@@ -2306,6 +2306,15 @@ async function setupFlow({
       `\nSaved, but the start did not finish:\n${lines}\nRun ${cli} logs ${id} for the exact error; once fixed, run ${cli} start\n`));
     return 1;
   }
+  // Autostart is asked here, right after the instance starts, while the terminal
+  // is still answering questions - not after the Feishu wait, where it has been
+  // idle for minutes. On Windows a terminal that had gone quiet stopped giving
+  // the question any input; nothing that writes the same Startup entry needs to
+  // run that late. Only mechanisms this platform has, and only while it is off.
+  const autostartAvailable = capabilities.autostart && Boolean(control.autostart);
+  const autostartAttempt = prompter.tty && autostartAvailable && !autostartEnabled({ homeDir, env })
+    ? await offerAutostart({ prompter, env, homeDir, control, cli })
+    : null;
   let greeted = false;
   // Only someone at a terminal can write to the bot while setup waits; where
   // the feed stood before the hello, so a quick reply still counts.
@@ -2321,8 +2330,6 @@ async function setupFlow({
   const received = listener
     ? await confirmReceiving({ prompter, listener, greeted, name: state.displayName, id, cli })
     : false;
-  // Only offer mechanisms implemented by this platform (including Windows logon).
-  if (!current && prompter.tty && capabilities.autostart && control.autostart && !autostartEnabled({ homeDir, env })) await offerAutostart({ prompter, env, homeDir, control, cli });
 
   // What to do next, one line per thing; on Weixin the owner has to write first.
   const next = [];
@@ -2360,6 +2367,18 @@ async function setupFlow({
     }
     next.push([t('常用命令', 'Commands'), 'ov-superagent status · ov-superagent logs · ov-superagent setup']);
   }
+  // Where starting at login stands, whether it was asked in this run or an
+  // earlier one, and how to change it. What setup just did decides, not the
+  // file: a service the system refused to enable leaves the unit on disk, and
+  // the summary would then claim it is on.
+  if (autostartAvailable) {
+    const state = autostartAttempt ?? (autostartEnabled({ homeDir, env }) ? 'on' : 'off');
+    next.push([t('开机自启', 'Start at login'), state === 'on'
+      ? t(`开 · 想关：${cli} autostart disable`, `on · to turn it off: ${cli} autostart disable`)
+      : state === 'off'
+        ? t(`关 · 想开：${cli} autostart enable`, `off · to turn it on: ${cli} autostart enable`)
+        : t(`开失败 · 重试：${cli} autostart enable`, `failed to turn on · retry: ${cli} autostart enable`)]);
+  }
   const title = t(`${state.displayName}（${id}）${current ? '已更新' : '已就绪'}`, `${state.displayName} (${id}) is ${current ? 'updated' : 'ready'}`);
   if (prompter.fancy) {
     table(prompter, title, next);
@@ -2373,20 +2392,40 @@ async function setupFlow({
   return 0;
 }
 
-// Starting at login is one question at the end of a first setup. A machine
-// without a user service manager says so, and setup still succeeds.
-export async function offerAutostart({ prompter, env, homeDir, control, cli }) {
-  if (!await prompter.confirm(t('开机后自动启动 OpenViking SuperAgent？', 'Start OpenViking SuperAgent when this computer starts?'), true)) {
-    prompter.info(t(`之后想开：${cli} autostart enable`, `To turn it on later: ${cli} autostart enable`));
-    return;
+// Starting at login is one question at the end of a setup that finds it off
+// (the summary then says where it stands). A machine without a user service
+// manager says so, and setup still succeeds.
+//
+// The answer is read as a line, in the terminal's own line mode: raw key events
+// depend on the terminal translating every key, and on Windows one setup run
+// stopped receiving them there - the question was left with nothing able to
+// answer it. A line arrives when Enter is pressed, and with no line at all the
+// answer shown as the default is what happens, so setup always ends.
+export async function offerAutostart({ prompter, env, homeDir, control, cli, timeoutMs = 120_000 }) {
+  const answer = await prompter.confirm(t('开机后自动启动 OpenViking SuperAgent？', 'Start OpenViking SuperAgent when this computer starts?'), true, { line: true, timeoutMs });
+  if (answer === null) {
+    prompter.warn(t(`没收到回答，按默认处理：开机自启开。之后想关：${cli} autostart disable`,
+      `No answer came through; using the default (on). To turn it off later: ${cli} autostart disable`));
+  } else if (!answer) {
+    prompter.info(t(`${cli} autostart enable`, `To turn it on later: ${cli} autostart enable`));
+    return 'off';
   }
   let said = '';
-  await control.autostart(['enable'], { env, homeDir, output: { write: (text) => { said += text; } } }).then(
-    (code) => code === 0
-      ? prompter.success(t('开机自启已开启', 'Autostart is on'))
-      : prompter.warn(said.trim() || t('开机自启没有完整开启', 'Autostart was not fully enabled')),
-    (error) => prompter.warn(t(`这台机器开不了开机自启：${String(error.message).split('\n')[0]}`, `Autostart is not available here: ${String(error.message).split('\n')[0]}`)),
-  );
+  let code = -1;
+  try {
+    code = await control.autostart(['enable'], { env, homeDir, output: { write: (text) => { said += text; } } });
+  } catch (error) {
+    prompter.warn(t(`这台机器开不了开机自启：${String(error.message).split('\n')[0]}。重试：${cli} autostart enable`,
+      `Autostart is not available here: ${String(error.message).split('\n')[0]}. To retry: ${cli} autostart enable`));
+    return 'failed';
+  }
+  if (code === 0) {
+    prompter.success(t('开机自启已开启', 'Autostart is on'));
+    return 'on';
+  }
+  prompter.warn(t(`${said.trim() || t('开机自启没有完整开启', 'Autostart was not fully enabled')}\n重试：${cli} autostart enable`,
+    `${said.trim() || 'Autostart was not fully enabled'}\nTo retry: ${cli} autostart enable`));
+  return 'failed';
 }
 
 // What a change to an instance does, one line each, for the confirmation.
