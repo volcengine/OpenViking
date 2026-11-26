@@ -837,7 +837,8 @@ class TestGitAccessor:
     async def test_git_clone_prefers_commit_over_branch(
         self, accessor: GitAccessor, tmp_path: Path
     ) -> None:
-        with patch.object(accessor, "_run_git", new_callable=AsyncMock) as run_git:
+        full_oid = "deadbeef" + "0" * 32
+        with patch.object(accessor, "_run_git", new=AsyncMock(return_value=full_oid)) as run_git:
             await accessor._git_clone(
                 "https://github.com/volcengine/OpenViking.git",
                 str(tmp_path),
@@ -847,7 +848,7 @@ class TestGitAccessor:
 
         clone_args = run_git.await_args_list[0].args[0]
         assert "--branch" not in clone_args
-        assert run_git.await_args_list[-1].args[0][-2:] == ["checkout", "deadbeef"]
+        assert run_git.await_args_list[-1].args[0][-3:] == ["checkout", "--detach", full_oid]
 
     async def test_git_clone_reuses_auth_env_for_clone_and_commit_fetches(
         self, accessor: GitAccessor, tmp_path: Path
@@ -865,7 +866,7 @@ class TestGitAccessor:
 
         async def run_git(args, cwd=None, env=None):
             if "rev-parse" in args:
-                return "deadbeef"
+                return "deadbeef" + "0" * 32
             return ""
 
         with patch.object(accessor, "_run_git", new=AsyncMock(side_effect=run_git)) as run_git_mock:

@@ -10,6 +10,7 @@ images themselves are stored next to the markdown file referencing them).
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 from urllib.parse import quote, unquote
@@ -71,7 +72,7 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
                 continue
 
             ref = original_ref.strip()
-            if not ref or _is_remote_uri(ref):
+            if not ref or is_remote_image_target(ref):
                 continue
 
             # Queries/fragments are not part of the local filesystem path, but
@@ -101,8 +102,16 @@ def build_artifact_image_mappings(root_dir: Path) -> Dict[str, Dict[str, str]]:
     return mappings
 
 
-def _is_remote_uri(path: str) -> bool:
-    return any(path.startswith(p) for p in _REMOTE_PREFIXES)
+def unwrap_link_destination(path: str) -> str:
+    """Return the path represented by a Markdown angle-bracket destination."""
+    path = path.strip()
+    if path.startswith("<") and path.endswith(">"):
+        return path[1:-1]
+    return path
+
+
+def is_remote_image_target(path: str) -> bool:
+    return unwrap_link_destination(path).startswith(_REMOTE_PREFIXES)
 
 
 def _inline_code_ranges(line: str):
@@ -404,16 +413,7 @@ def _rewrite_content(
 
     Returns (new_content, rewrite_count). Optional log_stats accumulates skipped references.
     """
-    rewrite_count = 0
     mappings = path_to_image_name or {}
-
-    protected = _protected_ranges(content)
-
-    def _in_protected(pos: int) -> bool:
-        for s, e in protected:
-            if s <= pos < e:
-                return True
-        return False
 
     def _mapped_uri(path: str) -> Optional[str]:
         """viking:// URI for *path* if the mapping covers it, else None."""
@@ -425,43 +425,33 @@ def _rewrite_content(
         logger.debug("Image missing; leaving reference unchanged target=%s", safe_uri_for_log(path))
         return None
 
-    def replacer(match: re.Match) -> str:
-        nonlocal rewrite_count
-        alt_text = match.group(1)
-        path = match.group(2)
+    return rewrite_image_targets(content, _mapped_uri)
 
-        # Skip image references that live inside code blocks / inline code.
-        if _in_protected(match.start()):
-            return match.group(0)
 
-        if _is_remote_uri(path):
-            return match.group(0)
+def rewrite_image_targets(
+    content: str, resolve_target: Callable[[str], str | None]
+) -> tuple[str, int]:
+    """Replace local Markdown and HTML image destinations outside code spans."""
+    rewrite_count = 0
+    protected = _protected_ranges(content)
 
-        uri = _mapped_uri(path)
-        if uri is None:
-            return match.group(0)
-        rewrite_count += 1
-        return f"![{alt_text}]({uri})"
-
-    def img_tag_replacer(match: re.Match) -> str:
+    def replace_target(match: re.Match) -> str:
         nonlocal rewrite_count
         path = match.group(2)
-
-        if _in_protected(match.start()):
+        if is_remote_image_target(path) or any(
+            start <= match.start() < end for start, end in protected
+        ):
             return match.group(0)
-
-        if _is_remote_uri(path):
-            return match.group(0)
-
-        uri = _mapped_uri(path)
-        if uri is None:
+        target = resolve_target(path)
+        if target is None:
             return match.group(0)
         rewrite_count += 1
-        return f"{match.group(1)}{uri}{match.group(3)}"
+        start, end = match.span(2)
+        return f"{match.string[match.start() : start]}{target}{match.string[end : match.end()]}"
 
-    new_content = _IMAGE_PATTERN.sub(replacer, content)
+    new_content = _IMAGE_PATTERN.sub(replace_target, content)
     # The markdown pass may have shifted offsets; recompute protected ranges
     # against the updated text before rewriting <img> tags.
     protected = _protected_ranges(new_content)
-    new_content = HTML_IMG_PATTERN.sub(img_tag_replacer, new_content)
+    new_content = HTML_IMG_PATTERN.sub(replace_target, new_content)
     return new_content, rewrite_count

@@ -820,7 +820,7 @@ test("a turn queued during an outage is replayed at the next SessionStart", asyn
   }
 });
 
-test("compact adds only the session-history pointer and touches neither state nor server", async () => {
+test("compact sends the profile again, then the session-history pointer, without touching state", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-session-start-"));
   const requests = [];
   try {
@@ -828,17 +828,17 @@ test("compact adds only the session-history pointer and touches neither state no
       const input = { session_id: "compacted-thread", source: "compact", cwd: "/tmp/codex-compact", hook_event_name: "SessionStart" };
       const { output } = await runSessionStart(input, baseEnv(baseUrl, stateDir));
       const context = output.hookSpecificOutput.additionalContext;
-      assert.match(context, /^<openviking-context source="session-history">\n/);
+      assert.match(context, /^<openviking-context source="session-start">\n/);
+      assert.match(context, /\n\n<openviking-context source="session-history">\n/);
       assert.match(context, /full record of this session as cx-compacted-thread, including what the compaction summary replaced/);
       assert.match(context, /pass session="cx-compacted-thread"/);
-      assert.doesNotMatch(context, /source="session-start"/);
 
       const off = await runSessionStart(input, { ...baseEnv(baseUrl, stateDir), OPENVIKING_SESSION_HISTORY_POINTER: "0" });
-      assert.deepEqual(off.output, {});
-      const noCapture = await runSessionStart(input, { ...baseEnv(baseUrl, stateDir), OPENVIKING_AUTO_CAPTURE: "0" });
-      assert.deepEqual(noCapture.output, {});
+      assert.match(off.output.hookSpecificOutput.additionalContext, /^<openviking-context source="session-start">/);
+      assert.doesNotMatch(off.output.hookSpecificOutput.additionalContext, /source="session-history"/);
+      const noInject = await runSessionStart(input, { ...baseEnv(baseUrl, stateDir), OPENVIKING_NO_AUTO_INJECT: "1", OPENVIKING_AUTO_CAPTURE: "0" });
+      assert.deepEqual(noInject.output, {});
     });
-    assert.deepEqual(requests, []);
     assert.deepEqual((await readdir(stateDir)).filter((name) => name.startsWith("compacted-thread")), []);
   } finally {
     await rm(stateDir, { recursive: true, force: true });

@@ -1,11 +1,11 @@
 /**
- * session_history support across the hook hosts: the post-compaction note
- * through the real hook entry, the hook-side `session` fill (Cursor, Qoder) and
- * the proxy-side fill from a tool call's `_meta` (CodeBuddy, TRAE).
+ * session_history support across the hook hosts: the post-compaction note and
+ * profile through the real hook entry, the hook-side `session` fill (Cursor,
+ * Qoder) and the proxy-side fill from a tool call's `_meta` (CodeBuddy, TRAE).
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -27,12 +27,14 @@ const HOOK = join(ROOT, "scripts", "hook.mjs");
 
 const POINTER = /<openviking-context source="session-history">/;
 
-async function withHooks(fn) {
+const healthOnly = (req, res) => (
+  req.url === "/health" ? writeJson(res, { status: "ok" }) : writeJson(res, { status: "error" }, 404)
+);
+
+async function withHooks(fn, server = healthOnly) {
   const dir = mkdtempSync(join(tmpdir(), "ov-session-history-"));
   try {
-    await withMockOpenViking((req, res) => (
-      req.url === "/health" ? writeJson(res, { status: "ok" }) : writeJson(res, { status: "error" }, 404)
-    ), async (url, requests) => {
+    await withMockOpenViking(server, async (url, requests) => {
       const env = {
         HOME: dir,
         OPENVIKING_URL: url,
@@ -55,7 +57,7 @@ async function withHooks(fn) {
         if (!out) return null;
         try { return JSON.parse(out); } catch { return out; }
       };
-      await fn(run, requests);
+      await fn(run, requests, dir);
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -160,6 +162,44 @@ test("CodeBuddy leaves the note from PreCompact and a resume for the next prompt
     const compacted = await run("codebuddy", "user-prompt-submit", { session_id: "cb-3", prompt: "hi" });
     assert.match(compacted.hookSpecificOutput.additionalContext, /as cb-cb-3, including what the compaction/);
   });
+});
+
+const profileServer = (req, res) => (
+  writeJson(res, { status: "ok", result: req.url.startsWith("/api/v1/content/read") ? "profile line" : [] })
+);
+const PROFILE = /<openviking-context source="session-start">\n[^]*profile line/;
+
+test("CodeBuddy sends the profile again with the first prompt after a compaction", async () => {
+  await withHooks(async (run) => {
+    const context = async (prompt) => (await run("codebuddy", "user-prompt-submit", { session_id: "cb-p", prompt }))
+      ?.hookSpecificOutput?.additionalContext || "";
+    assert.doesNotMatch(await context("hi"), /source="session-start"/);
+    await run("codebuddy", "pre-compact", { session_id: "cb-p", transcript_path: "/nonexistent.jsonl" });
+    assert.match(await context("go on"), PROFILE);
+    assert.doesNotMatch(await context("again"), /source="session-start"/);
+  }, profileServer);
+});
+
+test("Qoder sends the profile on SessionStart(compact) inside the resume dedup window", async () => {
+  await withHooks(async (run) => {
+    await run("qoder", "session-start", { session_id: "q-p", source: "resume" });
+    const compact = await run("qoder", "session-start", { session_id: "q-p", source: "compact" });
+    assert.match(compact.hookSpecificOutput.additionalContext, PROFILE);
+  }, profileServer);
+});
+
+test("Antigravity sends the profile again on the first turn after a compaction checkpoint", async () => {
+  await withHooks(async (run, _requests, dir) => {
+    const transcriptPath = join(dir, "transcript_full.jsonl");
+    const steps = [["USER_EXPLICIT", "USER_INPUT", "first"], ["SYSTEM", "CHECKPOINT", "# Resuming from a compaction"],
+      ["USER_EXPLICIT", "USER_INPUT", "second"], ["MODEL", "PLANNER_RESPONSE", "ok"], ["USER_EXPLICIT", "USER_INPUT", "third"]];
+    writeFileSync(transcriptPath, steps.map(([source, type, content], step_index) => JSON.stringify({ step_index, source, type, content, status: "DONE" })).join("\n"));
+    const turn = async (initialNumSteps, lastUserInput) => (await run("antigravity", "pre-invocation", {
+      conversationId: "ag-p", invocationNum: 0, initialNumSteps, lastUserInput, transcriptPath,
+    }))?.injectSteps?.[0]?.systemMessage?.systemMessage || "";
+    assert.match(await turn(3, "second"), PROFILE);
+    assert.doesNotMatch(await turn(5, "third"), /source="session-start"/);
+  }, profileServer);
 });
 
 test("Kimi Code adds the note to the next prompt and asks the model to pass session", async () => {

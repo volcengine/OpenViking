@@ -160,14 +160,14 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>OpenViking Service を使う（Volcengine がホスト）</strong></summary>
 
-同じ OpenViking サービスを Volcengine が代わりに運用します。最初の 50 ファイルは無料です。[Volcengine の製品ページ](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme)で利用を開始したら、コンソールの「User Management → API Key」で API キーを作成してください。サーバーのアドレスは `https://api.vikingdb.cn-beijing.volces.com/openviking` です。エージェントを接続するときに、このアドレスと API キーを使います。
+同じ OpenViking サービスを Volcengine が代わりに運用します。最初の 50 ファイルは無料です。[Volcengine の製品ページ](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme)で利用を開始したら、コンソールの「User Management → API Key」で API キーを作成してください。セットアップウィザードで Volcengine を選ぶと、サービス URL は自動で設定されます。手動で設定する場合は `https://api.vikingdb.cn-beijing.volces.com/openviking` を使います。
 
 </details>
 
 <details>
 <summary><strong>OpenViking Service を使う（BytePlus がホスト）</strong></summary>
 
-[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) はアジア太平洋（ジョホール）で OpenViking をホストしています。接続には BytePlus OpenViking のサービス URL と API キーを使います。CLI とエージェントの設定は [BytePlus セットアップガイド（英語）](https://docs.openviking.ai/en/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme)を参照してください。
+[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) はアジア太平洋（ジョホール）で OpenViking をホストしています。セットアップウィザードでインスタンスの API キーを入力します。BytePlus を選ぶと、サービス URL は自動で設定されます。CLI とエージェントの設定は [BytePlus セットアップガイド（英語）](https://docs.openviking.ai/en/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme)を参照してください。
 
 </details>
 

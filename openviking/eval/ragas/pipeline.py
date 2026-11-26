@@ -79,29 +79,7 @@ class RAGQueryPipeline:
         Returns:
             List of root URIs for added resources
         """
-        client = self._get_client()
-        root_uris = []
-
-        for doc_path in docs_dirs:
-            path = Path(doc_path).expanduser()
-            if not path.exists():
-                logger.warning(f"Path does not exist: {path}")
-                continue
-
-            logger.info(f"Adding document: {path}")
-            result = client.add_resource(
-                str(path),
-                wait=wait,
-            )
-
-            if result and "root_uri" in result:
-                root_uris.append(result["root_uri"])
-                logger.info(f"Added: {result['root_uri']}")
-            elif result and result.get("status") == "error":
-                errors = result.get("errors", [])
-                logger.error(f"Failed to add {path}: {errors}")
-
-        return root_uris
+        return self._add_resources(docs_dirs, wait=wait, allow_git_urls=False)
 
     def add_code_repos(
         self,
@@ -118,7 +96,43 @@ class RAGQueryPipeline:
         Returns:
             List of root URIs for added resources
         """
-        return self.add_documents(code_dirs, wait=wait)
+        return self._add_resources(code_dirs, wait=wait, allow_git_urls=True)
+
+    def _add_resources(
+        self, sources: List[Union[str, Path]], *, wait: bool, allow_git_urls: bool
+    ) -> List[str]:
+        client = self._get_client()
+        root_uris = []
+
+        for source in sources:
+            if (
+                allow_git_urls
+                and isinstance(source, str)
+                and (
+                    source.startswith(("https://", "http://", "git://", "ssh://"))
+                    or (source.startswith("git@") and ":" in source)
+                )
+            ):
+                resource = source
+                label = "Git repository"
+            else:
+                path = Path(source).expanduser()
+                if not path.exists():
+                    logger.warning(f"Path does not exist: {path}")
+                    continue
+                resource = str(path)
+                label = resource
+
+            logger.info(f"Adding document: {label}")
+            result = client.add_resource(resource, wait=wait)
+            if result and "root_uri" in result:
+                root_uris.append(result["root_uri"])
+                logger.info(f"Added: {result['root_uri']}")
+            elif result and result.get("status") == "error":
+                errors = result.get("errors", [])
+                logger.error(f"Failed to add {label}: {errors}")
+
+        return root_uris
 
     def query(
         self,

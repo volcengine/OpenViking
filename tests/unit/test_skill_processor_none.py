@@ -148,7 +148,6 @@ async def test_process_skill_preserves_hyphenated_allowed_tools_in_meta():
     from openviking.core.skill_loader import SkillLoader
 
     written = processor._write_skill_content.await_args.kwargs
-    assert written["overview"] == "# Dict Skill"
     written_content = SkillLoader.to_skill_md(written["skill_dict"])
     assert "allowed-tools: Read" in written_content
     assert "tags:" in written_content

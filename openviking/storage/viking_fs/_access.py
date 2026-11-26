@@ -213,9 +213,16 @@ class _AccessMixin:
         canonical = tuple(
             dict.fromkeys((t if t == "viking://" else t.rstrip("/")) for t in targets)
         )
+        target_parts = [self._safe_uri_parts(target) for target in canonical]
+        # Trusted maintenance can bypass resource ACLs only for an explicit shared-resource scope.
+        if (
+            ctx.bypass_acl
+            and target_parts
+            and all(parts[:1] == ["resources"] for parts in target_parts)
+        ):
+            return ctx
         owners = set()
-        for target in canonical:
-            parts = self._safe_uri_parts(target)
+        for parts in target_parts:
             if parts[:1] == ["user"] and len(parts) >= 2:
                 owners.add(parts[1])
             elif parts == ["user"]:

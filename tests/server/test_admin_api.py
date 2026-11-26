@@ -2134,10 +2134,9 @@ async def test_create_user_paths_accept_initial_user_config(
 async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updates(
     lightweight_admin_client, lightweight_admin_app, monkeypatch
 ):
-    import fakeredis.aioredis
-
     from openviking.ttl import wiring
     from openviking.ttl.runtime import DirectoryTTL
+    from openviking.ttl.tests.test_support import FakeredisCacheRuntime
     from openviking_cli.exceptions import PermissionDeniedError
     from openviking_cli.utils.config.open_viking_config import set_openviking_config
 
@@ -2214,9 +2213,12 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
     rejected = await client.patch(url, json={"ttl": {"sessions": 7}}, headers=user_headers)
     assert rejected.status_code == 501 and fs.files == before
 
-    engine = DirectoryTTL(resource_id="settings-contract", timezone_name="UTC")
+    engine = DirectoryTTL(
+        resource_id="settings-contract",
+        cache_runtime=FakeredisCacheRuntime(),
+        timezone_name="UTC",
+    )
     engine.bind_runtime(service, lightweight_admin_app.state.api_key_manager)
-    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     monkeypatch.setattr(wiring, "_adapter", engine)
     previous_config = get_openviking_config()
     try:
@@ -2327,7 +2329,11 @@ async def test_user_settings_preserve_policy_inheritance_backup_and_sparse_updat
         # Enabling retention must persist recovery intent before changing UserConfig.
         before = dict(fs.files)
         with monkeypatch.context() as failure:
-            failure.setattr(engine, "client", AsyncMock(side_effect=OSError("Redis unavailable")))
+            failure.setattr(
+                engine.cache_runtime,
+                "hsetnx",
+                AsyncMock(side_effect=OSError("Redis unavailable")),
+            )
             rejected = await client.patch(
                 url, json={"ttl": {"user_events": 7}}, headers=root_headers()
             )
@@ -2742,11 +2748,10 @@ async def test_delete_account(
 async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
     admin_client, admin_service, admin_app, monkeypatch
 ):
-    import fakeredis.aioredis
-
     from openviking.scheduling.expiry.api import CallbackRequest, ItemIdentity
     from openviking.ttl import wiring
     from openviking.ttl.runtime import DirectoryTTL
+    from openviking.ttl.tests.test_support import FakeredisCacheRuntime
 
     acct = _uid()
     resp = await admin_client.post(
@@ -2755,20 +2760,20 @@ async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
         headers=root_headers(),
     )
     user_key = resp.json()["result"]["user_key"]
-    engine = DirectoryTTL(resource_id="account-cleanup")
+    cache_runtime = FakeredisCacheRuntime()
+    engine = DirectoryTTL(resource_id="account-cleanup", cache_runtime=cache_runtime)
     engine.bind_runtime(admin_service, admin_app.state.api_key_manager)
-    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     scheduler = Mock(report=AsyncMock(), unregister=AsyncMock())
     engine.install_expiry(scheduler)
     monkeypatch.setattr(wiring, "_adapter", engine)
     prefix = engine.prefix(acct)
     other = engine.prefix("other") + "sessions"
-    await engine.redis.zadd(prefix + "sessions", {"viking://user/alice/sessions/s": 1})
-    await engine.redis.hset(prefix + "backfill:initial", "roots", "[]")
-    await engine.redis.set(prefix + "backfill:initial:done", "1")
-    await engine.redis.zadd(other, {"viking://user/alice/sessions/kept": 1})
-    unlink = engine.redis.unlink
-    monkeypatch.setattr(engine.redis, "unlink", AsyncMock(side_effect=OSError("Redis unavailable")))
+    await cache_runtime.redis.zadd(prefix + "sessions", {"viking://user/alice/sessions/s": 1})
+    await cache_runtime.redis.hset(prefix + "backfill:initial", "roots", "[]")
+    await cache_runtime.redis.set(prefix + "backfill:initial:done", "1")
+    await cache_runtime.redis.zadd(other, {"viking://user/alice/sessions/kept": 1})
+    unlink = cache_runtime.unlink
+    monkeypatch.setattr(cache_runtime, "unlink", AsyncMock(side_effect=OSError("Redis unavailable")))
     delete_config = AsyncMock(side_effect=OSError("provider unavailable"))
     monkeypatch.setattr(admin_service.runtime_config_manager, "delete_account", delete_config)
     try:
@@ -2776,7 +2781,7 @@ async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
         assert resp.status_code == 202
         failed = await _wait_for_task(admin_client, resp.json()["result"]["task_id"])
         assert failed["status"] == "failed" and "Redis unavailable" in failed["error"]
-        assert await engine.redis.zcard(prefix + "sessions") == 1
+        assert await cache_runtime.redis.zcard(prefix + "sessions") == 1
         denied = await admin_client.get(
             "/api/v1/fs/ls?uri=viking://", headers={"X-API-Key": user_key}
         )
@@ -2789,7 +2794,7 @@ async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
         )
         assert conflict.status_code == 409
 
-        monkeypatch.setattr(engine.redis, "unlink", unlink)
+        monkeypatch.setattr(cache_runtime, "unlink", unlink)
         retry = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
         failed = await _wait_for_task(admin_client, retry.json()["result"]["task_id"])
         assert failed["status"] == "failed" and "provider unavailable" in failed["error"]
@@ -2800,14 +2805,14 @@ async def test_delete_account_retries_cleanup_and_retires_ttl_callbacks(
         assert completed["status"] == "completed"
         assert await admin_app.state.api_key_manager.get_deletion(acct) is None
         assert delete_config.await_count == 2
-        assert not [key async for key in engine.redis.scan_iter(match=prefix + "*")]
-        assert await engine.redis.zcard(other) == 1
+        assert not [key async for key in cache_runtime.redis.scan_iter(match=prefix + "*")]
+        assert await cache_runtime.redis.zcard(other) == 1
 
         # A delivery already in flight cannot revive maintenance for the deleted account.
         callback = CallbackRequest(ItemIdentity("ttl", acct, "_system", "maintenance"))
         assert (await engine.handle(callback)).reason == "account_deleted"
         scheduler.report.assert_not_awaited()
-        assert not [key async for key in engine.redis.scan_iter(match=prefix + "*")]
+        assert not [key async for key in cache_runtime.redis.scan_iter(match=prefix + "*")]
     finally:
         await engine.aclose()
 

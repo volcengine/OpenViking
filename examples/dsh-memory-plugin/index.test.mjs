@@ -138,10 +138,12 @@ function startupAgent(id = "dsh-startup") {
   const agent = {
     status: "idle",
     session: { id, header: { cwd: "/workspace" } },
+    inbox: { nextTurn: [], nextStep: [] },
     injected: [],
     effects: [],
     inject(message) {
       this.injected.push(message);
+      this.inbox.nextStep.push(message);
     },
     ctx: {
       effect(execute, label) {
