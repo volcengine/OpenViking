@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Index selected archive passages and return excerpts with their source URI."""
 
+import hashlib
 from typing import TYPE_CHECKING, Any
 
 from openviking.models.embedder.base import embed_compat
@@ -55,12 +56,16 @@ def _require_enabled() -> None:
 async def _selected_excerpts(fs: "VikingFS", source_uri: str, ctx: RequestContext) -> set[str]:
     if not is_archive_source_uri(source_uri, ctx):
         return set()
-    await fs._ensure_access(source_uri, ctx)
-    if not await fs.exists(source_uri, ctx=ctx):
-        return set()
     archive_uri = source_uri.rsplit("/", 1)[0]
     archive = ArchiveStore(fs, ctx, archive_uri.rsplit("/", 2)[0])
     meta = await archive.read_meta(archive_uri)
+    phase1 = meta.get("phase1")
+    recorded_hash = phase1.get("messages_sha256") if isinstance(phase1, dict) else None
+    if not recorded_hash:
+        return set()
+    raw = await fs.read_file(source_uri, ctx=ctx)
+    if hashlib.sha256(raw.encode("utf-8")).hexdigest() != recorded_hash:
+        return set()
     return {
         excerpt
         for excerpt in meta.get(ARCHIVE_SOURCE_CANDIDATES) or []
