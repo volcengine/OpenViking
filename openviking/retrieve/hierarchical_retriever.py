@@ -216,7 +216,7 @@ class HierarchicalRetriever:
             and search_type == "semantic"
             and not image_query
             and context_type in {None, ContextType.MEMORY.value}
-            and (level is None or ContextLevel.DETAIL in level)
+            and (not level or ContextLevel.DETAIL in level)
         )
         search_limit = (
             limit * self.RERANK_CANDIDATE_MULTIPLIER
