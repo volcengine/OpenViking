@@ -217,6 +217,37 @@ test('DingTalk commits each message before ACK and hands it to the Core once, ac
   } finally { client.stop(); }
 });
 
+test('DWS releases a persisted backlog after start returns', async (t) => {
+  const registry = { run: async (_bin, args) => args.includes('auth')
+    ? { code: 0, stdout: '{"authenticated":true}' } : assert.fail('unexpected CLI run') };
+  const { client, directory, beforeCleanup } = setupClient(t, registry);
+  fs.writeFileSync(path.join(directory, 'dingtalk-policy.json'), JSON.stringify({
+    defaultChannel: 'off',
+    dws: { profile: 'corp:user', tenantId: 'corp-fixture', robotOpenId: 'robot-open-id' },
+    groups: { [groupId]: { channel: 'dws', strategy: 'ambient' } },
+  }));
+  t.mock.method(DwsSubscription.prototype, 'start', () => {});
+  await client.preflight();
+  beforeCleanup(() => void client.stop());
+  const ids = [];
+  const state = new DingTalkState(directory, 'corp:user');
+  try {
+    for (let i = 0; i < 120; i++) {
+      const id = 'backlog-' + i;
+      ids.push(id);
+      state.stage({ id }, groupId, 'ambient');
+    }
+  } finally { state.close(); }
+  const lines = [];
+  client.startSubscription((line) => lines.push(JSON.parse(line).id), () => {});
+  // The start reply goes out before the backlog is released.
+  assert.deepEqual(lines, []);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(lines, ids);
+  const restarted = new DingTalkState(directory, 'corp:user');
+  try { assert.deepEqual(restarted.pendingGroup(groupId, 500), []); } finally { restarted.close(); }
+});
+
 test('DingTalk reports a Stream that stays disconnected to the Core', async (t) => {
   const { client } = setupClient(t);
   t.mock.method(DWClient.prototype, 'connect', async () => {});

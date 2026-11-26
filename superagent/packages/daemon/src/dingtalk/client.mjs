@@ -113,7 +113,11 @@ export class DingTalkClient {
           if (this.state === state) this.fail({ code: 1, stderr: 'DingTalk DWS release failed' });
         });
       });
-      this.gate.resume();
+      // After the Core's start reply: a persisted backlog must not hold start
+      // past its deadline and get this worker killed mid-release.
+      setImmediate(() => {
+        if (this.state === state) this.gate.resume();
+      });
       this.startDws();
     }
     this.drain();
@@ -196,10 +200,15 @@ export class DingTalkClient {
   // Staged messages to the Core, in order, each removed once written.
   drain() {
     for (let rows; (rows = this.state.pending()).length;) {
-      for (const { seq, envelope } of rows) {
-        const group = parseChatId(JSON.parse(envelope).conversation.id);
-        if (this.policy.route(group).channel === 'stream') this.onLine(envelope);
-        this.state.delivered(seq);
+      const done = [];
+      try {
+        for (const { seq, envelope } of rows) {
+          const group = parseChatId(JSON.parse(envelope).conversation.id);
+          if (this.policy.route(group).channel === 'stream') this.onLine(envelope);
+          done.push(seq);
+        }
+      } finally {
+        this.state.deliveredMany(done);
       }
     }
   }
@@ -260,9 +269,14 @@ export class DingTalkClient {
 
   drainDws(group) {
     for (let rows; (rows = this.state.pendingGroup(group)).length;) {
-      for (const { seq, envelope } of rows) {
-        if (this.policy.route(group).channel === 'dws') this.onLine(envelope);
-        this.state.delivered(seq);
+      const done = [];
+      try {
+        for (const { seq, envelope } of rows) {
+          if (this.policy.route(group).channel === 'dws') this.onLine(envelope);
+          done.push(seq);
+        }
+      } finally {
+        this.state.deliveredMany(done);
       }
     }
   }

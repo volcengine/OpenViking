@@ -34,6 +34,12 @@ export class DingTalkState {
     if (!columns.includes('kind')) this.db.exec("ALTER TABLE pending ADD COLUMN kind TEXT NOT NULL DEFAULT 'stream'");
     if (!columns.includes('created_at')) this.db.exec('ALTER TABLE pending ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0');
     if (!columns.includes('profile')) this.db.exec('ALTER TABLE pending ADD COLUMN profile TEXT');
+    // Every staged message prunes and every release reads one group; without
+    // these both scanned the whole table.
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS pending_age ON pending(kind, created_at);
+      CREATE INDEX IF NOT EXISTS pending_group ON pending(group_id, kind, seq);
+    `);
     // Old DWS rows without a Profile cannot be attributed to the new receiver.
     this.db.prepare("DELETE FROM pending WHERE kind <> 'stream' AND (profile IS NULL OR profile IS NOT ?)").run(profile);
   }
@@ -73,17 +79,32 @@ export class DingTalkState {
     else if (route.strategy === 'reply-only') this.db.prepare("UPDATE pending SET kind = 'context' WHERE group_id = ? AND kind = 'ambient'").run(group);
   }
 
+  // Expired context lines go, and a group keeps its newest `maxLines`. Split in
+  // two so each side uses its index; the old OR form scanned the whole table.
   pruneContext(group, before, maxLines) {
+    this.db.prepare("DELETE FROM pending WHERE kind = 'context' AND created_at < ?").run(before);
     this.db.prepare(`
-      DELETE FROM pending WHERE kind = 'context' AND (
-        created_at < ? OR (group_id = ? AND seq NOT IN (
-          SELECT seq FROM pending WHERE group_id = ? AND kind = 'context' ORDER BY seq DESC LIMIT ?
-        ))
+      DELETE FROM pending WHERE kind = 'context' AND group_id = ? AND seq NOT IN (
+        SELECT seq FROM pending WHERE group_id = ? AND kind = 'context' ORDER BY seq DESC LIMIT ?
       )
-    `).run(before, group, group, maxLines);
+    `).run(group, group, maxLines);
   }
 
-  delivered(seq) { this.db.prepare('DELETE FROM pending WHERE seq = ?').run(seq); }
+  // Delete the batch after writing it to the Worker output pipe. A crash
+  // before commit leaves the batch available for replay. Core deduplicates
+  // events it has already stored by event ID.
+  deliveredMany(seqs) {
+    if (!seqs.length) return;
+    const deleteRow = this.db.prepare('DELETE FROM pending WHERE seq = ?');
+    this.db.exec('BEGIN');
+    try {
+      for (const seq of seqs) deleteRow.run(seq);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
 
   close() { this.db.close(); }
 }
