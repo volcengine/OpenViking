@@ -337,7 +337,7 @@ def _apply_cli_skip_markers(items):
     if not CLI_COMPATIBLE:
         skip_reason = "openviking CLI not available"
         if CLI_BIN is None:
-            skip_reason = "openviking CLI binary not found. Install via: curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash"
+            skip_reason = "openviking CLI binary not found. Install via: npm install -g @openviking/cli"
         else:
             try:
                 result = subprocess.run(
