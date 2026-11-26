@@ -567,17 +567,21 @@ async def find_mcp_tools(query: str, limit: int = 10) -> CallToolResult | str:
 async def invoke_mcp_tool(
     tool_uri: str,
     arguments: Optional[Dict[str, Any]] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> CallToolResult | str:
     """
     Execute a tool selected from find_mcp_tools.
     Pass its returned uri as tool_uri and fill arguments according to the returned tool.inputSchema.
     OpenViking resolves the server and credentials internally.
+    timeout_seconds overrides the per-call timeout, which defaults to 60 seconds.
     The upstream tool may have external side effects and calls are not retried.
     """
     service = get_service()
     ctx = _get_ctx()
     try:
-        result = await service.mcps.invoke(tool_uri, arguments or {}, ctx)
+        result = await service.mcps.invoke(
+            tool_uri, arguments or {}, ctx, timeout_seconds=timeout_seconds
+        )
     except OpenVikingError as exc:
         return _mcp_failure(str(exc))
     return CallToolResult.model_validate(result)

@@ -14,7 +14,7 @@ This module registers Streamable HTTP MCP servers, synchronizes and searches the
 
 - MCP servers must use Streamable HTTP. Endpoint URLs support both HTTP and HTTPS.
 - Server names may contain only letters, numbers, `_`, and `-`, up to 64 characters. Tool names must be valid OpenViking filenames.
-- Secret HTTP header values submitted at registration are stored in the caller's Privacy. Registry and API `headers` contain ordinary values and relative Privacy references, never plaintext secrets.
+- Secret HTTP header and URL query parameter values submitted at registration are stored in the caller's Privacy. The registry and API contain ordinary values and relative Privacy references, never plaintext secrets.
 - Tool definitions can live in the user space at `viking://~/tools/<server>/<tool>.json` or in the account-shared space at `viking://agent/tools/<server>/<tool>.json`. Invocation and mount arguments are validated against the tool's `inputSchema`.
 - `target_uri` accepts only `viking://~/tools` or `viking://agent/tools`. Registration defaults to the user space. When omitted, `show`, `status`, `sync`, `remove`, and `mounts` with an `mcp` filter look in the private space first and fall back to the shared space only when the name is absent. Private servers take precedence when both spaces contain the name. An explicit target restricts the operation to that space without fallback. List and search merge both spaces and retain same-named servers.
 - Name-based responses identify the selected space through `root_uri`. Once a private server is found, permission errors, missing credentials, or connection failures do not cause fallback to a shared server.
@@ -52,7 +52,7 @@ This module registers Streamable HTTP MCP servers, synchronizes and searches the
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `name` | string | Yes | - | Server name |
-| `url` | string | Yes | - | Streamable HTTP endpoint |
+| `url` | string | Yes | - | Streamable HTTP endpoint; may include query parameters whose credentials are extracted during registration |
 | `headers` | object | No | `{}` | Native headers; values containing secrets are automatically extracted to the caller's Privacy |
 | `target_uri` | string | No | `viking://~/tools` | User or shared tools root |
 | `wait` | boolean | No | `false` | Registration only; wait for tool catalog processing |
@@ -93,6 +93,10 @@ Missing targets or fields return `NOT_FOUND`, with no fallback to Alice's creden
 Automatic extraction follows the Skills Privacy write flow: unrelated fields are retained, equal values do not create a new version, and historical values cannot overwrite rotated credentials. Headers may also use the same `{{ov_privacy:<current-user>:viking://~/privacy/<category>/<target>#/values/<field>}}` references as Skills, optionally preceded by `Bearer `. Registration checks reference ownership, then stores a relative reference. Other callers of a public MCP must still configure the matching target and field in their own Privacy.
 
 All headers are stored together in `headers`: secret values become references such as `{{ov_privacy:viking://~/privacy/credential/mcp.agent.weather#/values/Authorization}}`, while ordinary values remain unchanged. `mcps show` returns these safe values and references. Connections resolve references for the caller and preserve the surrounding text.
+
+URL query parameters also support automatic credential extraction. Nonempty `key` parameters, authentication names containing `api_key`, `token`, `secret`, or `password`, and values detected as secrets are saved under `credential/mcp.user.<name>.query` for personal MCPs or `credential/mcp.agent.<name>.query` for public MCPs, using the parameter name as the field. The stored `url` has no query string; `query_params` contains ordinary values and relative Privacy references. Connections resolve these values and rebuild the URL. `query_params` is a response field, not a registration parameter; submit query parameters through `url`.
+
+For example, after registering a public MCP at `https://mcp.example.com/mcp?key=<token>&region=cn`, other users configure their own credential with `ov privacy upsert credential mcp.agent.weather.query --field "key=$WEATHER_MCP_TOKEN"`. Explicit Privacy references in query parameters follow the same caller ownership checks, resolution, rotation, and revocation rules as headers.
 
 Python, TypeScript, and Go SDK registration methods retain their existing arguments and accept native `headers`. CLI `add` supports `-p` and a per-server `target_uri`. `validate` continues testing native URLs and headers directly without involving Privacy.
 
@@ -440,11 +444,13 @@ ov mcps find --limit 5 "current weather for a city"
 |-----------|------|----------|---------|-------------|
 | `uri` | string | Yes | - | `viking://agent/tools/<server>/<tool>.json` |
 | `arguments` | object | No | `{}` | Values satisfying the tool's `inputSchema` |
+| `timeout_seconds` | number | No | `60` | Timeout per tool call; must be finite and positive, and is independent of the client's HTTP request timeout |
 
 ```python
 result = client.invoke_mcp_tool(
     "viking://agent/tools/weather/current.json",
     {"city": "Beijing"},
+    timeout_seconds=120,
 )
 ```
 
@@ -452,12 +458,13 @@ result = client.invoke_mcp_tool(
 const result = await client.invokeMCPTool(
   "viking://agent/tools/weather/current.json",
   { city: "Beijing" },
+  120,
 );
 ```
 
 ```bash
 ov mcps invoke viking://agent/tools/weather/current.json \
-  --args '{"city":"Beijing"}'
+  --args '{"city":"Beijing"}' --timeout-seconds 120
 ```
 
 ```json
@@ -608,6 +615,8 @@ Mount status is computed from local tool definitions without contacting the upst
 | `UNKNOWN` | The local definition cannot be read or is corrupt, so its status cannot be determined |
 
 Set `status=INVALID` (CLI: `--status INVALID`) to filter by status. Multiple values are comma-separated, for example `status=INVALID,REMOVED,UNKNOWN`; omitting the parameter returns all statuses. Supported values are `VALID`, `REVIEW`, `INVALID`, `REMOVED`, and `UNKNOWN`, case-insensitively. Each item includes `status` and `reason`. `total` counts returned nodes, `matched_total` counts readable nodes matching the MCP, tool, and space filters, and `counts` summarizes their statuses. Status filtering does not change `matched_total` or `counts`.
+
+The CLI shows the total, counts by status, and displayed count. It omits `status` and `reason` for `VALID` nodes, while retaining reasons for other statuses. JSON responses retain all status fields.
 
 ```python
 result = client.list_mcp_mounts()

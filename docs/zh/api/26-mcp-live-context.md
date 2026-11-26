@@ -13,7 +13,7 @@
 
 - MCP Server 只支持 Streamable HTTP，地址支持 HTTP 和 HTTPS。
 - Server 名称只能包含字母、数字、`_` 和 `-`，最长 64 个字符。工具名必须能作为 OpenViking 文件名使用。
-- 注册时提交的机密 HTTP Header 值保存至当前用户 Privacy，注册表和 API 中的 `headers` 只包含普通值和相对 Privacy 引用，不包含机密明文。
+- 注册时提交的机密 HTTP Header 和 URL 查询参数值保存至当前用户 Privacy，注册表和 API 中只包含普通值和相对 Privacy 引用，不包含机密明文。
 - 工具目录可以位于用户空间 `viking://~/tools/<server>/<tool>.json`，也可以位于账号共享空间 `viking://agent/tools/<server>/<tool>.json`。调用和挂载参数会按工具的 `inputSchema` 校验。
 - `target_uri` 只接受 `viking://~/tools` 或 `viking://agent/tools`。注册未指定时使用用户空间；`show`、`status`、`sync`、`remove` 和指定 `mcp` 的 `mounts` 未指定时先找个人 MCP，个人不存在才找公共 MCP，同名时操作个人 MCP。显式指定后只操作目标空间，未找到时不回退。列出和检索未指定时合并两个空间，同名 Server 均保留。
 - 按名称操作的响应通过 `root_uri` 标识实际命中的空间。已找到个人 MCP 后，权限不足、凭证缺失或连接失败不会回退到公共 MCP。
@@ -51,7 +51,7 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `name` | string | 是 | - | Server 名称 |
-| `url` | string | 是 | - | Streamable HTTP 地址 |
+| `url` | string | 是 | - | Streamable HTTP 地址；可包含查询参数，注册时自动提取其中的凭证 |
 | `headers` | object | 否 | `{}` | 原生 Header；自动将含机密信息的 Header 值提取到当前用户 Privacy |
 | `target_uri` | string | 否 | `viking://~/tools` | 用户或共享 tools 根目录 |
 | `wait` | boolean | 否 | `false` | 仅注册接口使用；是否等待工具目录处理完成 |
@@ -92,6 +92,10 @@ ov privacy upsert credential mcp.agent.weather \
 自动提取沿用 Skills 的 Privacy 写入流程：保留已有其他字段，相同值不产生新版本，拒绝用已轮换的历史值覆盖当前凭证。`headers` 也可以使用 Skills 同款 `{{ov_privacy:<当前用户>:viking://~/privacy/<category>/<target>#/values/<field>}}` 引用，或在引用前加 `Bearer `；注册时检查引用所属用户，再转换为相对引用。公共 MCP 的其他用户仍需在自己的同名目标和字段中配置凭证。
 
 所有 Header 统一保存在 `headers` 中，例如机密值替换为 `{{ov_privacy:viking://~/privacy/credential/mcp.agent.weather#/values/Authorization}}`，普通值保持原样。`mcps show` 返回这些安全的 Header 值和引用，连接时才按调用者解析；引用前后的文本会保留。
+
+URL 查询参数也会自动提取凭证：非空的 `key`、名称包含 `api_key`、`token`、`secret`、`password` 等认证字段，或值被识别为机密的参数，保存至 `credential/mcp.user.<name>.query`（个人 MCP）或 `credential/mcp.agent.<name>.query`（公共 MCP），字段名为查询参数名。注册后的 `url` 不含查询串，参数单独保存在 `query_params` 中，机密值使用相对 Privacy 引用，普通值保持原样；连接时再解析并拼回 URL。`query_params` 是返回字段，不是注册请求参数，仍通过 `url` 传入查询参数。
+
+例如注册 URL 为 `https://mcp.example.com/mcp?key=<token>&region=cn` 的公共 MCP 后，其他用户应在自己的 Privacy 中配置 `ov privacy upsert credential mcp.agent.weather.query --field "key=$WEATHER_MCP_TOKEN"`。查询参数中的显式 Privacy 引用同样按当前用户检查和解析，凭证轮换与撤销规则与 Header 一致。
 
 Python、TypeScript、Go SDK 的 `add` 参数保持原样，直接传入 `headers`。CLI `add` 支持 `-p`，也可在 Server 配置中填写 `target_uri`。`validate` 继续直接使用原生 URL 和 headers 测试连接，不涉及 Privacy。
 
@@ -439,11 +443,13 @@ ov mcps find --limit 5 "查询城市当前天气"
 |------|------|------|--------|------|
 | `uri` | string | 是 | - | `viking://agent/tools/<server>/<tool>.json` |
 | `arguments` | object | 否 | `{}` | 符合工具 `inputSchema` 的参数 |
+| `timeout_seconds` | number | 否 | `60` | 单次工具调用超时，必须为有限正数；与客户端 HTTP 请求超时独立 |
 
 ```python
 result = client.invoke_mcp_tool(
     "viking://agent/tools/weather/current.json",
     {"city": "Beijing"},
+    timeout_seconds=120,
 )
 ```
 
@@ -451,12 +457,13 @@ result = client.invoke_mcp_tool(
 const result = await client.invokeMCPTool(
   "viking://agent/tools/weather/current.json",
   { city: "Beijing" },
+  120,
 );
 ```
 
 ```bash
 ov mcps invoke viking://agent/tools/weather/current.json \
-  --args '{"city":"Beijing"}'
+  --args '{"city":"Beijing"}' --timeout-seconds 120
 ```
 
 ```json
@@ -610,6 +617,8 @@ ov mcps mount \
 | `UNKNOWN` | 本地工具定义无法读取或损坏，无法判断状态 |
 
 `status=INVALID`（CLI：`--status INVALID`）按状态筛选，支持逗号分隔的多个值，例如 `status=INVALID,REMOVED,UNKNOWN`；省略时返回全部状态。支持 `VALID`、`REVIEW`、`INVALID`、`REMOVED`、`UNKNOWN`，大小写不敏感。每项包含 `status` 和 `reason`。`total` 为返回的节点数，`matched_total` 为按 MCP、工具、空间和权限筛选后的节点总数，`counts` 为这些节点的各状态统计；状态筛选不改变 `matched_total` 和 `counts`。
+
+CLI 显示总数、各状态数量和实际显示数量；`VALID` 节点省略 `status` 和 `reason`，其他状态仍显示原因。JSON 响应保留全部状态字段。
 
 ```python
 result = client.list_mcp_mounts()

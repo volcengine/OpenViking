@@ -3,14 +3,17 @@
 
 """MCP wire-result tests for tool execution failures."""
 
+from contextlib import asynccontextmanager
+from datetime import timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
-from mcp.types import CallToolRequest, CallToolRequestParams
+from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.identity import RequestContext, Role
+from openviking.service.mcp_service import MCPService
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -89,6 +92,81 @@ async def test_remote_resource_business_failure_sets_error_result(monkeypatch):
         },
     )
     assert result == upstream_error
+
+
+@pytest.mark.parametrize("timeout_seconds", [None, 65.5])
+async def test_invoke_timeout_is_exposed_and_forwarded(monkeypatch, timeout_seconds):
+    uri = "viking://agent/tools/weather/current.json"
+    arguments = {"city": "Beijing"}
+    native_result = {
+        "content": [{"type": "text", "text": "weather result"}],
+        "structuredContent": {"temperature": 23},
+        "isError": False,
+    }
+    invoke = AsyncMock(return_value=native_result)
+    monkeypatch.setattr(
+        mcp_endpoint,
+        "get_service",
+        lambda: SimpleNamespace(mcps=SimpleNamespace(invoke=invoke)),
+    )
+    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    schema = tools["invoke_mcp_tool"].inputSchema
+    assert "timeout_seconds" in schema["properties"]
+    assert "timeout_seconds" not in schema.get("required", [])
+    request = {"tool_uri": uri, "arguments": arguments}
+    if timeout_seconds is not None:
+        request["timeout_seconds"] = timeout_seconds
+
+    result = await _call_tool("invoke_mcp_tool", request)
+
+    assert result == native_result
+    invoke.assert_awaited_once_with(
+        uri, arguments, mcp_endpoint._get_ctx(), timeout_seconds=timeout_seconds
+    )
+
+
+@pytest.mark.parametrize(
+    "options,expected_timeout",
+    [({}, 60), ({"timeout_seconds": None}, 60), ({"timeout_seconds": 65.5}, 65.5)],
+)
+async def test_service_invoke_default_timeout(monkeypatch, options, expected_timeout):
+    uri = "viking://agent/tools/weather/current.json"
+    arguments = {"city": "Beijing"}
+    service = MCPService(None)
+    server = {"url": "https://mcp.example.com/mcp"}
+    document = {
+        "tool": {
+            "name": "current",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        }
+    }
+    monkeypatch.setattr(service, "_registered", AsyncMock(return_value=(server, {})))
+    monkeypatch.setattr(service, "_read_tool_document", AsyncMock(return_value=document))
+    monkeypatch.setattr(service, "_connection_headers", AsyncMock(return_value={}))
+    monkeypatch.setattr(service, "_connection_server", AsyncMock(return_value=server))
+    upstream = SimpleNamespace(
+        initialize=AsyncMock(),
+        call_tool=AsyncMock(return_value=CallToolResult(content=[])),
+    )
+
+    @asynccontextmanager
+    async def session(*_args):
+        yield upstream
+
+    session_factory = Mock(side_effect=session)
+    monkeypatch.setattr(service, "_session", session_factory)
+
+    await service.invoke(uri, arguments, mcp_endpoint._get_ctx(), **options)
+
+    session_factory.assert_called_once_with(server, {}, expected_timeout)
+    upstream.call_tool.assert_awaited_once_with(
+        "current",
+        arguments=arguments,
+        read_timeout_seconds=timedelta(seconds=expected_timeout),
+    )
 
 
 async def test_skill_install_business_failure_sets_error_result(monkeypatch):

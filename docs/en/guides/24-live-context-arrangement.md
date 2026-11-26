@@ -105,9 +105,11 @@ The management commands are:
 | `ov mcps validate <json>` | Check connectivity and discovery without persisting |
 | `ov mcps add <json> [-p <tools-root>] [-w\|--wait]` | Register servers; `-p` defaults to `viking://~/tools` |
 | `ov mcps list [-p <tools-root>]` | Merge user and shared servers by default; `-p` restricts the space |
-| `ov mcps show <name> [-p <tools-root>]` | Show a server; name-based operations default to the user space |
-| `ov mcps status <name> [-p <tools-root>]` | Check upstream status; name-based operations default to the user space |
+| `ov mcps show <name> [-p <tools-root>]` | Show a server; prefer the private space, falling back to the shared space when absent |
+| `ov mcps status <name> [-p <tools-root>]` | Check upstream status; prefer private servers, with shared fallback |
 | `ov mcps remove <name> [-p <tools-root>]` | Remove the server from the selected space |
+
+Without `-p`, `show`, `status`, `sync`, `remove`, and `mounts` filtered by MCP name prefer the private server and fall back to the public server only when the private name is absent. An explicit `-p` disables fallback. Private server permission, credential, or connection errors do not cause fallback either. Credentials in headers and URL query parameters are extracted to the caller's Privacy; each caller of a public MCP configures their own credentials. See [MCP and Live Context API](../api/26-mcp-live-context.md#automatic-credential-extraction-and-public-mcps).
 
 ### Find and invoke a tool
 
@@ -153,12 +155,16 @@ ov read viking://resources/arrange/beijing-weather.md
 List and remove mounts:
 
 ```bash
+ov mcps mounts
+ov mcps mounts --status INVALID,REMOVED,UNKNOWN
 ov mcps mounts -p viking://agent/tools --mcp weather
 ov mcps mounts -p viking://agent/tools --mcp weather --tool current
 ov mcps unmount viking://resources/arrange/beijing-weather.md --wait
 ```
 
 `mount` converges on `node_uri`: repeating it updates the tool, arguments, title, and description while retaining the initial `created_at`. Remove a node with `ov mcps unmount` so the descriptor and mount record are deleted together.
+
+`ov mcps mounts` lists all readable mounts in the private and shared tools spaces by default, including nodes retained after MCP removal. Combine `--mcp`, `--tool`, `-p`, and `--status`; statuses are comma-separated and case-insensitive. Status checks use the last synchronized local tool definitions without contacting upstream MCPs: `VALID` means matching input revisions, `REVIEW` means valid arguments requiring review, `INVALID` means invalid arguments, `REMOVED` means a deleted tool, and `UNKNOWN` means the definition cannot be checked. The CLI shows totals and status counts, unaffected by status filtering. It omits status and reason for valid nodes; JSON retains all fields.
 
 ### Synchronize the Tool Catalog
 
@@ -246,7 +252,7 @@ These rules keep retrieval and browsing free of side effects while still allowin
 The OpenViking MCP endpoint exposes two additional data-plane tools:
 
 1. `find_mcp_tools(query, limit=10)` semantically retrieves tools and returns `uri`, `score`, and the complete `tool` definition, including `inputSchema` and annotations.
-2. `invoke_mcp_tool(tool_uri, arguments={})` proxies execution while the server resolves connection details and credentials.
+2. `invoke_mcp_tool(tool_uri, arguments={}, timeout_seconds=None)` proxies execution while the server resolves connection details and credentials. Set `timeout_seconds` to override the per-call timeout, which defaults to 60 seconds. Mounted live nodes use their own timeout, defaulting to 60 seconds.
 
 The expected agent flow is:
 
@@ -331,11 +337,11 @@ python arrange.py apply --prune --wait
 
 `ContextArranger` behavior:
 
-- `plan` always reports `CREATE`, `UPDATE`, `DELETE`, `UNCHANGED`, and `CONFLICT`.
+- `plan` computes `CREATE`, `UPDATE`, `DELETE`, `UNCHANGED`, and `CONFLICT`. Tables hide `UNCHANGED` by default; use `--show-unchanged` to include them.
 - `apply` creates and updates by default; deletions appear as `PENDING DELETE`.
 - Only `apply --prune` deletes nodes owned by this arrangement but absent from the declaration.
 - `--dry-run` does not mutate remote state; `--wait` waits for processing.
-- Output defaults to a human-readable table; `--output json` is for automation.
+- `plan` and `apply` tables include totals and counts by action. `--output json` retains all changes, `plan.total`, and `plan.counts` for automation.
 - Ownership and drift use `ov-cac-owner`, `ov-cac-kind`, and specification fingerprint tags.
 - An existing target not managed by this arrangement is a conflict and is not overwritten.
 - `root_uri` may be below the account-shared `viking://resources` root or a canonical
@@ -353,6 +359,12 @@ The **Arranger** page in OpenViking Studio provides a visual interface to the sa
 - Create, update, and remove live context nodes.
 - Inspect tool-to-node relationships in a context graph.
 - Preflight target paths and existing live nodes before mutation.
+- Enter a Viking URI or select a recent path saved in the browser. History is scoped by connection and identity, retains up to 20 paths, and does not prefill a fixed path.
+- Preview MCP tool definitions. Renaming, moving, or copying directories also updates mounts for live nodes within them.
+- Single-click to select nodes in the tree and graph; double-click directory names or click arrows to expand or collapse.
+- View mount status colors: green for valid, amber for review, red for invalid or removed, and gray for unknown. Hover for explanations or select a live node for status and reason. Ancestor directories of abnormal nodes show a warning color.
+
+The page refreshes directory and mount information every 15 seconds. Refresh live tool results manually. Mount status reflects the local Tool Catalog and does not replace an upstream health check.
 
 Studio, CLI, REST, and SDK share the same service APIs and mount database, so they can be combined. For a long-lived node set, choose one declarative source as its source of truth.
 
@@ -375,7 +387,7 @@ The SDK and Studio use these endpoints:
 | `POST` | `/api/v1/mcps/batch-mount` | Mount a batch |
 | `DELETE` | `/api/v1/mcps/mount?node_uri=...` | Unmount one node |
 | `POST` | `/api/v1/mcps/batch-unmount` | Unmount a batch |
-| `GET` | `/api/v1/mcps/mounts?mcp=...&tool=...` | List mounts |
+| `GET` | `/api/v1/mcps/mounts` | List readable mounts; `mcp`, `tool`, `target_uri`, and `status` are optional |
 
 Requests use the current OpenViking identity. User-space server registrations and catalogs are user-scoped; the shared space and mount database are account-scoped. Destination resource URIs still follow normal identity and ACL checks. Registration, removal, inspect, sync, status, and mount-list operations accept `target_uri`; list and search merge both spaces when it is omitted.
 

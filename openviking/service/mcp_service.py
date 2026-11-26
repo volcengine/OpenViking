@@ -65,6 +65,7 @@ _TOOL_URI_RE = re.compile(
 _AGENT_TOOLS_ROOT = "viking://agent/tools"
 _REGISTRY_VERSION = 1
 _DEFAULT_TIMEOUT_SECONDS = 30.0
+_DEFAULT_TOOL_TIMEOUT_SECONDS = 60.0
 _MOUNT_STATUSES = ("VALID", "REVIEW", "INVALID", "REMOVED", "UNKNOWN")
 _MOUNT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS live_context_nodes (
@@ -2036,12 +2037,12 @@ class MCPService:
         uri: str,
         arguments: dict[str, Any],
         ctx: RequestContext,
-        timeout_seconds: float | None = _DEFAULT_TIMEOUT_SECONDS,
+        timeout_seconds: float | None = _DEFAULT_TOOL_TIMEOUT_SECONDS,
         *,
         require_read_only: bool = False,
     ) -> dict[str, Any]:
         uri, tools_root, server_name, tool_name = self._parse_tool_uri(uri, ctx)
-        timeout_seconds = _DEFAULT_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        timeout_seconds = _DEFAULT_TOOL_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
         server, _ = await self._registered(
             server_name,
             ctx,

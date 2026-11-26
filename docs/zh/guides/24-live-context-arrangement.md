@@ -105,9 +105,11 @@ ov mcps status -p viking://agent/tools weather
 | `ov mcps validate <json>` | 验证连接和 Tool discovery，不持久化 |
 | `ov mcps add <json> [-p <tools-root>] [-w\|--wait]` | 注册一个或多个 Server；`-p` 默认 `viking://~/tools` |
 | `ov mcps list [-p <tools-root>]` | 默认合并列出用户与共享 Server；`-p` 限定空间 |
-| `ov mcps show <name> [-p <tools-root>]` | 查看 Server；名称型操作默认用户空间 |
-| `ov mcps status <name> [-p <tools-root>]` | 实时检查连接状态；名称型操作默认用户空间 |
+| `ov mcps show <name> [-p <tools-root>]` | 查看 Server；默认个人优先，个人不存在时查找公共 MCP |
+| `ov mcps status <name> [-p <tools-root>]` | 实时检查连接状态；默认个人优先，公共回退 |
 | `ov mcps remove <name> [-p <tools-root>]` | 删除指定空间的 Server 注册和 Tool Catalog |
+
+`show`、`status`、`sync`、`remove` 及按 MCP 名称查询的 `mounts`，未指定 `-p` 时均先找个人 MCP，个人不存在才找公共 MCP。同名时操作个人 MCP；显式指定 `-p` 后不回退。个人 MCP 的权限、凭证或连接错误也不会触发回退。Header 和 URL 查询参数中的凭证会自动保存至当前用户 Privacy；公共 MCP 的每个调用者需配置自己的凭证，详见 [MCP 与实时上下文 API](../api/26-mcp-live-context.md#自动提取凭证与公共-mcp)。
 
 ### 查找和直接调用 Tool
 
@@ -153,12 +155,16 @@ ov read viking://resources/arrange/beijing-weather.md
 查看和删除挂载：
 
 ```bash
+ov mcps mounts
+ov mcps mounts --status INVALID,REMOVED,UNKNOWN
 ov mcps mounts -p viking://agent/tools --mcp weather
 ov mcps mounts -p viking://agent/tools --mcp weather --tool current
 ov mcps unmount viking://resources/arrange/beijing-weather.md --wait
 ```
 
 `mount` 对同一个 `node_uri` 是收敛式写入：再次执行会更新 Tool、参数、标题和描述，并保留最初的 `created_at`。删除节点应使用 `ov mcps unmount`，使 Markdown 节点和挂载记录一起删除。
+
+`ov mcps mounts` 默认列出个人和公共工具空间的全部可读挂载，包括 MCP 删除后保留的节点。可组合使用 `--mcp`、`--tool`、`-p` 和 `--status`；状态支持逗号分隔，忽略大小写。状态根据最近同步的本地工具定义计算，不连接上游 MCP；`VALID` 表示输入版本一致，`REVIEW` 表示参数仍有效但需复核，`INVALID` 表示参数失效，`REMOVED` 表示工具已删除，`UNKNOWN` 表示无法检查。CLI 显示总数和各状态统计，筛选状态后统计口径不变；正常节点省略状态和原因，JSON 保留完整字段。
 
 ### 同步 Tool Catalog
 
@@ -246,7 +252,7 @@ viking://agent/tools/<server>/<tool>.json
 OpenViking MCP endpoint 额外提供两个数据面工具：
 
 1. `find_mcp_tools(query, limit=10)`：语义检索 Tool，返回 `uri`、`score` 和完整 `tool` 定义，包括 `inputSchema` 与 annotations。
-2. `invoke_mcp_tool(tool_uri, arguments={})`：代理调用选中的 Tool，服务端解析连接信息和凭证。
+2. `invoke_mcp_tool(tool_uri, arguments={}, timeout_seconds=None)`：代理调用选中的 Tool，服务端解析连接信息和凭证。可用 `timeout_seconds` 指定单次调用超时，省略时为 60 秒；实时挂载节点使用自身配置的超时，默认 60 秒。
 
 典型 Agent 流程：
 
@@ -331,11 +337,11 @@ python arrange.py apply --prune --wait
 
 `ContextArranger` 的行为：
 
-- `plan` 始终展示 `CREATE`、`UPDATE`、`DELETE`、`UNCHANGED` 和 `CONFLICT`。
+- `plan` 计算 `CREATE`、`UPDATE`、`DELETE`、`UNCHANGED` 和 `CONFLICT`；表格默认隐藏 `UNCHANGED`，使用 `--show-unchanged` 查看。
 - `apply` 默认只创建和更新；待删除项显示为 `PENDING DELETE`。
 - `apply --prune` 才删除由当前 arrangement 拥有、但不再声明的节点。
 - `--dry-run` 不修改远端状态；`--wait` 等待索引处理完成。
-- 默认输出适合人阅读的表格，`--output json` 适合自动化。
+- `plan` 和 `apply` 的表格包含总数和各 action 统计；`--output json` 保留全部 changes 及 `plan.total`、`plan.counts`，适合自动化。
 - 通过 `ov-cac-owner`、`ov-cac-kind` 和规格指纹标签识别所有权与漂移。
 - 目标 URI 已存在但不归当前 arrangement 管理时返回冲突，不会覆盖。
 - `root_uri` 可以位于账号共享的 `viking://resources` 下，也可以位于规范化的用户私有
@@ -352,6 +358,12 @@ OpenViking Studio 的 **Arranger** 页面提供同一模型的可视化入口：
 - 创建、更新和删除实时上下文节点。
 - 在上下文图中查看 Tool 与目标节点的关系。
 - 在执行变更前检查目标路径和已有实时节点，避免覆盖不相关资源。
+- 输入要编排的 Viking URI，或从浏览器保存的最近路径中选择；路径历史按连接和身份隔离，最多保留 20 项，不预填固定路径。
+- 预览 MCP Tool 定义；重命名、移动和复制目录时同步处理其下的实时节点挂载。
+- 在目录树和结构图中单击选中节点，双击目录名称展开或收起，也可单击箭头操作。
+- 按挂载状态着色：正常为绿、需复核为黄、失效或移除为红、未知为灰；悬停查看说明，选中实时节点后查看状态和原因，异常节点的祖先目录显示警告色。
+
+页面每 15 秒刷新目录和挂载信息，实时工具结果需手动刷新。挂载状态基于本地 Tool Catalog，不能代替上游服务的实时健康检查。
 
 Studio、CLI、REST 和 SDK 共用同一组服务端 API 和挂载数据库，因此可以组合使用；但长期维护的一组节点建议选择一个声明式来源作为事实源。
 
@@ -374,7 +386,7 @@ SDK 和 Studio 使用以下接口：
 | `POST` | `/api/v1/mcps/batch-mount` | 批量挂载 |
 | `DELETE` | `/api/v1/mcps/mount?node_uri=...` | 卸载单个节点 |
 | `POST` | `/api/v1/mcps/batch-unmount` | 批量卸载 |
-| `GET` | `/api/v1/mcps/mounts?mcp=...&tool=...` | 查询挂载 |
+| `GET` | `/api/v1/mcps/mounts` | 查询可读挂载；`mcp`、`tool`、`target_uri` 和 `status` 可选 |
 
 接口使用当前 OpenViking 用户的身份上下文。用户空间的 Server 注册和 Tool Catalog 按用户隔离，共享空间及挂载数据库按账号隔离；目标资源 URI 仍按正常的身份和 ACL 规则校验。注册、删除、查看、同步、状态和挂载查询支持 `target_uri`，列出和检索在未指定时合并两个空间。
 
