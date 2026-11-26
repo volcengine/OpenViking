@@ -33,6 +33,10 @@ class ExtractContextProvider(ABC):
         """
         return None
 
+    def directory_merge_source_for_target(self, uri: str) -> str | None:
+        """Find an existing counterpart of a proposed write to a canonical directory."""
+        return None
+
     @abstractmethod
     async def prefetch(
         self,

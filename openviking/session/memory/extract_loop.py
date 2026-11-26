@@ -1421,27 +1421,30 @@ class ExtractLoop:
 
     async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
         refetch_uris = {}
+        related_source = getattr(self.context_provider, "directory_merge_source_for_target", None)
+        uris_to_read = {}
         for operation in operations.upsert_operations:
             for uri in operation.uris:
-                if uri in self.context_provider.read_file_contents:
+                uris_to_read[uri] = None
+                if related_source and isinstance(source_uri := related_source(uri), str):
+                    uris_to_read[source_uri] = None
+        for uri in uris_to_read:
+            if uri in self.context_provider.read_file_contents:
+                continue
+            try:
+                content = await self.context_provider.execute_tool(
+                    ToolCall(id="", name="read", arguments={"uri": uri})
+                )
+                if isinstance(content, Dict) and "error" in content:
                     continue
-                try:
-                    content = await self.context_provider.execute_tool(
-                        ToolCall(id="", name="read", arguments={"uri": uri})
-                    )
-                    # 读取出错表示文件不存在（error dict 含 "error" key）
-                    if isinstance(content, Dict) and "error" in content:
-                        continue
-
-                    # execute_tool(MemoryReadTool) 已经返回 parsed dict，直接使用
-                    refetch_uris[uri] = content
-                except Exception as e:
-                    logger.debug(
-                        "memory operation failed stage=%s error_type=%s",
-                        "_check_unread_existing_files",
-                        type(e).__name__,
-                        extra={"error_type": type(e).__name__},
-                    )
+                refetch_uris[uri] = content
+            except Exception as e:
+                logger.debug(
+                    "memory operation failed stage=%s error_type=%s",
+                    "_check_unread_existing_files",
+                    type(e).__name__,
+                    extra={"error_type": type(e).__name__},
+                )
         return refetch_uris
 
     def _add_format_error_message(self, messages: List[Dict[str, Any]]) -> None:

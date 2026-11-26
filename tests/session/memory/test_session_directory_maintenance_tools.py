@@ -9,7 +9,12 @@ import pytest
 
 from openviking.models.vlm.base import ToolCall
 from openviking.server.identity import RequestContext, Role
-from openviking.session.memory.dataclass import MemoryTypeSchema
+from openviking.session.memory.dataclass import (
+    MemoryTypeSchema,
+    ResolvedOperation,
+    ResolvedOperations,
+)
+from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
@@ -75,6 +80,41 @@ async def _call(provider, name, **arguments):
 
 
 @pytest.mark.asyncio
+async def test_refetch_reads_existing_source_for_a_proposed_target_write():
+    source = f"{_ENTITIES}/runbooks"
+    target = f"{_ENTITIES}/runbook"
+    source_card = f"{source}/server.md"
+    target_card = f"{target}/server.md"
+    provider = _provider(
+        _ListingFS(
+            {
+                _ENTITIES: [_entry(_ENTITIES, "runbooks"), _entry(_ENTITIES, "runbook")],
+                source: [_entry(source, "server.md", directory=False)],
+            }
+        )
+    )
+    await provider.prefetch()
+    await _call(provider, "merge_dirs", source_uri=source, target_uri=target)
+    provider.execute_tool = AsyncMock(side_effect=[{"error": "File not found"}, {"name": "Server"}])
+    operations = ResolvedOperations(
+        upsert_operations=[
+            ResolvedOperation(memory_type="entities", memory_fields={}, uris=[target_card])
+        ],
+        delete_file_contents=[],
+        errors=[],
+    )
+
+    loop = SimpleNamespace(context_provider=provider)
+    assert await ExtractLoop._check_unread_existing_files(loop, operations) == {
+        source_card: {"name": "Server"}
+    }
+    assert [call.args[0].arguments["uri"] for call in provider.execute_tool.await_args_list] == [
+        target_card,
+        source_card,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_prefetch_inventory_is_paged_scoped_and_excludes_denied_and_hidden():
     existing = [_entry(_ENTITIES, f"category_{index}") for index in range(128)]
     existing.extend(
@@ -100,7 +140,7 @@ async def test_prefetch_inventory_is_paged_scoped_and_excludes_denied_and_hidden
     assert inventory[_ENTITIES]["directories"] == [entry["name"] for entry in existing[:129]]
     assert fs.calls == [(_ENTITIES, 0), (_ENTITIES, 128), (_PREFERENCES, 0)]
     assert "even when its language differs" in provider.instruction()
-    assert set(provider.get_tools()) == {"ls", "merge_dirs"}
+    assert set(provider.get_tools()) == {"read", "ls", "merge_dirs"}
 
     await _call(provider, "ls", uri=_ENTITIES)
     assert fs.calls == [(_ENTITIES, 0), (_ENTITIES, 128), (_PREFERENCES, 0)]
@@ -142,6 +182,10 @@ async def test_native_tools_propose_only_visible_authorized_sibling_directories(
     assert [entry["uri"] for entry in accepted["source_listing"]["entries"]] == [
         f"{source}/server.md"
     ]
+    assert provider.directory_merge_source_for_target(f"{target}/server.md") == (
+        f"{source}/server.md"
+    )
+    assert provider.directory_merge_source_for_target(f"{target}/new.md") is None
     assert await _call(provider, "merge_dirs", source_uri=source, target_uri=target) == accepted
     assert "error" in await _call(provider, "merge_dirs", source_uri=target, target_uri=source)
     assert "error" in await _call(

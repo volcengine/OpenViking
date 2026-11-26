@@ -240,7 +240,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
 - The prefetched inventory lists existing first-level directories. When needed, use shallow `ls` on a listed root or direct child to inspect their children.
 - When adding or updating a card, check its directory for equivalent siblings in the inventory. Inspect ambiguous pairs with `ls`. Use `merge_dirs(source_uri=..., target_uri=...)` for clearly equivalent sibling categories related to the current conversation, even if nobody asked to clean them up.
 - For preferences, propose a merge only when the source is a formatting alias of the scoped owner ID at the target. Similar preferences do not establish common ownership.
-- A proposed merge runs after normal card operations. Use the returned canonical directory for genuinely new cards. If a card already exists in the source directory, update it at its current path so it can move with the directory. Inspect the source card names returned by the proposal before adding anything at the destination.
+- A proposed merge runs after normal card operations. Use the returned canonical directory for genuinely new cards. Read a matching source card and use its page reference to update it in place. It can then move with the directory. Inspect the source card names in the proposal before adding anything at the destination.
 - After inspection and any merge proposals, return the normal memory operations. Continue extracting applicable facts even if the directory tool rejects a proposal.
 """
         contains_resource_uri = self._conversation_contains_resource_uri()
@@ -816,8 +816,19 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         """获取可用的工具列表"""
         tools = [] if self._eager_prefetch else ["read"]
         if self._directory_maintenance_available():
-            tools.extend(("ls", "merge_dirs"))
+            return ["read", "ls", "merge_dirs"]
         return tools
+
+    def directory_merge_source_for_target(self, uri: str) -> str | None:
+        parent, _, name = uri.rpartition("/")
+        for plan in self.directory_merge_plans:
+            if plan.target_uri != parent:
+                continue
+            listing = self._directory_inventory.get(plan.source_uri, {})
+            for entry in listing.get("entries", []):
+                if not entry["isDir"] and entry["name"] == name:
+                    return entry["uri"]
+        return None
 
     def _directory_maintenance_available(self) -> bool:
         return self._directory_maintenance_enabled and any(
