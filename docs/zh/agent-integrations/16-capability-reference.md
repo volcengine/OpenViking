@@ -49,9 +49,9 @@
 
 | 集成 | 每次提问前召回 | 会话开场上下文 | 会话中的提交 | 正常退出时提交 | 宿主压缩 |
 |---|---|---|---|---|---|
-| Claude Code | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 20,000 | 是 | 先提交，再由宿主摘要 |
-| Codex | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 20,000 | Codex 0.145+；否则下次启动时 | 先提交，再由宿主摘要 |
-| TraeCode CLI 2.0 | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 20,000 | 仅当版本带 `SessionEnd`；否则下次启动时 | 同 Codex |
+| Claude Code | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 100,000 | 是 | 先提交，再由宿主摘要 |
+| Codex | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 100,000 | Codex 0.145+；否则下次启动时 | 先提交，再由宿主摘要 |
+| TraeCode CLI 2.0 | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 100,000 | 仅当版本带 `SessionEnd`；否则下次启动时 | 同 Codex |
 | Cursor | 是，带会话 | profile、记忆索引、skill | 每捕获 8 条消息 | 否 | 先提交，再由宿主摘要 |
 | TRAE、TRAE CN | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
 | ZCode | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
@@ -59,9 +59,9 @@
 | CodeBuddy Code | 是，带会话，仅限交互式 TUI | profile、记忆索引、skill | 每捕获 8 条消息 | 是，仅限交互式 TUI | 提交尚未提交的消息 |
 | Qoder CLI | 是，带会话 | profile、记忆索引、skill | 每捕获 8 条消息 | 是 | 提交尚未提交的消息 |
 | Antigravity | 是，带会话，在每轮第一次模型调用时 | profile、记忆索引、skill | 每轮 | 没有退出 hook；每轮已提交 | 没有压缩前 hook |
-| OpenCode | 是，带会话 | profile、记忆索引、skill、已索引的仓库 | 空闲时，待提交 token 达到 20,000 | 是，在宿主的清理时限内 | 在压缩前后提交 |
-| DSH | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 20,000 | 是，预算 3 秒 | 先提交，再由宿主摘要 |
-| pi | 是，带会话 | profile、记忆索引、skill，每轮 | takeover 开：约 30,000 token；关：20,000 | takeover 开：否；关：是 | takeover 替换 pi 的摘要 |
+| OpenCode | 是，带会话 | profile、记忆索引、skill、已索引的仓库 | 空闲时，待提交 token 达到 100,000 | 是，在宿主的清理时限内 | 在压缩前后提交 |
+| DSH | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 100,000 | 是，预算 3 秒 | 先提交，再由宿主摘要 |
+| pi | 是，带会话 | profile、记忆索引、skill，每轮 | takeover 开：约 30,000 token；关：100,000 | takeover 开：否；关：是 | takeover 替换 pi 的摘要 |
 | OpenClaw | 是，带会话 | profile，每轮 | token 预算的一半（默认 64,000） | 否 | 插件接管压缩 |
 | Hermes（内置） | 是，带会话，有回退路径 | profile 与记忆清单 | 否；只在会话边界 | 是，前提是待上传内容在 10 秒内完成 | fork 型压缩时提交 |
 | ov CLI | 否 | 否 | 只有 `ov session commit` | 不适用 | 不适用 |
@@ -354,8 +354,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 集成 | 会话中 | 显式操作或会话边界 | 压缩前后 |
 |---|---|---|---|
-| Claude Code | `Stop` 时待提交 token 达到 20,000 | `SessionEnd` 和 `SubagentStop` 总是提交；`SessionStart` 重放排队的写入 | `PreCompact` 总是同步提交 |
-| Codex | `Stop` 时待提交 token 达到 20,000 | `SessionEnd`（Codex 0.145+）补齐漏掉的轮次，然后在分离的 worker 中提交。startup 或 clear 的 `SessionStart` 会提交已标记结束或空闲超过 30 分钟的会话 | `PreCompact` 补齐后提交全部内容 |
+| Claude Code | `Stop` 时待提交 token 达到 100,000 | `SessionEnd` 和 `SubagentStop` 总是提交；`SessionStart` 重放排队的写入 | `PreCompact` 总是同步提交 |
+| Codex | `Stop` 时待提交 token 达到 100,000 | `SessionEnd`（Codex 0.145+）补齐漏掉的轮次，然后在分离的 worker 中提交。startup 或 clear 的 `SessionStart` 会提交已标记结束或空闲超过 30 分钟的会话 | `PreCompact` 补齐后提交全部内容 |
 | TraeCode CLI 2.0 | 同 Codex | 同 Codex；没有 `SessionEnd` 时只有启动时的扫描 | 同 Codex |
 | Cursor | 距上次提交捕获满 8 条消息时，在 `stop` 提交（`commitTurnThreshold`），本地计数 | `sessionEnd` 已注册，但实际不会运行 | `preCompact` 总是提交 |
 | TRAE、TRAE CN | 每个捕获到内容的 `Stop` | 无 | 没有压缩前事件 |
@@ -364,10 +364,10 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | CodeBuddy Code | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd`（仅交互式 TUI）提交所有尚未提交的消息，包括 `Stop` 已经发送的；`SessionStart` 重放排队的写入 | `PreCompact` 提交所有尚未提交的消息 |
 | Qoder CLI | 距上次提交捕获满 8 条消息时，在 `Stop` 提交 | `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的；`SessionStart` 重放排队的写入 | `PreCompact` 提交所有尚未提交的消息 |
 | Antigravity | 每个捕获到内容的 `Stop`；漏掉的 `Stop` 留下的 step 在下一个 `Stop` 补齐 | 无；`SessionStart` 重放排队的写入 | 没有压缩前 hook |
-| OpenCode | v1 `session.idle`、v2 执行结束时：待提交 token 达到 20,000 | 删除会话、v1 `session.error`、v1 dispose 和 v2 cleanup 强制提交 | v1 在压缩前后各一次；v2 在压缩结束后一次 |
-| DSH | `turn/end` 时待提交 token 达到 20,000 | Cordis teardown 提交每个会话 | `compaction/start` 提交，跳过阈值检查 |
+| OpenCode | v1 `session.idle`、v2 执行结束时：待提交 token 达到 100,000 | 删除会话、v1 `session.error`、v1 dispose 和 v2 cleanup 强制提交 | v1 在压缩前后各一次；v2 在压缩结束后一次 |
+| DSH | `turn/end` 时待提交 token 达到 100,000 | Cordis teardown 提交每个会话 | `compaction/start` 提交，跳过阈值检查 |
 | pi，takeover 开（默认） | 本地估算达到 30,000 token，且用户轮多于 3 个 | `/viking commit` | `session_before_compact` |
-| pi，takeover 关 | 每次同步后待提交 token 达到 20,000 | `session_shutdown` 和 `/viking commit` | `session_before_compact` |
+| pi，takeover 关 | 每次同步后待提交 token 达到 100,000 | `session_shutdown` 和 `/viking commit` | `session_before_compact` |
 | OpenClaw | 每轮结束后达到 `tokenBudget × commitTokenThresholdRatio`（默认 128,000 × 0.5） | `/new`、`/reset` 和 `memory_store` 提交并等待 | `compact()` 提交，并最多等待 5 分钟完成抽取 |
 | Hermes（内置） | 无 | 会话结束、会话切换（`/new`、`/resume`、`/branch`、fork 型压缩）、gateway 缓存驱逐，以及退出处理器；`/undo` 和原地压缩不提交 | 只在 fork 型压缩时 |
 | ov CLI | 无 | `ov session commit`；`ov add-memory` 会创建、写入并提交自己的会话 | 不适用 |
@@ -789,7 +789,7 @@ OpenViking 的 profile 会自动尝试安装目录插件。provider 名、配置
 
 | | 内置 provider（Hermes `989798c`） | 外部插件（本仓库） |
 |---|---|---|
-| 会话中的提交 | 无，只在会话边界 | 待提交 token 达到 20,000 时后台提交（`commit_token_threshold`） |
+| 会话中的提交 | 无，只在会话边界 | 待提交 token 达到 100,000 时后台提交（`commit_token_threshold`） |
 | 召回摘要 | 不支持 | 可选的服务端摘要（`recall_compress`） |
 | 镜像 Hermes 内置记忆 | 只同步新增 | 同步新增、替换和删除，用 URI 注册表跟踪 |
 | `viking_forget` | 带明确用户 ID 的用户记忆文件 | 还接受 `viking://~/`，拒绝不带用户 ID 的路径，删除前检查归属 |

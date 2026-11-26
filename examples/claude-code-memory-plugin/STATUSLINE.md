@@ -42,7 +42,7 @@ The default composition runs left to right, joined by ` │ `. Segments are cond
 |               | `OV ⚡ bypass`         | yellow | session matched `OPENVIKING_BYPASS_SESSION` or `*_PATTERNS`                                                           |
 | Model · ctx   | `Fable 5 · ctx 42%`    | dim / by usage | always, when CC's statusline payload carries `model` / `context_window`. Registering a custom statusLine replaces CC's native context indicator, so this reproduces it: `<70%` dim, `70–89%` yellow, `≥90%` red (native thresholds). Hide with `OPENVIKING_STATUSLINE_CTX=off`. Shows in bypass mode too — it describes the CC conversation, not OV |
 | Recall        | `↩ 6 mem · 50ms`        | dim    | last user prompt actually injected memories; latency is the recall round-trip                                                    |
-| Capture       | `✎ 573/20k · 2 arch`   | dim    | tokens pending toward the next archive (sawtooth — resets on commit), `2 arch` = archives produced this session       |
+| Capture       | `✎ 573/100k · 2 arch`  | dim    | tokens pending toward the next archive (sawtooth — resets on commit), `2 arch` = archives produced this session       |
 |               | `✎ committed · 2 arch` | dim    | the turn that just finished produced an archive                                                                       |
 |               | `✎ 2 arch`             | dim    | nothing pending, but archives already exist this session                                                              |
 | Failures      | `✗ 1 dropped`          | red    | auto-capture failed N turns this batch — overwrites every Stop, so transient single-turn failures self-clear          |
@@ -138,7 +138,7 @@ For an assistant adding a segment that consumes existing state. All files live u
   "turns_captured": 3,
   "turns_failed": 0,
   "pending_tokens": 12450,           // sawtooth — resets to 0 on commit
-  "commit_threshold": 20000,
+  "commit_threshold": 100000,
   "committed": false,                // true on the turn a commit happened
   "commit_count": 2,                 // total archives in this session
   "total_message_count": 412,

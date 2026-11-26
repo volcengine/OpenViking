@@ -369,7 +369,7 @@ to the existing search path within that deadline.
 ### Active-session commits
 
 The plugin checks OpenViking's `pending_tokens` after each successful
-turn upload. At **20,000 tokens** by default, it requests a background commit
+turn upload. At **100,000 tokens** by default, it requests a background commit
 without ending the Hermes session. Memory extraction then runs on the server.
 Session-end and session-switch commits still flush messages below this threshold.
 
@@ -383,7 +383,7 @@ memory:
 
 `OPENVIKING_COMMIT_TOKEN_THRESHOLD` overrides the YAML value. The setting accepts
 integers from 1,000 to 1,000,000. Values outside this range use the nearest limit.
-Invalid values use the default of 20,000 tokens. The provider also exposes this
+Invalid values use the default of 100,000 tokens. The provider also exposes this
 setting through its configuration schema.
 
 This is a client-side commit trigger. It does not set or replace the server's

@@ -78,7 +78,7 @@ Behaviour and peer-scoping knobs live in `~/.openviking/ovcli.conf` beside the c
       "skillCatalog": true,
       "skillCatalogTokenBudget": 1200,
       "resumeContextBudget": 32000,
-      "commitTokenThreshold": 20000,
+      "commitTokenThreshold": 100000,
       "takeoverEnabled": false,
       "takeoverTokenThreshold": 30000,
       "takeoverKeepRecentTurns": 3,
@@ -186,7 +186,7 @@ integrations should configure category `quotas` when they need exact ceilings.
 | `captureAssistantTurns`  | `true`     | Include assistant turns (text + tool USE inputs)                         |
 | `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: `lib/capture-adapter.mjs` keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
-| `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
+| `commitTokenThreshold`   | `100000`   | Pending-token threshold for client-driven commit                         |
 | `commitKeepRecentCount`  | `10`       | Not read: commits outside takeover archive every captured message (`keep_recent_count` 0); takeover sends the exact message count of the turns it keeps |
 
 ### Context takeover

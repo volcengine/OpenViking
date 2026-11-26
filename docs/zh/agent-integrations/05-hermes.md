@@ -38,7 +38,7 @@ hermes
 旧版插件连接 Volcengine 时使用 **OpenViking Service (VolcEngine Cloud)**，
 连接 BytePlus 时使用 **Custom**。
 
-配置后正常聊天即可。插件默认在待提交内容达到 20,000 tokens、会话结束或切换时
+配置后正常聊天即可。插件默认在待提交内容达到 100,000 tokens、会话结束或切换时
 请求提交。OpenViking 完成抽取后，记忆才能被召回。已有服务端数据会保留。
 
 Quick Local 服务在 Hermes 退出后仍会运行。支持的模型、服务控制命令和运行环境

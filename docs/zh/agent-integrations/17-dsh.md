@@ -177,7 +177,7 @@ adapter 可能继续请求，但迟到的结果不会注入。辅助消息不追
     recallTokenBudget: 2000
     scoreThreshold: 0.35
     captureToolResults: true
-    commitTokenThreshold: 20000
+    commitTokenThreshold: 100000
 ```
 
 在这个 `config` 块、或 `ovcli.conf` 的 `plugin` / `plugin.dsh` 中设置 `mcpEnabled: false` 时，既不挂载 OpenViking MCP 工具，也不挂载内置技能；召回和捕获照常。

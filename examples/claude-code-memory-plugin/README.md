@@ -200,7 +200,7 @@ Recall covers skills as well as memories: the server-assembled context block can
 | `OPENVIKING_CAPTURE_MAX_LENGTH`        | `24000`      | Max sanitized text length for the capture decision                       |
 | `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`       | Include assistant turns (text + tool I/O). Set to `0` for user-only.     |
 | `OPENVIKING_CAPTURE_TOOL_MAX_CHARS`    | `1000000`    | Guard cap on one tool part's `tool_output`; oversized output is externalized server-side |
-| `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `20000`      | Pending-token threshold for client-driven commit                         |
+| `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `100000`     | Pending-token threshold for client-driven commit                         |
 | `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`      | Token budget when fetching archive overview on session resume            |
 | `OPENVIKING_CAPTURE_FILTERS`           | `""`         | CSV of regex rules applied to every captured turn — see [Input filters](#input-filters) |
 
@@ -404,7 +404,7 @@ OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem · 50ms          6 memories injected
 OV ⚠ slow                                  probe missed the 1 s budget (server may be lagging)
 OV ✗ offline                               server unreachable
 OV ⚡ bypass │ Fable 5 · ctx 42%            OPENVIKING_BYPASS_SESSION* matched
-OV ✓ │ ✎ 573/20k · 2 arch                  pending capture, two archives produced this session
+OV ✓ │ ✎ 573/100k · 2 arch                 pending capture, two archives produced this session
 OV ✓ │ 🔗 resumed │ +3 today               session re-hydrated; 3 archives committed today
 ```
 
@@ -532,7 +532,7 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
 
 There is no TypeScript build step and no runtime npm bootstrap. Hooks are plain `.mjs` files that talk to OpenViking over HTTP; MCP uses `servers/mcp-proxy.mjs` as a zero-dependency stdio bridge to the OpenViking server's `/mcp` endpoint. The source-card module in `mods/usage/` is TypeScript that Claude Code compiles itself.
 
-A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<cc_session_id>` (the CC session_id verbatim, no hashing), so resume / compact / multi-hook events all target the same session. Archival + memory extraction is triggered client-side: the `Stop` hook commits when server-reported pending tokens cross `commitTokenThreshold` (default 20000), and `PreCompact` / `SessionEnd` / `SubagentStop` commit unconditionally.
+A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<cc_session_id>` (the CC session_id verbatim, no hashing), so resume / compact / multi-hook events all target the same session. Archival + memory extraction is triggered client-side: the `Stop` hook commits when server-reported pending tokens cross `commitTokenThreshold` (default 100000), and `PreCompact` / `SessionEnd` / `SubagentStop` commit unconditionally.
 
 ### Hook responsibilities
 

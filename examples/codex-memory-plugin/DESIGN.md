@@ -224,7 +224,7 @@ the SessionStart sweep retry the remaining tail. The transcript must remain
 available until that catch-up succeeds.
 
 After a complete append, Stop reads session meta and commits when
-`pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default 20000).
+`pending_tokens >= OPENVIKING_COMMIT_TOKEN_THRESHOLD` (default 100000).
 The threshold commit passes
 `keep_recent_count=0`: Codex keeps its own transcript, so a live tail in
 OpenViking would only delay extraction. Committing at the threshold

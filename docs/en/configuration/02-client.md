@@ -194,7 +194,7 @@ No command writes the registry file. Create it by hand at the path `ov-memory-do
   "version": 1,
   "peer": { "source": "git" },
   "recall": { "peer_scope": "actor", "max_items": 20 },
-  "capture": { "commit_token_threshold": 20000 },
+  "capture": { "commit_token_threshold": 100000 },
   "labels": { "team": "search" }
 }
 ```

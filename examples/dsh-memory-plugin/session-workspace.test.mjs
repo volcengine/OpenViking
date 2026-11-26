@@ -123,7 +123,7 @@ test("capture, recall and commit send each session's peer on the wire", async t 
     let result = {};
     if (path === "/api/v1/search/search") result = { rendered: "" };
     else if (path === "/api/v1/fs/ls") result = [];
-    else if (path.startsWith("/api/v1/sessions/") && !init.method) result = { pending_tokens: 20000 };
+    else if (path.startsWith("/api/v1/sessions/") && !init.method) result = { pending_tokens: 100000 };
     return new Response(JSON.stringify({ status: "ok", result }), {
       headers: { "Content-Type": "application/json" },
     });
@@ -159,7 +159,7 @@ test("a session's workspace recall and capture switches apply to that session", 
   t.mock.method(globalThis, "fetch", async (url, init = {}) => {
     const path = new URL(url).pathname;
     requests.push(path);
-    const result = path.startsWith("/api/v1/sessions/") && !init.method ? { pending_tokens: 20000 } : {};
+    const result = path.startsWith("/api/v1/sessions/") && !init.method ? { pending_tokens: 100000 } : {};
     return new Response(JSON.stringify({ status: "ok", result }), {
       headers: { "Content-Type": "application/json" },
     });

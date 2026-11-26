@@ -42,7 +42,7 @@ Then choose a connection in **Hermes's own setup menu**:
 Older plugin versions use **OpenViking Service (VolcEngine Cloud)** for
 Volcengine and **Custom** for BytePlus.
 
-After setup, chat as usual. The plugin requests a commit at 20,000 pending
+After setup, chat as usual. The plugin requests a commit at 100,000 pending
 tokens by default, at session end and when switching sessions. Memories become
 available after OpenViking finishes extraction. Existing server data is kept.
 

@@ -103,7 +103,7 @@ node examples/opencode-plugin/scripts/setup.mjs
     "recallPreferAbstract": true,
     "recallTokenBudget": 2000,
     "minQueryLength": 3,
-    "commitTokenThreshold": 20000,
+    "commitTokenThreshold": 100000,
     "profileTokenBudget": 10000,
     "skillCatalog": true,
     "skillCatalogTokenBudget": 1200,

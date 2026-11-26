@@ -166,7 +166,7 @@ _CONFIG_SCHEMA = [
         default="off",
     ),
     _cfg_field("commit_token_threshold", "Pending session tokens that trigger a background memory commit",
-               type="integer", minimum=1000, maximum=1000000, default=20000),
+               type="integer", minimum=1000, maximum=1000000, default=100000),
     _cfg_field("recall_limit", "Maximum memories injected by automatic recall", type="integer", minimum=1, maximum=100, default=6),
     _cfg_field("recall_score_threshold", "Minimum relevance score for automatic recall", type="number", minimum=0.0, maximum=1.0, step=0.01, default=0.15),
     _cfg_field("recall_max_injected_chars", "Maximum total characters injected by recall", type="integer", minimum=100, maximum=50000, default=4000),

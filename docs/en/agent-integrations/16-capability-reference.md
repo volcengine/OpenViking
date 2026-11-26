@@ -49,9 +49,9 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 
 | Integration | Recall before each prompt | Session-start context | Commits during a session | Commits at a normal exit | Host compaction |
 |---|---|---|---|---|---|
-| Claude Code | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Yes | Commits, then the host summarizes |
-| Codex | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Codex 0.145+; otherwise at the next start | Commits, then the host summarizes |
-| TraeCode CLI 2.0 | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Only if the build has `SessionEnd`; otherwise at the next start | Same as Codex |
+| Claude Code | Yes, session-aware | Profile, memory index, skills | At 100,000 pending tokens | Yes | Commits, then the host summarizes |
+| Codex | Yes, session-aware | Profile, memory index, skills | At 100,000 pending tokens | Codex 0.145+; otherwise at the next start | Commits, then the host summarizes |
+| TraeCode CLI 2.0 | Yes, session-aware | Profile, memory index, skills | At 100,000 pending tokens | Only if the build has `SessionEnd`; otherwise at the next start | Same as Codex |
 | Cursor | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | No | Commits, then the host summarizes |
 | TRAE, TRAE CN | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
 | ZCode | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
@@ -59,9 +59,9 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | CodeBuddy Code | Yes, session-aware, in the interactive TUI only | Profile, memory index, skills | Every 8 captured messages | Yes, in the interactive TUI only | Commits uncommitted messages |
 | Qoder CLI | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | Yes | Commits uncommitted messages |
 | Antigravity | Yes, session-aware, at the first model call of each turn | Profile, memory index, skills | Every turn | No exit hook; turns are already committed | No pre-compaction hook |
-| OpenCode | Yes, session-aware | Profile, memory index, skills, indexed repositories | At 20,000 pending tokens, when idle | Yes, within the host's cleanup time | Commits around compaction |
-| DSH | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
-| pi | Yes, session-aware | Profile, memory index, skills, every turn | Takeover on: about 30,000 tokens; off: 20,000 | Takeover on: no; off: yes | Takeover replaces pi's summary |
+| OpenCode | Yes, session-aware | Profile, memory index, skills, indexed repositories | At 100,000 pending tokens, when idle | Yes, within the host's cleanup time | Commits around compaction |
+| DSH | Yes, session-aware | Profile, memory index, skills | At 100,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
+| pi | Yes, session-aware | Profile, memory index, skills, every turn | Takeover on: about 30,000 tokens; off: 100,000 | Takeover on: no; off: yes | Takeover replaces pi's summary |
 | OpenClaw | Yes, session-aware | Profile, every turn | At half the token budget (64,000 by default) | No | The plugin owns compaction |
 | Hermes (bundled) | Yes, session-aware with a fallback | Profile and memory listings | No; only at session boundaries | Yes, if pending uploads finish within 10 seconds | Commits at fork-style compaction |
 | ov CLI | No | No | Only `ov session commit` | Not applicable | Not applicable |
@@ -356,8 +356,8 @@ Thresholds in this table are client-side. They read the server's pending-token c
 
 | Integration | During the session | On an explicit action or boundary | Before or after compaction |
 |---|---|---|---|
-| Claude Code | `Stop` at 20,000 pending tokens | `SessionEnd` and `SubagentStop` always commit; `SessionStart` replays queued writes | `PreCompact` always commits, synchronously |
-| Codex | `Stop` at 20,000 pending tokens | `SessionEnd` (Codex 0.145+) catches up missed turns, then commits in a detached worker. `SessionStart` on startup or clear commits sessions marked as ended or idle for more than 30 minutes | `PreCompact` catches up and commits everything |
+| Claude Code | `Stop` at 100,000 pending tokens | `SessionEnd` and `SubagentStop` always commit; `SessionStart` replays queued writes | `PreCompact` always commits, synchronously |
+| Codex | `Stop` at 100,000 pending tokens | `SessionEnd` (Codex 0.145+) catches up missed turns, then commits in a detached worker. `SessionStart` on startup or clear commits sessions marked as ended or idle for more than 30 minutes | `PreCompact` catches up and commits everything |
 | TraeCode CLI 2.0 | Same as Codex | Same as Codex; without `SessionEnd`, only the start-up sweep | Same as Codex |
 | Cursor | `stop` after 8 captured messages since the last commit (`commitTurnThreshold`), counted locally | `sessionEnd` is registered but does not run in practice | `preCompact` always commits |
 | TRAE, TRAE CN | Every `Stop` that captured content | None | No pre-compaction event |
@@ -366,10 +366,10 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | CodeBuddy Code | `Stop` after 8 captured messages since the last commit | `SessionEnd` (interactive TUI only) commits everything not yet committed, including messages `Stop` already sent; `SessionStart` replays queued writes | `PreCompact` commits everything not yet committed |
 | Qoder CLI | `Stop` after 8 captured messages since the last commit | `SessionEnd` commits everything not yet committed, including messages `Stop` already sent; `SessionStart` replays queued writes | `PreCompact` commits everything not yet committed |
 | Antigravity | Every `Stop` that captured content; steps a missed `Stop` left behind are captured at the next `Stop` | None; `SessionStart` replays queued writes | No pre-compaction hook |
-| OpenCode | v1 `session.idle`, v2 end of execution: at 20,000 pending tokens | Session deletion, v1 `session.error`, v1 dispose, and v2 cleanup force a commit | v1 before and after compaction; v2 once after compaction ends |
-| DSH | `turn/end` at 20,000 pending tokens | Cordis teardown commits each session | `compaction/start` commits without the threshold check |
+| OpenCode | v1 `session.idle`, v2 end of execution: at 100,000 pending tokens | Session deletion, v1 `session.error`, v1 dispose, and v2 cleanup force a commit | v1 before and after compaction; v2 once after compaction ends |
+| DSH | `turn/end` at 100,000 pending tokens | Cordis teardown commits each session | `compaction/start` commits without the threshold check |
 | pi, takeover on (default) | Locally estimated 30,000 tokens with more than 3 user turns | `/viking commit` | `session_before_compact` |
-| pi, takeover off | 20,000 pending tokens after each sync | `session_shutdown` and `/viking commit` | `session_before_compact` |
+| pi, takeover off | 100,000 pending tokens after each sync | `session_shutdown` and `/viking commit` | `session_before_compact` |
 | OpenClaw | After a turn, at `tokenBudget × commitTokenThresholdRatio` (128,000 × 0.5 by default) | `/new`, `/reset`, and `memory_store` commit and wait | `compact()` commits and waits up to 5 minutes for extraction |
 | Hermes (bundled) | None | Session end, session switch (`/new`, `/resume`, `/branch`, fork-style compaction), gateway cache eviction, and an exit handler; `/undo` and in-place compaction do not commit | At fork-style compaction only |
 | ov CLI | None | `ov session commit`; `ov add-memory` creates, fills, and commits its own session | Not applicable |
@@ -793,7 +793,7 @@ The two are separate code bases. Where their behavior differs:
 
 | | Bundled provider (Hermes `989798c`) | External plugin (this repository) |
 |---|---|---|
-| Commits during a session | Only at session boundaries | A background commit at 20,000 pending tokens (`commit_token_threshold`) |
+| Commits during a session | Only at session boundaries | A background commit at 100,000 pending tokens (`commit_token_threshold`) |
 | Recall digests | Not supported | Optional server digest (`recall_compress`) |
 | Mirroring Hermes's built-in memory | Additions only | Additions, replacements, and removals, tracked in a URI registry |
 | `viking_forget` | User memory files with an explicit user ID | Also accepts `viking://~/`, rejects user-ID-less layouts, and checks ownership before deleting |

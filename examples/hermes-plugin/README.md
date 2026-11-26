@@ -60,7 +60,7 @@ Volcengine and **Custom** for BytePlus.
 
 After setup, chat as usual. Memories become available after the captured
 conversation is committed and OpenViking finishes extraction. The plugin
-requests a commit at 20,000 pending tokens by default, at session end and when
+requests a commit at 100,000 pending tokens by default, at session end and when
 switching sessions.
 
 The plugin sends conversation turns, tool results and edits to `MEMORY.md`

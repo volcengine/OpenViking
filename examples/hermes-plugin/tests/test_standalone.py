@@ -789,7 +789,7 @@ def _live_provider(external_provider, monkeypatch, name="live-commit"):
     provider._hermes_home = str(home)
     provider._session_id = "live-sid"
     provider._client = Mock()
-    provider._client.get.return_value = {"pending_tokens": 20000}
+    provider._client.get.return_value = {"pending_tokens": 100000}
     provider._ensure_client = lambda: True
     provider._new_client = lambda: provider._client
     provider._acquire_run_lock()
@@ -806,13 +806,13 @@ def test_live_session_commits_at_token_threshold_and_rearms(external_provider, m
     """Small turns do not trigger a commit; crossing the token limit does, repeatedly."""
     home, provider, _ = _live_provider(external_provider, monkeypatch)
     client = provider._client
-    client.get.return_value = {"pending_tokens": 19999}
+    client.get.return_value = {"pending_tokens": 99999}
     for _ in range(7):
         _finish_turn(provider)
     assert not [c for c in client.post.call_args_list if c.args[0].endswith("/commit")]
     marker = provider._state_path("pending", "live-sid")
     assert marker.exists()
-    client.get.return_value = {"result": {"pending_tokens": 20000}}
+    client.get.return_value = {"result": {"pending_tokens": 100000}}
     _finish_turn(provider)
     assert provider._turn_count == 0
     assert provider._has_committed_session("live-sid")
@@ -821,7 +821,7 @@ def test_live_session_commits_at_token_threshold_and_rearms(external_provider, m
     _finish_turn(provider, "new turn")
     assert not provider._has_committed_session("live-sid")
     assert marker.exists()
-    client.get.return_value = {"pending_tokens": 25000}
+    client.get.return_value = {"pending_tokens": 125000}
     _finish_turn(provider)
     commits = [c for c in client.post.call_args_list if c.args[0].endswith("/commit")]
     assert len(commits) == 2
@@ -890,7 +890,7 @@ def test_live_metadata_failure_does_not_replay_uploaded_turn(external_provider, 
     assert provider._client.post.call_count == 1
     assert provider._state_path("pending", "live-sid").exists()
     provider._client.get.side_effect = None
-    provider._client.get.return_value = {"pending_tokens": 20000}
+    provider._client.get.return_value = {"pending_tokens": 100000}
     _finish_turn(provider)
     assert provider._has_committed_session("live-sid")
 
@@ -917,7 +917,7 @@ def test_live_config_schema_save_and_profile_overrides(external_provider, monkey
     (home_b / ".env").write_text("OPENVIKING_COMMIT_TOKEN_THRESHOLD=4000\n")
     monkeypatch.setenv("OPENVIKING_COMMIT_TOKEN_THRESHOLD", "99000")
     schema = next(f for f in provider.get_config_schema() if f["key"] == "commit_token_threshold")
-    assert schema["default"] == 20000
+    assert schema["default"] == 100000
     assert schema["env_var"] == "OPENVIKING_COMMIT_TOKEN_THRESHOLD"
     monkeypatch.setattr("agent.secret_scope._MULTIPLEX_ACTIVE", True)
     for home, expected in [(home_a, 8000), (home_b, 4000), (home_a, 8000)]:
@@ -931,7 +931,7 @@ def test_live_config_schema_save_and_profile_overrides(external_provider, monkey
             reset_hermes_home_override(token)
 
 
-@pytest.mark.parametrize("value,expected", [("bad", 20000), (True, 20000), ("nan", 20000), (999, 1000), (1000001, 1000000)])
+@pytest.mark.parametrize("value,expected", [("bad", 100000), (True, 100000), ("nan", 100000), (999, 1000), (1000001, 1000000)])
 def test_live_threshold_validation(external_provider, value, expected):
     _, provider, _, _ = external_provider("threshold-validation")
     assert provider._setting("commit_token_threshold", {"commit_token_threshold": value}) == expected
@@ -946,7 +946,7 @@ def test_live_commit_uses_upload_client_after_connection_change(external_provide
 
     def get(*_args, **_kwargs):
         provider._client = replacement
-        return {"pending_tokens": 20000}
+        return {"pending_tokens": 100000}
 
     original.get.side_effect = get
     _finish_turn(provider)
@@ -979,7 +979,7 @@ def test_non_primary_contexts_skip_writes(external_provider, monkeypatch, agent_
     assert (provider._agent_context, provider._writes_enabled) == (agent_context, False)
 
     provider._client = Mock()
-    provider._client.get.return_value = {"pending_tokens": 20000}
+    provider._client.get.return_value = {"pending_tokens": 100000}
     provider._ensure_client = lambda: True
     provider._new_client = lambda: provider._client
     provider._acquire_run_lock()
@@ -1102,7 +1102,7 @@ def test_upload_client_keeps_published_defaults_until_reload(external_provider, 
     assert upload_client._headers()["X-OpenViking-User"] == "alice"
 
 
-@pytest.mark.parametrize("bob_tokens", [20, 20000])
+@pytest.mark.parametrize("bob_tokens", [20, 100000])
 @pytest.mark.parametrize("endpoint", ["http://127.0.0.1:19531", "http://127.0.0.1:19532"])
 def test_reload_keeps_new_connection_pending_after_old_commit(reload_provider, monkeypatch, bob_tokens, endpoint):
     """A's finalizer must neither clear B's work nor suppress B's finalizer."""
@@ -1127,7 +1127,7 @@ def test_reload_keeps_new_connection_pending_after_old_commit(reload_provider, m
         return {"result": {"pending_tokens": tokens}}
 
     monkeypatch.setattr(provider, "_claim_deferred_sid", observe_claim)
-    backends["alice"].get.side_effect = lambda *_: metadata(alice_get, release_alice, 20000)
+    backends["alice"].get.side_effect = lambda *_: metadata(alice_get, release_alice, 100000)
     backends["bob"].get.side_effect = lambda *_: metadata(bob_get, release_bob, bob_tokens)
     provider.sync_turn("Alice's pending turn", "reply", session_id=sid)
     try:
@@ -1147,7 +1147,7 @@ def test_reload_keeps_new_connection_pending_after_old_commit(reload_provider, m
     assert provider._drain_writers(sid, timeout=5)
     assert provider._drain_finalizers(timeout=5)
     assert not alice_marker.exists()
-    if bob_tokens < 20000:
+    if bob_tokens < 100000:
         assert bob_marker.exists()
         assert not provider._has_committed_session(sid)
         assert provider._turn_count == 1
@@ -1248,7 +1248,7 @@ def test_reload_back_to_original_identity_keeps_new_generation_pending(reload_pr
         if not first_get.is_set():
             first_get.set()
             assert release_first.wait(timeout=10)
-            return {"pending_tokens": 20000}
+            return {"pending_tokens": 100000}
         later_get.set()
         return {"pending_tokens": 20}
 

@@ -191,7 +191,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
   "version": 1,
   "peer": { "source": "git" },
   "recall": { "peer_scope": "actor", "max_items": 20 },
-  "capture": { "commit_token_threshold": 20000 },
+  "capture": { "commit_token_threshold": 100000 },
   "labels": { "team": "search" }
 }
 ```

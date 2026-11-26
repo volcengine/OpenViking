@@ -287,7 +287,7 @@ The profile's `cordis.patch.yml` can also carry plugin config:
     scoreThreshold: 0.35
     captureToolResults: true
     skipSubagentSessions: true
-    commitTokenThreshold: 20000
+    commitTokenThreshold: 100000
     mcpToolCallTimeoutMs: 60000
 ```
 

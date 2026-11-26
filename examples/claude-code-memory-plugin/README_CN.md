@@ -168,7 +168,7 @@ claude
 | `OPENVIKING_CAPTURE_MODE`              | `semantic`    | `semantic`（总是捕获）或 `keyword`（基于触发词）                   |
 | `OPENVIKING_CAPTURE_MAX_LENGTH`        | `24000`       | 捕获判定时 sanitized 文本的长度上限                                |
 | `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`        | 捕获 assistant 回合(文本 + tool 输入/输出)。设为 `0` 可退回仅用户   |
-| `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `20000`       | client-driven commit 的 pending-token 阈值                         |
+| `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `100000`      | client-driven commit 的 pending-token 阈值                         |
 | `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`       | resume 时拉取 archive overview 的 token 预算                       |
 | `OPENVIKING_CAPTURE_FILTERS`           | `""`          | 逗号分隔的正则规则，作用于每个被捕获的回合 —— 见[输入过滤器](#输入过滤器) |
 
@@ -352,7 +352,7 @@ OV ✓ │ Fable 5 · ctx 42% │ ↩ 6 mem · 50ms          注入 6 条记忆�
 OV ⚠ slow                                  探针超过 1s 预算（服务器可能在抽风）
 OV ✗ offline                               服务器不可达
 OV ⚡ bypass │ Fable 5 · ctx 42%            命中 OPENVIKING_BYPASS_SESSION*
-OV ✓ │ ✎ 573/20k · 2 arch                  待提交进度 + 本 session 已归档 2 次
+OV ✓ │ ✎ 573/100k · 2 arch                 待提交进度 + 本 session 已归档 2 次
 OV ✓ │ 🔗 resumed │ +3 today               session 已恢复上下文；今日累计归档 3 次
 ```
 
@@ -480,7 +480,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 
 没有 TypeScript 编译步骤，也没有运行时 npm 引导。Hook 都是直接走 HTTP 调 OpenViking 的 `.mjs` 文件；MCP 使用 `servers/mcp-proxy.mjs` 作为零依赖 stdio 桥接，转发到 OpenViking 服务器自身的 `/mcp` endpoint。
 
-首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<cc_session_id>`（CC session_id 原样保留，不做哈希），所以 resume / compact / 多 hook 事件都打到同一个 session。归档与记忆抽取由客户端触发：`Stop` hook 在服务端报告的 pending tokens 超过 `commitTokenThreshold`（默认 20000）时 commit，`PreCompact` / `SessionEnd` / `SubagentStop` 则无条件 commit。
+首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<cc_session_id>`（CC session_id 原样保留，不做哈希），所以 resume / compact / 多 hook 事件都打到同一个 session。归档与记忆抽取由客户端触发：`Stop` hook 在服务端报告的 pending tokens 超过 `commitTokenThreshold`（默认 100000）时 commit，`PreCompact` / `SessionEnd` / `SubagentStop` 则无条件 commit。
 
 ### 各 hook 职责
 

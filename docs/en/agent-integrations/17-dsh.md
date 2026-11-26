@@ -183,7 +183,7 @@ Behavior knobs live in the profile's Cordis patch entry:
     recallTokenBudget: 2000
     scoreThreshold: 0.35
     captureToolResults: true
-    commitTokenThreshold: 20000
+    commitTokenThreshold: 100000
 ```
 
 `mcpEnabled: false` in that block, or in `ovcli.conf`'s `plugin` or `plugin.dsh`, mounts neither the OpenViking MCP tools nor the bundled skills; recall and capture continue.
