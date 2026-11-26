@@ -287,7 +287,6 @@ jobs:
       - name: Run database contracts
         run: |
           uv run --no-sync python -m pytest -q -o addopts='' \
-            tests/server/test_account_services.py::test_mysql_load_creates_default_account \
             tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
             tests/server/test_mysql_account_store.py \
             tests/server/test_postgres_account_store.py \
@@ -296,6 +295,7 @@ jobs:
             tests/service/test_task_work_contract.py \
             tests/service/test_task_store_postgres.py \
             tests/resource/test_watch_store.py \
+            tests/resource/test_watch_store_sqlite.py \
             tests/resource/test_watch_store_postgres.py \
             tests/resource/test_watch_main_integration.py \
             tests/resource/test_watch_process.py \
@@ -757,23 +757,22 @@ jobs:
           fi
           uv run --no-sync python -m pytest scenarios/resources_retrieval/test_intent_extended_search.py \
             -q --override-ini=addopts= -m offline_contract
+      - name: Set up Node.js for released CLI compatibility tests (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
       - name: Install released OpenViking CLI for compatibility tests (Unix)
         if: runner.os != 'Windows'
         run: |
-          echo "Installing OpenViking CLI..."
-          curl -fsSL http://openviking.tos-cn-beijing.volces.com/cli/install.sh | bash
-
-          echo "Verifying CLI installation..."
-          if command -v openviking &> /dev/null; then
-            openviking version
-            echo "OPENVIKING_COMPAT_CLI_BIN=$(which openviking)" >> $GITHUB_ENV
-          elif command -v ov &> /dev/null; then
-            ov language en
-            ov version
-            echo "OPENVIKING_COMPAT_CLI_BIN=$(which ov)" >> $GITHUB_ENV
-          else
-            echo "WARNING: CLI binary not found after installation, CLI tests will be skipped"
-          fi
+          # Use the supported release channel and npm's download retries.
+          CLI_PREFIX="$RUNNER_TEMP/openviking-compat-cli"
+          npm install --prefix "$CLI_PREFIX" --no-audit --no-fund @openviking/cli
+          COMPAT_CLI_BIN="$CLI_PREFIX/node_modules/.bin/ov"
+          "$COMPAT_CLI_BIN" language en
+          "$COMPAT_CLI_BIN" version
+          echo "OPENVIKING_COMPAT_CLI_BIN=$COMPAT_CLI_BIN" >> "$GITHUB_ENV"
 
       - name: Run CLI Compatibility Tests (Unix)
         if: runner.os != 'Windows'

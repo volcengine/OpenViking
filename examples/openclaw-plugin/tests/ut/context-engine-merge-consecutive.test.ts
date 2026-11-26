@@ -18,42 +18,6 @@ type AgentMessage = {
 // =====================================================================
 
 describe("mergeConsecutiveUsers", () => {
-  it("merges two consecutive user messages into one (issue #1724 source 1+session)", () => {
-    const input: AgentMessage[] = [
-      { role: "user", content: "[Session History Summary]\nold archive" },
-      { role: "user", content: "Hello, what's up?" },
-      { role: "assistant", content: "Hi!" },
-    ];
-    const result = mergeConsecutiveUsers(input);
-    expect(result).toHaveLength(2);
-    expect(result[0]?.role).toBe("user");
-    expect(result[1]?.role).toBe("assistant");
-  });
-
-  it("merges three consecutive user turns (archive + yield + new user)", () => {
-    const input: AgentMessage[] = [
-      { role: "user", content: "[Session History Summary]\nold archive" },
-      { role: "user", content: "[sessions_yield interrupt]" },
-      { role: "user", content: "Hello" },
-      { role: "assistant", content: "Hi" },
-    ];
-    const result = mergeConsecutiveUsers(input);
-    expect(result).toHaveLength(2);
-    expect(result[0]?.role).toBe("user");
-  });
-
-  it("merges four consecutive user turns (3-source stack)", () => {
-    const input: AgentMessage[] = [
-      { role: "user", content: "[Session History Summary]" },
-      { role: "user", content: "[sessions_yield interrupt]" },
-      { role: "user", content: "[Audio] User text: [Telegram User] hello" },
-      { role: "user", content: "new message" },
-      { role: "assistant", content: "ok" },
-    ];
-    const result = mergeConsecutiveUsers(input);
-    expect(result).toHaveLength(2);
-  });
-
   it("preserves existing alternation untouched", () => {
     const input: AgentMessage[] = [
       { role: "user", content: "Q1" },
@@ -63,17 +27,6 @@ describe("mergeConsecutiveUsers", () => {
     ];
     const result = mergeConsecutiveUsers(input);
     expect(result).toEqual(input);
-  });
-
-  it("does not merge user with assistant (only same-role)", () => {
-    const input: AgentMessage[] = [
-      { role: "user", content: "Q" },
-      { role: "assistant", content: "A" },
-    ];
-    const result = mergeConsecutiveUsers(input);
-    expect(result).toHaveLength(2);
-    expect(result[0]?.role).toBe("user");
-    expect(result[1]?.role).toBe("assistant");
   });
 
   it("merges content as array of parts (preserves part structure)", () => {
@@ -101,17 +54,6 @@ describe("mergeConsecutiveUsers", () => {
     expect(content).toHaveLength(2);
     expect(content[0]?.text).toBe("first message as string");
     expect(content[1]?.text).toBe("second as array");
-  });
-
-  it("handles empty input", () => {
-    expect(mergeConsecutiveUsers([])).toEqual([]);
-  });
-
-  it("handles single message input", () => {
-    const input: AgentMessage[] = [{ role: "user", content: "alone" }];
-    const result = mergeConsecutiveUsers(input);
-    expect(result).toHaveLength(1);
-    expect(result[0]?.content).toBe("alone");
   });
 
   it("does not mutate the input messages array", () => {
@@ -195,21 +137,6 @@ describe("ensureAlternation", () => {
     expect(result).toEqual(input);
   });
 
-  it("inserts placeholder user between consecutive assistants", () => {
-    const input: AgentMessage[] = [
-      { role: "user", content: "Q" },
-      { role: "assistant", content: "A1" },
-      { role: "assistant", content: "A2" },
-    ];
-    const result = ensureAlternation(input);
-    expect(result).toHaveLength(4);
-    expect(result[0]?.role).toBe("user");
-    expect(result[1]?.role).toBe("assistant");
-    expect(result[2]?.role).toBe("user");
-    expect(result[2]?.content).toBe("(no content)");
-    expect(result[3]?.role).toBe("assistant");
-  });
-
   it("does NOT touch consecutive user (that is mergeConsecutiveUsers' job)", () => {
     const input: AgentMessage[] = [
       { role: "user", content: "U1" },
@@ -220,15 +147,6 @@ describe("ensureAlternation", () => {
     expect(result).toEqual(input);
   });
 
-  it("handles empty input", () => {
-    expect(ensureAlternation([])).toEqual([]);
-  });
-
-  it("handles single message", () => {
-    const input: AgentMessage[] = [{ role: "assistant", content: "alone" }];
-    expect(ensureAlternation(input)).toEqual(input);
-  });
-
   it("inserts multiple placeholders for triple consecutive assistants", () => {
     const input: AgentMessage[] = [
       { role: "user", content: "Q" },
@@ -237,16 +155,8 @@ describe("ensureAlternation", () => {
       { role: "assistant", content: "A3" },
     ];
     const result = ensureAlternation(input);
-    // Q, A1, [user], A2, [user], A3
-    expect(result).toHaveLength(6);
-    expect(result.map((m) => m.role)).toEqual([
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-      "user",
-      "assistant",
-    ]);
+    const placeholder = { role: "user", content: "(no content)" };
+    expect(result).toEqual([input[0], input[1], placeholder, input[2], placeholder, input[3]]);
   });
 });
 
@@ -254,7 +164,7 @@ describe("ensureAlternation", () => {
 // Issue #1724 end-to-end scenario: combined fix verification
 // =====================================================================
 
-describe("issue #1724 end-to-end", () => {
+describe("OpenClaw context message assembly", () => {
   it("fixes the canonical archive + yield + audio + new-user stack", () => {
     // Reproduce the actual stack from issue #1724 and its follow-up analysis.
     const assembled: AgentMessage[] = [

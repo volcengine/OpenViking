@@ -6,7 +6,7 @@ Community-maintained integrations for various agent runtimes. Each differs in ta
 
 Source: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
 
-The ZCode community integration adds cross-project, cross-session memory through config-driven lifecycle hooks and an OpenViking MCP server:
+The ZCode community integration adds cross-project, cross-session memory through config-driven lifecycle hooks, an OpenViking MCP server, and 5 skills:
 
 - **SessionStart** injects the user profile.
 - **UserPromptSubmit** recalls relevant memories.
@@ -19,16 +19,24 @@ ZCode does not expose `PreCompact`, `SessionEnd`, or subagent lifecycle hooks. T
 
 Prerequisites: Node.js 18+, a running OpenViking server, and ZCode.
 
+For a managed connection, select **OpenViking Managed Service**, then:
+
+- **Volcengine:** enter your service API key. The installer supplies the URL.
+- **BytePlus:** enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older installers use **Custom URL** for BytePlus.
+
 ```bash
 curl -fsSL https://openviking.ai/install | bash
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
-The installer detects `~/.zcode/` or the `zcode` binary, installs the runtime under `~/.openviking/agent-integrations/zcode/`, and merges hooks and MCP configuration into `~/.zcode/cli/config.json`.
+The installer detects `~/.zcode/` or the `zcode` binary, installs the runtime under `~/.openviking/agent-integrations/zcode/`, merges hooks and MCP configuration into `~/.zcode/cli/config.json`, and installs `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` into `~/.zcode/skills/<name>`. A skill you edited, or an existing unmanaged directory of the same name, is preserved on upgrade and uninstall.
 
 After restarting ZCode, verify that:
 
 - `~/.zcode/cli/config.json` contains `hooks.enabled: true`, OpenViking entries under `hooks.events`, and `mcp.servers.openviking`.
+- `~/.zcode/skills/` holds the 5 skill directories, each with a `SKILL.md`.
 - `OPENVIKING_DEBUG=1` produces diagnostics in `~/.openviking/logs/zcode-hooks.log`.
 
 | Symptom | Cause | Fix |
@@ -53,11 +61,18 @@ transcript decoding, output formatting, and commit policy:
 - **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
 - **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
 - **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
-- The plugin manifest exposes the OpenViking MCP server without editing Kimi's legacy config files.
+- The plugin manifest exposes the OpenViking MCP server and the 5 skills under the plugin root's `skills/` (`openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor`) without editing Kimi's legacy config files.
 
 ### Install
 
 Prerequisites: Node.js 18+, a running OpenViking server, and Kimi Code CLI.
+
+For a managed connection, select **OpenViking Managed Service**, then:
+
+- **Volcengine:** enter your service API key. The installer supplies the URL.
+- **BytePlus:** enter your API key. See [BytePlus setup](../guides/27-byteplus-setup.md).
+
+Older installers use **Custom URL** for BytePlus.
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
@@ -87,24 +102,30 @@ The Antigravity integration serves the Antigravity desktop app and the `agy` CLI
 
 - **SessionStart** injects the user profile.
 - **PreInvocation** recalls relevant memories on the first model call of each turn. Antigravity runs this hook before every model call, so later calls in a tool loop skip recall.
+- **PreToolUse** denies file tool calls whose location argument is a `viking://` URI and points to the OpenViking MCP tools. Shell commands (`run_command`) are not checked.
 - **Stop** captures the finished steps of the conversation transcript in a detached worker, then commits the OpenViking session.
 
 Antigravity hooks use their own `hooks.json` format: each top-level key names a hook, and context is returned as `injectSteps` system messages. A Claude Code `hooks.json` therefore cannot be reused.
+
+The plugin also carries the OpenViking MCP server and 5 skills (`openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor`): the agent can search and manage memory itself through the MCP tools, and each skill is also invocable as `/<name>`.
 
 ### Install
 
 Prerequisites: Node.js 18+, a running OpenViking server, and the Antigravity app or `agy`.
 
+This noninteractive command uses the connection saved in `~/.openviking/ovcli.conf`. Configure it first with `ov config`: select **OpenViking Managed Service**, then **Volcengine** (service API key) or **BytePlus** (enter your API key). See [BytePlus setup](../guides/27-byteplus-setup.md#connect-the-cli).
+
 ```bash
 curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
 ```
 
-The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The installer does not add an MCP server; add the OpenViking MCP server in `~/.gemini/config/mcp_config.json` if you want the agent to search memory itself.
+The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The plugin directory holds `plugin.json`, `hooks.json`, `mcp_config.json`, and `skills/`. If `~/.gemini/config/mcp_config.json` already defines an MCP server named `openviking`, the installer keeps yours and does not write the plugin's `mcp_config.json`, so no tool appears twice.
 
 Restart the Antigravity app or start a new `agy` session, then verify that:
 
 - the `agy` log under `~/.gemini/antigravity-cli/log/` reports `loaded 1 named hooks`;
-- after a turn, `~/.openviking/hook-state/antigravity/<conversation-id>.json` records `lastStep`.
+- after a turn, `~/.openviking/hook-state/antigravity/<conversation-id>.json` records `lastStep`;
+- the plugin directory contains `skills/openviking-memory/SKILL.md`, and `mcp_config.json` unless your own configuration already has an `openviking` server.
 
 To uninstall:
 

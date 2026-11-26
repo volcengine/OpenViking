@@ -1,5 +1,9 @@
-export type ServiceProvider = 'opensource' | 'volcengine' | 'unknown'
-export type ServiceSelection = 'auto' | Exclude<ServiceProvider, 'unknown'>
+export type ServiceProvider =
+  | 'opensource'
+  | 'volcengine'
+  | 'byteplus'
+  | 'unknown'
+export type ServiceSelection = 'auto' | 'opensource' | 'volcengine'
 export type StudioDomain = 'workspace' | 'extensions' | 'management'
 export type CapabilityState =
   | 'supported'
@@ -7,9 +11,47 @@ export type CapabilityState =
   | 'forbidden'
   | 'unknown'
 
+// Keep the endpoint binding separate from the public provider domains. An
+// unbound or unrelated deployment must not inherit hosted restrictions.
+function matchesBytePlusServiceUrl(
+  baseUrl: string,
+  serviceUrl: string | undefined,
+): boolean {
+  if (!serviceUrl) return false
+  try {
+    const normalize = (value: string) => {
+      const url = new URL(value)
+      if (
+        url.protocol !== 'https:' ||
+        url.username ||
+        url.password ||
+        url.href.includes('?') ||
+        url.href.includes('#')
+      )
+        return null
+      return `${url.origin}${url.pathname.replace(/\/+$/, '')}`
+    }
+    const expected = normalize(serviceUrl)
+    return expected !== null && expected === normalize(baseUrl)
+  } catch {
+    return false
+  }
+}
+
 // URL detection identifies the deployment, not the permissions of its key.
 // Version numbers and encoded key contents are not provider identifiers.
-export function identifyServiceProvider(baseUrl: string): ServiceProvider {
+export function identifyServiceProvider(
+  baseUrl: string,
+): Exclude<ServiceProvider, 'byteplus'>
+export function identifyServiceProvider(
+  baseUrl: string,
+  bytePlusServiceUrl: string | undefined,
+): ServiceProvider
+export function identifyServiceProvider(
+  baseUrl: string,
+  bytePlusServiceUrl?: string,
+): ServiceProvider {
+  if (matchesBytePlusServiceUrl(baseUrl, bytePlusServiceUrl)) return 'byteplus'
   try {
     const { hostname, protocol } = new URL(baseUrl)
     if (!['http:', 'https:'].includes(protocol)) return 'unknown'
@@ -28,7 +70,7 @@ export function identifyServiceProvider(baseUrl: string): ServiceProvider {
 export function resolveConfiguredServiceProvider(
   baseUrl: string,
   selection: ServiceSelection = 'auto',
-): ServiceProvider {
+): Exclude<ServiceProvider, 'byteplus'> {
   const detected = identifyServiceProvider(baseUrl)
   return detected === 'volcengine'
     ? detected

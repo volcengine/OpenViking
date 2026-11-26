@@ -145,6 +145,8 @@ async def test_token_serves_bound_file_once_and_ignores_uri_param(client, fake_f
 
     reused = await client.get("/api/v1/content/download", params={"token": token})
     assert reused.status_code == 401
+    assert reused.json()["detail"] == "unknown or already-consumed upload token"
+    assert len(fake_fs.reads) == 1
 
 
 async def test_expired_token_is_rejected(client, monkeypatch):
@@ -157,6 +159,7 @@ async def test_expired_token_is_rejected(client, monkeypatch):
 
     response = await client.get("/api/v1/content/download", params={"token": token})
     assert response.status_code == 401
+    assert response.json()["detail"] == "upload token expired"
 
 
 async def test_upload_and_download_tokens_are_not_interchangeable(client, upload_temp_dir):

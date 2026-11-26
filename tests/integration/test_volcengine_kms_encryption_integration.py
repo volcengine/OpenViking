@@ -285,6 +285,8 @@ class TestVikingFSEncryptionWithVolcengineKMS:
             path=str(test_data_dir / "viking"), user=UserIdentifier.the_default_user("test_user")
         )
         await svc.initialize()
+        await svc.recover()
+        await svc.start_background()
 
         api_key_manager = build_api_key_manager(root_key=self.ROOT_KEY, viking_fs=svc.viking_fs)
         await api_key_manager.load()

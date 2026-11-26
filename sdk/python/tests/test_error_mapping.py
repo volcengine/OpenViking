@@ -3,108 +3,95 @@
 
 import httpx
 import pytest
-from openviking_sdk import AsyncHTTPClient, SyncHTTPClient
-from openviking_sdk.client import ERROR_CODE_TO_EXCEPTION
-from openviking_sdk.errors import (
-    AbortedError,
-    ConflictError,
-    OpenVikingError,
-    ResourceExhaustedError,
-    UnavailableError,
-    UnimplementedError,
-)
+from openviking_sdk import AsyncHTTPClient, SyncHTTPClient, errors
 
 
+# Exercise constructor branches with the details a server would send.
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync", [False, True])
-@pytest.mark.parametrize("code", ERROR_CODE_TO_EXCEPTION)
-async def test_public_clients_preserve_server_error_details(sync, code):
-    details = {
-        "resource": "viking://resources/demo",
-        "uri": "viking://resources/demo",
-        "retryable": True,
-        "upstream_status_code": 503,
-        "provider": {"retry_after": 2},
-    }
-    client = (SyncHTTPClient if sync else AsyncHTTPClient)(url="http://localhost:1933")
-    async_client = client._async_client if sync else client
-    async_client._http = httpx.AsyncClient(
-        base_url="http://localhost:1933",
-        transport=httpx.MockTransport(
-            lambda _request: httpx.Response(
-                409,
-                json={
-                    "status": "error",
-                    "error": {"code": code, "message": "busy", "details": details},
-                },
-            )
-        ),
-    )
-    try:
-        with pytest.raises(OpenVikingError) as raised:
-            if sync:
-                client.stat("viking://resources/demo")
-            else:
-                await client.stat("viking://resources/demo")
-        assert raised.value.code == code
-        assert {key: raised.value.details[key] for key in details} == details
-    finally:
-        await async_client.close()
-
-
 @pytest.mark.parametrize(
-    ("code", "exc_type"),
-    (
-        ("CONFLICT", ConflictError),
-        ("ABORTED", AbortedError),
-        ("RESOURCE_EXHAUSTED", ResourceExhaustedError),
-        ("UNIMPLEMENTED", UnimplementedError),
-    ),
+    ("code", "status", "exception", "details"),
+    [
+        ("INVALID_ARGUMENT", 400, errors.InvalidArgumentError, {"field": "uri"}),
+        ("INVALID_URI", 400, errors.InvalidURIError, {"uri": "demo", "reason": "malformed"}),
+        (
+            "NOT_FOUND",
+            404,
+            errors.NotFoundError,
+            {
+                "resource": "viking://resources/demo",
+                "type": "resource",
+                "reason": "The data may not have been indexed yet or may have been deleted",
+            },
+        ),
+        (
+            "ALREADY_EXISTS",
+            409,
+            errors.AlreadyExistsError,
+            {"resource": "demo", "type": "resource"},
+        ),
+        ("CONFLICT", 409, errors.ConflictError, {"resource": "demo"}),
+        ("FAILED_PRECONDITION", 412, errors.FailedPreconditionError, {}),
+        ("ABORTED", 409, errors.AbortedError, {}),
+        ("UNAUTHENTICATED", 401, errors.UnauthenticatedError, {}),
+        ("PERMISSION_DENIED", 403, errors.PermissionDeniedError, {}),
+        ("RESOURCE_EXHAUSTED", 429, errors.ResourceExhaustedError, {"upstream_status_code": 429}),
+        (
+            "UNAVAILABLE",
+            503,
+            errors.UnavailableError,
+            {"service": "storage backend", "reason": "lock contention"},
+        ),
+        ("INTERNAL", 500, errors.InternalError, {}),
+        ("DEADLINE_EXCEEDED", 504, errors.DeadlineExceededError, {}),
+        ("UNIMPLEMENTED", 501, errors.UnimplementedError, {}),
+        ("NOT_INITIALIZED", 503, errors.NotInitializedError, {}),
+        ("PROCESSING_ERROR", 500, errors.ProcessingError, {}),
+        ("EMBEDDING_FAILED", 500, errors.EmbeddingFailedError, {}),
+        ("VLM_FAILED", 500, errors.VLMFailedError, {}),
+        ("SESSION_EXPIRED", 410, errors.SessionExpiredError, {}),
+        ("UNKNOWN", 500, errors.OpenVikingError, {}),
+        ("PROVIDER_SPECIFIC", 502, errors.OpenVikingError, {"provider": {"retry_after": 2}}),
+    ],
 )
-def test_client_maps_standard_error_codes(code, exc_type):
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-
-    with pytest.raises(exc_type) as exc_info:
-        client._raise_exception({"code": code, "message": "mapped"})
-
-    assert exc_info.value.code == code
-
-
-def test_client_preserves_unknown_error_code():
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-
-    with pytest.raises(OpenVikingError) as exc_info:
-        client._raise_exception(
-            {
-                "code": "PROVIDER_SPECIFIC",
-                "message": "provider-specific failure",
-                "details": {"x": 1},
-            }
+async def test_public_clients_preserve_server_error_details(
+    sdk_transport, code, status, exception, details
+):
+    sdk_transport(
+        lambda request: httpx.Response(
+            status,
+            json={
+                "status": "error",
+                "error": {"code": code, "message": "request failed", "details": details},
+            },
         )
-
-    assert exc_info.value.code == "PROVIDER_SPECIFIC"
-    assert exc_info.value.details == {"x": 1}
-
-
-def test_client_preserves_unavailable_service_and_reason():
-    client = AsyncHTTPClient(url="http://127.0.0.1:1933")
-
-    with pytest.raises(UnavailableError) as exc_info:
-        client._raise_exception(
-            {
-                "code": "UNAVAILABLE",
-                "message": "Storage backend unavailable: lock contention",
-                "details": {
-                    "service": "storage backend",
-                    "reason": "failed to read lock token (os error 33)",
-                },
-            }
-        )
-
-    assert str(exc_info.value) == (
-        "Storage backend unavailable: failed to read lock token (os error 33)"
     )
-    assert exc_info.value.details == {
-        "service": "storage backend",
-        "reason": "failed to read lock token (os error 33)",
-    }
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    await client.initialize()
+    try:
+        with pytest.raises(exception) as raised:
+            await client.stat("viking://resources/demo")
+    finally:
+        await client.close()
+
+    assert type(raised.value) is exception
+    assert raised.value.code == code
+    assert {key: raised.value.details[key] for key in details} == details
+    if code == "NOT_FOUND":
+        assert details["reason"] in str(raised.value)
+    if code == "UNAVAILABLE":
+        assert str(raised.value) == "Storage backend unavailable: lock contention"
+
+
+@pytest.mark.parametrize("failure", [httpx.ConnectError, httpx.ReadTimeout])
+def test_client_preserves_transport_failures(sdk_transport, failure):
+    def handle(request):
+        raise failure("transport failed", request=request)
+
+    sdk_transport(handle)
+    client = SyncHTTPClient(url="http://localhost:1933")
+    client.initialize()
+    try:
+        with pytest.raises(failure, match="transport failed"):
+            client.stat("viking://resources/demo")
+    finally:
+        client.close()

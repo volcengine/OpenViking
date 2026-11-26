@@ -17,6 +17,8 @@ openviking-server --config /path/to/ov.conf
 
 服务端启动时读取配置。修改模型、检索、存储或 `server` 配置后，需要重启服务；重启后建议运行 `openviking-server doctor`。
 
+`server.roles` 控制业务接口和后台执行职责，配置、路由边界和停止顺序见[服务角色与启停](03-server-roles.md)。
+
 通过单 worker 的 `openviking-server` 启动时，Studio 的「服务端配置」页面提供「保存并重启」。重启能力和实例标识复用现有 ROOT 配置读取接口（`GET /api/v1/admin/configuration?source=file`）返回；只有 ROOT 可以请求重启（`POST /api/v1/admin/restart`，请求体为 `{"revision":"<已保存文件的版本>"}`）。服务校验当前文件和版本后返回 HTTP 202，等待现有请求结束，停止其管理的 Bot，再使用原解释器、启动参数、环境变量和工作目录替换当前进程。页面确认新的服务实例恢复后才显示成功。单独点击「保存配置」仍只保存文件。
 
 多 worker 或嵌入式 ASGI 启动不支持页面重启，需要通过部署平台重启。配置通过校验后，外部依赖仍可能导致启动失败。如果修改了地址、端口或 ROOT 凭证，请更新 Studio 连接设置。账号和集群覆盖配置仍优先于文件默认配置。
@@ -53,6 +55,7 @@ openviking-server --config /path/to/ov.conf
 |---|---|---|---|
 | `default_account` | string | `"default"` | Service context 使用的默认账号 |
 | `default_user` | string | `"default"` | Service context 使用的默认用户 |
+| `enable_default_resources` | boolean | `true` | 补齐缺省本地 Embedding/VectorDB 并预置默认 Account 目录，见[资源配置](../guides/01-configuration.md) |
 | `embedding` | object | 内置本地 Dense 模型 | 向量化模型和稀疏/混合检索配置；默认使用 `local` / `bge-small-zh-v1.5-f16` |
 | `vlm` | object | 空配置 | 内容理解、摘要和记忆抽取使用的模型；使用相关能力前需要配置可用模型 |
 | `query_planner` | object / `null` | `null` | 检索意图分析和召回改写使用的模型。未配置或为空时回退到 `vlm`；`auto` 模式的召回改写要求配置集群级 `query_planner`，或账户级 `query_planner` / `vlm` 覆盖项 |

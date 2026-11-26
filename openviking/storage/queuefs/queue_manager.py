@@ -466,12 +466,8 @@ class QueueManager:
                     t.cancel()
                 await asyncio.gather(*active_tasks, return_exceptions=True)
 
-    def stop(self) -> None:
-        """Stop QueueManager and release resources."""
-        global _instance
-        if not self._started:
-            return
-
+    def stop_workers(self) -> None:
+        """Drain consumers while retaining queue clients and handlers for reuse."""
         # Stop queue workers
         for stop_event in self._queue_stop_events.values():
             stop_event.set()
@@ -489,10 +485,15 @@ class QueueManager:
             raise RuntimeError(f"Queue workers did not stop: {', '.join(alive_workers)}")
         self._queue_threads.clear()
         self._queue_stop_events.clear()
+        self._started = False
+        logger.info("[QueueManager] Workers stopped")
 
+    def stop(self) -> None:
+        """Stop QueueManager and release resources."""
+        global _instance
+        self.stop_workers()
         self._agfs = None
         self._queues.clear()
-        self._started = False
 
         if _instance is self:
             _instance = None
@@ -582,13 +583,26 @@ class QueueManager:
 
     # ========== Status check interface ==========
 
-    async def check_status(self, queue_name: Optional[str] = None) -> Dict[str, QueueStatus]:
+    async def check_status(
+        self, queue_name: Optional[str] = None, *, account_id: str | None = None
+    ) -> Dict[str, QueueStatus]:
         """Check queue status."""
         if queue_name:
             if queue_name not in self._queues:
                 return {}
-            return {queue_name: await self._queues[queue_name].get_status()}
-        return {name: await q.get_status() for name, q in self._queues.items()}
+            queues = {queue_name: self._queues[queue_name]}
+        else:
+            queues = self._queues
+        statuses = {name: await q.get_status(account_id) for name, q in queues.items()}
+        if account_id is not None and statuses:
+            from openviking.service.task_tracker import get_task_tracker
+
+            counts = await get_task_tracker().get_queue_work_counts(account_id=account_id)
+            for name, status in statuses.items():
+                bucket = counts.get(name, {})
+                status.pending = bucket.get("pending", 0)
+                status.in_progress = bucket.get("running", 0)
+        return statuses
 
     def has_errors(self, queue_name: Optional[str] = None) -> bool:
         """Check if there are errors."""

@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Protocol
 
 from openviking.pyagfs import AsyncAGFSClient
+from openviking.pyagfs.async_client import fs_ctx_from_agfs_path
 from openviking.pyagfs.exceptions import AGFSAlreadyExistsError, AGFSNotFoundError
 from openviking.service.task_domain import (
     ACTIVE_TASK_STATUSES,
@@ -48,6 +49,7 @@ from openviking.service.task_tracker_concurrency import (
 SYSTEM_TASK_ACCOUNT_ID = "_system"
 SYSTEM_TASK_USER_ID = "root"
 TaskStatsSnapshot = Dict[str, Dict[str, int]]
+QueueWorkCounts = Dict[str, Dict[str, int]]
 
 
 class WorkRegistration(str, Enum):
@@ -357,12 +359,16 @@ class TaskWorkStore(Protocol):
 
     async def has_open_work(
         self,
-        task_id: str,
+        task_id: Optional[str],
         *,
         exclude_work_id: Optional[str],
         account_id: Optional[str],
         user_id: Optional[str],
+        exclude_inline: bool = False,
     ) -> bool: ...
+
+    async def get_queue_work_counts(self, *, account_id: str) -> QueueWorkCounts:
+        """Count pending/running non-Inline Work by queue across an account's users."""
 
     async def summarize_works(
         self,
@@ -410,6 +416,21 @@ class _WorkSet:
     works: Dict[str, WorkRecord]
     open_count: int = 0
 
+    def has_open_work(
+        self, exclude_work_id: Optional[str] = None, *, exclude_inline: bool = False
+    ) -> bool:
+        if self.open_count == 0:
+            return False
+        if exclude_inline:
+            return any(
+                work.is_open() and work.queue_name != "Inline" and work.work_id != exclude_work_id
+                for work in self.works.values()
+            )
+        if exclude_work_id is None:
+            return True
+        excluded = self.works.get(exclude_work_id)
+        return self.open_count > int(excluded is not None and excluded.is_open())
+
 
 @dataclass(frozen=True)
 class _WorkMutationResult:
@@ -429,6 +450,36 @@ class PersistentTaskStore(TaskWorkStore):
     ROOT_PREFIX = "/local"
     SYSTEM_DIRNAME = "_system"
     TASKS_DIRNAME = "tasks"
+
+    @classmethod
+    def has_task_store(cls, agfs: Any) -> bool:
+        """Check legacy File task roots, including empty directories.
+
+        Probe task roots without listing users or task files. Only absent
+        paths mean no store; other storage failures must propagate.
+        """
+
+        def is_directory(path: str) -> bool:
+            try:
+                return bool(agfs.stat(path, ctx=fs_ctx_from_agfs_path(path)).get("isDir"))
+            except (AGFSNotFoundError, FileNotFoundError):
+                return False
+
+        if is_directory(cls._task_root_dir(SYSTEM_TASK_ACCOUNT_ID)):
+            return True
+        try:
+            accounts = agfs.ls(cls.ROOT_PREFIX, ctx=fs_ctx_from_agfs_path(cls.ROOT_PREFIX))
+        except (AGFSNotFoundError, FileNotFoundError):
+            return False
+        for account in accounts:
+            if not account.get("isDir") or not account.get("name"):
+                continue
+            account_id = str(account["name"])
+            if account_id == SYSTEM_TASK_ACCOUNT_ID:
+                continue
+            if is_directory(cls._task_root_dir(account_id)):
+                return True
+        return False
 
     def __init__(self, agfs: Any) -> None:
         self._agfs = agfs if isinstance(agfs, AsyncAGFSClient) else AsyncAGFSClient(agfs)
@@ -982,23 +1033,45 @@ class PersistentTaskStore(TaskWorkStore):
 
     async def has_open_work(
         self,
-        task_id: str,
+        task_id: Optional[str],
         *,
         exclude_work_id: Optional[str] = None,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        exclude_inline: bool = False,
     ) -> bool:
+        if task_id is None:
+            if not account_id:
+                raise ValueError("Account Work query requires account_id")
+            with self._lock:
+                return any(
+                    work_set.has_open_work(exclude_work_id, exclude_inline=exclude_inline)
+                    for (account, user, _), work_set in self._work_sets.items()
+                    if account == account_id and (user_id is None or user == user_id)
+                )
         task = await self._load_task(task_id, account_id, user_id)
         if task is None or not task.account_id or not task.user_id:
             return False
         with self._lock:
             work_set = self._work_sets.get((task.account_id, task.user_id, task_id))
-            if work_set is None or work_set.open_count == 0:
-                return False
-            if exclude_work_id is None:
-                return True
-            excluded = work_set.works.get(exclude_work_id)
-            return work_set.open_count > int(excluded is not None and excluded.is_open())
+            return work_set is not None and work_set.has_open_work(
+                exclude_work_id, exclude_inline=exclude_inline
+            )
+
+    async def get_queue_work_counts(self, *, account_id: str) -> QueueWorkCounts:
+        if not account_id:
+            raise ValueError("Queue Work query requires account_id")
+        counts: QueueWorkCounts = {}
+        with self._lock:
+            for (account, _, _), work_set in self._work_sets.items():
+                if account != account_id or work_set.open_count == 0:
+                    continue
+                for work in work_set.works.values():
+                    if not work.is_open() or work.queue_name == "Inline":
+                        continue
+                    bucket = counts.setdefault(work.queue_name, {"pending": 0, "running": 0})
+                    bucket[work.state.value] += 1
+        return counts
 
     async def summarize_works(
         self,
@@ -1742,16 +1815,19 @@ class PersistentTaskStore(TaskWorkStore):
             self._task_dir(account_id, user_id),
         )
 
-    def _system_dir(self, account_id: str) -> str:
+    @classmethod
+    def _system_dir(cls, account_id: str) -> str:
         if account_id == SYSTEM_TASK_ACCOUNT_ID:
-            return f"{self.ROOT_PREFIX}/{account_id}"
-        return f"{self.ROOT_PREFIX}/{account_id}/{self.SYSTEM_DIRNAME}"
+            return f"{cls.ROOT_PREFIX}/{account_id}"
+        return f"{cls.ROOT_PREFIX}/{account_id}/{cls.SYSTEM_DIRNAME}"
 
-    def _task_root_dir(self, account_id: str) -> str:
-        return f"{self._system_dir(account_id)}/{self.TASKS_DIRNAME}"
+    @classmethod
+    def _task_root_dir(cls, account_id: str) -> str:
+        return f"{cls._system_dir(account_id)}/{cls.TASKS_DIRNAME}"
 
-    def _task_dir(self, account_id: str, user_id: str) -> str:
-        return f"{self._task_root_dir(account_id)}/{user_id}"
+    @classmethod
+    def _task_dir(cls, account_id: str, user_id: str) -> str:
+        return f"{cls._task_root_dir(account_id)}/{user_id}"
 
     def _task_path(self, account_id: str, user_id: str, task_id: str) -> str:
         return f"{self._task_dir(account_id, user_id)}/{task_id}.json"

@@ -18,7 +18,6 @@ from openviking.storage.abstract_overview import (
 )
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.context_update_plan import ContextUpdatePlan
-from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
 from openviking.utils.ingest_options import IngestOptions
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
@@ -117,21 +116,16 @@ async def test_semantic_message_carries_file_md5_and_old_abstract(monkeypatch, c
     file_uri = "viking://resources/demo.py"
     queue = SimpleNamespace(enqueue=AsyncMock(return_value="enqueued"))
     manager = SimpleNamespace(SEMANTIC="Semantic", get_queue=lambda *args, **kwargs: queue)
-    monkeypatch.setattr(content_write_module, "get_queue_manager", lambda: manager)
-    monkeypatch.setattr(
-        content_write_module,
-        "plan_abstract_overview_refresh",
-        AsyncMock(return_value=SimpleNamespace(action=FreshnessAction.REFRESH_NOW)),
-    )
+    monkeypatch.setattr("openviking.utils.summarizer.get_queue_manager", lambda: manager)
     coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
 
-    await coordinator._enqueue_semantic_refresh_changes(
-        root_uri="viking://resources",
-        context_type="resource",
-        changes={"modified": [file_uri]},
+    await coordinator._execute_batch_refresh_payload(
+        {
+            "refresh_kinds": {file_uri: "modified"},
+            "file_md5s": {file_uri: "new-md5"},
+            "file_abstracts": {file_uri: "old abstract"},
+        },
         ctx=ctx,
-        file_md5s={file_uri: "new-md5"},
-        file_abstracts={file_uri: "old abstract"},
     )
 
     msg = queue.enqueue.await_args.args[0]
@@ -333,47 +327,3 @@ async def test_new_memory_file_renders_from_replace_mode_and_explicit_new_file_s
     )
 
     assert MemoryFileUtils.read(rendered.decode("utf-8"), uri=uri).content == "new memory content"
-
-
-def test_plan_statuses_report_deferred_parent_and_queued_vector_work():
-    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
-    work = SimpleNamespace(
-        semantic_requested=False,
-        vector_requested=True,
-        semantic_action=FreshnessAction.MARK_PENDING.value,
-    )
-
-    assert coordinator._plan_statuses(work, wait=False, queue_status=None) == (
-        "deferred",
-        "queued",
-    )
-
-
-@pytest.mark.parametrize(
-    ("semantic_action", "wait", "queue_status", "expected"),
-    [
-        (
-            FreshnessAction.MARK_PENDING.value,
-            False,
-            None,
-            ("deferred", "queued"),
-        ),
-        (
-            FreshnessAction.NOOP.value,
-            True,
-            {},
-            ("skipped", "complete"),
-        ),
-    ],
-)
-def test_plan_statuses_prioritize_parent_freshness_over_file_semantic_work(
-    semantic_action, wait, queue_status, expected
-):
-    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
-    work = SimpleNamespace(
-        semantic_requested=True,
-        vector_requested=True,
-        semantic_action=semantic_action,
-    )
-
-    assert coordinator._plan_statuses(work, wait=wait, queue_status=queue_status) == expected

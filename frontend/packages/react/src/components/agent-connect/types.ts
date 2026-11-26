@@ -21,6 +21,8 @@ export interface AgentConnectProps extends Omit<
   locale?: AgentConnectLocale;
   /** 服务地址，默认 OpenViking 云服务。Optional service endpoint. */
   baseUrl?: string;
+  /** 预发布环境使用统一接入地址，优先于 baseUrl。Use the prelaunch endpoint instead of baseUrl. */
+  isPrelaunch?: boolean;
   /** 企业版数据库使用团队接入安装文案，默认 false。Use team onboarding for enterprise databases. */
   isEnterprise?: boolean;
   /** 宿主提供的用户协议链接；未传时不显示协议引用。Host agreement URL. */

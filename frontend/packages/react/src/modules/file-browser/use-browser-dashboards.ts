@@ -1,6 +1,6 @@
 import type { ExperienceDashboardProps } from '../../components/experience-dashboard/index.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
-import { createDashboardTab } from './dashboard-tab.js';
+import { useDashboardTab } from './use-dashboard-tab.js';
 import type { FileBrowserDashboardLabels } from './types.js';
 import { readCompileTargets } from './dashboard-data.js';
 import { isMemoryUri } from './fs-memory-fields.js';
@@ -165,24 +165,22 @@ export function useBrowserDashboards({
     [onOpenUri],
   );
   const close = useCallback(() => setOpened(null), []);
-  const tab = current
-    ? createDashboardTab(current, {
-        locale,
-        labels: dashboardLabels,
-        requestOptions,
-        generation,
-        conflictRevision,
-        isFile,
-        experienceDataSource,
-        experienceDashboardSlots,
-        renderDashboard,
-        onOpenUri: (target) => {
-          close();
-          void onOpenUri(target);
-        },
-        onOpenDashboard: open,
-      })
-    : undefined;
+  const tab = useDashboardTab(current, {
+    locale,
+    labels: dashboardLabels,
+    requestOptions,
+    generation,
+    conflictRevision,
+    isFile,
+    experienceDataSource,
+    experienceDashboardSlots,
+    renderDashboard,
+    onOpenUri: (target) => {
+      close();
+      void onOpenUri(target);
+    },
+    onOpenDashboard: open,
+  });
   const readPreviewHint = usePreviewDashboardHint(uri, resolved?.kind, hint);
   return {
     previewOptions: { readDashboardHint: readPreviewHint },

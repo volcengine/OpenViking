@@ -425,7 +425,7 @@ appendfsync everysec
 
 在网关配置中设置 `request_log_sink: "stdout"`，或设置 `OPENVIKING_GATEWAY_REQUEST_LOG_SINK=stdout`，重启后新记录只写到 stdout。每个模型请求（包括失败的请求）产生一行 JSON，即使 stdout 接到管道也会立即刷新。每条记录包含 `time`（写入时的 Unix 秒数）、`account` 和 `user_id`（密钥确认之前就失败的请求为 `null`），以及位于顶层的现有请求指标，如 `kind`、`status`、`input_tokens` 和 `cached_tokens`。不包含凭证、提示词或回复。采集系统负责这些记录的保留期限和访问权限；`log_retention_days` 只作用于存储中的日志。
 
-设置 `request_log_sink: "file"` 和 `request_log_path`，就把同样的行写到文件。写文件由后台线程完成，磁盘慢也不会拖住请求；它的队列（10,000 行）满了时，新行被丢弃，并计入状态行的 `records_dropped`。文件达到 `request_log_max_bytes`（默认 256 MiB）时轮转，保留四个旧文件（`requests.jsonl.1` … `.4`）。这种输出需要单个 worker 进程：独立网关设 `workers: 1`，嵌入式网关需要服务端只有一个 worker；需要扩容时增加副本。在 Kubernetes 上，把文件放在日志采集器能读到的卷上，例如用 chart 的 `extraVolumes` 和 `extraVolumeMounts`：
+设置 `request_log_sink: "file"` 和 `request_log_path`，就把同样的行写到文件。写文件由后台线程完成，磁盘慢也不会拖住请求；它的队列（10,000 行）满了时，新行被丢弃，并计入状态行的 `records_dropped`。与服务端的用量日志相同，文件每隔 `request_log_rotation_interval_hours`（默认 1）小时轮转一次，保留 `request_log_backup_count` 个旧文件（默认 168，即一周的每小时文件）；旧文件以开始时的 UTC 小时命名，如 `requests.jsonl.2026-01-31_13`。旧文件按个数而不是大小保留，占用的磁盘随流量增长；要限制占用，调低 `request_log_backup_count`。文件旁边有一个空的隐藏文件 `.<文件名>.lock`，如 `.requests.jsonl.lock`，日志采集的匹配规则应排除它。从按大小轮转的版本升级后，删除旧的 `requests.jsonl.1` … `.4`：它们不会被自动删除。这种输出需要单个 worker 进程：独立网关设 `workers: 1`，嵌入式网关需要服务端只有一个 worker；需要扩容时增加副本。在 Kubernetes 上，把文件放在日志采集器能读到的卷上，例如用 chart 的 `extraVolumes` 和 `extraVolumeMounts`：
 
 ```yaml
 config:
@@ -441,7 +441,7 @@ extraVolumeMounts:
     mountPath: /var/log/openviking-gateway
 ```
 
-`$HOSTNAME` 从环境变量解析为 Pod 名，每个 Pod 写自己的文件：副本之间绝不能共用一个日志文件。
+`$HOSTNAME` 从环境变量解析为 Pod 名，每个 Pod 写自己的文件，轮转后为 `<Pod 名>.jsonl.<YYYY-MM-DD_HH>`：副本之间绝不能共用一个日志文件。网关只清理本 Pod 的旧文件，已不存在的 Pod 留下的文件会一直留在节点上，需要由节点或日志采集系统清理。
 
 独立网关的应用日志在 stderr 或 `log_path` 指定的轮转文件中使用统一 UTC 文本格式。每条记录包含 `ts`、`level`、`logger`、`pid`、`request_id`、`trace_id` 和带引号的消息。异步写入前捕获上下文，缺失的关联 ID 使用 `-`。Uvicorn 同样使用此格式。请求和后台保存记录继续使用前述独立 JSON 格式。
 

@@ -5,7 +5,7 @@ import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } fro
 import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
 
 const pluginRoot = fileURLToPath(new URL("..", import.meta.url))
-const BUNDLED_SKILLS = ["openviking-memory", "openviking-rule-search", "openviking-skills", "ov-experience-memory"]
+const BUNDLED_SKILLS = ["openviking-memory", "openviking-rule-search", "openviking-skills", "ov-experience-memory", "ov-memory-doctor"]
 
 function runtimeFixture(overrides = {}) {
   const events = []
@@ -111,6 +111,7 @@ test("existing skills override bundled skills by ID or name", async () => {
     "openviking-rule-search",
     "openviking-skills",
     "ov-experience-memory",
+    "ov-memory-doctor",
     "project-memory",
   ])
   assert.equal(skillSources.find((skill) => skill.id === "openviking-skills").name, "Custom skills")
@@ -266,6 +267,23 @@ test("captureV2Context advances a per-session cursor and preserves tool parts", 
   events.length = 0
   await captureV2Context(ctx, manager, cursors, "ses_1")
   assert.deepEqual(events, [])
+})
+
+test("a trailing assistant message can be captured when its content becomes available", async () => {
+  const events = []
+  const assistant = { id: "msg_assistant", type: "assistant", content: [] }
+  const messages = [{ id: "msg_user", type: "user", text: "question" }, assistant]
+  const ctx = { session: { context: async () => messages }, storage: new Map() }
+  const manager = { handleEvent: async (event) => events.push(event) }
+
+  await captureV2Context(ctx, manager, new Map(), "ses_1")
+  assert.deepEqual(events.filter((event) => event.type === "message.updated").map((event) => event.properties.info.id), ["msg_user"])
+
+  events.length = 0
+  assistant.content = [{ type: "text", text: "answer" }]
+  await captureV2Context(ctx, manager, new Map(), "ses_1")
+  assert.deepEqual(events.filter((event) => event.type === "message.updated").map((event) => event.properties.info.id), ["msg_assistant"])
+  assert.equal(events.at(-1).properties.part.text, "answer")
 })
 
 test("v2 prompt, context, after-tool, and event failures are contained", async () => {

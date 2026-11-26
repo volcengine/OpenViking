@@ -1,8 +1,29 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import type { VikingBotReference } from '../../../components/viking-bot/index.js';
 import type { ConsoleChatOptions } from '../types.js';
 
 const emptyReferences: readonly VikingBotReference[] = [];
+
+export function useReplaceReference(
+  selection: ConsoleChatOptions['referenceSelection'],
+  enabled: boolean,
+) {
+  const onChange = selection?.onChange;
+  useImperativeHandle(
+    selection?.replaceRef,
+    () =>
+      ({ uri, name, type }) => {
+        if (enabled) onChange?.([{ uri, name, type }]);
+      },
+    [enabled, onChange],
+  );
+}
 
 export function useReferenceSelection(
   scope: object,

@@ -1,4 +1,5 @@
-export { ResizableHandle, clampResizableWidth } from './resizable-handle.js';
+export { clampResizableSize } from './clamp.js';
+export { ResizableHandle } from './resizable-handle.js';
 export type {
   ResizableHandleProps,
   ResizeDirection,

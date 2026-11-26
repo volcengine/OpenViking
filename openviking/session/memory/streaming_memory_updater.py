@@ -2243,13 +2243,7 @@ def _operation_lock_paths(
     viking_fs: Any | None,
     ctx: RequestContext,
 ) -> list[str]:
-    operation_uris = _operation_uri_set(operations)
-    uris = set(operation_uris)
-    for uri in operation_uris:
-        normalized_uri = str(uri).rstrip("/")
-        directory, separator, _ = normalized_uri.rpartition("/")
-        if separator and directory:
-            uris.add(f"{directory}/.overview.md")
+    uris = _operation_uri_set(operations)
     uris.update(_link_endpoint_uri_set(list(operations.resolved_links or [])))
     for deleted_uri, replacement_uri in dict(operations.delete_replacements or {}).items():
         if deleted_uri:
@@ -2269,49 +2263,6 @@ def _operation_lock_paths(
             if to_uri:
                 uris.add(str(to_uri))
     return _uri_lock_paths(uris, viking_fs, ctx)
-
-
-def _operation_tree_lock_paths(
-    operations: ResolvedOperations,
-    viking_fs: Any | None,
-    ctx: RequestContext,
-) -> list[str]:
-    """Tree-lock parent directories that may be emptied by this batch.
-
-    `generate_overview` follows any batch whose last file in a directory is removed with
-    a recursive rm of that directory, so the lease has to cover the parent. A same-dir
-    rename does not empty the parent (the target replaces the source in place), so those
-    can stay on exact locks.
-    """
-    replacements = dict(operations.delete_replacements or {})
-    directories: set[str] = set()
-    for source_uri, target_uri in replacements.items():
-        source_directory = str(source_uri).rstrip("/").rpartition("/")[0]
-        target_directory = str(target_uri).rstrip("/").rpartition("/")[0]
-        if source_directory and source_directory != target_directory:
-            directories.add(source_directory)
-    for memory_file in operations.delete_file_contents or []:
-        uri = getattr(memory_file, "uri", None)
-        if not uri:
-            continue
-        source_directory = str(uri).rstrip("/").rpartition("/")[0]
-        if not source_directory:
-            continue
-        replacement = replacements.get(str(uri))
-        if replacement:
-            replacement_directory = str(replacement).rstrip("/").rpartition("/")[0]
-            if replacement_directory == source_directory:
-                continue
-        directories.add(source_directory)
-    return _uri_lock_paths(directories, viking_fs, ctx)
-
-
-def _exclude_tree_covered_paths(exact_paths: set[str], tree_paths: set[str]) -> set[str]:
-    return {
-        path
-        for path in exact_paths
-        if not any(path == tree or path.startswith(f"{tree.rstrip('/')}/") for tree in tree_paths)
-    }
 
 
 async def _persisted_delete_relation_uris(
@@ -2353,25 +2304,15 @@ async def acquire_memory_operation_lease(
     # this before second-stage patch merging would present the same rename as
     # both an update patch and a delete patch.
     MemoryUpdater._materialize_uri_migrations(operations)
-    exact_paths = set(_operation_lock_paths(operations, viking_fs, ctx))
-    tree_paths = set(_operation_tree_lock_paths(operations, viking_fs, ctx))
-    exact_paths = _exclude_tree_covered_paths(exact_paths, tree_paths)
-    if not exact_paths and not tree_paths:
+    required_exact_paths = set(_operation_lock_paths(operations, viking_fs, ctx))
+    if not required_exact_paths:
         return None
 
-    required_exact_paths = set(exact_paths)
     for acquisition in range(1, _MEMORY_APPLY_LOCK_MAX_ACQUISITIONS + 1):
-        if tree_paths:
-            lease = await viking_fs._async_agfs.pathlock_acquire_exact_tree_batch(
-                sorted(required_exact_paths),
-                sorted(tree_paths),
-                timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
-            )
-        else:
-            lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
-                sorted(required_exact_paths),
-                timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
-            )
+        lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
+            sorted(required_exact_paths),
+            timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+        )
         try:
             relation_uris = await _persisted_delete_relation_uris(
                 operations,
@@ -2381,7 +2322,6 @@ async def acquire_memory_operation_lease(
             expanded_exact_paths = required_exact_paths | set(
                 _uri_lock_paths(relation_uris, viking_fs, ctx)
             )
-            expanded_exact_paths = _exclude_tree_covered_paths(expanded_exact_paths, tree_paths)
         except BaseException:
             await viking_fs._async_agfs.pathlock_release(lease)
             raise

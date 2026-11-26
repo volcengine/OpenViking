@@ -224,7 +224,7 @@ class TestExtractLoopFinalJsonRetry:
         updater._apply_upsert = AsyncMock()
         updater._sync_resource_refs_for_result = AsyncMock()
         updater._vectorize_memories = AsyncMock()
-        updater.generate_overview = AsyncMock()
+        updater._submit_directory_changes = AsyncMock()
         result = await updater.apply_operations(operations=resolved, ctx=loop.ctx)
 
         assert result.written_uris == ["viking://user/user_a/memories/events/kickoff.md"]

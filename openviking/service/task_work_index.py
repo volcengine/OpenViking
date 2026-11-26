@@ -201,6 +201,15 @@ def prepare_task_payload(
     )
 
 
+def extract_queue_account_id(message: Any) -> str | None:
+    """Read account ownership from tracked and untracked queue messages."""
+    payload = _payload_dict(message)
+    if payload is None:
+        return None
+    account_id, _ = _owner_from_payload(payload)
+    return account_id or None
+
+
 def extract_task_metadata(message: Any) -> Optional[QueueTaskMetadata]:
     """Read Task metadata from either a QueueFS envelope or its inner payload."""
     payload = _payload_dict(message)

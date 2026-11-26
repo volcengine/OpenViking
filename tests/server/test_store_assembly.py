@@ -2,50 +2,18 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
-from openviking.scheduling.expiry.config import ExpiryRedisConfig
-from openviking.scheduling.expiry.keys import ExpiryKeys
-from openviking.scheduling.expiry.metrics import ExpiryMetrics
-from openviking.scheduling.expiry.redis_store import RedisExpiryStore
-from openviking.scheduling.expiry.redis_store import create_redis_client as create_expiry_client
 from openviking.server.account_stores.file import FileStore
 from openviking.server.account_stores.redis_client import create_redis_client
 from openviking.server.config import AccountStoreConfig
+from openviking.server.identity import Role
 from openviking.server.store_assembly import build_api_key_manager
 from tests.server.account_store_fakes import InMemoryAGFS
 
 
-class _InlineExecutor:
-    async def run(self, operation):
-        return await operation()
-
-
-async def test_expiry_cluster_disables_client_level_command_retries(monkeypatch):
-    cluster = pytest.importorskip("redis.asyncio.cluster")
-    ping = AsyncMock(return_value=True)
-    monkeypatch.setattr(cluster.RedisCluster, "ping", ping)
-    store = RedisExpiryStore(
-        ExpiryRedisConfig(mode="cluster", endpoints=["127.0.0.1:6379"]),
-        ExpiryKeys("resource"),
-        _InlineExecutor(),
-        ExpiryMetrics(),
-    )
-    await store.open()
-    other_cluster = cluster.RedisCluster(host="127.0.0.1", port=6379)
-    try:
-        assert store._client.retry._retries == 0
-        assert other_cluster.retry._retries == 3
-        assert store._client.retry is not other_cluster.retry
-    finally:
-        await store.close()
-        await other_cluster.aclose()
-
-
-@pytest.mark.parametrize("factory", ["expiry", "account_store"])
-async def test_cluster_client_recovers_after_an_outage(monkeypatch, factory):
+async def test_account_store_cluster_client_recovers_after_an_outage(monkeypatch):
     cluster = pytest.importorskip("redis.asyncio.cluster")
     from redis.asyncio.connection import Connection
     from redis.exceptions import ConnectionError as RedisConnectionError
@@ -63,14 +31,9 @@ async def test_cluster_client_recovers_after_an_outage(monkeypatch, factory):
 
     monkeypatch.setattr(Connection, "send_packed_command", send_packed_command)
     monkeypatch.setattr(cluster.ClusterNode, "parse_response", parse_response)
-    if factory == "expiry":
-        client = create_expiry_client(
-            ExpiryRedisConfig(mode="cluster", endpoints=["redis:6379"], max_connections=2)
-        )
-    else:
-        client = create_redis_client(
-            {"mode": "cluster", "endpoints": ["redis://redis:6379"], "pool_size": 2}
-        ).client
+    client = create_redis_client(
+        {"mode": "cluster", "endpoints": ["redis://redis:6379"], "pool_size": 2}
+    ).client
     try:
         assert await client.ping()
         reachable = False
@@ -96,6 +59,15 @@ async def test_assembled_manager_supports_account_authentication(injected):
     await manager.load()
     try:
         key = await manager.create_account("acme", "alice")
-        assert (await manager.resolve_identity(key)).user_id == "alice"
+        identity = await manager.resolve_identity(key)
+        assert (identity.account_id, identity.user_id, identity.role) == (
+            "acme",
+            "alice",
+            Role.ADMIN,
+        )
+        if injected:
+            user = await account_store.get_user("acme", "alice")
+            assert user is not None
+            assert user["role"] == Role.ADMIN
     finally:
         await manager.close()

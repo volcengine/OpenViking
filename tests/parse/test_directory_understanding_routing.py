@@ -1,4 +1,5 @@
 import asyncio
+import io
 import zipfile
 from contextlib import nullcontext
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.accessors.web_crawler.models import CrawledPage, CrawlResult
 from openviking.parse.base import NodeType, ResourceNode, create_parse_result
+from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
 from openviking.parse.parser_router import ParserRouter
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.directory import DirectoryParser
@@ -21,6 +23,7 @@ from openviking.utils.media_processor import UnifiedResourceProcessor
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.open_viking_config import ParserApiConfig
+from tests.parse.test_parser_config_wiring import write_text_pdf
 
 
 class _FakeVikingFS:
@@ -354,32 +357,71 @@ async def test_directory_recursively_routes_understanding_files(
 
 
 @pytest.mark.asyncio
-async def test_directory_does_not_preflight_understanding_file_size(
+async def test_oversized_understanding_file_does_not_discard_valid_sibling(
     monkeypatch,
     tmp_path: Path,
 ):
+    source = tmp_path / "source"
+    source.mkdir()
+    large_pdf = source / "large.pdf"
+    small_pdf = source / "small.pdf"
+    write_text_pdf(small_pdf, ["One paragraph"])
+    write_text_pdf(large_pdf, ["One paragraph", "A second paragraph"])
+    limit = small_pdf.stat().st_size
     _configure_understanding(
         monkeypatch,
         ["pdf"],
-        upload_simple_max_bytes=8,
+        upload_simple_max_bytes=limit,
         enable_resumable_upload=False,
     )
-    large_pdf = tmp_path / "large.pdf"
-    small_pdf = tmp_path / "small.pdf"
-    large_pdf.write_bytes(b"%PDF-1.7+")
-    small_pdf.write_bytes(b"%PDF-1.7")
-    calls: list[Path] = []
+    uploads = []
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zipped:
+        zipped.writestr("0.md", "parsed small PDF")
 
-    with (
-        patch.object(BaseParser, "_get_viking_fs", return_value=_FakeVikingFS()),
-        patch.object(ParserRouter, "parse", new=_fake_understanding_parse(calls)),
-        patch.object(DirectoryParser, "_merge_temp", new=AsyncMock(return_value=True)),
-    ):
-        result = await DirectoryParser().parse(str(tmp_path), strict=True)
+    def respond(request):
+        match request.url.path:
+            case "/api/v3/files":
+                uploads.append(request.content)
+                return httpx.Response(200, json={"id": "file-small"})
+            case "/api/v3/responses":
+                return httpx.Response(200, json={"id": "response-small"})
+            case "/api/v3/responses/response-small":
+                return httpx.Response(
+                    200,
+                    json={
+                        "status": "completed",
+                        "result": {"zip_url": "https://downloads.example.test/result.zip"},
+                    },
+                )
+            case "/result.zip":
+                return httpx.Response(200, content=archive.getvalue())
+            case _:
+                pytest.fail(f"Unexpected parser request: {request.url.path}")
 
-    assert calls == [large_pdf, small_pdf]
-    assert result.meta["file_count"] == 2
-    assert result.meta["skipped_files"] == []
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kwargs: client(transport=transport, **kwargs)
+    )
+    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
+
+    result = await DirectoryParser().parse(source, strict=True, parse_output_store=store)
+
+    [upload] = uploads
+    assert b'filename="small.pdf"' in upload
+    assert small_pdf.read_bytes() in upload
+    assert result.meta["file_count"] == 1
+    [failure] = result.meta["failed_files"]
+    assert failure["path"] == "large.pdf"
+    assert (
+        f"file too large: size={large_pdf.stat().st_size}, upload_simple_max_bytes={limit}"
+        in (failure["error"])
+    )
+    assert result.artifact_ref is not None
+    assert set(await read_artifact_manifest(store, result.artifact_ref)) == {"source/small/0.md"}
+    assert await store.read_bytes(result.artifact_ref, "source/small/0.md") == b"parsed small PDF"
+    assert list((tmp_path / "artifacts").iterdir()) == [Path(result.artifact_ref.root)]
 
 
 @pytest.mark.asyncio

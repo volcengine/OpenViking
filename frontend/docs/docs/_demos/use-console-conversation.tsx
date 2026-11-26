@@ -109,13 +109,21 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
         id: 'wiki',
         label: 'Wiki',
         prompt: prompts[0],
-        icon: <VikingBotIcon name="book" />,
+        icon: (
+          <VikingBotIcon
+            name="book"
+            width={14}
+            height={14}
+            viewBox="-0.833333 -2.357143 16 16"
+            strokeWidth={8 / 7}
+          />
+        ),
       },
       {
         id: 'report',
         label: zh ? '定时日报' : 'Scheduled report',
         prompt: prompts[1],
-        icon: <VikingBotIcon name="report" />,
+        icon: <VikingBotIcon name="report" width={14} height={14} />,
       },
     ],
     sessions: {

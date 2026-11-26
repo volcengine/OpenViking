@@ -15,7 +15,11 @@ openviking-server init
 openviking-server doctor
 ```
 
-`openviking-server init` prompts for embedding and VLM settings separately. For API-based VLM choices such as `OpenAI`, `Volcengine`, `Kimi`, and `GLM`, enter the VLM API key when prompted. If you want to use Codex as the VLM provider, choose `OpenAI Codex`; the wizard can import existing Codex auth or guide you through login directly.
+The wizard configures Embedding and VLM. API-based providers require credentials; `OpenAI Codex` supports importing existing authentication or logging in.
+
+`enable_default_resources` defaults to `true`, supplying omitted local Embedding/VectorDB resources and preset directories for the default Account. `false` disables these defaults; explicit Cluster resources remain available. System files follow `reconcile_system_assets_on_startup`.
+
+`dev` and `trusted` require valid Cluster VLM, Embedding, and VectorDB. With defaults disabled, `api_key` can start without Cluster resources; ROOT supplies them through [Account creation settings](../api/08-admin.md#account-configuration-reference). `api_key` and `trusted` create a default Account record only when Cluster resources are valid.
 
 ## Configuration File
 
@@ -1109,7 +1113,7 @@ needs those platform-specific URL semantics. Add other Git hosts to
 
 ### pdf
 
-PDF parsing configuration. Three strategies are supported: `local` (local pdfplumber), `mineru` (remote MinerU API), and `auto` (try local first, fall back to MinerU).
+PDF parsing configuration. `local` parses on this machine, `mineru` requires remote parsing to succeed, and `auto` sends PDFs to the configured MinerU endpoint first and falls back to local parsing on failure. With no endpoint, `auto` parses locally.
 
 ```json
 {
@@ -1130,10 +1134,11 @@ PDF parsing configuration. Three strategies are supported: `local` (local pdfplu
 |-----------|------|-------------|
 | `strategy` | str | Parsing strategy: `local` / `mineru` / `auto` (default `auto`) |
 | `mineru_endpoint` | str | MinerU API **base URL** (e.g. `http://127.0.0.1:8000`) |
-| `mineru_timeout` | float | Request timeout in seconds (default `300.0`) |
-| `mineru_bodys` | dict | MinerU API multipart form fields |
+| `mineru_timeout` | float | Timeout in seconds for requests and hosted result polling (default `300.0`) |
+| `mineru_bodys` | dict | Additional MinerU request fields (self-hosted form or hosted JSON) |
+| `mineru_token` | str | Bearer token for the hosted MinerU v4 API |
 
-**MinerU protocol**: a synchronous `POST {mineru_endpoint}/file_parse` request with the PDF as the multipart `files` field; form parameters are passed through from `mineru_bodys`.
+For self-hosted MinerU, use its base URL. OpenViking sends the PDF to `/file_parse`. For hosted MinerU, set `mineru_endpoint` to `https://mineru.net/api/v4` and provide `mineru_token`. OpenViking uses the v4 upload and result APIs.
 
 ### External parser API (`parser_api`) {#parser-api}
 
@@ -1401,7 +1406,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `agfs` | object | RAGFS (Rust-based AGFS) configuration | {} |
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
-| `watch_store` | object | Watch store: `file` (single node), `mysql` or `postgres` (shared) | `{"provider":"file"}` |
+| `watch_store` | object | Watch store: `file` (single process), `sqlite` (one host), or `mysql` / `postgres` (shared) | `{"provider":"file"}` |
 
 
 ```json
@@ -1506,6 +1511,40 @@ across processes sharing tasks. Changing providers does not migrate existing
 tasks; plan the data migration before switching a deployed store.
 
 #### watch_store
+
+For durable local Watch metadata, install `openviking[sqlite]` and select
+`sqlite`. The database and tables are created automatically. By default the
+database is `{storage.workspace}/_system/watch/watch.db`; `params.path` can
+override it with an absolute path on local disk. `params.table` defaults to
+`ov_watch_tasks` and `params.busy_timeout_ms` to `5000` (a positive integer).
+SQLite acquires its writer lock before reading transaction state.
+Transactions are serialized, including reads, so this backend is intended for
+local deployments with modest Watch traffic. Multiple processes on the same
+host can share the database and `service_name`; different service names isolate
+their rows. Do not put the SQLite database on NFS/EFS or share it across hosts.
+Selecting SQLite does not change the Task store or PathLock backend; configure
+shared coordination and target locks separately if multiple processes run the
+scheduler. SQLite does not automatically select Redis coordination.
+
+```json
+{
+  "storage": {
+    "watch_store": {
+      "provider": "sqlite",
+      "params": {
+        "credential_encryption_key": "base64-encoded-32-byte-key"
+      }
+    }
+  }
+}
+```
+
+Like MySQL, SQLite requires `params.credential_encryption_key` (base64-encoded
+32 bytes) to encrypt private `auth_state` and `connector_states` with AES-GCM.
+Keep the key across restarts and use the same key for processes sharing rows.
+Reservations, Task associations, deleted-but-running Watches and checkpoint
+versions survive restart and retain the existing missing-Task grace period.
+Existing file-provider Watches are not imported automatically.
 
 The default `file` provider keeps Watch tasks in the internal control file
 `viking://resources/.watch_tasks.json`, as earlier releases did; it belongs to
@@ -1886,11 +1925,13 @@ Move Provider settings to `cache.instances.<name>`, set top-level `service_name`
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `mode` | str | QueueFS namespace mode: `"shared"` uses `/queue`; `"worker"` isolates each worker under `/queue/worker-<index\|pid>` | `"shared"` |
-| `backend` | str | QueueFS backend: `"memory"`, `"sqlite"`, `"sqlite3"`, or `"cache"` | `"sqlite"` |
+| `backend` | str | QueueFS backend: `"memory"`, `"sqlite"`, `"sqlite3"`, `"cache"`, or `"postgres"` | `"sqlite"` |
 | `instance` | str | Runtime selected when `backend="cache"` | `"default"` |
 | `db_path` | str (optional) | SQLite database path for QueueFS when backend is `"sqlite"` or `"sqlite3"` | `null` |
 | `recover_stale_sec` | int | Recover `processing` queue messages older than this many seconds on startup. `0` means recover all stale processing messages | `0` |
 | `busy_timeout_ms` | int | SQLite busy timeout for QueueFS in milliseconds | `5000` |
+| `postgres_dsn_env` | str / null | Required for `postgres`: environment variable holding the DSN | `null` |
+| `postgres_lease_seconds` | int | PostgreSQL consumer lease duration, `10..=86400` seconds | `60` |
 
 Notes:
 
@@ -1898,6 +1939,7 @@ Notes:
 - `mode=shared` keeps the historical global queue namespace at `/queue`; `mode=worker` isolates each worker under `/queue/worker-<index|pid>`.
 - `db_path` is only used when QueueFS backend is `sqlite` or `sqlite3`.
 - `backend=cache` selects `queuefs.instance` from `cache.instances` and uses top-level `service_name` as the key prefix.
+- `backend=postgres` connects directly to PostgreSQL and uses top-level `service_name` as its namespace. Provision the schema before startup; see [PostgreSQL QueueFS](15-postgres-queuefs.md). It does not require Redis.
 - `recover_stale_sec` and `busy_timeout_ms` apply only to SQLite backends.
 - Redis Cluster endpoints are seed nodes, and `db` must be `0`. Slot routing, `MOVED`/`ASK`, topology refresh, and reconnects are handled by Fred RedisProvider.
 - Redis Sentinel endpoints are Sentinel nodes and require a non-empty `master_name`; the provider handles master discovery and reconnects.
@@ -2236,27 +2278,44 @@ Notes:
 - When `enabled=false`, sessions created without an explicit or `server.user_config_defaults.auto_commit_policy` policy keep auto commit disabled and return `auto_commit_policy: null`; `SessionAutoCommitScheduler` is not started.
 - When `enabled=true`:
   - Sessions without an explicit or deployment-default policy get the built-in policy below.
-  - With `idle_backend="local"`, `SessionAutoCommitScheduler` starts a scan round immediately, then waits at least `check_interval_seconds` before the next round. Session `.meta.json` files are read serially at no more than `scan_rate_limit_files_per_second`.
-  - With `idle_backend="redis"`, the server enables expiry reporting, publishing, and callback consumption together using the top-level `expiry` configuration.
+  - With `idle_backend="local"`, `scheduler` nodes run `SessionAutoCommitScheduler`, which scans immediately and waits at least `check_interval_seconds` between rounds. Session `.meta.json` files are read serially at no more than `scan_rate_limit_files_per_second`.
+  - With `idle_backend="redis"`, top-level `expiry` settings control shared scheduling: `scheduler` nodes publish due events and `queue_worker` nodes execute callbacks.
 - Token- and message-count auto commit run inline after message writes, do not depend on the scheduler, but still require the session to carry an `auto_commit_policy`.
 
 #### Distributed Expiry Configuration
 
-All API, publisher, and callback instances that share expiry state must use the same stable `service_name`. It identifies the deployed document service, not an individual pod.
+All nodes sharing expiry state must use the same stable `service_name`. It identifies the deployed document service, not an individual pod. See [server roles](../configuration/03-server-roles.md).
 
 ```json
 {
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://redis-cache.example.com:6379"]
+        }
+      },
+      "expiry": {
+        "provider": "redis",
+        "params": {
+          "mode": "cluster",
+          "endpoints": ["redis://redis-proxy.example.com:6379"],
+          "username": "openviking",
+          "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD",
+          "default_ttl_seconds": 0
+        }
+      }
+    }
+  },
   "expiry": {
     "service_name": "openviking-documents",
     "publisher_separate_process": true,
     "shard_count": 128,
     "session_consumer_concurrency": 8,
-    "redis": {
-      "mode": "cluster",
-      "endpoints": ["redis://redis-proxy.example.com:6379"],
-      "username": "openviking",
-      "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD"
-    }
+    "cache": {"instance": "expiry"},
+    "request_budget_seconds": 5,
+    "max_inflight_requests": 128
   }
 }
 ```
@@ -2264,16 +2323,43 @@ All API, publisher, and callback instances that share expiry state must use the 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `service_name` | string | Stable document service name shared by all instances using the same expiry data | `""` |
-| `publisher_separate_process` | bool | Let `openviking-server` supervise publisher in a dedicated child process; when `false`, publisher runs in each API process | `true` |
+| `publisher_separate_process` | bool | On `scheduler` nodes, supervise publisher in a child process; when `false`, run it inside each `scheduler` process | `true` |
 | `shard_count` | int | Number of logical expiry shards; all instances sharing a namespace must use the same value, in the range `1..512` | `128` |
-| `session_consumer_concurrency` | int | Concurrent Session expiry callbacks per API process; must be greater than `0` | `8` |
-| `redis.mode` | string | Redis deployment mode: `standalone` or `cluster` | `standalone` |
-| `redis.endpoints` | string array | Redis endpoints; a cluster may use one proxy endpoint | `[]` |
-| `redis.username` | string | Redis ACL username | `""` |
-| `redis.password_env` | string | Environment variable containing the Redis password; startup fails if it is not set | `""` |
-| `redis.password` | string | Legacy plaintext password; prefer `password_env`; mutually exclusive with it | `""` |
+| `session_consumer_concurrency` | int | Concurrent Session expiry callbacks per `queue_worker` process; must be greater than `0` | `8` |
+| `cache.instance` | string | Named Redis CacheRuntime selected for expiry state | required when expiry is enabled |
+| `request_budget_seconds` | number | Total budget for one expiry Store operation; must be shorter than owner renewal | `5` |
+| `max_inflight_requests` | int | Maximum concurrent expiry Store operations | `128` |
 
-`service_name` and Redis endpoints are required when Redis idle auto commit is enabled. Credentials must use the dedicated fields above and cannot be embedded in endpoint URIs. With the default `publisher_separate_process=true`, `openviking-server` starts one internal publisher before serving traffic, stops it during shutdown, and exits if that child fails unexpectedly. This publisher is not exposed as a public CLI command.
+The selected `cache.instances.<instance>` must use `provider="redis"` and set
+`params.default_ttl_seconds=0`. Expiry state is durable scheduling state, so
+only its Lua scripts set TTLs for metadata and owner leases.
+
+`service_name` and `cache.instance` are required when Redis idle auto commit is
+enabled. Redis endpoints, credentials, pool size, and timeouts belong in
+`cache.instances.<instance>.params`; credentials cannot be embedded in endpoint
+URIs. With the default `publisher_separate_process=true`, `openviking-server`
+starts one internal publisher before serving traffic, stops it during shutdown,
+and exits if that child fails unexpectedly. This publisher is not exposed as a
+public CLI command.
+
+`expiry.redis` is not supported. Move its connection fields to
+`cache.instances.<instance>.params`, move `request_budget_seconds` and
+`max_inflight_requests` directly under `expiry`, then set
+`expiry.cache.instance` to that instance name.
+
+| Old field | New field | Migration |
+| --- | --- | --- |
+| `expiry.redis.mode` | `cache.instances.<instance>.params.mode` | Copy the value. |
+| `expiry.redis.endpoints` | `cache.instances.<instance>.params.endpoints` | Add `redis://` or `rediss://`; bare `host:port` values are rejected. |
+| `expiry.redis.tls` | endpoint scheme | Preserve an explicit `redis://` or `rediss://` scheme; use `rediss://` only when converting a bare endpoint with `tls=true`. |
+| `expiry.redis.username` | `cache.instances.<instance>.params.username` | Copy the value. |
+| `expiry.redis.password_env` | `cache.instances.<instance>.params.password_env` | Copy the value. |
+| `expiry.redis.password` | `cache.instances.<instance>.params.password` | Copy the value; prefer `password_env` for new deployments. |
+| `expiry.redis.connect_timeout_seconds` | `connect_timeout_ms` | Multiply by 1000. |
+| `expiry.redis.socket_timeout_seconds` | `command_timeout_ms` | Multiply by 1000. |
+| `expiry.redis.max_connections` | `pool_size` | Copy the value. |
+| `expiry.redis.request_budget_seconds` | `expiry.request_budget_seconds` | Copy the value. |
+| `expiry.redis.max_inflight_requests` | `expiry.max_inflight_requests` | Copy the value. |
 
 ##### Per-session Auto Commit Policy
 
@@ -2423,10 +2509,10 @@ deployment boundary when multiple OpenViking clusters share a database. Changing
 `service_name` selects a different logical account-store partition.
 
 The provider never creates or migrates database tables. Create the normalized
-tables in `openviking/server/account_stores/sql/init.sql` through your normal
-DBA or deployment process before starting the server. Future reviewed schema
-changes are stored as ordered SQL files in
-`openviking/server/account_stores/sql/changes/`. The five `ov_accounts*` table
+tables in `openviking/server/account_stores/sql/init.sql`, then apply the ordered
+migrations in `openviking/server/account_stores/sql/changes/` through your normal
+DBA or deployment process before starting the server. Existing databases apply
+only migrations not yet recorded by that process. The five `ov_accounts*` table
 names are fixed; use distinct top-level `service_name` values rather than
 separate table prefixes to isolate OpenViking clusters that share a database.
 
@@ -2452,8 +2538,10 @@ separate table prefixes to isolate OpenViking clusters that share a database.
 For PostgreSQL Account Store, install `pip install 'openviking[postgres]'` and
 select the `postgres` provider. It connects through psycopg 3 and SQLAlchemy;
 Redis and pgvector are not required. Provision
-`openviking/server/account_stores/sql/postgres/init.sql` with your migration role
-before startup. The runtime never creates or migrates tables. Grant the runtime
+`openviking/server/account_stores/sql/postgres/init.sql`, then apply
+`openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql` with
+your migration role before startup. Existing databases apply this migration once.
+The runtime never creates or migrates tables. Grant the runtime
 role schema `USAGE`, `SELECT, INSERT, UPDATE, DELETE` on the five `ov_accounts*`
 tables, and `USAGE, SELECT` on their three primary-key sequences. Table ownership
 and schema `CREATE` are not required. A new deployment creates the `default`

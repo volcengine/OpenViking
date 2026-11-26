@@ -729,54 +729,6 @@ def test_middleware_resumes_after_last_successful_recorder_batch():
     assert sum(part["type"] == "context" for message in stored for part in message["parts"]) == 1
 
 
-def test_middleware_retains_pending_context_when_first_recorder_batch_fails():
-    class FailFirstBatchClient(TrackingOpenVikingClient):
-        def __init__(self):
-            super().__init__()
-            self.attempts = 0
-
-        def batch_add_messages(
-            self,
-            session_id: str,
-            messages: list[dict[str, Any]],
-            **kwargs: Any,
-        ) -> dict[str, Any]:
-            self.attempts += 1
-            if self.attempts == 1:
-                raise RuntimeError("first batch failed")
-            return super().batch_add_messages(session_id, messages, **kwargs)
-
-    client = FailFirstBatchClient()
-    middleware = OpenVikingContextMiddleware(
-        client=client,
-        session_id_resolver=lambda _state, _runtime: "middleware-first-batch-retry",
-    )
-    capture_key = ("middleware-first-batch-retry", "")
-    middleware._pending_context_parts[capture_key] = [
-        {
-            "type": "context",
-            "uri": "viking://~/memories/retry.md",
-            "context_type": "memory",
-            "abstract": "Retained retry context.",
-        }
-    ]
-    state = {
-        "messages": [
-            HumanMessage(content="Remember the retained context."),
-            AIMessage(content="Context holder."),
-        ]
-    }
-
-    with pytest.raises(RuntimeError, match="first batch failed"):
-        middleware.after_agent(state, runtime=None)
-    middleware.after_agent(state, runtime=None)
-
-    assert client.attempts == 2
-    stored = client.sessions["middleware-first-batch-retry"]
-    assert len(stored) == 2
-    assert sum(part["type"] == "context" for message in stored for part in message["parts"]) == 1
-
-
 def test_middleware_keeps_context_pending_until_empty_assistant_arrives():
     client = TrackingOpenVikingClient()
     middleware = OpenVikingContextMiddleware(

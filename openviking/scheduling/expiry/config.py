@@ -4,74 +4,28 @@
 
 from __future__ import annotations
 
-import os
+import re
 from typing import Literal
-from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_CACHE_INSTANCE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-class ExpiryRedisConfig(BaseModel):
+class ExpiryCacheConfig(BaseModel):
+    """Select the named CacheRuntime used by distributed expiry scheduling."""
+
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    mode: Literal["standalone", "cluster"] = "standalone"
-    endpoints: list[str] = Field(default_factory=list)
-    username: str = ""
-    password_env: str = ""
-    password: str = Field(default="", repr=False)
-    tls: bool = False
-    connect_timeout_seconds: float = Field(default=1.0, gt=0)
-    socket_timeout_seconds: float = Field(default=2.0, gt=0)
-    request_budget_seconds: float = Field(default=5.0, gt=0)
-    max_connections: int = Field(default=64, ge=1)
-    max_inflight_requests: int = Field(default=128, ge=1)
+    instance: str = Field(min_length=1)
 
-    @model_validator(mode="after")
-    def validate_connection(self) -> "ExpiryRedisConfig":
-        if self.password and self.password_env:
-            raise ValueError("Redis password and password_env are mutually exclusive")
-        if self.mode == "standalone" and len(self.endpoints) > 1:
-            raise ValueError("standalone Redis accepts at most one endpoint")
-        schemes: set[str] = set()
-        for endpoint in self.endpoints:
-            normalized = (
-                endpoint
-                if "://" in endpoint
-                else (("rediss" if self.tls else "redis") + f"://{endpoint}")
-            )
-            try:
-                parsed = urlsplit(normalized)
-                valid_address = bool(parsed.hostname and parsed.port)
-            except ValueError:
-                # urlsplit/.port errors can echo untrusted endpoint fragments.
-                raise ValueError("invalid Redis endpoint") from None
-            if parsed.scheme not in {"redis", "rediss"} or not valid_address:
-                raise ValueError("invalid Redis endpoint")
-            if (
-                parsed.username is not None
-                or parsed.password is not None
-                or parsed.path not in {"", "/"}
-                or parsed.query
-                or parsed.fragment
-            ):
-                raise ValueError(
-                    "Redis endpoints must not contain credentials, paths, "
-                    "query parameters, or fragments; use dedicated Redis fields"
-                )
-            schemes.add(parsed.scheme)
-        if len(schemes) > 1:
-            raise ValueError("Redis cluster endpoints must use one transport scheme")
-        return self
-
-    def resolve_password(self) -> str | None:
-        if self.password_env.strip():
-            try:
-                return os.environ[self.password_env]
-            except KeyError as exc:
-                raise ValueError(
-                    f"Redis secret environment variable {self.password_env} is not set"
-                ) from exc
-        return self.password if self.password.strip() else None
+    @field_validator("instance")
+    @classmethod
+    def validate_instance(cls, value: str) -> str:
+        """Validate the CacheRuntime selector against named cache instance rules."""
+        if not _CACHE_INSTANCE_NAME_RE.fullmatch(value):
+            raise ValueError("expiry.cache.instance must match [A-Za-z0-9_-]+")
+        return value
 
 
 class ExpiryConfig(BaseModel):
@@ -90,18 +44,17 @@ class ExpiryConfig(BaseModel):
     processing_timeout_seconds: int = Field(default=120, ge=1)
     callback_poll_seconds: float = Field(default=0.5, gt=0)
     shutdown_timeout_seconds: float = Field(default=30.0, gt=0)
-    redis: ExpiryRedisConfig = Field(default_factory=ExpiryRedisConfig)
+    cache: ExpiryCacheConfig | None = None
+    request_budget_seconds: float = Field(default=5.0, gt=0)
+    max_inflight_requests: int = Field(default=128, ge=1)
 
     def validate_for_runtime(self) -> None:
+        """Validate fields required when one process starts expiry scheduling."""
         if not self.service_name.strip():
             raise ValueError(
-                "expiry.service_name is required when Redis expiry scheduling is enabled"
+                "expiry.service_name is required when expiry scheduling is enabled"
             )
-        if not self.redis.endpoints:
-            raise ValueError(
-                "expiry.redis.endpoints is required when Redis expiry scheduling is enabled"
-            )
-        if self.redis.mode == "standalone" and len(self.redis.endpoints) != 1:
-            raise ValueError("standalone Redis requires exactly one endpoint")
-        if self.redis.request_budget_seconds >= self.owner_renew_interval_seconds:
-            raise ValueError("Redis request budget must be shorter than owner renew interval")
+        if self.cache is None:
+            raise ValueError("expiry.cache.instance is required when expiry scheduling is enabled")
+        if self.request_budget_seconds >= self.owner_renew_interval_seconds:
+            raise ValueError("expiry request budget must be shorter than owner renew interval")

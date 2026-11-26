@@ -8,7 +8,8 @@ import { dashboardKey, type FileBrowserDashboard } from './dashboard-model.js';
 import { ExperienceDashboardPane } from './experience-dashboard-pane.js';
 import type { FileBrowserExperienceDataSource } from './experience-data-source.js';
 import type { FileBrowserDashboardLabels } from './types.js';
-import { WikiDashboardPane } from './wiki-dashboard-pane.js';
+import { WikiDashboardView } from './wiki-dashboard-pane.js';
+import type { useWikiDashboard } from './use-wiki-dashboard.js';
 
 export function createDashboardTab(
   dashboard: FileBrowserDashboard,
@@ -17,8 +18,8 @@ export function createDashboardTab(
     labels,
     requestOptions,
     generation,
-    conflictRevision,
     isFile,
+    wikiQuery,
     experienceDataSource,
     experienceDashboardSlots,
     renderDashboard,
@@ -29,8 +30,8 @@ export function createDashboardTab(
     labels?: FileBrowserDashboardLabels;
     requestOptions?: OvRequestOptions;
     generation: number;
-    conflictRevision: number;
     isFile: boolean;
+    wikiQuery: ReturnType<typeof useWikiDashboard>;
     experienceDataSource?: FileBrowserExperienceDataSource;
     experienceDashboardSlots?: ExperienceDashboardProps['slots'];
     renderDashboard?: (dashboard: FileBrowserDashboard) => ReactNode;
@@ -41,10 +42,26 @@ export function createDashboardTab(
   const { uri } = dashboard;
   const text = dashboardLabels(locale, labels);
   const experience = dashboard.kind === 'experience';
-  const common = { uri, locale, requestOptions, onOpenUri };
+  const result = wikiQuery.data;
+  const count =
+    result?.kind === 'file'
+      ? result.data.conflicts.filter((conflict) => conflict.state === 'unfixed')
+          .length
+      : result?.data.conflictFileCount;
+  const common = { uri, locale, onOpenUri };
   return {
     key: dashboardKey(uri),
     title: experience ? text.experienceTitle : text.wikiTitle,
+    badge:
+      !experience && count !== undefined && count > 0
+        ? {
+            count,
+            label:
+              result?.kind === 'file'
+                ? text.wikiConflictCount(count)
+                : text.wikiConflictFileCount(count),
+          }
+        : undefined,
     icon: createElement(experience ? ExperienceBoardIcon : WikiBoardIcon, {
       width: 14,
       height: 14,
@@ -56,14 +73,15 @@ export function createDashboardTab(
       (experience
         ? createElement(ExperienceDashboardPane, {
             ...common,
+            requestOptions,
             dataSource: experienceDataSource,
             slots: experienceDashboardSlots,
             refreshGeneration: generation,
           })
-        : createElement(WikiDashboardPane, {
+        : createElement(WikiDashboardView, {
             ...common,
             kind: isFile ? 'file' : 'directory',
-            refreshGeneration: generation + conflictRevision,
+            query: wikiQuery,
             onOpenDashboard,
           })),
   };

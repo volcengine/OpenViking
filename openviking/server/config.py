@@ -20,10 +20,9 @@ from pydantic import (
     model_validator,
 )
 
-# Import auth plugin registry for config validation
+from openviking.scheduling.expiry.config import ExpiryCacheConfig
 from openviking.server.auth.ldap_config import LDAPConfig
 from openviking.server.auth.oidc_config import OIDCConfig
-from openviking.server.auth.registry import get_registry
 from openviking.server.identity import AuthMode
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
@@ -175,6 +174,7 @@ class UserConfig(BaseModel):
     memory_policy: Optional[UserMemoryPolicy] = None
     ttl: Optional[TTLConfig] = None
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
+    team_compile_status: Literal["open", "closed", "suspend"] = "closed"
     agent_evolution: DeprecatedUserAgentEvolutionConfig = Field(
         default_factory=DeprecatedUserAgentEvolutionConfig,
         exclude=True,
@@ -204,6 +204,7 @@ class UserSettingsPatch(BaseModel):
     memory_policy: Optional[UserMemoryPolicy] = None
     ttl: Optional[TTLConfig] = None
     privacy: Optional[PrivacyConfig] = None
+    team_compile_status: Literal["open", "closed", "suspend"] = "closed"
 
 
 def validate_config_input(
@@ -372,15 +373,28 @@ class UsageReporterConfig(BaseModel):
 
 
 class TTLAdapterConfig(BaseModel):
-    """Opt-in Redis-backed directory TTL configuration.
+    """Opt-in CacheRuntime-backed directory TTL configuration.
 
-    Uses the built-in implementation, supplied with its ResourceID, Redis
-    connection and writer/reader role through ``config``. No external Python
-    package is required. Unset or disabled leaves all TTL hooks inactive.
+    Uses the built-in implementation, supplied with its ResourceID and
+    writer/reader role through ``config``. ``cache`` selects the RAGFS-owned
+    named Runtime. Unset or disabled leaves all TTL hooks inactive.
     """
 
     enabled: bool = False
+    cache: ExpiryCacheConfig = Field(
+        default_factory=lambda: ExpiryCacheConfig(instance="default")
+    )
     config: Dict[str, object] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_legacy_redis_config(self) -> "TTLAdapterConfig":
+        """Require directory TTL Redis settings to live in the selected Runtime."""
+        if "redis" in self.config:
+            raise ValueError(
+                "ttl_adapter.config.redis is not supported; configure "
+                "cache.instances.<name>.params and ttl_adapter.cache.instance"
+            )
+        return self
 
     @property
     def writer_enabled(self) -> bool:
@@ -465,7 +479,10 @@ class AccountStoreConfig(BaseModel):
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
-    workers: int = 1
+    workers: int = Field(default=1, ge=1)
+    roles: List[Literal["api", "queue_worker", "scheduler"]] = Field(
+        default_factory=lambda: ["api", "queue_worker", "scheduler"], min_length=1
+    )
     executor_threads: int = Field(
         default=64,
         ge=0,
@@ -525,6 +542,11 @@ class ServerConfig(BaseModel):
     @classmethod
     def normalize_user_config_defaults(cls, value: Any) -> Any:
         return value.model_dump() if isinstance(value, UserConfig) else value
+
+    @field_validator("roles")
+    @classmethod
+    def unique_roles(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
 
     def get_effective_auth_mode(self) -> str:
         """Get effective auth mode, auto-detecting if not explicitly set.
@@ -702,14 +724,6 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     )
 
 
-_LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-def _is_localhost(host: str) -> bool:
-    """Return True if *host* resolves to a loopback address."""
-    return host in _LOCALHOST_HOSTS
-
-
 def load_bot_gateway_token(config_path: Optional[str] = None) -> str:
     """Load bot gateway token from ov.conf bot.gateway.token."""
     path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
@@ -758,6 +772,7 @@ def validate_server_config(config: ServerConfig) -> None:
     # If a non-built-in plugin has already claimed a built-in mode name,
     # log a security warning and forcefully override it.
     from openviking.server.auth.plugins import ApiKeyAuthPlugin, DevAuthPlugin, TrustedAuthPlugin
+    from openviking.server.auth.registry import get_registry
 
     registry = get_registry()
     _BUILTIN_PLUGINS = {
