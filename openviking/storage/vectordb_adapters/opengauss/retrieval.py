@@ -14,7 +14,7 @@ import json
 import math
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, Protocol, cast
 
 from openviking.storage.vectordb.collection.result import SearchItemResult, SearchResult
 from openviking_cli.exceptions import (
@@ -34,13 +34,22 @@ from .sql import (
     _validate_vector,
 )
 
-if TYPE_CHECKING:
-    from .collection import OpenGaussCollection
-
 MAX_SPARSE_NONZERO = 4096
 MAX_SPARSE_TERM_BYTES = 256
 MAX_CANDIDATE_LIMIT = 10000
 DEFAULT_CANDIDATE_LIMIT = 1000
+
+
+class _DenseCandidateCollection(Protocol):
+    """Collection methods needed by the hook, without importing its concrete owner."""
+
+    _array_fields: set[str]
+
+    def _normalize_filter_date_times(
+        self, filters: dict[str, Any] | None
+    ) -> dict[str, Any] | None: ...
+
+    def _resolve_distance_and_op(self, index_name: str) -> tuple[str, str]: ...
 
 
 def _finite_number(value: Any, name: str) -> float:
@@ -454,7 +463,7 @@ class OpenGaussRetrievalMixin:
 
     def _dense_candidate_ctes(self, index_name, vector_text, budget, filters):
         """Backend hook shared by dense recall and sparse/advanced reranking."""
-        collection = cast("OpenGaussCollection", self)
+        collection = cast(_DenseCandidateCollection, self)
         where, params = _build_where_clause(
             collection._normalize_filter_date_times(filters), collection._array_fields
         )
