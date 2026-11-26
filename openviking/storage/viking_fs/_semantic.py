@@ -776,7 +776,11 @@ class _SemanticMixin:
             if text
         ]
         await self._ensure_access_many(
-            [uri, *(summary_uri for _, summary_uri, _ in summaries)],
+            [
+                uri,
+                *(summary_uri for _, summary_uri, _ in summaries),
+                *([f"{uri}/{content_filename}"] if content else []),
+            ],
             ctx,
             action=AclAction.WRITE,
         )

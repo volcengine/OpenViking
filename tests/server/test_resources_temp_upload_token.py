@@ -50,7 +50,7 @@ async def test_token_upload_auto_ingests_and_returns_result(
 ):
     """An upload keeps the issuing authority, but cannot outlive a role downgrade."""
     from types import SimpleNamespace
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, Mock
     from urllib.parse import parse_qs, urlparse
 
     from fastapi import FastAPI
@@ -62,8 +62,9 @@ async def test_token_upload_auto_ingests_and_returns_result(
     from openviking.server.identity import RequestContext
     from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS
     from openviking.server.routers.resources import router
-    from openviking.storage.acl import AclSpec
-    from openviking.storage.viking_fs._access import _AccessMixin
+    from openviking.storage.acl import AclManager, AclSpec
+    from openviking.storage.viking_fs import VikingFS
+    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.exceptions import OpenVikingError
     from openviking_cli.session.user_id import UserIdentifier
 
@@ -81,8 +82,13 @@ async def test_token_upload_auto_ingests_and_returns_result(
             status_code=ERROR_CODE_TO_HTTP_STATUS[exc.code], content={"error": exc.code}
         )
 
-    fs = _AccessMixin()
-    fs.acl_manager = SimpleNamespace(is_enabled=AsyncMock(return_value=False))
+    acl_manager = AclManager(
+        context_store=Mock(spec=VikingVectorIndexBackend),
+        runtime_config=Mock(get_account=AsyncMock(return_value=None)),
+    )
+    acl_manager.set_principal_directory(manager)
+    fs = VikingFS(agfs=Mock(), acl_manager=acl_manager)
+    await manager.register_user("acct", "bob", Role.USER)
     acl = AclSpec(acl_mode="restricted", entries=[{"principal": "user:bob", "level": "read"}])
     target = "viking://resources/hello.md"
     imported = []

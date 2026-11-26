@@ -174,9 +174,8 @@ pub(crate) fn relative_depth(rel: &str) -> usize {
 
 /// Compile a grep pattern into a `Regex`, applying the case-insensitive `(?i)` prefix.
 ///
-/// Shared by the trait's default `grep` and by `EncryptionWrappedFS::grep`, so the regex setup
-/// lives in exactly one place (no copy-paste drift between the two call sites).
-pub(crate) fn compile_grep_regex(pattern: &str, case_insensitive: bool) -> Result<Regex> {
+/// Shared by filesystem grep and the matcher for already-read text.
+pub fn compile_grep_regex(pattern: &str, case_insensitive: bool) -> Result<Regex> {
     let regex_pattern = if case_insensitive {
         format!("(?i){}", pattern)
     } else {

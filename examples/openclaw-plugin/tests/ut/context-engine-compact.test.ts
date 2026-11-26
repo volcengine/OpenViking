@@ -91,13 +91,15 @@ describe("context-engine commitOVSession()", () => {
   });
 
   it("returns false on failed commit", async () => {
-    const { engine } = makeEngine({
+    const { engine, logger } = makeEngine({
       status: "failed",
       error: "extraction error",
+      trace_id: "trace-failed-commit",
     });
 
     const ok = await engine.commitOVSession({ sessionId: "test-session" });
     expect(ok).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("trace_id=trace-failed-commit"));
   });
 
   it("returns false on timeout commit", async () => {
@@ -152,12 +154,13 @@ describe("context-engine commitOVSession()", () => {
       status: "completed",
       archived: true,
       memories_extracted: { core: 3, preferences: 1 },
+      trace_id: "trace-commit",
     });
 
     await engine.commitOVSession({ sessionId: "s1" });
 
     expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining("memories=4"),
+      expect.stringMatching(/memories=4.*trace_id=trace-commit/),
     );
   });
 

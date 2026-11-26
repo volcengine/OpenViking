@@ -795,6 +795,54 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
+        AdminCommands::FreezeFile {
+            account_id,
+            user_id,
+            path,
+        } => {
+            commands::admin::frozen_file(
+                &client,
+                &account_id,
+                &user_id,
+                &path,
+                Some(true),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::UnfreezeFile {
+            account_id,
+            user_id,
+            path,
+        } => {
+            commands::admin::frozen_file(
+                &client,
+                &account_id,
+                &user_id,
+                &path,
+                Some(false),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        AdminCommands::FrozenFileStatus {
+            account_id,
+            user_id,
+            path,
+        } => {
+            commands::admin::frozen_file(
+                &client,
+                &account_id,
+                &user_id,
+                &path,
+                None,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
     }
 }
 

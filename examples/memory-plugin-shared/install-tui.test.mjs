@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { resolveConnection } from "./lib/credentials.mjs";
 
 const installer = fileURLToPath(new URL("./install.sh", import.meta.url));
 const installerSource = readFileSync(installer, "utf8");
@@ -96,6 +97,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -118,6 +120,7 @@ HOME=${JSON.stringify(home)}
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -148,6 +151,7 @@ add_detected_traecode_cli_alias
 refresh_available_harnesses
 HAVE_CURSOR=0
 HAVE_TRAE_CN=0
+HAVE_DSH_DESKTOP=0
 tui_reset_bin_selection
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
@@ -186,10 +190,11 @@ printf '%s:%s:%s\\n' "$SELECTED_HARNESSES" "$(list_words "$CODEX_BINS")" "$(tui_
 
 test("keeping the stored API key leaves the wizard on its feet", () => {
   const result = runInstallerPrelude(`
-tui_menu() { TUI_MENU_CHOICE=1; }
+MENU_ANSWERS="1 0"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
 INTERACTIVE=1
 exec 3< <(printf '\\n')
-prompt_connection "https://example.invalid/openviking" "stored-key"
+prompt_connection "$VOLCENGINE_SERVICE_URL" "stored-key"
 printf '%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 `);
 
@@ -202,7 +207,8 @@ printf '%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 
 test("choosing the cloud service says where to get an API key", () => {
   const result = runInstallerPrelude(`
-tui_menu() { TUI_MENU_CHOICE=1; }
+MENU_ANSWERS="1 0"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
 INTERACTIVE=1
 exec 3< <(printf 'cloud-key\\n')
 prompt_connection "" ""
@@ -218,10 +224,11 @@ printf '%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
 test("the credentials step writes ovcli.conf when the stored key is kept", (t) => {
   const home = makeTempHome(t);
   const conf = join(home, "ovcli.conf");
-  writeFileSync(conf, `${JSON.stringify({ url: "http://127.0.0.1:1933", api_key: "stored-key", output: "table" }, null, 2)}\n`);
+  writeFileSync(conf, `${JSON.stringify({ url: "https://api.vikingdb.cn-beijing.volces.com/openviking", api_key: "stored-key", output: "table" }, null, 2)}\n`);
 
   const result = runInstallerPrelude(`
-tui_menu() { TUI_MENU_CHOICE=1; }
+MENU_ANSWERS="1 1 0"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
 INTERACTIVE=1
 OV_HOME=${JSON.stringify(home)}
 OVCLI_CONF=${JSON.stringify(conf)}
@@ -283,7 +290,8 @@ test("the credentials step names the field it changed", (t) => {
   writeFileSync(conf, `${JSON.stringify({ url, api_key: "stored-key" }, null, 2)}\n`);
 
   const result = runInstallerPrelude(`
-tui_menu() { TUI_MENU_CHOICE=1; }
+MENU_ANSWERS="1 1 0"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
 INTERACTIVE=1
 OV_HOME=${JSON.stringify(home)}
 OVCLI_CONF=${JSON.stringify(conf)}
@@ -590,7 +598,7 @@ test("a non-interactive run with no server says so and how to re-run", (t) => {
   assert.ok(result.stdout.indexOf("Review") < result.stdout.search(notice));
   assert.match(result.stdout, /curl -fsSL https:\/\/openviking\.ai\/install \| bash -s -- --yes --harness dsh --url <server-url> --api-key <api-key>/);
   assert.match(result.stdout, /\[4\/4\] Validation/);
-  assert.match(result.stdout, /DeepSeek Harness\n {4}Next: start a new dsh session: dsh --profile web\n {4}Updates: re-run this installer\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
+  assert.match(result.stdout, /DeepSeek Harness\n {4}Next: start a new dsh session: dsh --profile web\n {4}Updates: re-run this installer\n {4}Verify: node ~\/\.dsh\/profiles\/web\/node_modules\/@openviking\/dsh-memory-plugin\/scripts\/ov-memory-doctor\.mjs\n {4}Uninstall: dsh plugin --profile web rm @openviking\/dsh-memory-plugin/);
   assert.equal(JSON.parse(readFileSync(join(home, ".openviking", "ovcli.conf"), "utf8")).url, "http://127.0.0.1:1933");
   // The unreachable server is repeated at the end, then where the agent goes next.
   assert.match(result.stdout, /!! {2}Not done:\n {6}- Cannot reach http:\/\/127\.0\.0\.1:1933\. If the server is not running yet, start it before using the plugin\.\n==> Onboarding guide \(for your agent\): https:\/\/docs\.openviking\.ai\/agents\/en\/onboarding\.md\n==> Using another edition of the guide \(such as the team edition\)\? Follow the link in your prompt instead\.\n$/);
@@ -602,9 +610,14 @@ test("a non-interactive run with no server says so and how to re-run", (t) => {
 });
 
 test("what was asked for but not installed is listed again just before the onboarding link", (t) => {
-  const { run } = detachedInstaller(t);
+  const { home, run: runWithPath } = detachedInstaller(t);
+  // pi is selected but not on PATH; dsh is. The directory node itself sits in
+  // may hold a real pi, so node is reached through a directory of its own.
+  const nodeBin = join(home, "node-bin");
+  mkdirSync(nodeBin);
+  symlinkSync(process.execPath, join(nodeBin, "node"));
+  const run = (args) => runWithPath(args, { PATH: `${join(home, "bin")}:${nodeBin}:/usr/bin:/bin` });
 
-  // pi is selected but not on PATH; dsh is.
   const result = run(["--harness", "dsh,pi", "--lang", "en", "--yes"]);
 
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -696,6 +709,8 @@ test("macOS detects DeepSeek Harness Desktop under ~/Applications and selects it
 
   const result = runInstallerPrelude(`
 HAVE_CURSOR=0
+HAVE_TRAE=0
+HAVE_TRAE_CN=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -743,6 +758,8 @@ test("Linux never offers DeepSeek Harness Desktop", (t) => {
 
   const result = runInstallerPrelude(`
 HAVE_CURSOR=0
+HAVE_TRAE=0
+HAVE_TRAE_CN=0
 INTERACTIVE=0
 REQUESTED_HARNESSES=""
 select_harnesses
@@ -903,4 +920,374 @@ while [ "$idx" -lt "$(tui_selectable_count)" ]; do printf '%s\\n' "$(tui_item_at
   assert.deepEqual(kinds, [
     "opencode", "pi", "dsh", "cursor", "trae", "trae-cn", "zcode", "kimicode", "codebuddy", "qoder", "antigravity", "cli",
   ]);
+});
+
+
+test("BytePlus is available without a preset and asks for a fresh URL and key", () => {
+  const result = runInstallerPrelude(`
+MENU_ANSWERS="1 1"
+tui_menu() {
+  printf 'menu:%s\\n' "$1"
+  shift 2
+  printf 'choices:%s\\n' "$*"
+  set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"
+}
+INTERACTIVE=1
+exec 3< <(printf '\\nhttps://byteplus.example/openviking\\nbyteplus-test-key\\n')
+prompt_connection "$VOLCENGINE_SERVICE_URL" "volcengine-test-key"
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /OpenViking Managed Service/);
+  assert.match(result.stdout, /choices:Volcengine BytePlus/);
+  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|byteplus-test-key/);
+  assert.doesNotMatch(result.stdout, /volcengine-test-key/);
+  assert.match(result.stderr, /full HTTPS service URL/);
+});
+
+test("BytePlus rejects HTTP and an empty API key before settling on a connection", () => {
+  const result = runInstallerPrelude(`
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf 'http://byteplus.example/openviking\\nhttps://byteplus.example:443/openviking\\n   \\nnew-key\\n')
+prompt_connection "" ""
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /full HTTPS service URL/);
+  assert.match(result.stderr, /API key is required/);
+  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|new-key/);
+});
+
+test("a BytePlus preset remains editable and cannot reuse another server's key", () => {
+  const result = runInstallerPrelude(`
+BYTEPLUS_SERVICE_URL=https://byteplus.example/openviking
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf 'https://other.example/openviking\\nreplacement-key\\n')
+prompt_connection "$BYTEPLUS_SERVICE_URL" "old-byteplus-key"
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /connection:https:\/\/other.example\/openviking\|replacement-key/);
+  assert.doesNotMatch(result.stdout, /old-byteplus-key/);
+});
+
+test("EOF at a required BytePlus URL or key cancels without saving", () => {
+  const url = "https://byteplus.example/openviking";
+  for (const [input, currentUrl, currentKey] of [["", "", ""], [`${url}\n`, "", ""], [`${url}\n`, url, "saved-key"]]) {
+    const result = runInstallerPrelude(`
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf '%b' ${JSON.stringify(input)})
+prompt_connection ${JSON.stringify(currentUrl)} ${JSON.stringify(currentKey)}
+printf 'connection-would-be-saved\\n'
+`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Cancelled; nothing was changed/);
+    assert.doesNotMatch(result.stdout, /connection-would-be-saved/);
+    if (input) assert.match(result.stdout, /API key/);
+  }
+});
+
+test("BytePlus can keep a key explicitly for the same service URL", () => {
+  const result = runInstallerPrelude(`
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf 'https://byteplus.example/openviking/\\n\\n')
+prompt_connection https://byteplus.example/openviking saved-key
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|__OPENVIKING_KEEP__/);
+});
+
+test("a whitespace-only saved BytePlus key cannot be kept", () => {
+  const result = runInstallerPrelude(`
+MENU_ANSWERS="1 1"
+tui_menu() { set -- $MENU_ANSWERS; TUI_MENU_CHOICE="$1"; shift; MENU_ANSWERS="$*"; }
+INTERACTIVE=1
+exec 3< <(printf 'https://byteplus.example/openviking\\n\\nreplacement-key\\n')
+prompt_connection https://byteplus.example/openviking '   '
+printf 'connection:%s|%s\\n' "$WIZ_URL" "$WIZ_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /API key is required/);
+  assert.match(result.stdout, /connection:https:\/\/byteplus.example\/openviking\|replacement-key/);
+  assert.doesNotMatch(result.stdout, /Enter = keep/);
+});
+
+test("managed provider defaults follow the installer language", () => {
+  for (const [language, expected] of [["en", "1"], ["zh", "0"]]) {
+    const result = runInstallerPrelude(`
+UI_LANG=${language}
+MENU_COUNT=0
+tui_menu() {
+  MENU_COUNT=$((MENU_COUNT + 1))
+  if [ "$MENU_COUNT" -eq 1 ]; then TUI_MENU_CHOICE=1; else
+    printf 'provider-default:%s\\n' "$2"
+    TUI_MENU_CHOICE=0
+  fi
+}
+INTERACTIVE=1
+exec 3< <(printf 'volcengine-key\\n')
+prompt_connection "" ""
+`);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`provider-default:${expected}`));
+  }
+});
+
+test("a changed installer URL clears inherited authentication but keeps client options", (t) => {
+  const file = join(makeTempHome(t), "ovcli.conf");
+  writeFileSync(file, JSON.stringify({
+    url: "https://previous.example/openviking", api_key: "old-key", root_api_key: "old-root",
+    account_id: "old-account", user_id: "old-user", peer_id: "old-peer", extra_headers: { Authorization: "old-header" },
+    gateway_token: "old-token", oidc_token: "old-oidc", timeout: 4,
+    plugin: { enabled: true, apiKey: "old-shared", codex: { apiKey: "old-harness", accountId: "old-account", recallLimit: 3 } },
+  }));
+  const result = runInstallerPrelude(`
+OVCLI_CONF=${JSON.stringify(file)}
+INTERACTIVE=0
+URL_ARG=https://byteplus.example/openviking
+API_KEY_ARG=new-key
+gather_credentials
+printf 'resolved:%s:%s:%s\\n' "$CRED_KEY" "$CRED_ACCOUNT" "$CRED_USER"
+json_merge_ovcli "$OVCLI_CONF" "$CRED_URL" "$CRED_KEY" "$CRED_ACCOUNT" "$CRED_USER"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /resolved:new-key::/);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+    url: "https://byteplus.example/openviking", api_key: "new-key", timeout: 4,
+    plugin: { enabled: true, codex: { recallLimit: 3 } },
+  });
+});
+
+
+test("an unknown old URL does not bind its saved key to the default local endpoint", (t) => {
+  const file = join(makeTempHome(t), "ovcli.conf");
+  writeFileSync(file, JSON.stringify({ api_key: "unknown-server-key" }));
+  const result = runInstallerPrelude(`
+OVCLI_CONF=${JSON.stringify(file)}
+INTERACTIVE=0
+URL_ARG=http://127.0.0.1:1933
+gather_credentials
+printf '<%s>\\n' "$CRED_KEY"
+`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /<>/);
+});
+
+test("an explicit installer key can be saved despite an unpaired environment key", (t) => {
+  for (const [variable, previous, envUrl, envBaseUrl] of [
+    ["OPENVIKING_API_KEY", null],
+    ["OPENVIKING_BEARER_TOKEN", { url: "https://previous.example/openviking", api_key: "previous-key" }],
+    ["OPENVIKING_API_KEY", null, " \t ", "\n"],
+    ["OPENVIKING_BEARER_TOKEN", { url: "https://previous.example/openviking", api_key: "previous-key" }, "\t"],
+  ]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    if (previous) writeFileSync(file, JSON.stringify(previous));
+    const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking replacement-key '' ''
+`, {
+      HOME: home,
+      OPENVIKING_CONFIG_FILE: undefined,
+      OPENVIKING_URL: envUrl,
+      OPENVIKING_BASE_URL: envBaseUrl,
+      OPENVIKING_API_KEY: undefined,
+      OPENVIKING_BEARER_TOKEN: undefined,
+      [variable]: "environment-key",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stderr, /can override the saved API key/);
+    assert.doesNotMatch(result.stderr, /environment-key|replacement-key/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+      url: "https://byteplus.example/openviking", api_key: "replacement-key",
+    });
+  }
+});
+
+test("an unpaired environment key is not used to save a different endpoint without a new key", (t) => {
+  for (const env of [
+    { OPENVIKING_API_KEY: "environment-key" },
+    { OPENVIKING_API_KEY: "environment-key", OPENVIKING_URL: " \t " },
+    { OPENVIKING_BEARER_TOKEN: "environment-key", OPENVIKING_BASE_URL: "\n" },
+    { OPENVIKING_API_KEY: "environment-key", OPENVIKING_BEARER_TOKEN: " ", OPENVIKING_URL: " ", OPENVIKING_BASE_URL: "\t" },
+  ]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const previous = { url: "https://previous.example/openviking", api_key: "previous-key" };
+    writeFileSync(file, JSON.stringify(previous));
+    const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' '' ''
+`, {
+      HOME: home,
+      OPENVIKING_CONFIG_FILE: undefined,
+      OPENVIKING_URL: undefined,
+      OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_API_KEY: undefined,
+      OPENVIKING_BEARER_TOKEN: undefined,
+      ...env,
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /could reuse a key from another server/);
+    assert.doesNotMatch(result.stderr, /environment-key|previous-key/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+  }
+});
+
+test("blank environment values follow the client credential defaults", (t) => {
+  for (const env of [
+    { OPENVIKING_API_KEY: " \t ", OPENVIKING_BEARER_TOKEN: "\n" },
+    { OPENVIKING_API_KEY: "environment-key", OPENVIKING_URL: " ", OPENVIKING_BASE_URL: "https://previous.example/openviking" },
+  ]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' '' ''
+`, {
+      HOME: home,
+      OPENVIKING_CONFIG_FILE: undefined,
+      OPENVIKING_URL: undefined,
+      OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_API_KEY: undefined,
+      OPENVIKING_BEARER_TOKEN: undefined,
+      ...env,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stderr, /could reuse a key|can override the saved API key/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {
+      url: "https://byteplus.example/openviking", api_key: "",
+    });
+  }
+});
+
+test("keeping a saved key with an implicit URL does not pin or probe a new endpoint", (t) => {
+  for (const legacyUrl of [undefined, "https://previous.example/openviking"]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const legacy = join(home, "ov.conf");
+    const previous = { api_key: "implicit-key", timeout: 4 };
+    writeFileSync(file, JSON.stringify(previous));
+    if (legacyUrl) writeFileSync(legacy, JSON.stringify({ server: { url: legacyUrl } }));
+    const result = runInstallerPrelude(`
+OV_HOME=${JSON.stringify(home)}
+OVCLI_CONF=${JSON.stringify(file)}
+INTERACTIVE=1
+tui_menu() { TUI_MENU_CHOICE=0; }
+probe_server() { printf 'Unexpected probe\\n' >&2; exit 9; }
+gather_credentials
+check_server
+write_ovcli
+`, { HOME: home, OPENVIKING_CONFIG_FILE: legacy });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /no explicit server URL/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+  }
+});
+
+test("a connection change with no new key cannot activate a key from a legacy server", (t) => {
+  const home = makeTempHome(t);
+  const file = join(home, "ovcli.conf");
+  const legacy = join(home, "ov.conf");
+  const previous = { url: "https://previous.example/openviking" };
+  writeFileSync(file, JSON.stringify(previous));
+  writeFileSync(legacy, JSON.stringify({ server: { url: previous.url }, codex: { apiKey: "legacy-key" } }));
+  const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' '' ''
+`, { OPENVIKING_CONFIG_FILE: legacy });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /could reuse a key from another server/);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+});
+
+test("legacy endpoint normalization preserves the runtime credential boundary", (t) => {
+  for (const [server, expectedUrl, allowed] of [
+    [{ port: 0 }, "http://127.0.0.1:0", false],
+    [{ port: "0" }, "http://127.0.0.1:0", false],
+    [{ port: null }, "http://127.0.0.1:0", false],
+    [{ host: " 0.0.0.0 ", port: "1933.9" }, "http://127.0.0.1:1933", true],
+    [{ host: "", port: "invalid" }, "http://127.0.0.1:1933", true],
+    [{ url: " http://127.0.0.1:1933/ " }, "http://127.0.0.1:1933", true],
+  ]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const legacy = join(home, "ov.conf");
+    const previous = { timeout: 4 };
+    const legacyConfig = { server: { ...server, root_api_key: "legacy-root-key" } };
+    const env = { HOME: home, OPENVIKING_CONFIG_FILE: legacy };
+    writeFileSync(file, JSON.stringify(previous));
+    writeFileSync(legacy, JSON.stringify(legacyConfig));
+    const connection = resolveConnection("claude", {
+      env, rootKeyFallback: true,
+      files: { cliFile: previous, ovFile: legacyConfig, cliPath: file, ovPath: legacy },
+    });
+    assert.equal(connection.baseUrl, expectedUrl);
+    assert.equal(connection.apiKey, "legacy-root-key");
+    const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} http://127.0.0.1:1933 '' '' ''
+`, {
+      ...env,
+      OPENVIKING_URL: undefined, OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_API_KEY: undefined, OPENVIKING_BEARER_TOKEN: undefined,
+    });
+    if (allowed) {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(readFileSync(file, "utf8")).url, expectedUrl);
+    } else {
+      assert.notEqual(result.status, 0, JSON.stringify(server));
+      assert.match(result.stderr, /could reuse a key from another server/);
+      assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+    }
+  }
+});
+
+test("legacy config path normalization cannot hide a key from the installer guard", (t) => {
+  for (const pathKind of ["absolute", "tilde", "blank"]) {
+    const home = makeTempHome(t);
+    const file = join(home, "ovcli.conf");
+    const directory = join(home, ".openviking");
+    const legacy = join(directory, "ov.conf");
+    mkdirSync(directory);
+    const previous = { timeout: 4 };
+    writeFileSync(file, JSON.stringify(previous));
+    writeFileSync(legacy, JSON.stringify({
+      server: { url: "https://previous.example/openviking", root_api_key: "legacy-root-key" },
+    }));
+    const path = {
+      absolute: ` ${legacy} `,
+      tilde: " ~/.openviking/ov.conf ",
+      blank: "   ",
+    }[pathKind];
+    const result = runInstallerPrelude(`
+json_merge_ovcli ${JSON.stringify(file)} https://byteplus.example/openviking '' '' ''
+`, {
+      HOME: home, OPENVIKING_CONFIG_FILE: path,
+      OPENVIKING_URL: undefined, OPENVIKING_BASE_URL: undefined,
+      OPENVIKING_API_KEY: undefined, OPENVIKING_BEARER_TOKEN: undefined,
+    });
+    assert.notEqual(result.status, 0, pathKind);
+    assert.match(result.stderr, /could reuse a key from another server/);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), previous);
+    const runtimeEnv = preludeEnv({ HOME: home });
+    for (const key of Object.keys(runtimeEnv)) {
+      if (key.startsWith("OPENVIKING_")) delete runtimeEnv[key];
+    }
+    runtimeEnv.OPENVIKING_CONFIG_FILE = path;
+    runtimeEnv.OPENVIKING_CLI_CONFIG_FILE = file;
+    const runtime = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+import { resolveConnection } from ${JSON.stringify(new URL("./lib/credentials.mjs", import.meta.url).href)};
+const connection = resolveConnection("agent-plugins", { rootKeyFallback: true });
+console.log(JSON.stringify({ baseUrl: connection.baseUrl, hasExpectedKey: connection.apiKey === "legacy-root-key" }));
+`], { env: runtimeEnv, encoding: "utf8", timeout: 10_000 });
+    assert.equal(runtime.status, 0, runtime.stderr);
+    assert.deepEqual(JSON.parse(runtime.stdout), {
+      baseUrl: "https://previous.example/openviking", hasExpectedKey: true,
+    });
+  }
 });

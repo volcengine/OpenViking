@@ -1,7 +1,7 @@
 import { OpenVikingClient } from "./client.mjs";
 import { resolveConfig } from "./config.mjs";
 import { injectStartupProfile } from "./lifecycle.mjs";
-import { mountOpenVikingMcp } from "./mcp.mjs";
+import { fillHistorySession, mountOpenVikingMcp } from "./mcp.mjs";
 import { OpenVikingRuntime } from "./runtime.mjs";
 import { mountOpenVikingSkills } from "./skills.mjs";
 import { guardVikingUri, noticeVikingUri } from "./uri-guard.mjs";
@@ -38,9 +38,10 @@ export function apply(ctx, input = {}) {
   // OpenViking session, and inject the profile while the agent is still idle.
   // Runs at most once per agent, whichever DSH event reaches it.
   const started = new WeakSet();
-  const startAgent = async (agent, signal) => {
+  const startAgent = async (agent, signal, source) => {
     if (skipMemory(agent.session) || started.has(agent)) return false;
     started.add(agent);
+    if (source === "resume") runtime.markHistoryPointer(agent.session, "resume");
     agent.ctx.effect(
       () => () => runtime.dispose(agent.session),
       "openvikingMemory.disposeSession()",
@@ -66,10 +67,10 @@ export function apply(ctx, input = {}) {
   // dispatch and skips the listeners registered after this one.
   ctx.on("agent/created", async ({ agent, source, signal }) => {
     if (source === undefined) return undefined;
-    await untilAborted(startAgent(agent, signal), signal);
+    await untilAborted(startAgent(agent, signal, source), signal);
     return undefined;
   });
-  ctx.on("agent/session-start", ({ agent }) => startAgent(agent));
+  ctx.on("agent/session-start", ({ agent, source }) => startAgent(agent, undefined, source));
 
   // prepend: downstream waterfall listeners run first, so this plugin sees
   // the final claimed batch and appends after every other contributor.
@@ -85,7 +86,7 @@ export function apply(ctx, input = {}) {
       runtime.recallMessage(agent, decision.messages, signal),
     ]);
     if (signal.aborted) return decision;
-    const additions = [profile, recall].filter(Boolean);
+    const additions = [profile, recall, runtime.historyPointerMessage(agent, ctx.sessions)].filter(Boolean);
     // Keep the rest of the decision: goal-round-driver marks its entries with
     // `startsRequestSeries`, and rebuilding the object would drop that flag.
     return additions.length > 0
@@ -97,6 +98,9 @@ export function apply(ctx, input = {}) {
     if (skipMemory(session)) return;
     runtime.capture(session, event);
     runtime.maybeCommit(session, event);
+    if (event.type === "compaction/end" && !event.data?.error) {
+      runtime.markHistoryPointer(session, "compact");
+    }
   });
 
   ctx.on("session/flush", async session => {
@@ -106,10 +110,16 @@ export function apply(ctx, input = {}) {
 
   ctx.on("tools/pre-execute", guardVikingUri);
   ctx.on("tools/post-execute", noticeVikingUri);
+  ctx.on("tools/execute", (exec, next) => (
+    skipMemory(exec.agent?.session) ? next() : fillHistorySession(ctx.tools, exec, next, ctx.sessions)
+  ));
 
   // Mounted last, and deliberately not awaited: the bridge's apply blocks on
   // its first tools/list, so a server that accepts the connection but never
   // answers would otherwise hold up every registration above it.
+  // The skills tell the model to call the MCP tools, so `mcpEnabled: false`
+  // leaves both out, as on OpenCode and pi.
+  if (config.mcpEnabled === false) return;
   mountOpenVikingMcp(ctx, config);
   mountOpenVikingSkills(ctx);
 }

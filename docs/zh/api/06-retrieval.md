@@ -565,7 +565,7 @@ list 模式下，空或仅含空白的 query 加过滤条件，会复用 `find()
 
 由记忆提取流程新生成或更新的记忆会自动写入 `memory_type=<类型>` 检索标签。启用衰减时，本地和云端均将按是否带 `memory_type=events` 标签拆成互斥且完整覆盖原范围的两路，再合并排序；两路均保留原 scope 的权限、目录和 level 限制，无需指定 peer id。存量数据不补标签，无标签记忆保持原分。直接内容刷新和普通标签更新保留已有类型，不从 URI 推断或重设类型。
 
-本地向量引擎按所需 event 条数在内部最多放大 3 倍候选（上限 100,000），在 C++ 中计算衰减并排序，截取 top-k 后才读取摘要等字段。这是有界候选近似，不能保证将语义候选窗口以外的事件提升进结果。HTTP 向量服务透传同一规则；云端 Adapter 使用 VikingDB 分数融合，仅请求 limit + offset，不设置固定 100,000 条输入预算。cuVS 集合的衰减请求使用其原生标量/向量索引。openGauss 接收透传参数但不执行时间衰减，保留普通向量分数。
+本地向量引擎按所需 event 条数在内部最多放大 3 倍候选（上限 100,000），在 C++ 中计算衰减并排序，截取 top-k 后才读取摘要等字段。这是有界候选近似，不能保证将语义候选窗口以外的事件提升进结果。HTTP 向量服务透传同一规则；云端 Adapter 使用 VikingDB 分数融合，仅请求 limit + offset，不设置固定 100,000 条输入预算。cuVS 集合的衰减请求使用其原生标量/向量索引。分布式 openGauss 收到衰减请求时，仍按普通向量检索和排序返回结果。
 
 启用模型 rerank 时，两路各请求 `2 × limit` 条结果。事件分支在召回时已完成衰减：云端由 VikingDB 计算，开源本地由 C++ 引擎计算。两路按召回分合并，取前 `2 × limit` 条统一执行一次模型 rerank，再按模型分排序、过滤阈值并取最终结果，模型后不再衰减。模型失败时使用已经衰减过的召回分。`origin_score` 和 `time_score` 始终描述召回阶段的原向量分与时间因子，因此二者乘积不一定等于成功 rerank 后的模型分。最终分数不混入父目录分数或热度分。
 
@@ -1006,7 +1006,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要搜索的 Viking URI |
-| pattern | str | 是 | - | 搜索模式（正则表达式）|
+| pattern | str | 是 | - | 搜索模式，使用 Rust `regex` 语法逐行匹配 |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | exclude_uri | str | 否 | None | 要排除在搜索之外的 URI 前缀 |
@@ -1015,6 +1015,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
 | before_context | int | 否 | 0 | 每条匹配行之前返回的上下文行数；仅 HTTP API 和 CLI 支持 |
 | after_context | int | 否 | 0 | 每条匹配行之后返回的上下文行数；仅 HTTP API 和 CLI 支持 |
+
+环视、反向引用等超出支持范围的写法属于无效正则。
 
 `tags` 使用 AND 语义，并在内容匹配与 `node_limit` 截断之前过滤候选文件。例如 `["team=search", "env=prod"]` 只匹配同时具有两个标签的文件。
 

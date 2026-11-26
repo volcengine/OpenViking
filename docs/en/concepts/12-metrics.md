@@ -516,7 +516,7 @@ Possible `model_type` values include:
 - `embedding`
 - `rerank`
 
-`openviking_model_provider_readiness=1` does not verify credentials, quota, or remote inference. It only checks client construction. Use actual model-call errors and latency to assess requests.
+Global vector and retrieval probes require Cluster VectorDB; the model-provider probe requires Cluster VLM. `openviking_model_provider_readiness=1` checks client construction, not credentials, quota, or remote inference.
 
 ## Configuration Example
 

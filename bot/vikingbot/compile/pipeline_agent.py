@@ -113,9 +113,15 @@ def agent_runner(loop, session_key, connection, limits):
             registry.register(
                 CompileChildTool(tool, output_root, merge_only=True, readonly_paths=readonly_paths)
             )
-        evidence = EvidenceReader(model.files, data)
-        if evidence.allowed:
-            registry.register(evidence)
+        reader = EvidenceReader(
+            model.files,
+            data,
+            recovery_evidence=(
+                runtime.recovery_evidence if (runtime.changes or {}).get("recovery_sources") else None
+            ),
+        )
+        if reader.allowed:
+            registry.register(reader)
         registry.register(runtime.resources)
         registry.register(TargetReader(runtime))
         search = runtime.tools.get("openviking_search")

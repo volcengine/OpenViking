@@ -65,7 +65,9 @@ Select **Wiki** or **Schedule daily report** to fill an empty draft or switch pr
 
 This example uses simulated services, including native capabilities and the current commercial contract. The native adapter implements `interrupt` and `steer` for stopping and in-flight follow-ups. The current commercial adapter omits both: sending is disabled during generation and stop is hidden. Both support another question after completion.
 
-Click the toolbar `@` or type `@` in the draft to browse, search and reference files or directories. The built-in picker uses `/api/v1/fs/ls` and `/api/v1/search/glob` in the current request scope and loads only when opened. Pass `{ selected, onChange }` in `chatOptions.referenceSelection` to share the selection with a file tree while keeping the built-in picker. Console removes submitted references immediately for a new message. For an in-flight follow-up, it waits for acceptance, preserves references added while waiting, and keeps the selection if the follow-up is rejected. A reference removed and selected again while awaiting acceptance counts as a new selection. Resetting the conversation clears the selection. Set `conversation.references` to supply your own candidates and selection in place of the built-in picker. Custom chat services receive the chosen items in the `references` field.
+Click the toolbar `@` or type `@` in the draft to browse, search and reference files or directories. The built-in picker uses `/api/v1/fs/ls` and `/api/v1/search/glob` in the current request scope and loads only when opened. Pass `{ selected, onChange }` in `chatOptions.referenceSelection` to share the selection with a file tree while keeping the built-in picker. To let a tree replace the selection only while the conversation is ready and idle, pass an optional `replaceRef` and call `replaceRef.current?.(reference)` when the tree selects a file or directory. Draft references can be removed while VikingBot replies.
+
+Console removes submitted references immediately for a new message. For an in-flight follow-up, it waits for acceptance, preserves references added while waiting, and keeps the selection if the follow-up is rejected. A reference removed and selected again while awaiting acceptance counts as a new selection. Resetting the conversation clears the selection. Set `conversation.references` to supply your own candidates and selection in place of the built-in picker. Custom chat services receive the chosen items in the `references` field.
 
 ### Bot activation
 
@@ -83,7 +85,7 @@ The live status region mounts empty and announces only while visible. When suppo
 
 If the scope's request signal is already cancelled or becomes cancelled, Console keeps the Bot tab and displays a static cancellation message, without loading or a retry button that cannot restart the cancelled request. To check again, the host must replace the aborted signal with a fresh, non-aborted signal, or remove it. Changing only `scopeKey` while passing the same aborted signal leaves the panel cancelled.
 
-After `isEligible` returns `true`, Console calls `getStatus`. When the runtime has yet to start, clicking **Enable VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
+After `isEligible` returns `true`, Console calls `getStatus`. When the runtime has yet to start, clicking **Start using VikingBot** triggers the host's `start` callback. Console confirms readiness again before loading chat and session history. Update `scopeKey` or pass the corresponding `activation` when the library or identity changes. The simulated Volcengine host adapter maps `GetOpenVikingCollection`'s `EnableVikingBot === true` to the boolean returned by `isEligible`.
 
 Keep the adapter stable for the current library and identity. All three callbacks receive an `AbortSignal` and should throw on failure. Pass `media` to replace the illustration with your introduction media.
 
@@ -166,18 +168,18 @@ When host content fails to render, the block shows the default fallback: an illu
 
 ### ConsoleChatOptions
 
-| Property           | Description                                             | Type                                                  | Default                |
-| ------------------ | ------------------------------------------------------- | ----------------------------------------------------- | ---------------------- |
-| taskService        | Conversation task queries; inherits the Console adapter | `ConsoleTaskService`                                  | Inherited from Console |
-| locale             | Conversation locale                                     | `'zh-CN' \| 'en-US'`                                  | Inherited from Console |
-| persist            | Save completed messages                                 | `boolean`                                             | `true`                 |
-| scopeKey           | Isolation key for dynamic identities                    | `string`                                              | Inherited from Console |
-| service            | Chat and session adapter; keep its reference stable     | `VikingBotChatService & VikingBotSessionService`      | Native service         |
-| activation         | Check library access and start the Bot from Console     | `ConsoleBotActivation`                                | Optional               |
-| requestOptions     | Conversation request settings                           | `OvRequestOptions`                                    | Inherited from Console |
-| hitl               | Automatic questions, field validation and custom cards  | `ConsoleHitlOptions \| false`                         | Built-in cards enabled |
-| referenceSelection | Controlled selection for the built-in `@` picker        | `Pick<VikingBotReferences, 'selected' \| 'onChange'>` | Optional               |
-| memoryCommit       | Hide the session commit action                          | `false`                                               | Enabled when supported |
+| Property           | Description                                                                                              | Type                                             | Default                |
+| ------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | ---------------------- |
+| taskService        | Conversation task queries; inherits the Console adapter                                                  | `ConsoleTaskService`                             | Inherited from Console |
+| locale             | Conversation locale                                                                                      | `'zh-CN' \| 'en-US'`                             | Inherited from Console |
+| persist            | Save completed messages                                                                                  | `boolean`                                        | `true`                 |
+| scopeKey           | Isolation key for dynamic identities                                                                     | `string`                                         | Inherited from Console |
+| service            | Chat and session adapter; keep its reference stable                                                      | `VikingBotChatService & VikingBotSessionService` | Native service         |
+| activation         | Check library access and start the Bot from Console                                                      | `ConsoleBotActivation`                           | Optional               |
+| requestOptions     | Conversation request settings                                                                            | `OvRequestOptions`                               | Inherited from Console |
+| hitl               | Automatic questions, field validation and custom cards                                                   | `ConsoleHitlOptions \| false`                    | Built-in cards enabled |
+| referenceSelection | Controlled selection for the built-in `@` picker, with optional `replaceRef` for host actions while idle | `ConsoleChatOptions['referenceSelection']`       | Optional               |
+| memoryCommit       | Hide the session commit action                                                                           | `false`                                          | Enabled when supported |
 
 Every adapter method receives an `AbortSignal`, must honor cancellation, and throws on failure. Omit `saveMessage` when the backend persists messages automatically. Set `interrupted: true` on known interrupted replies in `loadMessages` so they do not offer Commit session after reopening.
 

@@ -134,7 +134,7 @@ class _AnyDocMarkdownRenderer:
                 return f"### Speaker Notes\n\n{inner}"
             return "\n".join(">" if not line else f"> {line}" for line in inner.splitlines())
         if kind == "code_block":
-            body = (block.text or "").rstrip("\n")
+            body = (block.text or "").removesuffix("\n")
             fence = self._backtick_fence(body, 3)
             return f"{fence}{block.lang or ''}\n{body}\n{fence}"
         if kind == "rule":
@@ -194,7 +194,7 @@ class _AnyDocMarkdownRenderer:
             number = self.note_numbers.get(inline.note_id or "")
             return f"[^{number}]" if number is not None else ""
         if kind == "line_break":
-            return "\\\n" if context == "block" else "\n" if context == "table_cell" else " "
+            return "<br>" if context == "block" else "\n" if context == "table_cell" else " "
         if kind == "math":
             source = self._escape_math_source(inline.text or "", context=context)
             return f"${source}$" if source else ""

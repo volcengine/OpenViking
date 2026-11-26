@@ -32,14 +32,6 @@ from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 from tests.utils.mock_agfs import MockLocalAGFS
 
 
-def test_set_bot_api_key_updates_module_state():
-    bot_router_module.set_bot_api_key("gateway-secret")
-    assert bot_router_module.BOT_API_KEY == "gateway-secret"
-
-    bot_router_module.set_bot_api_key("")
-    assert bot_router_module.BOT_API_KEY == ""
-
-
 async def test_create_bot_proxy_client_disables_env_proxy():
     async with bot_router_module._create_bot_proxy_client() as client:
         assert isinstance(client, httpx.AsyncClient)
@@ -75,7 +67,8 @@ async def test_feedback_proxy_forwards_request(monkeypatch):
             return FakeResponse()
 
     monkeypatch.setattr(bot_router_module, "BOT_API_URL", "http://127.0.0.1:18790")
-    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "gateway-secret")
+    monkeypatch.setattr(bot_router_module, "BOT_API_KEY", "")
+    bot_router_module.set_bot_api_key("gateway-secret")
     monkeypatch.setattr(bot_router_module, "_create_bot_proxy_client", lambda: FakeClient())
 
     app = FastAPI()
@@ -85,21 +78,23 @@ async def test_feedback_proxy_forwards_request(monkeypatch):
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            "/bot/v1/feedback",
-            json={
-                "session_id": "session-1",
-                "response_id": "resp-123",
-                "feedback_type": "thumb_up",
-            },
-        )
+        payload = {
+            "session_id": "session-1",
+            "response_id": "resp-123",
+            "feedback_type": "thumb_up",
+        }
+        response = await client.post("/bot/v1/feedback", json=payload)
+        assert response.status_code == 200
+        assert response.json() == {"accepted": True, "response_id": "resp-123"}
+        assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/feedback"
+        assert forwarded["json"]["response_id"] == "resp-123"
+        assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
+        assert forwarded["timeout"] == 30.0
 
-    assert response.status_code == 200
-    assert response.json() == {"accepted": True, "response_id": "resp-123"}
-    assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/feedback"
-    assert forwarded["json"]["response_id"] == "resp-123"
-    assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
-    assert forwarded["timeout"] == 30.0
+        bot_router_module.set_bot_api_key("")
+        response = await client.post("/bot/v1/feedback", json=payload)
+        assert response.status_code == 200
+        assert "X-Gateway-Token" not in forwarded["headers"]
 
 
 async def test_interrupt_proxy_forwards_session_interrupt(monkeypatch):
@@ -250,20 +245,7 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
     app.include_router(bot_router_module.router, prefix="/bot/v1")
     transport = httpx.ASGITransport(app=app)
 
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post(
-            "/bot/v1/chat",
-            headers={
-                "X-API-Key": "active-root-key",
-                "X-OpenViking-Account": "acct",
-                "X-OpenViking-User": "alice",
-            },
-            json={"message": "hello", "user_id": "ignored-by-proxy-identity"},
-        )
-
-    assert response.status_code == 200
-    assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/chat"
-    assert forwarded["json"]["openviking_connection"] == {
+    connection = {
         "api_key": "active-root-key",
         "account_id": "acct",
         "user_id": "alice",
@@ -272,7 +254,24 @@ async def test_chat_proxy_attaches_authenticated_openviking_connection(monkeypat
         "api_key_type": "root",
         "server_url": "http://127.0.0.1:1944",
     }
-    assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        for actor in (" peer-a ", " "):
+            response = await client.post(
+                "/bot/v1/chat",
+                headers={
+                    "X-API-Key": "active-root-key",
+                    "X-OpenViking-Account": "acct",
+                    "X-OpenViking-User": "alice",
+                    "X-OpenViking-Actor-Peer": actor,
+                },
+                json={"message": "hello", "user_id": "ignored-by-proxy-identity"},
+            )
+
+            assert response.status_code == 200
+            assert forwarded["url"] == "http://127.0.0.1:18790/bot/v1/chat"
+            expected = {**connection, "actor_peer_id": "peer-a"} if actor.strip() else connection
+            assert forwarded["json"]["openviking_connection"] == expected
+            assert forwarded["headers"]["X-Gateway-Token"] == "gateway-secret"
     assert forwarded["timeout"] == 300.0
 
 
@@ -363,34 +362,54 @@ _COMPILE_RUNTIME_ARGS = {
 }
 
 
-# Argument and identity variants share the successful path; failures retain full credentials.
+# Credentials and identity are serialized independently. The failure variants keep
+# the full request so recovery must retain its private arguments.
 @pytest.mark.parametrize(
     "finish,args,identity",
     [
-        ("complete", args, identity)
-        for args in [
-            None,
+        pytest.param("complete", None, {}, id="complete-None-identity0"),
+        pytest.param(
+            "complete",
             {},
+            {"account_id": "acct", "user_id": "alice"},
+            id="complete-args3-identity3",
+        ),
+        pytest.param(
+            "complete",
             {"user_key": ""},
-            {"user_key": "model-user-key"},
+            {"account_id": "acct", "user_id": "alice"},
+            id="complete-args5-identity5",
+        ),
+        pytest.param("complete", {"user_key": "model-user-key"}, {}, id="complete-args6-identity6"),
+        pytest.param(
+            "complete",
             _COMPILE_RUNTIME_ARGS,
-        ]
-        for identity in [{}, {"account_id": "acct", "user_id": "alice"}]
+            {"account_id": "acct", "user_id": "alice"},
+            id="complete-args9-identity9",
+        ),
     ]
     + [
-        (finish, _COMPILE_RUNTIME_ARGS, {"account_id": "acct", "user_id": "alice"})
-        for finish in [
-            "archive_failure",
-            "cancel",
-            "cancel_immediate",
-            "poll_failure",
-            "connect_timeout",
-            "read_timeout",
-            "restart",
-            "restart_cancel",
-            "conflict",
-            "recovered_conflict",
-        ]
+        pytest.param(
+            finish,
+            _COMPILE_RUNTIME_ARGS,
+            {"account_id": "acct", "user_id": "alice"},
+            id=f"{finish}-args{index}-identity{index}",
+        )
+        for index, finish in enumerate(
+            (
+                "archive_failure",
+                "cancel",
+                "cancel_immediate",
+                "poll_failure",
+                "connect_timeout",
+                "read_timeout",
+                "restart",
+                "restart_cancel",
+                "conflict",
+                "recovered_conflict",
+            ),
+            10,
+        )
     ],
 )
 async def test_compile_api_client_session_protocol_retry_and_cancellation(

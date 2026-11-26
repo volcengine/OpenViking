@@ -41,7 +41,7 @@ class VikingDBManager(VikingVectorIndexBackend):
 
     def __init__(
         self,
-        vectordb_config: VectorDBBackendConfig,
+        vectordb_config: VectorDBBackendConfig | None,
         queue_manager: Optional[QueueManager] = None,
     ):
         """

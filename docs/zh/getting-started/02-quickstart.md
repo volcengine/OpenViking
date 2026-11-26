@@ -4,7 +4,7 @@
 
 当你希望 AI Agent 根据项目资料回答问题时，需要先让它找到相关内容，再读取原文。OpenViking 是面向 Agent 的上下文数据库，负责保存和检索这些资料，让 Agent 能够根据来源生成回答。
 
-接下来，你会导入一份虚构的“灯塔项目”说明，让 Agent 回答反馈收集的问题，并打开它引用的原文核对结果。你可以使用火山引擎云服务，也可以在本机运行 OpenViking：两条路径都会完成 **导入资料 → 检索与读取 → 生成回答 → 核对来源**。
+接下来，你会导入一份虚构的“灯塔项目”说明，让 Agent 回答反馈收集的问题，并打开它引用的原文核对结果。你可以使用 BytePlus 或火山引擎的托管服务，也可以在本机运行 OpenViking。每种方式都会完成 **导入资料 → 检索与读取 → 生成回答 → 核对来源**。
 
 ## 准备工作
 
@@ -12,12 +12,13 @@
 
 | 运行方式 | 适合的情况 | 需要准备 |
 | --- | --- | --- |
+| **BytePlus 云服务** | 希望使用亚太地区（柔佛）的托管服务 | Node.js/npm、BytePlus OpenViking 服务地址和 API Key，以及能在本机执行终端命令的 Agent |
 | **火山引擎云服务** | 希望使用托管服务，并在已有 Agent 中提问 | Node.js/npm、火山引擎账号，以及能在本机执行终端命令的 Agent |
 | **本地服务** | 希望在自己的电脑上运行，并直接使用内置 Agent VikingBot | Node.js/npm、uv、Python，以及模型访问凭据 |
 
 ### 安装 Node.js
 
-两条路径都通过 `ov` CLI 操作资料。打开 [Node.js 下载页](https://nodejs.org/en/download)，选择与你的系统匹配的 **LTS** 版本，按页面提供的安装程序或命令完成安装；npm 会随 Node.js 一同安装。
+以上方式都通过 `ov` CLI 操作资料。打开 [Node.js 下载页](https://nodejs.org/en/download)，选择与你的系统匹配的 **LTS** 版本，按页面提供的安装程序或命令完成安装；npm 会随 Node.js 一同安装。
 
 安装后重新打开终端，确认两个命令都能输出版本号：
 
@@ -63,6 +64,10 @@ uv python install 3.13
 ## 开通或启动服务
 
 选择下面的一条路径，完成后继续[连接 CLI](#连接-cli)。
+
+### BytePlus 云服务
+
+准备 BytePlus OpenViking 实例的服务地址和 API Key，详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。准备一个能在本机执行终端命令的 Agent，再继续[连接 CLI](#连接-cli)。
 
 <a id="火山引擎托管服务"></a>
 
@@ -136,7 +141,8 @@ ov config
 
 | 运行方式 | 连接类型 | 填写内容 |
 | --- | --- | --- |
-| 火山引擎云服务 | **OpenViking Service** | 按向导使用服务地址，输入控制台取得的 API Key |
+| BytePlus 云服务 | OpenViking 托管服务 → BytePlus | 输入 BytePlus OpenViking 服务地址和 API Key |
+| 火山引擎云服务 | OpenViking 托管服务 → Volcengine | 按向导使用服务地址，输入控制台取得的 API Key |
 | 本地服务 | **自定义（Custom）** | URL 填写 `http://127.0.0.1:1933`；默认本机模式的密钥留空 |
 
 如果本地服务已有认证配置，使用对应的 User/Admin Key；配置方式见[身份认证](../guides/04-authentication.md)。

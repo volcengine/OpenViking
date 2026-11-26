@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Process-wide registry and service wiring for the TTL adapter.
 
-The adapter is a singleton per server process. ``app.py`` creates the built-in
+The adapter is a singleton per server process. ``OpenVikingService`` creates the built-in
 implementation from ``server.ttl_adapter``, registers it here and installs its
 post-write hook on the VikingFS instance. The admin configuration routes consult
 :func:`ttl_config_supported` to decide whether an explicit TTL section is

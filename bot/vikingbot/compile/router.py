@@ -124,7 +124,9 @@ def register_runtime_task_routes(
         if cancel:
             task = await service.cancel_task(body.session_id, principal_scope=principal_scope)
         else:
-            task = await service.get_task(body.session_id, principal_scope=principal_scope)
+            task = await service.get_task(
+                body.session_id, principal_scope=principal_scope, include_recovery_proof=True
+            )
         if task is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

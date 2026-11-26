@@ -26,6 +26,9 @@ export const kimicode = {
   capturesOnlyWhenEnabled: true,
   detachesCapture: true,
   profileStage: "first-prompt",
+  // Kimi drops a hook entry that carries any key beyond event, matcher,
+  // command and timeout, so the replay bound lives here, not in the manifest.
+  pendingReplayLimit: 2,
   requestBudgets: {
     "session-start": 25_000,
     "user-prompt-submit": 17_000,
@@ -41,6 +44,15 @@ export const kimicode = {
   },
   envelope(event, block) {
     return event === "user-prompt-submit" ? block || null : null;
+  },
+  // Only UserPromptSubmit output reaches the model, and the MCP server cannot
+  // tell which session calls it.
+  historyPointer: {
+    sessionDefault: false,
+    defer: (event, input) => {
+      if (event === "pre-compact") return "compact";
+      return event === "session-start" && input.source === "resume" ? "resume" : "";
+    },
   },
   guard(input = {}) {
     const decision = evaluateUriGuard(input.tool_name, input.tool_input || {}, {

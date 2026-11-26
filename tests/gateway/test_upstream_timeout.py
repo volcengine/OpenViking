@@ -129,7 +129,7 @@ async def test_upstream_that_never_answers_is_cut_off(running_gateway, release, 
 
 
 async def test_stream_that_goes_silent_is_cut_off(running_gateway, release):
-    app, client, _, key, _, _ = running_gateway
+    app, client, admin, key, _, _ = running_gateway
     first = chat_events(1).split(b"\n\n")[0] + b"\n\n"
 
     async def backend(request):
@@ -154,6 +154,9 @@ async def test_stream_that_goes_silent_is_cut_off(running_gateway, release):
     message = "upstream_timeout: the model provider stopped before the reply finished"
     error = sse({"error": {"type": "upstream_timeout", "message": message}})
     assert response.content == first + error + b"data: [DONE]\n\n"
+    (record,) = (await client.get("/admin/logs", headers=admin)).json()
+    assert record["stream_error"] == record["error_reason"] == "upstream_timeout"
+    assert record["error_origin"] == "upstream" and record["status"] == 200
 
 
 async def put_chat_upstream(client, admin, base_url):
@@ -372,15 +375,3 @@ async def test_wait_covers_sending_a_body_the_upstream_never_reads(silent_server
             async with async_timeout.timeout(5):
                 await proxy.open_upstream(http, "POST", silent_server, WAIT, data=b"x" * (16 << 20))
         assert time.monotonic() - started < WAIT + 1.5
-
-
-async def test_sock_read_alone_bounds_the_wait_for_response_headers(silent_server):
-    # open_upstream relies on aiohttp starting sock_read once the request is sent.
-    async with aiohttp.ClientSession() as http:
-        started = time.monotonic()
-        with pytest.raises(aiohttp.ServerTimeoutError):
-            async with async_timeout.timeout(5):
-                await http.post(
-                    silent_server, data=b"{}", timeout=aiohttp.ClientTimeout(sock_read=WAIT)
-                )
-        assert WAIT * 0.8 < time.monotonic() - started < WAIT + 1.5

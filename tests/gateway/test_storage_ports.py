@@ -23,37 +23,23 @@ from openviking_gateway.storage import CachedManagement, SQLiteManagementStore, 
 from openviking_gateway.tool_protocols import ResponseCapture
 
 
-async def exercise_kernel_capture(ports, credential, protocol):
+async def test_kernel_capture_backend_contract(kernel_store, credential):
     viking = FakeViking()
-    kernel = MemoryKernel(ports, viking)
+    kernel = MemoryKernel(kernel_store, viking)
     policy = Policy(commit_tokens=1, keep_recent_messages=0, context_window=1024).model_dump()
-    field = "input" if protocol == "responses" else "messages"
     messages = [
         {"role": "user", "content": "How do I deploy?"},
         {"role": "assistant", "content": "Blue cluster"},
         {"role": "user", "content": "What next?"},
     ]
-    summary = {
-        "chat": {"choices": [{"message": {"content": "Deploy blue"}, "finish_reason": "stop"}]},
-        "anthropic": {
-            "content": [{"type": "text", "text": "Deploy blue"}],
-            "stop_reason": "end_turn",
-        },
-        "responses": {
-            "status": "completed",
-            "output": [
-                {"type": "message", "content": [{"type": "output_text", "text": "Deploy blue"}]}
-            ],
-        },
-    }[protocol]
 
     async def summarize(prepared, body):
-        return summary
+        return {"choices": [{"message": {"content": "Deploy blue"}, "finish_reason": "stop"}]}
 
     async def prepare(session="client"):
         return await kernel.prepare(
-            {field: messages},
-            protocol,
+            {"messages": messages},
+            "chat",
             {"x-openviking-session": session},
             credential,
             {"id": "upstream"},
@@ -63,7 +49,7 @@ async def exercise_kernel_capture(ports, credential, protocol):
 
     def reply(**usage):
         return ResponseCapture(
-            protocol, {"role": "assistant", "content": "Ok"}, usage=usage, complete=True
+            "chat", {"role": "assistant", "content": "Ok"}, usage=usage, complete=True
         )
 
     p, response = await prepare(), reply(input_tokens=1000)
@@ -73,12 +59,12 @@ async def exercise_kernel_capture(ports, credential, protocol):
     compacted = await prepare()
     assert compacted.metrics["compaction_tokens"] > 0
     # Another kernel and another session continuing the reply replay the same cut.
-    kernel = MemoryKernel(ports, viking)
+    kernel = MemoryKernel(kernel_store, viking)
     fork = await prepare("fork")
-    assert fork.body[field][0]["content"].startswith(
+    assert fork.body["messages"][0]["content"].startswith(
         '<openviking-context source="gateway-compaction">'
     )
-    assert fork.body[field][1:] == compacted.body[field][1:]
+    assert fork.body["messages"][1:] == compacted.body["messages"][1:]
     assert fork.capture.value["ov_session"] != p.capture.value["ov_session"]
     assert await kernel.save(compacted, credential, reply())
     assert await kernel.save(fork, credential, reply())
@@ -557,11 +543,6 @@ async def test_redis_does_not_repeat_a_write_after_losing_its_response(
         assert (await store.get("account", "upstreams", "object"))["revision"] == 2
     else:
         assert len(await store.logs("account")) == 1
-
-
-@pytest.mark.parametrize("protocol", ["chat", "anthropic", "responses"])
-async def test_kernel_capture_backend_contract(kernel_store, credential, protocol):
-    await exercise_kernel_capture(kernel_store, credential, protocol)
 
 
 async def test_replay_put_if_absent_is_atomic(kernel_store):

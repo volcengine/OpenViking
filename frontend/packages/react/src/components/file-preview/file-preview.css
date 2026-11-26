@@ -169,6 +169,29 @@
   color: inherit;
 }
 
+.ov-file-preview__tab-badge {
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding-inline: 4px;
+  border-radius: 99px;
+  background: var(
+    --ov-ui-color-warning-light,
+    var(--ov-ui-file-preview-badge-bg-default)
+  );
+  color: var(
+    --ov-ui-color-warning,
+    var(--ov-ui-file-preview-badge-text-default)
+  );
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
 .ov-file-preview__panel {
   display: flex;
   flex: 1 1 auto;

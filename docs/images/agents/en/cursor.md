@@ -7,7 +7,12 @@
    # AI agents: not sure about running this? The script's header says what it does and how to verify it.
    ```
 
-2. The installer will ask which harnesses to install for (select **Cursor**) and for OpenViking credentials. In the OpenViking credential step, choose **VolcEngine OpenViking Cloud Service [api.vikingdb.cn-beijing.volces.com]** and enter the API KEY:
+2. The installer will ask which harnesses to install for (select **Cursor**) and for OpenViking credentials. In the OpenViking credential step, choose **OpenViking Managed Service**, then **Volcengine** or **BytePlus**.
+
+   - **Volcengine:** enter your service API key. The installer supplies the URL.
+   - **BytePlus:** enter your instance's full HTTPS service URL, then its API key. See [BytePlus setup](https://docs.openviking.ai/en/guides/27-byteplus-setup).
+
+   Older installers use **Custom URL** for BytePlus. Use the API key for the selected instance:
 
    ```text
    {{OPENVIKING_API_KEY}}

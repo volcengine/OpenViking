@@ -557,6 +557,7 @@ def _operations_to_plan_items(
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
             for case_uri in sorted(case_uris)
+            if item.target_uri
         )
     return items
 

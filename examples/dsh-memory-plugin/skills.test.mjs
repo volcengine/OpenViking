@@ -39,6 +39,7 @@ test("the bundled skill stays readable without watching the installed package", 
       "openviking-rule-search",
       "openviking-skills",
       "ov-experience-memory",
+      "ov-memory-doctor",
     ]);
     for (const candidate of candidates) {
       assert.equal(candidate.source, "bundled", candidate.name);

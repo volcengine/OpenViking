@@ -217,6 +217,13 @@ def _apply_items_to_snapshot(items: list[PolicyPlanItem], policy_set: PolicySet)
         )
         metadata = dict(existing.metadata) if existing is not None else {}
         metadata.update(item.metadata.get("patch_metadata", {}))
+        metadata.update(
+            {
+                key: value
+                for key, value in item.metadata.get("merge_memory_fields", {}).items()
+                if key not in {"content", "links", "backlinks", "status", "version"}
+            }
+        )
         metadata.setdefault("memory_type", item.memory_type or "experiences")
         metadata["experience_name"] = item.target_name
         version = (existing.version + 1) if existing is not None else 1

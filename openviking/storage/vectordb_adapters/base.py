@@ -136,6 +136,10 @@ class CollectionAdapter(ABC):
         return self._collection_name
 
     @property
+    def supports_event_time_decay(self) -> bool:
+        return True
+
+    @property
     def index_name(self) -> str:
         return self._index_name
 

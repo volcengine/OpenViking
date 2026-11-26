@@ -565,7 +565,7 @@ Event time decay applies to results tagged `memory_type=events` in semantic `fin
 
 New and updated memories produced by memory extraction automatically receive a `memory_type=<type>` search tag. With decay enabled, both local and cloud backends recall records tagged `memory_type=events` separately and merge them with the complementary untagged/non-event branch; both branches preserve the original scope, permission and level filters, without requiring a peer ID. Existing data is not backfilled; untagged memories keep their original scores. Direct content refreshes and ordinary tag updates preserve the existing memory type without inferring it from the URI.
 
-The local vector engine expands the requested event window by at most 3x internally (capped at 100,000), computes decay and sorts in C++, then returns top-k before any abstract or payload fields are fetched. This is a bounded candidate approximation, so events outside that semantic window are not guaranteed to be promoted. The HTTP vector service forwards the same native rule. Cloud adapters use VikingDB score fusion and request only the required limit plus offset, without a fixed 100,000-input override. cuVS collections use their native scalar/vector index for decay requests. openGauss accepts the forwarded parameters but does not apply time decay; it retains ordinary vector scoring.
+The local vector engine expands the requested event window by at most 3x internally (capped at 100,000), computes decay and sorts in C++, then returns top-k before any abstract or payload fields are fetched. This is a bounded candidate approximation, so events outside that semantic window are not guaranteed to be promoted. The HTTP vector service forwards the same native rule. Cloud adapters use VikingDB score fusion and request only the required limit plus offset, without a fixed 100,000-input override. cuVS collections use their native scalar/vector index for decay requests. Distributed openGauss handles decay requests with ordinary vector retrieval and scoring.
 
 When model rerank is enabled, each recall branch requests `2 × limit` results. Event decay is already applied inside VikingDB for cloud backends, or inside the local C++ engine, before the two branches merge. The best `2 × limit` merged candidates go through one model rerank; model scores determine the final ranking and score threshold. There is no additional decay after the model. If rerank fails, retrieval keeps the already-decayed recall scores. `origin_score` and `time_score` remain recall-stage details, so their product need not equal a successful model rerank score. Parent-directory scores and hotness are not mixed into the result.
 
@@ -1007,7 +1007,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to search in |
-| pattern | str | Yes | - | Search pattern (regex) |
+| pattern | str | Yes | - | Search pattern in Rust `regex` syntax, matched against individual lines |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
 | node_limit | int | No | 256 | Maximum number of results. Omitted requests default to 256; pass a larger integer when you need more results |
@@ -1016,6 +1016,8 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | include_tags | bool | No | `false` | Include each matched file's retrieval tags without filtering |
 | before_context | int | No | 0 | Number of context lines returned before each match; supported by the HTTP API and CLI |
 | after_context | int | No | 0 | Number of context lines returned after each match; supported by the HTTP API and CLI |
+
+Patterns that use unsupported syntax, such as lookaround or backreferences, are invalid.
 
 `tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
 

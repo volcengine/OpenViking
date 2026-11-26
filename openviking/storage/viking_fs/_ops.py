@@ -287,12 +287,14 @@ class _OpsMixin:
         """
         from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 
-        real_ctx = self._ctx_or_default(ctx)
-        guard_ctx = replace(real_ctx, bypass_acl=True)
+        ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(ctx, bypass_acl=True)
         await self._ensure_access(uri, guard_ctx, action=AclAction.MANAGE)
+        ctx.frozen_files = guard_ctx.frozen_files
         await self._ensure_access(uri, ctx, action=AclAction.WRITE)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
+        await self._ensure_file_changes_allowed([target_uri], ctx, recursive=recursive)
 
         async def _delete_vectors() -> int:
             """Delete the target scope without enumerating filesystem entries."""
@@ -308,7 +310,7 @@ class _OpsMixin:
             from openviking.storage.catalog import delete_catalog_subtree
 
             estimated_count = await _delete_vectors()
-            await delete_catalog_subtree(self, target_uri, real_ctx)
+            await delete_catalog_subtree(self, target_uri, ctx)
             logger.info("rm target not found, cleaned orphan index: %s", safe_uri_for_log(str(uri)))
             return {"estimated_deleted_count": estimated_count}
 
@@ -387,7 +389,7 @@ class _OpsMixin:
             emit_file_change(target_uri, ctx, "deleted", is_dir=is_dir)
             from openviking.storage.catalog import delete_catalog_subtree
 
-            await delete_catalog_subtree(self, target_uri, real_ctx)
+            await delete_catalog_subtree(self, target_uri, ctx)
             if isinstance(result, dict):
                 result["estimated_deleted_count"] = estimated_count
             else:
@@ -477,6 +479,7 @@ class _OpsMixin:
             )
 
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="cp")
+        await self._ensure_file_changes_allowed([new_uri], ctx, recursive=is_dir)
         target_preexisted = await self._ensure_transfer_target_type(
             new_path, new_uri, is_dir=is_dir
         )
@@ -785,8 +788,10 @@ class _OpsMixin:
 
         old_uri = self._normalize_transfer_uri(old_uri)
         new_uri = self._normalize_transfer_uri(new_uri)
-        guard_ctx = replace(self._ctx_or_default(ctx), bypass_acl=True)
+        ctx = self._ctx_or_default(ctx)
+        guard_ctx = replace(ctx, bypass_acl=True)
         await self._ensure_access(old_uri, guard_ctx, action=AclAction.MANAGE)
+        ctx.frozen_files = guard_ctx.frozen_files
         await self._ensure_access(old_uri, ctx, action=AclAction.WRITE)
         await self._ensure_access(new_uri, ctx, action=AclAction.WRITE)
         old_scope = old_uri.rstrip("/")
@@ -813,6 +818,7 @@ class _OpsMixin:
 
         if is_dir:
             await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
+        await self._ensure_file_changes_allowed([old_uri, new_uri], ctx, recursive=is_dir)
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="mv")
         target_preexisted = await self._ensure_transfer_target_type(
             new_path, new_uri, is_dir=is_dir
