@@ -34,8 +34,10 @@ const BOT_REPLY_FUSE = 20;
 // stay_silent, send or timer) before the daemon ends that turn. One repeat is
 // a harmless retry; this many is a model that cannot stop.
 const LOOP_BREAK_AFTER = 3;
-// Characters of an input a refusal quotes: enough to reconsider on.
-const QUOTE_CHARS = 300;
+// A refusal quotes the last inputs there, each clipped: enough to reconsider
+// on, and all of it within the 2,000 characters the action API returns.
+const QUOTE_INPUTS = 5;
+const QUOTE_CHARS = 200;
 
 const HANDLERS = {
   send_message: 'sendMessage',
@@ -794,7 +796,7 @@ export class ActionService {
     const newerSeq = this.store.newerAcceptedSeq(decision.scope_key, decision.seq);
     if (newerSeq !== null) {
       caller.trace.newerSeq = newerSeq;
-      const next = this.newestThere(decision.scope_key, newerSeq, caller);
+      const next = this.saidThere(decision.scope_key, decision.seq, caller);
       throw blocked('stale_decision', `Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. ${next.text}`, next.quote);
     }
   }
@@ -809,28 +811,32 @@ export class ActionService {
     if (decision.chat_id === target.chat_id && decision.thread_root_id && decision.thread_root_id === target.message_id) return;
     const asked = this.tasks.askedIn(taskIds, target.scope_key);
     if (asked.length === 0) return;
-    const newest = this.store.newerAcceptedSeq(target.scope_key, 0) ?? target.seq;
-    const next = this.newestThere(target.scope_key, newest, caller);
+    // What was said there from the message answered on.
+    const next = this.saidThere(target.scope_key, target.seq - 1, caller);
     throw blocked('decision_elsewhere', `Delivery blocked: ${asked.join(', ')} was asked in the chat/thread this reply goes to, and decision_id is an input from another conversation. ${next.text}`, next.quote);
   }
 
   // Where a refusal sends the model: inputs still waiting in the scope go to it
-  // now; else the newest there is quoted, since one it was shown before is no
-  // longer in its inbox and no tool reads it back by event=. The quote has no
-  // msg=, which is never a decision_id.
-  newestThere(scopeKey, seq, caller) {
+  // now; else those accepted there after `seq` are quoted (the last few), since
+  // ones it was shown before are no longer in its inbox and no tool reads them
+  // back by event=. A quote has no msg=, which is never a decision_id.
+  saidThere(scopeKey, seq, caller) {
     const waiting = this.deliverWaiting(scopeKey);
     if (waiting > 0) {
       caller.trace.inboxDelivered = waiting;
       return { text: `${waiting} newer input(s) there were waiting in your inbox; they follow as your next input. Read them, then use the newest event= as decision_id if the action still fits.` };
     }
-    const event = this.store.inboundBySeq(seq);
-    const text = oneLine([event.title, event.content, ...(event.attachments ?? []).map((item) => `[${item.type || 'attachment'}]`)]
-      .filter(Boolean).join(' '));
-    const chars = [...text];
+    const { rows, total } = this.store.newerAccepted(scopeKey, seq, QUOTE_INPUTS);
+    if (rows.length === 0) return { text: 'Decide on an input from there.' };
+    const quote = (event) => {
+      const chars = [...oneLine([event.title, event.content, ...(event.attachments ?? [])
+        .map((item) => `[${item.type || 'attachment'}]`)].filter(Boolean).join(' '))];
+      const text = chars.length > QUOTE_CHARS ? `${chars.slice(0, QUOTE_CHARS).join('')}…` : chars.join('');
+      return `event=${metadataTag(event.eventId)} time=${isoMinute(event.createTimeMs)} from=${senderLabel(event)}: ${text}`;
+    };
     return {
-      text: 'Reconsider with the newest input there, quoted below, then use its event= as decision_id if the action still fits.',
-      quote: `event=${metadataTag(event.eventId)} time=${isoMinute(event.createTimeMs)} from=${senderLabel(event)}: ${chars.length > QUOTE_CHARS ? `${chars.slice(0, QUOTE_CHARS).join('')}…` : text}`,
+      text: `Reconsider with what was said there, quoted below oldest first${total > rows.length ? ` (the last ${rows.length} of ${total})` : ''}, then use the newest event= as decision_id if the action still fits.`,
+      quote: rows.map(quote).join('\n'),
     };
   }
 

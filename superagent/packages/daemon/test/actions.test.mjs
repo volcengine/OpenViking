@@ -1092,7 +1092,7 @@ describe('decision references', () => {
     // It is no longer in the inbox, so the refusal quotes it.
     assert.match(stale.detail, /^event=evt-follow-up time=\S+Z from=\S+: hello$/);
     // Copy the tag the hint names from the newer input's line, as the model would.
-    const [, tag] = /use its (\w+)= as decision_id/.exec(stale.message);
+    const [, tag] = /use the newest (\w+)= as decision_id/.exec(stale.message);
     const line = formatInboundLine(followUp);
     const wrong = await reply(/ msg=(\S+)/.exec(line)[1]).catch((error) => error);
     assert.equal(wrong.code, 'unknown_decision');
@@ -1101,6 +1101,20 @@ describe('decision references', () => {
     // The reply still answers the question it targets.
     assert.deepEqual(outbox(store), [question.seq]);
     assert.equal(connectors.calls.length, 1);
+  });
+
+  it('quotes what was said there since a stale decision, the last five of more', async (t) => {
+    const { store, call } = setup(t);
+    store.ingest(chatEvent({ messageId: 'om_manyAsked12345', eventId: 'evt-asked', chatId: 'oc_many123456789' }));
+    for (let index = 1; index <= 7; index += 1) {
+      store.ingest(chatEvent({ messageId: `om_manyLater${index}2345`, eventId: `evt-later-${index}`, chatId: 'oc_many123456789',
+        content: `第 ${index} 条` }));
+    }
+    const stale = await call('send_message', { chat_id: 'oc_many123456789', markdown: 'x', decision_id: 'evt-asked' }).catch((error) => error);
+    assert.equal(stale.code, 'stale_decision');
+    assert.match(stale.message, /quoted below oldest first \(the last 5 of 7\), then use the newest event= as decision_id/);
+    assert.deepEqual(stale.detail.split('\n').map((line) => /^event=(\S+) time=\S+ from=\S+: (.*)$/.exec(line).slice(1)),
+      [3, 4, 5, 6, 7].map((index) => [`evt-later-${index}`, `第 ${index} 条`]));
   });
 
   it('keys a delivery by its decision event', async (t) => {
@@ -2159,14 +2173,16 @@ describe('workers scheduler', () => {
     await finish(turns[0], '流程图在附件');
     const relay = (decision, messageId = 'om_askOrigin12345') => call('reply_message', {
       message_id: messageId, markdown: '流程图在附件', reply_in_thread: true, decision_id: decision, task_ids: ['t1'] });
-    const quotesProgress = (code) => (error) => error.code === code
-      && /^event=message:om_askProgress123 time=\S+ from=\S+: 这个还没做完吗$/.test(error.detail);
+    const progress = 'event=message:om_askProgress123 time=\\S+ from=\\S+: 这个还没做完吗';
+    const quotes = (code, pattern) => (error) => error.code === code && pattern.test(error.detail);
 
     // The progress question was read and answered before the report came.
-    await assert.rejects(relay('message:om_askOrigin12345'), quotesProgress('stale_decision'));
-    // Another group's input, or the main chat's, passes no freshness check for the topic.
-    await assert.rejects(relay('message:om_askReview12345'), quotesProgress('decision_elsewhere'));
-    await assert.rejects(relay('message:om_askChatter1234'), quotesProgress('decision_elsewhere'));
+    await assert.rejects(relay('message:om_askOrigin12345'), quotes('stale_decision', new RegExp(`^${progress}$`)));
+    // Another group's input, or the main chat's, passes no freshness check for
+    // the topic: what was said there from the request on is quoted.
+    const fromRequest = new RegExp(`^event=message:om_askOrigin12345 time=\\S+ from=\\S+: 用 HTML 重画流程图\\n${progress}$`);
+    await assert.rejects(relay('message:om_askReview12345'), quotes('decision_elsewhere', fromRequest));
+    await assert.rejects(relay('message:om_askChatter1234'), quotes('decision_elsewhere', fromRequest));
     assert.equal(connectors.calls.length, 0);
     await relay('message:om_askProgress123');
     assert.deepEqual(store.db.prepare('SELECT inbound_seq FROM outbox').all().map((row) => row.inbound_seq), [origin.seq],
