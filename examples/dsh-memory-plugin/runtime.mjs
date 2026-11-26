@@ -55,7 +55,6 @@ export class OpenVikingRuntime {
       config: { ...this.config, ...resolved, peerId: peer.peerId, legacyPeerId: peer.legacyPeerId },
       ready: false,
       profileBlock: "",
-      profileDelivered: false,
       historyPointer: null,
       toolNames: new Map(),
       writes: Promise.resolve(),
@@ -127,14 +126,11 @@ export class OpenVikingRuntime {
     return state;
   }
 
-  async profileMessage(agent) {
+  // Sent whenever the model would not see it: at session start, and again after
+  // a compaction summarizes it away. `batch` is the step's claimed messages.
+  async profileMessage(agent, batch = []) {
     const state = await this.initialize(agent);
-    if (!state.ready || !state.profileBlock || state.profileDelivered) return null;
-    if (hasStartupProfile(agent)) {
-      state.profileDelivered = true;
-      return null;
-    }
-    state.profileDelivered = true;
+    if (!state.ready || !state.profileBlock || hasStartupProfile(agent, batch)) return null;
     return pluginMessage(state.profileBlock, { form: "instructions" });
   }
 
@@ -482,16 +478,11 @@ export class OpenVikingRuntime {
   }
 }
 
-function hasStartupProfile(agent) {
-  const session = agent.session;
-  const ownEvents = typeof session?.ownEvents === "function"
-    ? session.ownEvents()
-    : (session?.events || []).slice(session?.header?.seedLength ?? 0);
-  const inHistory = ownEvents.some(event => (
-    event?.type === "user/message" && isStartupProfile(event.data)
-  ));
-  if (inHistory) return true;
-  return [agent.inbox?.nextTurn, agent.inbox?.nextStep].some(messages => (
+// The history the model keeps: a compaction replaces summarized messages here
+// but never removes their events from the log.
+function hasStartupProfile(agent, batch) {
+  const history = agent.session?.deriveMessages?.() ?? [];
+  return [history, batch, agent.inbox?.nextTurn, agent.inbox?.nextStep].some(messages => (
     (messages || []).some(isStartupProfile)
   ));
 }

@@ -1,7 +1,9 @@
 use bytes::Bytes;
 use ragfs::cache_runtime::{
     CacheError, CacheRuntime, Expiration, RedisProviderConfig, SetCondition, SetOptions, SetResult,
+    ScoredMember, ZAddCondition, ZAddOptions,
 };
+use std::collections::HashMap;
 use std::time::Duration;
 
 fn config() -> Option<RedisProviderConfig> {
@@ -64,6 +66,117 @@ async fn redis_runtime_preserves_primitive_and_batch_semantics() {
     );
     assert_eq!(runtime.del(&[one.clone(), two]).await.unwrap(), 2);
     assert_eq!(runtime.get(&one).await.unwrap(), None);
+    runtime.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn redis_runtime_supports_ttl_index_primitives() {
+    let Some(mut config) = config() else {
+        return;
+    };
+    config.default_ttl_seconds = 0;
+    let runtime = CacheRuntime::redis(config).await.unwrap();
+    let state_key = key("ttl-primitives", "state");
+    let index_key = key("ttl-primitives", "index");
+
+    assert_eq!(
+        runtime
+            .hsetnx(
+                &state_key,
+                HashMap::from([
+                    ("checkpoint".to_string(), Bytes::from_static(b"first")),
+                    ("intent".to_string(), Bytes::from_static(b"token")),
+                ]),
+            )
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        runtime
+            .hsetnx(
+                &state_key,
+                HashMap::from([
+                    ("checkpoint".to_string(), Bytes::from_static(b"ignored")),
+                    ("discover".to_string(), Bytes::from_static(b"1")),
+                ]),
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime.hget(&state_key, "checkpoint").await.unwrap(),
+        Some(Bytes::from_static(b"first"))
+    );
+
+    assert_eq!(
+        runtime
+            .zadd(
+                &index_key,
+                vec![ScoredMember {
+                    member: "session".to_string(),
+                    score: 10.0,
+                }],
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime
+            .zadd_with_options(
+                &index_key,
+                vec![ScoredMember {
+                    member: "session".to_string(),
+                    score: 20.0,
+                }],
+                ZAddOptions {
+                    condition: ZAddCondition::Gt,
+                },
+            )
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        runtime
+            .zadd_with_options(
+                &index_key,
+                vec![
+                    ScoredMember {
+                        member: "session".to_string(),
+                        score: 30.0,
+                    },
+                    ScoredMember {
+                        member: "event".to_string(),
+                        score: 5.0,
+                    },
+                ],
+                ZAddOptions {
+                    condition: ZAddCondition::Nx,
+                },
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        runtime
+            .zmscore(
+                &index_key,
+                &[
+                    "event".to_string(),
+                    "session".to_string(),
+                    "missing".to_string(),
+                ],
+            )
+            .await
+            .unwrap(),
+        vec![Some(5.0), Some(20.0), None]
+    );
+
+    runtime.del(&[state_key, index_key]).await.unwrap();
     runtime.close().await.unwrap();
 }
 

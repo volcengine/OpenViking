@@ -158,7 +158,8 @@ export const sections: DocSection[] = [
       ]),
       g('Memory and tools', '记忆与工具', [
         p('gateway/04-openviking-tools'),
-        p('gateway/05-long-conversations')
+        p('gateway/05-long-conversations'),
+        p('gateway/14-seal-secrets')
       ]),
       g('Manage in Studio', '在 Studio 中管理', [
         p('gateway/06-manage-in-studio'),

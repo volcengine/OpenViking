@@ -18,6 +18,9 @@ pub(super) const SET_CONDITION_NX: u32 = 1;
 pub(super) const SET_CONDITION_XX: u32 = 2;
 pub(super) const SET_APPLIED: u8 = 0;
 pub(super) const SET_CONDITION_NOT_MET: u8 = 1;
+pub(super) const ZADD_CONDITION_NONE: u32 = 0;
+pub(super) const ZADD_CONDITION_NX: u32 = 1;
+pub(super) const ZADD_CONDITION_GT: u32 = 2;
 pub(super) const LIST_BEFORE: u32 = 0;
 pub(super) const LIST_AFTER: u32 = 1;
 pub(super) const LIST_LEFT: u32 = 0;
@@ -81,10 +84,83 @@ pub(super) struct KeyValueV1 {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub(super) struct FieldValueV1 {
+    pub(super) field: ByteSliceV1,
+    pub(super) value: ByteSliceV1,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct OwnedFieldValueV1 {
+    pub(super) field: OwnedBufferV1,
+    pub(super) value: OwnedBufferV1,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct OwnedFieldValueArrayV1 {
+    pub(super) items: *mut OwnedFieldValueV1,
+    pub(super) len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct ScoredMemberV1 {
+    pub(super) score: f64,
+    pub(super) member: ByteSliceV1,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct OwnedScoredMemberV1 {
+    pub(super) score: f64,
+    pub(super) member: OwnedBufferV1,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct OwnedScoredMemberArrayV1 {
+    pub(super) items: *mut OwnedScoredMemberV1,
+    pub(super) len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct OptionalScoreV1 {
+    pub(super) score: f64,
+    pub(super) present: u8,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub(super) struct OwnedOptionalScoreArrayV1 {
+    pub(super) items: *mut OptionalScoreV1,
+    pub(super) len: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(super) struct ScoreRangeV1 {
+    pub(super) min: f64,
+    pub(super) min_exclusive: u8,
+    pub(super) max: f64,
+    pub(super) max_exclusive: u8,
+    pub(super) offset: u64,
+    pub(super) limit: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub(super) struct SetOptionsV1 {
     pub(super) expiration_ms: i64,
     pub(super) condition: u32,
     pub(super) keep_ttl: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(super) struct ZAddOptionsV1 {
+    pub(super) condition: u32,
 }
 
 #[repr(C)]
@@ -174,14 +250,21 @@ pub(super) type ProviderHgetV1 = unsafe extern "C" fn(
     output: *mut OptionalOwnedBufferV1,
     error: *mut OwnedBufferV1,
 ) -> i32;
+pub(super) type ProviderHgetallV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    output: *mut OwnedFieldValueArrayV1,
+    error: *mut OwnedBufferV1,
+) -> i32;
 pub(super) type ProviderHsetV1 = unsafe extern "C" fn(
     provider: *mut c_void,
     key: ByteSliceV1,
-    field: ByteSliceV1,
-    value: ByteSliceV1,
+    entries: *const FieldValueV1,
+    entries_len: usize,
     added: *mut u64,
     error: *mut OwnedBufferV1,
 ) -> i32;
+pub(super) type ProviderHsetnxV1 = ProviderHsetV1;
 pub(super) type ProviderSismemberV1 = unsafe extern "C" fn(
     provider: *mut c_void,
     key: ByteSliceV1,
@@ -204,9 +287,26 @@ pub(super) type ProviderScardV1 = unsafe extern "C" fn(
 pub(super) type ProviderZaddV1 = unsafe extern "C" fn(
     provider: *mut c_void,
     key: ByteSliceV1,
-    score: f64,
-    member: ByteSliceV1,
+    entries: *const ScoredMemberV1,
+    entries_len: usize,
     added: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZaddConditionalV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    options: ZAddOptionsV1,
+    entries: *const ScoredMemberV1,
+    entries_len: usize,
+    added: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZmscoreV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    members: *const ByteSliceV1,
+    members_len: usize,
+    output: *mut OwnedOptionalScoreArrayV1,
     error: *mut OwnedBufferV1,
 ) -> i32;
 pub(super) type ProviderZscanV1 = unsafe extern "C" fn(
@@ -220,10 +320,20 @@ pub(super) type ProviderZscanV1 = unsafe extern "C" fn(
 pub(super) type ProviderZrangeByScoreV1 = unsafe extern "C" fn(
     provider: *mut c_void,
     key: ByteSliceV1,
-    min: f64,
-    max: f64,
-    limit: u32,
-    output: *mut OwnedBufferArrayV1,
+    range: ScoreRangeV1,
+    output: *mut OwnedScoredMemberArrayV1,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderZcardV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    count: *mut u64,
+    error: *mut OwnedBufferV1,
+) -> i32;
+pub(super) type ProviderServerTimeForKeyV1 = unsafe extern "C" fn(
+    provider: *mut c_void,
+    key: ByteSliceV1,
+    time_ms: *mut u64,
     error: *mut OwnedBufferV1,
 ) -> i32;
 pub(super) type ProviderZremV1 = unsafe extern "C" fn(
@@ -356,6 +466,12 @@ pub(super) struct ProviderApiV1 {
     pub(super) zrem: Option<ProviderZremV1>,
     pub(super) unlink: Option<ProviderUnlinkV1>,
     pub(super) zrangebyscore: Option<ProviderZrangeByScoreV1>,
+    pub(super) hgetall: Option<ProviderHgetallV1>,
+    pub(super) zcard: Option<ProviderZcardV1>,
+    pub(super) server_time_for_key: Option<ProviderServerTimeForKeyV1>,
+    pub(super) hsetnx: Option<ProviderHsetnxV1>,
+    pub(super) zadd_conditional: Option<ProviderZaddConditionalV1>,
+    pub(super) zmscore: Option<ProviderZmscoreV1>,
 }
 
 pub(super) type ProviderEntryV1 = unsafe extern "C" fn() -> *const ProviderApiV1;

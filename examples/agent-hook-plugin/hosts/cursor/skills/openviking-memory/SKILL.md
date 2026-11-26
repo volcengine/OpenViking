@@ -8,8 +8,11 @@ description: >
   context this session does not have — even if nobody says the word "memory".
   Also use it when the user asks where memories are stored: per project, per folder, or shared between repositories.
   Covers choosing between context search, find, list search, and grep, reading viking://
-  URIs, and when (not) to write.
-version: 2026.10.1
+  URIs, and when (not) to write. Also use it when a message or file holds an
+  {{ov_privacy:…}} reference or says OpenViking replaced a secret with one: it
+  covers using saved credentials without reading them (`ov privacy run`), and
+  naming or rotating them.
+version: 2026.11.1
 ---
 
 # OpenViking Memory
@@ -97,6 +100,56 @@ Do not invent other keys or commands for this: that file is the whole interface,
   `ov-experience-memory` skill.
 - Skills stored in OpenViking (the `<available-skills>` list, `add_skill`,
   moving local skills in) are covered by the `openviking-skills` skill.
+
+## Saved credentials
+
+OpenViking keeps the user's API keys and tokens in Privacy. A saved secret is
+named by a reference such as
+`{{ov_privacy:alice:viking://~/privacy/credential/github#/values/token}}`: the
+owner, then the field. It stands for a value you are not meant to read.
+
+- **Use it without reading it** — `ov privacy run` resolves references for one
+  local command and masks their values in its output. Pass a reference as an
+  environment variable with `--env NAME=REF` (repeatable), load `NAME=REF`
+  lines with `--env-file <path>`, or put it inside an argument; the command
+  comes after `--`. Single-quote every reference in a shell command, because
+  `{{…}}` and `#` are otherwise open to shell interpretation:
+
+  ```bash
+  ov privacy run --env GH_TOKEN='{{ov_privacy:alice:viking://~/privacy/credential/github#/values/token}}' -- gh repo list
+  ```
+
+  To use the variable on the command line, wrap the command in `sh -c '…'`:
+
+  ```bash
+  ov privacy run --env GH_TOKEN='<reference>' -- sh -c 'curl -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/user'
+  ```
+
+  `$GH_TOKEN` written outside `sh -c '…'` is expanded by your own shell
+  before `ov` runs, and is empty.
+
+  Prefer `--env`: with `OPENVIKING_PRIVACY_RUN_STRICT=1` references in arguments are refused.
+- **Do not print values.** `privacy_resolve`, `ov privacy resolve`,
+  `ov privacy get` and `ov privacy version` print plain values; use them only
+  when the user asks to see a value. Do not print any part of a secret either
+  (a prefix, a suffix); to check a secret, print only its length.
+  `ov privacy run` masks only complete values in its output.
+- **What exists** — `privacy_tree` lists targets, fields, their references and
+  descriptions, never values; on the CLI, `ov privacy tree --references` shows
+  the references and `ov privacy tree -o json` also the descriptions. The
+  description is how to tell similar credentials apart. `privacy_tree` leaves
+  the `auto` category out unless you ask for it with `category="auto"`; an
+  `auto/…` reference was created automatically and works like any other.
+- **Naming and rotating** — only when the `privacy_upsert` tool's own
+  description says that a reference can be passed as the value: then a whole
+  reference as a value copies that field's current value, so the secret never
+  passes through you; prefer it. On the CLI, under the same condition:
+  `ov privacy upsert credential <target> --field <field>='<reference>'`. Use it
+  to save an automatic entry under a proper name in `credential`, or to
+  replace a value. The automatic entry is removed once saved, so use the
+  reference the upsert returns from then on. Give a short description of what
+  the credential is for: `description` on `privacy_upsert`, or `--labels-json
+  '{"description":"…"}'` on the CLI, which replaces all of the target's labels.
 
 ## Beyond the MCP tools
 

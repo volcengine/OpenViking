@@ -1,8 +1,10 @@
 """Standalone gateway tests intentionally need no vector engine or LLM SDK."""
 
+import asyncio
 import copy
 import json
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs, urlsplit
@@ -148,6 +150,133 @@ class FakeViking:
         return {}
 
 
+PRIVACY_REFERENCE = re.compile(r"\{\{[ \t]*ov_privacy:[^{}\r\n]+\}\}")
+# The fake server's whole detector: GitHub-style tokens.
+DETECTOR = re.compile(r"ghp_[A-Za-z0-9]{10,}")
+
+
+def privacy_reference(target, field="token", owner="alice", category="credential"):
+    return f"{{{{ov_privacy:{owner}:viking://~/privacy/{category}/{target}#/values/{field}}}}}"
+
+
+def is_temporary(reference):
+    """CONTRACT §9.1: a reference is temporary exactly when its category is ``auto``."""
+    return "/privacy/auto/" in reference
+
+
+class FakePrivacy:
+    """The seal and resolve endpoints of CONTRACT §1, §5, §8 and §9.1, for one user's vault."""
+
+    def __init__(self):
+        # Current credential values: value -> reference.
+        self.values = {}
+        self.revision = 1
+        self.calls, self.resolves = [], []
+        # Set to an HTTP status, "timeout" or "malformed".
+        self.failure = None
+        self.resolve_failure = None
+        self.enrolled = 0
+
+    def register(self, value, target, field="token", category="credential"):
+        reference = privacy_reference(target, field, category=category)
+        # Rotation: the field's old value is no longer current.
+        self.values = {v: r for v, r in self.values.items() if r != reference}
+        self.values[value] = reference
+        self.revision += 1
+        return reference
+
+    def rename(self, reference, target, field="token"):
+        """Save an ``auto`` entry under a name in ``credential``, as an upsert passing its
+        reference does: the ``auto`` source is deleted."""
+        value = next(v for v, r in self.values.items() if r == reference)
+        del self.values[value]
+        return self.register(value, target, field)
+
+    def enroll_from(self, text, created):
+        """Enroll detected tokens of ``text`` that are not registered yet."""
+        taken = [m.span() for m in PRIVACY_REFERENCE.finditer(text)]
+        for m in DETECTOR.finditer(text):
+            free = not any(s < m.end() and m.start() < e for s, e in taken)
+            if free and m[0] not in self.values:
+                self.enrolled += 1
+                target = f"github-{self.enrolled:04d}"
+                created.add(self.register(m[0], target, category="auto"))
+
+    def seal_one(self, text, created):
+        taken = [m.span() for m in PRIVACY_REFERENCE.finditer(text)]
+
+        def free(start, end):
+            return not any(s < end and start < e for s, e in taken)
+
+        spans = []
+        for value in sorted(self.values, key=len, reverse=True):
+            if len(value) < 6:
+                continue
+            start = text.find(value)
+            while start >= 0:
+                end = start + len(value)
+                if free(start, end):
+                    taken.append((start, end))
+                    spans.append((start, end, self.values[value]))
+                start = text.find(value, start + 1)
+        if not spans:
+            return None
+        spans.sort()
+        out, position = [], 0
+        for start, end, reference in spans:
+            out += [text[position:start], reference]
+            position = end
+        out.append(text[position:])
+        return {
+            "text": "".join(out),
+            "replaced": [
+                {
+                    "start": s,
+                    "end": e,
+                    "reference": r,
+                    "created": r in created,
+                    "temporary": is_temporary(r),
+                }
+                for s, e, r in spans
+            ],
+        }
+
+    def seal_texts(self, texts):
+        """``result.texts`` for request ``texts``: like the server, enroll from every text
+        of the call first, then replace in all of them."""
+        created = set()
+        for t in texts:
+            if t.get("enroll", False):
+                self.enroll_from(t["text"], created)
+        return [self.seal_one(t["text"], created) for t in texts]
+
+    async def handle(self, request):
+        body = await request.json()
+        if request.path.endswith("/resolve"):
+            self.resolves.append(body["selector"])
+            if self.resolve_failure:
+                return web.json_response({"status": "error"}, status=self.resolve_failure)
+            value = next((v for v, r in self.values.items() if r == body["selector"]), None)
+            if value is None:
+                return web.json_response({"status": "error"}, status=404)
+            return web.json_response(
+                {"status": "ok", "result": {"reference": body["selector"], "value": value}}
+            )
+        self.calls.append(body["texts"])
+        if self.failure == "timeout":
+            await asyncio.sleep(2)
+        if isinstance(self.failure, int):
+            return web.json_response({"status": "error"}, status=self.failure)
+        if self.failure == "malformed":
+            return web.json_response({"status": "ok", "result": {"texts": []}})
+        if not 1 <= len(body["texts"]) <= 1024:
+            return web.json_response({"status": "error"}, status=422)
+        texts = self.seal_texts(body["texts"])
+        return web.json_response(
+            {"status": "ok", "result": {"revision": f"r{self.revision}", "texts": texts}}
+        )
+
+
 @pytest.fixture
 def credential():
     return {
@@ -194,10 +323,12 @@ async def update_capture(store, request, **changes):
 async def gateway_backend():
     captured = []
     writes = []
-    override = {}
+    override = {"privacy": FakePrivacy()}
     viking = FakeViking()
 
     async def backend(request):
+        if request.path in {"/api/v1/privacy-configs/seal", "/api/v1/privacy-configs/resolve"}:
+            return await override["privacy"].handle(request)
         if request.path == "/mcp" and (await request.json()).get("method") == "tools/list":
             key = request.headers.get("X-API-Key")
             override.setdefault("tools_calls", []).append(key)
@@ -221,10 +352,16 @@ async def gateway_backend():
             if status != 200:
                 return web.json_response({}, status=status)
             if override.get("auth_mode") in {"dev", "trusted"}:
-                return web.json_response({"version": "0.4.16", "auth_mode": override["auth_mode"]})
+                return web.json_response(
+                    {
+                        "version": override.get("version", "0.4.16"),
+                        "auth_mode": override["auth_mode"],
+                    }
+                )
             return web.json_response(
                 {
-                    "version": "0.4.16",
+                    # The version seal tests set to one with the seal endpoint.
+                    "version": override.get("version", "0.4.16"),
                     "status": "ok",
                     "auth_mode": "api_key",
                     "role": "root" if key == "root" else "admin" if key == "admin-key" else "user",

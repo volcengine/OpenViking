@@ -32,7 +32,8 @@ async def _assert_failed_package_settled(client, failed_paths):
     # the whole queue, including that work, before checking its final counts.
     waited = await client.post("/api/v1/system/wait", json={})
     assert waited.status_code == 200, waited.text
-    assert waited.json()["result"]["Semantic"]["error_count"] == 1
+    semantic = waited.json()["result"]["Semantic"]
+    assert semantic["error_count"] == 1, semantic["errors"]
     queue_manager = get_queue_manager()
     status = await queue_manager.get_queue(queue_manager.SEMANTIC).get_status()
     assert status.pending == 0

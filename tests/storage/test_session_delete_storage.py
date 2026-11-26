@@ -3,6 +3,7 @@
 
 """Unindexed deletion avoids vector work while retaining storage safety checks."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -156,11 +157,10 @@ async def test_session_rm_rechecks_existence_after_waiting_for_tree_lock(storage
 async def test_ttl_recycles_under_native_tree_lease_and_retries_failed_deletion(
     tmp_path, monkeypatch
 ):
-    import fakeredis.aioredis
-
     from openviking.scheduling.expiry.api import CallbackRequest, ItemIdentity
     from openviking.ttl.adapter import TTLBackfillRequest, TTLRecycleRequest
     from openviking.ttl.runtime import DirectoryTTL
+    from openviking.ttl.tests.test_support import FakeredisCacheRuntime
     from openviking.ttl.wiring import install_ttl_hook
     from openviking.utils.agfs_utils import RagfsBindingConfig, create_agfs_client
     from openviking_cli.exceptions import NotFoundError
@@ -172,10 +172,15 @@ async def test_ttl_recycles_under_native_tree_lease_and_retries_failed_deletion(
     )
     vectors = SimpleNamespace(count=AsyncMock(return_value=1), delete_uris=AsyncMock())
     fs = VikingFS(agfs=agfs, vector_store=vectors)
-    engine = DirectoryTTL(resource_id="recycle-contract", batch_interval=0, delete_interval=0)
+    cache_runtime = FakeredisCacheRuntime()
+    engine = DirectoryTTL(
+        resource_id="recycle-contract",
+        cache_runtime=cache_runtime,
+        batch_interval=0,
+        delete_interval=0,
+    )
     engine.fs = fs
     engine.policies = AsyncMock(return_value=(TTLConfig(sessions=7, user_events=7), None))
-    engine.redis = fakeredis.aioredis.FakeRedis(decode_responses=True)
     ctx = engine.context("account")
     session = "viking://user/alice/sessions/fresh"
     event = "viking://user/alice/memories/events/2020/01/01"
@@ -188,9 +193,9 @@ async def test_ttl_recycles_under_native_tree_lease_and_retries_failed_deletion(
         await engine.start()
         # Soft TTL permits writing old Events until the background deletion happens.
         await fs.write_file(event + "/event.md", "historical event", ctx=ctx)
-        await engine._registration_task
+        await asyncio.wait_for(engine._registration_task, 5)
         prefix = engine.prefix(ctx.account_id)
-        event_score = await engine.redis.zscore(prefix + "user_events", event)
+        event_score = await cache_runtime.redis.zscore(prefix + "user_events", event)
         assert event_score is not None
         await engine.register_initial_backfill(
             TTLBackfillRequest(
@@ -205,17 +210,17 @@ async def test_ttl_recycles_under_native_tree_lease_and_retries_failed_deletion(
             "openviking.ttl.runtime.time.time_ns", lambda: engine._recycle_after_ms * 1_000_000
         )
         await engine.handle(callback)
-        await engine._task
+        await asyncio.wait_for(engine._task, 5)
         assert (await engine.read_initial(ctx.account_id))["done"]
-        assert await engine.redis.zscore(prefix + "sessions", session) is not None
+        assert await cache_runtime.redis.zscore(prefix + "sessions", session) is not None
 
         # The file's fresh ModTime wins over a stale Session index entry.
-        await engine.redis.zadd(prefix + "sessions", {session: 1})
+        await cache_runtime.redis.zadd(prefix + "sessions", {session: 1})
         vectors.delete_uris.side_effect = OSError("vector deletion unavailable")
         failed = await engine.recycle_due(request)
         assert failed.failed == 1 and failed.skipped >= 1
-        assert await engine.redis.zscore(prefix + "sessions", session) > 1
-        assert await engine.redis.zscore(prefix + "user_events", event) == event_score
+        assert await cache_runtime.redis.zscore(prefix + "sessions", session) > 1
+        assert await cache_runtime.redis.zscore(prefix + "user_events", event) == event_score
         assert await fs.read_file(event + "/event.md", ctx=ctx) == "historical event"
         assert (await fs._async_agfs.pathlock_observe())["active_locks"] == 0
 
@@ -224,7 +229,7 @@ async def test_ttl_recycles_under_native_tree_lease_and_retries_failed_deletion(
         assert recycled.deleted == 1 and recycled.failed == 0
         with pytest.raises(NotFoundError):
             await fs.stat(event, ctx=ctx)
-        assert await engine.redis.zscore(prefix + "user_events", event) is None
+        assert await cache_runtime.redis.zscore(prefix + "user_events", event) is None
         assert await fs.read_file(session + "/messages.jsonl", ctx=ctx) == "recent message"
         assert (await fs._async_agfs.pathlock_observe())["active_locks"] == 0
     finally:
@@ -325,7 +330,7 @@ async def test_default_rm_still_cleans_vector_records(
 
 
 @pytest.mark.parametrize("allowed", [False, True])
-async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, allowed):
+async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, allowed, monkeypatch):
     backend = _RealAclMemoryTransferBackend(
         [
             _record(
@@ -348,7 +353,7 @@ async def test_resource_rm_authorizes_the_whole_subtree_at_its_root(storage, all
     storage.fs.vector_store = backend
     storage.fs.acl_manager = backend.acl_manager
     service = FSService(viking_fs=storage.fs)
-    service._enqueue_delete_refresh = AsyncMock(return_value="queued")
+    monkeypatch.setattr("openviking.service.fs_service.enqueue_directory_refresh", AsyncMock())
 
     if allowed:
         # Direct deletion still checks the child; FSService authorizes the subtree at its root.

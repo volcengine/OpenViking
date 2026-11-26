@@ -212,8 +212,16 @@ def normalize(value: Any) -> Any:
     return value
 
 
+SECRET_REFERENCE_PREFIX = b"{{ov_privacy:"
+SECRET_REFERENCE = re.compile(rb"\{\{ov_privacy:[^\s{}\"\\]*\}\}")
+
+
 def prefix_chain(messages: list[dict], after: Sequence[str] = ()) -> list[str]:
-    """Anchors of ``messages``; ``after``, the chain of the history before them, continues it."""
+    """Anchors of ``messages``; ``after``, the chain of the history before them, continues it.
+
+    Every secret reference hashes alike: renaming or rotating a credential changes the
+    reference a client's plain value seals to, not the conversation.
+    """
     previous = next(
         (bytes.fromhex(a) for a in reversed(after) if a),
         hashlib.sha256(NORMALIZATION_VERSION.encode()).digest(),
@@ -234,9 +242,10 @@ def prefix_chain(messages: list[dict], after: Sequence[str] = ()) -> list[str]:
         ):
             result.append("")
             continue
-        previous = hashlib.sha256(
-            previous + orjson.dumps(canonical, option=orjson.OPT_SORT_KEYS)
-        ).digest()
+        data = orjson.dumps(canonical, option=orjson.OPT_SORT_KEYS)
+        if SECRET_REFERENCE_PREFIX in data:
+            data = SECRET_REFERENCE.sub(b"{{ov_privacy}}", data)
+        previous = hashlib.sha256(previous + data).digest()
         result.append(previous.hex())
     return result
 

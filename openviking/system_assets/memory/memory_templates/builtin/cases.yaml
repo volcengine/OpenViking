@@ -13,6 +13,7 @@ description: |
 
 directory: "viking://user/{{ user_space }}/memories/cases"
 filename_template: "{{ case_name|lower }}.md"
+abstract_template: "Past problems and how they were resolved, organized as individual cases."
 enabled: true
 peer_enabled: false
 content_template: |
