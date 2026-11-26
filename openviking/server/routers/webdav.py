@@ -172,9 +172,11 @@ def _destination_path(destination: str) -> str:
 
 
 async def _write_text_resource(service, uri: str, content: str, ctx: RequestContext) -> None:
-    """Persist UTF-8 text content and refresh derived summaries before returning."""
+    """Persist UTF-8 text content and schedule file processing."""
+    from openviking.utils.summarizer import Summarizer
+
     await service.viking_fs.write_file(uri, content, ctx=ctx)
-    await service.resources.summarize([uri], ctx=ctx)
+    await Summarizer(vlm_processor=None).refresh_file_parent(file_uri=uri, ctx=ctx)
 
 
 async def _safe_stat(service, uri: str, ctx: RequestContext) -> Optional[dict[str, Any]]:
