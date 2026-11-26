@@ -261,6 +261,7 @@ class MemoryTypeRegistry:
             stage=stage,
             peer_enabled=data.get("peer_enabled", True),
             overview_template=data.get("overview_template"),
+            abstract_template=data.get("abstract_template"),
         )
 
     async def initialize_memory_files(

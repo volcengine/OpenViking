@@ -162,14 +162,14 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>Use OpenViking Service (hosted by Volcengine)</strong></summary>
 
-The same OpenViking service, run for you by Volcengine. The first 50 files are free. Activate it on the [Volcengine product page](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme), then create an API key in the console under User Management → API Key. The server address is `https://api.vikingdb.cn-beijing.volces.com/openviking`; you'll need it and the API key when you connect your agent.
+The same OpenViking service, run for you by Volcengine. The first 50 files are free. Activate it on the [Volcengine product page](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme), then create an API key in the console under User Management → API Key. The Volcengine setup option sets the service URL automatically. For manual setup, use `https://api.vikingdb.cn-beijing.volces.com/openviking`.
 
 </details>
 
 <details>
 <summary><strong>Use OpenViking Service (hosted by BytePlus)</strong></summary>
 
-[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) hosts OpenViking in Asia Pacific (Johor). To connect a client, use your BytePlus OpenViking service URL and API key. See the [BytePlus setup guide](https://docs.openviking.ai/en/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme) for CLI and agent setup.
+[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) hosts OpenViking in Asia Pacific (Johor). Enter your instance's API key in the setup wizard. The BytePlus option sets the service URL automatically. See the [BytePlus setup guide](https://docs.openviking.ai/en/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme) for CLI and agent setup.
 
 </details>
 

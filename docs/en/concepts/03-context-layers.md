@@ -16,8 +16,6 @@ L0 and L1 are normally generated together, but either one may exist independentl
 
 For resource-directory summary generation, `semantic.abstract_max_chars` and `semantic.overview_max_chars` set character budgets; the table shows their defaults. The budgets apply to the generated Markdown body. Sidecar metadata is excluded.
 
-Truncation prefers complete sentences. If no sentence ends within the budget, it can retain the first complete sentence even when that sentence is longer. These settings therefore do not impose hard size limits on stored sidecars.
-
 ## L0: Abstract
 
 L0 is the shortest representation of a directory, used for vector retrieval and quick relevance decisions.
@@ -52,7 +50,7 @@ This directory covers the primary API authentication methods.
 overview = client.overview(uri="viking://resources/docs/auth")
 ```
 
-When generating resource-directory summaries, L0 is extracted from the L1 body: the Brief Description paragraph after the H1 title and before the first `##` heading. YAML frontmatter is not part of this extraction.
+For ordinary directories, the model writes a directory summary from file summaries and child-directory L0 bodies. L1 opens with that complete summary. The template adds directory navigation and an access guide, using the remaining space for as many entry links and descriptions as fit. L0 takes a short prefix from the same summary. On a memory directory refresh, a type template can supply a missing L0 as a `manual` preset. L1 renders from stored memory fields, so directory refresh after a normal memory write needs no text generation call. For Skill roots, L0 comes from Skill metadata and L1 uses the `SKILL.md` body.
 
 ## L2: Detail
 
@@ -152,7 +150,7 @@ When the direct-entry count exceeds `semantic.overview_sample_limit` (32 by defa
 
 `pending_child_changes > 0` means the body is still readable but is known to lag behind lower-level changes. A successful parent refresh resets the value to 0 as part of the new coverage metadata.
 
-Resource/skill parent refreshes are freshness-aware. An unchanged child L0 body does not trigger propagation. A changed body triggers an immediate refresh when the parent has no freshness baseline, or its direct-entry count is at most `semantic.overview_sample_limit`. Larger directories accumulate `pending_child_changes` and refresh when its ratio to `total_entries` reaches `semantic.freshness_refresh_ratio` (default `0.10`). Manual refresh/import bypasses the threshold for its requested root, not every ancestor. Propagation stops at the namespace-root boundary. Below the threshold, the parent stays readable but pending; the threshold policy does not promise a timed refresh.
+Resource, memory, and skill directories share the automatic freshness policy. An unchanged child L0 body does not trigger propagation. A changed body triggers an immediate refresh when the parent has no freshness baseline, or its direct-entry count is at most `semantic.overview_sample_limit`. Larger directories accumulate `pending_child_changes` and refresh when its ratio to `total_entries` reaches `semantic.freshness_refresh_ratio` (default `0.10`). Manual refresh/import bypasses the threshold for its requested root, not every ancestor. Propagation stops at the namespace-root boundary. Below the threshold, the parent stays readable but pending; the threshold policy does not promise a timed refresh.
 
 ## Write Protection
 
@@ -160,20 +158,24 @@ L0/L1 bodies can be updated through public `write` / `batch_write`, while metada
 
 - The target sidecar must already exist; public APIs cannot directly create a new `.abstract.md` or `.overview.md`.
 - A body-only request inherits the stored metadata and writes canonical OKF.
-- A full-OKF request must preserve all known metadata; changing a protected field fails.
+- A full-OKF request must preserve known metadata; changing protected fields is rejected.
 - Unknown metadata fields are silently dropped.
 - `append` appends only to the body, never to frontmatter.
 - A body update rebuilds only the directory levels that currently exist and does not regenerate semantics, preventing the newly written body from being overwritten.
+
+Editing an existing L0 body through `write` / `batch_write` sets `maintenance: manual`. This system-managed marker cannot be changed or removed through the public write APIs. Automatic refreshes and semantic rebuilds preserve this L0 while updating L1 navigation. L1 has no protected manual sections; subsequent generation replaces direct body edits.
+
+Preset L0 descriptions also use `manual` maintenance. New presets carry this marker; existing presets without it are recognized by their directory-initialization source metadata. Preset L1 descriptions are not protected by this rule.
 
 ## Generation
 
 SemanticProcessor processes directories bottom-up:
 
 ```text
-file summaries → leaf L1 → leaf L0 → parent directories → namespace boundary
+file summaries / child L0 → directory L0 → rendered directory L1 → parent directories
 ```
 
-Child-directory L0 bodies are aggregated into the parent L1. Memory directories use the same SemanticProcessor entry point, although the current parent-bubbling path applies only to resource/skill. Multimodal files first produce text summaries, which contribute to the containing directory's L0/L1 like other file summaries; OpenViking does not create per-file L0/L1 sidecars for each image, audio file, or video.
+Child-directory L0 bodies contribute to the parent L0, which also becomes the parent L1 description. Memory directories use the same SemanticProcessor entry point, although the current parent-bubbling path applies only to resource/skill. Multimodal files first produce text summaries, which contribute to the containing directory's L0/L1 like other file summaries; OpenViking does not create per-file L0/L1 sidecars for each image, audio file, or video.
 
 ## Best Practices
 

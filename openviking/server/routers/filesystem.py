@@ -288,7 +288,7 @@ async def mkdir(
 async def rm(
     uri: str = Query(..., description="Viking URI"),
     recursive: bool = Query(False, description="Remove recursively"),
-    wait: bool = Query(False, description="Wait for semantic refresh to complete"),
+    wait: bool = Query(False, description="Confirm that the deletion task has completed"),
     timeout: Optional[float] = Query(
         None,
         deprecated=True,

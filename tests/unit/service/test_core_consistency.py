@@ -101,12 +101,42 @@ def test_service_loads_account_store_runtime_from_config_file(tmp_path, monkeypa
     )
 
     binding = service._build_ragfs_binding_config()
-    assert binding.account_store_cache_instance == "accountstore"
+    assert binding.required_cache_instances == {"Redis MySQL Account Store": "accountstore"}
     cache = binding.to_binding_dict()["cache"]
     assert cache["runtime_enabled"] is True
     assert cache["cachefs"]["enabled"] is False
     assert cache["instances"]["accountstore"]["provider"] == "redis"
     assert cache["instances"]["accountstore"]["redis"]["endpoints"] == ["redis://127.0.0.1:6380"]
+
+
+def test_service_requires_ttl_runtime_from_registered_config(monkeypatch) -> None:
+    """Select the enabled Directory TTL CacheRuntime before constructing AGFS."""
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = object()
+    calls = []
+    server_config = SimpleNamespace(
+        account_store=SimpleNamespace(provider="file", params={}),
+        ttl_adapter=SimpleNamespace(
+            enabled=True,
+            cache=SimpleNamespace(instance="ttl"),
+        ),
+    )
+
+    monkeypatch.setattr(
+        "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
+        lambda: None,
+    )
+    monkeypatch.setattr("openviking.server.dependencies._server_config", server_config)
+    monkeypatch.setattr(
+        "openviking.service.core.build_runtime_ragfs_binding_config",
+        lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
+    )
+
+    service._build_ragfs_binding_config()
+
+    assert calls == [
+        (service._config, {"required_cache_instances": {"Directory TTL": "ttl"}})
+    ]
 
 
 @pytest.mark.asyncio

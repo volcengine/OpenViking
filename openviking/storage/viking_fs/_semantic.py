@@ -814,7 +814,8 @@ class _SemanticMixin:
                             "generated_by": {
                                 "component": "VikingFS.write_context",
                                 "trigger": "context_write",
-                            }
+                            },
+                            **({"maintenance": "manual"} if level == ContextLevel.ABSTRACT else {}),
                         },
                     ),
                     ctx=ctx,

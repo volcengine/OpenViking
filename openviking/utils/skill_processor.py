@@ -23,7 +23,7 @@ from urllib.parse import unquote
 
 import yaml
 
-from openviking.config.vlm import VLMHandle, VLMResolver
+from openviking.config.vlm import VLMResolver
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.namespace import canonical_user_root
 from openviking.core.skill_loader import SkillLoader
@@ -265,8 +265,6 @@ class SkillProcessor:
                         change_reason=privacy_change_reason,
                     )
                 )
-            skill_abstract = self._build_skill_abstract(skill_dict)
-
             if new_package:
                 from openviking.storage.catalog import declare_item
                 from openviking_cli.exceptions import UnimplementedError
@@ -288,8 +286,6 @@ class SkillProcessor:
                     viking_fs=viking_fs,
                     skill_dict=skill_dict,
                     skill_dir_uri=skill_dir_uri,
-                    abstract=skill_abstract,
-                    overview=skill_dict.get("content", ""),
                     ctx=ctx,
                     lease_ref=lease,
                 )
@@ -786,49 +782,19 @@ class SkillProcessor:
             change_reason="auto-extracted from add_skill",
         )
 
-    async def _generate_overview(self, skill_dict: Dict[str, Any], vlm: VLMHandle) -> str:
-        """Generate L1 overview using VLM."""
-        from openviking.prompts import render_prompt
-
-        prompt = render_prompt(
-            "skill.overview_generation",
-            {
-                "skill_name": skill_dict["name"],
-                "skill_description": skill_dict.get("description", ""),
-                "skill_content": skill_dict.get("content", ""),
-            },
-        )
-        return await vlm.get_completion_async(prompt)
-
     async def _write_skill_content(
         self,
         viking_fs: VikingFS,
         skill_dict: Dict[str, Any],
         skill_dir_uri: str,
-        abstract: str,
-        overview: str,
         ctx: RequestContext,
         lease_ref: Dict[str, Any],
-    ):
-        """Write main skill content to VikingFS."""
-        from openviking.storage.abstract_overview import write_abstract_overview
-
-        skill_md_uri = f"{skill_dir_uri}/SKILL.md"
-        serialized = SkillLoader.to_skill_md(skill_dict)
+    ) -> None:
         await viking_fs.write_file(
-            skill_md_uri,
-            serialized,
+            f"{skill_dir_uri}/SKILL.md",
+            SkillLoader.to_skill_md(skill_dict),
             ctx=ctx,
             lease_ref=lease_ref,
-        )
-        await write_abstract_overview(
-            viking_fs=viking_fs,
-            dir_uri=skill_dir_uri,
-            abstract=abstract,
-            overview=overview,
-            ctx=ctx,
-            lock=lease_ref,
-            metadata={"generated_by": {"component": "SkillProcessor", "trigger": "skill_ingest"}},
         )
 
     async def _write_auxiliary_files(

@@ -6,9 +6,11 @@ Copy and run the following commands step by step in your terminal to complete Op
 npm i -g @openviking/cli && ov config
 ```
 
-### Step 2: When prompted, enter the OpenViking Base URL and API Key
+### Step 2: Configure the connection
 
-- Base URL: Copy the following Base URL into your terminal
+The wizard sets the Base URL when you select a managed preset.
+
+- Base URL: If the wizard asks for a URL, copy this address into your terminal:
 ```text
 {{OPENVIKING_BASE_URL}}
 ```

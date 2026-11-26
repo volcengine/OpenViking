@@ -6,11 +6,11 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 
 读取或写入文件正文见[内容 API](12-content.md)。通过 WebDAV 客户端访问文件见 [WebDAV](20-webdav.md)。
 
-`viking://system` 的文件系统和内容 API 对所有角色开放读取；ROOT 和 ADMIN
-只能修改 `viking://system/memory/memory_templates/custom/` 下的具体资产。
-`builtin/` 内置模板和 `viking://system/compile/example-skills/` 官方示例由服务自动同步，
-API 不允许写入、追加、删除、移动或覆盖复制，也不能通过操作其父目录绕过限制。
-自定义模板也可以通过[模板管理 API](08-admin.md)发布。
+`viking://system` 的文件系统和内容 API 对所有角色开放读取。
+服务自动同步内置记忆模板、`viking://system/semantic/templates/builtin/` 中的目录 L0 和 L1 模板，
+以及 `viking://system/compile/example-skills/` 中的官方示例。这些资产对账户角色只读，包括账户管理员（ADMIN）。
+服务 ROOT 角色可以管理系统命名空间。账户管理员可以在
+`viking://system/memory/memory_templates/custom/` 下发布自定义记忆模板，也可以通过[模板管理 API](08-admin.md)发布。
 
 ## API 参考
 
@@ -707,7 +707,7 @@ URI 格式非法、scheme 不支持，或使用 `temp`、`queue` 等内部作用
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | uri | str | 是 | - | 要删除的 Viking URI |
-| wait | bool | 否 | False | 等待删除后的语义刷新完成 |
+| wait | bool | 否 | False | 确认本次删除任务完成 |
 | timeout | float | 否 | None | 已废弃：仅为兼容旧请求保留，传入值会被忽略；HTTP 超时使用客户端配置 |
 | recursive | bool | 否 | False | 递归删除目录 |
 

@@ -11,6 +11,7 @@ import yaml
 from jinja2 import Template
 from pydantic import BaseModel, Field
 
+from openviking.system_assets import BUILTIN_SEMANTIC_TEMPLATES_DIR
 from openviking_cli.utils.config import (
     OPENVIKING_PROMPT_TEMPLATES_DIR_ENV,
     get_openviking_config,
@@ -153,6 +154,11 @@ class PromptManager:
         if primary_path.exists():
             return primary_path
 
+        if category == "semantic":
+            system_path = BUILTIN_SEMANTIC_TEMPLATES_DIR / relative_path.name
+            if system_path.exists():
+                return system_path
+
         bundled_path = self._get_bundled_templates_dir() / relative_path
         if bundled_path.exists():
             return bundled_path
@@ -246,7 +252,7 @@ class PromptManager:
         Returns:
             List of prompt IDs
         """
-        prompts = []
+        prompts = set()
         for yaml_file in self.templates_dir.rglob("*.yaml"):
             rel_path = yaml_file.relative_to(self.templates_dir)
             category_name = rel_path.parent.name
@@ -254,7 +260,15 @@ class PromptManager:
             prompt_id = f"{category_name}.{file_stem}"
 
             if category is None or category_name == category:
-                prompts.append(prompt_id)
+                prompts.add(prompt_id)
+
+        if self.templates_dir == self._get_bundled_templates_dir() and category in (
+            None,
+            "semantic",
+        ):
+            prompts.update(
+                f"semantic.{path.stem}" for path in BUILTIN_SEMANTIC_TEMPLATES_DIR.glob("*.yaml")
+            )
 
         return sorted(prompts)
 

@@ -4,6 +4,7 @@ import { createOpenVikingRuntime } from "./lib/plugin-runtime.mjs"
 import { startV2Plugin } from "./lib/v2-plugin.mjs"
 import { injectOpenVikingMcpConfig, injectOpenVikingSkillPaths } from "./lib/mcp-config.mjs"
 import { fillHistorySession } from "./lib/session-history.mjs"
+import { keepNewestStartContext } from "./lib/session-inject.mjs"
 import { isRecallEnabled } from "./lib/shared/recall-core.mjs"
 import { log } from "./lib/utils.mjs"
 
@@ -53,6 +54,10 @@ function v1Hooks(runtime) {
       await vikingUriGuard(input, output)
     },
     "tool.execute.after": vikingUriNotice,
+
+    "experimental.chat.messages.transform": async (_input, output) => {
+      keepNewestStartContext((output.messages || []).map((message) => message.parts))
+    },
 
     "experimental.chat.system.transform": (_input, output) => {
       const prompt = repoContext.getRepoSystemPrompt()

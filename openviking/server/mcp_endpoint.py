@@ -62,6 +62,7 @@ from openviking.privacy.operations import (
     privacy_field_metadata,
     resolve_privacy_field,
 )
+from openviking.privacy.service import AUTO_CATEGORY
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.resource.processing_mode import DEFAULT_PROCESSING_MODE, ProcessingMode
 from openviking.retrieve.context_assembler import (
@@ -469,11 +470,19 @@ async def privacy_tree(
     """Find saved API keys, tokens and other private fields for the current user.
     Use when you need to check whether a GitHub PAT or a skill's api_key is saved.
     Returns categories, targets, active versions, configured flags and complete
-    {{ov_privacy:...}} references, never secret values or history. Pass a returned
+    {{ov_privacy:...}} references, plus each target's description when it has one,
+    never secret values or history. Pass a returned
     reference to privacy_resolve when you need the actual value for a task.
+    The automatically created entries of the auto category are left out unless
+    you pass category="auto".
     """
     ctx = _get_ctx()
-    return await build_privacy_tree(get_service().privacy_configs, ctx, category)
+    return await build_privacy_tree(
+        get_service().privacy_configs,
+        ctx,
+        category,
+        omit_unless_named=frozenset({AUTO_CATEGORY}),
+    )
 
 
 @_mcp_error_results()
@@ -495,7 +504,9 @@ async def privacy_resolve(
     Use the returned value in the API's Authorization header or credential field;
     do not send the placeholder itself as a key. Returns one current field owned
     by the caller. Keep references in saved documents and do not echo the secret
-    in chat. If you do not know the reference, use privacy_tree first.
+    in chat. If you do not know the reference, use privacy_tree first. To use a
+    credential in a shell command without reading it, run
+    `ov privacy run --env NAME='<reference>' -- <command>` instead.
     """
     ctx = _get_ctx()
     return await resolve_privacy_field(get_service().privacy_configs, ctx, reference)
@@ -511,24 +522,41 @@ async def privacy_upsert(
     values: Annotated[
         dict[str, Any],
         Field(
-            description='Fields to save, e.g. {"pat": "user-provided-token"}. Unspecified fields are preserved.'
+            description='Fields to save, e.g. {"pat": "user-provided-token"}. A value may be a whole credential reference you were given, to copy that field\'s value. Unspecified fields are preserved.'
         ),
     ],
+    description: Annotated[
+        Optional[str],
+        Field(
+            max_length=500,
+            description="Short note on what the credential is for, e.g. GitHub PAT for the acme org. Omit to keep the current one.",
+        ),
+    ] = None,
 ) -> dict[str, Any]:
     """Save a credential the user supplies, e.g. a GitHub PAT or a skill's api_key.
     For a GitHub PAT use category="credential", target_key="github", values={"pat":
     "<user-provided-token>"}. Creates the target or merges the supplied fields;
     updating pat preserves other fields such as username. Changed values create
     and activate a version; this does not rotate keys at GitHub or other providers.
-    Returns updated-field metadata and {{ov_privacy:...}} references, never values.
-    Use those references instead of embedding the key in saved documents or memory.
+    To save or rotate a credential you only hold as a reference, pass the
+    reference you were given, unchanged, as the value; the server copies its
+    current value and removes the source if it was a temporary entry. Pass
+    description to record what the target is for; privacy_tree shows it.
+    Returns updated-field metadata and
+    {{ov_privacy:...}} references, never values. Use those references instead of
+    embedding the key in saved documents or memory.
     """
     ctx = _get_ctx()
     privacy = get_service().privacy_configs
     if privacy is None:
         raise FailedPreconditionError("Privacy configuration service is unavailable")
+    labels = None
+    if description is not None:
+        # The service replaces labels wholesale; keep the target's other labels.
+        meta = await privacy.get_meta(ctx, category, target_key)
+        labels = {**(meta.labels if meta is not None else {}), "description": description}
     current = await privacy.patch_values(
-        ctx, category, target_key, values, updated_by=ctx.user.user_id
+        ctx, category, target_key, values, updated_by=ctx.user.user_id, labels=labels
     )
     return {
         "owner_user_id": ctx.user.user_id,

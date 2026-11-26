@@ -246,7 +246,7 @@ pub(super) async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) ->
                 }
 
                 let helper_lines = if kind == ConfigKind::OpenVikingService {
-                    openviking_service_api_key_helper_lines()
+                    openviking_service_api_key_helper_lines(&url)
                 } else {
                     custom_api_key_helper_lines(custom_allows_empty_api_key(&url))
                 };
@@ -362,7 +362,7 @@ pub(super) async fn run_edit_config(store: &ConfigStore, ui: &mut LiveRegion) ->
                     api_key_label(false)
                 };
                 let helper_lines = if kind == ConfigKind::OpenVikingService {
-                    openviking_service_api_key_helper_lines()
+                    openviking_service_api_key_helper_lines(&url)
                 } else {
                     custom_api_key_input_helper_lines(key_mode.unwrap_or(CustomKeyMode::UserKey))
                 };

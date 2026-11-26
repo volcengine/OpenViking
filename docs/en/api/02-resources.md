@@ -888,7 +888,7 @@ DELETE /api/v1/resources?uri={uri}
 |-----------------|------|----------|---------|-------------|
 | `uri` | string | Yes | - | Shared resource URI to delete; the shared root is not allowed |
 | `recursive` | boolean | No | `false` | Delete a directory recursively |
-| `wait` | boolean | No | `true` | Wait for parent semantic refresh |
+| `wait` | boolean | No | `true` | Confirm that the deletion task has completed |
 
 ```bash
 curl -X DELETE "http://localhost:1933/api/v1/resources" \
@@ -900,7 +900,7 @@ curl -X DELETE "http://localhost:1933/api/v1/resources" \
 ```
 
 The success response includes the deleted `uri` in `result`. With `wait=false`,
-semantic work runs asynchronously; use the returned `task_id`, when present, to
+use the returned `task_id`, when present, to
 track completion through the [Task API](17-tasks.md).
 
 ---

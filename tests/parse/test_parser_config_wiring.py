@@ -1,12 +1,17 @@
-"""Verify that the parser-specific character limit controls stored Markdown."""
+"""Verify how the parser registry applies PDF and HTML configuration."""
 
+import io
+import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
+from PIL import Image
 
 from openviking.parse.output import LocalParseOutputStore
 from openviking.parse.registry import ParserRegistry
 from openviking_cli.utils.config.parser_config import HTMLConfig, PDFConfig
+from openviking_cli.utils.storage import StoragePath
 
 
 def write_text_pdf(path: Path, lines: list[str]) -> None:
@@ -40,23 +45,102 @@ def write_text_pdf(path: Path, lines: list[str]) -> None:
 @pytest.mark.parametrize(
     ("format_name", "config"),
     [
-        ("pdf", PDFConfig(strategy="local", max_section_chars=160)),
+        (
+            "pdf",
+            PDFConfig(
+                mineru_endpoint="https://mineru.example/api/v4",
+                mineru_token="test-token",
+                max_section_chars=160,
+            ),
+        ),
         ("html", HTMLConfig(max_section_chars=160)),
     ],
 )
-async def test_registry_writes_document_sections_using_format_specific_limit(
-    tmp_path, format_name, config
+async def test_registry_applies_parser_config_when_storing_document_sections(
+    tmp_path, monkeypatch, format_name, config
 ):
     source = tmp_path / f"report.{format_name}"
     lines = [f"Paragraph {i} describes the import process in OpenViking." for i in range(8)]
+    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
+    registry = ParserRegistry({format_name: config})
     if format_name == "pdf":
         write_text_pdf(source, lines)
+        image = io.BytesIO()
+        Image.new("RGB", (32, 32)).save(image, format="PNG")
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as result_zip:
+            result_zip.writestr(
+                "result/full.md",
+                "Hosted result\n\nKeep figure.png and images/figure.png in the text.\n\n"
+                "![Figure](<./images/figure.png>)\n\n![Other](other/figure.png)",
+            )
+            result_zip.writestr("result/images/figure.png", image.getvalue())
+            result_zip.writestr("result/layout.json", '{"unused": true}')
+            result_zip.writestr("thumbnail/images/figure.png", b"unrelated image")
+        mineru_available = True
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "files.example":
+                assert "Authorization" not in request.headers
+                if request.method == "PUT":
+                    assert "Content-Type" not in request.headers
+                    assert request.content == source.read_bytes()
+                    return httpx.Response(200)
+                return httpx.Response(200, content=archive.getvalue())
+
+            assert request.headers["Authorization"] == "Bearer test-token"
+            if request.url.path.endswith("/file-urls/batch"):
+                if not mineru_available:
+                    return httpx.Response(
+                        200, json={"code": -60009, "msg": "Task submission queue is full"}
+                    )
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": {"batch_id": "batch", "file_urls": ["https://files.example/pdf"]},
+                    },
+                )
+            if request.url.path.endswith("/file_parse"):
+                return httpx.Response(404)
+            assert request.url.path == "/api/v4/extract-results/batch/batch"
+            entry = {"state": "done", "full_zip_url": "https://files.example/result.zip"}
+            return httpx.Response(200, json={"code": 0, "data": {"extract_result": [entry]}})
+
+        transport = httpx.MockTransport(respond)
+        client_type = httpx.AsyncClient
+        monkeypatch.setattr(
+            httpx, "AsyncClient", lambda **kw: client_type(transport=transport, **kw)
+        )
+        monkeypatch.setattr("openviking_cli.utils.storage._default_storage", StoragePath(tmp_path))
+        hosted = await registry.parse(source, parse_output_store=store)
+        assert hosted.meta["pdf_strategy_effective"] == "mineru"
+        assert hosted.artifact_ref is not None
+        hosted_root = Path(hosted.artifact_ref.root)
+        hosted_markdown = "\n".join(
+            file.read_text(encoding="utf-8") for file in hosted_root.rglob("*.md")
+        )
+        assert "Hosted result" in hosted_markdown
+        assert "Keep figure.png and images/figure.png in the text." in hosted_markdown
+        assert "![Figure](<report/images/figure.png>)" in hosted_markdown
+        assert "![Other](other/figure.png)" in hosted_markdown
+        assert next(hosted_root.rglob("figure.png")).read_bytes() == image.getvalue()
+
+        mineru_available = False
+        config.strategy = "mineru"
+        rejected = await registry.parse(source, parse_output_store=store)
+        assert rejected.artifact_ref is None
+        assert rejected.warnings == [
+            "Failed to parse PDF: MinerU returned code -60009: Task submission queue is full"
+        ]
+        config.strategy = "auto"
     else:
         source.write_text("<article>" + "".join(f"<p>{line}</p>" for line in lines) + "</article>")
-    store = LocalParseOutputStore(str(tmp_path / "artifacts"))
 
-    result = await ParserRegistry({format_name: config}).parse(source, parse_output_store=store)
+    result = await registry.parse(source, parse_output_store=store)
 
+    if format_name == "pdf":
+        assert result.meta["pdf_strategy_effective"] == "local"
     assert result.source_format == format_name
     assert result.artifact_ref is not None
     files = sorted(Path(result.artifact_ref.root).rglob("*.md"))
