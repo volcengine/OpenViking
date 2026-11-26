@@ -76,6 +76,9 @@ _, _, _ = imageResults, storedImageResults, similarPosters
 | 系统和 observer | `Health`, `CheckConsistency`, `GetStatus`, `IsHealthy`, `QueueStatus`, `VikingDBStatus`, `ModelsStatus` |
 | 管理接口 | `AdminCreateAccount`, `AdminCreateAccountWithOptions`, `AdminListAccounts`, `AdminGetAccount`, `AdminDeleteAccount`, `AdminRegisterUser`, `AdminRegisterUserWithOptions`, `AdminListUsers`, `AdminGetUser`, `AdminRemoveUser`, `AdminSetRole`, `AdminRegenerateKey`, `AdminRegenerateKeyWithOptions` |
 
+使用 `ExportOVPack` 导出资源子树，再用 `ImportOVPack` 指定目标父目录导入。
+`BackupOVPack` 与 `RestoreOVPack` 用于账号备份和恢复，需要 ROOT 或 ADMIN 权限。
+
 ## 暂未实现接口
 
 Go SDK v1 的边界是对齐当前 Python HTTP client，不覆盖所有 server 路由。
