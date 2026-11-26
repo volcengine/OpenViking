@@ -316,9 +316,8 @@ export async function fetchSessionMemoryDiffs(
     },
   )
 
-  return results
-    .flatMap((result) => (result ? [result] : []))
-    .sort((left, right) => right.archiveId.localeCompare(left.archiveId))
+  // The concurrent reader preserves the ascending archive index order.
+  return results.flatMap((result) => (result ? [result] : [])).reverse()
 }
 
 export async function addMessage(
