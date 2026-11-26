@@ -77,3 +77,15 @@ def test_oversized_header_and_row_stay_together_without_duplicate_header(header_
     row = "| " + "文" * 2500 + " | Y |"
     content = header + "\n" + row
     assert parser._smart_split_content(content, max_size=2000) == [content]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("separation", [1, 2])
+def test_smart_split_keeps_a_fitting_fence_intact(newline, separation):
+    parser = MarkdownParser(config=ParserConfig(max_section_chars=120))
+    lead = "Package installation checklist before running the migration. Read the notes carefully."
+    fence = newline.join(["~~~python", "first_sample = 1", "", "next_sample = 2", "~~~"])
+    body = lead + newline * separation + fence
+
+    assert len(fence) <= 120 < len(body)
+    assert parser._smart_split_content(body, max_size=120) == [lead, fence]
