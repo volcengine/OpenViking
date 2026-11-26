@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -56,10 +57,16 @@ async def test_global_write_masks_shared_directory_summaries_in_auto_strict(serv
     await service.privacy_configs.upsert(ctx, "credential", "deployment", {"key": secret})
 
     parent = "viking://resources/team/deployment"
+    reference = build_privacy_field_reference(ctx.user.user_id, "credential", "deployment", "key")
+    background = replace(ctx, bypass_acl=True)
+    assert await service.fs.make_visible(parent, secret, background) == reference
+    matcher = await service.privacy_sanitizer.prepare_matcher(background)
+    assert [match.reference for match in matcher(secret)] == [reference]
+    assert background.bypass_acl
+
     await service.fs.write(f"{parent}/guide.md", "Deployment steps.", ctx, mode="create", wait=True)
     await service.resources.wait_processed()
 
-    reference = build_privacy_field_reference(ctx.user.user_id, "credential", "deployment", "key")
     for name in (".abstract.md", ".overview.md"):
         stored = await service.viking_fs.read_file(f"{parent}/{name}", ctx=ctx)
         assert reference in stored
