@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_SIDECAR_SUFFIX_BY_LEVEL = {
+_SIDECAR_SUFFIX_BY_LEVEL: dict[int, str] = {
     ContextLevel.ABSTRACT: "/.abstract.md",
     ContextLevel.OVERVIEW: "/.overview.md",
 }
