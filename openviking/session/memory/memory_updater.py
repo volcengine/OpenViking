@@ -914,12 +914,15 @@ class MemoryUpdater:
         registry: Optional[MemoryTypeRegistry] = None,
         vikingdb=None,
         transaction_handle: Any = None,
+        *,
+        directory_migration: Tuple[str, str] | None = None,
     ):
         """Create a memory updater with an optional pathlock transaction handle."""
         self._viking_fs = None
         self._registry = registry
         self._vikingdb = vikingdb
         self._transaction_handle = transaction_handle
+        self._directory_migration = directory_migration
 
     def _get_viking_fs(self):
         """Get or create VikingFS instance."""
@@ -1366,7 +1369,7 @@ class MemoryUpdater:
         )
 
         changed_uris = uri_memory_type_map.keys() | deleted_uris
-        if changed_uris:
+        if changed_uris and self._directory_migration is None:
             await self._submit_directory_changes(changed_uris, ctx)
         return result
 
@@ -1701,6 +1704,10 @@ class MemoryUpdater:
                     old_content.links,
                 )
             metadata.update(resolved_op.memory_fields)
+            directory_migration = is_uri_migration and self._directory_migration == (
+                source_content.uri.rsplit("/", 1)[0],
+                uri.rsplit("/", 1)[0],
+            )
             source = getattr(resolved_op, "source", None)
             source_extraction_id = getattr(source, "extraction_id", None) if source else None
             if source_extraction_id:
@@ -1712,6 +1719,26 @@ class MemoryUpdater:
             for field in schema.fields:
                 if field.name in resolved_op.memory_fields:
                     patch_value = resolved_op.memory_fields[field.name]
+                    if (
+                        directory_migration
+                        and (memory_type, field.name)
+                        in {("entities", "category"), ("preferences", "user")}
+                        and patch_value == uri.rsplit("/", 2)[1]
+                    ):
+                        # Maintenance changes only the verified directory identity field.
+                        # Ordinary updates continue to apply their configured merge policy.
+                        if memory_type == "preferences":
+                            old_user = old_content.extra_fields.get("user")
+                            if (
+                                not isinstance(old_user, str)
+                                or not old_user.isascii()
+                                or old_user.strip(" ").lower() != patch_value
+                            ):
+                                raise ConflictError(
+                                    "Stored preference owner changed before directory migration",
+                                    resource=source_content.uri,
+                                )
+                        continue
                     # Get current value for this URI
                     if old_content is None:
                         current_value = None
@@ -1796,7 +1823,7 @@ class MemoryUpdater:
             mf = MemoryFile.from_parsed(uri=uri, parsed=metadata)
             new_full_content = MemoryFileUtils.write(
                 mf,
-                content_template=schema.content_template,
+                content_template=None if directory_migration else schema.content_template,
                 account_content_template_type=(
                     schema.memory_type if schema._account_content_template else None
                 ),

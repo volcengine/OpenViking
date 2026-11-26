@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Session Compressor V3.
 
-V3 keeps the V2 extraction interface with a patch-merge flow and no directory-level
-memory locks. Ordinary memories can be batched; cases and execution memories retain
+V3 keeps the V2 extraction interface with a patch-merge flow.
+Ordinary memories can be batched; cases and execution memories retain
 the complete task. Cases use ExtractLoop and are submitted with the commit rollout
 to the process-global StreamingPolicyTrainer.
 """
@@ -45,6 +45,7 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
     StoredLink,
 )
+from openviking.session.memory.directory_maintenance import merge_memory_directories
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 from openviking.session.memory.memory_type_registry import get_default_registry
 from openviking.session.memory.memory_updater import (
@@ -340,10 +341,13 @@ class SessionCompressorV3:
         deletes: list[dict[str, Any]] = []
 
         upsert_by_uri = {}
+        delete_by_uri = {dc.uri: dc for dc in operations.delete_file_contents}
         for op in operations.upsert_operations:
             for uri in op.uris:
                 upsert_by_uri[uri] = op
-        delete_by_uri = {dc.uri: dc for dc in operations.delete_file_contents}
+            old_file = op.old_memory_file_content
+            if old_file and old_file.uri and old_file.uri not in op.uris:
+                delete_by_uri.setdefault(old_file.uri, old_file)
 
         for uri in result.written_uris:
             op = upsert_by_uri.get(uri)
@@ -351,7 +355,7 @@ class SessionCompressorV3:
                 op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
             )
             old_file = op.old_memory_file_content if op else None
-            if old_file:
+            if old_file and (not old_file.uri or old_file.uri == uri):
                 updates.append(
                     {
                         "uri": uri,
@@ -773,6 +777,9 @@ class SessionCompressorV3:
         output_language_override = await get_output_language_override(
             self.runtime_config_manager, ctx.account_id
         )
+        directory_maintenance_enabled = (
+            bool(archive_uri) and get_openviking_config().memory.directory_maintenance_enabled
+        )
         context_provider = SessionExtractContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
@@ -783,6 +790,7 @@ class SessionCompressorV3:
             memory_registry=registry,
             vlm_config=vlm_config,
             output_language_override=output_language_override,
+            directory_maintenance_enabled=directory_maintenance_enabled,
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
@@ -868,6 +876,49 @@ class SessionCompressorV3:
             )
 
         contexts = _contexts_from_update_result(result)
+        if context_provider.directory_merge_plans:
+            diffs = [memory_diff] if memory_diff is not None else []
+            for plan in context_provider.directory_merge_plans:
+                report = {
+                    "memory_type": plan.memory_type,
+                    "source_uri": plan.source_uri,
+                    "target_uri": plan.target_uri,
+                }
+                try:
+                    migration = await merge_memory_directories(
+                        plan, registry=registry, vikingdb=self.vikingdb, ctx=ctx
+                    )
+                except Exception as exc:
+                    # The ordinary extraction already completed. Keep directory
+                    # maintenance independently retryable in a later Commit.
+                    logger.warning(
+                        "Memory directory merge failed error_type=%s", type(exc).__name__
+                    )
+                    report.update(status="failed", error_type=type(exc).__name__)
+                    diffs.append({"directory_merges": [report]})
+                    continue
+                deleted = set(migration.result.deleted_uris)
+                report.update(
+                    status=migration.status,
+                    moved=len(deleted),
+                    remaining=migration.remaining,
+                    conflicts=migration.conflicts,
+                    pruned=migration.pruned,
+                    errors=len(migration.result.errors),
+                )
+                contexts = [context for context in contexts if context.uri not in deleted]
+                contexts.extend(_contexts_from_update_result(migration.result))
+                directory_diff = await self._build_memory_diff(
+                    result=migration.result,
+                    operations=migration.operations,
+                    viking_fs=viking_fs,
+                    ctx=ctx,
+                    archive_uri=archive_uri or "",
+                )
+                directory_diff["directory_merges"] = [report]
+                diffs.append(directory_diff)
+            memory_diff = _merge_memory_diffs(diffs, archive_uri=archive_uri or "")
+
         canonical_cases = await _canonical_cases_from_update_result(
             operations=patch_operations,
             result=result,
@@ -2264,6 +2315,7 @@ def _merge_memory_diffs(
     updates: list[dict[str, Any]] = []
     deletes: list[dict[str, Any]] = []
     skipped_operations: list[dict[str, Any]] = []
+    directory_merges: list[dict[str, Any]] = []
     trace_id = tracer.get_trace_id() or None
     for diff in diffs:
         if not isinstance(diff, dict):
@@ -2272,6 +2324,9 @@ def _merge_memory_diffs(
             trace_id = str(diff.get("trace_id"))
         skipped_operations.extend(
             item for item in diff.get("skipped_operations", []) if isinstance(item, dict)
+        )
+        directory_merges.extend(
+            item for item in diff.get("directory_merges", []) if isinstance(item, dict)
         )
         operations = diff.get("operations")
         if not isinstance(operations, dict):
@@ -2287,12 +2342,16 @@ def _merge_memory_diffs(
         skipped_operations=skipped_operations,
     )
     merged["trace_id"] = trace_id
+    if directory_merges:
+        merged["directory_merges"] = directory_merges
     return merged
 
 
 def _memory_diff_has_changes(diff: Any) -> bool:
     if not isinstance(diff, dict):
         return False
+    if diff.get("directory_merges"):
+        return True
     summary = diff.get("summary")
     if not isinstance(summary, dict):
         return False

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """
-Memory tools - encapsulate VikingFS read operations for ReAct loop.
+Memory tools for the extraction loop.
 
 Reference: bot/vikingbot/agent/tools/base.py design pattern
 """
@@ -10,6 +10,7 @@ import json
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.core.namespace import uri_parts
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, _serialize_datetime
@@ -19,7 +20,7 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
-    from openviking.server.identity import ToolContext
+    from openviking.server.identity import RequestContext, ToolContext
 
 logger = get_logger(__name__)
 
@@ -28,6 +29,72 @@ _LLM_HIDDEN_MEMORY_FIELDS = {
     "source_extraction_ids",
     "last_update_trace_id",
 }
+
+_DIRECTORY_LIST_PAGE_SIZE = 128
+_DIRECTORY_LIST_MAX_ENTRIES = 512
+
+
+async def list_memory_directory_entries(ctx: "ToolContext", uri: str) -> dict[str, Any]:
+    """List visible direct children, advancing by the number of VFS rows."""
+    entries = []
+    for offset in range(0, _DIRECTORY_LIST_MAX_ENTRIES, _DIRECTORY_LIST_PAGE_SIZE):
+        page = await ctx.viking_fs.ls(
+            uri,
+            output="original",
+            include_abstract=False,
+            include_overview=False,
+            show_all_hidden=False,
+            node_limit=_DIRECTORY_LIST_PAGE_SIZE,
+            sort_by="name",
+            ctx=ctx.request_ctx,
+            offset=offset,
+        )
+        for entry in page:
+            name = entry.get("name", "")
+            entry_uri = entry.get("uri", "").rstrip("/")
+            is_directory = bool(entry.get("isDir"))
+            if (
+                not name
+                or name.startswith(".")
+                or entry.get("access") in {"denied", "container"}
+                or entry_uri.rpartition("/") != (uri, "/", name)
+            ):
+                continue
+            entries.append({"name": name, "uri": entry_uri, "isDir": is_directory})
+        if len(page) < _DIRECTORY_LIST_PAGE_SIZE:
+            return {"entries": entries, "truncated": False}
+    return {"entries": entries, "truncated": True}
+
+
+def verified_preference_directory_owner(
+    source_uri: str, target_uri: str, request_ctx: "RequestContext"
+) -> Optional[str]:
+    """Verify a formatting alias of a scoped owner ID after scope authorization."""
+    source = uri_parts(source_uri)
+    target = uri_parts(target_uri)
+    root = target[:-1]
+    if not root or source[:-1] != root or source[-1] == target[-1]:
+        return None
+    user_id = request_ctx.user.user_id
+    if root == ["user", user_id, "memories", "preferences"]:
+        owner = user_id
+    elif (
+        len(root) == 6
+        and root[:3] == ["user", user_id, "peers"]
+        and root[4:] == ["memories", "preferences"]
+    ):
+        owner = root[3]
+    else:
+        return None
+    canonical_owner = owner.lower()
+    source_label = source[-1]
+    if (
+        target[-1] == canonical_owner
+        and source_label.isascii()
+        and source_label.strip(" ").lower() == canonical_owner
+    ):
+        return canonical_owner
+    return None
 
 
 def memory_maintenance_notice(
@@ -193,8 +260,7 @@ class MemoryReadTool(MemoryTool):
                 "uri": {
                     "type": "string",
                     "description": (
-                        "Memory URI to read. e.g., current user: "
-                        "'viking://~/memories/profile.md'"
+                        "Memory URI to read. e.g., current user: 'viking://~/memories/profile.md'"
                     ),
                 },
                 "offset": {
@@ -355,8 +421,7 @@ class MemoryLsTool(MemoryTool):
                 "uri": {
                     "type": "string",
                     "description": (
-                        "Directory URI to list. e.g., current user: "
-                        "'viking://~/memories'"
+                        "Directory URI to list. e.g., current user: 'viking://~/memories'"
                     ),
                 },
                 "recursive": {
@@ -441,6 +506,39 @@ class MemoryLsTool(MemoryTool):
         return text
 
 
+class MemoryMergeDirsTool(MemoryTool):
+    """Propose consolidation of sibling memory directories."""
+
+    @property
+    def name(self) -> str:
+        return "merge_dirs"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Propose merging a redundant memory directory into an existing equivalent sibling. "
+            "The proposal does not change any files during extraction."
+        )
+
+    @property
+    def parameters(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "source_uri": {"type": "string", "description": "Redundant directory URI"},
+                "target_uri": {"type": "string", "description": "Existing canonical directory URI"},
+            },
+            "required": ["source_uri", "target_uri"],
+            "additionalProperties": False,
+        }
+
+    async def execute(self, ctx: Optional["ToolContext"], **kwargs: Any) -> Any:
+        propose = kwargs.get("propose")
+        if propose is None:
+            return {"error": "Directory merge proposals are unavailable in this extraction"}
+        return await propose(kwargs.get("source_uri"), kwargs.get("target_uri"))
+
+
 # Tool registry
 MEMORY_TOOLS_REGISTRY: Dict[str, MemoryTool] = {}
 
@@ -459,3 +557,4 @@ def get_tool(name: str) -> Optional[MemoryTool]:
 register_tool(MemoryReadTool())
 register_tool(MemorySearchTool())
 register_tool(MemoryLsTool())
+register_tool(MemoryMergeDirsTool())
