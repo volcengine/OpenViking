@@ -76,10 +76,13 @@ async def assert_auth_wait_budget(store, stage, monkeypatch):
         if stage in {"connection", "shared", "pool_timeout"}:
             tasks.append(asyncio.create_task(store._sql_runtime.run(hold_connection)))
             assert await asyncio.to_thread(held_connection.wait, 5)
-        if stage in {"admission", "shared"}:
+        if stage in {"admission", "shared", "queue_full"}:
             slot_task = asyncio.create_task(store._sql_runtime.run(hold_slot))
             tasks.append(slot_task)
             assert await asyncio.to_thread(held_slot.wait, 5)
+        if stage == "queue_full":
+            tasks.append(asyncio.create_task(store.get_auth_snapshot(key)))
+            await _wait_for_runtime(store, lambda: store._auth_admission.waiting == 1)
         if stage == "pool_timeout":
             store._engine.pool._timeout = budget * 0.1
 
@@ -92,6 +95,7 @@ async def assert_auth_wait_budget(store, stage, monkeypatch):
                 original_execute = session_type.execute
                 original_slot = store._auth_read_slot
                 auth_times = {}
+                auth_queries = []
 
                 @asynccontextmanager
                 async def timed_slot():
@@ -111,19 +115,20 @@ async def assert_auth_wait_budget(store, stage, monkeypatch):
 
                 async def slow_query(session, statement, parameters=None, **kwargs):
                     if parameters and "auth_lookup_digest" in parameters:
-                        await asyncio.sleep(budget * 2)
+                        auth_queries.append(statement)
+                        if stage == "query":
+                            await asyncio.sleep(budget * 2)
                     return await original_execute(session, statement, parameters, **kwargs)
 
                 if stage == "connect":
                     patch.setattr(session_type, "connection", slow_connection)
-                if stage == "query":
-                    patch.setattr(session_type, "execute", slow_query)
+                patch.setattr(session_type, "execute", slow_query)
                 request = asyncio.create_task(
                     client.get("/auth-wait-test", headers={"X-API-Key": key})
                 )
                 tasks.append(request)
                 if stage == "shared":
-                    await _wait_for_runtime(store, lambda: bool(store._auth_admission[1]._waiters))
+                    await _wait_for_runtime(store, lambda: store._auth_admission.waiting == 1)
                     tasks.append(asyncio.create_task(release_slot()))
                 response = await asyncio.wait_for(request, timeout=5)
                 # Measure the SQL runtime operation, excluding HTTP setup/logging.
@@ -136,10 +141,16 @@ async def assert_auth_wait_budget(store, stage, monkeypatch):
                     assert response.json()["error"]["code"] == "UNAVAILABLE"
                     # A second full budget for checkout would take >= 1.6 * budget.
                     assert elapsed < budget * 1.4
-                    if stage != "pool_timeout":
+                    if stage not in {"pool_timeout", "queue_full"}:
                         assert elapsed >= budget * 0.9
                     reason = response.json()["error"]["details"]["reason"]
-                    assert ("admission" if stage == "admission" else "connection") in reason
+                    if stage == "queue_full":
+                        assert "queue full" in reason
+                        assert elapsed < budget * 0.5
+                        assert not auth_queries
+                        assert store._auth_admission.waiting == 1
+                    else:
+                        assert ("admission" if stage == "admission" else "connection") in reason
 
             release.set()
             await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5)
@@ -151,8 +162,8 @@ async def assert_auth_wait_budget(store, stage, monkeypatch):
             )
             assert invalid.status_code == 401, invalid.text
             if store._auth_admission is not None:
-                assert store._auth_admission[1]._value == 1
-                assert not store._auth_admission[1]._waiters
+                assert store._auth_admission.semaphore._value == 1
+                assert store._auth_admission.waiting == 0
     finally:
         release.set()
         for task in tasks:
@@ -182,10 +193,11 @@ async def assert_auth_admission_cancellation_and_reload(store):
         assert await asyncio.to_thread(held.wait, 5)
         first = asyncio.create_task(store.get_auth_snapshot(key))
         await _wait_for_runtime(
-            store, lambda: store._auth_admission is not None and store._auth_admission[1].locked()
+            store,
+            lambda: store._auth_admission is not None and store._auth_admission.semaphore.locked(),
         )
         second = asyncio.create_task(store.get_auth_snapshot(key))
-        await _wait_for_runtime(store, lambda: bool(store._auth_admission[1]._waiters))
+        await _wait_for_runtime(store, lambda: store._auth_admission.waiting == 1)
         # Cancel both a queued permit waiter and an admitted connection waiter.
         for task in (second, first):
             task.cancel()
@@ -196,7 +208,8 @@ async def assert_auth_admission_cancellation_and_reload(store):
         snapshot = await asyncio.wait_for(store.get_auth_snapshot(key), timeout=5)
         assert snapshot["account_id"] == "acme"
         state = store._auth_admission
-        assert state[1]._value == 1
+        assert state.semaphore._value == 1
+        assert state.waiting == 0
         await store.close()
         assert store._auth_admission is None
         await store.load()

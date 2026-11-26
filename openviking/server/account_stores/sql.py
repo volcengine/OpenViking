@@ -13,6 +13,7 @@ import json
 import math
 import secrets
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import timezone
 from functools import lru_cache
 from time import monotonic
@@ -84,6 +85,41 @@ from openviking_cli.utils.config.config_utils import normalize_service_name
 _SQL_IDENTIFIER_MAX_LENGTH = MAX_IDENTIFIER_LENGTH
 _RETAINED_REVOKED_CREDENTIALS = 10
 _DEFAULT_ACCOUNT_ID = "default"
+
+
+@dataclass
+class _AuthAdmissionState:
+    loop: asyncio.AbstractEventLoop
+    semaphore: asyncio.Semaphore
+    waiting: int = 0
+
+
+async def _acquire_auth_permit(state: _AuthAdmissionState, deadline: float) -> None:
+    """On failure, finish acquisition and return any permit obtained in the race."""
+    remaining = deadline - state.loop.time()
+    if remaining <= 0:
+        raise asyncio.TimeoutError
+    acquisition = asyncio.create_task(state.semaphore.acquire())
+    try:
+        # Unlike wait_for() on Python 3.10, wait() does not swallow caller
+        # cancellation when acquisition happens to complete at the same time.
+        done, _ = await asyncio.wait((acquisition,), timeout=remaining)
+        if not done:
+            raise asyncio.TimeoutError
+        acquisition.result()
+    except BaseException:
+
+        async def cleanup() -> None:
+            acquisition.cancel()
+            try:
+                await acquisition
+            except asyncio.CancelledError:
+                pass  # Semaphore.acquire() returns its own reserved permit.
+            else:
+                state.semaphore.release()  # Acquisition completed before cancellation.
+
+        await wait_sql_cleanup(cleanup())
+        raise
 
 
 def _validate_length(value: str, name: str) -> None:
@@ -236,6 +272,14 @@ class SQLAccountStore(AccountStore):
         bootstrap_default_account: bool = True,
     ) -> None:
         values = dict(params or {})
+        explicit_max_waiters = "auth_max_waiters" in values
+        auth_max_waiters = values.pop("auth_max_waiters", 0)
+        if (
+            isinstance(auth_max_waiters, bool)
+            or not isinstance(auth_max_waiters, int)
+            or auth_max_waiters < 0
+        ):
+            raise InvalidArgumentError("auth_max_waiters must be a non-negative integer")
         auth_wait_timeout = values.pop("auth_wait_timeout", 5.0)
         if (
             isinstance(auth_wait_timeout, bool)
@@ -263,11 +307,15 @@ class SQLAccountStore(AccountStore):
             )
         self._url, engine_options = self._connection_options(values)
         self._engine_options = engine_options
+        capacity = cast(int, engine_options["pool_size"])
+        if explicit_max_waiters and capacity <= 0:
+            raise InvalidArgumentError("auth_max_waiters requires a positive maxsize")
+        self._auth_max_waiters = auth_max_waiters if explicit_max_waiters else 4 * max(0, capacity)
         self._sql_runtime = runtime or get_shared_sql_runtime()
         self._sql_lease = False
         self._engine: AsyncEngine | None = None
         self._sessions: async_sessionmaker[AsyncSession] | None = None
-        self._auth_admission: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
+        self._auth_admission: _AuthAdmissionState | None = None
         self._empty_frozen_files = EmptyFrozenFileCache()
 
     @staticmethod
@@ -1394,19 +1442,33 @@ class SQLAccountStore(AccountStore):
             yield deadline
             return
         state = self._auth_admission
-        if state is None or state[0] is not loop:
-            state = (loop, asyncio.Semaphore(capacity))
+        if state is None or state.loop is not loop:
+            state = _AuthAdmissionState(loop, asyncio.Semaphore(capacity))
             self._auth_admission = state
-        try:
-            await asyncio.wait_for(state[1].acquire(), timeout=max(0, deadline - loop.time()))
-        except asyncio.TimeoutError:
-            raise UnavailableError(
-                "authentication account store", reason="auth admission wait budget exceeded"
-            ) from None
+        if state.waiting == 0 and not state.semaphore.locked():
+            # No suspension on this path: reserve the available permit before
+            # another caller can observe it. Waiting also includes acquisition
+            # Tasks not yet registered with the semaphore; don't overtake them.
+            await state.semaphore.acquire()
+        else:
+            # Check and reserve on the runtime loop before the first await.
+            if state.waiting >= self._auth_max_waiters:
+                raise UnavailableError(
+                    "authentication account store", reason="auth admission queue full"
+                )
+            state.waiting += 1
+            try:
+                await _acquire_auth_permit(state, deadline)
+            except asyncio.TimeoutError:
+                raise UnavailableError(
+                    "authentication account store", reason="auth admission wait budget exceeded"
+                ) from None
+            finally:
+                state.waiting -= 1
         try:
             yield deadline
         finally:
-            state[1].release()
+            state.semaphore.release()
 
     async def get_auth_snapshot(
         self,

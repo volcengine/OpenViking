@@ -484,7 +484,7 @@ async def test_pg_auth_admission_cancellation_and_runtime_reload(pg_database):
 
 
 @pytest.mark.parametrize(
-    "stage", ["admission", "connection", "shared", "pool_timeout", "connect", "query"]
+    "stage", ["admission", "connection", "shared", "pool_timeout", "connect", "query", "queue_full"]
 )
 async def test_pg_auth_wait_budget_and_http_status(pg_database, stage, monkeypatch):
     from tests.server.auth_admission_test_helpers import assert_auth_wait_budget
@@ -492,7 +492,12 @@ async def test_pg_auth_wait_budget_and_http_status(pg_database, stage, monkeypat
     params, _, _, _ = pg_database
     store = PostgresAccountStore(
         service_name="wait-" + uuid4().hex,
-        params={**params, "maxsize": 1, "auth_wait_timeout": 1.5},
+        params={
+            **params,
+            "maxsize": 1,
+            "auth_wait_timeout": 5 if stage == "queue_full" else 1.5,
+            "auth_max_waiters": 1,
+        },
         runtime=sql_runtime.SQLRuntime(),
     )
     await assert_auth_wait_budget(store, stage, monkeypatch)

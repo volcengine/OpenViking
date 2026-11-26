@@ -288,6 +288,7 @@ jobs:
         run: |
           uv run --no-sync python -m pytest -q -o addopts='' \
             tests/server/test_account_services.py::test_distributed_authentication_state_is_shared_and_service_scoped \
+            tests/server/test_auth_admission.py \
             tests/server/test_mysql_account_store.py \
             tests/server/test_postgres_account_store.py \
             tests/server/test_redis_mysql_account_store.py \
