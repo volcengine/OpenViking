@@ -156,6 +156,36 @@ test("durably queued capture is checkpointed before a failed commit check", asyn
   });
 });
 
+test("serverAutoCommit leaves the threshold commit to a session that carries the policy", async () => {
+  await withPendingDir(async () => {
+    const requests = [];
+    const c = client({
+      getSession: async () => ({
+        pending_tokens: 20000,
+        auto_commit_policy: { pending_token_threshold: 20000, message_count_threshold: 0, idle_timeout_seconds: 1800, keep_recent_count: 0, min_commit_interval_seconds: 0 },
+      }),
+      fetchJSON: async (path, init = {}) => {
+        if (init.method === "PATCH") requests.push(path);
+        return { ok: true, result: {} };
+      },
+      commitSessionResponse: async () => {
+        requests.push("commit");
+        return { result: {} };
+      },
+    });
+    const cfg = config({ takeoverEnabled: false, serverAutoCommit: true, commitIdleSeconds: 1800 });
+    const sync = new SyncManager(c, cfg);
+    await sync.ensureSession("server-commit");
+    assert.equal((await sync.syncBranch([captureEntry("turn")])).added, 1);
+    assert.deepEqual(requests, []);
+
+    const own = new SyncManager(c, { ...cfg, serverAutoCommit: false });
+    await own.ensureSession("plugin-commit");
+    await own.syncBranch([captureEntry("turn")]);
+    assert.deepEqual(requests, ["commit"]);
+  });
+});
+
 async function readLastRecord(path) {
   const lines = (await readFile(path, "utf8")).trim().split("\n");
   return JSON.parse(lines[lines.length - 1]);

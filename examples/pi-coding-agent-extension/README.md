@@ -187,6 +187,8 @@ integrations should configure category `quotas` when they need exact ceilings.
 | `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: `lib/capture-adapter.mjs` keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
 | `commitTokenThreshold`   | `100000`   | Pending-token threshold for client-driven commit                         |
+| `serverAutoCommit`       | `false`    | Outside takeover, leave the threshold commit to the server: the extension sets the session's `auto_commit_policy` from `commitTokenThreshold` and commits only at shutdown, compaction and `/viking commit` |
+| `commitIdleSeconds`      | `1800`     | Idle commit asked of the server with `serverAutoCommit`; `0` for none. Needs `memory.session_auto_commit.enabled` on the server |
 | `commitKeepRecentCount`  | `10`       | Not read: commits outside takeover archive every captured message (`keep_recent_count` 0); takeover sends the exact message count of the turns it keeps |
 
 ### Context takeover

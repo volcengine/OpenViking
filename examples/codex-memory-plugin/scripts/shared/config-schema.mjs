@@ -159,6 +159,11 @@ export const KNOBS = [
   { name: "commitKeepRecentCount", type: "int", default: 10, min: 0, max: 1000, env: "OPENVIKING_COMMIT_KEEP_RECENT_COUNT", capability: "capture" },
   { name: "commitTurnThreshold", type: "int", default: 8, min: 1, max: 1000, env: "OPENVIKING_COMMIT_TURN_THRESHOLD", capability: "capture" },
   { name: "autoCommitOnCompact", type: "bool", default: true, env: "OPENVIKING_AUTO_COMMIT_ON_COMPACT", capability: "capture" },
+  // Leave the threshold commit to OpenViking's session auto-commit; the plugin
+  // still commits at session end and on compaction. commitIdleSeconds is the
+  // idle commit asked of the server along with it: 0 for none, else 300 or more.
+  { name: "serverAutoCommit", type: "bool", default: false, env: "OPENVIKING_SERVER_AUTO_COMMIT", capability: "capture" },
+  { name: "commitIdleSeconds", type: "int", default: 1800, min: 0, max: 604800, env: "OPENVIKING_COMMIT_IDLE_SECONDS", capability: "capture" },
   { name: "writePathAsync", type: "bool", default: true, env: "OPENVIKING_WRITE_PATH_ASYNC", capability: "capture" },
 
   // ── session lifecycle ─────────────────────────────────────────────────

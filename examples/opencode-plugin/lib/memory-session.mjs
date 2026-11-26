@@ -7,6 +7,7 @@ import {
 } from "./shared/capture-utils.mjs"
 import {
   deriveHarnessSessionId,
+  thresholdCommitDue,
 } from "./shared/session-model.mjs"
 import {
   deferCommitBehindPendingWrites,
@@ -532,7 +533,13 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       pendingTokens,
       threshold: config.commitTokenThreshold,
     })
-    if (!meta.ok || pendingTokens < config.commitTokenThreshold) return { committed: false, pendingTokens }
+    const due = meta.ok && await thresholdCommitDue(
+      (endpoint, init = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 5000 }),
+      state.ovSessionId,
+      config,
+      meta.result,
+    )
+    if (!due) return { committed: false, pendingTokens }
     return commitOvSession(state.ovSessionId, { force: true, reason: "threshold" })
   }
 

@@ -319,6 +319,7 @@ function config() {
     captureToolMaxChars: 1000000,
     captureMaxLength: 24000,
     captureMode: "semantic",
+    commitTokenThreshold: 20000,
   };
 }
 

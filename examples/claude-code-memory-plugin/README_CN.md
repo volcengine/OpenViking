@@ -169,6 +169,8 @@ claude
 | `OPENVIKING_CAPTURE_MAX_LENGTH`        | `24000`       | 捕获判定时 sanitized 文本的长度上限                                |
 | `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`        | 捕获 assistant 回合(文本 + tool 输入/输出)。设为 `0` 可退回仅用户   |
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `100000`      | client-driven commit 的 pending-token 阈值                         |
+| `OPENVIKING_SERVER_AUTO_COMMIT`        | `false`       | 阈值 commit 交给服务端：插件用 `OPENVIKING_COMMIT_TOKEN_THRESHOLD` 设置会话的 `auto_commit_policy`，自己只在会话结束、subagent 结束和 compact 时 commit |
+| `OPENVIKING_COMMIT_IDLE_SECONDS`       | `1800`        | 配合 `OPENVIKING_SERVER_AUTO_COMMIT` 交给服务端的空闲 commit 秒数；`0` 表示不设。需要服务端开启 `memory.session_auto_commit.enabled` |
 | `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`       | resume 时拉取 archive overview 的 token 预算                       |
 | `OPENVIKING_CAPTURE_FILTERS`           | `""`          | 逗号分隔的正则规则，作用于每个被捕获的回合 —— 见[输入过滤器](#输入过滤器) |
 

@@ -91,14 +91,19 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
         writeJson(res, { status: "ok", result: { ok: true } });
         return;
       }
-      if (req.method === "GET" && url.pathname === "/api/v1/sessions/cx-codex_commit") {
+      if (req.method === "GET" && /^\/api\/v1\/sessions\/cx-codex_commit[^/]*$/.test(url.pathname)) {
         writeJson(res, {
           status: "ok",
-          result: { pending_tokens: 2500, commit_count: 2, total_message_count: 8 },
+          result: {
+            pending_tokens: 2500,
+            commit_count: 2,
+            total_message_count: 8,
+            auto_commit_policy: { pending_token_threshold: 1000, message_count_threshold: 0, idle_timeout_seconds: 1800, keep_recent_count: 0, min_commit_interval_seconds: 0 },
+          },
         });
         return;
       }
-      if (req.method === "POST" && url.pathname === "/api/v1/sessions/cx-codex_commit/commit") {
+      if (req.method === "POST" && url.pathname.endsWith("/commit")) {
         calls[calls.length - 1].body = await readRequestBody(req);
         writeJson(res, {
           status: "ok",
@@ -109,24 +114,27 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "error", error: "not found" }));
     }, async (baseUrl) => {
-      const result = await runAutoCapture(
-        { session_id: "codex:commit", transcript_path: transcriptPath },
-        {
-          OPENVIKING_AUTO_CAPTURE: "1",
-          OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
-          OPENVIKING_CODEX_STATE_DIR: stateDir,
-          OPENVIKING_DEBUG: "1",
-          OPENVIKING_DEBUG_LOG: debugLogPath,
-          OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
-          OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
-          OPENVIKING_CREDENTIAL_SOURCE: "env",
-          OPENVIKING_COMMIT_TOKEN_THRESHOLD: "1000",
-          OPENVIKING_COMMIT_KEEP_RECENT_COUNT: "7",
-          OPENVIKING_MIN_QUERY_LENGTH: "1",
-          OPENVIKING_WRITE_PATH_ASYNC: "0",
-          OPENVIKING_TIMEOUT_MS: "5000",
-          OPENVIKING_URL: baseUrl,
-        },
+      const env = {
+        OPENVIKING_AUTO_CAPTURE: "1",
+        OPENVIKING_CAPTURE_ASSISTANT_TURNS: "1",
+        OPENVIKING_CODEX_STATE_DIR: stateDir,
+        OPENVIKING_DEBUG: "1",
+        OPENVIKING_DEBUG_LOG: debugLogPath,
+        OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+        OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+        OPENVIKING_CREDENTIAL_SOURCE: "env",
+        OPENVIKING_COMMIT_TOKEN_THRESHOLD: "1000",
+        OPENVIKING_COMMIT_KEEP_RECENT_COUNT: "7",
+        OPENVIKING_MIN_QUERY_LENGTH: "1",
+        OPENVIKING_WRITE_PATH_ASYNC: "0",
+        OPENVIKING_TIMEOUT_MS: "5000",
+        OPENVIKING_URL: baseUrl,
+      };
+      const result = await runAutoCapture({ session_id: "codex:commit", transcript_path: transcriptPath }, env);
+      // With serverAutoCommit, a session that carries the policy is the server's to commit.
+      await runAutoCapture(
+        { session_id: "codex:commit-server", transcript_path: transcriptPath },
+        { ...env, OPENVIKING_SERVER_AUTO_COMMIT: "1" },
       );
 
       const output = JSON.parse(result.stdout.trim());
@@ -134,6 +142,10 @@ test("auto-capture commits when pending tokens cross threshold", async () => {
       assert.match(output.systemMessage, /trace_id=trace-codex-commit/);
     });
 
+    assert.deepEqual(
+      calls.filter((call) => call.method !== "GET" && !call.path.includes("/messages")).map((call) => call.path),
+      ["/api/v1/sessions/cx-codex_commit/commit"],
+    );
     const commitCall = calls.find((call) => call.path.endsWith("/commit"));
     const debugLog = await readFile(debugLogPath, "utf-8").catch(() => "");
     assert.ok(commitCall, `expected threshold commit call; calls=${JSON.stringify(calls)} debug=${debugLog}`);

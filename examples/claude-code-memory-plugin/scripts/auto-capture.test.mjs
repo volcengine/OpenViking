@@ -188,6 +188,7 @@ test("threshold commit archives every captured message", async () => {
   const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-commit-"));
   const transcriptPath = join(root, "transcript.jsonl");
   const commits = [];
+  const unexpected = [];
 
   try {
     await writeTranscript(transcriptPath);
@@ -202,31 +203,42 @@ test("threshold commit archives every captured message", async () => {
         writeJson(res, { status: "ok", result: { added: body.messages.length } });
         return;
       }
-      if (req.method === "GET" && url.pathname === "/api/v1/sessions/cc-capture-commit") {
+      if (req.method === "GET" && /^\/api\/v1\/sessions\/cc-capture-commit[^/]*$/.test(url.pathname)) {
         writeJson(res, {
           status: "ok",
-          result: { message_count: 2, pending_tokens: 5000, commit_count: 0 },
+          result: {
+            message_count: 2,
+            pending_tokens: 5000,
+            commit_count: 0,
+            auto_commit_policy: { pending_token_threshold: 1000, message_count_threshold: 0, idle_timeout_seconds: 1800, keep_recent_count: 0, min_commit_interval_seconds: 0 },
+          },
         });
         return;
       }
-      if (req.method === "POST" && url.pathname === "/api/v1/sessions/cc-capture-commit/commit") {
-        commits.push(await readRequestBody(req));
+      if (req.method === "POST" && url.pathname.endsWith("/commit")) {
+        commits.push(url.pathname);
+        assert.deepEqual(await readRequestBody(req), { keep_recent_count: 0 });
         writeJson(res, { status: "ok", result: { status: "accepted" } });
         return;
       }
+      unexpected.push(`${req.method} ${url.pathname}`);
       writeJson(res, { status: "error", error: { code: "NOT_FOUND" } }, 404);
     }, async (baseUrl) => {
+      const env = {
+        ...hookEnv(root, baseUrl),
+        OPENVIKING_COMMIT_TOKEN_THRESHOLD: "1000",
+        OPENVIKING_COMMIT_KEEP_RECENT_COUNT: "10",
+      };
+      await runAutoCapture({ session_id: "capture-commit", transcript_path: transcriptPath, cwd: root }, env);
+      // With serverAutoCommit, a session that carries the policy is the server's to commit.
       await runAutoCapture(
-        { session_id: "capture-commit", transcript_path: transcriptPath, cwd: root },
-        {
-          ...hookEnv(root, baseUrl),
-          OPENVIKING_COMMIT_TOKEN_THRESHOLD: "1000",
-          OPENVIKING_COMMIT_KEEP_RECENT_COUNT: "10",
-        },
+        { session_id: "capture-commit-server", transcript_path: transcriptPath, cwd: root },
+        { ...env, OPENVIKING_SERVER_AUTO_COMMIT: "1" },
       );
     });
 
-    assert.deepEqual(commits, [{ keep_recent_count: 0 }]);
+    assert.deepEqual(commits, ["/api/v1/sessions/cc-capture-commit/commit"]);
+    assert.deepEqual(unexpected, []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

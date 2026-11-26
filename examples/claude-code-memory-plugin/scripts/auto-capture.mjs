@@ -8,8 +8,8 @@
  * capture → pushes them to a PERSISTENT per-CC-session OpenViking session.
  *
  * Unlike the previous one-shot model (create→add→extract→delete every Stop),
- * this keeps a stable ovSessionId derived from the CC session_id. OV's own
- * auto_commit_threshold (openviking/session/session.py) drives archive + extract.
+ * this keeps a stable ovSessionId derived from the CC session_id. A commit at the
+ * pending-token threshold drives archive + extract.
  * This preserves cross-turn context for the memory extractor, produces archives
  * naturally, and lets resume / PreCompact / SessionEnd reuse the same session.
  *
@@ -40,6 +40,7 @@ import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage, withAgentHookLock } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
 import { shapeCaptureParts } from "./shared/capture-utils.mjs";
+import { thresholdCommitDue } from "./shared/session-model.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -432,9 +433,9 @@ async function main({ cfg, input, cwd }) {
   });
   log("state_update", { newCapturedTurnCount: allTurns.length });
 
-  // Client-driven commit (ported from openclaw-plugin/context-engine.ts:afterTurn).
-  // OV's Session._auto_commit_threshold is not consumed by addMessage, so we
-  // poll pending_tokens ourselves and commit when the threshold is crossed.
+  // Client-driven commit (ported from openclaw-plugin/context-engine.ts:afterTurn):
+  // poll pending_tokens and commit when the threshold is crossed, unless
+  // serverAutoCommit left that commit to OpenViking.
   let committed = false;
   let commitTraceId = "";
   let pendingTokens = 0;
@@ -446,7 +447,7 @@ async function main({ cfg, input, cwd }) {
     commitCount = Number(meta?.commit_count || 0);
     totalMessageCount = Number(meta?.total_message_count || 0);
     log("pending_tokens", { ovSessionId, pending: pendingTokens, threshold: cfg.commitTokenThreshold });
-    if (pendingTokens >= cfg.commitTokenThreshold) {
+    if (await thresholdCommitDue(fetchJSON, ovSessionId, cfg, meta)) {
       const commitRes = await commitSession(fetchJSON, ovSessionId, { keep_recent_count: 0 });
       committed = commitRes.ok;
       commitTraceId = commitRes.traceId || commitRes.result?.trace_id || "";

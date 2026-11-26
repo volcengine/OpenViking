@@ -19,6 +19,7 @@ export interface OVSessionMeta {
   total_message_count?: number;
   commit_count: number;
   pending_tokens?: number;
+  auto_commit_policy?: Record<string, number> | null;
   memories_extracted?: Record<string, number>;
   last_commit_at?: string;
 }

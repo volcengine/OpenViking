@@ -28,6 +28,7 @@ import { catchUpTurns, hasCaptureKeyword, makeFetchJSON } from "./ov-session.mjs
 import { clearEnded, loadState, saveState, withSessionLock } from "./session-state.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
+import { thresholdCommitDue } from "./shared/session-model.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 let cfg = loadConfig();
@@ -71,7 +72,7 @@ async function maybeCommitByThreshold(ovSessionId, added) {
     pending: pendingTokens,
     threshold: cfg.commitTokenThreshold,
   });
-  if (pendingTokens < cfg.commitTokenThreshold) {
+  if (!(await thresholdCommitDue(fetchJSONRes, ovSessionId, cfg, meta))) {
     return { committed: false, pendingTokens, commitCount, totalMessageCount, traceId: "" };
   }
   const commit = await fetchJSONRes(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {

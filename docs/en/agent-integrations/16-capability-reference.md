@@ -343,7 +343,7 @@ Injected context is wrapped in fixed tags such as `<openviking-context>`, and ca
 - **Sessions are created implicitly.** The server creates a session when it receives the first message for it, or on the first context-mode recall with that session ID. DSH is the only integration that creates its sessions explicitly.
 - **A commit has two phases.** `POST /api/v1/sessions/{id}/commit` returns after phase 1 archives the messages. Its response includes a `task_id` for phase 2, memory extraction, which runs in the background. A successful commit response does not mean extraction has finished.
 - **`keep_recent_count`** sets how many recent messages a commit leaves live in the session. The server default is 0, which archives everything. Claude Code, Codex, OpenCode, DSH, Cursor, TRAE, TRAE CN, ZCode, and Hermes send 0; pi sends the exact message count of its last 3 user turns in takeover mode and 0 otherwise; OpenClaw sends 10 on its threshold commit and 0 on reset, `memory_store`, and compaction.
-- **Server auto-commit is off by default.** `memory.session_auto_commit.enabled` defaults to `false`, and the idle scanner does not start while it is off. A new session can still get a policy from `server.user_config_defaults.auto_commit_policy`, or explicitly through `POST /api/v1/sessions`, `PATCH /api/v1/sessions/{id}/config`, the SDK, or `ov session new --auto-commit-policy-json` and `ov session config set`. A policy's defaults are 150,000 pending tokens (strictly greater than), 100 messages, an 86,400-second idle timeout, `keep_recent_count` 0, and no minimum interval. The idle timeout also needs `memory.session_auto_commit.enabled=true`. The memory plugins send no policy, so without one of these settings the client is the only thing that commits.
+- **Server auto-commit is off by default.** `memory.session_auto_commit.enabled` defaults to `false`, and the idle scanner does not start while it is off. A new session can still get a policy from `server.user_config_defaults.auto_commit_policy`, or explicitly through `POST /api/v1/sessions`, `PATCH /api/v1/sessions/{id}/config`, the SDK, or `ov session new --auto-commit-policy-json` and `ov session config set`. A policy's defaults are 150,000 pending tokens (strictly greater than), 100 messages, an 86,400-second idle timeout, `keep_recent_count` 0, and no minimum interval. The idle timeout also needs `memory.session_auto_commit.enabled=true`. The memory plugins send a policy only with `OPENVIKING_SERVER_AUTO_COMMIT` (see [When each integration commits](#when-each-integration-commits)), so without one of these settings the client is the only thing that commits.
 - **Writes are batched.** The shared plugins send up to 100 messages per `POST /messages/batch`, matching the server limit, and fall back to one message at a time when the batch endpoint returns 404 or 405.
 - **Large tool output is stored separately.** The server moves tool output above 20,000 characters into a separate record and leaves a `tool_output_ref`. Plugins raise their own limit (`captureToolMaxChars`) to 1,000,000 only as a safety net.
 - **Some writes run in the background.** Claude Code, Codex, and ZCode hand the `Stop` write to a detached worker by default (`OPENVIKING_WRITE_PATH_ASYNC`), so the host does not wait. The worker survives the terminal closing once it has started, but network errors or process termination can still interrupt it. While this is on, `Stop` no longer prints the `appended N turn(s)` notice.
@@ -374,6 +374,13 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Hermes (bundled) | None | Session end, session switch (`/new`, `/resume`, `/branch`, fork-style compaction), gateway cache eviction, and an exit handler; `/undo` and in-place compaction do not commit | At fork-style compaction only |
 | ov CLI | None | `ov session commit`; `ov add-memory` creates, fills, and commits its own session | Not applicable |
 
+`OPENVIKING_SERVER_AUTO_COMMIT=1` (`serverAutoCommit`, off by default) leaves the pending-token commit in the "During the session" column to the server, for Claude Code, Codex, TraeCode CLI 2.0, OpenCode, DSH, and pi with takeover off. The integration sets the session's `auto_commit_policy` from its own settings: `pending_token_threshold` from `commitTokenThreshold`, an idle commit after `commitIdleSeconds` (`OPENVIKING_COMMIT_IDLE_SECONDS`, 1,800 by default; 0 for none, otherwise at least 300), the message-count trigger off, and `keep_recent_count` 0. Once the session carries that policy the integration stops committing at its own threshold; the other two columns still apply.
+
+- The policy is sent with `PATCH /api/v1/sessions/{id}/config` after a turn is written. That turn is still checked against the client-side threshold, and the server takes over from the next write.
+- The idle commit needs `memory.session_auto_commit.enabled=true` on the server.
+- A server that does not accept the policy keeps the client-side threshold.
+- Turning the setting off does not remove the policy from sessions that already have it.
+
 <a id="_3-3-3-shutdown-method-×-harness-outcome-matrix"></a>
 
 ### What happens at exit
@@ -403,7 +410,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 What this means in practice:
 
 - **Commits at a normal exit:** Claude Code, Codex 0.145+, Qoder CLI, OpenCode, DSH, pi with takeover off, and Hermes. The others rely on the recovery in the last column.
-- **No integration commits after `kill -9`.** Written messages stay live until the next commit of that session. A server auto-commit policy with an idle timeout is the only server-side fallback, and the plugins do not configure one.
+- **No integration commits after `kill -9`.** Written messages stay live until the next commit of that session. A server auto-commit policy with an idle timeout is the only server-side fallback, and the plugins configure one only with `OPENVIKING_SERVER_AUTO_COMMIT=1`.
 - **TRAE, TRAE CN, ZCode, and Antigravity** have the simplest exit behavior because every turn commits, at the cost of a full archive and extraction on every `Stop`.
 
 <a id="_3-3-4-pending-queue-offline-compensation-comparison"></a>
@@ -588,6 +595,7 @@ Integrations built on the shared plugin code read behavior settings from, highes
 Settings that apply only to some integrations:
 
 - `OPENVIKING_COMMIT_TURN_THRESHOLD`: Cursor, Kimi Code, CodeBuddy Code, and Qoder CLI. TRAE, TRAE CN, ZCode, and Antigravity commit every turn.
+- `OPENVIKING_SERVER_AUTO_COMMIT` and `OPENVIKING_COMMIT_IDLE_SECONDS`: Claude Code, Codex, TraeCode CLI 2.0, OpenCode, DSH, and pi with takeover off. The integrations that count captured messages or commit every turn keep their own commits.
 - `OPENVIKING_WRITE_PATH_ASYNC`: Claude Code, Codex, ZCode, and Antigravity.
 - `OPENVIKING_RECALL_COMPRESS=client`: Claude Code and Codex. `server` and `auto` work for every integration listed under [Recall digest](#recall-digest).
 - The workspace files, the `ovcli.conf` `plugin` section, `OPENVIKING_RECALL_DEDUP_TURNS`, `OPENVIKING_RECALL_QUERY_EXPANSION`, `OPENVIKING_PEER_SOURCE`, and the skill catalog settings: every integration built on the shared plugin code, not OpenClaw or Hermes.

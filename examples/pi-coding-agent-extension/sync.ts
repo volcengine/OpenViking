@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "./shared/debug-log.mjs";
 import type { OVConfig } from "./config.js";
-import { deriveHarnessSessionId } from "./shared/session-model.mjs";
+import { deriveHarnessSessionId, thresholdCommitDue } from "./shared/session-model.mjs";
 import {
   claimForReplay,
   deferCommitBehindPendingWrites,
@@ -353,8 +353,7 @@ export class SyncManager {
   async commitIfNeeded(): Promise<void> {
     if (!this.ovSessionId) return;
     const meta = await this.client.getSession(this.ovSessionId);
-    const pending = Number(meta?.pending_tokens || 0);
-    if (pending >= this.config.commitTokenThreshold) {
+    if (await thresholdCommitDue(this.fetchJSON, this.ovSessionId, this.config, meta)) {
       await this.commit();
     }
   }

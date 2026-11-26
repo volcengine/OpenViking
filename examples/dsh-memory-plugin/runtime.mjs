@@ -13,6 +13,7 @@ import {
   replayPending,
 } from "./shared/pending-queue.mjs";
 import { isRetryableFailure } from "./shared/retryable.mjs";
+import { thresholdCommitDue } from "./shared/session-model.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 import {
   captureEvent,
@@ -230,7 +231,13 @@ export class OpenVikingRuntime {
           state.ovSessionId,
           state.config.peerId,
         );
-        if (Number(metadata?.pending_tokens || 0) < state.config.commitTokenThreshold) return;
+        const due = await thresholdCommitDue(
+          (path, init) => this.client.fetchJSON(path, init, { actorPeerId: state.config.peerId }),
+          state.ovSessionId,
+          state.config,
+          metadata,
+        );
+        if (!due) return;
       }
       const response = await this.client.commitSession(
         state.ovSessionId,

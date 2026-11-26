@@ -41,6 +41,8 @@ export interface OVConfig {
   resumeArchiveInject: boolean;
   sessionHistoryPointer: boolean;
   commitTokenThreshold: number;
+  serverAutoCommit: boolean;
+  commitIdleSeconds: number;
   commitKeepRecentCount: number;
   takeoverEnabled: boolean;
   takeoverTokenThreshold: number;

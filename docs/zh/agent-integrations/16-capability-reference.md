@@ -341,7 +341,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 - **会话隐式创建**。服务端收到某个会话的第一条消息时创建该会话；带该会话 ID 的第一次 context 模式召回也会创建。DSH 是唯一显式创建会话的集成。
 - **提交分两个阶段**。`POST /api/v1/sessions/{id}/commit` 在第一阶段归档消息后返回。响应中带有第二阶段（记忆抽取）的 `task_id`，抽取在后台运行。提交请求成功不代表抽取已经完成。
 - **`keep_recent_count`** 决定提交后会话中保留多少条最近的消息。服务端默认 0，即全部归档。Claude Code、Codex、OpenCode、DSH、Cursor、TRAE、TRAE CN、ZCode 和 Hermes 发送 0；pi 在 takeover 模式下发送最近 3 个用户轮对应的确切消息数，其他情况发送 0；OpenClaw 在阈值提交时发送 10，在 reset、`memory_store` 和压缩时发送 0。
-- **服务端自动提交默认关闭**。`memory.session_auto_commit.enabled` 默认 `false`，关闭时空闲扫描器不会启动。新会话仍可以从 `server.user_config_defaults.auto_commit_policy` 获得策略，也可以通过 `POST /api/v1/sessions`、`PATCH /api/v1/sessions/{id}/config`、SDK，或 `ov session new --auto-commit-policy-json` 与 `ov session config set` 显式设置。策略的默认值是：待提交 token 150,000（严格大于）、100 条消息、86,400 秒空闲超时、`keep_recent_count` 0、无最小间隔。空闲超时还需要 `memory.session_auto_commit.enabled=true`。记忆插件不发送策略，所以没有上述设置时，只有客户端会提交。
+- **服务端自动提交默认关闭**。`memory.session_auto_commit.enabled` 默认 `false`，关闭时空闲扫描器不会启动。新会话仍可以从 `server.user_config_defaults.auto_commit_policy` 获得策略，也可以通过 `POST /api/v1/sessions`、`PATCH /api/v1/sessions/{id}/config`、SDK，或 `ov session new --auto-commit-policy-json` 与 `ov session config set` 显式设置。策略的默认值是：待提交 token 150,000（严格大于）、100 条消息、86,400 秒空闲超时、`keep_recent_count` 0、无最小间隔。空闲超时还需要 `memory.session_auto_commit.enabled=true`。记忆插件只在设置了 `OPENVIKING_SERVER_AUTO_COMMIT` 时发送策略（见[各集成何时提交](#各集成何时提交)），所以没有上述设置时，只有客户端会提交。
 - **批量写入**。共享插件每次 `POST /messages/batch` 最多发送 100 条消息，与服务端上限一致；批量接口返回 404 或 405 时改为逐条发送。
 - **大块工具输出单独存放**。服务端把超过 20,000 字符的工具输出移到单独的记录中，留下 `tool_output_ref`。插件把自己的上限（`captureToolMaxChars`）提高到 1,000,000，只作为兜底。
 - **部分写入在后台运行**。Claude Code、Codex 和 ZCode 默认把 `Stop` 的写入交给一个分离的 worker（`OPENVIKING_WRITE_PATH_ASYNC`），宿主不用等待。worker 启动后，关闭终端不影响它，但网络错误或进程被终止仍可能打断它。开启这项设置时，`Stop` 不再输出 `appended N turn(s)` 提示。
@@ -372,6 +372,13 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Hermes（内置） | 无 | 会话结束、会话切换（`/new`、`/resume`、`/branch`、fork 型压缩）、gateway 缓存驱逐，以及退出处理器；`/undo` 和原地压缩不提交 | 只在 fork 型压缩时 |
 | ov CLI | 无 | `ov session commit`；`ov add-memory` 会创建、写入并提交自己的会话 | 不适用 |
 
+设置 `OPENVIKING_SERVER_AUTO_COMMIT=1`（`serverAutoCommit`，默认关闭）后，Claude Code、Codex、TraeCode CLI 2.0、OpenCode、DSH 和关闭 takeover 的 pi 把“会话中”一列按待提交 token 的提交交给服务端。集成用自己的配置设置会话的 `auto_commit_policy`：`pending_token_threshold` 取 `commitTokenThreshold`，空闲 `commitIdleSeconds` 秒后提交（`OPENVIKING_COMMIT_IDLE_SECONDS`，默认 1,800；0 表示不提交，否则至少 300），关闭消息数触发，`keep_recent_count` 为 0。会话带上这个策略后，集成不再按自己的阈值提交，另外两列不变。
+
+- 策略在一轮写入之后通过 `PATCH /api/v1/sessions/{id}/config` 发送。这一轮仍按客户端阈值判断，服务端从下一次写入开始接管。
+- 空闲提交需要服务端设置 `memory.session_auto_commit.enabled=true`。
+- 服务端不接受该策略时，仍按客户端阈值提交。
+- 关闭这个设置不会移除已有会话上的策略。
+
 <a id="_3-3-3-关闭方式-×-harness-终局矩阵"></a>
 
 ### 退出时会发生什么
@@ -401,7 +408,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 这张表的实际含义：
 
 - **正常退出时会提交**：Claude Code、Codex 0.145+、Qoder CLI、OpenCode、DSH、takeover 关闭的 pi，以及 Hermes。其他集成依赖最后一列的回收方式。
-- **`kill -9` 之后没有任何集成会提交**。已写入的消息保持未提交，直到该会话的下一次提交。带空闲超时的服务端自动提交策略是唯一的服务端兜底，而插件不会配置它。
+- **`kill -9` 之后没有任何集成会提交**。已写入的消息保持未提交，直到该会话的下一次提交。带空闲超时的服务端自动提交策略是唯一的服务端兜底，而插件只在设置 `OPENVIKING_SERVER_AUTO_COMMIT=1` 时配置它。
 - **TRAE、TRAE CN、ZCode 和 Antigravity** 的退出行为最简单，因为每轮都提交；代价是每个 `Stop` 都要做一次完整的归档和抽取。
 
 <a id="_3-3-4-pending-queue-离线补偿对照"></a>
@@ -586,6 +593,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 只对部分集成生效的设置：
 
 - `OPENVIKING_COMMIT_TURN_THRESHOLD`：Cursor、Kimi Code、CodeBuddy Code 和 Qoder CLI。TRAE、TRAE CN、ZCode 和 Antigravity 每轮都提交。
+- `OPENVIKING_SERVER_AUTO_COMMIT` 和 `OPENVIKING_COMMIT_IDLE_SECONDS`：Claude Code、Codex、TraeCode CLI 2.0、OpenCode、DSH 和关闭 takeover 的 pi。按捕获消息数提交或每轮都提交的集成保留自己的提交。
 - `OPENVIKING_WRITE_PATH_ASYNC`：Claude Code、Codex、ZCode 和 Antigravity。
 - `OPENVIKING_RECALL_COMPRESS=client`：Claude Code 和 Codex。`server` 和 `auto` 适用于[召回摘要](#召回摘要)中列出的所有集成。
 - 工作区文件、`ovcli.conf` 的 `plugin` 段、`OPENVIKING_RECALL_DEDUP_TURNS`、`OPENVIKING_RECALL_QUERY_EXPANSION`、`OPENVIKING_PEER_SOURCE` 和 skill 清单相关设置：所有基于共享插件代码的集成，不包括 OpenClaw 和 Hermes。

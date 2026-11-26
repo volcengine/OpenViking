@@ -129,6 +129,30 @@ test("a retryable threshold commit failure is queued", async () => {
   ]);
 });
 
+test("serverAutoCommit leaves the threshold commit to a session that carries the policy", async () => {
+  const requests = [];
+  const runtime = new OpenVikingRuntime({
+    async getSession() {
+      return { pending_tokens: 20000, auto_commit_policy: { pending_token_threshold: 20000, message_count_threshold: 0, idle_timeout_seconds: 1800, keep_recent_count: 0, min_commit_interval_seconds: 0 } };
+    },
+    async fetchJSON(path) {
+      requests.push(path);
+      return { ok: true, result: {} };
+    },
+    async commitSession() {
+      requests.push("commit");
+      return { ok: true, result: {} };
+    },
+  }, { ...config(), serverAutoCommit: true, commitIdleSeconds: 1800 }, { debug() {} });
+  const session = { id: "server-commit", header: { cwd: "/workspace" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.maybeCommit(session, { type: "turn/end" });
+  await runtime.flush(session);
+
+  assert.deepEqual(requests, []);
+});
+
 test("compaction/start commits below the token threshold without reading session metadata", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-compaction-"));
   tempDirs.push(pendingDir);
@@ -581,6 +605,7 @@ function config() {
     captureToolMaxChars: 1000000,
     captureMaxLength: 24000,
     captureMode: "semantic",
+    commitTokenThreshold: 20000,
     commitKeepRecentCount: 10,
   };
 }

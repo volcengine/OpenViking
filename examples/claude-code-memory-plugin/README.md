@@ -201,6 +201,8 @@ Recall covers skills as well as memories: the server-assembled context block can
 | `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`       | Include assistant turns (text + tool I/O). Set to `0` for user-only.     |
 | `OPENVIKING_CAPTURE_TOOL_MAX_CHARS`    | `1000000`    | Guard cap on one tool part's `tool_output`; oversized output is externalized server-side |
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `100000`     | Pending-token threshold for client-driven commit                         |
+| `OPENVIKING_SERVER_AUTO_COMMIT`        | `false`      | Leave the threshold commit to the server: the plugin sets the session's `auto_commit_policy` from `OPENVIKING_COMMIT_TOKEN_THRESHOLD` and commits only at session end, subagent stop and compaction |
+| `OPENVIKING_COMMIT_IDLE_SECONDS`       | `1800`       | Idle commit asked of the server with `OPENVIKING_SERVER_AUTO_COMMIT`; `0` for none. Needs `memory.session_auto_commit.enabled` on the server |
 | `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`      | Token budget when fetching archive overview on session resume            |
 | `OPENVIKING_CAPTURE_FILTERS`           | `""`         | CSV of regex rules applied to every captured turn — see [Input filters](#input-filters) |
 

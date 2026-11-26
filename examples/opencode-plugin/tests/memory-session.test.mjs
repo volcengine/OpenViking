@@ -20,7 +20,7 @@ async function withTempDir(prefix, fn) {
   }
 }
 
-async function withCaptureServer(fn) {
+async function withCaptureServer(fn, sessionMeta = { pending_tokens: 0 }) {
   const requests = []
   const server = createServer(async (req, res) => {
     let body = ""
@@ -34,7 +34,7 @@ async function withCaptureServer(fn) {
     } else if (req.url?.startsWith("/api/v1/sessions/") && req.url.endsWith("/messages/batch")) {
       res.end(JSON.stringify({ status: "ok", result: { accepted: true } }))
     } else if (req.url?.startsWith("/api/v1/sessions/")) {
-      res.end(JSON.stringify({ status: "ok", result: { pending_tokens: 0 } }))
+      res.end(JSON.stringify({ status: "ok", result: sessionMeta }))
     } else {
       res.statusCode = 404
       res.end(JSON.stringify({ status: "error", error: { message: "not found" } }))
@@ -371,6 +371,35 @@ test("session.idle event flushes pending OpenCode capture", async () => {
       await manager.flushAll({ commit: false })
     })
   })
+})
+
+test("the threshold commit is the plugin's, or the server's under serverAutoCommit", async () => {
+  const policy = { pending_token_threshold: 20000, message_count_threshold: 0, idle_timeout_seconds: 1800, keep_recent_count: 0, min_commit_interval_seconds: 0 }
+  for (const serverAutoCommit of [false, true]) {
+    await withCaptureServer(async ({ endpoint, requests }) => {
+      await withTempDir("ov-oc-threshold-", async (dir) => {
+        const manager = createMemorySessionManager({
+          config: { ...baseConfig(endpoint), serverAutoCommit, commitIdleSeconds: 1800 },
+          pluginRoot: dir,
+        })
+        await manager.init()
+        await manager.handleEvent({ type: "session.created", properties: { info: { id: "s1" } } })
+        await manager.handleEvent({
+          type: "message.updated",
+          properties: { info: { id: "m1", sessionID: "s1", role: "user" } },
+        })
+        await manager.handleEvent({
+          type: "message.part.updated",
+          properties: { part: { id: "p1", messageID: "m1", sessionID: "s1", type: "text", text: "Remember that this turn crosses the commit threshold." } },
+        })
+        await manager.handleEvent({ type: "session.idle", sessionID: "s1" })
+
+        const writes = requests.filter((request) => request.method !== "GET").map((request) => `${request.method} ${request.url}`)
+        const sent = "POST /api/v1/sessions/oc-s1/messages/batch"
+        assert.deepEqual(writes, serverAutoCommit ? [sent] : [sent, "POST /api/v1/sessions/oc-s1/commit"])
+      })
+    }, { pending_tokens: 20000, auto_commit_policy: policy })
+  }
 })
 
 test("overlapping session.idle and dispose flushAll send each message once and commit after the batch", async () => {
