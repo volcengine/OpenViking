@@ -318,6 +318,7 @@ async def test_text_summary_passes_detected_content_language_to_model(
     monkeypatch.setattr(semantic_processor, "get_viking_fs", lambda: None)
     config = MagicMock(output_language_override="")
     config.semantic.max_file_content_chars = 10000
+    config.semantic.abstract_max_chars = 256
     monkeypatch.setattr(semantic_processor, "get_openviking_config", lambda: config)
     vlm = MagicMock()
     vlm.is_available.return_value = True

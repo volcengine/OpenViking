@@ -21,6 +21,7 @@ def _config(vlm_available: bool = True):
     config.output_language_override = ""
     config.semantic.max_file_content_chars = 10000
     config.semantic.max_skeleton_chars = 10000
+    config.semantic.abstract_max_chars = 256
     config.vlm.is_available.return_value = vlm_available
     config.vlm.get_completion_async = AsyncMock(return_value="LLM summary")
     return config
