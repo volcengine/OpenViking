@@ -1180,6 +1180,7 @@ class CompileLifecycle:
                     # A publication snapshot is not a completed rollback checkpoint.
                     if (
                         self._checkpoint(task).get("phase") != "rolling_back"
+                        and not self._checkpoint(task).get("terminal_status")
                         and meta["finish_snapshot"]
                     ):
                         meta["finish_snapshot"] = None
@@ -1216,7 +1217,13 @@ class CompileLifecycle:
 
     async def _finish_progress(self, task: Any, run: dict) -> None:
         try:
-            await self._advance_progress(task, run)
+            if run["status"] == "completed":
+                await self._advance_progress(task, run)
+            elif (
+                self._checkpoint(task).get("terminal_status") in {"failed", "cancelled"}
+                and run["meta"]["finish_snapshot"]
+            ):
+                await self._restore_progress(task)
         except NotFoundError as exc:
             # An accepted Task can still settle if there is no config to update.
             if exc.details.get("type") != "compile configuration" or exc.details.get(
@@ -1251,28 +1258,89 @@ class CompileLifecycle:
                 task.task_id, account_id=task.account_id, user_id=task.user_id
             ):
                 return
-            if execution_signature(record) != task.meta["request"]["compile"]["input_signature"]:
+            if (
+                str(record["config_id"]) != task.resource_id
+                or execution_signature(record) != task.meta["request"]["compile"]["input_signature"]
+            ):
                 return
-            if (record["progress"] or {}).get("source_commit") != previous:
-                return
-            if partial:
-                record["execution_context"]["partial_compile"] = {
-                    "base": previous,
-                    "signature": task.meta["request"]["compile"]["input_signature"],
-                }
-                return
+            state = self._progress_state(record)
+            undo = checkpoint.get("progress_rollback")
+            if undo:
+                # Replays reuse the first undo record, even after a config write succeeded.
+                if undo["config_id"] != record["config_id"] or same_json_value(
+                    state, undo["after"]
+                ):
+                    return
+                if not same_json_value(state, undo["before"]):
+                    return
+                after = undo["after"]
+            else:
+                if (record["progress"] or {}).get("source_commit") != previous:
+                    return
+                after = deepcopy(state)
+                if partial:
+                    after["partial_compile"] = {
+                        "base": previous,
+                        "signature": task.meta["request"]["compile"]["input_signature"],
+                    }
+                else:
+                    after["partial_compile"] = None
+                    after["progress"] = {
+                        "source_commit": run["meta"]["start_snapshot"],
+                        "processed_roots": list(run["params"]["from"]),
+                        "instruction": run["params"].get("instruction"),
+                        # Empty uses Runtime's default model selection.
+                        "model_name": (run["params"].get("args") or {}).get("model_name", ""),
+                        "skill_snapshot": {
+                            "uri": run["params"]["skill"],
+                            "snapshot_id": run["meta"]["skill_snapshot_id"],
+                        },
+                    }
+                if same_json_value(state, after):
+                    return
+                # Persist undo under the config lock before publishing the new baseline.
+                await self._save_checkpoint(
+                    task,
+                    {
+                        "progress_rollback": {
+                            "config_id": record["config_id"],
+                            "before": state,
+                            "after": after,
+                        }
+                    },
+                )
+            self._set_progress_state(record, after)
+
+    @staticmethod
+    def _progress_state(record: dict) -> dict:
+        return {
+            "progress": deepcopy(record["progress"]),
+            "partial_compile": deepcopy(record["execution_context"].get("partial_compile")),
+        }
+
+    @staticmethod
+    def _set_progress_state(record: dict, state: dict) -> None:
+        record["progress"] = deepcopy(state["progress"])
+        if state["partial_compile"] is None:
             record["execution_context"].pop("partial_compile", None)
-            record["progress"] = {
-                "source_commit": run["meta"]["start_snapshot"],
-                "processed_roots": list(run["params"]["from"]),
-                "instruction": run["params"].get("instruction"),
-                # Empty means the successful request uses Runtime's default model selection.
-                "model_name": (run["params"].get("args") or {}).get("model_name", ""),
-                "skill_snapshot": {
-                    "uri": run["params"]["skill"],
-                    "snapshot_id": run["meta"]["skill_snapshot_id"],
-                },
-            }
+        else:
+            record["execution_context"]["partial_compile"] = deepcopy(state["partial_compile"])
+
+    async def _restore_progress(self, task: Any) -> None:
+        """Undo this run's baseline only after output rollback, preserving later config changes."""
+        undo = self._checkpoint(task).get("progress_rollback")
+        if not undo:
+            return
+        async with self.edit_config(
+            task.account_id, self._owner_user_id(task), self._compile_name(task)
+        ) as record:
+            if (
+                record["config_id"] == undo["config_id"]
+                and execution_signature(record)
+                == task.meta["request"]["compile"]["input_signature"]
+                and same_json_value(self._progress_state(record), undo["after"])
+            ):
+                self._set_progress_state(record, undo["before"])
 
     async def _rollback(self, to: str, task: Any, run: Dict[str, Any], ctx: RequestContext) -> None:
         """Restore the output baseline and persist its resulting commit under the output lease.
