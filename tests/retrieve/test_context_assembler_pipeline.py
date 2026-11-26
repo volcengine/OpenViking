@@ -550,15 +550,28 @@ def test_oversized_resource_abstract_degrades_without_reading_the_body():
     assert [(e.detail, e.text) for e in plan.entries] == [("uri", "")]
 
 
-def test_memory_keeps_overview_as_the_cheaper_abstract_substitute():
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_memory_keeps_overview_as_the_cheaper_abstract_substitute(newline):
     """Memory stores its whole body in `abstract`, so overview discloses less."""
     uri = f"{USER_ROOT}/memories/entities/a.md"
-    body = "# Summary\n\nA thing happened.\n\n# Detail\n\nlong body"
+    body = "# Summary\n\nA thing happened.\n\n# Detail\n\nlong body".replace("\n", newline)
     candidate = _resource_candidate("Y " * 400, category="entities", uri=uri)
 
     assert oversized_abstract_needs_body(candidate, per_entry_cap(60, 1))
     plan = plan_entries([candidate], {uri: body}, max_tokens=60, detail=None)
     assert [(e.detail, e.text) for e in plan.entries] == [("overview", "A thing happened.")]
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_event_overview_excludes_chatlog_with_common_line_endings(newline):
+    uri = f"{USER_ROOT}/memories/events/a.md"
+    candidate = _resource_candidate("event", category="events", uri=uri)
+    body = newline.join(
+        ["# Summary", "Shipped the fix.", "# 2026-11-26 (Thursday) ChatLog:", "Full transcript"]
+    )
+
+    plan = plan_entries([candidate], {uri: body}, max_tokens=1600, detail="overview")
+    assert [(e.detail, e.text) for e in plan.entries] == [("overview", "Shipped the fix.")]
 
 
 @pytest.mark.parametrize(
