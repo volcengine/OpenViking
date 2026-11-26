@@ -3,6 +3,7 @@
 """Index selected archive passages and return excerpts with their source URI."""
 
 import hashlib
+import json
 from typing import TYPE_CHECKING, Any
 
 from openviking.models.embedder.base import embed_compat
@@ -121,11 +122,14 @@ async def visible_archive_source_hits(
             if sanitizer is not None and read_ctx.data_access is None:
                 settings = await sanitizer.settings_for_uri(source_uri, read_ctx)
                 if settings is not None:
-                    excerpt = (
-                        await sanitizer.sanitize(
-                            excerpt, ctx=read_ctx, uri=source_uri, settings=settings
-                        )
-                    ).content
+                    # Treat the excerpt as a message value, even when it contains JSON.
+                    sanitized = await sanitizer.sanitize(
+                        json.dumps(excerpt, ensure_ascii=False),
+                        ctx=read_ctx,
+                        uri=source_uri,
+                        settings=settings,
+                    )
+                    excerpt = json.loads(sanitized.content)
         except (
             AGFSClientError,
             OSError,
