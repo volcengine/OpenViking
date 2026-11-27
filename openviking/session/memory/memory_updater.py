@@ -534,7 +534,11 @@ class ExtractContext:
                 content = original or ""
             elif original and len(summary) / len(original) >= ratio_threshold:
                 content = original
-        max_chars = get_openviking_config().memory.event_chatlog_max_chars
+        try:
+            max_chars = get_openviking_config().memory.event_chatlog_max_chars
+        except FileNotFoundError:
+            # Standalone template rendering also works without a server config.
+            return content
         return content[:max_chars] if max_chars else content
 
     def get_resource_event_content(self, ranges_str: str, summary: str) -> str:

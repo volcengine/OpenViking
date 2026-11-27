@@ -135,6 +135,11 @@ class TestMemoryUpdater:
         assert context.get_event_content("0-1", "对话记录", 0) == chatlog
         assert context.messages == original_messages
 
+    def test_event_chatlog_can_render_without_server_config(self):
+        context = ExtractContext([Message(id="m", role="user", parts=[TextPart("你好🌱")])])
+        with patch.object(OpenVikingConfigSingleton, "get_instance", side_effect=FileNotFoundError):
+            assert context.get_event_content("0", "") == "**user**: 你好🌱"
+
     @pytest.mark.parametrize(
         ("second_role", "second_peer", "expected"),
         [
