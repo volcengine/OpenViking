@@ -23,6 +23,7 @@ event_context = _fact_context.event_context
 _deferred_file_changes: ContextVar[DeferredFileChanges | None] = ContextVar(
     "metric_deferred_file_changes", default=None
 )
+_copy_targets: ContextVar[set[str] | None] = ContextVar("metric_copy_targets", default=None)
 
 
 @dataclass
@@ -58,6 +59,87 @@ def defer_file_changes():
         pending.active = False
         pending.events.clear()
         _deferred_file_changes.reset(token)
+
+
+@contextmanager
+def observe_copy_targets():
+    """Collect existing destinations from the copy's existing type checks."""
+    from .runtime import is_reporting_enabled
+
+    destinations = set() if is_reporting_enabled() else None
+    token = _copy_targets.set(destinations)
+    try:
+        yield destinations
+    finally:
+        _copy_targets.reset(token)
+
+
+def record_existing_copy_target(uri):
+    destinations = _copy_targets.get()
+    if destinations is not None:
+        destinations.add(uri)
+
+
+def report_copied_files(entries, destinations, ctx, *, copy_semantic_sidecars):
+    if destinations is None:
+        return
+    from openviking.storage.abstract_overview import ABSTRACT_OVERVIEW_FILENAMES
+
+    for entry in entries:
+        if entry.is_dir:
+            continue
+        leaf = entry.source_path.rsplit("/", 1)[-1]
+        if copy_semantic_sidecars or leaf not in ABSTRACT_OVERVIEW_FILENAMES:
+            status = "modified" if entry.target_uri in destinations else "added"
+            emit_file_change(entry.target_uri, ctx, status, operation="copy")
+
+
+def report_indexed_descendant_moves(entries, root_uri, ctx):
+    from .runtime import is_reporting_enabled
+
+    if not is_reporting_enabled():
+        return
+    for entry in entries:
+        if entry.source_uri == root_uri:
+            continue
+        try:
+            data = file_metadata(entry.target_uri, ctx, is_dir=entry.is_dir)
+            if data is not None:
+                try_publish_event(
+                    "file_index_move", {**data, "old_uri": entry.source_uri, "operation": "move"}
+                )
+        except Exception:
+            continue
+
+
+def report_restored_files(written_paths, deleted_paths, to_uri, ctx, task=None):
+    from .runtime import is_reporting_enabled
+
+    if not is_reporting_enabled():
+        return
+    for paths, status in ((written_paths, "modified"), (deleted_paths, "deleted")):
+        for path in paths:
+            try:
+                uri = to_uri(path)
+            except Exception:
+                continue
+            emit_file_change(uri, ctx, status, operation="snapshot_restore", task=task)
+
+
+def report_initialized_directory_summary(message, ctx):
+    """Report a preset summary after its existing vector write has succeeded."""
+    try:
+        source = message.dashboard_source_type
+        if source not in {"create_collection", "workspace_init", "create_account", "register_user"}:
+            return
+        data = message.context_data
+        suffix = {0: ".abstract.md", 1: ".overview.md"}.get(data.get("level"))
+        uri = data.get("uri")
+        if suffix and uri:
+            uri = uri if uri.endswith("/" + suffix) else f"{uri.rstrip('/')}/{suffix}"
+            emit_file_change(uri, ctx, "added", operation=source)
+    except Exception:
+        return
 
 
 def begin_request_reporting():
@@ -176,7 +258,9 @@ def file_metadata(uri, ctx=None, *, is_dir=False):
     return data
 
 
-def emit_file_change(uri, ctx, change_type, *, old_uri=None, is_dir=False, operation=None):
+def emit_file_change(
+    uri, ctx, change_type, *, old_uri=None, is_dir=False, operation=None, task=None
+):
     from .runtime import is_reporting_enabled
 
     if not is_reporting_enabled():
@@ -193,6 +277,8 @@ def emit_file_change(uri, ctx, change_type, *, old_uri=None, is_dir=False, opera
         )
         if change_type == "added" and not is_dir and data["scope"] in {"resources", "agent"}:
             data["first_contributor_user_id"] = data.get("user_id")
+        if task is not None:
+            data.update(task_id=task.task_id, task_type=task.task_type)
         from openviking.service.task_work_index import get_task_context
 
         pending = _deferred_file_changes.get()

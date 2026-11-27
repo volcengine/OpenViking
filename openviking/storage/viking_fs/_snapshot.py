@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from openviking.observability.log_safety import safe_uri_for_log, short_hash
+from openviking.observability.reporting.facts import report_restored_files
 from openviking.pyagfs.exceptions import (
     AGFSInvalidOperationError,
     AGFSNotFoundError,
@@ -555,6 +556,7 @@ class _SnapshotMixin:
             return None
         tasks = self._collect_restore_vector_tasks(written_paths, deleted_paths)
         if not tasks:
+            report_restored_files(written_paths, deleted_paths, self._tree_path_to_uri, real_ctx)
             return None
 
         from openviking.service.task_tracker import get_task_tracker
@@ -578,6 +580,7 @@ class _SnapshotMixin:
         )
         self._background_tasks.add(background)
         background.add_done_callback(self._background_tasks.discard)
+        report_restored_files(written_paths, deleted_paths, self._tree_path_to_uri, real_ctx, task)
         return task.task_id
 
     async def show(

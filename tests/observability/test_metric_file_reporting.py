@@ -4,15 +4,17 @@ import asyncio
 import json
 from queue import Full
 from threading import Event
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.observability.events import try_publish_event
-from openviking.observability.reporting import runtime
+from openviking.observability.events import get_event_bus, try_publish_event
+from openviking.observability.reporting import facts, runtime
 from openviking.observability.reporting.file_reporter import FileEventReporter
 from openviking.server.api_keys.key_mgr import APIKeyManager
 from openviking.server.config import EventReportingConfig
+from openviking.storage.viking_fs._ops import _OpsMixin
 
 
 @pytest.mark.asyncio
@@ -216,3 +218,90 @@ async def test_dashboard_lifecycle_and_usage_are_written_with_source_identity(tm
     assert events[5]["call_count"] == 1
     assert events[5]["prompt_tokens"] == 12
     assert all(row["ov_account_id"] == "space" and row["account_id"] == "cloud" for row in events)
+
+
+@pytest.mark.asyncio
+async def test_copies_keep_transfer_contract_and_report_the_target_state(monkeypatch):
+    monkeypatch.setattr(runtime, "is_reporting_enabled", lambda: True)
+    publish = Mock()
+    monkeypatch.setattr(get_event_bus(), "publish", publish)
+    filesystem = _OpsMixin()
+    filesystem._async_agfs = SimpleNamespace(
+        stat=AsyncMock(side_effect=[FileNotFoundError(), {"isDir": False}])
+    )
+    created = "viking://resources/new.md"
+    overwritten = "viking://resources/existing.md"
+    with facts.observe_copy_targets() as targets:
+        assert await filesystem._ensure_transfer_target_type("/new", created, is_dir=False) is None
+        assert (
+            await filesystem._ensure_transfer_target_type("/existing", overwritten, is_dir=False)
+            is None
+        )
+    entries = [
+        SimpleNamespace(source_path="/source/note.md", target_uri=uri, is_dir=False)
+        for uri in (created, overwritten)
+    ]
+    actor = SimpleNamespace(account_id="space", user=SimpleNamespace(user_id="alice"))
+    facts.report_copied_files(entries, targets, actor, copy_semantic_sidecars=True)
+    first, second = [call.args[0].payload for call in publish.call_args_list]
+    assert filesystem._async_agfs.stat.await_count == 2
+    assert first["change_type"] == "added"
+    assert first["first_contributor_user_id"] == "alice"
+    assert second["change_type"] == "modified"
+    assert second["operation"] == "copy"
+
+
+@pytest.mark.parametrize(
+    "source_type", ["create_collection", "workspace_init", "create_account", "register_user"]
+)
+def test_reporting_includes_initialized_files_moved_descendants_and_restored_paths(
+    monkeypatch, source_type
+):
+    monkeypatch.setattr(runtime, "is_reporting_enabled", lambda: True)
+    sink = Mock()
+    monkeypatch.setattr(
+        get_event_bus(),
+        "publish",
+        runtime.make_subscriber(
+            sink, {"telemetry": {"deployment": {"collection_version": "enterprise"}}}
+        ),
+    )
+    actor = SimpleNamespace(account_id="space", user=SimpleNamespace(user_id="alice"))
+    resource = "viking://resources"
+    initialize = SimpleNamespace(
+        dashboard_source_type=source_type, context_data={"uri": resource, "level": 0}
+    )
+    facts.report_initialized_directory_summary(initialize, actor)
+    unrelated = SimpleNamespace(
+        dashboard_source_type="add_resource", context_data={"uri": resource, "level": 1}
+    )
+    facts.report_initialized_directory_summary(unrelated, actor)
+    facts.report_indexed_descendant_moves(
+        [
+            SimpleNamespace(
+                source_uri=f"{resource}/old.md", target_uri=f"{resource}/moved.md", is_dir=False
+            )
+        ],
+        resource,
+        actor,
+    )
+    facts.report_restored_files(
+        [f"{resource}/restored.md"],
+        [f"{resource}/deleted.md"],
+        str,
+        actor,
+        SimpleNamespace(task_id="restore", task_type="snapshot_restore_reindex"),
+    )
+
+    initial, move, restore, deleted = [call.args[0] for call in sink.report.call_args_list]
+    assert initial["event_name"] == "file_mutation"
+    assert initial["uri"] == f"{resource}/.abstract.md"
+    assert initial["context_type"] == "resource" and initial["level"] == 0
+    assert initial["operation"] == source_type
+    assert move["event_name"] == "file_index_move"
+    assert move["old_uri"] == f"{resource}/old.md"
+    assert restore["operation"] == "snapshot_restore" and restore["task_id"] == "restore"
+    assert deleted["change_type"] == "deleted"
+    assert all(
+        event["collection_version"] == "enterprise" for event in (initial, move, restore, deleted)
+    )

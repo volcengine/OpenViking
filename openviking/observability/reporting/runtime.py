@@ -37,6 +37,7 @@ def is_reporting_enabled():
 
 def make_subscriber(reporter, config):
     deployment = config.get("telemetry", {}).get("deployment", {})
+    collection_version = deployment.get("collection_version")
 
     def subscriber(event):
         name = _NAMES.get(event.event_name, event.event_name)
@@ -48,6 +49,7 @@ def make_subscriber(reporter, config):
             "task_terminal",
             "file_mutation",
             "skill_mutation",
+            "file_index_move",
             "public_asset_attribution",
         }:
             return
@@ -65,6 +67,12 @@ def make_subscriber(reporter, config):
             ov_user_id=event.user_id,
             request_id=event.request_id,
         )
+        if (
+            name in {"file_mutation", "skill_mutation", "file_index_move"}
+            and isinstance(collection_version, str)
+            and collection_version
+        ):
+            payload["collection_version"] = collection_version
         if name == "http_request":
             payload.update(
                 http_method=source.get("method"),
