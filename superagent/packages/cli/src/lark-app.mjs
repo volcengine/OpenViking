@@ -61,7 +61,9 @@ export function openApiBase(brand) {
 
 // scopes: { tenant: [...], user: [...] }. onQRCode({ url, expiresIn }) shows
 // the code; onStatus gets polling / slow_down / domain_switched. `appId` is
-// the app an `update` scan changes. Resolves with
+// the app an `update` scan changes. `missing` (from missingConfig) narrows an
+// update to what the app lacks: the confirm page then lists only that, and the
+// QR code, which carries the request, stays small. Resolves with
 // { appId, appSecret, brand, ownerOpenId }.
 export async function scanApp({
   mode = 'create',
@@ -69,6 +71,7 @@ export async function scanApp({
   name,
   description,
   scopes,
+  missing = null,
   onQRCode,
   onStatus = () => {},
   signal = undefined,
@@ -80,7 +83,7 @@ export async function scanApp({
       source: 'ov-superagent',
       ...(mode === 'create' ? { createOnly: true } : {}),
       ...(mode === 'update' ? { appId } : { appPreset: { ...(name ? { name } : {}), ...(description ? { desc: description } : {}) } }),
-      addons: {
+      addons: mode === 'update' && missing ? updateAddons(missing) : {
         scopes: { tenant: [...scopes.tenant], user: [...scopes.user] },
         events: { items: { tenant: [...EVENTS] } },
         callbacks: { items: [...CALLBACKS] },
@@ -102,6 +105,17 @@ export async function scanApp({
     appSecret: result.client_secret,
     brand: result.user_info?.tenant_brand === 'lark' ? 'lark' : 'feishu',
     ownerOpenId: result.user_info?.open_id ?? null,
+  };
+}
+
+// Only what the app lacks; events it could not be read for are all asked.
+function updateAddons(missing) {
+  const events = missing.events ?? EVENTS;
+  return {
+    ...(missing.scopes.tenant.length || missing.scopes.user.length
+      ? { scopes: { tenant: [...missing.scopes.tenant], user: [...missing.scopes.user] } } : {}),
+    ...(events.length ? { events: { items: { tenant: [...events] } } } : {}),
+    ...(missing.callbacks.length ? { callbacks: { items: [...missing.callbacks] } } : {}),
   };
 }
 
