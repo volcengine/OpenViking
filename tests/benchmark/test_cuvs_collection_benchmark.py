@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -15,40 +16,71 @@ sys.modules[SPEC.name] = benchmark
 SPEC.loader.exec_module(benchmark)
 
 
-def test_filter_scenarios_cover_scalar_and_path_selectivity():
-    scenarios = benchmark.filter_scenarios()
+def test_collection_cli_reports_search_write_and_restart(tmp_path, monkeypatch, capsys):
+    output = tmp_path / "report.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_collection_benchmark.py",
+            "--backends",
+            "native",
+            "--vector-count",
+            "1000",
+            "--dimension",
+            "4",
+            "--query-count",
+            "2",
+            "--k",
+            "128",
+            "--warmup-queries",
+            "1",
+            "--mutation-sizes",
+            "1",
+            "--delete-count",
+            "1",
+            "--data-root",
+            str(tmp_path),
+            "--output",
+            str(output),
+        ],
+    )
+    benchmark.main()
 
-    assert [scenario.name for scenario in scenarios] == [
-        "unfiltered",
-        "uniform_10pct",
-        "uniform_1pct",
-        "uniform_0_1pct",
-        "clustered_10pct",
-        "clustered_1pct",
-        "clustered_0_1pct",
-        "path_10pct",
-        "path_1pct",
-        "path_0_1pct",
-    ]
-    assert [scenario.selectivity for scenario in scenarios] == [
-        1.0,
-        0.1,
-        0.01,
-        0.001,
-        0.1,
-        0.01,
-        0.001,
-        0.1,
-        0.01,
-        0.001,
-    ]
-    assert [scenario.distribution for scenario in scenarios[-3:]] == ["path"] * 3
-    assert [scenario.filter["conds"][0] for scenario in scenarios[-3:]] == [
-        "/docs/g0",
-        "/docs/g0/h0",
-        "/docs/g0/h0/i0",
-    ]
-    assert all(scenario.filter["para"] == "-d=-1" for scenario in scenarios[-3:])
+    [native] = json.loads(output.read_text())["results"]
+    searches = {row["name"]: row for row in native["searches"]}
+    counts = {"unfiltered": 128}
+    for distribution in ("uniform", "clustered", "path"):
+        counts.update(
+            {
+                f"{distribution}_10pct": 100,
+                f"{distribution}_1pct": 10,
+                f"{distribution}_0_1pct": 1,
+            }
+        )
+    assert {name: row["first_result_count"] for name, row in searches.items()} == counts
+    for row in searches.values():
+        assert row["search"]["query_count"] == 2
+        assert "recall_at_k" not in row
+    recall_columns = {}
+    for line in capsys.readouterr().out.splitlines():
+        columns = line.split()
+        if len(columns) == 6 and columns[0] == "native" and columns[1] in searches:
+            recall_columns[columns[1]] = columns[-1]
+    assert recall_columns == dict.fromkeys(searches, "N/A")
+    for rate, scope in (
+        ("10pct", "/docs/g0"),
+        ("1pct", "/docs/g0/h0"),
+        ("0_1pct", "/docs/g0/h0/i0"),
+    ):
+        row = searches[f"path_{rate}"]
+        assert row["distribution"] == "path"
+        assert row["filter"]["conds"] == [scope]
+        assert row["filter"]["para"] == "-d=-1"
+    [update] = native["lifecycle"]["updates"]
+    assert update["count"] == 1
+    assert native["lifecycle"]["delete"]["count"] == 1
+    assert native["lifecycle"]["restart"]["first_result_count"] == 128
 
 
 def test_scalar_fields_have_expected_uniform_and_clustered_counts():
