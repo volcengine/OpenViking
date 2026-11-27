@@ -205,7 +205,7 @@
       ]
     },
     {
-      "id": "deepseek",
+      "id": "sk_hex32",
       "pattern": "sk-[a-f0-9]{32}",
       "reject_repeated": true,
       "positive": [
@@ -218,7 +218,7 @@
       ]
     },
     {
-      "id": "moonshot",
+      "id": "sk_48",
       "pattern": "sk-[A-Za-z0-9_-]{48}",
       "reject_repeated": true,
       "positive": [
@@ -232,16 +232,16 @@
     },
     {
       "id": "zhipu",
-      "pattern": "[a-f0-9]{32}\\.(?:[A-Za-z0-9_-]{24}|[A-Za-z0-9]{16,17})",
+      "pattern": "[a-f0-9]{32}\\.[A-Za-z0-9]{16,17}",
       "reject_repeated": true,
       "positive": [
         ["0a1b2c3d4e5f60718293a4b5c6d7e8f9", ".", "aB3dE5gH7jK9mN2p"],
-        ["0a1b2c3d4e5f60718293a4b5c6d7e8f9", ".", "aB3dE5gH7jK9mN2pQ"],
-        ["0a1b2c3d4e5f60718293a4b5c6d7e8f9", ".", "aB3dE5gH7jK9mN2pQ4sT6vW8"]
+        ["0a1b2c3d4e5f60718293a4b5c6d7e8f9", ".", "aB3dE5gH7jK9mN2pQ"]
       ],
       "negative": [
         ["0a1b2c3d4e5f60718293a4b5c6d7e8f9", ".", "aB3dE5gH7jK9mN2"],
         ["0a1b2c3d4e5f60718293a4b5c6d7e8f9", ".", "aB3dE5gH7jK9mN2pQ4sT"],
+        ["0a1b2c3d4e5f60718293a4b5c6d7e8f9", ".", "aB3dE5gH7jK9mN2pQ4sT6vW8"],
         ["0A1B2C3D4E5F60718293A4B5C6D7E8F9", ".", "aB3dE5gH7jK9mN2p"]
       ]
     },
@@ -260,17 +260,6 @@
       ]
     },
     {
-      "id": "langfuse",
-      "pattern": "sk-lf-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}",
-      "positive": [
-        ["sk-lf-", "1234abcd-5678-90ef-ab12-34567890abcd"]
-      ],
-      "negative": [
-        ["sk-lf-", "vikingbot-secret-key-2026"],
-        ["pk-lf-", "1234abcd-5678-90ef-ab12-34567890abcd"]
-      ]
-    },
-    {
       "id": "vault",
       "pattern": "hvs\\.[A-Za-z0-9_-]{90,120}",
       "reject_repeated": true,
@@ -284,10 +273,11 @@
     },
     {
       "id": "telegram_bot_token",
-      "pattern": "[0-9]{5,16}:A[A-Za-z0-9_-]{34}",
+      "pattern": "(?:bot)?[0-9]{5,16}:A[A-Za-z0-9_-]{34}",
       "reject_repeated": true,
       "positive": [
-        ["1234567890:A", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB"]
+        ["1234567890:A", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB"],
+        ["bot1234567890:A", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB"]
       ],
       "negative": [
         ["1234:A", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB"],
