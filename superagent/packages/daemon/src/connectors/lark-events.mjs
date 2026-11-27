@@ -118,28 +118,34 @@ const LOCALE_PRIORITY = ['en', 'zh'];
 const LOCAL_I18N = { i18n_content: 'content', i18n_default_value: 'default_value' };
 // A block configured in every language in place of a whole field (全局多语言):
 // the locale map decides the field, and the field it replaces is not read.
-const GLOBAL_I18N = { i18n: 'content', i18n_text_tag_list: 'text_tag_list', i18n_elements: 'elements' };
+// i18n_header is the JSON 1.0 header, i18n_elements and i18n the body and its
+// title, i18n_text_tag_list the title's tags.
+const GLOBAL_I18N = {
+  i18n: 'content', i18n_header: 'header', i18n_elements: 'elements', i18n_text_tag_list: 'text_tag_list',
+};
 
 function localeRank(locale) {
   const rank = LOCALE_PRIORITY.indexOf(String(locale).toLowerCase().split('_')[0]);
   return rank === -1 ? LOCALE_PRIORITY.length : rank;
 }
 
-function hasText(value) {
-  if (typeof value === 'string') return value.trim() !== '';
-  if (Array.isArray(value)) return value.length > 0;
-  return Boolean(value && typeof value === 'object' && Object.keys(value).length > 0);
-}
-
-// The one locale to read out of a locale-keyed map ({en_us: ..., zh_cn: ...}).
-function pickLocale(map) {
-  if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
-  const filled = Object.entries(map)
-    .filter(([locale, text]) => LOCALES.has(locale.toLowerCase()) && hasText(text));
-  if (filled.length === 0) return null;
+// Reads the first language of a locale-keyed map ({en_us: ..., zh_cn: ...})
+// that actually yields text, into `output`. A block of its own may hold
+// nothing readable (a divider, an empty array), and then the language after
+// it is read instead, rather than nothing standing in for it.
+function readLocale(map, output, mediaKeys, depth) {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return false;
+  const filled = Object.entries(map).filter(([locale]) => LOCALES.has(locale.toLowerCase()));
   // The sort is stable, so locales of one rank keep the card's own order.
   filled.sort(([left], [right]) => localeRank(left) - localeRank(right));
-  return filled[0][1];
+  for (const [, text] of filled) {
+    const scratch = [];
+    collectText(text, scratch, mediaKeys, depth + 1);
+    if (scratch.length === 0) continue;
+    output.push(...scratch);
+    return true;
+  }
+  return false;
 }
 
 function parseJson(value) {
@@ -184,32 +190,27 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
   }
 
   const visited = new Set();
-  // Text read through a locale map, kept until the title and the other plain
-  // fields are in, so a card reads in its own order.
-  const translated = [];
   // A multi-language post carries its whole body under a locale key
   // ({zh_cn: {...}, en_us: {...}}), so it is read through the same rule.
   if (Object.keys(value).every((key) => LOCALES.has(key.toLowerCase()))) {
-    const chosen = pickLocale(value);
-    if (chosen !== null) collectText(chosen, output, mediaKeys, depth + 1);
+    readLocale(value, output, mediaKeys, depth);
     return;
   }
+  // Text read through a locale map, kept until the title and the other plain
+  // fields are in, so a card reads in its own order.
+  const translated = [];
   for (const [key, base] of Object.entries(LOCAL_I18N)) {
     if (!Object.hasOwn(value, key) || Object.hasOwn(value, base)) continue;
-    const chosen = pickLocale(value[key]);
-    if (chosen !== null) translated.push(chosen);
-    visited.add(key);
+    if (readLocale(value[key], translated, mediaKeys, depth)) visited.add(key);
   }
   for (const [key, base] of Object.entries(GLOBAL_I18N)) {
     if (!Object.hasOwn(value, key)) continue;
-    const chosen = pickLocale(value[key]);
-    if (chosen === null) continue;
-    translated.push(chosen);
-    visited.add(key).add(base);
+    // A map that reads nothing leaves the field it would replace readable.
+    if (readLocale(value[key], translated, mediaKeys, depth)) visited.add(key).add(base);
   }
   const priorityKeys = ['text', 'title', 'content', 'name', 'file_name'];
   // A card's title sits under header and reads before the body.
-  if (Object.hasOwn(value, 'header')) {
+  if (Object.hasOwn(value, 'header') && !visited.has('header')) {
     collectText(value.header, output, mediaKeys, depth + 1);
     visited.add('header');
   }

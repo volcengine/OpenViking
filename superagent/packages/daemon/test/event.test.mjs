@@ -309,6 +309,46 @@ describe('normalizeEvent', () => {
     assert.equal(event.content, '中文模板');
   });
 
+  it('keeps the title of a JSON 1.0 card whose header is configured per language', () => {
+    const event = cardEvent({
+      i18n_header: {
+        zh_cn: { title: { tag: 'plain_text', content: '部署失败' } },
+        en_us: { title: { tag: 'plain_text', content: 'Deployment failed' } },
+      },
+      i18n_elements: {
+        zh_cn: [{ tag: 'markdown', content: '请重试部署' }],
+        en_us: [{ tag: 'markdown', content: 'Please retry the deployment' }],
+      },
+    });
+    assert.equal(event.content, 'Deployment failed\nPlease retry the deployment');
+  });
+
+  it('reads a header configured in one language', () => {
+    const event = cardEvent({
+      i18n_header: { zh_cn: { title: { tag: 'plain_text', content: '部署失败' } } },
+      elements: [{ tag: 'markdown', content: '请重试部署' }],
+    });
+    assert.equal(event.content, '部署失败\n请重试部署');
+  });
+
+  it('reads the next language when the one before it holds no text', () => {
+    const event = cardEvent({
+      i18n_elements: {
+        en_us: [{ tag: 'hr' }],
+        zh_cn: [{ tag: 'markdown', content: '请重试部署' }],
+      },
+    });
+    assert.equal(event.content, '请重试部署');
+  });
+
+  it('reads the field a language map replaced when that map reads nothing', () => {
+    const event = cardEvent({
+      i18n_elements: { en_us: [], zh_cn: [] },
+      elements: [{ tag: 'markdown', content: '请重试部署' }],
+    });
+    assert.equal(event.content, '请重试部署');
+  });
+
   it('reads one language of a post too, instead of both copies', () => {
     const event = normalizeEvent({
       type: 'im.message.receive_v1',
