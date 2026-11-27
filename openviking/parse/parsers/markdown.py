@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote
 
 import yaml
+from markdown_it import MarkdownIt
 
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
@@ -68,6 +69,13 @@ _MD_LINK_RE = re.compile(r"(!?)\[([^\]]*)\]\(([^)]+)\)")
 _MD_FRAGMENT_RE = re.compile(r"^([^#?]*)([#?].*)?$")
 # Extensions whose targets become directories on ingest (see _rewrite_single_link).
 _MD_DIR_EXTS = {".md", ".markdown", ".mdown", ".mkd"}
+
+# Preserve character references in heading slugs while recognizing Markdown escapes.
+_HEADING_INLINE_PARSER = MarkdownIt("commonmark").disable("entity")
+_INLINE_FORMATTING_TAG = re.compile(
+    r"</?(?:b|code|del|em|i|ins|kbd|mark|s|samp|small|span|strike|strong|sub|sup|u|var)(?=[\s/>])",
+    re.IGNORECASE,
+)
 
 
 def _smart_stem(path_or_name: str | Path) -> str:
@@ -113,6 +121,19 @@ def _gh_slug(text: str) -> str:
     # while GitHub generates "foo--bar", breaking intra-doc anchor links.
     s = re.sub(r"\s", "-", s)
     return s
+
+
+def _cross_document_heading_slug(title: str) -> str:
+    """Ignore inline HTML formatting when matching an otherwise plain heading."""
+    if _INLINE_FORMATTING_TAG.search(title):
+        tokens = _HEADING_INLINE_PARSER.parseInline(title)[0].children or []
+        if all(token.type in {"text", "html_inline"} for token in tokens):
+            title = "".join(
+                token.content
+                for token in tokens
+                if not (token.type == "html_inline" and _INLINE_FORMATTING_TAG.match(token.content))
+            )
+    return _gh_slug(title)
 
 
 @dataclass
@@ -1144,7 +1165,8 @@ class MarkdownParser(BaseParser):
                     rel
                     for rel, text in layout.items()
                     if any(
-                        _gh_slug(title) == anchor for _, _, title, _ in self._find_headings(text)
+                        _cross_document_heading_slug(title) == anchor
+                        for _, _, title, _ in self._find_headings(text)
                     )
                 ]
                 if len(hits) == 1:
