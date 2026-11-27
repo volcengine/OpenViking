@@ -725,20 +725,8 @@ async def test_reindex_user_namespace_partitions_memory_skill_and_resource(monke
     scopes = {call.kwargs["uri"]: call.kwargs for call in executor._reindex_rfv.await_args_list}
     assert set(scopes) == {
         root + suffix
-        for suffix in (
-            "",
-            "/resources",
-            "/skills",
-            "/skills/live",
-            "/skills/gone",
-            "/peers",
-            "/notes",
-            "/persona.md",
-        )
+        for suffix in ("/resources", "/skills/live", "/skills/gone", "/notes", "/persona.md")
     }
-    for marker_uri in (root, root + "/skills", root + "/peers"):
-        assert scopes[marker_uri]["recursive"] is False
-        assert scopes[marker_uri]["mode"] == "vectors_only"
     assert scopes[root + "/skills/gone"]["root_exists"] is False
     assert set(scopes[root + "/skills/gone"]["vector_inventory"]) == {"skill"}
     memories = {
@@ -787,8 +775,6 @@ async def test_reindex_global_namespace_partitions_user_and_resources(monkeypatc
         for call in executor._reindex_rfv.await_args_list
     } == {
         ("viking://resources", "resource"),
-        ("viking://agent", "resource"),
-        ("viking://agent/skills", "skill"),
         ("viking://agent/skills/demo", "skill"),
     }
     assert [call.kwargs["uri"] for call in executor._reindex_user_namespace.await_args_list] == [

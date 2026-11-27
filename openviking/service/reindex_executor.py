@@ -625,30 +625,6 @@ class ReindexExecutor:
                 vector_inventory=inventory,
             )
 
-    async def _reindex_namespace_markers(
-        self,
-        *,
-        uri: str,
-        run: _ReindexRunContext,
-        inventory: Mapping[str, Mapping[str, Any]],
-    ) -> None:
-        """Rebuild a namespace directory's vectors from its stored descriptions."""
-        root_records = {
-            record_id: record
-            for record_id, record in inventory.items()
-            if record.get("uri") == uri and record.get("level") in {0, 1}
-        }
-        await self._reindex_rfv(
-            uri=uri,
-            mode="vectors_only",
-            context_type=context_type_for_uri(uri),
-            recursive=False,
-            run=run,
-            root_is_dir=True,
-            formal_entries=[],
-            vector_inventory=root_records,
-        )
-
     async def _skill_scopes(
         self,
         *,
@@ -684,9 +660,6 @@ class ReindexExecutor:
                 formal_entries=None if child is not None else [],
                 vector_inventory=groups.get(root, {}),
             )
-
-        if exists:
-            await self._reindex_namespace_markers(uri=uri, run=run, inventory=inventory)
 
     async def _reindex_peer_scopes(
         self,
@@ -755,9 +728,6 @@ class ReindexExecutor:
                     formal_entries=memory_facts[2],
                     vector_inventory=content_groups.get(memories, {}),
                 )
-
-        if exists:
-            await self._reindex_namespace_markers(uri=uri, run=run, inventory=inventory)
 
     async def _memory_scopes(
         self,
@@ -1088,7 +1058,7 @@ class ReindexExecutor:
             # when their md5 values are unchanged (the public API regression
             # contract relies on this), while other RFV targets retain the
             # caller-controlled force behavior.
-            force=run.force or (classify_uri(uri).is_skill_root and mode == "vectors_only"),
+            force=run.force or (context_type == "skill" and mode == "vectors_only"),
             scalar_target_levels=frozenset({0, 1, 2}),
         )
         resolved_root_is_dir = run.root_is_dir if root_is_dir is None else root_is_dir
@@ -1484,7 +1454,6 @@ class ReindexExecutor:
         for name in ("skills", "peers"):
             if facts[name][0] and not facts[name][1]:
                 raise InvalidArgumentError(f"{name} namespace must be a directory: {roots[name]}")
-        await self._reindex_namespace_markers(uri=uri, run=run, inventory=direct_inventory)
         await self._resource_scope(
             uri=roots["resources"],
             mode=mode,
@@ -1550,13 +1519,6 @@ class ReindexExecutor:
                 ctx=run.ctx,
                 recursive=True,
             )
-        agent = "viking://agent"
-        agent_exists, agent_is_dir, _ = await self._namespace_facts(agent, ctx=run.ctx)
-        agent_inventory = None
-        if agent_exists and agent_is_dir:
-            agent_inventory = await self._read_reindex_inventory(
-                get_service().vikingdb_manager, uri=agent, ctx=run.ctx, recursive=False
-            )
         resource_facts = await self._namespace_facts(resources, ctx=run.ctx)
         skill_facts = await self._namespace_facts(skills, ctx=run.ctx, list_children=True)
         _, _, users = await self._namespace_facts(
@@ -1564,8 +1526,6 @@ class ReindexExecutor:
             ctx=run.ctx,
             list_children=True,
         )
-        if agent_inventory is not None:
-            await self._reindex_namespace_markers(uri=agent, run=run, inventory=agent_inventory)
         await self._resource_scope(
             uri=resources,
             mode=mode,

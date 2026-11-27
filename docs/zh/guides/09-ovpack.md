@@ -15,13 +15,11 @@ checksum，保证包内容没有偏离 manifest；如果攻击者能同时篡改
 
 - `viking://resources/...`
 - `viking://user/...`
-- `viking://agent/...`
 
 全量迁移使用单独的 `backup/restore`，它会把支持的 scope root 一起打进备份包。这里指命名空间根，不表示内容对所有人公开：
 
 - `viking://resources`
 - 当前账号下所有 `viking://user/{user_id}` 内容
-- `viking://agent`
 
 `backup/restore` 仅允许 ROOT 或 ADMIN 调用，并以账号为边界访问所有用户内容。备份包不包含
 用户账号和服务端 API Key 注册表。用户文件仍属于内容树，包括可能存放外部凭证的 privacy 配置，因此需要保护归档。
@@ -334,7 +332,7 @@ curl -f -X POST http://localhost:1933/api/v1/pack/backup \
 
 上表描述普通 `import`。全量 `restore` 的 `overwrite` 使用合并覆盖：包内不存在的目标路径会
 创建，同路径内容会覆盖，目标环境中仅有而备份中没有的路径会保留。恢复不会删除整个
-`viking://resources`、`viking://user` 或 `viking://agent`，也不会创建或写入 `viking://user` 聚合目录本身。
+`viking://resources` 或 `viking://user`，也不会创建或写入 `viking://user` 聚合目录本身。
 向量只恢复或重建包内新增、覆盖的内容，目标环境独有内容的向量保持不变。
 
 无论使用哪种冲突策略，都会先完整校验 manifest、文件、checksum 和向量元数据。损坏的包
@@ -486,7 +484,7 @@ ov import ./exports/a.ovpack viking://resources/imported/
 viking://resources/imported/a
 ```
 
-顶级目录包只能导入到 `viking://`。覆盖已存在的 `resources` 或 `agent` 根需要 ROOT 权限。
+顶级 scope 包只能导入到 `viking://`：
 
 ```bash
 ov export viking://resources ./exports/resources.ovpack

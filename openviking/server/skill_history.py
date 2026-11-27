@@ -10,20 +10,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from openviking.core.namespace import uri_parts
 from openviking.server.identity import RequestContext
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 SKILL_HISTORY_DIRECTORY = ".skill-history"
 SKILL_HISTORY_VERSION = 1
-
-
-def is_skill_history_uri(uri: str) -> bool:
-    """Identify the history subtree alongside installed Skills."""
-    parts = uri_parts(uri)
-    return parts[:3] == ["agent", "skills", SKILL_HISTORY_DIRECTORY] or (
-        parts[:1] == ["user"] and parts[2:4] == ["skills", SKILL_HISTORY_DIRECTORY]
-    )
 
 
 def _now() -> str:

@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from openviking.storage.viking_fs import VikingFS
     from openviking.system_assets.sync import SystemAssetSynchronizer
 
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import NotFoundError
 
 
 @dataclass
@@ -232,7 +232,7 @@ class DirectoryInitializer:
     async def initialize_user_directories(
         self, ctx: RequestContext, *, lease_ref: Any = None
     ) -> int:
-        """Provision the user workspace and return the number of directories initialized."""
+        """Provision the user workspace and return the number of directories seeded with summaries."""
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
@@ -246,37 +246,30 @@ class DirectoryInitializer:
         self, user_root: _DirectoryTarget, *, lease_ref: Any = None
     ) -> int:
         ctx = user_root.ctx
-        viking_fs = self._get_viking_fs()
-
-        async def create_directory(uri: str) -> bool:
-            try:
-                existing = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
-            except (FileNotFoundError, NotFoundError):
-                await viking_fs.mkdir(uri, exist_ok=True, ctx=ctx, lease_ref=lease_ref)
-                return True
-            if not existing["isDir"]:
-                raise InvalidArgumentError(f"Expected a preset directory at {uri}")
-            return False
-
-        # Memory updates generate and index directory summaries after content is written.
+        directories = [
+            _DirectoryTarget(
+                uri=f"{user_root.uri}/{parent.path}/{child.path}",
+                parent_uri=f"{user_root.uri}/{parent.path}",
+                definition=child,
+                scope=user_root.scope,
+                ctx=ctx,
+            )
+            for parent in user_root.definition.children
+            for child in parent.children
+        ]
+        # Seed browsing descriptions here. Memory updates index the summaries derived from content.
         results = await asyncio.gather(
-            *(
-                create_directory(f"{user_root.uri}/{parent.path}/{child.path}")
-                for parent in user_root.definition.children
-                for child in parent.children
-            ),
+            *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in directories),
             return_exceptions=True,
         )
-        created = 0
-        for result in results:
-            if isinstance(result, BaseException):
-                raise result
-            created += result
-
+        created, error = self._partition_directory_results(results)
+        if error is not None:
+            raise error
+        viking_fs = self._get_viking_fs()
         await ensure_agent_file(viking_fs, ctx, lease_ref=lease_ref)
         if self.user_config_defaults.preset_global_policy:
             await ensure_global_policy_file(viking_fs, ctx, lease_ref=lease_ref)
-        return created
+        return len(created)
 
     async def _initialize_directory_trees(
         self,

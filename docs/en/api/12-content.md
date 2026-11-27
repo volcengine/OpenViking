@@ -798,7 +798,7 @@ For `resource` and `skill`, `semantic_and_vectors` refreshes directory/file sema
 
 Both resource/skill modes share one persisted-content scan and one lightweight vector-record read. Each source is read once and reused during later processing. `force=true` bypasses fingerprint equality but still performs completeness and scope checks.
 
-For a resource/skill directory, `recursive=false` limits both modes to the target directory's own L0/L1 records. Direct children are used only to aggregate the target directory; they are not scanned or rebuilt. Namespace reindex requires `recursive=true` and uses stored descriptions to rebuild a namespace directory’s own L0/L1 records. Memory remains on the existing reindex path.
+For a resource/skill directory, `recursive=false` limits both modes to the target directory's own L0/L1 records. Direct children are used only to aggregate the target directory; they are not scanned or rebuilt. Namespace containers have no index records of their own, so namespace targets reject `recursive=false` instead of silently becoming a no-op. Memory remains on the existing reindex path.
 
 When non-empty `tags` are provided, tags are saved in the same write as each vector record produced by reindex; reindex does not call `set_tags` afterwards. Directory and namespace reindex operations apply tags to successfully rebuilt directory L0/L1 and leaf L2 records. `replace` overwrites existing tags, while `append` merges by key. `replace` with an empty tag list is a no-op. `clear` removes existing tags and does not require `tags`; if values are supplied with `clear`, they are ignored.
 

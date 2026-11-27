@@ -17,7 +17,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Any, Optional
 
 from openviking.core.global_policy import GlobalAccessPolicy, global_policy_from_source
-from openviking.core.namespace import owner_fields_for_uri, relative_uri_path, uri_parts
+from openviking.core.namespace import owner_fields_for_uri, relative_uri_path
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.pathlock_transfer import PathLockGuard
@@ -32,14 +32,7 @@ LOGGER = logging.getLogger(__name__)
 
 POLICY_CACHE_TTL_SECONDS = 600
 POLICY_CACHE_MAX_ENTRIES = 10_000
-_POLICY_FILENAME = "GLOBAL_POLICY.md"
-_POLICY_URI = f"viking://user/{{owner_user_id}}/{_POLICY_FILENAME}"
-
-
-def is_user_global_policy_uri(uri: str) -> bool:
-    """Identify the policy file that the GLOBAL access evaluator reads directly."""
-    parts = uri_parts(uri)
-    return len(parts) == 3 and parts[0] == "user" and parts[2] == _POLICY_FILENAME
+_POLICY_URI = "viking://user/{owner_user_id}/GLOBAL_POLICY.md"
 
 
 async def ensure_global_policy_file(
@@ -213,5 +206,4 @@ __all__ = [
     "POLICY_CACHE_TTL_SECONDS",
     "UserGlobalPolicyService",
     "ensure_global_policy_file",
-    "is_user_global_policy_uri",
 ]

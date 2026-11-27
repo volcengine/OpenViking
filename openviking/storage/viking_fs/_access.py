@@ -479,7 +479,7 @@ class _AccessMixin:
                 self._ensure_supported_delete_namespace(uri)
                 canonical_parts = self._safe_uri_parts(uri)
                 if real_ctx.role != Role.ROOT and (
-                    canonical_parts in (["resources"], ["agent"])
+                    canonical_parts == ["resources"]
                     or (canonical_parts[:1] == ["user"] and len(canonical_parts) == 2)
                 ):
                     raise PermissionDeniedError(
@@ -678,6 +678,12 @@ class _AccessMixin:
             raise PermissionDeniedError(
                 "Deleting viking://user is not supported; use viking://~/... or an "
                 "explicit viking://user/{user_id}/... path instead.",
+                resource=normalized_uri,
+            )
+        if parts == ["agent"]:
+            raise PermissionDeniedError(
+                "Deleting viking://agent root is not supported; use a concrete "
+                "agent sub-path (e.g. viking://agent/skills/...) instead.",
                 resource=normalized_uri,
             )
 

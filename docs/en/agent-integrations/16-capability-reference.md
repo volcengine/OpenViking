@@ -165,7 +165,7 @@ The updated Hermes external plugin has seven tools: `viking_search`, `viking_rul
 The server applies the same checks to every delete, whichever tool or command sends it:
 
 - The caller needs manage permission on the URI, and a user whose own deletion is in progress is refused.
-- `viking://` and `viking://user` cannot be deleted. Deleting `viking://resources`, `viking://agent`, or a whole user root such as `viking://user/<id>` requires the ROOT role. Non-root callers cannot write to the `viking://temp` root.
+- `viking://`, `viking://user`, and `viking://agent` cannot be deleted. Deleting `viking://resources` or a whole user root such as `viking://user/<id>` requires the ROOT role. Non-root callers cannot write to the `viking://temp` root.
 - URIs hidden by the caller's actor-peer view are refused.
 
 These checks protect namespaces, not content types. Restrictions by type come from the client:
