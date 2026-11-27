@@ -266,7 +266,6 @@ function checkConfig(report, cfg, host) {
     `auto-capture ${cfg.autoCapture ? "on" : "OFF"}`,
     `write path ${cfg.writePathAsync ? "async" : "sync"}`,
   ];
-  if (CLIENT === "cursor") toggles.push(`commit threshold ${cfg.commitTurnThreshold}`);
   reportToggles(report, cfg, host, toggles);
 
   sweepEnv(report, cfg, host);

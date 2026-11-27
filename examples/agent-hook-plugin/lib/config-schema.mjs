@@ -106,11 +106,11 @@ export const KNOBS = [
     capability: "recall",
   },
 
-  // Digest compression. Claude Code reads this as the tri-state
-  // off/client/server/auto through `normalizeRewriteMode`; Codex reads the same
-  // key as on/off. Both spellings stay declared so neither harness's users are
-  // told their config is a typo.
-  { name: "recallCompress", type: "string", default: "off", harness: { claude_code: "auto", codex: "auto" }, env: "OPENVIKING_RECALL_COMPRESS", aliases: ["recallRewrite"], capability: "recall" },
+  // Digest compression, off unless asked for. Claude Code reads this as the
+  // tri-state off/client/server/auto through `normalizeRewriteMode`; Codex reads
+  // the same key as on/off. Both spellings stay declared so neither harness's
+  // users are told their config is a typo.
+  { name: "recallCompress", type: "string", default: "off", env: "OPENVIKING_RECALL_COMPRESS", aliases: ["recallRewrite"], capability: "recall" },
   { name: "recallCompressModel", type: "string", default: "", env: "OPENVIKING_RECALL_COMPRESS_MODEL", capability: "recall" },
   { name: "recallCompressBaseUrl", type: "string", default: "", env: "OPENVIKING_RECALL_COMPRESS_BASE_URL", capability: "recall" },
   { name: "recallCompressThinking", type: "string", default: "", env: "OPENVIKING_RECALL_COMPRESS_THINKING", aliases: ["recallCompressReasoningEffort"], capability: "recall" },
@@ -154,9 +154,7 @@ export const KNOBS = [
   { name: "captureFilters", type: "list", default: [], env: "OPENVIKING_CAPTURE_FILTERS", capability: "capture" },
   // 0 means "derive from timeoutMs": a write gets a longer budget than a read.
   { name: "captureTimeoutMs", type: "int", default: 0, min: 0, max: 600000, env: "OPENVIKING_CAPTURE_TIMEOUT_MS", capability: "capture" },
-  { name: "commitTokenThreshold", type: "int", default: 20000, min: 1000, max: 1000000, env: "OPENVIKING_COMMIT_TOKEN_THRESHOLD", workspace: "capture.commit_token_threshold", capability: "capture" },
-  { name: "commitKeepRecentCount", type: "int", default: 10, min: 0, max: 1000, env: "OPENVIKING_COMMIT_KEEP_RECENT_COUNT", capability: "capture" },
-  { name: "commitTurnThreshold", type: "int", default: 8, min: 1, max: 1000, env: "OPENVIKING_COMMIT_TURN_THRESHOLD", capability: "capture" },
+  { name: "commitTokenThreshold", type: "int", default: 100000, min: 1000, max: 1000000, env: "OPENVIKING_COMMIT_TOKEN_THRESHOLD", workspace: "capture.commit_token_threshold", capability: "capture" },
   { name: "autoCommitOnCompact", type: "bool", default: true, env: "OPENVIKING_AUTO_COMMIT_ON_COMPACT", capability: "capture" },
   // The idle commit asked of the server in the session's auto-commit policy,
   // next to commitTokenThreshold: 0 for none, else 300 or more.
