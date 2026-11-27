@@ -177,7 +177,7 @@ describe('commandCandidate on a card', () => {
 describe('matchPrefix', () => {
   it('lets an exact match win over longer candidates and reports ambiguity', () => {
     assert.deepEqual(matchPrefix('low', ['low', 'lower']), ['low']);
-    assert.deepEqual(matchPrefix('m', EFFORT_LEVELS), ['minimal', 'medium']);
+    assert.deepEqual(matchPrefix('m', EFFORT_LEVELS), ['minimal', 'medium', 'max']);
     assert.deepEqual(matchPrefix('', EFFORT_LEVELS), []);
   });
 });
