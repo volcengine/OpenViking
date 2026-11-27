@@ -158,6 +158,9 @@ export const KNOBS = [
   { name: "commitKeepRecentCount", type: "int", default: 10, min: 0, max: 1000, env: "OPENVIKING_COMMIT_KEEP_RECENT_COUNT", capability: "capture" },
   { name: "commitTurnThreshold", type: "int", default: 8, min: 1, max: 1000, env: "OPENVIKING_COMMIT_TURN_THRESHOLD", capability: "capture" },
   { name: "autoCommitOnCompact", type: "bool", default: true, env: "OPENVIKING_AUTO_COMMIT_ON_COMPACT", capability: "capture" },
+  // The idle commit asked of the server in the session's auto-commit policy,
+  // next to commitTokenThreshold: 0 for none, else 300 or more.
+  { name: "commitIdleSeconds", type: "int", default: 1800, min: 0, max: 604800, env: "OPENVIKING_COMMIT_IDLE_SECONDS", capability: "capture" },
   { name: "writePathAsync", type: "bool", default: true, env: "OPENVIKING_WRITE_PATH_ASYNC", capability: "capture" },
 
   // ── session lifecycle ─────────────────────────────────────────────────

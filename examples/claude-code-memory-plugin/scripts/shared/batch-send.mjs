@@ -14,15 +14,17 @@ function makeResult() {
     queued: 0,
     enqueueFailed: 0,
     failed: 0,
+    status: 0,
     retryable: false,
     usedBatch: true,
     lastError: null,
   };
 }
 
-async function enqueueRemainder(sessionId, payloads, startIndex, result, retryable, lastError) {
+async function enqueueRemainder(sessionId, payloads, startIndex, result, retryable, res) {
   result.retryable = retryable;
-  result.lastError = lastError ?? null;
+  result.status = Number(res?.status || 0);
+  result.lastError = res?.error ?? res ?? null;
 
   if (!retryable) {
     result.failed += Math.max(0, payloads.length - startIndex);
@@ -62,9 +64,10 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
 
     const retryable = isRetryableSendFailure(res);
     if (opts.enqueueOnRetryable) {
-      return enqueueRemainder(sessionId, payloads, i, result, retryable, res?.error ?? res);
+      return enqueueRemainder(sessionId, payloads, i, result, retryable, res);
     }
     result.retryable = retryable;
+    result.status = Number(res?.status || 0);
     result.lastError = res?.error ?? res ?? null;
     result.failed += payloads.length - i;
     return result;
@@ -81,7 +84,8 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
  * @param {object} opts
  * @param {boolean} opts.enqueueOnRetryable - enqueue unsent payloads after a retryable failure
  * @param {Function} opts.onSent - called with the number of messages durably sent after each success
- * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,retryable:boolean,usedBatch:boolean,lastError:any}>}
+ * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,status:number,retryable:boolean,usedBatch:boolean,lastError:any}>}
+ *   `status` is the HTTP status of the response that stopped the send, 0 when none did
  */
 export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts = {}) {
   const result = makeResult();
@@ -109,9 +113,10 @@ export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts =
 
     const retryable = isRetryableSendFailure(res);
     if (opts.enqueueOnRetryable) {
-      return enqueueRemainder(sessionId, messages, start, result, retryable, res?.error ?? res);
+      return enqueueRemainder(sessionId, messages, start, result, retryable, res);
     }
     result.retryable = retryable;
+    result.status = Number(res?.status || 0);
     result.lastError = res?.error ?? res ?? null;
     result.failed += messages.length - start;
     return result;

@@ -510,6 +510,32 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
   return { parts, text: decision.shouldCapture ? decision.text : "", signalText: signalText || "", dropped: false };
 }
 
+/**
+ * One host message as the session message to send, or null when nothing in it
+ * is to be captured. `role` is the host's own role for the message. Text parts
+ * lose injected context and go through `captureFilters`; tool calls and results
+ * stay structured parts, in the order the host had them, and never decide keep
+ * or drop. With `captureAssistantTurns` off only what the user wrote is sent:
+ * no assistant message, no tool call and no tool result.
+ */
+export function buildCaptureMessage(payload, role, cfg = {}, { toolNameById = {} } = {}) {
+  const wireRole = normalizeCaptureRole(role);
+  if (!wireRole) return null;
+  const userOnly = cfg.captureAssistantTurns === false;
+  if (userOnly && isAssistantSideCaptureRole(role)) return null;
+
+  const options = { toolMaxChars: cfg.captureToolMaxChars, toolNameById };
+  let parts = extractPartsFromPayload(payload, options);
+  if (parts.length === 0) {
+    // Some hosts supply an array of plain strings: text, but no structured parts.
+    const text = extractTextFromPayload(payload, options);
+    if (text) parts = [{ type: "text", text }];
+  }
+  if (userOnly) parts = parts.filter((part) => part?.type === "text");
+  const shaped = shapeCaptureParts(parts, wireRole, cfg).parts;
+  return shaped.length ? { role: wireRole, parts: shaped } : null;
+}
+
 export function extractCaptureTurns(rolloutEntries, cfg = {}) {
   const toolNameById = collectToolNamesByIdFromEntries(rolloutEntries);
   const turns = [];

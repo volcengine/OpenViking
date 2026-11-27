@@ -9,6 +9,7 @@ export function sendSessionMessages(
   queued: number;
   enqueueFailed: number;
   failed: number;
+  status: number;
   retryable: boolean;
   usedBatch: boolean;
   lastError: any;

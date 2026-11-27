@@ -68,9 +68,10 @@ function getTTLDays() {
   return Number.isFinite(v) && v >= 0 ? v : DEFAULT_TTL_DAYS;
 }
 
-function getReplayLimit() {
+function getReplayLimit(hostLimit) {
   const v = parseInt(process.env.OPENVIKING_PENDING_REPLAY_LIMIT || "", 10);
-  return Number.isFinite(v) && v > 0 ? v : DEFAULT_REPLAY_LIMIT;
+  if (Number.isFinite(v) && v > 0) return v;
+  return hostLimit > 0 ? hostLimit : DEFAULT_REPLAY_LIMIT;
 }
 
 function stableStringify(value) {
@@ -388,7 +389,7 @@ export async function replayPending(fetchJSON, log, options = {}) {
     return { replayed: 0, failed: 0, skipped: 0, deferred: 0 };
   }
 
-  const replayLimit = getReplayLimit();
+  const replayLimit = getReplayLimit(options.limit);
   log("pending-queue", { count: pending.length, replayLimit, action: "replay-start" });
 
   let replayed = 0;
@@ -534,4 +535,37 @@ export async function deferCommitBehindPendingWrites(fetchJSON, sessionId, paylo
   }
   if (!(await hasPendingWrites(sessionId))) return null;
   return enqueueCommitAfterWrites(sessionId, payload);
+}
+
+/**
+ * Commit a session. The commit waits behind the session's queued writes when it
+ * has any, and is queued for replay itself when the server cannot take it now;
+ * `queue: false` sends it once and leaves any retry to the caller.
+ *
+ * Returns the server's answer, with `pendingQueued` set when the commit was
+ * parked; a commit parked behind queued writes without being sent comes back as
+ * `{ ok: false, deferred: true }`.
+ */
+export async function commitSession(fetchJSON, sessionId, body = {}, { queue = true, log = () => {} } = {}) {
+  if (queue) {
+    const deferred = await deferCommitBehindPendingWrites(fetchJSON, sessionId, body, log);
+    if (deferred) {
+      return { ok: false, deferred: true, pendingQueued: deferred.ok, pendingEnqueueFailed: !deferred.ok };
+    }
+  }
+  const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (queue && !result.ok && isRetryableFailure(result)) {
+    let parked = { ok: false };
+    try {
+      parked = await enqueue("commitSession", sessionId, body);
+    } catch {
+      // Reported through pendingEnqueueFailed.
+    }
+    if (parked.ok) result.pendingQueued = true;
+    else result.pendingEnqueueFailed = true;
+  }
+  return result;
 }
