@@ -1187,15 +1187,20 @@ class SemanticProcessor(DequeueHandlerBase):
             content, output_language_override=output_language_override
         )
         if live_context is not None:
+            tool_uri = live_context["tool_uri"]
+            user_tools_prefix = f"viking://user/{active_ctx.user.user_id}/tools/"
+            if tool_uri.startswith(user_tools_prefix):
+                tool_uri = "viking://~/tools/" + tool_uri[len(user_tools_prefix) :]
             prompt_variables = {
                 "file_name": file_name,
                 "title": live_context["title"],
                 "description": live_context["description"],
-                "tool_uri": live_context["tool_uri"],
+                "tool_uri": tool_uri,
                 "arguments": json.dumps(
                     live_context["arguments"],
                     ensure_ascii=False,
                     sort_keys=True,
+                    separators=(",", ":"),
                 ),
                 "output_language": output_language,
             }

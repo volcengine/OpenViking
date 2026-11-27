@@ -572,11 +572,19 @@ async def invoke_mcp_tool(
     timeout_seconds: Optional[float] = None,
 ) -> CallToolResult | str:
     """
-    Execute a tool selected from find_mcp_tools.
-    Pass its returned uri as tool_uri and fill arguments according to the returned tool.inputSchema.
+    Execute an MCP tool using its exact definition URI as tool_uri.
     OpenViking resolves the server and credentials internally.
     timeout_seconds overrides the per-call timeout, which defaults to 60 seconds.
     The upstream tool may have external side effects and calls are not retried.
+
+    Instruction:
+    Obtain the tool definition from find_mcp_tools or read its definition URI.
+    Fill arguments according to tool.inputSchema and check the tool's annotations before execution.
+    A complete read of a Live Context node already executes its bound tool with mounted arguments.
+    After a successful complete read, use the returned result; do not invoke the tool again with the same arguments.
+    Invoke directly only when the request requires different valid arguments, using values from the request, context, or prior results.
+    Mounted arguments describe the node's default call; adjusting this call must not modify the node's stored configuration.
+    Never infer or override preset_arguments in the tool definition; inputSchema describes the arguments you may supply.
     """
     service = get_service()
     ctx = _get_ctx()

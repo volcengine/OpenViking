@@ -45,22 +45,19 @@ template: |
   [Node]
   File: {{ file_name }}
   Title: {{ title }}
-  Description: {{ description }}
   MCP Tool URI: {{ tool_uri }}
   Mounted arguments: {{ arguments }}
+  Description: {{ description }}
 
   Output requirements:
-  - Write 80-180 words in {{ output_language }} as plain text.
-  - State the title and description so the node's purpose is immediately clear.
-  - Preserve the exact MCP Tool URI `{{ tool_uri }}` without translating, shortening, or rewriting it.
-  - Preserve every mounted argument name and value from `{{ arguments }}`.
-  - Explain that the mounted arguments describe this node's default live-context call.
-  - Explicitly state that a complete read of this Live Context node executes the bound MCP Tool with the mounted arguments and returns the latest result, rather than cached content.
-  - Explicitly state that after a successful complete read, an agent must use that returned result and must not invoke the MCP Tool again with the same arguments.
-  - Guide an agent to read the Tool definition at `{{ tool_uri }}` and its inputSchema, then invoke the Tool directly only when the request requires different valid arguments.
-  - Do not claim that the mounted arguments are the only allowed arguments.
-  - Do not invent Tool capabilities, parameters, results, or constraints absent from the supplied node.
-  - Do not use Markdown headings or tables.
+  - Output a single plain-text sentence in this exact order: title, tool_uri, args, desc. Introduce the title with "Live context node" rather than a title label. Use commas to connect the fields, not vertical bars. Do not repeat the file name.
+  - Use this format: Live context node <title>,tool_uri:<tool_uri>,args:<compact JSON>,desc:<short description>. Translate "Live context node" into {{ output_language }} while keeping the field labels tool_uri, args, and desc unchanged.
+  - Preserve the title and exact Tool URI as supplied. Render arguments as compact JSON, preserving every argument name and value, including an empty object.
+  - Summarize only the description in {{ output_language }} and place it last, so directory-listing truncation preserves the preceding fields first.
+  - If the supplied description is empty, whitespace-only, or a placeholder such as "No description provided", omit the entire desc field and its preceding comma. Do not generate fallback text or infer a description from other fields.
+  - Aim for at most 256 characters total, including spaces and punctuation; characters, not words. Shorten or omit the description first. If the first three fields alone exceed the budget, preserve them in full rather than truncating or rewriting them.
+  - Omit tool invocation instructions, parameter rules, and repeated-call guidance.
+  - Do not invent capabilities, results, or constraints. Do not use Markdown headings or tables.
 
 llm_config:
   temperature: 0.0
