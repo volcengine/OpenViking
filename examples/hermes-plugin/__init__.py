@@ -36,7 +36,6 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import url2pathname
 
-from agent.message_content import flatten_message_text
 from agent.memory_provider import MemoryProvider, spawn_context_thread
 from agent.secret_scope import get_secret
 from agent.skill_commands import extract_user_instruction_from_skill_message
@@ -58,6 +57,14 @@ try:
     from hermes_constants import get_routing_process_hermes_home as _get_launch_hermes_home
 except ImportError:  # Hermes releases before process-home pinning
     _get_launch_hermes_home = get_process_hermes_home
+
+# Hermes moved this helper from agent/message_content.py to session_rules/turns.py
+# (the old module was removed); support both locations. The signature is
+# identical, so callers cannot tell which one they got.
+try:
+    from agent.message_content import flatten_message_text
+except ImportError:  # Hermes releases that dropped agent/message_content.py
+    from session_rules.turns import flatten_message_text
 
 _DEFAULT_ENDPOINT = "http://127.0.0.1:1933"
 _OPENVIKING_SERVICE_ENDPOINT = "https://api.vikingdb.cn-beijing.volces.com/openviking"
