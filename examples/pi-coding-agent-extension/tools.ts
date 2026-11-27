@@ -27,4 +27,3 @@ export function registerMcpTools(pi: any, bridge: McpBridge): string[] {
     return name;
   });
 }
-
