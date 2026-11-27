@@ -213,7 +213,11 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 
 运行时不会创建或迁移 PostgreSQL 表。运行账号只需 `snapshot_log` 的
 `SELECT`、`INSERT` 权限，以及 identity sequence 的 `USAGE` 权限。
-不同 OV 部署应使用独立数据库或 schema；同一索引内按账号、分支隔离。
+部署前须按新版 DDL 建表或重建表；`IF NOT EXISTS` 不会更新已有表结构。
+记录、索引和追加锁都按顶层 `service_name` 隔离，多个部署可以共用数据库或 schema。
+同一部署的副本使用相同名称，不同部署使用不同名称。
+`service_name` 允许 1–64 个 ASCII 字母、数字、`.`、`_` 或 `-`；`account` 上限为 64 字节。
+每个部署使用独立数据库或 schema 也仍然可行。
 自定义 schema 可通过连接 URL 的 `options` 参数指定
 `-c search_path=your_schema`，参数值需要 URL 编码。
 
@@ -225,7 +229,7 @@ PostgreSQL 索引操作有执行期限，连接同时设置 `statement_timeout` 
 无需安装 PostgreSQL 扩展或 Python 数据库 extra，驱动由 Rust binding 提供；
 独立 Rust 接入需启用 `ragfs/postgres` feature。
 
-同一账号、分支的索引追加使用事务 advisory lock 串行化，包括空索引的首次写入。
+同一服务、账号、分支的索引追加使用事务 advisory lock 串行化，包括空索引的首次写入。
 仅当最新索引提交等于预期父提交时，整批路径记录才会原子提交。
 路径索引使用 `md5(path)` 避免超过 PostgreSQL B-tree 键宽限制，
 查询同时校验原始路径；同一提交发生摘要冲突时会拒绝整批追加，不会静默丢失路径。

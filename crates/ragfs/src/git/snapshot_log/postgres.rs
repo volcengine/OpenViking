@@ -7,8 +7,8 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Postgres, QueryBuilder};
 
 use super::store::{
-    ensure_latest_matches, validate_append, SnapshotLogError, SnapshotLogHit, SnapshotLogLimits,
-    SnapshotLogRow, SnapshotLogStore,
+    ensure_latest_matches, validate_append, validate_service_name, SnapshotLogError, SnapshotLogHit,
+    SnapshotLogLimits, SnapshotLogRow, SnapshotLogStore,
 };
 
 const POSTGRES_INSERT_BATCH_ROWS: usize = 1_000;
@@ -33,16 +33,20 @@ pub struct PostgresSnapshotLogStore {
     pool: PgPool,
     limits: SnapshotLogLimits,
     operation_timeout: Duration,
+    service_name: String,
 }
 
 impl PostgresSnapshotLogStore {
-    /// Connect to a pre-provisioned database without creating or migrating tables.
+    /// Connect using a service name, DSN, pool size and acquisition timeout.
+    /// Return the service-scoped store or an error; never provision tables.
     pub async fn connect(
+        service_name: &str,
         dsn: &str,
         max_connections: u32,
         connect_timeout_ms: u64,
     ) -> Result<Self, SnapshotLogError> {
         Self::connect_with_timeout(
+            service_name,
             dsn,
             max_connections,
             connect_timeout_ms,
@@ -51,14 +55,17 @@ impl PostgresSnapshotLogStore {
         .await
     }
 
-    /// Bound initialization and each complete index operation, including pool
-    /// acquisition, lock waits and all statements in an append transaction.
+    /// Connect using a service name, DSN, pool size and timeouts in milliseconds.
+    /// Return a store whose initialization and complete operations have deadlines,
+    /// or a configuration/database error.
     pub async fn connect_with_timeout(
+        service_name: &str,
         dsn: &str,
         max_connections: u32,
         connect_timeout_ms: u64,
         operation_timeout_ms: u64,
     ) -> Result<Self, SnapshotLogError> {
+        validate_service_name(service_name)?;
         if dsn.trim().is_empty()
             || max_connections == 0
             || connect_timeout_ms == 0
@@ -89,13 +96,16 @@ impl PostgresSnapshotLogStore {
                 .await?;
             // Fail initialization if deployment DDL/permissions are missing, allowing
             // the binding's existing best-effort fallback to the Git scan path.
-            sqlx::query("SELECT id, account, branch, path, commit_oid FROM snapshot_log LIMIT 0")
-                .execute(&pool)
-                .await?;
+            sqlx::query(
+                "SELECT id, service_name, account, branch, path, commit_oid FROM snapshot_log LIMIT 0",
+            )
+            .execute(&pool)
+            .await?;
             Ok(Self {
                 pool,
                 limits: SnapshotLogLimits::default(),
                 operation_timeout,
+                service_name: service_name.to_string(),
             })
         })
         .await
@@ -116,8 +126,9 @@ impl SnapshotLogStore for PostgresSnapshotLogStore {
         with_timeout(self.operation_timeout, async {
             Ok(sqlx::query_as::<_, (i64, String)>(
                 "SELECT id, commit_oid FROM snapshot_log \
-             WHERE account = $1 AND branch = $2 ORDER BY id DESC LIMIT 1",
+             WHERE service_name = $1 AND account = $2 AND branch = $3 ORDER BY id DESC LIMIT 1",
             )
+            .bind(&self.service_name)
             .bind(account)
             .bind(branch)
             .fetch_optional(&self.pool)
@@ -142,18 +153,22 @@ impl SnapshotLogStore for PostgresSnapshotLogStore {
                 .execute(&mut *tx)
                 .await?;
             // Row locking cannot serialize two first appends to an empty branch.
-            // Length-prefixing avoids ambiguous (account, branch) concatenations.
+            // Length-prefixing isolates service/account/branch lock namespaces.
             // Hash collisions only serialize unrelated branches; equality is still
-            // checked against the original account/branch columns.
-            let lock_key = format!("{}:{}{}", account.len(), account, branch);
+            // checked against the original service/account/branch columns.
+            let lock_key = format!(
+                "{}:{}|{}:{}{}",
+                self.service_name.len(), self.service_name, account.len(), account, branch
+            );
             sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind(lock_key)
                 .execute(&mut *tx)
                 .await?;
             let latest = sqlx::query_as::<_, (i64, String)>(
                 "SELECT id, commit_oid FROM snapshot_log \
-             WHERE account = $1 AND branch = $2 ORDER BY id DESC LIMIT 1",
+             WHERE service_name = $1 AND account = $2 AND branch = $3 ORDER BY id DESC LIMIT 1",
             )
+            .bind(&self.service_name)
             .bind(account)
             .bind(branch)
             .fetch_optional(&mut *tx)
@@ -164,10 +179,11 @@ impl SnapshotLogStore for PostgresSnapshotLogStore {
             )?;
             for chunk in rows.chunks(POSTGRES_INSERT_BATCH_ROWS) {
                 let mut builder = QueryBuilder::<Postgres>::new(
-                    "INSERT INTO snapshot_log (account, branch, path, commit_oid) ",
+                    "INSERT INTO snapshot_log (service_name, account, branch, path, commit_oid) ",
                 );
                 builder.push_values(chunk, |mut values, row| {
                     values
+                        .push_bind(&self.service_name)
                         .push_bind(account)
                         .push_bind(branch)
                         .push_bind(&row.path)
@@ -197,11 +213,12 @@ impl SnapshotLogStore for PostgresSnapshotLogStore {
         with_timeout(self.operation_timeout, async {
             let rows = sqlx::query_as::<_, (String, i64)>(
                 "SELECT commit_oid, MAX(id) AS last_id FROM snapshot_log \
-             WHERE account = $1 AND branch = $2 \
-               AND md5(path) IN (SELECT md5(p) FROM unnest($3::text[]) AS p) \
-               AND path = ANY($3::text[]) AND id <= $4 \
-             GROUP BY commit_oid ORDER BY last_id DESC LIMIT $5 OFFSET $6",
+             WHERE service_name = $1 AND account = $2 AND branch = $3 \
+               AND md5(path) IN (SELECT md5(p) FROM unnest($4::text[]) AS p) \
+               AND path = ANY($4::text[]) AND id <= $5 \
+             GROUP BY commit_oid ORDER BY last_id DESC LIMIT $6 OFFSET $7",
             )
+            .bind(&self.service_name)
             .bind(account)
             .bind(branch)
             .bind(paths)
@@ -234,7 +251,7 @@ mod tests {
             ("postgresql://localhost/test", 1, 0),
             ("postgresql://user:secret@host:not-a-port/test", 1, 1000),
         ] {
-            match PostgresSnapshotLogStore::connect(dsn, max, timeout).await {
+            match PostgresSnapshotLogStore::connect("test-service", dsn, max, timeout).await {
                 Err(SnapshotLogError::Config(message)) => assert!(!message.contains("secret")),
                 _ => panic!("invalid configuration must fail before database access"),
             }
@@ -242,6 +259,7 @@ mod tests {
         for timeout in [0, i32::MAX as u64 + 1] {
             assert!(matches!(
                 PostgresSnapshotLogStore::connect_with_timeout(
+                    "test-service",
                     "postgresql://localhost/test",
                     1,
                     1000,

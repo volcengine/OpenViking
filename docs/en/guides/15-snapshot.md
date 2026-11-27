@@ -218,8 +218,14 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 
 Runtime startup does not create or migrate PostgreSQL tables. The runtime role
 needs `SELECT` and `INSERT` on `snapshot_log`, and `USAGE` on its identity sequence.
-Use a dedicated database or schema per OV deployment; accounts and branches
-are isolated within that index. When using a custom schema, set the URL's
+Create or rebuild the table with the current DDL before deploying;
+`IF NOT EXISTS` does not update an existing schema.
+Rows, indexes and append locks are scoped by the top-level `service_name`,
+so deployments can share one database or schema. Use the same name for replicas
+of one deployment and distinct names for separate deployments.
+`service_name` accepts 1–64 ASCII letters, digits, `.`, `_` or `-`; `account` is
+limited to 64 bytes. A dedicated database or schema per deployment also works.
+When using a custom schema, set the URL's
 `options` parameter to a URL-encoded `-c search_path=your_schema`.
 No PostgreSQL extension or Python database extra is required: the driver is
 part of the Rust binding (`ragfs/postgres` for standalone Rust consumers).
@@ -232,7 +238,7 @@ Git when the index is unavailable. A write transaction that times out before
 commit is rolled back.
 Increase `operation_timeout_ms` if normal index operations exceed the default.
 
-Each account/branch append is serialized with a transaction advisory lock,
+Each service/account/branch append is serialized with a transaction advisory lock,
 including the first append to an empty index. All rows are committed atomically
 only when the latest indexed commit matches the expected parent.
 Path indexes use `md5(path)` to stay within PostgreSQL B-tree width limits;
