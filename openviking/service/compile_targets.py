@@ -231,7 +231,9 @@ class CompileStore(Protocol):
 
     async def create_config(
         self, account_id: str, owner_user_id: str, compile_name: str, record: dict
-    ) -> None: ...
+    ) -> None:
+        """Create a configuration without replacing an existing one."""
+
     async def update_config(
         self,
         account_id: str,
@@ -239,7 +241,9 @@ class CompileStore(Protocol):
         compile_name: str,
         changes: dict,
         expected: Optional[Mapping[str, Any]] = None,
-    ) -> bool: ...
+    ) -> bool:
+        """Apply changes if expected fields match and report whether they were applied."""
+
     def list_configs(
         self,
         account_id: Optional[str] = None,
@@ -248,7 +252,8 @@ class CompileStore(Protocol):
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
         fresh: bool = False,
-    ) -> AsyncIterator[tuple[str, str, dict]]: ...
+    ) -> AsyncIterator[tuple[str, str, dict]]:
+        """Iterate configurations matching the filters and cursor."""
 
 
 class CompileStateStore:
