@@ -346,6 +346,13 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /OV_SUPERAGENT_CODEX_EFFORT/);
   });
 
+  it('accepts the codex effort levels its model catalogue offers', () => {
+    for (const level of ['max', 'ultra']) {
+      setEnv('OV_SUPERAGENT_CODEX_EFFORT', level);
+      assert.equal(getConfig().codexEffort, level);
+    }
+  });
+
   it('does not read the removed Codex model environment variable', () => {
     setEnv('OV_SUPERAGENT_MODEL', undefined);
     setEnv('OV_SUPERAGENT_CODEX_MODEL', 'gpt-5.6-sol');

@@ -150,7 +150,9 @@ describe('/workers', () => {
     assert.equal(settings.own('pi').model, 'volcengine-ark/ep-2');
     assert.match((await run(settings, 'model default')).text, /^worker 在 codex 上的模型已恢复默认：gpt-5\.6-sol（跟随 router）/);
     assert.match((await run(settings, 'effort x')).text, /^worker 在 codex 上的推理档位已设为 xhigh。/);
-    assert.match((await run(settings, 'effort turbo')).text, /^不支持的档位：turbo\n可选：none、minimal、low、medium、high、xhigh$/);
+    assert.match((await run(settings, 'effort max')).text, /^worker 在 codex 上的推理档位已设为 max。/);
+    assert.match((await run(settings, 'effort ultra')).text, /^worker 在 codex 上的推理档位已设为 ultra。/);
+    assert.match((await run(settings, 'effort turbo')).text, /^不支持的档位：turbo\n可选：none、minimal、low、medium、high、xhigh、max、ultra$/);
     assert.match((await run(settings, 'bogus')).text, /^用法：/);
   });
 

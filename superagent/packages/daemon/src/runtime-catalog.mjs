@@ -131,7 +131,11 @@ export const RUNTIME_CATALOG = Object.freeze({
     id: 'codex',
     ovIsolation: 'launch-args',
     aliases: ['codex'],
-    efforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+    // The union Codex accepts across its model catalogue: current gpt-6 models
+    // add `max` and `ultra`, while older models still take `none` and `minimal`.
+    // Which of them one model offers is answered by that model's own catalogue;
+    // the router's `/effort` already validates against it.
+    efforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     capabilities: {
       modelCatalog: 'dynamic',
       effortControl: 'selectable',

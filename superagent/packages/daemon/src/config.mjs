@@ -336,7 +336,7 @@ export function getConfig() {
     primaryRuntime,
     fallbackRuntime,
     fallbackReturnAfterMs: intEnv('OV_SUPERAGENT_FALLBACK_RETURN_AFTER_MS', 600_000, { min: 0, max: 86_400_000 }),
-    codexEffort: enumEnv('OV_SUPERAGENT_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']),
+    codexEffort: enumEnv('OV_SUPERAGENT_CODEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']),
     traexEffort: enumEnv('OV_SUPERAGENT_TRAEX_EFFORT', 'medium', ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
     claudeModel: process.env.OV_SUPERAGENT_CLAUDE_MODEL || '',
     claudeEffort: enumEnv('OV_SUPERAGENT_CLAUDE_EFFORT', 'medium', ['low', 'medium', 'high', 'xhigh', 'max']),

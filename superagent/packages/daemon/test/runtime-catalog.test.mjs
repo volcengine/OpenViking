@@ -42,6 +42,9 @@ describe('runtime catalog', () => {
     });
     assert.deepEqual(getRuntimeDefinition('claude').models, ['sonnet', 'opus', 'haiku', 'fable']);
     assert.deepEqual(getRuntimeDefinition('claude').efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+    assert.deepEqual(getRuntimeDefinition('codex').efforts, [
+      'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra',
+    ]);
     assert.equal(getRuntimeDefinition('codex').capabilities.sessionAuthority, 'preserve-process');
     assert.deepEqual(getRuntimeDefinition('traex').directAliases, ['traex', 'trae', 'traecli', 'trae-cli']);
     assert.deepEqual(getRuntimeDefinition('traex').efforts, [
