@@ -147,6 +147,8 @@ async function pluginRequirements(root) {
     for (const dir of CONTENT_DIRS) {
       for (const file of await filesUnder(join(host, dir))) required.add(file);
     }
+    // The hook entry loads a host's module by client id, which no import names.
+    if (await isFile(join(host, "host.mjs"))) entrypoints.add(join(host, "host.mjs"));
   }
 
   for (const file of [...required]) {

@@ -1,0 +1,20 @@
+{
+  "what": "an input the transcript has not recorded yet is a new turn",
+  "read": {
+    "event": "pre-invocation",
+    "payload": {
+      "conversationId": "conv-1",
+      "cwd": "/workspace",
+      "transcriptPath": "/x/transcript_full.jsonl",
+      "lastUserInput": "  And the\ntimeout?  ",
+      "invocationNum": 0,
+      "initialNumSteps": 5
+    },
+    "transcript": "first-turn.jsonl"
+  },
+  "expect": {
+    "sessionId": "conv-1",
+    "prompt": "And the\ntimeout?",
+    "eventId": "conv-1:5"
+  }
+}

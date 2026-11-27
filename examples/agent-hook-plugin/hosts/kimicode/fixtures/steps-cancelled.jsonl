@@ -1,0 +1,6 @@
+{"type":"turn.prompt","input":[{"type":"text","text":"question"}]}
+{"type":"context.append_loop_event","event":{"type":"content.part","turnId":"3","part":{"type":"think","think":"hidden"}}}
+{"type":"context.append_loop_event","event":{"type":"content.part","turnId":"3","part":{"type":"text","text":"Reading files."}}}
+{"type":"context.append_loop_event","event":{"type":"content.part","turnId":"3","part":{"type":"text","text":"Done."}}}
+{"type":"turn.prompt","input":[{"type":"text","text":"cancel me"}]}
+{"type":"turn.ended","turnId":"8","reason":"cancelled"}

@@ -1,0 +1,10 @@
+{
+  "what": "UserPromptSubmit context is raw text on stdout",
+  "emit": {
+    "event": "user-prompt-submit",
+    "output": {
+      "context": "<openviking-context source=\"recall\">\nx\n</openviking-context>"
+    }
+  },
+  "expect": "<openviking-context source=\"recall\">\nx\n</openviking-context>"
+}

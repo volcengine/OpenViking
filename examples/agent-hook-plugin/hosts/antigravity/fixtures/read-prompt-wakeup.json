@@ -1,0 +1,18 @@
+{
+  "what": "a wakeup after the model answered does not recall again",
+  "read": {
+    "event": "pre-invocation",
+    "payload": {
+      "conversationId": "conv-1",
+      "cwd": "/workspace",
+      "transcriptPath": "/x/transcript_full.jsonl",
+      "lastUserInput": "What is the retry budget?",
+      "invocationNum": 0,
+      "initialNumSteps": 5
+    },
+    "transcript": "first-turn.jsonl"
+  },
+  "expect": {
+    "skip": "wakeup"
+  }
+}

@@ -1,0 +1,6 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Friday, Nov 27, 2026, 5:00 PM (UTC+8)</timestamp>\n<user_query>\nfix the build\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"<user_query>quoted</user_query> done"}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>ok</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"[REDACTED]"}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>ok</user_query>"}]}}
+{"role":"assistant","content":"ok then"}

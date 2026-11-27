@@ -1,0 +1,8 @@
+{
+  "what": "an injection event with nothing to say prints nothing",
+  "emit": {
+    "event": "user-prompt-submit",
+    "output": {}
+  },
+  "expect": null
+}

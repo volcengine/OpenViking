@@ -1,0 +1,13 @@
+{
+  "what": "beforeReadFile of a viking:// path is denied, naming the MCP read",
+  "tool": {
+    "payload": {
+      "file_path": "viking://resources/project/file.md",
+      "content": ""
+    }
+  },
+  "expect": {
+    "permission": "deny",
+    "user_message": "viking:// URIs are OpenViking virtual paths, not local filesystem paths.\nUse OpenViking MCP read instead.\nExample: read(uri=\"viking://resources/project/file.md\")"
+  }
+}

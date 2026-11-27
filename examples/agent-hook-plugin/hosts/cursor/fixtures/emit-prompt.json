@@ -1,0 +1,13 @@
+{
+  "what": "beforeSubmitPrompt continues with the context",
+  "emit": {
+    "event": "beforeSubmitPrompt",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "continue": true,
+    "additional_context": "BLOCK"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "what": "the prompt is the payload string, trimmed; generation_id identifies the prompt event",
+  "read": {
+    "event": "user-prompt-submit",
+    "payload": {
+      "session_id": "s",
+      "prompt": "  trimmed  ",
+      "generation_id": "g1",
+      "transcript_path": "/x/t.jsonl",
+      "is_internal_continuation": false
+    }
+  },
+  "expect": {
+    "prompt": "trimmed",
+    "eventId": "g1",
+    "transcript": "/x/t.jsonl",
+    "resumed": ""
+  }
+}

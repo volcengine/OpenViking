@@ -1,0 +1,27 @@
+{
+  "what": "session_history through mcp_call is given this session",
+  "tool": {
+    "payload": {
+      "session_id": "s1",
+      "tool_name": "mcp_call",
+      "tool_input": {
+        "toolName": "mcp__openviking__session_history",
+        "arguments": {
+          "action": "overview"
+        }
+      }
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "updatedInput": {
+        "toolName": "mcp__openviking__session_history",
+        "arguments": {
+          "action": "overview",
+          "session": "qd-s1"
+        }
+      }
+    }
+  }
+}

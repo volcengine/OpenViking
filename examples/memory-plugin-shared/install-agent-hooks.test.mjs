@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -169,9 +169,7 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
     assert.ok(existsSync(join(root, "agent-integrations", "kimicode", "scripts", "hook.mjs")));
     assert.ok(existsSync(join(root, "agent-integrations", "kimicode", "lib", "agent-hook-runtime.mjs")));
     assert.equal(existsSync(join(root, "agent-integrations", "memory-plugin-shared")), false);
-    assert.equal(existsSync(join(root, "agent-integrations", "kimicode", "tests")), false);
-    assert.equal(existsSync(join(root, "agent-integrations", "kimicode", "hosts", "cursor.mjs")), false);
-    assert.equal(existsSync(join(root, "agent-integrations", "kimicode", "hosts", "zcode.mjs")), false);
+    assert.deepEqual(readdirSync(join(root, "agent-integrations", "kimicode", "hosts")).sort(), ["index.mjs", "kimicode"]);
     assert.equal(existsSync(join(home, ".kimi-code", "config.toml")), false);
     assert.equal(existsSync(join(home, ".kimi-code", "mcp.json")), false);
 
@@ -258,12 +256,8 @@ exit 0
     assert.ok(existsSync(join(root, "skills", "openviking-memory", "SKILL.md")));
     assert.ok(existsSync(join(root, "agent-integrations", "qoder", "lib", "agent-hook-runtime.mjs")));
     const hostsDir = join(root, "agent-integrations", "qoder", "hosts");
-    assert.ok(existsSync(join(hostsDir, "qoder.mjs")));
-    assert.ok(existsSync(join(hostsDir, "qoder-turns.mjs")));
-    for (const other of ["cursor.mjs", "codebuddy.mjs", "kimicode.mjs", "trae.mjs", "zcode.mjs", "qoder"]) {
-      assert.equal(existsSync(join(hostsDir, other)), false, other);
-    }
-    assert.equal(existsSync(join(root, "agent-integrations", "qoder", "tests")), false);
+    assert.deepEqual(readdirSync(hostsDir).sort(), ["index.mjs", "qoder"]);
+    assert.deepEqual(readdirSync(join(hostsDir, "qoder")).sort(), ["decode.mjs", "host.mjs"]);
     assert.equal(existsSync(staleCache), false, "a re-install drops the cached copy");
     assert.equal(existsSync(join(qoderHome, "settings.json")), false, "the installer never writes Qoder's settings");
 

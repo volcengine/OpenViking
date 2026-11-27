@@ -1,0 +1,35 @@
+{
+  "what": "a failed Cursor tool is a note carrying the error message",
+  "read": {
+    "event": "postToolUseFailure",
+    "payload": {
+      "conversation_id": "c1",
+      "transcript_path": "t.jsonl",
+      "tool_use_id": "shell-2",
+      "tool_name": "Shell",
+      "tool_input": {
+        "command": "false"
+      },
+      "error_message": "Command failed with exit code 1",
+      "failure_type": "error"
+    },
+    "transcript": "tools.jsonl"
+  },
+  "expect": {
+    "note": {
+      "afterTurn": 3,
+      "tool": {
+        "type": "tool_result",
+        "tool_use_id": "shell-2",
+        "name": "Shell",
+        "state": {
+          "input": {
+            "command": "false"
+          },
+          "output": "Command failed with exit code 1"
+        },
+        "is_error": true
+      }
+    }
+  }
+}

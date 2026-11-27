@@ -59,5 +59,5 @@ Each copy checks the client it was installed for; pass `cursor`, `trae`, `trae-c
 ## Tests
 
 ```bash
-node --test examples/agent-hook-plugin/tests/*.test.mjs
+node --test examples/memory-plugin-shared/flow.test.mjs examples/memory-plugin-shared/hosts.test.mjs examples/memory-plugin-shared/hook-entry.test.mjs
 ```

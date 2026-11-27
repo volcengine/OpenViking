@@ -266,8 +266,8 @@ test("release marketplace archive supports ZCode and pi TOS installs", () => {
     assert.ok(existsSync(join(integrationRoot, "plugin.json")));
     assert.equal(existsSync(join(integrationRoot, ".claude-plugin")), false);
     assert.ok(existsSync(join(integrationRoot, "scripts", "hook.mjs")));
-    assert.ok(existsSync(join(integrationRoot, "hosts", "zcode.mjs")));
-    assert.ok(existsSync(join(integrationRoot, "hosts", "zcode-capture.mjs")));
+    assert.ok(existsSync(join(integrationRoot, "hosts", "zcode", "host.mjs")));
+    assert.ok(existsSync(join(integrationRoot, "hosts", "zcode", "decode.mjs")));
     // An installation is for one client: the other hosts' configuration
     // directories are not copied with it.
     assert.equal(existsSync(join(integrationRoot, "hosts", "zcode", "hooks.json")), true);

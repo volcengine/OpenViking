@@ -2,11 +2,13 @@
 
 Established facts for the CodeBuddy Code CLI host, per
 `docs/en/agent-integrations/18-plugin-development.md` §2, plus the design of the
-`codebuddy` adapter that implements them (`hosts/codebuddy.mjs` and
-`hosts/codebuddy-turns.mjs` beside this file).
+`codebuddy` adapter that implements them (`host.mjs` and
+`decode.mjs` beside this file).
 
 **Verified against**: CodeBuddy Code CLI **v2.163.0** (`client: "CLI"` in every payload),
-macOS 26.x / darwin 25.5.0, 2026-10-09.
+macOS 26.x / darwin 25.5.0, 2026-10-09; tool records, `SessionEnd` and the adapter's capture
+re-verified on **v2.187.0**, darwin 27.2.0, 2026-11-27 (run 4). A custom model in `models.json`
+runs `-p` without a login; the TUI asks for one.
 
 **Method**: a throwaway probe plugin loaded with `codebuddy --plugin-dir /tmp/cb-ov-probe`
 (never installed, no user config written). It appended one JSON line per event to
@@ -17,6 +19,7 @@ macOS 26.x / darwin 25.5.0, 2026-10-09.
 | 1 | `codebuddy --plugin-dir <probe> -p '<prompt>'` | 1 (single-shot) |
 | 2 | `codebuddy -p --input-format stream-json --output-format stream-json` | 2 |
 | 3 | `codebuddy --plugin-dir <probe>` — **interactive TUI**, 3 prompts, one subagent, `/exit` | 3 |
+| 4 | v2.187.0, plugin installed by the installer into a scratch `HOME`, a custom model in `models.json` and a stdio MCP probe: `codebuddy -p -y '<prompt>'` (Bash, Read, a failing Bash, two MCP calls), then `-p -c`, then `-p --input-format stream-json` | 3 |
 
 Legend: **verified** = observed in a real session · *documented* = only in the host docs ·
 **pending** = not reproduced (see §9).
@@ -73,11 +76,11 @@ reported `mcp_servers: [{"name":"openviking","status":"connected"}]` and listed 
 | Event | Fired? | matcher semantics |
 | --- | --- | --- |
 | `SessionStart` | **verified** (all 3 runs) | `source`; observed `startup` |
-| `UserPromptSubmit` | **verified in the TUI only** (3×); **never fired in 2 headless runs / 4 turns** | *documented*: no matcher |
+| `UserPromptSubmit` | **verified in the TUI** (3×); never fired headless on v2.163.0, **fires headless** on v2.185.0+ (§12, run 4) | *documented*: no matcher |
 | `PreToolUse` | **verified** | tool-name regex; observed names `Bash`, `Write`, `Read`, `Edit`, `Grep`, `ToolSearch`, `Agent` |
 | `PostToolUse` | **verified** | same matcher space as PreToolUse |
 | `Stop` | **verified** | *documented*: no matcher |
-| `SessionEnd` | **verified** (run 3) | `reason`; observed `prompt_input_exit` |
+| `SessionEnd` | **verified** in the TUI (run 3); **not fired by headless `-p`** on v2.187.0, text or stream-json output (run 4) | `reason`; observed `prompt_input_exit` |
 | `SubagentStart` | **verified** (run 3) | not in the user-hook event table, **but fires for plugin hooks** |
 | `SubagentStop` | **verified** (run 3) | no independent stdin schema in the host docs |
 | `PreCompact` | **verified** (P7 follow-up) | *documented*: `manual` / `auto`; a compaction leaves `{"type":"summary","providerData":{"source":"pre-compact"}}` in the transcript |
@@ -192,8 +195,19 @@ non-blocking error shown to the user. **Not exercised by the probe** — every h
 - Subagent conversations live in `<session-uuid>/subagents/agent-<uuid>.jsonl` (verified;
   files exist and are what `SubagentStart`/`SubagentStop` point at).
 - Format: append-only JSONL; record `type` ∈ `message`, `reasoning`, `function_call`,
-  `function_call_result`, `file-history-snapshot`, `summary`, `turn-metrics`, … plus
+  `function_call_result`, `file-history-snapshot`, `session-meta`, `summary`, `turn-metrics`, … plus
   `sessionId`, `cwd`, `providerData`.
+- Tool records (**verified**, run 4): `function_call` is `{name, arguments: "<JSON string>", callId}`;
+  `function_call_result` is `{name, callId, status, output}` where `output` is a text block
+  `{"type":"text","text":"…"}` (the bundle also writes a plain string on one path). `status` is
+  `completed` or `incomplete` (a failed MCP call); the bundle also streams `in_progress` partial
+  results. A shell command that exits non-zero is still `completed`: only
+  `providerData.toolResult.rawResponse.is_error: true` (with `exitCode`) marks it failed. Read
+  results carry a `<system-reminder data-role="tool-hint">` line inside the output text.
+- Deferred tools, every MCP tool among them, are found with `ToolSearch` and called through
+  `DeferExecuteTool` with `arguments: {"toolName": "mcp__<server>__<tool>", "params": {…}}`; the
+  result record is named `DeferExecuteTool` too (**verified**, run 4). `PreToolUse` fires for
+  `DeferExecuteTool` and again for the inner `mcp__<server>__<tool>`.
 - **Flush timing: complete at `Stop`** — verified: the size recorded by the `Stop` hook
   (37 571 B) was byte-identical after the session ended, the tail line parsed as JSON, and it
   already contained the sentinel token and the final assistant text. Capture can read the
@@ -224,49 +238,65 @@ blocks `<user_query>`, `cb_summary`, `memory_and_skills_reminder`, …). That na
 **server-side ingest identifier**, not this client's harness id: the plugin registers the
 canonical harness key **`codebuddy`** in `HARNESS_KEYS`. Do not add `workbuddy` to
 `HARNESS_KEYS`; do reuse the adapter's parsing knowledge in
-`hosts/codebuddy-turns.mjs` (the JS half of the same format, kept in step by a
-parity test).
+`decode.mjs` (the JS half of the same format; its `HOST_BLOCK_TAGS` mirrors
+the adapter's `_HOST_BLOCK_TAGS`).
 
 ## 11. Adapter mapping and v1 scope
 
 The host facts above were first implemented as a standalone Claude-Code-shaped
-plugin; this adapter is the same behaviour expressed through the agent-hook
-dispatcher (`scripts/hook.mjs`), which owns the state machine every
-config-driven host shares.
+plugin; this adapter is the same behaviour expressed as a host module that the
+shared flow (`lib/flow/`) runs, which owns capture, commit and injection for
+every host.
 
 | Standalone script | Adapter home |
 | --- | --- |
-| `cb-transcript.mjs` (turn decoding) | `hosts/codebuddy-turns.mjs` |
+| `cb-transcript.mjs` (turn decoding) | `decode.mjs` |
 | `config.mjs` (loader, `rootKeyFallback`, legacy `ov.conf` section) | shared `loadAgentHookConfig("codebuddy")` — §4.2 of the plugin guide forbids the fallback and the legacy section for a host with no history |
-| `auto-recall.mjs` | the dispatcher's `prompt` stage + shared `recallForPrompt` |
-| `session-start.mjs` | the dispatcher's `start` stage (profile injection + pending replay) |
-| `auto-capture.mjs` / `pre-compact.mjs` / `session-end.mjs` | the dispatcher's `capture` stage (`hosts/codebuddy.mjs`) |
-| `uri-guard.mjs` | the dispatcher's guard entry + shared `preToolUseOutput()` |
+| `auto-recall.mjs` | the flow's `prompt` stage + shared `recallForPrompt` |
+| `session-start.mjs` | the flow's `start` stage (profile injection + pending replay) |
+| `auto-capture.mjs` / `pre-compact.mjs` / `session-end.mjs` | the flow's `turnEnd` / `compactSoon` / `end` stages |
+| `uri-guard.mjs` | the shared guard entry; `host.mjs` `tool()` / `emit()` |
 | `subagent-start.mjs` / `subagent-stop.mjs` | not ported in v1 (below) |
 | `ov-memory-doctor.mjs`, `lib/*`, vendored `shared/*` | the plugin's shared copies |
 
 Measured facts that shaped the adapter and are *not* visible in the code:
 
-- `prompt()` returns `""` for `is_internal_continuation` (§4): those turns are
+- `read()` returns an empty prompt for `is_internal_continuation` (§4): those turns are
   host-driven continuations, not user asks, and must not trigger a search.
-- `envelope()` answers the Claude-Code-shaped JSON on `session-start` and
+- `emit()` answers the Claude-Code-shaped JSON on `session-start` and
   `user-prompt-submit` and nothing on the write-path events (§5); an empty
   envelope is verified safe.
-- `guard()` is deny-only in effect (§5): the hooks.json matcher leaves the shell
+- The URI guard is deny-only in effect (§5): the hooks.json matcher leaves the shell
   tools out because `PreToolUse` has no advisory channel on this host, and a
   `permissionDecisionReason` reaches the model only through a `deny`'s failed
   tool result.
-- `detachesCapture` is safe (§7): the host kills a timed-out hook but not its
+- `canDetach` is safe (§7): the host kills a timed-out hook but not its
   descendants, so the shared async-write pattern holds.
+- The decoder folds the `function_call` / `function_call_result` records that
+  follow an assistant `message` into that assistant turn, in record order (tool
+  records with no assistant message before them form an assistant turn of
+  their own). Calls and results go out as tool parts, never as message text: a
+  call `running` with its input, a result `completed` (or `error` when its
+  status is `incomplete` or its raw response says `is_error`) with the text of
+  its output, under the call's `callId` and name. A `DeferExecuteTool` call is
+  unwrapped to the tool it names, and its result takes that name, so the pair
+  matches under the real tool. `in_progress` results are skipped.
+- `SessionEnd` does not fire in headless `-p` (§3), so a headless session's
+  last turns are committed only by the server's own token threshold or idle
+  commit.
+- Commit policy: `Stop` only captures; the token threshold and idle commit are
+  the server's (the session's auto-commit policy). `PreCompact` (unless
+  `autoCommitOnCompact` is off) and `SessionEnd` commit whatever is still
+  uncommitted.
 
 v1 scope, matching the other adapters (Cursor, KimiCode) rather than the
 standalone plugin:
 
-- **No subagent capture.** The dispatcher has no subagent stage today; the
+- **No subagent capture.** The flow has no subagent stage today; the
   events fire (verified, run 3) but the capture path is a follow-up that would
   add the stage for every host, with the reason spelled out per §3.1.
 - **No resume/compact archive injection** (`latest_archive_overview`) and no
-  profile-repeat skip — the dispatcher's start stage injects the profile and
+  profile-repeat skip — the flow's start stage injects the profile and
   replays pending writes only.
 - **No keyword capture mode.** `captureMode` is not read: like the other
   agent-hook hosts, every captured batch is sent.

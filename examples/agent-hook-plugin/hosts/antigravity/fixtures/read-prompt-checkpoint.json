@@ -1,0 +1,21 @@
+{
+  "what": "the latest CHECKPOINT step is the compaction",
+  "read": {
+    "event": "pre-invocation",
+    "payload": {
+      "conversationId": "conv-1",
+      "cwd": "/workspace",
+      "transcriptPath": "/x/transcript_full.jsonl",
+      "lastUserInput": "And the timeout?",
+      "invocationNum": 0,
+      "initialNumSteps": 7
+    },
+    "transcript": "checkpoint.jsonl"
+  },
+  "expect": {
+    "sessionId": "conv-1",
+    "prompt": "And the timeout?",
+    "eventId": "conv-1:7",
+    "compaction": 5
+  }
+}

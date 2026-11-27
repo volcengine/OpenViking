@@ -121,9 +121,9 @@ sync / install / pack 负责把这张依赖图完整交付到机器上
 
 “薄”指它只拥有宿主差异，不设行数上限。例如 [cc-transcript.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/scripts/cc-transcript.mjs) 负责 Claude 消息块和嵌套 `tool_result` 的转换；[Codex capture-utils.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/scripts/capture-utils.mjs) 还要展开嵌套工具活动并消除同一调用的重复表示，因此可以更长。两者都应把通用内容处理交给共享代码。
 
-新增薄宿主时，优先使用现有 [`HOSTS`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/index.mjs) 和 dispatcher 支持的 `stages`、`envelope`、`prompt`、`normalizeInput`、`capture`、`guard`。需要新增接口时，先说明哪一个宿主事实无法表达，再决定是否扩展；不要预先设计覆盖所有未来 Agent 的适配器 DSL。
+新增 hook 宿主就是在 [`hosts/`](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin/hosts) 下加一个目录，里面的 `host.mjs` 满足 [`lib/flow/host.d.mts`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/flow/host.d.mts) 的契约：`events`、`facts`、`read`、`decode`、`emit`、`tool`。需要扩展契约时，先说明哪一个宿主事实无法表达，再决定是否扩展；不要预先设计覆盖所有未来 Agent 的适配器 DSL。
 
-现有 `hosts/cursor.mjs`、`hosts/trae.mjs` 和 `hosts/zcode.mjs` 表明，事件映射适合数据，消息转换适合纯函数，异步捕获适合显式回调。不要把这三种东西压进一个包含网络访问的“配置对象生成器”。
+现有 `hosts/cursor/`、`hosts/trae/` 和 `hosts/zcode/` 表明，事件映射和宿主事实适合数据，transcript 解析适合 `decode.mjs` 里的纯函数，发送、提交和状态归 lib 的流程。宿主模块不做网络访问。
 
 ## 4. 配置、凭据和身份
 

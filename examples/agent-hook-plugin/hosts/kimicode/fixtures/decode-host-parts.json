@@ -1,0 +1,48 @@
+{
+  "what": "hook output, skill bodies and injection messages are not the user's words",
+  "decode": {
+    "transcript": "host-parts.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "/skill:openviking-memory:openviking-memory reply with noted"
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "noted"
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Fix release.json."
+        }
+      ],
+      "turn_id": "1"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Done."
+        }
+      ],
+      "turn_id": "1"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "what": "stop names the session and the transcript",
+  "read": {
+    "event": "stop",
+    "payload": {
+      "conversationId": "conv-1",
+      "transcriptPath": "/x/transcript.jsonl"
+    }
+  },
+  "expect": {
+    "sessionId": "conv-1",
+    "transcript": "/x/transcript.jsonl"
+  }
+}

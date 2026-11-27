@@ -1,0 +1,20 @@
+{
+  "what": "a file tool pointed at a viking:// URI is denied",
+  "tool": {
+    "payload": {
+      "hook_event_name": "PreToolUse",
+      "session_id": "s",
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "viking://user/me/memories/x.md"
+      }
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "deny",
+      "permissionDecisionReason": "viking:// URIs are OpenViking virtual paths, not local filesystem paths.\nUse OpenViking MCP read instead.\nExample: read(uri=\"viking://user/me/memories/x.md\")"
+    }
+  }
+}

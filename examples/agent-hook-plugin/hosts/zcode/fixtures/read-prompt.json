@@ -1,0 +1,14 @@
+{
+  "what": "the prompt is read under its alternate spellings and cleaned of injected context",
+  "read": {
+    "event": "user-prompt-submit",
+    "payload": {
+      "sessionId": "sess_a",
+      "user_prompt": "<openviking-context>x</openviking-context>  alt prompt "
+    }
+  },
+  "expect": {
+    "prompt": "alt prompt",
+    "transcript": "sess_a"
+  }
+}

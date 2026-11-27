@@ -29,7 +29,7 @@ import {
   resolvePeer,
   sessionId,
 } from "./import-history.mjs";
-import { HOSTS as HOOK_HOSTS } from "../agent-hook-plugin/hosts/index.mjs";
+import { loadHookHosts } from "./testing/support.mjs";
 import { deriveDshSessionId } from "../dsh-memory-plugin/session-id.mjs";
 import { deriveAgentSessionId } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
 import { resolveConnection as libConnection } from "../agent-hook-plugin/lib/credentials.mjs";
@@ -868,9 +868,9 @@ test("--input: session ids, live ids and peers follow each host's plugin", async
   // Live ids, against the plugins' own derivations.
   const ids = ["ses_4f2a9c", "sess_01J9ZX", "0199AAAA-bbbb-7ccc-8ddd-eeeeeeeeeeee", "a:b/c d?.", "im?a"];
   for (const id of ids) {
-    for (const [name, host] of Object.entries(HOOK_HOSTS)) {
+    for (const [name, host] of Object.entries(await loadHookHosts())) {
       const key = name.replace(/-/g, "_");
-      assert.equal(liveSessionId(key, id), deriveAgentSessionId(host.prefix, { session_id: id }), `${name} ${id}`);
+      assert.equal(liveSessionId(key, id), deriveAgentSessionId(host.sessionPrefix, { session_id: id }), `${name} ${id}`);
     }
     assert.equal(liveSessionId("opencode", id), deriveHarnessSessionId("oc-", id), `opencode ${id}`);
     assert.equal(liveSessionId("pi", id), deriveHarnessSessionId("pi-", id), `pi ${id}`);

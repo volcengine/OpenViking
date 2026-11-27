@@ -1,0 +1,41 @@
+{
+  "what": "a rewrite inside the captured part is caught even when the transcript grew past the cursor",
+  "decode": {
+    "transcript": "rewritten.jsonl",
+    "cursor": {
+      "lastTurnId": "7",
+      "capturedTurnIds": [
+        "2b4499d5a013ccf8048d8a3bd67ad14f2f8d9c12d3aac77919d7f0c8fcb0c00a",
+        "f140b4f26700a5e746b2c4e01929dbfe5ac5fedaffff682134da0fc274bd5389",
+        "d7136a658c804e45cbad8a432b643cd40641c9ce284a8cc730c48915042e2e54",
+        "31b78759b6e15dc67ddd5a91cfb3ddb04898693c417ed329cec692d39ed70ad0",
+        "1a99f654ff46e5f75aa62cf6a676aea44adfa81e335ca5246460178f6ec5e2ff",
+        "301d5915c3e7cf1e5337cbf5303d110e6961c6e053a720b44ae24c99ae83de92",
+        "acba79b56969dcc988e58d4fa6563da80847ff6cd8ec740a775dcbcff981f2ab",
+        "4f7665084b7c6fa63d57ba7a54a17aff38bf02bac8cc17b16cf62941a1c37376"
+      ]
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "edited 6"
+        }
+      ],
+      "turn_id": "6"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "answer 7"
+        }
+      ],
+      "turn_id": "7"
+    }
+  ]
+}

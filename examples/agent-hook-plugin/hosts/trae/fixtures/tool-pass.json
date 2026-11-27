@@ -1,0 +1,12 @@
+{
+  "what": "a local path gets no answer",
+  "tool": {
+    "payload": {
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "/tmp/file.md"
+      }
+    }
+  },
+  "expect": null
+}

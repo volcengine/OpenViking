@@ -1,0 +1,13 @@
+{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<system-reminder>noise</system-reminder>\n<user_query>wrapped ask</user_query>"}]}
+{"type": "reasoning", "content": "not a turn"}
+{"type": "function_call", "name": "Bash", "arguments": "{\"command\":\"ls\"}", "callId": "c1"}
+{"type": "function_call_result", "name": "Bash", "callId": "c1", "status": "in_progress", "output": {"type": "text", "text": "part"}}
+{"type": "function_call_result", "name": "Bash", "callId": "c1", "status": "completed", "output": {"type": "text", "text": "a.txt"}}
+{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "one file"}]}
+{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<previous_user_message><user_query>old ask</user_query></previous_user_message><user_query>new ask</user_query>"}]}
+{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<memory_and_skills_reminder>x</memory_and_skills_reminder>bare ask"}]}
+{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<user_query>short</user_query><user_query>the longer candidate</user_query>"}]}
+{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<cb_summary>summary</cb_summary><system-reminder>x</system-reminder>"}]}
+{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "task notification"}], "providerData": {"isMeta": true}}
+{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "/clear"}], "providerData": {"skipRun": true}}
+{"type": "file-history-snapshot"}

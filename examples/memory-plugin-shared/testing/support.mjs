@@ -9,10 +9,12 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { buildPluginConfig } from "../../agent-hook-plugin/lib/plugin-config.mjs";
 
@@ -199,4 +201,18 @@ export function expectExit(result, code = 0) {
   const detail = result.stderr.trim() || String(result.error || "");
   assert.equal(result.code, code, detail || `expected exit ${code}, got ${result.code}`);
   return result;
+}
+
+export const HOOK_HOSTS_DIR = fileURLToPath(new URL("../../agent-hook-plugin/hosts/", import.meta.url));
+
+/** Every hook host the plugin carries, by client id; a directory may serve several. */
+export async function loadHookHosts() {
+  const hosts = {};
+  for (const entry of readdirSync(HOOK_HOSTS_DIR, { withFileTypes: true })) {
+    const file = join(HOOK_HOSTS_DIR, entry.name, "host.mjs");
+    if (!entry.isDirectory() || !existsSync(file)) continue;
+    const module = await import(pathToFileURL(file).href);
+    Object.assign(hosts, module.hosts || { [module.default.id]: module.default });
+  }
+  return hosts;
 }

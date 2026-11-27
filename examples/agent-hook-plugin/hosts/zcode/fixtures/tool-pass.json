@@ -1,0 +1,12 @@
+{
+  "what": "a local path prints nothing",
+  "tool": {
+    "payload": {
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "/tmp/local-file.txt"
+      }
+    }
+  },
+  "expect": null
+}

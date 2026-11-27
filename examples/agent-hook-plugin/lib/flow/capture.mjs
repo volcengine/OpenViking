@@ -16,7 +16,7 @@ import {
 import { buildCaptureMessage, isCaptureEnabled } from "../capture-utils.mjs";
 import { isAuthFailure } from "../retryable.mjs";
 import { commitWhenDue } from "./commit.mjs";
-import { appendNote, readNotes } from "./notes.mjs";
+import { appendNote, clearNotes, readNotes } from "./notes.mjs";
 import { deferContext } from "./pointer.mjs";
 
 const BOUNDARY = { compactSoon: "compact", end: "end" };
@@ -24,12 +24,15 @@ const LOCK_WAIT_MS = 5000;
 const STALE_LOCK_MS = 60_000;
 
 export async function readTranscript(host, ref) {
-  if (!ref) return host.facts?.transcript === false ? { status: "ok", text: "" } : { status: "missing" };
-  const path = host.locate ? await host.locate(ref) : ref;
-  if (!path) return { status: "missing" };
+  const kind = host.facts?.transcript;
+  const none = { status: "ok", text: "" };
+  if (!ref && kind === false) return none;
+  const path = ref && host.locate ? await host.locate(ref) : ref;
+  if (!path) return kind === "optional" ? none : { status: "missing" };
   try {
     return { status: "ok", text: await readFile(path, "utf8") };
   } catch (error) {
+    if (kind === "optional") return none;
     // Not an empty transcript: a read that failed must not acknowledge turns
     // nobody saw.
     return { status: "unreadable", error: error?.code || "read_failed" };
@@ -68,10 +71,11 @@ async function captureTurns(ctx, state, stateFile) {
     log(`capture_${source.status}`, source.error ? { error: source.error } : {});
     return state;
   }
+  const notes = await readNotes(stateFile);
   const decoded = host.decode({
     text: source.text,
     cursor: state.cursor ?? state,
-    notes: await readNotes(stateFile),
+    notes,
     payload: ctx.payload,
     cfg,
   });
@@ -98,6 +102,8 @@ async function captureTurns(ctx, state, stateFile) {
 
   let next = state;
   if (settled > 0) next = { ...next, cursor: decoded.cursorAfter(settled) };
+  // Every turn the notes could add to is settled, so they have served.
+  if (notes.length > 0 && settled > 0 && settled === decoded.turns.length) await clearNotes(stateFile);
   if (boundary || sent > 0) {
     const commit = await commitWhenDue(ctx, next, { boundary, sent, captured });
     if (Object.keys(commit).some((key) => commit[key] !== next[key])) next = { ...next, ...commit };

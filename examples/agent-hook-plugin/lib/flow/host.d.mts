@@ -32,8 +32,11 @@ export interface HostFacts {
   historySession?: "default" | "explicit";
   /** How the session-history note names the tool, when not the plain MCP name. */
   historyTool?: string;
-  /** false for a host with no transcript file: `decode` builds turns from the payload and notes. */
-  transcript?: boolean;
+  /**
+   * false for a host with no transcript file: `decode` builds turns from the payload and notes.
+   * "optional" where the file may be absent: `decode` then gets "" and does the same.
+   */
+  transcript?: false | "optional";
   /** How many queued writes a session start replays; the queue's own default when absent. */
   replayLimit?: number;
 }
@@ -58,7 +61,7 @@ export interface EventRead {
   defer?: boolean;
   /** The latest compaction a host without a compaction event knows of. */
   compaction?: unknown;
-  /** Something this event carried that the transcript will not hold. */
+  /** Something this event carried that the transcript will not hold; `decode` gets it until its turns are settled. */
   note?: Record<string, unknown>;
 }
 

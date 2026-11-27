@@ -2722,8 +2722,6 @@ install_codex() {
 # Cursor / TRAE lifecycle hooks
 # ---------------------------------------------------------------------------
 
-AGENT_HOOK_HOSTS="cursor trae zcode kimicode codebuddy qoder antigravity"
-
 copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destination]
   local host="$1" dest_name="$2" explicit_dest="${3:-}" source dest tmp other
   source="$(plugin_dir_on_disk agent-hook-plugin)" || {
@@ -2735,11 +2733,12 @@ copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destinat
   rm -rf "$tmp"
   mkdir -p "$tmp"
   (cd "$source" && tar --exclude node_modules --exclude .git -cf - .) | (cd "$tmp" && tar -xf -)
-  # One plugin serves every config-driven host; an installation is for one
-  # client, so the other hosts' configuration directories do not travel with it.
-  for other in $AGENT_HOOK_HOSTS; do
-    [ "$other" = "$host" ] || rm -rf "$tmp/hosts/$other"
+  # One plugin serves every host; an installation is for one client, so the
+  # other hosts' directories do not travel with it, nor do the test fixtures.
+  for other in "$tmp"/hosts/*/; do
+    [ "$(basename "$other")" = "$host" ] || rm -rf "$other"
   done
+  rm -rf "$tmp/hosts/$host/fixtures"
   # Preserve the first-install timestamp across managed upgrades. The package
   # descriptor is copied from source; integration.json records this machine's
   # installation and must survive replacing the runtime directory.
@@ -3191,13 +3190,8 @@ install_kimicode() {
     rm -rf "$bundle"
     return 1
   }
-  rm -rf "$root/tests"
   rm -f "$root/README.md" "$root/README_CN.md" "$root/DESIGN.md" "$root/plugin.json"
   cp "$root/hosts/kimicode/kimi.plugin.json" "$bundle/kimi.plugin.json" || {
-    rm -rf "$bundle"
-    return 1
-  }
-  cp "$root/hosts/kimicode/runtime-index.mjs" "$root/hosts/index.mjs" || {
     rm -rf "$bundle"
     return 1
   }
@@ -3206,14 +3200,8 @@ install_kimicode() {
     rm -rf "$bundle"
     return 1
   }
-  local host_module
-  for host_module in "$root"/hosts/*.mjs; do
-    case "$(basename "$host_module")" in
-      index.mjs|incremental-turn-capture.mjs|kimicode.mjs|kimicode-turns.mjs) ;;
-      *) rm -f "$host_module" ;;
-    esac
-  done
-  rm -rf "$root/hosts/kimicode"
+  # The host's modules stay; its manifest and skills now live at the bundle root.
+  find "$root/hosts/kimicode" -mindepth 1 -maxdepth 1 ! -name '*.mjs' -exec rm -rf {} +
   kimi_home="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
   install_lib="$(require_install_lib_dir)" || { rm -rf "$bundle"; return 1; }
   persisted_dir="$OV_HOME/agent-integrations/kimicode/lib/install"
@@ -3310,26 +3298,19 @@ validate_marketplace_host() { # validate_marketplace_host <host> "<cli>..." <sub
 # through their own plugin CLI (`codebuddy plugin …`, `qodercli plugins …`).
 install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>..." <subcommand>
   local host="$1" label="$2" clis="$3" sub="$4" cli
-  local bundle root config marketplace version host_module note=""
+  local bundle root config marketplace version note=""
   step_heading "$label $(t 'integration' '集成')"
   ensure_bundle
   bundle="$OV_HOME/agent-integrations/$host-bundle.$$"
   rm -rf "$bundle"
   mkdir -p "$bundle"
   root="$(assemble_agent_integration "$host" "$host" "$bundle")" || { rm -rf "$bundle"; return 1; }
-  rm -rf "$root/tests"
   rm -f "$root/README.md" "$root/README_CN.md" "$root/DESIGN.md" "$root/plugin.json"
-  # Keep this host's config directory aside before the adapters are pruned.
+  # The host's modules stay where they are; its config files move into the
+  # layout the host reads.
   config="$bundle/$host-config"
   cp -R "$root/hosts/$host" "$config" || { rm -rf "$bundle"; return 1; }
-  cp "$config/runtime-index.mjs" "$root/hosts/index.mjs" || { rm -rf "$bundle"; return 1; }
-  for host_module in "$root"/hosts/*.mjs; do
-    case "$(basename "$host_module")" in
-      index.mjs|incremental-turn-capture.mjs|history-session.mjs|"$host.mjs"|"$host-turns.mjs") ;;
-      *) rm -f "$host_module" ;;
-    esac
-  done
-  rm -rf "$root/hosts/$host"
+  find "$root/hosts/$host" -mindepth 1 -maxdepth 1 ! -name '*.mjs' -exec rm -rf {} +
   # The host copies the plugin directory into its cache, so it has to carry
   # the whole agent-hook layout under agent-integrations/ (the shape the Kimi
   # Code bundle uses).

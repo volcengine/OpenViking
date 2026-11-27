@@ -1,0 +1,18 @@
+{
+  "what": "an MCP completion without a result is skipped",
+  "read": {
+    "event": "afterMCPExecution",
+    "payload": {
+      "conversation_id": "c1",
+      "transcript_path": "t.jsonl",
+      "tool_use_id": "read-1",
+      "tool_name": "read",
+      "mcp_server_name": "user-openviking",
+      "tool_input": "{\"uris\":\"viking://~/memories/x.md\"}",
+      "result_json": "{}"
+    }
+  },
+  "expect": {
+    "skip": "missing_mcp_tool_result"
+  }
+}

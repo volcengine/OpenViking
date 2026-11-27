@@ -1,0 +1,141 @@
+{
+  "what": "a recorded 2.8.1 session's tool calls and results go out in wire order, OpenViking MCP names normalised",
+  "decode": {
+    "transcript": "wire.jsonl"
+  },
+  "cursor": {
+    "lastTurnId": "1",
+    "capturedTurnIds": [
+      "0:user",
+      "0:assistant",
+      "1:user",
+      "1:assistant"
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "List the files in this folder with a shell command, then read hello.txt, then run the shell command 'cat missing-file.txt' (it will fail), then call the OpenViking read tool with uri viking://resources/demo, then reply with one short sentence."
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "I'll run the four steps in order."
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_mk47sz7usjjzd7upuk4h5qze",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "ls -la"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_01_p02psrr89u6s95ezt8bwdsav",
+          "tool_name": "Read",
+          "tool_status": "running",
+          "tool_input": {
+            "path": "hello.txt"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_mk47sz7usjjzd7upuk4h5qze",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "total 8\ndrwxr-xr-x@  3 user  staff   96 11月 27 15:39 .\ndrwxr-xr-x@ 12 user  staff  384 11月 27 15:39 ..\n-rw-r--r--@  1 user  staff   28 11月 27 15:39 hello.txt"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_01_p02psrr89u6s95ezt8bwdsav",
+          "tool_name": "Read",
+          "tool_status": "completed",
+          "tool_output": "1\thello from a synthetic file"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_tdjuny0gqfpmm136zw3nidd3",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "cat missing-file.txt"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_01_a4ypqmsisvatacyxgtxcpkob",
+          "tool_name": "mcp__openviking__read",
+          "tool_status": "running",
+          "tool_input": {
+            "uri": "viking://resources/demo"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_tdjuny0gqfpmm136zw3nidd3",
+          "tool_name": "Bash",
+          "tool_status": "error",
+          "tool_output": "cat: missing-file.txt: No such file or directory\nCommand failed with exit code: 1."
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_01_a4ypqmsisvatacyxgtxcpkob",
+          "tool_name": "mcp__openviking__read",
+          "tool_status": "completed",
+          "tool_output": "mock content of viking://resources/demo"
+        },
+        {
+          "type": "text",
+          "text": "Done: the folder holds only `hello.txt` (which reads \"hello from a synthetic file\"), `cat missing-file.txt` failed with \"No such file or directory\", and the OpenViking read of `viking://resources/demo` returned mock content."
+        }
+      ],
+      "turn_id": "0"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Run the shell command 'echo two' and then reply with the single word ok."
+        }
+      ],
+      "turn_id": "1"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call_00_dt3tr0p5ztec9ud6autzirnz",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "echo two"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_dt3tr0p5ztec9ud6autzirnz",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "two"
+        },
+        {
+          "type": "text",
+          "text": "ok"
+        }
+      ],
+      "turn_id": "1"
+    }
+  ]
+}

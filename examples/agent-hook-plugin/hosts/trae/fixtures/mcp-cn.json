@@ -1,0 +1,10 @@
+{
+  "what": "trae-cn names its session through _meta.chatSessionId under its own prefix",
+  "host": "trae-cn",
+  "mcp": {
+    "meta": {
+      "chatSessionId": " s1 "
+    }
+  },
+  "expect": "trcn-s1"
+}

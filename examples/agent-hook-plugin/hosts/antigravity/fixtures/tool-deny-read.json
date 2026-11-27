@@ -1,0 +1,17 @@
+{
+  "what": "a file tool whose location is a viking:// URI is denied",
+  "tool": {
+    "payload": {
+      "toolCall": {
+        "name": "read_file",
+        "args": {
+          "Path": "viking://user/default/memories/profile.md"
+        }
+      }
+    }
+  },
+  "expect": {
+    "decision": "deny",
+    "reason": "viking:// URIs are OpenViking virtual paths, not local filesystem paths.\nUse OpenViking MCP read instead.\nExample: read(uri=\"viking://user/default/memories/profile.md\")"
+  }
+}

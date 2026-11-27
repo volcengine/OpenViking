@@ -341,7 +341,7 @@ test("no doctor wrapper redefines a name doctor-core already exports", () => {
   }
 });
 
-// The hooks bound their own requests (agent-hook-plugin/tests/request-budget),
+// The hooks bound their own requests (flow.test.mjs, hosts.test.mjs),
 // so no timeout setting is a hook overrun the doctor should report.
 test("the hook hosts' doctor reports no hook-budget overrun at any request timeout", () => {
   const home = mkdtempSync(join(tmpdir(), "ov-doctor-hosts-"));

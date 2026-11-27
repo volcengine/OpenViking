@@ -1,0 +1,9 @@
+{
+  "what": "without baggage the conversation id names the session",
+  "mcp": {
+    "meta": {
+      "workbuddy.ai/conversationId": " conv "
+    }
+  },
+  "expect": "cb-conv"
+}

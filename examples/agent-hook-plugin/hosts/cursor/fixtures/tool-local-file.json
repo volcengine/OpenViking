@@ -1,0 +1,9 @@
+{
+  "what": "beforeReadFile of a local path has no opinion",
+  "tool": {
+    "payload": {
+      "file_path": "/tmp/file.md"
+    }
+  },
+  "expect": {}
+}

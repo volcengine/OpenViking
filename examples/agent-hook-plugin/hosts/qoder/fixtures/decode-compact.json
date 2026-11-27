@@ -1,0 +1,48 @@
+{
+  "what": "the compaction summary and host-authored user records are not captured",
+  "decode": {
+    "transcript": "compact.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Reply with only the plain word and the session word from your context."
+        }
+      ],
+      "turn_id": "2"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "HERON22 OTTER11"
+        }
+      ],
+      "turn_id": "14"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Reply with only: ok"
+        }
+      ],
+      "turn_id": "21"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "ok"
+        }
+      ],
+      "turn_id": "26"
+    }
+  ]
+}

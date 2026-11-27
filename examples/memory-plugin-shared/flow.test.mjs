@@ -52,7 +52,7 @@ const SESSION = "/api/v1/sessions/ft-s1";
  * maps "METHOD path-suffix" to a status or a function of the request body;
  * anything unlisted answers 200.
  */
-async function withFlow(t, answers, fn, { env = {} } = {}) {
+async function withFlow(t, answers, fn, { env = {}, as = host } = {}) {
   const restore = scrubOpenVikingEnv();
   t.after(restore);
   const files = await writeCredentialFiles("ov-flow-", { ovcli: { url: "http://127.0.0.1:9", api_key: "k" }, ov: {} });
@@ -78,7 +78,7 @@ async function withFlow(t, answers, fn, { env = {} } = {}) {
       ...env,
     });
     const say = (role, text) => appendFileSync(transcript, `${JSON.stringify({ role, text })}\n`);
-    const run = (event, extra = {}) => runStage(host, event, {
+    const run = (event, extra = {}) => runStage(as, event, {
       session_id: "s1",
       cwd: files.dir,
       transcript_path: transcript,
@@ -234,6 +234,33 @@ test("a transcript that cannot be read acknowledges nothing", async (t) => {
     await run("stop", { transcript_path: undefined });
     assert.equal(calls("/messages/batch").length, 1);
   });
+});
+
+test("a note reaches decode until its turn is settled, with or without a transcript", async (t) => {
+  // A host whose transcript may be absent and whose prompt only an event carries.
+  const noted = {
+    ...host,
+    facts: { transcript: "optional" },
+    read: (event, payload) => ({ ...host.read(event, payload), note: payload.prompt ? { prompt: payload.prompt } : undefined }),
+    decode: ({ text, notes, cursor }) => resumeTurns(
+      [...parseJsonl(text), ...notes.map((note) => ({ role: "user", text: note.prompt }))]
+        .map((record) => ({ role: record.role, content: record.text })),
+      cursor,
+    ),
+  };
+  let refuse = 401;
+  await withFlow(t, { "/messages/batch": () => refuse }, async ({ run, sentTexts, calls }) => {
+    await run("prompt", { prompt: "only the event had this" });
+    await run("stop", { transcript_path: "/nonexistent/session.jsonl" });
+    refuse = undefined;
+    await run("stop", { transcript_path: "/nonexistent/session.jsonl" });
+    assert.deepEqual(sentTexts(), ["only the event had this", "only the event had this"]);
+
+    // Settled, so the note is gone: a cursor that forgot it would not bring it back.
+    await run("stop", { transcript_path: undefined });
+    assert.equal(calls("/messages/batch").length, 2);
+    assert.deepEqual(readdirSync(join(process.env.OPENVIKING_HOOK_STATE_DIR, "flowtest")).filter((name) => name.includes("notes")), []);
+  }, { as: noted, env: { OPENVIKING_AUTO_RECALL: "0" } });
 });
 
 test("capture off, the plugin off and a bypassed session send nothing", async (t) => {

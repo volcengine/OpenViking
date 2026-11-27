@@ -1,0 +1,17 @@
+{
+  "what": "RunCommand carrying a viking:// URI runs with a notice",
+  "tool": {
+    "payload": {
+      "tool_name": "RunCommand",
+      "tool_input": {
+        "command": "ov read viking://resources/project/file.md"
+      }
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "additionalContext": "[OpenViking memory plugin] URI guard: this shell command contains the viking:// URI viking://resources/project/file.md.\nviking:// URIs are OpenViking virtual paths, not local files, so cat, ls, grep and other file commands cannot open them.\nIf you meant to read or search OpenViking content, use OpenViking MCP read or search instead.\nExample: read(uri=\"viking://resources/project/file.md\")\nIf the URI is intentional data (an ov CLI argument, an HTTP payload, a search pattern), ignore this notice."
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "what": "a failed MCP call without content is still a note, as an error",
+  "read": {
+    "event": "afterMCPExecution",
+    "payload": {
+      "conversation_id": "c1",
+      "transcript_path": "t.jsonl",
+      "tool_use_id": "read-1",
+      "tool_name": "read",
+      "mcp_server_name": "user-openviking",
+      "tool_input": "{\"uris\":\"viking://~/memories/x.md\"}",
+      "result_json": "{\"isError\":true}"
+    },
+    "transcript": "tools.jsonl"
+  },
+  "expect": {
+    "note": {
+      "afterTurn": 3,
+      "tool": {
+        "type": "tool_result",
+        "tool_use_id": "read-1",
+        "name": "mcp__openviking__read",
+        "state": {
+          "input": {
+            "uris": "viking://~/memories/x.md"
+          },
+          "output": {
+            "isError": true
+          }
+        },
+        "is_error": true
+      }
+    }
+  }
+}

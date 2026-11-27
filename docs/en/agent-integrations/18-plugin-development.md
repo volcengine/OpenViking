@@ -121,9 +121,9 @@ Dependencies must point from host adapters to shared capabilities. Shared code m
 
 Thin means owning only host differences; it is not a line-count limit. For example, [cc-transcript.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/claude-code-memory-plugin/scripts/cc-transcript.mjs) converts Claude message blocks and nested `tool_result` content. [Codex capture-utils.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/codex-memory-plugin/scripts/capture-utils.mjs) also expands nested tool activity and removes duplicate representations of the same call, so it can be longer. Both should delegate common content processing to shared code.
 
-For a new thin host, prefer the existing [`HOSTS`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/index.mjs) registry and dispatcher interfaces: `stages`, `envelope`, `prompt`, `normalizeInput`, `capture`, and `guard`. Before adding an interface, identify the host fact that cannot be expressed. Do not design an adapter DSL for every hypothetical future agent.
+A new hook host is a directory under [`hosts/`](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin/hosts) with a `host.mjs` that meets the contract in [`lib/flow/host.d.mts`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/flow/host.d.mts): `events`, `facts`, `read`, `decode`, `emit`, and `tool`. Before adding to the contract, identify the host fact that cannot be expressed. Do not design an adapter DSL for every hypothetical future agent.
 
-The existing `hosts/cursor.mjs`, `hosts/trae.mjs`, and `hosts/zcode.mjs` demonstrate the separation: event mappings are data, message conversion fits pure functions, and asynchronous capture needs explicit callbacks. Do not combine them into a configuration-object builder that also performs network requests.
+The existing `hosts/cursor/`, `hosts/trae/`, and `hosts/zcode/` demonstrate the separation: event mappings and host facts are data, transcript decoding is a pure function in `decode.mjs`, and sending, committing and state belong to the lib flow. A host module performs no network requests.
 
 ## 4. Configuration, credentials, and identity
 

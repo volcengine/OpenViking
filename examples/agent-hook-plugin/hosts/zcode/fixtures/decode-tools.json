@@ -1,0 +1,140 @@
+{
+  "what": "parallel tool calls and their results fold into one assistant turn; hook context filed as a user message is not the prompt",
+  "decode": {
+    "transcript": "rollout-tools.jsonl"
+  },
+  "cursor": {
+    "lastTurnId": "turn_451fef31-5bc1-460f-bde3-e20225031cb1",
+    "capturedTurnIds": [
+      "turn_9e2b789a-c0a9-4f14-8e8b-00d8016afe74:user",
+      "turn_9e2b789a-c0a9-4f14-8e8b-00d8016afe74:assistant",
+      "turn_451fef31-5bc1-460f-bde3-e20225031cb1:user",
+      "turn_451fef31-5bc1-460f-bde3-e20225031cb1:assistant"
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "List the files in this folder, read hello.txt, run the shell command 'ls missing-dir', and call the echo_upper MCP tool with text 'probe'. Reply with one short line."
+        }
+      ],
+      "turn_id": "turn_9e2b789a-c0a9-4f14-8e8b-00d8016afe74"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call_00_y0qz8yfvsp9e7j2rulm7nyb4",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "ls -la",
+            "description": "List files in current folder"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_01_0idm5miiw5741cewqll2uxpn",
+          "tool_name": "Read",
+          "tool_status": "running",
+          "tool_input": {
+            "file_path": "/workspace/hello.txt"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_02_pmiwp640c8keazicmri8nixb",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "ls missing-dir",
+            "description": "List a nonexistent directory"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_03_u1nda6d3wobcn3kdbk36ink7",
+          "tool_name": "mcp__echo__echo_upper",
+          "tool_status": "running",
+          "tool_input": {
+            "text": "probe"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_y0qz8yfvsp9e7j2rulm7nyb4",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "total 8\n-rw-r--r--  1 user  staff  6 Jan  1 00:00 hello.txt"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_01_0idm5miiw5741cewqll2uxpn",
+          "tool_name": "Read",
+          "tool_status": "completed",
+          "tool_output": "1\thello\n2"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_02_pmiwp640c8keazicmri8nixb",
+          "tool_name": "Bash",
+          "tool_status": "error",
+          "tool_output": "Exit code 1\nls: missing-dir: No such file or directory"
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_03_u1nda6d3wobcn3kdbk36ink7",
+          "tool_name": "mcp__echo__echo_upper",
+          "tool_status": "completed",
+          "tool_output": "PROBE"
+        },
+        {
+          "type": "text",
+          "text": "Folder has only `hello.txt` (contents: \"hello\"); `ls missing-dir` failed with \"No such file or directory\"; echo_upper returned \"PROBE\"."
+        }
+      ],
+      "turn_id": "turn_9e2b789a-c0a9-4f14-8e8b-00d8016afe74"
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Now run the shell command 'echo second-turn' and tell me its output in one line."
+        }
+      ],
+      "turn_id": "turn_451fef31-5bc1-460f-bde3-e20225031cb1"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "call_00_zqm5u9mr9pcv48e45f26d07w",
+          "tool_name": "Bash",
+          "tool_status": "running",
+          "tool_input": {
+            "command": "echo second-turn",
+            "description": "Print second-turn"
+          }
+        },
+        {
+          "type": "tool",
+          "tool_id": "call_00_zqm5u9mr9pcv48e45f26d07w",
+          "tool_name": "Bash",
+          "tool_status": "completed",
+          "tool_output": "second-turn"
+        },
+        {
+          "type": "text",
+          "text": "Output: `second-turn`"
+        }
+      ],
+      "turn_id": "turn_451fef31-5bc1-460f-bde3-e20225031cb1"
+    }
+  ]
+}

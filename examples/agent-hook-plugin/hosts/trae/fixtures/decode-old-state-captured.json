@@ -1,0 +1,17 @@
+{
+  "what": "a turn the old host already captured is not re-sent",
+  "decode": {
+    "payload": {
+      "last_assistant_message": "the retry budget is three attempts"
+    },
+    "cursor": {
+      "capturedHashes": [
+        "e89d6c522a999b430c12d00e6b55ddc80d2f86c1df89f0733e1f4a2ace526cd8",
+        "51872fa50ea2acb76345ed7d99d1a61950e5bba277af491d56e3aa498d256882"
+      ],
+      "lastTurnKey": 5,
+      "pendingPrompt": null
+    }
+  },
+  "messages": []
+}

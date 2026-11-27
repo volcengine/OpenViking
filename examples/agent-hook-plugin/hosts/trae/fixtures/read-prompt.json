@@ -1,0 +1,17 @@
+{
+  "what": "the prompt is cleaned, kept as a note, and generation_id identifies the event",
+  "read": {
+    "event": "user-prompt-submit",
+    "payload": {
+      "prompt": " ask <openviking-context>x</openviking-context>",
+      "generation_id": "g1"
+    }
+  },
+  "expect": {
+    "prompt": "ask",
+    "eventId": "g1",
+    "note": {
+      "prompt": "ask"
+    }
+  }
+}

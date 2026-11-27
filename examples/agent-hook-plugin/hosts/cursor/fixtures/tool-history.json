@@ -1,0 +1,18 @@
+{
+  "what": "session_history without a session is given this one's",
+  "tool": {
+    "payload": {
+      "conversation_id": "c1",
+      "tool_name": "MCP:session_history",
+      "tool_input": {
+        "action": "overview"
+      }
+    }
+  },
+  "expect": {
+    "updated_input": {
+      "action": "overview",
+      "session": "cu-c1"
+    }
+  }
+}

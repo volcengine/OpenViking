@@ -183,10 +183,10 @@ function checkInstall(report) {
     report.warn(`this copy was installed for ${installed.client}, not ${CLIENT}`, "", `run the ${installed.client} copy, or pass the client name as an argument`);
   }
 
-  const missing = REQUIRED_PLUGIN_FILES.filter((rel) => !existsPath(join(PLUGIN_ROOT, rel)));
+  const missing = [...REQUIRED_PLUGIN_FILES, `hosts/${HOST_DIR}/host.mjs`].filter((rel) => !existsPath(join(PLUGIN_ROOT, rel)));
   if (!manifest) missing.unshift(relative(PLUGIN_ROOT, manifestPath));
   if (missing.length) report.fail("plugin files missing", missing.join(", "), `curl -fsSL https://openviking.ai/install | bash -s -- --harness ${CLIENT}`);
-  else report.ok("plugin files present (hook entry, URI guard, MCP proxy, host adapters)");
+  else report.ok("plugin files present (hook entry, URI guard, MCP proxy, host module)");
 
   // An absent runtime is ERR_MODULE_NOT_FOUND on the first hook, which the host
   // reports as nothing at all.

@@ -1,0 +1,29 @@
+{
+  "what": "injected blocks are stripped and text_content stands in for last_assistant_message",
+  "decode": {
+    "payload": {
+      "prompt": "q<openviking-context>m</openviking-context>",
+      "text_content": "a<relevant-memories>m</relevant-memories>"
+    }
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "q"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "a"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "what": "a write event answers approve",
+  "emit": {
+    "event": "stop",
+    "output": {}
+  },
+  "expect": {
+    "decision": "approve"
+  }
+}

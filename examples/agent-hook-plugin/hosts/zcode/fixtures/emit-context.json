@@ -1,0 +1,15 @@
+{
+  "what": "an injection carries hookSpecificOutput only",
+  "emit": {
+    "event": "session-start",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "hookEventName": "SessionStart",
+      "additionalContext": "BLOCK"
+    }
+  }
+}

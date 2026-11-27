@@ -15,7 +15,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CALL_SITES = [
   {
     name: "the thin-harness hook forwards its derived session id",
-    file: join(ROOT, "examples", "agent-hook-plugin", "scripts", "hook.mjs"),
+    file: join(ROOT, "examples", "agent-hook-plugin", "lib", "flow", "prompt.mjs"),
     pattern: /recallForPrompt\([^)]*\{[^}]*\bsessionId\b/s,
   },
   {

@@ -1,0 +1,2 @@
+{"step_index":0,"status":"DONE","source":"USER_EXPLICIT","type":"USER_INPUT","content":"<USER_REQUEST>\nWhat is the …","truncated_fields":["content"]}
+{"step_index":1,"status":"DONE","source":"MODEL","type":"PLANNER_RESPONSE","content":"Three."}

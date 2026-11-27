@@ -59,5 +59,5 @@ node ~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/agent-
 ## 测试
 
 ```bash
-node --test examples/agent-hook-plugin/tests/*.test.mjs
+node --test examples/memory-plugin-shared/flow.test.mjs examples/memory-plugin-shared/hosts.test.mjs examples/memory-plugin-shared/hook-entry.test.mjs
 ```

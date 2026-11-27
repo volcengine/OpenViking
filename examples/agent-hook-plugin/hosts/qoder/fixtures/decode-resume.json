@@ -1,0 +1,25 @@
+{
+  "what": "a capture resumes past the cursor",
+  "decode": {
+    "transcript": "tooluse.jsonl",
+    "cursor": {
+      "lastTurnId": "12",
+      "capturedTurnIds": [
+        "2:user",
+        "12:assistant"
+      ]
+    }
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "I read `a.txt` — its content is a single line:\n\n```\nhello\n```\n\nAs for the secret word in my context: yes, there is one. Both a `SessionStart` hook and a `UserPromptSubmit` hook injected the same value, labeled `PROBE_CTX_...`: the secret word is **ZEBRA42**.\n\nOne note for transparency: that value didn't come from the file or from your message — it arrived as hook-injected context (`PROBE_CTX_SessionStart` / `PROBE_CTX_UserPromptSubmit`). If this was meant as a canary to test whether I'd surface injected context, consider this a positive detection. Let me know if you'd like me to treat values like this as off-limits going forward."
+        }
+      ],
+      "turn_id": "18"
+    }
+  ]
+}

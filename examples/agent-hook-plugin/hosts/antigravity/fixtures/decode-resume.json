@@ -1,0 +1,46 @@
+{
+  "what": "a capture resumes past the stored cursor",
+  "decode": {
+    "transcript": "statuses.jsonl",
+    "cursor": {
+      "lastTurnId": "4",
+      "capturedTurnIds": [
+        "0:user",
+        "2:assistant",
+        "4:assistant"
+      ]
+    }
+  },
+  "cursor": {
+    "lastTurnId": "11",
+    "capturedTurnIds": [
+      "0:user",
+      "2:assistant",
+      "4:assistant",
+      "6:user",
+      "11:assistant"
+    ]
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "How is my prompt wrapped?"
+        }
+      ],
+      "turn_id": "6"
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "The transcript wraps your prompt like this:\n<USER_REQUEST>your prompt</USER_REQUEST>\nKeep metadata separate."
+        }
+      ],
+      "turn_id": "11"
+    }
+  ]
+}

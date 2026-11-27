@@ -1,0 +1,13 @@
+{
+  "what": "a host-generated continuation is not a prompt",
+  "read": {
+    "event": "user-prompt-submit",
+    "payload": {
+      "prompt": "continue",
+      "is_internal_continuation": true
+    }
+  },
+  "expect": {
+    "prompt": ""
+  }
+}

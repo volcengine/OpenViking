@@ -2,10 +2,11 @@
  * What a session's events carried that its transcript will not: the prompt a
  * host leaves out of its turn-end payload, a tool result only a hook saw. A
  * host's `read` hands a note over, the flow appends it beside the session's
- * state under the session lock, and `decode` gets them all back.
+ * state under the session lock, and `decode` gets them all back until a
+ * capture has settled every turn it decoded.
  */
 
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, readFile, rm } from "node:fs/promises";
 
 import { parseJsonl } from "./turns.mjs";
 
@@ -21,4 +22,8 @@ export async function readNotes(stateFile) {
   } catch {
     return [];
   }
+}
+
+export async function clearNotes(stateFile) {
+  await rm(notesFile(stateFile), { force: true });
 }

@@ -19,8 +19,7 @@ import { after, before, test } from "node:test";
 
 import { loadAgentHookConfig } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
 import { ROOT } from "./sync.mjs";
-import { scrubOpenVikingEnv, writeCredentialFiles } from "./testing/support.mjs";
-import { HOSTS } from "../agent-hook-plugin/hosts/index.mjs";
+import { loadHookHosts, scrubOpenVikingEnv, writeCredentialFiles } from "./testing/support.mjs";
 import { readProxyConfig as agentHookProxy } from "../agent-hook-plugin/servers/mcp-proxy.mjs";
 import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
 import { readProxyConfig as claudeCodeProxy } from "../claude-code-memory-plugin/servers/mcp-proxy.mjs";
@@ -43,6 +42,8 @@ const CODEX_ENV_VARS = JSON.parse(readFileSync(join(ROOT, "examples", "codex-mem
 // `@deepseek-ai/dsh-subprocess` treats as credentials.
 const DSH_SCRUBBED = /KEY|PASSWORD|SECRET|TOKEN/i;
 const dshInherited = (env) => Object.fromEntries(Object.entries(env).filter(([name]) => !DSH_SCRUBBED.test(name)));
+
+const HOSTS = await loadHookHosts();
 
 const HARNESSES = [
   {
