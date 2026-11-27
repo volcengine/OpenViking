@@ -379,6 +379,8 @@ export class Store {
         ON cognition_journal(epoch, seq);
       CREATE INDEX IF NOT EXISTS cognition_journal_runtime_token
         ON cognition_journal(runtime_token, seq);
+      CREATE INDEX IF NOT EXISTS cognition_journal_chat_thread
+        ON cognition_journal(chat_id, thread_id, seq);
 
       -- A prior sidecar may have died after Lark accepted an action but before
       -- its local commit. Preserve that ambiguity for catch-up; never silently
@@ -1636,6 +1638,35 @@ export class Store {
     const rows = this.db.prepare(`SELECT * FROM connector_events WHERE ${where} ORDER BY seq DESC LIMIT ?`)
       .all(scopeKey, seq, limit);
     return { total, rows: rows.reverse().map(rowToInbound) };
+  }
+
+  // What was said in one chat, or one thread of it, before the inbound
+  // `inboundSeq` was journaled: its last `limit` journal lines (inbound and
+  // the agent's own outbound), oldest first. A thread's messages carry its
+  // thread_id; the message that opened it does not (see journalMessage).
+  scopeJournalBefore({ chatId, threadId = null, inboundSeq, limit }) {
+    if (!chatId) return [];
+    const at = this.db.prepare("SELECT seq FROM cognition_journal WHERE kind = 'inbound' AND inbound_seq = ? ORDER BY seq LIMIT 1")
+      .get(inboundSeq);
+    const rows = this.db.prepare(`
+      SELECT * FROM cognition_journal
+      WHERE chat_id = ? AND thread_id IS ? AND seq < ? AND kind IN ('inbound', 'outbound')
+        AND status IN ('PENDING', 'COMMITTED', 'UNCERTAIN')
+      ORDER BY seq DESC LIMIT ?
+    `).all(chatId, threadId, at ? number(at.seq) : Number.MAX_SAFE_INTEGER, limit);
+    return rows.reverse().map(rowToCognitionJournal);
+  }
+
+  // The journal line of one message in a chat, the agent's or someone else's.
+  journalMessage(chatId, messageId) {
+    if (!chatId || !messageId) return null;
+    const row = this.db.prepare(`
+      SELECT * FROM cognition_journal
+      WHERE chat_id = ? AND message_id = ? AND kind IN ('inbound', 'outbound')
+        AND status IN ('PENDING', 'COMMITTED', 'UNCERTAIN')
+      ORDER BY seq LIMIT 1
+    `).get(chatId, messageId);
+    return row ? rowToCognitionJournal(row) : null;
   }
 
   // The last message a person wrote in this chat/thread, up to `seq`; 0 if none.

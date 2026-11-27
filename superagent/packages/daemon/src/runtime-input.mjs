@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { lookupMemberName, sanitizeMemberName } from './roster.mjs';
+import { normalizeEvent } from './event.mjs';
 
 // Runtime-neutral authenticated envelope shared by every adapter. Untrusted
 // content stays on one physical line so it cannot forge metadata.
@@ -211,6 +212,67 @@ export function formatInboundLine(message, resolveName = null, authenticated = {
     + ` time=${isoMinute(message.createTimeMs)} from=${fromLabel(message.chatId, message.senderId, resolveName, message.source, message.senderName)}${ownerTag}`
     + `${BOT_SENDERS.has(message.senderType) ? ' sender=bot' : ''}${botsTag}${replyTag}${mentionTag}${idleTag}${undecidedTag}] ${renderInboundContent(message)}`;
   return line;
+}
+
+// `[daemon context …]` after a group line: the last lines before it in its
+// chat, or in its thread (with the message that opened the thread while the
+// thread is short), oldest first. A continuous session holds a chat's lines
+// among those of every other chat; here they sit next to the line they lead up
+// to, so whom it answers can be read off them. They are history the agent was
+// shown, not inputs: no msg= or event= to decide on, and each one clipped.
+export const CONTEXT_LINES = 5;
+const CONTEXT_CHARS = 200;
+const NOT_SAID = new Set(['reaction', 'recall', 'card_action']);
+
+export function scopeContext(store, event, inboundSeq, options = {}) {
+  if (event.chatType !== 'group' || !event.chatId || NOT_SAID.has(event.messageType) || !store?.scopeJournalBefore) return '';
+  // Context only helps: a failure to read it never holds up the line.
+  try {
+    return contextBlock(store, event, inboundSeq, options);
+  } catch {
+    return '';
+  }
+}
+
+function contextBlock(store, event, inboundSeq, { isOwner = () => false, limit = CONTEXT_LINES }) {
+  const threadId = event.threadId ?? null;
+  // Reactions and clicks are journaled too but say nothing: read past them.
+  let lines = store.scopeJournalBefore({ chatId: event.chatId, threadId, inboundSeq, limit: limit * 3 })
+    .map((item) => contextLine(store, item, isOwner)).filter(Boolean).slice(-limit);
+  if (threadId && lines.length < limit && event.threadRootId) {
+    const root = store.journalMessage(event.chatId, event.threadRootId);
+    const line = root ? contextLine(store, root, isOwner) : null;
+    if (line) lines = [line, ...lines];
+  }
+  if (lines.length === 0) return '';
+  const label = event.messageId ? `msg=${event.messageId}` : `event=${event.eventId}`;
+  return [`[daemon context ${label}: the last ${lines.length} lines before it in this ${threadId ? 'thread' : 'chat'}, oldest first]`,
+    ...lines].join('\n');
+}
+
+function clipped(text) {
+  const chars = [...oneLine(text).trim()];
+  return chars.length > CONTEXT_CHARS ? `${chars.slice(0, CONTEXT_CHARS).join('')}…` : chars.join('');
+}
+
+function contextLine(store, item, isOwner) {
+  const time = isoMinute(item.atMs);
+  if (item.kind === 'outbound') return `- ${time} from=me: ${clipped(item.text)}`;
+  let message = null;
+  try {
+    message = item.metadata?.event ? normalizeEvent(item.metadata.event) : null;
+  } catch { /* an older row: its text and sender still do */ }
+  if (!message) return `- ${time} from=${fromLabel(item.chatId, item.actor)}: ${clipped(item.text)}`;
+  if (NOT_SAID.has(message.messageType)) return null;
+  const replyTo = resolveReplyTarget(store, message);
+  const replyTag = replyTo?.kind === 'me'
+    ? ' reply_to=me'
+    : replyTo?.kind === 'user'
+      ? ` reply_to=${fromLabel(replyTo.chatId ?? message.chatId, replyTo.senderId, null, message.source, replyTo.senderName)}`
+      : '';
+  return `- ${time} from=${fromLabel(message.chatId, message.senderId, null, message.source, message.senderName)}`
+    + `${isOwner(message) ? ' owner=1' : ''}${BOT_SENDERS.has(message.senderType) ? ' sender=bot' : ''}${replyTag}`
+    + `: ${clipped(quotedContent(message))}`;
 }
 
 // A quote-reply's target, resolved from local history: 'me' when the sender

@@ -199,7 +199,9 @@ describe('daemon event path (mock env)', { concurrency: false }, () => {
         env.receive(textMessage({ messageId, chatId: 'oc-group', chatType: 'group', text: '@_user_1 帮看看', mentions }));
         await env.waitForCodexInput(new RegExp(messageId));
         await env.daemon.agentRuntime.whenIdle();
-        return env.codexInput().find((entry) => entry.text.includes(messageId)).text;
+        // The line itself; the lines before it follow as [daemon context].
+        return env.codexInput().find((entry) => entry.text.includes(messageId)).text.split('\n')
+          .find((line) => line.startsWith('[chat=') && line.includes(`msg=${messageId} `));
       };
       assert.match(await send('om-to-me', [mention('ou_mockSelf123456')]), / mention=me\] @TestBot 帮看看$/);
       assert.match(await send('om-to-twin', [mention('ou_twin1234567890')]), / mention=other\] @TestBot 帮看看$/);

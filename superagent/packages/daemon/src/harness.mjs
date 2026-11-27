@@ -4,7 +4,7 @@
 import { normalizeEvent, deterministicFilter } from './event.mjs';
 import { commandCandidate, parseCommand } from './commands.mjs';
 import { GroupBurstRouter } from './group-burst.mjs';
-import { BOT_SENDERS, formatInboundLine, resolveReplyTarget, eventDeliveryItem, senderLabel } from './runtime-input.mjs';
+import { BOT_SENDERS, formatInboundLine, resolveReplyTarget, eventDeliveryItem, scopeContext, senderLabel } from './runtime-input.mjs';
 import { opaqueRef, safeError } from './logger.mjs';
 import { parseProtocolLine } from './connectors/protocol.mjs';
 
@@ -245,7 +245,8 @@ export class Harness {
           ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, result.inbound.seq) } : {}),
       });
       const hint = event.chatId ? this.taskHint?.(event, { owner }) ?? '' : '';
-      this.route(eventDeliveryItem(event, result.inbound.seq, { text: [line, hint, recall].filter(Boolean).join('\n') }),
+      const context = scopeContext(this.store, event, result.inbound.seq, { isOwner: (message) => this.isOwner(message) });
+      this.route(eventDeliveryItem(event, result.inbound.seq, { text: [line, hint, context, recall].filter(Boolean).join('\n') }),
         inputMeta(event, { owner, mention }));
     });
   }

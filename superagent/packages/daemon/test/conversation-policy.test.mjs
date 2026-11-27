@@ -316,6 +316,8 @@ describe('the instance role', () => {
       assert.match(text, /## Role\n\nYour soul [^\n]*viking:\/\/~\/memories\/soul\.md[^\n]*\n\nRole boundary:/);
       assert.match(text, /In a group, most messages are not for you\. Settle whom each one is for/);
       assert.match(text, /The Role decides which of these you take up; where it says nothing, stay silent\./);
+      assert.match(text, /`\[daemon context …\]`: the last few lines before it in the same chat or thread/);
+      assert.match(text, /a fact they lack that you have checked yourself/);
     }
     const custom = assembleConversationPolicy({ connectors: ['lark'], soulUri: 'viking://~/memories/team/soul.md' });
     assert.match(custom, /kept in OpenViking at `viking:\/\/~\/memories\/team\/soul\.md`/);
