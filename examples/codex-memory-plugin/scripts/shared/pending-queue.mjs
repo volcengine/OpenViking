@@ -198,9 +198,17 @@ async function recoverStaleProcessing(dir) {
  * @param {number} options.createdAt - optional queue timestamp override
  * @param {string} options.origin - the server and identity it is queued for
  */
+// Entries replay in createdAt order, so two queued in the same millisecond
+// must not share one.
+let lastCreatedAt = 0;
+
 export async function enqueue(type, sessionId, payload, options = {}) {
   const dir = getPendingDir();
-  const now = Number.isFinite(options.createdAt) ? options.createdAt : Date.now();
+  let now = options.createdAt;
+  if (!Number.isFinite(now)) {
+    now = Math.max(Date.now(), lastCreatedAt + 1);
+    lastCreatedAt = now;
+  }
   const origin = options.origin || undefined;
   const dedup = type !== "addMessage";
   const dedupKey = dedup ? makeDedupKey(type, sessionId, payload, origin) : randomUUID();
