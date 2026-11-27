@@ -122,19 +122,25 @@ async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
     assert current_body["result"]["current"]["values"]["api_key"] == "sample"
     assert current_body["result"]["meta"]["active_version"] == 1
 
+    second_values = {"api_key": "secret-2", "new_key": "x"}
     second = await client.post(
         "/api/v1/privacy-configs/credential/demo-skill",
         json={
-            "values": {"api_key": "secret-2"},
+            "values": second_values,
             "change_reason": "rotate",
         },
     )
     assert second.status_code == 200
     assert second.json()["result"]["version"] == 2
+    assert second.json()["result"]["values"] == second_values
 
     versions = await client.get("/api/v1/privacy-configs/credential/demo-skill/versions")
     assert versions.status_code == 200
     assert versions.json()["result"] == [1, 2]
+    missing = await client.get("/api/v1/privacy-configs/credential/demo-skill/versions/10")
+    assert missing.status_code == 404
+    assert missing.json()["status"] == "error"
+    assert missing.json()["error"]["code"] == "NOT_FOUND"
 
     activate = await client.post(
         "/api/v1/privacy-configs/credential/demo-skill/activate",
@@ -144,31 +150,7 @@ async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
     assert activate.json()["result"]["version"] == 1
 
     final_current = await client.get("/api/v1/privacy-configs/credential/demo-skill")
-    assert final_current.json()["result"]["current"]["values"]["api_key"] == "sample"
-
-
-async def test_privacy_config_update_allows_new_keys(client: httpx.AsyncClient):
-    create = await client.post(
-        "/api/v1/privacy-configs/skill/demo-skill-unknown-key",
-        json={
-            "values": {"api_key": "secret-1"},
-            "change_reason": "seed",
-        },
-    )
-    assert create.status_code == 200
-
-    update = await client.post(
-        "/api/v1/privacy-configs/skill/demo-skill-unknown-key",
-        json={
-            "values": {"api_key": "secret-2", "new_key": "x"},
-            "change_reason": "extend-keys",
-        },
-    )
-    assert update.status_code == 200
-    body = update.json()
-    assert body["status"] == "ok"
-    assert body["result"]["values"]["api_key"] == "secret-2"
-    assert body["result"]["values"]["new_key"] == "x"
+    assert final_current.json()["result"]["current"]["values"] == {"api_key": "sample"}
 
 
 async def test_privacy_config_patch_creates_target_and_atomically_merges_fields(
@@ -188,10 +170,11 @@ async def test_privacy_config_patch_creates_target_and_atomically_merges_fields(
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["result"]["version"] == 2
-    assert updated.json()["result"]["values"] == {
-        "pat": "github_pat_mock_value",
-        "username": "alice",
-    }
+    expected = {"pat": "github_pat_mock_value", "username": "alice"}
+    assert updated.json()["result"]["values"] == expected
+    current = await client.get("/api/v1/privacy-configs/credential/github")
+    assert current.status_code == 200, current.text
+    assert current.json()["result"]["current"]["values"] == expected
 
 
 async def test_privacy_api_rejects_invalid_target_with_structured_format_error(
@@ -225,25 +208,6 @@ async def test_privacy_api_rejects_oversized_values_without_echoing_secret(
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
     assert response.json()["error"]["details"]["reason"] == "string value too large"
     assert secret not in response.text
-
-
-async def test_privacy_config_get_version_not_found(client: httpx.AsyncClient):
-    create = await client.post(
-        "/api/v1/privacy-configs/skill/demo-skill-version-not-found",
-        json={
-            "values": {"api_key": "secret-1"},
-            "change_reason": "seed",
-        },
-    )
-    assert create.status_code == 200
-
-    missing = await client.get(
-        "/api/v1/privacy-configs/skill/demo-skill-version-not-found/versions/10"
-    )
-    assert missing.status_code == 404
-    body = missing.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "NOT_FOUND"
 
 
 async def test_privacy_config_target_not_found(client: httpx.AsyncClient):
@@ -393,6 +357,16 @@ async def test_privacy_config_delete_is_idempotent_and_removes_history(
     deleted_again = await client.delete("/api/v1/privacy-configs/credential/delete-me")
     assert deleted_again.status_code == 200, deleted_again.text
     assert deleted_again.json()["result"]["deleted"] is False
+
+    recreated = await client.post(
+        "/api/v1/privacy-configs/credential/delete-me",
+        json={"values": {"api_key": "replacement"}},
+    )
+    assert recreated.status_code == 200, recreated.text
+    assert recreated.json()["result"]["version"] == 1
+    old_version = await client.get("/api/v1/privacy-configs/credential/delete-me/versions/2")
+    assert old_version.status_code == 404
+    assert old_version.json()["error"]["code"] == "NOT_FOUND"
 
 
 async def test_privacy_scan_is_dry_run_by_default_and_fix_rewrites_content(

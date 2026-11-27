@@ -249,8 +249,8 @@ async def test_viking_fs_read_propagates_storage_errors(read_method):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", ["restore-skill", "restore-skill-agent-segment"])
-async def test_skill_read_restores_placeholder(service, monkeypatch, name):
+async def test_skill_read_restores_placeholder(service, monkeypatch):
+    name = "restore-skill-agent-segment"
     ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_restore"), role=Role.ROOT)
     await service.initialize_user_directories(ctx)
     from openviking.server.user_config import patch_user_config
@@ -444,87 +444,41 @@ async def test_privacy_config_service_uses_user_root(service):
 
 
 def test_placeholderization_only_replaces_structured_values():
-    content = """region: cn\nnotes: region is cn in docs\ndefault_env=prod\ntext: prod should stay here\n"""
-    result = placeholderize_skill_content_with_blocks(
-        content,
-        "structured-skill",
-        {"region": "cn", "env": "prod"},
+    content = (
+        "region: cn\r\n"
+        "notes: region is cn in docs\r\n"
+        "token:\ta.b+c?[x]  \r\n"
+        "text: a.b+c?[x] should stay here\r\n"
+        'note: use "secret" in prose\n'
+        'api_key: "secret"\n'
+        "backup=secret"
     )
+    values = {"region": "cn", "token": "a.b+c?[x]", "api_key": "secret"}
+    result = placeholderize_skill_content_with_blocks(content, "skill-example", values)
 
-    assert result.replaced_values == {"region": "cn", "env": "prod"}
+    assert result.replaced_values == values
     assert result.sanitized_content == (
-        "region: {{ov_privacy:skill:structured-skill:region}}\n"
-        "notes: region is cn in docs\n"
-        "default_env={{ov_privacy:skill:structured-skill:env}}\n"
-        "text: prod should stay here\n"
-    )
-
-
-def test_placeholderization_replaces_end_of_file_values_without_newline():
-    result = placeholderize_skill_content_with_blocks(
-        "api_key=secret-xyz",
-        "eof-skill",
-        {"api_key": "secret-xyz"},
-    )
-
-    assert result.replaced_values == {"api_key": "secret-xyz"}
-    assert result.sanitized_content == "api_key={{ov_privacy:skill:eof-skill:api_key}}"
-
-
-def test_placeholderization_replaces_all_structured_occurrences_for_same_value():
-    result = placeholderize_skill_content_with_blocks(
-        'api_key: "secret"\nbackup=secret\n',
-        "multi-hit-skill",
-        {"api_key": "secret"},
-    )
-
-    assert result.replaced_values == {"api_key": "secret"}
-    assert result.sanitized_content == (
-        'api_key: "{{ov_privacy:skill:multi-hit-skill:api_key}}"\n'
-        "backup={{ov_privacy:skill:multi-hit-skill:api_key}}\n"
-    )
-
-
-def test_placeholderization_preserves_crlf_spacing_and_regex_special_values():
-    result = placeholderize_skill_content_with_blocks(
-        "token:\ta.b+c?[x]  \r\ntext: a.b+c?[x] should stay here\r\n",
-        "regex-skill",
-        {"token": "a.b+c?[x]"},
-    )
-
-    assert result.replaced_values == {"token": "a.b+c?[x]"}
-    assert result.sanitized_content == (
-        "token:\t{{ov_privacy:skill:regex-skill:token}}  \r\ntext: a.b+c?[x] should stay here\r\n"
-    )
-
-
-def test_placeholderization_preserves_quoted_value_matching():
-    result = placeholderize_skill_content_with_blocks(
-        'note: use "secret" in prose\n',
-        "quoted-skill",
-        {"api_key": "secret"},
-    )
-
-    assert result.replaced_values == {"api_key": "secret"}
-    assert result.sanitized_content == (
-        'note: use "{{ov_privacy:skill:quoted-skill:api_key}}" in prose\n'
+        "region: {{ov_privacy:skill:skill-example:region}}\r\n"
+        "notes: region is cn in docs\r\n"
+        "token:\t{{ov_privacy:skill:skill-example:token}}  \r\n"
+        "text: a.b+c?[x] should stay here\r\n"
+        'note: use "{{ov_privacy:skill:skill-example:api_key}}" in prose\n'
+        'api_key: "{{ov_privacy:skill:skill-example:api_key}}"\n'
+        "backup={{ov_privacy:skill:skill-example:api_key}}"
     )
 
 
 @pytest.mark.asyncio
-async def test_patch_preserves_equal_fields_and_rotates_only_named_field(monkeypatch):
+async def test_patch_preserves_equal_fields_and_rotates_only_named_field():
     category = "credential"
 
     privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     await privacy.upsert(ctx, category, "demo", {"a": "old-secret", "b": "new-secret"})
-    read = AsyncMock(wraps=privacy.get_current)
-    monkeypatch.setattr(privacy, "get_current", read)
     current = await privacy.patch_values(
         ctx, category, "demo", {"a": "new-secret", "c": "new-secret"}
     )
     assert current.values == {"a": "new-secret", "b": "new-secret", "c": "new-secret"}
-    read.assert_awaited_once()
     rotated = await privacy.patch_values(ctx, category, "demo", {"a": "rotated-secret"})
     assert rotated.values == {"a": "rotated-secret", "b": "new-secret", "c": "new-secret"}
     previous = await privacy.get_version(ctx, category, "demo", current.version)

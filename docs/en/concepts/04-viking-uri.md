@@ -136,13 +136,11 @@ viking://user/{user_id}/peers/{peer_id}/resources/
 ```
 viking://agent/skills/search-web                    # A specific skill definition
 viking://agent/skills/                              # All skill definitions
-viking://agent/endpoints/                           # Communication endpoints (a2a, anp, etc.) (planned)
-viking://agent/tools/mcp/                           # MCP tool configuration (planned)
-viking://agent/payments/ap2/                        # Payment configuration (planned)
+viking://agent/tools/                               # Shared MCP tool definitions
 ```
 
 `viking://agent/...` is an account-shared directory for capabilities and configuration,
-including skills, endpoints, tools, payments, and other subdirectories. Directory names
+with preset `skills` and `tools` subdirectories. Directory names
 do not identify agents, and `actor_peer_id` does not filter this scope. Sharing is limited
 to the current account. Peer data belongs under `viking://user/<user_id>/peers/<peer_id>/...`.
 

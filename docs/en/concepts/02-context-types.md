@@ -149,14 +149,12 @@ viking://agent/skills/{skill-name}/    # Override via -p/--parent-auto-create, p
 
 ### AgentDefinedContextType Subtypes
 
-The table below lists the design categories for shared capabilities. Skills are supported and installed in the user-private directory by default, with an option to use `viking://agent/skills/`. The other categories are planned and do not imply available APIs:
+Skills are installed in the user-private directory by default and can also be shared with the account.
 
 | Subtype | Location | Description |
 |---------|----------|-------------|
 | **Skill** | `agent/skills/` | Traditional workflow definitions, such as search and code generation |
-| **Endpoint** | `agent/endpoints/` | Communication endpoint configuration (a2a, anp, etc.) (planned) |
-| **Tool** | `agent/tools/` | Tool configuration (mcp, etc.) (planned) |
-| **Payment** | `agent/payments/` | Payment capability configuration (ap2, etc.) (planned) |
+| **Tool** | `agent/tools/` | Shared tool definitions from MCP servers |
 
 ### Usage
 

@@ -16,14 +16,15 @@ import {
   ScheduleFields,
 } from '#/features/workbench/compile/components/schedule-fields'
 import type {
-  CompileConfig,
   CompileRequest,
   CompileTask,
   UpdateSchedule,
 } from '#/features/workbench/compile/lib/api'
 import {
   createCompile,
+  createCompileConfig,
   fetchCompileConfig,
+  isCompileName,
   fetchCompileTask,
   lookupSubmission,
   updateCompileConfig,
@@ -53,6 +54,7 @@ import {
 import { isOvClientError } from '#/shared/api/ov-client/index'
 import { createRandomUuid } from '#/shared/lib/browser-crypto'
 import { Button } from '#/shared/ui/button'
+import { Input } from '#/shared/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -87,11 +89,11 @@ function readDraft(key: string): Draft {
 export function CompileForm({
   fromTask,
   sourceUri,
-  target,
+  compileName,
 }: {
   fromTask?: string
   sourceUri?: string
-  target?: string
+  compileName?: string
 }) {
   const { t } = useTranslation('compile'),
     navigate = useNavigate()
@@ -103,14 +105,15 @@ export function CompileForm({
   const queryClient = useQueryClient()
   const [autoUpdate, setAutoUpdate] = useState(false)
   const [schedule, setSchedule] = useState<UpdateSchedule>(defaultSchedule)
+  const [planName, setPlanName] = useState('')
   const config = useQuery({
-    queryKey: ['compile-config', identityScopeKey, target],
-    queryFn: ({ signal }) => fetchCompileConfig(target!, signal),
-    enabled: !!target,
+    queryKey: ['compile-config', identityScopeKey, compileName],
+    queryFn: ({ signal }) => fetchCompileConfig(compileName!, signal),
+    enabled: !!compileName,
     staleTime: 0,
   })
   const [recoverKey, setRecoverKey] = useState(() => {
-    if (target) return null
+    if (compileName) return null
     try {
       return sessionStorage.getItem(submissionKey)
     } catch {
@@ -125,8 +128,8 @@ export function CompileForm({
     clearCompileHandoff()
   }, [])
   const [draft, setDraft] = useState(() =>
-    target
-      ? { ...empty, to: target }
+    compileName
+      ? empty
       : recoverKey
         ? savedDraft
         : handoff
@@ -144,7 +147,7 @@ export function CompileForm({
               },
   )
   const [args, setArgs] = useState(
-      !target && !recoverKey && handoff?.args
+      !compileName && !recoverKey && handoff?.args
         ? JSON.stringify(handoff.args, null, 2)
         : '',
     ),
@@ -175,14 +178,14 @@ export function CompileForm({
     enableBeforeUnload: () => !completed.current && !!args.trim(),
   })
   useEffect(() => {
-    if (completed.current || !draftStarted || target) return
+    if (completed.current || !draftStarted || compileName) return
     try {
       localStorage.setItem(draftKey, JSON.stringify(draft))
       setSavingError(false)
     } catch {
       setSavingError(true)
     }
-  }, [draft, draftKey, draftStarted, target])
+  }, [draft, draftKey, draftStarted, compileName])
   useEffect(() => {
     if (!config.isSuccess || !config.isFetchedAfterMount || filled.current)
       return
@@ -243,6 +246,15 @@ export function CompileForm({
         ? t('invalidUri')
         : '',
     to: targetError(draft.to.trim()) ? t(targetError(draft.to.trim())!) : '',
+    // Only new plans need a name; existing configurations keep theirs.
+    name:
+      compileName || !autoUpdate
+        ? ''
+        : !planName.trim()
+          ? t('schedule.nameRequired')
+          : !isCompileName(planName.trim())
+            ? t('schedule.nameInvalid')
+            : '',
     args: (() => {
       try {
         const parsed = parseArgs(args)
@@ -319,10 +331,10 @@ export function CompileForm({
   function isCurrent() {
     return mounted.current
   }
-  async function finish(result: CompileTask | CompileConfig) {
+  async function finish(result: CompileTask | { compile_name: string }) {
     if (!isCurrent()) return
     completed.current = true
-    if (!target) {
+    if (!compileName) {
       try {
         localStorage.removeItem(draftKey)
         sessionStorage.removeItem(submissionKey)
@@ -350,7 +362,7 @@ export function CompileForm({
   async function submit() {
     if (
       busy ||
-      (target &&
+      (compileName &&
         (!config.data || !config.isFetchedAfterMount || config.isError))
     )
       return
@@ -375,14 +387,16 @@ export function CompileForm({
           throw new Error(t('expiredSubmission'))
       }
       if (!submission.current && !validate()) return
-      if (target) {
+      if (compileName) {
         const body = request()
         await finish(
           await updateCompileConfig({
-            to: target,
+            compile_name: compileName,
             from: body.from,
             skill: body.skill,
             instruction: draft.instruction.trim() || null,
+            // Args are not editable here; updates replace them, so keep the saved ones.
+            args: config.data?.args ?? null,
             auto_update: autoUpdate,
             update_schedule: autoUpdate ? schedule : null,
           }),
@@ -412,9 +426,12 @@ export function CompileForm({
         if (!isCurrent()) return
       }
       if (autoUpdate && !submission.current && !restoredKey) {
-        // Saving a plan creates no task submission to recover by idempotency key.
+        // Saving a plan creates a named configuration and starts no execution.
         await finish(
-          await createCompile(request(), `${Date.now()}:${createRandomUuid()}`),
+          await createCompileConfig({
+            compile_name: planName.trim(),
+            ...request(),
+          }),
         )
         return
       }
@@ -477,25 +494,16 @@ export function CompileForm({
     ['sharedSkills', skills.shared],
   ] as const
   return (
-    <CompileShell title={t(target ? 'schedule.edit' : 'new')}>
-      {!target && <CapabilityNotice capability={capability} />}
-      {target && !config.isFetchedAfterMount && !config.isError && (
+    <CompileShell title={t(compileName ? 'schedule.edit' : 'new')}>
+      {!compileName && <CapabilityNotice capability={capability} />}
+      {compileName && !config.isFetchedAfterMount && !config.isError && (
         <p role="status">{t('loading')}</p>
       )}
-      {target && config.isError && (
+      {compileName && config.isError && (
         <CompileError
           error={config.error}
           retry={() => void config.refetch()}
         />
-      )}
-      {target && config.data?.last_error && (
-        <div role="status" className="break-words text-sm text-destructive">
-          <p>{t('schedule.lastRunFailed')}</p>
-          <details className="mt-2">
-            <summary className="cursor-pointer">{t('errors.details')}</summary>
-            <p className="mt-1 whitespace-pre-wrap">{config.data.last_error}</p>
-          </details>
-        </div>
       )}
       {recoverKey && (
         <Button
@@ -536,7 +544,7 @@ export function CompileForm({
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-muted-foreground">{t('formIntro')}</p>
-          {!target &&
+          {!compileName &&
             !draftStarted &&
             Object.values(savedDraft).some(Boolean) && (
               <Button
@@ -560,7 +568,7 @@ export function CompileForm({
           disabled={
             busy ||
             uncertain ||
-            (!!target &&
+            (!!compileName &&
               (!config.data || !config.isFetchedAfterMount || config.isError))
           }
           className="space-y-6 rounded-xl border bg-card p-5 disabled:opacity-60 sm:p-6"
@@ -690,7 +698,7 @@ export function CompileForm({
             attempted={attempted}
             sourceError={fieldErrors.sources}
             destinationError={fieldErrors.to}
-            targetReadOnly={!!target}
+            targetReadOnly={!!compileName}
           />
           <section className="space-y-2">
             <label
@@ -716,7 +724,39 @@ export function CompileForm({
             onEnabled={setAutoUpdate}
             onChange={setSchedule}
           />
-          {!target && (
+          {autoUpdate && !compileName && (
+            <section className="space-y-2">
+              <label
+                htmlFor="compile-name"
+                className="block text-sm font-medium"
+              >
+                {t('schedule.name')} <span className="text-destructive">*</span>
+              </label>
+              <Input
+                id="compile-name"
+                value={planName}
+                maxLength={64}
+                aria-invalid={attempted && !!fieldErrors.name}
+                aria-describedby={
+                  attempted && fieldErrors.name
+                    ? 'error-name'
+                    : 'compile-name-hint'
+                }
+                onChange={(e) => {
+                  setDraftStarted(true)
+                  setPlanName(e.target.value)
+                }}
+              />
+              <p
+                id="compile-name-hint"
+                className="text-xs text-muted-foreground"
+              >
+                {t('schedule.nameHint')}
+              </p>
+              {fieldError('name')}
+            </section>
+          )}
+          {!compileName && (
             <details id="compile-advanced" className="border-t pt-4">
               <summary className="cursor-pointer rounded text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
                 {t('advanced')}
@@ -747,13 +787,13 @@ export function CompileForm({
               })}
             </p>
           )}
-          {!target && draftStarted && (
+          {!compileName && draftStarted && (
             <p className="text-xs text-muted-foreground">
               {t(savingError ? 'storageFailed' : 'draft')}
             </p>
           )}
           <div className="flex flex-wrap justify-between gap-3">
-            {!target && (
+            {!compileName && (
               <Button
                 type="button"
                 variant="outline"
@@ -774,7 +814,7 @@ export function CompileForm({
               </Button>
             )}
             <div className="flex gap-2">
-              {!target && (
+              {!compileName && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -782,6 +822,7 @@ export function CompileForm({
                   onClick={() => {
                     setAutoUpdate(false)
                     setSchedule(defaultSchedule)
+                    setPlanName('')
                     setDraftStarted(true)
                     setDraft(empty)
                     setLocationRevision((value) => value + 1)
@@ -806,7 +847,7 @@ export function CompileForm({
                 type="submit"
                 disabled={
                   busy ||
-                  (target
+                  (compileName
                     ? !config.data ||
                       !config.isFetchedAfterMount ||
                       config.isError
@@ -820,7 +861,7 @@ export function CompileForm({
                     ? 'submitting'
                     : uncertain
                       ? 'retry'
-                      : target || autoUpdate
+                      : compileName || autoUpdate
                         ? 'schedule.save'
                         : 'start',
                 )}
