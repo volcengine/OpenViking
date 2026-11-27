@@ -35,19 +35,7 @@ class KeyMismatchError(EncryptionError):
     pass
 
 
-class KeyNotFoundError(EncryptionError):
-    """Key not found error."""
-
-    pass
-
-
 class ConfigError(EncryptionError):
     """Configuration error."""
-
-    pass
-
-
-class KMSError(EncryptionError):
-    """KMS service error."""
 
     pass

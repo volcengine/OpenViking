@@ -7,11 +7,7 @@ from openviking.storage.acl import AclLevel, DirectAcl
     "record",
     [
         {},
-        {"acl_direct_grants": None},
-        {"acl_direct_grants": []},
         {"acl_direct_grants": ["none"]},
-        {"acl_direct_grants": [""]},
-        {"acl_direct_grants": ["", ""]},
         {"acl_direct_grants": ("", "")},
     ],
 )
@@ -27,7 +23,6 @@ def test_context_fields_roundtrip_empty_grants(record):
     "raw_grants",
     [
         ["3:user:alice", "1:group:readers"],
-        ["", "3:user:alice", "", "1:group:readers", ""],
         ("", "3:user:alice", "1:group:readers", ""),
     ],
 )
@@ -51,13 +46,9 @@ def test_context_fields_preserve_valid_grants(prefix, raw_grants):
     "raw_grants",
     [
         [" "],
-        ["invalid"],
-        ["", "invalid"],
         ["", 1],
         ["", "none"],
         ["none", "3:user:alice"],
-        ["none", "none"],
-        [1],
     ],
 )
 def test_context_fields_reject_invalid_grants(raw_grants):

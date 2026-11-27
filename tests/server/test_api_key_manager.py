@@ -428,22 +428,6 @@ async def test_account_mutation_preserves_registry_when_baseline_is_missing(
 # ---- User lifecycle tests ----
 
 
-async def test_register_user(manager: APIKeyManager):
-    """register_user should create a user with given role."""
-    from openviking.server.api_keys import parse_api_key
-
-    acct = _uid()
-    await manager.create_account(acct, "alice")
-    key = await manager.register_user(acct, "bob", "user")
-    assert parse_api_key(key)[:2] == (acct, "bob")
-
-    identity = await manager.resolve_identity(key)
-    assert identity.role == Role.USER
-    assert identity.account_id == acct
-    assert identity.user_id == "bob"
-    assert await manager.get_registered_user_role(acct, "bob") == Role.USER
-
-
 async def test_register_user_in_nonexistent_account_raises(manager: APIKeyManager):
     """Registering user in nonexistent account should raise NotFoundError."""
     with pytest.raises(NotFoundError):
@@ -516,7 +500,6 @@ async def test_regenerate_key(manager: APIKeyManager):
     old_key = await manager.register_user(account, "bob", Role.USER)
     original_fingerprint = hashlib.sha256(old_key.encode()).hexdigest()
     assert await manager.get_user_key_fingerprint(account, "bob") == original_fingerprint
-    assert await manager.get_user_key_fingerprint(account, "bob") == original_fingerprint
 
     new_key = await manager.regenerate_key(account, "bob")
     assert new_key != old_key
@@ -579,144 +562,74 @@ async def test_conditional_rotation_checks_persisted_key(manager_service, hashin
 
 
 async def test_set_role(manager: APIKeyManager):
-    """set_role should update user's role in both storage and index."""
+    """An issued key keeps its identity and sees the registered role change."""
+    from openviking.server.api_keys import parse_api_key
+
     acct = _uid()
     await manager.create_account(acct, "alice")
-    bob_key = await manager.register_user(acct, "bob", "user")
-
-    assert (await manager.resolve_identity(bob_key)).role == Role.USER
+    key = await manager.register_user(acct, "bob", "user")
+    assert parse_api_key(key)[:2] == (acct, "bob")
+    identity = await manager.resolve_identity(key)
+    assert (identity.account_id, identity.user_id, identity.role) == (acct, "bob", Role.USER)
+    assert await manager.get_registered_user_role(acct, "bob") == Role.USER
 
     await manager.set_role(acct, "bob", "admin")
-    assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
-
     with pytest.raises(PermissionDeniedError, match="server.root_api_key"):
         await manager.set_role(acct, "bob", Role.ROOT)
-    assert (await manager.resolve_identity(bob_key)).role == Role.ADMIN
-
-
-async def test_get_users(manager: APIKeyManager):
-    """list_users should list all users in an account."""
-    acct = _uid()
-    await manager.create_account(acct, "alice")
-    await manager.register_user(acct, "bob", "user")
-
-    users = await _list_users(manager, acct)
-    user_ids = {u["user_id"] for u in users}
-    assert user_ids == {"alice", "bob"}
-
-    roles = {u["user_id"]: u["role"] for u in users}
-    assert roles["alice"] == "admin"
-    assert roles["bob"] == "user"
-
-    await manager.begin_deletion(
-        acct,
-        "bob",
-        task_id="delete-bob",
-        owner_account_id=acct,
-        owner_user_id="alice",
-    )
-    users = await _list_users(manager, acct)
-    assert {u["user_id"] for u in users} == {"alice"}
-
-
-async def test_get_users_name_filter(manager: APIKeyManager):
-    """list_users name_filter uses fnmatch wildcard matching against user IDs."""
-    acct = _uid()
-    await manager.create_account(acct, "alice")
-    await manager.register_user(acct, "alan", "user")
-    await manager.register_user(acct, "bob", "user")
-
-    # Wildcard substring match
-    matched = {u["user_id"] for u in await _list_users(manager, acct, name_filter="al*")}
-    assert matched == {"alice", "alan"}
-
-    # Exact match (no wildcard) only hits the literal ID
-    assert {u["user_id"] for u in await _list_users(manager, acct, name_filter="alice")} == {
-        "alice"
-    }
-
-    # No match
-    assert await _list_users(manager, acct, name_filter="zzz*") == []
-
-    # No filter returns all
-    assert {u["user_id"] for u in await _list_users(manager, acct)} == {"alice", "alan", "bob"}
-
-
-async def test_get_accounts_filter(manager: APIKeyManager):
-    """list_accounts supports fnmatch name_filter, mirroring list_users."""
-    prefix = f"acme_{uuid.uuid4().hex[:8]}"
-    first = f"{prefix}_alpha"
-    second = f"{prefix}_beta"
-    other = f"other_{uuid.uuid4().hex[:8]}"
-    await manager.create_account(first, "u1")
-    await manager.create_account(second, "u2")
-    await manager.create_account(other, "u3")
-
-    # Wildcard match returns only the two prefixed accounts
-    matched = {a["account_id"] for a in await manager.list_accounts(name_filter=f"{prefix}*")}
-    assert matched == {first, second}
-
-    # Exact match (no wildcard) hits a single account
-    assert {a["account_id"] for a in await manager.list_accounts(name_filter=first)} == {first}
-
-    # No filter returns all accounts (including the default one)
-    all_ids = {a["account_id"] for a in await manager.list_accounts()}
-    assert {first, second, other} <= all_ids
+    assert (await manager.resolve_identity(key)).role == Role.ADMIN
+    assert await manager.get_registered_user_role(acct, "bob") == Role.ADMIN
 
 
 async def test_get_users_pagination_and_ordering(manager: APIKeyManager):
-    """list_users returns users in creation order and honors limit/page."""
     acct = _uid()
     await manager.create_account(acct, "alice")
-    # Register out of alphabetical order; creation order is alice, dave, bob, carol.
-    await manager.register_user(acct, "dave", "user")
-    await manager.register_user(acct, "bob", "user")
-    await manager.register_user(acct, "carol", "user")
+    for user in ("dave", "alan", "carol"):
+        await manager.register_user(acct, user, "user")
 
-    # No limit -> all users, in creation order.
-    ids = [u["user_id"] for u in await _list_users(manager, acct)]
-    assert ids == ["alice", "dave", "bob", "carol"]
+    users = await _list_users(manager, acct)
+    assert [(u["user_id"], u["role"]) for u in users] == [
+        ("alice", Role.ADMIN),
+        ("dave", Role.USER),
+        ("alan", Role.USER),
+        ("carol", Role.USER),
+    ]
+    for page, expected in enumerate((["alice", "dave"], ["alan", "carol"], []), start=1):
+        assert [
+            u["user_id"] for u in await _list_users(manager, acct, limit=2, page=page)
+        ] == expected
+    for pattern, expected in (("al*", ["alice", "alan"]), ("alice", ["alice"]), ("zzz*", [])):
+        assert [
+            u["user_id"] for u in await _list_users(manager, acct, name_filter=pattern)
+        ] == expected
 
-    # First page of 2 (creation order).
-    page1 = [u["user_id"] for u in await _list_users(manager, acct, limit=2, page=1)]
-    assert page1 == ["alice", "dave"]
-
-    # Second page of 2 (creation order).
-    page2 = [u["user_id"] for u in await _list_users(manager, acct, limit=2, page=2)]
-    assert page2 == ["bob", "carol"]
-
-    # Page past the end is empty.
-    assert await _list_users(manager, acct, limit=2, page=3) == []
+    await manager.begin_deletion(
+        acct,
+        "alan",
+        task_id="delete-alan",
+        owner_account_id=acct,
+        owner_user_id="alice",
+    )
+    assert [u["user_id"] for u in await _list_users(manager, acct, name_filter="al*")] == ["alice"]
 
 
 async def test_get_accounts_pagination_and_ordering(manager: APIKeyManager):
-    """list_accounts returns accounts in creation order and honors limit/page."""
-    prefix = f"page_{uuid.uuid4().hex[:8]}"
-    # Creation order matches this list.
+    prefix = _uid()
     ids = [f"{prefix}_{suffix}" for suffix in ("delta", "alpha", "charlie", "bravo")]
-    for account_id in ids:
+    unrelated = _uid()
+    for account_id in [*ids, unrelated]:
         await manager.create_account(account_id, "u")
 
-    # No limit -> all matches, in creation order.
-    got = [a["account_id"] for a in await manager.list_accounts(name_filter=f"{prefix}*")]
-    assert got == ids
-
-    # First page of 2 (creation order).
-    page1 = [
-        a["account_id"]
-        for a in await manager.list_accounts(name_filter=f"{prefix}*", limit=2, page=1)
-    ]
-    assert page1 == ids[:2]
-
-    # Second page of 2 (creation order).
-    page2 = [
-        a["account_id"]
-        for a in await manager.list_accounts(name_filter=f"{prefix}*", limit=2, page=2)
-    ]
-    assert page2 == ids[2:]
-
-    # Page past the end is empty.
-    assert await manager.list_accounts(name_filter=f"{prefix}*", limit=2, page=3) == []
+    all_ids = [account["account_id"] for account in await manager.list_accounts()]
+    assert all_ids == ["default", *ids, unrelated]
+    assert [
+        account["account_id"] for account in await manager.list_accounts(name_filter=ids[0])
+    ] == ids[:1]
+    assert [
+        account["account_id"] for account in await manager.list_accounts(name_filter=f"{prefix}_*")
+    ] == ids
+    for page, expected in enumerate((ids[:2], ids[2:], []), start=1):
+        accounts = await manager.list_accounts(name_filter=f"{prefix}_*", limit=2, page=page)
+        assert [account["account_id"] for account in accounts] == expected
 
 
 async def test_user_and_group_persistence_across_reload(manager_service):
@@ -798,24 +711,14 @@ async def test_seeded_api_keys_are_predictable(manager: APIKeyManager):
     assert secret1 == secret2 == _seed_secret("alice", seed)
     assert key1 != key2
 
-
-async def test_seeded_register_and_regenerate_key(manager: APIKeyManager):
-    from openviking.server.api_keys import parse_api_key
-
-    acct = _uid()
-    await manager.create_account(acct, "alice")
-    old_key = await manager.register_user(acct, "bob", "user", seed="first-seed")
-    _, _, old_secret = parse_api_key(old_key)
-    assert old_secret == _seed_secret("bob", "first-seed")
-
-    new_key = await manager.regenerate_key(acct, "bob", seed="second-seed")
-    _, _, new_secret = parse_api_key(new_key)
-    assert new_secret == _seed_secret("bob", "second-seed")
-    assert new_key != old_key
-
+    old_key = await manager.register_user(acct1, "bob", "user", seed=seed)
+    assert parse_api_key(old_key) == (acct1, "bob", _seed_secret("bob", seed))
+    new_key = await manager.regenerate_key(acct1, "bob", seed="rotated-seed")
+    assert parse_api_key(new_key) == (acct1, "bob", _seed_secret("bob", "rotated-seed"))
     with pytest.raises(UnauthenticatedError):
         await manager.resolve_identity(old_key)
-    assert (await manager.resolve_identity(new_key)).user_id == "bob"
+    identity = await manager.resolve_identity(new_key)
+    assert (identity.account_id, identity.user_id, identity.role) == (acct1, "bob", Role.USER)
 
 
 async def test_seed_must_not_be_empty(manager: APIKeyManager):
