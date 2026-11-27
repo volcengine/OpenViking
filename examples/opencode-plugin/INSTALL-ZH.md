@@ -11,7 +11,7 @@
 
 需要先准备：
 
-- OpenCode 1.15.7+ 或 OpenCode 2.0.15+
+- OpenCode 2.0.15+
 - OpenViking HTTP Server
 - Node.js 18+
 - 如果服务端启用了认证，需要可用的 OpenViking API Key
@@ -48,7 +48,7 @@ curl -fsSL https://openviking.ai/install | bash
 }
 ```
 
-这份 `plugin` 配置同时兼容 v1 和 v2；v2 会在加载时规范化为原生的 `plugins`，无需手工迁移配置。
+OpenCode v2 会在加载时规范化为原生的 `plugins`，无需手工迁移配置。
 
 ## 安装方式三：源码安装
 
@@ -78,6 +78,7 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ├── openviking.js
 └── openviking/
     ├── index.mjs
+    ├── host.mjs
     ├── package.json
     ├── lib/
     └── servers/

@@ -1,33 +1,15 @@
-import type { OVClient } from "./client.js";
-import type { OVConfig } from "./config.js";
-import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
-import { applyInputFilters, compileInputFilters } from "./shared/input-filters.mjs";
 import { RecallLedger, ledgerKey } from "./lib/recall-ledger.mjs";
 
-export interface RecallCache {
-  block: string | null;
-  promptText: string;      // the query this cache is for
-}
-
+/**
+ * Where recalled context goes in pi's request. What to recall is the flow's
+ * (`runStage(host, "context", ...)`); this places the block it returned on the
+ * newest user message and replays earlier blocks from the ledger.
+ */
 export class RecallManager {
-  private client: OVClient;
-  private config: OVConfig;
-  private cache: RecallCache = { block: null, promptText: "" };
-  private pendingPrompt = "";
-  // Read lazily: the session manager that owns this id is constructed after the
-  // recall manager, and the id only exists once a session has been opened.
-  private sessionId: () => string | null;
+  private block: string | null = null;
   private ledger: RecallLedger | null;
 
-  constructor(
-    client: OVClient,
-    config: OVConfig,
-    sessionId: () => string | null = () => null,
-    ledger: RecallLedger | null = null,
-  ) {
-    this.client = client;
-    this.config = config;
-    this.sessionId = sessionId;
+  constructor(ledger: RecallLedger | null = null) {
     this.ledger = ledger;
   }
 
@@ -36,56 +18,9 @@ export class RecallManager {
     this.ledger?.open(piSessionId);
   }
 
-  queueSearch(userQuery: string): void {
-    this.pendingPrompt = userQuery;
-  }
-
-  async searchPending(): Promise<string | null> {
-    if (!this.pendingPrompt) return this.cache.block;
-
-    const userQuery = this.pendingPrompt;
-    this.pendingPrompt = "";
-    if (!isRecallEnabled(this.config)) {
-      this.cache = { block: null, promptText: userQuery };
-      return null;
-    }
-    // Filters run before the length gate, so a prompt whose only content was a
-    // stripped prefix counts as short rather than searching for the rest.
-    let query = userQuery;
-    const queryFilters = compileInputFilters(this.config.recallQueryFilters);
-    if (queryFilters.rules.length) {
-      const verdict = applyInputFilters(query, queryFilters.rules, { role: "user" });
-      if (verdict.dropped) {
-        this.cache = { block: null, promptText: userQuery };
-        return null;
-      }
-      query = verdict.text;
-    }
-    if (query.trim().length < this.config.minQueryLength) {
-      this.cache = { block: null, promptText: userQuery };
-      return null;
-    }
-
-    const block = await buildRecallBlock(
-      // 10s is this extension's own budget for a bare retrieval; when the
-      // request also spends a server fuse the helper hands down a longer
-      // deadline, and ignoring it would abort a request still inside its fuse.
-      (path, init, options) => this.client.fetchJSON(path, init, options),
-      this.config,
-      query,
-      {
-        actorPeerId: this.config.peerId,
-        // Under `actor` scope the effective peer is the only one asked, so a
-        // workspace whose id changed would lose everything written before it.
-        legacyPeerId: this.config.legacyPeerId,
-        // Passing the OV session id is what turns on server-side query
-        // expansion and the cross-turn dedup ledger.
-        sessionId: this.sessionId() ?? "",
-        excludeUris: this.config.recallExcludeUris,
-      },
-    );
-    this.cache = { block, promptText: userQuery };
-    return block;
+  /** The block this run's prompt recalled. */
+  setBlock(block: string | null): void {
+    this.block = block || null;
   }
 
   // --- Injection ---
@@ -103,7 +38,7 @@ export class RecallManager {
     messageIdFor: (message: any) => string | null = () => null,
   ): any[] {
     const ledger = this.ledger?.isOpen ? this.ledger : null;
-    if (!this.cache.block && !ledger) return messages;
+    if (!this.block && !ledger) return messages;
 
     // Locate the newest user message; everything before it is history.
     let lastUserIndex = -1;
@@ -132,7 +67,7 @@ export class RecallManager {
       }
 
       if (isNewest) {
-        const block = this.cache.block;
+        const block = this.block;
         if (block) {
           prependBlock(msg, block);
           // Key by the ORIGINAL content: that is what the next turn's deep
@@ -150,8 +85,7 @@ export class RecallManager {
   }
 
   invalidate(): void {
-    this.cache = { block: null, promptText: "" };
-    this.pendingPrompt = "";
+    this.block = null;
   }
 }
 

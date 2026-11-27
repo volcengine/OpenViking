@@ -184,9 +184,9 @@ integrations should configure category `quotas` when they need exact ceilings.
 | `captureMode`            | `"semantic"` | `"semantic"` (always capture) or `"keyword"` (trigger-based)           |
 | `captureMaxLength`       | `24000`    | Max sanitized text length for the capture decision                       |
 | `captureAssistantTurns`  | `true`     | Include assistant turns (text + tool USE inputs)                         |
-| `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: `lib/capture-adapter.mjs` keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
+| `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: capture keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
-| `commitTokenThreshold`   | `20000`    | Pending-token threshold for client-driven commit                         |
+| `commitTokenThreshold`   | `20000`    | Pending-token threshold the server commits at (set as the session's auto-commit policy); not used with takeover on |
 | `commitKeepRecentCount`  | `10`       | Not read: commits outside takeover archive every captured message (`keep_recent_count` 0); takeover sends the exact message count of the turns it keeps |
 
 ### Context takeover
@@ -275,10 +275,10 @@ Not covered, because it reaches the model without passing these events: the syst
          │                  │           │
          │  ┌───────────────▼───────────▼────────┐
          │  │   extension modules (.ts)           │        OpenViking
-         │  │   client / sync / recall / takeover │──────►  REST API
+         │  │   host / recall / takeover → flow   │──────►  REST API
          │  └─────────────────────────────────────┘        (recall, session
-         │                                                  sync, takeover,
-         │                                                  health)
+         │                                                  capture, commit,
+         │                                                  takeover)
          │  ┌──────────────────────────────────────┐
          └──►  tools.ts + lib/mcp-bridge.mjs       │──────►  OpenViking
             │  the server's own tools/list,        │         /mcp endpoint
@@ -286,7 +286,7 @@ Not covered, because it reaches the model without passing these events: the syst
             └──────────────────────────────────────┘
 ```
 
-The extension's TypeScript files are loaded by pi's `jiti` transpiler without a build step. Recall, session sync, context takeover and the startup health check use the REST API. Model-facing tools use the official `@modelcontextprotocol/client` SDK over Streamable HTTP and mirror the server's `/mcp` catalogue. Configuration and identity headers reuse the shared library.
+The extension's TypeScript files are loaded by pi's `jiti` transpiler without a build step. Capture, commits, recall and the session opening run through the shared flow every OpenViking harness runs; context takeover also uses the REST API directly. Model-facing tools use the official `@modelcontextprotocol/client` SDK over Streamable HTTP and mirror the server's `/mcp` catalogue. Configuration and identity headers reuse the shared library.
 
 MCP initialization and tool discovery share a 5-second deadline. Each tool call uses `timeoutMs` (15 seconds by default), including any reconnection. Credentials and connection settings are reloaded before calls; a transport failure is returned immediately and the next call reconnects. Calls are never automatically replayed. Cancellation ends the client's wait and cannot undo a write already accepted by the server.
 
@@ -296,15 +296,15 @@ When the model calls `openviking_session_history` without `session`, the extensi
 
 | Pi Event               | Extension Action                                                                 |
 |------------------------|----------------------------------------------------------------------------------|
-| `session_start`        | Health check → derive OV session → build profile context → restore takeover state |
+| `session_start`        | Derive OV session → restore takeover state → flow session start (queue replay, profile) |
 | `input`                | With `sealSecrets`: seal the typed text; stop it when sealing fails              |
 | `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall; with `sealSecrets`, add the sealing paragraph and the turn's enrollment note |
 | `context`              | Run current-prompt recall after UI rendering, then inject takeover and recall context |
 | `tool_call`            | URI guard, then with `sealSecrets`: put the real values in for references         |
 | `tool_result`          | With `sealSecrets`: seal the result (or withhold it), then the viking:// notice   |
-| `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
-| `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages |
-| `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
+| `turn_end`             | Flow capture of the branch (sent or queued) → maybe advance boundary              |
+| `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise the flow captures and commits |
+| `session_shutdown`     | Persist takeover state, or the flow's final capture and commit                   |
 
 ### Recall: Synchronous, Not Stale
 
@@ -318,10 +318,7 @@ Unlike Hermes's stale prefetch (recall from previous turn's query, injected one 
 
 Before pushing turns to OpenViking, shared capture sanitization strips injected context blocks such as `<openviking-context>` to prevent a self-referential pollution loop where recall context is captured back as user messages.
 
-In takeover mode the adapter uses faithful capture: acknowledgments and short
-turns are retained because they may later be represented only through the OV
-archive overview. Empty text, slash commands, and OpenViking status messages
-remain filtered.
+Acknowledgments and short turns are captured too, in every mode: under takeover they may later be represented only through the OV archive overview. Empty text is dropped and `captureFilters` apply.
 
 ### Tool Use Preservation
 
@@ -364,7 +361,7 @@ complete Rule blocks so no condition or exception is cut off; omitted Rules are
 explicitly marked with `delivery.complete=false` and a retrieval URI when available.
 Check remaining Rules before acting. Reconnect after a server upgrade to refresh the tools.
 
-The canonical `/viking` command (type `/viking` in pi's chat) displays connection status, session info, how many tools registered — or the handshake error when none did — and accepts `commit` for manual synchronous commit.
+The canonical `/viking` command (type `/viking` in pi's chat) displays session info, how many tools registered — or the handshake error when none did — and accepts `commit` for manual synchronous commit.
 
 ## Upgrading from 0.3.x
 
@@ -425,8 +422,9 @@ See [DESIGN.md](./DESIGN.md) for what each module is responsible for, how the mo
 pi-coding-agent-extension/
 ├── config.ts            # Config loader (shared schema + ovcli.conf layers)
 ├── client.ts            # OpenViking HTTP client (fetch + response envelope)
-├── sync.ts              # Turn capture, write queue, session lifecycle
-├── recall.ts            # Synchronous recall with ranking + budget
+├── host.mjs             # What pi's events and payloads mean to the shared flow
+├── decode.mjs           # A pi branch -> captured turns, and the cursor
+├── recall.ts            # Places the flow's recall block in each request
 ├── takeover.ts          # Thin pi binding around lib/takeover-core.mjs
 ├── tools.ts             # Publishes the server's MCP tools as pi tools
 ├── lib/mcp-bridge.mjs   # Official SDK connection lifecycle

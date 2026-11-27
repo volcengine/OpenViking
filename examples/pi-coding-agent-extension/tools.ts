@@ -4,11 +4,7 @@ import type { McpBridge } from "./lib/mcp-bridge.mjs";
 
 export const TOOL_NAME_PREFIX = "openviking_";
 
-export function registerMcpTools(
-  pi: any,
-  bridge: McpBridge,
-  sessionId: () => string | null = () => null,
-): string[] {
+export function registerMcpTools(pi: any, bridge: McpBridge): string[] {
   const validator = new AjvJsonSchemaValidator();
   return bridge.state.tools.map((tool) => {
     const name = TOOL_NAME_PREFIX + tool.name;
@@ -25,7 +21,6 @@ export function registerMcpTools(
         return args;
       },
       async execute(_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) {
-        if (tool.name === "session_history") params = withDefaultSession(params, sessionId());
         return bridge.callTool(tool.name, params, { signal });
       },
     });
@@ -33,9 +28,3 @@ export function registerMcpTools(
   });
 }
 
-/** Fill `session_history`'s `session` with the current OV session when the model leaves it out. */
-function withDefaultSession(params: Record<string, unknown>, session: string | null): Record<string, unknown> {
-  const given = params?.session;
-  if (!session || (given != null && (typeof given !== "string" || given.trim()))) return params;
-  return { ...params, session };
-}

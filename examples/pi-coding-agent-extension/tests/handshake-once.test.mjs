@@ -47,12 +47,13 @@ const MANAGED_ENV = [
   "OPENVIKING_DEBUG_LOG",
   "OV_DEBUG_LOG",
   "OPENVIKING_PENDING_DIR",
+  "OPENVIKING_HOOK_STATE_DIR",
 ];
 
 async function startServer() {
   const initializes = [];
   const requests = [];
-  const gate = { health: null };
+  const gate = { rest: null };
   const server = createServer((req, res) => {
     const chunks = [];
     req.on("data", (chunk) => chunks.push(chunk));
@@ -71,9 +72,9 @@ async function startServer() {
         res.end(JSON.stringify({ detail: "root key cannot reach /mcp" }));
         return;
       }
-      if (path === "/health") await gate.health;
-      // Everything the REST half touches during startup: /health, the profile
-      // fetch, recall. An empty result keeps each of them a no-op.
+      await gate.rest;
+      // Everything the REST half touches: the profile fetch, recall, capture.
+      // An empty result keeps each of them a no-op.
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ status: "ok", result: {} }));
     });
@@ -134,6 +135,7 @@ async function withExtension(t, fn) {
   process.env.OPENVIKING_CLI_CONFIG_FILE = join(dir, "ovcli.conf");
   process.env.OPENVIKING_CONFIG_FILE = join(dir, "ov.conf");
   process.env.OPENVIKING_PENDING_DIR = join(dir, "pending");
+  process.env.OPENVIKING_HOOK_STATE_DIR = join(dir, "state");
   await writeFile(join(dir, "ovcli.conf"), JSON.stringify({ plugin: { pi: {} } }), "utf8");
 
   t.after(async () => {
@@ -210,7 +212,7 @@ test("a refused handshake still leaves the session working", async (t) => {
     assert.deepEqual(tools, []);
     if (result) assert.ok(!/OpenViking tools/.test(result.systemPrompt));
     assert.ok(
-      statuses.some(([, status]) => /OV ✓/.test(status) && /tools ✗/.test(status)),
+      statuses.some(([, status]) => /tools ✗/.test(status)),
       JSON.stringify(statuses),
     );
     await shutdown();
@@ -234,10 +236,10 @@ test("reload clears only the owning extension's coexistence marker", async (t) =
   });
 });
 
-test("shutdown during health check cannot restore the marker or register tools", async (t) => {
+test("shutdown during the session opening cannot restore the marker or register tools", async (t) => {
   await withExtension(t, async ({ server, turn, shutdown, tools }) => {
     let release;
-    server.gate.health = new Promise((resolve) => { release = resolve; });
+    server.gate.rest = new Promise((resolve) => { release = resolve; });
     const starting = turn("hello");
     await shutdown();
     release();

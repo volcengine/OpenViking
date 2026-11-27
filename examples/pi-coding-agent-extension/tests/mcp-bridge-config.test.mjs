@@ -66,9 +66,6 @@ async function withConfig({ env = {}, plugin = {} } = {}, fn) {
 
 /**
  * What `OVClient` sends for one request, as the server would see it.
- *
- * `health()` is the first call `start()` makes and the one every session makes,
- * so it is the honest sample of the REST side of the connection.
  */
 async function restRequest(cfg) {
   const originalFetch = globalThis.fetch;
@@ -81,7 +78,7 @@ async function restRequest(cfg) {
     });
   };
   try {
-    assert.equal(await new OVClient(cfg).health(), true);
+    assert.equal((await new OVClient(cfg).fetchJSON("/health")).ok, true);
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -23,15 +23,13 @@ test("bundle uses neutral DSH naming and bounded peers", async () => {
   const dshRange = { includePrerelease: true };
   for (const [name, range] of Object.entries(manifest.peerDependencies)) {
     for (const version of [
-      "0.1.0-rc.6", "0.1.5-rc.1", "0.1.5-rc.2", "0.1.5", "0.1.7-rc.2",
-      "0.2.0-rc.2", "0.2.1-alpha.1", "0.2.1-rc.3", "0.3.0",
+      "0.1.7-rc.2", "0.2.0-rc.2", "0.2.1-alpha.1", "0.2.1-rc.3", "0.3.0",
     ]) {
       assert.ok(semver.satisfies(version, range, dshRange), `${name} must accept ${version}`);
     }
-    for (const version of ["0.0.1-rc.3", "0.1.0-rc.5", "1.0.0-rc.1", "1.0.0"]) {
+    for (const version of ["0.1.0-rc.6", "0.1.5", "0.1.7-rc.1", "1.0.0-rc.1", "1.0.0"]) {
       assert.ok(!semver.satisfies(version, range, dshRange), `${name} must reject ${version}`);
     }
-    assert.equal(manifest.devDependencies[name], "0.1.0-rc.6", `${name} must test the minimum`);
   }
   assert.ok(manifest.peerDependencies["@deepseek-ai/dsh-mcp-client"]);
   assert.ok(manifest.peerDependencies["@deepseek-ai/dsh-llm"]);

@@ -6,37 +6,13 @@ import { createOvHttp } from "./shared/ov-http.mjs";
 // All OV responses wrap in: { status: "ok"|"error", result: T, error?: {...}, ... }
 // This client normalizes to { ok, result } internally.
 //
-// Scope: session plumbing only — health, the OV session and its commit, plus the
-// raw `fetchJSON` the shared recall/sync/profile modules are built on. Search,
+// Scope: what only this extension sends — takeover's commit and archive reads,
+// plus the raw `fetchJSON` sealing is built on. Capture, commits, recall and the
+// session opening are the shared flow's. Search,
 // content reads, filesystem operations and resource ingest are the model's
 // business and reach the server over MCP (`lib/mcp-bridge.mjs`), so their REST
 // wrappers are gone rather than kept as a second, drifting path to the same
 // endpoints.
-
-export interface OVSessionMeta {
-  session_id: string;
-  message_count: number;
-  total_message_count?: number;
-  commit_count: number;
-  pending_tokens?: number;
-  memories_extracted?: Record<string, number>;
-  last_commit_at?: string;
-}
-
-export interface OVSessionContext {
-  latest_archive_overview: string | null;
-  pre_archive_abstracts: any[];
-  messages: any[];
-  estimatedTokens: number;
-  stats: {
-    totalArchives: number;
-    includedArchives: number;
-    droppedArchives: number;
-    failedArchives: number;
-    activeTokens: number;
-    archiveTokens: number;
-  };
-}
 
 export interface OVCommitResult {
   /**
@@ -72,8 +48,6 @@ export interface OVResponse<T> {
 
 export class OVClient {
   private http: ReturnType<typeof createOvHttp>;
-  connected: boolean = false;
-
   /** Read-only access to config (for value access across modules). */
   readonly cfg: OVConfig;
 
@@ -88,35 +62,6 @@ export class OVClient {
   /** Core fetch wrapper. Returns { ok, result } after parsing OV's { status, result } envelope. */
   async fetchJSON<T>(path: string, init?: RequestInit, options?: OvHttpRequestOptions): Promise<OVResponse<T>> {
     return this.http(path, init, options);
-  }
-
-  // ========== Health ==========
-
-  async health(): Promise<boolean> {
-    const res = await this.fetchJSON<any>("/health", undefined, { timeoutMs: 5000 });
-    this.connected = res.ok;
-    return res.ok;
-  }
-
-  // ========== Sessions ==========
-
-  /** GET /api/v1/sessions/{id} — session metadata */
-  async getSession(sessionId: string, autoCreate = false): Promise<OVSessionMeta | null> {
-    const q = autoCreate ? "?auto_create=true" : "";
-    const res = await this.fetchJSON<OVSessionMeta>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}${q}`,
-      undefined, { timeoutMs: 5000 },
-    );
-    return res.ok ? res.result : null;
-  }
-
-  /** GET /api/v1/sessions/{id}/context — assembled context with archive overview */
-  async getSessionContext(sessionId: string, tokenBudget = 128000): Promise<OVSessionContext | null> {
-    const res = await this.fetchJSON<OVSessionContext>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${tokenBudget}`,
-      undefined, { timeoutMs: 10000 },
-    );
-    return res.ok ? res.result : null;
   }
 
   /** POST /api/v1/sessions/{id}/commit — commit session for archiving + extraction */
@@ -146,7 +91,7 @@ export class OVClient {
    * Working Memory of one archive: `GET /content/read?uri=<archive_uri>/.overview.md`.
    *
    * This reads the Working Memory that belongs to a *specific* commit, keyed by
-   * the `archive_uri` that commit returned — unlike `getSessionContext`, whose
+   * the `archive_uri` that commit returned — unlike the session `/context`, whose
    * `latest_archive_overview` reflects whatever the session's newest archive is
    * and can point at an older `/context` summary that this takeover did not
    * produce. Returns null until commit phase 2 writes the sidecar (the server

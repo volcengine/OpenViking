@@ -30,18 +30,15 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 ```text
 examples/opencode-plugin/
 ├── index.mjs
+├── host.mjs
 ├── package.json
 ├── README.md
 ├── INSTALL-ZH.md
 ├── lib/
 │   ├── config.mjs
 │   ├── mcp-config.mjs
-│   ├── runtime.mjs
 │   ├── repo-context.mjs
-│   ├── memory-session.mjs
-│   ├── memory-recall.mjs
-│   ├── session-inject.mjs
-│   ├── viking-uri-guard.mjs
+│   ├── v2-plugin.mjs
 │   └── utils.mjs
 ├── servers/
 │   └── mcp-proxy.mjs
@@ -56,12 +53,12 @@ examples/opencode-plugin/
 
 ## Requirements
 
-- OpenCode 1.15.7+ or OpenCode 2.0.15+
+- OpenCode 2.0.15+
 - OpenViking HTTP server
 - Node.js 18+
 - An OpenViking API key if your server requires authentication
 
-The same package serves both plugin APIs. OpenCode 1 calls `server()` (or the named `OpenVikingPlugin` export), while OpenCode 2 calls `setup()`. The v2 entrypoint does not import `@opencode/plugin`, so a source install on OpenCode 1 still loads. OpenCode 2 normalizes the installer's `"plugin"` key to `"plugins"`; keep `"plugin"` in shared v1/v2 configuration. On v2, the bundled MCP server uses `codemode: false`, preserving the documented `openviking_*` tool names.
+OpenCode 2 calls `setup()`. OpenCode 1.x is no longer supported: loaded through `server()` (or the named `OpenVikingPlugin` export), the plugin writes one line saying so to its log and does nothing. OpenCode 2 normalizes the installer's `"plugin"` key to `"plugins"`. On v2, the bundled MCP server uses `codemode: false`, preserving the documented `openviking_*` tool names.
 
 Start OpenViking first:
 
@@ -119,6 +116,7 @@ This creates a stable OpenCode plugin layout:
 ├── openviking.js
 └── openviking/
     ├── index.mjs
+    ├── host.mjs
     ├── package.json
     ├── lib/
     └── servers/
@@ -221,7 +219,7 @@ call and points it to the OpenViking MCP tools. A `bash` command that contains a
 an HTTP payload); the command runs and the plugin appends a notice naming the
 MCP tools to its output.
 
-OpenCode v2 has no plugin toast API. Service availability and other non-fatal notices are written to `openviking-memory.log`. The plugin captures the transcript before compaction discards it, checks the commit threshold after every execution (succeeded, failed, or interrupted), and forces a commit after completed compaction, session deletion, and cleanup. Each plugin instance handles only the sessions of its own location, and keeps its capture cursor in OpenCode plugin storage so a reloaded instance does not resend earlier turns.
+OpenCode v2 has no plugin toast API. Non-fatal notices are written to `openviking-memory.log`; the plugin does not probe the server's health. The plugin captures new messages after every execution (succeeded, failed, or interrupted) and the transcript before compaction discards it, and commits the session at compaction and at session deletion. Token-threshold and idle commits are made by the server from the auto-commit policy the plugin sets on the session (OpenViking 0.4.13 or later). Each plugin instance handles only the sessions of its own location; the capture cursor is kept under `~/.openviking/hook-state/opencode/`, so a reloaded instance does not resend earlier turns. Writes that fail while the server is unreachable are queued and replayed when the next session is created.
 
 ## MCP Tools
 

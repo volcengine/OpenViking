@@ -55,15 +55,6 @@ export function log(level, toolName, message, data) {
   }
 }
 
-export function makeToast(client) {
-  return (message, variant = "warning") => {
-    const request = client?.tui?.showToast?.({
-      body: { title: "OpenViking", message, variant, duration: 8000 },
-    })
-    return request?.catch?.(() => {})
-  }
-}
-
 export function normalizeEndpoint(endpoint) {
   return endpoint.replace(/\/+$/, "")
 }

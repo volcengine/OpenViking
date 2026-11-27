@@ -1,117 +1,99 @@
-import { OpenVikingClient } from "./client.mjs";
 import { resolveConfig } from "./config.mjs";
-import { injectStartupProfile } from "./lifecycle.mjs";
+import { promptText } from "./decode.mjs";
+import host from "./host.mjs";
 import { fillHistorySession, mountOpenVikingMcp } from "./mcp.mjs";
-import { OpenVikingRuntime } from "./runtime.mjs";
+import { runStage } from "./shared/flow/index.mjs";
 import { mountOpenVikingSkills } from "./skills.mjs";
 import { guardVikingUri, noticeVikingUri } from "./uri-guard.mjs";
 
 export const name = "openviking-memory";
 export const inject = ["agents", "sessions", "tools"];
 
+const CAPTURED_EVENTS = new Set(["user/message", "assistant/message", "tool/call", "tool/result"]);
+
 export function apply(ctx, input = {}) {
   const config = resolveConfig(input);
-  const client = new OpenVikingClient(config);
-  const runtime = new OpenVikingRuntime(client, config, ctx.logger, cwd => (
-    // Rebuild from the host input, not the config already merged for boot's cwd.
-    // The shared loader preserves host/env precedence over workspace settings.
-    resolveConfig(input, process.env, cwd)
-  ));
-  const skipMemory = session => (
-    config.skipSubagentSessions && session?.header?.origin === "subagent"
-  );
-  ctx.provide("openvikingMemory", runtime);
-  ctx.effect(
-    () => () => runtime.disposeAll(),
-    "openvikingMemory.disposeAll()",
-  );
-  // The pending-queue drainer is the in-process recovery path: without it a
-  // single transient write failure latches capture/commit until the next dsh
-  // restart. Started here so every session shares one single-flight drainer.
-  runtime.startDrainer();
-  ctx.effect(
-    () => () => runtime.stopDrainer(),
-    "openvikingMemory.stopDrainer()",
-  );
-
-  // Per-agent startup: register the session's disposal commit, initialize the
-  // OpenViking session, and inject the profile while the agent is still idle.
-  // Runs at most once per agent, whichever DSH event reaches it.
-  const started = new WeakSet();
-  const startAgent = async (agent, signal, source) => {
-    if (skipMemory(agent.session) || started.has(agent)) return false;
-    started.add(agent);
-    if (source === "resume") runtime.markHistoryPointer(agent.session, "resume");
-    agent.ctx.effect(
-      () => () => runtime.dispose(agent.session),
-      "openvikingMemory.disposeSession()",
-    );
-    try {
-      return await injectStartupProfile(agent, runtime, signal);
-    } catch (error) {
-      // A throw from a serial `agent/created` listener fails agent creation;
-      // memory startup must never do that. pre-step retries profile delivery.
-      runtime.log("startup_error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    }
+  const log = message => ctx.logger?.debug?.(`[openviking:dsh] ${message}`);
+  // Rebuilt from the host input for the session's directory, not the config
+  // merged for boot's cwd.
+  const configs = new Map();
+  const configFor = cwd => {
+    if (!configs.has(cwd)) configs.set(cwd, resolveConfig(input, process.env, cwd));
+    return configs.get(cwd);
   };
+  // Called synchronously from the listeners: the flow's session lock keeps
+  // calls for one session in the order they were made.
+  const inFlight = new Map();
+  const run = (event, session, extra = {}) => {
+    const cwd = session?.header?.cwd || process.cwd();
+    const payload = { session_id: session?.id, cwd, subagent: session?.header?.origin === "subagent", ...extra };
+    const pending = runStage(host, event, payload, { cfg: configFor(cwd) }).catch(error => {
+      log(`${event} ${error instanceof Error ? error.message : String(error)}`);
+      return {};
+    });
+    const list = inFlight.get(session?.id) || new Set();
+    inFlight.set(session?.id, list.add(pending));
+    pending.finally(() => { list.delete(pending); if (!list.size) inFlight.delete(session?.id); });
+    return pending;
+  };
+  const open = new Map();
+  const end = session => (open.delete(session.id) ? run("session/dispose", session) : undefined);
+  ctx.effect(() => () => Promise.all([...open.values()].map(end)), "openvikingMemory.endSessions()");
 
-  // DSH 0.1.7+ has no `agent/session-start`; startup is the serial
-  // `agent/created` event with `{ agent, source, signal? }`, and AgentLoop holds
-  // queued input until its listeners settle. DSH 0.1.0-rc.6 and 0.1.5 still
-  // emit a composition-only `agent/created` with `{ agent }` only, followed by
-  // `agent/session-start`, so a missing `source` leaves startup to that event.
+  // DSH 0.1.5 and earlier emit `agent/created` without `source`.
+  let unsupported = false;
+  const started = new WeakSet();
   // The listener must resolve to undefined: any other value bails the serial
-  // dispatch and skips the listeners registered after this one.
+  // dispatch and skips the listeners registered after this one. AgentLoop holds
+  // queued input until it settles.
   ctx.on("agent/created", async ({ agent, source, signal }) => {
-    if (source === undefined) return undefined;
-    await untilAborted(startAgent(agent, signal, source), signal);
+    if (source === undefined) {
+      if (!unsupported) ctx.logger?.warn?.("[openviking:dsh] this DeepSeek Harness version is not supported (needs 0.1.7-rc.2 or later); OpenViking memory is off");
+      unsupported = true;
+      return undefined;
+    }
+    if (unsupported || started.has(agent)) return undefined;
+    started.add(agent);
+    open.set(agent.session.id, agent.session);
+    agent.ctx.effect(() => () => end(agent.session), "openvikingMemory.endSession()");
+    await untilAborted((async () => {
+      const output = await run("agent/created", agent.session, { resumed: source, idle: agent.status === "idle" });
+      const message = host.emit("agent/created", output);
+      if (message && !signal?.aborted && agent.status === "idle") agent.inject(message);
+    })(), signal);
     return undefined;
   });
-  ctx.on("agent/session-start", ({ agent, source }) => startAgent(agent, undefined, source));
 
   // prepend: downstream waterfall listeners run first, so this plugin sees
   // the final claimed batch and appends after every other contributor.
-  // Profile + recall are independent after `next()`; run them concurrently so
-  // the agent/pre-step waterfall (which currently gates user/message push in
-  // dsh-agent-loop) spends less wall time (#4515).
-  ctx.on("agent/pre-step", async ({ agent, messages, signal }, next) => {
+  ctx.on("agent/pre-step", async ({ agent, signal }, next) => {
     const decision = await next();
-    if (skipMemory(agent.session)) return decision;
-    if (decision.kind !== "enter" || signal.aborted) return decision;
-    const [profile, recall] = await Promise.all([
-      runtime.profileMessage(agent, decision.messages),
-      runtime.recallMessage(agent, decision.messages, signal),
-    ]);
-    if (signal.aborted) return decision;
-    const additions = [profile, recall, runtime.historyPointerMessage(agent, ctx.sessions)].filter(Boolean);
+    if (unsupported || decision.kind !== "enter" || signal.aborted) return decision;
+    const prompt = promptText(decision.messages);
+    if (!prompt) return decision;
+    const output = await run("agent/pre-step", agent.session, { prompt, agent, signal });
+    const message = host.emit("agent/pre-step", output);
     // Keep the rest of the decision: goal-round-driver marks its entries with
     // `startsRequestSeries`, and rebuilding the object would drop that flag.
-    return additions.length > 0
-      ? { ...decision, messages: [...decision.messages, ...additions] }
-      : decision;
+    return message && !signal.aborted ? { ...decision, messages: [...decision.messages, message] } : decision;
   }, { prepend: true });
 
   ctx.on("session/event", (session, event) => {
-    if (skipMemory(session)) return;
-    runtime.capture(session, event);
-    runtime.maybeCommit(session, event);
-    if (event.type === "compaction/end" && !event.data?.error) {
-      runtime.markHistoryPointer(session, "compact");
-    }
+    if (unsupported) return;
+    const kind = event?.type === "compaction/start" ? "compaction/start"
+      : CAPTURED_EVENTS.has(event?.type) ? "session/event" : "";
+    if (kind) run(kind, session, { event });
   });
 
   ctx.on("session/flush", async session => {
-    if (skipMemory(session)) return;
-    await runtime.flush(session);
+    await Promise.all(inFlight.get(session.id) || []);
   });
 
+  const skipMemory = session => config.skipSubagentSessions && session?.header?.origin === "subagent";
   ctx.on("tools/pre-execute", guardVikingUri);
   ctx.on("tools/post-execute", noticeVikingUri);
   ctx.on("tools/execute", (exec, next) => (
-    skipMemory(exec.agent?.session) ? next() : fillHistorySession(ctx.tools, exec, next, ctx.sessions)
+    unsupported || skipMemory(exec.agent?.session) ? next() : fillHistorySession(ctx.tools, exec, next, ctx.sessions)
   ));
 
   // Mounted last, and deliberately not awaited: the bridge's apply blocks on
@@ -125,7 +107,7 @@ export function apply(ctx, input = {}) {
 }
 
 // Resolve when `promise` settles or `signal` aborts, whichever comes first. An
-// abandoned initialization keeps running and is reused by the pre-step path.
+// abandoned startup keeps running and drops its injection.
 function untilAborted(promise, signal) {
   if (!signal) return promise;
   if (signal.aborted) return Promise.resolve();

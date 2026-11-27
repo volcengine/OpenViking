@@ -1,11 +1,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { createServer } from "node:http"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadConfig } from "../lib/config.mjs"
-import { OpenVikingPlugin } from "../index.mjs"
+import plugin, { OpenVikingPlugin } from "../index.mjs"
 
 // The layers, the knobs and the peer are the shared loader's, and
 // memory-plugin-shared/plugin-config.test.mjs holds this harness to them. What
@@ -18,25 +17,6 @@ async function withTempDir(prefix, fn) {
     return await fn(dir)
   } finally {
     await rm(dir, { recursive: true, force: true })
-  }
-}
-
-async function withHealthServer(fn) {
-  const server = createServer((request, response) => {
-    response.setHeader("Content-Type", "application/json")
-    if (request.url === "/health") {
-      response.end(JSON.stringify({ status: "ok" }))
-      return
-    }
-    response.statusCode = 404
-    response.end(JSON.stringify({ status: "error" }))
-  })
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
-  try {
-    const { port } = server.address()
-    return await fn(`http://127.0.0.1:${port}`)
-  } finally {
-    await new Promise((resolve) => server.close(resolve))
   }
 }
 
@@ -73,45 +53,24 @@ test("loadConfig supports hook-only mode without registering the bundled MCP ser
   })
 })
 
-test("OpenVikingPlugin keeps lifecycle hooks without mutating MCP config in hook-only mode", async () => {
+test("OpenCode 1.x gets an empty hooks object", async () => {
   const snapshot = { ...process.env }
-  await withTempDir("ov-oc-hook-only-runtime-", async (dir) => {
-    await withHealthServer(async (endpoint) => {
-      try {
-        for (const key of Object.keys(process.env)) {
-          if (key.startsWith("OPENVIKING_")) delete process.env[key]
-        }
-        const ovcli = join(dir, "ovcli.conf")
-        await writeFile(ovcli, JSON.stringify({
-          url: endpoint,
-          plugin: {
-            opencode: {
-              mcpEnabled: false,
-              dataDir: join(dir, "runtime"),
-              repoContext: false,
-              autoRecall: false,
-              autoCapture: false,
-            },
-          },
-        }))
-        process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
-        process.env.OPENVIKING_URL = endpoint
-
-        const plugin = await OpenVikingPlugin({ client: {}, directory: dir })
-        assert.equal(typeof plugin.event, "function")
-        assert.equal(typeof plugin["chat.message"], "function")
-        assert.equal(typeof plugin.dispose, "function")
-
-        const opencodeConfig = { mcp: { external: { type: "remote", url: "https://example.com/mcp" } } }
-        await plugin.config(opencodeConfig)
-        assert.deepEqual(opencodeConfig, {
-          mcp: { external: { type: "remote", url: "https://example.com/mcp" } },
-        })
-        await plugin.dispose()
-      } finally {
-        restoreOpenVikingEnv(snapshot)
+  await withTempDir("ov-oc-v1-", async (dir) => {
+    try {
+      for (const key of Object.keys(process.env)) {
+        if (key.startsWith("OPENVIKING_")) delete process.env[key]
       }
-    })
+      const ovcli = join(dir, "ovcli.conf")
+      await writeFile(ovcli, JSON.stringify({ url: "http://127.0.0.1:9", plugin: { dataDir: join(dir, "data") } }))
+      process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
+      process.env.OPENVIKING_CONFIG_FILE = join(dir, "ov.conf")
+      process.env.OPENVIKING_HOME = dir
+      assert.deepEqual(await OpenVikingPlugin({ directory: dir }), {})
+      assert.deepEqual(await plugin.server({ directory: dir }), {})
+      assert.match(await readFile(join(dir, "data", "openviking-memory.log"), "utf8"), /OpenCode 1\.x is no longer supported/)
+    } finally {
+      restoreOpenVikingEnv(snapshot)
+    }
   })
 })
 
@@ -162,40 +121,5 @@ test("loadConfig defaults an invalid commit keep recent count", async () => {
     } finally {
       restoreOpenVikingEnv(snapshot)
     }
-  })
-})
-
-test("OpenVikingPlugin tool.execute.before fills session_history's session", async () => {
-  const snapshot = { ...process.env }
-  await withTempDir("ov-oc-history-fill-", async (dir) => {
-    await withHealthServer(async (endpoint) => {
-      try {
-        for (const key of Object.keys(process.env)) {
-          if (key.startsWith("OPENVIKING_")) delete process.env[key]
-        }
-        const ovcli = join(dir, "ovcli.conf")
-        await writeFile(ovcli, JSON.stringify({
-          url: endpoint,
-          plugin: {
-            opencode: {
-              dataDir: join(dir, "runtime"),
-              repoContext: false,
-              autoRecall: false,
-              autoCapture: false,
-            },
-          },
-        }))
-        process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
-        process.env.OPENVIKING_URL = endpoint
-
-        const plugin = await OpenVikingPlugin({ client: {}, directory: dir })
-        const output = { args: { action: "overview" } }
-        await plugin["tool.execute.before"]({ tool: "openviking_session_history", sessionID: "ses_v1" }, output)
-        assert.equal(output.args.session, "oc-ses_v1")
-        await plugin.dispose()
-      } finally {
-        restoreOpenVikingEnv(snapshot)
-      }
-    })
   })
 })

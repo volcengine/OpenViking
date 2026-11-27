@@ -74,7 +74,7 @@ no Linux release.
 
 ## Requirements
 
-- `@deepseek-ai/dsh` `0.1.0-rc.6` or later, below `1.0.0` (see [DSH version compatibility](#dsh-version-compatibility))
+- `@deepseek-ai/dsh` `0.1.7-rc.2` or later, below `1.0.0` (see [DSH version compatibility](#dsh-version-compatibility))
 - Node.js `^22.19.0` or `>=24` for the bundle itself. The host decides in
   practice: DSH `0.2.1-rc.2` and later need Node.js `>=24.9`, and Desktop ships
   its own runtime, so it needs no system Node.js.
@@ -101,16 +101,18 @@ and reconnect DSH; the tool is an on-demand constraint check.
 
 ### DSH version compatibility
 
-The peer range is `>=0.1.0-rc.6 <1.0.0-0`. DSH checks each `@deepseek-ai/dsh-*`
+The peer range is `>=0.1.7-rc.2 <1.0.0-0`. DSH checks each `@deepseek-ai/dsh-*`
 peer when it loads a plugin, with pre-releases included in the range, so this
-admits every 0.x release and pre-release from `0.1.0-rc.6` on, including ones
+admits every 0.x release and pre-release from `0.1.7-rc.2` on, including ones
 published after this bundle. The bundle touches a small DSH surface —
 `createUserMessage` and `boundContextSummary` from `@deepseek-ai/dsh-llm` and
 the plugin entry points of `@deepseek-ai/dsh-mcp-client` and
 `@deepseek-ai/dsh-skill-filesystem` — so the range is not narrowed to the
 releases tested so far.
 
-Verified releases: `0.1.0-rc.6`, `0.1.5-rc.1`, `0.1.5-rc.2`, `0.1.7-rc.2`,
+DSH builds before `0.1.7-rc.2` (`0.1.5` and the `0.1.0-rc` builds included) are not supported: when one loads the bundle anyway, it logs one line saying so and stays off.
+
+Verified releases: `0.1.7-rc.2`,
 `0.2.0-rc.2`, `0.2.1-alpha.1`, `0.2.1-rc.2`, and `0.2.1-rc.3` (built from the
 same source tag as Desktop `0.2.1-rc.3`). A daily job
 (`.github/workflows/host-compat.yml`) runs the bundle's tests against the
@@ -126,8 +128,7 @@ profile the way Desktop's first launch does, adds the bundle through
 that npm `dsh` still refuses that profile, and that no `dsh` dumps its config. Real Desktop builds are checked by
 hand. DSH 1.0 and later, pre-releases included, fall outside the
 range and DSH refuses to load the bundle; `dsh plugin allow-version` grants an exact-version
-exemption if you accept the risk. Local devDependencies and `overrides` stay
-pinned to rc.6 to exercise the minimum supported contract.
+exemption if you accept the risk. Local devDependencies and `overrides` are pinned to `0.1.7-rc.2`, the lowest supported release.
 
 ## Diagnostics
 
@@ -319,23 +320,22 @@ The older size settings apply to fallback recall, not the primary context reques
 
 ## Behavior
 
-- Agent startup injects the OpenViking profile, the available-memory index, and the `<available-skills>` catalog through `agent.inject()`, and registers the per-session disposal commit. On DSH `0.1.7` and later this runs from the serial `agent/created` event (`{ agent, source, signal? }`), which holds queued input until it settles; DSH `0.1.0-rc.6` and `0.1.5` emit `agent/created` without `source` and start the session through `agent/session-start` instead. Startup runs once per agent, and `agent/pre-step` delivers the profile when startup did not or a compaction dropped it. Whether the profile is still there is read from `session.deriveMessages()`, the history the model keeps, not from the event log, which a compaction never edits.
-- `agent/pre-step` retrieves with the current step input and appends a durable plugin message to that same step.
+- Agent startup (the serial `agent/created` event, which holds queued input until it settles) replays the offline queue, injects the OpenViking profile, the available-memory index, and the `<available-skills>` catalog through `agent.inject()`, and registers the per-session end commit. Startup runs once per agent. After a compaction, the next prompt's step carries the profile again.
+- `agent/pre-step` retrieves with what the user typed in the current step and appends a durable plugin message to that same step.
 - `session/event` captures user, assistant, and optionally tool-result messages without scraping a transcript.
-- `turn/end` checks the OpenViking pending-token threshold and commits when required.
+- The session is committed when a compaction starts (`compaction/start`, unless `autoCommitOnCompact` is off) and when the session ends. In between, OpenViking commits on its own: the plugin sets the session's auto-commit policy (`commitTokenThreshold`, `commitIdleSeconds`) once per session; this needs OpenViking `0.4.13` or later.
 - `skipSubagentSessions: true` excludes sessions marked with `header.origin: subagent` from automatic profile, recall, capture, and commit; it defaults to `false`.
-- `syncTurns: false` stops every new write: no captured messages, no threshold or shutdown commit. Writes queued while the toggle was on are still replayed by the background drainer once the server recovers — they were captured with the toggle on. Profile injection and recall are unaffected; it defaults to `true`.
+- `syncTurns: false` stops every new write: no captured messages, no compaction or end commit. Profile injection and recall are unaffected; it defaults to `true`.
 - `skillCatalog` (default `true`) and `skillCatalogTokenBudget` (default `1200`; `0` also turns the catalog off) govern `<available-skills>`. The catalog comes from one `GET /api/v1/skills?node_limit=200` call: the user's own skills first, then those shared under `viking://agent/skills` minus any whose name the user also owns, each description cut to about 40 tokens. Its budget is separate from `profileTokenBudget`. When the descriptions do not fit, the catalog lists names only (with a `... +N more` tail if even the names do not all fit); when not even one name fits, it shrinks to a one-line count; with no skills, or a server without the endpoint, it is omitted.
-- Retryable failed writes enter the shared OpenViking pending queue. A background drainer (default every 60s, `OPENVIKING_PENDING_DRAIN_INTERVAL_MS`) probes the server health and replays the queue in-process, so a transient write failure recovers without restarting dsh; it does not consume the session-start retry budget. Session-start replays keep consuming retries as before.
-- Non-retryable capture, commit, and initialization failures emit a warning once per session and stage, with the HTTP status, a bounded error code, and an endpoint template. Success resets that stage’s warning. Unexpected write exceptions also warn once until a write completes. Warnings omit message payloads and error text. Permanent failures are not queued for replay.
+- Retryable failed writes enter the shared OpenViking pending queue, which the next session start replays. Permanent failures are not queued for replay. Session state, the per-session lock and the plugin log live under `~/.openviking/` like every other OpenViking memory plugin's (`hook-state/dsh/`, `logs/`).
 - `tools/pre-execute` denies a DSH filesystem tool (`read`, `glob`, `grep`, `edit`, `write`, `str_replace_editor`) whose path argument is a `viking://` URI, pointing the model at the bridged `mcp__openviking__*` tools instead. A `write` or `edit` under a skill directory (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) points at `mcp__openviking__add_skill` instead, which creates or replaces a whole skill from its `SKILL.md` text. A `grep` whose pattern is `viking://` text still runs.
 - `tools/post-execute` lets a `bash` command (`pwsh` on Windows, where DSH mounts it in place of `bash`) that carries a `viking://` URI run unchanged and attaches a notice for the model: use the bridged tools if it meant OpenViking content, or ignore the notice when the URI is intentional data such as an `ov` argument or an HTTP payload.
-- After a compaction finishes (`compaction/end` without an error) or a session is resumed, the next step carries a short `<openviking-context source="session-history">` note, once: it names the session's OpenViking id (`dsh-<session-id>`) and tells the model how to look up exact details the summary lost with `mcp__openviking__session_history` (`action="search"`, `"read"`, `"overview"`). Subagent sessions skipped by `skipSubagentSessions` and sessions with capture off get no note. Set `sessionHistoryPointer: false` or `OPENVIKING_SESSION_HISTORY_POINTER=0` to turn it off.
-- `tools/execute` fills `session` on a `mcp__openviking__session_history` call that leaves it out, with the calling session's OpenViking id: the MCP proxy is shared by every session and receives no caller identity, and DSH freezes call arguments, so the plugin runs the bridged tool itself with `session` added. A `session` the model passed is kept. A forked session, or a subagent seeded with its parent's turns, never captures the inherited part, so for those both the filled `session` and the note list the session followed by its parent chain (`dsh-<fork>,dsh-<parent>`, newest first).
+- After a compaction or a resume, the next prompt's step carries a short `<openviking-context source="session-history">` note, once: it names the session's OpenViking id (`dsh-<session-id>`) and tells the model how to look up exact details the summary lost with `mcp__openviking__session_history` (`action="search"`, `"read"`, `"overview"`). Subagent sessions skipped by `skipSubagentSessions` and sessions with capture off get no note. Set `sessionHistoryPointer: false` or `OPENVIKING_SESSION_HISTORY_POINTER=0` to turn it off.
+- `tools/execute` fills `session` on a `mcp__openviking__session_history` call that leaves it out, with the calling session's OpenViking id: the MCP proxy is shared by every session and receives no caller identity, and DSH freezes call arguments, so the plugin runs the bridged tool itself with `session` added. A `session` the model passed is kept. A forked session, or a subagent seeded with its parent's turns, never captures the inherited part, so for those the filled `session` lists the session followed by its parent chain (`dsh-<fork>,dsh-<parent>`, newest first).
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking. IDs that contain Windows-invalid path characters are normalized to a readable underscore form plus a stable hash, so two native IDs cannot collapse onto the same OpenViking session; already-portable IDs keep their existing mapping. Existing sessions whose native IDs require normalization start a new OpenViking session after this upgrade. Workspace-derived actor peers are resolved per session and sent on every session-specific request: the peer is the git identity of the session's workspace — the normalized `origin` URL (`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`), else the repository root path, that fallback keeping the older rule where every non-letter-or-digit character becomes `-`. With the default peer settings, no peer is sent outside a git repository, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. Memories written under the older path-derived peer stay reachable: the default `recallPeerScope: all` sweeps every peer under the user.
 
-Workspace settings (peer, `recall.*`, `capture.*`) are loaded from `session.header.cwd` when the session first uses memory, not from the directory DSH was launched in. A workspace can set `peer.id` to name its project explicitly, or `peer.source` to choose a preset or template chain. For example, `<root>/.openviking/config.json` can contain:
+Workspace settings (peer, `recall.*`, `capture.*`) are loaded from `session.header.cwd`, not from the directory DSH was launched in. A workspace can set `peer.id` to name its project explicitly, or `peer.source` to choose a preset or template chain. For example, `<root>/.openviking/config.json` can contain:
 
 ```json
 {
@@ -344,7 +344,7 @@ Workspace settings (peer, `recall.*`, `capture.*`) are loaded from `session.head
 }
 ```
 
-The shared loader also applies `config.local.json` and machine registry overrides. Explicit host `peerId`, environment overrides and pinned `ovcli.conf` credentials retain their existing precedence. The resolved peer stays fixed for the session's runtime state; new sessions load the current workspace settings. A session without a cwd falls back to the process's working directory.
+The shared loader also applies `config.local.json` and machine registry overrides. Explicit host `peerId`, environment overrides and pinned `ovcli.conf` credentials retain their existing precedence. Settings are resolved once per directory for the life of the DSH process. A session without a cwd falls back to the process's working directory.
 
 ## Tools
 
@@ -389,12 +389,6 @@ The startup failure from issue #4944 was reproduced by adding the reported
 old skill packages to an rc.2 profile; removing those direct dependencies and
 reinstalling the bundle restored the same integration checks. A clean rc.2
 profile with the published `0.3.0` bundle did not reproduce that import error.
-
-`live-recall.test.mjs` is an opt-in end-to-end gate against a real OpenViking
-server: it stores a sentinel memory through a session commit, waits for
-extraction, and asserts recall returns that sentinel — the property no stub
-can certify. Enable it with `OPENVIKING_E2E=1` plus the normal credential
-chain; it skips otherwise (including in CI until a server secret exists).
 
 ### Client-side recall compression
 

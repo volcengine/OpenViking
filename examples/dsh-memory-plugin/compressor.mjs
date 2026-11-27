@@ -1,5 +1,5 @@
 import { BlockAssembler } from "@deepseek-ai/dsh-llm";
-import { pluginMessage } from "./capture.mjs";
+import { pluginMessage } from "./host.mjs";
 
 /** One host model call, without an agent loop, tools, or session-log writes. */
 export function createRecallCompressor(agent, config, signal) {
