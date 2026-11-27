@@ -9,6 +9,7 @@ from typing import Any
 
 from openviking.core.context import ResourceContentType
 from openviking.core.namespace import is_session_uri
+from openviking.core.namespace_policy import NamespaceProcessingMode, namespace_policy_for_uri
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
@@ -89,8 +90,22 @@ def _entry_uri(root_uri: str, entry: dict[str, Any]) -> str:
 
 
 def _is_index_scope(uri: str) -> bool:
+    """Whether vector records are expected for this URI.
+
+    The consistency checker must use the same indexability rules as the
+    reindexer: FILE_ONLY namespaces (e.g. viking://system/*) are deliberately
+    never indexed, so expecting level=0/1 records for them makes the check
+    permanently fail and makes `backup --include-vectors` unusable.
+    """
     try:
-        return VikingURI(uri).scope not in NON_INDEX_SCOPES and not is_session_uri(uri)
+        parsed = VikingURI(uri)
+        if parsed.scope in NON_INDEX_SCOPES or is_session_uri(uri):
+            return False
+        # The bare agent root is not a valid reindex target, so its level=0/1
+        # records can never be created. Its children remain indexable.
+        if parsed.full_path == "agent":
+            return False
+        return namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.INDEXED
     except Exception:
         return False
 
