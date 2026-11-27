@@ -227,13 +227,41 @@ describe('meeting notes in OpenViking', () => {
     assert.deepEqual([cli.asked(MEETING), cli.asked(OTHER)], asked, 'a settled meeting is not asked again');
   });
 
-  it('the next scan starts six hours before the last one ended', async (t) => {
+  it('the next scan starts a day before the last one ended', async (t) => {
     const { notes, cli, scan } = await sync(t);
     notes.start();
     await notes.running;
     await scan(15 * MINUTE);
-    assert.equal(cli.searches()[1][cli.searches()[1].indexOf('--start') + 1], new Date(NOW - 6 * HOUR).toISOString());
+    assert.equal(cli.searches()[1][cli.searches()[1].indexOf('--start') + 1], new Date(NOW - 24 * HOUR).toISOString());
     assert.equal(cli.asked(MEETING), 1, 'its meeting stored, it is not asked again');
+  });
+
+  it('finds a meeting from a stop long enough that the window has to reach back over the stop', async (t) => {
+    const startedAt = NOW + HOUR;
+    const { notes, cli, scan, row } = await sync(t, { script: {
+      search: [[], [MEETING]], ended: { [MEETING]: (startedAt + 3 * HOUR) / 1000 },
+    } });
+    notes.start();
+    await notes.running;
+    assert.equal(row(), null, 'it began after the first scan');
+    await scan(40 * HOUR);
+    const start = cli.searches()[1][cli.searches()[1].indexOf('--start') + 1];
+    assert.ok(Date.parse(start) <= startedAt, `the scan reaches back to ${start}, before it began`);
+    assert.equal(row().status, 'stored');
+  });
+
+  it('finds a meeting longer than the scan overlap once it ends', async (t) => {
+    const startedAt = NOW - 20 * HOUR;
+    const { notes, cli, scan, row } = await sync(t, { script: {
+      search: [[], [MEETING]], ended: { [MEETING]: (NOW + 5 * MINUTE) / 1000 },
+    } });
+    notes.start();
+    await notes.running;
+    assert.equal(row(), null, 'still running at the first scan, so not listed yet');
+    await scan(15 * MINUTE);
+    const start = cli.searches()[1][cli.searches()[1].indexOf('--start') + 1];
+    assert.ok(Date.parse(start) <= startedAt, `the scan reaches back to ${start}, past its beginning`);
+    assert.equal(row().status, 'stored');
   });
 
   it('a meeting that cannot be read is asked again next time; a scan that can read none fails and says why', async (t) => {
