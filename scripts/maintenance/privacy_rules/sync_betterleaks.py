@@ -38,25 +38,6 @@ HAND_WRITTEN = re.compile(
     r"^(?:anthropic|aws-access-token|github|jwt|openai|private-key"
     r"|slack-(?:app|bot|config-access|legacy|user)-)"
 )
-EXCLUDED = {
-    # The prefix and body also fit ordinary identifiers such as prf_hmac_sha256_expand_label.
-    "brave-search-api-key": "matches ordinary identifiers",
-    "lichess-personal-access-token": "matches ordinary identifiers",
-    "polar-oauth-access-token": "matches ordinary identifiers",
-    "proof-full-access-api-key": "matches ordinary identifiers",
-    "thunderstore-api-token.1": "matches ordinary identifiers",
-    # Their lazy DFAs do not fit the per-pattern cache of the built-in detectors.
-    "authress-service-client-access-key": "too large for the built-in cache budget",
-    "azure-servicebus-connection-string": "too large for the built-in cache budget",
-}
-# Upstream relies on a trailing \b to reach the longer branch or to stop early; the
-# extractor checks boundaries after matching, so these need the full token spelled out.
-OVERRIDES = {
-    "buildkite-user-access-token": "bkua_(?:[a-z0-9]{53}|[a-z0-9]{40})",
-    "datastax-astra-application-token": "AstraCS:[A-Za-z0-9]{20,}:[a-f0-9]{64}",
-}
-# Real tokens of these rules contain long runs of one character.
-KEEP_REPEATED = {"flyio-access-token"}
 MIN_PREFIX = 3
 
 ASCII_CLASS = {"w": "0-9A-Za-z_", "d": "0-9", "s": r"\t\n\f\r "}
@@ -239,8 +220,6 @@ def convert(rules: list[dict]) -> tuple[list[dict], dict[str, str]]:
         try:
             if HAND_WRITTEN.match(rule_id):
                 raise Skip("covered by a hand-written detector")
-            if rule_id in EXCLUDED:
-                raise Skip(EXCLUDED[rule_id])
             if not rule.get("regex") or rule.get("path"):
                 raise Skip("matches file paths")
             if rule.get("skipReport"):
@@ -253,10 +232,7 @@ def convert(rules: list[dict]) -> tuple[list[dict], dict[str, str]]:
                 raise Skip("no fixed prefix")
             if fixed:
                 raise Skip("fixed string without a secret part")
-            detector = {"id": rule_id, "pattern": to_rust(OVERRIDES.get(rule_id, pattern))}
-            if rule_id not in KEEP_REPEATED:
-                detector["reject_repeated"] = True
-            detectors.append(detector)
+            detectors.append({"id": rule_id, "pattern": to_rust(pattern), "reject_repeated": True})
         except Skip as reason:
             skipped[rule_id] = str(reason)
     return sorted(detectors, key=lambda detector: detector["id"]), skipped

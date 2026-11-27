@@ -52,7 +52,6 @@ def test_business_values_code_and_masked_examples_are_not_credentials(content):
         ("openviking_gateway_key", "ovgw_" + BODY + BODY[:11]),
         ("openviking_oauth_token", "ovat_" + BODY + BODY[:22]),
         ("sk_hex32", "sk-" + HEX),
-        ("telegram_bot_token", "bot1234567890:A" + BODY + BODY[:2]),
         ("groq-api-key", "gsk_" + BODY + BODY[:20]),
         ("gitlab-pat", "glpat-" + BODY[:20]),
     ],

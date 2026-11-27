@@ -17,6 +17,7 @@ authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
 license = "AGPL-3.0"
+license-files = ["LICENSE", "crates/ragfs/src/BETTERLEAKS_LICENSE.txt"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
