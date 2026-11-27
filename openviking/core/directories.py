@@ -152,8 +152,7 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
     "agent": DirectoryDefinition(
         path="",
         abstract="Shared agent capabilities and configuration available across the account.",
-        overview="Account-wide capability definitions, organized into skills, communication "
-        "endpoints, tools, and payments. Each category has its own directory.",
+        overview="Stores account-wide skill and tool definitions in the skills and tools directories.",
         children=[
             DirectoryDefinition(
                 path="skills",
@@ -163,22 +162,10 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 "User-private skills remain under viking://user/{user_id}/skills.",
             ),
             DirectoryDefinition(
-                path="endpoints",
-                abstract="Shared communication endpoint configuration for agent capabilities.",
-                overview="Stores definitions of external communication endpoints, organized "
-                "by protocol or service, such as A2A and ANP.",
-            ),
-            DirectoryDefinition(
                 path="tools",
                 abstract="Shared tool configuration for agent capabilities.",
                 overview="Stores tool integration definitions, organized by protocol or "
                 "provider, such as MCP server configurations.",
-            ),
-            DirectoryDefinition(
-                path="payments",
-                abstract="Shared payment capability configuration for agents.",
-                overview="Stores payment capability definitions, organized by protocol "
-                "or provider, such as AP2 configurations.",
             ),
         ],
     ),
