@@ -868,12 +868,16 @@ impl FilesystemPathLockProvider {
         path: &str,
         owner: &str,
         stale_before: u128,
+        acquisition_started_at: Instant,
     ) -> PathLockResult<()> {
         let scan_start = Instant::now();
         let lock_paths = self.scan_descendant_locks(path).await?;
         self.descendant_scan.record(scan_start.elapsed(), &[]);
         for lock_path in lock_paths {
             if let Some(token) = self.read_token(&lock_path).await? {
+                // A scanned token can expire before its read completes.
+                let stale_before =
+                    stale_before.saturating_add(acquisition_started_at.elapsed().as_nanos());
                 if token.owner_id != owner && token.live_kind(stale_before).is_some() {
                     return Err(PathLockError::Conflict {
                         lock_path,
@@ -940,8 +944,13 @@ impl FilesystemPathLockProvider {
         self.check_lock_paths(&plan.conflict_paths, owner, stale_before)
             .await?;
         if plan.request.kind == PathLockKind::Tree {
-            self.check_descendant_locks(&plan.request.path, owner, stale_before)
-                .await?;
+            self.check_descendant_locks(
+                &plan.request.path,
+                owner,
+                stale_before,
+                acquisition_started_at,
+            )
+            .await?;
         }
         self.ensure_lock_dir(&plan.lock_path).await?;
 
@@ -1020,6 +1029,7 @@ impl FilesystemPathLockProvider {
         plans: &[FilesystemAcquisitionPlan],
         owner: &str,
         stale_before: u128,
+        acquisition_started_at: Instant,
     ) -> PathLockResult<()> {
         for plan in plans {
             self.check_ancestor_tree_locks(&plan.request.path, owner, stale_before)
@@ -1027,8 +1037,13 @@ impl FilesystemPathLockProvider {
             self.check_lock_paths(&plan.conflict_paths, owner, stale_before)
                 .await?;
             if plan.request.kind == PathLockKind::Tree {
-                self.check_descendant_locks(&plan.request.path, owner, stale_before)
-                    .await?;
+                self.check_descendant_locks(
+                    &plan.request.path,
+                    owner,
+                    stale_before,
+                    acquisition_started_at,
+                )
+                .await?;
             }
         }
         Ok(())
@@ -1352,7 +1367,10 @@ impl PathLockProvider for FilesystemPathLockProvider {
         let acquisitions: Vec<_> = acquisitions.into_iter().flatten().collect();
         let result = match first_error {
             Some(error) => Err(error),
-            None => self.verify_plans(&plans, owner, stale_before).await,
+            None => {
+                self.verify_plans(&plans, owner, stale_before, acquisition_started_at)
+                    .await
+            }
         };
         if let Err(error) = result {
             if let Err(rollback_error) = self
