@@ -76,16 +76,18 @@ function transcriptReader(host) {
 /**
  * Run one host event and return what to answer: `{ context }` for the model,
  * `{ deny }`, `{ notice }` or `{ input }` for a tool call, or `{}`. The caller
- * hands it to `host.emit`.
+ * hands it to `host.emit`. A host that lives in its harness's process passes
+ * the config it resolved as `cfg`; a hook process leaves it to be loaded for
+ * the event's directory.
  */
-export async function runStage(host, event, payload = {}, { detached = false } = {}) {
+export async function runStage(host, event, payload = {}, { detached = false, cfg: given } = {}) {
   const stage = stageOf(host, event);
   if (!stage) return {};
   if (stage === "toolCall") return toolCall(host, payload, event);
 
   const read = host.read(event, payload, { text: transcriptReader(host) }) || {};
   const cwd = read.cwd || resolveAgentCwd(payload);
-  const cfg = loadAgentHookConfig(host.id, cwd);
+  const cfg = given || loadAgentHookConfig(host.id, cwd);
   const { log, logError } = createAgentLogger(host.id, event, cfg);
   const nativeId = nativeSessionId(host, event, payload, read);
   const child = String(read.child || "");

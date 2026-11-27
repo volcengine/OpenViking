@@ -2,7 +2,7 @@
 
 import { realpathSync } from "node:fs";
 import { access, mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
+import { dirname, join, posix, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -374,7 +374,10 @@ export async function sharedClosure(seeds) {
     if (source === null) continue;
     generated.add(name);
     for (const spec of importSpecifiers(source)) {
-      if (spec.startsWith("./")) pending.push(spec.slice(2));
+      if (!spec.startsWith(".")) continue;
+      // Relative to the module, which may sit in a subdirectory of lib/.
+      const imported = posix.normalize(posix.join(posix.dirname(name), spec));
+      if (!imported.startsWith("..")) pending.push(imported);
     }
   }
   return [...generated].sort();
@@ -425,12 +428,19 @@ export async function resolveTargets() {
  * whether this one imports from TypeScript.
  */
 async function copySharedFile(file, targetDir, typed) {
-  await mkdir(targetDir, { recursive: true });
+  await mkdir(dirname(join(targetDir, file)), { recursive: true });
   const data = file.endsWith(DATA_EXTENSION);
   const names = typed && !data ? [file, `${file.slice(0, -4)}.d.mts`] : [file];
   for (const name of names) {
     const body = await readFile(join(SHARED_DIR, name), "utf-8").catch(() => null);
     if (body === null) continue;
+    // A declaration that has no module of its own travels with the one that imports it.
+    if (name.endsWith(".d.mts")) {
+      for (const spec of importSpecifiers(body)) {
+        const imported = posix.normalize(posix.join(posix.dirname(name), spec));
+        if (spec.startsWith(".") && spec.endsWith(".d.mts") && !names.includes(imported)) names.push(imported);
+      }
+    }
     // Written through a rename so a reader never sees half a module: the
     // marketplace staging script runs this generator, and it can run while a
     // test is byte-comparing the copies.
@@ -458,7 +468,11 @@ async function copySkill(skill, targetDir) {
 /** Vendored copies the target no longer imports; the sync would never touch them again. */
 async function staleCopies(target, keep) {
   const stale = [];
-  for (const name of (await readdir(target.dir).catch(() => [])).sort()) {
+  const entries = await readdir(target.dir, { recursive: true, withFileTypes: true }).catch(() => []);
+  const names = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(target.dir, join(entry.parentPath, entry.name)).split(sep).join("/"));
+  for (const name of names.sort()) {
     if (name.endsWith(DATA_EXTENSION)) {
       // No banner to tell a copy by: one named after a lib/ data file is ours.
       if (!keep.includes(name) && (await exists(join(SHARED_DIR, name)))) stale.push(name);
