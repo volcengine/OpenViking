@@ -148,6 +148,14 @@ function readLocale(map, output, mediaKeys, depth) {
   return false;
 }
 
+// The image of an i18n_img_key map in the language the card text is read in.
+function cardImageKey(map) {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return undefined;
+  return Object.entries(map)
+    .filter(([locale, key]) => LOCALES.has(locale.toLowerCase()) && typeof key === 'string' && IMAGE_KEY.test(key))
+    .sort(([left], [right]) => localeRank(left) - localeRank(right))[0]?.[1];
+}
+
 function parseJson(value) {
   if (typeof value !== 'string') return value;
   try {
@@ -181,7 +189,12 @@ function humanizeCompositeCard(text) {
   if (card === null) return null;
   const refs = text.match(MEDIA_REFERENCE) ?? [];
   const parts = [];
-  collectText(card, parts);
+  // An image the event already references is not listed a second time.
+  const seen = new Set(refs.flatMap((ref) => {
+    const key = /image_key=(\S+?)\]/.exec(ref)?.[1];
+    return key ? [`image:${key}`] : [];
+  }));
+  collectText(card, parts, seen);
   if (parts.length === 0) return refs.length > 0 ? refs.join('\n') : '[card]';
   return [...refs, ...parts].join('\n').trim();
 }
@@ -203,12 +216,20 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
   // content. Preserve only the resource pointer that the matching MCP tool
   // can retrieve; keep the generic sensitive-key filter below for everything
   // else.
-  if ((value.tag === 'img' || value.tag === 'image')
-    && typeof value.image_key === 'string' && IMAGE_KEY.test(value.image_key)) {
-    const key = `image:${value.image_key}`;
-    if (!mediaKeys.has(key)) output.push(`[image image_key=${value.image_key}]`);
-    mediaKeys.add(key);
-    return;
+  if (value.tag === 'img' || value.tag === 'image') {
+    // Posts name the image image_key; card img elements name it img_key, or
+    // only i18n_img_key per language, read by the same one-language rule.
+    const imageKey = [value.image_key, value.img_key, cardImageKey(value.i18n_img_key)]
+      .find((candidate) => typeof candidate === 'string' && IMAGE_KEY.test(candidate));
+    if (imageKey) {
+      const key = `image:${imageKey}`;
+      if (!mediaKeys.has(key)) output.push(`[image image_key=${imageKey}]`);
+      mediaKeys.add(key);
+      const alt = [];
+      collectText(value.alt, alt, mediaKeys, depth + 1);
+      output.push(...alt);
+      return;
+    }
   }
   if ((value.tag === 'media' || value.tag === 'file')
     && typeof value.file_key === 'string' && value.file_key) {

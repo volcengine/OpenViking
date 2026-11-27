@@ -276,6 +276,15 @@ describe('normalizeEvent', () => {
     assert.equal(event.content, "It's time to check in");
   });
 
+  it('keeps a card image named by img_key or i18n_img_key for get_message_media', () => {
+    const event = cardEvent({ elements: [
+      { tag: 'img', img_key: 'img_v3_cardimage01', alt: { tag: 'plain_text', content: '架构图' } },
+      { tag: 'img', i18n_img_key: { zh_cn: 'img_v3_chineseimg1', en_us: 'img_v3_englishimg1' } },
+    ] });
+    assert.equal(event.content,
+      '[image image_key=img_v3_cardimage01]\n架构图\n[image image_key=img_v3_englishimg1]');
+  });
+
   it('reads one language of a card configured in every language', () => {
     const event = cardEvent({
       header: { title: { tag: 'plain_text', i18n: { zh_cn: '中文模板', en_us: 'English template' } } },
