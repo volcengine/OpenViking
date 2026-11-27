@@ -625,30 +625,6 @@ class ReindexExecutor:
                 vector_inventory=inventory,
             )
 
-    async def _reindex_namespace_markers(
-        self,
-        *,
-        uri: str,
-        run: _ReindexRunContext,
-        inventory: Mapping[str, Mapping[str, Any]],
-    ) -> None:
-        """Rebuild a namespace directory's vectors from its stored descriptions."""
-        root_records = {
-            record_id: record
-            for record_id, record in inventory.items()
-            if record.get("uri") == uri and record.get("level") in {0, 1}
-        }
-        await self._reindex_rfv(
-            uri=uri,
-            mode="vectors_only",
-            context_type=context_type_for_uri(uri),
-            recursive=False,
-            run=run,
-            root_is_dir=True,
-            formal_entries=[],
-            vector_inventory=root_records,
-        )
-
     async def _skill_scopes(
         self,
         *,
@@ -686,7 +662,9 @@ class ReindexExecutor:
             )
 
         if exists:
-            await self._reindex_namespace_markers(uri=uri, run=run, inventory=inventory)
+            await self._reindex_rfv(
+                uri=uri, recursive=False, run=run, formal_entries=[], vector_inventory=inventory
+            )
 
     async def _reindex_peer_scopes(
         self,
@@ -757,7 +735,9 @@ class ReindexExecutor:
                 )
 
         if exists:
-            await self._reindex_namespace_markers(uri=uri, run=run, inventory=inventory)
+            await self._reindex_rfv(
+                uri=uri, recursive=False, run=run, formal_entries=[], vector_inventory=inventory
+            )
 
     async def _memory_scopes(
         self,
@@ -1064,10 +1044,10 @@ class ReindexExecutor:
         self,
         *,
         uri: str,
-        mode: str,
-        context_type: str,
         recursive: bool,
         run: _ReindexRunContext,
+        mode: str = "vectors_only",
+        context_type: str | None = None,
         root_is_dir: bool | None = None,
         formal_entries: list[dict[str, Any]] | None = None,
         root_exists: bool = True,
@@ -1078,6 +1058,8 @@ class ReindexExecutor:
         from openviking.storage.resource_rnfv import RequestIntent
         from openviking.utils.resource_processor import ResourceProcessor
 
+        if context_type is None:
+            context_type = context_type_for_uri(uri)
         service = get_service()
         request = RequestIntent.from_ingest_options(
             target_uri=uri,
@@ -1103,6 +1085,13 @@ class ReindexExecutor:
                 recursive=recursive,
                 include_direct_children=bool(resolved_root_is_dir) and not recursive,
             )
+        if root_exists and resolved_root_is_dir and not recursive and formal_entries == []:
+            # Descendants have their own scopes. Only reconcile the directory's summaries here.
+            vector_inventory = {
+                record_id: record
+                for record_id, record in vector_inventory.items()
+                if record.get("uri") == uri and record.get("level") in {0, 1}
+            }
         snapshot = await build_rfv_snapshot(
             viking_fs=service.viking_fs,
             vikingdb=service.vikingdb_manager,
@@ -1484,7 +1473,9 @@ class ReindexExecutor:
         for name in ("skills", "peers"):
             if facts[name][0] and not facts[name][1]:
                 raise InvalidArgumentError(f"{name} namespace must be a directory: {roots[name]}")
-        await self._reindex_namespace_markers(uri=uri, run=run, inventory=direct_inventory)
+        await self._reindex_rfv(
+            uri=uri, recursive=False, run=run, formal_entries=[], vector_inventory=direct_inventory
+        )
         await self._resource_scope(
             uri=roots["resources"],
             mode=mode,
@@ -1568,7 +1559,13 @@ class ReindexExecutor:
             list_children=True,
         )
         if agent_inventory is not None:
-            await self._reindex_namespace_markers(uri=agent, run=run, inventory=agent_inventory)
+            await self._reindex_rfv(
+                uri=agent,
+                recursive=False,
+                run=run,
+                formal_entries=[],
+                vector_inventory=agent_inventory,
+            )
         for root in resource_roots:
             await self._resource_scope(
                 uri=root,
