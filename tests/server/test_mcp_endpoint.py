@@ -1512,7 +1512,7 @@ async def test_list_loads_directory_summary_with_default_length(service):
 
     result = await list_tool(uri)
 
-    assert result == f"[dir] guide\n  - {'a' * 1997}..."
+    assert result == f"[dir] guide\n  - {'a' * 253}..."
 
 
 async def test_list_system_namespace_keeps_plain_listing(service, monkeypatch):
@@ -2850,7 +2850,7 @@ async def test_tree_include_abstract_renders_directory_abstracts(service, monkey
     assert "\npr-review/\n  - name: pr-review description: Review a PR diff\n" in result
     assert "\n  SKILL.md (42 B)" in result
     assert captured["output"] == "agent"
-    assert captured["abs_limit"] == 2000
+    assert captured["abs_limit"] == 1024
 
 
 async def test_tree_include_abstract_skips_not_ready_placeholders(service):
@@ -2972,7 +2972,7 @@ async def test_tree_renders_summaries_with_tags_and_pagination(
         uri,
         ctx=DEFAULT_CTX,
         output="agent",
-        abs_limit=2000,
+        abs_limit=1024,
         node_limit=2,
         level_limit=3,
         tags=tags,

@@ -526,7 +526,7 @@ describe("OpenVikingClient", () => {
       "id",
     ]);
     expect(requests.map((url) => url.searchParams.get("abs_limit"))).toEqual(
-      Array(5).fill("2000"),
+      ["256", "256", "256", "128", "128"],
     );
     expect(legacy!.searchParams.has("include_abstract")).toBe(false);
     expect(legacy!.searchParams.has("include_overview")).toBe(false);

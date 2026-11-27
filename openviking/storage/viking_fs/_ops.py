@@ -1875,7 +1875,7 @@ class _OpsMixin:
         self,
         uri: str = "viking://",
         output: str = "original",
-        abs_limit: int = 2000,
+        abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: Optional[int] = 1000,
         level_limit: Optional[int] = 3,
@@ -1895,7 +1895,7 @@ class _OpsMixin:
         Args:
             uri: Viking URI
             output: str = "original" or "agent"
-            abs_limit: Maximum returned abstract length (default: 2000)
+            abs_limit: Maximum returned abstract length (default: 256)
             show_all_hidden: bool = False (list all hidden files, like -a)
             node_limit: int | None = 1000 (maximum number of nodes to list, None means unlimited)
             level_limit: int | None = 3 (maximum depth level to traverse, None means unlimited)
@@ -2321,7 +2321,7 @@ class _OpsMixin:
         self,
         uri: str,
         output: str = "original",
-        abs_limit: int = 2000,
+        abs_limit: int = 256,
         include_abstract: Optional[bool] = None,
         include_overview: bool = False,
         overview_limit: int = 4000,

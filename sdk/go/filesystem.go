@@ -22,7 +22,7 @@ func (c *Client) List(ctx context.Context, uri string, opts *ListOptions) ([]any
 // ListPage lists directory contents with pagination metadata.
 func (c *Client) ListPage(ctx context.Context, uri string, opts *ListOptions) (*ListPage, error) {
 	if opts == nil {
-		opts = &ListOptions{Output: "original", AbsLimit: 2000, NodeLimit: 1000}
+		opts = &ListOptions{Output: "original", AbsLimit: 256, NodeLimit: 1000}
 	}
 	output := opts.Output
 	if output == "" {
@@ -30,7 +30,7 @@ func (c *Client) ListPage(ctx context.Context, uri string, opts *ListOptions) (*
 	}
 	absLimit := opts.AbsLimit
 	if absLimit == 0 {
-		absLimit = 2000
+		absLimit = 256
 	}
 	overviewLimit := opts.OverviewLimit
 	if overviewLimit == 0 {
@@ -96,7 +96,7 @@ func (c *Client) Tree(ctx context.Context, uri string, opts *TreeOptions) ([]map
 // TreePage returns a directory tree with pagination metadata.
 func (c *Client) TreePage(ctx context.Context, uri string, opts *TreeOptions) (*TreePage, error) {
 	if opts == nil {
-		opts = &TreeOptions{Output: "original", AbsLimit: 2000, NodeLimit: 1000}
+		opts = &TreeOptions{Output: "original", AbsLimit: 128, NodeLimit: 1000}
 	}
 	output := opts.Output
 	if output == "" {
@@ -104,7 +104,7 @@ func (c *Client) TreePage(ctx context.Context, uri string, opts *TreeOptions) (*
 	}
 	absLimit := opts.AbsLimit
 	if absLimit == 0 {
-		absLimit = 2000
+		absLimit = 128
 	}
 	overviewLimit := opts.OverviewLimit
 	if overviewLimit == 0 {

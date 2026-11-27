@@ -1602,7 +1602,7 @@ async def ls(
 # -- tree ------------------------------------------------------------------
 
 # Long enough to keep a full skill description (the Agent Skills limit is 1024 chars).
-_TREE_ABSTRACT_LIMIT = 2000
+_TREE_ABSTRACT_LIMIT = 1024
 
 
 def _listing_abstract(entry: Dict[str, Any]) -> str:

@@ -53,7 +53,7 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 | simple | bool | 否 | False | 仅返回相对路径 |
 | recursive | bool | 否 | False | 递归列出所有子目录 |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
-| abs_limit | int | 否 | 2000 | 返回的摘要最大字符数 |
+| abs_limit | int | 否 | 256 | 返回的摘要最大字符数 |
 | include_abstract | bool | 否 | 未设置 | 是否返回文件和目录的摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
 | include_overview | bool | 否 | 未设置 | 是否返回目录 L1 概览。未设置时不返回 |
 | overview_limit | int | 否 | 4000 | 返回的概览最大长度 |
@@ -271,7 +271,7 @@ HTTP 响应中的 `result` 保持为条目数组。`has_more=true` 表示在应�
 |------|------|------|--------|------|
 | uri | str | 是 | - | 文件或目录的 Viking URI |
 | output | str | 否 | HTTP：`agent`；SDK：`original` | 输出格式：`agent` 或 `original` |
-| abs_limit | int | 否 | 2000 | 返回的摘要最大字符数 |
+| abs_limit | int | 否 | HTTP：256；SDK/CLI：128 | 返回的摘要最大字符数 |
 | include_abstract | bool | 否 | 未设置 | 是否返回文件和目录的摘要。未设置时沿用旧 `output` 语义（`agent` 返回，`original` 不返回） |
 | include_overview | bool | 否 | 未设置 | 是否返回目录 L1 概览。未设置时不返回 |
 | overview_limit | int | 否 | 4000 | 返回的概览最大长度 |

@@ -47,7 +47,7 @@ async def ls(
     simple: bool = Query(False, description="Return only relative path list"),
     recursive: bool = Query(False, description="List all subdirectories recursively"),
     output: str = Query("agent", description="Output format: original or agent"),
-    abs_limit: int = Query(2000, description="Maximum returned abstract length"),
+    abs_limit: int = Query(256, description="Maximum returned abstract length"),
     include_abstract: Optional[bool] = Query(
         None, description="Include file and directory abstracts; defaults to the output format"
     ),
@@ -109,7 +109,7 @@ async def ls(
 async def tree(
     uri: str = Query(..., description="File or directory Viking URI"),
     output: str = Query("agent", description="Output format: original or agent"),
-    abs_limit: int = Query(2000, description="Maximum returned abstract length"),
+    abs_limit: int = Query(256, description="Maximum returned abstract length"),
     include_abstract: Optional[bool] = Query(
         None, description="Include file and directory abstracts; defaults to the output format"
     ),

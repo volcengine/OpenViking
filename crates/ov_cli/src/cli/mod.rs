@@ -317,7 +317,7 @@ pub(crate) enum Commands {
         #[arg(
             long = "abs-limit",
             short = 'l',
-            default_value = "2000",
+            default_value = "256",
             value_name = "n",
             help_heading = "Advanced options"
         )]
@@ -422,7 +422,7 @@ pub(crate) enum Commands {
         #[arg(
             long = "abs-limit",
             short = 'l',
-            default_value = "2000",
+            default_value = "128",
             value_name = "n",
             help_heading = "Advanced options"
         )]

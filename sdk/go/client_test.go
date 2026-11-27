@@ -190,12 +190,12 @@ func TestListAndTreePreserveOptionsAndPagination(t *testing.T) {
 					"overview_limit": {"512"}, "abs_limit": {"128"}, "include_tags": {"true"},
 				}
 			} else {
-				want = map[string][]string{"abs_limit": {"2000"}, "overview_limit": {"4000"}}
+				want = map[string][]string{"abs_limit": {"256"}, "overview_limit": {"4000"}}
 				omitted = []string{"include_abstract", "include_overview", "include_tags"}
 			}
 			listCalls++
 		case "/api/v1/fs/tree":
-			if got := r.URL.Query().Get("abs_limit"); got != "2000" {
+			if got := r.URL.Query().Get("abs_limit"); got != "128" {
 				t.Fatalf("abs_limit = %q", got)
 			}
 			if treeCalls == 0 {

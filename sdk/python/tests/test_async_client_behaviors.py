@@ -879,11 +879,11 @@ async def test_ls_and_tree_preserve_query_options_and_pagination():
     assert fake_http.get.await_args_list[1].kwargs["params"]["overview_limit"] == 4000
     assert fake_http.get.await_args_list[1].kwargs["params"]["directories_only"] is True
     assert all(
-        tree_call.kwargs["params"]["abs_limit"] == 2000
+        tree_call.kwargs["params"]["abs_limit"] == 128
         for tree_call in fake_http.get.await_args_list[1:]
     )
     await client.ls("viking://resources/")
-    assert fake_http.get.await_args.kwargs["params"]["abs_limit"] == 2000
+    assert fake_http.get.await_args.kwargs["params"]["abs_limit"] == 256
 
 
 @pytest.mark.asyncio

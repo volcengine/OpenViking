@@ -66,7 +66,7 @@ container must be a directory.
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
-| abs_limit | int | No | 2000 | Maximum returned abstract length in characters |
+| abs_limit | int | No | 256 | Maximum returned abstract length in characters |
 | include_abstract | bool | No | Unset | Include file and directory abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
 | include_overview | bool | No | Unset | Include directory L1 overviews. Unset means omitted |
 | overview_limit | int | No | 4000 | Maximum returned overview length |
@@ -262,7 +262,7 @@ pagination, tags, metadata, and errors follow the `ls` rules above.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | File or directory Viking URI |
 | output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
-| abs_limit | int | No | 2000 | Maximum returned abstract length in characters |
+| abs_limit | int | No | HTTP: 256; SDKs/CLI: 128 | Maximum returned abstract length in characters |
 | include_abstract | bool | No | Unset | Include file and directory abstracts. When unset, follows the legacy output behavior (`agent`: included; `original`: omitted) |
 | include_overview | bool | No | Unset | Include directory L1 overviews. Unset means omitted |
 | overview_limit | int | No | 4000 | Maximum returned overview length |
