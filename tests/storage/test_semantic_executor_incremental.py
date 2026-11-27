@@ -115,7 +115,11 @@ class _FakeProcessor:
             name = item.get("name", "")
             abstract = item.get("abstract", "")
             lines.append(f"- {name}/: {abstract}")
-        return DirectoryGeneration(overview="\n".join(lines), abstract="abstract")
+        return DirectoryGeneration(
+            overview="\n".join(lines),
+            abstract="abstract",
+            sampled_entries=len(file_summaries) + len(children_abstracts),
+        )
 
     async def _load_indexed_file_summaries(self, file_paths, ctx=None):
         self.transfer_summary_calls.append(list(file_paths))

@@ -378,6 +378,7 @@ class TestMemoryUpdater:
         directory = "viking://user/alice/memories/events/2026/06/16"
         event_uri = f"{directory}/kept.md"
         additional_uri = f"{directory}/a-extra.md"
+        abstract_uri = f"{directory}/.abstract.md"
         overview_uri = f"{directory}/.overview.md"
         files = {
             event_uri: MemoryFileUtils.write(
@@ -420,6 +421,7 @@ class TestMemoryUpdater:
         semantic_logger.addHandler(caplog.handler)
         request.addfinalizer(lambda: semantic_logger.removeHandler(caplog.handler))
         with (
+            patch.object(semantic_logger, "propagate", False),
             patch(
                 "openviking.storage.queuefs.semantic_processor.get_viking_fs",
                 return_value=fs,
@@ -456,12 +458,24 @@ class TestMemoryUpdater:
                 with pytest.raises(AGFSIoError) as error:
                     await executor.run(directory)
                 assert error.value is additional_card
+                assert abstract_uri not in fs.files
                 assert overview_uri not in fs.files
                 return
             await executor.run(directory)
 
+        excluded_count = int(additional_card is not None)
+        expected_freshness = {
+            "total_entries": 2 + excluded_count,
+            "sampled_entries": 2,
+            "unsampled_entries": excluded_count,
+            "pending_child_changes": 0,
+        }
+        for uri in (abstract_uri, overview_uri):
+            assert (
+                parse_abstract_overview(fs.files[uri]).metadata["freshness"] == expected_freshness
+            )
         overview = parse_abstract_overview(fs.files[overview_uri]).body
-        abstract = parse_abstract_overview(fs.files[f"{directory}/.abstract.md"]).body
+        abstract = parse_abstract_overview(fs.files[abstract_uri]).body
         assert abstract == "Remembered events, decisions, and milestones for 2026/06/16.\n"
         assert "- [kept event](./kept.md)" in overview
         assert "- [plain.md](./plain.md)" in overview

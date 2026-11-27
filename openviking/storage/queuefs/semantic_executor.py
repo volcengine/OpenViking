@@ -1568,7 +1568,7 @@ class SemanticTreeExecutor:
                     )
                 overview, abstract = generated.overview, generated.abstract
                 preset_abstract = generated.preset_abstract
-                sampled_entries = len(file_summaries) + len(children_abstracts)
+                sampled_entries = generated.sampled_entries
 
             if self._closed:
                 return
