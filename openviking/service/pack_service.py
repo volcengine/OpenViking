@@ -101,7 +101,7 @@ class PackService:
         ctx: RequestContext,
         include_vectors: bool = False,
     ) -> str:
-        """Back up all public OpenViking scopes as a restore-only .ovpack file."""
+        """Back up the current account as a restore-only .ovpack file."""
         viking_fs = self._ensure_initialized()
         maintenance_ctx = self._account_maintenance_ctx(ctx)
         return await local_backup_ovpack(

@@ -11,6 +11,7 @@ from typing import Any
 from openviking.core.namespace import (
     content_owner_context_for_uri,
     context_type_for_uri,
+    is_hidden_uri,
     is_session_uri,
     owner_fields_for_uri,
 )
@@ -303,7 +304,7 @@ async def restore_vector_snapshot(
         if manifest_entry is None:
             continue
         target_uri = manifest_entry_target_uri(root_uri, rel_path, manifest_entry)
-        if target_uri == "viking://user" or is_session_uri(target_uri):
+        if target_uri == "viking://user" or is_hidden_uri(target_uri) or is_session_uri(target_uri):
             continue
         owner_ctx = content_owner_context_for_uri(target_uri, ctx)
         await _upsert_vector_snapshot_record(

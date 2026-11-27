@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import zipfile
-from typing import Any
+from typing import Any, Literal
 
 from openviking.storage.ovpack.format import (
     OVPACK_DENSE_PATH,
@@ -484,7 +484,11 @@ def validate_manifest_content(
 
 
 def validated_import_members(
-    infolist: list[zipfile.ZipInfo], base_name: str, root_uri: str
+    infolist: list[zipfile.ZipInfo],
+    base_name: str,
+    root_uri: str,
+    *,
+    operation: Literal["import", "restore"] = "import",
 ) -> list[tuple[zipfile.ZipInfo, str, str, str]]:
     members: list[tuple[zipfile.ZipInfo, str, str, str]] = []
     for info in infolist:
@@ -516,7 +520,7 @@ def validated_import_members(
             members.append((info, safe_zip_path, kind, rel_path))
             continue
         target_uri = join_uri(root_uri, rel_path)
-        validate_import_target_uri(target_uri)
+        validate_import_target_uri(target_uri, operation=operation)
         members.append((info, safe_zip_path, kind, rel_path))
 
     return members

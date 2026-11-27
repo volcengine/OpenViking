@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from openviking.core.namespace import uri_depth, uri_parts
 from openviking.resource.watch_storage import is_watch_task_control_uri
@@ -18,8 +18,8 @@ from openviking.storage.ovpack.format import (
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.uri import VikingURI
 
-PUBLIC_SCOPES = ("resources", "user")
-IMPORTABLE_SCOPES = frozenset(PUBLIC_SCOPES)
+BACKUP_SCOPES = ("resources", "user", "agent")
+IMPORTABLE_SCOPES = frozenset({"resources", "user"})
 STRUCTURED_IMPORT_SCOPES = frozenset({"user"})
 EXCLUDED_FILENAMES = frozenset({".relations.json"})
 
@@ -51,19 +51,22 @@ def validate_public_scope(uri: str, *, operation: str, allow_root: bool = False)
         if allow_root:
             return
         raise InvalidArgumentError(f"ovpack {operation} is not supported for root URI")
-    if parsed.scope not in IMPORTABLE_SCOPES:
+    scopes = BACKUP_SCOPES if operation == "restore" else IMPORTABLE_SCOPES
+    if parsed.scope not in scopes:
         raise InvalidArgumentError(f"ovpack {operation} is not supported for scope: {parsed.scope}")
 
 
-def validate_import_target_uri(uri: str) -> None:
-    """Enforce the same target-policy boundary as direct content writes."""
-    validate_public_scope(uri, operation="import")
-    validate_ovpack_user_rel_path(_scope_relative_path(uri), operation="import")
+def validate_import_target_uri(
+    uri: str, *, operation: Literal["import", "restore"] = "import"
+) -> None:
+    """Validate the destination URI and the package content path."""
+    validate_public_scope(uri, operation=operation)
+    validate_ovpack_user_rel_path(_scope_relative_path(uri), operation=operation)
     name = leaf_name(uri)
     if name in EXCLUDED_FILENAMES:
-        raise InvalidArgumentError(f"cannot import internal ovpack file: {uri}")
+        raise InvalidArgumentError(f"cannot {operation} internal ovpack file: {uri}")
     if is_watch_task_control_uri(uri):
-        raise InvalidArgumentError(f"cannot import watch task control file: {uri}")
+        raise InvalidArgumentError(f"cannot {operation} watch task control file: {uri}")
 
 
 def validate_export_source_uri(uri: str) -> None:
@@ -163,7 +166,7 @@ def backup_scopes_from_manifest(
     manifest: dict[str, Any], manifest_entries: dict[str, dict[str, Any]]
 ) -> tuple[str, ...]:
     roots = {rel_path.split("/", 1)[0] for rel_path in manifest_entries if rel_path}
-    unexpected = sorted(root for root in roots if root not in IMPORTABLE_SCOPES)
+    unexpected = sorted(root for root in roots if root not in BACKUP_SCOPES)
     if unexpected:
         raise InvalidArgumentError(
             "Backup ovpack contains unsupported roots",
@@ -173,7 +176,7 @@ def backup_scopes_from_manifest(
     directory_scope_roots = {
         rel_path
         for rel_path, entry in manifest_entries.items()
-        if rel_path in IMPORTABLE_SCOPES and entry.get("kind") == "directory"
+        if rel_path in BACKUP_SCOPES and entry.get("kind") == "directory"
     }
     missing_scope_directories = sorted(roots - directory_scope_roots)
     if missing_scope_directories:
@@ -182,7 +185,7 @@ def backup_scopes_from_manifest(
             details={"missing_scope_directories": missing_scope_directories},
         )
 
-    entry_scopes = tuple(scope for scope in PUBLIC_SCOPES if scope in directory_scope_roots)
+    entry_scopes = tuple(scope for scope in BACKUP_SCOPES if scope in directory_scope_roots)
     declared_scopes = manifest.get("scopes")
     if not isinstance(declared_scopes, list) or any(
         not isinstance(scope, str) for scope in declared_scopes
@@ -194,7 +197,7 @@ def backup_scopes_from_manifest(
     duplicate_scopes = sorted(
         scope for scope in set(declared_scopes) if declared_scopes.count(scope) > 1
     )
-    invalid_scopes = sorted(scope for scope in declared_scopes if scope not in IMPORTABLE_SCOPES)
+    invalid_scopes = sorted(scope for scope in declared_scopes if scope not in BACKUP_SCOPES)
     if duplicate_scopes or invalid_scopes:
         raise InvalidArgumentError(
             "Invalid backup ovpack scopes",

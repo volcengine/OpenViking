@@ -24,6 +24,7 @@ scope roots together (these are namespace roots, not a statement that their cont
 
 - `viking://resources`
 - all `viking://user/{user_id}` content in the current account
+- `viking://agent`
 
 Only ROOT or ADMIN can call `backup/restore`, and these operations traverse all
 user content within the current account. Backup packages do not contain user
@@ -348,7 +349,7 @@ curl -f -X POST http://localhost:1933/api/v1/pack/backup \
 The table above describes regular `import`. For full `restore`, `overwrite`
 performs a merge-upsert: missing target paths are created, matching paths are
 overwritten, and target-only paths absent from the backup are normally preserved. If a package file replaces an existing directory (or vice versa), restore removes the conflicting target first; existing descendants of that directory are also removed. Restore
-does not delete the full `viking://resources` or `viking://user` tree, and it
+does not delete the full `viking://resources`, `viking://user`, or `viking://agent` tree, and it
 does not create or write the aggregate `viking://user` container itself.
 Vectors are restored or recomputed only for package content that is added or
 overwritten; vectors for target-only content remain unchanged.

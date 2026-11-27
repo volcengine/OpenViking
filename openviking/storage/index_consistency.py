@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from openviking.core.context import ResourceContentType
-from openviking.core.namespace import is_session_uri, uri_parts
+from openviking.core.namespace import is_hidden_uri, is_session_uri, uri_parts
 from openviking.core.namespace_policy import NamespaceProcessingMode, namespace_policy_for_uri
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.global_policy import is_user_global_policy_uri
@@ -99,6 +99,8 @@ def _expects_index(uri: str, *, is_directory: bool) -> bool:
         return False
     if not parts or parts[0] in NON_INDEX_SCOPES or is_session_uri(uri):
         return False
+    if is_hidden_uri(uri):
+        return False
     if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
         return False
     if parts[0] != "user" or len(parts) < 3:
@@ -159,8 +161,6 @@ def _file_candidates(
             continue
         rel_path = str(entry.get("rel_path") or "")
         name = str(entry.get("name") or _leaf_name(rel_path))
-        if name.startswith("."):
-            continue
         candidates.append((uri, rel_path, name))
     return candidates
 
