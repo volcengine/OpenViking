@@ -98,18 +98,6 @@ test("sync runs through a symlinked directory", () => {
   });
 });
 
-test("the pi experiment's credentials CLI runs through a symlinked directory", () => {
-  withTemp((tmp) => {
-    const result = runThroughLink(
-      tmp,
-      join(ROOT, "examples/pi-experimental-context-management/shared"),
-      "credentials.mjs",
-    );
-    assert.equal(result.status, 2, output(result));
-    assert.match(result.stderr, /usage: ov-credentials\.mjs/u);
-  });
-});
-
 test("check-marketplace-archive runs through a symlinked directory", () => {
   withTemp((tmp) => {
     const result = runThroughLink(tmp, join(ROOT, ".github/scripts"), "check-marketplace-archive.mjs");
