@@ -14,6 +14,22 @@ Verified against Kimi Code CLI 0.43.1 and Node.js 18+.
   `session_index.jsonl`. `turn.ended` closes interrupted or tool-only turns.
   If log rotation removes the acknowledged cursor, capture restarts from the
   current file and the bounded acknowledgement set suppresses duplicates.
+- Capture reads `context.append_loop_event` records: `content.part` text,
+  `tool.call` (`toolCallId`, `name`, `args`, a `turnId` or the `stepUuid` of a
+  step that carries one) and `tool.result` (`toolCallId`, `result.output` as a
+  string or content parts, `result.isError`). A result has no `turnId` and joins
+  the turn of the call it answers; one whose call was never seen is dropped, as
+  is any record missing those fields. Each turn sends one assistant message:
+  its text, then each call as a `running` tool part with `tool_input` and each
+  result as a `completed` or `error` tool part with the output's text, paired
+  by `tool_id` and `tool_name`. The tool record shapes come from the upstream
+  type definitions (`loopEventFold.ts`, wire protocol 1.5), not from a recorded
+  wire log.
+- A Stop sends the new turns, then reads the session and commits once its
+  `pending_tokens` reach `commitTokenThreshold`, unless `serverAutoCommit`
+  leaves that commit to OpenViking. Interrupt, SessionEnd and PreCompact
+  (unless `autoCommitOnCompact` is off) commit whatever is uncommitted without
+  reading the session.
 - Stop, PreCompact, and SessionEnd capture may detach. Interrupt stays
   synchronous and all of its OpenViking requests share a two-second budget.
 - The native plugin manifest owns hooks and MCP. Installation does not edit

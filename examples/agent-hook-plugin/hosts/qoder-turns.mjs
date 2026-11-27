@@ -6,9 +6,10 @@
  *
  * 1. **One assistant record per content block.** A model response is split
  *    into `text` / `tool_use` / `thinking` records that share a
- *    `responseGroupId`. They are folded back into one assistant turn, together
- *    with the `tool_result` user records that answer its calls; `thinking` is
- *    dropped.
+ *    `responseGroupId`. They are folded back into one assistant turn, in record
+ *    order, together with the `tool_result` user records that answer its calls;
+ *    `thinking` is dropped. A lazily loaded MCP tool is called through
+ *    `mcp_call`; the call is unwrapped to the tool it names.
  *
  * 2. **Host context is written to the transcript.** What a hook injects lands
  *    in `attachment` records (`hook_output`, `hook_success`), beside the skill
@@ -26,13 +27,8 @@
  * of a turn is a durable cursor.
  */
 
-import {
-  collectToolNamesByIdFromEntries,
-  extractPartsFromPayload,
-  normalizeCaptureRole,
-  sanitizeCapturedText,
-} from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { readUnseenTurns, textFromToolParts } from "./incremental-turn-capture.mjs";
+import { sanitizeCapturedText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { readUnseenTurns, turnsFromBlocks } from "./incremental-turn-capture.mjs";
 
 export { parseJsonlTranscript as parseTranscript } from "./incremental-turn-capture.mjs";
 
@@ -42,10 +38,16 @@ function contentBlocks(record) {
   return Array.isArray(content) ? content.filter((block) => block && typeof block === "object") : [];
 }
 
-function textsOf(blocks) {
-  return blocks
-    .filter((block) => block.type === "text" && typeof block.text === "string" && block.text.trim())
-    .map((block) => block.text);
+function isText(block) {
+  return block.type === "text" && typeof block.text === "string" && block.text.trim() !== "";
+}
+
+// Lazy MCP loading calls every MCP tool as `mcp_call` (DESIGN.md §9); the part
+// names the real tool, so its result pairs with it and OpenViking tools are known.
+function unwrapMcpCall(block) {
+  const { toolName, arguments: args } = block.input || {};
+  if (block.name !== "mcp_call" || typeof toolName !== "string" || !toolName) return block;
+  return { ...block, name: toolName, input: args ?? {} };
 }
 
 function isHostAuthoredUser(record) {
@@ -60,95 +62,58 @@ function decodeRecord(record) {
   const blocks = contentBlocks(record);
   if (record?.type === "user") {
     const results = blocks.filter((block) => block.type === "tool_result");
-    if (results.length > 0) return { kind: "tool", tools: results };
+    if (results.length > 0) return { kind: "tool", blocks: results };
     if (isHostAuthoredUser(record)) return null;
-    const texts = textsOf(blocks);
-    return texts.length > 0 ? { kind: "user", texts } : null;
+    const texts = blocks.filter(isText);
+    return texts.length > 0 ? { kind: "user", blocks: texts } : null;
   }
   if (record?.type === "assistant") {
-    const texts = textsOf(blocks);
-    const tools = blocks.filter((block) => block.type === "tool_use");
-    if (texts.length === 0 && tools.length === 0) return null;
-    return { kind: "assistant", group: record.responseGroupId || null, texts, tools };
+    const kept = blocks
+      .filter((block) => isText(block) || block.type === "tool_use")
+      .map((block) => (block.type === "tool_use" ? unwrapMcpCall(block) : block));
+    if (kept.length === 0) return null;
+    return { kind: "assistant", group: record.responseGroupId || null, blocks: kept };
   }
   return null;
 }
 
-export function extractQoderTurns(records, cfg = {}) {
+export function extractQoderTurns(records) {
   const collected = [];
   let current = null;
-
-  const flush = () => {
-    if (current && (current.texts.length > 0 || current.tools.length > 0)) collected.push(current);
-    current = null;
-  };
-  const openAssistant = (index, group) => {
-    flush();
-    current = { role: "assistant", group, texts: [], tools: [], recordIndex: index };
+  const open = (role, index, group = null) => {
+    current = { role, group, blocks: [], recordIndex: index };
+    collected.push(current);
   };
 
   (records || []).forEach((record, index) => {
     const decoded = decodeRecord(record);
     if (!decoded) return;
     if (decoded.kind === "user") {
-      flush();
-      current = { role: "user", texts: decoded.texts, tools: [], recordIndex: index };
-      return;
-    }
-    if (decoded.kind === "assistant") {
+      open("user", index);
+    } else if (decoded.kind === "assistant") {
       // A new model response opens a new turn; its other blocks, and the tool
       // results answering it, stay in that turn.
       if (current?.role !== "assistant" || (decoded.group && current.group !== decoded.group)) {
-        openAssistant(index, decoded.group);
+        open("assistant", index, decoded.group);
       }
-      current.texts.push(...decoded.texts);
-      current.tools.push(...decoded.tools);
-      return;
+    } else if (current?.role !== "assistant") {
+      open("assistant", index);
     }
-    if (current?.role !== "assistant") openAssistant(index, null);
-    current.tools.push(...decoded.tools);
+    current.blocks.push(...decoded.blocks);
   });
-  flush();
-
-  const turnPayloads = collected.map((turn) => ({
-    role: turn.role,
-    content: [
-      ...turn.texts.map((text) => ({ type: "text", text })),
-      ...turn.tools,
-    ],
-  }));
-  const toolNameById = collectToolNamesByIdFromEntries(turnPayloads);
-
-  const turns = [];
-  for (const [index, payload] of turnPayloads.entries()) {
-    if (payload.role === "assistant" && cfg.captureAssistantTurns === false) continue;
-    const parts = extractPartsFromPayload(payload, { toolMaxChars: Infinity, toolNameById });
-    if (parts.length === 0) continue;
-    const text = textFromToolParts(parts);
-    if (!text) continue;
-    turns.push({
-      role: normalizeCaptureRole(payload.role),
-      content: text,
-      turnId: String(collected[index].recordIndex),
-    });
-  }
-  return turns;
+  return turnsFromBlocks(collected);
 }
 
 export function resolveQoderTranscriptPath(input = {}) {
   return String(input.transcript_path || input.transcriptPath || "").trim();
 }
 
-export function extractUnseenQoderTurns(transcriptPath, lastTurnId = null, cfg = {}) {
-  return readUnseenTurns(transcriptPath, lastTurnId, (records) => extractQoderTurns(records, cfg));
+export function extractUnseenQoderTurns(transcriptPath, lastTurnId = null) {
+  return readUnseenTurns(transcriptPath, lastTurnId, extractQoderTurns);
 }
 
-export function buildQoderTurns(input = {}, state = {}, cfg = {}) {
-  return extractUnseenQoderTurns(
-    resolveQoderTranscriptPath(input),
-    state.lastTurnId || null,
-    cfg,
-  );
+export function buildQoderTurns(input = {}, state = {}) {
+  return extractUnseenQoderTurns(resolveQoderTranscriptPath(input), state.lastTurnId || null);
 }
 
 export function cleanQoderText(value) {

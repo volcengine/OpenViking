@@ -1,13 +1,6 @@
-import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { preToolUseOutput } from "../../memory-plugin-shared/lib/uri-guard.mjs";
-import {
-  applyIncrementalCaptureResult,
-  buildIncrementalCapturePlan,
-  shouldCommitCapture,
-} from "./incremental-turn-capture.mjs";
+import { captureIncrementalTurns } from "./incremental-turn-capture.mjs";
 import { buildCodebuddyTurns, cleanCodebuddyText } from "./codebuddy-turns.mjs";
-
-export { shouldCommitCapture as shouldCommitCodebuddyCapture };
 
 export const codebuddy = {
   prefix: "cb-",
@@ -95,29 +88,6 @@ export const codebuddy = {
     return "";
   },
   async capture(ctx, state, event) {
-    const transcript = buildCodebuddyTurns(ctx.input, state, ctx.cfg);
-    if (transcript.status !== "ok") {
-      ctx.log(`capture_${transcript.status}`, transcript.error ? { error: transcript.error } : {});
-      return null;
-    }
-    const plan = buildIncrementalCapturePlan(transcript.turns, state, ctx.cfg);
-    let next;
-    if (plan.toSend.length > 0) {
-      const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
-      next = applyIncrementalCaptureResult(state, plan, result, cleanCodebuddyText);
-    } else if (shouldCommitCapture(event, ctx.cfg, state.capturedSinceCommit, 0)) {
-      // Nothing new to send, but turns sent earlier are still uncommitted; a
-      // session end or compaction may be their last chance.
-      next = { ...state, captured: 0 };
-    } else {
-      return null;
-    }
-    let capturedSinceCommit = Number(state.capturedSinceCommit || 0) + next.captured;
-    if (shouldCommitCapture(event, ctx.cfg, state.capturedSinceCommit, next.captured)) {
-      const committed = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
-      if (committed.ok || committed.pendingQueued) capturedSinceCommit = 0;
-    }
-    const { captured, ...persisted } = next;
-    return { ...persisted, capturedSinceCommit };
+    return captureIncrementalTurns(ctx, state, event, buildCodebuddyTurns(ctx.input, state), { cleanText: cleanCodebuddyText });
   },
 };

@@ -58,6 +58,17 @@ export function resolveKimicodeWirePath(input = {}, home = kimiCodeHome()) {
   return "";
 }
 
+function toolOutputText(output) {
+  if (typeof output === "string") return output;
+  if (!Array.isArray(output)) return null;
+  return output
+    .map((part) => (typeof part === "string" ? part : typeof part?.text === "string" ? part.text : ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
+const turnKey = (value) => (typeof value === "string" || typeof value === "number" ? String(value) : null);
+
 export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
   if (!wirePath || !existsSync(wirePath)) return { status: "missing", turns: [] };
   let raw;
@@ -69,6 +80,11 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
 
   const users = new Map();
   const assistants = new Map();
+  // Per turn, the assistant side in wire order: text, tool calls and results.
+  const blocks = new Map();
+  const toolTurns = new Map();
+  const stepTurns = new Map();
+  const toolNameById = {};
   const order = [];
   let pendingUser = "";
   const remember = (value) => {
@@ -84,6 +100,10 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
     }
     return turnId;
   };
+  const pushBlock = (turnId, block) => {
+    if (!blocks.has(turnId)) blocks.set(turnId, []);
+    blocks.get(turnId).push(block);
+  };
 
   for (const line of raw.split("\n")) {
     if (!line.trim()) continue;
@@ -93,6 +113,7 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
     } catch {
       continue;
     }
+    if (!row || typeof row !== "object") continue;
     if (row.type === "context.append_message" && row.message?.role === "user") {
       const kind = row.message.origin?.kind;
       if (!kind || kind === "user") pendingUser = textFromContent(row.message.content) || pendingUser;
@@ -107,15 +128,50 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
       continue;
     }
     if (row.type !== "context.append_loop_event") continue;
-    const event = row.event || {};
+    const event = row.event && typeof row.event === "object" ? row.event : {};
+    const stepTurn = turnKey(event.turnId);
+    if (stepTurn !== null && typeof (event.stepUuid ?? event.uuid) === "string") {
+      stepTurns.set(event.stepUuid ?? event.uuid, stepTurn);
+    }
     if (event.type === "turn.ended") {
       attachPending(event.turnId ?? row.turnId);
       continue;
     }
     if (event.type === "content.part" && event.part?.type === "text") {
       const turnId = attachPending(event.turnId);
+      const text = event.part.text || "";
       const prev = assistants.get(turnId);
-      assistants.set(turnId, prev ? `${prev}\n${event.part.text || ""}` : event.part.text || "");
+      assistants.set(turnId, prev ? `${prev}\n${text}` : text);
+      if (text) pushBlock(turnId, { type: "text", text });
+      continue;
+    }
+    if (event.type === "tool.call") {
+      const id = turnKey(event.toolCallId);
+      const turn = stepTurn ?? stepTurns.get(event.stepUuid);
+      if (!id || typeof event.name !== "string" || !event.name || !turn) continue;
+      const turnId = attachPending(turn);
+      toolTurns.set(id, turnId);
+      toolNameById[id] = event.name;
+      pushBlock(turnId, {
+        type: "tool_use",
+        id,
+        name: event.name,
+        ...(event.args === undefined ? {} : { input: event.args }),
+      });
+      continue;
+    }
+    if (event.type === "tool.result") {
+      const id = turnKey(event.toolCallId);
+      const turnId = id ? toolTurns.get(id) : undefined;
+      const output = toolOutputText(event.result?.output);
+      if (!turnId || output === null) continue;
+      toolTurns.delete(id);
+      pushBlock(turnId, {
+        type: "tool_result",
+        tool_use_id: id,
+        output,
+        ...(event.result.isError === true ? { is_error: true } : {}),
+      });
     }
   }
 
@@ -126,10 +182,21 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
   for (const turnId of order.slice(lastIndex + 1)) {
     const user = cleanKimicodeText(users.get(turnId) || "");
     const assistant = cleanKimicodeText(assistants.get(turnId) || "");
+    const assistantBlocks = blocks.get(turnId) || [];
+    const hasTools = assistantBlocks.some((block) => block.type !== "text");
     if (user) turns.push({ role: "user", content: user, turnId });
-    if (assistant) turns.push({ role: "assistant", content: assistant, turnId });
+    if (hasTools) {
+      turns.push({
+        role: "assistant",
+        content: assistant,
+        turnId,
+        payload: { role: "assistant", content: assistantBlocks },
+      });
+    } else if (assistant) {
+      turns.push({ role: "assistant", content: assistant, turnId });
+    }
   }
-  return { status: "ok", turns };
+  return { status: "ok", turns, toolNameById };
 }
 
 export function buildKimicodeTurns(input = {}, state = {}) {

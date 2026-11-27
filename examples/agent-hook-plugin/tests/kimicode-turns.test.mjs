@@ -9,6 +9,7 @@ import {
   cleanKimicodeText,
   extractUnseenKimicodeTurns,
 } from "../hosts/kimicode-turns.mjs";
+import { buildIncrementalCapturePlan } from "../hosts/incremental-turn-capture.mjs";
 
 test("content parts are normalized and injected context is removed", () => {
   assert.equal(cleanKimicodeText([
@@ -83,6 +84,47 @@ test("assistant text from consecutive steps is separated", () => {
   ]);
 });
 
+test("tool calls and their results fold into the turn's assistant message", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-kimi-wire-"));
+  const wire = join(dir, "wire.jsonl");
+  const loop = (event) => JSON.stringify({ type: "context.append_loop_event", event });
+  writeFileSync(wire, [
+    JSON.stringify({ type: "turn.prompt", input: [{ type: "text", text: "list the files" }] }),
+    loop({ type: "step.begin", uuid: "s1", turnId: "4" }),
+    loop({ type: "content.part", stepUuid: "s1", turnId: "4", part: { type: "text", text: "Checking the folder first." } }),
+    loop({ type: "tool.call", stepUuid: "s1", toolCallId: "c1", name: "Shell", args: { command: "ls" } }),
+    loop({ type: "tool.call", stepUuid: "s1", turnId: "4", toolCallId: "c2", name: "ReadFile", args: { path: "a.txt" } }),
+    loop({ type: "tool.call", stepUuid: "s1", turnId: "4", toolCallId: "c3" }),
+    loop({ type: "tool.result", toolCallId: "c1", result: { output: [{ type: "text", text: "a.txt" }, { type: "text", text: "b.txt" }] } }),
+    loop({ type: "tool.result", toolCallId: "c2", result: { output: "no such file", isError: true } }),
+    loop({ type: "tool.result", toolCallId: "ghost", result: { output: "orphan" } }),
+    loop({ type: "tool.result", toolCallId: "c1" }),
+    loop({ type: "content.part", stepUuid: "s2", turnId: "4", part: { type: "text", text: "There are two files." } }),
+    JSON.stringify({ type: "turn.ended", turnId: 4, reason: "completed" }),
+  ].join("\n") + "\n");
+
+  const transcript = extractUnseenKimicodeTurns(wire);
+  assert.deepEqual(transcript.turns.map(({ role, content, turnId }) => ({ role, content, turnId })), [
+    { role: "user", content: "list the files", turnId: "4" },
+    { role: "assistant", content: "Checking the folder first.\nThere are two files.", turnId: "4" },
+  ]);
+  const plan = buildIncrementalCapturePlan(transcript.turns, {}, {}, { toolNameById: transcript.toolNameById });
+  assert.deepEqual(plan.payloads, [
+    { role: "user", content: "list the files", turn_id: "4" },
+    {
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Checking the folder first.\n\nThere are two files." },
+        { type: "tool", tool_id: "c1", tool_name: "Shell", tool_status: "running", tool_input: { command: "ls" } },
+        { type: "tool", tool_id: "c2", tool_name: "ReadFile", tool_status: "running", tool_input: { path: "a.txt" } },
+        { type: "tool", tool_id: "c1", tool_name: "Shell", tool_status: "completed", tool_output: "a.txt\nb.txt" },
+        { type: "tool", tool_id: "c2", tool_name: "ReadFile", tool_status: "error", tool_output: "no such file" },
+      ],
+      turn_id: "4",
+    },
+  ]);
+});
+
 test("turn.ended closes an interrupted user-only turn", () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-kimi-wire-"));
   const wire = join(dir, "wire.jsonl");
@@ -117,7 +159,7 @@ test("an unreadable wire is distinct from a readable wire with no new turns", ()
 
   const empty = join(dir, "empty.jsonl");
   writeFileSync(empty, "");
-  assert.deepEqual(extractUnseenKimicodeTurns(empty), { status: "ok", turns: [] });
+  assert.deepEqual(extractUnseenKimicodeTurns(empty), { status: "ok", turns: [], toolNameById: {} });
 });
 
 test("a rotated wire restarts from its current first turn when the old cursor is absent", () => {

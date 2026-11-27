@@ -1,18 +1,6 @@
-import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
-import {
-  applyIncrementalCaptureResult,
-  buildIncrementalCapturePlan,
-} from "./incremental-turn-capture.mjs";
+import { captureIncrementalTurns } from "./incremental-turn-capture.mjs";
 import { buildKimicodeTurns, cleanKimicodeText } from "./kimicode-turns.mjs";
-
-export function shouldCommitKimicodeCapture(event, cfg = {}, previous = 0, captured = 0) {
-  const uncommitted = Number(previous || 0) + captured;
-  if (uncommitted <= 0) return false;
-  if (event === "interrupt" || event === "session-end") return true;
-  if (event === "pre-compact") return cfg.autoCommitOnCompact !== false;
-  return uncommitted >= Number(cfg.commitTurnThreshold || Infinity);
-}
 
 function promptParts(input) {
   if (typeof input === "string") return input;
@@ -70,29 +58,9 @@ export const kimicode = {
     return cleanKimicodeText(promptParts(input.prompt));
   },
   async capture(ctx, state, event) {
-    const transcript = buildKimicodeTurns(ctx.input, state);
-    if (transcript.status !== "ok") {
-      ctx.log(`capture_${transcript.status}`, transcript.error ? { error: transcript.error } : {});
-      return null;
-    }
-    const plan = buildIncrementalCapturePlan(transcript.turns, state, ctx.cfg);
-    let next;
-    if (plan.toSend.length > 0) {
-      const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
-      next = applyIncrementalCaptureResult(state, plan, result, cleanKimicodeText);
-    } else if (shouldCommitKimicodeCapture(event, ctx.cfg, state.capturedSinceCommit, 0)) {
-      // Nothing new to send, but turns sent earlier are still uncommitted; a
-      // session end, interrupt or compaction may be their last chance.
-      next = { ...state, captured: 0 };
-    } else {
-      return null;
-    }
-    let capturedSinceCommit = Number(state.capturedSinceCommit || 0) + next.captured;
-    if (shouldCommitKimicodeCapture(event, ctx.cfg, state.capturedSinceCommit, next.captured)) {
-      const committed = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
-      if (committed.ok || committed.pendingQueued) capturedSinceCommit = 0;
-    }
-    const { captured, ...persisted } = next;
-    return { ...persisted, capturedSinceCommit };
+    return captureIncrementalTurns(ctx, state, event, buildKimicodeTurns(ctx.input, state), {
+      cleanText: cleanKimicodeText,
+      endEvents: ["session-end", "interrupt"],
+    });
   },
 };

@@ -48,13 +48,8 @@
  * transcript is append-only, so the position of a turn is a durable cursor.
  */
 
-import {
-  collectToolNamesByIdFromEntries,
-  extractPartsFromPayload,
-  normalizeCaptureRole,
-  sanitizeCapturedText,
-} from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { readUnseenTurns, textFromToolParts } from "./incremental-turn-capture.mjs";
+import { normalizeCaptureRole, sanitizeCapturedText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { readUnseenTurns, turnsFromBlocks } from "./incremental-turn-capture.mjs";
 
 export { parseJsonlTranscript as parseTranscript } from "./incremental-turn-capture.mjs";
 
@@ -183,23 +178,16 @@ function payloadForRecord(record) {
 }
 
 /**
- * Every user/assistant turn in the transcript, in order.
- *
- * Turns carrying no structured part are dropped; the rest keep the index of
- * the record that opened them, so the position of a turn is a durable cursor
- * for the incremental capture.
- *
- * Assistant turns are dropped when `captureAssistantTurns` is off — the shared
- * per-turn filter has no notion of the switch, and the agent-hook adapters
- * otherwise capture both sides.
+ * Every user/assistant turn in the transcript, in order, each keeping the
+ * index of the record that opened it, so the position of a turn is a durable
+ * cursor for the incremental capture.
  */
-export function extractCodebuddyTurns(records, cfg = {}) {
+export function extractCodebuddyTurns(records) {
   const collected = [];
   let current = null;
-
-  const flush = () => {
-    if (current && (current.texts.length > 0 || current.tools.length > 0)) collected.push(current);
-    current = null;
+  const open = (role, index) => {
+    current = { role, blocks: [], recordIndex: index };
+    collected.push(current);
   };
 
   (records || []).forEach((record, index) => {
@@ -208,49 +196,16 @@ export function extractCodebuddyTurns(records, cfg = {}) {
     if (normalized.kind === "message") {
       // A new message always opens a new turn; tool records that follow an
       // assistant message stay attached to it.
-      flush();
-      current = { role: normalized.role, texts: [normalized.text], tools: [], recordIndex: index };
+      open(normalized.role, index);
+      current.blocks.push({ type: "text", text: normalized.text });
     } else {
       // Tool use is assistant-side: after a user message it opens an
       // assistant turn of its own rather than landing in the user's.
-      if (current?.role !== "assistant") {
-        flush();
-        current = { role: "assistant", texts: [], tools: [], recordIndex: index };
-      }
-      current.tools.push(normalized.payload);
+      if (current?.role !== "assistant") open("assistant", index);
+      current.blocks.push(normalized.payload);
     }
   });
-  flush();
-
-  // One payload per turn, in the shape capture-utils walks.
-  //
-  // Tool blocks go *inline in `content`*, never under a top-level `tool_calls`
-  // key: `isToolCallBlock()` tests `Boolean(block.tool_calls)`, so that key
-  // makes the whole turn look like a single tool call and swallows its text.
-  const turnPayloads = collected.map((turn) => ({
-    role: turn.role,
-    content: [
-      ...turn.texts.map((text) => ({ type: "text", text })),
-      ...turn.tools,
-    ],
-  }));
-
-  const toolNameById = collectToolNamesByIdFromEntries(turnPayloads);
-
-  const turns = [];
-  for (const [index, payload] of turnPayloads.entries()) {
-    if (payload.role === "assistant" && cfg.captureAssistantTurns === false) continue;
-    const parts = extractPartsFromPayload(payload, { toolMaxChars: Infinity, toolNameById });
-    if (parts.length === 0) continue;
-    const text = textFromToolParts(parts);
-    if (!text) continue;
-    turns.push({
-      role: normalizeCaptureRole(payload.role),
-      content: text,
-      turnId: String(collected[index].recordIndex),
-    });
-  }
-  return turns;
+  return turnsFromBlocks(collected);
 }
 
 /** The transcript path every CodeBuddy event payload carries, or "". */
@@ -258,16 +213,12 @@ export function resolveCodebuddyTranscriptPath(input = {}) {
   return String(input.transcript_path || input.transcriptPath || "").trim();
 }
 
-export function extractUnseenCodebuddyTurns(transcriptPath, lastTurnId = null, cfg = {}) {
-  return readUnseenTurns(transcriptPath, lastTurnId, (records) => extractCodebuddyTurns(records, cfg));
+export function extractUnseenCodebuddyTurns(transcriptPath, lastTurnId = null) {
+  return readUnseenTurns(transcriptPath, lastTurnId, extractCodebuddyTurns);
 }
 
-export function buildCodebuddyTurns(input = {}, state = {}, cfg = {}) {
-  return extractUnseenCodebuddyTurns(
-    resolveCodebuddyTranscriptPath(input),
-    state.lastTurnId || null,
-    cfg,
-  );
+export function buildCodebuddyTurns(input = {}, state = {}) {
+  return extractUnseenCodebuddyTurns(resolveCodebuddyTranscriptPath(input), state.lastTurnId || null);
 }
 
 /** The sanitize step the incremental capture asks its host for. */

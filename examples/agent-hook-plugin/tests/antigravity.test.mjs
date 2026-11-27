@@ -6,8 +6,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { buildCaptureMessage } from "../../memory-plugin-shared/lib/capture-utils.mjs";
 import { expectExit, runHookScript } from "../../memory-plugin-shared/testing/support.mjs";
-import { antigravityTranscriptPath, resolveAntigravityTurnStep } from "../hosts/antigravity.mjs";
+import {
+  antigravityTranscriptPath,
+  buildAntigravityTurns,
+  resolveAntigravityTurnStep,
+} from "../hosts/antigravity.mjs";
 import { evaluateHostUriGuard } from "../scripts/uri-guard.mjs";
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -21,8 +26,8 @@ const firstTurn = step(0, {
   content: "<USER_REQUEST>\nWhat is the retry budget?\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nlocal time\n</ADDITIONAL_METADATA>",
 })
   + step(1, { source: "SYSTEM_SDK", type: "SYSTEM_MESSAGE", content: "<openviking-context>old</openviking-context>" })
-  + step(2, { source: "MODEL", type: "PLANNER_RESPONSE", tool_calls: [{ name: "run_command" }] })
-  + step(3, { source: "MODEL", type: "GENERIC", content: "Command output: 3" })
+  + step(2, { source: "MODEL", type: "PLANNER_RESPONSE", tool_calls: [{ name: "run_command", args: { CommandLine: "grep -c retry app.toml" } }] })
+  + step(3, { source: "MODEL", type: "GENERIC", content: "Created At: 2026-01-01T00:00:00Z\nCompleted At: 2026-01-01T00:00:01Z\n3" })
   + step(4, { source: "MODEL", type: "PLANNER_RESPONSE", content: "The retry budget is three attempts." });
 
 async function runHook(event, input, env) {
@@ -57,17 +62,29 @@ test("Antigravity denies a file tool whose location is a viking:// URI", () => {
 });
 
 test("Antigravity recalls once per turn and captures only new transcript text", async () => {
-  const messages = [];
+  const sent = {};
   const commits = [];
+  let serialPosts = 0;
+  let rejectSerialPost = 0;
   const server = createServer((request, response) => {
     let body = "";
     request.on("data", (chunk) => { body += chunk; });
     request.on("end", () => {
+      const session = request.url?.match(/\/sessions\/([^/]+)\/messages/)?.[1];
       if (request.url === "/api/v1/search/search" || request.url === "/api/v1/search/recall") {
         response.end(JSON.stringify({ result: { rendered: "antigravity memory", entries: [], stats: {} } }));
-      } else if (request.url?.includes("/messages")) {
+      } else if (session === "ag-conv-4" && request.url.endsWith("/batch")) {
+        // No batch route: the client falls back to one request per message.
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: { code: "NOT_FOUND" } }));
+      } else if (session) {
+        if (!request.url.endsWith("/batch") && ++serialPosts === rejectSerialPost) {
+          response.statusCode = 400;
+          response.end(JSON.stringify({ error: { code: "INVALID_ARGUMENT" } }));
+          return;
+        }
         const parsed = JSON.parse(body);
-        messages.push(...(parsed.messages ?? [parsed]));
+        (sent[session] ||= []).push(...(parsed.messages ?? [parsed]).map(({ peer_id, ...message }) => message));
         response.end(JSON.stringify({ result: { ok: true } }));
       } else {
         if (request.url?.endsWith("/commit")) commits.push(request.url);
@@ -86,6 +103,8 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     OPENVIKING_MEMORY_ENABLED: "1",
     OPENVIKING_WRITE_PATH_ASYNC: "0",
   };
+  const messages = () => sent["ag-conv-1"] || [];
+  const texts = (from) => messages().slice(from).map((message) => message.content);
   try {
     const base = { conversationId: "conv-1", cwd: "/workspace", transcriptPath };
     const call = (invocationNum, initialNumSteps) => ({
@@ -119,9 +138,17 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     assert.deepEqual(await runHook("pre-invocation", call(0, 6), env), {});
 
     await runHook("stop", base, env);
-    assert.deepEqual(messages.map((message) => [message.role, message.parts?.[0]?.text ?? message.content]), [
-      ["user", "What is the retry budget?"],
-      ["assistant", "The retry budget is three attempts."],
+    const runCommand = { type: "tool", tool_id: "ag-2-0", tool_name: "run_command" };
+    assert.deepEqual(messages(), [
+      { role: "user", content: "What is the retry budget?" },
+      {
+        role: "assistant",
+        parts: [
+          { ...runCommand, tool_status: "running", tool_input: { CommandLine: "grep -c retry app.toml" } },
+          { ...runCommand, tool_status: "completed", tool_output: "3" },
+        ],
+      },
+      { role: "assistant", content: "The retry budget is three attempts." },
     ]);
     assert.equal(commits.length, 1);
     assert.ok(commits[0].includes("ag-conv-1"));
@@ -136,11 +163,10 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     }, env);
     assert.match(secondRecall.injectSteps?.[0]?.systemMessage?.systemMessage || "", /antigravity memory/);
 
-    // Backgrounded commands (`GENERIC` with `RUNNING`) and failed/invalid tool
-    // steps stay non-DONE permanently in Antigravity transcripts, and a
-    // canceled/errored reply will never become DONE; neither may freeze the
-    // capture cursor before later finished replies. An in-flight reply at the
-    // tail (`RUNNING` / `GENERATING`) still waits for the next Stop.
+    // Tool steps no planner step called are dropped, and a canceled reply will
+    // never become DONE; neither may freeze the capture cursor before later
+    // finished replies. An in-flight reply at the tail (`RUNNING` /
+    // `GENERATING`) still waits for the next Stop.
     appendFileSync(transcriptPath, step(7, { source: "MODEL", type: "GENERIC", content: "Tool is running as a background task", status: "RUNNING" })
       + step(8, { source: "MODEL", type: "GENERIC", content: "Encountered error", status: "ERROR" })
       + step(9, { source: "MODEL", type: "GENERIC", content: "Invalid tool call", status: "INVALID" })
@@ -152,7 +178,7 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
       ...base, invocationNum: 0, initialNumSteps: 13, lastUserInput: "How is my prompt wrapped?",
     }, env), {});
     await runHook("stop", base, env);
-    assert.deepEqual(messages.slice(2).map((message) => message.parts?.[0]?.text ?? message.content), [
+    assert.deepEqual(texts(3), [
       "How is my prompt wrapped?",
       quoted,
       template,
@@ -162,9 +188,7 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
       readFileSync(transcriptPath, "utf8").replace('{"step_index":13,"status":"RUNNING"', '{"step_index":13,"status":"DONE"'),
     );
     await runHook("stop", base, env);
-    assert.deepEqual(messages.slice(5).map((message) => message.parts?.[0]?.text ?? message.content), [
-      "Thirty seconds.",
-    ]);
+    assert.deepEqual(texts(6), ["Thirty seconds."]);
 
     // A queued user turn that the model already answered without an initial
     // recall must not recall late on a background wakeup, while a genuine
@@ -188,6 +212,26 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     }, env);
     assert.match(secondContinue.injectSteps?.[0]?.systemMessage?.systemMessage || "", /antigravity memory/);
 
+    // With assistant capture off only the user requests go out.
+    await runHook("stop", lateBase, { ...env, OPENVIKING_CAPTURE_ASSISTANT_TURNS: "0" });
+    assert.deepEqual(sent["ag-conv-2"].map((message) => message.role), ["user", "user", "user"]);
+
+    // After a partial write the next Stop resends only what the server did not take.
+    const partialPath = join(root, "partial_transcript.jsonl");
+    writeFileSync(partialPath, step(0, { source: "USER_EXPLICIT", type: "USER_INPUT", content: "<USER_REQUEST>\nList the services\n</USER_REQUEST>" })
+      + step(1, { source: "MODEL", type: "PLANNER_RESPONSE", tool_calls: [{ name: "list_dir", args: { DirectoryPath: "/srv" } }] })
+      + step(2, { source: "MODEL", type: "LIST_DIRECTORY", content: "Created At: T\nCompleted At: T\napi\nworker" })
+      + step(3, { source: "MODEL", type: "PLANNER_RESPONSE", content: "There are two services: api and worker." }));
+    const partialBase = { conversationId: "conv-4", cwd: "/workspace", transcriptPath: partialPath };
+    rejectSerialPost = serialPosts + 2;
+    await runHook("stop", partialBase, env);
+    await runHook("stop", partialBase, env);
+    assert.deepEqual(sent["ag-conv-4"].map((message) => message.content ?? message.parts.map((part) => part.tool_status)), [
+      "List the services",
+      ["running", "completed"],
+      "There are two services: api and worker.",
+    ]);
+
     // Missing transcript falls back to initialNumSteps without failing recall.
     const noTranscript = await runHook("pre-invocation", {
       conversationId: "conv-3",
@@ -202,6 +246,57 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     server.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("Antigravity folds each call and the result answering it into the planner step's turn", () => {
+  const user = (index, text) => step(index, { source: "USER_EXPLICIT", type: "USER_INPUT", content: `<USER_REQUEST>\n${text}\n</USER_REQUEST>` });
+  const planner = (index, names, content) => step(index, {
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    ...(content ? { content } : {}),
+    tool_calls: names.map((name) => ({ name, args: { Path: `/src/${name}` } })),
+  });
+  const result = (index, status, content) => step(index, { source: "MODEL", type: "GENERIC", status, content });
+  const jsonl = user(0, "Check the build")
+    // Superseded before any result: the call goes out unanswered.
+    + planner(1, ["read_file"])
+    + planner(2, ["run_command", "read_file", "view_file"], "Checking the build.")
+    + result(3, "RUNNING", "Created At: T\nTool is running as a background task with task id t-1")
+    + result(4, "ERROR", "Created At: T\nCompleted At: T\nfile not found")
+    + result(5, "INVALID", "Created At: T\nCompleted At: T\nmissing argument")
+    // More results than calls: none of them can be placed.
+    + planner(6, ["search_web"])
+    + result(7, "DONE", "first")
+    + result(8, "DONE", "second")
+    + user(9, "And the tests?")
+    // No call is pending after a user step.
+    + result(10, "DONE", "stray")
+    // A result still being written holds back its planner step.
+    + planner(11, ["list_dir"])
+    + result(12, "PENDING", "");
+
+  const { turns, lastStep } = buildAntigravityTurns(jsonl);
+  assert.equal(lastStep, 10);
+  const blocks = (turn) => turn.payload?.content.map((block) => [block.type, block.id ?? block.tool_use_id ?? block.text]);
+  assert.deepEqual(turns.map((turn) => [turn.role, turn.firstStep, blocks(turn) ?? turn.content]), [
+    ["user", 0, "Check the build"],
+    ["assistant", 1, [["tool_use", "ag-1-0"]]],
+    ["assistant", 2, [
+      ["text", "Checking the build."],
+      ["tool_use", "ag-2-0"],
+      ["tool_use", "ag-2-1"],
+      ["tool_use", "ag-2-2"],
+      ["tool_result", "ag-2-1"],
+      ["tool_result", "ag-2-2"],
+    ]],
+    ["assistant", 6, [["tool_use", "ag-6-0"]]],
+    ["user", 9, "And the tests?"],
+  ]);
+  const message = buildCaptureMessage(turns[2].payload, "assistant", {});
+  assert.deepEqual(message.parts.slice(4).map((part) => [part.tool_name, part.tool_status, part.tool_output]), [
+    ["read_file", "error", "file not found"],
+    ["view_file", "error", "missing argument"],
+  ]);
 });
 
 test("Antigravity treats an input the transcript has not recorded yet as a new turn", () => {

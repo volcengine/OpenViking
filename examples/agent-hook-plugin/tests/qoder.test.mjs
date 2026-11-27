@@ -15,7 +15,6 @@ import {
 } from "../../memory-plugin-shared/testing/support.mjs";
 import { loadAgentHookConfig } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { qoder } from "../hosts/qoder.mjs";
-import { shouldCommitCapture } from "../hosts/incremental-turn-capture.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HOOK = join(ROOT, "scripts", "hook.mjs");
@@ -84,19 +83,6 @@ test("both injection events answer hookSpecificOutput without a decision, write-
   assert.equal(qoder.envelope("session-start", ""), null);
 });
 
-test("the commit policy commits at session end and on compact, else by turn count", () => {
-  assert.equal(shouldCommitCapture("session-end", {}, 0, 1), true);
-  assert.equal(shouldCommitCapture("session-end", {}, 0, 0), false);
-  // Turns a Stop already sent are still uncommitted at session end.
-  assert.equal(shouldCommitCapture("session-end", {}, 3, 0), true);
-  assert.equal(shouldCommitCapture("pre-compact", {}, 3, 0), true);
-  assert.equal(shouldCommitCapture("stop", { commitTurnThreshold: 8 }, 3, 0), false);
-  assert.equal(shouldCommitCapture("pre-compact", {}, 0, 1), true);
-  assert.equal(shouldCommitCapture("pre-compact", { autoCommitOnCompact: false }, 0, 1), false);
-  assert.equal(shouldCommitCapture("stop", { commitTurnThreshold: 2 }, 1, 1), true);
-  assert.equal(shouldCommitCapture("stop", { commitTurnThreshold: 8 }, 1, 1), false);
-});
-
 test("plugin.qoder.* overrides apply", async () => {
   const files = await writeCredentialFiles("ov-qd-harness-key-", {
     ovcli: { plugin: { qoder: { recallLimit: 7 } } },
@@ -114,10 +100,8 @@ test("plugin.qoder.* overrides apply", async () => {
 // Capture, driven through the hook entry
 // ---------------------------------------------------------------------------
 
-const qoderTranscript = () => readFileSync(
-  join(ROOT, "tests", "fixtures", "qoder", "transcript-tooluse.jsonl"),
-  "utf8",
-);
+const qoderFixture = (name) => readFileSync(join(ROOT, "tests", "fixtures", "qoder", `${name}.jsonl`), "utf8");
+const qoderTranscript = () => qoderFixture("transcript-tooluse");
 
 const codebuddyTranscript = () => [
   // A real ask wrapped in host markup.
@@ -166,10 +150,13 @@ async function withCapture(t, handler, runCapture, transcript = qoderTranscript(
   }));
 }
 
-/** A mock that records batch sends and answers the commit route. */
+/** A mock that records batch sends, reports `seen.pendingTokens` and answers the commit route. */
 function healthyMock(seen) {
   return async (req, res) => {
     const { pathname } = new URL(req.url, "http://127.0.0.1");
+    if (req.method === "GET" && /^\/api\/v1\/sessions\/[^/]+$/.test(pathname)) {
+      return writeJson(res, { status: "ok", result: { pending_tokens: seen.pendingTokens || 0 } });
+    }
     if (pathname.endsWith("/messages/batch")) {
       seen.batches.push(await readRequestBody(req));
       return writeJson(res, { status: "ok", data: { added: 1 } });
@@ -186,13 +173,13 @@ test("Qoder and CodeBuddy each capture their transcript format and commit it onc
   for (const [host, transcript, roles, expected, excluded] of [
     [
       "qoder", qoderTranscript(), ["user", "assistant", "assistant"],
-      ["Read the file a.txt", "[tool: Read]"],
-      ["PROBE_CTX_SessionStart: the secret word", "1\\thello"],
+      ["Read the file a.txt", '"tool_name":"Read","tool_status":"completed"', "1\\thello"],
+      ["PROBE_CTX_SessionStart: the secret word", "[tool:"],
     ],
     [
       "codebuddy", codebuddyTranscript(), ["user", "assistant", "user"],
-      ["我偏好用 tabs", "那 A 方案里的并发问题呢", "[tool: Bash]"],
-      ["system-reminder", "<user_query>", "task-notification", "a.txt"],
+      ["我偏好用 tabs", "那 A 方案里的并发问题呢", '"tool_name":"Bash","tool_status":"completed"', "a.txt"],
+      ["system-reminder", "<user_query>", "task-notification", "[tool:"],
     ],
   ]) {
     await t.test(host, async (subtest) => {
@@ -218,6 +205,24 @@ test("Qoder and CodeBuddy each capture their transcript format and commit it onc
       }, transcript);
     });
   }
+});
+
+test("a Stop commits once pending tokens reach commitTokenThreshold, a session end commits the rest", async (t) => {
+  const threshold = 100_000; // the default commitTokenThreshold
+  const lines = qoderTranscript().split("\n");
+  const seen = { batches: [], commit: 0, pendingTokens: 0 };
+  await withCapture(t, healthyMock(seen), async ({ run, input }) => {
+    // Each Stop finds one new turn: the ask, the tool-using response, the answer.
+    const stops = [[12, threshold - 1, 0], [17, threshold, 1], [lines.length, 0, 1]];
+    for (const [index, [end, pendingTokens, commits]] of stops.entries()) {
+      writeFileSync(input.transcript_path, lines.slice(0, end).join("\n"));
+      seen.pendingTokens = pendingTokens;
+      expectExit(await run("stop"), 0);
+      assert.deepEqual([seen.batches.length, seen.commit], [index + 1, commits]);
+    }
+    expectExit(await run("session-end"), 0);
+    assert.deepEqual([seen.batches.length, seen.commit], [3, 2]);
+  }, "");
 });
 
 test("Qoder SessionEnd waits for an in-flight Stop holding the session lock", async (t) => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -139,9 +139,9 @@ test("profile retries until success, emits raw text, then injects only once", as
 });
 
 test("Interrupt shares one two-second request budget across capture and commit", async (t) => {
-  let requests = 0;
-  const server = createServer((_request, response) => {
-    requests++;
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push(`${request.method} ${new URL(request.url, "http://localhost").pathname}`);
     setTimeout(() => {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.end('{"result":{}}');
@@ -175,15 +175,24 @@ test("Interrupt shares one two-second request budget across capture and commit",
   const elapsed = Date.now() - started;
   assert.equal(result.status, 0, result.stderr);
   assert.ok(elapsed < 2100, `Interrupt took ${elapsed}ms`);
-  assert.equal(requests, 1, "commit started after the remaining budget was below one request quantum");
+  assert.deepEqual(
+    requests,
+    [`POST /api/v1/sessions/kc-${sessionId}/messages/batch`],
+    "commit started after the remaining budget was below one request quantum",
+  );
 });
 
-test("SessionEnd commits turns a Stop already sent below the commit threshold", async (t) => {
+test("Stop commits at the pending-token threshold and a session end commits what it left", async (t) => {
   const paths = [];
+  let pendingTokens = 0;
   const server = createServer((request, response) => {
-    paths.push(new URL(request.url, "http://localhost").pathname);
+    const path = new URL(request.url, "http://localhost").pathname;
+    paths.push(`${request.method} ${path}`);
+    const result = request.method === "GET" && /^\/api\/v1\/sessions\/[^/]+$/.test(path)
+      ? { pending_tokens: pendingTokens }
+      : {};
     response.writeHead(200, { "Content-Type": "application/json" });
-    response.end('{"result":{}}');
+    response.end(JSON.stringify({ result }));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
@@ -193,10 +202,12 @@ test("SessionEnd commits turns a Stop already sent below the commit threshold", 
   const sessionDir = join(home, "sessions", "wd", sessionId);
   mkdirSync(join(sessionDir, "agents", "main"), { recursive: true });
   writeFileSync(join(home, "session_index.jsonl"), `${JSON.stringify({ sessionId, sessionDir })}\n`);
-  writeFileSync(join(sessionDir, "agents", "main", "wire.jsonl"), [
-    JSON.stringify({ type: "turn.prompt", input: [{ type: "text", text: "question" }] }),
-    JSON.stringify({ type: "context.append_loop_event", event: { type: "content.part", turnId: "1", part: { type: "text", text: "answer" } } }),
-  ].join("\n") + "\n");
+  const wire = join(sessionDir, "agents", "main", "wire.jsonl");
+  const turn = (turnId) => [
+    JSON.stringify({ type: "turn.prompt", input: [{ type: "text", text: `question ${turnId}` }] }),
+    JSON.stringify({ type: "context.append_loop_event", event: { type: "content.part", turnId, part: { type: "text", text: `answer ${turnId}` } } }),
+  ].join("\n") + "\n";
+  writeFileSync(wire, turn("1"));
   const env = {
     HOME: home,
     KIMI_CODE_HOME: home,
@@ -204,7 +215,9 @@ test("SessionEnd commits turns a Stop already sent below the commit threshold", 
     OPENVIKING_PENDING_DIR: join(home, "pending"),
     OPENVIKING_URL: `http://127.0.0.1:${server.address().port}`,
     OPENVIKING_WRITE_PATH_ASYNC: "0",
+    OPENVIKING_COMMIT_TOKEN_THRESHOLD: "5000",
   };
+  const session = `/api/v1/sessions/kc-${sessionId}`;
   const run = async (event) => {
     paths.length = 0;
     const result = await runHook([event, "kimicode"], { session_id: sessionId, cwd: home }, env);
@@ -212,9 +225,19 @@ test("SessionEnd commits turns a Stop already sent below the commit threshold", 
     return paths.filter((path) => path.includes("/sessions/"));
   };
 
-  const stop = await run("stop");
-  assert.ok(stop.some((path) => path.endsWith("/messages/batch")), stop.join(", "));
-  assert.ok(!stop.some((path) => path.endsWith("/commit")), stop.join(", "));
-  assert.deepEqual(await run("session-end"), [`/api/v1/sessions/kc-${sessionId}/commit`]);
+  pendingTokens = 4999;
+  assert.deepEqual(await run("stop"), [`POST ${session}/messages/batch`, `GET ${session}`]);
+  assert.deepEqual(await run("session-end"), [`POST ${session}/commit`]);
   assert.deepEqual(await run("session-end"), []);
+
+  appendFileSync(wire, turn("2"));
+  pendingTokens = 5000;
+  assert.deepEqual(await run("stop"), [
+    `POST ${session}/messages/batch`,
+    `GET ${session}`,
+    `POST ${session}/commit`,
+  ]);
+
+  appendFileSync(wire, turn("3"));
+  assert.deepEqual(await run("pre-compact"), [`POST ${session}/messages/batch`, `POST ${session}/commit`]);
 });

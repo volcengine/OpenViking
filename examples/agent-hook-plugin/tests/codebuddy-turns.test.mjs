@@ -24,6 +24,7 @@ import {
   stripHostBlocks,
   userTurnText,
 } from "../hosts/codebuddy-turns.mjs";
+import { buildIncrementalCapturePlan } from "../hosts/incremental-turn-capture.mjs";
 
 const message = (role, text, extra = {}) => ({
   type: "message",
@@ -36,6 +37,10 @@ const call = (name, args, callId) => ({ type: "function_call", name, arguments: 
 const result = (name, callId, status = "success", output = "out") => (
   { type: "function_call_result", name, callId, status, output }
 );
+const messagesOf = (records) => buildIncrementalCapturePlan(extractCodebuddyTurns(records)).payloads;
+const toolSummary = (message) => message.parts
+  .filter((part) => part.type === "tool")
+  .map((part) => [part.tool_name, part.tool_id, part.tool_status]);
 
 test("userTurnText takes the ask out of its host wrapper", () => {
   assert.equal(
@@ -98,16 +103,25 @@ test("extractCodebuddyTurns assembles turns from separate records", () => {
   // position the incremental cursor relies on.
   assert.deepEqual(turns.map((t) => t.turnId), ["0", "2", "6"]);
   assert.equal(turns[0].content, "帮我看看 A");
-  // The tool call is inlined into the assistant turn's text; the tool *result*
-  // is not — the signal lives in the prose, not the returned bytes.
-  assert.match(turns[1].content, /\[tool: Bash\]/);
-  assert.match(turns[1].content, /"command":\s*"ls"/);
-  assert.ok(!turns[1].content.includes("out"), "tool result bytes stay out of the text");
+  assert.equal(turns[1].content, "好的");
+  assert.deepEqual(turns[1].payload.content.map((block) => block.type), ["text", "function_call", "tool_result"]);
+});
+
+test("a folded tool call and its result go out as structured parts", () => {
+  const [sent] = messagesOf([
+    message("assistant", "先列一下目录"),
+    call("Bash", '{"command":"ls"}', "call_1"),
+    result("Bash", "call_1", "success", "a.txt"),
+  ]);
+  assert.equal(sent.parts[0].text, "先列一下目录");
+  assert.deepEqual(toolSummary(sent), [["Bash", "call_1", "running"], ["Bash", "call_1", "completed"]]);
+  assert.deepEqual(sent.parts[1].tool_input, { command: "ls" });
+  assert.equal(sent.parts[2].tool_output, "a.txt");
 });
 
 test("extractCodebuddyTurns treats a lone tool record as an assistant turn", () => {
-  const turns = extractCodebuddyTurns([call("Read", "{}", "c9")]);
-  assert.deepEqual(turns.map((t) => [t.role, t.content]), [["assistant", "[tool: Read]\n{}"]]);
+  const messages = messagesOf([call("Read", "{}", "c9")]);
+  assert.deepEqual(messages.map((m) => [m.role, toolSummary(m)]), [["assistant", [["Read", "c9", "running"]]]]);
 });
 
 test("extractCodebuddyTurns gives tool use after a user message to the assistant", () => {
@@ -123,7 +137,7 @@ test("extractCodebuddyTurns gives tool use after a user message to the assistant
   assert.deepEqual(turns.map((t) => t.role), ["user", "assistant", "assistant"]);
   assert.deepEqual(turns.map((t) => t.turnId), ["0", "1", "3"]);
   assert.equal(turns[0].content, "列一下文件");
-  assert.match(turns[1].content, /\[tool: Bash\]/);
+  assert.deepEqual(turns[1].payload.content.map((block) => block.type), ["function_call", "tool_result"]);
   assert.equal(turns[2].content, "有三个文件");
 });
 
@@ -147,29 +161,14 @@ test("extractCodebuddyTurns drops a user record that carries only host blocks", 
   );
 });
 
-test("a tool result with a non-success status still assembles the turn", () => {
-  // The adapter sends content text, so the error status is not observable
-  // here; what must hold is that a failed result neither breaks the turn nor
-  // leaks its bytes into the text.
-  const turns = extractCodebuddyTurns([
+test("a tool result with a non-success status goes out as an error part", () => {
+  const [sent] = messagesOf([
     message("assistant", "trying"),
     result("Bash", "c1", "error", "boom"),
   ]);
-  assert.equal(turns.length, 1);
-  assert.match(turns[0].content, /trying/);
-  assert.ok(!turns[0].content.includes("boom"));
-});
-
-test("extractCodebuddyTurns drops assistant turns when captureAssistantTurns is off", () => {
-  const records = [message("user", "问"), message("assistant", "答")];
-  assert.deepEqual(
-    extractCodebuddyTurns(records, { captureAssistantTurns: false }).map((t) => t.role),
-    ["user"],
-  );
-  assert.deepEqual(
-    extractCodebuddyTurns(records, { captureAssistantTurns: true }).map((t) => t.role),
-    ["user", "assistant"],
-  );
+  assert.equal(sent.parts[0].text, "trying");
+  assert.deepEqual(toolSummary(sent), [["Bash", "c1", "error"]]);
+  assert.equal(sent.parts[1].tool_output, "boom");
 });
 
 test("parseTranscript reads JSONL and nothing else", () => {

@@ -1,7 +1,17 @@
 import { readFileSync } from "node:fs";
 
-import { stableHash } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { shouldCaptureText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import {
+  addAgentMessages,
+  commitAgentSession,
+  getAgentSession,
+  stableHash,
+} from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+import {
+  buildCaptureMessage,
+  collectToolNamesByIdFromEntries,
+  normalizeCaptureRole,
+} from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { thresholdCommitDue } from "../../memory-plugin-shared/lib/session-model.mjs";
 
 export function turnDedupKey(turn) {
   return turn.turnId
@@ -9,27 +19,38 @@ export function turnDedupKey(turn) {
     : stableHash(turn.role, turn.content);
 }
 
-export function buildIncrementalCapturePlan(turns, state = {}, cfg = {}) {
+/**
+ * What to send for the turns a host decoded. A turn is `{ role, turnId, content }`
+ * with its text in `content`; one that also has tool calls or results carries
+ * the host message in `payload`, in a shape the shared part builder reads, and
+ * `toolNameById` names the tools those results answer.
+ */
+export function buildIncrementalCapturePlan(turns, state = {}, cfg = {}, { toolNameById } = {}) {
   const acknowledged = new Set(
     Array.isArray(state.capturedTurnIds) ? state.capturedTurnIds : [],
   );
   const candidates = [];
   for (const turn of turns) {
-    const decision = shouldCaptureText(turn.content, turn.role, cfg);
-    if (!decision.shouldCapture) continue;
-    candidates.push({ dedupKey: turnDedupKey(turn), turn, content: decision.text });
+    if (turn.role === "assistant" && cfg.captureAssistantTurns === false) continue;
+    const message = buildCaptureMessage(
+      turn.payload || { role: turn.role, content: turn.content },
+      turn.role,
+      cfg,
+      { toolNameById },
+    );
+    if (!message) continue;
+    candidates.push({ dedupKey: turnDedupKey(turn), turn, message });
   }
   const seenInBatch = new Set();
   const toSend = candidates.filter((item) => {
     if (acknowledged.has(item.dedupKey)) return false;
-    const batchKey = stableHash(item.dedupKey, item.content);
+    const batchKey = stableHash(item.dedupKey, JSON.stringify(item.message));
     if (seenInBatch.has(batchKey)) return false;
     seenInBatch.add(batchKey);
     return true;
   });
-  const payloads = toSend.map(({ turn, content }) => ({
-    role: turn.role,
-    content,
+  const payloads = toSend.map(({ turn, message }) => ({
+    ...message,
     ...(turn.turnId ? { turn_id: turn.turnId } : {}),
   }));
   return { candidates, toSend, payloads };
@@ -105,11 +126,11 @@ export function parseJsonlTranscript(content) {
 }
 
 /**
- * The turns `extract` finds past `lastTurnId` in a JSONL transcript, or a
- * status when the transcript cannot be read. `ok` distinguishes "read it, it
- * has N turns" from "could not read it": a caller must not treat an unreadable
- * transcript as an empty one, or a transient read error would acknowledge
- * turns that were never seen.
+ * The turns `extract` finds past `lastTurnId` in a JSONL transcript, with the
+ * tool names their results answer, or a status when the transcript cannot be
+ * read. `ok` distinguishes "read it, it has N turns" from "could not read it":
+ * a caller must not treat an unreadable transcript as an empty one, or a
+ * transient read error would acknowledge turns that were never seen.
  */
 export function readUnseenTurns(transcriptPath, lastTurnId, extract) {
   if (!transcriptPath) return { status: "missing", turns: [] };
@@ -120,44 +141,79 @@ export function readUnseenTurns(transcriptPath, lastTurnId, extract) {
     return { status: "unreadable", turns: [], error: error?.code || "read_failed" };
   }
   const turns = extract(parseJsonlTranscript(raw));
-  if (turns.length === 0) return { status: "ok", turns: [] };
+  // Named over every turn: a result may answer a call in a turn already captured.
+  const toolNameById = collectToolNamesByIdFromEntries(turns);
   const lastIndex = lastTurnId == null || lastTurnId === ""
     ? -1
     : turns.findIndex((turn) => turn.turnId === String(lastTurnId));
-  return { status: "ok", turns: lastIndex === -1 ? turns : turns.slice(lastIndex + 1) };
+  return { status: "ok", turns: lastIndex === -1 ? turns : turns.slice(lastIndex + 1), toolNameById };
 }
 
-function formatToolInput(value) {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
+/**
+ * The turns a transcript decoder collected as `{ role, recordIndex, blocks }`,
+ * blocks in record order. A turn's id is the index of the record that opened
+ * it; one with tool blocks carries them as `payload` for the part builder.
+ */
+export function turnsFromBlocks(collected) {
+  const turns = [];
+  for (const { role, recordIndex, blocks } of collected) {
+    if (blocks.length === 0) continue;
+    const turn = {
+      role: normalizeCaptureRole(role),
+      turnId: String(recordIndex),
+      content: blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n\n"),
+    };
+    if (blocks.some((block) => block.type !== "text")) turn.payload = { role: turn.role, content: blocks };
+    turns.push(turn);
   }
+  return turns;
 }
 
-// Tool calls are inlined with their input. Tool *results* stay out — the
-// extraction signal lives in the agent's prose about what happened, not in the
-// raw bytes a tool returned (measured: the shared part builder caps tool input
-// itself and the server externalizes oversized output, so retaining result
-// bytes here only diluted the text).
-export function textFromToolParts(parts) {
-  const chunks = [];
-  for (const part of parts) {
-    if (part.type !== "tool") {
-      chunks.push(part.text);
-    } else if (part.tool_status === "running") {
-      chunks.push(`[tool: ${part.tool_name || "unknown"}]\n${formatToolInput(part.tool_input)}`);
-    }
+/**
+ * Send the turns a host decoded and commit the session when it is time: at a
+ * session end and before a compaction, whatever earlier Stops sent and left
+ * uncommitted; on a plain Stop, once the session's pending tokens reach the
+ * shared threshold. `endEvents` are the host's events that end a session.
+ */
+export async function captureIncrementalTurns(ctx, state, event, transcript, {
+  cleanText,
+  endEvents = ["session-end"],
+} = {}) {
+  if (transcript.status !== "ok") {
+    ctx.log(`capture_${transcript.status}`, transcript.error ? { error: transcript.error } : {});
+    return null;
   }
-  return chunks.join("\n\n").trim();
-}
+  const boundary = event === "pre-compact" || endEvents.includes(event);
+  const commitsAtBoundary = boundary && !(event === "pre-compact" && ctx.cfg.autoCommitOnCompact === false);
+  const uncommitted = Number(state.capturedSinceCommit || 0);
 
-/** Commit at session end and on compaction, otherwise once the turn threshold is reached. */
-export function shouldCommitCapture(event, cfg = {}, previous = 0, captured = 0) {
-  const uncommitted = Number(previous || 0) + captured;
-  if (uncommitted <= 0) return false;
-  if (event === "session-end") return true;
-  if (event === "pre-compact") return cfg.autoCommitOnCompact !== false;
-  return uncommitted >= Number(cfg.commitTurnThreshold || Infinity);
+  const plan = buildIncrementalCapturePlan(transcript.turns, state, ctx.cfg, {
+    toolNameById: transcript.toolNameById,
+  });
+  let next;
+  let sent = 0;
+  if (plan.toSend.length > 0) {
+    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
+    next = applyIncrementalCaptureResult(state, plan, result, cleanText);
+    sent = Number(result?.sent || 0);
+  } else if (commitsAtBoundary && uncommitted > 0) {
+    // Nothing new to send, but turns sent earlier are still uncommitted, and
+    // this may be their last chance.
+    next = { ...state, captured: 0 };
+  } else {
+    return null;
+  }
+
+  let capturedSinceCommit = uncommitted + next.captured;
+  let due = commitsAtBoundary && capturedSinceCommit > 0;
+  if (!boundary && sent > 0) {
+    const meta = await getAgentSession(ctx.fetchJSON, ctx.sessionId);
+    due = Boolean(meta) && await thresholdCommitDue(ctx.fetchJSON, ctx.sessionId, ctx.cfg, meta);
+  }
+  if (due) {
+    const committed = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
+    if (committed.ok || committed.pendingQueued) capturedSinceCommit = 0;
+  }
+  const { captured, ...persisted } = next;
+  return { ...persisted, capturedSinceCommit };
 }

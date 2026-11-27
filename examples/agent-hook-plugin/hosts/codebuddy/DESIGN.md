@@ -258,6 +258,17 @@ Measured facts that shaped the adapter and are *not* visible in the code:
   tool result.
 - `detachesCapture` is safe (§7): the host kills a timed-out hook but not its
   descendants, so the shared async-write pattern holds.
+- The decoder folds the `function_call` / `function_call_result` records that
+  follow an assistant `message` into that assistant turn, in record order (tool
+  records with no assistant message before them form an assistant turn of
+  their own). Calls and results go out as tool parts, never as message text: a
+  call `running` with its input, a result `completed` (or `error` for any
+  status other than `success` / `completed`) with its output, under the call's
+  `callId` and name.
+- Commit policy: `Stop` commits once the session's `pending_tokens` reach
+  `commitTokenThreshold`, unless `serverAutoCommit` leaves that commit to the
+  server; `PreCompact` (unless `autoCommitOnCompact` is off) and `SessionEnd`
+  commit whatever is still uncommitted, including turns an earlier `Stop` sent.
 
 v1 scope, matching the other adapters (Cursor, KimiCode) rather than the
 standalone plugin:

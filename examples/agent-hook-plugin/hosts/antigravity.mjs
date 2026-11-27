@@ -13,6 +13,12 @@
  * Stop carries no message text: capture reads the finished steps of
  * `transcriptPath` after the last captured step.
  *
+ * A `PLANNER_RESPONSE` step lists its `tool_calls` (`{ name, args }`, no call
+ * id), and each call's result is a later `MODEL` step (`GENERIC`, `RUN_COMMAND`,
+ * …) with nothing naming the call. A planner step's calls are answered, in
+ * order, by the result steps before the next planner or user step; a call the
+ * model abandons gets no result, and the next planner step starts over.
+ *
  * PreToolUse hands over `toolCall.name` (`read_file`, `run_command`, …) and
  * `toolCall.args`, whose keys are PascalCase (`Path`, `CommandLine`).
  */
@@ -22,23 +28,20 @@ import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { buildCaptureMessage, sanitizeCapturedText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
 import { evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 
 // The host wraps a typed request as `<USER_REQUEST>…</USER_REQUEST>` followed by
 // metadata blocks. Only that record is unwrapped, and only an envelope that
 // opens the record, so text that merely quotes the tags is kept verbatim.
 const USER_REQUEST = /^<USER_REQUEST>\s*([\s\S]*)\s*<\/USER_REQUEST>/;
-const INJECTED = /<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/g;
 const IN_PROGRESS_STATUSES = new Set(["PENDING", "QUEUED", "WAITING", "RUNNING", "GENERATING"]);
-
-export function cleanAntigravityText(text) {
-  return String(text || "").replace(INJECTED, "").trim();
-}
+const RESULT_TYPES = new Set(["GENERIC", "RUN_COMMAND", "VIEW_FILE", "CODE_ACTION", "LIST_DIRECTORY"]);
+const RESULT_HEADER = /^Created At:[^\n]*\n(?:Completed At:[^\n]*\n)?/;
 
 function userRequestText(text) {
   const raw = String(text || "");
-  return cleanAntigravityText(raw.match(USER_REQUEST)?.[1] ?? raw);
+  return sanitizeCapturedText(raw.match(USER_REQUEST)?.[1] ?? raw);
 }
 
 const sameText = (text) => userRequestText(text).replace(/\s+/g, " ");
@@ -115,35 +118,88 @@ export function latestAntigravityCheckpoint(jsonl) {
   return latest;
 }
 
-/** The user requests and text replies of finished steps after `afterStep`. */
+function toolResultBlock(step, call) {
+  return {
+    type: "tool_result",
+    tool_use_id: call.id,
+    name: call.name,
+    content: String(step.content ?? "").replace(RESULT_HEADER, "") || String(step.error ?? ""),
+    ...(step.status && step.status !== "DONE" ? { is_error: true } : {}),
+  };
+}
+
+/**
+ * The finished steps after `afterStep` as turns: a user request, or a planner
+ * step's text and calls followed by the results answering them. `firstStep` is
+ * the step a turn starts at, where a resend has to read from again.
+ */
 export function buildAntigravityTurns(jsonl, afterStep = -1) {
   const turns = [];
   let lastStep = afterStep;
+  let open = null;
+  const close = () => {
+    if (!open) return;
+    const { turn, calls, results } = open;
+    // Only a balanced set of results can be paired by position; with more or
+    // fewer there is no telling which call a result answers, so the calls go
+    // out unanswered.
+    const answered = results.length === calls.length ? results : [];
+    turn.payload.content.push(
+      ...calls.map(({ id, name, input }) => ({ type: "tool_use", id, name, input })),
+      // A backgrounded command stays RUNNING and never reports a result.
+      ...answered.flatMap((step, i) => step.status === "RUNNING" ? [] : [toolResultBlock(step, calls[i])]),
+    );
+    open = null;
+  };
+  // A result still being written belongs to the open planner step, which is
+  // read again whole by the next Stop.
+  const reopen = () => {
+    if (!open) return;
+    turns.splice(turns.indexOf(open.turn), 1);
+    lastStep = open.turn.firstStep - 1;
+    open = null;
+  };
   for (const line of String(jsonl || "").split("\n")) {
     if (!line.trim()) continue;
     let step;
-    try { step = JSON.parse(line); } catch { break; }
+    try { step = JSON.parse(line); } catch { reopen(); break; }
     const index = Number(step.step_index);
     if (!(index > afterStep)) continue;
     const isUser = step.type === "USER_INPUT" && step.source === "USER_EXPLICIT";
-    const isAssistant = step.type === "PLANNER_RESPONSE";
-    // Backgrounded commands (`GENERIC` with `RUNNING`) and failed tool steps
-    // stay non-DONE permanently and are never captured, so they must not stall
-    // the cursor.
-    if (!isUser && !isAssistant) {
+    const isPlanner = step.type === "PLANNER_RESPONSE";
+    if (step.source === "MODEL" && RESULT_TYPES.has(step.type)) {
+      if (step.status !== "RUNNING" && IN_PROGRESS_STATUSES.has(step.status)) { reopen(); break; }
+      open?.results.push(step);
       lastStep = index;
       continue;
     }
+    if (!isUser && !isPlanner) {
+      lastStep = index;
+      continue;
+    }
+    close();
     // An in-flight turn step is read again by the next Stop; terminal failures
     // (CANCELED, ERROR, INVALID, …) will never become DONE and are skipped.
     if (IN_PROGRESS_STATUSES.has(step.status)) break;
     lastStep = index;
     if (step.status && step.status !== "DONE") continue;
-    const turn = isUser
-      ? { role: "user", content: userRequestText(step.content) }
-      : { role: "assistant", content: cleanAntigravityText(step.content) };
-    if (turn.content) turns.push(turn);
+    if (isUser) {
+      turns.push({ role: "user", firstStep: index, content: userRequestText(step.content) });
+      continue;
+    }
+    const content = typeof step.content === "string" && step.content.trim()
+      ? [{ type: "text", text: step.content }]
+      : [];
+    const turn = { role: "assistant", firstStep: index, payload: { role: "assistant", content } };
+    const calls = (Array.isArray(step.tool_calls) ? step.tool_calls : []).map((call, i) => ({
+      id: `ag-${index}-${i}`,
+      name: String(call?.name || "unknown"),
+      input: call?.args ?? {},
+    }));
+    turns.push(turn);
+    open = { turn, calls, results: [] };
   }
+  close();
   return { turns, lastStep };
 }
 
@@ -180,7 +236,7 @@ export const antigravity = {
   },
   prompt(input) {
     if (Number(input.invocationNum || 0) !== 0) return "";
-    const text = cleanAntigravityText(input.lastUserInput);
+    const text = sanitizeCapturedText(input.lastUserInput);
     if (!text) return "";
     let turnStep;
     if (input.transcriptPath) {
@@ -202,14 +258,22 @@ export const antigravity = {
     const path = antigravityTranscriptPath(ctx.input.transcriptPath);
     const jsonl = path ? await readFile(path, "utf8").catch(() => "") : "";
     const { turns, lastStep } = buildAntigravityTurns(jsonl, afterStep);
-    const { kept, dropped } = filterCaptureTurns(turns, ctx.cfg);
-    for (const item of dropped) ctx.log("capture_skip", item);
-    const result = kept.length
-      ? await addAgentMessages(ctx.fetchJSON, ctx.sessionId, kept, ctx.peerId)
+    const outgoing = [];
+    for (const turn of turns) {
+      if (turn.role === "assistant" && ctx.cfg.captureAssistantTurns === false) continue;
+      const message = buildCaptureMessage(turn.payload || { role: turn.role, content: turn.content }, turn.role, ctx.cfg);
+      if (message) outgoing.push({ firstStep: turn.firstStep, message });
+      else ctx.log("capture_skip", { role: turn.role, step: turn.firstStep });
+    }
+    const result = outgoing.length
+      ? await addAgentMessages(ctx.fetchJSON, ctx.sessionId, outgoing.map((item) => item.message), ctx.peerId)
       : { sent: 0, queued: 0 };
     const captured = result.sent + result.queued;
     if (captured > 0) await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
-    // Keep the cursor when a write was lost, so the next Stop resends it.
-    return { ...state, lastStep: captured >= kept.length ? lastStep : afterStep };
+    // The server takes a prefix of the batch: resume at the first turn it did not take.
+    return {
+      ...state,
+      lastStep: captured < outgoing.length ? outgoing[captured].firstStep - 1 : lastStep,
+    };
   },
 };
