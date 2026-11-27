@@ -170,6 +170,7 @@ fn build_snapshot_log_store(
                 PyRuntimeError::new_err("build_snapshot_log_store must run inside a tokio runtime")
             })?;
             match handle.block_on(ragfs::git::PostgresSnapshotLogStore::connect_with_timeout(
+                service_name,
                 &dsn,
                 postgres.max_connections,
                 postgres.connect_timeout_ms,
@@ -851,6 +852,9 @@ mod tests {
         let store = build_snapshot_log_store(&cfg, "test-service")
             .unwrap()
             .expect("PG index enabled");
+        let other = build_snapshot_log_store(&cfg, "other-service")
+            .unwrap()
+            .expect("PG index enabled for another service");
         runtime.block_on(async {
             let account = uuid::Uuid::new_v4().simple().to_string();
             let oid = "1234567890123456789012345678901234567890";
@@ -875,6 +879,11 @@ mod tests {
                     .1,
                 oid
             );
+            assert!(other
+                .load_latest_indexed_commit(&account, "main")
+                .await
+                .unwrap()
+                .is_none());
         });
     }
 

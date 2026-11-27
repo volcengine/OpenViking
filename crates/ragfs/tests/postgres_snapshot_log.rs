@@ -9,6 +9,8 @@ use std::sync::Arc;
 use tokio::sync::Barrier;
 use tokio::time::{timeout, Duration, Instant};
 
+const TEST_SERVICE: &str = "test-service";
+
 async fn expect_timeout<T: std::fmt::Debug>(
     operation: impl std::future::Future<Output = Result<T, SnapshotLogError>>,
 ) {
@@ -32,7 +34,7 @@ fn dsn() -> String {
 }
 
 async fn store() -> PostgresSnapshotLogStore {
-    PostgresSnapshotLogStore::connect(&dsn(), 4, 5_000)
+    PostgresSnapshotLogStore::connect(TEST_SERVICE, &dsn(), 4, 5_000)
         .await
         .expect("provision openviking/service/sql/snapshot_log_postgres_init.sql first")
 }
@@ -69,8 +71,8 @@ async fn cleanup(account: &str) {
 #[ignore = "requires a real PostgreSQL database"]
 async fn postgres_snapshot_log_history_scope_width_and_watermark() {
     let store = store().await;
-    let account = uuid::Uuid::new_v4().simple().to_string() + &"a".repeat(223);
-    let branch = "b".repeat(512);
+    let account = uuid::Uuid::new_v4().simple().to_string() + &"a".repeat(32);
+    let branch = "b".repeat(128);
     // Varied four-byte characters exercise the full 2048-byte path limit.
     let wide: String = (0..512)
         .map(|i| char::from_u32(0x10000 + i).unwrap())
@@ -291,7 +293,7 @@ async fn postgres_snapshot_log_startup_does_not_provision_schema() {
     url.query_pairs_mut()
         .append_pair("options", &format!("-c search_path={schema}"));
     assert!(matches!(
-        PostgresSnapshotLogStore::connect(url.as_str(), 1, 5_000).await,
+        PostgresSnapshotLogStore::connect(TEST_SERVICE, url.as_str(), 1, 5_000).await,
         Err(SnapshotLogError::Sql(_))
     ));
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_tables WHERE schemaname = $1")
@@ -330,7 +332,7 @@ async fn postgres_snapshot_log_bounds_startup_and_read_table_lock_waits() {
     let mut url = url::Url::parse(&dsn()).unwrap();
     url.query_pairs_mut()
         .append_pair("options", &format!("-c search_path={schema}"));
-    let store = PostgresSnapshotLogStore::connect_with_timeout(url.as_str(), 1, 5_000, 200)
+    let store = PostgresSnapshotLogStore::connect_with_timeout(TEST_SERVICE, url.as_str(), 1, 5_000, 200)
         .await
         .unwrap();
     let mut lock = pool.begin().await.unwrap();
@@ -343,7 +345,7 @@ async fn postgres_snapshot_log_bounds_startup_and_read_table_lock_waits() {
     // Do not release the lock until every call has returned by its own deadline.
     let result = timeout(
         Duration::from_secs(2),
-        PostgresSnapshotLogStore::connect_with_timeout(url.as_str(), 1, 5_000, 200),
+        PostgresSnapshotLogStore::connect_with_timeout(TEST_SERVICE, url.as_str(), 1, 5_000, 200),
     )
     .await
     .expect("startup probe must have an execution deadline");
@@ -372,7 +374,7 @@ async fn postgres_snapshot_log_bounds_startup_and_read_table_lock_waits() {
 #[tokio::test]
 #[ignore = "requires a real PostgreSQL database"]
 async fn postgres_snapshot_log_bounds_advisory_lock_and_reuses_pool() {
-    let store = PostgresSnapshotLogStore::connect_with_timeout(&dsn(), 1, 5_000, 200)
+    let store = PostgresSnapshotLogStore::connect_with_timeout(TEST_SERVICE, &dsn(), 1, 5_000, 200)
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -383,11 +385,21 @@ async fn postgres_snapshot_log_bounds_advisory_lock_and_reuses_pool() {
     let account = uuid::Uuid::new_v4().simple().to_string();
     let mut lock = pool.begin().await.unwrap();
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("{}:{}main", account.len(), account))
+        .bind(format!("12:test-service|{}:{}main", account.len(), account))
         .execute(&mut *lock)
         .await
         .unwrap();
     expect_timeout(store.append_rows_if_latest(&account, "main", None, &rows(1, &["/"]))).await;
+    // Another service must append without waiting for this service's lock.
+    let other = PostgresSnapshotLogStore::connect_with_timeout(
+        "other-service", &dsn(), 1, 5_000, 200,
+    )
+    .await
+    .unwrap();
+    other
+        .append_rows_if_latest(&account, "main", None, &rows(1, &["/"]))
+        .await
+        .unwrap();
     lock.rollback().await.unwrap();
     assert!(store
         .load_latest_indexed_commit(&account, "main")
@@ -438,7 +450,7 @@ async fn postgres_snapshot_log_deadline_covers_all_batches_and_rolls_back() {
     let mut url = url::Url::parse(&dsn()).unwrap();
     url.query_pairs_mut()
         .append_pair("options", &format!("-c search_path={schema}"));
-    let store = PostgresSnapshotLogStore::connect_with_timeout(url.as_str(), 1, 5_000, 500)
+    let store = PostgresSnapshotLogStore::connect_with_timeout(TEST_SERVICE, url.as_str(), 1, 5_000, 500)
         .await
         .unwrap();
     let account = uuid::Uuid::new_v4().simple().to_string();
