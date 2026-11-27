@@ -274,6 +274,18 @@ function checkConfig(report, cfg, host) {
   return { keyInfo, peer, ovConf };
 }
 
+/**
+ * Whether a session state file shows a captured turn. Cursor, TRAE and the
+ * incremental-turn hosts remember the turns they sent by hash or by id;
+ * Antigravity's adapter instead advances a `lastStep` cursor over the
+ * transcript, so a session that captured without one of the two lists is not
+ * idle. A cursor still at -1 has run but not reached a capturable step yet.
+ */
+function hasCapturedTurn(state) {
+  return (state.data?.capturedHashes?.length || state.data?.capturedTurnIds?.length || 0) > 0
+    || (Number.isInteger(state.data?.lastStep) && state.data.lastStep >= 0);
+}
+
 function checkActivity(report, cfg, connection) {
   report.section("Recent activity");
   const dir = hookStateDir();
@@ -289,7 +301,7 @@ function checkActivity(report, cfg, connection) {
   if (states.length) {
     const newest = states[0];
     report.info(`${states.length} session state file(s) in ${homeShort(dir)}; newest ${fmtAge(newest.mtimeMs)}`);
-    const captured = states.filter((state) => (state.data?.capturedHashes?.length || state.data?.capturedTurnIds?.length || 0) > 0);
+    const captured = states.filter(hasCapturedTurn);
     if (states.length > 3 && !captured.length) {
       report.warn("no session has ever captured a turn", "the Stop hook runs but never appends messages", "check the Connection section; set OPENVIKING_DEBUG=1 and read the hook log");
     }
