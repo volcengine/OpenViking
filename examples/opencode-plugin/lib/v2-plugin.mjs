@@ -28,6 +28,8 @@ export async function startV2Plugin(ctx, { pluginRoot }) {
   const host = createOpencodeHost({ dataDir, mcpEnabled: config.mcp.enabled })
   const repoContext = createRepoContext({ config })
   const sessions = new Map()
+  // Sessions seen and not yet ended, ended on dispose.
+  const live = new Set()
 
   // What a session is: its parent (a subagent is captured under it) and its
   // location. Looked up once; nothing here decides what is captured.
@@ -48,6 +50,7 @@ export async function startV2Plugin(ctx, { pluginRoot }) {
   }
 
   async function payloadFor(sessionID, extra = {}) {
+    if (sessionID) live.add(sessionID)
     const { parentID } = await sessionInfo(sessionID)
     return { sessionID, parentID, directory, ...extra }
   }
@@ -175,6 +178,7 @@ export async function startV2Plugin(ctx, { pluginRoot }) {
       } else {
         await captureStage("session.deleted", sessionID)
         sessions.delete(sessionID)
+        live.delete(sessionID)
         await storage("remove", sessionID)
       }
     })
@@ -193,6 +197,10 @@ export async function startV2Plugin(ctx, { pluginRoot }) {
   return async () => {
     controller.abort()
     await eventTask.catch((error) => logHookError("plugin.cleanup", error))
+    for (const sessionID of live) {
+      await captureStage("session.deleted", sessionID).catch((error) => logHookError("plugin.cleanup", error))
+    }
+    live.clear()
     log("INFO", "plugin", "OpenViking plugin disposed")
   }
 }

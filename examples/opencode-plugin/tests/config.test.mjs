@@ -65,6 +65,9 @@ test("OpenCode 1.x gets an empty hooks object", async () => {
       process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
       process.env.OPENVIKING_CONFIG_FILE = join(dir, "ov.conf")
       process.env.OPENVIKING_HOME = dir
+      process.env.OPENVIKING_HOOK_STATE_DIR = join(dir, "hook-state")
+      process.env.OPENVIKING_PENDING_DIR = join(dir, "pending")
+      process.env.OPENVIKING_STATE_DIR = join(dir, "state")
       assert.deepEqual(await OpenVikingPlugin({ directory: dir }), {})
       assert.deepEqual(await plugin.server({ directory: dir }), {})
       assert.match(await readFile(join(dir, "data", "openviking-memory.log"), "utf8"), /OpenCode 1\.x is no longer supported/)

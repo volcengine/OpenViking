@@ -11,7 +11,6 @@ import { join } from "node:path"
 
 import { normalizeToolName } from "./lib/shared/uri-guard.mjs"
 
-const KEEP = 1000
 const SESSION_HISTORY_TOOL = "openviking_session_history"
 
 const TOOL_HINTS = {
@@ -68,9 +67,12 @@ export function decode({ cursor = {}, payload = {} }) {
   const after = cursor.after ? messages.findIndex((message) => message?.id === cursor.after) : -1
   for (const message of messages.slice(0, after + 1)) if (message?.id) sent.add(message.id)
   const pending = messages.filter((message) => message?.id && !sent.has(message.id)).map(turnOf).filter(Boolean)
+  // Bounded by the context window: an id no longer in it cannot come back.
+  const present = new Set(messages.map((message) => message?.id))
+  const kept = [...sent].filter((id) => present.has(id))
   return {
     turns: pending,
-    cursorAfter: (count) => ({ ids: [...sent, ...pending.slice(0, count).map((turn) => turn.turnId)].slice(-KEEP) }),
+    cursorAfter: (count) => ({ ids: [...kept, ...pending.slice(0, count).map((turn) => turn.turnId)] }),
   }
 }
 

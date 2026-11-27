@@ -86,3 +86,12 @@ test("tool calls: viking:// guard and session_history fill", () => {
   )
   assert.deepEqual(toolCall(host, { sessionID: "ses_1", tool: "openviking_session_history", input: { session: "oc-other" } }), {})
 })
+
+test("a window of more than 1000 messages sends nothing twice", () => {
+  const messages = Array.from({ length: 1500 }, (_, index) => ({ id: `m${index}`, type: "user", text: `q${index}` }))
+  const first = decode({ cursor: {}, payload: { messages } })
+  const cursor = first.cursorAfter(first.turns.length)
+  assert.deepEqual(decode({ cursor, payload: { messages } }).turns, [])
+  // An id that left the window is dropped from the cursor.
+  assert.equal(decode({ cursor, payload: { messages: messages.slice(1) } }).cursorAfter(0).ids.length, 1499)
+})

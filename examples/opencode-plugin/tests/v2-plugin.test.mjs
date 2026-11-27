@@ -24,6 +24,8 @@ async function withPluginEnv(url, fn, plugin = {}) {
       OPENVIKING_HOME: join(dir, "home"),
       OPENVIKING_HOOK_STATE_DIR: join(dir, "hook-state"),
       OPENVIKING_PENDING_DIR: join(dir, "pending"),
+      OPENVIKING_STATE_DIR: join(dir, "state"),
+      HOME: join(dir, "home"),
     })
     return await fn(dir)
   } finally {
@@ -185,4 +187,23 @@ test("execution ends capture each message once and session deletion commits", as
   assert.deepEqual(writes[0][2].messages.map((message) => message.role), ["user", "assistant"])
   assert.ok(bodies.some(([method, path]) => method === "POST" && path === "/api/v1/sessions/oc-ses_a/commit"))
   assert.ok(!bodies.some(([, path]) => path.includes("ses_b")))
+})
+
+test("dispose commits a session that captured something", async () => {
+  const bodies = []
+  await withMockOpenViking(async (req, res) => {
+    await readRequestBody(req)
+    if (req.method !== "GET") bodies.push([req.method, new URL(req.url, "http://x").pathname])
+    writeJson(res, { status: "ok", result: {} })
+  }, async (url) => {
+    await withPluginEnv(url, async () => {
+      const { ctx } = contextFixture({
+        messages: [{ id: "msg_user", type: "user", text: "question" }],
+        events: [{ type: "session.execution.succeeded", data: { sessionID: "ses_a" } }],
+      })
+      await (await startV2Plugin(ctx, { pluginRoot }))()
+    })
+  })
+  assert.ok(bodies.some(([, path]) => path.includes("/sessions/oc-ses_a/messages")))
+  assert.ok(bodies.some(([method, path]) => method === "POST" && path === "/api/v1/sessions/oc-ses_a/commit"))
 })
