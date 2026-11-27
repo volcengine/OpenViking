@@ -36,6 +36,10 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 const SCHEDULE_TIME_ZONE = 'Asia/Shanghai'
+const parseTime = (value: string | null | undefined) => {
+  const time = value ? new Date(value) : null
+  return time && !Number.isNaN(time.getTime()) ? time : null
+}
 type ConfigPage = Awaited<ReturnType<typeof fetchCompileConfigs>>
 
 export function CompileScheduleTarget({
@@ -56,14 +60,19 @@ export function CompileScheduleTarget({
       // Read fresh source/Skill settings so a list action cannot restore stale ones.
       const controller = new AbortController()
       pendingRead.current = controller
-      const config = await fetchCompileConfig(target.to, controller.signal)
+      const config = await fetchCompileConfig(
+        target.compile_name,
+        controller.signal,
+      )
       // The active connection may have changed while reading the configuration.
       controller.signal.throwIfAborted()
       return updateCompileConfig({
-        to: target.to,
+        compile_name: target.compile_name,
         from: config.from,
         skill: config.skill,
         instruction: config.instruction,
+        // Updates replace args, so carry the saved ones forward.
+        args: config.args,
         auto_update: schedule !== null,
         update_schedule: schedule,
       })
@@ -78,8 +87,10 @@ export function CompileScheduleTarget({
             ...data,
             pages: data.pages.map((page) => ({
               ...page,
-              targets: page.targets.map((item) =>
-                item.to === target.to ? { ...item, ...config } : item,
+              configs: page.configs.map((item) =>
+                item.compile_name === target.compile_name
+                  ? { ...item, ...config }
+                  : item,
               ),
             })),
           },
@@ -91,7 +102,7 @@ export function CompileScheduleTarget({
       await Promise.all([
         client.invalidateQueries({ queryKey: listKey }),
         client.invalidateQueries({
-          queryKey: ['compile-config', identityScopeKey, target.to],
+          queryKey: ['compile-config', identityScopeKey, target.compile_name],
           refetchType: 'none',
         }),
       ])
@@ -105,8 +116,13 @@ export function CompileScheduleTarget({
   const time = schedule
     ? `${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`
     : ''
-  const nextRun = target.next_run_at ? new Date(target.next_run_at) : null
-  const validNextRun = nextRun && !Number.isNaN(nextRun.getTime())
+  const nextRun = parseTime(target.next_triggered_slot)
+  const lastRun =
+    target.last_run_time == null
+      ? null
+      : new Date(target.last_run_time * 1000)
+  const formatTime = (value: Date) =>
+    value.toLocaleString(i18n.language, { timeZone: SCHEDULE_TIME_ZONE })
 
   return (
     <li
@@ -114,16 +130,24 @@ export function CompileScheduleTarget({
       aria-busy={mutation.isPending}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h2 className="min-w-0 flex-1 break-words text-sm font-medium [overflow-wrap:anywhere]">
-          <ContextLink uri={target.to}>{target.to}</ContextLink>
-        </h2>
+        <div className="min-w-0 flex-1 space-y-1">
+          <h2 className="break-words text-sm font-medium [overflow-wrap:anywhere]">
+            {target.compile_name}
+          </h2>
+          <p className="break-words text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            <ContextLink uri={target.to}>{target.to}</ContextLink>
+          </p>
+        </div>
         <Button
           variant="ghost"
           size="sm"
           disabled={mutation.isPending}
-          aria-label={`${t('schedule.edit')}: ${target.to}`}
+          aria-label={`${t('schedule.edit')}: ${target.compile_name}`}
           onClick={() =>
-            void navigate({ to: '/compile/new', search: { target: target.to } })
+            void navigate({
+              to: '/compile/new',
+              search: { name: target.compile_name },
+            })
           }
         >
           {t('schedule.edit')}
@@ -132,11 +156,11 @@ export function CompileScheduleTarget({
       <div className="flex flex-wrap items-center gap-3">
         <label htmlFor={switchId} className="text-sm font-medium">
           {t('schedule.autoUpdate')}
-          <span className="sr-only">{`: ${target.to}`}</span>
+          <span className="sr-only">{`: ${target.compile_name}`}</span>
         </label>
         <Switch
           id={switchId}
-          aria-label={`${t('schedule.autoUpdate')}: ${target.to}`}
+          aria-label={`${t('schedule.autoUpdate')}: ${target.compile_name}`}
           checked={target.auto_update}
           disabled={mutation.isPending}
           onCheckedChange={(checked) => {
@@ -181,7 +205,7 @@ export function CompileScheduleTarget({
               size="sm"
               className="h-auto px-1 py-0.5 text-xs text-muted-foreground"
               disabled={mutation.isPending}
-              aria-label={`${t(target.auto_update ? 'schedule.adjust' : 'schedule.setUp')}: ${target.to}`}
+              aria-label={`${t(target.auto_update ? 'schedule.adjust' : 'schedule.setUp')}: ${target.compile_name}`}
               onClick={openEditor}
             >
               <PencilIcon className="size-3" />
@@ -194,11 +218,9 @@ export function CompileScheduleTarget({
             {t('schedule.nextRun')}
           </dt>
           <dd>
-            {validNextRun ? (
+            {nextRun && target.auto_update ? (
               <time dateTime={nextRun.toISOString()}>
-                {nextRun.toLocaleString(i18n.language, {
-                  timeZone: SCHEDULE_TIME_ZONE,
-                })}
+                {formatTime(nextRun)}
               </time>
             ) : (
               t('schedule.notScheduled')
@@ -207,9 +229,17 @@ export function CompileScheduleTarget({
         </div>
         <div className="space-y-1">
           <dt className="text-xs text-muted-foreground">
-            {t('schedule.execution')}
+            {t('schedule.lastRun')}
           </dt>
-          <dd>{t(target.running ? 'schedule.running' : 'schedule.idle')}</dd>
+          <dd>
+            {lastRun ? (
+              <time dateTime={lastRun.toISOString()}>
+                {formatTime(lastRun)}
+              </time>
+            ) : (
+              t('schedule.neverRun')
+            )}
+          </dd>
         </div>
       </dl>
       {!editing && mutation.isError && (
@@ -254,8 +284,8 @@ function ScheduleDialog({
   const [schedule, setSchedule] = useState<UpdateSchedule>(defaultSchedule)
   const [filled, setFilled] = useState(false)
   const config = useQuery({
-    queryKey: ['compile-config', identityScopeKey, target.to],
-    queryFn: ({ signal }) => fetchCompileConfig(target.to, signal),
+    queryKey: ['compile-config', identityScopeKey, target.compile_name],
+    queryFn: ({ signal }) => fetchCompileConfig(target.compile_name, signal),
     staleTime: 0,
   })
   useEffect(() => {
@@ -277,7 +307,7 @@ function ScheduleDialog({
             {t(target.auto_update ? 'schedule.adjust' : 'schedule.turnOn')}
           </DialogTitle>
           <DialogDescription className="break-all">
-            {target.to}
+            {target.compile_name}
           </DialogDescription>
         </DialogHeader>
         <form

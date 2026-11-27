@@ -1,6 +1,5 @@
 export default {
   schedule: {
-    lastRunFailed: 'The last Compile run failed. Review the technical details.',
     listDescription:
       'Turn automatic updates on or off, or adjust the schedule here. Schedules use Beijing time (Asia/Shanghai).',
     autoUpdate: 'Automatic updates',
@@ -25,9 +24,14 @@ export default {
     noSchedule: 'No schedule configured',
     nextRun: 'Next run',
     notScheduled: 'Not scheduled',
-    execution: 'Execution',
-    running: 'Running',
-    idle: 'Idle',
+    lastRun: 'Last run',
+    neverRun: 'Not run yet',
+    name: 'Plan name',
+    nameHint:
+      'Identifies this plan. Use letters, digits, Chinese characters, underscores or hyphens (no leading hyphen); up to 64 characters, or 32 with Chinese characters.',
+    nameRequired: 'Enter a plan name.',
+    nameInvalid:
+      'Use letters, digits, Chinese characters, underscores or hyphens, without a leading hyphen, within the length limit.',
     tasksTab: 'Execution history',
     plansTab: 'Scheduled plans',
     enabled: 'Scheduled automatic updates',
