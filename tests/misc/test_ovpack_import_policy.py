@@ -1153,37 +1153,23 @@ async def test_import_ovpack_rejects_legacy_session_scope(
 async def test_import_top_level_scope_package_requires_root_target(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
-    manifest = _manifest_for_files("resources", {"README.md": "hello"})
-    manifest["root"] = {
-        "name": "resources",
-        "uri": "viking://resources",
-        "scope": "resources",
-    }
-    _write_ovpack_with_manifest(
-        temp_ovpack_path,
-        "resources",
-        {"README.md": "hello"},
-        manifest=manifest,
-    )
-    fake_fs = FakeVikingFS()
+    files = {"README.md": "hello"}
+    for scope in ("resources", "agent"):
+        uri = f"viking://{scope}"
+        manifest = _manifest_for_files(scope, files)
+        manifest["root"] = {"name": scope, "uri": uri, "scope": scope}
+        _write_ovpack_with_manifest(temp_ovpack_path, scope, files, manifest=manifest)
+        fake_fs = FakeVikingFS()
 
-    with pytest.raises(InvalidArgumentError, match=r"must be imported to viking://"):
-        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+        with pytest.raises(InvalidArgumentError, match=r"must be imported to viking://"):
+            await import_ovpack(fake_fs, str(temp_ovpack_path), uri, request_ctx)
 
-    assert await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://", request_ctx) == (
-        "viking://resources"
-    )
+        assert await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://", request_ctx) == uri
+        assert fake_fs.written_files == [f"{uri}/README.md"]
 
-    _write_ovpack_with_manifest(
-        temp_ovpack_path,
-        "renamed",
-        {"README.md": "hello"},
-        manifest=manifest,
-    )
-    with pytest.raises(InvalidArgumentError, match=r"root name does not match zip root"):
-        await import_ovpack(
-            FakeVikingFS(), str(temp_ovpack_path), "viking://resources", request_ctx
-        )
+        _write_ovpack_with_manifest(temp_ovpack_path, "renamed", files, manifest=manifest)
+        with pytest.raises(InvalidArgumentError, match=r"root name does not match zip root"):
+            await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), uri, request_ctx)
 
 
 async def _restricted_pack_source(indexed_fs):

@@ -15,6 +15,7 @@ checksum，保证包内容没有偏离 manifest；如果攻击者能同时篡改
 
 - `viking://resources/...`
 - `viking://user/...`
+- `viking://agent/...`
 
 全量迁移使用单独的 `backup/restore`，它会把支持的 scope root 一起打进备份包。这里指命名空间根，不表示内容对所有人公开：
 
@@ -485,7 +486,7 @@ ov import ./exports/a.ovpack viking://resources/imported/
 viking://resources/imported/a
 ```
 
-顶级 scope 包只能导入到 `viking://`：
+顶级目录包只能导入到 `viking://`。覆盖已存在的 `resources` 或 `agent` 根需要 ROOT 权限。
 
 ```bash
 ov export viking://resources ./exports/resources.ovpack

@@ -175,7 +175,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 - manifest `format_version` 不是当前支持版本（`3`）的包会被拒绝。
 - `.abstract.md` 和 `.overview.md` 会作为语义侧边文件恢复；`.relations.json` 和 OVPack 内部文件会被排除。
 - manifest index 标量中的 `context_type` 如果存在，必须和最终导入路径语义一致。
-- `viking://resources/` 这类顶级 scope 包必须导入到 `viking://`。
+- `viking://resources` 和 `viking://agent` 等顶级目录包必须导入到 `viking://`。覆盖已存在的 `resources` 或 `agent` 根需要 ROOT 权限。
 - OVPack 不额外设置导入包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
 #### 3. 使用示例

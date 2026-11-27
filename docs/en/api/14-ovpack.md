@@ -177,7 +177,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 - Packages whose manifest `format_version` is not the current supported version (`3`) are rejected.
 - `.abstract.md` and `.overview.md` are restored as semantic sidecars. `.relations.json` and OVPack internals are excluded.
 - Manifest `context_type`, when present in index scalar metadata, must match the final import path semantics.
-- Top-level scope packages such as `viking://resources/` must be imported to `viking://`.
+- Top-level packages such as `viking://resources` and `viking://agent` must be imported to `viking://`. Overwriting an existing `resources` or `agent` root requires the ROOT role.
 - OVPack does not add import package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
 #### 3. Usage Examples

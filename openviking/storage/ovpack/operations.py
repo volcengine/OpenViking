@@ -48,7 +48,7 @@ from openviking.storage.ovpack.manifest import (
     validate_manifest_root_matches_zip,
 )
 from openviking.storage.ovpack.policy import (
-    BACKUP_SCOPES,
+    OVPACK_SCOPES,
     backup_scopes_from_manifest,
     is_backup_package,
     is_excluded_rel_path,
@@ -391,7 +391,7 @@ async def import_ovpack(
 
 async def _backup_entries(viking_fs, ctx: RequestContext) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    for scope in BACKUP_SCOPES:
+    for scope in OVPACK_SCOPES:
         scope_uri = f"viking://{scope}"
         entries.append(
             {
@@ -631,7 +631,7 @@ async def backup_ovpack(
         entries,
         ctx,
         package_type=OVPACK_BACKUP_TYPE,
-        scopes=list(BACKUP_SCOPES),
+        scopes=list(OVPACK_SCOPES),
         include_vectors=include_vectors,
     )
     await _write_ovpack_archive(
@@ -690,7 +690,7 @@ async def restore_ovpack(
 
         manifest_entries = manifest_entries_by_path(manifest)
         backup_scopes = backup_scopes_from_manifest(manifest, manifest_entries)
-        members = validated_import_members(infolist, base_name, root_uri, operation="restore")
+        members = validated_import_members(infolist, base_name, root_uri)
 
         index_records = validate_manifest_content(zf, manifest, infolist, base_name)
         dense_vectors = read_dense_vectors(zf, manifest, base_name, index_records)

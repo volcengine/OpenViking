@@ -18,6 +18,7 @@ Regular `export/import` handles one package root:
 
 - `viking://resources/...`
 - `viking://user/...`
+- `viking://agent/...`
 
 Full migration uses the separate `backup/restore` flow. It packages public
 scope roots together (these are namespace roots, not a statement that their content is publicly readable):
@@ -513,7 +514,7 @@ Result:
 viking://resources/imported/a
 ```
 
-Top-level scope packages can only be imported to `viking://`:
+Top-level scope packages can only be imported to `viking://`. Overwriting an existing `resources` or `agent` root requires the ROOT role.
 
 ```bash
 ov export viking://resources ./exports/resources.ovpack
