@@ -561,6 +561,8 @@ describe('the workers scheduler', () => {
     assert.match(workers, /A report may leave a restart of this service to you: relay it first, then restart as the Core says, and only when the owner asked for it\./);
     assert.match(workers, /Looking into a subject is its worker's work\. Your own OpenViking lookups are for telling which task, thread or earlier request an input refers to, and for what you answer yourself\./);
     assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
+    assert.match(workers, /Answering an input yourself and handing it to a task are alternatives, never both/);
+    assert.match(workers, /tell the requester once that you are looking into it: one short line saying what you will check[^\n]*The line holds no answer/);
     assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
   });
 
