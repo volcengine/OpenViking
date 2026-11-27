@@ -108,7 +108,7 @@ OpenViking 的配置分为两个层级：
 | Account | `github`、`acl` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改；不回退到 Cluster。 |
 | Account | `output_language_override`、`memory.extraction_enabled` | 动态配置 | ROOT 或该 Account 的 ADMIN 可修改。生成内容使用任务所属 Account 的配置，未配置时由业务层使用 Cluster 默认值。 |
 | Account | `vlm`、`query_planner` | 动态配置 | 仅 ROOT 可读写。每段已配置的模型配置都必须包含 `model` 和非空 `credentials` 数组，`timeout` 可选；ADMIN 无法读取或修改这两段配置。 |
-| Account | `parser_api.api_key` | 动态配置 | 仅 ROOT 可读写。已配置的段必须包含非空白 Key；Understanding 使用调用方的 OpenViking API key。 |
+| Account | `parser_api.api_key` | 动态配置 | 仅 ROOT 可读写。已配置的段必须包含非空白 Key，用于 Understanding 的 Bearer 请求头。 |
 | Account | `embedding` | 部分动态 | 仅 ROOT 可读写。凭证、重试、并发、故障回切和熔断参数可动态修改；模型身份、向量空间字段、文本来源和输入 token 上限仅能在创建时设置。 |
 | Account | `vectordb` | 仅创建时配置 | 仅 ROOT 可在 Account 创建请求的 `settings` 中设置，后续新增、修改和重置均被拒绝。Account 专属连接仅支持 `http`、`volcengine`、`vikingdb` 远端后端。 |
 
@@ -1163,7 +1163,7 @@ PDF 解析配置。`local` 只在本地解析，`mineru` 要求远程解析成�
 | `enable` | `false` | 启用外部解析。 |
 | `extensions` | `[]` | 交给外部解析的扩展名；转为小写并去掉开头的点。 |
 | `host` | `""` | 带协议的 API 地址，如 `https://parser.example.com`；启用时必填。 |
-| `api_key` | `""` | 旧配置字段。Understanding 不读取此值。 |
+| `api_key` | `""` | Account 未配置 `parser_api` 段时，Understanding 使用该凭证发送 Bearer 请求头。 |
 | `enable_feishu_url` | `false` | 有可用凭证时允许直接解析飞书 URL。已由 Accessor 归一化为 Markdown 的飞书文档跳过外部解析；文件附件仍按扩展名路由。 |
 | `enable_resumable_upload` | `false` | 启用断点续传。 |
 | `upload_simple_max_bytes` | `536870912`（512 MiB） | 简单上传的大小阈值。 |
@@ -1174,12 +1174,12 @@ PDF 解析配置。`local` 只在本地解析，`mineru` 要求远程解析成�
 
 大小、超时和轮询参数都必须大于零。
 
-Understanding 在上传、提交和轮询时通过 `X-API-Key` 请求头传递调用方的 OpenViking API key。
-Cluster 和 Account 的 `parser_api.api_key` 字段仅为兼容旧配置保留。请求未携带 API key 时，OV 省略该请求头。
+OV 向 Understanding 上传文件、提交任务和轮询时，通过 `Authorization: Bearer <parser-key>` 发送配置的解析服务 key，通过 `X-API-Key: <caller-key>` 发送调用方的 OpenViking API key。
+解析服务 key 优先取 Account 的 `parser_api.api_key`，Account 未配置时取 Cluster 配置。缺少哪把 key 就省略对应的请求头。
 host、路由和超时仍由 Cluster 配置。add-resource 接口拒绝 `args.api_key` 和 `args.parser_api`。
 
-需要该 key 的后台任务会加密保存一份，worker 恢复时沿用本次请求的凭证。
-跨源重定向和结果 ZIP 下载均不携带该 key。
+后台任务按需加密保存调用方的 key。worker 恢复时沿用原调用方的 key，并读取当前解析服务 key。
+跨源重定向和结果 ZIP 下载均不携带这两把 key。
 
 内置文件配置源通过 AGFS 持久化 Account 配置，开启 `encryption.enabled=true`
 时沿用现有文件加密；该开关默认关闭。本次改动不会加密宿主机上的 `ov.conf`，

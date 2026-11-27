@@ -721,8 +721,8 @@ PATCH body 包含其中任一段，立即返回 `403 PERMISSION_DENIED`。ADMIN 
 {"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
 ```
 
-该字段仅为兼容旧配置保留。Understanding 在上传、提交和轮询时使用调用方的 OpenViking API key，
-worker 恢复任务时沿用同一把 key。详见[外部解析 API](../guides/01-configuration.md#parser-api)。
+Understanding 请求通过 `Authorization: Bearer` 发送此 Account 的解析服务 key，通过 `X-API-Key` 发送调用方的 OpenViking key。
+Account 未配置解析服务 key 时，Bearer 取 Cluster 配置。详见[外部解析 API](../guides/01-configuration.md#parser-api)。
 Account 配置沿用现有配置源，开启 AGFS 文件加密时加密存储。
 
 **其他 Account 配置段**

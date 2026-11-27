@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from openviking.config.binding import manager_over_source
+from openviking.config.parser_api import get_effective_parser_api_config
 from openviking.config.source import MemoryConfigSource
 from openviking.parse.accessors.base import LocalResource, SourceType
 from openviking.parse.output import LocalParseOutputStore
@@ -172,15 +173,13 @@ async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tm
         }
     )
     monkeypatch.setattr("openviking.config.binding.get_openviking_config", lambda: cluster)
-    monkeypatch.setattr(
-        "openviking.utils.resource_processor.get_openviking_config", lambda: cluster
-    )
     manager = manager_over_source(MemoryConfigSource(), base_config=cluster)
     await manager.patch_account("a", {"parser_api": {"api_key": "key-a"}})
     contexts = [
-        RequestContext(user=UserIdentifier("a", user), role=Role.USER, api_key=f"ov-key-{user}")
-        for user in ("alice", "bob")
+        RequestContext(user=UserIdentifier(account, user), role=Role.USER, api_key=f"ov-key-{user}")
+        for account, user in (("a", "alice"), ("b", "bob"))
     ]
+    expected_bearer = {"alice": "Bearer key-a", "bob": "Bearer legacy-key"}
     requests = []
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w") as zipped:
@@ -188,13 +187,14 @@ async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tm
 
     async def handler(request):
         await asyncio.sleep(0)
-        assert "Authorization" not in request.headers
         auth = request.headers.get("X-API-Key")
         requests.append((request.method, request.url.path, auth))
         if request.url.path == "/result.zip":
             assert auth is None
+            assert "Authorization" not in request.headers
             return httpx.Response(200, content=archive.getvalue())
         owner = {"ov-key-alice": "alice", "ov-key-bob": "bob"}[auth]
+        assert request.headers["Authorization"] == expected_bearer[owner]
         if request.url.path.endswith("/files"):
             return httpx.Response(200, json={"id": f"file-{owner}"})
         if request.method == "POST":
@@ -231,7 +231,7 @@ async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tm
             return await router.parse(
                 source,
                 parser_backend="understanding",
-                parser_api_config=cluster.parser_api,
+                parser_api_config=await get_effective_parser_api_config(manager, ctx.account_id),
                 parse_output_store=store,
                 resolved_extension=".pdf",
                 **kwargs,
@@ -250,6 +250,7 @@ async def test_parse_prepared_file_id_creates_response_and_polls(monkeypatch, tm
         await store.cleanup(result.artifact_ref)
 
     await manager.patch_account("a", {"parser_api": {"api_key": "rotated-a"}})
+    expected_bearer["alice"] = "Bearer rotated-a"
     requests.clear()
     results = await asyncio.gather(
         *[
@@ -317,6 +318,7 @@ async def _return(value):
 def _api_with_transport(monkeypatch, handler):
     api = UnderstandingAPI.__new__(UnderstandingAPI)
     api._api_base = "https://parser.example.test/api/v3"
+    api._api_key = "parser-key"
     api._http_timeout_sec = 1.0
     api._timeout_sec = 2.0
     api._default_poll_interval_ms = 0
@@ -504,26 +506,38 @@ async def test_api_calls_do_not_retry_transient_http_error(monkeypatch, method):
 
 
 @pytest.mark.asyncio
-async def test_parser_redirects_and_calls_without_caller_key(monkeypatch):
+@pytest.mark.parametrize(
+    "target", ["https://other.example.test/end", "https://parser.example.test/end"]
+)
+@pytest.mark.parametrize("parser_key", ["", "parser-key"])
+async def test_parser_redirects_and_calls_without_caller_key(monkeypatch, target, parser_key):
     observed = []
 
     def handler(request):
-        observed.append((request.url.host, request.headers.get("X-API-Key")))
-        assert "Authorization" not in request.headers
+        observed.append(
+            (
+                request.url.path,
+                request.headers.get("X-API-Key"),
+                request.headers.get("Authorization"),
+            )
+        )
         if request.url.path.endswith("/responses"):
             return httpx.Response(307, headers={"Location": "/local"})
         if request.url.path == "/local":
-            return httpx.Response(307, headers={"Location": "https://other.example.test/end"})
+            return httpx.Response(307, headers={"Location": target})
         return httpx.Response(200, json={"id": "response-1"})
 
     api = _api_with_transport(monkeypatch, handler)
+    api._api_base = "http://parser.example.test/api/v3"
+    api._api_key = parser_key
     for key in (None, "caller"):
         with parser_key_scope(key):
             await api._submit_response({})
+        bearer = f"Bearer {parser_key}" if parser_key else None
         assert observed == [
-            ("parser.example.test", key),
-            ("parser.example.test", key),
-            ("other.example.test", None),
+            ("/api/v3/responses", key, bearer),
+            ("/local", key, bearer),
+            ("/end", None, None),
         ]
         observed.clear()
 
@@ -535,11 +549,13 @@ async def test_parse_http_failure_preserves_message_and_remote_ids(monkeypatch, 
     def handler(request):
         requests.append(request)
         assert request.headers["X-API-Key"] == "test-key"
-        assert "Authorization" not in request.headers
+        assert request.headers["Authorization"] == "Bearer parser-key"
         if request.method == "POST":
             assert request.url.path == "/api/v3/responses"
             return httpx.Response(200, json={"id": "response-1"})
-        return httpx.Response(403, json={"message": "credential test-key cannot access response"})
+        return httpx.Response(
+            403, json={"message": "test-key and parser-key cannot access response"}
+        )
 
     api = _api_with_transport(monkeypatch, handler)
     with (
@@ -555,6 +571,8 @@ async def test_parse_http_failure_preserves_message_and_remote_ids(monkeypatch, 
     assert len(requests) == 2  # One submission and one denied poll; no fallback or resubmission.
     assert "test-key" not in str(exc_info.value)
     assert "test-key" not in caplog.text
+    assert "parser-key" not in str(exc_info.value)
+    assert "parser-key" not in caplog.text
 
 
 @pytest.mark.asyncio

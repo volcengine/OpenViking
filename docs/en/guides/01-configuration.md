@@ -108,7 +108,7 @@ Only fields explicitly declared as runtime fields are exposed by the runtime con
 | Account | `github`, `acl` | Dynamic | ROOT or the Account ADMIN can update it. These sections have no Cluster fallback. |
 | Account | `output_language_override`, `memory.extraction_enabled` | Dynamic | ROOT or the Account ADMIN can update them. Generation uses the owning Account's settings; absent values use business-level Cluster defaults. |
 | Account | `vlm`, `query_planner` | Dynamic | ROOT-only. Each configured section requires `model` and a non-empty `credentials` array; `timeout` is optional. ADMIN callers cannot read or update these sections. |
-| Account | `parser_api.api_key` | Dynamic | ROOT-only. A configured section requires a nonblank key; Understanding uses the caller's OpenViking API key. |
+| Account | `parser_api.api_key` | Dynamic | ROOT-only. A configured section requires a nonblank key for the Understanding Bearer header. |
 | Account | `embedding` | Mixed | ROOT-only. Credentials, retries, concurrency, failback and circuit-breaker settings are dynamic; model identity, vector-space fields, text source and input token limit are create-only. |
 | Account | `vectordb` | Create-only | ROOT-only. Supply it in Account creation `settings`; later additions, changes and resets are rejected. Only remote backends `http`, `volcengine` and `vikingdb` are supported for Account-owned connections. |
 
@@ -1149,7 +1149,7 @@ The top-level `parser_api` section routes selected formats to the external Under
 | `enable` | `false` | Enable external parsing. |
 | `extensions` | `[]` | File extensions to route externally; normalized to lowercase without the leading dot. |
 | `host` | `""` | API host including scheme, such as `https://parser.example.com`; required when enabled. |
-| `api_key` | `""` | Legacy configuration field. Understanding ignores this value. |
+| `api_key` | `""` | Bearer credential for Understanding when the Account has no `parser_api` section. |
 | `enable_feishu_url` | `false` | Allow direct Feishu URL parsing when credentials are available. Feishu documents already normalized to Markdown by the accessor bypass external parsing; file attachments still use extension routing. |
 | `enable_resumable_upload` | `false` | Enable resumable uploads. |
 | `upload_simple_max_bytes` | `536870912` (512 MiB) | Simple-upload size threshold. |
@@ -1160,14 +1160,15 @@ The top-level `parser_api` section routes selected formats to the external Under
 
 All size, timeout, and polling values must be greater than zero.
 
-Understanding forwards the caller's OpenViking API key in the `X-API-Key` header
-for uploads, submission and polling. The Cluster and Account `parser_api.api_key`
-fields are retained for configuration compatibility. If the request has no API key,
-OpenViking omits the header. The Cluster still configures the host, routing and timeouts.
+For uploads, submission and polling, OpenViking sends the configured parser key
+in `Authorization: Bearer <parser-key>` and the caller's OpenViking key in
+`X-API-Key: <caller-key>`. It omits each header when its key is absent.
+The Account parser key takes precedence over the Cluster parser key.
+The Cluster configures the host, routing and timeouts.
 The add-resource API rejects `args.api_key` and `args.parser_api`.
 
-Background tasks that need the key store an encrypted copy so workers can resume
-with the original credential. Cross-origin redirects and result ZIP downloads
+Background tasks that need the caller's key store an encrypted copy so workers can resume
+with the original caller key and the current parser key. Cross-origin redirects and result ZIP downloads
 receive no API key.
 
 The built-in file configuration source persists Account settings through AGFS.

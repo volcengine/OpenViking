@@ -87,6 +87,7 @@ class UnderstandingAPI(BaseParser):
         raw_host = (parser_api.host or "").rstrip("/")
         self._api_host = raw_host
         self._api_base = raw_host if raw_host.endswith("/api/v3") else f"{raw_host}/api/v3"
+        self._api_key = parser_api.api_key.strip()
         self._enable_resumable_upload = bool(parser_api.enable_resumable_upload)
         self._upload_simple_max_bytes = int(parser_api.upload_simple_max_bytes)
         self._upload_part_size_bytes = int(parser_api.upload_part_size_bytes)
@@ -419,6 +420,8 @@ class UnderstandingAPI(BaseParser):
 
     def _auth_headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         headers = {"x-kb-env": "snake"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         if key := _caller_api_key.get():
             headers["X-API-Key"] = key
         if extra:
@@ -427,9 +430,9 @@ class UnderstandingAPI(BaseParser):
 
     def _api_client(self, timeout: float) -> httpx.AsyncClient:
         async def strip_foreign_key(request: httpx.Request) -> None:
-            # httpx strips Authorization on cross-origin redirects, but retains X-API-Key.
             if request.url.scheme != origin.scheme or request.url.netloc != origin.netloc:
                 request.headers.pop("X-API-Key", None)
+                request.headers.pop("Authorization", None)
 
         origin = httpx.URL(self._api_base)
         return httpx.AsyncClient(
@@ -479,8 +482,10 @@ class UnderstandingAPI(BaseParser):
         return redact(summary)
 
     def _redact_error(self, message: str) -> str:
-        api_key = _caller_api_key.get()
-        return message.replace(api_key, "[redacted]") if api_key else message
+        keys = (getattr(self, "_api_key", ""), _caller_api_key.get() or "")
+        for key in sorted(filter(None, keys), key=len, reverse=True):
+            message = message.replace(key, "[redacted]")
+        return message
 
     def _error_message(self, obj: Any) -> str:
         """Extract the failure reason without adding remote identifiers."""

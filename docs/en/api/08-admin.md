@@ -848,9 +848,9 @@ Only ROOT can read, update or reset it:
 {"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
 ```
 
-This field is retained for compatibility. Understanding uses the caller's
-OpenViking API key for uploads, submission and polling, including after a worker
-resumes a task. See [External parser API](../guides/01-configuration.md#parser-api).
+Understanding requests use this Account key in `Authorization: Bearer` and the caller's
+OpenViking key in `X-API-Key`. When the Account has no parser settings, the Bearer
+key comes from the Cluster. See [External parser API](../guides/01-configuration.md#parser-api).
 Account settings use the existing configuration source and AGFS file encryption
 when enabled.
 
