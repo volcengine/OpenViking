@@ -356,6 +356,38 @@ describe('loading the soul', () => {
     assert.match(assembleConversationPolicy(config), /## Role\n\nYour soul [^\n]*\n\nRole boundary:/);
   });
 
+  it('keeps an unread soul apart from a missing one, and reloads the policy text once a later read succeeds', async () => {
+    const config = { connectors: ['lark'], soulText: 'an older soul' };
+    // The read that fails at startup is a runtime fault, not a missing soul.
+    assert.equal(await loadSoul(config, { read: async () => { throw failure(503); } },
+      { sleep: async () => {} }), false);
+    assert.equal(config.soulMissing, false, 'a transient failure must not read as "no soul here"');
+    assert.equal(config.soulLoad, 'unavailable');
+    const before = assembleConversationPolicy(config);
+    assert.match(before, /## Role\n\nYour soul [^\n]*\n\nRole boundary:/);
+    assert.doesNotMatch(before, /a soul kept in OpenViking/);
+    // A read that lands later has to change the text the runtimes assemble,
+    // not only config.soulText: they build their policy once, in the constructor.
+    assert.equal(await loadSoul(config, { read: async () => 'a soul kept in OpenViking' },
+      { sleep: async () => {} }), true);
+    assert.equal(config.soulLoad, 'loaded');
+    assert.match(assembleConversationPolicy(config), /a soul kept in OpenViking/);
+    // A refusal is neither a runtime fault nor silence: it is reported apart.
+    const refused = { connectors: ['lark'] };
+    assert.equal(await loadSoul(refused, { read: async () => { throw failure(403); } },
+      { sleep: async () => {} }), false);
+    assert.equal(refused.soulLoad, 'refused');
+  });
+
+  it('says in /status when the agent runs on the default role, and says nothing when it does not', async () => {
+    const { soulStatusLine } = await import('../src/settings-card.mjs');
+    assert.equal(soulStatusLine('loaded'), '');
+    assert.equal(soulStatusLine('missing'), '');
+    assert.equal(soulStatusLine(undefined), '');
+    assert.match(soulStatusLine('unavailable'), /^角色：当前按默认角色运行（soul 没读到/);
+    assert.match(soulStatusLine('refused'), /^角色：当前按默认角色运行（读 soul 被拒绝/);
+  });
+
   it('succeeds on a retry, and does not retry a soul that is missing or refused', async () => {
     let calls = 0;
     const config = {};

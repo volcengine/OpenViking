@@ -278,6 +278,16 @@ export function statusCard({ headline, snapshot, settings = null, queued = 0, ta
   };
 }
 
+// The soul line /status adds once a read failed: the agent keeps running, but
+// on the default role, and nothing else shows it. `soulLoad` is what loadSoul
+// left on the config ('unavailable' or 'refused'; every other value means the
+// Role is the instance's own).
+export function soulStatusLine(soulLoad) {
+  if (soulLoad === 'unavailable') return '角色：当前按默认角色运行（soul 没读到，恢复后重启或切 Runtime 再读）';
+  if (soulLoad === 'refused') return '角色：当前按默认角色运行（读 soul 被拒绝，检查配置与权限）';
+  return '';
+}
+
 // The workers' line /status adds to its text.
 export function workerStatusLine(settings) {
   if (!settings) return '';

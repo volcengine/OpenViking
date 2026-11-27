@@ -15,7 +15,7 @@ import { formatInboundLine, resolveReplyTarget } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
 import { executeCommand, statusHeadline } from './commands.mjs';
 import { settingsModels } from './settings-models.mjs';
-import { SETTINGS_CARD, applySettings, redrawn, settingsCard, settledCard, statusCard, workerStatusLine } from './settings-card.mjs';
+import { SETTINGS_CARD, applySettings, redrawn, settingsCard, settledCard, soulStatusLine, statusCard, workerStatusLine } from './settings-card.mjs';
 import { executePrimaryCommand } from './primary-channel.mjs';
 import { executeTasksCommand, refreshesCard, taskStatusLine } from './task-commands.mjs';
 import { executeWorkersCommand } from './worker-commands.mjs';
@@ -562,7 +562,7 @@ export class PersonalAgentDaemon {
         workers: (parsed) => executeWorkersCommand(parsed, {
           event, connectors: this.connectors, settings: this.workerSettings ?? null, tasks: this.tasks, router: this.agentRuntime,
         }),
-        statusExtra: () => [workerStatusLine(this.workerSettings ?? null), taskStatusLine(this.tasks)].filter(Boolean).join('\n'),
+        statusExtra: () => [soulStatusLine(this.config.soulLoad), workerStatusLine(this.workerSettings ?? null), taskStatusLine(this.tasks)].filter(Boolean).join('\n'),
         // On Lark /runtime and /status answer with a card too (settings-card.mjs).
         // The workers' settings are the owner's to change, as with /workers.
         runtimeCard: async (snapshot) => settingsCard({ snapshot: await settingsModels(snapshot, [snapshot.runtime, this.workerSettings?.preferred()], this.config), settings: this.connectors.isOwner(event) ? this.workerSettings ?? null : null,

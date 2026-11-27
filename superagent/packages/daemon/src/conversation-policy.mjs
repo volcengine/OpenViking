@@ -228,46 +228,60 @@ function roleSection(config) {
 // it: at daemon start and before a runtime switch, never per session. A read
 // that fails is tried `attempts` times; a soul that is missing, empty or still
 // unreadable leaves no Role text, only the pointer. There is no local copy.
+//
+// An unread soul is not a missing one, and config.soulLoad tells them apart:
+// 'loaded', 'missing' (404 or an empty body: the instance has no soul),
+// 'unavailable' (the read failed on the way) and 'refused' (OV answered with a
+// lasting client error). Only the last two are worth asking again, so the
+// daemon retries them once OV answers instead of running the rest of the
+// instance on the default role.
 export async function loadSoul(config, client, {
   logger = null, attempts = 3, delayMs = 500,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   const uri = config.soulUri || OV_SOUL_URI;
   let text = '';
-  let missing = false;
+  config.soulLoad = 'loaded';
   if (isLocalSoul(uri)) {
+    let read = false;
     try {
       text = fs.readFileSync(uri, 'utf8');
-      missing = text.trim() === '';
+      read = true;
+      config.soulMissing = text.trim() === '';
     } catch (error) {
-      missing = error?.code === 'ENOENT';
-      if (!missing) logger?.warn('soul_file_unreadable', { error: safeError(error) });
+      config.soulMissing = error?.code === 'ENOENT';
+      if (!config.soulMissing) logger?.warn('soul_file_unreadable', { error: safeError(error) });
     }
+    // A file that is there but could not be read is a fault, not a missing soul.
+    config.soulLoad = config.soulMissing ? 'missing' : (read ? 'loaded' : 'unavailable');
     config.soulText = text;
-    config.soulMissing = missing;
     return text.trim() !== '';
   }
+  config.soulMissing = false;
   for (let attempt = 1; typeof client?.read === 'function'; attempt += 1) {
     try {
       text = String(await client.read(uri, 0, -1) ?? '');
-      missing = text.trim() === '';
+      config.soulMissing = text.trim() === '';
+      config.soulLoad = config.soulMissing ? 'missing' : 'loaded';
       break;
     } catch (error) {
       const status = error?.httpStatus;
       if (status === 404) {
-        missing = true;
+        config.soulMissing = true;
+        config.soulLoad = 'missing';
         break;
       }
       const lasting = status >= 400 && status < 500 && status !== 408 && status !== 429;
       if (lasting || attempt >= attempts) {
         logger?.warn('ov_soul_unavailable', { attempts: attempt, error: safeError(error) });
+        config.soulLoad = lasting ? 'refused' : 'unavailable';
         break;
       }
       await sleep(delayMs * attempt);
     }
   }
   config.soulText = text;
-  config.soulMissing = missing;
+  config.soulMissing = config.soulLoad === 'missing';
   return text.trim() !== '';
 }
 
