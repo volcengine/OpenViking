@@ -559,6 +559,38 @@ class TestVLMExtraRequestBody:
         for body in bodies:
             assert {key: body[key] for key in extra_body} == extra_body
 
+    @pytest.mark.parametrize("thinking", [True, False])
+    async def test_volcengine_vision_forwards_configured_reasoning_effort(
+        self, monkeypatch, thinking
+    ):
+        send = MagicMock(
+            side_effect=lambda request: httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]},
+            )
+        )
+        vlm = VolcEngineVLM({"api_key": "sk-test", "reasoning_effort": "low", "thinking": thinking})
+
+        with Ark(
+            api_key="sk-test", http_client=httpx.Client(transport=httpx.MockTransport(send))
+        ) as client:
+            monkeypatch.setattr(vlm, "get_client", lambda: client)
+            assert vlm.get_vision_completion("describe", images=[b"\x89PNG\r\n\x1a\n"]) == "ok"
+
+        async with AsyncArk(
+            api_key="sk-test", http_client=httpx.AsyncClient(transport=httpx.MockTransport(send))
+        ) as async_client:
+            monkeypatch.setattr(vlm, "get_async_client", lambda: async_client)
+            assert (
+                await vlm.get_vision_completion_async("describe", images=[b"\x89PNG\r\n\x1a\n"])
+                == "ok"
+            )
+
+        bodies = [json.loads(call.args[0].content) for call in send.call_args_list]
+        assert len(bodies) == 2
+        for body in bodies:
+            assert body.get("reasoning_effort") == ("low" if thinking else None)
+
     @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
     def test_dashscope_thinking_merges_with_extra_request_body(self, mock_openai_class):
         mock_client = MagicMock()
