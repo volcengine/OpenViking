@@ -9,14 +9,10 @@ from typing import Any
 
 from openviking.core.context import ResourceContentType
 from openviking.core.namespace import is_session_uri
-from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
 from openviking.storage.expr import Eq
 from openviking.utils.embedding_utils import get_resource_content_type
-from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
-
-logger = get_logger(__name__)
 
 NON_INDEX_SCOPES = frozenset({"session"})
 PUBLIC_MISSING_RECORD_LIMIT = 20
@@ -190,24 +186,15 @@ async def _fetch_index_records(vector_store, uri: str, ctx: RequestContext) -> l
         "limit": 10,
         "output_fields": ["uri", "level"],
     }
+    # An index that cannot be read is not an empty index. Callers use this report
+    # to gate export and to answer consistency queries, so backend failures must
+    # surface instead of turning every expected record into a false "missing" one.
     try:
         return await vector_store.filter(**kwargs, ctx=ctx)
     except TypeError:
-        try:
-            return await vector_store.filter(**kwargs)
-        except Exception as exc:
-            logger.info(
-                "Failed to check vector index records for %s: %s",
-                safe_uri_for_log(str(uri)),
-                type(exc).__name__,
-            )
-    except Exception as exc:
-        logger.info(
-            "Failed to check vector index records for %s: %s",
-            safe_uri_for_log(str(uri)),
-            type(exc).__name__,
-        )
-    return []
+        # Some stores resolve the request context themselves and reject the
+        # ``ctx`` keyword; retry with the signature they accept.
+        return await vector_store.filter(**kwargs)
 
 
 async def check_index_consistency(
