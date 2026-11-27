@@ -676,7 +676,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         return ProcessResult.success()
                     semantic_lock = work.scope
                     assert semantic_lock is not None
-                    dag_stats = None
+                    tree_stats: list[SemanticTreeStats] = []
                     processing_succeeded = False
                     try:
                         if msg.plan is not None:
@@ -699,9 +699,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                     generation_trigger=msg.generation_trigger,
                                 )
                                 await executor.run(run_uri)
-                                self._cache_tree_stats(
-                                    msg.telemetry_id, run_uri, executor.get_stats()
-                                )
+                                stats = executor.get_stats()
+                                tree_stats.append(stats)
+                                self._cache_tree_stats(msg.telemetry_id, run_uri, stats)
                                 if not executor.stale:
                                     write_result = getattr(
                                         executor,
@@ -835,12 +835,9 @@ class SemanticProcessor(DequeueHandlerBase):
                                 telemetry_id=msg.telemetry_id,
                             )
                             await executor.run(run_uri)
-                            dag_stats = executor.get_stats()
-                            self._cache_tree_stats(
-                                msg.telemetry_id,
-                                run_uri,
-                                dag_stats,
-                            )
+                            stats = executor.get_stats()
+                            tree_stats.append(stats)
+                            self._cache_tree_stats(msg.telemetry_id, run_uri, stats)
                             if not executor.stale and defer_directory_refresh:
                                 # The shared directory task reads committed file abstracts.
                                 await work._wait_for_embedding_work(
@@ -863,7 +860,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         processing_succeeded = True
                     finally:
                         await work.finish_processing(processing_succeeded)
-                    failure = work.failure_result(dag_stats)
+                    failure = work.failure_result(tree_stats)
                     if failure is not None:
                         return failure
                     self._merge_request_stats(msg.telemetry_id, processed=1)

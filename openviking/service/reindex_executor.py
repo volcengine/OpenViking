@@ -32,7 +32,7 @@ from openviking.core.namespace_policy import namespace_policy_for_uri
 from openviking.metrics.datasources.vikingdb import VikingDBEventDataSource
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.service.task_domain import TaskPatch, collect_queue_work_errors
+from openviking.service.task_domain import TaskPatch, collect_queue_work_errors, project_work_error
 from openviking.service.task_tracker import TaskStatus, get_task_tracker
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.service.task_work_index import bind_task_context, get_task_context
@@ -853,7 +853,7 @@ class ReindexExecutor:
         counters.rebuilt_records += int(getattr(stats, "indexed_records", 0) or 0)
         failures = list(getattr(stats, "failures", ()) or ())
         counters.failed_records += len(failures)
-        counters.warnings.extend(failures)
+        counters.warnings.extend(project_work_error(error)["message"] for error in failures)
 
     async def _reindex_skill_namespace(
         self,
