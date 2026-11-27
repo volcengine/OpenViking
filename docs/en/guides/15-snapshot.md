@@ -216,6 +216,11 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 }
 ```
 
+For an existing PostgreSQL index, rerun the script against the configured
+schema as the table owner. The upgrade takes an `ACCESS EXCLUSIVE` lock on
+`snapshot_log` while replacing the old path uniqueness index and preserves
+existing history.
+
 Runtime startup does not create or migrate PostgreSQL tables. The runtime role
 needs `SELECT` and `INSERT` on `snapshot_log`, and `USAGE` on its identity sequence.
 Use a dedicated database or schema per OV deployment; accounts and branches

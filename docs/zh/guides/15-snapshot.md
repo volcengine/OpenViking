@@ -211,6 +211,9 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 }
 ```
 
+已有 PostgreSQL 索引时，请以表所有者身份对配置的 schema 重新执行该脚本。
+升级会在替换旧的路径唯一索引时对 `snapshot_log` 加 `ACCESS EXCLUSIVE` 锁，并保留已有历史记录。
+
 运行时不会创建或迁移 PostgreSQL 表。运行账号只需 `snapshot_log` 的
 `SELECT`、`INSERT` 权限，以及 identity sequence 的 `USAGE` 权限。
 不同 OV 部署应使用独立数据库或 schema；同一索引内按账号、分支隔离。

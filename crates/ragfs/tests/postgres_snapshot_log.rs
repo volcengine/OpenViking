@@ -67,6 +67,77 @@ async fn cleanup(account: &str) {
 
 #[tokio::test]
 #[ignore = "requires a real PostgreSQL database"]
+async fn postgres_snapshot_log_accepts_distinct_paths_with_same_digest() {
+    let admin = PgPoolOptions::new().connect(&dsn()).await.unwrap();
+    let schema = format!("snapshot_collision_{}", uuid::Uuid::new_v4().simple());
+    sqlx::raw_sql(&format!(
+        "CREATE SCHEMA {schema};
+         CREATE FUNCTION {schema}.md5(text) RETURNS text
+         LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT repeat('0', 32) $$;"
+    ))
+    .execute(&admin)
+    .await
+    .unwrap();
+    let mut url = url::Url::parse(&dsn()).unwrap();
+    // Put the private digest function ahead of the built-in one for the DDL
+    // and the store's queries. Both paths deliberately share one lookup key.
+    url.query_pairs_mut()
+        .append_pair("options", &format!("-c search_path={schema},pg_catalog"));
+    let pool = PgPoolOptions::new().connect(url.as_str()).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../openviking/service/sql/snapshot_log_postgres_init.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    let store = PostgresSnapshotLogStore::connect(url.as_str(), 1, 5_000)
+        .await
+        .unwrap();
+
+    let account = "collision";
+    let branch = "main";
+    let paths = ["docs/first.md", "docs/First.md"];
+    store
+        .append_rows_if_latest(account, branch, None, &rows(1, &paths))
+        .await
+        .expect("distinct paths with the same digest must be indexed in one append");
+    store
+        .append_rows_if_latest(account, branch, Some(&oid(1)), &rows(2, &paths[..1]))
+        .await
+        .unwrap();
+    store
+        .append_rows_if_latest(account, branch, Some(&oid(2)), &rows(3, &paths[1..]))
+        .await
+        .unwrap();
+    let (watermark, latest) = store
+        .load_latest_indexed_commit(account, branch)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest, oid(3));
+    for (path, expected) in [(paths[0], 2), (paths[1], 3)] {
+        let hits = store
+            .query_path_commits(account, branch, &[path.into()], watermark, 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            hits.into_iter()
+                .map(|hit| hit.commit_oid)
+                .collect::<Vec<_>>(),
+            [oid(expected), oid(1)]
+        );
+    }
+    drop(store);
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires a real PostgreSQL database"]
 async fn postgres_snapshot_log_history_scope_width_and_watermark() {
     let store = store().await;
     let account = uuid::Uuid::new_v4().simple().to_string() + &"a".repeat(223);
