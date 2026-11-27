@@ -1,5 +1,5 @@
 import {
-  shapeCapturePayload,
+  buildCaptureMessage,
 } from "../shared/capture-utils.mjs";
 
 function normalizeRole(role) {
@@ -36,23 +36,10 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
     if (!role) continue;
     if (role === "assistant" && cfg.captureAssistantTurns === false) continue;
 
-    const shaped = shapeCapturePayload(payload, role, cfg, {
+    const body = buildCaptureMessage(payload, role, cfg, {
       faithful: cfg.faithfulCapture || cfg.takeoverEnabled,
     });
-    if (shaped.dropped) continue;
-    const structuredParts = shaped.parts.filter((part) => part?.type !== "text");
-    if (!shaped.text && structuredParts.length === 0) continue;
-
-    // Tool-only payloads must not also send rendered tool output as text.
-    const bodyParts = [
-      ...(shaped.parts.some((part) => part?.type === "text") && shaped.text
-        ? [{ type: "text", text: shaped.text }]
-        : []),
-      ...structuredParts,
-    ];
-    const body = bodyParts.length > 0
-      ? { role, parts: bodyParts }
-      : { role, content: shaped.text };
+    if (!body) continue;
     if (cfg.peerId) body.peer_id = cfg.peerId;
     payloads.push(body);
   }

@@ -1,9 +1,9 @@
 import fs from "fs"
 import path from "path"
 import {
+  buildCaptureMessage,
   extractTextFromPayload,
   isCaptureEnabled,
-  shapeCapturePayload,
 } from "./shared/capture-utils.mjs"
 import {
   deriveHarnessSessionId,
@@ -450,17 +450,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (!role) return null
     if (role === "assistant" && !config.captureAssistantTurns) return null
 
-    const shaped = shapeCapturePayload({ role, content: partsRaw }, role, config)
-    const toolParts = shaped.parts.filter((part) => part.type !== "text")
-    if (shaped.dropped || (!shaped.text && toolParts.length === 0)) return null
-    const body = toolParts.length > 0
-      ? { role, parts: [
-        ...(shaped.text && shaped.parts.some((part) => part.type === "text")
-          ? [{ type: "text", text: shaped.text }]
-          : []),
-        ...toolParts,
-      ] }
-      : { role, content: shaped.text }
+    const body = buildCaptureMessage({ role, content: partsRaw }, role, config)
+    if (!body) return null
     const peerId = effectivePeerId(config)
     if (peerId) body.peer_id = peerId
     return body

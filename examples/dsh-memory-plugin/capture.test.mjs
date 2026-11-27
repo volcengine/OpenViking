@@ -49,7 +49,7 @@ test("captures DSH message events without recapturing injected context", () => {
   }, CONFIG);
   assert.deepEqual(user, {
     role: "user",
-    parts: [{ type: "text", text: "Remember that deployment uses blue." }],
+    content: "Remember that deployment uses blue.",
     peer_id: "workspace-a",
   });
 
@@ -60,7 +60,7 @@ test("captures DSH message events without recapturing injected context", () => {
       content: [{ type: "text", text: "Legacy hosts may omit source metadata." }],
     },
   }, CONFIG);
-  assert.equal(legacyUser?.parts?.[0]?.text, "Legacy hosts may omit source metadata.");
+  assert.equal(legacyUser?.content, "Legacy hosts may omit source metadata.");
 
   const injected = captureEvent({
     type: "user/message",
@@ -97,7 +97,7 @@ test("DSH capture applies rules after removing injected context", () => {
   assert.equal(captureEvent(event, { ...CONFIG, captureFilters: ["k/approved/"] }), null);
   assert.deepEqual(captureEvent(event, { ...CONFIG, captureFilters: ["d/approved/"] }), {
     role: "user",
-    parts: [{ type: "text", text: "Remember private details." }],
+    content: "Remember private details.",
     peer_id: "workspace-a",
   });
 });

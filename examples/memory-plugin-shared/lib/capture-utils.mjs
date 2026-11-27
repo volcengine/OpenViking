@@ -510,6 +510,21 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
   return { parts, text: decision.shouldCapture ? decision.text : "", signalText: signalText || "", dropped: false };
 }
 
+/**
+ * One host message as the session message to send, or null when nothing in it
+ * is worth capturing. Text follows the capture rules (injected context, filters,
+ * acknowledgements, `captureMaxLength`); tool calls and results stay structured
+ * parts and never decide keep or drop.
+ */
+export function buildCaptureMessage(payload, role, cfg = {}, options = {}) {
+  const shaped = shapeCapturePayload(payload, role, cfg, options);
+  if (shaped.dropped) return null;
+  const toolParts = shaped.parts.filter((part) => part?.type !== "text");
+  if (toolParts.length === 0) return shaped.text ? { role, content: shaped.text } : null;
+  const hasText = shaped.text && shaped.parts.some((part) => part?.type === "text");
+  return { role, parts: [...(hasText ? [{ type: "text", text: shaped.text }] : []), ...toolParts] };
+}
+
 export function extractCaptureTurns(rolloutEntries, cfg = {}) {
   const toolNameById = collectToolNamesByIdFromEntries(rolloutEntries);
   const turns = [];

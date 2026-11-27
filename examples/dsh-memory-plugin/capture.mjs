@@ -1,7 +1,7 @@
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import {
+  buildCaptureMessage,
   extractTextFromPayload,
-  shapeCapturePayload,
 } from "./shared/capture-utils.mjs";
 
 export const OPENVIKING_PLUGIN_SOURCE = "openviking-memory";
@@ -73,23 +73,8 @@ function captureMessage(event, message, config, toolNames) {
 
   const role = message.role === "assistant" ? "assistant" : "user";
   const toolNameById = Object.fromEntries(toolNames);
-  const shaped = shapeCapturePayload(message, role, config, {
-    toolNameById,
-  });
-  if (shaped.dropped) return null;
-  const structuredParts = shaped.parts.filter(part => part?.type !== "text");
-  if (!shaped.text && structuredParts.length === 0) return null;
-
-  const hasTextPart = shaped.parts.some(part => part?.type === "text");
-  const bodyParts = [
-    ...(hasTextPart && shaped.text
-      ? [{ type: "text", text: shaped.text }]
-      : []),
-    ...structuredParts,
-  ];
-  const payload = bodyParts.length > 0
-    ? { role, parts: bodyParts }
-    : { role, content: shaped.text };
+  const payload = buildCaptureMessage(message, role, config, { toolNameById });
+  if (!payload) return null;
   const createdAt = eventCreatedAt(event);
   if (createdAt) payload.created_at = createdAt;
   if (config.peerId) payload.peer_id = config.peerId;

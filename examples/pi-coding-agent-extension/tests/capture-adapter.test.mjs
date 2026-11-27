@@ -11,8 +11,7 @@ test("extractBranchCapturePayloads converts user text to message payload", () =>
   assert.equal(result.nextEntryCount, 1);
   assert.equal(result.payloads.length, 1);
   assert.equal(result.payloads[0].role, "user");
-  assert.equal(result.payloads[0].parts[0].type, "text");
-  assert.match(result.payloads[0].parts[0].text, /Remember this decision/);
+  assert.match(result.payloads[0].content, /Remember this decision/);
   assert.equal(result.payloads[0].peer_id, "peer-a");
 });
 
@@ -86,7 +85,7 @@ test("extractBranchCapturePayloads faithful mode keeps ack, short, and punctuati
 
   const result = extractBranchCapturePayloads(branch, 0, { faithfulCapture: true });
   assert.equal(result.payloads.length, 3);
-  assert.deepEqual(result.payloads.map((p) => p.parts[0].text), ["ok", "hi", "!!!"]);
+  assert.deepEqual(result.payloads.map((p) => p.content), ["ok", "hi", "!!!"]);
 });
 
 test("extractBranchCapturePayloads faithful mode still skips commands and plugin status", () => {
@@ -160,7 +159,7 @@ for (const [mode, modeConfig] of [
         });
         assert.deepEqual(result.payloads, expected === null ? [] : [{
           role: "user",
-          ...(fallback ? { content: expected } : { parts: [{ type: "text", text: expected }] }),
+          content: expected,
           peer_id: "peer-filter",
         }]);
         assert.equal(result.nextEntryCount, 1);
@@ -177,7 +176,7 @@ for (const [mode, modeConfig] of [
       })), 0, { ...modeConfig, captureFilters: [`${scope}:s/secret/[removed]/`] });
       assert.deepEqual(result.payloads, ["user", "assistant"].map((role) => ({
         role,
-        parts: [{ type: "text", text: `Remember ${role === scope ? "[removed]" : "secret"} for later.` }],
+        content: `Remember ${role === scope ? "[removed]" : "secret"} for later.`,
       })));
     });
   }
@@ -247,7 +246,7 @@ for (const [mode, modeConfig] of [
       role: "user", content: `prefix ${content}`,
     })), 0, { ...modeConfig, captureFilters: ["s/^prefix //"] });
     assert.deepEqual(payloads, mode === "normal" ? [] : ["ok", "hi", "!!!"].map((text) => ({
-      role: "user", parts: [{ type: "text", text }],
+      role: "user", content: text,
     })));
   });
 

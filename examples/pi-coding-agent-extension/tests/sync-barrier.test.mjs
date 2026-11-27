@@ -365,7 +365,7 @@ test("capture cursor skips continuations and re-extracts sibling branches", asyn
     const calls = [];
     const c = client({
       fetchJSON: async (_path, init) => {
-        calls.push(JSON.parse(init.body).messages.map((payload) => payload.parts[0].text));
+        calls.push(JSON.parse(init.body).messages.map((payload) => payload.content));
         return { ok: true, result: {} };
       },
     });

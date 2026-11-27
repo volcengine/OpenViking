@@ -7,6 +7,10 @@ export function shapeCapturePayload(payload: any, role: string, cfg?: Record<str
   toolNameById?: Record<string, string>;
   faithful?: boolean;
 }): { parts: any[]; text: string; signalText: string; dropped: boolean };
+export function buildCaptureMessage(payload: any, role: string, cfg?: Record<string, any>, options?: {
+  toolNameById?: Record<string, string>;
+  faithful?: boolean;
+}): { role: string; content: string } | { role: string; parts: any[] } | null;
 export function shouldCaptureText(text: string, role: string, cfg?: Record<string, any>, options?: { filters?: boolean }): {
   shouldCapture: boolean;
   reason: string;
