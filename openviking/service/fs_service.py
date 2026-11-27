@@ -1551,7 +1551,7 @@ class FSService:
         self,
         uri: str | Sequence[str],
         ctx: RequestContext,
-        search: Callable[[str, RequestContext], Awaitable[Dict]],
+        run_for_scope: Callable[[str, RequestContext], Awaitable[Dict]],
     ) -> list[Dict]:
         scopes = list(dict.fromkeys([uri] if isinstance(uri, str) else uri))
         if not scopes:
@@ -1562,7 +1562,7 @@ class FSService:
         results = []
         for scope in scopes:
             try:
-                results.append(await search(scope, ctx))
+                results.append(await run_for_scope(scope, ctx))
             except Exception as exc:
                 mapped = map_exception(exc, resource=scope, resource_type="file")
                 if mapped is None or mapped is exc:
@@ -1603,7 +1603,7 @@ class FSService:
             "after_context": after_context,
         }
 
-        async def search(scope: str, scope_ctx: RequestContext) -> Dict:
+        async def grep_scope(scope: str, scope_ctx: RequestContext) -> Dict:
             file_only = (
                 namespace_policy_for_uri(scope).processing_mode is NamespaceProcessingMode.FILE_ONLY
             )
@@ -1624,7 +1624,7 @@ class FSService:
             result["count"] = len(matches)
             return result
 
-        results = await self._search_pattern_scopes(uri, ctx, search)
+        results = await self._search_pattern_scopes(uri, ctx, grep_scope)
         if len(results) == 1:
             return results[0]
 
@@ -1671,7 +1671,7 @@ class FSService:
 
             tag_filter = build_search_tags_filter(normalized_tags)
 
-        async def search(scope: str, scope_ctx: RequestContext) -> Dict:
+        async def glob_scope(scope: str, scope_ctx: RequestContext) -> Dict:
             file_only = (
                 namespace_policy_for_uri(scope).processing_mode is NamespaceProcessingMode.FILE_ONLY
             )
@@ -1707,7 +1707,7 @@ class FSService:
                 result["count"] = len(matches)
             return result
 
-        results = await self._search_pattern_scopes(uri, ctx, search)
+        results = await self._search_pattern_scopes(uri, ctx, glob_scope)
         if len(results) == 1:
             return results[0]
 
