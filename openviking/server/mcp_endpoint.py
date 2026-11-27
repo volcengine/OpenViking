@@ -86,11 +86,7 @@ from openviking.server.local_input_guard import (
     looks_like_local_path,
 )
 from openviking.server.resource_ingest import ingest_temp_upload
-from openviking.server.routers.search import (
-    PatternSearchURI,
-    context_only_fields_error,
-    resolve_search_filter,
-)
+from openviking.server.routers.search import context_only_fields_error, resolve_search_filter
 from openviking.server.skill_ingest import install_skills
 from openviking.server.temp_upload_store import TempUploadStore
 from openviking.server.upload_token_store import download_token_store, upload_token_store
@@ -2582,7 +2578,7 @@ async def cancel_watch(to_uri: str) -> str:
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def grep(
-    uri: PatternSearchURI,
+    uri: str,
     pattern: str | list[str],
     case_insensitive: bool = False,
     node_limit: int = 10,
@@ -2608,11 +2604,7 @@ async def grep(
 
     service = get_service()
     ctx = _get_ctx()
-    resolved_uri = (
-        _resolve_mcp_workspace_uri(uri, ctx)
-        if isinstance(uri, str)
-        else [_resolve_mcp_workspace_uri(scope, ctx) for scope in uri]
-    )
+    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
@@ -2791,19 +2783,11 @@ async def session_history(
 
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
-async def glob(
-    pattern: str,
-    uri: PatternSearchURI = "viking://",
-    node_limit: int = 100,
-) -> str:
+async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()
     ctx = _get_ctx()
-    resolved_uri = (
-        _resolve_mcp_workspace_uri(uri, ctx)
-        if isinstance(uri, str)
-        else [_resolve_mcp_workspace_uri(scope, ctx) for scope in uri]
-    )
+    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
 
     try:
         result = await service.fs.glob(pattern, ctx=ctx, uri=resolved_uri, node_limit=node_limit)
