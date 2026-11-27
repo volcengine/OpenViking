@@ -96,11 +96,6 @@ def uri_parts(uri: str) -> list[str]:
     return [part for part in normalized[len("viking://") :].split("/") if part]
 
 
-def is_hidden_uri(uri: str) -> bool:
-    """Return whether the URI or any ancestor has a dot-prefixed name."""
-    return any(part.startswith(".") for part in uri_parts(uri))
-
-
 def uri_depth(uri: str) -> int:
     """Return the number of normalized Viking URI path segments."""
     return len(uri_parts(uri))

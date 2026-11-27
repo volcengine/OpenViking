@@ -25,6 +25,7 @@ from openviking.storage.ovpack.operations import (
     import_ovpack,
     restore_ovpack,
 )
+from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.storage.test_transfer_merge_binding import binding_fs as binding_fs
@@ -901,9 +902,10 @@ async def test_ovpack_roundtrips_dot_and_escaped_looking_user_paths(
         "viking://resources/imported/demo/.notes.txt",
         "viking://resources/imported/demo/_._notes.txt",
     ]
-    assert [call.kwargs["file_path"] for call in vectorize_file.await_args_list] == [
+    assert {call.kwargs["file_path"] for call in vectorize_file.await_args_list} == {
+        "viking://resources/imported/demo/.ovpack/foo.txt",
         "viking://resources/imported/demo/_._notes.txt",
-    ]
+    }
 
 
 @pytest.mark.asyncio
@@ -1219,7 +1221,8 @@ async def test_account_backup_includes_restricted_originals_without_crossing_acc
         "settings/user_config.json": b"{}",
         "privacy/example/current.json": b"{}",
         "privacy/example/.abstract.md": b"Privacy description",
-        "GLOBAL_POLICY.md": b"Access policy",
+        "GLOBAL_POLICY.md": (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_bytes(),
+        "skills/.skill-history/runbook.json": b'{"events": []}',
         "memories/soul.md": b"Agent instructions",
         "memories/preferences/example/.abstract.md": b"Memory summary",
         "memories/preferences/example/.overview.md": b"Memory overview",

@@ -6,14 +6,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from openviking.core.namespace import (
-    context_type_for_uri,
-    is_hidden_uri,
-    is_session_uri,
-    owner_fields_for_uri,
-)
+from openviking.core.namespace import context_type_for_uri, is_session_uri, owner_fields_for_uri
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.server.identity import RequestContext
+from openviking.server.skill_history import is_skill_history_uri
 from openviking.storage.expr import Eq
 from openviking.storage.ovpack.format import (
     OVPACK_FORMAT_VERSION,
@@ -125,7 +121,7 @@ async def index_records_for_uri(
     *,
     include_vectors: bool = False,
 ) -> list[dict[str, Any]]:
-    if is_hidden_uri(uri):
+    if is_skill_history_uri(uri):
         return []
     records = await call_vector_filter(vector_store, uri, ctx, include_vectors=include_vectors)
     records_by_level = {record_level(record): record for record in records}

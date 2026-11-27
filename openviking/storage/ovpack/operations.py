@@ -12,13 +12,13 @@ from typing import Any, Optional
 from openviking.core.namespace import (
     content_owner_context_for_uri,
     context_type_for_uri,
-    is_hidden_uri,
     is_session_uri,
     relative_uri_path,
 )
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
+from openviking.server.skill_history import is_skill_history_uri
 from openviking.storage.index_consistency import check_index_consistency
 from openviking.storage.ovpack.format import (
     OVPACK_BACKUP_NAME,
@@ -190,7 +190,7 @@ async def _enqueue_direct_vectorization(
     manifest_path_root_uri: Optional[str] = None,
     entries: Optional[list[dict[str, Any]]] = None,
 ) -> None:
-    if is_hidden_uri(uri) or is_session_uri(uri):
+    if is_session_uri(uri) or is_skill_history_uri(uri):
         return
 
     index_records = index_records or []
@@ -201,7 +201,7 @@ async def _enqueue_direct_vectorization(
     file_entries: list[tuple[str, str, str, str]] = []
     for entry in entries:
         entry_uri = entry.get("uri")
-        if not entry_uri or is_hidden_uri(entry_uri) or is_session_uri(entry_uri):
+        if not entry_uri or is_session_uri(entry_uri) or is_skill_history_uri(entry_uri):
             continue
         rel_path = entry.get("rel_path") or relative_uri_path(uri, entry_uri)
         manifest_rel_path = relative_uri_path(manifest_path_root_uri, entry_uri)
@@ -209,6 +209,8 @@ async def _enqueue_direct_vectorization(
             dir_uris.add(entry_uri)
             continue
         name = entry.get("name", "") or leaf_name(rel_path)
+        if name.startswith("."):
+            continue
         parent = VikingURI(entry_uri).parent
         if parent:
             file_entries.append((entry_uri, parent.uri, name, manifest_rel_path))
