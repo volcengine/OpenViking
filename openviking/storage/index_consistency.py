@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import chain
 from typing import Any
 
 from openviking.core.context import ResourceContentType
@@ -81,18 +82,6 @@ class IndexConsistencyReport:
         }
 
 
-def _join_uri(base_uri: str, rel_path: str) -> str:
-    return VikingURI(base_uri).join(rel_path).uri
-
-
-def _entry_uri(root_uri: str, entry: dict[str, Any]) -> str:
-    uri = entry.get("uri")
-    if isinstance(uri, str) and uri:
-        return uri
-    rel_path = str(entry.get("rel_path") or "")
-    return _join_uri(root_uri, rel_path)
-
-
 def is_index_source_uri(uri: str, *, is_directory: bool) -> bool:
     """Identify content paths eligible for index validation or recomputation."""
     try:
@@ -112,17 +101,6 @@ def is_index_source_uri(uri: str, *, is_directory: bool) -> bool:
     return parts[2:] != ["memories", SOUL_FILENAME] and not is_user_global_policy_uri(uri)
 
 
-def _expects_directory_index(uri: str) -> bool:
-    if not is_index_source_uri(uri, is_directory=True):
-        return False
-    parts = uri_parts(uri)
-    return not (parts[0] == "user" and parts[2:3] == ["memories"])
-
-
-def _leaf_name(uri_or_path: str) -> str:
-    return uri_or_path.rstrip("/").split("/")[-1]
-
-
 async def _read_text_if_exists(viking_fs, uri: str, ctx: RequestContext) -> str:
     try:
         if not await viking_fs.exists(uri, ctx=ctx):
@@ -133,45 +111,6 @@ async def _read_text_if_exists(viking_fs, uri: str, ctx: RequestContext) -> str:
         return ""
 
 
-def _directory_candidates(
-    root_uri: str,
-    entries: list[dict[str, Any]],
-) -> list[tuple[str, str]]:
-    candidates: list[tuple[str, str]] = []
-    if _expects_directory_index(root_uri):
-        candidates.append((root_uri, ""))
-
-    for entry in entries:
-        if not entry.get("isDir"):
-            continue
-        uri = _entry_uri(root_uri, entry)
-        if not _expects_directory_index(uri):
-            continue
-        rel_path = str(entry.get("rel_path") or "")
-        candidates.append((uri, rel_path))
-    return candidates
-
-
-def _file_candidates(
-    root_uri: str,
-    entries: list[dict[str, Any]],
-) -> list[tuple[str, str, str]]:
-    candidates: list[tuple[str, str, str]] = []
-    for entry in entries:
-        if entry.get("isDir"):
-            continue
-        size = entry.get("size")
-        if isinstance(size, int) and not isinstance(size, bool) and size == 0:
-            continue
-        uri = _entry_uri(root_uri, entry)
-        if not is_index_source_uri(uri, is_directory=False):
-            continue
-        rel_path = str(entry.get("rel_path") or "")
-        name = str(entry.get("name") or _leaf_name(rel_path))
-        candidates.append((uri, rel_path, name))
-    return candidates
-
-
 async def build_index_expectations(
     viking_fs,
     root_uri: str,
@@ -180,16 +119,30 @@ async def build_index_expectations(
 ) -> tuple[IndexExpectation, ...]:
     """Build the index records expected from current filesystem content."""
     expectations: list[IndexExpectation] = []
+    root_entry = {"uri": root_uri, "isDir": True}
+    for entry in chain((root_entry,), entries):
+        is_directory = bool(entry.get("isDir"))
+        size = entry.get("size")
+        if not is_directory and isinstance(size, int) and not isinstance(size, bool) and size == 0:
+            continue
+        rel_path = str(entry.get("rel_path") or "")
+        uri = entry.get("uri")
+        if not isinstance(uri, str) or not uri:
+            uri = VikingURI(root_uri).join(rel_path).uri
+        if not is_index_source_uri(uri, is_directory=is_directory):
+            continue
 
-    for uri, rel_path in _directory_candidates(root_uri, entries):
-        abstract = await _read_text_if_exists(viking_fs, f"{uri}/.abstract.md", ctx)
-        overview = await _read_text_if_exists(viking_fs, f"{uri}/.overview.md", ctx)
-        if abstract:
-            expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=0))
-        if overview:
-            expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=1))
+        if is_directory:
+            parts = uri_parts(uri)
+            # Memory directories can have saved descriptions without indexed summaries.
+            if parts[0] == "user" and parts[2:3] == ["memories"]:
+                continue
+            for level, filename in ((0, ".abstract.md"), (1, ".overview.md")):
+                if await _read_text_if_exists(viking_fs, f"{uri}/{filename}", ctx):
+                    expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=level))
+            continue
 
-    for uri, rel_path, name in _file_candidates(root_uri, entries):
+        name = str(entry.get("name") or rel_path.rstrip("/").rsplit("/", 1)[-1])
         if get_resource_content_type(name) == ResourceContentType.TEXT:
             expectations.append(IndexExpectation(uri=uri, rel_path=rel_path, level=2))
 
