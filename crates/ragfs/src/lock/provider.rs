@@ -821,11 +821,14 @@ impl FilesystemPathLockProvider {
         path: &str,
         owner: &str,
         stale_before: u128,
+        acquisition_started_at: Instant,
     ) -> PathLockResult<()> {
         let resolver = super::resolver::LockPathResolver::new(self.fs.clone());
         for ancestor in super::resolver::LockPathResolver::ancestor_paths(path) {
             for lock_path in resolver.resolve_tree_conflict_paths(&ancestor).await? {
                 if let Some(token) = self.read_token(&lock_path).await? {
+                    let stale_before =
+                        stale_before.saturating_add(acquisition_started_at.elapsed().as_nanos());
                     if token.owner_id != owner
                         && token.live_kind(stale_before) == Some(PathLockKind::Tree)
                     {
@@ -847,9 +850,12 @@ impl FilesystemPathLockProvider {
         lock_paths: &[String],
         owner: &str,
         stale_before: u128,
+        acquisition_started_at: Instant,
     ) -> PathLockResult<()> {
         for lock_path in lock_paths {
             if let Some(token) = self.read_token(lock_path).await? {
+                let stale_before =
+                    stale_before.saturating_add(acquisition_started_at.elapsed().as_nanos());
                 if token.owner_id != owner && token.live_kind(stale_before).is_some() {
                     return Err(PathLockError::Conflict {
                         lock_path: lock_path.clone(),
@@ -939,10 +945,20 @@ impl FilesystemPathLockProvider {
         acquisition_started_at: Instant,
         source: Option<&str>,
     ) -> PathLockResult<AtomicAcquisition> {
-        self.check_ancestor_tree_locks(&plan.request.path, owner, stale_before)
-            .await?;
-        self.check_lock_paths(&plan.conflict_paths, owner, stale_before)
-            .await?;
+        self.check_ancestor_tree_locks(
+            &plan.request.path,
+            owner,
+            stale_before,
+            acquisition_started_at,
+        )
+        .await?;
+        self.check_lock_paths(
+            &plan.conflict_paths,
+            owner,
+            stale_before,
+            acquisition_started_at,
+        )
+        .await?;
         if plan.request.kind == PathLockKind::Tree {
             self.check_descendant_locks(
                 &plan.request.path,
@@ -957,14 +973,15 @@ impl FilesystemPathLockProvider {
         for _ in 0..16 {
             let mut replacement = LockToken::held(owner, holder, plan.request.kind, now);
             let previous = self.read_token(&plan.lock_path).await?;
-            // A source can expire while this plan performs filesystem reads.
-            let (now, stale_before) = if source.is_some() {
-                let elapsed = acquisition_started_at.elapsed().as_nanos();
+            // A token can expire while this plan performs filesystem reads.
+            let elapsed = acquisition_started_at.elapsed().as_nanos();
+            let stale_before = stale_before.saturating_add(elapsed);
+            let now = if source.is_some() {
                 let now = now.saturating_add(elapsed);
                 replacement = LockToken::held(owner, holder, plan.request.kind, now);
-                (now, stale_before.saturating_add(elapsed))
+                now
             } else {
-                (now, stale_before)
+                now
             };
             if let Some(source) = source {
                 validate_handoff_source(
@@ -1032,10 +1049,20 @@ impl FilesystemPathLockProvider {
         acquisition_started_at: Instant,
     ) -> PathLockResult<()> {
         for plan in plans {
-            self.check_ancestor_tree_locks(&plan.request.path, owner, stale_before)
-                .await?;
-            self.check_lock_paths(&plan.conflict_paths, owner, stale_before)
-                .await?;
+            self.check_ancestor_tree_locks(
+                &plan.request.path,
+                owner,
+                stale_before,
+                acquisition_started_at,
+            )
+            .await?;
+            self.check_lock_paths(
+                &plan.conflict_paths,
+                owner,
+                stale_before,
+                acquisition_started_at,
+            )
+            .await?;
             if plan.request.kind == PathLockKind::Tree {
                 self.check_descendant_locks(
                     &plan.request.path,
