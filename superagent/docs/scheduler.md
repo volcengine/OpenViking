@@ -322,9 +322,10 @@ No process runs between turns, so an idle task holds nothing; Durable,
 OpenCode and Ark have no worker mode, and `task_create` tells the router to
 handle the request itself when workers are set to run there. A task keeps its
 runtime while it works (see Runtime, model and effort).
-Three turns run at once, plus one slot only a follow-up to an existing task may
-take. Each task works in a directory under `<workspace>/tasks/` (see Task
-directories).
+Three turns run at once by default, plus one slot only a follow-up to an
+existing task may take; both counts can be set in the daemon env and changed
+for one instance at runtime (see Slots). Each task works in a directory under
+`<workspace>/tasks/` (see Task directories).
 
 A worker's own shell is not capped like the router's: it may build, test and
 wait. Pi's `bash` alone has no default timeout, so a Pi worker's command
@@ -426,6 +427,33 @@ reported as before. A failure another runtime would share (a cancelled turn,
 a rejected key, a bad request) moves nothing. A turn whose worker filed its
 final report before the failure is complete: the report stands, and the
 runtime is only marked out.
+
+### Slots
+
+`OV_SUPERAGENT_WORKER_SLOTS` worker turns run at once (3 by default), plus up
+to `OV_SUPERAGENT_WORKER_RESERVED_SLOTS` more (1 by default) that only a
+follow-up to an existing task (one that has run, or one that follows another)
+may take, so new work cannot keep a person waiting on the task they are
+already in, so at most the sum runs at once (4 by default); a reserved count of `0`
+makes every slot equal. Both are daemon env, read at start: `env` in
+`config.json` sets them for every instance of the deployment.
+
+The owner changes them for one instance with `/workers slots 6 2` in a direct
+chat (`/workers slots 6` leaves the reserved count as it is, `/workers slots
+default` goes back to the env's). That setting is kept in SQLite like the
+runtime, model and effort, outlasts a restart and wins over the env. It
+applies to the next turn the scheduler starts: raising it starts tasks waiting
+in the queue at once; lowering it stops nothing already running, and no turn
+starts, a follow-up's included, until the running ones are under the new
+counts. `/workers` and `/tasks` show the counts in force.
+
+The default is the old 3 and 1. More slots buy more concurrent turns only
+while the endpoint, the machine and the router can carry them: each turn is
+its own runtime CLI process (hundreds of MB resident with its MCP adapter),
+the router stays one serial session that creates each task and relays each
+report, and a single task still runs one turn at a time. An endpoint that
+enforces tokens or requests per minute is the first wall for most instances;
+one with no such limit is bounded by memory and CPU first.
 
 ### Handover
 
@@ -630,7 +658,7 @@ again, and any other refusal is logged, with nothing sent. Each press logs what
 became of it (`command_card_refresh`). The owner stops a task with
 `/tasks stop t12`; `/status` counts the tasks
 at work. `/workers` shows and sets what workers run on (see Runtime, model and
-effort). The Core answers these without the model.
+effort, and Slots). The Core answers these without the model.
 
 Activities: `task.created` (with `parent`), `task.reopened` (round, the
 status it had, what it found of its directory and session),

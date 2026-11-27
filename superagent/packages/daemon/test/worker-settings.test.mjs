@@ -153,4 +153,39 @@ describe('/workers', () => {
     assert.match((await run(settings, 'effort turbo')).text, /^不支持的档位：turbo\n可选：none、minimal、low、medium、high、xhigh$/);
     assert.match((await run(settings, 'bogus')).text, /^用法：/);
   });
+
+  it('sets how many worker turns run at once, plus how many more only follow-ups may take', async () => {
+    const { settings, store } = settingsWith();
+    let pumped = 0;
+    const instance = { slots: 3, reservedSlots: 1 };
+    const taskApi = { overview: () => ({ live: [] }), limits: () => settings.limits(instance), pump: () => { pumped += 1; } };
+    const send = (arg) => executeWorkersCommand({ name: 'workers', arg }, { event: OWNER_DM, connectors, settings, tasks: taskApi, router, now: 1_000_000 });
+    assert.match((await send('slots')).text, /^并发槽位：3，另有 1 个只给跟进任务（最多同时 4 轮）\n用法：/);
+    assert.match((await send('')).text, /\n并发槽位：3，另有 1 个只给跟进任务（最多同时 4 轮）\n/, 'the overview shows them too');
+
+    const set = await send('slots 6 2');
+    assert.equal(set.ok, true);
+    assert.match(set.text, /^已设置。并发槽位：6，另有 2 个只给跟进任务（最多同时 8 轮）/);
+    assert.equal(pumped, 1, 'a raised limit starts queued work now');
+    assert.deepEqual(settings.limits(instance), { slots: 6, reservedSlots: 2 });
+
+    assert.equal((await send('slots 2')).ok, true, 'a reserved count above the new slots is fine: they come on top');
+    assert.deepEqual(settings.limits(instance), { slots: 2, reservedSlots: 2 }, 'without a reserved count, the one set stays');
+    assert.match((await send('slots 4 0')).text, /并发槽位：4（不另留跟进专用槽位）/);
+
+    for (const bad of ['slots 0', 'slots 65', 'slots 6x', 'slots 6 65', 'slots 6 default', 'slots 6 2 9']) {
+      const reply = await send(bad);
+      assert.equal(reply.ok, false, bad);
+      assert.match(reply.text, /用法：\/workers slots/, bad);
+    }
+    assert.deepEqual(settings.limits(instance), { slots: 4, reservedSlots: 0 }, 'a refused value changes nothing');
+
+    assert.match((await send('slots default')).text, /^已恢复实例配置。并发槽位：3，另有 1 个/);
+    assert.deepEqual(settings.limits(instance), { slots: 3, reservedSlots: 1 });
+
+    assert.equal((await send('slots 5')).ok, true);
+    assert.equal(store.getSetting('worker_reserved_slots'), '', 'a reserved count never typed is not written');
+    instance.reservedSlots = 3;
+    assert.deepEqual(settings.limits(instance), { slots: 5, reservedSlots: 3 }, 'so it still follows the instance');
+  });
 });

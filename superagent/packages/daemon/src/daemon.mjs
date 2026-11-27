@@ -370,6 +370,8 @@ export class PersonalAgentDaemon {
           runtimes: this.workerSettings,
           db: this.store.db,
           config: this.config,
+          slots: this.config.workerSlots,
+          reservedSlots: this.config.workerReservedSlots,
           executor,
           inbox: this.inbox,
           lineFor: (row) => {

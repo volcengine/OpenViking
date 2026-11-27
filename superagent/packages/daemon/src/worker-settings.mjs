@@ -61,6 +61,10 @@ export function isWorkerRuntime(runtime) {
   return WORKER_RUNTIMES.includes(runtime);
 }
 
+// The most worker slots, and the most reserved ones, an instance may set
+// (config.mjs bounds its env the same).
+export const MAX_WORKER_SLOTS = 64;
+
 export class WorkerSettings {
   // router(): the router's { runtime, model, effort } now.
   constructor({ store, config = {}, router = () => ({}), now = Date.now, logger = null }) {
@@ -74,6 +78,46 @@ export class WorkerSettings {
 
   write(key, value) {
     this.store.setSetting(`worker_${key}`, value ?? '');
+  }
+
+  // Slots (tasks.mjs): how many worker turns run at once, plus how many more
+  // only a follow-up to an existing task may take. A count the owner has not
+  // set is the instance's (OV_SUPERAGENT_WORKER_SLOTS, ..._RESERVED_SLOTS).
+  limits(fallback = {}) {
+    return { slots: this.number('slots', fallback.slots), reservedSlots: this.number('reserved_slots', fallback.reservedSlots) };
+  }
+
+  number(key, fallback) {
+    const value = Number.parseInt(this.read(key), 10);
+    return Number.isInteger(value) ? value : fallback;
+  }
+
+  // Set by /workers slots. Without `reservedSlots` that count stays as it is
+  // (the owner's, or the instance's); an invalid value changes nothing.
+  setSlots(slots, reservedSlots) {
+    if (!Number.isInteger(slots) || slots < 1 || slots > MAX_WORKER_SLOTS) {
+      return { ok: false, text: `槽位数要是 1 到 ${MAX_WORKER_SLOTS} 的整数` };
+    }
+    if (reservedSlots !== undefined && (!Number.isInteger(reservedSlots) || reservedSlots < 0 || reservedSlots > MAX_WORKER_SLOTS)) {
+      return { ok: false, text: `跟进预留要是 0 到 ${MAX_WORKER_SLOTS} 的整数` };
+    }
+    this.together(() => {
+      this.write('slots', String(slots));
+      if (reservedSlots !== undefined) this.write('reserved_slots', String(reservedSlots));
+    });
+    return { ok: true };
+  }
+
+  clearSlots() {
+    this.together(() => {
+      this.write('slots', '');
+      this.write('reserved_slots', '');
+    });
+  }
+
+  // Both counts or neither: a half-written pair would mix two settings.
+  together(fn) {
+    return this.store.transaction ? this.store.transaction(fn) : fn();
   }
 
   // The runtime set with /workers runtime, or null: workers follow the router.

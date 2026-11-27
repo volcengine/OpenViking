@@ -99,7 +99,7 @@ export function helpText(snapshot) {
     '/primary — 将当前 IM 设为主 IM（仅限 owner 私聊，无需重启）',
     '/primary status — 查看当前主 IM（仅限 owner 私聊）',
     '/tasks [编号 | stop 编号] — 查看或停止后台任务（workers 调度，仅限 owner 私聊）',
-    '/workers [runtime | model | effort | fallback …] — 查看或设置后台 worker 的 Runtime、模型、推理档位和备用 Runtime，与 router 分开（workers 调度，仅限 owner 私聊）',
+    '/workers [runtime | model | effort | fallback | slots …] — 查看或设置后台 worker 的 Runtime、模型、推理档位、备用 Runtime 和并发槽位，与 router 分开（workers 调度，仅限 owner 私聊）',
     '/runtime [名称] — 查看或切换 Runtime（可简写 /run）',
     '/model [名称] — 查看或切换当前 Runtime 的模型，保留会话',
   ];

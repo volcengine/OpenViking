@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { getConfig, privateRegularFile, projectDir } from '../src/config.mjs';
+import { RESERVED_SLOTS, WORKER_SLOTS } from '../src/tasks.mjs';
 import { managedPiBin } from '../src/pi-runtime.mjs';
 
 const saved = new Map();
@@ -229,6 +230,26 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('OV_SUPERAGENT_SCHEDULER', 'parallel');
     assert.throws(() => getConfig(), /OV_SUPERAGENT_SCHEDULER must be one of: legacy, inbox, workers/);
     setEnv('OV_SUPERAGENT_SCHEDULER', undefined);
+  });
+  it('takes the worker slots from the instance, the built-in counts by default', () => {
+    setEnv('OV_SUPERAGENT_WORKER_SLOTS', undefined);
+    setEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', undefined);
+    assert.equal(getConfig().workerSlots, WORKER_SLOTS);
+    assert.equal(getConfig().workerReservedSlots, RESERVED_SLOTS);
+    setEnv('OV_SUPERAGENT_WORKER_SLOTS', '8');
+    setEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', '2');
+    assert.equal(getConfig().workerSlots, 8);
+    assert.equal(getConfig().workerReservedSlots, 2);
+    setEnv('OV_SUPERAGENT_WORKER_SLOTS', '0');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_WORKER_SLOTS must be an integer between 1 and 64/);
+    setEnv('OV_SUPERAGENT_WORKER_SLOTS', 'many');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_WORKER_SLOTS must be an integer between 1 and 64/);
+    setEnv('OV_SUPERAGENT_WORKER_SLOTS', undefined);
+    setEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', '5');
+    assert.equal(getConfig().workerReservedSlots, 5, 'the reserved slots come on top of the others, so they may outnumber them');
+    setEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', '65');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_WORKER_RESERVED_SLOTS must be an integer between 0 and 64/);
+    setEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', undefined);
   });
   it('searches OV per line only on an instance that opts in; preferences need no switch', () => {
     setEnv('OV_SUPERAGENT_OV_AUTO_RECALL', undefined);

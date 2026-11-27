@@ -213,6 +213,23 @@ test('deployment manifest accepts the timer occurrence check delay env', () => {
   });
 });
 
+test('deployment manifest passes the worker slot counts to every instance', () => {
+  const manifest = validManifest();
+  manifest.env.OV_SUPERAGENT_WORKER_SLOTS = '8';
+  manifest.env.OV_SUPERAGENT_WORKER_RESERVED_SLOTS = '2';
+  withManifest(manifest, (manifestPath) => {
+    const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
+    assert.deepEqual(deployment.ignoredFields, []);
+    for (const id of ['alpha', 'beta']) {
+      const env = { OV_SUPERAGENT_CONFIG: manifestPath };
+      applyDeploymentDaemonEnv(env, deployment);
+      applyDeploymentAgentEnv(env, deployment, id);
+      assert.equal(env.OV_SUPERAGENT_WORKER_SLOTS, '8');
+      assert.equal(env.OV_SUPERAGENT_WORKER_RESERVED_SLOTS, '2');
+    }
+  });
+});
+
 test('falls back to a secrets file for daemon-wide secrets missing from the environment', () => {
   withManifest(validManifest(), (manifestPath) => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-secrets-'));
