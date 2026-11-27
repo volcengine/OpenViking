@@ -285,6 +285,20 @@ describe('normalizeEvent', () => {
       '[image image_key=img_v3_cardimage01]\n架构图\n[image image_key=img_v3_englishimg1]');
   });
 
+  it('keeps a card cover, combination and background image, not an icon', () => {
+    const event = cardEvent({
+      header: { title: { tag: 'plain_text', content: '周报' },
+        icon: { tag: 'custom_icon', img_key: 'img_v3_headericon1' } },
+      body: { cover: { img_key: 'img_v3_coverimage1' }, elements: [
+        { tag: 'img_combination', img_list: [{ img_key: 'img_v3_combinatn01' }, { img_key: 'img_v3_combinatn02' }] },
+        { tag: 'column_set', background_img_key: 'img_v3_backgrnd001' },
+      ] },
+    });
+    assert.equal(event.content, ['周报', '[image image_key=img_v3_coverimage1]',
+      '[image image_key=img_v3_combinatn01]', '[image image_key=img_v3_combinatn02]',
+      '[image image_key=img_v3_backgrnd001]'].join('\n'));
+  });
+
   it('reads one language of a card configured in every language', () => {
     const event = cardEvent({
       header: { title: { tag: 'plain_text', i18n: { zh_cn: '中文模板', en_us: 'English template' } } },

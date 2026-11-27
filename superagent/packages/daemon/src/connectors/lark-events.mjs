@@ -216,7 +216,11 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
   // content. Preserve only the resource pointer that the matching MCP tool
   // can retrieve; keep the generic sensitive-key filter below for everything
   // else.
-  if (value.tag === 'img' || value.tag === 'image') {
+  // Any card image counts, not only an img element: a cover or background
+  // ({img_key}), the items of an img_combination, a list or panel picture.
+  // A custom_icon is decoration and stays out.
+  if (value.tag !== 'custom_icon' && (value.tag === 'img' || value.tag === 'image'
+    || 'img_key' in value || 'image_key' in value || 'i18n_img_key' in value)) {
     // Posts name the image image_key; card img elements name it img_key, or
     // only i18n_img_key per language, read by the same one-language rule.
     const imageKey = [value.image_key, value.img_key, cardImageKey(value.i18n_img_key)]
@@ -282,7 +286,15 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
     if (visited.has(key) || /^i18n/i.test(key)
       || ['tag', 'style', 'language', 'schema', 'direction', 'padding', 'fallback',
         'template', 'type', 'size', 'width'].includes(key)
-      || /(?:_key|_id|url|token|secret)$/i.test(key)) continue;
+      || /(?:_key|_id|url|token|secret)$/i.test(key)) {
+      // A picture named by a field of its own (cover_img_key, bg_image_key).
+      if (value.tag !== 'custom_icon' && /(?:img|image)_key$/i.test(key) && typeof child === 'string' && IMAGE_KEY.test(child)
+        && !mediaKeys.has(`image:${child}`)) {
+        output.push(`[image image_key=${child}]`);
+        mediaKeys.add(`image:${child}`);
+      }
+      continue;
+    }
     collectText(child, output, mediaKeys, depth + 1);
   }
 }
