@@ -47,15 +47,10 @@ class TestLanguageDetection:
         language = _detect_language_from_text(text, fallback_language="ja")
         assert language == "ja"
 
-    def test_detect_language_kanji_heavy_japanese(self):
+    @pytest.mark.parametrize("fallback", ["ja", "zh-CN"])
+    def test_kanji_do_not_count_toward_kana_ratio(self, fallback):
         text = "明日は会議です"
-        language = _detect_language_from_text(text, fallback_language="ja")
-        assert language == "ja"
-
-    def test_japanese_text_uses_system_fallback_when_system_is_not_japanese(self):
-        text = "明日は会議です"
-        language = _detect_language_from_text(text, fallback_language="zh-CN")
-        assert language == "zh-CN"
+        assert _detect_language_from_text(text, fallback_language=fallback) == "zh-CN"
 
     def test_strong_japanese_text_can_override_system_fallback(self):
         text = (
@@ -65,12 +60,12 @@ class TestLanguageDetection:
         language = _detect_language_from_text(text, fallback_language="zh-CN")
         assert language == "ja"
 
-    def test_japanese_title_does_not_override_chinese_fallback(self):
+    def test_japanese_title_in_chinese_text_selects_chinese(self):
         text = "请记住我最近在读《ノルウェイの森》，后面继续用中文讨论这个内容"
         language = _detect_language_from_text(text, fallback_language="zh-CN")
         assert language == "zh-CN"
 
-    def test_single_kana_does_not_override_chinese(self):
+    def test_single_kana_in_han_text_selects_chinese(self):
         text = "这是中文の测试"
         language = _detect_language_from_text(text, fallback_language="en")
         assert language == "zh-CN"
@@ -85,30 +80,24 @@ class TestLanguageDetection:
         language = _detect_language_from_text(text, fallback_language="zh-CN")
         assert language == "ko"
 
-    def test_detect_language_russian(self):
-        text = "Это русский документ"
-        language = _detect_language_from_text(text, fallback_language="ru")
-        assert language == "ru"
-
-    def test_strong_russian_text_can_override_system_fallback(self):
-        text = "Это русский документ для проверки памяти пользователя и настроек проекта"
-        language = _detect_language_from_text(text, fallback_language="zh-CN")
-        assert language == "ru"
-
-    def test_detect_language_arabic(self):
-        text = "هذا مستند باللغة العربية"
-        language = _detect_language_from_text(text, fallback_language="ar")
-        assert language == "ar"
-
-    def test_strong_arabic_text_can_override_system_fallback(self):
-        text = "هذا مستند عربي طويل لتسجيل تفضيلات المستخدم ومعلومات المشروع"
-        language = _detect_language_from_text(text, fallback_language="zh-CN")
-        assert language == "ar"
-
     def test_detect_language_empty_text(self):
         text = ""
         language = _detect_language_from_text(text, fallback_language="en")
         assert language == "en"
+
+    @pytest.mark.parametrize(
+        "text,fallback,expected",
+        [
+            ("・", "en", "en"),
+            ("١٢٣٤٥، １２３！？", "zh-CN", "zh-CN"),
+            ("×÷", "ko", "ko"),
+            ("テスト日本・١٢٣", "en", "ja"),
+            ("中" + "a" * 19 + "،١", "en", "zh-CN"),
+            ("id42 field_name e٤١", "ko", "ko"),
+        ],
+    )
+    def test_nonletters_do_not_contribute_to_language_ratios(self, text, fallback, expected):
+        assert _detect_language_from_text(text, fallback_language=fallback) == expected
 
     def test_detect_language_mixed_chinese_english(self):
         text = "这是一个 mixed 文档"
@@ -130,38 +119,53 @@ class TestLanguageDetection:
         language = _detect_language_from_text(text, fallback_language="en")
         assert language == "en"
 
-    def test_detect_language_italian(self):
-        text = "Questo documento descrive le preferenze dell utente e il progetto da completare."
-        language = _detect_language_from_text(text, fallback_language="it")
-        assert language == "it"
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ("中文" + "a" * 38, "zh-CN"),
+            ("中文" + "a" * 39, "en"),
+            ("中文" + "я" * 39, "en"),
+            ("中" + "a" * 19, "zh-CN"),
+            ("中" + "a" * 20, "en"),
+        ],
+    )
+    def test_chinese_requires_five_percent(self, text, expected):
+        assert _detect_language_from_text(text, fallback_language="en") == expected
 
-    def test_strong_italian_text_can_override_system_fallback(self):
-        text = (
-            "Questo documento descrive le preferenze dell utente e il progetto da completare. "
-            "Il contenuto include le decisioni, le attività, la priorità e una nota finale."
-        )
-        language = _detect_language_from_text(text, fallback_language="zh-CN")
-        assert language == "it"
+    @pytest.mark.parametrize(
+        "text,fallback,expected",
+        [("go の", "ja", "en"), ("go", "ja", "en"), ("test 한", "ko", "en")],
+    )
+    def test_short_text_with_locale_hint(self, text, fallback, expected):
+        assert _detect_language_from_text(text, fallback_language=fallback) == expected
 
     @pytest.mark.parametrize(
         "text,expected",
         [
-            ("project document user data model profile", "en"),
-            ("Ce document décrit les préférences de l utilisateur et le projet à terminer.", "fr"),
-            (
-                "Este documento describe las preferencias del usuario y el proyecto para completar.",
-                "es",
-            ),
-            ("Dieses Dokument beschreibt die Präferenzen der Benutzer und das Projekt.", "de"),
-            (
-                "Este documento descreve as preferências do usuário e o projeto para completar.",
-                "pt",
-            ),
+            ("テスト日本", "ja"),
+            ("テスト日本語", "zh-CN"),
+            ("한국어 go", "ko"),
+            ("한국어 log", "en"),
         ],
     )
-    def test_detect_latin_language_conservatively(self, text, expected):
-        language = _detect_language_from_text(text, fallback_language=expected)
-        assert language == expected
+    def test_japanese_and_korean_dominance_at_sixty_percent(self, text, expected):
+        assert _detect_language_from_text(text, fallback_language="en") == expected
+
+    @pytest.mark.parametrize(
+        "text,locale_hint",
+        [
+            ("Questo documento descrive le preferenze del progetto.", "it"),
+            ("Ce document décrit les préférences pour le projet.", "fr"),
+            ("Este documento describe las preferencias del usuario.", "es"),
+            ("Dieses Dokument beschreibt die Präferenzen der Benutzer.", "de"),
+            ("Este documento descreve as preferências do usuário.", "pt"),
+            ("Это русский документ", "ru"),
+            ("هذا مستند باللغة العربية", "ar"),
+        ],
+    )
+    def test_unsupported_languages_use_english(self, text, locale_hint):
+        assert _detect_language_from_text(text, fallback_language=locale_hint) == "en"
+        assert _language_from_locale_value(locale_hint) == ""
 
 
 class TestOverviewGenerationFlow:
@@ -177,9 +181,10 @@ class TestOverviewGenerationFlow:
                 "Este documento descreve as preferências do usuário e o projeto para completar. "
                 "Ele reúne informações importantes sobre funcionalidades e configuração.",
                 "",
-                "pt",
+                "en",
             ),
             ("", "zh-CN", "zh-CN"),
+            ("", "pt", "pt"),
         ],
     )
     async def test_import_paths_do_not_set_overview_language(
@@ -230,8 +235,6 @@ class LanguageAwareMockVLM:
             "en": "English summary: This is a test function",
             "ja": "日本語要約：これはテスト関数です",
             "ko": "한국어 요약: 이것은 테스트 함수입니다",
-            "ru": "Резюме на русском: это тестовая функция",
-            "ar": "ملخص عربي: هذه وظيفة اختبار",
         }
 
     async def get_completion_async(self, prompt: str) -> str:
@@ -264,14 +267,14 @@ class LanguageAwareMockVLM:
             "broken.py",
             "Это русский документ для проверки памяти пользователя и настроек проекта",
             "en_US.UTF-8",
-            "ru",
+            "en",
             id="russian-code-summary-fallback",
         ),
         pytest.param(
             "broken.py",
             "هذا مستند عربي طويل لتسجيل تفضيلات المستخدم ومعلومات المشروع",
             "en_US.UTF-8",
-            "ar",
+            "en",
             id="arabic-code-summary-fallback",
         ),
     ],
@@ -429,39 +432,9 @@ class TestOutputLanguageOverride:
     def test_windows_timezone_hint_values(self, timezone_value, expected):
         assert _language_from_timezone_value(timezone_value) == expected
 
-    @pytest.mark.parametrize(
-        "timezone_value",
-        [
-            "Europe/Astrakhan",
-            "Europe/Kaliningrad",
-            "Europe/Kirov",
-            "Europe/Moscow",
-            "Europe/Samara",
-            "Europe/Saratov",
-            "Europe/Ulyanovsk",
-            "Europe/Volgograd",
-            "Asia/Anadyr",
-            "Asia/Barnaul",
-            "Asia/Chita",
-            "Asia/Irkutsk",
-            "Asia/Kamchatka",
-            "Asia/Khandyga",
-            "Asia/Krasnoyarsk",
-            "Asia/Magadan",
-            "Asia/Novokuznetsk",
-            "Asia/Novosibirsk",
-            "Asia/Omsk",
-            "Asia/Sakhalin",
-            "Asia/Srednekolymsk",
-            "Asia/Tomsk",
-            "Asia/Ust-Nera",
-            "Asia/Vladivostok",
-            "Asia/Yakutsk",
-            "Asia/Yekaterinburg",
-        ],
-    )
-    def test_every_russian_timezone_hints_russian(self, timezone_value):
-        assert _language_from_timezone_value(timezone_value) == "ru"
+    @pytest.mark.parametrize("timezone_value", ["Europe/Moscow", "Asia/Riyadh", "Europe/Lisbon"])
+    def test_unsupported_timezone_has_no_language_hint(self, timezone_value):
+        assert _language_from_timezone_value(timezone_value) == ""
 
     def test_timezone_hint_overrides_english_locale_for_weak_fallback(self):
         with patch.dict(
@@ -504,18 +477,6 @@ class TestOutputLanguageOverride:
         ):
             result = resolve_output_language("12345 ---", config=config)
         assert result == "en"
-
-    def test_arabic_timezone_hint_used_when_locale_hint_absent(self):
-        config = self._make_config(override="")
-        with (
-            patch.dict(os.environ, {"TZ": "Asia/Riyadh"}, clear=True),
-            patch(
-                "openviking.session.memory.utils.language.locale.getlocale",
-                return_value=("C", "UTF-8"),
-            ),
-        ):
-            result = resolve_output_language("12345 ---", config=config)
-        assert result == "ar"
 
     def test_content_language_wins_over_locale_hint(self):
         config = self._make_config(override="")
