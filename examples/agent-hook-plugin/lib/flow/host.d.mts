@@ -71,6 +71,8 @@ export interface EventRead {
   defer?: boolean;
   /** The latest compaction a host without a compaction event knows of. */
   compaction?: unknown;
+  /** An earlier version's cursor that only the harness's own API can fetch; the wiring puts it in the payload and `legacyCursor` returns it from here. */
+  legacy?: unknown;
   /** Something this event carried that the transcript will not hold; `decode` gets it until its turns are settled. */
   note?: Record<string, unknown>;
 }
