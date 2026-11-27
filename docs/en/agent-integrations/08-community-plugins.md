@@ -60,7 +60,7 @@ transcript decoding, output formatting, and commit policy:
 
 - **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
 - **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
-- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns, with tool calls and their results as tool parts of the turn's assistant message; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget. `Stop` commits once the session's pending tokens reach 100,000; the other three commit whatever is still uncommitted (`PreCompact` only while `autoCommitOnCompact` is on). `kimi -p` fires neither `Stop` nor `SessionEnd`, so a prompt-mode run is not captured.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns, with tool calls and their results as tool parts of the turn's assistant message, within a 25-second OpenViking request budget; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget. `Stop` commits once the session's pending tokens reach 100,000; the other three commit whatever is still uncommitted (`PreCompact` only while `autoCommitOnCompact` is on). `kimi -p` fires neither `Stop` nor `SessionEnd`, so a prompt-mode run is not captured.
 - The plugin manifest exposes the OpenViking MCP server and the 5 skills under the plugin root's `skills/` (`openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor`) without editing Kimi's legacy config files.
 
 ### Install

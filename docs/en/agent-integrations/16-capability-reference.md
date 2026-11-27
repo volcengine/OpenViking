@@ -378,7 +378,7 @@ Thresholds in this table are client-side. They read the server's pending-token c
 
 | Integration | During the session | On an explicit action or boundary | Before or after compaction |
 |---|---|---|---|
-| Claude Code | `Stop` at 100,000 pending tokens | `SessionEnd` and `SubagentStop` always commit; `SessionStart` replays queued writes | `PreCompact` commits synchronously, queued behind the session's queued writes if it has any |
+| Claude Code | `Stop` at 100,000 pending tokens | `SessionEnd` and `SubagentStop` always commit; `SessionEnd` first captures the turns no `Stop` captured and waits for a `Stop` capture still running for the session; `SessionStart` replays queued writes | `PreCompact` commits synchronously, queued behind the session's queued writes if it has any |
 | Codex | `Stop` at 100,000 pending tokens | `SessionEnd` (Codex 0.145+) catches up missed turns, then commits in a detached worker. `SessionStart` on startup or clear commits sessions marked as ended or idle for more than 30 minutes | `PreCompact` catches up and commits everything |
 | TraeCode CLI 2.0 | Same as Codex | Same as Codex; without `SessionEnd`, only the start-up sweep | Same as Codex |
 | Cursor | `stop` after 8 captured messages since the last commit (`commitTurnThreshold`), counted locally | `sessionEnd` is registered but does not run in practice | `preCompact` commits |
@@ -443,9 +443,8 @@ What this means in practice:
 
 | Integration | What happens when a write fails |
 |---|---|
-| Claude Code, CodeBuddy Code, Qoder CLI, Antigravity, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run (2 for Kimi Code) and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
-| Cursor | New captures are not queued. The text transcript and local tool records retain unsent content; progress advances only after server acknowledgement. Later capture in the same conversation retries it, and incomplete capture prevents a commit. `SessionStart` still replays legacy queued writes |
-| Codex, TraeCode CLI 2.0 | New captures and commits are not queued. The transcript cursor moves only past messages the server accepted, so the next capture or start-up sweep resends the rest; a session whose commit failed stays marked for the next sweep. `SessionStart` still replays queued entries |
+| Claude Code, CodeBuddy Code, Qoder CLI, Antigravity, TRAE, TRAE CN, ZCode, Kimi Code, Cursor, OpenCode, DSH, pi | Retryable failures (network errors, 408, 429, and 5xx) go to an on-disk queue under `~/.openviking/pending`. A session with queued writes replays them before sending anything new, and new messages wait in the queue behind whatever is still there, so the server stores them in order. The queue is also replayed at session start once the server answers its health check: up to 50 entries per run (2 for Kimi Code) and 3 attempts per entry, kept for 7 days. A failed message stops the replay so order is kept. Each entry belongs to the server and identity that queued it; an integration that resolves a different one leaves it alone. A batch the server refuses for its content (413, 422, or another 4xx) is resent one message at a time, so only the refused message is lost. A 401 or 403 sends and queues nothing: the messages stay unsent behind the capture cursor until the key works (DSH, which has no cursor, queues them), and a queued entry that meets a 401 or 403 stays queued without using an attempt |
+| Codex, TraeCode CLI 2.0 | New captures and commits are not queued. The transcript cursor moves past messages the server accepted and past a message it refused for its content (a refused batch is resent one message at a time), so the next capture or start-up sweep resends the rest, including what a 401 or 403 held back; a session whose commit failed stays marked for the next sweep. `SessionStart` still replays queued entries |
 | OpenClaw | No queue. A failed turn is not sent again |
 | Hermes (bundled) | Uploads run in in-process threads and are not replayed from disk. Pending-commit markers under `$HERMES_HOME/openviking/pending_sessions/` let a later start commit sessions left by a dead run (POSIX only) |
 | LangChain | A failed commit is retried on the next record, in memory only. A partial write raises `OpenVikingPartialWriteError` with counts that let the caller retry the remaining messages |
@@ -547,7 +546,7 @@ Recall errors are handled so the host can continue without injected memories. Re
 
 ### Shared timeouts and locks
 
-The shared plugins use a 15-second HTTP timeout (1-second minimum). MCP proxy requests time out after 15 seconds, and the `DELETE /mcp` sent on exit after 2 seconds. Cross-process locks wait 5 seconds and are considered stale after 60 seconds; queue entries being replayed are reclaimed after 10 minutes. The MCP proxy does not handle SIGHUP, so closing a terminal sends no `DELETE /mcp`; the server runs MCP statelessly, so nothing is left behind.
+The shared plugins use a 15-second HTTP timeout (1-second minimum). Captured messages and commits use `captureTimeoutMs` (`OPENVIKING_CAPTURE_TIMEOUT_MS`) instead, by default twice the HTTP timeout and at least 30 seconds, on every integration built on the shared code: Claude Code, Codex, the hook hosts, OpenCode, DSH, and pi. A host's request or exit budget can still cut it shorter. MCP proxy requests time out after 15 seconds, and the `DELETE /mcp` sent on exit after 2 seconds. Cross-process locks wait 5 seconds and are considered stale after 60 seconds; queue entries being replayed are reclaimed after 10 minutes. The MCP proxy does not handle SIGHUP, so closing a terminal sends no `DELETE /mcp`; the server runs MCP statelessly, so nothing is left behind.
 
 <a id="_3-1-integration-forms-installation-and-configuration"></a><a id="_3-1-1-decision-matrix"></a>
 
@@ -664,7 +663,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - It registers more hooks than any other integration: `SessionStart`, `UserPromptSubmit`, `PostToolUse:Read` (the skill-experience hook, off by default), `PreToolUse` on Read, Glob, Grep, Edit, Write, and Bash (the URI guard), `Stop`, `PreCompact`, `SessionEnd`, `SubagentStart`, and `SubagentStop`.
 - Recall digests are on by default through a local `claude -p`, with the server digest as the fallback.
 - Every exit except `kill -9` sends a commit.
-- The capture cursor is kept under `/tmp`. If the system clears it, the whole session is sent again.
+- The capture cursor is kept under `~/.openviking/state/cc-capture-state/`. A cursor an older release left in the system temp directory is still read, and the next capture moves it.
 - The URI guard runs even when the plugin's own switch is off.
 
 <a id="codex"></a><a id="trae-cli-traecode-cli-2-0"></a>
@@ -688,6 +687,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - `postToolUse` and `postToolUseFailure` record every finished Cursor tool, and `afterMCPExecution` every MCP call, in a local log that `stop` uploads with the conversation. The post events skip their `MCP:<tool>` copy of an MCP call, which carries no server name, so each call is recorded once. OpenViking MCP calls are named `mcp__openviking__<tool>`, and calls to other MCP servers `mcp__<server>__<tool>`.
 - `preToolUse` matches only `MCP:session_history` and fills its `session` argument when the Agent leaves it out.
 - Successful Experience reads can link to trajectories produced by that commit; failed or unfinished calls and automatic injection do not count as successful reads.
+- Captured turns are tracked by transcript position. A failed send goes to the offline queue as on the other hook hosts, and a commit runs only after every new message has been sent, queued, or refused by the server.
 - `sessionEnd` fires only on window close, after Cursor has stopped running hook commands, so it does not commit in practice.
 - With the server unreachable, every turn waits out the 15-second recall timeout.
 
@@ -721,7 +721,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - Captured turns come from `wire.jsonl`; a turn's tool calls and their results go into its assistant message as tool parts. A turn moves the cursor only after it is sent or stored in the offline queue.
 - Session-start context is injected at the first prompt and retried on later prompts until it succeeds.
 - Kimi fires `Stop` only after a completed turn and `Interrupt` only after a cancelled one. `kimi -p` fires neither `Stop` nor `SessionEnd`, so a prompt-mode run is not captured.
-- `Stop`, `PreCompact`, and `SessionEnd` may write in the background. `Interrupt` stays synchronous with a 2-second request budget.
+- `Stop`, `PreCompact`, and `SessionEnd` may write in the background, within a 25-second request budget. `Interrupt` stays synchronous with a 2-second request budget.
 - `UserPromptSubmit` returns plain context text, not JSON.
 - Installation keeps other plugin records and does not edit the older `config.toml` or `mcp.json`.
 
@@ -767,7 +767,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - v2 checks the commit threshold after every execution, including failed or interrupted ones, which keep their state. It handles only sessions of its own location and stores its cursor in plugin storage. v2 has no toast API and logs notices instead.
 - MCP tools keep the `openviking_` prefix; v2 sets `codemode: false`. The 5 skills are added only when the plugin registers its MCP server, not in hook-only mode or with `mcp.openviking` disabled.
 - The URI guard denies `read`, `glob`, and `grep` calls whose path is a `viking://` URI before they run, with an example call to the matching `openviking_*` tool; a `bash` command that contains one runs, and a notice is appended to its output afterwards.
-- Commit timeout is 30 seconds.
+- Captures, commits, and queue replays time out after `captureTimeoutMs` (by default twice `timeoutMs`, at least 30 seconds).
 
 <a id="dsh-deepseek-harness"></a>
 

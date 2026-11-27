@@ -44,7 +44,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 ## 工作原理
 
-- **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
+- **SessionStart** 注入用户画像；服务端通过健康检查后，重放离线队列中暂存的写入。
 - **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。
 - **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Bash 命令中包含这种 URI 时照常执行，并附加一条指向同一组工具的提示，`ov` 调用与字面量 `viking://` 参数照常可用。`mcp_call` 上的第二个 `PreToolUse` 条目在 `session_history` 调用没传 `session` 参数时补上当前会话。
 - 压缩或恢复之后，**SessionStart** 还会追加一段简短说明，给出会话的 OpenViking id 以及用来查回之前确切细节的 `session_history` MCP 工具。

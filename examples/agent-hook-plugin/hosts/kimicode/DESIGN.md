@@ -39,7 +39,7 @@ Verified against Kimi Code CLI 0.43.1 and, for capture and the hook events below
   leaves that commit to OpenViking. Interrupt, SessionEnd and PreCompact
   (unless `autoCommitOnCompact` is off) commit whatever is uncommitted without
   reading the session.
-- Stop, PreCompact, and SessionEnd capture may detach. Interrupt stays
+- Stop, PreCompact, and SessionEnd capture may detach, and their OpenViking requests share a 25-second budget. Interrupt stays
   synchronous and all of its OpenViking requests share a two-second budget; a
   commit that no longer fits is queued and replayed later.
 - Kimi fires Stop only after a completed turn and Interrupt only after a

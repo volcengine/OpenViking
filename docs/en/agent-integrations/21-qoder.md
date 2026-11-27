@@ -44,7 +44,7 @@ Every Qoder CLI build on `PATH` gets the plugin: `qodercli` in `~/.qoder` (`QODE
 
 ## How it works
 
-- **SessionStart** injects the user profile and replays anything the offline queue is holding.
+- **SessionStart** injects the user profile and, once the server answers its health check, replays anything the offline queue is holding.
 - **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`.
 - **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. A Bash command that contains such a URI still runs, with a notice pointing at the same tools, so `ov` invocations and literal `viking://` arguments still work. A second `PreToolUse` entry on `mcp_call` adds the current session as the `session` argument of a `session_history` call that leaves it out.
 - After a compaction or a resume, **SessionStart** also adds a short note naming the session's OpenViking id and the `session_history` MCP tool for looking up exact earlier details.

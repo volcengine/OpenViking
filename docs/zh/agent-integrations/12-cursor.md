@@ -47,13 +47,13 @@ curl -fsSL https://openviking.ai/install | bash
 - `beforeSubmitPrompt`：根据当前问题召回上下文并通过 `additional_context` 注入，召回范围包括你自己的 skill 和账号内共享在 `viking://agent/skills` 下的 skill。
 - `beforeReadFile`：阻止把 `viking://` 虚拟路径当作本地文件读取，并提示改用 OpenViking MCP 工具；shell 命令不做检查。
 - `postToolUse` / `postToolUseFailure` 与 `afterMCPExecution`：前两者把每次完成的 Cursor 工具调用、后者把每次 MCP 调用追加到本地工具日志，保留真实调用 ID、输入、输出和成功或失败状态；此时不向服务端写入消息，也不重写此前的结果。post 事件会跳过 MCP 调用的 `MCP:<tool>` 副本（它不带服务名），所以每次调用只记录一次。`openviking` MCP 服务的调用记为 `mcp__openviking__<tool>`，其他 MCP 服务的调用记为 `mcp__<server>__<tool>`。
-- `stop`：将新增对话与本地工具记录一起通过 `add message` 上报；成功后才推进捕获位置，达到原有消息阈值时执行 `session commit`。工具记录不额外增加该阈值的消息计数。
+- `stop`：将新增对话与本地工具记录一起通过 `add message` 上报；上报失败的消息进入离线队列，下一次采集或会话开始时先于新消息发送；达到原有消息阈值时执行 `session commit`。工具记录不额外增加该阈值的消息计数。
 - `preCompact` / `sessionEnd`：提交尚未处理的消息，触发记忆抽取；关闭 `autoCommitOnCompact`（`OPENVIKING_AUTO_COMMIT_ON_COMPACT=0`）时，`preCompact` 仍会上报消息，但不提交。压缩之后，下一次 `beforeSubmitPrompt` 还会追加一段简短说明，给出会话的 OpenViking id（`cu-<conversation id>`）以及用来查回之前确切细节的 `session_history` MCP 工具。
 - `preToolUse`：只匹配 `MCP:session_history`，Agent 没传 `session` 参数时补上当前会话。
 
-工具采集要求每个事件提供 `tool_use_id` 和 `tool_name`；`afterMCPExecution` 还要提供 `mcp_server_name`、`tool_input` 和 `result_json`。缺少身份或结果的事件会跳过，不会推断为成功。上传失败时保留本地记录，等待同一会话的后续采集重试；消息未传完整时不提交。
+工具采集要求每个事件提供 `tool_use_id` 和 `tool_name`；`afterMCPExecution` 还要提供 `mcp_server_name`、`tool_input` 和 `result_json`。缺少身份或结果的事件会跳过，不会推断为成功。上传失败的消息进入 `~/.openviking/pending` 下的离线队列；服务端拒绝凭据（401 或 403）时既不发送也不入队，消息留在本地，等 key 可用后再发。新消息全部发送、入队或被拒绝之前不提交。
 
-工具日志与会话状态文件放在同一目录。Stop 只读取尚未确认的日志尾部；状态文件保留字节位置和已确认的调用 ID，去重时不需要重读旧结果正文。收到确认后才推进上传位置，工具调用不占用文本的去重额度。
+工具日志与会话状态文件放在同一目录。状态文件记录最后一个已捕获轮次在 transcript 中的位置，以及工具日志的字节位置和已确认的调用 ID，因此 Stop 只读取新的轮次和尚未确认的日志尾部，不需要重读旧结果正文。消息发送成功、入队或因内容被服务端拒绝后，才推进上传位置。
 
 skill 清单先列你自己的 skill，再列账号内共享的 skill；共享 skill 与你自己的 skill 重名时不列出。每条描述截到约 40 token。清单有独立的 token 预算 `skillCatalogTokenBudget`（默认 `1200`），不占用画像预算。描述放不下时只列名称，名称也列不全时末尾附 `... +N more`；连一个名称都放不下时，只写一行 skill 数量。把 `skillCatalog` 设为 `false` 或把预算设为 `0` 即可关闭，既可以写在 `~/.openviking/ovcli.conf` 的 `plugin` 或 `plugin.cursor` 段（见[插件配置](../configuration/02-client.md#插件配置)），也可以用环境变量 `OPENVIKING_SKILL_CATALOG` 和 `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`。没有任何 skill，或服务端不提供 `GET /api/v1/skills` 时，不注入这份清单。
 

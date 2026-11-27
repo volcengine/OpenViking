@@ -376,7 +376,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 集成 | 会话中 | 显式操作或会话边界 | 压缩前后 |
 |---|---|---|---|
-| Claude Code | `Stop` 时待提交 token 达到 100,000 | `SessionEnd` 和 `SubagentStop` 总是提交；`SessionStart` 重放排队的写入 | `PreCompact` 同步提交；会话有排队的写入时，排在它们之后 |
+| Claude Code | `Stop` 时待提交 token 达到 100,000 | `SessionEnd` 和 `SubagentStop` 总是提交；`SessionEnd` 先捕获没有被 `Stop` 捕获的轮次，并等待该会话仍在运行的 `Stop` 捕获结束；`SessionStart` 重放排队的写入 | `PreCompact` 同步提交；会话有排队的写入时，排在它们之后 |
 | Codex | `Stop` 时待提交 token 达到 100,000 | `SessionEnd`（Codex 0.145+）补齐漏掉的轮次，然后在分离的 worker 中提交。startup 或 clear 的 `SessionStart` 会提交已标记结束或空闲超过 30 分钟的会话 | `PreCompact` 补齐后提交全部内容 |
 | TraeCode CLI 2.0 | 同 Codex | 同 Codex；没有 `SessionEnd` 时只有启动时的扫描 | 同 Codex |
 | Cursor | 距上次提交捕获满 8 条消息时，在 `stop` 提交（`commitTurnThreshold`），本地计数 | `sessionEnd` 已注册，但实际不会运行 | `preCompact` 提交 |
@@ -441,9 +441,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 集成 | 写入失败时 |
 |---|---|
-| Claude Code、CodeBuddy Code、Qoder CLI、Antigravity、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、DSH、pi | 可重试的失败进入 `~/.openviking/pending` 下的磁盘队列，在会话开始时重放：每次最多 50 条（Kimi Code 为 2 条），每条最多 3 次，保留 7 天。网络错误、408、429 和 5xx 可重试；其他 4xx（含 401 和 403）不入队。某条消息重放失败时停止，以保证顺序 |
-| Cursor | 新捕获不入离线队列。文本 transcript 与本地工具记录保留未上报内容，服务端确认后才推进进度；同一会话后续采集重试。消息未传完整时不提交。`SessionStart` 仍重放旧队列中的写入 |
-| Codex、TraeCode CLI 2.0 | 新捕获的内容和提交都不入队。transcript 游标只越过服务端已接受的消息，下次捕获或启动扫描会重发剩余部分；提交失败的会话保留标记，留给下一次扫描。`SessionStart` 仍会重放已排队的条目 |
+| Claude Code、CodeBuddy Code、Qoder CLI、Antigravity、TRAE、TRAE CN、ZCode、Kimi Code、Cursor、OpenCode、DSH、pi | 可重试的失败（网络错误、408、429 和 5xx）进入 `~/.openviking/pending` 下的磁盘队列。会话有排队的写入时，先重放它们再发送新消息，新消息排在队列中剩余条目之后，服务端存下的顺序与对话一致。会话开始时，服务端通过健康检查后也会重放队列：每次最多 50 条（Kimi Code 为 2 条），每条最多 3 次，保留 7 天。某条消息重放失败时停止，以保证顺序。每个条目属于把它排队的服务端和身份，解析出其他服务端或身份的集成不会动它。服务端因内容拒绝的批次（413、422 或其他 4xx）会逐条重发，只丢失被拒绝的那条。401 或 403 时既不发送也不入队：消息留在捕获游标之后，等 key 可用后再发（DSH 没有游标，会把这些消息入队）；重放中遇到 401 或 403 的条目留在队列里，不消耗重试次数 |
+| Codex、TraeCode CLI 2.0 | 新捕获的内容和提交都不入队。transcript 游标越过服务端已接受的消息，也越过因内容被拒绝的消息（被拒绝的批次会逐条重发），下次捕获或启动扫描会重发剩余部分，包括 401 或 403 时留下的消息；提交失败的会话保留标记，留给下一次扫描。`SessionStart` 仍会重放已排队的条目 |
 | OpenClaw | 没有队列，失败的轮次不会重发 |
 | Hermes（内置） | 上传在进程内线程中运行，不从磁盘重放。`$HERMES_HOME/openviking/pending_sessions/` 下的待提交标记让之后的启动能提交已退出进程留下的会话（仅 POSIX） |
 | LangChain | 提交失败时在下一次 record 时重试，只保存在内存中。部分写入会抛出 `OpenVikingPartialWriteError`，附带计数，调用方可据此重试剩余消息 |
@@ -545,7 +544,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 ### 共享超时与锁
 
-共享插件的 HTTP 超时为 15 秒（最小 1 秒）。MCP 代理请求 15 秒超时，退出时发送的 `DELETE /mcp` 为 2 秒。跨进程锁等待 5 秒，60 秒后视为过期；正在重放的队列条目 10 分钟后被回收。MCP 代理不处理 SIGHUP，关闭终端时不会发送 `DELETE /mcp`；服务端以无状态方式运行 MCP，不会留下残留状态。
+共享插件的 HTTP 超时为 15 秒（最小 1 秒）。捕获的消息和提交改用 `captureTimeoutMs`（`OPENVIKING_CAPTURE_TIMEOUT_MS`），默认为 HTTP 超时的两倍、至少 30 秒，适用于所有基于共享代码的集成：Claude Code、Codex、各 hook 宿主、OpenCode、DSH 和 pi。宿主的请求预算或退出预算仍可能让它更短。MCP 代理请求 15 秒超时，退出时发送的 `DELETE /mcp` 为 2 秒。跨进程锁等待 5 秒，60 秒后视为过期；正在重放的队列条目 10 分钟后被回收。MCP 代理不处理 SIGHUP，关闭终端时不会发送 `DELETE /mcp`；服务端以无状态方式运行 MCP，不会留下残留状态。
 
 <a id="_3-1-接入形态、安装与配置体系"></a><a id="_3-1-1-判定矩阵"></a>
 
@@ -662,7 +661,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 - 注册的 hook 比其他集成都多：`SessionStart`、`UserPromptSubmit`、`PostToolUse:Read`（skill 经验 hook，默认关闭）、作用于 Read、Glob、Grep、Edit、Write 和 Bash 的 `PreToolUse`（URI guard）、`Stop`、`PreCompact`、`SessionEnd`、`SubagentStart` 和 `SubagentStop`。
 - 召回摘要默认通过本地 `claude -p` 生成，服务端摘要作为回退。
 - 除 `kill -9` 外，所有退出方式都会发出提交。
-- 捕获游标保存在 `/tmp` 下。系统清理后，整个会话会重新发送。
+- 捕获游标保存在 `~/.openviking/state/cc-capture-state/` 下。旧版本留在系统临时目录中的游标仍会读取，下一次捕获会把它移过来。
 - 插件自身的开关关闭时，URI guard 仍然运行。
 
 <a id="codex"></a><a id="trae-cli-traecode-cli-2-0"></a>
@@ -686,6 +685,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 - `postToolUse` 和 `postToolUseFailure` 记录每次完成的 Cursor 工具调用，`afterMCPExecution` 记录每次 MCP 调用，都写入本地日志，由 `stop` 与对话一起上报。post 事件会跳过 MCP 调用的 `MCP:<tool>` 副本（它不带服务名），所以每次调用只记录一次。OpenViking MCP 调用命名为 `mcp__openviking__<tool>`，其他 MCP 服务的调用命名为 `mcp__<server>__<tool>`。
 - `preToolUse` 只匹配 `MCP:session_history`，在 Agent 没传 `session` 参数时补上它。
 - 成功读取的 Experience 可关联到同次提交生成的轨迹；失败、未完成调用和自动注入不计为成功读取。
+- 按 transcript 位置记录已捕获的轮次。发送失败时与其他 hook 宿主一样进入离线队列；新消息全部发送、入队或被服务端拒绝之后才会提交。
 - `sessionEnd` 只在关闭窗口时触发，此时 Cursor 已停止执行 hook 命令，因此实际不会提交。
 - 服务端不可达时，每轮都要等满 15 秒召回超时。
 
@@ -719,7 +719,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 - 捕获的轮次来自 `wire.jsonl`；一轮中的工具调用及其结果以 tool part 的形式放进该轮的 assistant 消息。一轮对话只有在发送成功或存入离线队列后才会推进游标。
 - 会话开场上下文在首次提问时注入，失败后在后续提问中重试，直到成功。
 - Kimi 只在一轮完成后触发 `Stop`，只在一轮被取消后触发 `Interrupt`。`kimi -p` 既不触发 `Stop` 也不触发 `SessionEnd`，所以 prompt 模式的运行不会被捕获。
-- `Stop`、`PreCompact` 和 `SessionEnd` 可以在后台写入。`Interrupt` 保持同步，请求预算 2 秒。
+- `Stop`、`PreCompact` 和 `SessionEnd` 可以在后台写入，请求预算 25 秒。`Interrupt` 保持同步，请求预算 2 秒。
 - `UserPromptSubmit` 返回纯文本上下文，不是 JSON。
 - 安装时保留其他插件记录，不修改旧的 `config.toml` 或 `mcp.json`。
 
@@ -765,7 +765,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 - v2 在每次执行结束后检查提交阈值，包括失败和被中断的执行，这些执行会保留状态。v2 只处理本 location 的会话，游标存在插件 storage 中。v2 没有 toast API，改为写日志。
 - MCP 工具保留 `openviking_` 前缀；v2 设置 `codemode: false`。5 个 skill 只在插件注册自己的 MCP 服务时加入，hook-only 模式或关闭 `mcp.openviking` 时不加入。
 - URI guard 在工具执行前拒绝路径为 `viking://` URI 的 `read`、`glob` 和 `grep` 调用，并给出对应的 `openviking_*` 工具调用示例；`bash` 命令中包含这种 URI 时照常执行，执行后在工具输出末尾追加一条提示。
-- 提交超时 30 秒。
+- 捕获、提交和队列重放的超时为 `captureTimeoutMs`（默认为 `timeoutMs` 的两倍，至少 30 秒）。
 
 <a id="dsh-deepseek-harness"></a>
 

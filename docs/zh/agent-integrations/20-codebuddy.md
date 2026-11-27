@@ -40,7 +40,7 @@ curl -fsSL https://openviking.ai/install | bash
 
 ## 工作原理
 
-- **SessionStart** 注入用户画像，并重放离线队列中暂存的写入。
+- **SessionStart** 注入用户画像；服务端通过健康检查后，重放离线队列中暂存的写入。
 - **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。宿主自动生成的续写轮次会被跳过，因此宿主自己产生的轮次不会触发检索。
 - **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
 - **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。工具调用及其结果以结构化 tool part 的形式放进所在轮次的 assistant 消息。`Stop` 在 session 待提交 token 达到 100,000（`commitTokenThreshold`）时提交 OpenViking session，除非 `OPENVIKING_SERVER_AUTO_COMMIT` 把这次提交交给服务端；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。

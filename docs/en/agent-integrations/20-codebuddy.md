@@ -40,7 +40,7 @@ The installer assembles a self-contained plugin under `~/.openviking/agent-integ
 
 ## How it works
 
-- **SessionStart** injects the user profile and replays anything the offline queue is holding.
+- **SessionStart** injects the user profile and, once the server answers its health check, replays anything the offline queue is holding.
 - **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`. Host-generated continuation turns are skipped, so a turn the host produced on its own never triggers a search.
 - **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. Shell commands are not checked, so `ov` invocations and literal `viking://` arguments still work.
 - **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. Tool calls and their results go into the assistant message of their turn as structured tool parts. `Stop` commits the OpenViking session once its pending tokens reach 100,000 (`commitTokenThreshold`), unless `OPENVIKING_SERVER_AUTO_COMMIT` leaves that commit to the server; `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.

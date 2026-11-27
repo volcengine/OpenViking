@@ -221,7 +221,7 @@ may quote the same labels without being filtered. State is updated:
 
 The transcript and persisted cursor own retries. Failed messages are not also
 put in the shared pending queue: replaying both sources would duplicate them.
-A partial append advances only past confirmed messages; subsequent hooks or
+A partial append advances only past confirmed messages and messages the server refused for their content (a refused batch is resent one message at a time); subsequent hooks or
 the SessionStart sweep retry the remaining tail. The transcript must remain
 available until that catch-up succeeds.
 

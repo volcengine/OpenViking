@@ -492,7 +492,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 | `Stop`                | Claude 完成一次响应                   | 解析 transcript → 把新的用户回合推到 OV session → pending tokens 超阈值时 commit                  |
 | `SessionStart`        | 新建 / resume / compact 后的会话      | 注入 `profile.md`、记忆索引和 `<available-skills>`；`resume`/`compact` 时再注入最新的 archive overview |
 | `PreCompact`          | Claude Code 重写 transcript 之前      | 先推送进行中的回合，再在 CC 改 transcript 之前把 pending 提交为归档                              |
-| `SessionEnd`          | Claude Code 会话关闭                  | 最后一次 commit                                                                                  |
+| `SessionEnd`          | Claude Code 会话关闭                  | 先捕获没有被 `Stop` 捕获的轮次，等仍在运行的 `Stop` 捕获结束后做最后一次 commit                                                                                  |
 | `SubagentStart`       | 父 session 通过 Task 工具孵化子 agent | 为子 agent 派生隔离的 OV session ID，写 start state                                              |
 | `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |
 | `PreToolUse`          | 原生 `Read` / `Glob` / `Grep` / `Edit` / `Write` 的路径是 `viking://` URI | 拒绝该调用，提示 Claude 改用对应的 OpenViking MCP 工具；对 skill URI（`viking://~/skills/...`、`viking://user/<id>/skills/...`、`viking://agent/skills/...`）的 `Write` / `Edit` 会被引导到 `add_skill` |

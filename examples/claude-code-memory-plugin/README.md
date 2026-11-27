@@ -544,7 +544,7 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `Stop`                | Claude finishes a response               | Parse transcript → push new user turns to OV session → commit when pending tokens cross threshold |
 | `SessionStart`        | New / resumed / post-compact session     | Inject `profile.md`, the memory index, and `<available-skills>`; on `resume`/`compact`, also the latest archive overview |
 | `PreCompact`          | Before Claude Code rewrites the transcript | Push the turn in progress, then commit pending messages so they become an archive before CC mutates the transcript |
-| `SessionEnd`          | Claude Code session closes               | Final commit so the last window is archived                                                       |
+| `SessionEnd`          | Claude Code session closes               | Capture turns no `Stop` captured, then a final commit once any running `Stop` capture finishes, so the last window is archived |
 | `SubagentStart`       | Parent spawns a subagent via Task tool   | Derive an isolated OV session ID for the subagent, persist start state                            |
 | `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
 | `PreToolUse`          | Native `Read` / `Glob` / `Grep` / `Edit` / `Write` whose path is a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool; a `Write` / `Edit` on a skill URI (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) is pointed to `add_skill` |
