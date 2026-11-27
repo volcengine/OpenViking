@@ -511,6 +511,24 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
   return { parts, text: decision.shouldCapture ? decision.text : "", signalText: signalText || "", dropped: false };
 }
 
+// What a user says when something is worth remembering: asks to keep it,
+// preferences and decisions, facts about themselves, contact details.
+const CAPTURE_TRIGGERS = [
+  /\b(?:remember|memorize|store|save|capture|note|record)\b|preference|prefer|important|decision|decided|always|never/i,
+  /记住|保存|记录|记忆|偏好|喜欢|喜爱|崇拜|讨厌|害怕|重要|决定|总是|永远|优先|习惯|爱好|擅长|最爱|不喜欢/i,
+  /[\w.-]+@[\w.-]+\.\w+/,
+  /\+\d{10,}/,
+  /(?:我|my)\s*(?:是|叫|名字|name|住在|live|来自|from|生日|birthday|电话|phone|邮箱|email)/i,
+  /(?:我|i)\s*(?:喜欢|崇拜|讨厌|害怕|擅长|不会|爱|恨|想要|需要|希望|觉得|认为|相信)/i,
+  /(?:favorite|favourite|love|hate|enjoy|dislike|admire|idol|fan of)/i,
+];
+
+/** Whether `text` says something `captureMode: "keyword"` keeps. */
+export function hasCaptureTrigger(text) {
+  const value = sanitizeCapturedText(String(text || ""));
+  return CAPTURE_TRIGGERS.some((pattern) => pattern.test(value));
+}
+
 /**
  * One host message as the session message to send, or null when nothing in it
  * is to be captured. `role` is the host's own role for the message. Text parts

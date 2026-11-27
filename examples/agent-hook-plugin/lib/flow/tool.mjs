@@ -19,9 +19,9 @@ export function nativeSessionId(host, event, payload, read = host.read(event, pa
   return resolveNativeSessionId(read?.sessionId ? { session_id: read.sessionId } : payload);
 }
 
-/** The OpenViking session a host session is captured into. */
-export function ovSessionId(host, nativeId) {
-  return deriveHarnessSessionId(host.sessionPrefix, nativeId);
+/** The OpenViking session a host session, or a child of it, is captured into. */
+export function ovSessionId(host, nativeId, child = "") {
+  return deriveHarnessSessionId(host.sessionPrefix, nativeId, child);
 }
 
 /** `session_history` arguments with this session filled in, or null when the model named one. */

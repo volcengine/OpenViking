@@ -19,3 +19,4 @@ export function sanitizeCapturedText(text: string): string;
 export function truncateCaptureText(text: string, maxChars?: number): string;
 
 export function isCaptureEnabled(cfg?: Record<string, any>): boolean;
+export function hasCaptureTrigger(text: unknown): boolean;

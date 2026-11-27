@@ -13,7 +13,7 @@ import {
   withAgentHookLock,
   writeHookState,
 } from "../agent-hook-runtime.mjs";
-import { buildCaptureMessage, isCaptureEnabled } from "../capture-utils.mjs";
+import { buildCaptureMessage, hasCaptureTrigger, isCaptureEnabled } from "../capture-utils.mjs";
 import { isAuthFailure } from "../retryable.mjs";
 import { commitWhenDue } from "./commit.mjs";
 import { appendNote, clearNotes, readNotes } from "./notes.mjs";
@@ -50,6 +50,8 @@ function settledTurns(messages, settledSends) {
   return messages.length;
 }
 
+const messageText = (message) => message.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+
 /** The session message each decoded turn is sent as; null where a turn has nothing to send. */
 export function turnMessages(decoded, cfg) {
   return decoded.turns.map((turn) => {
@@ -72,9 +74,14 @@ async function captureTurns(ctx, state, stateFile) {
     return state;
   }
   const notes = await readNotes(stateFile);
+  // Until this flow stores a cursor, the one an earlier version of the plugin
+  // left: in a file of the host's own, or in the session state. What that
+  // version sent may still be uncommitted, so the next boundary commits.
+  const legacy = state.cursor === undefined ? host.legacyCursor?.(ctx.nativeSessionId, ctx.read) : undefined;
+  if (legacy !== undefined) state = { ...state, capturedSinceCommit: Math.max(1, Number(state.capturedSinceCommit) || 0) };
   const decoded = host.decode({
     text: source.text,
-    cursor: state.cursor ?? state,
+    cursor: state.cursor ?? legacy ?? state,
     notes,
     payload: ctx.payload,
     cfg,
@@ -83,7 +90,11 @@ async function captureTurns(ctx, state, stateFile) {
   // message may still grow and waits for the next capture.
   const held = boundary === "compact" && decoded.turns.at(-1)?.role === "assistant" ? 1 : 0;
   const messages = turnMessages(decoded, cfg).slice(0, decoded.turns.length - held);
-  const sends = messages.filter(Boolean);
+  // Keyword mode keeps a batch only when the user said something worth
+  // remembering; a batch it drops is settled.
+  const wanted = cfg.captureMode !== "keyword"
+    || messages.some((message) => message?.role === "user" && hasCaptureTrigger(messageText(message)));
+  const sends = wanted ? messages.filter(Boolean) : [];
 
   let sent = 0;
   let captured = 0;
@@ -98,6 +109,7 @@ async function captureTurns(ctx, state, stateFile) {
     const unsettled = result.enqueueFailed + (isAuthFailure(result) ? result.failed : 0);
     settled = settledTurns(messages, sends.length - unsettled);
     log("capture", { sent, queued: result.queued, failed: result.failed, held: unsettled });
+    ctx.outcome.capture = { sent, queued: result.queued, failed: result.failed, held: unsettled };
   }
 
   let next = state;
@@ -124,14 +136,14 @@ function lockWaitMs(ctx) {
 export async function capture(ctx) {
   const { host } = ctx;
   const enabled = isCaptureEnabled(ctx.cfg);
-  const done = await withAgentHookLock(host.id, ctx.nativeSessionId, async (stateFile) => {
-    const read = await readHookState(host.id, ctx.nativeSessionId);
+  const done = await withAgentHookLock(host.id, ctx.stateKey, async (stateFile) => {
+    const read = await readHookState(host.id, ctx.stateKey);
     let state = deferContext(ctx, read);
     if (enabled) {
       if (ctx.read.note) await appendNote(stateFile, ctx.read.note);
       if (ctx.stage !== "toolResult") state = await captureTurns(ctx, state, stateFile);
     }
-    if (state !== read) await writeHookState(host.id, ctx.nativeSessionId, state);
+    if (state !== read) await writeHookState(host.id, ctx.stateKey, state);
     return true;
   }, { waitMs: enabled ? lockWaitMs(ctx) : LOCK_WAIT_MS });
   if (!done) ctx.log("capture_lock_timeout");

@@ -38,7 +38,9 @@ async function main() {
   const cfg = loadAgentHookConfig(host.id);
   // The write path answers before it works, so the worker is started while
   // stdin is still unread.
-  if (mayDetach(host, event, cfg) && await maybeDetach(cfg, { approve: () => answer() })) return;
+  const detach = mayDetach(host, event, cfg);
+  const detachCfg = detach === "always" ? { ...cfg, writePathAsync: true } : cfg;
+  if (detach && await maybeDetach(detachCfg, { approve: () => answer() })) return;
   let payload;
   try {
     payload = JSON.parse(await readHookStdin() || "{}");

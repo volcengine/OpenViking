@@ -16,7 +16,7 @@ const CALL_SITES = [
   {
     name: "the thin-harness hook forwards its derived session id",
     file: join(ROOT, "examples", "agent-hook-plugin", "lib", "flow", "prompt.mjs"),
-    pattern: /recallForPrompt\([^)]*\{[^}]*\bsessionId\b/s,
+    pattern: /recallDetailsForPrompt\([^)]*\{[^}]*\bsessionId\b/s,
   },
   {
     name: "OpenCode recall forwards the mapped OV session id",

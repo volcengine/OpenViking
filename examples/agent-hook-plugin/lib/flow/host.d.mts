@@ -45,6 +45,12 @@ export interface HostFacts {
 export interface EventRead {
   /** The host's own id for the session; the payload's usual spellings are tried when absent. */
   sessionId?: string;
+  /**
+   * The event belongs to a child of the session (a subagent), named so that it
+   * is unique within the parent: it is captured into an OpenViking session of
+   * its own, and not at all with `skipSubagentSessions`.
+   */
+  child?: string;
   /** The session's directory; the payload's usual spellings are tried when absent. */
   cwd?: string;
   /** Leave this event alone, with the reason to log. */
@@ -111,6 +117,35 @@ export interface Output {
   input?: Record<string, any>;
 }
 
+/** What an event did, as `observe` is told. */
+export interface Outcome {
+  /** The event was left alone: "disabled", "bypass", "subagent", or the host's own reason. */
+  skip?: string;
+  /** The context the event answered with. */
+  context?: string;
+  /** What the recall core reported for a prompt, and how long the search took. */
+  recall?: { stage: string; contentCount?: number; hintCount?: number; budgetUsed?: number; latencyMs: number };
+  /** Messages of a capture: sent, queued offline, refused, and held for the next capture. */
+  capture?: { sent: number; queued: number; failed: number; held: number };
+  /** The event committed the session. */
+  committed?: boolean;
+}
+
+/** What an event's stage works with; `observe` gets the same. */
+export interface EventContext {
+  event: string;
+  stage: Stage;
+  read: EventRead;
+  payload: Record<string, any>;
+  cfg: Record<string, any>;
+  cwd: string;
+  /** The host's id for the session, and the OpenViking session it is captured into. */
+  nativeSessionId: string;
+  sessionId: string;
+  fetchJSON: (path: string, init?: object, options?: object) => Promise<any>;
+  log: (stage: string, data?: unknown) => void;
+}
+
 export interface Host {
   id: string;
   /** Prefix of the OpenViking session id a host session is captured into. */
@@ -123,6 +158,8 @@ export interface Host {
   canDetach?: boolean;
   /** Write events that must finish inside the hook all the same. */
   syncEvents?: string[];
+  /** Write events the host gives too little time: detached whatever `writePathAsync` says. */
+  detachEvents?: string[];
   facts?: HostFacts;
   /** Replacement tools and example calls the URI guard names; the shared table when absent. */
   toolHints?: Record<string, { tool: unknown; example: unknown }>;
@@ -137,4 +174,20 @@ export interface Host {
   tool?(payload: Record<string, any>): ToolCall | null;
   /** The host's own session id out of an MCP tool call's `_meta`, where the host names it there. */
   mcpSession?(meta: Record<string, any>): string;
+  /**
+   * The cursor an earlier version of the plugin kept for this session outside
+   * the session state, so an upgrade does not send again what it captured.
+   * Synchronous; asked only until the flow has stored a cursor.
+   */
+  legacyCursor?(nativeSessionId: string, read: EventRead): unknown;
+  /** The context as this host shows it, where it adds something of its own to what the flow built. */
+  present?(ctx: EventContext, context: string): string;
+  /** A local recall compressor run through the host's own CLI, or null when it cannot run. */
+  compress?(cfg: Record<string, any>, log: EventContext["log"]): unknown;
+  /**
+   * Told after every event what it did, for files the host keeps for its own
+   * interface (a statusline snapshot, a session binding). It cannot change the
+   * answer, and a failure is only logged.
+   */
+  observe?(ctx: EventContext, outcome: Outcome): void | Promise<void>;
 }

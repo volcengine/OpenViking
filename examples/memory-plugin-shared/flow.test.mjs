@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { appendFileSync, chmodSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
-import { runStage, toolCall } from "../agent-hook-plugin/lib/flow/index.mjs";
+import { mayDetach, runStage, toolCall } from "../agent-hook-plugin/lib/flow/index.mjs";
 import { parseJsonl, resumeTurns } from "../agent-hook-plugin/lib/flow/turns.mjs";
 import {
   readRequestBody,
@@ -263,6 +263,94 @@ test("a note reaches decode until its turn is settled, with or without a transcr
   }, { as: noted, env: { OPENVIKING_AUTO_RECALL: "0" } });
 });
 
+test("a child session is captured into a session of its own, from where an earlier version stopped", async (t) => {
+  const parent = {
+    ...host,
+    read: (event, payload) => ({ ...host.read(event, payload), child: payload.agent_id ? `subagent:${payload.agent_id}` : "" }),
+    legacyCursor: (sessionId, read) => (read.child ? { lastTurnId: "0" } : undefined),
+  };
+  await withFlow(t, {}, async ({ run, say, calls, sentTexts }) => {
+    say("user", "sent by the old plugin");
+    say("assistant", "the subagent's answer");
+    await run("end", { agent_id: "a1" });
+    assert.deepEqual(sentTexts(), ["the subagent's answer"]);
+    assert.equal(calls("/api/v1/sessions/ft-s1__subagent-a1/commit").length, 1);
+
+    // The parent has its own cursor.
+    await run("stop");
+    assert.equal(calls(`${SESSION}/messages/batch`).length, 1);
+  }, { as: parent });
+
+  await withFlow(t, {}, async ({ run, say, seen }) => {
+    say("user", "one");
+    await run("end", { agent_id: "a1" });
+    assert.deepEqual(seen, []);
+  }, { as: parent, env: { OPENVIKING_SKIP_SUBAGENT_SESSIONS: "1" } });
+
+  // What the earlier version sent may never have been committed.
+  await withFlow(t, {}, async ({ run, say, calls }) => {
+    say("user", "sent by the old plugin");
+    await run("end");
+    assert.equal(calls("/messages/batch").length, 0);
+    assert.equal(calls(`${SESSION}/commit`).length, 1);
+  }, { as: { ...host, legacyCursor: () => ({ lastTurnId: "0" }) } });
+});
+
+test("keyword mode sends a batch only when the user said something to remember", async (t) => {
+  await withFlow(t, {}, async ({ run, say, sentTexts }) => {
+    say("user", "list the files");
+    say("assistant", "done");
+    await run("stop");
+    assert.deepEqual(sentTexts(), []);
+
+    say("user", "remember that the staging host is green-2");
+    await run("stop");
+    assert.deepEqual(sentTexts(), ["remember that the staging host is green-2"]);
+  }, { env: { OPENVIKING_CAPTURE_MODE: "keyword" } });
+});
+
+test("a session opens with the profile, and a resume adds only what the model no longer holds", async (t) => {
+  const answers = { "/content/read": "- prefers short answers", "/context": { latest_archive_overview: "earlier: the build was fixed" } };
+  await withFlow(t, answers, async ({ run }) => {
+    const first = await run("start");
+    assert.match(first.context, /prefers short answers/);
+    assert.doesNotMatch(first.context, /session-archive/);
+
+    // Past the window in which a second start is taken for the same one.
+    const stateFile = join(process.env.OPENVIKING_HOOK_STATE_DIR, "flowtest", "s1.json");
+    writeFileSync(stateFile, JSON.stringify({ ...JSON.parse(readFileSync(stateFile, "utf8")), lastSessionStartAt: 0 }));
+    const resumed = await run("start", { source: "resume" });
+    assert.doesNotMatch(resumed.context, /prefers short answers/);
+    assert.match(resumed.context, /earlier: the build was fixed/);
+  }, { env: { OPENVIKING_RESUME_ARCHIVE_INJECT: "1" } });
+});
+
+test("the host is told what each event did", async (t) => {
+  const told = [];
+  const watched = {
+    ...host,
+    observe: (ctx, outcome) => { told.push([ctx.event, ctx.sessionId, { ...outcome }]); },
+    // What the host adds to the context is part of what it is told.
+    present: (ctx, context) => `${context}\n<card for="${ctx.event}"/>`,
+  };
+  const recall = { rendered: "what OpenViking remembers", entries: [], stats: {} };
+  await withFlow(t, { "/search/search": recall, "/search/recall": recall }, async ({ run, say }) => {
+    await run("prompt", { prompt: "how did we set up the build?" });
+    say("user", "how did we set up the build?");
+    await run("end");
+    const [[, , prompt], [, session, end]] = told;
+    assert.match(prompt.context, /what OpenViking remembers[\s\S]*<card for="prompt"\/>$/);
+    assert.equal(typeof prompt.recall.stage, "string");
+    assert.equal(session, "ft-s1");
+    assert.deepEqual(end, { capture: { sent: 1, queued: 0, failed: 0, held: 0 }, committed: true });
+  }, { as: watched });
+
+  await withFlow(t, {}, async ({ run }) => {
+    await run("start");
+    assert.deepEqual(told.at(-1), ["start", "ft-s1", { skip: "bypass" }]);
+  }, { as: watched, env: { OPENVIKING_BYPASS_SESSION: "1" } });
+});
+
 test("capture off, the plugin off and a bypassed session send nothing", async (t) => {
   for (const env of [
     { OPENVIKING_AUTO_CAPTURE: "0" },
@@ -314,6 +402,16 @@ test("the note about the session's full record waits for an event that reaches t
     const resumed = await run("start", { source: "resume" });
     assert.match(resumed.context, /anything an earlier compaction summarized/);
   });
+});
+
+test("a write event detaches when the host allows it, and always where the host has no time for it", () => {
+  const cfg = { autoCapture: true, writePathAsync: false };
+  assert.equal(mayDetach(host, "end", cfg), false);
+  assert.equal(mayDetach({ ...host, canDetach: true }, "end", cfg), true);
+  assert.equal(mayDetach({ ...host, canDetach: true, syncEvents: ["end"] }, "end", cfg), false);
+  assert.equal(mayDetach({ ...host, detachEvents: ["end"] }, "end", cfg), "always");
+  assert.equal(mayDetach({ ...host, detachEvents: ["end"] }, "end", { ...cfg, autoCapture: false }), false);
+  assert.equal(mayDetach({ ...host, canDetach: true }, "prompt", cfg), false);
 });
 
 test("a tool call is judged from its payload alone", () => {

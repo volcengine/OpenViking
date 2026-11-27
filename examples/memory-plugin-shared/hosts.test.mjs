@@ -104,7 +104,8 @@ for (const directory of directories) {
         // A template names the client the installer fills in.
         assert.ok(ids.includes(id) || /^__\w+__$/.test(id), `${file} runs hook.mjs for ${id}`);
         assert.ok(host.events[event], `${file} passes ${event}, which host.mjs does not map`);
-        if (typeof entry.timeout !== "number" || host.events[event] === "toolCall") continue;
+        // A detached event's requests are not bound by the hook's timeout.
+        if (typeof entry.timeout !== "number" || host.events[event] === "toolCall" || host.detachEvents?.includes(event)) continue;
         const budget = host.budgets?.[event];
         assert.ok(budget > 0 && budget <= entry.timeout * 1000 - 3000,
           `${file} ${event}: request budget ${budget}ms, hook timeout ${entry.timeout}s`);

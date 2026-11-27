@@ -5,7 +5,7 @@
 
 import {
   readHookState,
-  recallForPrompt,
+  recallDetailsForPrompt,
   stableHash,
   withAgentHookLock,
   writeHookState,
@@ -21,8 +21,8 @@ export async function promptSubmit(ctx) {
   const { host, read, logError } = ctx;
   const prompt = read.prompt || "";
   if (!prompt) return {};
-  const context = await withAgentHookLock(host.id, ctx.nativeSessionId, async (stateFile) => {
-    const state = await readHookState(host.id, ctx.nativeSessionId);
+  const context = await withAgentHookLock(host.id, ctx.stateKey, async (stateFile) => {
+    const state = await readHookState(host.id, ctx.stateKey);
     const promptHash = stableHash(prompt);
     const now = Date.now();
     const duplicate = read.eventId
@@ -46,20 +46,25 @@ export async function promptSubmit(ctx) {
       }
     }
 
-    const recallBlock = state.promptHash === promptHash && state.recallBlock
-      ? state.recallBlock
-      : await recallForPrompt(ctx.fetchJSON, ctx.cfg, prompt, ctx.cwd, ctx.log, { sessionId: ctx.sessionId })
-        .catch((error) => {
-          logError("recall", error);
-          return null;
-        });
+    let recallBlock = state.promptHash === promptHash ? state.recallBlock : "";
+    if (!recallBlock) {
+      const recall = await recallDetailsForPrompt(ctx.fetchJSON, ctx.cfg, prompt, ctx.cwd, ctx.log, {
+        sessionId: ctx.sessionId,
+        runCompressor: await host.compress?.(ctx.cfg, ctx.log),
+      }).catch((error) => {
+        logError("recall", error);
+        return { block: "", stage: "error" };
+      });
+      recallBlock = recall.block || null;
+      ctx.outcome.recall = { ...recall, block: undefined, latencyMs: Date.now() - now };
+    }
     if (recallBlock) parts.push(recallBlock);
 
     const delivered = deliverPointer(ctx, state);
     if (delivered.pointer) parts.push(delivered.pointer);
     if (read.note && isCaptureEnabled(ctx.cfg)) await appendNote(stateFile, read.note, now);
 
-    await writeHookState(host.id, ctx.nativeSessionId, {
+    await writeHookState(host.id, ctx.stateKey, {
       ...delivered.state,
       promptHash,
       promptEventId: read.eventId || "",

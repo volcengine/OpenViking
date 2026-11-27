@@ -9,7 +9,7 @@ import { createOvHttp } from "./ov-http.mjs";
 import { applyInputFilters, compileInputFilters } from "./input-filters.mjs";
 import { commitSession, enqueue, replayPending } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
-import { buildRecallBlock, isRecallEnabled } from "./recall-core.mjs";
+import { buildRecallBlockDetailed, isRecallEnabled } from "./recall-core.mjs";
 import { buildPluginConfig } from "./plugin-config.mjs";
 import { isRetryableFailure } from "./retryable.mjs";
 import { deriveHarnessSessionId, isBypassed } from "./session-model.mjs";
@@ -316,12 +316,17 @@ export function recallQuery(cfg, prompt, log = () => {}) {
   return query;
 }
 
-export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
-  if (!isRecallEnabled(cfg)) return null;
+/**
+ * Recall for a prompt, with what the recall core reports beside the block
+ * (`stage`, `contentCount`, `hintCount`, `budgetUsed`). `options.runCompressor`
+ * is a host's local compressor.
+ */
+export async function recallDetailsForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
+  if (!isRecallEnabled(cfg)) return { block: "", stage: "disabled" };
   const query = recallQuery(cfg, prompt, log);
-  if (!query) return null;
+  if (!query) return { block: "", stage: "no_query" };
   const peer = resolveEffectivePeerId({ cfg, cwd });
-  return buildRecallBlock(fetchJSON, cfg, query, {
+  const details = await buildRecallBlockDetailed(fetchJSON, cfg, query, {
     actorPeerId: peer.peerId,
     legacyPeerId: peer.legacyPeerId,
     // Passing the OV session id is what turns on server-side query expansion
@@ -329,7 +334,14 @@ export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {
     sessionId: options.sessionId || "",
     excludeUris: cfg.recallExcludeUris,
     log,
+    ...(options.runCompressor ? { runCompressor: options.runCompressor, localCompressorAvailable: true } : {}),
   });
+  if (details.error) console.error(details.error);
+  return details;
+}
+
+export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {}, options = {}) {
+  return (await recallDetailsForPrompt(fetchJSON, cfg, prompt, cwd, log, options)).block || null;
 }
 
 export async function buildAgentProfile(fetchJSON, cfg, cwd) {

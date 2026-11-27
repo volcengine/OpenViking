@@ -41,6 +41,7 @@ export async function commitWhenDue(ctx, state, { boundary, sent, captured }) {
     if (next.capturedSinceCommit > 0 && (boundary !== "compact" || cfg.autoCommitOnCompact !== false)) {
       const committed = await commitAgentSession(fetchJSON, sessionId, log, COMMIT_BODY);
       if (committed.ok || committed.pendingQueued) next.capturedSinceCommit = 0;
+      if (committed.ok) ctx.outcome.committed = true;
     }
     return next;
   }

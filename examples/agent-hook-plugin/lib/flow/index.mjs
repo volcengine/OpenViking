@@ -35,10 +35,10 @@ export const isWriteStage = (stage) => WRITE_STAGES.has(stage);
  * handed the payload.
  */
 export function mayDetach(host, event, cfg) {
-  return Boolean(host.canDetach)
-    && isWriteStage(stageOf(host, event))
-    && !host.syncEvents?.includes(event)
-    && isCaptureEnabled(cfg);
+  if (!isWriteStage(stageOf(host, event)) || !isCaptureEnabled(cfg)) return false;
+  // An event the host gives too little time detaches whatever writePathAsync says.
+  if (host.detachEvents?.includes(event)) return "always";
+  return Boolean(host.canDetach) && !host.syncEvents?.includes(event);
 }
 
 /** One deadline for every request an event sends, so their timeouts cannot add up past the host's. */
@@ -88,14 +88,7 @@ export async function runStage(host, event, payload = {}, { detached = false } =
   const cfg = loadAgentHookConfig(host.id, cwd);
   const { log, logError } = createAgentLogger(host.id, event, cfg);
   const nativeId = nativeSessionId(host, event, payload, read);
-  const skip = read.skip
-    || (cfg.enabled === false && "disabled")
-    || (isBypassed(cfg, { sessionId: nativeId, cwd }) && "bypass");
-  if (skip) {
-    log("skip", { reason: skip });
-    return {};
-  }
-
+  const child = String(read.child || "");
   const agent = makeAgentFetchJSON(cfg, cwd);
   const ctx = {
     host,
@@ -107,7 +100,9 @@ export async function runStage(host, event, payload = {}, { detached = false } =
     cwd,
     detached,
     nativeSessionId: nativeId,
-    sessionId: ovSessionId(host, nativeId),
+    // A child session has state, a lock and an OpenViking session of its own.
+    stateKey: child ? `${nativeId}__${child.replace(/[^A-Za-z0-9._-]/g, "-")}` : nativeId,
+    sessionId: ovSessionId(host, nativeId, child),
     budgetMs: host.budgets?.[event] || 0,
     fetchJSON: withRequestBudget(agent.fetchJSON, host.budgets?.[event], cfg.timeoutMs),
     // The peer the actor-peer header already carries, stamped into captured
@@ -115,12 +110,28 @@ export async function runStage(host, event, payload = {}, { detached = false } =
     get peerId() { return agent.effectivePeer.peerId; },
     log,
     logError,
+    // What the event did, for `host.observe`.
+    outcome: {},
   };
-  if (stage === "start") return sessionStart(ctx);
-  if (stage === "prompt") return promptSubmit(ctx);
-  if (stage === "compacted") {
+  const skip = read.skip
+    || (cfg.enabled === false && "disabled")
+    || (isBypassed(cfg, { sessionId: nativeId, cwd }) && "bypass")
+    || (child && cfg.skipSubagentSessions && "subagent");
+  let output = {};
+  if (skip) {
+    log("skip", { reason: skip });
+    ctx.outcome.skip = skip;
+  } else if (stage === "start") output = await sessionStart(ctx);
+  else if (stage === "prompt") output = await promptSubmit(ctx);
+  else if (stage === "compacted") {
     const { pointer } = deliverPointer(ctx, {});
-    return pointer ? { context: pointer } : {};
+    if (pointer) output = { context: pointer };
+  } else output = await capture(ctx);
+
+  if (output.context && host.present) output = { ...output, context: host.present(ctx, output.context) };
+  if (host.observe) {
+    if (output.context) ctx.outcome.context = output.context;
+    await Promise.resolve(host.observe(ctx, ctx.outcome)).catch((error) => logError("observe", error));
   }
-  return capture(ctx);
+  return output;
 }
