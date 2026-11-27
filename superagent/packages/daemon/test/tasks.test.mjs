@@ -1233,4 +1233,17 @@ describe('TaskManager', () => {
       }
     });
   }
+
+  it('takes its slot count from the worker settings, and a raised limit starts queued work at once', async (t) => {
+    let limits = { slots: 1, reservedSlots: 0 };
+    const { tasks, executor } = setup(t, { runtimes: { limits: () => limits, modelFor: () => ({ model: '', effort: '' }) } });
+    assert.equal(tasks.overview({ recent: 0 }).slots.of, 1, 'the setting overrides the default');
+    tasks.create({ rows: [row()], title: 'A', runtime: 'pi' });
+    tasks.create({ rows: [row()], title: 'B', runtime: 'pi' });
+    assert.deepEqual(executor.turns.map((turn) => turn.task.id), ['t1'], 'one slot, one turn');
+    limits = { slots: 2, reservedSlots: 1 };
+    tasks.pump();
+    assert.deepEqual(executor.turns.map((turn) => turn.task.id), ['t1', 't2'], 'the next slot starts the queued task');
+    assert.deepEqual(tasks.overview({ recent: 0 }).slots, { used: 2, of: 2, reserved: 0, reservedOf: 1 });
+  });
 });

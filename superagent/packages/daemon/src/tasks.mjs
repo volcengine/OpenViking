@@ -1110,20 +1110,33 @@ export class TaskManager {
     this.pump();
   }
 
+  // Slots in force now: the instance's defaults, overridden by the workers'
+  // settings when the owner set a value (/workers slots). Read on every pump
+  // and in the overview, so a raised limit starts waiting tasks at once and a
+  // lowered one drains: no running turn is stopped.
+  limits() {
+    const set = this.runtimes?.limits?.({ slots: this.slots, reservedSlots: this.reservedSlots }) ?? {};
+    const slots = Number.isInteger(set.slots) && set.slots > 0 ? set.slots : this.slots;
+    const reserved = Number.isInteger(set.reservedSlots) && set.reservedSlots >= 0 && set.reservedSlots <= slots
+      ? set.reservedSlots : Math.min(this.reservedSlots, slots);
+    return { slots, reservedSlots: reserved };
+  }
+
   pump() {
+    const { slots, reservedSlots } = this.limits();
     while (!this.stopped && this.pending.length > 0) {
       const reserved = [...this.running.values()].filter((slot) => slot.reserved).length;
       const normal = this.running.size - reserved;
-      let index = normal < this.slots ? 0 : -1;
+      let index = normal < slots ? 0 : -1;
       // Beyond the normal slots only a follow-up to a task that already ran.
-      if (index < 0 && reserved < this.reservedSlots) {
+      if (index < 0 && reserved < reservedSlots) {
         index = this.pending.findIndex((id) => { const task = this.get(id); return (task?.turns ?? 0) > 0 || Boolean(task?.parent_id); });
       }
       if (index < 0) return;
       const [taskId] = this.pending.splice(index, 1);
       const task = this.get(taskId);
       if (!task || task.status === 'stopped') continue;
-      void this.runTurn(task, { reserved: normal >= this.slots });
+      void this.runTurn(task, { reserved: normal >= slots });
     }
   }
 
@@ -1829,11 +1842,12 @@ export class TaskManager {
     const ended = this.db.prepare(`SELECT * FROM tasks WHERE status IN ${ENDED_SQL}
       ORDER BY ended_at_ms DESC LIMIT ?`).all(recent);
     const reserved = [...this.running.values()].filter((slot) => slot.reserved).length;
+    const { slots, reservedSlots } = this.limits();
     return {
       live: live.map((task) => this.facts(task)),
       ended: ended.map((task) => this.facts(task)),
       total: Number(this.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n),
-      slots: { used: this.running.size - reserved, of: this.slots, reserved, reservedOf: this.reservedSlots },
+      slots: { used: this.running.size - reserved, of: slots, reserved, reservedOf: reservedSlots },
       disk: this.disk,
       dormantDays: this.dormantDays(),
     };

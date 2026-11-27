@@ -11,6 +11,7 @@
 //   /workers model <name | default>       the model on that runtime (<runtime>:<name> for another)
 //   /workers effort <level | default>     the effort on that runtime
 //   /workers fallback <name | off | default>  where a task goes when its runtime's quota runs out
+//   /workers slots <n> [reserved | default]   turns running at once, and how many slots keep for follow-ups
 //
 // A setting applies to work that starts after it: a new task, or a task that
 // reopens for a new round whose session cannot go on. A task at work, or one
@@ -20,12 +21,18 @@
 import { matchPrefix } from './commands.mjs';
 import { RUNTIME_ALIASES, modelIdProblem, parseRuntimeModelSelector, staticModelEntries } from './runtime-catalog.mjs';
 import { isWorkerRuntime } from './worker-settings.mjs';
+import { RESERVED_SLOTS, WORKER_SLOTS } from './tasks.mjs';
 import { WORKER_RUNTIMES } from './worker-executor.mjs';
 
-const USAGE = '用法：/workers runtime <名称|router> · /workers model <名称|default> · /workers effort <档位|default> · /workers fallback <名称|off|default>';
+const USAGE = '用法：/workers runtime <名称|router> · /workers model <名称|default> · /workers effort <档位|default> · /workers fallback <名称|off|default> · /workers slots <数量> [预留]';
 const SCOPE = '只影响之后新建的任务，以及复开时原会话已续不上的任务；进行中的任务和复开后能续上原会话的任务留在原 Runtime，只有原 Runtime 额度用尽或持续失败时才交接到其他 Runtime。';
 const FOLLOW = new Set(['router', 'follow', 'default', '跟随']);
-const VERBS = ['runtime', 'model', 'effort', 'fallback'];
+// /workers slots default: back to the instance's configured count.
+const RESET = new Set(['default', '跟随']);
+const VERBS = ['runtime', 'model', 'effort', 'fallback', 'slots'];
+
+// A count typed by the owner: whole digits only, so "6x" is refused.
+const count = (value) => (/^\d+$/.test(String(value ?? '')) ? Number.parseInt(value, 10) : NaN);
 
 function minutes(ms) {
   return Math.max(1, Math.ceil(ms / 60_000));
@@ -77,6 +84,8 @@ export function workersOverview(settings, tasks, now = Date.now()) {
     const out = settings.unavailable(runtime);
     if (out) lines.push(`暂不可用：${runtime}（额度用尽，约 ${minutes(out.until - now)} 分钟后再试；/workers runtime ${runtime} 可立即恢复）`);
   }
+  const limits = tasks?.limits?.();
+  if (limits) lines.push(`并发槽位：${limits.slots}（其中 ${limits.reservedSlots} 个留给跟进任务）`);
   const live = liveByRuntime(tasks);
   if (live.size) lines.push(`进行中的任务：${[...live].map(([runtime, count]) => `${runtime} ${count}`).join(' · ')}`);
   lines.push(USAGE);
@@ -174,6 +183,26 @@ function runtimeCommand(settings, tasks, arg) {
   ].filter(Boolean).join('\n') };
 }
 
+function slotsCommand(settings, tasks, arg) {
+  const limits = tasks?.limits?.() ?? { slots: WORKER_SLOTS, reservedSlots: RESERVED_SLOTS };
+  if (!arg) {
+    return { ok: true, text: `并发槽位：${limits.slots}（其中 ${limits.reservedSlots} 个只给跟进任务）\n用法：/workers slots <1-64> [预留 0-64] · /workers slots default\n调高后排队中的任务立即开跑；调低不打断正在跑的轮次，槽位空出后自然收敛。` };
+  }
+  if (RESET.has(arg.toLowerCase())) {
+    settings.clearSlots();
+    tasks?.pump?.();
+    const now = tasks?.limits?.() ?? { slots: WORKER_SLOTS, reservedSlots: RESERVED_SLOTS };
+    return { ok: true, text: `并发槽位已恢复实例配置：${now.slots}（其中 ${now.reservedSlots} 个留给跟进任务）。` };
+  }
+  const [rawSlots, rawReserved] = arg.split(/\s+/).filter(Boolean);
+  const slots = count(rawSlots);
+  const reserved = rawReserved === undefined ? limits.reservedSlots : count(rawReserved);
+  const set = settings.setSlots(slots, reserved);
+  if (!set.ok) return set;
+  tasks?.pump?.();
+  return { ok: true, text: `并发槽位已设为 ${set.slots}（其中 ${set.reservedSlots} 个只给跟进任务）。之后空出的槽位按新值开跑。` };
+}
+
 function fallbackCommand(settings, arg) {
   if (!arg) {
     const fallback = settings.fallback();
@@ -209,6 +238,7 @@ export async function executeWorkersCommand(command, { event, connectors, settin
     if (verbs[0] === 'runtime') return runtimeCommand(settings, tasks, arg);
     if (verbs[0] === 'model') return await modelCommand(settings, tasks, router, arg);
     if (verbs[0] === 'effort') return effortCommand(settings, arg);
+    if (verbs[0] === 'slots') return slotsCommand(settings, tasks, arg);
     return fallbackCommand(settings, arg);
   } catch (error) {
     return { ok: false, text: `设置失败：${error.message}` };

@@ -153,4 +153,23 @@ describe('/workers', () => {
     assert.match((await run(settings, 'effort turbo')).text, /^不支持的档位：turbo\n可选：none、minimal、low、medium、high、xhigh$/);
     assert.match((await run(settings, 'bogus')).text, /^用法：/);
   });
+
+  it('sets how many worker turns run at once, and keeps a reserved slot for follow-ups', async () => {
+    const { settings } = settingsWith();
+    let pumped = 0;
+    const taskApi = { overview: () => ({ live: [] }), limits: () => settings.limits({ slots: 3, reservedSlots: 1 }), pump: () => { pumped += 1; } };
+    const send = (arg) => executeWorkersCommand({ name: 'workers', arg }, { event: OWNER_DM, connectors, settings, tasks: taskApi, router, now: 1_000_000 });
+    assert.match((await send('slots')).text, /并发槽位：3（其中 1 个只给跟进任务）/);
+    const set = await send('slots 6 2');
+    assert.equal(set.ok, true);
+    assert.match(set.text, /已设为 6（其中 2 个只给跟进任务）/);
+    assert.equal(pumped, 1, 'a raised limit starts queued work now');
+    assert.deepEqual(settings.limits({ slots: 3, reservedSlots: 1 }), { slots: 6, reservedSlots: 2 });
+    assert.equal((await send('slots 6 9')).ok, false);
+    assert.equal((await send('slots 0')).ok, false);
+    assert.equal((await send('slots 6x')).ok, false, 'whole digits only');
+    const reset = await send('slots default');
+    assert.match(reset.text, /恢复实例配置：3（其中 1 个/);
+    assert.deepEqual(settings.limits({ slots: 3, reservedSlots: 1 }), { slots: 3, reservedSlots: 1 });
+  });
 });

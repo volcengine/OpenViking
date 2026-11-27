@@ -433,6 +433,12 @@ export function getConfig() {
     // read them at a checkpoint (inbox.mjs); workers adds worker sessions
     // the main session hands longer work to (tasks.mjs). Read at start only.
     scheduler: enumEnv('OV_SUPERAGENT_SCHEDULER', 'legacy', ['legacy', 'inbox', 'workers']),
+    // Worker turns running at once, and how many of those slots only a
+    // follow-up to an existing task may take (tasks.mjs, whose built-in
+    // WORKER_SLOTS/RESERVED_SLOTS these must equal). /workers slots changes
+    // them for a running instance.
+    workerSlots: intEnv('OV_SUPERAGENT_WORKER_SLOTS', 3, { min: 1, max: 64 }),
+    workerReservedSlots: intEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', 1, { min: 0, max: 63 }),
     // Directories of ended worker tasks (<workspace>/tasks): dependency
     // folders are deleted after the first number of days, the whole directory
     // and its worker sessions after the second; past the budget (GB) the

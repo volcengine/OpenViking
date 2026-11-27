@@ -76,6 +76,33 @@ export class WorkerSettings {
     this.store.setSetting(`worker_${key}`, value ?? '');
   }
 
+  // Slots (tasks.mjs): how many worker turns run at once, and how many of
+  // them only a follow-up to an existing task may take. Unset, the instance's
+  // configured values (OV_SUPERAGENT_WORKER_SLOTS, ..._RESERVED_SLOTS).
+  limits(fallback = {}) {
+    return { slots: this.number('slots', fallback.slots), reservedSlots: this.number('reserved_slots', fallback.reservedSlots) };
+  }
+
+  number(key, fallback) {
+    const value = Number.parseInt(this.read(key), 10);
+    return Number.isInteger(value) ? value : fallback;
+  }
+
+  // Set by /workers slots: both values, already resolved against the slots in
+  // force; an invalid one changes nothing.
+  setSlots(slots, reservedSlots) {
+    if (!Number.isInteger(slots) || slots < 1 || slots > 64) return { ok: false, text: '槽位数要是 1 到 64 的整数' };
+    if (!Number.isInteger(reservedSlots) || reservedSlots < 0 || reservedSlots > slots) return { ok: false, text: `预留槽位要是 0 到 ${slots} 的整数` };
+    this.write('slots', String(slots));
+    this.write('reserved_slots', String(reservedSlots));
+    return { ok: true, slots, reservedSlots };
+  }
+
+  clearSlots() {
+    this.write('slots', '');
+    this.write('reserved_slots', '');
+  }
+
   // The runtime set with /workers runtime, or null: workers follow the router.
   configuredRuntime() {
     const value = this.read('runtime');
