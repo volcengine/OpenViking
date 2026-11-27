@@ -756,18 +756,36 @@ async def test_reindex_user_namespace_partitions_memory_skill_and_resource(monke
 
 
 @pytest.mark.asyncio
-async def test_reindex_global_namespace_partitions_user_and_resources(monkeypatch):
+async def test_reindex_global_namespace_covers_agent_and_preserves_skill_indexing(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
 
     children = {
         "viking://agent/skills": [{"uri": "viking://agent/skills/demo", "isDir": True}],
         "viking://user": [{"uri": "viking://user/bob", "isDir": True}],
     }
+    tools = {"uri": "viking://agent/tools", "isDir": True}
+    extra = {"uri": "viking://agent/extra/note.md", "isDir": False}
     fs = SimpleNamespace(
         stat=AsyncMock(return_value={"isDir": True}),
         ls=AsyncMock(side_effect=lambda uri, **kw: children[uri]),
+        tree=AsyncMock(
+            return_value=[
+                {"uri": "viking://agent/skills", "isDir": True},
+                *children["viking://agent/skills"],
+                tools,
+                extra,
+            ]
+        ),
     )
-    db = SimpleNamespace(get_reindex_inventory_under_uri=AsyncMock(return_value={}))
+    records = {
+        "tool-overview": {"uri": tools["uri"], "level": 1},
+        "skill-content": {"uri": "viking://agent/skills/demo/SKILL.md", "level": 2},
+    }
+    db = SimpleNamespace(
+        get_reindex_inventory_under_uri=AsyncMock(
+            side_effect=lambda uri, **kw: records if uri == "viking://agent" else {}
+        )
+    )
     monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: fs)
     monkeypatch.setattr(
         "openviking.service.reindex_executor.get_service",
@@ -782,14 +800,19 @@ async def test_reindex_global_namespace_partitions_user_and_resources(monkeypatc
         uri="viking://", mode="vectors_only", run=_make_reindex_run(ctx, _ReindexCounters())
     )
 
-    assert {
-        (call.kwargs["uri"], call.kwargs["context_type"])
-        for call in executor._reindex_rfv.await_args_list
-    } == {
-        ("viking://resources", "resource"),
-        ("viking://agent", "resource"),
-        ("viking://agent/skills", "skill"),
-        ("viking://agent/skills/demo", "skill"),
+    scopes = {call.kwargs["uri"]: call.kwargs for call in executor._reindex_rfv.await_args_list}
+    assert {uri: scope["context_type"] for uri, scope in scopes.items()} == {
+        "viking://resources": "resource",
+        "viking://agent": "resource",
+        "viking://agent/skills": "skill",
+        "viking://agent/skills/demo": "skill",
+    }
+    agent_scope = scopes["viking://agent"]
+    assert agent_scope["recursive"] is True
+    assert agent_scope["formal_entries"] == [tools, extra]
+    assert agent_scope["vector_inventory"] == {"tool-overview": records["tool-overview"]}
+    assert scopes["viking://agent/skills/demo"]["vector_inventory"] == {
+        "skill-content": records["skill-content"]
     }
     assert [call.kwargs["uri"] for call in executor._reindex_user_namespace.await_args_list] == [
         "viking://user/bob"
