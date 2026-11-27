@@ -36,6 +36,12 @@ class VolcengineConfig(BaseModel):
             "Used together with `api_key` for data-plane-only access."
         ),
     )
+    console_host: Optional[str] = Field(
+        default=None, description="Optional AK/SK management API hostname, without a URL scheme"
+    )
+    data_host: Optional[str] = Field(
+        default=None, description="Optional AK/SK data API hostname, without a URL scheme"
+    )
 
 
 class VikingDBConfig(BaseModel):

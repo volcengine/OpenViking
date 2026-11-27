@@ -83,6 +83,34 @@ def test_embedding_binding_rotation_preserves_implicit_input_and_identity(config
     assert dense["dimension"] == 1024 and dense["extra_body"] == {"routing": "keep"}
 
 
+@pytest.mark.parametrize("backup_token", [None, "", "backup-token"])
+def test_embedding_form_preserves_sts_token_ownership(config_file, backup_token):
+    path, raw = config_file
+    backup = {"id": "backup", "ak": "backup-ak", "sk": "backup-sk"}
+    if backup_token is not None:
+        backup["session_token"] = backup_token
+    raw["embedding"]["dense"] = {
+        "provider": "vikingdb",
+        "model": "bge-m3",
+        "dimension": 1024,
+        "ak": "parent-ak",
+        "sk": "parent-sk",
+        "session_token": "parent-token",
+        "region": "ap-southeast-1",
+        "credentials": [{"id": "primary"}, backup],
+    }
+    path.write_text(json.dumps(raw))
+    before = read_config_file()
+    settings = {"embedding": before["models"]["embedding"]["config"]}
+    projected = settings["embedding"]["dense"]["credentials"]
+    assert projected[0]["session_token"] == "parent-token"
+    assert projected[1].get("session_token") == backup_token
+    _save_form(settings, before["revision"])
+    saved = json.loads(path.read_text())["embedding"]["dense"]["credentials"]
+    assert saved[0]["session_token"] == "parent-token"
+    assert saved[1].get("session_token") == backup_token
+
+
 def test_programmatic_configuration_never_guesses_a_file(monkeypatch):
     monkeypatch.setattr(OpenVikingConfigSingleton, "_config_file", None)
     with pytest.raises(ValueError, match="without a configuration file"):
