@@ -454,6 +454,7 @@ export class PersonalAgentDaemon {
       // Inputs the previous daemon accepted but never handed to the model,
       // and tasks whose worker it was running.
       this.inbox?.restore();
+      this.harness.restorePendingInboxInputs();
       this.tasks?.restore();
       this.tasks?.startSweeps();
       this.timerConnector = new TimerConnector({
@@ -695,7 +696,7 @@ export class PersonalAgentDaemon {
 
   runMaintenance() {
     if (!this.store) return;
-    const removed = this.store.prune(this.config.retentionMs);
+    const removed = this.store.prune(this.config.retentionMs, Date.now(), { maxEventAgeMs: this.config.maxEventAgeMs });
     try {
       removed.larkMedia = pruneLarkMedia(this.config.tempDir, this.config.retentionMs);
     } catch (error) {

@@ -61,6 +61,83 @@ describe('Store', () => {
     assert.equal(store.ingest(event('1')).inserted, false);
   });
 
+  it('migrates old DONE rows without preparing them for the inbox', () => {
+    const { inbound } = store.ingest(event('old'));
+    store.db.exec(`
+      DROP INDEX connector_events_inbox_prepare_pending;
+      ALTER TABLE connector_events DROP COLUMN inbox_prepare_pending;
+    `);
+    store.close();
+    store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    assert.deepEqual(store.inboundBySeq(inbound.seq), inbound);
+    assert.deepEqual(store.pendingInboxInputs(), []);
+    assert.equal(store.ingest(event('old'), null, Date.now(), { prepareForInbox: true }).inserted, false);
+    assert.deepEqual(store.pendingInboxInputs(), []);
+  });
+
+  it('rolls back the inbound row, journal, and inbox preparation together', () => {
+    const message = event('rollback');
+    const options = { prepareForInbox: true };
+    store.db.exec(`
+      CREATE TRIGGER fail_inbound_activity BEFORE INSERT ON activities WHEN NEW.kind = 'message.received'
+      BEGIN SELECT RAISE(ABORT, 'inbound activity failed'); END;
+    `);
+    assert.throws(() => store.ingest(message, null, 1_000, options), /inbound activity failed/);
+    assert.deepEqual(store.acceptedEvents(message.eventId), []);
+    assert.deepEqual(store.cognitionJournal(), []);
+    assert.deepEqual(store.pendingInboxInputs(), []);
+
+    store.db.exec('DROP TRIGGER fail_inbound_activity');
+    const { inserted, inbound } = store.ingest(message, null, 2_000, options);
+    assert.equal(inserted, true);
+    assert.equal(store.ingest(message, null, 3_000, options).inserted, false);
+    assert.deepEqual(store.pendingInboxInputs(), [inbound]);
+    assert.equal(store.pendingInboxInputs()[0].receivedAtMs, 2_000);
+    assert.deepEqual(store.cognitionJournal().map((row) => row.inboundSeq), [inbound.seq]);
+    assert.equal(store.cognitionJournal()[0].status, 'PENDING');
+    store.close();
+    store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    assert.equal(store.cognitionJournal()[0].status, 'PENDING');
+    assert.equal(store.transaction(() => store.clearPendingInboxInput(inbound.seq)), true);
+    assert.equal(store.cognitionJournal()[0].status, 'COMMITTED');
+    assert.equal(store.clearPendingInboxInput(inbound.seq), false);
+    assert.equal(store.ingest(message, null, 4_000, options).inserted, false);
+    assert.deepEqual(store.pendingInboxInputs(), []);
+  });
+
+  it('marks only events that pass the final ingest filter for inbox preparation', () => {
+    const options = { prepareForInbox: true };
+    const ignored = store.ingest(event('ignored'), 'unsupported_message_type', 1_000, options);
+    assert.equal(ignored.inbound.status, 'RULE_IGNORED');
+    const expiredCard = store.ingest({
+      ...event('expired-card', 'expired answer', { kind: 'message.action' }),
+      parentId: 'om-expired-question',
+      question: { kind: 'choice' },
+      answer: { key: 'yes' },
+    }, null, 2_000, options);
+    assert.equal(expiredCard.filterReason, 'card_already_answered_or_expired');
+    assert.deepEqual(store.pendingInboxInputs(), []);
+    assert.deepEqual(store.cognitionJournal(), []);
+  });
+
+  it('keeps pending inbox inputs through the recovery window, then applies normal retention', () => {
+    const options = { prepareForInbox: true };
+    const newer = store.ingest(event('first'), null, 5_000, options).inbound;
+    const older = store.ingest(event('second'), null, 4_999, options).inbound;
+    assert.deepEqual(store.pendingInboxInputs(), [newer, older], 'ordered by seq, even if receipt times differ');
+
+    assert.equal(store.prune(10_000, 10_000, { maxEventAgeMs: 5_000 }).expiredInboxInputs, 1);
+    assert.deepEqual(store.pendingInboxInputs(), [newer], 'the cutoff is inclusive');
+    assert.equal(store.inboundBySeq(older.seq).status, 'DONE');
+
+    assert.equal(store.prune(1_000, 10_000, { maxEventAgeMs: 5_000 }).inbound, 1);
+    assert.deepEqual(store.pendingInboxInputs(), [newer], 'still recoverable after ordinary retention');
+    assert.deepEqual(store.recoverPendingInboxInputs(5_001), [], 'recheck the cutoff after startup maintenance');
+    assert.deepEqual(store.pendingInboxInputs(), []);
+    assert.deepEqual(store.cognitionJournal().map((row) => row.status), ['COMMITTED', 'COMMITTED']);
+    assert.equal(store.prune(1_000, 10_001, { maxEventAgeMs: 5_000 }).inbound, 1);
+  });
+
   it('resolves a quoted message author from inbound history or the journal', () => {
     store.ingest(event('parent', 'original', { senderId: 'ou-author' }));
     const { message, ...author } = store.resolveMessageAuthor('om-parent');

@@ -140,10 +140,13 @@ export class Harness {
     // carry out, like a slash command; it never reaches the model as such.
     const approval = commandText === null || command ? null : this.approvalReply(commandText, event);
     const handler = this.eventHandler(event);
+    const reason = command ? 'slash_command' : approval ? 'approval_reply' : filterReason;
+    // Capture eligibility at admission, even if the runtime changes during preparation.
+    const allowInbox = !reason && !handler && (this.inbox?.usable() ?? false);
+    const prepareForInbox = allowInbox && typeof this.inbox.persist === 'function';
     let result;
     try {
-      result = this.store.ingest(event, command ? 'slash_command' : approval ? 'approval_reply' : filterReason,
-        Date.now(), { journal: !handler });
+      result = this.store.ingest(event, reason, Date.now(), { journal: !handler, prepareForInbox });
     } catch (error) {
       this.logger.error('event_persist_failed', { error: safeError(error) });
       this.recordActivity('system.persist_failed', {
@@ -204,8 +207,18 @@ export class Harness {
       conversationRef: opaqueRef(event.conversationKey),
       chatType: event.chatType,
     });
+    this.enqueueInput(event, result.inbound, { allowInbox, prepareForInbox });
+  }
+
+  restorePendingInboxInputs() {
+    if (!this.inbox) return;
+    const pending = this.store.recoverPendingInboxInputs(Date.now() - this.config.maxEventAgeMs);
+    for (const inbound of pending) this.enqueueInput(inbound, inbound, { prepareForInbox: true });
+  }
+
+  enqueueInput(event, inbound, { allowInbox, prepareForInbox }) {
     this.enqueueIngress(async () => {
-      const idleHint = event.chatId && event.replyRoute && this.liveness?.beforeInbound(event, result.inbound, {
+      const idleHint = event.chatId && event.replyRoute && this.liveness?.beforeInbound(event, inbound, {
         modelBusy: this.runtime.snapshot().work.turnInProgress,
       });
       // Bounded roster warm-up so formatInboundLine can resolve from= to a
@@ -213,11 +226,14 @@ export class Harness {
       // slow or failing lark-cli only degrades the label back to the id stub.
       // A document has no members to list: its Connector names the commenter.
       if (event.source === 'lark' && event.chatId && event.chatType !== 'doc_comment') await this.roster?.warm(event.chatId);
+      if (this.isStopping()) return;
       const owner = this.isOwner(event);
       const mention = this.mentionTarget(event);
       // Bounded like the warm-up above, and never rejects.
       const recall = this.recall && wantsRecall(event, mention) ? await this.recall.forEvent(event, { owner }) : '';
+      if (this.isStopping()) return;
       await this.runtime.prepareInputContext?.();
+      if (this.isStopping()) return;
       const line = formatInboundLine(event, null, {
         ...(idleHint ?? {}),
         owner,
@@ -225,23 +241,35 @@ export class Harness {
         replyTo: resolveReplyTarget(this.store, event),
         // How long only bots have been talking here: the model's cue to stop.
         ...(BOT_SENDERS.has(event.senderType)
-          ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, result.inbound.seq) } : {}),
+          ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, inbound.seq) } : {}),
       });
       const hint = event.chatId ? this.taskHint?.(event, { owner }) ?? '' : '';
-      this.route(eventDeliveryItem(event, result.inbound.seq, { text: [line, hint, recall].filter(Boolean).join('\n') }),
-        inputMeta(event, { owner, mention }));
+      const item = eventDeliveryItem(event, inbound.seq, { text: [line, hint, recall].filter(Boolean).join('\n') });
+      const meta = inputMeta(event, { owner, mention });
+      if (!prepareForInbox) {
+        this.route(item, meta, { allowInbox });
+        return;
+      }
+      const entry = this.store.transaction(() => {
+        if (!this.store.clearPendingInboxInput(inbound.seq)) return null;
+        return this.inbox.persist(item, meta);
+      });
+      if (!entry) return;
+      this.inbox.publish(entry);
+      if (!this.inbox.usable()) this.inbox.drain();
     });
   }
 
   // Every input line's way to the runtime: the inbox scheduler's inbox, or
   // the legacy group burst. A runtime that cannot read the inbox (no Core
   // tools) gets inputs the legacy way, after anything still waiting there.
-  route(item, meta) {
-    if (this.inbox?.usable()) {
+  route(item, meta, { allowInbox = true } = {}) {
+    const usable = this.inbox?.usable();
+    if (usable && allowInbox) {
       this.inbox.add(item, meta);
       return;
     }
-    this.inbox?.drain();
+    if (!usable) this.inbox?.drain();
     this.groupBurst.route(item);
   }
 

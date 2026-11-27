@@ -233,6 +233,7 @@ export class Store {
         received_at_ms INTEGER NOT NULL,
         status TEXT NOT NULL,
         filter_reason TEXT,
+        inbox_prepare_pending INTEGER NOT NULL DEFAULT 0,
         turn_id INTEGER,
         last_error TEXT,
         FOREIGN KEY (conv_key) REFERENCES conversations(conv_key),
@@ -379,17 +380,27 @@ export class Store {
         ON cognition_journal(epoch, seq);
       CREATE INDEX IF NOT EXISTS cognition_journal_runtime_token
         ON cognition_journal(runtime_token, seq);
-
-      -- A prior sidecar may have died after Lark accepted an action but before
-      -- its local commit. Preserve that ambiguity for catch-up; never silently
-      -- treat it as failed and invite a duplicate send.
-      UPDATE cognition_journal SET status = 'UNCERTAIN' WHERE status = 'PENDING';
-      UPDATE outbox SET status = 'UNCERTAIN' WHERE status = 'PENDING';
     `);
+    if (!this.db.prepare('PRAGMA table_info(connector_events)').all().some(({ name }) => name === 'inbox_prepare_pending')) {
+      this.db.exec('ALTER TABLE connector_events ADD COLUMN inbox_prepare_pending INTEGER NOT NULL DEFAULT 0');
+    }
     migrateMeetingStore(this.db);
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS activities_source
-        ON activities(source_ref, id DESC)
+        ON activities(source_ref, id DESC);
+      CREATE INDEX IF NOT EXISTS connector_events_inbox_prepare_pending
+        ON connector_events(seq) WHERE inbox_prepare_pending = 1;
+      CREATE INDEX IF NOT EXISTS cognition_journal_inbound_seq
+        ON cognition_journal(inbound_seq) WHERE kind = 'inbound';
+
+      -- A prior sidecar may have died after Lark accepted an action but before
+      -- its local commit. Preserve that ambiguity for catch-up. Inbound
+      -- preparation is instead retried using the connector ledger marker.
+      UPDATE cognition_journal SET status = 'UNCERTAIN'
+        WHERE status = 'PENDING' AND (kind <> 'inbound' OR NOT EXISTS (
+          SELECT 1 FROM connector_events WHERE seq = cognition_journal.inbound_seq AND inbox_prepare_pending = 1
+        ));
+      UPDATE outbox SET status = 'UNCERTAIN' WHERE status = 'PENDING';
     `);
   }
 
@@ -405,8 +416,8 @@ export class Store {
         message_id, event_id, conv_key, chat_id, chat_type, message_type,
         source, sender_id, sender_type, root_id, parent_id, thread_id, thread_root_id,
         content, mentions_json, create_time_ms, received_at_ms,
-        status, filter_reason
-      ) VALUES (${Array(26).fill('?').join(', ')})
+        status, filter_reason, inbox_prepare_pending
+      ) VALUES (${Array(27).fill('?').join(', ')})
     `);
     this.getInboundByMessage = this.db.prepare('SELECT * FROM connector_events WHERE connector_instance = ? AND message_id = ? ORDER BY seq DESC LIMIT 1');
     this.getInboundByEvent = this.db.prepare('SELECT * FROM connector_events WHERE connector_instance = ? AND event_id = ?');
@@ -765,7 +776,7 @@ export class Store {
 
   // One event ledger for all sources. Chat columns are nullable indexes into the
   // canonical envelope, not a separate message ledger. No provider raw is stored.
-  ingest(event, filterReason = null, now = Date.now(), { journal = true } = {}) {
+  ingest(event, filterReason = null, now = Date.now(), { journal = true, prepareForInbox = false } = {}) {
     return this.transaction(() => {
       const existing = this.getInboundByEvent.get(event.connectorInstance, event.eventId);
       if (existing) return { inserted: false, inbound: rowToInbound(existing), filterReason: existing.filter_reason };
@@ -801,6 +812,7 @@ export class Store {
         now,
         status,
         filterReason,
+        prepareForInbox && !filterReason ? 1 : 0,
       );
       const inserted = number(result.changes) > 0;
       const row = this.getInboundByEvent.get(event.connectorInstance, event.eventId);
@@ -809,6 +821,8 @@ export class Store {
         if (!ignored && journal) {
           this.appendCognitionJournal({
             kind: 'inbound',
+            // OV history sync waits at PENDING rows, including retired epochs.
+            status: prepareForInbox ? 'PENDING' : 'COMMITTED',
             atMs: event.createTimeMs || now,
             inboundSeq: number(row.seq),
             chatId: event.chatId,
@@ -840,6 +854,43 @@ export class Store {
       }
       return { inserted, inbound: rowToInbound(row), filterReason: row?.filter_reason ?? filterReason };
     });
+  }
+
+  pendingInboxInputs() {
+    return this.db.prepare(`
+      SELECT * FROM connector_events WHERE inbox_prepare_pending = 1 ORDER BY seq
+    `).all().map(rowToInbound);
+  }
+
+  recoverPendingInboxInputs(cutoff) {
+    return this.transaction(() => {
+      this.expirePendingInboxInputs(cutoff);
+      return this.pendingInboxInputs();
+    });
+  }
+
+  // The caller's transaction also writes the ready inbox row.
+  clearPendingInboxInput(seq) {
+    const cleared = this.db.prepare(`
+      UPDATE connector_events SET inbox_prepare_pending = 0 WHERE seq = ? AND inbox_prepare_pending = 1
+    `).run(seq).changes > 0;
+    if (cleared) this.commitInboxInputJournal(seq);
+    return cleared;
+  }
+
+  expirePendingInboxInputs(cutoff) {
+    const expired = this.db.prepare(`
+      UPDATE connector_events SET inbox_prepare_pending = 0
+      WHERE inbox_prepare_pending = 1 AND received_at_ms < ? RETURNING seq
+    `).all(cutoff);
+    for (const { seq } of expired) this.commitInboxInputJournal(seq);
+    return expired.length;
+  }
+
+  commitInboxInputJournal(seq) {
+    this.db.prepare(`
+      UPDATE cognition_journal SET status = 'COMMITTED' WHERE inbound_seq = ? AND kind = 'inbound' AND status = 'PENDING'
+    `).run(seq);
   }
 
   upsertMeetingInvite({
@@ -1723,12 +1774,13 @@ export class Store {
       WHERE remote_message_id = ? AND connector = ? ORDER BY id DESC LIMIT 1`).get(messageId, connector) ?? null;
   }
 
-  prune(retentionMs, now = Date.now()) {
+  prune(retentionMs, now = Date.now(), { maxEventAgeMs = retentionMs } = {}) {
     const cutoff = now - retentionMs;
     const removed = this.transaction(() => {
+      const expiredInboxInputs = this.expirePendingInboxInputs(now - maxEventAgeMs);
       const inbound = this.db.prepare(`
         DELETE FROM connector_events
-        WHERE received_at_ms < ?
+        WHERE received_at_ms < ? AND inbox_prepare_pending = 0
       `).run(cutoff);
       const meeting = this.meetings.prune(cutoff);
       const outbox = this.db.prepare(`
@@ -1742,6 +1794,7 @@ export class Store {
       `).run();
       return {
         inbound: number(inbound.changes),
+        expiredInboxInputs,
         meetingEvents: meeting.events,
         meetingSessions: meeting.sessions,
         outbox: number(outbox.changes),

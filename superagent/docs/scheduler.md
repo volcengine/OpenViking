@@ -13,8 +13,8 @@ edit `config.json` and restart the instance.
 | `inbox` | While the model works, inputs wait and the model is told they are there; it reads them at a checkpoint. |
 | `workers` | The inbox, and the main session becomes a router: it hands longer work to worker sessions (on the router's runtime unless `/workers` sets another) and relays their results. |
 
-With `legacy`, the prompt, the tool list, the policyHash and the database schema
-are exactly what they were before the setting existed.
+With `legacy`, the prompt, tool list and policyHash stay the same. The ready
+inbox table is created on first use by the inbox and workers schedulers.
 
 ## Inbox
 
@@ -30,7 +30,8 @@ the same `event=`, `msg=` and authenticated tags.
 ### Flow
 
 ```
-Connector event → Harness (validate, dedupe, ledger) → inbox_pending
+Connector event → Harness (validate, dedupe, ledger marks pending preparation)
+                → ordered context preparation → ready in inbox_pending
                                                          │
           runtime idle ──────────────────────────────────┤── wake: start a turn with the oldest
                                                          │   waiting inputs (up to 20; the rest
@@ -69,21 +70,34 @@ Connector event → Harness (validate, dedupe, ledger) → inbox_pending
 - **Decisions.** An input counts as consumed when it is delivered, by a wake,
   `message_check` or a held delivery, exactly as a steered input does. Inputs
   never delivered are never nudged.
-- **Durability.** Waiting inputs are rows in `inbox_pending` (created on first
-  use, so a legacy instance never has the table). A restart delivers them
-  again; rows older than the event age limit (`OV_SUPERAGENT_MAX_EVENT_AGE_MS`) are
-  dropped like a stale event. Legacy keeps its known gap: an input inside the
-  400 ms group window when the process dies is not delivered.
+- **Durability.** The ledger records inbox-eligible inputs as pending preparation
+  in the same transaction that accepts them. The Harness prepares their context
+  in order, then atomically clears the marker and writes a ready row to
+  `inbox_pending`. Only ready rows can appear in a notice or be delivered by
+  `message_check`. The runtime's OpenViking history sync pauses at the first
+  pending preparation. On restart, the daemon loads ready rows first, then queues
+  pending preparations in their original `seq` order before subscribing to live
+  Connector events. The same event ID still deduplicates against the ledger.
+  Once `AgentRuntime.submit` returns `accepted: true`, delivery belongs to the
+  runtime and follows its usual turn recovery rules.
+- **Expiry and upgrade.** The event age limit (`OV_SUPERAGENT_MAX_EVENT_AGE_MS`)
+  starts at receipt for pending preparations and at ready-row creation for
+  regular ready inputs. Maintenance protects pending preparations during that
+  window, then clears their markers and applies ordinary ledger retention.
+  Ready task reports keep their existing expiry exception. On upgrade, existing
+  `DONE` rows start with the marker off and existing ready rows still recover.
+  An input in the legacy 400 ms group window can be lost when the process stops.
 - **Runtimes.** The inbox needs the Core tools (`message_check`). Ark has none,
   so a manifest with `scheduler: "inbox"` on Ark is rejected; switching to Ark
-  at run time delivers everything waiting at once and routes new inputs the
-  legacy way. A runtime that cannot take input mid-turn (OpenCode,
-  `activeInput: queue-next-turn`) gets no notices; its waiting inputs start its
-  next turn.
-- **Slash commands, approvals, meeting notes.** Slash commands and approval
-  replies are handled by the Core before the inbox. Daemon notes about a chat
-  (`[mail reply sent]`) and undecided-line reminders wait in the inbox like
-  inputs. The meeting inbox keeps its own notice.
+  at run time drains ready inputs through the runtime's submit path. Pending
+  preparations use that same drain after becoming ready. Inputs accepted
+  without Core tools take the legacy route. A runtime that cannot take input
+  mid-turn (OpenCode, `activeInput: queue-next-turn`) gets no notices. Its waiting
+  inputs start its next turn.
+- **Slash commands, approvals, meeting notes.** The Core handles slash commands,
+  approval replies and dedicated event handlers before inbox preparation.
+  Daemon notes about a chat (`[mail reply sent]`) and undecided-line reminders
+  wait in the inbox like inputs. The meeting inbox keeps its own notice.
 
 ### Observing it
 
