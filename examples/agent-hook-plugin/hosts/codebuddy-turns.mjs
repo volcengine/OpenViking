@@ -144,13 +144,6 @@ function unwrapDeferredCall(record) {
   return { name: toolName, arguments: args.params ?? {} };
 }
 
-// A result's output is a string or one `{type: "text", text}` block.
-function resultOutput(output) {
-  return output && typeof output === "object" && !Array.isArray(output) && typeof output.type === "string"
-    ? [output]
-    : output;
-}
-
 // A failed tool call is `incomplete`, but a failed shell command is
 // `completed` and says so only in `providerData.toolResult.rawResponse`.
 function isErrorResult(record) {
@@ -191,7 +184,7 @@ function payloadForRecord(record, namesByCallId) {
       // Re-typed: the shared set has no `function_call_result`.
       type: "tool_result",
       name: namesByCallId.get(callId) || record.name,
-      output: resultOutput(record.output),
+      output: record.output,
       call_id: callId,
     };
     if (isErrorResult(record)) payload.is_error = true;

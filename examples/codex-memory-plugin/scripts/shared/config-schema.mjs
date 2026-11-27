@@ -3,7 +3,7 @@
  * Every knob a memory plugin reads, declared once.
  *
  * A setting stayed uniform across harnesses only when a shared module read it
- * on the hot path: `recallLimit`, `scoreThreshold` and `captureMaxLength` agree
+ * on the hot path: `recallLimit`, `scoreThreshold` and `captureFilters` agree
  * everywhere because `recall-core` and `capture-utils` read them. Everything
  * else drifted — the same switch is `autoRecall` in three loaders, an
  * `autoRecall` *object* in opencode, `syncTurns` in dsh and pi, and absent from
@@ -141,7 +141,6 @@ export const KNOBS = [
   { name: "captureWithoutSession", type: "bool", default: false, capability: "capture" },
   { name: "nativeAgents", type: "list", default: [], capability: "capture" },
   { name: "captureMode", type: "enum", values: ["semantic", "keyword"], default: "semantic", env: "OPENVIKING_CAPTURE_MODE", capability: "capture" },
-  { name: "captureMaxLength", type: "int", default: 24000, min: 200, max: 100000, env: "OPENVIKING_CAPTURE_MAX_LENGTH", capability: "capture" },
   // Tool output is reported verbatim; the server owns truncation via
   // tool_output_externalization. This cap only guards pathological payloads.
   { name: "captureToolMaxChars", type: "int", default: 1000000, min: 200, max: 1000000, env: "OPENVIKING_CAPTURE_TOOL_MAX_CHARS", capability: "capture" },
@@ -149,14 +148,10 @@ export const KNOBS = [
   // conversation extracts noticeably worse.
   { name: "captureAssistantTurns", type: "bool", default: true, env: "OPENVIKING_CAPTURE_ASSISTANT_TURNS", capability: "capture" },
   { name: "captureLastAssistantOnStop", type: "bool", default: true, env: "OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP", capability: "capture" },
-  // dsh is the only reader. Its Experience usage records need the completed
-  // tool results, so it captures them by default.
-  { name: "captureToolResults", type: "bool", default: false, harness: { dsh: true }, env: "OPENVIKING_CAPTURE_TOOL_RESULTS", capability: "capture" },
   { name: "captureFilters", type: "list", default: [], env: "OPENVIKING_CAPTURE_FILTERS", capability: "capture" },
   // 0 means "derive from timeoutMs": a write gets a longer budget than a read.
   { name: "captureTimeoutMs", type: "int", default: 0, min: 0, max: 600000, env: "OPENVIKING_CAPTURE_TIMEOUT_MS", capability: "capture" },
   { name: "commitTokenThreshold", type: "int", default: 100000, min: 1000, max: 1000000, env: "OPENVIKING_COMMIT_TOKEN_THRESHOLD", workspace: "capture.commit_token_threshold", capability: "capture" },
-  { name: "commitKeepRecentCount", type: "int", default: 10, min: 0, max: 1000, env: "OPENVIKING_COMMIT_KEEP_RECENT_COUNT", capability: "capture" },
   { name: "commitTurnThreshold", type: "int", default: 8, min: 1, max: 1000, env: "OPENVIKING_COMMIT_TURN_THRESHOLD", capability: "capture" },
   { name: "autoCommitOnCompact", type: "bool", default: true, env: "OPENVIKING_AUTO_COMMIT_ON_COMPACT", capability: "capture" },
   // Leave the threshold commit to OpenViking's session auto-commit; the plugin

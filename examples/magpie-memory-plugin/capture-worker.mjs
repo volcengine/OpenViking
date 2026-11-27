@@ -194,7 +194,12 @@ export async function deliverSnapshot(directory, snapshot, { call = request, sig
       });
       offset += messages.length;
       return { ok: true };
-    }, sessionId, snapshot.messages.slice(offset));
+    }, sessionId, snapshot.messages.slice(offset), {
+      // This fetch journals magpie's own appends: queued entries must not go
+      // through it, and a refused batch stays uncertain as a whole.
+      replayFirst: false,
+      isolateRejected: false,
+    });
     if (sent.failed) return "uncertain";
   } catch (error) {
     if (stopReason) return stopReason;

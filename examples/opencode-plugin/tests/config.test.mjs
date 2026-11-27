@@ -115,9 +115,9 @@ test("OpenVikingPlugin keeps lifecycle hooks without mutating MCP config in hook
   })
 })
 
-test("loadConfig preserves an explicit zero commit keep recent count", async () => {
+test("loadConfig preserves an explicit zero commit idle seconds", async () => {
   const snapshot = { ...process.env }
-  await withTempDir("ov-oc-keep-recent-zero-", async (dir) => {
+  await withTempDir("ov-oc-idle-zero-", async (dir) => {
     try {
       for (const key of Object.keys(process.env)) {
         if (key.startsWith("OPENVIKING_")) delete process.env[key]
@@ -128,21 +128,21 @@ test("loadConfig preserves an explicit zero commit keep recent count", async () 
       const ovcli = join(dir, "ovcli.conf")
       await writeFile(ovcli, JSON.stringify({
         url: "https://env.example.com",
-        plugin: { commitKeepRecentCount: 0 },
+        plugin: { commitIdleSeconds: 0 },
       }))
       process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
 
       const cfg = loadConfig(dir, project)
-      assert.equal(cfg.commitKeepRecentCount, 0)
+      assert.equal(cfg.commitIdleSeconds, 0)
     } finally {
       restoreOpenVikingEnv(snapshot)
     }
   })
 })
 
-test("loadConfig defaults an invalid commit keep recent count", async () => {
+test("loadConfig defaults an invalid commit idle seconds", async () => {
   const snapshot = { ...process.env }
-  await withTempDir("ov-oc-keep-recent-invalid-", async (dir) => {
+  await withTempDir("ov-oc-idle-invalid-", async (dir) => {
     try {
       for (const key of Object.keys(process.env)) {
         if (key.startsWith("OPENVIKING_")) delete process.env[key]
@@ -153,12 +153,12 @@ test("loadConfig defaults an invalid commit keep recent count", async () => {
       const ovcli = join(dir, "ovcli.conf")
       await writeFile(ovcli, JSON.stringify({
         url: "https://env.example.com",
-        plugin: { commitKeepRecentCount: null },
+        plugin: { commitIdleSeconds: null },
       }))
       process.env.OPENVIKING_CLI_CONFIG_FILE = ovcli
 
       const cfg = loadConfig(dir, project)
-      assert.equal(cfg.commitKeepRecentCount, 10)
+      assert.equal(cfg.commitIdleSeconds, 1800)
     } finally {
       restoreOpenVikingEnv(snapshot)
     }

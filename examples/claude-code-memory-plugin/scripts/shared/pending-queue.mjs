@@ -9,7 +9,10 @@
  * maxRetries/TTL) or by a long-running drainer that passes
  * `consumeRetries: false` so transient failures stay retryable.
  *
- * Each file contains: { type, sessionId, payload, createdAt, retries, dedupKey }
+ * Each file contains: { type, sessionId, payload, createdAt, retries, dedupKey,
+ * origin }. `origin` is a short hash of the server and identity the entry was
+ * queued for (`ovOrigin` in ov-http.mjs); replay skips entries queued for a
+ * different one, and an entry without it replays anywhere.
  *
  * Config (env vars):
  *   OPENVIKING_PENDING_DIR         pending queue directory
@@ -25,7 +28,7 @@ import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod, utime
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { isRetryableFailure } from "./retryable.mjs";
+import { isAuthFailure, isRetryableFailure } from "./retryable.mjs";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_TTL_DAYS = 7;
@@ -80,14 +83,20 @@ function stableStringify(value) {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
 }
 
-function makeDedupKey(type, sessionId, payload) {
-  return createHash("sha256")
+function makeDedupKey(type, sessionId, payload, origin) {
+  const hash = createHash("sha256")
     .update(type)
     .update("\n")
     .update(sessionId)
     .update("\n")
-    .update(stableStringify(payload))
-    .digest("hex");
+    .update(stableStringify(payload));
+  if (origin) hash.update("\n").update(origin);
+  return hash.digest("hex");
+}
+
+/** Whether an entry belongs to `origin`; either side unknown matches. */
+export function matchesOrigin(entry, origin) {
+  return !origin || !entry?.origin || entry.origin === origin;
 }
 
 function pendingFilename(dedupKey, retries = 0) {
@@ -184,11 +193,13 @@ async function recoverStaleProcessing(dir) {
  * @param {object} payload - the data that failed to send
  * @param {object} options
  * @param {number} options.createdAt - optional queue timestamp override
+ * @param {string} options.origin - the server and identity it is queued for
  */
 export async function enqueue(type, sessionId, payload, options = {}) {
   const dir = getPendingDir();
   const now = Number.isFinite(options.createdAt) ? options.createdAt : Date.now();
-  const dedupKey = makeDedupKey(type, sessionId, payload);
+  const origin = options.origin || undefined;
+  const dedupKey = makeDedupKey(type, sessionId, payload, origin);
   const filename = pendingFilename(dedupKey, 0);
   const entry = {
     type,
@@ -197,6 +208,7 @@ export async function enqueue(type, sessionId, payload, options = {}) {
     createdAt: now,
     retries: 0,
     dedupKey,
+    ...(origin ? { origin } : {}),
   };
 
   try {
@@ -378,11 +390,16 @@ export async function cleanStale() {
  *   a background drainer can keep retrying a transient failure without
  *   burning the session-start retry budget. Exhausted and non-retryable
  *   entries are deleted exactly as in the default mode.
- * @returns {{ replayed: number, failed: number, skipped: number, deferred: number }}
+ *
+ * Only entries queued for `fetchJSON.origin` are replayed. A 401 / 403 stops
+ * the run and leaves the entry queued without a retry charged, so a revoked
+ * key does not empty the queue; the result then has `authFailed` set.
+ * @returns {{ replayed: number, failed: number, skipped: number, deferred: number, authFailed?: boolean, lastError?: any }}
  */
 export async function replayPending(fetchJSON, log, options = {}) {
   const consumeRetries = options.consumeRetries !== false;
-  const pending = await listPending();
+  const origin = fetchJSON?.origin;
+  const pending = (await listPending()).filter(({ entry }) => matchesOrigin(entry, origin));
 
   if (pending.length === 0) {
     return { replayed: 0, failed: 0, skipped: 0, deferred: 0 };
@@ -452,6 +469,12 @@ export async function replayPending(fetchJSON, log, options = {}) {
     if (res?.ok) {
       await dequeue(claimedFilename);
       replayed++;
+    } else if (isAuthFailure(res)) {
+      await releaseClaim(claimedFilename);
+      failed++;
+      deferred += Math.max(0, pending.length - processed);
+      log("pending-queue", { action: "replay-done", replayed, failed, skipped, deferred, status: res.status });
+      return { replayed, failed, skipped, deferred, authFailed: true, lastError: res.error ?? res };
     } else if (!isRetryableReplayFailure(res)) {
       await dequeue(claimedFilename);
       skipped++;
@@ -490,10 +513,10 @@ export async function replayPending(fetchJSON, log, options = {}) {
   return { replayed, failed, skipped, deferred };
 }
 
-/** Whether the queue still holds messages for this session. */
-export async function hasPendingWrites(sessionId) {
+/** Whether the queue still holds messages for this session (and origin). */
+export async function hasPendingWrites(sessionId, origin) {
   return (await listPending()).some(
-    ({ entry }) => entry.type === "addMessage" && entry.sessionId === sessionId,
+    ({ entry }) => entry.type === "addMessage" && entry.sessionId === sessionId && matchesOrigin(entry, origin),
   );
 }
 
@@ -503,15 +526,16 @@ export async function hasPendingWrites(sessionId) {
  * would keep an older queued commit at its earlier position, so the session's
  * queued commits are replaced rather than added to.
  */
-export async function enqueueCommitAfterWrites(sessionId, payload = {}) {
+export async function enqueueCommitAfterWrites(sessionId, payload = {}, { origin } = {}) {
   let lastWrite = 0;
   for (const { filename, entry } of await listPending()) {
-    if (entry.sessionId !== sessionId) continue;
+    if (entry.sessionId !== sessionId || !matchesOrigin(entry, origin)) continue;
     if (entry.type === "addMessage") lastWrite = Math.max(lastWrite, entry.createdAt || 0);
     else if (entry.type === "commitSession") await dequeue(filename);
   }
   return enqueue("commitSession", sessionId, payload, {
     createdAt: Math.max(Date.now(), lastWrite + 1),
+    origin,
   });
 }
 
@@ -526,14 +550,15 @@ export async function enqueueCommitAfterWrites(sessionId, payload = {}) {
  *   now, otherwise the result of queueing it.
  */
 export async function deferCommitBehindPendingWrites(fetchJSON, sessionId, payload = {}, log = () => {}) {
-  if (!(await hasPendingWrites(sessionId))) return null;
+  const origin = fetchJSON?.origin;
+  if (!(await hasPendingWrites(sessionId, origin))) return null;
   try {
     await replayPending(fetchJSON, log, { consumeRetries: false });
   } catch {
     // Whatever is left queued is handled below.
   }
-  if (!(await hasPendingWrites(sessionId))) return null;
-  return enqueueCommitAfterWrites(sessionId, payload);
+  if (!(await hasPendingWrites(sessionId, origin))) return null;
+  return enqueueCommitAfterWrites(sessionId, payload, { origin });
 }
 
 /**
@@ -559,7 +584,7 @@ export async function commitSession(fetchJSON, sessionId, body = {}, { queue = t
   if (queue && !result.ok && isRetryableFailure(result)) {
     let parked = { ok: false };
     try {
-      parked = await enqueue("commitSession", sessionId, body);
+      parked = await enqueue("commitSession", sessionId, body, { origin: fetchJSON?.origin });
     } catch {
       // Reported through pendingEnqueueFailed.
     }

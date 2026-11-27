@@ -120,7 +120,7 @@ test("Stop returns before slow writes while detached worker finishes capture", a
   assert.equal(state.captured, undefined);
 });
 
-test("400 failure does not advance state and successful retry prevents duplicate Stop", async (t) => {
+test("refused credentials do not advance state and a successful retry prevents a duplicate Stop", async (t) => {
   let batchAttempts = 0;
   const requests = [];
   const server = createServer((request, response) => {
@@ -133,10 +133,10 @@ test("400 failure does not advance state and successful retry prevents duplicate
       });
       const isBatch = request.url?.endsWith("/messages/batch");
       if (isBatch) batchAttempts++;
-      const status = isBatch && batchAttempts === 1 ? 400 : 200;
+      const status = isBatch && batchAttempts === 1 ? 401 : 200;
       response.writeHead(status, { "Content-Type": "application/json" });
-      response.end(status === 400
-        ? '{"status":"error","error":{"message":"invalid request"}}'
+      response.end(status === 401
+        ? '{"status":"error","error":{"message":"invalid api key"}}'
         : '{"result":{}}');
     });
   });

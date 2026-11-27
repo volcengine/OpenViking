@@ -56,7 +56,8 @@ export const trae = {
     }
     const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, toSend.map((item) => item.message), ctx.peerId);
     const captured = result.sent + result.queued;
-    for (const item of toSend.slice(0, captured)) hashes.add(item.hash);
+    const settled = toSend.length - result.retryLater - result.enqueueFailed;
+    for (const item of toSend.slice(0, settled)) hashes.add(item.hash);
     let nextCount = Number(state.capturedSinceCommit || 0) + captured;
     if (captured > 0) {
       const committed = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);

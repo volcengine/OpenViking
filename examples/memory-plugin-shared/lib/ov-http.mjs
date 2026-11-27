@@ -16,7 +16,22 @@
 // that asks for less than a second gets a second.
 const MIN_TIMEOUT_MS = 1000;
 
+import { createHash } from "node:crypto";
+
 import { parseExtraHeaders } from "./mcp-proxy-config.mjs";
+
+/**
+ * A short hash of the server and identity a config talks to. The pending queue
+ * stamps it on what it parks, so a write queued for one server or account is
+ * never replayed to another.
+ */
+export function ovOrigin(cfg = {}) {
+  const baseUrl = String(cfg.baseUrl || cfg.endpoint || "").trim().replace(/\/+$/, "");
+  return createHash("sha256")
+    .update([baseUrl, cfg.account || "", cfg.user || ""].join("\n"))
+    .digest("hex")
+    .slice(0, 16);
+}
 
 /**
  * The headers every harness puts on every OpenViking request.
@@ -50,6 +65,9 @@ function responseTraceId(body) {
  * loading session state under the lock, well after the client is built.
  * `requireJsonBody` is for the capture hooks, which would rather retry a body
  * they cannot parse than record the turn as sent.
+ *
+ * The function carries `origin` (see `ovOrigin`); a wrapper around it that
+ * reaches the pending queue passes it on.
  */
 export function createOvHttp(cfg = {}, {
   defaultTimeoutMs = 0,
@@ -66,7 +84,7 @@ export function createOvHttp(cfg = {}, {
   // needs the same headers on the turn hooks as on the MCP path, and wiring each
   // harness by hand is how the header blocks drifted in the first place.
   const resolvedExtraHeaders = extraHeaders ?? parseExtraHeaders(process.env.OPENVIKING_EXTRA_HEADERS);
-  return async function fetchJSON(path, init = {}, options = {}) {
+  async function fetchJSON(path, init = {}, options = {}) {
     const timeoutMs = Math.max(MIN_TIMEOUT_MS, Number(options.timeoutMs) || Number(defaultTimeoutMs) || 0);
     const controller = new AbortController();
     let timedOut = false;
@@ -131,5 +149,7 @@ export function createOvHttp(cfg = {}, {
     } finally {
       clearTimeout(timer);
     }
-  };
+  }
+  fetchJSON.origin = ovOrigin(cfg);
+  return fetchJSON;
 }

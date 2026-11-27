@@ -32,6 +32,24 @@ test("replayPending sends queued entries and removes them after success", async 
   });
 });
 
+test("replay skips another server's entries and keeps its own on refused credentials", async () => {
+  await withPendingDir(async () => {
+    await enqueue("addMessage", "s", { role: "user", content: "mine" }, { origin: "here" });
+    await enqueue("addMessage", "s", { role: "user", content: "theirs" }, { origin: "there" });
+    const sent = [];
+    const fetchJSON = Object.assign(async (path, init) => {
+      sent.push(JSON.parse(init.body).content);
+      return { ok: false, status: 401, error: { code: "UNAUTHENTICATED" } };
+    }, { origin: "here" });
+
+    const result = await replayPending(fetchJSON, () => {});
+    assert.equal(result.authFailed, true);
+    assert.deepEqual(sent, ["mine"]);
+    assert.deepEqual((await listPending()).map(({ entry }) => [entry.payload.content, entry.retries]).sort(),
+      [["mine", 0], ["theirs", 0]]);
+  });
+});
+
 test("enqueue deduplicates identical payloads", async () => {
   await withPendingDir(async () => {
     const payload = { role: "user", parts: [{ type: "text", text: "same" }] };

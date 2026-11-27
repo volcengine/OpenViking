@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { sendSessionMessages } from "./lib/batch-send.mjs";
-import { listPending } from "./lib/pending-queue.mjs";
+import { enqueue, listPending } from "./lib/pending-queue.mjs";
 
 function payloads(count, offset = 0) {
   return Array.from({ length: count }, (_, i) => ({
@@ -54,7 +54,9 @@ test("sendSessionMessages chunks batches at the server limit", async () => {
     queued: 0,
     enqueueFailed: 0,
     failed: 0,
+    retryLater: 0,
     retryable: false,
+    authFailed: false,
     usedBatch: true,
     lastError: null,
   });
@@ -116,20 +118,69 @@ test("sendSessionMessages queues the unsent suffix after a retryable batch failu
   });
 });
 
-test("sendSessionMessages treats non-retryable failures as failed without enqueueing", async () => {
+test("a refused batch is sent one by one, so only the refused message fails", async () => {
   await withPendingDir(async (dir) => {
+    const order = [];
     const res = await sendSessionMessages(
-      async () => ({ ok: false, status: 400, error: { message: "bad request" } }),
+      async (path, init) => {
+        if (path.endsWith("/messages/batch")) return { ok: false, status: 422, error: { message: "invalid" } };
+        return parseBody(init).content === "message-1"
+          ? { ok: false, status: 422, error: { message: "invalid" } }
+          : { ok: true, status: 200, result: {} };
+      },
       "bad-session",
       payloads(4),
+      {
+        enqueueOnRetryable: true,
+        onSent: (n) => order.push(["sent", n]),
+        onRejected: (n) => order.push(["rejected", n]),
+      },
+    );
+
+    assert.equal(res.sent, 3);
+    assert.equal(res.failed, 1);
+    assert.equal(res.retryLater, 0);
+    assert.deepEqual(order, [["sent", 1], ["rejected", 1], ["sent", 1], ["sent", 1]]);
+    assert.equal((await readdir(dir).catch(() => [])).filter((name) => name.endsWith(".json")).length, 0);
+  });
+});
+
+test("refused credentials send and queue nothing more and leave the rest to the caller", async () => {
+  await withPendingDir(async (dir) => {
+    let calls = 0;
+    const res = await sendSessionMessages(
+      async () => {
+        calls += 1;
+        return calls === 1 ? { ok: true, status: 200, result: {} } : { ok: false, status: 401, error: { code: "UNAUTHENTICATED" } };
+      },
+      "revoked",
+      payloads(150),
       { enqueueOnRetryable: true },
     );
 
-    assert.equal(res.sent, 0);
+    assert.equal(calls, 2);
+    assert.equal(res.sent, 100);
     assert.equal(res.queued, 0);
-    assert.equal(res.failed, 4);
-    assert.equal(res.retryable, false);
+    assert.equal(res.retryLater, 50);
+    assert.equal(res.authFailed, true);
     assert.equal((await readdir(dir).catch(() => [])).filter((name) => name.endsWith(".json")).length, 0);
+  });
+});
+
+test("new messages wait behind the session's queued ones", async () => {
+  await withPendingDir(async () => {
+    const fetchJSON = Object.assign(async () => ({ ok: false, status: 503 }), { origin: "o1" });
+    await enqueue("addMessage", "ordered", { role: "user", content: "older" }, { createdAt: Date.now() + 60_000, origin: "o1" });
+    await enqueue("addMessage", "ordered", { role: "user", content: "elsewhere" }, { origin: "o2" });
+
+    const queued = await sendSessionMessages(fetchJSON, "ordered", payloads(2), { enqueueOnRetryable: true });
+    assert.equal(queued.queued, 2);
+    const mine = (await listPending()).filter(({ entry }) => entry.origin === "o1");
+    assert.deepEqual(mine.map(({ entry }) => entry.payload.content), ["older", "message-0", "message-1"]);
+
+    const held = await sendSessionMessages(fetchJSON, "ordered", payloads(2));
+    assert.equal(held.sent + held.queued, 0);
+    assert.equal(held.retryLater, 2);
   });
 });
 

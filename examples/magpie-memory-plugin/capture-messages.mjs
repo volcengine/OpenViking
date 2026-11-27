@@ -1,4 +1,4 @@
-import { shapeCapturePayload } from "./shared/capture-utils.mjs";
+import { buildCaptureMessage } from "./shared/capture-utils.mjs";
 import { recallAnchors } from "./recall-ledger.mjs";
 
 /** Adapt only host formats; shared shaping strips recall, reminders and filters. */
@@ -36,11 +36,11 @@ export function captureMessages(messages, protocol, cfg) {
       }) };
       if (ambiguous) return null;
     }
-    const role = message.role === "assistant" || message.type === "function_call" ? "assistant" : "user";
     if (!["assistant", "user", "tool", "function"].includes(message.role) && !["message", "function_call", "function_call_output"].includes(message.type)) continue;
-    const shaped = shapeCapturePayload(message, role, cfg, { toolNameById: names, faithful: true });
-    const parts = shaped.parts.length ? shaped.parts : shaped.text ? [{ type: "text", text: shaped.text }] : [];
-    if (!parts.length) continue;
+    const hostRole = ["function_call", "function_call_output"].includes(message.type) ? message.type : message.role;
+    const built = buildCaptureMessage(message, hostRole, cfg, { toolNameById: names });
+    if (!built) continue;
+    const { role, parts } = built;
     for (const part of parts.filter((p) => p.type === "tool")) {
       if (!part.tool_id) return null;
       if (part.tool_status === "running") { calls.add(part.tool_id); names[part.tool_id] = part.tool_name; }

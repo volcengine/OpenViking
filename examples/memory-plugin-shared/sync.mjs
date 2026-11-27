@@ -180,7 +180,7 @@ export const SKILL_TARGETS = [
     committed: true,
   },
   // The harnesses that ship the experience workflow today. Where capture sends
-  // no tool parts (agent-plugins, Cursor; dsh with captureToolResults off),
+  // no tool parts (agent-plugins, TRAE),
   // the copy only retrieves and applies Experience, and its reads feed no
   // trajectory back to the server.
   {

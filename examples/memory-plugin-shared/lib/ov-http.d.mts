@@ -31,6 +31,8 @@ export function buildOvHeaders(
   },
 ): Record<string, string>;
 
+export function ovOrigin(cfg?: OvHttpConfig): string;
+
 export function createOvHttp(
   cfg?: OvHttpConfig,
   options?: {
@@ -40,8 +42,8 @@ export function createOvHttp(
     extraHeaders?: Record<string, string>;
     requireJsonBody?: boolean;
   },
-): (
+): ((
   path: string,
   init?: RequestInit,
   options?: OvHttpRequestOptions,
-) => Promise<OvHttpEnvelope>;
+) => Promise<OvHttpEnvelope>) & { origin: string };

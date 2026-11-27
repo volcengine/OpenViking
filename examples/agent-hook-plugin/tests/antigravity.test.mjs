@@ -218,7 +218,8 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     await runHook("stop", lateBase, { ...env, OPENVIKING_CAPTURE_ASSISTANT_TURNS: "0" });
     assert.deepEqual(sent["ag-conv-2"].map((message) => message.role), ["user", "user", "user"]);
 
-    // After a partial write the next Stop resends only what the server did not take.
+    // A message the server refuses is passed over: the rest land, and the
+    // next Stop does not send it again.
     const partialPath = join(root, "partial_transcript.jsonl");
     writeFileSync(partialPath, step(0, { source: "USER_EXPLICIT", type: "USER_INPUT", content: "<USER_REQUEST>\nList the services\n</USER_REQUEST>" })
       + step(1, { source: "MODEL", type: "PLANNER_RESPONSE", tool_calls: [{ name: "list_dir", args: { DirectoryPath: "/srv" } }] })
@@ -231,7 +232,6 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     const summary = (message) => message.parts.map((part) => part.text ?? part.tool_status);
     assert.deepEqual(sent["ag-conv-4"].map(summary), [
       ["List the services"],
-      ["running", "completed"],
       ["There are two services: api and worker."],
     ]);
 

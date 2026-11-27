@@ -5,8 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { filterCaptureTurns } from "./lib/capture-utils.mjs";
-import { listPending } from "./lib/pending-queue.mjs";
+import { enqueue, listPending } from "./lib/pending-queue.mjs";
 import { expectExit, runHookScript, withMockOpenViking, withPendingDir, writeJson } from "./testing/support.mjs";
 
 import {
@@ -14,6 +13,7 @@ import {
   commitAgentSession,
   loadAgentHookConfig,
   makeAgentFetchJSON,
+  replayAgentPending,
   resolveNativeSessionId,
   runHookStage,
   withAgentHookLock,
@@ -177,58 +177,6 @@ test("a failed write is parked when a retry can help and reported once when it c
     if (savedPendingDir === undefined) delete process.env.OPENVIKING_PENDING_DIR;
     else process.env.OPENVIKING_PENDING_DIR = savedPendingDir;
     rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-// The thin harnesses composed on this runtime used to send whatever their
-// transcript parser produced. Every other harness runs the same filter, so it
-// belongs beside the runtime rather than reimplemented in each hook.
-test("the shared capture filter drops the turns no harness wants to remember", () => {
-  const { kept, dropped } = filterCaptureTurns([
-    { role: "user", content: "/compact" },
-    { role: "assistant", content: "ok" },
-    { role: "user", content: "..." },
-    { role: "assistant", content: "[openviking-memory] recalled 3 items" },
-    { role: "user", content: "the retry budget is three attempts" },
-  ], { captureMaxLength: 24000 });
-
-  assert.deepEqual(kept.map((turn) => turn.content), ["the retry budget is three attempts"]);
-  assert.deepEqual(dropped.map((turn) => turn.reason), [
-    "slash_command", "ack", "punctuation", "plugin_status",
-  ]);
-});
-
-test("a turn past captureMaxLength is capped rather than dropped", () => {
-  const long = "remember this detail. ".repeat(200);
-  const { kept, dropped } = filterCaptureTurns(
-    [{ role: "user", content: long }],
-    { captureMaxLength: 200 },
-  );
-
-  assert.equal(dropped.length, 0);
-  assert.ok(kept[0].content.length < long.length, "the turn must reach the extractor capped");
-  assert.ok(kept[0].content.startsWith("remember this detail."));
-});
-
-test("hook capture rules judge sanitized text beyond the send cap", () => {
-  const content = `Remember the audit result ${"x".repeat(100)} SECRET123`;
-  const turn = { role: "user", content };
-  const cfg = { captureMaxLength: 64, captureFilters: ["d/SECRET123/"] };
-  assert.deepEqual(filterCaptureTurns([turn], cfg), {
-    kept: [], dropped: [{ role: "user", reason: "filtered" }],
-  });
-
-  const kept = filterCaptureTurns([turn], {
-    captureMaxLength: 64, captureFilters: ["k/SECRET123/"],
-  }).kept;
-  assert.equal(kept.length, 1);
-  assert.ok(kept[0].content.length <= 64);
-  assert.ok(kept[0].content.endsWith("[truncated]"));
-});
-
-test("filterCaptureTurns tolerates a missing or malformed turn list", () => {
-  for (const input of [undefined, null, "text", 3, {}]) {
-    assert.deepEqual(filterCaptureTurns(input), { kept: [], dropped: [] });
   }
 });
 
@@ -529,5 +477,19 @@ test("a commit after a send that got parked waits behind the parked messages", a
       "addMessage",
       "commitSession",
     ]);
+  });
+});
+
+test("a session start leaves the queue alone while the server is down", async () => {
+  await withPendingDir(async () => {
+    await enqueue("addMessage", "down", { role: "user", content: "kept" });
+    const paths = [];
+    const result = await replayAgentPending(async (path) => {
+      paths.push(path);
+      return { ok: false, status: 0 };
+    });
+    assert.equal(result.unhealthy, true);
+    assert.deepEqual(paths, ["/health"]);
+    assert.equal((await listPending())[0].entry.retries, 0);
   });
 });

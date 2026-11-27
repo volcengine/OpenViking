@@ -27,8 +27,6 @@ const CONTENT_IMAGE_TYPES = new Set(["image", "inputimage", "outputimage"]);
 // guards against pathological payloads.
 const DEFAULT_TOOL_MAX_CHARS = 1000000;
 
-const ACK_RE = /^(?:ok|okay|k|yes|yep|no|nope|thanks|thank you|thx|done|收到|好的|好|嗯|可以|继续|不用|不需要|没了|好了)[.!?。！？\s]*$/i;
-const SLASH_COMMAND_RE = /^\/[a-z0-9_-]{1,64}\b/i;
 const METADATA_KEYS = [
   "session_id",
   "sessionid",
@@ -66,7 +64,7 @@ function oneLine(text) {
   return String(text || "").replace(/\s+/g, " ").trim();
 }
 
-export function truncateCaptureText(text, maxChars = 2000) {
+function truncateCaptureText(text, maxChars = 2000) {
   const value = String(text || "").trim();
   if (!Number.isFinite(maxChars) || maxChars <= 0 || value.length <= maxChars) return value;
   return `${value.slice(0, Math.max(0, maxChars - 20)).trimEnd()}\n[truncated]`;
@@ -140,12 +138,16 @@ function toolPayload(block, kind) {
   return contentBlocksText(output) ?? output;
 }
 
-// pi, dsh and Codex dynamic tools return a list of content blocks. Keep their
-// text as text: stringified JSON turns line breaks into literal "\n".
+// pi, dsh and Codex dynamic tools return a list of content blocks, CodeBuddy a
+// single one. Keep their text as text: stringified JSON turns line breaks into
+// literal "\n".
 function contentBlocksText(value) {
-  if (!Array.isArray(value) || value.length === 0) return null;
+  const blocks = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && typeof value.type === "string" ? [value] : [];
+  if (blocks.length === 0) return null;
   const chunks = [];
-  for (const block of value) {
+  for (const block of blocks) {
     const type = normalizeType(block?.type).replace(/_/g, "");
     if (CONTENT_TEXT_TYPES.has(type) && typeof block.text === "string") chunks.push(block.text);
     else if (CONTENT_IMAGE_TYPES.has(type)) chunks.push("[image]");
@@ -464,53 +466,6 @@ export function shapeCaptureParts(parts, role, cfg = {}) {
   return filterCaptureParts(sanitized, role, cfg);
 }
 
-function faithfulCaptureDecision(text, cfg) {
-  const sanitized = sanitizeCapturedText(text);
-  if (!sanitized) return { shouldCapture: false, text: "" };
-  const capped = truncateCaptureText(sanitized, cfg.captureMaxLength || 24000);
-  const compact = oneLine(capped);
-  if (/^\[openviking-memory\]/i.test(compact) || SLASH_COMMAND_RE.test(compact)) {
-    return { shouldCapture: false, text: "" };
-  }
-  return { shouldCapture: true, text: capped };
-}
-
-/**
- * Shape one host message before an adapter builds its session payload.
- * Sanitize injected context before evaluating keep/drop rules, so text that
- * will not be sent cannot satisfy a keep rule. Tool parts never decide keep or drop.
- */
-export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}, faithful = false } = {}) {
-  const options = { toolMaxChars: cfg.captureToolMaxChars, toolNameById };
-  const rawText = extractTextFromPayload(payload, options);
-  const sourceParts = extractPartsFromPayload(payload, options);
-  const hasTextPart = sourceParts.some((part) => part?.type === "text");
-  const sanitizedText = sanitizeCapturedText(rawText);
-  // Some hosts supply an array of plain strings. It has text but no structured
-  // parts, so use a temporary part for the same filter verdict.
-  const fallback = sourceParts.length === 0 && sanitizedText
-    ? [{ type: "text", text: rawText }]
-    : [];
-  const shaped = shapeCaptureParts(sourceParts.length ? sourceParts : fallback, role, cfg);
-  if (shaped.dropped) return { parts: [], text: "", signalText: "", dropped: true };
-
-  const parts = sourceParts.length ? shaped.parts : [];
-  const decisionText = hasTextPart || fallback.length
-    ? shaped.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n\n")
-    : sanitizedText;
-  const decision = faithful
-    ? faithfulCaptureDecision(decisionText, cfg)
-    : shouldCaptureText(decisionText, role, cfg, { filters: false });
-  // Codex scans turn.text for explicit-memory keywords; keep that scan based
-  // on the user's original words while the filtered parts go on the wire.
-  const signalText = decision.shouldCapture && parts.length
-    ? (faithful
-      ? faithfulCaptureDecision(sanitizedText, cfg)
-      : shouldCaptureText(sanitizedText, role, cfg, { filters: false })).text
-    : decision.text;
-  return { parts, text: decision.shouldCapture ? decision.text : "", signalText: signalText || "", dropped: false };
-}
-
 /**
  * One host message as the session message to send, or null when nothing in it
  * is to be captured. `role` is the host's own role for the message. Text parts
@@ -598,26 +553,22 @@ export function findLastHumanTurnIndex(turns) {
   return -1;
 }
 
+// pi spells these toolResult / toolCall, which normalizeType folds to one word.
+const TOOL_RESULT_ROLES = new Set(["tool", "tool_result", "toolresult", "function", "function_call_output"]);
+const TOOL_CALL_ROLES = new Set(["tool_call", "toolcall", "function_call"]);
+
 export function normalizeCaptureRole(role) {
   const value = normalizeType(role);
   if (value === "user") return "user";
   if (value === "assistant") return "assistant";
-  if (value === "tool" || value === "tool_result" || value === "function" || value === "function_call_output") {
-    return "user";
-  }
-  if (value === "tool_call" || value === "function_call") return "assistant";
+  if (TOOL_RESULT_ROLES.has(value)) return "user";
+  if (TOOL_CALL_ROLES.has(value)) return "assistant";
   return null;
 }
 
 export function isAssistantSideCaptureRole(role) {
   const value = normalizeType(role);
-  return value === "assistant" ||
-    value === "tool" ||
-    value === "tool_result" ||
-    value === "tool_call" ||
-    value === "function" ||
-    value === "function_call" ||
-    value === "function_call_output";
+  return value === "assistant" || TOOL_RESULT_ROLES.has(value) || TOOL_CALL_ROLES.has(value);
 }
 
 function stripMetadataFences(text) {
@@ -676,6 +627,11 @@ function stripInjectedDigestBlocks(text) {
   return out.join("\n");
 }
 
+// The usage footer a harness asks the model to append to its answer opens with
+// its summary line ("OpenViking · 2 sources · 1 read"). Everything from that
+// line to the end of the message is the plugin's report, not conversation.
+const USAGE_FOOTER_RE = /(?:^|\n)(?:[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*\n+)?[ \t>*_`]*OpenViking · \d+ sources?\b[\s\S]*$/;
+
 /**
  * Drop everything in a turn that the conversation did not put there.
  *
@@ -701,20 +657,11 @@ export function sanitizeCapturedText(text) {
   value = stripMetadataFences(value);
   value = stripInjectedDigestBlocks(value);
   value = value.replace(/^\s*More detail: use the OpenViking MCP .*$/gim, " ");
+  value = value.replace(USAGE_FOOTER_RE, "");
   return value
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-}
-
-function hasEnoughSignal(text) {
-  const cjk = text.match(/[\u3400-\u9fff]/g)?.length || 0;
-  const alnum = text.match(/[a-z0-9]/gi)?.length || 0;
-  return cjk >= 4 || alnum >= 6 || text.length >= 12;
-}
-
-function isPunctuationOnly(text) {
-  return !/[\p{L}\p{N}\u3400-\u9fff]/u.test(text);
 }
 
 /**
@@ -732,66 +679,4 @@ export function isCaptureEnabled(cfg = {}) {
     if (value && typeof value === "object" && !Array.isArray(value) && value.enabled === false) return false;
   }
   return true;
-}
-
-export function shouldCaptureText(text, role, cfg = {}, { filters = true } = {}) {
-  const maxLength = cfg.captureMaxLength || 24000;
-  const sanitized = sanitizeCapturedText(text);
-  if (!sanitized) return { shouldCapture: false, reason: "empty", text: "" };
-
-  // Rules judge the full sanitized turn; the wire cap applies afterward.
-  let filtered = sanitized;
-  if (filters) {
-    const compiled = compileInputFilters(cfg?.captureFilters);
-    if (compiled.rules.length) {
-      const verdict = applyInputFilters(filtered, compiled.rules, { role });
-      if (verdict.dropped) return { shouldCapture: false, reason: "filtered", text: "" };
-      filtered = verdict.text;
-      if (!filtered) return { shouldCapture: false, reason: "empty", text: "" };
-    }
-  }
-  const capped = truncateCaptureText(filtered, maxLength);
-  const compact = oneLine(capped);
-  const isToolSummary = /^\[tool-(?:call|result)\b/i.test(compact);
-
-  if (!isToolSummary && role === "user" && SLASH_COMMAND_RE.test(compact)) {
-    return { shouldCapture: false, reason: "slash_command", text: "" };
-  }
-  if (!isToolSummary && ACK_RE.test(compact)) {
-    return { shouldCapture: false, reason: "ack", text: "" };
-  }
-  if (!isToolSummary && isPunctuationOnly(compact)) {
-    return { shouldCapture: false, reason: "punctuation", text: "" };
-  }
-  if (!isToolSummary && !hasEnoughSignal(compact)) {
-    return { shouldCapture: false, reason: "too_short", text: "" };
-  }
-  if (/^\[openviking-memory\]/i.test(compact)) {
-    return { shouldCapture: false, reason: "plugin_status", text: "" };
-  }
-
-  return { shouldCapture: true, reason: "ok", text: capped };
-}
-
-/**
- * Apply the capture filter to a list of `{ role, content }` turns.
- *
- * The harnesses that compose `agent-hook-runtime` used to send whatever their
- * transcript parser produced: an acknowledgement, a slash command, a stray
- * `ok`, or a turn far past `captureMaxLength` all reached the extractor
- * verbatim. This is the same decision every other harness makes, in one place,
- * so a thin harness gets it by calling rather than by reimplementing it.
- *
- * Returns the surviving turns with `content` replaced by the sanitized and
- * capped text, and the dropped ones with the reason, for the debug log.
- */
-export function filterCaptureTurns(turns, cfg = {}) {
-  const kept = [];
-  const dropped = [];
-  for (const turn of Array.isArray(turns) ? turns : []) {
-    const decision = shouldCaptureText(turn?.content, turn?.role, cfg);
-    if (decision.shouldCapture) kept.push({ ...turn, content: decision.text });
-    else dropped.push({ role: turn?.role, reason: decision.reason });
-  }
-  return { kept, dropped };
 }

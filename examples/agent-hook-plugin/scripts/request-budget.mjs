@@ -10,7 +10,7 @@
 export function withRequestBudget(fetchJSON, budgetMs, defaultTimeoutMs = 0) {
   if (!budgetMs) return fetchJSON;
   const deadline = Date.now() + budgetMs;
-  return (path, init = {}, options = {}) => {
+  return Object.assign((path, init = {}, options = {}) => {
     const remaining = deadline - Date.now();
     // ov-http deliberately clamps individual requests to one second. Do not
     // start one inside that final second or the host-level total can overrun.
@@ -24,5 +24,5 @@ export function withRequestBudget(fetchJSON, budgetMs, defaultTimeoutMs = 0) {
     }
     const requested = Number(options.timeoutMs) || Number(defaultTimeoutMs) || remaining;
     return fetchJSON(path, init, { ...options, timeoutMs: Math.min(requested, remaining) });
-  };
+  }, { origin: fetchJSON.origin });
 }

@@ -459,23 +459,34 @@ test("failed batch keeps its entries queued with one retry and leaves the rest u
   });
 });
 
-test("non-retryable batch failure drops the payloads but still advances the sync watermark", async () => {
+test("refused payloads are dropped and passed over; refused credentials keep the watermark", async () => {
   await withPendingDir(async () => {
+    const branch = [
+      { type: "message", message: { role: "user", content: "Poison payload one for watermark test." } },
+      { type: "message", message: { role: "user", content: "Poison payload two for watermark test." } },
+    ];
     const { c, calls } = batchClient({ respond: () => ({ ok: false, status: 400, error: { message: "bad" } }) });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
 
-    const result = await sync.syncBranch([
-      { type: "message", message: { role: "user", content: "Poison payload one for watermark test." } },
-      { type: "message", message: { role: "user", content: "Poison payload two for watermark test." } },
-    ]);
+    const result = await sync.syncBranch(branch);
 
     assert.equal(result.added, 2);
     assert.equal(result.allDelivered, false);
     assert.equal(sync.syncedCount, 2);
     assert.equal(sync.droppedCount, 2);
     assert.equal(result.permanentFailures, 2);
-    assert.equal(calls.length, 1);
+    // The refused batch is retried one message at a time.
+    assert.equal(calls.length, 3);
+    assert.equal((await listPending()).length, 0);
+
+    const revoked = batchClient({ respond: () => ({ ok: false, status: 401, error: { code: "UNAUTHENTICATED" } }) });
+    const later = new SyncManager(revoked.c, config());
+    await later.ensureSession("pi-session");
+    const held = await later.syncBranch(branch);
+    assert.equal(held.added, 0);
+    assert.equal(later.syncedCount, 0);
+    assert.equal(later.droppedCount, 0);
     assert.equal((await listPending()).length, 0);
   });
 });

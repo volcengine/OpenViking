@@ -91,13 +91,14 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   let queued = 0;
   let failed = 0;
   let enqueueFailed = 0;
+  let retryLater = 0;
   const payloads = [];
   for (const turn of turns) {
     // Counted by the cursor, never sent.
     if (turn.hostAuthored || !turn.message) continue;
     const payload = peerId ? { ...turn.message, peer_id: peerId } : turn.message;
     if (enqueueOnly) {
-      const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload);
+      const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload, fetchJSON.origin);
       if (res.ok) queued++;
       else enqueueFailed++;
     } else {
@@ -112,6 +113,7 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
     queued = res.queued;
     failed = res.failed;
     enqueueFailed = res.enqueueFailed;
+    retryLater = res.retryLater;
   }
   // Commit once at the end; subagents are short-lived, so threshold tracking
   // adds little value.
@@ -120,7 +122,7 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   let commitTraceId = "";
   if (ok + queued > 0) {
     const commitRes = enqueueOnly
-      ? await enqueueCommitAfterWrites(ovSessionId)
+      ? await enqueueCommitAfterWrites(ovSessionId, {}, { origin: fetchJSON.origin })
       : await commitSession(fetchJSON, ovSessionId);
     committed = !enqueueOnly && commitRes.ok;
     commitQueued = enqueueOnly ? Boolean(commitRes.ok) : Boolean(commitRes.pendingQueued);
@@ -133,6 +135,7 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
     queued,
     failed,
     enqueueFailed,
+    retryLater,
     committed,
     commitQueued,
     commit_trace_id: commitTraceId || undefined,
@@ -224,8 +227,8 @@ async function main() {
     }
     log("push_turns", { ovSessionId, ...result });
 
-    if (result.enqueueFailed > 0) {
-      logError("pending_enqueue", "some turns failed to enqueue; state not advanced");
+    if (result.enqueueFailed > 0 || result.retryLater > 0) {
+      logError("capture_write", "some turns were neither sent nor queued; state not advanced");
       return;
     }
 

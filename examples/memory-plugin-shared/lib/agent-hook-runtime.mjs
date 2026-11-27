@@ -198,10 +198,13 @@ export function makeAgentFetchJSON(cfg, cwd = process.cwd(), {
   return { fetchJSON, get effectivePeer() { return workspacePeer(); } };
 }
 
-/** Park a write for the next hook to replay. Never throws: the caller is a hook. */
-export async function enqueueAgentPending(type, sessionId, payload = {}) {
+/**
+ * Park a write for the next hook to replay. Never throws: the caller is a hook.
+ * `origin` is the `fetchJSON.origin` of the client the write was meant for.
+ */
+export async function enqueueAgentPending(type, sessionId, payload = {}, origin) {
   try {
-    return await enqueue(type, sessionId, payload);
+    return await enqueue(type, sessionId, payload, { origin });
   } catch {
     return { ok: false };
   }
@@ -212,7 +215,7 @@ export async function enqueueAgentPending(type, sessionId, payload = {}) {
  * stderr when no retry can help. `pendingQueued` / `pendingEnqueueFailed` are
  * what the capture hooks log and what decides whether a turn is lost.
  */
-async function notePendingWrite(type, sessionId, payload, result) {
+async function notePendingWrite(type, sessionId, payload, result, origin) {
   if (result.ok) return result;
   if (!isRetryableFailure(result)) {
     const detail = result.error?.message || result.error?.code || "";
@@ -222,7 +225,7 @@ async function notePendingWrite(type, sessionId, payload, result) {
     );
     return result;
   }
-  const pending = await enqueueAgentPending(type, sessionId, payload);
+  const pending = await enqueueAgentPending(type, sessionId, payload, origin);
   if (pending.ok) result.pendingQueued = true;
   else result.pendingEnqueueFailed = true;
   return result;
@@ -233,7 +236,7 @@ export async function addAgentMessage(fetchJSON, sessionId, payload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  return notePendingWrite("addMessage", sessionId, payload, result);
+  return notePendingWrite("addMessage", sessionId, payload, result, fetchJSON.origin);
 }
 
 /**
@@ -287,7 +290,17 @@ export async function getAgentSessionContext(fetchJSON, sessionId, tokenBudget =
   return result.ok ? result.result : null;
 }
 
+/**
+ * Replay the queue at a session start, but only against a server that answers:
+ * each replay of an unreachable server charges every entry a retry, and the
+ * queue holds what other harnesses parked too.
+ */
 export async function replayAgentPending(fetchJSON, log = () => {}) {
+  const health = await fetchJSON("/health");
+  if (!health.ok) {
+    log("pending-queue", { action: "replay-skipped", reason: "server_unhealthy", status: health.status || 0 });
+    return { replayed: 0, failed: 0, skipped: 0, deferred: 0, unhealthy: true };
+  }
   return replayPending(fetchJSON, log);
 }
 

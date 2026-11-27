@@ -180,14 +180,18 @@ export async function catchUpTurns({
     return body;
   });
 
+  // A refused message is passed over like a sent one; the unsent tail stays
+  // behind the cursor.
+  const advance = async (n) => {
+    state.capturedTurnCount += n;
+    await saveState(state);
+    await heartbeat?.();
+  };
   const r = await sendSessionMessages(fetchJSONRes, ovSessionId, payloads, {
     // The transcript and persisted cursor own retries, including SessionStart
     // catch-up. Queueing the same tail would create a second retry owner.
-    onSent: async (n) => {
-      state.capturedTurnCount += n;
-      await saveState(state);
-      await heartbeat?.();
-    },
+    onSent: advance,
+    onRejected: advance,
   });
   return { newTurns, added: r.sent, ovSessionId };
 }

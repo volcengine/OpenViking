@@ -1,46 +1,20 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
+  buildCaptureMessage,
   collectToolNamesByIdFromEntries,
   extractCaptureTurns,
   extractPartsFromPayload,
   findLastHumanTurnIndex,
   filterCaptureParts,
   sanitizeCapturedText,
-  shapeCapturePayload,
   shapeCaptureParts,
-  shouldCaptureText,
 } from "./lib/capture-utils.mjs"
 
 const CAPTURE_CONFIG = {
   captureAssistantTurns: true,
   captureToolMaxChars: 1000000,
-  captureMaxLength: 24000,
 }
-
-for (const text of [
-  "мой любимый редактор называется курсор",
-  "これからもこのせっていをおぼえてください",
-  "تذكر أن المحرر المفضل لدي هو هذا المحرر",
-  "앞으로도 이 설정을 꼭 기억해 주세요",
-]) {
-  test(`capture keeps substantive Unicode text: ${text}`, () => {
-    for (const role of ["user", "assistant"]) {
-      const decision = shouldCaptureText(text, role)
-      assert.equal(decision.shouldCapture, true)
-      assert.equal(decision.text, text)
-    }
-  })
-}
-
-test("Unicode punctuation detection preserves signal thresholds and noise filtering", () => {
-  for (const text of ["abcd", "αβγδεζ", "中文本abc", "……！？！？……", "😀😀😀😀😀😀😀😀😀😀😀😀", "\u0301".repeat(16), "thanks", "/remember project"]) {
-    assert.equal(shouldCaptureText(text, "user").shouldCapture, false, text)
-  }
-  for (const text of ["abcdef", "中文文字", "䷀䷁䷂䷃"]) {
-    assert.equal(shouldCaptureText(text, "user").shouldCapture, true, text)
-  }
-})
 
 function toolPart(parts) {
   return parts.find((part) => part?.type === "tool")
@@ -121,6 +95,10 @@ test("a tool result given as content blocks keeps its text and line breaks", () 
     ],
   }
   assert.equal(toolPart(extractPartsFromPayload(result)).tool_output, "line one\nline two\n[image]\nline three")
+  const single = { ...result, content: { type: "text", text: "only\nblock" } }
+  assert.equal(toolPart(extractPartsFromPayload(single)).tool_output, "only\nblock")
+  assert.equal(buildCaptureMessage(result, "toolResult").role, "user")
+  assert.equal(buildCaptureMessage(result, "toolResult", { captureAssistantTurns: false }), null)
 })
 
 test("a tool result with an unknown content block is kept as JSON", () => {
@@ -144,12 +122,18 @@ test("a subagent context line is not part of the conversation", () => {
 })
 
 test("a turn that is only a system reminder never reaches the extractor", () => {
-  const decision = shouldCaptureText(
-    "<system-reminder>the user opened a new file</system-reminder>",
+  assert.equal(buildCaptureMessage(
+    { role: "user", content: "<system-reminder>the user opened a new file</system-reminder>" },
     "user",
-  )
-  assert.equal(decision.shouldCapture, false)
-  assert.equal(decision.reason, "empty")
+  ), null)
+})
+
+test("the usage footer an answer ends with is not part of the conversation", () => {
+  const footer = "OpenViking · 2 sources · 1 read\n  viking://resources/a.md"
+  assert.equal(sanitizeCapturedText(`The answer.\n\n---\n${footer}`), "The answer.")
+  assert.equal(sanitizeCapturedText(`The answer.\n\n**${footer}`), "The answer.")
+  assert.equal(sanitizeCapturedText("OpenViking · 1 source"), "")
+  assert.equal(sanitizeCapturedText("mentions OpenViking · inline"), "mentions OpenViking · inline")
 })
 
 test("findLastHumanTurnIndex skips tool results mapped onto the user role", () => {
@@ -328,54 +312,35 @@ test("already-extracted parts are sanitized before capture rules run", () => {
 
 test("shared capture filters sanitized conversation text before keep and drop", () => {
   const payload = { role: "user", content: "<openviking-context>approved</openviking-context>Remember private details." }
-  const kept = shapeCapturePayload(payload, "user", { captureFilters: ["k/approved/"] })
-  assert.equal(kept.dropped, true)
+  assert.equal(buildCaptureMessage(payload, "user", { captureFilters: ["k/approved/"] }), null)
   assert.deepEqual(extractCaptureTurns([{ payload }], { captureFilters: ["k/approved/"] }), [])
-
-  const dropped = shapeCapturePayload(payload, "user", { captureFilters: ["d/approved/"] })
-  assert.equal(dropped.dropped, false)
-  assert.deepEqual(dropped.parts, [{ type: "text", text: "Remember private details." }])
-  assert.equal(dropped.text, "Remember private details.")
+  assert.deepEqual(buildCaptureMessage(payload, "user", { captureFilters: ["d/approved/"] }), {
+    role: "user",
+    parts: [{ type: "text", text: "Remember private details." }],
+  })
 })
 
 test("shared capture filters aggregate text and leave tool payloads intact", () => {
   const payload = { role: "assistant", content: [
     { type: "text", text: "Remember secret" },
-    { type: "toolCall", id: "call-1", name: "lookup", arguments: { secret: true } },
+    { type: "toolCall", id: "call-1", name: "lookup", arguments: { flag: true } },
   ] }
-  assert.equal(shapeCapturePayload(payload, "assistant", {
-    captureFilters: ["d/secret/"],
-  }, { faithful: true }).dropped, true)
+  assert.equal(buildCaptureMessage(payload, "assistant", { captureFilters: ["d/secret/"] }), null)
 
-  const shaped = shapeCapturePayload(payload, "assistant", {
-    captureFilters: ["s/secret/[redacted]/g"],
-  }, { faithful: true })
-  assert.equal(shaped.text, "Remember [redacted]")
-  assert.equal(shaped.parts[1].tool_input.secret, true)
+  const shaped = buildCaptureMessage(payload, "assistant", { captureFilters: ["s/secret/[redacted]/g"] })
+  assert.equal(shaped.parts[0].text, "Remember [redacted]")
+  assert.equal(shaped.parts[1].tool_input.flag, true)
 
-  const toolOnly = shapeCapturePayload({ role: "assistant", content: payload.content.slice(1) }, "assistant", {
+  const toolOnly = buildCaptureMessage({ role: "assistant", content: payload.content.slice(1) }, "assistant", {
     captureFilters: ["k/never matches/"],
-  }, { faithful: true })
-  assert.equal(toolOnly.dropped, false)
+  })
   assert.equal(toolOnly.parts[0].type, "tool")
-})
 
-test("shared capture uses conversation text for mixed messages regardless of rule presence", () => {
-  const payload = { role: "assistant", content: [
-    { type: "text", text: "Run this." },
-    { type: "toolCall", id: "call-1", name: "lookup", arguments: { q: "x" } },
-  ] }
-  const baseline = shapeCapturePayload(payload, "assistant", {}, { faithful: true })
-  assert.equal(baseline.text, "Run this.")
-  assert.deepEqual(shapeCapturePayload(payload, "assistant", {
-    captureFilters: ["user:d/.*/"],
-  }, { faithful: true }), baseline)
-  assert.deepEqual(shapeCapturePayload(payload, "assistant", {
-    captureFilters: ["s/zzz/y/"],
-  }, { faithful: true }), baseline)
-  assert.equal(shapeCapturePayload(payload, "assistant", {
-    captureFilters: ["assistant:s/Run/Do/"],
-  }, { faithful: true }).text, "Do this.")
+  const baseline = buildCaptureMessage(payload, "assistant", {})
+  assert.deepEqual(buildCaptureMessage(payload, "assistant", { captureFilters: ["user:d/.*/"] }), baseline)
+  assert.equal(buildCaptureMessage(payload, "assistant", {
+    captureFilters: ["assistant:s/Remember/Note/"],
+  }).parts[0].text, "Note secret")
 })
 
 test("sanitation keeps ordinary timestamped log lines", () => {
@@ -386,22 +351,6 @@ test("sanitation keeps ordinary timestamped log lines", () => {
   assert.deepEqual(turns[0].parts, [{ type: "text", text: log }])
   assert.equal(sanitizeCapturedText("[2024-01-01 12:00:00] Context"), "Context")
   assert.equal(sanitizeCapturedText("[2024-01-01 12:00:00 ERROR] failed"), "[2024-01-01 12:00:00 ERROR] failed")
-})
-
-test("shouldCaptureText reports a filtered drop and can be asked to skip filters", () => {
-  const cfg = { captureFilters: ["user:d/^\\/compact\\b/", "s/^ultrathink\\s+//"] }
-  assert.deepEqual(shouldCaptureText("/compact the thread", "user", cfg), {
-    shouldCapture: false,
-    reason: "filtered",
-    text: "",
-  })
-  assert.equal(shouldCaptureText("/compact the thread", "assistant", cfg).shouldCapture, true)
-  assert.equal(shouldCaptureText("ultrathink about the retry policy", "user", cfg).text,
-    "about the retry policy")
-  assert.equal(
-    shouldCaptureText("ultrathink about the retry policy", "user", cfg, { filters: false }).text,
-    "ultrathink about the retry policy",
-  )
 })
 
 test("extractCaptureTurns drops filtered turns and keeps short replies", () => {

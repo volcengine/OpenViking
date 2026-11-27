@@ -18,6 +18,7 @@ import {
 import {
   sendSessionMessages,
 } from "./shared/batch-send.mjs"
+import { ovOrigin } from "./shared/ov-http.mjs"
 import {
   log,
   effectivePeerId,
@@ -33,6 +34,9 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
   const oldSessionMapPath = path.join(pluginRoot, "openviking-session-map.json")
   let saveTimer = null
   let initBackground = Promise.resolve()
+  // What reaches the pending queue carries the server it was meant for.
+  const origin = ovOrigin({ ...config, baseUrl: config.endpoint })
+  const queueFetch = (fn) => Object.assign(fn, { origin })
   // Serialize saves: concurrent saveState() calls (a debounced save racing
   // with flushAll / flushSession / session deletion) all share the same
   // `${statePath}.tmp` temp file, so one rename can fail with ENOENT after
@@ -55,7 +59,7 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
       const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
       if (!health.ok) return
       await replayPending(
-        (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
+        queueFetch((endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options)),
         (stage, data) => log("DEBUG", "pending", stage, data),
       )
     }).catch((error) => {
@@ -218,7 +222,7 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (health.ok) {
       await replayPending(
-        (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options),
+        queueFetch((endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options)),
         (stage, data) => log("DEBUG", "pending", stage, data),
       )
     }
@@ -486,20 +490,22 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (!health.ok) {
       for (const item of toSend) {
-        const queued = await enqueue("addMessage", state.ovSessionId, item.body)
+        const queued = await enqueue("addMessage", state.ovSessionId, item.body, { origin })
         if (!queued.ok) break
         item.message.captured = true
         added += 1
       }
     } else {
       const res = await sendSessionMessages(
-        (endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 10000, ...options }),
+        queueFetch((endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 10000, ...options })),
         state.ovSessionId,
         toSend.map((item) => item.body),
         { enqueueOnRetryable: true },
       )
       added = res.sent + res.queued
-      for (const item of toSend.slice(0, added)) {
+      // A message the server refused is not sent again; the unsent tail is.
+      const settled = toSend.length - res.retryLater - res.enqueueFailed
+      for (const item of toSend.slice(0, settled)) {
         item.message.captured = true
       }
       if (res.failed > 0 || res.enqueueFailed > 0) {
@@ -509,6 +515,7 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
           error: res.lastError,
           failed: res.failed,
           enqueueFailed: res.enqueueFailed,
+          retryLater: res.retryLater,
         })
       }
     }
@@ -542,8 +549,8 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
 
   async function commitOvSession(ovSessionId, { reason = "manual", abortSignal } = {}) {
     const res = await postSessionCommit(
-      (endpoint, init = {}, options = {}) =>
-        fetchJSON(config, endpoint, { ...init, signal: abortSignal }, { timeoutMs: 30000, ...options }),
+      queueFetch((endpoint, init = {}, options = {}) =>
+        fetchJSON(config, endpoint, { ...init, signal: abortSignal }, { timeoutMs: 30000, ...options })),
       ovSessionId,
       { keep_recent_count: 0 },
       { log: (stage, data) => log("DEBUG", "pending", stage, data) },

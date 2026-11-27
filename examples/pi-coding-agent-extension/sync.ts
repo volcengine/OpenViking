@@ -11,9 +11,12 @@ import {
   dequeue,
   incrementRetry,
   listPending,
+  matchesOrigin,
+  releaseClaim,
   replayPending,
 } from "./shared/pending-queue.mjs";
 import { BATCH_LIMIT, sendSessionMessages } from "./shared/batch-send.mjs";
+import { ovOrigin } from "./shared/ov-http.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
 import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
 
@@ -148,7 +151,7 @@ export class SyncManager {
       if (sid && await hasProcessingMessage(sid)) return;
     }
     await replayPending(
-      (path: string, init?: any) => this.client.fetchJSON(path, init),
+      this.queueFetch((path: string, init?: any) => this.client.fetchJSON(path, init)),
       (stage: string, data: unknown) => this.logger.log(stage, data),
     );
   }
@@ -196,7 +199,8 @@ export class SyncManager {
     let batches = 0;
 
     const backlog = (await listPending()).filter(
-      ({ entry }) => entry?.type === "addMessage" && entry.sessionId === sid,
+      ({ entry }) => entry?.type === "addMessage" && entry.sessionId === sid
+        && matchesOrigin(entry, this.fetchJSON.origin),
     );
     for (let start = 0; start < backlog.length; start += BATCH_LIMIT) {
       if (batches >= maxBatches || Date.now() - started >= timeBudgetMs) {
@@ -218,26 +222,34 @@ export class SyncManager {
       if (claimed.length === 0) continue;
       batches += 1;
 
+      let settled = 0;
       let delivered = 0;
       const result = await sendSessionMessages(
         this.fetchJSON,
         sid,
         claimed.map(({ entry }) => entry.payload),
         {
+          // These are the queued entries: nothing to replay ahead of them.
+          replayFirst: false,
           onSent: async (count: number) => {
-            for (let i = 0; i < count; i++) await dequeue(claimed[delivered++].filename);
+            for (let i = 0; i < count; i++) await dequeue(claimed[settled++].filename);
+            delivered += count;
+          },
+          // A permanent rejection is removed immediately.
+          onRejected: async (count: number) => {
+            for (let i = 0; i < count; i++) await dequeue(claimed[settled++].filename);
+            this.droppedForever += count;
           },
         },
       );
-      if (delivered === claimed.length) continue;
+      if (settled === claimed.length) continue;
 
-      // A permanent rejection is removed immediately. Retryable failures stay
-      // queued with one more retry; incrementRetry returning false means either
-      // retry exhaustion or a queue write failure. Both are permanent gaps.
-      for (const { filename, entry } of claimed.slice(delivered)) {
-        if (!result.retryable) {
-          await dequeue(filename);
-          this.droppedForever += 1;
+      // Refused credentials leave the entries as they were. Retryable failures
+      // stay queued with one more retry; incrementRetry returning false means
+      // either retry exhaustion or a queue write failure. Both are permanent gaps.
+      for (const { filename, entry } of claimed.slice(settled)) {
+        if (result.authFailed) {
+          await releaseClaim(filename);
         } else if ((await incrementRetry(filename, entry)) === false) {
           this.droppedForever += 1;
         }
@@ -245,13 +257,20 @@ export class SyncManager {
       this.logger.log("drain", {
         session: sid,
         delivered,
-        retried: claimed.length - delivered,
+        retried: claimed.length - settled,
       });
       return;
     }
   }
 
-  private fetchJSON = (path: string, init?: any) => this.client.fetchJSON(path, init);
+  /** The queue stamps what it parks with the server and identity it was meant for. */
+  private queueFetch<T extends (...args: any[]) => any>(fn: T): T & { origin: string } {
+    return Object.defineProperty(fn, "origin", {
+      get: () => ovOrigin({ ...this.config, baseUrl: this.config.endpoint }),
+    }) as T & { origin: string };
+  }
+
+  private fetchJSON = this.queueFetch((path: string, init?: any) => this.client.fetchJSON(path, init));
 
   async syncBranch(branch: any[]): Promise<SyncBranchResult> {
     if (!this.ovSessionId) {
@@ -312,8 +331,8 @@ export class SyncManager {
 
   /**
    * Send payloads in one batch request; retryable failures are queued to disk.
-   * Returns how many payloads were accepted (sent or queued, always a prefix)
-   * and how many of those were delivered to the server.
+   * Returns how many payloads were accepted (sent, queued or refused for good;
+   * always a prefix) and how many of those were delivered to the server.
    */
   private async sendPayloads(payloads: any[]): Promise<{
     accepted: number;
@@ -334,15 +353,15 @@ export class SyncManager {
         queued: res.queued,
         failed: res.failed,
         enqueueFailed: res.enqueueFailed,
+        retryLater: res.retryLater,
         error: res.lastError?.message || res.lastError?.code || "unknown",
       });
     }
-    // A non-retryable rejection (4xx) drops the remaining payloads, the same
-    // outcome replayPending() applies to such entries. Count them as accepted
-    // so the watermark still advances past them; otherwise the next turn would
-    // re-extract and re-send the payloads that were already delivered. They are
-    // gone from the archive for good, so they also count as a capture gap.
-    const dropped = (res.retryable ? 0 : res.failed) + res.enqueueFailed;
+    // A message the server refused is not sent again. Count it as accepted so
+    // the watermark advances past it; it is gone from the archive for good, so
+    // it also counts as a capture gap. Refused credentials (`retryLater`) leave
+    // the unsent tail for the next turn to send again.
+    const dropped = res.failed - res.retryLater + res.enqueueFailed;
     if (dropped > 0) this.droppedForever += dropped;
     return {
       accepted: res.sent + res.queued + dropped,
@@ -375,9 +394,9 @@ export class SyncManager {
       return null;
     }
     const response = await commitSession(
-      (path: string, init?: any) => this.client.fetchJSON(path, init, {
+      this.queueFetch((path: string, init?: any) => this.client.fetchJSON(path, init, {
         timeoutMs: opts.timeoutMs ?? (path.endsWith("/commit") ? COMMIT_TIMEOUT_MS : undefined),
-      }),
+      })),
       sid,
       { keep_recent_count: opts.keepRecentCount ?? 0, enable_working_memory: opts.enableWorkingMemory },
       { queue: opts.queue !== false, log: (stage: string, data: unknown) => this.logger.log(stage, data) },

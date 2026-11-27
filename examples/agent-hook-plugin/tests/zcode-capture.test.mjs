@@ -26,7 +26,7 @@ test("capture plan maps host identity to the OpenViking turn_id contract", () =>
   assert.equal(plan.payloads[0].turnId, undefined);
 });
 
-test("non-retryable failure keeps cursor, dedup, and pending prompt unchanged", () => {
+test("an unsent tail keeps cursor, dedup, and pending prompt unchanged; a refused one does not", () => {
   const state = {
     lastTurnId: "turn-000",
     capturedTurnIds: [],
@@ -37,12 +37,17 @@ test("non-retryable failure keeps cursor, dedup, and pending prompt unchanged", 
     sent: 0,
     queued: 0,
     failed: 2,
+    retryLater: 2,
   });
 
   assert.equal(next.lastTurnId, "turn-000");
   assert.deepEqual(next.capturedTurnIds, []);
   assert.deepEqual(next.pendingPrompt, state.pendingPrompt);
   assert.equal(next.captured, 0);
+
+  const refused = applyZcodeCaptureResult(state, plan, { sent: 0, queued: 0, failed: 2, retryLater: 0 });
+  assert.equal(refused.lastTurnId, "turn-001");
+  assert.equal(refused.captured, 0);
 });
 
 test("only the acknowledged contiguous prefix updates dedup and cursor state", () => {
@@ -56,6 +61,7 @@ test("only the acknowledged contiguous prefix updates dedup and cursor state", (
     sent: 1,
     queued: 0,
     failed: 1,
+    retryLater: 1,
   });
 
   assert.deepEqual(next.capturedTurnIds, ["turn-001:user"]);
@@ -141,6 +147,7 @@ test("repeated prompt text clears only after the latest matching user is acknowl
     sent: 2,
     queued: 0,
     failed: 2,
+    retryLater: 2,
   });
 
   assert.equal(partial.lastTurnId, "turn-001");

@@ -157,6 +157,7 @@ async function pushTurnsToOv(ovSessionId, turns, peerId = "") {
     queued: res.queued,
     failed: res.failed,
     enqueueFailed: res.enqueueFailed,
+    retryLater: res.retryLater,
     lastError: res.lastError,
   };
 }
@@ -165,7 +166,7 @@ async function enqueueTurnsToPending(ovSessionId, turns, peerId = "") {
   let queued = 0;
   let failed = 0;
   for (const turn of turns) {
-    const res = await enqueuePendingDirectly("addMessage", ovSessionId, toPayload(turn, peerId));
+    const res = await enqueuePendingDirectly("addMessage", ovSessionId, toPayload(turn, peerId), fetchJSON.origin);
     if (res.ok) queued++;
     else failed++;
   }
@@ -331,9 +332,10 @@ async function main({ cfg, input, cwd }) {
     queued: result.queued,
     failed: result.failed,
     enqueueFailed: result.enqueueFailed,
+    retryLater: result.retryLater,
   });
 
-  if (result.enqueueFailed > 0 || (
+  if (result.enqueueFailed > 0 || result.retryLater > 0 || (
     result.failed > 0
     && result.ok === 0
     && result.queued === 0
@@ -359,8 +361,8 @@ async function main({ cfg, input, cwd }) {
   }
 
   // A missing live-message file is recoverable after the server is fixed, so
-  // retain the cursor for that failure. Other non-retryable 4xx responses keep
-  // the historical terminal behavior instead of retrying invalid payloads.
+  // retain the cursor for that failure, as for refused credentials. A message
+  // the server refused is not sent again.
   await saveState(sessionId, {
     ...state,
     capturedTurnCount: allTurns.length,

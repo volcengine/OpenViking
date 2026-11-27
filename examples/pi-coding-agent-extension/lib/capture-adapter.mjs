@@ -2,14 +2,6 @@ import {
   buildCaptureMessage,
 } from "../shared/capture-utils.mjs";
 
-// pi spells these roles in camelCase; the shared capture knows them in snake_case.
-const PI_ROLES = { toolresult: "tool_result", toolcall: "tool_call" };
-
-function hostRole(role) {
-  const value = String(role || "");
-  return PI_ROLES[value.toLowerCase()] || value;
-}
-
 function entryPayload(entry) {
   if (!entry || typeof entry !== "object") return null;
   if (entry.type === "message" && entry.message && typeof entry.message === "object") {
@@ -31,7 +23,7 @@ export function extractBranchCapturePayloads(branch, syncedEntryCount = 0, cfg =
     const payload = entryPayload(entry);
     if (!payload) continue;
 
-    const body = buildCaptureMessage(payload, hostRole(payload.role || payload.type || payload.kind), cfg);
+    const body = buildCaptureMessage(payload, payload.role || payload.type || payload.kind, cfg);
     if (!body) continue;
     if (cfg.peerId) body.peer_id = cfg.peerId;
     payloads.push(body);

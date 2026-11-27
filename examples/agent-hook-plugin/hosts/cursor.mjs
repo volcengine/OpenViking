@@ -173,7 +173,9 @@ async function captureTranscript(ctx, state) {
   }));
   const result = await sendSessionMessages(ctx.fetchJSON, ctx.sessionId, payloads);
   const captured = result.sent;
-  const acknowledged = toSend.slice(0, captured);
+  // Refused messages are acknowledged too; only the unsent tail is kept.
+  const settled = toSend.length - result.retryLater - result.enqueueFailed;
+  const acknowledged = toSend.slice(0, settled);
   for (const item of acknowledged) {
     if (item.toolId) acceptedToolIds.add(item.toolId);
     else capturedHashes.add(item.hash);
@@ -184,7 +186,7 @@ async function captureTranscript(ctx, state) {
   }
   return {
     captured,
-    complete: captured === toSend.length,
+    complete: settled === toSend.length,
     state: {
       ...state,
       capturedHashes: [...capturedHashes].slice(-1000),

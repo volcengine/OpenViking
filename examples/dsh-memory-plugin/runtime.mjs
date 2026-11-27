@@ -11,9 +11,10 @@ import {
   enqueue,
   enqueueCommitAfterWrites,
   listPending,
+  matchesOrigin,
   replayPending,
 } from "./shared/pending-queue.mjs";
-import { isRetryableFailure } from "./shared/retryable.mjs";
+import { isAuthFailure, isRetryableFailure } from "./shared/retryable.mjs";
 import { commitsOnCompaction, isBypassed, thresholdCommitDue } from "./shared/session-model.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 import {
@@ -229,7 +230,10 @@ export class OpenVikingRuntime {
         state.config.peerId,
       );
       this.reportWriteResult(state, "capture", response, "/api/v1/sessions/{session_id}/messages");
-      if (isRetryableFailure(response)) {
+      // Refused credentials are kept for when they work again, like a retryable
+      // failure: the queue is the only place DSH holds an unsent message. A
+      // message the server refused is not sent again.
+      if (isRetryableFailure(response) || isAuthFailure(response)) {
         await this.enqueuePendingMessage(state, payload);
       }
     });
@@ -290,11 +294,16 @@ export class OpenVikingRuntime {
   async commit(state, stage, timeoutMs = 30000) {
     const body = { keep_recent_count: 0 };
     if (state.hasPendingWrites) {
-      this.notePendingCommit(state, await enqueueCommitAfterWrites(state.ovSessionId, body));
+      this.notePendingCommit(state, await enqueueCommitAfterWrites(state.ovSessionId, body, {
+        origin: this.client.fetchJSON?.origin,
+      }));
       return;
     }
     const response = await commitSession(
-      (path, init) => this.client.fetchJSON(path, init, { timeoutMs, actorPeerId: state.config.peerId }),
+      Object.assign(
+        (path, init) => this.client.fetchJSON(path, init, { timeoutMs, actorPeerId: state.config.peerId }),
+        { origin: this.client.fetchJSON?.origin },
+      ),
       state.ovSessionId,
       body,
       { log: (name, data) => this.log(name, data) },
@@ -370,7 +379,10 @@ export class OpenVikingRuntime {
   async enqueuePendingMessage(state, payload) {
     const createdAt = Math.max(Date.now(), state.pendingCreatedAt + 1);
     state.pendingCreatedAt = createdAt;
-    const result = await enqueue("addMessage", state.ovSessionId, payload, { createdAt });
+    const result = await enqueue("addMessage", state.ovSessionId, payload, {
+      createdAt,
+      origin: this.client.fetchJSON?.origin,
+    });
     this.notePending(state, "addMessage", result);
     return result;
   }
@@ -396,7 +408,8 @@ export class OpenVikingRuntime {
   async refreshPendingState(state) {
     const wasPending = state.hasPendingWrites;
     const pending = (await listPending()).filter(
-      item => item.entry?.sessionId === state.ovSessionId,
+      item => item.entry?.sessionId === state.ovSessionId
+        && matchesOrigin(item.entry, this.client.fetchJSON?.origin),
     );
     state.hasPendingWrites = pending.length > 0;
     state.pendingCreatedAt = pending.reduce(
@@ -417,7 +430,7 @@ export class OpenVikingRuntime {
    */
   async replayPendingQueue(options = {}) {
     await replayPending(
-      (path, init) => this.client.fetchJSON(path, init),
+      Object.assign((path, init) => this.client.fetchJSON(path, init), { origin: this.client.fetchJSON?.origin }),
       (stage, data) => this.log(stage, data),
       options,
     );

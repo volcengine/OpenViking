@@ -34,8 +34,8 @@ test("runtime uses a portable OpenViking id for DSH IM sessions", () => {
   );
 });
 
-test("capture queues retryable failures but drops permanent client errors", async () => {
-  for (const [status, expectedPending] of [[400, 0], [503, 1]]) {
+test("capture queues retryable failures and refused credentials but drops refused messages", async () => {
+  for (const [status, expectedPending] of [[400, 0], [401, 1], [503, 1]]) {
     const pendingDir = await mkdtemp(join(tmpdir(), `dsh-memory-${status}-`));
     tempDirs.push(pendingDir);
     process.env.OPENVIKING_PENDING_DIR = pendingDir;
@@ -53,7 +53,7 @@ test("capture queues retryable failures but drops permanent client errors", asyn
     await runtime.flush(session);
 
     assert.equal((await listPending()).length, expectedPending, `HTTP ${status}`);
-    assert.equal(warnings.length, status === 400 ? 1 : 0);
+    assert.equal(warnings.length, status === 503 ? 0 : 1);
   }
 });
 
@@ -538,6 +538,9 @@ test("the per-session peer honors peerSource", async () => {
 });
 
 test("permanent capture failures warn once per session and recover without logging payloads", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-capture-warnings-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
   const warnings = [];
   let response = { ok: false, status: 400, error: { code: "INVALID_ARGUMENT", message: "private message" } };
   const runtime = new OpenVikingRuntime({
@@ -643,7 +646,6 @@ function config() {
     captureToolMaxChars: 1000000,
     captureMode: "semantic",
     commitTokenThreshold: 20000,
-    commitKeepRecentCount: 10,
   };
 }
 

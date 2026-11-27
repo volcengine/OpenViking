@@ -112,7 +112,7 @@ runHookStage({
   }
   const health = await fetchJSON("/health");
   if (!health.ok && isRetryableFailure(health)) {
-    const queued = await enqueueCommitAfterWrites(ovSessionId);
+    const queued = await enqueueCommitAfterWrites(ovSessionId, {}, { origin: fetchJSON.origin });
     log("commit", { ovSessionId, ok: false, queued: queued.ok, reason: "health_retryable" });
     return;
   }

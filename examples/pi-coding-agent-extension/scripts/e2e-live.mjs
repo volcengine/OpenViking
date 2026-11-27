@@ -144,7 +144,6 @@ writeFileSync(OVCLI_CONF, JSON.stringify({
       takeoverEnabled: TAKEOVER,
       resumeArchiveInject: false,
       commitTokenThreshold: 1000,
-      commitKeepRecentCount: 0,
       takeoverTokenThreshold: 600,
       takeoverKeepRecentTurns: 1,
       takeoverOverviewBudget: 3000,

@@ -64,7 +64,6 @@ function baseConfig(endpoint) {
     captureToolMaxChars: 2000,
     captureMode: "semantic",
     commitTokenThreshold: 20000,
-    commitKeepRecentCount: 10,
   }
 }
 

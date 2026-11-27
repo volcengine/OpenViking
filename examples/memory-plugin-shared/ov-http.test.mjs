@@ -302,6 +302,14 @@ test("dsh and pi name the base url `endpoint`", async () => {
   assert.equal(calls[0].url, "http://127.0.0.1:1934/health");
 });
 
+test("the client names its server and identity as a short origin", () => {
+  const origin = createOvHttp({ baseUrl: "http://a:1933/", account: "acme", user: "u" }).origin;
+  assert.match(origin, /^[0-9a-f]{16}$/);
+  assert.equal(createOvHttp({ endpoint: "http://a:1933", account: "acme", user: "u" }).origin, origin);
+  assert.notEqual(createOvHttp({ baseUrl: "http://a:1933", account: "acme", user: "v" }).origin, origin);
+  assert.notEqual(createOvHttp({ baseUrl: "http://b:1933", account: "acme", user: "u" }).origin, origin);
+});
+
 test("the operator's OPENVIKING_EXTRA_HEADERS reach the wire without a caller wiring them", async () => {
   const previous = process.env.OPENVIKING_EXTRA_HEADERS;
   process.env.OPENVIKING_EXTRA_HEADERS = JSON.stringify({

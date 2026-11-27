@@ -80,11 +80,11 @@ export function applyIncrementalCaptureResult(state, plan, result, cleanText) {
   const acknowledged = new Set(
     Array.isArray(state.capturedTurnIds) ? state.capturedTurnIds : [],
   );
-  const captured = Math.min(
-    plan.toSend.length,
-    Math.max(0, Number(result?.sent || 0) + Number(result?.queued || 0)),
-  );
-  for (const item of plan.toSend.slice(0, captured)) acknowledged.add(item.dedupKey);
+  // Refused messages are acknowledged too; only the unsent tail is kept.
+  const settled = Math.max(0, plan.toSend.length
+    - Number(result?.retryLater || 0) - Number(result?.enqueueFailed || 0));
+  const captured = Math.min(settled, Math.max(0, Number(result?.sent || 0) + Number(result?.queued || 0)));
+  for (const item of plan.toSend.slice(0, settled)) acknowledged.add(item.dedupKey);
 
   const cursor = acknowledgedCursor(plan.candidates, acknowledged);
   const pendingPrompt = cleanText(state.pendingPrompt?.prompt || "");
