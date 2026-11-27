@@ -190,7 +190,7 @@ export class MessageInbox {
   schedule() {
     if (this.stopped || this.entries.length === 0) return;
     if (!this.usable()) {
-      if (!this.wakeTimer) this.armWake(0);
+      if (!this.wakeTimer && this.entries.some((entry) => this.canDrain(entry))) this.armWake(0);
       return;
     }
     if (this.busy()) {
@@ -327,12 +327,32 @@ export class MessageInbox {
     this.schedule();
   }
 
-  // Ark admits one scope per batch. A rejected batch stays durable and is
-  // retried even if the runtime does not send an availability notification.
+  canDrain(entry) {
+    // Ark resolves the conversation through a Connector ledger seq. Keep
+    // synthetic inputs such as task reports for a runtime with Core tools.
+    return !this.capabilities()?.requiresInboundSeq || entry.item.seq != null;
+  }
+
+  // Ark admits one scope per batch. Merge adjacent entries so batching cannot
+  // move an input ahead of one that arrived earlier in another conversation.
   drain() {
     if (this.stopped || this.entries.length === 0) return 0;
+    const batches = [];
+    let batch = null;
+    for (const entry of this.entries) {
+      if (!this.canDrain(entry)) {
+        batch = null;
+        continue;
+      }
+      if (batch?.[0].scopeKey !== entry.scopeKey) {
+        batch = [];
+        batches.push(batch);
+      }
+      batch.push(entry);
+    }
+
     let delivered = 0;
-    for (const taken of Map.groupBy(this.entries, (entry) => entry.scopeKey).values()) {
+    for (const taken of batches) {
       let result;
       try {
         result = this.runtime.submit(taken.map((entry) => entry.item), { admission: 'enqueue' });

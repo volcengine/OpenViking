@@ -4,6 +4,10 @@
 import { ovFixture } from './ov-fixture.mjs';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
+import { AgentRuntime } from '../src/agent-runtime.mjs';
+import { MessageInbox } from '../src/inbox.mjs';
+import { adaptRuntime } from '../src/runtime-adapter.mjs';
 import { VolcAgent as BaseVolcAgent } from '../src/volc.mjs';
 
 const quietLogger = {
@@ -716,6 +720,46 @@ describe('Volc managed-agent runtime', () => {
     assert.equal(agent.deliver('meeting without inbound target', null, 'receipt-1'), true);
     assert.equal(agent.turnActive, false);
     assert.equal(failures.length, 2);
+  });
+
+  it('B7 keeps a same-scope task report for Core and starts the ordinary Ark input', (t) => {
+    const data = store();
+    const failures = [];
+    const options = config();
+    const agent = new BaseVolcAgent(options, data, quietLogger, {
+      onTurnFailed: (info) => failures.push(info),
+    });
+    const runTurn = t.mock.method(agent, '_runTurn', async () => {});
+    agent.connected = true;
+    const runtime = new AgentRuntime(options, data, quietLogger);
+    runtime.runtime = 'volc';
+    runtime.backend = adaptRuntime('volc', agent);
+    const db = new DatabaseSync(':memory:');
+    let capabilities = agent.capabilities;
+    const inbox = new MessageInbox({ db, runtime, capabilities: () => capabilities });
+    try {
+      const report = inbox.persist({ text: 'finished task', seq: null, scopeKey: 'chat-a', receiptId: 'task-report:1' },
+        { kind: 'task.report' });
+      inbox.publish(report);
+      inbox.add({ text: 'ordinary input', seq: 1, scopeKey: 'chat-a' }, { kind: 'message.created' });
+
+      assert.equal(inbox.drain(), 1);
+      assert.equal(runTurn.mock.callCount(), 1, 'the real Ark validator allowed the ordinary input to start');
+      assert.deepEqual(runTurn.mock.calls[0].arguments[0].seqs, [1]);
+      assert.deepEqual(failures, []);
+      assert.deepEqual(db.prepare('SELECT id FROM inbox_pending').all().map(({ id }) => id), [report.id]);
+
+      const core = t.mock.fn(() => true);
+      runtime.runtime = 'codex';
+      runtime.backend = adaptRuntime('codex', { tryStartBatch: core });
+      capabilities = { agentTools: 'core', activeInput: 'steer' };
+      assert.equal(inbox.wake(), true);
+      assert.deepEqual(core.mock.calls[0].arguments[0].map(({ receiptId }) => receiptId), ['task-report:1']);
+      assert.equal(inbox.size, 0);
+    } finally {
+      inbox.stop();
+      db.close();
+    }
   });
 
   it('keeps a bare requires_action status inside the active self-hosted turn', async () => {

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
+import { setTimeout as delay } from 'node:timers/promises';
 import { normalizeEvent, deterministicFilter } from './event.mjs';
 import { commandCandidate, parseCommand } from './commands.mjs';
 import { GroupBurstRouter } from './group-burst.mjs';
@@ -9,7 +10,7 @@ import { opaqueRef, safeError } from './logger.mjs';
 import { parseProtocolLine } from './connectors/protocol.mjs';
 
 const PREPARE_RETRY_MS = 1_000;
-const PREPARE_ATTEMPTS = 3;
+const CONTEXT_PREPARE_ATTEMPTS = 3;
 
 // Recall (ov-recall.mjs) reads OV on the ingress path, which every later
 // line waits behind, so only where the agent is likely to answer: direct
@@ -84,7 +85,7 @@ export class Harness {
     // Legacy can have an inbox just to drain inputs left by another scheduler.
     this.inbox = inbox;
     this.inboxEnabled = inboxEnabled;
-    this.prepareRetries = new Set();
+    this.prepareRetryStop = new AbortController();
     // Workers scheduler: a line naming the tasks an input may belong to.
     this.taskHint = taskHint;
     this.ingressBarrier = Promise.resolve();
@@ -220,55 +221,80 @@ export class Harness {
   restorePendingInboxInputs() {
     if (!this.inbox) return;
     const pending = this.store.recoverPendingInboxInputs(Date.now() - this.config.maxEventAgeMs);
-    for (const inbound of pending) this.enqueueInput(inbound, inbound, { prepareForInbox: true, preserveInbox: true });
+    for (const inbound of pending) {
+      this.enqueueInput(inbound, inbound, { prepareForInbox: true, preserveInbox: true, recovered: true });
+    }
   }
 
-  enqueueInput(event, inbound, { prepareForInbox, preserveInbox, attempt = 1 }) {
-    this.enqueueIngress(async () => {
-      // An already inbox-eligible input keeps its durable handoff even if a
-      // switch takes away the tools. The active runtime decides how it is read.
-      preserveInbox ||= this.inbox?.usable();
-      let prepared;
-      let entry;
-      try {
-        if (attempt > PREPARE_ATTEMPTS) {
-          // Keep the accepted history, but release the cursor after preparation
-          // repeatedly failed. Retry this write too if SQLite is unavailable.
-          this.store.transaction(() => this.store.clearPendingInboxInput(inbound.seq));
-          return;
-        }
-        prepared = await this.prepareInput(event, inbound);
-        if (!prepared || this.isStopping()) return;
-        if (prepareForInbox) {
-          preserveInbox ||= this.inbox.usable();
-          entry = this.store.transaction(() => {
-            if (!this.store.clearPendingInboxInput(inbound.seq)) return null;
-            if (preserveInbox) return this.inbox.persist(prepared.item, prepared.meta);
-          });
-          if (entry === null) return;
-        }
-      } catch (error) {
-        if (!prepareForInbox) throw error;
-        this.logger.warn(attempt > PREPARE_ATTEMPTS ? 'inbox_input_settlement_failed' : 'inbox_input_preparation_failed', {
-          seq: inbound.seq, attempt, error: safeError(error),
+  enqueueInput(event, inbound, options) {
+    const state = { ...options, contextFailures: 0 };
+    this.enqueueIngress(() => this.deliverInput(event, inbound, state));
+  }
+
+  async deliverInput(event, inbound, state) {
+    const signal = this.prepareRetryStop.signal;
+    while (!signal.aborted && !this.isStopping()) {
+      if (await this.tryDeliverInput(event, inbound, state)) return;
+      const retry = delay(PREPARE_RETRY_MS, true, { signal, ref: false }).catch(() => false);
+      if (!state.recovered) {
+        // A live input retries at the back of ingress. Recovered inputs keep
+        // their place so a later recovered seq cannot be published first.
+        void retry.then((ready) => {
+          if (ready && !signal.aborted && !this.isStopping()) {
+            this.enqueueIngress(() => this.deliverInput(event, inbound, state));
+          }
         });
-        if (!this.isStopping()) {
-          const timer = setTimeout(() => {
-            this.prepareRetries.delete(timer);
-            this.enqueueInput(event, inbound, { prepareForInbox, preserveInbox, attempt: attempt + 1 });
-          }, PREPARE_RETRY_MS);
-          timer.unref();
-          this.prepareRetries.add(timer);
-        }
         return;
       }
-      if (entry) {
-        this.inbox.publish(entry);
-        if (!this.inbox.usable()) this.inbox.drain();
-      } else {
-        this.route(prepared.item, prepared.meta);
+      if (!(await retry)) return;
+    }
+  }
+
+  async tryDeliverInput(event, inbound, state) {
+    const { prepareForInbox } = state;
+    state.preserveInbox ||= this.inbox?.usable();
+    const settle = prepareForInbox && (state.contextFailures >= CONTEXT_PREPARE_ATTEMPTS
+      || inbound.receivedAtMs < Date.now() - this.config.maxEventAgeMs);
+    if (!settle && !state.prepared) {
+      try {
+        state.prepared = await this.prepareInput(event, inbound);
+      } catch (error) {
+        if (!prepareForInbox) throw error;
+        state.contextFailures += 1;
+        this.logger.warn('inbox_input_preparation_failed', {
+          seq: inbound.seq, attempt: state.contextFailures, error: safeError(error),
+        });
+        return false;
       }
-    });
+      if (!state.prepared || this.isStopping()) return true;
+    }
+    const prepared = settle ? null : state.prepared;
+
+    let entry;
+    if (prepareForInbox) {
+      // An already inbox-eligible input keeps its durable handoff even if a
+      // switch took away the tools. The active runtime decides how it is read.
+      state.preserveInbox ||= this.inbox.usable();
+      try {
+        entry = this.store.transaction(() => {
+          if (!this.store.clearPendingInboxInput(inbound.seq)) return null;
+          if (prepared && state.preserveInbox) return this.inbox.persist(prepared.item, prepared.meta);
+        });
+      } catch (error) {
+        // A rolled-back write leaves the ledger marker intact. Keep retrying
+        // the handoff while the event is eligible, regardless of retry count.
+        this.logger.warn('inbox_input_write_failed', { seq: inbound.seq, error: safeError(error) });
+        return false;
+      }
+      if (!prepared || entry === null) return true;
+    }
+    if (entry) {
+      this.inbox.publish(entry);
+      if (!this.inbox.usable()) this.inbox.drain();
+    } else {
+      this.route(prepared.item, prepared.meta);
+    }
+    return true;
   }
 
   async prepareInput(event, inbound) {
@@ -387,8 +413,7 @@ export class Harness {
   }
 
   stop() {
-    for (const timer of this.prepareRetries) clearTimeout(timer);
-    this.prepareRetries.clear();
+    this.prepareRetryStop.abort();
     this.groupBurst.stop();
     this.inbox?.stop();
   }

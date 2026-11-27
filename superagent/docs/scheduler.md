@@ -75,13 +75,14 @@ Connector event → Harness (validate, dedupe, ledger marks pending preparation)
   prepares their context in ingress order and atomically clears the marker and
   writes a ready row when handing off to the inbox. Only ready rows can appear
   in a notice or be delivered by `message_check`. OpenViking history sync pauses
-  at the first pending preparation. A failed preparation gets two retries while
-  the daemon runs. After the last failure, the daemon keeps the accepted event
-  in history and clears the marker so later entries can sync. On restart, the
-  daemon loads ready rows first, then queues pending preparations by their
-  original `seq` before subscribing to live Connector events. A restart into
-  `legacy` also recovers and drains these rows. The same event ID still deduplicates
-  against the ledger. Once `AgentRuntime.submit` returns `accepted: true`,
+  at the first pending preparation. Context preparation gets two retries
+  before its marker is cleared. A failed ready write retains the marker and
+  retries until the write succeeds or the event expires. On restart, the daemon
+  loads ready rows first, then queues pending preparations by their
+  original `seq` before subscribing to live Connector events. A recovered input
+  finishes preparation and its ready write before the next recovered input
+  proceeds. A restart into `legacy` also recovers and drains these rows. The same
+  event ID still deduplicates against the ledger. Once `AgentRuntime.submit` returns `accepted: true`,
   delivery belongs to the runtime and follows its usual turn recovery rules.
 - **Expiry and upgrade.** The event age limit (`OV_SUPERAGENT_MAX_EVENT_AGE_MS`)
   starts at receipt for pending preparations and at ready-row creation for
@@ -92,9 +93,11 @@ Connector event → Harness (validate, dedupe, ledger marks pending preparation)
   An input in the legacy 400 ms group window can be lost when the process stops.
 - **Runtimes.** The inbox needs the Core tools (`message_check`). Ark has none,
   so a manifest with `scheduler: "inbox"` on Ark is rejected; switching to Ark
-  at run time drains ready inputs by scope through the runtime's submit path.
-  The inbox retries rejected batches and removes rows once the runtime accepts
-  them. Pending preparations that qualified for the inbox use the same handoff.
+  at run time drains ready inputs in queue order, batching adjacent entries
+  of the same scope. Entries without a Connector ledger sequence, including
+  task reports, wait in the inbox for a runtime with Core tools. The inbox
+  retries rejected batches and removes rows once the runtime accepts them.
+  Pending preparations that qualified for the inbox use the same handoff.
   An input queued behind a switch to a runtime with Core tools goes through the
   inbox. During normal operation on Ark, new inputs follow the legacy route.
   A runtime that cannot take input mid-turn (OpenCode, `activeInput: queue-next-turn`)

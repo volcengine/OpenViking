@@ -4,6 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
+import { MessageInbox } from '../src/inbox.mjs';
 import { startMockEnv, textMessage } from './mock-env.mjs';
 
 function readySeqs(env) {
@@ -157,6 +158,77 @@ describe('inbox scheduler end to end', () => {
       assert.deepEqual(store.pendingInboxInputs(), []);
     } finally {
       await env.stop();
+    }
+  });
+
+  it('B6 keeps the original input recoverable after three rolled-back writes', async (t) => {
+    const env = await startMockEnv({ config: { scheduler: 'inbox' } });
+    const { inbox, store } = env.daemon;
+    const message = textMessage({ messageId: 'om-write-recovery', text: 'deliver after SQLite recovers' });
+    const persist = inbox.persist.bind(inbox);
+    let failures = 0;
+    try {
+      t.mock.method(inbox, 'persist', (item, meta) => {
+        const entry = persist(item, meta);
+        if (failures < 3) {
+          failures += 1;
+          throw new Error('ready transaction rolled back');
+        }
+        return entry;
+      });
+      env.receive(message);
+      const { seq } = await acceptedEvent(env, message);
+      await env.waitFor(() => failures === 3);
+      assert.deepEqual(store.pendingInboxInputs().map((row) => row.seq), [seq]);
+      assert.deepEqual(readySeqs(env), []);
+
+      await env.waitFor(() => store.pendingInboxInputs().length === 0);
+      await env.waitForCodexInput(/msg=om-write-recovery /, 1_500);
+      env.receive(message);
+      await env.waitFor(() => env.activities('message.duplicate').length === 1);
+      assert.deepEqual(env.activities('inbox.delivered').flatMap((row) => row.metadata.inboundSeqs), [seq]);
+    } finally {
+      await env.stop();
+    }
+  });
+
+  it('B8 keeps recovered inputs in seq order when the first ready write rolls back', async (t) => {
+    const first = await startMockEnv({ config: { scheduler: 'inbox' } });
+    const roster = Promise.withResolvers();
+    const oldest = textMessage({ messageId: 'om-recover-first', text: 'oldest recovered input' });
+    const newest = textMessage({ messageId: 'om-recover-second', text: 'next recovered input' });
+    let restarted;
+    try {
+      t.mock.method(first.daemon.harness.roster, 'warm', () => roster.promise);
+      first.receive(oldest);
+      const { seq: firstSeq } = await acceptedEvent(first, oldest);
+      first.receive(newest);
+      const { seq: secondSeq } = await acceptedEvent(first, newest);
+      assert.deepEqual(first.daemon.store.pendingInboxInputs().map(({ seq }) => seq), [firstSeq, secondSeq]);
+      await first.daemon.shutdown('restart', 0);
+
+      const persist = MessageInbox.prototype.persist;
+      let rolledBack = false;
+      t.mock.method(MessageInbox.prototype, 'persist', function(item, meta) {
+        const entry = persist.call(this, item, meta);
+        if (item.seq === firstSeq && !rolledBack) {
+          rolledBack = true;
+          throw new Error('first recovered ready write rolled back');
+        }
+        return entry;
+      });
+      restarted = await startMockEnv({ config: { scheduler: 'inbox', databasePath: first.config.databasePath } });
+      await restarted.waitForCodexInput(/msg=om-recover-first /);
+      await restarted.waitForCodexInput(/msg=om-recover-second /);
+      assert.ok(rolledBack);
+      const delivered = restarted.codexInput().flatMap(({ text }) =>
+        [...text.matchAll(/msg=(om-recover-first|om-recover-second) /g)].map((match) => match[1]));
+      assert.deepEqual(delivered, ['om-recover-first', 'om-recover-second']);
+      assert.deepEqual(restarted.activities('inbox.delivered').flatMap((row) => row.metadata.inboundSeqs), [firstSeq, secondSeq]);
+      assert.deepEqual(restarted.daemon.store.pendingInboxInputs(), []);
+    } finally {
+      roster.resolve();
+      try { await restarted?.stop(); } finally { await first.stop(); }
     }
   });
 
