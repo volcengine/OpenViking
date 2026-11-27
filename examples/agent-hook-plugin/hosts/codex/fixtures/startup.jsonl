@@ -1,0 +1,6 @@
+{"type":"session_meta","payload":{"id":"example"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nHere is a list of plugins that are available but not installed.\n\n- Example (example@marketplace)\n</recommended_plugins>"},{"type":"input_text","text":"# AGENTS.md instructions\n\n<INSTRUCTIONS>\nUse Chinese for answers.\n</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>\n  <cwd>/tmp/project</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-09-25</current_date>\n  <timezone>Asia/Singapore</timezone>\n  <filesystem><permission_profile type=\"disabled\" /></filesystem>\n</environment_context>"}]}}
+{"type":"turn_context","payload":{"turn_id":"turn-1"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Already sent"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Also sent"}]}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"New question"}]}}

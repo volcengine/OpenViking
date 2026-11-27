@@ -1,0 +1,15 @@
+{
+  "what": "SessionStart context is additionalContext",
+  "emit": {
+    "event": "SessionStart",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "hookEventName": "SessionStart",
+      "additionalContext": "BLOCK"
+    }
+  }
+}

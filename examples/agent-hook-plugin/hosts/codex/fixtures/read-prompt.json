@@ -1,0 +1,18 @@
+{
+  "what": "UserPromptSubmit reads the trimmed prompt, the rollout and the session",
+  "read": {
+    "event": "UserPromptSubmit",
+    "payload": {
+      "session_id": "s1",
+      "prompt": "  hello there  ",
+      "transcript_path": "/r.jsonl",
+      "turn_id": "t1"
+    }
+  },
+  "expect": {
+    "sessionId": "s1",
+    "prompt": "hello there",
+    "transcript": "/r.jsonl",
+    "resumed": ""
+  }
+}

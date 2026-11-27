@@ -1,0 +1,69 @@
+{
+  "what": "a tool Codex records in a history mutation and again, or also as mcp_tool_call_end, is sent once",
+  "decode": {
+    "transcript": "dedup.jsonl"
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "running a check"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "h1",
+          "tool_name": "exec",
+          "tool_status": "running",
+          "tool_input": {
+            "value": "await Promise.resolve()"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "h1",
+          "tool_name": "exec",
+          "tool_status": "completed",
+          "tool_output": "done"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "mcp-call-1",
+          "tool_name": "js",
+          "tool_status": "running",
+          "tool_input": {
+            "code": "return 1"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "mcp-call-1",
+          "tool_name": "js",
+          "tool_status": "completed",
+          "tool_output": "1"
+        }
+      ]
+    }
+  ]
+}

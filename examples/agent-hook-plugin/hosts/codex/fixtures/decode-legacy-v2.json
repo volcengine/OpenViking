@@ -1,0 +1,26 @@
+{
+  "what": "a v2 state-file cursor resumes where it says",
+  "decode": {
+    "transcript": "startup.jsonl",
+    "cursor": {
+      "codexSessionId": "s",
+      "capturedTurnCount": 2,
+      "captureFormatVersion": 2
+    }
+  },
+  "cursor": {
+    "capturedTurnCount": 3,
+    "captureFormatVersion": 2
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "New question"
+        }
+      ]
+    }
+  ]
+}

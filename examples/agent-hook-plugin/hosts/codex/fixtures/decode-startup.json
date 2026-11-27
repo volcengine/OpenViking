@@ -1,0 +1,39 @@
+{
+  "what": "the startup blocks before the first turn_context are not captured",
+  "decode": {
+    "transcript": "startup.jsonl"
+  },
+  "cursor": {
+    "capturedTurnCount": 3,
+    "captureFormatVersion": 2
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Already sent"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Also sent"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "New question"
+        }
+      ]
+    }
+  ]
+}

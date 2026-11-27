@@ -1,0 +1,15 @@
+{
+  "what": "UserPromptSubmit context is additionalContext",
+  "emit": {
+    "event": "UserPromptSubmit",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "hookEventName": "UserPromptSubmit",
+      "additionalContext": "BLOCK"
+    }
+  }
+}

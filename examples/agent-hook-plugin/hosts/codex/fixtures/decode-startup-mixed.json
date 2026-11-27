@@ -1,0 +1,35 @@
+{
+  "what": "user text sharing a startup message stays; quotations and incomplete wrappers are kept",
+  "decode": {
+    "transcript": "startup-mixed.jsonl"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Please explain this plugin list."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Why does the rollout contain AGENTS.md instructions and <environment_context>?"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "<recommended_plugins>\nmissing closing tag"
+        }
+      ]
+    }
+  ]
+}

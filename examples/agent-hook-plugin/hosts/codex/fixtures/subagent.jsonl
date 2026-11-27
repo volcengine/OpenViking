@@ -1,0 +1,3 @@
+{"type":"event_msg","payload":{"type":"agent_message","message":"UI duplicate of a normal assistant response"}}
+{"type":"response_item","payload":{"type":"agent_message","author":"reviewer","recipient":"main","content":[{"type":"input_text","text":"Found a pairing bug."}]}}
+{"type":"event_msg","payload":{"type":"sub_agent_activity","event_id":"subagent-event-1","occurred_at_ms":1234,"agent_thread_id":"thread-1","agent_path":"reviewer","kind":"started"}}

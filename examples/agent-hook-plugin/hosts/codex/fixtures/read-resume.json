@@ -1,0 +1,13 @@
+{
+  "what": "SessionStart(resume) is a resume",
+  "read": {
+    "event": "SessionStart",
+    "payload": {
+      "session_id": "s1",
+      "source": "resume"
+    }
+  },
+  "expect": {
+    "resumed": "resume"
+  }
+}

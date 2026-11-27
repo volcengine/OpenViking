@@ -1,0 +1,13 @@
+{
+  "what": "SessionStart(startup) and (clear) are fresh starts",
+  "read": {
+    "event": "SessionStart",
+    "payload": {
+      "session_id": "s1",
+      "source": "clear"
+    }
+  },
+  "expect": {
+    "resumed": ""
+  }
+}

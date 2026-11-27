@@ -1,0 +1,13 @@
+{
+  "what": "SessionStart(compact) follows a compaction and its answer reaches the model",
+  "read": {
+    "event": "SessionStart",
+    "payload": {
+      "session_id": "s1",
+      "source": "compact"
+    }
+  },
+  "expect": {
+    "resumed": "compact"
+  }
+}

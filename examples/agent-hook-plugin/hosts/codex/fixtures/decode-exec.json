@@ -1,0 +1,96 @@
+{
+  "what": "legacy command and patch completion events become a call and its result",
+  "decode": {
+    "transcript": "exec.jsonl"
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "exec-shell",
+          "tool_name": "exec_command",
+          "tool_status": "running",
+          "tool_input": {
+            "command": [
+              "pwd"
+            ],
+            "cwd": "/workspace"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "exec-shell",
+          "tool_name": "exec_command",
+          "tool_status": "completed",
+          "tool_output": "/workspace"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "exec-fail",
+          "tool_name": "exec_command",
+          "tool_status": "running",
+          "tool_input": {
+            "command": [
+              "false"
+            ],
+            "cwd": "/workspace"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "exec-fail",
+          "tool_name": "exec_command",
+          "tool_status": "error",
+          "tool_output": "boom"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "exec-patch",
+          "tool_name": "apply_patch",
+          "tool_status": "running",
+          "tool_input": {
+            "changes": {
+              "README.md": {
+                "type": "update"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "tool",
+          "tool_id": "exec-patch",
+          "tool_name": "apply_patch",
+          "tool_status": "completed",
+          "tool_output": "Done!"
+        }
+      ]
+    }
+  ]
+}

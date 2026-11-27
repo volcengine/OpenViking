@@ -1,0 +1,6 @@
+{"type":"history_mutation","payload":{"operation":"append","items":[{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"running a check"}]},{"type":"function_call","id":"fc1","call_id":"h1","name":"exec","arguments":"await Promise.resolve()"},{"type":"function_call_output","id":"fo1","call_id":"h1","output":"done"}]}}
+{"type":"response_item","payload":{"type":"function_call","id":"fc1","call_id":"h1","name":"exec","arguments":"await Promise.resolve()"}}
+{"type":"response_item","payload":{"type":"function_call_output","id":"fo1","call_id":"h1","output":"done"}}
+{"type":"response_item","payload":{"type":"function_call","id":"function","call_id":"mcp-call-1","name":"js","arguments":"{\"code\":\"return 1\"}"}}
+{"type":"response_item","payload":{"type":"function_call_output","id":"output","call_id":"mcp-call-1","output":"1"}}
+{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"mcp-call-1","invocation":{"server":"node-repl","tool":"js","arguments":{"code":"return 1"}},"result":{"Ok":{"content":[{"type":"text","text":"1"}]}}}}

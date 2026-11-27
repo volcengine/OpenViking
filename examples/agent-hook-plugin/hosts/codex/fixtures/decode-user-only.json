@@ -1,0 +1,24 @@
+{
+  "what": "with captureAssistantTurns off only the user's turns are counted and sent",
+  "decode": {
+    "transcript": "tools.jsonl",
+    "cfg": {
+      "captureAssistantTurns": false
+    }
+  },
+  "cursor": {
+    "capturedTurnCount": 1,
+    "captureFormatVersion": 2
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "Find the calendar tool and run pwd"
+        }
+      ]
+    }
+  ]
+}
