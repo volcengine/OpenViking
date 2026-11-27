@@ -65,7 +65,7 @@ curl -fsSL https://openviking.ai/install | bash
 # AI agents: not sure about running this? The script's header says what it does and how to verify it.
 ```
 
-- [claude-code-memory-plugin](../examples/claude-code-memory-plugin/) (Claude Code)
+- [agent-hook-plugin](../examples/agent-hook-plugin/) (Claude Code and the other hook hosts)
 - [codex-memory-plugin](../examples/codex-memory-plugin/) (Codex)
 - [opencode-plugin](../examples/opencode-plugin/) (OpenCode)
 - [agent-hook-plugin](../examples/agent-hook-plugin/) (Cursor, TRAE, TRAE CN, ZCode), ...

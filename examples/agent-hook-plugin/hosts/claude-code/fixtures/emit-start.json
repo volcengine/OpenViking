@@ -1,0 +1,16 @@
+{
+  "what": "SessionStart context is approved with hookSpecificOutput",
+  "emit": {
+    "event": "SessionStart",
+    "output": {
+      "context": "BLOCK"
+    }
+  },
+  "expect": {
+    "decision": "approve",
+    "hookSpecificOutput": {
+      "hookEventName": "SessionStart",
+      "additionalContext": "BLOCK"
+    }
+  }
+}

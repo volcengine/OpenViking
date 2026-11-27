@@ -185,36 +185,14 @@ test("findLastHumanTurnIndex reports -1 when no human turn survives", () => {
 })
 
 /**
- * Claude Code and Codex each wrap this module in an adapter that reads their
- * own transcript shape and exports it under the same name. `export *` beside a
+ * Codex wraps this module in an adapter that reads its own transcript shape
+ * and exports it under the same name. `export *` beside a
  * same-named local export lets the local one win with no diagnostic, so a
- * reader of the import cannot tell which function they hold; these two are the
- * adapters, and the shared names beside them are the shared ones. Each adapter
+ * reader of the import cannot tell which function they hold; this is the
+ * adapter, and the shared names beside it are the shared ones. The adapter
  * re-exports from its own vendored copy of this module, so the comparison is
  * against that copy rather than against lib/.
  */
-test("the Claude Code adapter is the extractCaptureTurns its callers import", async () => {
-  const cc = await import("../claude-code-memory-plugin/scripts/cc-transcript.mjs")
-  const vendored = await import("../claude-code-memory-plugin/scripts/shared/capture-utils.mjs")
-
-  assert.notEqual(cc.extractCaptureTurns, vendored.extractCaptureTurns)
-  assert.equal(cc.sanitizeCapturedText, vendored.sanitizeCapturedText)
-
-  // Claude nests a tool result in a content array; both flatten it to text.
-  const anthropic = [{
-    type: "user",
-    message: {
-      role: "user",
-      content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "tool output" }] }],
-    },
-  }]
-  assert.equal(cc.extractCaptureTurns(anthropic, CAPTURE_CONFIG)[0].parts[0].tool_output, "tool output")
-  assert.equal(
-    vendored.extractCaptureTurns(anthropic, CAPTURE_CONFIG)[0].parts[0].tool_output,
-    "tool output",
-  )
-})
-
 test("the Codex adapter is the extractCaptureTurns its callers import", async () => {
   const codex = await import("../codex-memory-plugin/scripts/capture-utils.mjs")
   const vendored = await import("../codex-memory-plugin/scripts/shared/capture-utils.mjs")

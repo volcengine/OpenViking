@@ -1,0 +1,47 @@
+{
+  "what": "the compaction summary and meta records are counted by the cursor but never sent",
+  "decode": {
+    "transcript": "compact.jsonl"
+  },
+  "cursor": {
+    "capturedTurnCount": 7
+  },
+  "messages": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "first question"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "first answer"
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "parts": [
+        {
+          "type": "text",
+          "text": "second question"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "text",
+          "text": "second answer"
+        }
+      ]
+    }
+  ]
+}

@@ -61,7 +61,7 @@ test("Claude URL marketplace lists the published plugin zip as an archive source
   try {
     const { stage } = stageMarketplaceZip(tmp);
     const pluginZip = join(tmp, "openviking-memory-claude.zip");
-    const zipped = run("zip", ["-rq", pluginZip, "claude-code-memory-plugin"], { cwd: stage });
+    const zipped = run("zip", ["-rq", pluginZip, "agent-hook-plugin"], { cwd: stage });
     assert.equal(zipped.status, 0, `${zipped.stdout}\n${zipped.stderr}`);
     const out = join(tmp, "marketplace.json");
     const zipUrl = "https://tos.example.invalid/releases/v9.9.9/openviking-memory-claude.zip";
@@ -69,7 +69,7 @@ test("Claude URL marketplace lists the published plugin zip as an archive source
     assert.equal(generated.status, 0, `${generated.stdout}\n${generated.stderr}`);
 
     const manifest = JSON.parse(readFileSync(out, "utf8"));
-    const pluginJson = JSON.parse(readFileSync(join(stage, "claude-code-memory-plugin", ".claude-plugin", "plugin.json"), "utf8"));
+    const pluginJson = JSON.parse(readFileSync(join(stage, "agent-hook-plugin", ".claude-plugin", "plugin.json"), "utf8"));
     assert.equal(manifest.name, "openviking");
     assert.equal(manifest.plugins.length, 1);
     const [entry] = manifest.plugins;
@@ -86,7 +86,7 @@ test("Claude URL marketplace lists the published plugin zip as an archive source
     // exactly one level down.
     const listed = run("unzip", ["-Z1", pluginZip]);
     assert.equal(listed.status, 0, listed.stderr);
-    assert.ok(listed.stdout.split("\n").includes("claude-code-memory-plugin/.claude-plugin/plugin.json"));
+    assert.ok(listed.stdout.split("\n").includes("agent-hook-plugin/.claude-plugin/plugin.json"));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

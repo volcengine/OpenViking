@@ -30,11 +30,12 @@ for (const source of ["resume", "compact"]) {
             ovcli: { url: baseUrl, plugin: enabled ? { resumeArchiveInject: true } : {} },
           });
           const result = expectExit(await runHookScript(
-            fileURLToPath(new URL("../claude-code-memory-plugin/scripts/session-start.mjs", import.meta.url)),
+            fileURLToPath(new URL("../agent-hook-plugin/scripts/hook.mjs", import.meta.url)),
             {
+              argv: ["SessionStart", "claude-code"],
               input: { session_id: "host", source, cwd: files.dir },
               cwd: files.dir,
-              env: { ...files.env, OPENVIKING_STATE_DIR: join(files.dir, "state"), OPENVIKING_PENDING_DIR: join(files.dir, "pending") },
+              env: { ...files.env, HOME: files.dir, TMPDIR: files.dir, OPENVIKING_STATE_DIR: join(files.dir, "state"), OPENVIKING_PENDING_DIR: join(files.dir, "pending") },
             },
           ));
           const context = JSON.parse(result.stdout).hookSpecificOutput?.additionalContext ?? "";

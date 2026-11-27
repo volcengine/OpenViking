@@ -68,7 +68,6 @@ test("jsonc-edit runs its CLI through a symlinked directory", () => {
 for (const pluginDir of [
   "agent-plugins",
   "examples/agent-hook-plugin",
-  "examples/claude-code-memory-plugin",
   "examples/codex-memory-plugin",
   "examples/dsh-memory-plugin",
   "examples/opencode-plugin",

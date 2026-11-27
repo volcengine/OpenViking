@@ -34,9 +34,9 @@ All four use the same QA / judge / stats pipeline (`eval.py` → `judge.py` →
      wants it running inside a tmux session so the runner can restart it
      across snapshots — set `OPENVIKING_SERVER_TMUX=<session>` (default
      `ovserver`).
-   - Point at your clone of [`claude-code-memory-plugin`][plugin]:
+   - Point at your clone of [`agent-hook-plugin`][plugin]:
      ```bash
-     export OPENVIKING_PLUGIN_DIR=$HOME/Dev/OpenViking/examples/claude-code-memory-plugin
+     export OPENVIKING_PLUGIN_DIR=$HOME/Dev/OpenViking/examples/agent-hook-plugin
      ```
      This is referenced from `config/ov-hooks.json` and from
      `scripts/auto-capture.mjs`.
@@ -44,7 +44,7 @@ All four use the same QA / judge / stats pipeline (`eval.py` → `judge.py` →
      to pin the local OV target and avoid leaking prod URLs from the
      user-shell's `claude` wrapper.
 
-[plugin]: https://github.com/OpenViking/openviking/tree/main/examples/claude-code-memory-plugin
+[plugin]: https://github.com/OpenViking/openviking/tree/main/examples/agent-hook-plugin
 
 ## Running
 

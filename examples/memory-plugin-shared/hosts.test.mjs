@@ -17,7 +17,7 @@
 
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -97,8 +97,12 @@ for (const directory of directories) {
     // budget that leaves the hook's timeout a few seconds for node start-up,
     // the session lock and the state write.
     const host = await loadHost(directory);
-    for (const file of readdirSync(dir).filter((name) => name.endsWith(".json"))) {
-      for (const entry of hookEntries(JSON.parse(readFileSync(join(dir, file), "utf8")))) {
+    const files = readdirSync(dir).filter((name) => name.endsWith(".json")).map((name) => join(dir, name));
+    // Claude Code reads its hooks from the plugin root.
+    if (directory === "claude-code") files.push(join(HOSTS_DIR, "..", "hooks", "hooks.json"));
+    for (const path of files) {
+      const file = basename(path);
+      for (const entry of hookEntries(JSON.parse(readFileSync(path, "utf8")))) {
         const [, event, id] = /hook\.mjs\S*\s+([A-Za-z-]+)\s+([\w-]+)/.exec(entry.command) || [];
         if (!event) continue;
         // A template names the client the installer fills in.

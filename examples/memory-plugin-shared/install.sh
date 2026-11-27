@@ -1951,7 +1951,7 @@ resolve_self_checkout() {
   dir="$(cd "$(dirname "$src")" >/dev/null 2>&1 && pwd -P)" || return 0
   # A linked worktree keeps `.git` as a file pointing at the real gitdir, so
   # test for existence rather than for a directory.
-  if [ -e "$dir/../../.git" ] && [ -d "$dir/../claude-code-memory-plugin" ]; then
+  if [ -e "$dir/../../.git" ] && [ -d "$dir/../agent-hook-plugin/.claude-plugin" ]; then
     CHECKOUT_DIR="$(cd "$dir/../.." >/dev/null 2>&1 && pwd -P)"
   fi
 }
@@ -2739,6 +2739,8 @@ copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destinat
     [ "$(basename "$other")" = "$host" ] || rm -rf "$other"
   done
   rm -rf "$tmp/hosts/$host/fixtures"
+  # The plugin root is also the Claude Code plugin; its packaging is Claude's alone.
+  rm -rf "$tmp/.claude-plugin" "$tmp/.mcp.json" "$tmp/hooks" "$tmp/commands" "$tmp/mods" "$tmp/skills" "$tmp/scripts/statusline.mjs"
   # Preserve the first-install timestamp across managed upgrades. The package
   # descriptor is copied from source; integration.json records this machine's
   # installation and must survive replacing the runtime directory.
@@ -3758,8 +3760,8 @@ process.stdout.write(command);
       ok=0
     fi
   fi
-  if [ -n "$MKT_DIR" ] && [ -f "$MKT_DIR/claude-code-memory-plugin/scripts/marketplace.test.mjs" ] && [ -d "$MKT_DIR/../.git" ]; then
-    node --test "$MKT_DIR/claude-code-memory-plugin/scripts/marketplace.test.mjs" \
+  if [ -n "$MKT_DIR" ] && [ -f "$MKT_DIR/agent-hook-plugin/hosts/claude-code/marketplace.test.mjs" ] && [ -d "$MKT_DIR/../.git" ]; then
+    node --test "$MKT_DIR/agent-hook-plugin/hosts/claude-code/marketplace.test.mjs" \
       "$MKT_DIR/codex-memory-plugin/scripts/marketplace.test.mjs" || ok=0
   fi
   if [ "$agent_fatal" -ne 0 ]; then

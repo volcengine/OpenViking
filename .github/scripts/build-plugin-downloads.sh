@@ -26,7 +26,7 @@ export ZIP_STAMP=200001010000.00
 
 STAGE="${WORK}/memory-plugin-marketplace"
 bash "${SCRIPTS}/stage-memory-plugin-marketplace.sh" "${STAGE}"
-PLUGIN_VERSION="$(jq -r .version "${STAGE}/claude-code-memory-plugin/.claude-plugin/plugin.json")"
+PLUGIN_VERSION="$(jq -r .version "${STAGE}/agent-hook-plugin/.claude-plugin/plugin.json")"
 CLAUDE_ZIP="plugins/claude/openviking-memory-${PLUGIN_VERSION}.zip"
 
 rm -rf "${OUT}"
@@ -57,7 +57,7 @@ git -C "${OUT}/plugins/memory-plugins.git" update-server-info
 rm -rf "${OUT}/plugins/memory-plugins.git/hooks"
 
 bash "${SCRIPTS}/reproducible-zip.sh" "${OUT}/releases/latest/memory-plugin-marketplace.zip" "${WORK}" memory-plugin-marketplace
-bash "${SCRIPTS}/reproducible-zip.sh" "${OUT}/${CLAUDE_ZIP}" "${STAGE}" claude-code-memory-plugin
+bash "${SCRIPTS}/reproducible-zip.sh" "${OUT}/${CLAUDE_ZIP}" "${STAGE}" agent-hook-plugin
 bash "${SCRIPTS}/generate-claude-marketplace-json.sh" "${BASE}/${CLAUDE_ZIP}" \
   "${OUT}/${CLAUDE_ZIP}" "${STAGE}" "${OUT}/plugins/claude/marketplace.json"
 

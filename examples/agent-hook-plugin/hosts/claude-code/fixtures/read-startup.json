@@ -1,0 +1,15 @@
+{
+  "what": "SessionStart(startup) is a fresh start",
+  "read": {
+    "event": "SessionStart",
+    "payload": {
+      "session_id": "5f0c1e2a-7b3d-4c9e-8a10-2d4b6c8e0f12",
+      "source": "startup"
+    }
+  },
+  "expect": {
+    "prompt": "",
+    "transcript": "",
+    "resumed": ""
+  }
+}

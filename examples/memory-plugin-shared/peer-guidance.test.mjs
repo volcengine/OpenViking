@@ -38,7 +38,7 @@ function walk(dir, match, out = []) {
 }
 
 const REFERENCES = [
-  "examples/claude-code-memory-plugin/skills/ov-memory-doctor/reference.md",
+  "examples/agent-hook-plugin/skills/ov-memory-doctor/reference.md",
   "examples/codex-memory-plugin/skills/ov-memory-doctor/reference.md",
 ];
 

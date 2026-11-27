@@ -17,7 +17,7 @@
 #   ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY
 #   ANTHROPIC_BASE_URL
 #   ANTHROPIC_MODEL
-#   OPENVIKING_PLUGIN_DIR           - path to claude-code-memory-plugin
+#   OPENVIKING_PLUGIN_DIR           - path to agent-hook-plugin
 #   OPENVIKING_DATA_DIR             - default: ~/.openviking/data
 #   OPENVIKING_SERVER_TMUX          - tmux session name running openviking-server
 #                                     (default "ovserver"); used to Ctrl-C/restart
@@ -27,7 +27,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-: "${OPENVIKING_PLUGIN_DIR:?set to claude-code-memory-plugin dir}"
+: "${OPENVIKING_PLUGIN_DIR:?set to agent-hook-plugin dir}"
 export LOCOMO_BENCHMARK_DIR="$SCRIPT_DIR"
 
 OV_DATA_DIR="${OPENVIKING_DATA_DIR:-$HOME/.openviking/data}"

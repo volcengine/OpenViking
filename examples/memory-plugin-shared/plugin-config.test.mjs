@@ -8,14 +8,14 @@ import { HARNESS_KEYS, KNOBS } from "../agent-hook-plugin/lib/config-schema.mjs"
 import { buildContextSearchBody } from "../agent-hook-plugin/lib/recall-core.mjs";
 import { buildPluginConfig } from "../agent-hook-plugin/lib/plugin-config.mjs";
 import { loadAgentHookConfig } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
-import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
+import claudeCode from "../agent-hook-plugin/hosts/claude-code/host.mjs";
 import { loadConfig as loadCodex } from "../codex-memory-plugin/scripts/config.mjs";
 import { loadConfig as loadOpencode } from "../opencode-plugin/lib/config.mjs";
 import { resolveConfig as loadDsh } from "../dsh-memory-plugin/config.mjs";
 import { loadConfig as loadPi } from "../pi-coding-agent-extension/config.ts";
 
 const LOADERS = {
-  claude_code: loadClaudeCode,
+  claude_code: (cwd) => loadAgentHookConfig("claude-code", cwd, claudeCode.config),
   codex: loadCodex,
   opencode: (cwd) => loadOpencode("", cwd),
   dsh: (cwd) => loadDsh({}, process.env, cwd),

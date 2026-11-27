@@ -21,8 +21,6 @@ import { loadAgentHookConfig } from "../agent-hook-plugin/lib/agent-hook-runtime
 import { ROOT } from "./sync.mjs";
 import { loadHookHosts, scrubOpenVikingEnv, writeCredentialFiles } from "./testing/support.mjs";
 import { readProxyConfig as agentHookProxy } from "../agent-hook-plugin/servers/mcp-proxy.mjs";
-import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
-import { readProxyConfig as claudeCodeProxy } from "../claude-code-memory-plugin/servers/mcp-proxy.mjs";
 import { loadConfig as loadCodex } from "../codex-memory-plugin/scripts/config.mjs";
 import { readProxyConfig as codexProxy } from "../codex-memory-plugin/servers/mcp-proxy.mjs";
 import { resolveConfig as loadDsh } from "../dsh-memory-plugin/config.mjs";
@@ -54,14 +52,6 @@ const HARNESSES = [
     proxy: ({ env }) => codexProxy(pick(env, CODEX_ENV_VARS)),
   },
   {
-    name: "claude-code",
-    dir: "claude-code-memory-plugin",
-    section: "claude_code",
-    rootKeyFallback: true,
-    hook: ({ env, cwd }) => loadClaudeCode(cwd, { env }),
-    proxy: ({ env }) => claudeCodeProxy(env),
-  },
-  {
     name: "opencode",
     dir: "opencode-plugin",
     section: "opencode",
@@ -73,8 +63,9 @@ const HARNESSES = [
     name: client,
     dir: "agent-hook-plugin",
     section: client.replace(/-/g, "_"),
-    hook: ({ env, cwd }) => loadAgentHookConfig(client, cwd, { env }),
-    proxy: ({ env }) => agentHookProxy({ ...env, OPENVIKING_HOOK_SOURCE: client }),
+    rootKeyFallback: Boolean(HOSTS[client].config?.rootKeyFallback),
+    hook: ({ env, cwd }) => loadAgentHookConfig(client, cwd, { ...HOSTS[client].config, env }),
+    proxy: ({ env }) => agentHookProxy({ ...env, OPENVIKING_HOOK_SOURCE: client }, undefined, HOSTS[client].config),
   })),
   // A hand-written MCP entry that names no client.
   {

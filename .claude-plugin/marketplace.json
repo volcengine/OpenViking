@@ -11,7 +11,7 @@
       "source": {
         "source": "git-subdir",
         "url": "https://github.com/volcengine/OpenViking.git",
-        "path": "examples/claude-code-memory-plugin",
+        "path": "examples/agent-hook-plugin",
         "ref": "main"
       },
       "category": "productivity"

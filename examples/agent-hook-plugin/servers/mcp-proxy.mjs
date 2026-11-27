@@ -17,8 +17,8 @@ import { loadHost } from "../hosts/index.mjs";
  * entry that names none resolves through the layers every harness shares rather
  * than borrowing another client's `plugin.<harness>` section.
  */
-export function readProxyConfig(env = process.env, client = env.OPENVIKING_HOOK_SOURCE) {
-  return toMcpProxyConfig(loadAgentHookConfig(client || "agent-hook", undefined, { env }), { env });
+export function readProxyConfig(env = process.env, client = env.OPENVIKING_HOOK_SOURCE, options = {}) {
+  return toMcpProxyConfig(loadAgentHookConfig(client || "agent-hook", undefined, { ...options, env }), { env });
 }
 
 /**
@@ -46,7 +46,7 @@ function isDirectRun() {
 if (isDirectRun()) {
   const host = await loadHost(process.env.OPENVIKING_HOOK_SOURCE || "");
   createOpenVikingMcpProxy({
-    readConfig: (env) => readProxyConfig(env, host?.id || "agent-hook"),
+    readConfig: (env) => readProxyConfig(env, host?.id || "agent-hook", host?.config),
     loggerFactory: createLogger,
     defaultHistorySession: historySessionFor(host),
   }).start();

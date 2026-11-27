@@ -29,11 +29,6 @@ export const TARGETS = [
     committed: false,
   },
   {
-    root: join(ROOT, "examples", "claude-code-memory-plugin"),
-    dir: join(ROOT, "examples", "claude-code-memory-plugin", "scripts", "shared"),
-    committed: true,
-  },
-  {
     root: join(ROOT, "examples", "codex-memory-plugin"),
     dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"),
     committed: true,
@@ -103,7 +98,7 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-memory",
-    dir: join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
+    dir: join(ROOT, "examples", "agent-hook-plugin", "skills"),
     committed: true,
   },
   {
@@ -146,7 +141,7 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "openviking-skills",
-    dir: join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
+    dir: join(ROOT, "examples", "agent-hook-plugin", "skills"),
     committed: true,
   },
   {
@@ -195,7 +190,7 @@ export const SKILL_TARGETS = [
   },
   {
     skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "claude-code-memory-plugin", "skills"),
+    dir: join(ROOT, "examples", "agent-hook-plugin", "skills"),
     committed: true,
   },
   {
@@ -241,7 +236,7 @@ export const SKILL_TARGETS = [
   // MCP hosts discover rule_search dynamically. OpenClaw exposes ov_rule_search
   // through its REST client. Ship the workflow wherever the host bundles skills.
   ...[
-    ["examples", "claude-code-memory-plugin", "skills"],
+    ["examples", "agent-hook-plugin", "skills"],
     ["examples", "codex-memory-plugin", "skills"],
     ["examples", "agent-hook-plugin", "hosts", "cursor", "skills"],
     ["examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"],
@@ -333,8 +328,7 @@ async function exists(path) {
  * The shared modules a target's own code imports directly.
  *
  * Everything under `root` except the vendored directory itself is the target's
- * own code — including re-export shims like claude-code's `scripts/lib/`, which
- * are the only importer of several modules.
+ * own code — including re-export shims, which may be the only importer of a module.
  */
 export async function directSharedImports({ root, dir }) {
   const seeds = new Set();

@@ -21,7 +21,7 @@ cd "$ROOT"
 
 # <plugin directory>:<manifest holding the version>
 PLUGINS=(
-  "examples/claude-code-memory-plugin:examples/claude-code-memory-plugin/.claude-plugin/plugin.json"
+  "examples/agent-hook-plugin:examples/agent-hook-plugin/.claude-plugin/plugin.json"
   "examples/codex-memory-plugin:examples/codex-memory-plugin/.codex-plugin/plugin.json"
   "examples/agent-hook-plugin:examples/agent-hook-plugin/plugin.json"
   "examples/opencode-plugin:examples/opencode-plugin/package.json"
@@ -57,6 +57,7 @@ process.stdin.on("end", () => {
 # CodeBuddy and Qoder resolve an installed plugin by the manifest version, so
 # keep them aligned with the integration and root manifests.
 PAIRED=(
+  "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/.claude-plugin/plugin.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/cursor/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/trae/openviking.integration.json"
   "examples/agent-hook-plugin/plugin.json:examples/agent-hook-plugin/hosts/zcode/openviking.integration.json"

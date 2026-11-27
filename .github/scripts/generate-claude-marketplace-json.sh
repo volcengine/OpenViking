@@ -18,7 +18,7 @@ sha256() { sha256sum "$1" | cut -d' ' -f1; }
 jq \
   --arg url "${ZIP_URL}" \
   --arg sha256 "$(sha256 "${PLUGIN_ZIP}")" \
-  --arg version "$(jq -r .version "${STAGE}/claude-code-memory-plugin/.claude-plugin/plugin.json")" \
+  --arg version "$(jq -r .version "${STAGE}/agent-hook-plugin/.claude-plugin/plugin.json")" \
   '.description = "OpenViking plugins for Claude Code."
   | .plugins |= map(select(.name == "openviking-memory")
       | .version = $version

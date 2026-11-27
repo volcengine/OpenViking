@@ -1,0 +1,18 @@
+{
+  "what": "a shell command that carries a viking:// URI runs with a notice",
+  "tool": {
+    "payload": {
+      "session_id": "5f0c1e2a-7b3d-4c9e-8a10-2d4b6c8e0f12",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "cat viking://user/me/memories/x.md"
+      }
+    }
+  },
+  "expect": {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "additionalContext": "[OpenViking memory plugin] URI guard: this shell command contains the viking:// URI viking://user/me/memories/x.md.\nviking:// URIs are OpenViking virtual paths, not local files, so cat, ls, grep and other file commands cannot open them.\nIf you meant to read or search OpenViking content, use OpenViking MCP read or search instead.\nExample: read(uri=\"viking://user/me/memories/x.md\")\nIf the URI is intentional data (an ov CLI argument, an HTTP payload, a search pattern), ignore this notice."
+    }
+  }
+}

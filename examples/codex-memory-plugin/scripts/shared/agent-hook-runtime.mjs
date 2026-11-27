@@ -126,17 +126,41 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Callers of one session inside this process, in the order they asked.
+const waiting = new Map();
+
 /**
  * Run `callback` holding the session's lock, or return null when it cannot be
  * taken within `waitMs`. A lock untouched for `staleMs` is taken over; a holder
  * whose work can outlast that keeps the lock fresh with `heartbeatMs`.
+ *
+ * Between processes the lock only excludes. Inside one process callers also
+ * run in the order they called: a host that lives in its harness is handed
+ * events faster than they can be written, and a reply must not land before the
+ * message it answers.
  */
-export async function withAgentHookLock(clientId, nativeSessionId, callback, {
-  waitMs = 5000,
-  staleMs = 60_000,
-  heartbeatMs = 0,
-} = {}) {
+export async function withAgentHookLock(clientId, nativeSessionId, callback, options = {}) {
   const file = statePath(clientId, nativeSessionId);
+  const before = waiting.get(file) || Promise.resolve();
+  let done;
+  const held = new Promise((resolve) => { done = resolve; });
+  const mine = before.then(() => held);
+  waiting.set(file, mine);
+  let timer;
+  const myTurn = await Promise.race([
+    before.then(() => true),
+    new Promise((resolve) => { timer = setTimeout(resolve, options.waitMs ?? 5000, false); }),
+  ]);
+  clearTimeout(timer);
+  try {
+    return myTurn ? await withFileLock(file, callback, options) : null;
+  } finally {
+    done();
+    if (waiting.get(file) === mine) waiting.delete(file);
+  }
+}
+
+async function withFileLock(file, callback, { waitMs = 5000, staleMs = 60_000, heartbeatMs = 0 }) {
   const lock = `${file}.lock`;
   await mkdir(dirname(file), { recursive: true, mode: STATE_DIR_MODE });
   const deadline = Date.now() + waitMs;
