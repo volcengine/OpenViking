@@ -143,6 +143,15 @@ visit budgets or recovery. Set `unfiltered_use_native=false` to test the enhance
 unfiltered traversal. Compiled empty filter objects also use native routing;
 non-empty ASTs retain filtered routing.
 
+"Unfiltered" means the adapter actually receives `None` or `{}`. Normal
+account-bound service searches add `account_id` even when the user supplies no
+filter. For example, `/api/v1/search/find` calls `SearchService.find`,
+`VikingFS.find`, `HierarchicalRetriever.retrieve`, `search_in_tenant`, and
+`_SingleAccountBackend.query`, which adds the account predicate before calling
+the adapter. Shared and dedicated account databases both retain this predicate.
+Standard service searches therefore do not trigger this option; it is currently
+mainly useful for direct adapter tests and experiments.
+
 For bounded recovery experiments, disable `unfiltered_use_native`, fix
 `search_width=2000`, set `recover=true`, and compare `max_graph_visits` of
 100000, 200000 and 400000 with the same heap and memory budgets. Recovery
@@ -153,6 +162,14 @@ permissions at connection time, then uses the capability for L2/cosine/IP HNSW
 indexes. Missing capabilities or unsupported indexes use native candidates.
 `required` rejects missing capabilities and unsupported dense index structures.
 Execution errors, permission failures and budget errors always propagate.
+
+Discovery runs only during adapter initialization in `_connect()`. Its result is
+cached and copied into each Collection. If `auto` initially connects to stock
+pgvector, upgrading the database to a compatible extension does not refresh
+existing adapters. Creating or replacing physical pooled connections and
+reloading a Collection do not rediscover the capability. Recreate the adapter
+and its Collections after upgrading, typically by restarting or rolling
+restarting the service.
 
 The current capability supports PostgreSQL 17 and full-precision HNSW vectors
 up to 2000 dimensions. Dense, hybrid and time-decay share its candidate hook;
@@ -187,6 +204,19 @@ Options are strictly validated. `mode="exact"` forces exact candidate search;
 raised to the requested candidate budget. ANN may return partial qualified
 results with an explicit stop reason. Eligibility currently scans the complete
 filtered set; measure recall, scan cost and p99 before enabling in production.
+
+Enhanced dense pagination requests `candidate_k = limit + offset` and sets
+`search_width = max(configured width, candidate_k)`. The configured width is a
+starting width, not a request ceiling; both the candidate budget and effective
+width have a hard maximum of `100000`. Above that limit the adapter raises
+`ValueError` before executing the query, without truncating pagination or falling
+back to native SQL. Explicit exact mode has the same limit. Direct extension
+calls with an excessive `candidate_k` raise SQLSTATE `22023` with
+`ov_filtered_knn: candidate_k must be between 1 and 100000`.
+These extension budget limits do not apply to native SQL routing, and `limit=0`
+still returns an empty result. Within valid budgets, insufficient ANN candidates
+can produce fewer than `limit` rows or an empty page. Stop reasons are logged
+at DEBUG level rather than exposed as additional `SearchResult` fields.
 
 For normalized URI scopes on large collections, evaluate a composite B-tree
 expression index over tenant and path. See

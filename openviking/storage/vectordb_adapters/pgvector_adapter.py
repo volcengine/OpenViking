@@ -81,6 +81,11 @@ class PgvectorCollection(OpenGaussCollection):
             # without an explicit predicate needs no complete eligibility set.
             # Reuse native SQL, including equal-distance ordering and paging.
             return super()._dense_candidate_ctes(index_name, vector_text, budget, filters)
+        if not 1 <= budget <= 100000:
+            raise ValueError(
+                "pgvector filtered_knn candidate budget must be between 1 and 100000 "
+                "(limit + offset for dense pagination)"
+            )
         schema = _quote_identifier(cast(str, self._filtered_knn_schema))
         index = self._indexes[index_name]["_pg_index_name"]
         qualified_index = f"{_quote_identifier('public')}.{_quote_identifier(index)}"
