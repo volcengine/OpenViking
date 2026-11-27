@@ -15,6 +15,7 @@
 - 轮换密钥（新版本）
 - 回滚到历史版本
 - 在读取 skill 或 session 内容时按占位符恢复配置值
+- 把密钥挡在模型请求之外（见 [seal_privacy_texts()](#seal-privacy-texts)）
 
 ---
 
@@ -25,6 +26,7 @@
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
 | GET | `/api/v1/privacy-configs/tree` | 树形列出当前目标和字段元数据，不返回值 |
 | POST | `/api/v1/privacy-configs/scan` | 扫描或修复已存储正文中的登记值 |
+| POST | `/api/v1/privacy-configs/seal` | 把调用方提交的文本中已登记的密钥换成引用，可选登记新密钥 |
 | GET | `/api/v1/privacy-configs/{category}` | 列出分类下目标 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | 获取当前生效配置（meta + current） |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}/fields` | 列出不含明文值的安全字段元数据 |
@@ -121,6 +123,89 @@ POST /api/v1/privacy-configs/scan
 
 ---
 
+### seal_privacy_texts()
+
+把调用方提交的文本中、调用者已登记的值（`credential` 和 `auto` 分类中的值）换成规范引用，并可选地登记识别出的新 token，例如在文本发给模型厂商之前调用。结果不受用户隐私 `mode` 影响，`mode` 为 `off` 时同样生效。供网关、agent 插件等客户端使用。网关的用法见[封存密钥](../gateway/14-seal-secrets.md)。
+
+```text
+POST /api/v1/privacy-configs/seal
+```
+
+```json
+{
+  "texts": [
+    {"text": "这是新的 GitHub token ghp_...，以后用它", "enroll": true},
+    {"text": "（一段工具输出）"}
+  ]
+}
+```
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "revision": "4f0c...-9a1b...",
+    "texts": [
+      {
+        "text": "这是新的 GitHub token {{ov_privacy:alice:viking://~/privacy/auto/github-k3j2m8#/values/token}}，以后用它",
+        "replaced": [
+          {"start": 18, "end": 58, "reference": "{{ov_privacy:alice:viking://~/privacy/auto/github-k3j2m8#/values/token}}", "created": true, "temporary": true}
+        ]
+      },
+      null
+    ]
+  }
+}
+```
+
+**请求**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `texts` | array | 是 | 1–1024 项，所有文本的 UTF-8 大小合计不超过 16 MiB |
+| `texts[].text` | string | 是 | 要封存的文本 |
+| `texts[].enroll` | bool | 否（默认 `false`） | 同时登记识别出的、尚未登记的 token，见下文**自动登记** |
+
+**响应**
+
+| 字段 | 说明 |
+|------|------|
+| `result.revision` | 不透明字符串，每次写入 `credential` 或 `auto` 以及 `never_mask`、`custom_rules` 变化后都会改变，且已包含本次调用的登记。只用于相等比较，例如作为缓存键的一部分 |
+| `result.texts[i]` | 为 `null` 表示该文本没有任何替换，调用方保留原文 |
+| `result.texts[i].text` | 值已换成引用的文本 |
+| `result.texts[i].replaced[].start`、`end` | 原文中的 Unicode 码点偏移，`end` 不含 |
+| `result.texts[i].replaced[].reference` | 替换该片段的规范引用 |
+| `result.texts[i].replaced[].temporary` | 当且仅当引用位于 `auto` 分类时为 true，即该值尚未以正式名字保存。它只取决于返回的 `revision` 时刻的保险库内容，调用方可以按该 revision 缓存 |
+| `result.texts[i].replaced[].created` | 本次调用新登记的值，在请求内任何文本中的每次出现都为 true。它只是关于本次调用的统计，不要缓存它，也不要据此做决定 |
+
+**匹配哪些值**
+
+- 匹配规则与落盘路径一致：只匹配不短于 6 个字符的字符串值，排除 `never_mask`，跳过已有的 <code v-pre>{{ov_privacy:...}}</code> 片段，歧义处理也相同。
+- 已登记的值包括 `credential` 分类中的值，以及存放自动登记值的 `auto` 分类中的值（见**自动登记**）。落盘路径的替换不看 `auto`。
+- 与落盘路径不同，seal 还会匹配每个目标早先存储的各版本中的值，因此轮换后仍留在对话历史里的旧 token 会继续被替换。旧值换成其字段的引用，与当前值得到的引用相同。同一个值由多个字段持有时，`credential` 字段优先于 `auto` 字段；同一分类内，当前值优先于旧值。删除目标会一并删除其历史，其值随后不再被替换。
+
+**自动登记**
+
+- `enroll: true` 的文本中，内置探测规则和用户 `custom_rules` 识别出的、尚未登记的 token（排除 `never_mask`）会各自登记为 `auto` 分类中的一个新目标：名称为 `<规则名>-<随机后缀>`，字段为 `token`，label 为 `{"ov.rule": "<规则名>"}`，引用为 <code v-pre>{{ov_privacy:&lt;owner&gt;:viking://~/privacy/auto/&lt;target&gt;#/values/token}}</code>。
+- 同一个值总是得到同一个引用，跨 worker 也一样。本次调用新登记的值，在请求内任何文本中的每次出现都返回 `created: true`。
+- 单次调用最多登记 1024 个新值，超出时返回 `RESOURCE_EXHAUSTED`，且一个都不登记。登记是幂等的，超时的调用方直接重试即可。
+
+要给自动登记的条目起正式名字，把它的引用作为值写入（见 [upsert_privacy_config()](#upsert-privacy-config)），`auto` 中的条目随后会被删除。除此之外，`auto` 中的条目会一直保留并不断累积；它们可以像其他目标一样列出、解析和删除。只有 seal 接口会写入 `auto`：以 `category=auto` 调用 upsert 或 patch 会以 `INVALID_ARGUMENT` 拒绝。
+
+**错误**
+
+| 情况 | 错误 |
+|------|------|
+| `texts` 少于 1 项或多于 1024 项 | `INVALID_ARGUMENT` |
+| 所有文本的 UTF-8 大小合计超过 16 MiB | `RESOURCE_EXHAUSTED` |
+| 需要登记的新值超过 1024 个 | `RESOURCE_EXHAUSTED`，一个都不登记 |
+| 整个请求的替换总数超过 10000 | `RESOURCE_EXHAUSTED` |
+
+- 出错时只返回错误，不会原样返回文本。
+- 调用方应把任何非 `ok` 的结果（包括旧版本服务端返回的 HTTP 404）视为失败，不要转发原文。
+
+---
+
 ### list_privacy_categories()
 
 列出当前用户下已有隐私配置的分类。
@@ -145,7 +230,7 @@ curl -X GET http://localhost:1933/api/v1/privacy-configs \
 }
 ```
 
-只返回已有配置的分类；Session 未提取到原值时，不会创建对应的 Privacy 配置。
+只返回已有配置的分类，有过自动登记后也包括 `auto`；Session 未提取到原值时，不会创建对应的 Privacy 配置。
 
 ---
 
@@ -162,6 +247,7 @@ GET /api/v1/privacy-configs/tree
 
 可选查询参数 `category` 将结果限制在一个分类。非法标识符返回 `INVALID_ARGUMENT`。
 空存量返回 `categories: []`；过滤的分类不存在时返回该分类和 `targets: []`。
+HTTP 接口和 `ov privacy tree` 列出全部分类；MCP 工具 `privacy_tree` 只有在以 `category="auto"` 调用时才列出 `auto` 分类。
 
 ```bash
 curl "http://localhost:1933/api/v1/privacy-configs/tree?category=credential" \
@@ -350,6 +436,10 @@ OpenViking 生成、保存和返回的 canonical reference 始终不带空格。
 - `values` 完整替换该版本的键值；本次省略的 key 不会出现在新快照中
 - 传入新 key 会直接写入（允许新增）
 - 若与当前版本完全一致，则复用当前版本号，不新建版本
+- 顶层字符串值整串恰好是调用者自己 `credential` 或 `auto` 分类中某个字段的引用时，服务端写入该字段的当前值，而不是引用文本。目标不存在时相当于改名，目标已存在时相当于轮换并生成新版本。来源在 `auto` 中时，写入成功后会删除它（删除失败不影响本次写入）；来源在 `credential` 中时保留。写入目标不能位于 `auto`
+- 请求中至少有一个值是这样的引用时，响应的 `values` 中每个已存储的值都换成该字段自己的规范引用，因此不会回显被复制的明文（`ov privacy upsert` 的表格和 JSON 输出也一样）。只含普通值的请求仍照旧返回存储的值
+- 其他包含引用的顶层字符串值一律以 `INVALID_ARGUMENT` 拒绝：指向其他分类或其他用户、指向不存在的目标或字段，或嵌在更长字符串中；嵌套在对象或数组值中的引用不检查，按原样保存。PATCH、MCP `privacy_upsert` 工具和 CLI 同样适用
+- 目标可以在 label `description` 中保存一段简短说明。`list_privacy_tree()` 会在带有说明的目标上返回它，其他 label 不在树中返回。MCP `privacy_upsert` 工具接受可选的 `description` 参数（最多 500 个字符），设置该 label 并保留其他 label；不传时 label 保持不变。CLI 可通过 `--labels-json '{"description":"..."}'` 设置
 
 **HTTP API**
 
@@ -416,6 +506,12 @@ PATCH /api/v1/privacy-configs/{category}/{target_key}
   "values": {"pat": "github_pat_..."},
   "change_reason": "configure GitHub PAT"
 }
+```
+
+指向 `credential` 或 `auto` 字段的整串引用会和 upsert 一样被换成被引用字段的值，因此只持有引用的模型也能在看不到明文的情况下改名或轮换凭据。与 upsert 一样，此时响应中的每个值都显示为其字段的引用。例如，下面的请求体把一个自动登记的 token 保存为 `pat`：
+
+```json
+{"values": {"pat": "{{ov_privacy:alice:viking://~/privacy/auto/github-k3j2m8#/values/token}}"}}
 ```
 
 CLI 规范参数 `--field` 与 `--field-*` 使用该接口，不在 CLI 中预读 current；`--key` 与 `--key-*` 继续作为兼容别名：
@@ -659,3 +755,4 @@ ov privacy run --env GITHUB_TOKEN='{{ov_privacy:alice:viking://~/privacy/credent
 - [隐私配置](../concepts/13-privacy.md) - 隐私敏感值的提取与还原机制
 - [文件系统](03-filesystem.md) - `read`/`write`/`ls` 等
 - [系统](07-system.md) - 服务状态与可观测性
+- [网关中的密钥封存](../gateway/14-seal-secrets.md) - 在模型请求中封存密钥

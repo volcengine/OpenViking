@@ -157,11 +157,20 @@ func (c *Client) SearchContext(ctx context.Context, query string, opts *SearchCo
 
 // Grep searches file content by pattern.
 func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOptions) (map[string]any, error) {
+	return c.grep(ctx, NormalizeURI(uri), pattern, opts)
+}
+
+// GrepMulti searches file content across multiple roots in a single request.
+func (c *Client) GrepMulti(ctx context.Context, uris []string, pattern string, opts *GrepOptions) (map[string]any, error) {
+	return c.grep(ctx, normalizeTarget(uris), pattern, opts)
+}
+
+func (c *Client) grep(ctx context.Context, uri any, pattern string, opts *GrepOptions) (map[string]any, error) {
 	if opts == nil {
 		opts = &GrepOptions{}
 	}
 	payload := map[string]any{
-		"uri":              NormalizeURI(uri),
+		"uri":              uri,
 		"pattern":          pattern,
 		"case_insensitive": opts.CaseInsensitive,
 	}
@@ -187,15 +196,21 @@ func (c *Client) Grep(ctx context.Context, uri, pattern string, opts *GrepOption
 
 // Glob finds files by glob pattern.
 func (c *Client) Glob(ctx context.Context, pattern string, uri string, opts *GlobOptions) (map[string]any, error) {
+	return c.glob(ctx, pattern, NormalizeURI(uri), opts)
+}
+
+// GlobMulti finds files across multiple roots in a single request.
+func (c *Client) GlobMulti(ctx context.Context, pattern string, uris []string, opts *GlobOptions) (map[string]any, error) {
+	return c.glob(ctx, pattern, normalizeTarget(uris), opts)
+}
+
+func (c *Client) glob(ctx context.Context, pattern string, uri any, opts *GlobOptions) (map[string]any, error) {
 	if opts == nil {
 		opts = &GlobOptions{}
 	}
-	if uri == "" {
-		uri = "viking://"
-	}
 	payload := map[string]any{
 		"pattern": pattern,
-		"uri":     NormalizeURI(uri),
+		"uri":     uri,
 	}
 	if opts.NodeLimit != nil {
 		payload["node_limit"] = *opts.NodeLimit

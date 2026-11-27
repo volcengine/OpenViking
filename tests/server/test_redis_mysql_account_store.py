@@ -77,7 +77,7 @@ async def backend(tmp_path):
                 }
             ),
             service_name=service,
-            account_store_cache_instance="accountstore",
+            required_cache_instances={"Redis MySQL Account Store": "accountstore"},
         )
     )
     cache_runtime = _CacheRuntimeObserver(cache_client.cache_runtime("accountstore"))

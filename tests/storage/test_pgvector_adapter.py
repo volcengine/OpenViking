@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Real pgvector integration tests. Set OV_PGVECTOR_TEST_DSN to opt in."""
 
+import json
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -180,11 +181,94 @@ def test_4096_flat_roundtrip():
         {"index_type": "ivfflat"},
         {"dsn_env": ""},
         {"unknown_option": True},
+        {"unfiltered_use_native": "false"},
+        {"unfiltered_use_native": 1},
     ],
 )
 def test_invalid_pgvector_settings(settings):
     with pytest.raises(ValueError):
         PgvectorConfig(**settings)
+
+
+def test_unfiltered_use_native_preserves_existing_default():
+    assert PgvectorConfig().unfiltered_use_native is False
+    assert PgvectorConfig(unfiltered_use_native=True).unfiltered_use_native is True
+
+
+@pytest.fixture
+def dense_pagination_collection(monkeypatch):
+    collection = pgvector_adapter.PgvectorCollection.__new__(pgvector_adapter.PgvectorCollection)
+    collection._name = "pagination"
+    collection._dim = 3
+    collection._array_fields = set()
+    collection._filtered_knn_mode = "auto"
+    collection._filtered_knn_schema = "public"
+    collection._filtered_knn_options = PgvectorConfig().filtered_knn_options
+    collection._unfiltered_use_native = False
+    collection._indexes = {
+        "default": {
+            "_pg_index_type": "hnsw",
+            "_distance": "cosine",
+            "_pg_index_name": "pagination_idx",
+        }
+    }
+    monkeypatch.setattr(collection, "has_index", Mock(return_value=True))
+    monkeypatch.setattr(collection, "_validate_ranked_filters", Mock())
+    monkeypatch.setattr(collection, "_normalize_filter_date_times", lambda filters: filters)
+    monkeypatch.setattr(collection, "_resolve_distance_and_op", lambda name: ("cosine", "<=>"))
+    monkeypatch.setattr(collection, "_select_output_columns", lambda fields: "id")
+    monkeypatch.setattr(collection, "_query_rows", Mock(return_value=(["id", "_ov_distance"], [])))
+    return collection
+
+
+@pytest.mark.parametrize("mode", ["adaptive", "exact"])
+@pytest.mark.parametrize("offset", [99991, 2**31])
+def test_enhanced_dense_pagination_rejects_excessive_budget(
+    dense_pagination_collection, mode, offset
+):
+    collection = dense_pagination_collection
+    collection._filtered_knn_options = PgvectorConfig(
+        filtered_knn_options={"mode": mode}
+    ).filtered_knn_options
+    with pytest.raises(ValueError, match=r"candidate budget.*100000.*limit \+ offset"):
+        collection.search_by_vector("default", [1, 0, 0], limit=10, offset=offset)
+    collection._query_rows.assert_not_called()
+
+
+@pytest.mark.parametrize("offset", [100, 99990])
+def test_enhanced_dense_pagination_accepts_budget_and_raises_width(
+    dense_pagination_collection, offset
+):
+    collection = dense_pagination_collection
+    collection.search_by_vector("default", [1, 0, 0], limit=10, offset=offset)
+    sql, params, _ = collection._query_rows.call_args.args
+    assert "ov_filtered_knn(" in sql
+    assert params[3] == 10 + offset
+    assert json.loads(params[4])["search_width"] == 10 + offset
+    assert params[-2:] == [10, offset]
+
+
+@pytest.mark.parametrize("route", ["off", "unavailable", "native"])
+def test_native_dense_pagination_does_not_apply_extension_budget(
+    dense_pagination_collection, route
+):
+    collection = dense_pagination_collection
+    if route == "off":
+        collection._filtered_knn_mode = "off"
+    elif route == "unavailable":
+        collection._filtered_knn_schema = None
+    else:
+        collection._unfiltered_use_native = True
+    collection.search_by_vector("default", [1, 0, 0], limit=10, offset=100000)
+    sql, params, _ = collection._query_rows.call_args.args
+    assert "ov_filtered_knn(" not in sql
+    assert params[-2:] == [10, 100000]
+
+
+def test_enhanced_dense_zero_limit_skips_budget_check(dense_pagination_collection):
+    collection = dense_pagination_collection
+    assert collection.search_by_vector("default", [1, 0, 0], limit=0, offset=100001).data == []
+    collection._query_rows.assert_not_called()
 
 
 def test_missing_driver_dsn(monkeypatch):

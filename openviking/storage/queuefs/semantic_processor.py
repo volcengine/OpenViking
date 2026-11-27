@@ -8,17 +8,18 @@ import re
 import threading
 import time
 from contextlib import nullcontext
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Mapping, Optional, Tuple
 
 import yaml
 
+from openviking.core.context import ContextLevel
 from openviking.core.namespace import classify_uri
 from openviking.models.model_error import ModelErrorKind, model_error_kind
 from openviking.observability.context import (
     bind_root_observability_context,
     reset_root_observability_context,
 )
-from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
+from openviking.observability.log_safety import safe_uri_for_log
 from openviking.observability.reporting.token_sources import (
     bind_dashboard_token_source_type,
     get_dashboard_token_source_type,
@@ -45,18 +46,18 @@ from openviking.prompts import render_prompt
 from openviking.pyagfs.exceptions import AGFSNotADirectoryError
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_domain import make_work_error
-from openviking.service.task_tracker import get_task_tracker, run_tracked_operation
+from openviking.service.task_tracker import (
+    get_task_tracker,
+    run_tracked_operation,
+    wait_for_enqueued_work,
+)
 from openviking.service.task_tracker_concurrency import run_to_completion
-from openviking.service.task_work_index import detach_task_context, get_task_context
+from openviking.service.task_work_index import get_task_context
 from openviking.storage.abstract_overview import (
     AbstractOverviewWriteResult,
     body_for_preview,
-    deterministic_sample,
-    freshness_metadata,
-    markdown_safe_viking_uri,
-    parse_overview_file_summaries,
-    plan_abstract_overview_refresh,
-    write_abstract_overview,
+    parse_abstract_overview,
+    read_sidecar_if_exists,
 )
 from openviking.storage.errors import (
     HandoffRecoveryBlocked,
@@ -70,11 +71,11 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.process_result import ProcessResult
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor, SemanticTreeStats
 from openviking.storage.queuefs.semantic_lock import SemanticLockScope
-from openviking.storage.queuefs.semantic_msg import SemanticMsg, build_semantic_coalesce_key
-from openviking.storage.queuefs.semantic_ops.freshness_policy import FreshnessAction
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.queuefs.semantic_ops.directory_refresh import enqueue_directory_refresh
 from openviking.storage.queuefs.semantic_queue import is_semantic_msg_stale
 from openviking.storage.queuefs.semantic_work import SemanticMessageWork, SkillSemanticMessageWork
-from openviking.storage.viking_fs import LS_ALL_NODES, SyncDiff, get_viking_fs
+from openviking.storage.viking_fs import SyncDiff, get_viking_fs
 from openviking.telemetry import (
     bind_telemetry,
     bind_telemetry_stage,
@@ -92,6 +93,8 @@ if TYPE_CHECKING:
     from openviking.config.vlm import VLMHandle, VLMResolver
 
 logger = get_logger(__name__)
+
+_REQUIRED_DIRECTORY_REFRESH_TRIGGERS = {"resource_ingest", "reindex"}
 
 _PERMANENT_STORAGE_ERRORS = (
     FileNotFoundError,
@@ -347,21 +350,15 @@ class SemanticProcessor(DequeueHandlerBase):
         handoff = await lock_guard.to_handoff()
         msg.lock_handoff = handoff
 
-        def accept(result: Any) -> bool:
-            if result == "deduplicated":
-                return False
+        def accept(_: str) -> bool:
             scope.lock = None
             scope._owned = False
             return True
 
         try:
-            enqueue_id = await lock_guard.handoff_and_dispatch(
-                handoff,
-                lambda: queue.enqueue(msg, deduplicate_memory=False),
-                accepted=accept,
+            await lock_guard.handoff_and_dispatch(
+                handoff, lambda: queue.enqueue(msg), accepted=accept
             )
-            if enqueue_id == "deduplicated":
-                raise RuntimeError("Semantic retry was unexpectedly deduplicated")
         finally:
             if lock_guard.lease is not None:
                 scope.lock = lock_guard.lease
@@ -402,111 +399,49 @@ class SemanticProcessor(DequeueHandlerBase):
     async def _enqueue_parent_refresh(
         self, msg: SemanticMsg, uri: str, *, l0_body_changed: bool
     ) -> None:
-        if msg.generation_trigger == "content_copy":
+        if msg.generation_trigger == "content_copy" or not l0_body_changed:
             return
-        if msg.context_type not in {"resource", "skill"}:
+        if msg.context_type not in {"resource", "skill", "memory"}:
             return
         if not msg.propagate_to_parent:
             return
         parent = VikingURI(uri).parent
         if parent is None:
             return
-        parent_uri = parent.uri.rstrip("/")
+        parent_uri = parent.uri
+        if parent_uri in {"viking://", "viking://user", "viking://agent"}:
+            return
+        classification = classify_uri(parent_uri)
+        if msg.context_type == "memory" and (
+            not classification.is_memory or classification.is_memory_root
+        ):
+            return
         if msg.context_type == "skill":
-            classification = classify_uri(parent_uri)
             if (
                 not classification.is_skill
                 or classification.is_skill_namespace
                 or classification.is_skill_root
             ):
                 return
-        if (
-            not parent_uri
-            or parent_uri in {"viking://", "viking:", "viking://user", "viking://agent"}
-            or parent_uri == uri.rstrip("/")
-        ):
-            return
-        parent_ctx = self._ctx_from_semantic_msg(msg)
-        semantic_config = get_openviking_config().semantic
-        try:
-            decision = await plan_abstract_overview_refresh(
-                viking_fs=get_viking_fs(),
-                dir_uri=parent_uri,
-                changed_entries=1,
-                ctx=parent_ctx,
-                l0_body_changed=l0_body_changed,
-                # This helper handles automatic upward propagation only. Manual
-                # refresh/ingest bypasses the threshold for its requested root,
-                # not for every ancestor reached afterwards.
-                force_refresh=False,
-                overview_sample_limit=getattr(semantic_config, "overview_sample_limit", 32),
-                refresh_ratio=getattr(semantic_config, "freshness_refresh_ratio", 0.10),
-                lock_timeout_secs=1.0,
-            )
-        except LockAcquisitionError as _log_error:
-            logger.info(
-                "Skipping best-effort parent freshness update because sidecars are busy: %s error_type=%s",
-                safe_uri_for_log(str(parent_uri)),
-                type(_log_error).__name__,
-            )
-            return
-
-        if decision.action is not FreshnessAction.REFRESH_NOW:
-            logger.debug(
-                "Parent semantic refresh %s for %s (pending=%d, total=%d)",
-                decision.action.value,
-                safe_uri_for_log(str(parent_uri)),
-                decision.pending_after,
-                decision.total_entries,
-            )
-            return
-
-        await self._enqueue_directory_refresh(msg, parent_uri, changes={"modified": [uri]})
-
-    async def _enqueue_directory_refresh(
-        self, msg: SemanticMsg, parent_uri: str, *, changes: Dict[str, List[str]]
-    ) -> None:
-        from openviking.storage.queuefs import get_queue_manager
-
-        queue_manager = get_queue_manager()
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        parent_msg = SemanticMsg(
-            uri=parent_uri,
-            context_type=msg.context_type,
-            recursive=False,
-            account_id=msg.account_id,
-            user_id=msg.user_id,
-            group_ids=msg.group_ids,
-            peer_id=msg.peer_id,
-            role=msg.role,
+        await enqueue_directory_refresh(
+            parent_uri,
+            1,
+            ctx=self._ctx_from_semantic_msg(msg),
             skip_vectorization=msg.skip_vectorization,
-            changes=changes,
-            generation_trigger="parent_refresh",
-            dashboard_source_type=(
-                msg.dashboard_source_type
-                or get_dashboard_token_source_type(generation_trigger=msg.generation_trigger)
-                or ""
-            ),
-            # Directory refreshes must not supersede pending file indexing.
-            coalesce_key=(
-                "directory|"
-                + build_semantic_coalesce_key(
-                    context_type=msg.context_type,
-                    uri=parent_uri,
-                    account_id=msg.account_id,
-                    user_id=msg.user_id,
-                    peer_id=msg.peer_id,
-                )
-            ),
+            dashboard_source_type=msg.dashboard_source_type
+            or get_dashboard_token_source_type(generation_trigger=msg.generation_trigger)
+            or "",
+            required=msg.generation_trigger in _REQUIRED_DIRECTORY_REFRESH_TRIGGERS,
         )
-        with detach_task_context():
-            await semantic_queue.enqueue(parent_msg)
-        logger.debug("Enqueued parent semantic refresh: %s", safe_uri_for_log(str(parent_uri)))
 
     def _message_work(
         self, msg: SemanticMsg, lock: Optional[Dict[str, Any]] = None
     ) -> SemanticMessageWork:
-        work_type = SkillSemanticMessageWork if msg.context_type == "skill" else SemanticMessageWork
+        work_type = (
+            SkillSemanticMessageWork
+            if msg.context_type == "skill" and msg.generation_trigger != "directory_refresh"
+            else SemanticMessageWork
+        )
         return work_type(self, msg, lock)
 
     async def on_dequeue(
@@ -571,8 +506,11 @@ class SemanticProcessor(DequeueHandlerBase):
         execute_status = "ok"
         breaker = None
         syncing_source = False
+        directory_refresh = msg.generation_trigger == "directory_refresh"
+        uses_model = msg.context_type != "memory" or not directory_refresh
         try:
-            breaker = self._account_breaker(msg.account_id)
+            if uses_model:
+                breaker = self._account_breaker(msg.account_id)
             work = self._message_work(msg, lock)
             work.start()
             execute_started_at = time.perf_counter()
@@ -616,7 +554,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     return ProcessResult.success()
             # Circuit breaker: if API is known-broken, re-enqueue and wait
             try:
-                breaker.check()
+                if breaker is not None:
+                    breaker.check()
             except CircuitBreakerOpen as _log_error:
                 logger.info(
                     "Circuit breaker is open, re-enqueueing semantic message: %s error_type=%s",
@@ -668,7 +607,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         await work.skip()
                         return ProcessResult.success()
 
-                    if self._vlm_resolver is None:
+                    if uses_model and self._vlm_resolver is None:
                         raise RuntimeError(
                             "SemanticProcessor requires a VLM resolver for account-owned work"
                         )
@@ -734,15 +673,6 @@ class SemanticProcessor(DequeueHandlerBase):
                                 dict(action_counts),
                                 type(vector_slots).__name__,
                             )
-                        # Regular memory writes keep their specialized update path.
-                        # Callers must explicitly opt into directory aggregation; the
-                        # trigger remains descriptive metadata, not an algorithm switch.
-                        elif msg.context_type == "memory" and not msg.use_hierarchical_aggregation:
-                            await self._process_memory_directory(
-                                msg,
-                                ctx=current_ctx,
-                                lock=semantic_lock.lock,
-                            )
                         else:
                             is_incremental = False
                             target_uri = msg.target_uri
@@ -791,7 +721,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                         "Using direct incremental semantic update for: %s",
                                         safe_uri_for_log(str(msg.uri)),
                                     )
-                            elif msg.changes is not None:
+                            elif msg.changes is not None or directory_refresh:
                                 is_incremental = True
                                 target_uri = msg.uri
                                 logger.debug(
@@ -800,9 +730,16 @@ class SemanticProcessor(DequeueHandlerBase):
                                 )
 
                             defer_directory_refresh = (
-                                msg.generation_trigger == "content_write"
-                                and msg.context_type == "resource"
+                                msg.generation_trigger
+                                in {
+                                    "content_write",
+                                    "resource_ingest",
+                                    "semantic_refresh",
+                                    "content_transfer_rebuild",
+                                }
+                                and msg.context_type in {"resource", "skill"}
                                 and not msg.recursive
+                                and not msg.skip_vectorization
                                 and msg.changes is not None
                                 and msg.aggregate_directory
                             )
@@ -838,12 +775,28 @@ class SemanticProcessor(DequeueHandlerBase):
                             stats = executor.get_stats()
                             tree_stats.append(stats)
                             self._cache_tree_stats(msg.telemetry_id, run_uri, stats)
+                            if executor.stale and directory_refresh:
+                                processing_succeeded = True
+                                return ProcessResult.success({"skipped": True})
                             if not executor.stale and defer_directory_refresh:
                                 # The shared directory task reads committed file abstracts.
-                                await work._wait_for_embedding_work(
+                                await wait_for_enqueued_work(
+                                    "Embedding",
                                     stop_waiting=self._embedding_worker_stopped,
                                 )
-                                await self._enqueue_directory_refresh(msg, run_uri, changes=changes)
+                                await enqueue_directory_refresh(
+                                    run_uri,
+                                    len({uri for uris in changes.values() for uri in uris}),
+                                    ctx=current_ctx,
+                                    propagate_to_parent=msg.propagate_to_parent,
+                                    dashboard_source_type=msg.dashboard_source_type
+                                    or get_dashboard_token_source_type(
+                                        generation_trigger=msg.generation_trigger
+                                    )
+                                    or "",
+                                    required=msg.generation_trigger
+                                    in _REQUIRED_DIRECTORY_REFRESH_TRIGGERS,
+                                )
                             elif not executor.stale and msg.aggregate_directory:
                                 write_result = getattr(
                                     executor,
@@ -867,7 +820,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     logger.debug(
                         "Completed semantic generation for: %s", safe_uri_for_log(str(msg.uri))
                     )
-                    breaker.record_success()
+                    if breaker is not None:
+                        breaker.record_success()
                     await self._cleanup_local_artifact(msg)
                     return ProcessResult.success()
                 finally:
@@ -1026,245 +980,6 @@ class SemanticProcessor(DequeueHandlerBase):
 
     def get_tree_stats(self, account_id: str | None = None) -> Optional["SemanticTreeStats"]:
         return SemanticTreeExecutor.get_active_stats(account_id=account_id)
-
-    async def _process_memory_directory(
-        self,
-        msg: SemanticMsg,
-        ctx: Optional[RequestContext] = None,
-        lock: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Process a memory directory with special handling.
-
-        For memory directories:
-        - Generate file summaries in bounded batches
-        - Enqueue each changed file for vectorization as soon as its summary is ready
-        - Retain only compact summaries for the directory overview
-        - Vectorize the generated abstract.md and overview.md
-
-        Args:
-            msg: The semantic message containing directory info and changes
-        """
-        viking_fs = get_viking_fs()
-        dir_uri = msg.uri
-        ctx = ctx or self._default_ctx
-        llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
-
-        try:
-            entries = await viking_fs.ls(dir_uri, node_limit=LS_ALL_NODES, ctx=ctx)
-        except Exception as e:
-            raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
-
-        file_paths: List[str] = []
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name.startswith(".") or name in [".", ".."]:
-                continue
-            if not entry.get("isDir", False):
-                item_uri = VikingURI(dir_uri).join(name).uri
-                file_paths.append(item_uri)
-        file_paths.sort()
-
-        if not file_paths:
-            logger.debug("No memory files found in %s", safe_uri_for_log(str(dir_uri)))
-            return
-
-        existing_summaries: Dict[str, str] = {}
-        if msg.changes:
-            try:
-                old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
-                if old_overview:
-                    existing_summaries = self._parse_overview_md(body_for_preview(old_overview))
-                    logger.debug(
-                        "Parsed %s existing summaries from overview.md", len(existing_summaries)
-                    )
-            except Exception as e:
-                logger.debug(
-                    "No existing overview.md found for %s: %s",
-                    safe_uri_for_log(str(dir_uri)),
-                    type(e).__name__,
-                )
-
-        changed_files: Set[str] = set()
-        if msg.changes:
-            changed_files = set(msg.changes.get("added", []) + msg.changes.get("modified", []))
-            deleted_files = set(msg.changes.get("deleted", []))
-            logger.debug(
-                "Processing memory directory %s with changes: added=%s, modified=%s, deleted=%s",
-                safe_uri_for_log(str(dir_uri)),
-                len(msg.changes.get("added", [])),
-                len(msg.changes.get("modified", [])),
-                len(deleted_files),
-            )
-
-        pending_indices: List[Tuple[int, str]] = []
-        file_summaries: List[Optional[Dict[str, str]]] = [None] * len(file_paths)
-        paths_to_vectorize = changed_files if msg.changes else set(file_paths)
-
-        for idx, file_path in enumerate(file_paths):
-            file_name = file_path.split("/")[-1]
-            if file_path not in changed_files and file_name in existing_summaries:
-                file_summaries[idx] = {
-                    "name": file_name,
-                    "summary": existing_summaries[file_name],
-                }
-                logger.debug("Reused existing summary for %s", safe_path_for_log(str(file_name)))
-            else:
-                pending_indices.append((idx, file_path))
-
-        if file_paths and not pending_indices:
-            try:
-                from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                CacheEventDataSource.record_hit("L1")
-            except Exception:
-                pass
-        elif file_paths and pending_indices:
-            try:
-                from openviking.metrics.datasources.cache import CacheEventDataSource
-
-                if len(file_paths) > len(pending_indices):
-                    CacheEventDataSource.record_hit("L1")
-                CacheEventDataSource.record_miss("L1")
-            except Exception:
-                pass
-
-        if pending_indices:
-            logger.debug(
-                "Generating summaries for %s changed files (reused %s cached)",
-                len(pending_indices),
-                len(file_paths) - len(pending_indices),
-            )
-
-            async def _gen(idx: int, file_path: str) -> None:
-                file_name = file_path.split("/")[-1]
-                try:
-                    summary_dict = await self._generate_single_file_summary(
-                        file_path, llm_sem=llm_sem, ctx=ctx
-                    )
-                    logger.debug("Generated summary for %s", safe_path_for_log(str(file_name)))
-                except Exception as e:
-                    logger.info(
-                        "Failed to generate summary for %s: %s",
-                        safe_path_for_log(str(file_path)),
-                        type(e).__name__,
-                    )
-                    summary_dict = {"name": file_name, "summary": ""}
-
-                if file_path in paths_to_vectorize and not msg.skip_vectorization:
-                    await self._vectorize_single_file(
-                        parent_uri=dir_uri,
-                        context_type="memory",
-                        file_path=file_path,
-                        summary_dict=summary_dict,
-                        ctx=ctx,
-                        preserve_existing_created_at=True,
-                        telemetry_id=msg.telemetry_id,
-                    )
-                file_summaries[idx] = {
-                    "name": str(summary_dict.get("name") or file_name),
-                    "summary": str(summary_dict.get("summary") or ""),
-                }
-
-            batch_size = max(1, min(self.max_concurrent_llm, 10))
-            for batch_start in range(0, len(pending_indices), batch_size):
-                batch = pending_indices[batch_start : batch_start + batch_size]
-                logger.debug(
-                    "Processing batch %s/%s (%s files)",
-                    batch_start // batch_size + 1,
-                    (len(pending_indices) + batch_size - 1) // batch_size,
-                    len(batch),
-                )
-                await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
-
-        completed_summaries = [s for s in file_summaries if s is not None]
-        sampled_summaries = deterministic_sample(
-            completed_summaries, get_openviking_config().semantic.overview_sample_limit
-        )
-        generated_content = await self._generate_overview(
-            dir_uri,
-            sampled_summaries,
-            [],
-            llm_sem=llm_sem,
-            total_files=len(file_paths),
-            ctx=ctx,
-        )
-        overview, abstract = self._normalize_overview_generation(generated_content)
-
-        try:
-            wrote_semantics = await self._write_memory_directory_semantics(
-                msg=msg,
-                viking_fs=viking_fs,
-                dir_uri=dir_uri,
-                overview=overview,
-                abstract=abstract,
-                ctx=ctx,
-                lock=lock,
-                total_entries=len(file_paths),
-                sampled_entries=len(sampled_summaries),
-            )
-        except LockAcquisitionError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
-        if not wrote_semantics.wrote:
-            return
-        logger.debug("Generated abstract.md and overview.md for %s", safe_uri_for_log(str(dir_uri)))
-
-        if msg.skip_vectorization:
-            logger.debug(
-                "Skipping vectorization for %s (requested via SemanticMsg)",
-                safe_uri_for_log(str(dir_uri)),
-            )
-            return
-        if not (wrote_semantics.overview_body_changed or wrote_semantics.abstract_body_changed):
-            logger.debug(
-                "Skipping directory vectorization for %s (visible semantics unchanged)",
-                safe_uri_for_log(str(dir_uri)),
-            )
-            return
-        await self._vectorize_directory(
-            uri=dir_uri,
-            context_type="memory",
-            abstract=abstract,
-            overview=overview,
-            ctx=ctx,
-            telemetry_id=msg.telemetry_id,
-        )
-        logger.debug(
-            "Vectorized abstract.md and overview.md for %s", safe_uri_for_log(str(dir_uri))
-        )
-
-    async def _write_memory_directory_semantics(
-        self,
-        *,
-        msg: SemanticMsg,
-        viking_fs: Any,
-        dir_uri: str,
-        overview: str,
-        abstract: str,
-        ctx: Optional[RequestContext],
-        lock: Optional[Dict[str, Any]] = None,
-        total_entries: int = 0,
-        sampled_entries: int = 0,
-    ) -> AbstractOverviewWriteResult:
-        return await write_abstract_overview(
-            viking_fs=viking_fs,
-            dir_uri=dir_uri,
-            overview=overview,
-            abstract=abstract,
-            ctx=ctx,
-            is_stale=lambda: is_semantic_msg_stale(msg, agfs=viking_fs._async_agfs),
-            metadata={
-                **({"source": msg.source} if msg.source else {}),
-                "generated_by": {
-                    "component": "SemanticProcessor",
-                    "trigger": msg.generation_trigger,
-                },
-                "freshness": freshness_metadata(total_entries, sampled_entries),
-            },
-            lock=lock,
-            log_prefix="[MemorySemantic]",
-        )
 
     async def _sync_topdown_recursive(
         self,
@@ -1603,501 +1318,158 @@ class SemanticProcessor(DequeueHandlerBase):
             file_path, file_name, llm_sem, ctx=ctx, file_content=file_content
         )
 
-    def _child_summary_line(
-        self,
-        dir_uri: str,
-        idx: int,
-        item: Dict[str, str],
-        link_map: Dict[str, str],
-    ) -> str:
-        """Render a subdirectory summary line with a collision-free link placeholder."""
-        placeholder = f"viking://input_sample_c{idx}"
-        link_map[placeholder] = self._markdown_link_target(dir_uri, item["name"])
-        return f"- {item['name']}/ (link: {placeholder}): {item['abstract']}"
-
-    @staticmethod
-    def _markdown_link_target(dir_uri: str, entry_name: str) -> str:
-        """Build a Markdown-safe target without changing the stored Viking URI."""
-        entry_uri = VikingURI(dir_uri).join(entry_name).uri
-        return markdown_safe_viking_uri(entry_uri)
-
-    def _replace_link_references(self, generated_content: str, link_map: Dict[str, str]) -> str:
-        """Resolve link placeholders (viking://input_sample_fN / cN) to real URIs.
-
-        The model is fed compact, collision-free placeholders and asked to emit
-        Markdown links against them; here we map each placeholder back to the
-        entry's real URI. Unknown placeholders are left untouched.
-        """
-
-        def replace_link(match):
-            return link_map.get(match.group(0), match.group(0))
-
-        return re.sub(r"viking://input_sample_[fc]\d+", replace_link, generated_content)
-
-    def _truncate_generated_text(self, text: str, max_chars: int) -> str:
-        if max_chars <= 0 or len(text) <= max_chars:
-            return text
-
-        if max_chars <= 3:
-            return text[:max_chars]
-
-        first_sentence_end = None
-        last_sentence_end_within_limit = None
-        for sentence_end_match in re.finditer(r"\.(?!\d)(?=\s|$)|[!?](?=\s|$)|[。？！]", text):
-            sentence_end = sentence_end_match.end()
-            if first_sentence_end is None:
-                first_sentence_end = sentence_end
-            if sentence_end <= max_chars:
-                last_sentence_end_within_limit = sentence_end
-            elif last_sentence_end_within_limit is not None:
-                break
-
-        if last_sentence_end_within_limit is not None:
-            return text[:last_sentence_end_within_limit].strip()
-        if first_sentence_end is not None:
-            return text[:first_sentence_end].strip()
-
-        candidate = text[: max_chars - 3].rstrip()
-        word_boundary = candidate.rfind(" ")
-        if word_boundary > 0:
-            return candidate[:word_boundary].rstrip() + "..."
-
-        return candidate + "..."
-
-    def _extract_abstract_from_overview(self, overview_content: str) -> str:
-        """Extract an abstract from the Markdown overview brief description."""
-        overview_content = body_for_preview(overview_content)
-        lines = overview_content.split("\n")
-
-        # Skip header lines (starting with #)
-        content_lines = []
-        in_header = True
-
-        for line in lines:
-            if line.strip() == "---":
-                continue
-            if in_header and line.startswith("#"):
-                continue
-            elif in_header and line.strip():
-                in_header = False
-
-            if not in_header:
-                # Stop at first ##
-                if line.startswith("##"):
-                    break
-                if line.strip():
-                    content_lines.append(line.strip())
-
-        return "\n".join(content_lines).strip()
-
-    def _normalize_overview_generation(self, generated_content: str) -> Tuple[str, str]:
-        """Convert raw Markdown overview output into final L1 overview and L0 abstract."""
-        overview = body_for_preview(generated_content)
-        abstract = self._extract_abstract_from_overview(overview)
-        return self._enforce_size_limits(overview, abstract)
-
-    def _enforce_size_limits(self, overview: str, abstract: str) -> Tuple[str, str]:
-        """Enforce max size limits on overview and abstract."""
-        semantic = get_openviking_config().semantic
-        if len(overview) > semantic.overview_max_chars:
-            overview = self._truncate_generated_text(overview, semantic.overview_max_chars)
-        if len(abstract) > semantic.abstract_max_chars:
-            abstract = self._truncate_generated_text(abstract, semantic.abstract_max_chars)
-        return overview, abstract
-
-    @classmethod
-    def _parse_overview_md(cls, overview_content: str) -> Dict[str, str]:
-        """Parse overview.md and extract direct-file summaries."""
-        return parse_overview_file_summaries(overview_content)
-
-    async def _generate_overview(
+    async def _generate_directory_semantics(
         self,
         dir_uri: str,
         file_summaries: List[Dict[str, str]],
         children_abstracts: List[Dict[str, str]],
-        llm_sem: Optional[asyncio.Semaphore] = None,
-        total_files: Optional[int] = None,
-        total_children: Optional[int] = None,
-        ctx: Optional[RequestContext] = None,
-    ) -> str:
-        """Generate raw directory overview model output.
-
-        For small directories, generates a single overview from all file summaries.
-        For large directories that would exceed the prompt budget, splits file
-        summaries into batches, generates a partial overview per batch, then
-        merges the partials into a final overview.
-
-        Args:
-            dir_uri: Directory URI
-            file_summaries: File summary list (only entries participating in
-                this aggregation, i.e. already sampled when applicable)
-            children_abstracts: Subdirectory summary list (sampled when applicable)
-            total_files: Total direct files in the directory (may exceed
-                ``len(file_summaries)`` when the directory was sampled)
-            total_children: Total direct subdirectories (may exceed
-                ``len(children_abstracts)`` when sampled)
-
-        Returns:
-            Markdown overview content generated by the model.
-        """
-
-        config = get_openviking_config()
-        active_ctx = ctx or self._default_ctx
-        vlm = await self._get_vlm_config(active_ctx)
-        semantic = config.semantic
-
-        if not vlm.is_available():
-            logger.info("VLM not available, using default overview")
-            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not ready]"
-
-        from openviking.session.memory.utils.language import resolve_output_language
-
-        # Build coverage statement so the model knows the directory scale
-        # and whether the provided summaries represent all entries or a sample.
-        total_files = len(file_summaries) if total_files is None else total_files
-        total_children = len(children_abstracts) if total_children is None else total_children
-        total_direct = total_files + total_children
-        provided = len(file_summaries) + len(children_abstracts)
-        if total_direct <= provided:
-            directory_coverage = (
-                f"Total direct entries: {total_direct}. "
-                "All direct entries are represented in the summaries below."
-            )
-        else:
-            directory_coverage = (
-                f"Total direct entries: {total_direct} "
-                f"({total_files} files, {total_children} subdirectories).\n"
-                f"Summaries provided for this aggregation: {provided}.\n"
-                f"Direct entries not individually shown: {total_direct - provided}.\n"
-                "Coverage: sampled. The summaries below are representative "
-                "entries; generalize cautiously and do not treat them as exhaustive."
-            )
-
-        # Build link placeholder mapping and summary string.
-        # The model is fed collision-free placeholders (viking://input_sample_fN)
-        # and asked to emit Markdown links; placeholders are resolved to real
-        # URIs in post-processing. This avoids the fragility of bare [N] indices
-        # and of asking the model to reproduce long/CJK URIs verbatim.
-        link_map: Dict[str, str] = {}
-        file_summaries_lines = []
-        for idx, item in enumerate(file_summaries, 1):
-            placeholder = f"viking://input_sample_f{idx}"
-            link_map[placeholder] = self._markdown_link_target(dir_uri, item["name"])
-            file_summaries_lines.append(
-                f"- {item['name']} (link: {placeholder}): {item['summary']}"
-            )
-        file_summaries_str = "\n".join(file_summaries_lines) if file_summaries_lines else "None"
-
-        # Build subdirectory summary string
-        children_abstracts_str = (
-            "\n".join(
-                self._child_summary_line(dir_uri, idx, item, link_map)
-                for idx, item in enumerate(children_abstracts, 1)
-            )
-            if children_abstracts
-            else "None"
-        )
-
-        language_source_parts = []
-        if file_summaries:
-            language_source_parts.append(file_summaries_str)
-        if children_abstracts:
-            language_source_parts.append(children_abstracts_str)
-        if not language_source_parts:
-            language_source_parts.append(dir_uri.split("/")[-1])
+        *,
+        ctx: RequestContext,
+        total_entries: int,
+        existing_raw: Mapping[int, str | bytes] | None = None,
+    ):
         from openviking.config.generation import get_output_language_override
-
-        output_language_override = await get_output_language_override(
-            self._runtime_config_manager, active_ctx.account_id, cluster_config=config
+        from openviking.server.error_mapping import is_not_found_error
+        from openviking.session.memory.utils.language import resolve_output_language
+        from openviking.storage.queuefs.semantic_ops.directory_generation import (
+            DirectoryGeneration,
+            generate_directory_semantics,
         )
-        output_language = resolve_output_language(
-            "\n".join(language_source_parts), output_language_override=output_language_override
+
+        raw = (
+            await read_sidecar_if_exists(get_viking_fs(), f"{dir_uri}/.abstract.md", ctx)
+            if existing_raw is None
+            else existing_raw.get(ContextLevel.ABSTRACT)
         )
+        previous = parse_abstract_overview(raw) if raw is not None else None
+        entries = {
+            item["name"]: {
+                "kind": "file",
+                "summary": item["summary"],
+                **({"title": item["title"]} if item.get("title") else {}),
+            }
+            for item in file_summaries
+        }
+        entries.update(
+            {
+                item["name"]: {"kind": "directory", "summary": item["abstract"]}
+                for item in children_abstracts
+            }
+        )
+        navigation_renderer = None
+        preset_abstract = None
+        from openviking.core.namespace import context_type_for_uri
 
-        # Budget guard: check if prompt would be oversized
-        estimated_size = len(file_summaries_str) + len(children_abstracts_str)
-        over_budget = estimated_size > semantic.max_overview_prompt_chars
-        entry_count = len(file_summaries) + len(children_abstracts)
-        many_entries = entry_count > semantic.overview_batch_size
-
-        if over_budget and many_entries:
-            # Many entries, oversized prompt → batch and merge
-            logger.info(
-                "Overview prompt for %s exceeds budget (%s chars, %s files, %s subdirectories). Splitting into batches of %s.",
-                safe_uri_for_log(str(dir_uri)),
-                estimated_size,
-                len(file_summaries),
-                len(children_abstracts),
-                semantic.overview_batch_size,
-            )
-            overview = await self._batched_generate_overview(
-                dir_uri,
-                file_summaries,
-                children_abstracts,
-                link_map,
-                llm_sem=llm_sem,
-                output_language=output_language,
-                directory_coverage=directory_coverage,
-                vlm=vlm,
-            )
-        elif over_budget:
-            # Few files but long summaries → truncate summaries to fit budget
-            logger.info(
-                "Overview prompt for %s exceeds budget (%s chars) with %s files. Truncating summaries to fit.",
-                safe_uri_for_log(str(dir_uri)),
-                estimated_size,
-                len(file_summaries),
-            )
-            budget = semantic.max_overview_prompt_chars
-            budget -= len(children_abstracts_str)
-            per_file = max(100, budget // max(len(file_summaries), 1))
-            truncated_lines = []
-            for idx, item in enumerate(file_summaries, 1):
-                summary = item["summary"][:per_file]
-                truncated_lines.append(
-                    f"- {item['name']} (link: viking://input_sample_f{idx}): {summary}"
+        if context_type_for_uri(dir_uri) == "memory":
+            if not total_entries:
+                return DirectoryGeneration(
+                    abstract=previous.body if previous is not None else None, overview=None
                 )
-            file_summaries_str = "\n".join(truncated_lines)
-            overview = await self._single_generate_overview(
-                dir_uri,
-                file_summaries_str,
-                children_abstracts_str,
-                link_map,
-                output_language=output_language,
-                directory_coverage=directory_coverage,
-                vlm=vlm,
+            from openviking.session.memory.memory_type_registry import get_default_registry
+            from openviking.session.memory.memory_updater import MemoryUpdater
+            from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
+            from openviking.session.memory.utils.uri import render_template
+
+            memory_type = MemoryUpdater.memory_type_from_uri(dir_uri)
+            schema = get_default_registry().get(memory_type) if memory_type else None
+            overview_template = schema.overview_template if schema else None
+            abstract_template = schema.abstract_template if schema else None
+            template_context = {
+                "memory_type": memory_type,
+                "directory_name": dir_uri.rsplit("/", 1)[-1],
+                "subdirectory": dir_uri.partition(f"/memories/{memory_type}/")[2],
+            }
+            preset_abstract = (
+                render_template(abstract_template, template_context).strip()
+                if abstract_template and previous is None
+                else ""
             )
-        else:
-            overview = await self._single_generate_overview(
-                dir_uri,
-                file_summaries_str,
-                children_abstracts_str,
-                link_map,
-                output_language=output_language,
-                directory_coverage=directory_coverage,
-                vlm=vlm,
-            )
+            fields = {}
+            for name, entry in list(entries.items()):
+                if entry["kind"] != "file":
+                    fields[name] = {}
+                    continue
+                file_uri = f"{dir_uri}/{name}"
+                try:
+                    raw = await get_viking_fs().read_file(file_uri, ctx=ctx)
+                except Exception as exc:
+                    if not is_not_found_error(exc):
+                        raise
+                    entries.pop(name)
+                    continue
+                memory = MemoryFileUtils.read(raw, uri=file_uri)
+                fields[name] = memory.to_metadata()
+                if not entry["summary"]:
+                    summary = memory.extra_fields.get("summary")
+                    entry["summary"] = (
+                        summary if isinstance(summary, str) and summary.strip() else memory.content
+                    ) or ""
 
-        return overview
+            if overview_template:
 
-    async def _single_generate_overview(
-        self,
-        dir_uri: str,
-        file_summaries_str: str,
-        children_abstracts_str: str,
-        link_map: Dict[str, str],
-        output_language: str = "en",
-        directory_coverage: str = "",
-        *,
-        vlm: "VLMHandle",
-    ) -> str:
-        """Generate overview from a single prompt (small directories)."""
+                def navigation_renderer(names: list[str]) -> str:
+                    rendered = render_template(
+                        overview_template,
+                        {
+                            **template_context,
+                            "items": [
+                                {
+                                    "file_name": name,
+                                    "file_content": fields[name],
+                                    "summary": entries[name]["summary"],
+                                }
+                                for name in names
+                            ],
+                        },
+                    )
+                    return re.sub(r"\A# [^\n]*\n*", "", rendered).strip()
 
-        try:
-            prompt = render_prompt(
-                "semantic.overview_generation",
-                {
-                    "dir_name": dir_uri.split("/")[-1],
-                    "file_summaries": file_summaries_str,
-                    "children_abstracts": children_abstracts_str,
-                    "output_language": output_language,
-                    "directory_coverage": directory_coverage,
-                },
-            )
-
-            with bind_telemetry_stage("semantic_execute"):
-                overview = await vlm.get_completion_async(prompt)
-
-            overview = self._replace_link_references(overview, link_map)
-
-            return overview.strip()
-
-        except Exception as e:
-            logger.info(
-                "Directory overview generation failed; using default overview target=%s error_type=%s degraded=true",
-                safe_uri_for_log(dir_uri),
-                type(e).__name__,
-            )
-            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not generated]"
-
-    async def _batched_generate_overview(
-        self,
-        dir_uri: str,
-        file_summaries: List[Dict[str, str]],
-        children_abstracts: List[Dict[str, str]],
-        link_map: Dict[str, str],
-        llm_sem: Optional[asyncio.Semaphore] = None,
-        output_language: str = "en",
-        directory_coverage: str = "",
-        *,
-        vlm: "VLMHandle",
-    ) -> str:
-        """Generate overview by batching file and subdirectory summaries.
-
-        Splits both input kinds into batches, generates a partial overview per
-        batch, then merges the partials without repeating the raw inputs.
-        """
         config = get_openviking_config()
-        semantic = config.semantic
-        batch_size = semantic.overview_batch_size
-        dir_name = dir_uri.split("/")[-1]
-
-        work_items = [("file", index, item) for index, item in enumerate(file_summaries, 1)] + [
-            ("child", index, item) for index, item in enumerate(children_abstracts, 1)
-        ]
-        batches = [work_items[i : i + batch_size] for i in range(0, len(work_items), batch_size)]
-        logger.info(
-            "Generating overview for %s in %s batches", safe_uri_for_log(str(dir_uri)), len(batches)
+        override = await get_output_language_override(
+            self._runtime_config_manager, ctx.account_id, cluster_config=config
+        )
+        language = resolve_output_language(
+            "\n".join(f"- {name}: {entry['summary']}" for name, entry in entries.items()),
+            output_language_override=override,
         )
 
-        # Generate partial overviews concurrently using global link placeholders.
-        if llm_sem is None:
-            llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
-        partial_overviews = [None] * len(batches)
-        batch_prompts: List[Tuple[int, str, Dict[str, str]]] = []
-
-        for batch_idx, batch in enumerate(batches):
-            batch_lines = []
-            child_lines = []
-            batch_link_map: Dict[str, str] = {}
-            for entry_kind, global_idx, item in batch:
-                assert global_idx is not None
-                if entry_kind == "file":
-                    placeholder = f"viking://input_sample_f{global_idx}"
-                    batch_link_map[placeholder] = link_map.get(
-                        placeholder, self._markdown_link_target(dir_uri, item["name"])
-                    )
-                    batch_lines.append(f"- {item['name']} (link: {placeholder}): {item['summary']}")
-                else:
-                    child_lines.append(
-                        self._child_summary_line(dir_uri, global_idx, item, batch_link_map)
-                    )
-
-            prompt = render_prompt(
-                "semantic.overview_generation",
-                {
-                    "dir_name": dir_name,
-                    "file_summaries": "\n".join(batch_lines) or "None",
-                    "children_abstracts": "\n".join(child_lines) or "None",
-                    "output_language": output_language,
-                    "directory_coverage": directory_coverage,
-                },
-            )
-            batch_prompts.append((batch_idx, prompt, batch_link_map))
-
-        async def _run_batch(batch_idx: int, prompt: str, batch_link_map: Dict[str, str]) -> None:
-            try:
-                async with llm_sem:
-                    with bind_telemetry_stage("semantic_execute"):
-                        partial = await vlm.get_completion_async(prompt)
-                partial = self._replace_link_references(partial, batch_link_map)
-                partial_overviews[batch_idx] = partial.strip()
-            except Exception as e:
-                logger.debug(
-                    "Failed to generate partial overview batch %s/%s for %s: %s",
-                    batch_idx + 1,
-                    len(batches),
-                    safe_uri_for_log(str(dir_uri)),
-                    type(e).__name__,
-                )
-
-        await asyncio.gather(*[_run_batch(*bp) for bp in batch_prompts])
-        failed_batches = sum(partial is None for partial in partial_overviews)
-        if failed_batches:
-            logger.info(
-                "Overview batch generation incomplete total=%d failed=%d degraded=true",
-                len(batches),
-                failed_batches,
-            )
-        partial_overviews = [p for p in partial_overviews if p is not None]
-
-        if not partial_overviews:
-            return f"# {dir_name}\n\n[Directory overview is not generated]"
-
-        # If only one batch succeeded, use it directly
-        if len(partial_overviews) == 1:
-            return partial_overviews[0]
-
-        # Merge partials only; each child abstract is already represented once.
-        # Partials already contain real URIs, but the shared generation prompt can
-        # make the merge model emit placeholders again. Resolve the merged output
-        # with the complete map before persisting it.
-        combined = "\n\n---\n\n".join(partial_overviews)
-        try:
-            prompt = render_prompt(
-                "semantic.overview_generation",
-                {
-                    "dir_name": dir_name,
-                    "file_summaries": combined,
-                    "children_abstracts": "None",
-                    "output_language": output_language,
-                    "directory_coverage": directory_coverage,
-                },
-            )
+        async def complete(prompt: str) -> str:
+            vlm = await self._get_vlm_config(ctx)
+            if not vlm.is_available():
+                raise RuntimeError("VLM is unavailable for directory abstract generation")
             with bind_telemetry_stage("semantic_execute"):
-                overview = await vlm.get_completion_async(prompt)
-            overview = self._replace_link_references(overview, link_map)
-            return overview.strip()
-        except Exception as e:
-            logger.info(
-                "Overview merge failed; using first partial overview target=%s error_type=%s degraded=true",
-                safe_uri_for_log(dir_uri),
-                type(e).__name__,
-            )
-            return partial_overviews[0]
+                return await vlm.get_completion_async(prompt)
+
+        return await generate_directory_semantics(
+            dir_uri,
+            entries,
+            previous=previous,
+            config=config.semantic,
+            language=language,
+            complete=complete,
+            max_concurrent_llm=self.max_concurrent_llm,
+            total_entries=total_entries,
+            navigation_renderer=navigation_renderer,
+            preset_abstract=preset_abstract,
+        )
 
     async def _skill_root_semantics(
         self,
         uri: str,
         *,
         ctx: RequestContext,
-        regenerate: bool = False,
-        lock: Optional[Dict[str, Any]] = None,
         skill_content: str | bytes | None = None,
-    ) -> Tuple[str, str]:
-        """Keep the package root tied only to its SKILL.md definition."""
-        viking_fs = get_viking_fs()
-        if (
-            not regenerate
-            and await viking_fs.exists(f"{uri}/.abstract.md", ctx=ctx)
-            and await viking_fs.exists(f"{uri}/.overview.md", ctx=ctx)
-        ):
-            abstract = body_for_preview(await viking_fs.read_file(f"{uri}/.abstract.md", ctx=ctx))
-            overview = body_for_preview(await viking_fs.read_file(f"{uri}/.overview.md", ctx=ctx))
-            if abstract and overview:
-                return overview, abstract
-
+    ) -> tuple[str, str]:
+        """Generate the root from the Skill definition."""
         from openviking.core.skill_loader import SkillLoader
         from openviking.utils.skill_processor import SkillProcessor
 
-        content = (
-            skill_content
-            if skill_content is not None
-            else await viking_fs.read_file(f"{uri}/SKILL.md", ctx=ctx)
-        )
-        if isinstance(content, bytes):
-            content = content.decode("utf-8")
-        definition = SkillLoader.parse(content)
-        processor = SkillProcessor(vikingdb=None, vlm_resolver=self._vlm_resolver)
-        abstract = processor._build_skill_abstract(definition)
-        overview = await processor._generate_overview(
-            definition,
-            await self._get_vlm_config(ctx),
-        )
-        await run_to_completion(
-            lambda: write_abstract_overview(
-                viking_fs=viking_fs,
-                dir_uri=uri,
-                abstract=abstract,
-                overview=overview,
-                ctx=ctx,
-                lock=lock,
-                metadata={
-                    "generated_by": {"component": "SkillProcessor", "trigger": "skill_refresh"}
-                },
-            )
-        )
-        return overview, abstract
+        if skill_content is None:
+            skill_content = await get_viking_fs().read_file(f"{uri}/SKILL.md", ctx=ctx)
+        if isinstance(skill_content, bytes):
+            skill_content = skill_content.decode("utf-8")
+        definition = SkillLoader.parse(skill_content)
+        return definition.get("content", ""), SkillProcessor._build_skill_abstract(definition)
 
     async def _vectorize_directory(
         self,
@@ -2150,12 +1522,12 @@ class SemanticProcessor(DequeueHandlerBase):
             md5s=md5s,
         )
 
-    async def _load_transfer_file_summaries(
+    async def _load_indexed_file_summaries(
         self,
         file_paths: List[str],
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, str]:
-        """Load copied/moved file summaries from their existing target L2 vectors."""
+        """Load existing summaries from the files' L2 index records."""
         if not file_paths:
             return {}
         viking_fs = get_viking_fs()

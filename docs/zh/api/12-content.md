@@ -233,9 +233,9 @@ ov read viking://resources/docs/api.md
 - 文件内容会在 API 返回前完成更新；`wait` 只控制是否等待语义/向量刷新完成。
 - 对支持索引的命名空间，设置 `defer_processing=true` 后仍会保存正文；同时设置 `use_snapshot=true` 时，会在同一写锁内记录快照。`semantic_status` / `vector_status` 返回 `deferred`，但不会向 QueueFS 派发 `ContentWrite`、`Semantic` 或 `Embedding` 消息。持久化 Task 会被直接完成：`wait=false` 返回已经处于终态的 `task_id`，`wait=true` 读取终态结果并移除 `task_id`。依赖搜索前，应对该 URI 执行 `reindex()`。延迟处理不能与实际的 tags/ACL 更新或 `resolve_conflicts=true` 同时使用。
 - `viking://system/` 等 FILE_ONLY 命名空间在 `defer_processing` 为 true 或 false 时都保持原有处理行为：语义/向量状态为 `skipped`，仍通过一条 `ContentWrite` 根消息完成 Task，不执行索引处理。`wait=false` 在入队后返回，`wait=true` 等待该 Task 完成。FILE_ONLY 命名空间不支持 reindex；原有命名空间及参数校验仍然生效。
-- 正文提交后，如果后续语义/向量任务入队失败，不会回滚已写正文；接口会返回错误，调用方应重试同一次 write 以重新派发派生维护。显式 write 始终重新提交最终字节，因此在向量索引暂时落后于文件时也能安全重试。
+- 正文提交后，文件自身的语义或向量任务入队失败时，接口会返回错误，已写正文会保留。显式 write 始终重新提交最终字节，因此在向量索引暂时落后于文件时也能安全重试。
 - 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后会自动调度相关语义与向量处理。
-- 资源写入附带的父目录 L0/L1 刷新采用尽力更新：父目录锁冲突时跳过本次目录刷新，保留原文写入及文件自身的摘要、向量处理。跳过 L0/L1 写回时也跳过目录向量更新，不保证自动补刷；原文文件本身的锁冲突仍报错。提交任务前发现冲突时返回 `semantic_status: "skipped"`；后台运行期间的跳过记录在日志中，`wait=true` 也不保证父目录摘要更新。
+- `wait=true` 等待文件自身的语义和向量处理。父目录 L0/L1 由独立任务尽力刷新，写入结果以文件自身的处理结果为准。首次生成和小目录立即刷新，大目录沿用累计变化阈值。
 - 提供非空 `tags` 时，标签会在该文件首次向量 upsert 时写入，而非在处理完成后再单独更新。省略 `tags`，或显式传 `tags: []` 配合 `tag_mode: "replace"`，都不会修改已有标签。使用 `tag_mode: "clear"` 可清空全部已有标签，且 `clear` 会忽略同时传入的标签值。
 - `resolve_conflicts=true` 表示编辑目的是进行冲突解决。
 
@@ -384,11 +384,11 @@ ov write viking://resources/docs/api.md \
 - `tags`、`tag_mode` 与 `acl` 按 operation 生效；tags 会随该文件首次向量 upsert 写入，`clear` 不要求传 `tags` 并会忽略同时传入的标签值。
 - `expected_sha256` 和 `if_absent` 会在整批目标锁持有期间校验。设置 `skip_conflicts=true` 后，校验失败的目标会进入 `conflicts` 且不会被覆盖；权限、传输和实际写入失败仍然报错。
 - `resolve_conflicts=true` 会比较新旧 Markdown、保留冲突历史，并更新 `has_conflict` 与 `conflict_num` 标签。它对 `replace` 及其兼容别名 `create` 生效，只接受文本正文，且不能与 `defer_processing` 同时使用；目标不存在、不是 Resource Markdown，或 mode 为 `append` / `upsert` 时仍按普通写入处理。
-- 整批先获取所有目标文件的精确锁，再校验文件状态并写入；同一目录下不涉及相同文件的写入可以并行，重叠文件的写入或父目录删除、移动仍会冲突。未启用延迟模式时，异步处理持有文件锁直到关联工作结束，统一刷新受影响的 `.overview.md` / `.abstract.md`。
-- 资源父目录刷新与 `write()` 一样采用尽力更新：L0/L1 锁冲突时跳过目录刷新及对应目录向量更新，保留原文和文件自身的处理，不保证自动补刷。
+- 整批先获取所有目标文件的精确锁，再校验并写入。同一目录下不同文件的写入可以并行，同一文件的写入以及父目录删除、移动仍会冲突。文件锁保护批量写入及其关联的处理，目录刷新另行执行。
+- 批量写入按直接父目录安排独立刷新。同一批对同一父目录的变更合计一次提交。父目录刷新沿用 `write()` 的规则。
 - 底层 I/O 中途失败时，本批次较早完成的写入仍可能已经可见。
 - 已存在的 `.abstract.md` / `.overview.md` 可以 replace 或 append；系统会保留并校验受保护的 OKF metadata，并只重建对应目录实际存在的 L0/L1 向量。
-- 响应体中，通过 `semantic_status`（`queued`、`complete`、`deferred` 或 `skipped`）表达按直接父目录聚合的状态；只有所有父目录都未入队时才为 `skipped`，某一个目录因锁冲突跳过不会掩盖其他目录已入队的工作。`vector_status` 表达变化文件的向量维护状态。
+- `semantic_status` 和 `vector_status` 表达此次批量写入所跟踪的语义和向量工作。父目录刷新在独立的后台任务中完成。
 - 每个成功请求都会创建一个持久化 `content_batch_write` Task。未启用延迟处理时，会向 QueueFS 的 `ContentWrite` 队列写入一条根消息；默认 SQLite QueueFS 会持久化该消息，显式配置 `backend=memory` 时进程退出后不保留。`wait=false` 在入队后返回 `task_id`，`wait=true` 等待 Task 终态并移除 `task_id`。
 - 对支持索引的命名空间，设置 `defer_processing=true` 后不会产生 `ContentWrite`、`Semantic` 或 `Embedding` QueueFS 消息；正文提交后 Task 会被直接完成。`wait=false` 返回已经处于终态的 `task_id`，`wait=true` 读取相同终态结果并移除 `task_id`。同时设置 `use_snapshot=true` 时，会在 Task 完成前为成功写入的文件生成一次快照。调用方需另行安排后处理，例如执行 `reindex()`；该模式拒绝实际的 tags/ACL 更新及 `resolve_conflicts=true`。
 - FILE_ONLY 批写在 `defer_processing` 为 true 或 false 时都保持原有行为：语义/向量状态为 `skipped`，仍通过一条 `ContentWrite` 根消息完成 Task，不执行索引处理。`wait=false` 在入队后返回，`wait=true` 等待该 Task 完成。命名空间及参数校验仍然生效，FILE_ONLY 目标不支持 reindex。

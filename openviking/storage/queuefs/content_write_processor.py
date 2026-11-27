@@ -376,7 +376,6 @@ class ContentWriteProcessor(DequeueHandlerBase):
                 semantic_lock_handoff=semantic_lock_handoff,
                 ingest_options=IngestOptions.from_value(refresh.get("ingest_options")),
                 file_created=bool(refresh.get("file_created", False)),
-                force_refresh=bool(refresh.get("force_refresh", False)),
                 generation_trigger="content_write",
             )
             semantic_status, vector_status = ContentWriteCoordinator._plan_statuses(
@@ -408,15 +407,16 @@ class ContentWriteProcessor(DequeueHandlerBase):
         if kind == "memory":
             root_uri = str(refresh["root_uri"])
             uri = str(refresh["uri"])
-            overview_refreshed, embedding_requested = await coordinator._refresh_memory_after_write(
+            overview_status, embedding_requested = await coordinator._refresh_memory_after_write(
                 root_uri=root_uri,
                 uri=uri,
                 ctx=ctx,
+                refresh_directory=refresh.get("refresh_directory", True),
                 ingest_options=IngestOptions.from_value(refresh.get("ingest_options")),
             )
             return (
                 {
-                    "overview_status": "complete" if overview_refreshed else "skipped",
+                    "overview_status": overview_status,
                     "vector_status": coordinator._queue_work_status(
                         requested=embedding_requested,
                         wait=False,
@@ -427,7 +427,5 @@ class ContentWriteProcessor(DequeueHandlerBase):
                 False,
             )
         if kind == "batch":
-            outcome = await coordinator._execute_batch_refresh_payload(refresh, ctx=ctx)
-            semantic_status, vector_status = outcome.statuses(wait=False)
-            return {"semantic_status": semantic_status, "vector_status": vector_status}, False
+            return await coordinator._execute_batch_refresh_payload(refresh, ctx=ctx), False
         raise ValueError(f"Unsupported content-write refresh kind: {kind}")

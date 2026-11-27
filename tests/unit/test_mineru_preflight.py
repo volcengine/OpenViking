@@ -34,7 +34,7 @@ def _make_fake_client(get_handler):
         async def __aexit__(self, *exc):
             return False
 
-        async def get(self, url):
+        async def get(self, url, **kwargs):
             return get_handler(url)
 
     return _FakeClient
@@ -74,9 +74,7 @@ async def test_ready_after_unhealthy(patch_httpx):
 
 @pytest.mark.asyncio
 async def test_timeout_raises(patch_httpx):
-    patch_httpx(
-        lambda url: _FakeResponse(payload={"protocol_version": 2, "status": "unhealthy"})
-    )
+    patch_httpx(lambda url: _FakeResponse(payload={"protocol_version": 2, "status": "unhealthy"}))
 
     with pytest.raises(RuntimeError) as exc_info:
         await wait_for_mineru_ready(ENDPOINT, timeout=0.05)
@@ -103,15 +101,22 @@ async def test_network_error_raises(patch_httpx):
 
 
 @pytest.mark.asyncio
-async def test_empty_error_message_falls_back_to_class_name(patch_httpx):
+async def test_hosted_preflight_distinguishes_missing_batch_from_bad_endpoint(patch_httpx):
+    status_code = 200
+    code = -60012
+
     def handler(url):
-        raise httpx.ConnectTimeout("")
+        assert url.startswith(f"{ENDPOINT}/extract-results/batch/")
+        return _FakeResponse(status_code=status_code, payload={"code": code})
 
     patch_httpx(handler)
 
-    with pytest.raises(RuntimeError) as exc_info:
-        await wait_for_mineru_ready(ENDPOINT, timeout=0.05)
+    await wait_for_mineru_ready(ENDPOINT, token="test-token")
+    code = "A0211"
+    with pytest.raises(RuntimeError, match="A0211"):
+        await wait_for_mineru_ready(ENDPOINT, timeout=0.05, token="test-token")
 
-    message = str(exc_info.value)
-    assert HEALTH_URL in message
-    assert "ConnectTimeout" in message
+    status_code = 404
+    code = None
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        await wait_for_mineru_ready(ENDPOINT, timeout=0.05, token="test-token")

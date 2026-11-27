@@ -72,6 +72,14 @@ class Policy(BaseModel):
     agent_windows: bool = False
     window_soft_ratio: float = Field(default=0.7, ge=0.3, le=0.95)
     window_hard_ratio: float = Field(default=0.85, ge=0.4, le=0.97)
+    # Registered secrets reach the model only as references, typed new tokens are enrolled,
+    # and references in client tool-call arguments are unsealed; a request or reply that
+    # cannot be sealed fails. The current profile's value applies, also to earlier sessions,
+    # and X-OpenViking-Context cannot set it.
+    seal_secrets: bool = False
+    # With seal_secrets: also enroll new tokens from tool results and blocks the client
+    # attached to user messages, in every turn. Read like seal_secrets; the header cannot set it.
+    enroll_tool_secrets: bool = False
     # Clients may override the other fields per conversation with X-OpenViking-Context.
     client_overrides: bool = True
 

@@ -2,17 +2,20 @@ use super::config::{parse_endpoint, RedisDeploymentMode};
 use super::RedisProviderConfig;
 use crate::cache_runtime::{
     CacheError, CacheResult, Expiration, ListDirection, ListInsertPosition, ListInsertRequest,
-    ListMoveRequest, ScriptValue, SetCondition, SetOptions, SetResult,
+    ListMoveRequest, ScoredMember, ScoreRange, ScriptValue, SetCondition, SetOptions, SetResult,
+    ZAddCondition, ZAddOptions,
 };
 use bytes::Bytes;
 use fred::error::{Error as FredError, ErrorKind};
 use fred::interfaces::{HashesInterface, SortedSetsInterface};
 use fred::prelude::*;
+use fred::types::sorted_sets::{Ordering as FredZAddOrdering, ZRange, ZRangeKind};
 use fred::types::scan::Scanner;
 use fred::types::{
     config::{ClusterDiscoveryPolicy, Server, TlsConfig, TlsConnector, TlsHostMapping},
     lists::{LMoveDirection, ListLocation},
-    ConnectHandle, Expiration as FredExpiration, Map, SetOptions as FredSetOptions, Value,
+    ConnectHandle, CustomCommand, Expiration as FredExpiration, Map, SetOptions as FredSetOptions,
+    Value,
 };
 use futures::{Future, StreamExt};
 use std::collections::HashMap;
@@ -233,9 +236,38 @@ impl RedisClient {
         self.execute("HGET", self.client.hget(key, field)).await
     }
 
-    pub(super) async fn hset(&self, key: &str, field: &str, value: Bytes) -> CacheResult<u64> {
-        let values = [(field.to_string(), value)].into_iter().collect::<Map>();
+    /// Read all hash fields through the shared Redis command guard.
+    pub(super) async fn hgetall(&self, key: &str) -> CacheResult<HashMap<String, Bytes>> {
+        self.execute("HGETALL", self.client.hgetall(key)).await
+    }
+
+    /// Store hash fields through the shared Redis command guard.
+    pub(super) async fn hset(
+        &self,
+        key: &str,
+        values: HashMap<String, Bytes>,
+    ) -> CacheResult<u64> {
+        if values.is_empty() {
+            return Ok(0);
+        }
+        let values = values.into_iter().collect::<Map>();
         self.execute("HSET", self.client.hset(key, values)).await
+    }
+
+    /// Store only missing hash fields through the shared Redis command guard.
+    pub(super) async fn hsetnx(
+        &self,
+        key: &str,
+        values: HashMap<String, Bytes>,
+    ) -> CacheResult<u64> {
+        let mut added = 0;
+        for (field, value) in values {
+            let applied: bool =
+                self.execute("HSETNX", self.client.hsetnx(key, field, value))
+                    .await?;
+            added += u64::from(applied);
+        }
+        Ok(added)
     }
 
     pub(super) async fn sismember(&self, key: &str, member: &[u8]) -> CacheResult<bool> {
@@ -251,13 +283,75 @@ impl RedisClient {
         self.execute("SCARD", self.client.scard(key)).await
     }
 
-    pub(super) async fn zadd(&self, key: &str, score: f64, member: &str) -> CacheResult<u64> {
+    /// Add sorted-set members through the shared Redis command guard.
+    pub(super) async fn zadd(
+        &self,
+        key: &str,
+        entries: Vec<ScoredMember>,
+    ) -> CacheResult<u64> {
+        if entries.iter().any(|entry| entry.score.is_nan()) {
+            return Err(CacheError::InvalidArgument(
+                "sorted-set score cannot be NaN".into(),
+            ));
+        }
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let values = entries
+            .into_iter()
+            .map(|entry| (entry.score, entry.member))
+            .collect::<Vec<_>>();
         self.execute(
             "ZADD",
             self.client
-                .zadd(key, None, None, false, false, (score, member)),
+                .zadd(key, None, None, false, false, values),
         )
         .await
+    }
+
+    /// Add sorted-set members with one Redis existence or score condition.
+    pub(super) async fn zadd_with_options(
+        &self,
+        key: &str,
+        entries: Vec<ScoredMember>,
+        options: ZAddOptions,
+    ) -> CacheResult<u64> {
+        if entries.iter().any(|entry| entry.score.is_nan()) {
+            return Err(CacheError::InvalidArgument(
+                "sorted-set score cannot be NaN".into(),
+            ));
+        }
+        if entries.is_empty() {
+            return Ok(0);
+        }
+        let (set_options, ordering) = match options.condition {
+            ZAddCondition::None => (None, None),
+            ZAddCondition::Nx => (Some(FredSetOptions::NX), None),
+            ZAddCondition::Gt => (None, Some(FredZAddOrdering::GreaterThan)),
+        };
+        let values = entries
+            .into_iter()
+            .map(|entry| (entry.score, entry.member))
+            .collect::<Vec<_>>();
+        self.execute(
+            "ZADD",
+            self.client
+                .zadd(key, set_options, ordering, false, false, values),
+        )
+        .await
+    }
+
+    /// Read multiple sorted-set scores through the shared Redis command guard.
+    pub(super) async fn zmscore(
+        &self,
+        key: &str,
+        members: &[String],
+    ) -> CacheResult<Vec<Option<f64>>> {
+        if members.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.execute("ZMSCORE", self.client.zmscore(key, members.to_vec()))
+            .await
     }
 
     pub(super) async fn zscan_match(
@@ -290,24 +384,63 @@ impl RedisClient {
         run_with_command_timeout("ZSCAN", self.command_timeout, work).await
     }
 
-    /// Return sorted-set members within one score range.
+    /// Return scored sorted-set members within one score range.
     pub(super) async fn zrangebyscore(
         &self,
         key: &str,
-        min: f64,
-        max: f64,
-        limit: u32,
-    ) -> CacheResult<Vec<String>> {
-        if limit == 0 {
+        range: ScoreRange,
+    ) -> CacheResult<Vec<ScoredMember>> {
+        if range.min.is_nan() || range.max.is_nan() {
+            return Err(CacheError::InvalidArgument(
+                "sorted-set score range cannot be NaN".into(),
+            ));
+        }
+        if range.limit == 0 {
             return Ok(Vec::new());
         }
-        let count = i64::from(limit);
-        self.execute(
+        let offset = i64::try_from(range.offset)
+            .map_err(|_| CacheError::InvalidArgument("sorted-set offset is too large".into()))?;
+        let count = i64::from(range.limit);
+        let values: Vec<(String, f64)> = self
+            .execute(
             "ZRANGEBYSCORE",
             self.client
-                .zrangebyscore(key, min, max, false, Some((0, count))),
-        )
-        .await
+                .zrangebyscore(
+                    key,
+                    fred_score_range(range.min, range.min_exclusive)?,
+                    fred_score_range(range.max, range.max_exclusive)?,
+                    true,
+                    Some((offset, count)),
+                ),
+            )
+            .await?;
+        Ok(values
+            .into_iter()
+            .map(|(member, score)| ScoredMember { member, score })
+            .collect())
+    }
+
+    /// Return the sorted-set member count through the shared Redis command guard.
+    pub(super) async fn zcard(&self, key: &str) -> CacheResult<u64> {
+        self.execute("ZCARD", self.client.zcard(key)).await
+    }
+
+    /// Return Redis server time from the primary selected by `key`'s cluster slot.
+    pub(super) async fn server_time_for_key(&self, key: &str) -> CacheResult<u64> {
+        let time: Vec<u64> = self
+            .execute(
+                "TIME",
+                self.client
+                    .custom(CustomCommand::new_static("TIME", key, false), Vec::<String>::new()),
+            )
+            .await?;
+        let [seconds, microseconds]: [u64; 2] = time.try_into().map_err(|_| {
+            CacheError::InvalidData("Redis TIME returned an unexpected response".into())
+        })?;
+        seconds
+            .checked_mul(1_000)
+            .and_then(|milliseconds| milliseconds.checked_add(microseconds / 1_000))
+            .ok_or_else(|| CacheError::InvalidData("Redis TIME exceeds Unix millisecond range".into()))
     }
 
     pub(super) async fn zrem(&self, key: &str, members: &[String]) -> CacheResult<u64> {
@@ -640,6 +773,16 @@ fn duration_to_expiration(duration: Duration) -> CacheResult<FredExpiration> {
         ));
     }
     Ok(FredExpiration::PX(millis))
+}
+
+/// Convert one public score boundary to Fred's Redis range representation.
+fn fred_score_range(value: f64, exclusive: bool) -> CacheResult<ZRange> {
+    let mut range = ZRange::try_from(value)
+        .map_err(|error| map_fred_error("ZRANGEBYSCORE", error))?;
+    if exclusive {
+        range.kind = ZRangeKind::Exclusive;
+    }
+    Ok(range)
 }
 
 fn list_direction(direction: ListDirection) -> LMoveDirection {

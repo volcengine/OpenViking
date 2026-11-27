@@ -59,7 +59,7 @@ async def test_failed_enqueue_never_supersedes_persisted_work(queue, monkeypatch
     await queue.enqueue(newer)
     assert newer.coalesce_version == 3
     retry = SemanticMsg.from_dict(failed.to_dict())
-    await queue.enqueue(retry, deduplicate_memory=False)
+    await queue.enqueue(retry)
     assert retry.coalesce_version == 2
     assert await latest(queue, retry) == 3
     assert await is_semantic_msg_stale(retry, agfs=queue._async_agfs)

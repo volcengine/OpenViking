@@ -110,6 +110,99 @@ Sparse term 以 JSONB 和倒排表存储。Sparse-only 只召回有正向 term o
 
 ## 目录过滤调优
 
+### 可选 filtered KNN 能力
+
+同一 adapter 可以调用兼容 vector 扩展的 `ov_filtered_knn` envelope-v1 API，
+普通 pgvector 安装仍受支持。`pgvector.filtered_knn` 可设为 `off`（默认）、
+`auto` 或 `required`。`auto` 在建立连接时校验扩展归属、函数签名、PG 版本和
+权限，对 L2/cosine/IP HNSW 使用新入口；能力缺失或索引结构不支持时使用原生
+候选路径。`required` 对能力缺失或不支持的 dense 索引明确报错。
+运行时错误、权限错误和预算不足直接传播。
+
+能力探测只在 adapter 初始化的 `_connect()` 中执行，结果会缓存并复制到 Collection。
+如果 `auto` 初始化时连接的是普通 pgvector，之后数据库升级为兼容扩展，
+现有 adapter 不会自动重新探测；连接池补建或替换连接、重新加载 Collection 都不会刷新能力。
+升级完成后需要重新创建 adapter 及其 Collection，通常通过重启或滚动重启服务完成。
+
+目前新能力支持 PostgreSQL 17、最多 2000 维的全精度 HNSW 向量。
+Dense、hybrid 和 time-decay 共用候选 hook，sparse-only 沿用倒排路径。
+候选和字段在同一条 SQL 中读取，单次 DEBUG 日志包含 route、stop_reason 和预算统计，
+空结果也保留这些信息。
+
+`unfiltered_use_native` 默认为 `false`，保留增强遍历的现有行为。设置为 `true` 并启用
+filtered KNN 后，真正没有显式过滤条件的
+adaptive dense 候选查询使用原生 SQL，避免构建完整资格集合。执行计划由 PostgreSQL
+选择，这个配置不选择或创建 HNSW 索引；hybrid 和
+time-decay 的 dense 候选也使用这一规则。MVCC 和 RLS 由 PostgreSQL 查询执行器
+正常检查，显式 tenant、ACL、路径过滤仍使用 filtered KNN。
+`mode="exact"` 继续使用精确候选入口。能力探测和 `required` 的错误规则仍然适用。
+原生路径中的 HNSW 扫描使用 `ef_search`（1–1000），不使用增强入口的 search width、访问预算或
+recover；编译后的空过滤对象同样使用原生路径，非空 AST 保留在增强入口。
+
+这里的“无过滤”指 adapter 实际收到 `None` 或 `{}`。正常账号绑定搜索即使用户
+未提供过滤，也会添加 `account_id`。例如 `/api/v1/search/find` 经
+`SearchService.find`、`VikingFS.find`、`HierarchicalRetriever.retrieve`、
+`search_in_tenant` 到 `_SingleAccountBackend.query`，后者补上账号条件后再调用
+adapter。共享库和独立账号库都保留这个条件，因此标准服务搜索不会触发该开关；
+它目前主要用于直接调用 adapter 的测试和实验，不代表正常服务搜索的原生旁路。
+
+```json
+{
+  "index_type": "hnsw",
+  "filtered_knn": "auto",
+  "filtered_knn_options": {
+    "mode": "adaptive",
+    "exact_threshold": 1000,
+    "search_width": 100,
+    "max_graph_visits": 20000,
+    "max_heap_fetches": 200000,
+    "eligible_memory_limit": 67108864,
+    "recover": false
+  }
+}
+```
+
+64 位扩展的 `eligible_memory_limit` 范围为 1 MiB–4 GiB，单位为字节，
+4 GiB 对应 `4294967296`，默认仍为 64 MiB。它是单请求按需分配的累计内存
+检查预算，检查间可能短暂超额；SPI executor 和最终 JSON 的内存未完全计入。
+32 位扩展仍限制为最高 1 GiB。
+
+参数经过严格校验。`mode="exact"` 强制精确候选检索；
+`exact_threshold=0` 对非空资格集合选择 ANN。
+Search width 至少等于候选预算。ANN 可能返回部分合格结果，并记录停止原因。
+当前资格构建仍扫描完整过滤集合；生产启用前需验证召回率、扫描成本和 p99。
+
+增强路径的纯 dense 分页使用 `candidate_k = limit + offset`，实际
+`search_width = max(配置值, candidate_k)`。配置的 `search_width` 是起始宽度，
+不是请求硬上限；候选预算和实际宽度的硬上限均为 `100000`。
+超过上限时 adapter 在执行查询前抛出 `ValueError`，不会截断分页或回退原生 SQL；
+`mode="exact"` 也受此限制。直接调用扩展时，超限 `candidate_k` 返回 SQLSTATE
+`22023`，消息为 `ov_filtered_knn: candidate_k must be between 1 and 100000`。
+这些扩展预算限制不适用于原生 SQL 路径，`limit=0` 仍返回空结果。
+合法预算内，ANN 候选不足可能导致分页少于 `limit` 条，甚至为空；
+停止原因仅记录在 DEBUG 诊断中，不作为 `SearchResult` 的额外字段返回。
+
+测试无过滤恢复机制时，设置 `unfiltered_use_native=false`，确保查询进入增强遍历。
+以下配置固定 width=2000、开启恢复并限制总图访问次数；可分别测试
+`max_graph_visits=100000`、`200000`、`400000`，对比 Recall@10 和延迟。
+恢复取消启发式停止，但仍受总访问次数、heap 和内存预算限制；访问上限不保证召回率。
+
+```json
+{
+  "index_type": "hnsw",
+  "filtered_knn": "required",
+  "unfiltered_use_native": false,
+  "filtered_knn_options": {
+    "search_width": 2000,
+    "exact_threshold": 10000,
+    "max_graph_visits": 200000,
+    "max_heap_fetches": 2000000,
+    "eligible_memory_limit": 4294967296,
+    "recover": true
+  }
+}
+```
+
 大规模 collection 的归一化 URI 范围过滤可评估租户与路径的 B-tree
 复合表达式索引。索引 SQL、level/depth 语义、百万行实测和部署边界见
 [pgvector 目录过滤索引优化](26-pgvector-directory-filtering.md)。

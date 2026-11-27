@@ -44,6 +44,24 @@ INPUTS = {"from": [SOURCE], "to": TARGET, "skill": SKILL}
 SAVED_INPUTS = {**INPUTS, "compile_name": "研发周报"}
 
 
+async def test_compile_source_directory_limit(service, app, client, monkeypatch):
+    ctx, _ = await prepare(service, app, monkeypatch)
+    sources = [f"viking://user/{ctx.user.user_id}/resources/s{i}" for i in range(100)]
+    stat = AsyncMock(side_effect=lambda uri, *a, **kw: {"isDir": not uri.endswith("/SKILL.md")})
+    monkeypatch.setattr(service.fs, "stat", stat)
+
+    path = "/api/v1/compile/create"
+    response = await client.post(path, json={**SAVED_INPUTS, "from": [*sources, SOURCE]})
+    assert response.status_code == 400, response.text
+    assert "at most 100 distinct source directories" in response.json()["error"]["message"]
+    stat.assert_not_awaited()
+
+    response = await client.post(
+        path, json={**SAVED_INPUTS, "from": [*sources, "viking://~/resources/s0/"]}
+    )
+    assert response.status_code == 200, response.text
+
+
 @pytest.mark.parametrize("source", ["viking://resources", "viking://user/"])
 @pytest.mark.parametrize("saved", [False, True])
 async def test_compile_rejects_root_sources(service, client, source, saved):

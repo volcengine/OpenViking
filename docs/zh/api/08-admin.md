@@ -60,6 +60,35 @@ Admin API 用于多租户环境下的账户、用户和用户组管理。包括�
 - `--sudo` 仅适用于上面的命令，用于普通数据命令会报错
 - 必须配置 `root_api_key` 才能使用 `--sudo`
 
+## 账号内冻结列表
+
+管理员可以维护账号内冻结列表，登记本 account 普通 USER（包括以 USER 身份运行的 agent）的文件路径。列表持久保存，最多包含十条。操作只读写账号授权元信息，不读取目标文件，也不授予管理员读取该 user 数据的权限。
+
+```bash
+ov admin freeze-file acme agent-a skills/example/SKILL.md
+ov admin frozen-file-status acme agent-a skills/example/SKILL.md
+ov admin unfreeze-file acme agent-a skills/example/SKILL.md
+```
+
+这三个 CLI 命令也接受 `viking://user/agent-a/skills/example/SKILL.md` 这样的完整 user URI，自动转换为相对路径。URI 中的 user 必须与命令的 `user-id` 一致，否则 CLI 会报错。转换保留原始路径，不解码转义或消除 `..`；服务端继续校验相对路径。
+
+ROOT 可以使用 `--sudo` 管理指定 account。普通 USER 和 GLOBAL 无权管理账号内冻结列表；新增冻结只允许 USER 目标。服务端接收的路径相对于目标 user 根目录，采用 GLOBAL 的严格字面路径语法：不支持通配符、URI、编码转义、`..` 或内部存储文件名，单段不得超过 255 字节。匹配、状态查询和解冻均区分大小写：`a.md` 和 `A.md` 是独立条目。
+
+冻结路径可以尚不存在。状态仅表示路径是否在账号内冻结列表中，不暴露文件存在性、内容、大小或摘要。重复冻结、解冻是幂等的；目标 user 已删除或变更角色后仍可清除旧规则。
+
+写入、追加、删除、移动、覆盖、后台写入和版本恢复会检查账号内冻结列表。删除或移动包含冻结路径的目录、向与冻结路径相交的目标子树复制也会拒绝。读取权限保持原样；解冻不会授予原本没有的权限。业务租约、`bypass_acl` 和关闭自动 PathLock 都不能解除这层保护。经授权的身份注销通过专用清理任务删除该 user 的全部数据，包括冻结文件。
+
+规则在首次写入检查时加载，并在同一个请求或后台执行中复用；普通读取和鉴权不加载规则。FileStore 的 watcher 正常运行时直接读取内存列表，不等待变更锁；否则 FileStore 和直接 SQL provider 将成功读取的空快照缓存 60 秒，Redis/MySQL 则使用配置的缓存 TTL，缓存经 SQL 确认的本地空快照。空快照命中时不做存储 IO 或路径匹配，命中不会延长有效期。每个 provider 最多保留 1,024 个账号的空快照，当前实例的冻结/解冻操作尝试会清除目标账号快照。非空列表沿用既有刷新/缓存机制。执行中已加载的规则快照允许继续使用。空快照过期后，规则读取或解析失败会阻止写入，不会被解释为空列表；缓存传播延迟是预期行为。
+
+| 方法 | 路径 | 参数 |
+|------|------|------|
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file?path={path}` | 必填 query: `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | JSON: `{"path":"skills/example/SKILL.md","frozen":true}` |
+
+响应 `result` 包含 `account_id`、`user_id`、`path`、`frozen`。该状态与 `stat.isLocked` 的短期并发租约状态独立。变更被拒绝时返回 `PERMISSION_DENIED`，`details.reason` 为 `admin_file_frozen`。
+
+MySQL/PostgreSQL 部署需在升级运行时启动前执行一次 `openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql`。新建 MySQL 库先执行 `sql/init.sql`，再按顺序执行 `sql/changes/` 中的迁移；新建 PostgreSQL 库先执行 `sql/postgres/init.sql`，再执行 `0002_account_frozen_files.sql`（之前的列表索引已在 PostgreSQL 初始化 SQL 中）。已有库只执行尚未应用的迁移。开源与商业部署均需在现有 DBA/部署流程中记录该迁移，运行时不自动加列。外部账号存储 provider 需要实现对应元信息能力后才能使用管理命令。
+
 ## 用户组
 
 用户组属于单个 account，用于通过一个 ACL principal 授权多个用户。`group_id` 由调用者创建时指定，使用与 `user_id` 相同的标识符规则，是 account 内唯一且稳定的标识；不存在单独的组名。组内只能加入当前 account 已存在的用户，不支持嵌套组。

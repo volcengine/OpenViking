@@ -181,8 +181,9 @@ claude
 | `OPENVIKING_SKILL_CATALOG`               | `true`    | 在会话启动块里加入 `<available-skills>` skill 清单                 |
 | `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`  | `1200`    | `<available-skills>` 的 token 预算（0–20000），不占用户画像的预算；设为 `0` 即不注入清单 |
 | `OPENVIKING_SESSION_START_MAX_BYTES`    | `9500`    | SessionStart 注入的总字节上限，保证低于 Claude Code 10,000 字符的内联限制；resume/compact 时归档最多占一半；`0` 取消上限 |
+| `OPENVIKING_SESSION_HISTORY_POINTER`    | `true`    | resume/compact 时附一段简短说明，给出本会话的 OV 会话 id 以及如何用服务端的 `session_history` MCP 工具查原始细节；MCP 代理会把该工具的 `session` 自动填成当前会话 |
 
-在 `ovcli.conf` 里，这几项对应 `plugin` 或 `plugin.claude_code` 下的 `noAutoInject`、`profileTokenBudget`、`skillCatalog` 和 `skillCatalogTokenBudget`。
+在 `ovcli.conf` 里，这几项对应 `plugin` 或 `plugin.claude_code` 下的 `noAutoInject`、`profileTokenBudget`、`skillCatalog`、`skillCatalogTokenBudget` 和 `sessionHistoryPointer`。
 
 每次 `SessionStart`（`startup`、`clear`、`resume`、`compact`）都会注入一个 `<openviking-context>` 块，依次包含 `<user-profile>`、`<available-memories>` 和 `<available-skills>`；`resume`/`compact` 时后面还会接上最新的 archive overview。skill 清单来自一次 `GET /api/v1/skills?node_limit=200` 调用：先列你自己的 skill，再列账号内共享在 `viking://agent/skills` 下的 skill，与你自己某个 skill 同名的共享 skill 不再列出。每条描述截到约 40 个 token，描述里出现的 `<openviking-context>` 等注入块标签会被转义。完整清单超出预算时只列名称，名称也放不全时以 `... +N more, search OpenViking skills to find the rest` 收尾；连一个名称都放不下时，整块缩成一行 `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`。没有任何 skill，或服务端不支持 `GET /api/v1/skills` 时，不注入清单。
 
@@ -211,11 +212,14 @@ claude
 | `OPENVIKING_WRITE_PATH_ASYNC`          | `true`        | 把写 hook detach 到后台 worker，避免 CC 等待 commit RTT            |
 | `OPENVIKING_BYPASS_SESSION`            | `false`       | 一次性：`1`/`true`=当前进程所有 hook 直接放行                      |
 | `OPENVIKING_BYPASS_SESSION_PATTERNS`   | `""`          | CSV 的 glob 模式，匹配 `session_id` 或 `cwd`                       |
+| `OPENVIKING_SKIP_SUBAGENT_SESSIONS`    | `false`       | `1`/`true`=跳过 SubagentStart / SubagentStop，子代理 transcript 不捕获、不提交 |
 | `OPENVIKING_MEMORY_ENABLED`            | (auto)        | `0`/`false`/`no`=强制禁用；`1`/`true`/`yes`=强制启用               |
 | `OPENVIKING_DEBUG`                     | `false`       | `1`/`true`=向 `~/.openviking/logs/cc-hooks.log` 输出 debug 日志    |
 | `OPENVIKING_DEBUG_LOG`                 | `~/.openviking/logs/cc-hooks.log` | 覆盖日志路径                                  |
 | `OPENVIKING_CONFIG_FILE`               | `~/.openviking/ov.conf`           | 覆盖 `ov.conf` 路径                          |
 | `OPENVIKING_CLI_CONFIG_FILE`           | `~/.openviking/ovcli.conf`        | 覆盖 `ovcli.conf` 路径                       |
+| `OPENVIKING_SEAL_SECRETS`              | `false`       | 把 Claude 读到的内容里的密钥换成 Privacy 引用，并把真实值交给工具；见[封存密钥](#封存密钥) |
+| `OPENVIKING_ENROLL_TOOL_SECRETS`       | `false`       | 封存打开时，工具输出里的新密钥也登记；见[封存密钥](#封存密钥) |
 
 纯环境变量启动（无需配置文件）：
 
@@ -248,6 +252,37 @@ OPENVIKING_BYPASS_SESSION=1 claude
 ```
 
 bypass 命中时所有 hook 直接放行，不联系 OpenViking。
+
+### 封存密钥
+
+默认关闭，在你的机器上运行，需要 OpenViking 服务端 0.5.7 或更新版本。`ovcli.conf` 里有两个设置，各有一个环境变量覆盖：
+
+```json
+{ "plugin": { "claude_code": { "sealSecrets": true, "enrollToolSecrets": false } } }
+```
+
+- `sealSecrets`（`OPENVIKING_SEAL_SECRETS`）打开封存。
+- `enrollToolSecrets`（`OPENVIKING_ENROLL_TOOL_SECRETS`）让工具结果也带登记发送，第一次出现在命令输出或文件里的密钥也会存下来。`sealSecrets` 关闭时不起作用。
+
+打开 `sealSecrets` 后，Claude 读到的是 `{{ov_privacy:…}}` 引用而不是密钥，工具拿到的是真实值：
+
+- **你的提示。** 每条提示在 Claude Code 发出之前先发到 OpenViking（`POST /api/v1/privacy-configs/seal`）。已经存进 Privacy 的密钥会换成对应的引用。服务端探测器认得出的 token（内置规则加上你的 `custom_rules`，去掉 `never_mask`）会登记成 `auto` 类别下的新条目，比如 `auto/github-k3j2m8`，同样换成引用。提示里含有这类临时条目时，Claude 会收到一句提示：除非明显只用一次，先把条目存到正式名字下并写一句用途说明，之后使用保存时返回的引用（比如配合 `ov privacy run`），并告诉你存了什么。斜杠命令和空提示不处理。
+- **工具结果。** 工具结果里的每个字符串（Bash 输出、Read 读到的文件、MCP 工具的回答、失败命令的报错）在 Claude 读到之前都会封存。已保存的密钥会被替换；新密钥只在打开 `enrollToolSecrets` 时登记。会话记录里存的是封存后的结果。
+- **工具参数。** Claude 在工具调用里写的引用，会在工具运行前换成真实值，所以命令或文件拿到的是真正的密钥，对话里保留的仍是 Claude 写的引用。只替换指向你自己 `credential` 或 `auto` 条目的完整引用，并且要服务端能解析出值、这个值再封存回来是同一个引用。含有 `ov privacy` 命令的字符串、OpenViking 自己的工具，以及把参数交给模型的工具（`Agent`、`Task`、`SendMessage`、`Workflow`、`Skill`）保留原样的引用。
+- **附加和 `@` 提及的文件，以及提醒。** Claude Code 为模型注入的文本（提及文件的内容、工作中发现的 `CLAUDE.md`、各种提醒、其他 hook 的上下文）封存时不登记。会话记录里保存的是 Claude Code 自己的记录，仍是原文。
+
+运行方式和出错时的行为：
+
+- **每个会话读一次。** 插件每个会话运行一次 `node scripts/seal-prompt.mjs`，读取设置、连接服务端的方式（和其他 hook 相同的 URL 和请求头），以及服务端能否封存：辅助脚本从服务端的 `/health` 读取版本，和插件自带的功能表（`scripts/shared/server-features.json`）比较，封存需要 0.5.7（`0.5.7.dev44` 这样的开发版算作 0.5.7）。之后所有封存和解析请求都由 hooks 模块通过 Claude Code 的 HTTP 接口直接发出。改了设置要到新会话才生效（`/clear` 也算新会话）。提示被拦下之后，下一条提示会重新读取这些内容，所以服务端能封存之后封存就恢复。关闭时，第一次读取之后不再运行任何东西。
+- **无法封存时会拦下。** 包括：服务端版本低于 0.5.7；`/health` 失败（版本未知）；封存或解析请求失败（服务端连不上、返回错误或格式不对的回答、超时，每次请求 10 秒）；`OPENVIKING_SEAL_SECRETS` 打开了封存，但读取设置的辅助脚本没有给出结果。提示不会发出，Claude Code 会显示原因（版本问题会写出要求的版本和实际版本）和怎么办：升级服务端或恢复连接，或者关闭 `sealSecrets`。工具结果换成一句说明，告诉 Claude 结果被扣下了（工具已经运行过）；引用解析不了的工具调用会被拦下并给出原因；附件换成一句说明。对版本太旧或版本未知的服务端，根本不发封存请求。`OPENVIKING_SEAL_SECRETS=0` 不运行任何东西直接关闭封存，插件自己的辅助脚本坏了也能关掉。
+- **会话说明**（告诉 Claude 引用是怎么回事的那段文字）随 hooks 模块在一个会话里封存的第一条提示一起发出，压缩（compact）之后或模块重新加载之后的第一条提示再带一次。
+- **开销。** 每条提示、每个工具结果、每个注入的附件各一次服务端请求（Claude Code 对每个附件只问一次并记住结果），工具调用里的每个引用再加一次解析和一次校验。
+- **不覆盖的内容。** 系统提示、斜杠命令参数、skill 正文，以及打开封存之前写下的历史，会原样到达 Claude。OpenViking 自己的工具按名字里含 `openviking` 识别：把 OpenViking MCP 服务器注册成别的名字时，它的 `privacy_upsert`、`write` 或 `remember` 参数里的引用会在调用前换成真实值。
+- **误报的撤销。** 删除这个条目（`ov privacy delete auto <target>`），再把这个值加进 `never_mask`，以后就不会再登记。
+- **前提。** 封存是插件 hooks 模块的一部分（`mods/seal/`），前提和[来源卡片](#来源卡片)相同。Claude Code 不加载这个模块时封存不会运行，所有内容原样发出。读取设置需要 Claude Code 的进程接口（CLI 有）。没有这个接口（或辅助脚本没有给出结果）时，不管 `ovcli.conf` 怎么写，封存都保持关闭，也不显示提示；在这类环境里设置 `OPENVIKING_SEAL_SECRETS=1`，提示会被拦下，并说明读不到设置。
+- 封存相关的设置都不是工作区设置，仓库里的 `.openviking/config.json` 改不了它们。
+
+用本地服务端试一下：先存一个值（`ov privacy upsert credential demo --values-json '{"token":"<value>"}'`），打开 `sealSecrets`，启动 `claude`，让它 `echo` 这个值：它读到的回答里是 `{{ov_privacy:…}}`。再让它用这个引用运行 `printf '%s' '{{ov_privacy:…}}' > /tmp/t`：`/tmp/t` 里是真实值。
 
 ### 输入过滤器
 
@@ -396,7 +431,7 @@ Claude's own lookups
 - 没用到任何 OpenViking 内容的回答不显示卡片。
 - 用卡片上的按钮展开或折叠单张卡片；用 `/openviking-usage expand` 或 `/openviking-usage collapse` 展开或折叠全部卡片。界面文字只有英文。
 
-**前提。** 卡片是一个 Claude Code hooks 模块（`hooks/hooks.json` 里的 `modules`，代码在 `mods/usage/`），需要 Claude Code 2.1.286 或更高版本，并启用 hooks 模块。下面这些情况下，Claude Code 会忽略这个模块，命令 hook 照常运行：
+**前提。** 卡片是一个 Claude Code hooks 模块（`hooks/hooks.json` 里的 `modules`，入口 `mods/register.ts`，代码在 `mods/usage/`），需要 Claude Code 2.1.286 或更高版本，并启用 hooks 模块。下面这些情况下，Claude Code 会忽略这个模块，命令 hook 照常运行：
 
 - 版本不支持模块。
 - 模块被关闭，例如设置了 `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0`，或被灰度开关关闭。
@@ -407,7 +442,7 @@ Claude's own lookups
 
 它在 Claude Code 的插件存储里保存每次回答的来源 URI、分数、脱敏后的搜索词，以及卡片所在对话行的 id 和该行回答文本的哈希（桌面端靠这个哈希找到卡片对应的回答），保留最近 20 个会话，所以 `claude --continue` 之后卡片还在。不保存 shell 命令和提示原文。卡片不会发给 Claude，不消耗 token。
 
-**开发。** `claude plugin test examples/claude-code-memory-plugin` 会运行 `mods/usage/sources.test.ts`。用 `claude --plugin-dir examples/claude-code-memory-plugin` 启动一次、生成 `.claude-plugin/types/` 后，可以用 `tsc -p examples/claude-code-memory-plugin/mods/usage` 做类型检查。
+**开发。** `claude plugin test examples/claude-code-memory-plugin` 会运行 `mods/usage/sources.test.ts` 和 `mods/seal/seal.test.ts`。提示封存的判断逻辑另用 `node --test` 测试，见 `scripts/lib/prompt-seal.test.mjs` 和 `scripts/seal-prompt.test.mjs`。用 `claude --plugin-dir examples/claude-code-memory-plugin` 启动一次、生成 `.claude-plugin/types/` 后，可以用 `tsc -p examples/claude-code-memory-plugin/mods/usage`（或 `mods/seal`）做类型检查。
 
 ## 调试日志
 
@@ -518,7 +553,7 @@ claude-code-memory-plugin/
 ├── .claude-plugin/
 │   └── plugin.json          # plugin manifest
 ├── hooks/
-│   └── hooks.json           # 9 个 hook 注册 + 来源卡片模块
+│   └── hooks.json           # 9 个 hook 注册 + hooks 模块
 ├── commands/
 │   └── ov.md                # /ov 状态命令
 ├── skills/
@@ -527,7 +562,9 @@ claude-code-memory-plugin/
 │   ├── ov-experience-memory/
 │   └── ov-memory-doctor/    # 安装 / 配置 / 连接 / 本机 server 排障
 ├── mods/
-│   └── usage/               # 来源卡片（Claude Code hooks 模块）
+│   ├── register.ts          # hooks 模块入口
+│   ├── seal/                # 封存提示、工具调用和结果、附件里的密钥
+│   └── usage/               # 来源卡片
 ├── servers/
 │   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp 桥接
 ├── scripts/
@@ -542,6 +579,7 @@ claude-code-memory-plugin/
 │   ├── subagent-stop.mjs    # SubagentStop
 │   ├── ov-status.mjs        # /ov 状态报告
 │   ├── ov-memory-doctor.mjs # 体检脚本（ov-memory-doctor skill）
+│   ├── seal-prompt.mjs      # mods/seal 的设置辅助脚本
 │   └── lib/
 │       ├── ov-session.mjs   # OV HTTP 客户端 + session 帮助 + bypass 检查
 │       └── async-writer.mjs # 写路径 detach-worker 帮助

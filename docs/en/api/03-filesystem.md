@@ -6,12 +6,14 @@ OpenViking provides Unix-like file system operations for managing context.
 
 For reading and writing file contents, see [Content](12-content.md). [WebDAV](20-webdav.md) provides file access through WebDAV clients.
 
-The file system and content APIs allow every role to read `viking://system`. ROOT and ADMIN
-may modify only concrete assets below `viking://system/memory/memory_templates/custom/`.
-Builtin templates and official examples below `viking://system/compile/example-skills/`
-are synchronized by the service. API writes, appends, deletes, moves, and overwrite copies
-cannot modify them or bypass the restriction through their parent directories.
-Custom templates can also be published through the [template management API](08-admin.md).
+The file system and content APIs allow every role to read `viking://system`.
+The service synchronizes builtin memory templates, the directory L0 and L1 templates in
+`viking://system/semantic/templates/builtin/`, and official examples in
+`viking://system/compile/example-skills/`. These assets are read-only to account roles,
+including ADMIN. The service ROOT role can manage the system namespace.
+Account administrators can publish custom memory templates under
+`viking://system/memory/memory_templates/custom/` or through the
+[template management API](08-admin.md).
 
 ## API Reference
 
@@ -677,7 +679,7 @@ Invalid URI formats, unsupported schemes, and internal scopes such as `temp` or 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI to remove |
-| wait | bool | No | False | Wait for the semantic refresh after deletion |
+| wait | bool | No | False | Confirm that the deletion task has completed |
 | timeout | float | No | None | Deprecated: accepted for compatibility and ignored; configure HTTP timeouts on the client |
 | recursive | bool | No | False | Remove directory recursively |
 

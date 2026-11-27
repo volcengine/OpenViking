@@ -42,6 +42,13 @@ fn compact_request_body(body: &mut Value) {
     });
 }
 
+fn pattern_search_scope(uris: &[String]) -> Value {
+    match uris {
+        [uri] => json!(uri),
+        _ => json!(uris),
+    }
+}
+
 fn add_resource_tag_fields(body: &mut Value, tags: &[String], tag_mode: &str) {
     if tags.is_empty() && tag_mode != "clear" {
         return;
@@ -905,7 +912,7 @@ impl HttpClient {
 
     pub async fn grep(
         &self,
-        uri: &str,
+        uri: &[String],
         exclude_uri: Option<String>,
         pattern: &str,
         ignore_case: bool,
@@ -917,7 +924,7 @@ impl HttpClient {
         include_tags: bool,
     ) -> Result<serde_json::Value> {
         let mut body = serde_json::json!({
-            "uri": uri,
+            "uri": pattern_search_scope(uri),
             "exclude_uri": exclude_uri,
             "pattern": pattern,
             "case_insensitive": ignore_case,
@@ -935,7 +942,7 @@ impl HttpClient {
     pub async fn glob(
         &self,
         pattern: &str,
-        uri: &str,
+        uri: &[String],
         node_limit: i32,
         extra_fields: Option<&[String]>,
         tags: &[String],
@@ -943,7 +950,7 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let mut body = serde_json::json!({
             "pattern": pattern,
-            "uri": uri,
+            "uri": pattern_search_scope(uri),
             "node_limit": node_limit,
             "tags": (!tags.is_empty()).then(|| tags),
             "include_tags": include_tags.then_some(true),
@@ -1897,6 +1904,32 @@ impl HttpClient {
         );
         let body = serde_json::json!({ "role": role });
         self.put(&path, &body).await
+    }
+
+    pub async fn admin_frozen_file(
+        &self,
+        account_id: &str,
+        user_id: &str,
+        file_path: &str,
+        frozen: Option<bool>,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/users/{}/frozen-file",
+            account_id, user_id
+        );
+        match frozen {
+            Some(frozen) => {
+                self.put(
+                    &path,
+                    &serde_json::json!({"path": file_path, "frozen": frozen}),
+                )
+                .await
+            }
+            None => {
+                self.get(&path, &[("path".to_string(), file_path.to_string())])
+                    .await
+            }
+        }
     }
 
     pub async fn admin_regenerate_key(

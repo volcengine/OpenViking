@@ -1127,7 +1127,7 @@ python -c "from tree_sitter_language_pack import download_all; download_all()"
 
 ### pdf
 
-PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru`（远程 MinerU API）、`auto`（先本地、失败回退 MinerU）。
+PDF 解析配置。`local` 只在本地解析，`mineru` 要求远程解析成功，`auto` 会先把 PDF 发给已配置的 MinerU，远程失败时回退到本地解析。未配置端点时，`auto` 直接在本地解析。
 
 ```json
 {
@@ -1148,10 +1148,11 @@ PDF 解析配置。支持三种策略：`local`（本地 pdfplumber）、`mineru
 |------|------|------|
 | `strategy` | str | 解析策略：`local` / `mineru` / `auto`（默认 `auto`） |
 | `mineru_endpoint` | str | MinerU API **base URL**（如 `http://127.0.0.1:8000`） |
-| `mineru_timeout` | float | 请求超时秒数（默认 `300.0`） |
-| `mineru_bodys` | dict | MinerU API multipart form 参数 |
+| `mineru_timeout` | float | 请求和托管版结果轮询的超时秒数（默认 `300.0`） |
+| `mineru_bodys` | dict | 额外的 MinerU 请求参数（自托管版表单或托管版 JSON） |
+| `mineru_token` | str | MinerU 官方托管版 v4 API 的 Bearer token |
 
-**MinerU 协议**：同步调用 `POST {mineru_endpoint}/file_parse`，multipart 文件字段为 `files`，form 参数由 `mineru_bodys` 透传。
+使用自托管 MinerU 时，填写服务地址，OpenViking 通过 `/file_parse` 上传 PDF。使用官方托管版时，将 `mineru_endpoint` 设为 `https://mineru.net/api/v4` 并填写 `mineru_token`，OpenViking 会通过 v4 接口上传文件和获取结果。
 
 ### 外部解析 API（`parser_api`） {#parser-api}
 
@@ -2152,6 +2153,13 @@ OpenViking 使用两个配置文件：
 > 副本。如果该 CLI 用于管理这个服务端，两处值必须一致，并在轮换时同时更新。
 > 普通租户数据使用的 `api_key` 仍是另一把 user/admin 凭据。
 
+### 读副本的任务历史清理 {#task-history-cleanup}
+
+启动参数 `server.enable_task_history_cleanup` 默认为 `true`。开启时，本节点每 5 分钟清理过期的 Task 和 Compile 历史。
+在读副本的 `ov.conf` 中设为 `false` 并重启服务，运行中的任务仍能收到取消信号。
+
+每组共享的 Task 存储和 Compile 历史存储，都应至少有一个能写入相应存储的节点开启清理。
+
 ### 配置重载边界
 
 服务端只在进程启动时读取 `ov.conf`，不会监听文件变化。修改 `embedding`、
@@ -2244,17 +2252,34 @@ openviking-server --config /path/to/ov.conf
 
 ```json
 {
+  "cache": {
+    "instances": {
+      "default": {
+        "provider": "redis",
+        "params": {
+          "endpoints": ["redis://redis-cache.example.com:6379"]
+        }
+      },
+      "expiry": {
+        "provider": "redis",
+        "params": {
+          "mode": "cluster",
+          "endpoints": ["redis://redis-proxy.example.com:6379"],
+          "username": "openviking",
+          "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD",
+          "default_ttl_seconds": 0
+        }
+      }
+    }
+  },
   "expiry": {
     "service_name": "openviking-documents",
     "publisher_separate_process": true,
     "shard_count": 128,
     "session_consumer_concurrency": 8,
-    "redis": {
-      "mode": "cluster",
-      "endpoints": ["redis://redis-proxy.example.com:6379"],
-      "username": "openviking",
-      "password_env": "OPENVIKING_EXPIRY_REDIS_PASSWORD"
-    }
+    "cache": {"instance": "expiry"},
+    "request_budget_seconds": 5,
+    "max_inflight_requests": 128
   }
 }
 ```
@@ -2265,13 +2290,38 @@ openviking-server --config /path/to/ov.conf
 | `publisher_separate_process` | bool | `scheduler` 节点由父进程托管 publisher 子进程；为 `false` 时在各 `scheduler` 进程内运行 | `true` |
 | `shard_count` | int | expiry 逻辑分片数；所有共享同一 namespace 的实例必须一致，取值范围为 `1..512` | `128` |
 | `session_consumer_concurrency` | int | 每个 `queue_worker` 进程中 Session expiry callback 的并发数，必须大于 `0` | `8` |
-| `redis.mode` | string | Redis 部署模式：`standalone` 或 `cluster` | `standalone` |
-| `redis.endpoints` | string array | Redis 地址；集群模式可以只配置一个统一 proxy 地址 | `[]` |
-| `redis.username` | string | Redis ACL 用户名 | `""` |
-| `redis.password_env` | string | 保存 Redis 密码的环境变量名；变量不存在时启动失败 | `""` |
-| `redis.password` | string | 兼容用明文密码；建议使用 `password_env`，两者互斥 | `""` |
+| `cache.instance` | string | expiry 状态使用的命名 Redis CacheRuntime | 启用 expiry 时必填 |
+| `request_budget_seconds` | number | 单次 expiry Store 操作的总预算；必须短于 owner 续约周期 | `5` |
+| `max_inflight_requests` | int | 同时执行的 expiry Store 操作上限 | `128` |
 
-启用 Redis idle auto commit 时必须配置 `service_name` 和 Redis 地址。用户名与密码只能使用上述独立字段，不能写入 endpoint URI。`publisher_separate_process=true` 时，`scheduler` 启动会拉起一个内部 publisher 子进程，关闭时停止它，子进程异常退出时一并退出。publisher 不提供公共 CLI 入口。
+所选 `cache.instances.<instance>` 必须使用 `provider="redis"`，并设置
+`params.default_ttl_seconds=0`。expiry 状态是持久调度状态，只有其 Lua 脚本会为
+metadata 和 owner lease 设置 TTL。
+
+启用 Redis idle auto commit 时必须配置 `service_name` 和 `cache.instance`。Redis
+地址、认证、连接池和超时配置位于
+`cache.instances.<instance>.params`；endpoint URI 不能包含认证信息。默认
+`publisher_separate_process=true` 时，`openviking-server` 会在开始服务前拉起一个
+内部 publisher 子进程，在服务关闭时停止它，并在子进程异常退出时一并退出。
+publisher 不再暴露为公共 CLI 命令。
+
+不支持 `expiry.redis`。将连接字段迁移到
+`cache.instances.<instance>.params`，将 `request_budget_seconds` 和
+`max_inflight_requests` 迁移到 `expiry`，再通过 `expiry.cache.instance` 选择实例。
+
+| 旧字段 | 新字段 | 转换规则 |
+| --- | --- | --- |
+| `expiry.redis.mode` | `cache.instances.<instance>.params.mode` | 直接复制。 |
+| `expiry.redis.endpoints` | `cache.instances.<instance>.params.endpoints` | 补充 `redis://` 或 `rediss://`；裸 `host:port` 会被拒绝。 |
+| `expiry.redis.tls` | endpoint scheme | 保留显式 `redis://` 或 `rediss://` scheme；仅将 `tls=true` 的裸 endpoint 转为 `rediss://`。 |
+| `expiry.redis.username` | `cache.instances.<instance>.params.username` | 直接复制。 |
+| `expiry.redis.password_env` | `cache.instances.<instance>.params.password_env` | 直接复制。 |
+| `expiry.redis.password` | `cache.instances.<instance>.params.password` | 直接复制；新部署建议使用 `password_env`。 |
+| `expiry.redis.connect_timeout_seconds` | `connect_timeout_ms` | 乘以 1000。 |
+| `expiry.redis.socket_timeout_seconds` | `command_timeout_ms` | 乘以 1000。 |
+| `expiry.redis.max_connections` | `pool_size` | 直接复制。 |
+| `expiry.redis.request_budget_seconds` | `expiry.request_budget_seconds` | 直接复制。 |
+| `expiry.redis.max_inflight_requests` | `expiry.max_inflight_requests` | 直接复制。 |
 
 ##### 单 session 自动 commit 策略
 
@@ -2388,7 +2438,8 @@ ov add-resource ./docs --exclude "*.tmp"
 | `root_api_key` | str | `api_key` 模式必填的 Root API Key；`trusted` 模式在所有部署中均必填，包括 localhost，不负责解析普通用户身份 | `null` |
 | `account_store.provider` | str | 完整 Account Store Provider。内置 `"file"`、`"mysql"`、`"postgres"` 和 `"redis_mysql"`；统一持久化 Account、User、Group 和 API Key。`"file"` 兼容现有 AGFS JSON 注册表，并由 Provider 自身维护进程内查询索引。`"postgres"` 直接使用 PostgreSQL。`"redis_mysql"` 保持 MySQL 为权威存储，并增加共享 Redis 认证和请求身份读取缓存。 | `"file"` |
 | `account_store.params` | object | Provider 启动参数。不能通过这里覆盖框架注入的 VikingFS 和 File Provider API Key Hash 配置。 | `{}` |
-| `account_store.params.read_only` | bool | 仅 File Provider。只读取 writer 已创建的注册表，启动时不写锁、不初始化、不迁移凭据，并拒绝身份变更。副本数据盘仍保持只读挂载，设置 `reconcile_system_assets_on_startup=false`；开启 `api_key_watch_enabled` 感知 writer 的变更。注册表缺失时拒绝启动。 | `false` |
+| `account_store.params.read_only` | bool | 仅 File Provider。只读取 writer 已创建的注册表，启动时不写锁、不初始化、不迁移凭据，并拒绝身份变更。副本数据盘仍保持只读挂载，设置 `reconcile_system_assets_on_startup=false`；开启 `api_key_watch_enabled` 感知 writer 的变更。注册表缺失时拒绝启动。[任务历史清理](#task-history-cleanup)需另行配置。 | `false` |
+| `enable_task_history_cleanup` | bool | 是否在本节点定期清理过期的 Task 和 Compile 历史。 | `true` |
 | `profile_enabled` | bool | 是否允许 HTTP 请求通过 `profile=1` 开启请求级 cProfile。关闭时服务端会忽略该请求参数；开启后，CLI 可以显示返回的 `profile`，而 Python HTTP client 默认只触发服务端 profile，不会把顶层 `profile` 字段自动附着到大多数 SDK 返回值上。 | `false` |
 | `cors_origins` | list | CORS 允许的来源 | `["*"]` |
 | `public_base_url` | str | MCP `add_resource` 和 `add_skill` 工具向客户端返回的上传指令里使用的对外可见 base URL。解析顺序：环境变量 `OPENVIKING_PUBLIC_BASE_URL` → 本字段 → 请求头 `X-Forwarded-Host` / `X-Forwarded-Proto` → 请求头 `Host` → 监听地址兜底。当 server 部署在反向代理后且代理不转发 `X-Forwarded-*` 时，请显式设置本字段（或环境变量）。 | `null` |
@@ -2417,8 +2468,9 @@ Account Store 表的 `service_name` 列，并在多个 OpenViking 集群共用�
 充当隔离边界。修改 `service_name` 会选择另一组逻辑 Account Store 分区。
 
 Provider 不会创建或迁移数据库表。启动服务前，应通过现有 DBA 或部署流程手工创建
-`openviking/server/account_stores/sql/init.sql` 中定义的规范化表。后续经评审的
-schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`。
+`openviking/server/account_stores/sql/init.sql` 中定义的规范化表，再按顺序执行
+`openviking/server/account_stores/sql/changes/` 中的迁移。已有数据库只执行部署流程中
+尚未记录为已完成的迁移。
 五张 `ov_accounts*` 表的名称固定；多个 OpenViking 集群共用数据库时，通过不同的
 顶层 `service_name` 隔离部署，不使用不同表前缀。
 
@@ -2444,7 +2496,9 @@ schema 变更按顺序存放于 `openviking/server/account_stores/sql/changes/`�
 PostgreSQL Account Store 使用 `postgres` provider，安装 `pip install 'openviking[postgres]'`。
 它直接通过 psycopg 3 和 SQLAlchemy 连接 PostgreSQL，无需 Redis 或 pgvector。
 先由迁移账号执行
-`openviking/server/account_stores/sql/postgres/init.sql`，启动不会创建或迁移表。
+`openviking/server/account_stores/sql/postgres/init.sql`，再执行
+`openviking/server/account_stores/sql/changes/0002_account_frozen_files.sql`。
+已有数据库只需执行一次该迁移，启动不会创建或迁移表。
 运行账号需要目标 schema 的 `USAGE`、五张 `ov_accounts*` 表的
 `SELECT, INSERT, UPDATE, DELETE` 和三个主键序列的 `USAGE, SELECT`，
 无需表所有权或 schema `CREATE` 权限。新部署首次启动会创建 `default` 账号。

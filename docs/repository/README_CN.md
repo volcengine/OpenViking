@@ -161,14 +161,14 @@ uv tool install openviking --upgrade && openviking-server init
 <details>
 <summary><strong>使用 OpenViking Service（火山引擎托管）</strong></summary>
 
-同一个 OpenViking 服务，由火山引擎替你运行。前 50 个文件免费。在[火山引擎产品页](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme)开通后，到控制台的「用户管理 → API Key」创建一个 API key。服务地址是 `https://api.vikingdb.cn-beijing.volces.com/openviking`，接入 agent 时要用到它和 API key。
+同一个 OpenViking 服务，由火山引擎替你运行。前 50 个文件免费。在[火山引擎产品页](https://www.volcengine.com/product/openviking-service?utm_source=github&utm_medium=referral&utm_campaign=readme)开通后，到控制台的「用户管理 → API Key」创建一个 API key。在向导中选择 Volcengine 后，服务地址会自动设置。手动配置时，请使用 `https://api.vikingdb.cn-beijing.volces.com/openviking`。
 
 </details>
 
 <details>
 <summary><strong>使用 OpenViking Service（BytePlus 托管）</strong></summary>
 
-[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) 在亚太地区（柔佛）托管 OpenViking。连接客户端时，使用你的 BytePlus OpenViking 服务地址和 API Key。CLI 与 Agent 接入方法见 [BytePlus 接入指南](https://docs.openviking.ai/zh/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme)。
+[BytePlus](https://openviking.ai/byteplus?utm_source=github&utm_medium=referral&utm_campaign=readme) 在亚太地区（柔佛）托管 OpenViking。在配置向导中输入实例的 API Key。选择 BytePlus 后，服务地址会自动设置。CLI 与 Agent 接入方法见 [BytePlus 接入指南](https://docs.openviking.ai/zh/guides/27-byteplus-setup?utm_source=github&utm_medium=referral&utm_campaign=readme)。
 
 </details>
 

@@ -3,6 +3,8 @@ import { join } from "node:path"
 import { isRecallEnabled } from "./shared/recall-core.mjs"
 import { createOpenVikingV2McpConfig, openVikingSkillsDir } from "./mcp-config.mjs"
 import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs"
+import { fillHistorySession } from "./session-history.mjs"
+import { keepNewestStartContext } from "./session-inject.mjs"
 import { log } from "./utils.mjs"
 
 const METADATA_KEY = "openviking"
@@ -63,6 +65,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   if (ctx?.tool?.hook) {
     await ctx.tool.hook("execute.before", async (event) => {
       await runtime.ready
+      fillHistorySession(sessionManager, { tool: event.tool, sessionID: event.sessionID, args: event.input })
       await vikingUriGuard(
         { tool: event.tool, args: event.input },
         { args: event.input },
@@ -244,6 +247,7 @@ export function injectV2Context(event, repoContext) {
       metadata: { [METADATA_KEY]: true },
     })
   }
+  keepNewestStartContext(event.messages.map((message) => message.content))
 }
 
 // The plugin event stream carries every location served by the process, and
@@ -286,15 +290,18 @@ export async function captureV2Context(ctx, sessionManager, cursors, sessionID) 
   const cursor = cursors.get(sessionID) ?? await readCursor(ctx, sessionID)
   const cursorIndex = cursor ? messages.findIndex((message) => message?.id === cursor) : -1
   const pending = cursorIndex >= 0 ? messages.slice(cursorIndex + 1) : messages
+  let lastCaptured = cursor
   for (const message of pending) {
-    for (const normalized of contextMessageEvents(sessionID, message)) {
+    const events = contextMessageEvents(sessionID, message)
+    if (events.length === 0) continue
+    for (const normalized of events) {
       await sessionManager.handleEvent(normalized)
     }
+    lastCaptured = message.id
   }
-  const last = messages.at(-1)?.id
-  if (!last) return
-  cursors.set(sessionID, last)
-  if (last !== cursor) await writeCursor(ctx, sessionID, last)
+  if (!lastCaptured) return
+  cursors.set(sessionID, lastCaptured)
+  if (lastCaptured !== cursor) await writeCursor(ctx, sessionID, lastCaptured)
 }
 
 async function readCursor(ctx, sessionID) {

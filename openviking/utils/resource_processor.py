@@ -1495,6 +1495,7 @@ class ResourceProcessor:
                         created=not target_preexisting,
                         file_md5=file_refresh.md5,
                         file_abstract="",
+                        generation_trigger="resource_ingest",
                     )
                 elif build_index and context_update_plan is None:
                     if root_is_file:
@@ -1525,6 +1526,7 @@ class ResourceProcessor:
                     created=not target_preexisting,
                     file_md5=file_refresh.md5,
                     file_abstract="",
+                    generation_trigger="resource_ingest",
                 )
             except BaseException:
                 await cleanup_artifact_if_owned()

@@ -446,6 +446,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/sessions/{session_id}/tool-results/{tool_result_id}/search` | 在工具结果内搜索 |
 | GET | `/api/v1/sessions/{session_id}/context` | 获取组装后的上下文 |
 | GET | `/api/v1/sessions/{session_id}/archives/{archive_id}` | 获取会话归档 |
+| POST | `/api/v1/sessions/history` | 搜索、读取或概览已保存的历史（面向模型的文本） |
 | DELETE | `/api/v1/sessions/{session_id}` | 删除会话 |
 | POST | `/api/v1/sessions/{session_id}/commit` | 归档会话并提取记忆 |
 | POST | `/api/v1/sessions/{session_id}/archives/{archive_id}/retry` | 重试失败或无主的会话归档 |
@@ -553,6 +554,8 @@ JSON 输出 - 错误：
 | PATCH | `/api/v1/user-settings/add-locations` | 更新当前用户的添加位置（deprecated） |
 | DELETE | `/api/v1/user-settings/add-locations` | 清除当前用户的添加位置设置（deprecated） |
 | DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户 |
+| GET | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | 查询路径是否在账号内冻结列表中；必填 query `path` |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/frozen-file` | 冻结或解冻 USER 文件 |
 | PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 在 USER 与 ADMIN 之间变更用户角色 |
 | POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成用户 Key |
 | POST | `/api/v1/admin/accounts/{account_id}/groups` | 创建用户组 |
@@ -564,6 +567,7 @@ JSON 输出 - 错误：
 | GET | `/api/v1/privacy-configs` | 列出隐私配置分类 |
 | GET | `/api/v1/privacy-configs/tree` | 树形列出当前目标和字段元数据，不返回值 |
 | POST | `/api/v1/privacy-configs/scan` | 扫描或修复正文中的登记值 |
+| POST | `/api/v1/privacy-configs/seal` | 把文本中的登记值换成引用，可选登记新 token |
 | GET | `/api/v1/privacy-configs/{category}` | 列出分类目标 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}` | 获取生效配置 |
 | GET | `/api/v1/privacy-configs/{category}/{target_key}/fields` | 列出不含明文值的安全字段元数据 |

@@ -230,7 +230,7 @@ async def test_lock_error_requeues_without_consuming_failure_budget(semantic_env
     result = await asyncio.wait_for(env.processor.on_dequeue(msg.to_dict()), timeout=1)
 
     assert result.outcome is ProcessOutcome.REQUEUED
-    env.retry_queue.enqueue.assert_awaited_once_with(msg, deduplicate_memory=False)
+    env.retry_queue.enqueue.assert_awaited_once_with(msg)
     requeued = env.retry_queue.enqueue.call_args.args[0]
     assert requeued.id == msg.id
     assert requeued.failure_requeue_count == 0

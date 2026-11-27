@@ -182,7 +182,16 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 
 ## 上下文配置的设置 {#context-profile-settings}
 
-在 Studio 中：**上下文配置** → 打开一份配置。下面几张表按编辑器的分区排列，先写 Studio 中的名称，再写管理 API 中的名称（管理 API 把上下文配置称为 `policies`）。**名称**（`name`，默认 `Default`）是配置的显示名称；各分区的作用见[上下文配置](08-context-profiles.md#context-profiles)。**允许客户端覆盖设置**（`client_overrides`，默认 `true`）允许客户端用 `X-OpenViking-Context` 请求头为新对话修改其余所有设置，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。
+在 Studio 中：**上下文配置** → 打开一份配置。下面几张表按编辑器的分区排列，先写 Studio 中的名称，再写管理 API 中的名称（管理 API 把上下文配置称为 `policies`）。**名称**（`name`，默认 `Default`）是配置的显示名称；各分区的作用见[上下文配置](08-context-profiles.md#context-profiles)。**允许客户端覆盖设置**（`client_overrides`，默认 `true`）允许客户端用 `X-OpenViking-Context` 请求头为新对话修改其余所有设置，见[允许客户端覆盖设置](08-context-profiles.md#client-overrides)。它下方的两个开关同样不能用该请求头修改，见[密钥封存](#profile-seal-secrets)。
+
+### 密钥封存 {#profile-seal-secrets}
+
+作用见[网关中的密钥封存](14-seal-secrets.md)。
+
+| Studio 名称 | API 名称 | 默认值 | 取值范围 | 含义 |
+| --- | --- | --- | --- | --- |
+| 封存密钥 | `seal_secrets` | `false` | | 已登记的凭据和用户新输入的 token 只以引用形式发给模型，客户端工具拿到真值。需要 OpenViking Server 0.5.7 或更高版本。无法封存的请求会被拒绝。`X-OpenViking-Context` 无法修改。 |
+| 同时登记工具输出中的密钥 | `enroll_tool_secrets` | `false` | | 工具结果和附带内容块中的新 token 也会登记。只在打开 `seal_secrets` 时生效。`X-OpenViking-Context` 无法修改。 |
 
 ### 召回记忆 {#profile-recall}
 

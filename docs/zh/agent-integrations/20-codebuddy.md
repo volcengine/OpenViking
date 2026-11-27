@@ -9,7 +9,7 @@
 连接托管实例时，选择 **OpenViking 托管服务**，再选择服务商：
 
 - **Volcengine**：输入服务 API Key，安装器会提供服务地址。
-- **BytePlus**：先输入实例的完整 HTTPS 服务地址，再输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
+- **BytePlus**：输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
 
 旧版安装器连接 BytePlus 时使用**自定义 URL**。
 
@@ -44,12 +44,13 @@ curl -fsSL https://openviking.ai/install | bash
 - **UserPromptSubmit** 召回相关记忆，以 `additionalContext` 中的 `<openviking-context>` 块注入。宿主自动生成的续写轮次会被跳过，因此宿主自己产生的轮次不会触发检索。
 - **PreToolUse** 拒绝把 `viking://` URI 当本地路径读写，并引导 Agent 改用 OpenViking MCP 工具。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
 - **Stop**、**PreCompact** 和 **SessionEnd** 在分离的 worker 中增量捕获 transcript 中的新轮次。`Stop` 每捕获 8 条消息（`commitTurnThreshold`）提交一次 OpenViking session；`PreCompact` 和 `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。
+- 压缩或恢复之后，下一次 **UserPromptSubmit** 还会追加一段简短说明，给出会话的 OpenViking id 以及用来查回之前确切细节的 `session_history` MCP 工具。Agent 没传该工具的 `session` 参数时，MCP 代理从调用中补上。
 
 hook 与 MCP 从 `~/.openviking/ovcli.conf` 读取同一份凭据，不会在服务端、账号或用户上各说各话。`OPENVIKING_URL` 与 `OPENVIKING_API_KEY` 可覆盖该文件，按插件的配置位于 `plugin.codebuddy` 下（见[插件配置](../configuration/02-client.md#插件配置)）。会话在 OpenViking 中记为 `cb-<session id>`。
 
 ### 宿主决定的行为
 
-`UserPromptSubmit` 与 `SessionEnd` **只在交互式 TUI 触发**。headless 运行（`-p`、`--input-format stream-json`）不会触发它们，因此 headless 会话只在 `Stop` 捕获，不发收尾提交。`SessionStart` 不带 `cwd`，且同一会话内可能投递两次，因此该 hook 是幂等的，并以进程工作目录兜底。hook 超时会被杀，但其子进程不会，这正是提交能在 hook 进程返回后由分离的 worker 完成的原因。
+`SessionEnd` **只在交互式 TUI 触发**，因此 headless 会话（`-p`、`--input-format stream-json`）只在 `Stop` 捕获，不发收尾提交。CodeBuddy Code 2.185.0 之前 `UserPromptSubmit` 也只在 TUI 触发；从 2.185.0 起 headless `-p` 运行同样会触发。`SessionStart` 不带 `cwd`，且同一会话内可能投递两次，因此该 hook 是幂等的，并以进程工作目录兜底。hook 超时会被杀，但其子进程不会，这正是提交能在 hook 进程返回后由分离的 worker 完成的原因。
 
 暂不支持子代理采集：宿主会触发 `SubagentStart`/`SubagentStop`，但共享 dispatcher 还没有子代理阶段。经过实测的宿主契约与 transcript 格式记录在 [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md)。
 
@@ -67,7 +68,7 @@ curl -fsSL https://openviking.ai/install | bash -s -- --uninstall --yes --harnes
 
 | 现象 | 原因与处理 |
 |------|------------|
-| headless 运行没有召回 | `UserPromptSubmit` 只在交互式 TUI 触发，请使用交互式会话。 |
+| headless 运行没有召回 | CodeBuddy Code 2.185.0 之前 `UserPromptSubmit` 只在交互式 TUI 触发，请升级或使用交互式会话。 |
 | 插件列表中没有它 | 重新运行安装器并确认 `codebuddy` 在 `PATH` 中，然后新建会话。 |
 | MCP 连不上 | 检查 `~/.openviking/ovcli.conf` 中的 URL/API Key，然后新建会话。 |
 | 需要详细诊断 | 以 `OPENVIKING_DEBUG=1` 启动 CodeBuddy，查看 `~/.openviking/logs/codebuddy-hooks.log`。 |

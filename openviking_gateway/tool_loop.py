@@ -51,10 +51,14 @@ def public_stream_error(value):
 
 
 class HiddenToolLoop:
-    def __init__(self, prepared, executor, store, capture, saver=None):
-        """``saver`` is the kernel's capture pipeline; without one a cut is not saved early."""
+    def __init__(self, prepared, executor, store, capture, saver=None, unsealer=None):
+        """``saver`` is the kernel's capture pipeline; without one a cut is not saved early.
+
+        ``unsealer`` puts values in the client's copy of its tool calls; the loop's own
+        history and records keep the references.
+        """
         self.prepared, self.executor, self.store, self.capture = prepared, executor, store, capture
-        self.saver = saver
+        self.saver, self.unsealer = saver, unsealer
         self.protocol = prepared.protocol
         self.adapter = tool_protocol(self.protocol)(prepared.body)
         self.body = {
@@ -65,11 +69,14 @@ class HiddenToolLoop:
         # A request without gateway tools comes here only to show the recall notice: every
         # call is the client's, nothing runs, and the reply takes as long as it takes.
         self.allowed = executor.allowed if prepared.tools_active else set()
+        self.adapter.gateway_tools = self.allowed
         seconds = self.policy.get("tool_total_seconds")
         self.deadline = time.monotonic() + seconds if prepared.tools_active and seconds else None
         self.adapter.lead_with(prepared.reply_lead)
         self.transcript, self.usage, self.counted = [], {}, {}
-        self.final, self.hidden, self.window = None, False, None
+        # ``sent`` is ``final`` as the client gets it.
+        self.final = self.sent = None
+        self.hidden, self.window = False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
         self.round = ToolRound([], [], {}, False)
         self.observe_upstream = None
@@ -205,6 +212,13 @@ class HiddenToolLoop:
                     yield event
             if skipped:
                 result = {"role": "tool", "tool_call_id": call["id"], "content": REFUSED}
+            elif call.get("invalid_arguments"):
+                result = {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": "Invalid tool arguments. Send a valid JSON object.",
+                    "failed": True,
+                }
             elif crowded:
                 result = {
                     "role": "tool",
@@ -215,6 +229,7 @@ class HiddenToolLoop:
             else:
                 result = await self.executor.execute(call)
             window = result.pop("cut", window)
+            skipped = result.pop("skipped", False) or skipped
             if show:
                 events = self.adapter.notice(tool_tail(result.get("failed", False), skipped))
             results.append(result)
@@ -332,12 +347,19 @@ class HiddenToolLoop:
                             )
                         async for event in self.execute(owned):
                             yield event
-                    for event in self.stream(self.adapter.publish_calls(client)):
+                    published = self.adapter.publish_calls(client)
+                    if self.unsealer and published and self.body.get("stream"):
+                        published = await self.unsealer.events(self.protocol, published)
+                    for event in self.stream(published):
                         yield event
                     if client or not owned:
                         await self.persist()
+                        self.sent = self.final
+                        if self.unsealer:
+                            self.sent = await self.unsealer.reply(self.protocol, self.final)
+                            self.prepared.metrics["secrets_unsealed"] = self.unsealer.unsealed
                         if self.body.get("stream"):
-                            for event in self.adapter.terminal(self.final):
+                            for event in self.adapter.terminal(self.sent):
                                 yield self.adapter.encode(event)
                         return
                     remaining = self.deadline and max(0.01, self.deadline - time.monotonic())

@@ -18,6 +18,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const api = vi.hoisted(() => ({
   BUILTIN_SKILLS_ROOT: 'viking://system/compile/example-skills',
   createCompile: vi.fn(),
+  createCompileConfig: vi.fn(),
+  isCompileName: (name: string) => /^[A-Za-z0-9_][A-Za-z0-9_-]*$/.test(name),
   fetchCompileConfig: vi.fn(),
   updateCompileConfig: vi.fn(),
   lookupSubmission: vi.fn(),
@@ -81,7 +83,7 @@ const storageKey = 'compile-submission:recovery-test'
 const clients: QueryClient[] = []
 const task = { task_id: 'cmp-original', status: 'pending' }
 function mount(
-  props: { fromTask?: string; sourceUri?: string; target?: string } = {},
+  props: { fromTask?: string; sourceUri?: string; compileName?: string } = {},
   cachedConfig?: unknown,
   cachedAt = Date.now(),
 ) {
@@ -91,7 +93,7 @@ function mount(
   clients.push(client)
   if (cachedConfig)
     client.setQueryData(
-      ['compile-config', 'recovery-test', props.target],
+      ['compile-config', 'recovery-test', props.compileName],
       cachedConfig,
       { updatedAt: cachedAt },
     )
@@ -259,22 +261,32 @@ it('still recovers an accepted task when execution is no longer configured', asy
   await waitFor(() => expect(api.navigate).toHaveBeenCalled())
   expect(api.createCompile).not.toHaveBeenCalled()
 })
+// Shape follows GET /api/v1/compile/config.
 const configuredTarget = {
-  ...savedDraft,
+  compile_name: 'weekly-wiki',
   from: savedDraft.sources.split('\n'),
+  to: savedDraft.to,
+  skill: savedDraft.skill,
+  instruction: savedDraft.instruction,
+  args: { mode_hint: 'summary' },
   auto_update: true,
   update_schedule: { frequency: 'weekly', weekday: 3, hour: 14, minute: 30 },
-  next_run_at: '2026-11-04T14:30:00+08:00',
+  task_first_create_time: null,
+  last_run_time: null,
+  last_triggered_slot: null,
+  next_triggered_slot: '2026-11-04T14:30:00+08:00',
 }
+const planName = () => screen.getByRole('textbox', { name: 'schedule.name *' })
 
 it('saves a weekly plan without navigating to a task or leaving a submission recovery key', async () => {
   prepareCompileHandoff(
     'recovery-test',
     'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
   )
-  api.createCompile.mockResolvedValueOnce(configuredTarget)
+  api.createCompileConfig.mockResolvedValueOnce({ compile_name: 'weekly-wiki' })
   const page = mount()
   fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
+  fireEvent.change(planName(), { target: { value: 'weekly-wiki' } })
   await choose(
     page.getByRole('combobox', { name: 'schedule.frequency' }),
     'schedule.weekly',
@@ -292,11 +304,34 @@ it('saves a weekly plan without navigating to a task or leaving a submission rec
       search: { tab: 'schedules' },
     }),
   )
-  expect(api.createCompile.mock.calls[0][0].args).toEqual({
-    auto_update: true,
-    update_schedule: configuredTarget.update_schedule,
+  expect(api.createCompileConfig).toHaveBeenCalledWith({
+    compile_name: 'weekly-wiki',
+    from: ['viking://resources/source'],
+    to: 'viking://resources/wiki',
+    skill: 'viking://agent/skills/wiki',
+    args: {
+      auto_update: true,
+      update_schedule: configuredTarget.update_schedule,
+    },
   })
+  expect(api.createCompile).not.toHaveBeenCalled()
   expect(sessionStorage.getItem(storageKey)).toBeNull()
+})
+
+it('requires a valid plan name before saving a schedule', async () => {
+  prepareCompileHandoff(
+    'recovery-test',
+    'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
+  )
+  const page = mount()
+  fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
+  page.submit()
+  expect(await page.findByText('schedule.nameRequired')).toBeTruthy()
+  fireEvent.change(planName(), { target: { value: '-weekly' } })
+  page.submit()
+  expect(await page.findByText('schedule.nameInvalid')).toBeTruthy()
+  expect(api.createCompileConfig).not.toHaveBeenCalled()
+  expect(api.createCompile).not.toHaveBeenCalled()
 })
 
 it('keeps a failed plan save retryable without task submission recovery', async () => {
@@ -304,11 +339,12 @@ it('keeps a failed plan save retryable without task submission recovery', async 
     'recovery-test',
     'compile --from viking://resources/source --to viking://resources/wiki --skill viking://agent/skills/wiki',
   )
-  api.createCompile
+  api.createCompileConfig
     .mockRejectedValueOnce(new Error('response lost'))
-    .mockResolvedValueOnce(configuredTarget)
+    .mockResolvedValueOnce({ compile_name: 'weekly-wiki' })
   const page = mount()
   fireEvent.click(page.getByRole('checkbox', { name: 'schedule.enabled' }))
+  fireEvent.change(planName(), { target: { value: 'weekly-wiki' } })
   page.submit()
   await waitFor(() => expect(page.getByRole('alert')).toBeTruthy())
   expect(sessionStorage.getItem(storageKey)).toBeNull()
@@ -329,7 +365,7 @@ it('loads a registered target and disables its schedule without requiring an exe
     configured: false,
     can_create: false,
   })
-  const page = mount({ target: savedDraft.to })
+  const page = mount({ compileName: configuredTarget.compile_name })
   await waitFor(() =>
     expect(
       (
@@ -347,10 +383,11 @@ it('loads a registered target and disables its schedule without requiring an exe
   page.submit()
   await waitFor(() =>
     expect(api.updateCompileConfig).toHaveBeenCalledWith({
-      to: savedDraft.to,
+      compile_name: configuredTarget.compile_name,
       from: configuredTarget.from,
       skill: savedDraft.skill,
       instruction: savedDraft.instruction,
+      args: configuredTarget.args,
       auto_update: false,
       update_schedule: null,
     }),
@@ -364,7 +401,10 @@ it('refetches a fresh cached configuration before enabling the editor', async ()
     auto_update: false,
     update_schedule: null,
   })
-  const page = mount({ target: savedDraft.to }, configuredTarget)
+  const page = mount(
+    { compileName: configuredTarget.compile_name },
+    configuredTarget,
+  )
   page.submit()
   expect(api.updateCompileConfig).not.toHaveBeenCalled()
   await waitFor(() =>
@@ -404,7 +444,7 @@ it('loads fresh configuration after a failed read instead of submitting cached s
     .mockResolvedValueOnce(freshConfig)
   api.updateCompileConfig.mockResolvedValueOnce(freshConfig)
   const page = mount(
-    { target: savedDraft.to },
+    { compileName: configuredTarget.compile_name },
     configuredTarget,
     Date.now() - 20_000,
   )
@@ -422,10 +462,11 @@ it('loads fresh configuration after a failed read instead of submitting cached s
   page.submit()
   await waitFor(() =>
     expect(api.updateCompileConfig).toHaveBeenCalledWith({
-      to: savedDraft.to,
+      compile_name: configuredTarget.compile_name,
       from: freshConfig.from,
       skill: freshConfig.skill,
       instruction: freshConfig.instruction,
+      args: freshConfig.args,
       auto_update: false,
       update_schedule: null,
     }),

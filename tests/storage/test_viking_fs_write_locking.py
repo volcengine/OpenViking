@@ -7,6 +7,24 @@ from openviking.storage.viking_fs import VikingFS
 from openviking_cli.session.user_id import UserIdentifier
 
 
+@pytest.mark.asyncio
+async def test_admin_frozen_file_restore_checks_missing_final_destination():
+    from openviking_cli.exceptions import PermissionDeniedError
+
+    fs = VikingFS(agfs=_FakeAGFS())
+    raw = AsyncMock()
+    fs._async_agfs = raw
+    ctx = RequestContext(user=UserIdentifier("acme", "agent"), role=Role.USER)
+    ctx.bind_frozen_files(["viking://user/agent/skills/a.md"])
+    with pytest.raises(PermissionDeniedError):
+        await fs._ensure_restore_plan_access(
+            {"diff": {"to_write": [{"path": "skills/a.md"}], "to_delete": []}},
+            tree_dir="user/agent",
+            ctx=ctx,
+        )
+    raw.stat.assert_not_awaited()
+
+
 class _FakeAGFS:
     """Minimal synchronous AGFS stub for VikingFS write-path tests."""
 

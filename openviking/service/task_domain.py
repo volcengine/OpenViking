@@ -653,9 +653,7 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
         ):
             if task.result.get(field_name) == "queued":
                 task.result[field_name] = (
-                    "failed"
-                    if projected.get(queue_name, {}).get("error_count", 0)
-                    else "complete"
+                    "failed" if projected[queue_name]["error_count"] else "complete"
                 )
     # Cancelled deliveries still need their execution stage and private context
     # for recovery and cleanup. Both expire with the Task record.
