@@ -7,13 +7,14 @@ import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs";
 import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
 import {
-  dequeue,
+  commitSession,
   enqueue,
+  enqueueCommitAfterWrites,
   listPending,
   replayPending,
 } from "./shared/pending-queue.mjs";
 import { isRetryableFailure } from "./shared/retryable.mjs";
-import { thresholdCommitDue } from "./shared/session-model.mjs";
+import { commitsOnCompaction, isBypassed, thresholdCommitDue } from "./shared/session-model.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 import {
   captureEvent,
@@ -30,17 +31,35 @@ export class OpenVikingRuntime {
     this.logger = logger;
     this.resolveSessionConfig = resolveSessionConfig;
     this.states = new Map();
+    this.sessionConfigs = new WeakMap();
     this.drainTimer = null;
     this.drainRunning = false;
     this.drainPromise = Promise.resolve();
     this.drainHealth = null;
   }
 
+  // Resolved once per session object: the bypass check runs on every event.
+  sessionConfig(session) {
+    let resolved = this.sessionConfigs.get(session);
+    if (resolved === undefined) {
+      resolved = this.resolveSessionConfig?.(session.header?.cwd || process.cwd()) ?? null;
+      this.sessionConfigs.set(session, resolved);
+    }
+    return resolved;
+  }
+
+  isBypassed(session) {
+    return isBypassed(this.sessionConfig(session) ?? this.config, {
+      sessionId: String(session.id),
+      cwd: session.header?.cwd || process.cwd(),
+    });
+  }
+
   stateFor(session) {
     let state = this.states.get(session.id);
     if (state) return state;
     const cwd = session.header?.cwd || process.cwd();
-    const resolved = this.resolveSessionConfig?.(cwd);
+    const resolved = this.sessionConfig(session);
     const peer = resolved?.effectivePeer ?? resolveEffectivePeerId({
       cfg: {
         peerId: this.config.explicitPeerId,
@@ -110,7 +129,7 @@ export class OpenVikingRuntime {
       await this.replayPendingQueue();
     }
     await this.refreshPendingState(state);
-    const profile = await buildProfileBlock(
+    const profile = state.config.noAutoInject ? null : await buildProfileBlock(
       (path, init, options) => this.client.fetchJSON(path, init, options),
       state.config.profileTokenBudget,
       state.config.peerId,
@@ -223,9 +242,12 @@ export class OpenVikingRuntime {
     if (event.type !== "turn/end" && !boundary) return;
     const state = this.stateFor(session);
     if (!isCaptureEnabled(state.config)) return;
+    if (boundary && !commitsOnCompaction(state.config)) return;
     this.enqueueWrite(state, async () => {
-      if (state.hasPendingWrites) return;
-      if (!state.ready && !(await this.ensureState(state)).ready) return;
+      // The server cannot count queued messages toward the threshold, so that
+      // check waits for the backlog to drain; a compaction commit queues behind it.
+      if (state.hasPendingWrites && !boundary) return;
+      if (!state.hasPendingWrites && !state.ready && !(await this.ensureState(state)).ready) return;
       if (!boundary) {
         const metadata = await this.client.getSession(
           state.ovSessionId,
@@ -239,21 +261,7 @@ export class OpenVikingRuntime {
         );
         if (!due) return;
       }
-      const response = await this.client.commitSession(
-        state.ovSessionId,
-        state.config.peerId,
-      );
-      const stage = boundary ? "compaction_commit" : "commit";
-      this.reportWriteResult(state, stage, response, "/api/v1/sessions/{session_id}/commit");
-      this.log(stage, {
-        sessionId: state.ovSessionId,
-        ok: response.ok,
-        trace_id: response.result?.trace_id || response.traceId,
-        error: response.ok ? undefined : response.error?.message || response.error?.code,
-      });
-      if (isRetryableFailure(response)) {
-        await this.enqueueFinalCommit(state, { keep_recent_count: 0 });
-      }
+      await this.commit(state, boundary ? "compaction_commit" : "commit");
     });
   }
 
@@ -264,26 +272,8 @@ export class OpenVikingRuntime {
     state.disposing = (async () => {
       this.enqueueWrite(state, async () => {
         if (!isCaptureEnabled(state.config)) return;
-        const commitPayload = { keep_recent_count: 0 };
-        if (state.hasPendingWrites) {
-          await this.enqueueFinalCommit(state, commitPayload);
-          return;
-        }
-        if (!state.ready && !(await this.ensureState(state)).ready) return;
-        const response = await this.client.commitSession(
-          state.ovSessionId,
-          state.config.peerId,
-          { timeoutMs: Math.min(3000, Number(state.config.requestTimeoutMs) || 3000) },
-        );
-        this.reportWriteResult(state, "shutdown_commit", response, "/api/v1/sessions/{session_id}/commit");
-        this.log("shutdown_commit", {
-          sessionId: state.ovSessionId,
-          ok: response.ok,
-          trace_id: response.result?.trace_id || response.traceId,
-        });
-        if (isRetryableFailure(response)) {
-          await this.enqueueFinalCommit(state, commitPayload);
-        }
+        if (!state.hasPendingWrites && !state.ready && !(await this.ensureState(state)).ready) return;
+        await this.commit(state, "shutdown_commit", Math.min(3000, Number(state.config.requestTimeoutMs) || 3000));
       });
       try {
         await state.writes;
@@ -292,6 +282,44 @@ export class OpenVikingRuntime {
       }
     })();
     return state.disposing;
+  }
+
+  // While the session has queued writes the commit is queued behind them
+  // without a send: the drainer owns replay, and the shared commitSession would
+  // replay the whole queue inline under this session's actor peer.
+  async commit(state, stage, timeoutMs = 30000) {
+    const body = { keep_recent_count: 0 };
+    if (state.hasPendingWrites) {
+      this.notePendingCommit(state, await enqueueCommitAfterWrites(state.ovSessionId, body));
+      return;
+    }
+    const response = await commitSession(
+      (path, init) => this.client.fetchJSON(path, init, { timeoutMs, actorPeerId: state.config.peerId }),
+      state.ovSessionId,
+      body,
+      { log: (name, data) => this.log(name, data) },
+    );
+    if (response.deferred) {
+      this.notePendingCommit(state, { ok: response.pendingQueued });
+      return;
+    }
+    this.reportWriteResult(state, stage, response, "/api/v1/sessions/{session_id}/commit");
+    this.log(stage, {
+      sessionId: state.ovSessionId,
+      ok: response.ok,
+      trace_id: response.result?.trace_id || response.traceId,
+      error: response.ok ? undefined : response.error?.message || response.error?.code,
+    });
+    if (response.pendingQueued || response.pendingEnqueueFailed) {
+      this.notePendingCommit(state, { ok: Boolean(response.pendingQueued) });
+    }
+  }
+
+  notePendingCommit(state, result) {
+    // A commit queued behind writes is stamped one past the latest of them;
+    // messages queued after it must sort after it.
+    if (result.ok) state.pendingCreatedAt = Math.max(state.pendingCreatedAt + 1, Date.now());
+    this.notePending(state, "commitSession", result);
   }
 
   async disposeAll() {
@@ -339,50 +367,30 @@ export class OpenVikingRuntime {
     })}`);
   }
 
-  async enqueuePending(state, type, payload) {
+  async enqueuePendingMessage(state, payload) {
     const createdAt = Math.max(Date.now(), state.pendingCreatedAt + 1);
     state.pendingCreatedAt = createdAt;
-    const result = await enqueue(type, state.ovSessionId, payload, { createdAt });
-    if (result.ok) {
-      // Log the latch transition only: every message that follows while the
-      // latch holds takes the cheap enqueue path, so this fires once per
-      // outage, not once per message.
-      if (!state.hasPendingWrites) {
-        this.log("pending_latched", { sessionId: state.ovSessionId, type });
-      }
-      state.hasPendingWrites = true;
-    }
+    const result = await enqueue("addMessage", state.ovSessionId, payload, { createdAt });
+    this.notePending(state, "addMessage", result);
+    return result;
+  }
+
+  notePending(state, type, result) {
     if (!result.ok) {
       this.log("pending_enqueue_error", {
         sessionId: state.ovSessionId,
         type,
         error: result.error,
       });
+      return;
     }
-    return result;
-  }
-
-  async enqueueFinalCommit(state, payload) {
-    await this.removePendingCommits(state);
-    return this.enqueuePending(state, "commitSession", payload);
-  }
-
-  async enqueuePendingMessage(state, payload) {
-    const result = await this.enqueuePending(state, "addMessage", payload);
-    if (result.ok) await this.removePendingCommits(state);
-    return result;
-  }
-
-  async removePendingCommits(state) {
-    const pending = await listPending();
-    for (const item of pending) {
-      if (
-        item.entry?.type === "commitSession"
-        && item.entry.sessionId === state.ovSessionId
-      ) {
-        await dequeue(item.filename);
-      }
+    // Log the latch transition only: every message that follows while the
+    // latch holds takes the cheap enqueue path, so this fires once per
+    // outage, not once per message.
+    if (!state.hasPendingWrites) {
+      this.log("pending_latched", { sessionId: state.ovSessionId, type });
     }
+    state.hasPendingWrites = true;
   }
 
   async refreshPendingState(state) {

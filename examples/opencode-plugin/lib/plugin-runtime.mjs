@@ -18,7 +18,7 @@ export function createOpenVikingRuntime({ client, directory, pluginRoot }) {
   }
 
   const repoContext = createRepoContext({ config })
-  const sessionManager = createMemorySessionManager({ config, pluginRoot: dataDir })
+  const sessionManager = createMemorySessionManager({ config, pluginRoot: dataDir, directory })
   const recall = createMemoryRecall({ config, sessionManager })
   const sessionInject = createSessionInject({ config, sessionManager })
   const vikingUriGuard = createVikingUriGuard()

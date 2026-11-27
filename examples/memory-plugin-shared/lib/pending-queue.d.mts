@@ -19,3 +19,18 @@ export function deferCommitBehindPendingWrites(
   payload?: Record<string, any>,
   log?: (stage: string, data?: any) => void,
 ): Promise<{ ok: boolean; path?: string; error?: string } | null>;
+export function commitSession(
+  fetchJSON: (path: string, init?: any) => Promise<{ ok: boolean; status?: number; result?: any; error?: any }>,
+  sessionId: string,
+  body?: Record<string, any>,
+  options?: { queue?: boolean; log?: (stage: string, data?: any) => void },
+): Promise<{
+  ok: boolean;
+  status?: number;
+  result?: any;
+  error?: any;
+  traceId?: string;
+  deferred?: boolean;
+  pendingQueued?: boolean;
+  pendingEnqueueFailed?: boolean;
+}>;

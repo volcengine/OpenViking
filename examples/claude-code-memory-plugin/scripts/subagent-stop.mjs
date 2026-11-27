@@ -39,7 +39,6 @@ import { enqueueCommitAfterWrites } from "./lib/pending-queue.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
-import { shapeCaptureParts } from "./shared/capture-utils.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -95,14 +94,8 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
   const payloads = [];
   for (const turn of turns) {
     // Counted by the cursor, never sent.
-    if (turn.hostAuthored) continue;
-    // Send structured parts: tool calls/results are dedicated `tool` parts, not
-    // inlined into content, so the server can process them separately.
-    // Sanitize injected context before applying the configured filters.
-    const parts = shapeCaptureParts(turn.parts, turn.role, cfg).parts;
-    if (parts.length === 0) continue;
-    const payload = { role: turn.role, parts };
-    if (peerId) payload.peer_id = peerId;
+    if (turn.hostAuthored || !turn.message) continue;
+    const payload = peerId ? { ...turn.message, peer_id: peerId } : turn.message;
     if (enqueueOnly) {
       const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload);
       if (res.ok) queued++;
@@ -149,7 +142,11 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
 // Write-path hook: gated by autoCapture so that disabling capture also
 // suppresses the subagent transcript push + commit, and by
 // skipSubagentSessions so subagent turns can be kept out of memory entirely.
-const capturesSubagents = (cfg) => cfg.autoCapture && !cfg.skipSubagentSessions;
+// Keyword mode keys on what the human wrote, and a subagent's prompt comes from
+// the parent agent, so that mode leaves subagent sessions out too.
+const capturesSubagents = (cfg) => cfg.autoCapture
+  && !cfg.skipSubagentSessions
+  && cfg.captureMode !== "keyword";
 
 async function main() {
   // Runs against the hook's own directory, before the payload names the

@@ -61,7 +61,9 @@ unappended turns from the transcript, commit the OV session for this codex
 `session_id`, and clear `ovSessionId` so the next `Stop` re-derives the
 same `cx-<codex-session-id>` OV session id for the post-compact half.
 `capturedTurnCount` is preserved unless the transcript was truncated by
-compaction (see "Post-compact transcript shrink" below).
+compaction (see "Post-compact transcript shrink" below). With
+`autoCommitOnCompact` off the catch-up still runs, but the commit is skipped
+and the session stays live.
 
 ### 2. `SessionEnd` — deterministic, graceful exits
 
@@ -284,8 +286,19 @@ When OV `/commit` returns non-2xx or times out, we log the `trace_id` and
 keep `ovSessionId` set. We must NOT call `clearState` on failure — keep the
 state file, and in the `SessionEnd` path keep the `.ended` marker too, so
 the next sweep retries. A transient OV outage shouldn't lose a session's
-worth of memory. An unreadable transcript is handled the same way: no
-commit, state and marker preserved.
+worth of memory, and a 401/403 is retried the same way so the sessions
+finish once the key is fixed. An unreadable transcript is handled the same
+way: no commit, state and marker preserved.
+
+A 404 is the exception: the server no longer has the session, and retrying
+would repeat the same commit at every `SessionStart` forever. `SessionEnd`
+and the sweep release such a session (clear `ovSessionId`, remove the
+marker, keep the cursor) and log `released: true`.
+
+None of these commits is put in the shared pending queue (`commitSession`
+runs with `queue: false`). The live id and the `.ended` marker already make
+the sweep retry them, and a queued copy replayed beside that retry would
+commit the session twice.
 
 ### Race: exit before Stop completes
 

@@ -7,3 +7,4 @@ export function thresholdCommitDue(
   cfg: Record<string, any>,
   meta?: { pending_tokens?: number; auto_commit_policy?: Record<string, number> | null } | null,
 ): Promise<boolean>;
+export function commitsOnCompaction(cfg: Record<string, any>): boolean;

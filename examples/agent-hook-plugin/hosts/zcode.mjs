@@ -7,10 +7,10 @@
  * and a pass-through writes nothing at all.
  */
 
-import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+import { sanitizeCapturedText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
 import { preToolUseOutput } from "../../memory-plugin-shared/lib/uri-guard.mjs";
-import { applyZcodeCaptureResult, buildZcodeCapturePlan } from "./zcode-capture.mjs";
-import { buildZcodeTurns, cleanZcodeText } from "./zcode-turns.mjs";
+import { captureIncrementalTurns } from "./incremental-turn-capture.mjs";
+import { buildZcodeTurns } from "./zcode-turns.mjs";
 
 export const zcode = {
   prefix: "zc-",
@@ -37,22 +37,15 @@ export const zcode = {
   normalizeInput: (input) => (
     !input.session_id && input.sessionId ? { ...input, session_id: input.sessionId } : input
   ),
-  prompt: (input) => cleanZcodeText(
+  prompt: (input) => sanitizeCapturedText(
     input.prompt || input.user_prompt || input.userMessage || input.user_message || input.message || "",
   ),
-  async capture(ctx, state) {
-    const plan = buildZcodeCapturePlan(buildZcodeTurns(ctx.input, state), state, ctx.cfg);
-    // Fail-closed: if no turns and no dedup keys, skip silently (not an error —
-    // could be a Stop with no new content, or a race with UserPromptSubmit).
-    if (plan.toSend.length === 0) return null;
-
-    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
-    const { captured, ...nextState } = applyZcodeCaptureResult(state, plan, result);
-    let nextCount = Number(state.capturedSinceCommit || 0) + captured;
-    if (captured > 0) {
-      const committed = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
-      if (committed.ok) nextCount = 0;
-    }
-    return { ...nextState, capturedSinceCommit: nextCount };
+  // ZCode has no session-end or compaction event, so every Stop commits what
+  // it and earlier Stops left uncommitted.
+  async capture(ctx, state, event) {
+    return captureIncrementalTurns(ctx, state, event, buildZcodeTurns(ctx.input, state), {
+      cleanText: sanitizeCapturedText,
+      endEvents: ["stop"],
+    });
   },
 };

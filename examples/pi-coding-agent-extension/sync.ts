@@ -1,4 +1,4 @@
-import type { OVClient } from "./client.js";
+import type { OVClient, OVCommitResult } from "./client.js";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +7,8 @@ import type { OVConfig } from "./config.js";
 import { deriveHarnessSessionId, thresholdCommitDue } from "./shared/session-model.mjs";
 import {
   claimForReplay,
-  deferCommitBehindPendingWrites,
+  commitSession,
   dequeue,
-  enqueue,
   incrementRetry,
   listPending,
   replayPending,
@@ -17,6 +16,9 @@ import {
 import { BATCH_LIMIT, sendSessionMessages } from "./shared/batch-send.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
 import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
+
+/** The commit request's timeout; queue replays ahead of it keep the client default. */
+const COMMIT_TIMEOUT_MS = 30000;
 
 // --- SyncManager ---
 
@@ -358,53 +360,50 @@ export class SyncManager {
     }
   }
 
+  /**
+   * Commit this session. The commit waits behind the session's queued messages
+   * and is queued for replay after a retryable failure; `queue: false` sends it
+   * once, which is what takeover wants: it commits only once its flush barrier
+   * has drained the session, and retries on its own terms.
+   */
   async commit(
-    opts: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean } = {},
-  ): Promise<any | null> {
-    if (!this.ovSessionId) {
+    opts: { queue?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean } = {},
+  ): Promise<OVCommitResult | null> {
+    const sid = this.ovSessionId;
+    if (!sid) {
       this.lastCommitFailure = "no OpenViking session yet";
       return null;
     }
-    // Takeover commits only once its flush barrier has drained this session.
-    if (!this.config.takeoverEnabled) {
-      const deferred = await deferCommitBehindPendingWrites(
-        (path: string, init?: any) => this.client.fetchJSON(path, init, opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : undefined),
-        this.ovSessionId,
-        { keep_recent_count: opts.keepRecentCount ?? 0 },
-        (stage: string, data: unknown) => this.logger.log(stage, data),
-      );
-      if (deferred) {
-        this.lastCommitFailure = "messages are still queued; the commit will follow them";
-        this.logger.log("commit", { session: this.ovSessionId, ok: false, queued: deferred.ok, reason: "pending_writes" });
-        return null;
-      }
-    }
-    const response = await this.client.commitSessionResponse(
-      this.ovSessionId,
-      opts.keepRecentCount,
-      opts.timeoutMs,
-      opts.enableWorkingMemory,
+    const response = await commitSession(
+      (path: string, init?: any) => this.client.fetchJSON(path, init, {
+        timeoutMs: opts.timeoutMs ?? (path.endsWith("/commit") ? COMMIT_TIMEOUT_MS : undefined),
+      }),
+      sid,
+      { keep_recent_count: opts.keepRecentCount ?? 0, enable_working_memory: opts.enableWorkingMemory },
+      { queue: opts.queue !== false, log: (stage: string, data: unknown) => this.logger.log(stage, data) },
     );
-    const result = response.result;
+    if (response.deferred) {
+      this.lastCommitFailure = "messages are still queued; the commit will follow them";
+      this.logger.log("commit", { session: sid, ok: false, queued: response.pendingQueued, reason: "pending_writes" });
+      return null;
+    }
+    const result = response.ok ? response.result as OVCommitResult | null : null;
     if (!result) {
       this.lastCommitFailure = describeCommitError(response.status, response.error);
       this.logger.log("commit", {
-        session: this.ovSessionId,
+        session: sid,
         ok: false,
         status: response.status ?? 0,
         trace_id: response.traceId || "none",
         error: response.error?.message || response.error?.code || "unknown",
+        queued: Boolean(response.pendingQueued),
       });
-      if (opts.queueOnFailure !== false) {
-        await enqueue("commitSession", this.ovSessionId, {
-          keep_recent_count: opts.keepRecentCount ?? 0,
-        });
-      }
       return null;
     }
+    if (!result.trace_id && response.traceId) result.trace_id = response.traceId;
     this.lastCommitFailure = "";
     this.logger.log("commit", {
-      session: this.ovSessionId,
+      session: sid,
       ok: true,
       trace_id: result.trace_id || "none",
     });

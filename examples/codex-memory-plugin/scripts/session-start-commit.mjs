@@ -53,7 +53,7 @@ import { join } from "node:path";
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { catchUpTurns, commitOvSession, makeFetchJSON } from "./ov-session.mjs";
+import { catchUpTurns, commitOvSession, isSessionGone, makeFetchJSON } from "./ov-session.mjs";
 import { detectRecallCompressorProfile } from "./recall-compressor-profile.mjs";
 import {
   clearEnded,
@@ -259,35 +259,39 @@ async function buildResumeArchiveContext(newSessionId) {
 /**
  * Commit a live OV session and release it, keeping the transcript cursor so a
  * later resume appends instead of replaying (DESIGN.md "Commit-then-resume").
- * On commit failure, keep the live session id so the next sweep retries.
+ * On commit failure, keep the live session id so the next sweep retries,
+ * unless the server no longer has the session: that one is released too.
  *
  * Returns { committed: bool, ovSessionId: string|null, traceId: string }.
  */
 async function commitAndRelease(state, reason, endToken, sessionFetchJSONRes) {
   const ovSessionId = state.ovSessionId;
   const commit = await commitOvSession(sessionFetchJSONRes, ovSessionId);
-  if (!commit?.ok) {
+  const traceId = commit.traceId || commit.result?.trace_id || "";
+  if (commit.ok) {
+    log("commit", {
+      reason,
+      codexSessionId: state.codexSessionId,
+      ovSessionId,
+      archived: commit.result?.archived ?? false,
+      taskId: commit.result?.task_id,
+      status: commit.result?.status,
+      trace_id: traceId || undefined,
+    });
+  } else {
+    const gone = isSessionGone(commit);
     log("commit", {
       reason,
       codexSessionId: state.codexSessionId,
       ovSessionId,
       ok: false,
-      status: commit?.status,
-      trace_id: commit?.traceId,
-      error: commit?.error?.message || commit?.error?.code,
+      status: commit.status,
+      trace_id: traceId || undefined,
+      error: commit.error?.message || commit.error?.code,
+      released: gone || undefined,
     });
-    return { committed: false, ovSessionId: null, traceId: commit?.traceId || "" };
+    if (!gone) return { committed: false, ovSessionId: null, traceId };
   }
-  const traceId = commit.traceId || commit.result?.trace_id || "";
-  log("commit", {
-    reason,
-    codexSessionId: state.codexSessionId,
-    ovSessionId,
-    archived: commit.result?.archived ?? false,
-    taskId: commit.result?.task_id,
-    status: commit.result?.status,
-    trace_id: traceId || undefined,
-  });
   state.ovSessionId = null;
   await saveState(state, { touch: false });
   // Only retire the marker this pass verified; a newer one belongs to an exit
@@ -296,7 +300,7 @@ async function commitAndRelease(state, reason, endToken, sessionFetchJSONRes) {
     state.codexSessionId,
     typeof endToken === "number" ? { before: endToken + 1 } : {},
   );
-  return { committed: true, ovSessionId, traceId };
+  return { committed: commit.ok, ovSessionId, traceId };
 }
 
 /**

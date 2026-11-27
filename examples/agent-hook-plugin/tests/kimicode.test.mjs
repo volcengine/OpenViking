@@ -82,7 +82,7 @@ test("SessionStart replays a bounded batch of queued writes", async (t) => {
   });
   const { enqueue, listPending } = await import("../../memory-plugin-shared/lib/pending-queue.mjs");
   for (const text of ["one", "two", "three"]) {
-    await enqueue("addMessage", "kc-queued", { role: "user", content: text });
+    await enqueue("addMessage", "kc-queued", { role: "user", parts: [{ type: "text", text }] });
   }
 
   const result = await runHook(["session-start", "kimicode"], { session_id: "session-replay", cwd: home }, env);

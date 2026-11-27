@@ -10,14 +10,15 @@
  * new turn's user step is not in the transcript yet, `lastUserInput` differing
  * from the last recorded request marks it as a new turn. Injected
  * context goes back as a `systemMessage` step, which stays in the conversation.
- * Stop carries no message text: capture reads the finished steps of
- * `transcriptPath` after the last captured step.
+ * Stop carries no message text: capture reads the finished turns of
+ * `transcriptPath` that no earlier Stop has sent.
  *
  * A `PLANNER_RESPONSE` step lists its `tool_calls` (`{ name, args }`, no call
  * id), and each call's result is a later `MODEL` step (`GENERIC`, `RUN_COMMAND`,
  * …) with nothing naming the call. A planner step's calls are answered, in
- * order, by the result steps before the next planner or user step; a call the
- * model abandons gets no result, and the next planner step starts over.
+ * order, by the result steps up to the next planner or user step, in
+ * `step_index` order rather than line order; a call the model abandons gets
+ * no result, and the next planner step starts over.
  *
  * PreToolUse hands over `toolCall.name` (`read_file`, `run_command`, …) and
  * `toolCall.args`, whose keys are PascalCase (`Path`, `CommandLine`).
@@ -28,8 +29,9 @@ import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { buildCaptureMessage, sanitizeCapturedText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { sanitizeCapturedText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
 import { evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
+import { applyIncrementalCaptureResult, buildIncrementalCapturePlan } from "./incremental-turn-capture.mjs";
 
 // The host wraps a typed request as `<USER_REQUEST>…</USER_REQUEST>` followed by
 // metadata blocks. Only that record is unwrapped, and only an envelope that
@@ -37,7 +39,8 @@ import { evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 const USER_REQUEST = /^<USER_REQUEST>\s*([\s\S]*)\s*<\/USER_REQUEST>/;
 const IN_PROGRESS_STATUSES = new Set(["PENDING", "QUEUED", "WAITING", "RUNNING", "GENERATING"]);
 const RESULT_TYPES = new Set(["GENERIC", "RUN_COMMAND", "VIEW_FILE", "CODE_ACTION", "LIST_DIRECTORY"]);
-const RESULT_HEADER = /^Created At:[^\n]*\n(?:Completed At:[^\n]*\n)?/;
+// The header is often written twice.
+const RESULT_HEADER = /^(?:Created At:[^\n]*\n(?:Completed At:[^\n]*\n)?)+/;
 
 function userRequestText(text) {
   const raw = String(text || "");
@@ -118,6 +121,48 @@ export function latestAntigravityCheckpoint(jsonl) {
   return latest;
 }
 
+// A partial last line is cut inside its record, after the step index that
+// every record opens with.
+const PARTIAL_STEP_INDEX = /^\{"step_index":(\d+)[,}]/;
+
+/**
+ * The transcript's steps in step order. Lines are not always written in that
+ * order, and a step written again keeps only its last record. A last line still
+ * being written stands in for its step as `{ step_index, held: true }`; one cut
+ * before its step index holds back the whole transcript.
+ */
+export function antigravitySteps(jsonl) {
+  const lines = String(jsonl || "").split("\n").filter((line) => line.trim());
+  const byIndex = new Map();
+  for (const [i, line] of lines.entries()) {
+    let step;
+    try {
+      step = JSON.parse(line);
+    } catch {
+      if (i < lines.length - 1) continue;
+      const index = line.match(PARTIAL_STEP_INDEX)?.[1];
+      if (index === undefined) return [];
+      step = { step_index: Number(index), held: true };
+    }
+    const index = Number(step?.step_index);
+    if (Number.isInteger(index)) byIndex.set(index, step);
+  }
+  return [...byIndex.values()].sort((a, b) => a.step_index - b.step_index);
+}
+
+/**
+ * MCP tools are all called through `call_mcp_tool`; the call is named after the
+ * tool it reaches, the way other hosts name MCP tools, so the server can tell
+ * OpenViking's own tools apart.
+ */
+function toolCall(call, id) {
+  const name = String(call?.name || "unknown");
+  const args = call?.args ?? {};
+  if (name !== "call_mcp_tool" || !args.ToolName) return { id, name, input: args };
+  const server = /openviking/i.test(String(args.ServerName || "")) ? "openviking" : String(args.ServerName || "unknown");
+  return { id, name: `mcp__${server}__${args.ToolName}`, input: args.Arguments ?? {} };
+}
+
 function toolResultBlock(step, call) {
   return {
     type: "tool_result",
@@ -129,13 +174,12 @@ function toolResultBlock(step, call) {
 }
 
 /**
- * The finished steps after `afterStep` as turns: a user request, or a planner
- * step's text and calls followed by the results answering them. `firstStep` is
- * the step a turn starts at, where a resend has to read from again.
+ * The finished turns, in step order: a user request, or a planner step's text
+ * and calls followed by the results answering them. A turn's id is the index of
+ * its user or planner step.
  */
-export function buildAntigravityTurns(jsonl, afterStep = -1) {
+export function buildAntigravityTurns(jsonl) {
   const turns = [];
-  let lastStep = afterStep;
   let open = null;
   const close = () => {
     if (!open) return;
@@ -154,53 +198,44 @@ export function buildAntigravityTurns(jsonl, afterStep = -1) {
   // A result still being written belongs to the open planner step, which is
   // read again whole by the next Stop.
   const reopen = () => {
-    if (!open) return;
-    turns.splice(turns.indexOf(open.turn), 1);
-    lastStep = open.turn.firstStep - 1;
+    if (open) turns.pop();
     open = null;
   };
-  for (const line of String(jsonl || "").split("\n")) {
-    if (!line.trim()) continue;
-    let step;
-    try { step = JSON.parse(line); } catch { reopen(); break; }
-    const index = Number(step.step_index);
-    if (!(index > afterStep)) continue;
+  for (const step of antigravitySteps(jsonl)) {
+    if (step.held) { reopen(); break; }
+    const index = step.step_index;
     const isUser = step.type === "USER_INPUT" && step.source === "USER_EXPLICIT";
     const isPlanner = step.type === "PLANNER_RESPONSE";
     if (step.source === "MODEL" && RESULT_TYPES.has(step.type)) {
       if (step.status !== "RUNNING" && IN_PROGRESS_STATUSES.has(step.status)) { reopen(); break; }
       open?.results.push(step);
-      lastStep = index;
       continue;
     }
-    if (!isUser && !isPlanner) {
-      lastStep = index;
-      continue;
-    }
+    if (!isUser && !isPlanner) continue;
     close();
     // An in-flight turn step is read again by the next Stop; terminal failures
     // (CANCELED, ERROR, INVALID, …) will never become DONE and are skipped.
     if (IN_PROGRESS_STATUSES.has(step.status)) break;
-    lastStep = index;
     if (step.status && step.status !== "DONE") continue;
+    const turnId = String(index);
     if (isUser) {
-      turns.push({ role: "user", firstStep: index, content: userRequestText(step.content) });
+      turns.push({ role: "user", turnId, content: userRequestText(step.content) });
       continue;
     }
-    const content = typeof step.content === "string" && step.content.trim()
-      ? [{ type: "text", text: step.content }]
-      : [];
-    const turn = { role: "assistant", firstStep: index, payload: { role: "assistant", content } };
-    const calls = (Array.isArray(step.tool_calls) ? step.tool_calls : []).map((call, i) => ({
-      id: `ag-${index}-${i}`,
-      name: String(call?.name || "unknown"),
-      input: call?.args ?? {},
-    }));
+    const text = typeof step.content === "string" ? step.content : "";
+    const turn = {
+      role: "assistant",
+      turnId,
+      content: text,
+      payload: { role: "assistant", content: text.trim() ? [{ type: "text", text }] : [] },
+    };
+    const calls = (Array.isArray(step.tool_calls) ? step.tool_calls : [])
+      .map((call, i) => toolCall(call, `ag-${index}-${i}`));
     turns.push(turn);
     open = { turn, calls, results: [] };
   }
   close();
-  return { turns, lastStep };
+  return turns;
 }
 
 // File tools name their location in an argument ending in Path, File or
@@ -254,26 +289,19 @@ export const antigravity = {
     return text;
   },
   async capture(ctx, state) {
-    const afterStep = Number.isInteger(state.lastStep) ? state.lastStep : -1;
     const path = antigravityTranscriptPath(ctx.input.transcriptPath);
     const jsonl = path ? await readFile(path, "utf8").catch(() => "") : "";
-    const { turns, lastStep } = buildAntigravityTurns(jsonl, afterStep);
-    const outgoing = [];
-    for (const turn of turns) {
-      if (turn.role === "assistant" && ctx.cfg.captureAssistantTurns === false) continue;
-      const message = buildCaptureMessage(turn.payload || { role: turn.role, content: turn.content }, turn.role, ctx.cfg);
-      if (message) outgoing.push({ firstStep: turn.firstStep, message });
-      else ctx.log("capture_skip", { role: turn.role, step: turn.firstStep });
-    }
-    const result = outgoing.length
-      ? await addAgentMessages(ctx.fetchJSON, ctx.sessionId, outgoing.map((item) => item.message), ctx.peerId)
-      : { sent: 0, queued: 0 };
-    const captured = result.sent + result.queued;
+    // State written before turns were acknowledged one by one keeps the last
+    // step it read in `lastStep` instead.
+    const { lastStep, ...rest } = state;
+    const after = rest.lastTurnId != null ? Number(rest.lastTurnId) : Number.isInteger(lastStep) ? lastStep : -1;
+    const turns = buildAntigravityTurns(jsonl).filter((turn) => Number(turn.turnId) > after);
+    const plan = buildIncrementalCapturePlan(turns, rest, ctx.cfg);
+    if (plan.toSend.length === 0) return null;
+    const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, plan.payloads, ctx.peerId);
+    const { captured, ...next } = applyIncrementalCaptureResult(rest, plan, result, userRequestText);
+    // No session end or compaction event follows, so each Stop commits what it sent.
     if (captured > 0) await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
-    // The server takes a prefix of the batch: resume at the first turn it did not take.
-    return {
-      ...state,
-      lastStep: captured < outgoing.length ? outgoing[captured].firstStep - 1 : lastStep,
-    };
+    return next.lastTurnId == null && Number.isInteger(lastStep) ? { ...next, lastStep } : next;
   },
 };

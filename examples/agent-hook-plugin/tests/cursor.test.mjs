@@ -47,6 +47,8 @@ test("Cursor command-installed integration contains Hook, Rule, Skill, and MCP e
     "beforeSubmitPrompt",
     "beforeReadFile",
     "preToolUse",
+    "postToolUse",
+    "postToolUseFailure",
     "afterMCPExecution",
     "stop",
     "preCompact",
@@ -133,8 +135,8 @@ test("Cursor captures a busy session without replaying text or rereading uploade
       ctx.input = { transcript_path: transcript };
       state = await cursor.capture(ctx, state, "stop");
     }
-    assert.equal(messages.filter((message) => typeof message.content === "string").length, 120);
-    assert.equal(messages.filter((message) => message.parts).length, 900);
+    assert.equal(messages.filter((message) => message.parts[0].type === "text").length, 120);
+    assert.equal(messages.filter((message) => message.parts[0].type === "tool").length, 900);
     assert.equal(commits, 15);
     const readBeforeEmptyStop = toolReadBytes;
     assert.equal(toolReadBytes, statSync(`${ctx.stateFile}.tools.jsonl`).size,
@@ -160,7 +162,7 @@ test("Cursor captures a busy session without replaying text or rereading uploade
   }
 });
 
-test("Cursor captures text and completed OpenViking tools together before commit", async () => {
+test("Cursor captures text and every completed tool together before commit", async () => {
   const messages = [];
   const actorPeers = [];
   const archives = [];
@@ -219,7 +221,7 @@ test("Cursor captures text and completed OpenViking tools together before commit
       ...base,
       transcript_path: transcript,
       tool_use_id: "read-1",
-      mcp_server_name: "openviking",
+      mcp_server_name: "user-openviking",
       tool_name: "read",
       tool_input: JSON.stringify({ uris: experienceUri }),
       result_json: JSON.stringify({ content: [{ type: "text", text: "experience body" }], isError: false }),
@@ -228,11 +230,25 @@ test("Cursor captures text and completed OpenViking tools together before commit
       runHook("afterMCPExecution", read, env),
       runHook("afterMCPExecution", read, env),
     ]);
+    // postToolUse repeats every MCP call as `MCP:<tool>`, without its server.
+    await runHook("postToolUse", {
+      ...base, transcript_path: transcript, tool_use_id: "read-1", tool_name: "MCP:read",
+      tool_input: JSON.parse(read.tool_input), tool_output: read.result_json,
+    }, env);
+    const shell = {
+      ...base, transcript_path: transcript, tool_use_id: "shell-1", tool_name: "Shell",
+      tool_input: { command: "ls", cwd: workspace }, tool_output: JSON.stringify({ output: "hello.txt\n", exitCode: 0 }),
+    };
+    await runHook("postToolUse", shell, env);
+    await runHook("postToolUseFailure", {
+      ...base, transcript_path: transcript, tool_use_id: "shell-2", tool_name: "Shell",
+      tool_input: { command: "false", cwd: workspace }, error_message: "Command failed with exit code 1", failure_type: "error",
+    }, env);
     await runHook("afterMCPExecution", {
       ...read, tool_use_id: "read-failed",
       result_json: JSON.stringify({ content: [{ type: "text", text: "NOT_FOUND: missing" }], isError: true }),
     }, env);
-    await runHook("afterMCPExecution", { ...read, tool_use_id: "other-server", mcp_server_name: "other" }, env);
+    await runHook("afterMCPExecution", { ...read, tool_use_id: "other-server", mcp_server_name: "user-other" }, env);
     await runHook("afterMCPExecution", { ...read, tool_use_id: "" }, env);
     await runHook("afterMCPExecution", { ...read, tool_use_id: "no-result", result_json: "{}" }, env);
     await runHook("afterMCPExecution", { ...read, tool_use_id: "disabled" }, { ...env, OPENVIKING_AUTO_CAPTURE: "0" });
@@ -247,29 +263,39 @@ test("Cursor captures text and completed OpenViking tools together before commit
       runHook("stop", { ...base, transcript_path: transcript }, env),
     ]);
     // Session writes ignore the actor-peer header, so the peer rides in the body.
+    const peer_id = "github.com-acme-cursor-project";
+    const tool = (part) => ({ role: "assistant", peer_id, parts: [{ type: "tool", ...part }] });
+    const text = (role, value) => ({ role, peer_id, parts: [{ type: "text", text: value }] });
     assert.deepEqual(messages, [
-      { role: "user", content: "question", peer_id: "github.com-acme-cursor-project" },
-      { role: "assistant", content: "answer", peer_id: "github.com-acme-cursor-project" },
-      {
-        role: "assistant", peer_id: "github.com-acme-cursor-project",
-        parts: [{
-          type: "tool", tool_id: "read-1", tool_name: "mcp__openviking__read",
-          tool_status: "completed", tool_input: { uris: experienceUri }, tool_output: read.result_json,
-        }],
-      },
-      {
-        role: "assistant", peer_id: "github.com-acme-cursor-project",
-        parts: [{
-          type: "tool", tool_id: "read-failed", tool_name: "mcp__openviking__read",
-          tool_status: "error", tool_input: { uris: experienceUri },
-          tool_output: JSON.stringify({ content: [{ type: "text", text: "NOT_FOUND: missing" }], isError: true }),
-        }],
-      },
-      { role: "assistant", content: "Task finished after reading the experience.", peer_id: "github.com-acme-cursor-project" },
+      text("user", "question"),
+      text("assistant", "answer"),
+      tool({
+        tool_id: "read-1", tool_name: "mcp__openviking__read",
+        tool_status: "completed", tool_input: { uris: experienceUri }, tool_output: read.result_json,
+      }),
+      tool({
+        tool_id: "shell-1", tool_name: "Shell",
+        tool_status: "completed", tool_input: shell.tool_input, tool_output: shell.tool_output,
+      }),
+      tool({
+        tool_id: "shell-2", tool_name: "Shell",
+        tool_status: "error", tool_input: { command: "false", cwd: workspace },
+        tool_output: "Command failed with exit code 1",
+      }),
+      tool({
+        tool_id: "read-failed", tool_name: "mcp__openviking__read",
+        tool_status: "error", tool_input: { uris: experienceUri },
+        tool_output: JSON.stringify({ content: [{ type: "text", text: "NOT_FOUND: missing" }], isError: true }),
+      }),
+      tool({
+        tool_id: "other-server", tool_name: "mcp__other__read",
+        tool_status: "completed", tool_input: { uris: experienceUri }, tool_output: read.result_json,
+      }),
+      text("assistant", "Task finished after reading the experience."),
     ]);
     await runHook("afterMCPExecution", read, env);
     await runHook("sessionEnd", { ...base, transcript_path: transcript }, env);
-    assert.equal(messages.length, 5, "a repeated completion after Stop is not captured twice");
+    assert.equal(messages.length, 8, "a repeated completion after Stop is not captured twice");
     assert.deepEqual(archives.at(-1), messages);
   } finally {
     server.close();
@@ -342,8 +368,8 @@ test("Cursor retries the unreported tail after a partial capture before committi
     offline = false;
     await runHook("preCompact", input, env);
     assert.deepEqual(messages, [
-      { role: "user", content: "offline question" },
-      { role: "assistant", content: "offline answer" },
+      { role: "user", parts: [{ type: "text", text: "offline question" }] },
+      { role: "assistant", parts: [{ type: "text", text: "offline answer" }] },
       {
         role: "assistant",
         parts: [{
@@ -364,6 +390,18 @@ test("Cursor retries the unreported tail after a partial capture before committi
 
     await runHook("stop", input, env);
     assert.equal(messages.length, 4, "acknowledged turns are not stored twice");
+
+    // User-only capture drops assistant text and tools; a compaction without
+    // autoCommitOnCompact still captures but leaves the commit alone.
+    const userOnly = { ...env, OPENVIKING_CAPTURE_ASSISTANT_TURNS: "0", OPENVIKING_AUTO_COMMIT_ON_COMPACT: "0" };
+    await runHook("postToolUse", { ...input, tool_use_id: "quiet-shell", tool_name: "Shell", tool_input: { command: "ls" }, tool_output: "{}" }, userOnly);
+    writeFileSync(transcript, `${readFileSync(transcript, "utf8")}\n${[
+      JSON.stringify({ role: "user", content: "later question" }),
+      JSON.stringify({ role: "assistant", content: "later answer" }),
+    ].join("\n")}`);
+    await runHook("preCompact", input, userOnly);
+    assert.deepEqual(messages.slice(4), [{ role: "user", parts: [{ type: "text", text: "later question" }] }]);
+    assert.equal(archives.length, 1);
   } finally {
     server.close();
     rmSync(root, { recursive: true, force: true });

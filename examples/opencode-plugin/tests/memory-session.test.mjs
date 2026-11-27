@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createMemorySessionManager } from "../lib/memory-session.mjs"
 import { contextMessageEvents } from "../lib/v2-events.mjs"
+import { createSessionInject } from "../lib/session-inject.mjs"
 import { initLogger } from "../lib/utils.mjs"
 import { listPending } from "../lib/shared/pending-queue.mjs"
 import { withPendingDir } from "../../memory-plugin-shared/testing/support.mjs"
@@ -62,7 +63,6 @@ function baseConfig(endpoint) {
     captureAssistantTurns: true,
     captureToolMaxChars: 2000,
     captureMode: "semantic",
-    captureMaxLength: 24000,
     commitTokenThreshold: 20000,
     commitKeepRecentCount: 10,
   }
@@ -165,6 +165,46 @@ test("autoCapture=false skips lifecycle commits but preserves explicit commits",
         .filter((request) => request.method === "POST" && request.url?.endsWith("/commit"))
         .map((request) => request.url)
       assert.deepEqual(commitUrls, ["/api/v1/sessions/oc-explicit-manual/commit"])
+    })
+  })
+})
+
+test("a bypassed session is neither captured, committed nor given start context", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-bypass-", async (dir) => {
+      const config = { ...baseConfig(endpoint), bypassSessionPatterns: ["ses_scratch*"], profileTokenBudget: 1000 }
+      const manager = createMemorySessionManager({ config, pluginRoot: dir, directory: "/work/app" })
+      const inject = createSessionInject({ config, sessionManager: manager })
+      await manager.init()
+      for (const id of ["ses_scratch1", "ses_kept"]) {
+        for (const event of contextMessageEvents(id, { id: `msg-${id}`, type: "user", text: "Remember the bypass rule." })) {
+          await manager.handleEvent(event)
+        }
+      }
+      assert.equal(await inject.buildSessionContext({ sessionID: "ses_scratch1", messageID: "m" }), false)
+      await manager.flushAll({ commit: true })
+
+      const writes = requests.filter((request) => request.method === "POST").map((request) => request.url)
+      assert.deepEqual(writes, ["/api/v1/sessions/oc-ses_kept/messages/batch", "/api/v1/sessions/oc-ses_kept/commit"])
+    })
+  })
+})
+
+test("autoCommitOnCompact=false still captures at a compaction but does not commit", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-compact-", async (dir) => {
+      const manager = createMemorySessionManager({
+        config: { ...baseConfig(endpoint), autoCommitOnCompact: false },
+        pluginRoot: dir,
+      })
+      await manager.init()
+      for (const event of contextMessageEvents("ses_c", { id: "msg-c", type: "user", text: "Remember the compaction rule." })) {
+        await manager.handleEvent(event)
+      }
+      await manager.handleEvent({ type: "session.compacted", sessionID: "ses_c" })
+
+      const writes = requests.filter((request) => request.method === "POST").map((request) => request.url)
+      assert.deepEqual(writes, ["/api/v1/sessions/oc-ses_c/messages/batch"])
     })
   })
 })
@@ -367,7 +407,7 @@ test("session.idle event flushes pending OpenCode capture", async () => {
       assert.ok(addMessage, "session.idle should POST pending messages")
       const body = JSON.parse(addMessage.body)
       assert.equal(body.messages[0].role, "user")
-      assert.match(body.messages[0].content, /idle events must flush captures/)
+      assert.match(body.messages[0].parts[0].text, /idle events must flush captures/)
       await manager.flushAll({ commit: false })
     })
   })
@@ -483,7 +523,7 @@ test("assistant messages are captured even when finish is not stop", async () =>
       assert.ok(addMessage, "session.idle should capture non-stop assistant messages")
       const body = JSON.parse(addMessage.body)
       assert.equal(body.messages[0].role, "assistant")
-      assert.match(body.messages[0].content, /Partial assistant output/)
+      assert.match(body.messages[0].parts[0].text, /Partial assistant output/)
       await manager.flushAll({ commit: false })
     })
   })
@@ -704,14 +744,14 @@ test("OpenCode capture filters sanitized text before sending", async () => {
       const sent = requests.find((request) => request.url === "/api/v1/sessions/oc-oc-filters/messages/batch")
       assert.ok(sent)
       assert.deepEqual(JSON.parse(sent.body).messages, [
-        { role: "user", content: "Remember approved [redacted] details." },
+        { role: "user", parts: [{ type: "text", text: "Remember approved [redacted] details." }] },
       ])
       await manager.flushAll({ commit: false })
     })
   })
 })
 
-test("OpenCode caps mixed-message text and omits low-signal text", async () => {
+test("OpenCode sends long and short assistant text uncut, in order with tool parts", async () => {
   await withCaptureServer(async ({ endpoint, requests }) => {
     await withTempDir("ov-oc-mixed-", async (dir) => {
       const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
@@ -732,11 +772,9 @@ test("OpenCode caps mixed-message text and omits low-signal text", async () => {
       assert.ok(sent)
       const messages = JSON.parse(sent.body).messages
       assert.equal(messages.length, 2)
-      assert.equal(messages[0].parts[0].type, "text")
-      assert.ok(messages[0].parts[0].text.length <= 24000)
-      assert.match(messages[0].parts[0].text, /\[truncated\]$/)
+      assert.equal(messages[0].parts[0].text.length, 40000)
       assert.equal(messages[0].parts[1].type, "tool")
-      assert.deepEqual(messages[1].parts.map((part) => part.type), ["tool"])
+      assert.deepEqual(messages[1].parts.map((part) => part.text ?? part.type), ["ok", "tool"])
       await manager.flushAll({ commit: false })
     })
   })

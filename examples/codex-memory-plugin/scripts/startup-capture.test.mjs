@@ -10,7 +10,7 @@ process.env.OPENVIKING_CODEX_STATE_DIR = stateDir;
 const { catchUpTurns } = await import("./ov-session.mjs");
 const { CAPTURE_FORMAT_VERSION, loadState, saveState, withSessionLock } = await import("./session-state.mjs");
 
-const cfg = { captureAssistantTurns: true, captureMaxLength: 24000 };
+const cfg = { captureAssistantTurns: true };
 const startup = [
   "<recommended_plugins>\nHere is a list of plugins that are available but not installed.\n\n- Example (example@marketplace)\n</recommended_plugins>",
   "# AGENTS.md instructions\n\n<INSTRUCTIONS>\nAnswer in Chinese.\n</INSTRUCTIONS>",

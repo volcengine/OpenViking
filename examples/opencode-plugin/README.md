@@ -18,8 +18,8 @@ The plugin uses OpenCode hooks for lifecycle behavior and registers OpenViking's
 - On the first message of each session, injects your profile, memory indexes, and an `<available-skills>` catalog of your own and account-shared OpenViking skills.
 - Exposes the same OpenViking MCP tools used by the Claude Code and Codex memory plugins.
 - Maps each OpenCode session to an OpenViking session.
-- Captures user and assistant text messages into OpenViking.
-- On OpenCode v2, reads the structured session context at execution boundaries so tool calls and results are captured too.
+- Captures user and assistant messages into OpenViking as written, with tool calls and results as structured parts in the order they happened. Injected OpenViking context and `captureFilters` matches are removed; nothing else is dropped or shortened. `captureAssistantTurns: false` sends only what the user wrote.
+- On OpenCode v2, reads the structured session context at execution boundaries to capture the same messages.
 - Commits sessions at lifecycle boundaries for memory extraction.
 - Automatically recalls relevant memories and injects them as hidden synthetic context for the current user message.
 - Ships the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills, which tell the agent when to use which OpenViking tool, and `ov-memory-doctor`, which runs the plugin's doctor. They are added to OpenCode's skill paths together with the MCP server, and left out in hook-only mode.
@@ -198,6 +198,10 @@ specific answer, and this is the order every memory plugin follows.
 
 After OpenCode compacts a session, the next message carries the session-start context again, because the compaction summarized it away. It also carries a short `<openviking-context source="session-history">` note, once per compaction: it names the session's OpenViking id (`oc-<id>`) and tells the model how to look up exact details the summary lost with the server's `session_history` MCP tool (`action="search"`, `"read"`, `"overview"`). When the model calls the bundled server's `openviking_session_history` without a `session`, the plugin fills in the calling session's OpenViking id (a subagent's own id inside a subagent). In hook-only mode the plugin does not know which MCP server carries the tool, so the note tells the model to pass `session="oc-<id>"` explicitly. Subagent sessions and sessions with capture off get no note. Set `sessionHistoryPointer: false` or `OPENVIKING_SESSION_HISTORY_POINTER=0` to turn it off.
 
+A compaction commits the session after capturing what the compaction is about to summarize. With `autoCommitOnCompact: false` (`OPENVIKING_AUTO_COMMIT_ON_COMPACT=0`) the capture still runs and the commit waits for the token threshold or the end of the session.
+
+`bypassSession: true` (`OPENVIKING_BYPASS_SESSION=1`) or a `bypassSessionPatterns` glob matching the OpenCode session id or the project directory leaves a session alone: no session-start context, no recall, no capture, and no commit.
+
 ### Hook-only mode
 
 When OpenViking is already exposed through another MCP server, retain the lifecycle hooks while
@@ -221,7 +225,7 @@ call and points it to the OpenViking MCP tools. A `bash` command that contains a
 an HTTP payload); the command runs and the plugin appends a notice naming the
 MCP tools to its output.
 
-OpenCode v2 has no plugin toast API. Service availability and other non-fatal notices are written to `openviking-memory.log`. The plugin captures the transcript before compaction discards it, checks the commit threshold after every execution (succeeded, failed, or interrupted), and forces a commit after completed compaction, session deletion, and cleanup. Each plugin instance handles only the sessions of its own location, and keeps its capture cursor in OpenCode plugin storage so a reloaded instance does not resend earlier turns.
+OpenCode v2 has no plugin toast API. Service availability and other non-fatal notices are written to `openviking-memory.log`. The plugin captures the transcript before compaction discards it, checks the commit threshold after every execution (succeeded, failed, or interrupted), and forces a commit after completed compaction (unless `autoCommitOnCompact` is off), session deletion, and cleanup. Each plugin instance handles only the sessions of its own location, and keeps its capture cursor in OpenCode plugin storage so a reloaded instance does not resend earlier turns.
 
 ## MCP Tools
 

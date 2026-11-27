@@ -15,6 +15,7 @@ import { extractCaptureTranscript, findLastHumanTurnIndex } from "./capture-util
 import { CAPTURE_FORMAT_VERSION, resolveOvSessionId, saveState } from "./session-state.mjs";
 import { makeAgentFetchJSON } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
+import { commitSession } from "./shared/pending-queue.mjs";
 
 /**
  * Build the `{ fetchJSONRes, fetchJSON }` pair used by every capture hook.
@@ -38,11 +39,18 @@ export function makeFetchJSON(cfg, { getActorPeerId = () => "" } = {}) {
   return { fetchJSONRes, fetchJSON };
 }
 
+/**
+ * Every Codex commit is retried from session state (the live id and the end
+ * marker the sweep looks for), so none is queued: a queued copy would replay
+ * beside that retry and commit the session twice.
+ */
 export function commitOvSession(fetchJSONRes, ovSessionId, body = {}) {
-  return fetchJSONRes(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
+  return commitSession(fetchJSONRes, ovSessionId, body, { queue: false });
+}
+
+/** A commit the server refused because the session no longer exists. */
+export function isSessionGone(commit) {
+  return Number(commit?.status) === 404;
 }
 
 function parseTranscript(content) {
@@ -75,12 +83,6 @@ export async function readTranscriptTurns(transcriptPath, cfg, logError) {
     logError?.("transcript_read", err);
     return { turns: [], excludedLegacyTurnIndices: [], ok: false };
   }
-}
-
-export function hasCaptureKeyword(turns) {
-  return turns.some((turn) =>
-    /\b(remember|memorize|store|save|capture|note|record)\b|记住|保存|记录|记忆/i.test(turn.text)
-  );
 }
 
 /**
@@ -173,9 +175,7 @@ export async function catchUpTurns({
   }
 
   const payloads = newTurns.map((turn) => {
-    const body = turn.parts?.length
-      ? { role: turn.role, parts: turn.parts }
-      : { role: turn.role, content: turn.text };
+    const body = { role: turn.role, parts: turn.parts };
     if (activePeerId) body.peer_id = activePeerId;
     return body;
   });

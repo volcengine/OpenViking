@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -397,8 +397,8 @@ test("captureToolMaxChars still caps tool output when an operator lowers it", as
       OPENVIKING_CAPTURE_TOOL_MAX_CHARS: "1000",
     });
     const result = toolParts.find((part) => part.tool_status === "completed");
-    assert.ok(result.tool_output.startsWith("y".repeat(1000)));
-    assert.match(result.tool_output, /\[truncated, 4000 more chars\]$/);
+    assert.ok(result.tool_output.length <= 1000);
+    assert.match(result.tool_output, /^y+\n\[truncated\]$/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -576,7 +576,7 @@ test("api-request-blob lines are not captured as conversation turns", () => {
     blob(answer),
   ]);
 
-  assert.deepEqual(turns.map((turn) => [turn.role, turn.text]), [
+  assert.deepEqual(turns.map((turn) => [turn.role, turn.message.parts[0].text]), [
     ["user", "what does the cursor track?"],
     ["assistant", "the number of captured turns"],
   ]);
@@ -685,6 +685,44 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
     assert.deepEqual(texts(batches[0]), ["first task for the subagent", "first task done"]);
     assert.deepEqual(texts(batches[1]), ["follow-up from a background task"]);
     assert.equal(commits, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("with assistant turns off only what the user wrote is sent; keyword mode leaves subagents out", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-user-only-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  const sent = [];
+  try {
+    await writeToolTranscript(transcriptPath, "file contents");
+    await appendFile(transcriptPath, `\n${JSON.stringify({ role: "assistant", content: "it holds the fixture" })}`);
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        const body = await readRequestBody(req);
+        sent.push(...body.messages.map((message) => [message.role, message.parts]));
+        writeJson(res, { status: "ok", result: { added: body.messages.length } });
+      } else {
+        if (req.method === "POST") await readRequestBody(req);
+        writeJson(res, { status: "ok", result: {} });
+      }
+    }, async (baseUrl) => {
+      const env = {
+        ...hookEnv(root, baseUrl),
+        OPENVIKING_CAPTURE_ASSISTANT_TURNS: "0",
+        OPENVIKING_CAPTURE_LAST_ASSISTANT_ON_STOP: "0",
+      };
+      await runAutoCapture({ session_id: "user-only", transcript_path: transcriptPath, cwd: root }, env);
+      const subagent = { session_id: "user-only", agent_id: "child", agent_transcript_path: transcriptPath, cwd: root };
+      await runHook("subagent-stop.mjs", subagent, env);
+      await runHook("subagent-stop.mjs", { ...subagent, agent_id: "child-2" }, {
+        ...hookEnv(root, baseUrl),
+        OPENVIKING_CAPTURE_MODE: "keyword",
+      });
+    });
+    const userText = ["user", [{ type: "text", text: "read the large fixture please" }]];
+    assert.deepEqual(sent, [userText, userText]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -10,24 +10,21 @@ import { enqueue, listPending } from "../shared/pending-queue.mjs";
 function config(overrides = {}) {
   return {
     commitTokenThreshold: 20000,
-    commitKeepRecentCount: 10,
     captureAssistantTurns: true,
     captureToolMaxChars: 2000,
-    captureMaxLength: 24000,
     takeoverEnabled: true,
     ...overrides,
   };
 }
 
-function client(overrides = {}) {
+function client({
+  commit = async () => ({ ok: true, result: { task_id: "t-1", archive_uri: "viking://archive/1" } }),
+  ...overrides
+} = {}) {
   return {
     connected: true,
     getSession: async () => ({ pending_tokens: 0 }),
-    commitSession: async () => ({ task_id: "t-1", archive_uri: "viking://archive/1" }),
-    commitSessionResponse: async () => ({
-      result: { task_id: "t-1", archive_uri: "viking://archive/1" },
-    }),
-    fetchJSON: async () => ({ ok: true, result: {} }),
+    fetchJSON: async (path, init) => path.endsWith("/commit") ? commit(path, init) : { ok: true, result: {} },
     ...overrides,
   };
 }
@@ -166,11 +163,8 @@ test("serverAutoCommit leaves the threshold commit to a session that carries the
       }),
       fetchJSON: async (path, init = {}) => {
         if (init.method === "PATCH") requests.push(path);
+        if (path.endsWith("/commit")) requests.push("commit");
         return { ok: true, result: {} };
-      },
-      commitSessionResponse: async () => {
-        requests.push("commit");
-        return { result: {} };
       },
     });
     const cfg = config({ takeoverEnabled: false, serverAutoCommit: true, commitIdleSeconds: 1800 });
@@ -195,12 +189,9 @@ test("commit writes success trace_id to the pi debug log", async () => {
   await withPendingDir(async (dir) => {
     const debugLogPath = join(dir, "pi-debug.log");
     const c = client({
-      commitSessionResponse: async () => ({
-        result: {
-          task_id: "t-trace",
-          archive_uri: "viking://archive/trace",
-          trace_id: "trace-pi-commit",
-        },
+      commit: async () => ({
+        ok: true,
+        result: { task_id: "t-trace", archive_uri: "viking://archive/trace" },
         traceId: "trace-pi-commit",
       }),
     });
@@ -221,7 +212,8 @@ test("commit writes failure trace_id to the pi debug log", async () => {
   await withPendingDir(async (dir) => {
     const debugLogPath = join(dir, "pi-debug-error.log");
     const c = client({
-      commitSessionResponse: async () => ({
+      commit: async () => ({
+        ok: false,
         result: null,
         status: 500,
         traceId: "trace-pi-error",
@@ -231,7 +223,7 @@ test("commit writes failure trace_id to the pi debug log", async () => {
     const sync = new SyncManager(c, config({ debugLogPath }));
     await sync.ensureSession("pi-trace-error");
 
-    assert.equal(await sync.commit({ queueOnFailure: false }), null);
+    assert.equal(await sync.commit({ queue: false }), null);
     const record = await readLastRecord(debugLogPath);
     assert.equal(record.stage, "commit");
     assert.equal(record.data.ok, false);
@@ -242,14 +234,15 @@ test("commit writes failure trace_id to the pi debug log", async () => {
 
 test("a failed commit keeps its status and server message for /viking commit", async () => {
   await withPendingDir(async () => {
-    let response = { result: null, status: 403, error: { message: "identity  deleted\n" } };
-    const sync = new SyncManager(client({ commitSessionResponse: async () => response }), config());
+    let response = { ok: false, result: null, status: 403, error: { message: "identity  deleted\n" } };
+    const sync = new SyncManager(client({ commit: async () => response }), config());
     await sync.ensureSession("pi-commit-error");
 
-    assert.equal(await sync.commit({ queueOnFailure: false }), null);
+    assert.equal(await sync.commit(), null);
     assert.equal(sync.lastCommitError, "HTTP 403: identity deleted");
-    response = { result: { status: "accepted", archive_uri: "viking://archive/1" } };
-    assert.ok(await sync.commit({ queueOnFailure: false }));
+    assert.deepEqual(await listPending(), [], "a permanent rejection is not queued for replay");
+    response = { ok: true, result: { status: "accepted", archive_uri: "viking://archive/1" } };
+    assert.ok(await sync.commit({ queue: false }));
     assert.equal(sync.lastCommitError, "");
   });
 });
@@ -323,7 +316,7 @@ test("current-session addMessage 500 remains queued and keeps barrier closed", a
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
 
-    await sync.addPayload({ role: "user", content: "Queued content with retryable server failure." });
+    await sync.addPayload({ role: "user", parts: [{ type: "text", text: "Queued content with retryable server failure." }] });
 
     assert.equal(await sync.flushForTakeover(), false);
     const pending = await listPending();
@@ -341,7 +334,7 @@ test("other-session addMessage and commit queue entries do not block takeover ba
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
 
-    await enqueue("addMessage", "different-session", { role: "user", content: "other" });
+    await enqueue("addMessage", "different-session", { role: "user", parts: [{ type: "text", text: "other" }] });
     await enqueue("commitSession", sync.sessionId, { keep_recent_count: 1 });
 
     assert.equal(await sync.flushForTakeover(), true);
@@ -352,7 +345,7 @@ test("a current-session processing entry keeps the takeover barrier closed", asy
   await withPendingDir(async (dir) => {
     const sync = new SyncManager(client({ connected: false }), config());
     await sync.ensureSession("pi-session");
-    await enqueue("addMessage", sync.sessionId, { role: "user", content: "in flight" });
+    await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: "in flight" }] });
     const [{ filename }] = await listPending();
     await rename(join(dir, filename), join(dir, filename.replace(/\.json$/, ".processing")));
 
@@ -365,7 +358,7 @@ test("capture cursor skips continuations and re-extracts sibling branches", asyn
     const calls = [];
     const c = client({
       fetchJSON: async (_path, init) => {
-        calls.push(JSON.parse(init.body).messages.map((payload) => payload.content));
+        calls.push(JSON.parse(init.body).messages.map((payload) => payload.parts[0].text));
         return { ok: true, result: {} };
       },
     });
@@ -432,15 +425,15 @@ test("takeover barrier drains a large backlog through the batch endpoint", async
     await sync.ensureSession("pi-session");
     const t0 = Date.now();
     for (let i = 0; i < 250; i++) {
-      await enqueue("addMessage", sync.sessionId, { role: "user", content: `m${i}` }, { createdAt: t0 + i });
+      await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: `m${i}` }] }, { createdAt: t0 + i });
     }
-    await enqueue("addMessage", "other-session", { role: "user", content: "other" }, { createdAt: t0 + 999 });
+    await enqueue("addMessage", "other-session", { role: "user", parts: [{ type: "text", text: "other" }] }, { createdAt: t0 + 999 });
 
     assert.equal(await sync.flushForTakeover(), true);
     assert.deepEqual(calls.map((call) => call.body.messages.length), [100, 100, 50]);
     // Order preserved across batches.
-    assert.equal(calls[0].body.messages[0].content, "m0");
-    assert.equal(calls[2].body.messages[49].content, "m249");
+    assert.equal(calls[0].body.messages[0].parts[0].text, "m0");
+    assert.equal(calls[2].body.messages[49].parts[0].text, "m249");
     const left = await listPending();
     assert.equal(left.length, 1);
     assert.equal(left[0].entry.sessionId, "other-session");
@@ -454,7 +447,7 @@ test("failed batch keeps its entries queued with one retry and leaves the rest u
     await sync.ensureSession("pi-session");
     const t0 = Date.now();
     for (let i = 0; i < 120; i++) {
-      await enqueue("addMessage", sync.sessionId, { role: "user", content: `m${i}` }, { createdAt: t0 + i });
+      await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: `m${i}` }] }, { createdAt: t0 + i });
     }
 
     assert.equal(await sync.flushForTakeover(), false);
@@ -512,7 +505,7 @@ test("takeover startup replay records a non-retryable current-session gap", asyn
     const c = client({ fetchJSON: async () => ({ ok: false, status: 400, error: { message: "bad" } }) });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
-    await enqueue("addMessage", sync.sessionId, { role: "user", content: "poison" });
+    await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: "poison" }] });
 
     await sync.replayPending();
     assert.equal(sync.droppedCount, 1);
@@ -528,7 +521,7 @@ test("takeover startup replay records retry exhaustion", async () => {
       const c = client({ fetchJSON: async () => ({ ok: false, status: 500 }) });
       const sync = new SyncManager(c, config());
       await sync.ensureSession("pi-session");
-      await enqueue("addMessage", sync.sessionId, { role: "user", content: "exhaust now" });
+      await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: "exhaust now" }] });
 
       await sync.replayPending();
       assert.equal(sync.droppedCount, 1);
@@ -555,8 +548,8 @@ test("takeover startup replays other sessions after its own, outside its gap acc
     });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
-    await enqueue("addMessage", sync.sessionId, { role: "user", content: "mine" });
-    await enqueue("addMessage", "different-session", { role: "user", content: "other" });
+    await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: "mine" }] });
+    await enqueue("addMessage", "different-session", { role: "user", parts: [{ type: "text", text: "other" }] });
     await enqueue("commitSession", "different-session", {});
 
     await sync.replayPending();
@@ -575,8 +568,8 @@ test("takeover startup leaves other sessions queued while its own backlog remain
     });
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
-    await enqueue("addMessage", sync.sessionId, { role: "user", content: "mine" });
-    await enqueue("addMessage", "different-session", { role: "user", content: "other" });
+    await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: "mine" }] });
+    await enqueue("addMessage", "different-session", { role: "user", parts: [{ type: "text", text: "other" }] });
 
     await sync.replayPending();
     // The generic replay could drop this session's entry untracked, so it waits.
@@ -596,7 +589,7 @@ test("drainSessionBacklog stops after maxBatches and leaves remainder for later 
       await sync.ensureSession("pi-session");
       const t0 = Date.now();
       for (let i = 0; i < 250; i++) {
-        await enqueue("addMessage", sync.sessionId, { role: "user", content: `m${i}` }, { createdAt: t0 + i });
+        await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: `m${i}` }] }, { createdAt: t0 + i });
       }
 
       assert.equal(await sync.flushForTakeover(), false);
@@ -615,7 +608,7 @@ test("the takeover barrier drains only within the budget it is given", async () 
     const { c, calls } = batchClient();
     const sync = new SyncManager(c, config());
     await sync.ensureSession("pi-session");
-    await enqueue("addMessage", sync.sessionId, { role: "user", content: "queued while offline" });
+    await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: "queued while offline" }] });
 
     // No handler time left: nothing is sent and the barrier stays closed.
     assert.equal(await sync.flushForTakeover(0), false);
@@ -631,16 +624,15 @@ test("a commit without takeover waits behind the session's queued messages", asy
   await withPendingDir(async () => {
     let commits = 0;
     const c = client({
-      fetchJSON: async () => ({ ok: false, status: 503, error: { code: "UNAVAILABLE" } }),
-      commitSessionResponse: async () => {
-        commits++;
-        return { result: { task_id: "t-1" } };
+      fetchJSON: async (path) => {
+        if (path.endsWith("/commit")) commits++;
+        return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
       },
     });
     const sync = new SyncManager(c, config({ takeoverEnabled: false }));
     await sync.ensureSession("pi-shutdown");
     const sid = sync.sessionId;
-    await enqueue("addMessage", sid, { role: "user", content: "parked" }, { createdAt: Date.now() + 60_000 });
+    await enqueue("addMessage", sid, { role: "user", parts: [{ type: "text", text: "parked" }] }, { createdAt: Date.now() + 60_000 });
 
     assert.equal(await sync.commit({ timeoutMs: 3000 }), null);
     assert.equal(commits, 0, "no commit overtakes the queued message");

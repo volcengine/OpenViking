@@ -190,8 +190,8 @@ test("estimateTokens and truncateToTokens handle CJK conservatively", () => {
   assert.ok(truncated.length < 2500);
 });
 
-test("estimatePayloadTokens counts content and structured parts", () => {
-  assert.equal(estimatePayloadTokens({ content: "a".repeat(40) }), 10);
+test("estimatePayloadTokens counts text and tool parts", () => {
+  assert.equal(estimatePayloadTokens({ parts: [{ type: "text", text: "a".repeat(40) }] }), 10);
   const withParts = estimatePayloadTokens({
     parts: [
       { type: "text", text: "a".repeat(40) },
@@ -468,7 +468,7 @@ test("commitAndAdvance advances to an entry id and the next context is trimmed",
   assert.equal(core.state.syncedEntryCount, 7);
   assert.equal(calls.flushed, 1);
   assert.equal(calls.committed, 1);
-  assert.equal(calls.lastCommitOpts.queueOnFailure, false);
+  assert.equal(calls.lastCommitOpts.queue, false);
   assert.equal(calls.lastCommitOpts.keepRecentCount, 1);
   assert.deepEqual(calls.slept, []);
   // Once for the pending archive, once for the advance.

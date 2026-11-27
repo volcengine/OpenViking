@@ -34,6 +34,7 @@ export interface OVConfig {
   minQueryLength: number;
   recallQueryFilters: string[];
   recallExcludeUris: string[];
+  noAutoInject: boolean;
   profileTokenBudget: number;
   skillCatalog: boolean;
   skillCatalogTokenBudget: number;
@@ -43,18 +44,16 @@ export interface OVConfig {
   commitTokenThreshold: number;
   serverAutoCommit: boolean;
   commitIdleSeconds: number;
-  commitKeepRecentCount: number;
+  autoCommitOnCompact: boolean;
   takeoverEnabled: boolean;
   takeoverTokenThreshold: number;
   takeoverKeepRecentTurns: number;
   takeoverOverviewBudget: number;
   takeoverOverviewPollMs: number;
   takeoverOverviewPollMax: number;
-  captureToolResults: boolean;
-  captureMode: "semantic" | "keyword";
-  captureMaxLength: number;
   captureToolMaxChars: number;
   captureAssistantTurns: boolean;
+  captureFilters: string[];
   /** Kept as this extension's original spelling; projected onto the shared one. */
   bypassPatterns: string[];
   bypassSession: boolean;

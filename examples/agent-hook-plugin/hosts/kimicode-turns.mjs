@@ -19,10 +19,15 @@ function kimiCodeHome() {
   return process.env.KIMI_CODE_HOME || join(homedir(), ".kimi-code");
 }
 
+// Kimi files a UserPromptSubmit hook's output and an activated skill's body as
+// text parts of the user's own message, tagged with these sources.
+const HOST_PART_SOURCES = new Set(["user prompt submit hook", "skill activation"]);
+
 function textFromContent(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
+    .filter((part) => !HOST_PART_SOURCES.has(part?.meta?.source))
     .map((part) => (typeof part === "string" ? part : part?.text || ""))
     .filter(Boolean)
     .join("\n");

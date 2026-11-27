@@ -2,7 +2,7 @@
 
 Established facts for the Qoder CLI host, per the host docs (`docs.qoder.com/cli/hooks`, `/cli/hooks-reference`, `/cli/plugins`, `/cli/plugins-reference`, `/cli/settings-reference`), plus the design of the `qoder` adapter that implements them (`hosts/qoder.mjs` and `hosts/qoder-turns.mjs` beside this file).
 
-**Verified against**: Qoder CLI **v1.1.88** (npm `@qoder-ai/qodercli`, `entrypoint: "cli"` and `version: "1.1.88"` on every transcript record), macOS / darwin 27.2.0, 2026-11-13.
+**Verified against**: Qoder CLI **v1.1.88** (npm `@qoder-ai/qodercli`, `entrypoint: "cli"` and `version: "1.1.88"` on every transcript record), macOS / darwin 27.2.0, 2026-11-13; capture re-verified on **v1.1.99**, 2026-11-27 (run 13).
 
 **Method**: a throwaway probe plugin (every hook appended its stdin and env to a JSONL file and answered per a mode file; one skill; one stdio MCP server that logged its argv and env), installed through the real host CLI, exercised with one-line prompts, then uninstalled. The finished adapter was then run once more through the real host (run 11), and the installer's marketplace flow was replayed with the real `qodercli` against a throwaway `QODER_CONFIG_DIR` (run 12).
 
@@ -20,6 +20,7 @@ Established facts for the Qoder CLI host, per the host docs (`docs.qoder.com/cli
 | 10 | `qodercli -p --plugin-dir <dir>`, `UserPromptSubmit` exits 2 | 0 | `--plugin-dir` env and listing |
 | 11 | `qodercli -p --plugin-dir <assembled openviking-memory>` against a mock OpenViking | 1 | the adapter end to end |
 | 12 | `plugins validate`, `marketplace remove/add`, `install`, `list`, `uninstall` with `QODER_CONFIG_DIR=<tmp>` | 0 | the installer's host calls |
+| 13 | v1.1.99, installer into a scratch `HOME` / `QODER_CONFIG_DIR`, a user-scope stdio MCP probe: `qodercli -p --dangerously-skip-permissions '<prompt>'` (Bash, Read, a failing Bash, two MCP calls), then two `-p -c` turns, against a recording mock OpenViking | 3 | tool parts and the commit rule end to end |
 
 Legend: **verified** = observed in a real session · *documented* = only in the host docs or read from the shipped bundle (`bundle/qodercli.js`) · **pending** = not reproduced (see §10).
 
@@ -199,10 +200,11 @@ Debugging aid: `~/.qoder/logs/sessions/<cwd-slug>/<session_id>/segments/*.jsonl`
 
 - `${QODER_PLUGIN_ROOT}` is substituted in `args`, and both `${QODER_PLUGIN_ROOT}` and `${QODER_PLUGIN_DATA}` in `env` values; `QODER_PLUGIN_ROOT` is also in the server's own env. Run 11 saw the proxy connect (`initialize` from `clientInfo.name: "qodercli"`).
 - The server name is **not prefixed with the plugin name**, and the fully-qualified tool name is `mcp__<server>__<tool>`. A user-scope MCP server with the same name would collide; which wins is pending.
-- **Lazy loading is the effective default.** MCP tools are not in the model's tool list; the host exposes three meta tools `mcp_list` / `mcp_get` / `mcp_call` and announces the catalogue in an `mcp_lazy_tools_delta` attachment. The bundle enables lazy mode when `QODER_MCP_LAZY=1`, when `mcp.lazyLoad: true`, **or when no settings file declares `mcp.lazyLoad` at all**; the docs' "default `false`" does not hold for v1.1.88. Consequences:
+- **Lazy loading is the effective default**, for a user-scope server too (run 13). MCP tools are not in the model's tool list; the host exposes three meta tools `mcp_list` / `mcp_get` / `mcp_call` and announces the catalogue in an `mcp_lazy_tools_delta` attachment. The bundle enables lazy mode when `QODER_MCP_LAZY=1`, when `mcp.lazyLoad: true`, **or when no settings file declares `mcp.lazyLoad` at all**; the docs' "default `false`" does not hold for v1.1.88. Consequences:
   - `PreToolUse` sees `tool_name: "mcp_call"` (or `mcp_get`/`mcp_list`) with the real tool in `tool_input.toolName`, so a matcher such as `mcp__openviking__.*` does not fire in lazy mode. The documented `mcp_context` / `original_request_name` fields were not present on these calls.
   - The uri-guard is unaffected: its matcher (`Read|Write|Edit|Glob|Grep|Bash`) never needs to see MCP calls.
-- In `-p` with `permission_mode: default`, `mcp_call` to a plugin tool was refused (`Allow MCP tool <server>/<tool>?`), and a `PreToolUse` allow did not change that. Headless memory-tool use needs a permission rule or a permissive mode; the rule syntax for MCP tools is pending. The TUI prompts the user.
+- Run 13's model called `mcp_get` (`{toolName}`, answered with the tool's schema) before each `mcp_call`; the decoder keeps `mcp_get` as a tool of its own and unwraps only `mcp_call`. A failed MCP call's result is `is_error: true`, as is a shell command that exits non-zero.
+- With `--dangerously-skip-permissions`, `mcp_call` runs headless (run 13). In `-p` with `permission_mode: default`, `mcp_call` to a plugin tool was refused (`Allow MCP tool <server>/<tool>?`), and a `PreToolUse` allow did not change that. Headless memory-tool use needs a permission rule or a permissive mode; the rule syntax for MCP tools is pending. The TUI prompts the user.
 
 **Skills.** `skills/<name>/SKILL.md` from an installed plugin is listed as **`<plugin>:<name>`** (the probe's `qx-probe:qx-hello`) in `init.skills`, in the slash-command list and in the turn's `skill_listing` attachment (`isInitial: true`), for both the installed copy and `--plugin-dir`. The model invokes it as `Skill {"skill":"<plugin>:<name>"}`; the body arrives as the `isMeta` user record of §8. The skill was already listed on the first turn.
 
@@ -238,7 +240,8 @@ Measured facts that shape the adapter and are not visible in the code:
 - `guard()` denies the file tools, as on CodeBuddy, and answers a Bash command that carries a `viking://` URI with an advisory `additionalContext` and no `permissionDecision` (§5): the command runs under the host's own permission flow and the model reads the notice (verified on v1.1.95, `-p --plugin-dir`).
 - The decoder reads only `user` and `assistant` records, skips `isSidechain`, `isMeta`, `isCompactSummary` and non-human `origin.kind`, folds a model response's per-block records (one `responseGroupId`) and the tool results answering it into one assistant turn in record order, and drops `thinking`. Calls and results go out as tool parts, never as message text: a call `running` with its input, a result `completed` (or `error` when `is_error`) with its output, under the call's id and name. An `mcp_call` is unwrapped to the tool it names (`input.toolName`, with `input.arguments` as the input), so the call and its result pair under the real tool's name. A turn's id is the index of the record that opened it.
 - `capture` treats the auxiliary `SessionEnd` (unknown session, missing transcript) as a no-op: it logs `capture_unreadable` and touches neither the network nor the hook state (§3, run 11).
-- Commit policy as on CodeBuddy: `Stop` commits once the session's `pending_tokens` reach `commitTokenThreshold`, unless `serverAutoCommit` leaves that commit to the server; `PreCompact` (unless `autoCommitOnCompact` is off) and `SessionEnd` commit whatever is still uncommitted, including turns an earlier `Stop` sent.
+- Each model response is its own `responseGroupId`, so a response that only calls a tool is an assistant turn of its own (run 13).
+- Commit policy as on CodeBuddy: `Stop` commits once the session's `pending_tokens` reach `commitTokenThreshold`, unless `serverAutoCommit` leaves that commit to the server; `PreCompact` (unless `autoCommitOnCompact` is off) and `SessionEnd` commit whatever is still uncommitted, including turns an earlier `Stop` sent. Run 13 saw it on the wire: each `Stop` sent its turns and read the session; with `pending_tokens` at 150 000 it committed and the following `SessionEnd` did not, with 0 or 10 it left the commit to `SessionEnd`.
 
 v1 scope matches the CodeBuddy adapter: no subagent capture (events and per-agent transcripts exist, §3/§8), no resume/compact archive injection, no keyword capture mode, no local recall compressor default.
 

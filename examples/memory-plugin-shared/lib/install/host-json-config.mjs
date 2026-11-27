@@ -82,7 +82,7 @@ const OPENVIKING_HOOK_SCRIPTS = [
 // Events an earlier release installed and the templates no longer name. An
 // install rewrites only the template's events, so these are pruned separately.
 const RETIRED_HOOK_EVENTS = {
-  cursor: ["postToolUse", "beforeShellExecution"],
+  cursor: ["beforeShellExecution"],
 };
 
 /** Whether a host's hook entry is one this installer owns. */

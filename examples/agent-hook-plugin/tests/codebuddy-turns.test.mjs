@@ -1,11 +1,13 @@
 /**
  * Decoder tests for the CodeBuddy transcript reader.
  *
- * These run against synthetic records. The cases that matter are the ones real
- * transcripts taught us: host blocks around the ask, a quoted earlier turn that
- * must not be mistaken for the current one, host-authored records that carry no
- * human text, and tool calls that are separate records from the messages they
- * belong to. The incremental cases pin the cursor the dispatcher relies on.
+ * Tool records come from a sanitized CodeBuddy Code 2.187.0 session
+ * (tests/fixtures/codebuddy/). The other cases are synthetic records for what
+ * real transcripts taught us: host blocks around the ask, a quoted earlier turn
+ * that must not be mistaken for the current one, host-authored records that
+ * carry no human text, and tool calls that are separate records from the
+ * messages they belong to. The incremental cases pin the cursor the dispatcher
+ * relies on.
  */
 
 import assert from "node:assert/strict";
@@ -34,9 +36,11 @@ const message = (role, text, extra = {}) => ({
 });
 
 const call = (name, args, callId) => ({ type: "function_call", name, arguments: args, callId });
-const result = (name, callId, status = "success", output = "out") => (
-  { type: "function_call_result", name, callId, status, output }
+const result = (name, callId) => (
+  { type: "function_call_result", name, callId, status: "completed", output: { type: "text", text: "out" } }
 );
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "codebuddy");
+const fixtureRecords = (name) => parseTranscript(readFileSync(join(FIXTURES, `${name}.jsonl`), "utf8"));
 const messagesOf = (records) => buildIncrementalCapturePlan(extractCodebuddyTurns(records)).payloads;
 const toolSummary = (message) => message.parts
   .filter((part) => part.type === "tool")
@@ -107,16 +111,32 @@ test("extractCodebuddyTurns assembles turns from separate records", () => {
   assert.deepEqual(turns[1].payload.content.map((block) => block.type), ["text", "function_call", "tool_result"]);
 });
 
-test("a folded tool call and its result go out as structured parts", () => {
-  const [sent] = messagesOf([
-    message("assistant", "先列一下目录"),
-    call("Bash", '{"command":"ls"}', "call_1"),
-    result("Bash", "call_1", "success", "a.txt"),
+test("a session's tool calls and results go out as paired parts in host order", () => {
+  const messages = messagesOf(fixtureRecords("transcript-tools"));
+  assert.deepEqual(messages.map((m) => m.role), ["user", "assistant", "assistant"]);
+  const [, tools] = messages;
+  assert.equal(tools.parts[0].text, "I'll run these in order.");
+  assert.ok(tools.parts.slice(1).every((part) => part.type === "tool"));
+  const summary = toolSummary(tools).map(([name, , status]) => [name, status]);
+  assert.deepEqual(summary, [
+    ["Bash", "running"], ["Bash", "completed"],
+    ["Read", "running"], ["Read", "completed"],
+    // A failed shell command is "completed" on the host; its raw response flags it.
+    ["Bash", "running"], ["Bash", "error"],
+    ["ToolSearch", "running"], ["ToolSearch", "completed"],
+    // MCP tools are called through DeferExecuteTool.
+    ["mcp__probe__echo", "running"], ["mcp__probe__echo", "completed"],
+    ["mcp__probe__fail", "running"], ["mcp__probe__fail", "error"],
   ]);
-  assert.equal(sent.parts[0].text, "先列一下目录");
-  assert.deepEqual(toolSummary(sent), [["Bash", "call_1", "running"], ["Bash", "call_1", "completed"]]);
-  assert.deepEqual(sent.parts[1].tool_input, { command: "ls" });
-  assert.equal(sent.parts[2].tool_output, "a.txt");
+  const parts = tools.parts.slice(1);
+  for (let index = 0; index < parts.length; index += 2) {
+    assert.equal(parts[index].tool_id, parts[index + 1].tool_id);
+  }
+  assert.deepEqual(parts[0].tool_input, { command: "ls", description: "List files in current folder" });
+  assert.deepEqual(parts[8].tool_input, { text: "ping" });
+  // The output is a text block on the host; the part carries its text.
+  assert.equal(parts[1].tool_output, "Stdout: hello.txt\n\nStderr: (empty)\nExit Code: 0\nSignal: (none)");
+  assert.equal(parts[9].tool_output, "echo: ping");
 });
 
 test("extractCodebuddyTurns treats a lone tool record as an assistant turn", () => {
@@ -159,16 +179,6 @@ test("extractCodebuddyTurns drops a user record that carries only host blocks", 
     extractCodebuddyTurns([message("user", "<system-reminder>only noise</system-reminder>")]).length,
     0,
   );
-});
-
-test("a tool result with a non-success status goes out as an error part", () => {
-  const [sent] = messagesOf([
-    message("assistant", "trying"),
-    result("Bash", "c1", "error", "boom"),
-  ]);
-  assert.equal(sent.parts[0].text, "trying");
-  assert.deepEqual(toolSummary(sent), [["Bash", "c1", "error"]]);
-  assert.equal(sent.parts[1].tool_output, "boom");
 });
 
 test("parseTranscript reads JSONL and nothing else", () => {

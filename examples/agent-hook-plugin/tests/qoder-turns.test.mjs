@@ -1,6 +1,6 @@
 /**
  * Decoder tests for the Qoder CLI transcript, built on sanitized copies of real
- * Qoder CLI 1.1.88 transcripts (tests/fixtures/qoder/).
+ * Qoder CLI 1.1.88 and 1.1.99 transcripts (tests/fixtures/qoder/).
  */
 
 import assert from "node:assert/strict";
@@ -57,21 +57,26 @@ test("a tool call and the result answering it go out as paired parts, never a us
   assert.match(result.tool_output, /1\thello/);
 });
 
-test("an mcp_call is unwrapped to the tool it names, and an error result says so", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ov-qd-turns-"));
-  try {
-    const path = join(dir, "s.jsonl");
-    writeFileSync(path, [
-      { type: "user", origin: { kind: "human" }, message: { role: "user", content: [{ type: "text", text: "search my notes" }] } },
-      { type: "assistant", responseGroupId: "g", message: { role: "assistant", content: [{ type: "tool_use", id: "c1", name: "mcp_call", input: { toolName: "mcp__openviking__search", arguments: { query: "notes" } } }] } },
-      { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", is_error: true, content: "denied" }] } },
-    ].map((record) => JSON.stringify(record)).join("\n"));
-    const [call, result] = toolParts(messagesOf(path)[1]);
-    assert.deepEqual([call.tool_name, call.tool_input], ["mcp__openviking__search", { query: "notes" }]);
-    assert.deepEqual([result.tool_name, result.tool_status, result.tool_output], ["mcp__openviking__search", "error", "denied"]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+test("an mcp_call is unwrapped to the tool it names, and error results say so", () => {
+  const messages = messagesOf(fixture("transcript-mcp-tools"));
+  const tools = messages.flatMap(toolParts);
+  assert.deepEqual(tools.map((part) => [part.tool_name, part.tool_status]), [
+    ["Bash", "running"], ["Bash", "completed"],
+    ["Read", "running"], ["Read", "completed"],
+    ["Bash", "running"], ["Bash", "error"],
+    ["mcp_get", "running"], ["mcp_get", "completed"],
+    ["mcp__probe__echo", "running"], ["mcp__probe__echo", "completed"],
+    ["mcp_get", "running"], ["mcp_get", "completed"],
+    ["mcp__probe__fail", "running"], ["mcp__probe__fail", "error"],
+  ]);
+  for (let index = 0; index < tools.length; index += 2) {
+    assert.equal(tools[index].tool_id, tools[index + 1].tool_id);
   }
+  assert.deepEqual(tools[8].tool_input, { text: "ping" });
+  assert.deepEqual([tools[9].tool_output, tools[13].tool_output], ["echo: ping", "probe failure"]);
+  assert.match(tools[5].tool_output, /No such file or directory/);
+  const texts = messages.flatMap((m) => m.parts.filter((part) => part.type === "text").map((part) => part.text));
+  assert.ok(!texts.some((text) => /echo: ping|No such file|tool_use|tool_result/.test(text)));
 });
 
 test("injected hook context and other attachments are never captured", () => {

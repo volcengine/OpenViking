@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   buildKimicodeTurns,
@@ -10,6 +11,8 @@ import {
   extractUnseenKimicodeTurns,
 } from "../hosts/kimicode-turns.mjs";
 import { buildIncrementalCapturePlan } from "../hosts/incremental-turn-capture.mjs";
+
+const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "kimicode");
 
 test("content parts are normalized and injected context is removed", () => {
   assert.equal(cleanKimicodeText([
@@ -34,38 +37,53 @@ test("wire decoding groups prompt and assistant text under a stable turn id", ()
   ]);
 });
 
-test("host-generated user messages do not replace the prompt", () => {
+// Kimi 2.8 records a UserPromptSubmit hook's output and an activated skill's
+// body as tagged parts of the user's own message.
+test("host-generated parts and messages are not taken for the user's words", () => {
   const dir = mkdtempSync(join(tmpdir(), "ov-kimi-wire-"));
   const wire = join(dir, "wire.jsonl");
+  const prompt = (turnId, content, origin = { kind: "user" }) => [
+    JSON.stringify({ type: "turn.prompt", turnId, origin, input: content }),
+    JSON.stringify({ type: "context.append_message", message: { role: "user", origin, content } }),
+  ];
+  const reply = (turnId, text) => [
+    JSON.stringify({ type: "context.append_loop_event", event: { type: "content.part", turnId: String(turnId), part: { type: "text", text } } }),
+    JSON.stringify({ type: "turn.ended", turnId, reason: "completed" }),
+  ];
   writeFileSync(wire, [
-    JSON.stringify({
-      type: "context.append_message",
-      message: {
-        role: "user",
-        origin: { kind: "hook_result", event: "UserPromptSubmit" },
-        content: [{
-          type: "text",
-          text: '<hook_result hook_event="UserPromptSubmit">\n<openviking-context source="recall">old</openviking-context>\n</hook_result>',
-        }],
+    ...prompt(0, [
+      {
+        type: "text",
+        text: 'User activated the skill "openviking-memory:openviking-memory".\n\n<skill-loaded name="openviking-memory:openviking-memory" trigger="user-slash">skill body</skill-loaded>',
+        meta: { source: "skill activation", activationId: "a1" },
       },
-    }),
-    JSON.stringify({ type: "turn.prompt", turnId: 0, origin: { kind: "user" }, input: [{ type: "text", text: "Fix release.json." }] }),
-    JSON.stringify({ type: "context.append_message", message: { role: "user", origin: { kind: "user" }, content: [{ type: "text", text: "Fix release.json." }] } }),
+      { type: "text", text: "/skill:openviking-memory:openviking-memory reply with noted" },
+    ], { kind: "user", skillActivations: [{ activationId: "a1", skillName: "openviking-memory:openviking-memory" }] }),
     JSON.stringify({
       type: "context.append_message",
       message: {
         role: "user",
-        origin: { kind: "injection", variant: "reminder" },
+        origin: { kind: "injection", variant: "permission_mode" },
         content: [{ type: "text", text: "<system-reminder>\nhost reminder\n</system-reminder>" }],
       },
     }),
-    JSON.stringify({ type: "context.append_loop_event", event: { type: "content.part", turnId: 0, part: { type: "text", text: "Done." } } }),
-    JSON.stringify({ type: "turn.ended", turnId: 0, reason: "completed" }),
+    ...reply(0, "noted"),
+    ...prompt(1, [
+      {
+        type: "text",
+        text: '<hook_result hook_event="UserPromptSubmit">\n<openviking-context source="session-start">profile</openviking-context>\n</hook_result>',
+        meta: { contentType: "text/xml", source: "user prompt submit hook" },
+      },
+      { type: "text", text: "Fix release.json." },
+    ]),
+    ...reply(1, "Done."),
   ].join("\n") + "\n");
 
   assert.deepEqual(extractUnseenKimicodeTurns(wire).turns, [
-    { role: "user", content: "Fix release.json.", turnId: "0" },
-    { role: "assistant", content: "Done.", turnId: "0" },
+    { role: "user", content: "/skill:openviking-memory:openviking-memory reply with noted", turnId: "0" },
+    { role: "assistant", content: "noted", turnId: "0" },
+    { role: "user", content: "Fix release.json.", turnId: "1" },
+    { role: "assistant", content: "Done.", turnId: "1" },
   ]);
 });
 
@@ -84,45 +102,49 @@ test("assistant text from consecutive steps is separated", () => {
   ]);
 });
 
-test("tool calls and their results fold into the turn's assistant message", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ov-kimi-wire-"));
-  const wire = join(dir, "wire.jsonl");
-  const loop = (event) => JSON.stringify({ type: "context.append_loop_event", event });
-  writeFileSync(wire, [
-    JSON.stringify({ type: "turn.prompt", input: [{ type: "text", text: "list the files" }] }),
-    loop({ type: "step.begin", uuid: "s1", turnId: "4" }),
-    loop({ type: "content.part", stepUuid: "s1", turnId: "4", part: { type: "text", text: "Checking the folder first." } }),
-    loop({ type: "tool.call", stepUuid: "s1", toolCallId: "c1", name: "Shell", args: { command: "ls" } }),
-    loop({ type: "tool.call", stepUuid: "s1", turnId: "4", toolCallId: "c2", name: "ReadFile", args: { path: "a.txt" } }),
-    loop({ type: "tool.call", stepUuid: "s1", turnId: "4", toolCallId: "c3" }),
-    loop({ type: "tool.result", toolCallId: "c1", result: { output: [{ type: "text", text: "a.txt" }, { type: "text", text: "b.txt" }] } }),
-    loop({ type: "tool.result", toolCallId: "c2", result: { output: "no such file", isError: true } }),
-    loop({ type: "tool.result", toolCallId: "ghost", result: { output: "orphan" } }),
-    loop({ type: "tool.result", toolCallId: "c1" }),
-    loop({ type: "content.part", stepUuid: "s2", turnId: "4", part: { type: "text", text: "There are two files." } }),
-    JSON.stringify({ type: "turn.ended", turnId: 4, reason: "completed" }),
-  ].join("\n") + "\n");
-
-  const transcript = extractUnseenKimicodeTurns(wire);
-  assert.deepEqual(transcript.turns.map(({ role, content, turnId }) => ({ role, content, turnId })), [
-    { role: "user", content: "list the files", turnId: "4" },
-    { role: "assistant", content: "Checking the folder first.\nThere are two files.", turnId: "4" },
-  ]);
+// Recorded from a Kimi Code 2.8.1 session with a shell command, a file read, a
+// failing command and an MCP call; paths and the account name are replaced.
+test("a recorded session's tool calls and results are sent in host order", () => {
+  const transcript = extractUnseenKimicodeTurns(join(FIXTURES, "wire.jsonl"));
   const plan = buildIncrementalCapturePlan(transcript.turns, {}, {}, { toolNameById: transcript.toolNameById });
-  assert.deepEqual(plan.payloads, [
-    { role: "user", content: "list the files", turn_id: "4" },
+  const outline = plan.payloads.map(({ role, turn_id, parts }) => ({
+    role,
+    turn_id,
+    parts: parts.map((part) => (part.type === "text" ? `text: ${part.text.slice(0, 24)}` : `${part.tool_name} ${part.tool_status}`)),
+  }));
+  const ovRead = "mcp__plugin-openviking-memory_openviking__read";
+  assert.deepEqual(outline, [
+    { role: "user", turn_id: "0", parts: ["text: List the files in this f"] },
     {
       role: "assistant",
+      turn_id: "0",
       parts: [
-        { type: "text", text: "Checking the folder first.\n\nThere are two files." },
-        { type: "tool", tool_id: "c1", tool_name: "Shell", tool_status: "running", tool_input: { command: "ls" } },
-        { type: "tool", tool_id: "c2", tool_name: "ReadFile", tool_status: "running", tool_input: { path: "a.txt" } },
-        { type: "tool", tool_id: "c1", tool_name: "Shell", tool_status: "completed", tool_output: "a.txt\nb.txt" },
-        { type: "tool", tool_id: "c2", tool_name: "ReadFile", tool_status: "error", tool_output: "no such file" },
+        "text: I'll run the four steps ",
+        "Bash running",
+        "Read running",
+        "Bash completed",
+        "Read completed",
+        "Bash running",
+        `${ovRead} running`,
+        "Bash error",
+        `${ovRead} completed`,
+        "text: Done: the folder holds o",
       ],
-      turn_id: "4",
     },
+    { role: "user", turn_id: "1", parts: ["text: Run the shell command 'e"] },
+    { role: "assistant", turn_id: "1", parts: ["Bash running", "Bash completed", "text: ok"] },
   ]);
+  const parts = plan.payloads[1].parts;
+  assert.deepEqual(parts[1], {
+    type: "tool",
+    tool_id: "call_00_mk47sz7usjjzd7upuk4h5qze",
+    tool_name: "Bash",
+    tool_status: "running",
+    tool_input: { command: "ls -la" },
+  });
+  assert.equal(parts[7].tool_id, "call_00_tdjuny0gqfpmm136zw3nidd3");
+  assert.equal(parts[7].tool_output, "cat: missing-file.txt: No such file or directory\nCommand failed with exit code: 1.");
+  assert.equal(parts[8].tool_output, "mock content of viking://resources/demo");
 });
 
 test("turn.ended closes an interrupted user-only turn", () => {

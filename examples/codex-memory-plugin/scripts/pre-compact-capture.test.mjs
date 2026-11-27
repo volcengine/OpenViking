@@ -83,49 +83,52 @@ function mockHandler(calls) {
   };
 }
 
-test("pre-compact catches up, commits and keeps the cursor", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-"));
-  const transcriptPath = join(stateDir, "transcript.jsonl");
-  const calls = [];
-  try {
-    const now = Date.now();
-    await writeFile(join(stateDir, "pc1.json"), JSON.stringify({
-      codexSessionId: "pc1",
-      ovSessionId: "cx-pc1",
-      capturedTurnCount: 2,
-      createdAt: now - 1000,
-      lastUpdatedAt: now,
-    }));
-    await writeEndedMarker(stateDir, "pc1", now);
-    await writeFile(transcriptPath, [
-      turn("user", "turn-0"),
-      turn("assistant", "turn-1"),
-      turn("user", "turn-2"),
-      turn("assistant", "turn-3"),
-    ].join("\n"));
+for (const commitOnCompact of [true, false]) {
+  test(`pre-compact catches up${commitOnCompact ? ", commits" : " without a commit when autoCommitOnCompact is off"} and keeps the cursor`, async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-"));
+    const transcriptPath = join(stateDir, "transcript.jsonl");
+    const calls = [];
+    try {
+      const now = Date.now();
+      await writeFile(join(stateDir, "pc1.json"), JSON.stringify({
+        codexSessionId: "pc1",
+        ovSessionId: "cx-pc1",
+        capturedTurnCount: 2,
+        createdAt: now - 1000,
+        lastUpdatedAt: now,
+      }));
+      await writeEndedMarker(stateDir, "pc1", now);
+      await writeFile(transcriptPath, [
+        turn("user", "turn-0"),
+        turn("assistant", "turn-1"),
+        turn("user", "turn-2"),
+        turn("assistant", "turn-3"),
+      ].join("\n"));
 
-    await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
-      const { output } = await runPreCompact(
-        { session_id: "pc1", transcript_path: transcriptPath, trigger: "auto" },
-        baseEnv(baseUrl, stateDir),
-      );
-      assert.match(output.systemMessage, /cx-pc1 is committed \(trace_id=trace-pc\)/);
-    });
+      await withMockOpenViking(mockHandler(calls), async (baseUrl) => {
+        const { output } = await runPreCompact(
+          { session_id: "pc1", transcript_path: transcriptPath, trigger: "auto" },
+          baseEnv(baseUrl, stateDir, commitOnCompact ? {} : { OPENVIKING_AUTO_COMMIT_ON_COMPACT: "0" }),
+        );
+        if (commitOnCompact) assert.match(output.systemMessage, /cx-pc1 is committed \(trace_id=trace-pc\)/);
+        else assert.deepEqual(output, {});
+      });
 
-    const messages = calls
-      .filter((c) => c.path.endsWith("/messages/batch"))
-      .flatMap((c) => c.body?.messages ?? []);
-    assert.equal(messages.length, 2);
-    assert.ok(calls.some((c) => c.path === "/api/v1/sessions/cx-pc1/commit"));
+      const messages = calls
+        .filter((c) => c.path.endsWith("/messages/batch"))
+        .flatMap((c) => c.body?.messages ?? []);
+      assert.equal(messages.length, 2);
+      assert.equal(calls.some((c) => c.path === "/api/v1/sessions/cx-pc1/commit"), commitOnCompact);
 
-    const state = JSON.parse(await readFile(join(stateDir, "pc1.json"), "utf-8"));
-    assert.equal(state.ovSessionId, null);
-    assert.equal(state.capturedTurnCount, 4);
-    assert.equal(await endedMarkerExists(stateDir, "pc1"), false, "compaction proves the thread is alive");
-  } finally {
-    await rm(stateDir, { recursive: true, force: true });
-  }
-});
+      const state = JSON.parse(await readFile(join(stateDir, "pc1.json"), "utf-8"));
+      assert.equal(state.ovSessionId, commitOnCompact ? null : "cx-pc1");
+      assert.equal(state.capturedTurnCount, 4);
+      assert.equal(await endedMarkerExists(stateDir, "pc1"), false, "compaction proves the thread is alive");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+}
 
 test("pre-compact is inert when auto-capture is disabled", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-off-"));
@@ -336,7 +339,7 @@ for (const { name, input, extra } of [
   { name: "null ID", input: { session_id: null } },
   { name: "empty ID", input: { session_id: "" } },
   { name: "empty native ID with an alias", input: { session_id: "", sessionId: "named" } },
-  { name: "disabled hook with missing ID", input: {}, extra: { OPENVIKING_AUTO_COMMIT_ON_COMPACT: "0" } },
+  { name: "disabled hook with missing ID", input: {}, extra: { OPENVIKING_AUTO_CAPTURE: "0" } },
 ]) {
   test(`pre-compact skips ${name} before state or HTTP access`, async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "ov-pre-compact-no-id-"));

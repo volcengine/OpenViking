@@ -9,8 +9,13 @@ export function shapeCapturePayload(payload: any, role: string, cfg?: Record<str
 }): { parts: any[]; text: string; signalText: string; dropped: boolean };
 export function buildCaptureMessage(payload: any, role: string, cfg?: Record<string, any>, options?: {
   toolNameById?: Record<string, string>;
-  faithful?: boolean;
-}): { role: string; content: string } | { role: string; parts: any[] } | null;
+}): { role: string; parts: any[] } | null;
+export function hasCaptureTrigger(text: string): boolean;
+export function extractCaptureTurns(rolloutEntries: any[], cfg?: Record<string, any>): Array<{
+  role: string;
+  text: string;
+  parts: any[];
+}>;
 export function shouldCaptureText(text: string, role: string, cfg?: Record<string, any>, options?: { filters?: boolean }): {
   shouldCapture: boolean;
   reason: string;

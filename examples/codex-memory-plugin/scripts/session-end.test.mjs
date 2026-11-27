@@ -211,28 +211,31 @@ test("a second session-end on an unchanged transcript neither sends nor commits"
   }
 });
 
-test("a failed commit keeps the live session and the end marker", async () => {
-  const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-fail-"));
-  const transcriptPath = join(stateDir, "transcript.jsonl");
-  const calls = [];
-  try {
-    await writeState(stateDir, "s3", { capturedTurnCount: 0 });
-    await writeTranscript(transcriptPath, 2);
-    await withMockOpenViking(mockHandler(calls, { commitStatus: 500 }), async (baseUrl) => {
-      await runSessionEnd(
-        { session_id: "s3", transcript_path: transcriptPath },
-        workerEnv(baseUrl, stateDir),
-      );
-    });
+for (const commitStatus of [500, 403, 404]) {
+  const gone = commitStatus === 404;
+  test(`a ${commitStatus} commit ${gone ? "releases the session" : "keeps the live session and the end marker"}`, async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-fail-"));
+    const transcriptPath = join(stateDir, "transcript.jsonl");
+    const calls = [];
+    try {
+      await writeState(stateDir, "s3", { capturedTurnCount: 0 });
+      await writeTranscript(transcriptPath, 2);
+      await withMockOpenViking(mockHandler(calls, { commitStatus }), async (baseUrl) => {
+        await runSessionEnd(
+          { session_id: "s3", transcript_path: transcriptPath },
+          workerEnv(baseUrl, stateDir),
+        );
+      });
 
-    const state = await readState(stateDir, "s3");
-    assert.equal(state.ovSessionId, "cx-s3");
-    assert.equal(state.capturedTurnCount, 2);
-    assert.equal(await endedMarkerExists(stateDir, "s3"), true);
-  } finally {
-    await rm(stateDir, { recursive: true, force: true });
-  }
-});
+      const state = await readState(stateDir, "s3");
+      assert.equal(state.ovSessionId, gone ? null : "cx-s3");
+      assert.equal(state.capturedTurnCount, 2);
+      assert.equal(await endedMarkerExists(stateDir, "s3"), !gone);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+}
 
 test("an unreachable server leaves the cursor and the end marker alone", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-down-"));

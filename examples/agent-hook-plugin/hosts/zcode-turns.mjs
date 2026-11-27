@@ -1,159 +1,110 @@
 /**
- * Pure transcript parser for ZCode hook events.
+ * ZCode turns, read from its rollout file.
  *
- * ZCode's Stop hook stdin payload is not fully documented. Based on
- * reverse-engineering (#3127 by @quinn-zenith) and rollout file analysis,
- * the Stop payload contains at least:
- *   - session_id / sessionId
- *   - cwd
- *   - transcript_path (points to a TEMP file with only the LAST assistant
- *     message — NOT a complete conversation)
- *   - responseText / responsePreview (the last assistant response text)
+ * ZCode records every model call of a session in
+ * ~/.zcode/cli/rollout/model-io-<sessionId>.jsonl, one `model_io` line per
+ * call, each carrying the host `turnId` of the user prompt it serves:
+ *   { turnId, querySource, error?,
+ *     request: { messagesKind, messageOffset, messages: [{ role, content, toolCalls?, toolCallId?, toolName?, isError? }] },
+ *     response: { text, toolCalls: [{ id, name, input }] } }
+ * `request.messages` may be the whole conversation, its tail or only what is
+ * new since the previous line, so a turn is assembled from what each line
+ * adds: its response (text and tool calls) and the `tool` messages that answer
+ * calls made earlier in the same turn. The prompt is the newest user message
+ * of the turn's first line. Lines of other query sources (compaction,
+ * subagents, web fetch) are not the conversation.
  *
- * The rollout files at ~/.zcode/cli/rollout/model-io-*.jsonl contain
- * the COMPLETE conversation with this structure per line:
- *   { sessionId, turnId, type: "model_io",
- *     request: { messages: [{ role, content }] },
- *     response: { text, toolCalls, finishReason } }
- *
- * Strategy:
- * 1. Use the rollout file as the authoritative incremental transcript and
- *    extract ALL unseen turns since the last acknowledged turnId.
- * 2. Use stdin + pendingPrompt only when the rollout file is unavailable.
+ * Hook stdin is the fallback when no rollout file can be read.
  */
 
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const INJECTED_BLOCK_RE = /<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi;
-const RELEVANT_MEMORIES_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
-const SYSTEM_REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/gi;
+import { sanitizeCapturedText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { readUnseenTurns } from "./incremental-turn-capture.mjs";
 
-/**
- * Strip plugin-injected blocks and trim whitespace.
- */
-export function cleanZcodeText(value) {
-  return String(value || "")
-    .replace(INJECTED_BLOCK_RE, "")
-    .replace(RELEVANT_MEMORIES_RE, "")
-    .replace(SYSTEM_REMINDER_RE, "")
-    .trim();
-}
-
-/**
- * Resolve the rollout file path for a given session ID.
- * ZCode stores rollout at ~/.zcode/cli/rollout/model-io-<sessionId>.jsonl
- */
 function resolveRolloutPath(input = {}) {
-  const sessionId =
-    input.session_id || input.sessionId || input.conversation_id || "";
+  const sessionId = input.session_id || input.sessionId || input.conversation_id || "";
   if (!sessionId) return null;
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  // ZCode rollout files are named: model-io-<sessionId>.jsonl
-  // sessionId already includes the "sess_" prefix, so no extra "sess-" needed.
   return join(home, ".zcode", "cli", "rollout", `model-io-${sessionId}.jsonl`);
 }
 
-/**
- * Extract the user message from a rollout entry's request.messages.
- * Finds the last user-role message in the array.
- */
-function extractUserFromMessages(messages) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role === "user") {
-      const content = typeof msg.content === "string"
-        ? msg.content
-        : Array.isArray(msg.content)
-          ? msg.content.filter((b) => b?.type === "text").map((b) => b.text).join("\n")
-          : "";
-      const cleaned = cleanZcodeText(content);
-      if (cleaned) return cleaned;
-      break;
-    }
+function messageText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block) => block?.type === "text" && typeof block.text === "string")
+    .map((block) => block.text)
+    .join("\n");
+}
+
+// ZCode puts its own reminders and the hooks' additional context in user
+// messages of their own, so the prompt is the newest user message that still
+// has text once those are stripped. Anything past an assistant or tool message
+// belongs to an earlier turn.
+function promptOf(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "user") return "";
+    const text = messageText(message.content);
+    if (sanitizeCapturedText(text)) return text;
   }
   return "";
 }
 
-/**
- * Read ALL unseen turns from a ZCode rollout file since lastKnownTurnId.
- * Each rollout line is a JSON object with turnId, request.messages, response.text.
- *
- * @param {string} rolloutPath - Path to the rollout JSONL file.
- * @param {string} lastKnownTurnId - The last processed turnId (exclusive bound).
- * @returns {Array<{role: string, content: string, turnId: string}>} Unseen turns.
- */
-export function extractUnseenRolloutTurns(rolloutPath, lastKnownTurnId = null) {
-  return readUnseenRolloutTurns(rolloutPath, lastKnownTurnId).turns;
+export function extractZcodeTurns(records) {
+  const turns = new Map();
+  for (const record of records) {
+    if (record.type && record.type !== "model_io") continue;
+    if (record.querySource && record.querySource !== "main_turn") continue;
+    const turnId = typeof record.turnId === "string" ? record.turnId : "";
+    if (!turnId) continue;
+    const messages = Array.isArray(record.request?.messages) ? record.request.messages : [];
+    let turn = turns.get(turnId);
+    if (!turn) {
+      turn = { prompt: promptOf(messages), blocks: [], calls: new Set(), answered: new Set() };
+      turns.set(turnId, turn);
+    }
+    for (const message of messages) {
+      const id = message?.role === "tool" ? message.toolCallId : "";
+      if (!id || !turn.calls.has(id) || turn.answered.has(id)) continue;
+      turn.answered.add(id);
+      turn.blocks.push({
+        type: "tool_result",
+        tool_use_id: id,
+        name: message.toolName,
+        content: message.content ?? "",
+        is_error: message.isError === true,
+      });
+    }
+    // A failed attempt is retried on a line of its own.
+    if (record.error || !record.response) continue;
+    if (typeof record.response.text === "string" && record.response.text.trim()) {
+      turn.blocks.push({ type: "text", text: record.response.text });
+    }
+    for (const call of Array.isArray(record.response.toolCalls) ? record.response.toolCalls : []) {
+      if (!call?.id || turn.calls.has(call.id)) continue;
+      turn.calls.add(call.id);
+      turn.blocks.push({ type: "tool_use", id: call.id, name: call.name, input: call.input ?? {} });
+    }
+  }
+
+  const out = [];
+  for (const [turnId, { prompt, blocks }] of turns) {
+    if (prompt) out.push({ role: "user", content: prompt, turnId });
+    if (blocks.length === 0) continue;
+    const assistant = {
+      role: "assistant",
+      content: blocks.filter((block) => block.type === "text").map((block) => block.text).join("\n\n"),
+      turnId,
+    };
+    if (blocks.some((block) => block.type !== "text")) assistant.payload = { role: "assistant", content: blocks };
+    out.push(assistant);
+  }
+  return out;
 }
 
-function readUnseenRolloutTurns(rolloutPath, lastKnownTurnId = null) {
-  if (!rolloutPath) return { available: false, turns: [] };
-  let raw;
-  try {
-    raw = readFileSync(rolloutPath, "utf8");
-  } catch {
-    return { available: false, turns: [] };
-  }
-
-  const lines = raw.trim().split("\n").filter(Boolean);
-  if (lines.length === 0) return { available: true, turns: [] };
-
-  // If we have a lastKnownTurnId, find its position and return everything after.
-  // If not, return only the last entry (first-time capture).
-  let startIndex = 0;
-  if (lastKnownTurnId) {
-    const foundIndex = lines.findIndex((line) => {
-      try {
-        return JSON.parse(line).turnId === lastKnownTurnId;
-      } catch {
-        return false;
-      }
-    });
-    if (foundIndex >= 0) startIndex = foundIndex + 1;
-  }
-  // No lastKnownTurnId → capture ALL entries (first-time capture should not
-  // lose prior turns). Previously only returned the last entry.
-
-  const turns = [];
-  for (let i = startIndex; i < lines.length; i++) {
-    let entry;
-    try {
-      entry = JSON.parse(lines[i]);
-    } catch {
-      continue;
-    }
-    const turnId = entry.turnId || "";
-    const userContent = extractUserFromMessages(entry?.request?.messages || []);
-    const assistantContent = cleanZcodeText(entry?.response?.text || "");
-    if (userContent) {
-      turns.push({ role: "user", content: userContent, turnId });
-    }
-    if (assistantContent) {
-      turns.push({ role: "assistant", content: assistantContent, turnId });
-    }
-  }
-
-  return { available: true, turns };
-}
-
-/**
- * Extract user/assistant turns from a ZCode Stop-event payload.
- *
- * Uses the rollout file first so every normal Stop observes stable host turn
- * IDs and can recover missed Stop events. Stdin is only a compatibility
- * fallback for environments where no rollout file can be read.
- *
- * @param {object} input - Raw hook stdin JSON.
- * @param {object} state - Persistent hook state (may contain pendingPrompt, lastTurnId).
- * @returns {Array<{role: string, content: string, turnId?: string}>} Non-empty turns.
- */
-export function buildZcodeTurns(input = {}, state = {}) {
-  const rolloutPath = resolveRolloutPath(input);
-  const rollout = readUnseenRolloutTurns(rolloutPath, state.lastTurnId || null);
-  if (rollout.available) return rollout.turns;
-
-  // Assistant content: try documented and reverse-engineered field names
+function stdinTurns(input, state) {
   const assistantContent =
     input.responseText ||
     input.responsePreview ||
@@ -163,8 +114,6 @@ export function buildZcodeTurns(input = {}, state = {}) {
     input.text_content ||
     input.response ||
     "";
-
-  // User content: try multiple field names
   const userContent =
     input.prompt ||
     input.user_prompt ||
@@ -174,9 +123,19 @@ export function buildZcodeTurns(input = {}, state = {}) {
     input.message ||
     state.pendingPrompt?.prompt ||
     "";
-
   return [
-    { role: "user", content: cleanZcodeText(userContent) },
-    { role: "assistant", content: cleanZcodeText(assistantContent) },
-  ].filter((turn) => turn.content);
+    { role: "user", content: userContent },
+    { role: "assistant", content: assistantContent },
+  ].filter((turn) => typeof turn.content === "string" && sanitizeCapturedText(turn.content));
+}
+
+/**
+ * The turns of a ZCode Stop that have not been captured yet, as the transcript
+ * the shared capture reads: the rollout's turns past `state.lastTurnId`, or the
+ * Stop payload's prompt and reply when the rollout cannot be read.
+ */
+export function buildZcodeTurns(input = {}, state = {}) {
+  const rollout = readUnseenTurns(resolveRolloutPath(input), state.lastTurnId || null, extractZcodeTurns);
+  if (rollout.status === "ok") return rollout;
+  return { status: "ok", turns: stdinTurns(input, state), toolNameById: {} };
 }

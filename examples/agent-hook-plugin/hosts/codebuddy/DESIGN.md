@@ -6,7 +6,9 @@ Established facts for the CodeBuddy Code CLI host, per
 `hosts/codebuddy-turns.mjs` beside this file).
 
 **Verified against**: CodeBuddy Code CLI **v2.163.0** (`client: "CLI"` in every payload),
-macOS 26.x / darwin 25.5.0, 2026-10-09.
+macOS 26.x / darwin 25.5.0, 2026-10-09; tool records, `SessionEnd` and the adapter's capture
+re-verified on **v2.187.0**, darwin 27.2.0, 2026-11-27 (run 4). A custom model in `models.json`
+runs `-p` without a login; the TUI asks for one.
 
 **Method**: a throwaway probe plugin loaded with `codebuddy --plugin-dir /tmp/cb-ov-probe`
 (never installed, no user config written). It appended one JSON line per event to
@@ -17,6 +19,7 @@ macOS 26.x / darwin 25.5.0, 2026-10-09.
 | 1 | `codebuddy --plugin-dir <probe> -p '<prompt>'` | 1 (single-shot) |
 | 2 | `codebuddy -p --input-format stream-json --output-format stream-json` | 2 |
 | 3 | `codebuddy --plugin-dir <probe>` — **interactive TUI**, 3 prompts, one subagent, `/exit` | 3 |
+| 4 | v2.187.0, plugin installed by the installer into a scratch `HOME`, a custom model in `models.json` and a stdio MCP probe: `codebuddy -p -y '<prompt>'` (Bash, Read, a failing Bash, two MCP calls), then `-p -c`, then `-p --input-format stream-json` | 3 |
 
 Legend: **verified** = observed in a real session · *documented* = only in the host docs ·
 **pending** = not reproduced (see §9).
@@ -73,11 +76,11 @@ reported `mcp_servers: [{"name":"openviking","status":"connected"}]` and listed 
 | Event | Fired? | matcher semantics |
 | --- | --- | --- |
 | `SessionStart` | **verified** (all 3 runs) | `source`; observed `startup` |
-| `UserPromptSubmit` | **verified in the TUI only** (3×); **never fired in 2 headless runs / 4 turns** | *documented*: no matcher |
+| `UserPromptSubmit` | **verified in the TUI** (3×); never fired headless on v2.163.0, **fires headless** on v2.185.0+ (§12, run 4) | *documented*: no matcher |
 | `PreToolUse` | **verified** | tool-name regex; observed names `Bash`, `Write`, `Read`, `Edit`, `Grep`, `ToolSearch`, `Agent` |
 | `PostToolUse` | **verified** | same matcher space as PreToolUse |
 | `Stop` | **verified** | *documented*: no matcher |
-| `SessionEnd` | **verified** (run 3) | `reason`; observed `prompt_input_exit` |
+| `SessionEnd` | **verified** in the TUI (run 3); **not fired by headless `-p`** on v2.187.0, text or stream-json output (run 4) | `reason`; observed `prompt_input_exit` |
 | `SubagentStart` | **verified** (run 3) | not in the user-hook event table, **but fires for plugin hooks** |
 | `SubagentStop` | **verified** (run 3) | no independent stdin schema in the host docs |
 | `PreCompact` | **verified** (P7 follow-up) | *documented*: `manual` / `auto`; a compaction leaves `{"type":"summary","providerData":{"source":"pre-compact"}}` in the transcript |
@@ -192,8 +195,19 @@ non-blocking error shown to the user. **Not exercised by the probe** — every h
 - Subagent conversations live in `<session-uuid>/subagents/agent-<uuid>.jsonl` (verified;
   files exist and are what `SubagentStart`/`SubagentStop` point at).
 - Format: append-only JSONL; record `type` ∈ `message`, `reasoning`, `function_call`,
-  `function_call_result`, `file-history-snapshot`, `summary`, `turn-metrics`, … plus
+  `function_call_result`, `file-history-snapshot`, `session-meta`, `summary`, `turn-metrics`, … plus
   `sessionId`, `cwd`, `providerData`.
+- Tool records (**verified**, run 4): `function_call` is `{name, arguments: "<JSON string>", callId}`;
+  `function_call_result` is `{name, callId, status, output}` where `output` is a text block
+  `{"type":"text","text":"…"}` (the bundle also writes a plain string on one path). `status` is
+  `completed` or `incomplete` (a failed MCP call); the bundle also streams `in_progress` partial
+  results. A shell command that exits non-zero is still `completed`: only
+  `providerData.toolResult.rawResponse.is_error: true` (with `exitCode`) marks it failed. Read
+  results carry a `<system-reminder data-role="tool-hint">` line inside the output text.
+- Deferred tools, every MCP tool among them, are found with `ToolSearch` and called through
+  `DeferExecuteTool` with `arguments: {"toolName": "mcp__<server>__<tool>", "params": {…}}`; the
+  result record is named `DeferExecuteTool` too (**verified**, run 4). `PreToolUse` fires for
+  `DeferExecuteTool` and again for the inner `mcp__<server>__<tool>`.
 - **Flush timing: complete at `Stop`** — verified: the size recorded by the `Stop` hook
   (37 571 B) was byte-identical after the session ended, the tail line parsed as JSON, and it
   already contained the sentinel token and the final assistant text. Capture can read the
@@ -262,9 +276,14 @@ Measured facts that shaped the adapter and are *not* visible in the code:
   follow an assistant `message` into that assistant turn, in record order (tool
   records with no assistant message before them form an assistant turn of
   their own). Calls and results go out as tool parts, never as message text: a
-  call `running` with its input, a result `completed` (or `error` for any
-  status other than `success` / `completed`) with its output, under the call's
-  `callId` and name.
+  call `running` with its input, a result `completed` (or `error` when its
+  status is `incomplete` or its raw response says `is_error`) with the text of
+  its output, under the call's `callId` and name. A `DeferExecuteTool` call is
+  unwrapped to the tool it names, and its result takes that name, so the pair
+  matches under the real tool. `in_progress` results are skipped.
+- `SessionEnd` does not fire in headless `-p` (§3), so a headless session's
+  turns after the last threshold commit stay uncommitted unless the server
+  commits them.
 - Commit policy: `Stop` commits once the session's `pending_tokens` reach
   `commitTokenThreshold`, unless `serverAutoCommit` leaves that commit to the
   server; `PreCompact` (unless `autoCommitOnCompact` is off) and `SessionEnd`

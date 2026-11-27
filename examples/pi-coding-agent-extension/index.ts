@@ -21,7 +21,7 @@ import { RecallLedger } from "./lib/recall-ledger.mjs";
 import { SyncManager } from "./sync.js";
 import { buildProfileBlock } from "./shared/profile-inject.mjs";
 import { formatSessionHistoryPointer } from "./shared/session-history-pointer.mjs";
-import { isBypassed } from "./shared/session-model.mjs";
+import { commitsOnCompaction, isBypassed } from "./shared/session-model.mjs";
 import { guardVikingUriToolCall, noticeVikingUriToolResult } from "./lib/uri-guard-adapter.mjs";
 import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.mjs";
 import { registerMcpTools, TOOL_NAME_PREFIX } from "./tools.js";
@@ -165,7 +165,7 @@ export default async function (pi: ExtensionAPI) {
 
     startPromise = (async () => {
       // Bypass check
-      if (isBypassed(config, { cwd: process.cwd() })) {
+      if (isBypassed(config, { sessionId: ctx.sessionManager?.getSessionId?.(), cwd: process.cwd() })) {
         bypassed = true;
         started = true;
         return;
@@ -224,8 +224,9 @@ export default async function (pi: ExtensionAPI) {
         takeover.recordCaptureGap();
       }
 
-      // Profile injection
-      profileBlock = await buildSessionProfileBlock(client, config);
+      // Profile injection; pi rebuilds the system prompt every turn, so this also
+      // covers the turns after a compaction.
+      profileBlock = config.noAutoInject ? "" : await buildSessionProfileBlock(client, config);
 
       if (!config.takeoverEnabled && config.resumeArchiveInject && sync.sessionId) {
         // Resume rehydration — fetch archive overview if session was previously committed.
@@ -436,8 +437,9 @@ export default async function (pi: ExtensionAPI) {
       }, () => ctx.sessionManager.getBranch(), { deadline });
     }
 
-    const archiveId = await sync.commit();
     compacted = true;
+    if (!commitsOnCompaction(config)) return;
+    const archiveId = await sync.commit();
 
     // Cache archive overview for rehydration after compaction
     if (config.resumeArchiveInject && archiveId && sync.sessionId) {

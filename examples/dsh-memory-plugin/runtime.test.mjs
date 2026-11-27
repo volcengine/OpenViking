@@ -114,7 +114,7 @@ test("a retryable threshold commit failure is queued", async () => {
     async getSession() {
       return { pending_tokens: 20000 };
     },
-    async commitSession() {
+    async fetchJSON() {
       return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
     },
   }, config(), { debug() {} });
@@ -139,10 +139,6 @@ test("serverAutoCommit leaves the threshold commit to a session that carries the
       requests.push(path);
       return { ok: true, result: {} };
     },
-    async commitSession() {
-      requests.push("commit");
-      return { ok: true, result: {} };
-    },
   }, { ...config(), serverAutoCommit: true, commitIdleSeconds: 1800 }, { debug() {} });
   const session = { id: "server-commit", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
@@ -159,16 +155,17 @@ test("compaction/start commits below the token threshold without reading session
   process.env.OPENVIKING_PENDING_DIR = pendingDir;
   let getSessionCalls = 0;
   let commitCalls = 0;
-  const runtime = new OpenVikingRuntime({
+  const client = {
     async getSession() {
       getSessionCalls += 1;
       return { pending_tokens: 5 };
     },
-    async commitSession() {
-      commitCalls += 1;
+    async fetchJSON(path) {
+      if (path.endsWith("/commit")) commitCalls += 1;
       return { ok: true };
     },
-  }, config(), { debug() {} });
+  };
+  const runtime = new OpenVikingRuntime(client, config(), { debug() {} });
   const session = { id: "compaction-commit", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
 
@@ -183,9 +180,15 @@ test("compaction/start commits below the token threshold without reading session
 
   assert.equal(getSessionCalls, 0);
   assert.equal(commitCalls, 1);
+
+  const off = new OpenVikingRuntime(client, { ...config(), autoCommitOnCompact: false }, { debug() {} });
+  off.stateFor(session).ready = true;
+  off.maybeCommit(session, { type: "compaction/start" });
+  await off.flush(session);
+  assert.equal(commitCalls, 1);
 });
 
-test("once a write is queued, later messages and the final commit stay ordered on disk", async () => {
+test("once a write is queued, later messages and the compaction and final commits stay ordered on disk", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-order-"));
   tempDirs.push(pendingDir);
   process.env.OPENVIKING_PENDING_DIR = pendingDir;
@@ -196,8 +199,8 @@ test("once a write is queued, later messages and the final commit stay ordered o
       addCalls += 1;
       return { ok: false, status: 503, error: { code: "UNAVAILABLE" } };
     },
-    async commitSession() {
-      commitCalls += 1;
+    async fetchJSON(path) {
+      if (path.endsWith("/commit")) commitCalls += 1;
       return { ok: true };
     },
   }, config(), { debug() {} });
@@ -212,6 +215,13 @@ test("once a write is queued, later messages and the final commit stay ordered o
     "addMessage",
     "addMessage",
   ]);
+  runtime.maybeCommit(session, { type: "compaction/start" });
+  await runtime.flush(session);
+  assert.deepEqual((await listPending()).map(item => item.entry.type), [
+    "addMessage",
+    "addMessage",
+    "commitSession",
+  ]);
   await runtime.dispose(session);
 
   const pending = await listPending();
@@ -224,7 +234,7 @@ test("once a write is queued, later messages and the final commit stay ordered o
     pending.map(item => (
       item.entry.type === "commitSession"
         ? item.entry.payload
-        : item.entry.payload.parts?.[0]?.text || item.entry.payload.content
+        : item.entry.payload.parts[0].text
     )),
     ["First queued message.", "Second queued message.", { keep_recent_count: 0 }],
   );
@@ -236,7 +246,7 @@ test("once a write is queued, later messages and the final commit stay ordered o
   assert.equal(commitCalls, 0);
 });
 
-test("new queued messages move an older pending commit behind them", async () => {
+test("the final commit replaces an older queued commit behind the new messages", async () => {
   const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-reorder-"));
   tempDirs.push(pendingDir);
   process.env.OPENVIKING_PENDING_DIR = pendingDir;
@@ -257,14 +267,17 @@ test("new queued messages move an older pending commit behind them", async () =>
   runtime.capture(session, userEvent("Message after an offline commit."));
   await runtime.flush(session);
   assert.deepEqual((await listPending()).map(item => item.entry.type), [
+    "commitSession",
     "addMessage",
   ]);
 
   await runtime.dispose(session);
-  assert.deepEqual((await listPending()).map(item => item.entry.type), [
+  const pending = await listPending();
+  assert.deepEqual(pending.map(item => item.entry.type), [
     "addMessage",
     "commitSession",
   ]);
+  assert.deepEqual(pending[1].entry.payload, { keep_recent_count: 0 });
 });
 
 test("flush waits only for the requested session", async () => {
@@ -283,14 +296,20 @@ test("flush waits only for the requested session", async () => {
 });
 
 test("dispose waits for the final commit before deleting session state", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-dispose-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
   let releaseCommit;
-  let commitOptions;
+  let commitStarted;
   const committed = new Promise(resolve => {
     releaseCommit = resolve;
   });
+  const started = new Promise(resolve => {
+    commitStarted = resolve;
+  });
   const runtime = new OpenVikingRuntime({
-    async commitSession(_sessionId, _peerId, options) {
-      commitOptions = options;
+    async fetchJSON(path, _init, options) {
+      commitStarted({ path, options });
       await committed;
       return { ok: true, result: { trace_id: "shutdown" } };
     },
@@ -302,11 +321,12 @@ test("dispose waits for the final commit before deleting session state", async (
   const disposing = runtime.dispose(session).then(() => {
     settled = true;
   });
-  await Promise.resolve();
+  const commit = await started;
 
   assert.equal(settled, false);
   assert.equal(runtime.states.has(session.id), true);
-  assert.deepEqual(commitOptions, { timeoutMs: 3000 });
+  assert.equal(commit.path, "/api/v1/sessions/dsh-dispose/commit");
+  assert.equal(commit.options.timeoutMs, 3000);
   releaseCommit();
   await disposing;
   assert.equal(runtime.states.has(session.id), false);
@@ -334,11 +354,31 @@ test("profile delivery follows the history the model keeps", async () => {
   assert.equal((await runtime.profileMessage({ session }))?.source?.form, "instructions");
 });
 
+test("noAutoInject builds no profile, memory index or skill catalog", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-no-inject-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+  const runtime = new OpenVikingRuntime({
+    async healthResult() { return { ok: true }; },
+    async ensureSessionResult() { return { ok: true }; },
+    async fetchJSON(path) {
+      throw new Error(`no profile request expected: ${path}`);
+    },
+  }, { ...config(), noAutoInject: true }, { debug() {} });
+  const session = { id: "no-inject", header: { cwd: "/workspace" }, deriveMessages: () => [] };
+
+  assert.equal(await runtime.profileMessage({ session }), null);
+  assert.equal(runtime.stateFor(session).ready, true);
+});
+
 test("disposeAll drains every live session", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-dispose-all-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
   const committed = [];
   const runtime = new OpenVikingRuntime({
-    async commitSession(sessionId) {
-      committed.push(sessionId);
+    async fetchJSON(path) {
+      committed.push(path.split("/")[4]);
       return { ok: true };
     },
   }, config(), { debug() {} });
@@ -454,10 +494,6 @@ test("syncTurns false sends nothing: no capture, no commit, no dispose flush, no
     async getSession() {
       return { pending_tokens: 1000000 };
     },
-    async commitSession() {
-      writes.push("commitSession");
-      return { ok: true };
-    },
   }, { ...config(), syncTurns: false }, { debug() {} });
   const session = { id: "sync-off", header: { cwd: "/workspace" } };
 
@@ -537,11 +573,14 @@ test("permanent capture failures warn once per session and recover without loggi
 });
 
 test("permanent threshold, compaction and shutdown commit failures are visible", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-memory-commit-warnings-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
   for (const eventType of ["turn/end", "compaction/start"]) {
     const warnings = [];
     const runtime = new OpenVikingRuntime({
       async getSession() { return { pending_tokens: 20000 }; },
-      async commitSession() { return { ok: false, status: 401, error: { code: "UNAUTHENTICATED" } }; },
+      async fetchJSON() { return { ok: false, status: 401, error: { code: "UNAUTHENTICATED" } }; },
     }, { ...config(), commitTokenThreshold: 100 }, { warn: message => warnings.push(message) });
     const session = { id: "commit-warnings", header: { cwd: "/workspace" } };
     runtime.stateFor(session).ready = true;
@@ -601,9 +640,7 @@ function config() {
     peerId: "",
     syncTurns: true,
     captureAssistantTurns: true,
-    captureToolResults: false,
     captureToolMaxChars: 1000000,
-    captureMaxLength: 24000,
     captureMode: "semantic",
     commitTokenThreshold: 20000,
     commitKeepRecentCount: 10,

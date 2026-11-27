@@ -9,7 +9,8 @@
  * extractor on the full pre-compact transcript.
  *
  * Catch-up: if the transcript has new turns the Stop hook hasn't
- * appended yet, we append them before committing.
+ * appended yet, we append them before committing. With
+ * autoCommitOnCompact off the catch-up still runs and the commit is skipped.
  *
  * After commit, we clear ovSessionId from state but keep
  * capturedTurnCount so post-compact Stop hooks don't re-capture pre-
@@ -26,9 +27,11 @@
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { catchUpTurns, commitOvSession, hasCaptureKeyword, makeFetchJSON } from "./ov-session.mjs";
+import { catchUpTurns, commitOvSession, makeFetchJSON } from "./ov-session.mjs";
 import { clearEnded, loadState, saveState, withSessionLock } from "./session-state.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { hasCaptureTrigger } from "./shared/capture-utils.mjs";
+import { commitsOnCompaction } from "./shared/session-model.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 let cfg = loadConfig();
@@ -76,7 +79,8 @@ async function compact(sessionId, transcriptPath, trigger, cwd, heartbeat) {
     // Keyword mode only gates sessions that have nothing live yet; once an OV
     // session exists we always finish it before compaction.
     shouldSend: (turns) =>
-      Boolean(state.ovSessionId) || cfg.captureMode !== "keyword" || hasCaptureKeyword(turns),
+      Boolean(state.ovSessionId) || cfg.captureMode !== "keyword"
+      || turns.some((turn) => turn.role === "user" && hasCaptureTrigger(turn.text)),
   });
 
   if (added > 0) log("appended_catchup", { ovSessionId, added });
@@ -97,6 +101,12 @@ async function compact(sessionId, transcriptPath, trigger, cwd, heartbeat) {
 
   if (!state.ovSessionId) {
     log("skip", { stage: "commit", reason: "no OV session for this codex session" });
+    await saveState(state);
+    return "";
+  }
+
+  if (!commitsOnCompaction(cfg)) {
+    log("skip", { stage: "commit", reason: "autoCommitOnCompact off" });
     await saveState(state);
     return "";
   }
@@ -140,7 +150,7 @@ async function compact(sessionId, transcriptPath, trigger, cwd, heartbeat) {
 runHookStage({
   loadConfig,
   // Catch-up uploads turns, so disabling capture also disables this commit.
-  gates: { enabled: (reloaded) => reloaded.autoCapture && reloaded.autoCommitOnCompact },
+  gates: { enabled: (reloaded) => reloaded.autoCapture },
   envelope: noop,
   onSkip: (reason) => log("skip", { stage: "init", reason }),
 }, async (stage) => {

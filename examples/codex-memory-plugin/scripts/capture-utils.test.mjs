@@ -6,7 +6,6 @@ import { extractCaptureTranscript, extractCaptureTurns } from "./capture-utils.m
 const CAPTURE_CONFIG = {
   captureAssistantTurns: true,
   captureToolMaxChars: 1000000,
-  captureMaxLength: 24000,
 };
 
 const startupBlocks = [
@@ -755,7 +754,7 @@ test("captures generic OpenViking MCP calls as standard tool parts", () => {
   assert.deepEqual(turns, [
     {
       role: "assistant",
-      text: "[tool-call find] {\"query\":\"无订单号换货\",\"target_uri\":\"viking://user/test/memories/experiences/\"}",
+      text: "",
       parts: [
         {
           type: "tool",
@@ -771,7 +770,7 @@ test("captures generic OpenViking MCP calls as standard tool parts", () => {
     },
     {
       role: "user",
-      text: `[tool-result] ${JSON.stringify(results)}`,
+      text: "",
       parts: [
         {
           type: "tool",

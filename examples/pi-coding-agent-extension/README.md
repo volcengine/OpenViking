@@ -181,15 +181,13 @@ integrations should configure category `quotas` when they need exact ceilings.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `captureMode`            | `"semantic"` | `"semantic"` (always capture) or `"keyword"` (trigger-based)           |
-| `captureMaxLength`       | `24000`    | Max sanitized text length for the capture decision                       |
-| `captureAssistantTurns`  | `true`     | Include assistant turns (text + tool USE inputs)                         |
-| `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: `lib/capture-adapter.mjs` keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
+| `captureAssistantTurns`  | `true`     | Send the assistant side: its text, tool calls and tool results. `false` sends only what the user wrote |
+| `captureFilters`         | `[]`       | sed-style rules applied to captured text before it is sent (`s///`, `d//`, `k//`); substitutions also reach tool input and output |
 | `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
 | `commitTokenThreshold`   | `100000`   | Pending-token threshold for client-driven commit                         |
 | `serverAutoCommit`       | `false`    | Outside takeover, leave the threshold commit to the server: the extension sets the session's `auto_commit_policy` from `commitTokenThreshold` and commits only at shutdown, compaction and `/viking commit` |
 | `commitIdleSeconds`      | `1800`     | Idle commit asked of the server with `serverAutoCommit`; `0` for none. Needs `memory.session_auto_commit.enabled` on the server |
-| `commitKeepRecentCount`  | `10`       | Not read: commits outside takeover archive every captured message (`keep_recent_count` 0); takeover sends the exact message count of the turns it keeps |
+| `autoCommitOnCompact`    | `true`     | Outside takeover, commit the session when pi compacts; `false` leaves the compaction without a commit |
 
 ### Context takeover
 
@@ -226,6 +224,7 @@ filtered or truncated the original Pi transcript.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
+| `noAutoInject`           | `false`    | Skip the profile block and its skill catalog; recall is unaffected. Env: `OPENVIKING_NO_AUTO_INJECT` |
 | `profileTokenBudget`     | `10000`    | Token budget for user profile block                                      |
 | `skillCatalog`           | `true`     | Add the `<available-skills>` catalog to the profile block. Env: `OPENVIKING_SKILL_CATALOG` |
 | `skillCatalogTokenBudget`| `1200`     | Separate token budget for the skill catalog (0–20000; `0` turns it off). Env: `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` |
@@ -281,7 +280,7 @@ When the model calls `openviking_session_history` without `session`, the extensi
 | `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall              |
 | `context`              | Run current-prompt recall after UI rendering, then inject takeover and recall context |
 | `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
-| `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages |
+| `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages unless `autoCommitOnCompact` is `false` |
 | `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
 
 ### Recall: Synchronous, Not Stale
@@ -296,10 +295,7 @@ Unlike Hermes's stale prefetch (recall from previous turn's query, injected one 
 
 Before pushing turns to OpenViking, shared capture sanitization strips injected context blocks such as `<openviking-context>` to prevent a self-referential pollution loop where recall context is captured back as user messages.
 
-In takeover mode the adapter uses faithful capture: acknowledgments and short
-turns are retained because they may later be represented only through the OV
-archive overview. Empty text, slash commands, and OpenViking status messages
-remain filtered.
+Apart from that, and from `captureFilters`, every message is sent as written: short replies, acknowledgements and slash commands included. Deciding what is worth remembering is left to the server's extraction, and a takeover archive overview can only represent what was captured.
 
 ### Tool Use Preservation
 

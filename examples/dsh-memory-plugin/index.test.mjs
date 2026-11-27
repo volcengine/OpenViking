@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { apply } from "./index.mjs";
 
-test("session filtering skips subagents without changing main-session recall", async () => {
+test("session filtering skips subagents and bypassed sessions without changing main-session recall", async () => {
   const handlers = new Map();
   let memoryRuntime;
   const ctx = {
@@ -24,6 +24,7 @@ test("session filtering skips subagents without changing main-session recall", a
     endpoint: "http://127.0.0.1:1933",
     workspacePeer: false,
     skipSubagentSessions: true,
+    bypassSessionPatterns: ["/scratch/**"],
   });
 
   const agent = {
@@ -62,38 +63,40 @@ test("session filtering skips subagents without changing main-session recall", a
       signal: new AbortController().signal,
     }, async () => ({ kind: "enter", messages: downstream }));
 
-    const child = {
-      status: "idle",
-      session: {
-        id: "dsh-derived-child",
-        header: { cwd: "/workspace", origin: "subagent" },
-      },
-      inject() {
-        assert.fail("subagent profile must not be injected");
-      },
-      ctx: {
-        effect() {
-          assert.fail("subagent teardown commit must not be registered");
+    for (const header of [
+      { cwd: "/workspace", origin: "subagent" },
+      { cwd: "/scratch/tmp" },
+    ]) {
+      const child = {
+        status: "idle",
+        session: { id: `dsh-skipped-${header.cwd}`, header },
+        inject() {
+          assert.fail("a skipped session's profile must not be injected");
         },
-      },
-    };
-    assert.equal(await created({ agent: child, source: "startup" }), undefined);
-    assert.equal(await handlers.get("agent/session-start")({ agent: child }), false);
-    const childMessages = [message("derived worker input")];
-    const childDecision = await preStep({
-      agent: child,
-      messages: childMessages,
-      signal: new AbortController().signal,
-    }, async () => ({ kind: "enter", messages: childMessages }));
-    handlers.get("session/event")(child.session, {
-      type: "user/message",
-      data: message("derived exploration chatter"),
-    });
-    handlers.get("session/event")(child.session, { type: "turn/end", data: {} });
-    await handlers.get("session/flush")(child.session);
+        ctx: {
+          effect() {
+            assert.fail("a skipped session's teardown commit must not be registered");
+          },
+        },
+      };
+      assert.equal(await created({ agent: child, source: "startup" }), undefined);
+      assert.equal(await handlers.get("agent/session-start")({ agent: child }), false);
+      const childMessages = [message("derived worker input")];
+      const childDecision = await preStep({
+        agent: child,
+        messages: childMessages,
+        signal: new AbortController().signal,
+      }, async () => ({ kind: "enter", messages: childMessages }));
+      handlers.get("session/event")(child.session, {
+        type: "user/message",
+        data: message("derived exploration chatter"),
+      });
+      handlers.get("session/event")(child.session, { type: "turn/end", data: {} });
+      await handlers.get("session/flush")(child.session);
 
-    assert.deepEqual(childDecision.messages, childMessages);
-    assert.equal(memoryRuntime.states.has(child.session.id), false);
+      assert.deepEqual(childDecision.messages, childMessages);
+      assert.equal(memoryRuntime.states.has(child.session.id), false);
+    }
   } finally {
     globalThis.fetch = originalFetch;
   }

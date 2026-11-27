@@ -22,7 +22,7 @@
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { catchUpTurns, commitOvSession, hasCaptureKeyword, makeFetchJSON } from "./ov-session.mjs";
+import { catchUpTurns, commitOvSession, isSessionGone, makeFetchJSON } from "./ov-session.mjs";
 import {
   clearEnded,
   loadState,
@@ -33,6 +33,7 @@ import {
 } from "./session-state.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
+import { hasCaptureTrigger } from "./shared/capture-utils.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
 let cfg = loadConfig();
@@ -81,7 +82,8 @@ async function finish(sessionId, transcriptPath, cwd, endToken, heartbeat) {
     logError,
     heartbeat,
     shouldSend: (turns) =>
-      Boolean(state.ovSessionId) || cfg.captureMode !== "keyword" || hasCaptureKeyword(turns),
+      Boolean(state.ovSessionId) || cfg.captureMode !== "keyword"
+      || turns.some((turn) => turn.role === "user" && hasCaptureTrigger(turn.text)),
   });
   if (added > 0) log("appended_catchup", { ovSessionId: state.ovSessionId, added });
 
@@ -115,29 +117,33 @@ async function finish(sessionId, transcriptPath, cwd, endToken, heartbeat) {
 
   const ovSessionId = state.ovSessionId;
   const commit = await commitOvSession(fetchJSONRes, ovSessionId);
+  const traceId = commit.traceId || commit.result?.trace_id || "";
   if (!commit.ok) {
+    const gone = isSessionGone(commit);
     log("commit", {
       reason: "session_end",
       ovSessionId,
       ok: false,
       status: commit.status,
-      trace_id: commit.traceId,
+      trace_id: traceId || undefined,
       error: commit.error?.message || commit.error?.code,
+      released: gone || undefined,
     });
-    // Keep ovSessionId and the end marker so the sweep retries this session.
-    await saveState(state, { touch: false });
-    return;
+    if (!gone) {
+      // Keep ovSessionId and the end marker so the sweep retries this session.
+      await saveState(state, { touch: false });
+      return;
+    }
+  } else {
+    log("commit", {
+      reason: "session_end",
+      ovSessionId,
+      archived: commit.result?.archived ?? false,
+      taskId: commit.result?.task_id,
+      status: commit.result?.status,
+      trace_id: traceId || undefined,
+    });
   }
-
-  const traceId = commit.traceId || commit.result?.trace_id || "";
-  log("commit", {
-    reason: "session_end",
-    ovSessionId,
-    archived: commit.result?.archived ?? false,
-    taskId: commit.result?.task_id,
-    status: commit.result?.status,
-    trace_id: traceId || undefined,
-  });
   state.ovSessionId = null;
   await saveState(state, { touch: false });
   await clearEnded(sessionId, { before: endToken + 1 });

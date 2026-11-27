@@ -104,8 +104,8 @@ test("Stop returns before slow writes while detached worker finishes capture", a
   assert.ok(batch);
   assert.deepEqual(JSON.parse(batch.body), {
     messages: [
-      { role: "user", content: "slow question", turn_id: "turn-001" },
-      { role: "assistant", content: "slow answer", turn_id: "turn-001" },
+      { role: "user", parts: [{ type: "text", text: "slow question" }], turn_id: "turn-001" },
+      { role: "assistant", parts: [{ type: "text", text: "slow answer" }], turn_id: "turn-001" },
     ],
   });
 
@@ -179,8 +179,8 @@ test("400 failure does not advance state and successful retry prevents duplicate
   const retriedBatch = requests.filter(({ url }) => url?.endsWith("/messages/batch"))[1];
   assert.deepEqual(JSON.parse(retriedBatch.body), {
     messages: [
-      { role: "user", content: "retry question", turn_id: "turn-001" },
-      { role: "assistant", content: "retry answer", turn_id: "turn-001" },
+      { role: "user", parts: [{ type: "text", text: "retry question" }], turn_id: "turn-001" },
+      { role: "assistant", parts: [{ type: "text", text: "retry answer" }], turn_id: "turn-001" },
     ],
   });
   const successfulState = JSON.parse(readFileSync(statePath, "utf8"));

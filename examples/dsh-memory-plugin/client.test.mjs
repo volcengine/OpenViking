@@ -30,14 +30,13 @@ test("client sends OpenViking identity headers and preserves response trace ids"
     peerId: "peer-a",
     userAgent: "openviking-memory-dsh/0.1.0",
     requestTimeoutMs: 1000,
-    commitKeepRecentCount: 10,
   });
-  const response = await client.commitSession("dsh-1");
+  const response = await client.addMessage("dsh-1", { role: "user", parts: [{ type: "text", text: "hi" }] });
 
   assert.equal(response.ok, true);
   assert.equal(response.traceId, "trace-123");
-  assert.equal(seen.url, "http://127.0.0.1:1933/api/v1/sessions/dsh-1/commit");
-  assert.deepEqual(JSON.parse(seen.init.body), { keep_recent_count: 0 });
+  assert.equal(seen.url, "http://127.0.0.1:1933/api/v1/sessions/dsh-1/messages");
+  assert.deepEqual(JSON.parse(seen.init.body), { role: "user", parts: [{ type: "text", text: "hi" }] });
   assert.equal(seen.init.headers.Authorization, "Bearer secret");
   assert.equal(seen.init.headers["X-OpenViking-Account"], "account-a");
   assert.equal(seen.init.headers["X-OpenViking-User"], "user-a");

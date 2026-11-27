@@ -304,6 +304,51 @@ test("startup commits a session whose SessionEnd marker is still present", async
   }
 });
 
+test("the sweep releases a session the server no longer has and retries a refused one", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-sweep-commit-status-"));
+  const requests = [];
+  const profile = profileHandler(requests);
+  try {
+    const now = Date.now();
+    for (const id of ["gone", "denied"]) {
+      await writeFile(join(stateDir, `${id}.json`), JSON.stringify({
+        codexSessionId: id,
+        ovSessionId: `cx-${id}`,
+        capturedTurnCount: 2,
+        createdAt: now - 1000,
+        lastUpdatedAt: now,
+      }));
+      await writeEndedMarker(stateDir, id, now);
+    }
+
+    await withMockOpenViking(async (req, res) => {
+      if (req.method === "POST" && req.url.endsWith("/cx-gone/commit")) {
+        return writeJson(res, { status: "error", error: { code: "NOT_FOUND", message: "no session" } }, 404);
+      }
+      if (req.method === "POST" && req.url.endsWith("/cx-denied/commit")) {
+        return writeJson(res, { status: "error", error: { code: "UNAUTHORIZED", message: "bad key" } }, 401);
+      }
+      return profile(req, res);
+    }, async (baseUrl) => {
+      const { output } = await runSessionStart(
+        { session_id: "new-session", source: "startup", cwd: "/tmp/codex-commit-status" },
+        baseEnv(baseUrl, stateDir),
+      );
+      assert.equal(output.systemMessage, undefined);
+    });
+
+    const gone = JSON.parse(await readFile(join(stateDir, "gone.json"), "utf-8"));
+    assert.equal(gone.ovSessionId, null);
+    assert.equal(await endedMarkerExists(stateDir, "gone"), false);
+    const denied = JSON.parse(await readFile(join(stateDir, "denied.json"), "utf-8"));
+    assert.equal(denied.ovSessionId, "cx-denied");
+    assert.equal(await endedMarkerExists(stateDir, "denied"), true);
+    assert.deepEqual(await readdir(join(stateDir, "pending")).catch(() => []), []);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("startup ignores committed cursor-only states", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-codex-cursor-only-"));
   const requests = [];

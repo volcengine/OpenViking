@@ -26,6 +26,20 @@
         "timeout": 5
       }
     ],
+    "postToolUse": [
+      {
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs postToolUse __OPENVIKING_CLIENT_ID__",
+        "matcher": "^(?!MCP:)",
+        "timeout": 10
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs postToolUseFailure __OPENVIKING_CLIENT_ID__",
+        "matcher": "^(?!MCP:)",
+        "timeout": 10
+      }
+    ],
     "afterMCPExecution": [
       {
         "command": "node __OPENVIKING_PLUGIN_ROOT__/scripts/hook.mjs afterMCPExecution __OPENVIKING_CLIENT_ID__",

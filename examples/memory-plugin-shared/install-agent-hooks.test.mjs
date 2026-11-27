@@ -600,7 +600,8 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
     assert.equal(cursor.hooks.beforeReadFile.filter((entry) => entry.command.includes("uri-guard.mjs")).length, 1);
     assert.equal(cursor.hooks.afterMCPExecution.filter((entry) => entry.command.includes("scripts/hook.mjs")).length, 1);
     assert.deepEqual(cursor.hooks.beforeShellExecution, [thirdPartyShellHook]);
-    assert.equal(Boolean(cursor.hooks.postToolUse), false);
+    assert.equal(cursor.hooks.postToolUse.length, 1);
+    assert.match(cursor.hooks.postToolUse[0].command, /scripts\/hook\.mjs' postToolUse cursor/);
 
     for (const [file, label] of [[traeHooks, "trae"], [traeCnHooks, "trae-cn"]]) {
       const config = JSON.parse(readFileSync(file, "utf8"));

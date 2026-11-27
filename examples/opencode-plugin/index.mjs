@@ -6,6 +6,7 @@ import { injectOpenVikingMcpConfig, injectOpenVikingSkillPaths } from "./lib/mcp
 import { fillHistorySession } from "./lib/session-history.mjs"
 import { keepNewestStartContext } from "./lib/session-inject.mjs"
 import { isRecallEnabled } from "./lib/shared/recall-core.mjs"
+import { commitsOnCompaction } from "./lib/shared/session-model.mjs"
 import { log } from "./lib/utils.mjs"
 
 const pluginRoot = dirname(fileURLToPath(import.meta.url))
@@ -88,7 +89,7 @@ function v1Hooks(runtime) {
         opencode_session: input.sessionID,
       })
       await sessionManager.flushSession(input.sessionID, {
-        commit: true,
+        commit: commitsOnCompaction(config),
         reason: "experimental.session.compacting",
       })
     },

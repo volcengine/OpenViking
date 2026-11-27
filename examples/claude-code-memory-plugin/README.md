@@ -196,9 +196,9 @@ Recall covers skills as well as memories: the server-assembled context block can
 | Env Var                                | Default      | Description                                                              |
 |----------------------------------------|--------------|--------------------------------------------------------------------------|
 | `OPENVIKING_AUTO_CAPTURE`              | `true`       | Enable auto-capture; also gates write hooks (PreCompact / SessionEnd / SubagentStop) |
-| `OPENVIKING_CAPTURE_MODE`              | `semantic`   | `semantic` (always capture) or `keyword` (trigger-based)                 |
-| `OPENVIKING_CAPTURE_MAX_LENGTH`        | `24000`      | Max sanitized text length for the capture decision                       |
-| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`       | Include assistant turns (text + tool I/O). Set to `0` for user-only.     |
+| `OPENVIKING_CAPTURE_MODE`              | `semantic`   | `semantic` (always capture) or `keyword`: a Stop sends its turns only when what the user wrote in them carries a trigger (an ask to remember, a preference, a personal fact). Subagent sessions are not captured in `keyword` mode, since their prompt comes from the parent agent, not from you |
+| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`       | Include assistant turns (text + tool I/O). Set to `0` to send only what the user wrote: no assistant text, tool calls or tool results, in subagent sessions too |
+| `OPENVIKING_AUTO_COMMIT_ON_COMPACT`    | `true`       | `PreCompact` commits the session before Claude Code compacts; `0` keeps the turn-in-progress capture and skips the commit |
 | `OPENVIKING_CAPTURE_TOOL_MAX_CHARS`    | `1000000`    | Guard cap on one tool part's `tool_output`; oversized output is externalized server-side |
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `100000`     | Pending-token threshold for client-driven commit                         |
 | `OPENVIKING_SERVER_AUTO_COMMIT`        | `false`      | Leave the threshold commit to the server: the plugin sets the session's `auto_commit_policy` from `OPENVIKING_COMMIT_TOKEN_THRESHOLD` and commits only at session end, subagent stop and compaction |
@@ -327,7 +327,7 @@ In `ovcli.conf` the rules are a JSON array, so backslashes are doubled:
 
 - **The env vars are comma-separated lists**, split before parsing, so a rule that needs a literal comma — a bounded `{10,}`, say — belongs in the array above. (`\x2c` covers a literal comma elsewhere in a pattern, but it is not quantifier syntax.)
 - **Order matters and drops win.** The first `d` that matches, or `k` that does not, ends the decision. Filters run before `OPENVIKING_MIN_QUERY_LENGTH` and before the built-in ack / slash-command heuristics, so a prefix stripped down to `ok` is discarded as an ack. Text a substitution empties is not a drop — an emptied query is simply too short to recall on.
-- **Filters shape what is sent, not what is stored.** Adding a `d`/`k` rule mid-session also shortens the turn list the capture cursor counts, which reads as a transcript rewrite and replays from the last user turn — the same thing toggling `OPENVIKING_CAPTURE_ASSISTANT_TURNS` does.
+- **Filters shape what is sent, not what is stored.** A rule added mid-session, like a change to `OPENVIKING_CAPTURE_ASSISTANT_TURNS`, applies to the turns captured after it; what was already sent stays as it was.
 - **Substitutions reach tool calls, verdicts do not.** On the capture path an `s` rule also rewrites every string value in a tool call's input and a tool result's output, so a redaction rule covers a secret that reached a command or its output. `d`/`k` rules look only at the turn's text.
 - **A bad rule is skipped, never fatal.** `ov-memory-doctor` lists the active rules and reports the exact parse or RegExp error for the ones it could not compile.
 
@@ -534,7 +534,7 @@ Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** 
 
 There is no TypeScript build step and no runtime npm bootstrap. Hooks are plain `.mjs` files that talk to OpenViking over HTTP; MCP uses `servers/mcp-proxy.mjs` as a zero-dependency stdio bridge to the OpenViking server's `/mcp` endpoint. The source-card module in `mods/usage/` is TypeScript that Claude Code compiles itself.
 
-A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<cc_session_id>` (the CC session_id verbatim, no hashing), so resume / compact / multi-hook events all target the same session. Archival + memory extraction is triggered client-side: the `Stop` hook commits when server-reported pending tokens cross `commitTokenThreshold` (default 100000), and `PreCompact` / `SessionEnd` / `SubagentStop` commit unconditionally.
+A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<cc_session_id>` (the CC session_id verbatim, no hashing), so resume / compact / multi-hook events all target the same session. Archival + memory extraction is triggered client-side: the `Stop` hook commits when server-reported pending tokens cross `commitTokenThreshold` (default 100000), and `PreCompact` (unless `OPENVIKING_AUTO_COMMIT_ON_COMPACT=0`) / `SessionEnd` / `SubagentStop` commit unconditionally.
 
 ### Hook responsibilities
 
@@ -543,7 +543,7 @@ A persistent OpenViking session is created on first contact and reused for the e
 | `UserPromptSubmit`    | Each user turn                           | Search OV → rank → inject `<openviking-context>` block within a token budget                      |
 | `Stop`                | Claude finishes a response               | Parse transcript → push new user turns to OV session → commit when pending tokens cross threshold |
 | `SessionStart`        | New / resumed / post-compact session     | Inject `profile.md`, the memory index, and `<available-skills>`; on `resume`/`compact`, also the latest archive overview |
-| `PreCompact`          | Before Claude Code rewrites the transcript | Commit pending messages so they become an archive before CC mutates the transcript                |
+| `PreCompact`          | Before Claude Code rewrites the transcript | Push the turn in progress, then commit pending messages so they become an archive before CC mutates the transcript |
 | `SessionEnd`          | Claude Code session closes               | Final commit so the last window is archived                                                       |
 | `SubagentStart`       | Parent spawns a subagent via Task tool   | Derive an isolated OV session ID for the subagent, persist start state                            |
 | `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |

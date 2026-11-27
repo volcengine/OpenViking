@@ -165,9 +165,9 @@ claude
 | 环境变量                                | 默认值        | 说明                                                                |
 |----------------------------------------|---------------|--------------------------------------------------------------------|
 | `OPENVIKING_AUTO_CAPTURE`              | `true`        | 启用自动捕获；同时 gate 写 hook（PreCompact / SessionEnd / SubagentStop） |
-| `OPENVIKING_CAPTURE_MODE`              | `semantic`    | `semantic`（总是捕获）或 `keyword`（基于触发词）                   |
-| `OPENVIKING_CAPTURE_MAX_LENGTH`        | `24000`       | 捕获判定时 sanitized 文本的长度上限                                |
-| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`        | 捕获 assistant 回合(文本 + tool 输入/输出)。设为 `0` 可退回仅用户   |
+| `OPENVIKING_CAPTURE_MODE`              | `semantic`    | `semantic`（总是捕获）或 `keyword`：一次 Stop 的回合里用户写的内容带有触发词（要求记住、偏好、个人信息）时才发送。`keyword` 模式下不捕获 subagent 会话，因为它的提示词来自父 agent，而不是你 |
+| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`        | 捕获 assistant 回合(文本 + tool 输入/输出)。设为 `0` 时只发送用户写的内容：不发 assistant 文本、工具调用和工具结果，subagent 会话同样如此 |
+| `OPENVIKING_AUTO_COMMIT_ON_COMPACT`    | `true`        | `PreCompact` 在 Claude Code compact 之前 commit 会话；设为 `0` 时仍捕获进行中的回合，只跳过 commit |
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `100000`      | client-driven commit 的 pending-token 阈值                         |
 | `OPENVIKING_SERVER_AUTO_COMMIT`        | `false`       | 阈值 commit 交给服务端：插件用 `OPENVIKING_COMMIT_TOKEN_THRESHOLD` 设置会话的 `auto_commit_policy`，自己只在会话结束、subagent 结束和 compact 时 commit |
 | `OPENVIKING_COMMIT_IDLE_SECONDS`       | `1800`        | 配合 `OPENVIKING_SERVER_AUTO_COMMIT` 交给服务端的空闲 commit 秒数；`0` 表示不设。需要服务端开启 `memory.session_auto_commit.enabled` |
@@ -295,7 +295,7 @@ bypass 命中时所有 hook 直接放行，不联系 OpenViking。
 
 - **环境变量是逗号分隔的列表**，先按逗号切分再解析，所以需要字面逗号的规则（比如带下界的 `{10,}`）只能写进上面的数组。（`\x2c` 能表示模式里其它位置的字面逗号，但它不是量词语法。）
 - **顺序有意义，丢弃优先。** 第一条命中的 `d`（或未命中的 `k`）就决定了结果。过滤发生在 `OPENVIKING_MIN_QUERY_LENGTH` 和内置的应答语／slash 命令启发式之前，所以剥掉前缀后只剩「好的」的文本会按应答语丢弃。被替换成空串不算丢弃 —— query 空了只是长度不够。
-- **过滤只管送出去的内容，管不到已经存下的。** 会话中途新增 `d`/`k` 规则还会让捕获游标计数的回合列表变短，这会被当成 transcript 被改写、从最后一个用户回合重放 —— 和切换 `OPENVIKING_CAPTURE_ASSISTANT_TURNS` 是同一个现象。
+- **过滤只管送出去的内容，管不到已经存下的。** 会话中途新增的规则和对 `OPENVIKING_CAPTURE_ASSISTANT_TURNS` 的改动一样，只作用于之后捕获的回合；已经发送的内容保持原样。
 - **替换会作用到工具调用，取舍判断不会。** 在写路径上，`s` 规则也会改写工具调用输入里的每个字符串值和工具结果的输出，所以脱敏规则同样能盖住出现在命令或命令输出里的密钥；`d`/`k` 规则只看回合的文本。
 - **坏规则只会被跳过，不会让 hook 挂掉。** `ov-memory-doctor` 会列出生效的规则，并对编译失败的那条给出确切的解析或 RegExp 报错。
 
@@ -482,7 +482,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 
 没有 TypeScript 编译步骤，也没有运行时 npm 引导。Hook 都是直接走 HTTP 调 OpenViking 的 `.mjs` 文件；MCP 使用 `servers/mcp-proxy.mjs` 作为零依赖 stdio 桥接，转发到 OpenViking 服务器自身的 `/mcp` endpoint。
 
-首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<cc_session_id>`（CC session_id 原样保留，不做哈希），所以 resume / compact / 多 hook 事件都打到同一个 session。归档与记忆抽取由客户端触发：`Stop` hook 在服务端报告的 pending tokens 超过 `commitTokenThreshold`（默认 100000）时 commit，`PreCompact` / `SessionEnd` / `SubagentStop` 则无条件 commit。
+首次接触时创建一个持久化的 OpenViking session，整个 Claude Code 会话期间复用。OV session ID 是 `cc-<cc_session_id>`（CC session_id 原样保留，不做哈希），所以 resume / compact / 多 hook 事件都打到同一个 session。归档与记忆抽取由客户端触发：`Stop` hook 在服务端报告的 pending tokens 超过 `commitTokenThreshold`（默认 100000）时 commit，`PreCompact`（除非 `OPENVIKING_AUTO_COMMIT_ON_COMPACT=0`）/ `SessionEnd` / `SubagentStop` 则无条件 commit。
 
 ### 各 hook 职责
 
@@ -491,7 +491,7 @@ Claude Code 自带 `MEMORY.md` 文件系统，本插件**与之互补**：
 | `UserPromptSubmit`    | 每个用户回合                          | 搜 OV → 排序 → 在 token 预算内注入 `<openviking-context>` 块                                      |
 | `Stop`                | Claude 完成一次响应                   | 解析 transcript → 把新的用户回合推到 OV session → pending tokens 超阈值时 commit                  |
 | `SessionStart`        | 新建 / resume / compact 后的会话      | 注入 `profile.md`、记忆索引和 `<available-skills>`；`resume`/`compact` 时再注入最新的 archive overview |
-| `PreCompact`          | Claude Code 重写 transcript 之前      | 在 CC 改 transcript 之前先把 pending 提交为归档                                                  |
+| `PreCompact`          | Claude Code 重写 transcript 之前      | 先推送进行中的回合，再在 CC 改 transcript 之前把 pending 提交为归档                              |
 | `SessionEnd`          | Claude Code 会话关闭                  | 最后一次 commit                                                                                  |
 | `SubagentStart`       | 父 session 通过 Task 工具孵化子 agent | 为子 agent 派生隔离的 OV session ID，写 start state                                              |
 | `SubagentStop`        | 子 agent 结束                         | 读子 agent transcript → 推到带子 agent peer 身份的隔离 session → commit                          |

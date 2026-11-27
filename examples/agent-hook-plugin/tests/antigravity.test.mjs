@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +27,7 @@ const firstTurn = step(0, {
 })
   + step(1, { source: "SYSTEM_SDK", type: "SYSTEM_MESSAGE", content: "<openviking-context>old</openviking-context>" })
   + step(2, { source: "MODEL", type: "PLANNER_RESPONSE", tool_calls: [{ name: "run_command", args: { CommandLine: "grep -c retry app.toml" } }] })
-  + step(3, { source: "MODEL", type: "GENERIC", content: "Created At: 2026-01-01T00:00:00Z\nCompleted At: 2026-01-01T00:00:01Z\n3" })
+  + step(3, { source: "MODEL", type: "GENERIC", content: "Created At: 2026-01-01T00:00:00Z\nCompleted At: 2026-01-01T00:00:01Z\n".repeat(2) + "3" })
   + step(4, { source: "MODEL", type: "PLANNER_RESPONSE", content: "The retry budget is three attempts." });
 
 async function runHook(event, input, env) {
@@ -104,7 +104,8 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     OPENVIKING_WRITE_PATH_ASYNC: "0",
   };
   const messages = () => sent["ag-conv-1"] || [];
-  const texts = (from) => messages().slice(from).map((message) => message.content);
+  const textOf = (message) => message.parts.filter((part) => part.type === "text").map((part) => part.text).join("\n\n");
+  const texts = (from) => messages().slice(from).map(textOf);
   try {
     const base = { conversationId: "conv-1", cwd: "/workspace", transcriptPath };
     const call = (invocationNum, initialNumSteps) => ({
@@ -140,15 +141,16 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     await runHook("stop", base, env);
     const runCommand = { type: "tool", tool_id: "ag-2-0", tool_name: "run_command" };
     assert.deepEqual(messages(), [
-      { role: "user", content: "What is the retry budget?" },
+      { role: "user", turn_id: "0", parts: [{ type: "text", text: "What is the retry budget?" }] },
       {
         role: "assistant",
+        turn_id: "2",
         parts: [
           { ...runCommand, tool_status: "running", tool_input: { CommandLine: "grep -c retry app.toml" } },
           { ...runCommand, tool_status: "completed", tool_output: "3" },
         ],
       },
-      { role: "assistant", content: "The retry budget is three attempts." },
+      { role: "assistant", turn_id: "4", parts: [{ type: "text", text: "The retry budget is three attempts." }] },
     ]);
     assert.equal(commits.length, 1);
     assert.ok(commits[0].includes("ag-conv-1"));
@@ -226,11 +228,24 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
     rejectSerialPost = serialPosts + 2;
     await runHook("stop", partialBase, env);
     await runHook("stop", partialBase, env);
-    assert.deepEqual(sent["ag-conv-4"].map((message) => message.content ?? message.parts.map((part) => part.tool_status)), [
-      "List the services",
+    const summary = (message) => message.parts.map((part) => part.text ?? part.tool_status);
+    assert.deepEqual(sent["ag-conv-4"].map(summary), [
+      ["List the services"],
       ["running", "completed"],
-      "There are two services: api and worker.",
+      ["There are two services: api and worker."],
     ]);
+
+    // State left by a version that kept a step cursor resumes after that step.
+    const stateFile = join(env.OPENVIKING_HOOK_STATE_DIR, "antigravity", "conv-5.json");
+    mkdirSync(dirname(stateFile), { recursive: true });
+    writeFileSync(stateFile, JSON.stringify({ lastStep: 2 }));
+    const upgradedBase = { conversationId: "conv-5", cwd: "/workspace", transcriptPath: partialPath };
+    await runHook("stop", upgradedBase, env);
+    await runHook("stop", upgradedBase, env);
+    assert.deepEqual(sent["ag-conv-5"].map(summary), [["There are two services: api and worker."]]);
+    const upgraded = JSON.parse(readFileSync(stateFile, "utf8"));
+    assert.equal(upgraded.lastTurnId, "3");
+    assert.equal(upgraded.lastStep, undefined);
 
     // Missing transcript falls back to initialNumSteps without failing recall.
     const noTranscript = await runHook("pre-invocation", {
@@ -250,20 +265,27 @@ test("Antigravity recalls once per turn and captures only new transcript text", 
 
 test("Antigravity folds each call and the result answering it into the planner step's turn", () => {
   const user = (index, text) => step(index, { source: "USER_EXPLICIT", type: "USER_INPUT", content: `<USER_REQUEST>\n${text}\n</USER_REQUEST>` });
-  const planner = (index, names, content) => step(index, {
+  const planner = (index, calls, content) => step(index, {
     source: "MODEL",
     type: "PLANNER_RESPONSE",
     ...(content ? { content } : {}),
-    tool_calls: names.map((name) => ({ name, args: { Path: `/src/${name}` } })),
+    tool_calls: calls.map((call) => (typeof call === "string" ? { name: call, args: { Path: `/src/${call}` } } : call)),
   });
   const result = (index, status, content) => step(index, { source: "MODEL", type: "GENERIC", status, content });
+  const mcpRead = {
+    name: "call_mcp_tool",
+    args: { ServerName: "openviking", ToolName: "read", Arguments: { uri: "viking://resources/a.md" }, toolSummary: "Read" },
+  };
   const jsonl = user(0, "Check the build")
-    // Superseded before any result: the call goes out unanswered.
-    + planner(1, ["read_file"])
-    + planner(2, ["run_command", "read_file", "view_file"], "Checking the build.")
+    // Superseded before any result: the call goes out unanswered. Its record
+    // lands after the first result of the next planner step, and step 4 is
+    // written twice; the order is step_index and the last record counts.
     + result(3, "RUNNING", "Created At: T\nTool is running as a background task with task id t-1")
-    + result(4, "ERROR", "Created At: T\nCompleted At: T\nfile not found")
+    + result(4, "PENDING", "")
+    + planner(1, ["read_file"])
+    + planner(2, ["run_command", mcpRead, "view_file"], "Checking the build.")
     + result(5, "INVALID", "Created At: T\nCompleted At: T\nmissing argument")
+    + result(4, "DONE", "Created At: T\nCompleted At: T\nretry budget: 3")
     // More results than calls: none of them can be placed.
     + planner(6, ["search_web"])
     + result(7, "DONE", "first")
@@ -275,13 +297,12 @@ test("Antigravity folds each call and the result answering it into the planner s
     + planner(11, ["list_dir"])
     + result(12, "PENDING", "");
 
-  const { turns, lastStep } = buildAntigravityTurns(jsonl);
-  assert.equal(lastStep, 10);
+  const turns = buildAntigravityTurns(jsonl);
   const blocks = (turn) => turn.payload?.content.map((block) => [block.type, block.id ?? block.tool_use_id ?? block.text]);
-  assert.deepEqual(turns.map((turn) => [turn.role, turn.firstStep, blocks(turn) ?? turn.content]), [
-    ["user", 0, "Check the build"],
-    ["assistant", 1, [["tool_use", "ag-1-0"]]],
-    ["assistant", 2, [
+  assert.deepEqual(turns.map((turn) => [turn.role, turn.turnId, blocks(turn) ?? turn.content]), [
+    ["user", "0", "Check the build"],
+    ["assistant", "1", [["tool_use", "ag-1-0"]]],
+    ["assistant", "2", [
       ["text", "Checking the build."],
       ["tool_use", "ag-2-0"],
       ["tool_use", "ag-2-1"],
@@ -289,14 +310,21 @@ test("Antigravity folds each call and the result answering it into the planner s
       ["tool_result", "ag-2-1"],
       ["tool_result", "ag-2-2"],
     ]],
-    ["assistant", 6, [["tool_use", "ag-6-0"]]],
-    ["user", 9, "And the tests?"],
+    ["assistant", "6", [["tool_use", "ag-6-0"]]],
+    ["user", "9", "And the tests?"],
   ]);
   const message = buildCaptureMessage(turns[2].payload, "assistant", {});
-  assert.deepEqual(message.parts.slice(4).map((part) => [part.tool_name, part.tool_status, part.tool_output]), [
-    ["read_file", "error", "file not found"],
+  assert.deepEqual(message.parts.slice(1).map((part) => [part.tool_name, part.tool_status, part.tool_input ?? part.tool_output]), [
+    ["run_command", "running", { Path: "/src/run_command" }],
+    ["mcp__openviking__read", "running", { uri: "viking://resources/a.md" }],
+    ["view_file", "running", { Path: "/src/view_file" }],
+    ["mcp__openviking__read", "completed", "retry budget: 3"],
     ["view_file", "error", "missing argument"],
   ]);
+
+  // A last line still being written holds back the step it belongs to.
+  const partial = user(0, "Check the build") + planner(1, ["read_file"]) + '{"step_index":2,"source":"MO';
+  assert.deepEqual(buildAntigravityTurns(partial).map((turn) => turn.turnId), ["0"]);
 });
 
 test("Antigravity treats an input the transcript has not recorded yet as a new turn", () => {

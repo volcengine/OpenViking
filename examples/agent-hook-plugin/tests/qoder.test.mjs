@@ -108,7 +108,7 @@ const codebuddyTranscript = () => [
   JSON.stringify({ type: "message", role: "user", content: [{ type: "input_text", text: "<system-reminder>n</system-reminder>\n<user_query>请记住：我偏好用 tabs 缩进</user_query>" }] }),
   JSON.stringify({ type: "message", role: "assistant", content: [{ type: "output_text", text: "好的，已记录。" }] }),
   JSON.stringify({ type: "function_call", name: "Bash", arguments: '{"command":"ls"}', callId: "c1" }),
-  JSON.stringify({ type: "function_call_result", name: "Bash", callId: "c1", status: "success", output: "a.txt" }),
+  JSON.stringify({ type: "function_call_result", name: "Bash", callId: "c1", status: "completed", output: { type: "text", text: "a.txt" } }),
   // Host-authored turn: no human text, must not be captured.
   JSON.stringify({ type: "message", role: "user", content: [{ type: "input_text", text: "<task-notification>x</task-notification>" }], providerData: { isMeta: true } }),
   JSON.stringify({ type: "message", role: "user", content: [{ type: "input_text", text: "那 A 方案里的并发问题呢" }] }),

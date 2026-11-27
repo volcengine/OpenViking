@@ -58,6 +58,11 @@ export function deriveCodexSessionId(codexSessionId) {
   return `cx-${safeId(codexSessionId, "_")}`;
 }
 
+/** Whether a compaction commits the session first (`autoCommitOnCompact`). */
+export function commitsOnCompaction(cfg) {
+  return cfg?.autoCommitOnCompact !== false;
+}
+
 // The shortest idle timeout the server accepts; 0 turns the idle commit off.
 const MIN_IDLE_COMMIT_SECONDS = 300;
 

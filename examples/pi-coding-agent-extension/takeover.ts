@@ -17,7 +17,7 @@ export function createTakeoverManager(opts: {
       // Deliver the branch, then confirm the queue is empty for this session.
       syncBranch: (branch: any[]) => sync.syncBranch(branch),
       flush: (budgetMs?: number) => sync.flushForTakeover(budgetMs),
-      commit: (commitOpts?: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean }) =>
+      commit: (commitOpts?: { queue?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean }) =>
         sync.commit(commitOpts),
       // Read the Working Memory of the exact archive this commit produced, not
       // the session's newest `/context` overview — the latter can be an older

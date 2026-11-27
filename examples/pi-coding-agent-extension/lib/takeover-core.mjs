@@ -226,15 +226,8 @@ function partText(part) {
 }
 
 export function estimatePayloadTokens(payload) {
-  if (!payload || typeof payload !== "object") return 0;
-  if (typeof payload.content === "string") return estimateTokens(payload.content);
-  if (Array.isArray(payload.parts)) {
-    return estimateTokens(payload.parts.map(partText).filter(Boolean).join("\n\n"));
-  }
-  if (Array.isArray(payload.content)) {
-    return estimateTokens(payload.content.map(partText).filter(Boolean).join("\n\n"));
-  }
-  return 0;
+  if (!Array.isArray(payload?.parts)) return 0;
+  return estimateTokens(payload.parts.map(partText).filter(Boolean).join("\n\n"));
 }
 
 export function buildOverviewMessage(
@@ -669,7 +662,7 @@ export class TakeoverCore {
       return this.fail("ran out of time delivering messages; retry");
     }
     const committed = await this.io.commit({
-      queueOnFailure: false,
+      queue: false,
       enableWorkingMemory: true,
       keepRecentCount: frozen.keepRecentCount,
       timeoutMs: left - READ_RESERVE_MS,
@@ -942,7 +935,7 @@ export class TakeoverCore {
         return undefined;
       }
       const committed = await this.io.commit({
-        queueOnFailure: false, enableWorkingMemory: true, keepRecentCount: 0, timeoutMs: left - READ_RESERVE_MS,
+        queue: false, enableWorkingMemory: true, keepRecentCount: 0, timeoutMs: left - READ_RESERVE_MS,
       });
       const outcome = commitOutcome(committed);
       if (!outcome.accepted) {

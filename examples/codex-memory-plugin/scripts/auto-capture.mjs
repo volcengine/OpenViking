@@ -24,10 +24,11 @@
 
 import { loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { catchUpTurns, hasCaptureKeyword, makeFetchJSON } from "./ov-session.mjs";
+import { catchUpTurns, commitOvSession, makeFetchJSON } from "./ov-session.mjs";
 import { clearEnded, loadState, saveState, withSessionLock } from "./session-state.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { maybeDetach, readHookStdin } from "./shared/async-writer.mjs";
+import { hasCaptureTrigger } from "./shared/capture-utils.mjs";
 import { thresholdCommitDue } from "./shared/session-model.mjs";
 import { resolveEffectivePeerId } from "./shared/workspace-peer.mjs";
 
@@ -75,10 +76,7 @@ async function maybeCommitByThreshold(ovSessionId, added) {
   if (!(await thresholdCommitDue(fetchJSONRes, ovSessionId, cfg, meta))) {
     return { committed: false, pendingTokens, commitCount, totalMessageCount, traceId: "" };
   }
-  const commit = await fetchJSONRes(`/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
-    method: "POST",
-    body: JSON.stringify({ keep_recent_count: 0 }),
-  });
+  const commit = await commitOvSession(fetchJSONRes, ovSessionId, { keep_recent_count: 0 });
   const committed = commit.ok;
   const traceId = commit.traceId || commit.result?.trace_id || "";
   log("commit", {
@@ -118,7 +116,8 @@ async function capture(sessionId, transcriptPath, cwd, heartbeat) {
     log,
     logError,
     heartbeat,
-    shouldSend: (turns) => cfg.captureMode !== "keyword" || hasCaptureKeyword(turns),
+    shouldSend: (turns) => cfg.captureMode !== "keyword"
+      || turns.some((turn) => turn.role === "user" && hasCaptureTrigger(turn.text)),
   });
 
   let commitInfo = { committed: false, traceId: "" };

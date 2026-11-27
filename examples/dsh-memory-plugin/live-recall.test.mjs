@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { OpenVikingClient } from "./client.mjs";
 import { resolveConfig } from "./config.mjs";
+import { commitSession } from "./shared/pending-queue.mjs";
 import { buildRecallBlock } from "./shared/recall-core.mjs";
 
 // Real-backend recall gate: proves recall returns a genuine hit for content
@@ -23,10 +24,10 @@ test("live recall returns a hit for a memory stored by this test", { skip: !enab
   assert.equal((await client.ensureSessionResult(sessionId)).ok, true, "session creation must succeed");
   const added = await client.addMessage(sessionId, {
     role: "user",
-    content: `Remember this fact: the deployment codename is ${sentinel}. It unlocks the staging cluster.`,
+    parts: [{ type: "text", text: `Remember this fact: the deployment codename is ${sentinel}. It unlocks the staging cluster.` }],
   });
   assert.equal(added.ok, true, "message append must succeed");
-  const committed = await client.commitSession(sessionId);
+  const committed = await commitSession(client.fetchJSON, sessionId, { keep_recent_count: 0 }, { queue: false });
   assert.equal(committed.ok, true, "commit must succeed");
 
   // Memory extraction is asynchronous server-side; wait for the queue, then

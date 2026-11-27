@@ -56,13 +56,6 @@ export interface OVCommitResult {
   trace_id?: string;
 }
 
-export interface OVCommitResponse {
-  result: OVCommitResult | null;
-  traceId?: string;
-  error?: any;
-  status?: number;
-}
-
 export interface OVResponse<T> {
   ok: boolean;
   result: T | null;
@@ -118,29 +111,6 @@ export class OVClient {
       undefined, { timeoutMs: 10000 },
     );
     return res.ok ? res.result : null;
-  }
-
-  /** POST /api/v1/sessions/{id}/commit — commit session for archiving + extraction */
-  async commitSessionResponse(
-    sessionId: string,
-    keepRecentCount = 0,
-    timeoutMs = 30000,
-    enableWorkingMemory?: boolean,
-  ): Promise<OVCommitResponse> {
-    const res = await this.fetchJSON<OVCommitResult>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      { method: "POST", body: JSON.stringify({ keep_recent_count: keepRecentCount, enable_working_memory: enableWorkingMemory }) },
-      { timeoutMs },
-    );
-    if (res.ok && res.result && !res.result.trace_id && res.traceId) {
-      res.result.trace_id = res.traceId;
-    }
-    return {
-      result: res.ok ? res.result : null,
-      traceId: res.traceId,
-      error: res.error,
-      status: res.status,
-    };
   }
 
   /**

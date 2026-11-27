@@ -802,6 +802,58 @@ test("a bypassed directory captures nothing and leaves no state behind", async (
   }
 });
 
+test("keyword mode sends nothing until the user's own words carry a trigger", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-capture-keyword-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const batches = [];
+  const line = (role, content) => JSON.stringify({ payload: { message: { role, content } } });
+
+  try {
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      if (req.method === "POST" && url.pathname.endsWith("/messages/batch")) {
+        batches.push(await readRequestBody(req));
+      }
+      writeJson(res, { status: "ok", result: { ok: true } });
+    }, async (baseUrl) => {
+      const env = {
+        OPENVIKING_AUTO_CAPTURE: "1",
+        OPENVIKING_CAPTURE_MODE: "keyword",
+        OPENVIKING_CODEX_STATE_DIR: stateDir,
+        OPENVIKING_CONFIG_FILE: join(stateDir, "missing-ov.conf"),
+        OPENVIKING_CLI_CONFIG_FILE: join(stateDir, "missing-ovcli.conf"),
+        OPENVIKING_CREDENTIAL_SOURCE: "env",
+        OPENVIKING_WRITE_PATH_ASYNC: "0",
+        OPENVIKING_TIMEOUT_MS: "5000",
+        OPENVIKING_URL: baseUrl,
+      };
+      const input = { session_id: "codex:keyword", transcript_path: transcriptPath };
+      await writeFile(transcriptPath, [
+        line("user", "ok"),
+        line("assistant", "I will remember to always run the tests"),
+      ].join("\n"));
+      await runAutoCapture(input, env);
+      assert.equal(batches.length, 0);
+
+      await writeFile(transcriptPath, [
+        line("user", "ok"),
+        line("assistant", "I will remember to always run the tests"),
+        line("user", "I prefer tabs over spaces"),
+      ].join("\n"));
+      await runAutoCapture(input, env);
+    });
+
+    assert.equal(batches.length, 1);
+    assert.deepEqual(batches[0].messages.map((message) => message.parts[0].text), [
+      "ok",
+      "I will remember to always run the tests",
+      "I prefer tabs over spaces",
+    ]);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("capture filters rewrite and drop turns without stranding the cursor", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-auto-capture-filters-"));
   const transcriptPath = join(stateDir, "transcript.jsonl");

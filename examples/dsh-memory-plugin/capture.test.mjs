@@ -10,9 +10,7 @@ import {
 
 const CONFIG = {
   captureAssistantTurns: true,
-  captureToolResults: true,
   captureToolMaxChars: 1000000,
-  captureMaxLength: 24000,
   captureMode: "semantic",
   peerId: "workspace-a",
 };
@@ -49,7 +47,7 @@ test("captures DSH message events without recapturing injected context", () => {
   }, CONFIG);
   assert.deepEqual(user, {
     role: "user",
-    content: "Remember that deployment uses blue.",
+    parts: [{ type: "text", text: "Remember that deployment uses blue." }],
     peer_id: "workspace-a",
   });
 
@@ -60,7 +58,7 @@ test("captures DSH message events without recapturing injected context", () => {
       content: [{ type: "text", text: "Legacy hosts may omit source metadata." }],
     },
   }, CONFIG);
-  assert.equal(legacyUser?.content, "Legacy hosts may omit source metadata.");
+  assert.equal(legacyUser?.parts[0].text, "Legacy hosts may omit source metadata.");
 
   const injected = captureEvent({
     type: "user/message",
@@ -97,7 +95,7 @@ test("DSH capture applies rules after removing injected context", () => {
   assert.equal(captureEvent(event, { ...CONFIG, captureFilters: ["k/approved/"] }), null);
   assert.deepEqual(captureEvent(event, { ...CONFIG, captureFilters: ["d/approved/"] }), {
     role: "user",
-    content: "Remember private details.",
+    parts: [{ type: "text", text: "Remember private details." }],
     peer_id: "workspace-a",
   });
 });
@@ -109,7 +107,7 @@ test("preserves DSH tool call identity in captured tool results", () => {
     data: { callId: "call-1", name: "bash", arguments: "{\"command\":\"pwd\"}" },
   }, CONFIG, names), null);
 
-  const captured = captureEvent({
+  const event = {
     type: "tool/result",
     data: {
       message: {
@@ -122,7 +120,8 @@ test("preserves DSH tool call identity in captured tool results", () => {
         source: { kind: "tool", callId: "call-1" },
       },
     },
-  }, CONFIG, names);
+  };
+  const captured = captureEvent(event, CONFIG, names);
 
   assert.equal(captured.role, "user");
   assert.equal(captured.parts[0].type, "tool");
@@ -130,6 +129,9 @@ test("preserves DSH tool call identity in captured tool results", () => {
   assert.equal(captured.parts[0].tool_name, "bash");
   assert.equal(captured.parts[0].tool_output, "/workspace");
   assert.equal(names.size, 0);
+
+  // A tool result sits on the assistant side even though DSH records it as user.
+  assert.equal(captureEvent(event, { ...CONFIG, captureAssistantTurns: false }, names), null);
 });
 
 test("marks DSH tool-result errors with the error status", () => {
@@ -158,16 +160,6 @@ test("marks DSH tool-result errors with the error status", () => {
   assert.equal(captured.role, "user");
   assert.equal(captured.parts[0].type, "tool");
   assert.equal(captured.parts[0].tool_status, "error");
-});
-
-test("does not retain tool call names when tool-result capture is disabled", () => {
-  const names = new Map();
-  const config = { ...CONFIG, captureToolResults: false };
-  captureEvent({
-    type: "tool/call",
-    data: { callId: "call-disabled", name: "bash" },
-  }, config, names);
-  assert.equal(names.size, 0);
 });
 
 test("releases tool call names even when a tool result has no capturable content", () => {

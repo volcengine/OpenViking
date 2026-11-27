@@ -1,5 +1,4 @@
 import { buildRecallBlock, isRecallEnabled } from "./shared/recall-core.mjs"
-import { isBypassed } from "./shared/session-model.mjs"
 import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createMemoryRecall({ config, sessionManager }) {
@@ -9,10 +8,7 @@ export function createMemoryRecall({ config, sessionManager }) {
     if (!query) return
     if (query.length < config.minQueryLength) return
     const sessionID = input.sessionID
-    if (isBypassed(config, {
-      sessionId: sessionID,
-      cwd: input.directory ?? input.cwd,
-    })) return
+    if (sessionManager.isBypassed(sessionID)) return
 
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (!health.ok) return

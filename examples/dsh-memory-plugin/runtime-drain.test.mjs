@@ -127,7 +127,8 @@ test("commit resumes once the drain clears the backlog", async () => {
         ? { ok: true }
         : { ok: false, status: 503, error: { message: "down" } };
     },
-    async fetchJSON() {
+    async fetchJSON(path) {
+      if (path.endsWith("/commit")) commitCalls += 1;
       return healthy
         ? { ok: true }
         : { ok: false, status: 503, error: { message: "down" } };
@@ -139,10 +140,6 @@ test("commit resumes once the drain clears the backlog", async () => {
     },
     async getSession() {
       return { pending_tokens: 20000 };
-    },
-    async commitSession() {
-      commitCalls += 1;
-      return { ok: true };
     },
   }, config(), { debug() {} });
   const session = { id: "commit-resume", header: { cwd: "/workspace" } };
@@ -315,9 +312,7 @@ function config() {
     peerId: "",
     syncTurns: true,
     captureAssistantTurns: true,
-    captureToolResults: false,
     captureToolMaxChars: 1000000,
-    captureMaxLength: 24000,
     captureMode: "semantic",
     commitTokenThreshold: 20000,
   };

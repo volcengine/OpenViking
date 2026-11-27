@@ -15,8 +15,9 @@
  * the next Stop), so the push lands in the live tail after the commit, as it
  * did before this catch-up existed.
  *
- * Then the persistent OV session is committed so pending messages become an
- * archive before the transcript is mutated. PreCompact has no
+ * Then, unless autoCommitOnCompact is off, the persistent OV session is
+ * committed so pending messages become an archive before the transcript is
+ * mutated. PreCompact has no
  * additionalContext output (platform-verified), so injection happens later in
  * session-start.mjs when source="compact".
  */
@@ -30,11 +31,12 @@ import { createLogger } from "./debug-log.mjs";
 import {
   commitSession,
   deriveOvSessionId,
-  enqueuePendingDirectly,
   isRetryableFailure,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
+import { enqueueCommitAfterWrites } from "./lib/pending-queue.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { commitsOnCompaction } from "./shared/session-model.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -95,7 +97,7 @@ runHookStage({
   gates: { enabled: (cfg) => cfg.autoCapture },
   envelope: approve,
   onSkip: (reason) => log("skip", { reason }),
-}, async ({ sessionId, raw }) => {
+}, async ({ cfg, sessionId, raw }) => {
   if (!sessionId) {
     log("skip", { reason: "no session_id" });
     return;
@@ -104,9 +106,13 @@ runHookStage({
   log("catch_up", await catchUpTranscript(raw));
 
   const ovSessionId = deriveOvSessionId(sessionId);
+  if (!commitsOnCompaction(cfg)) {
+    log("skip", { stage: "commit", reason: "autoCommitOnCompact off", ovSessionId });
+    return;
+  }
   const health = await fetchJSON("/health");
   if (!health.ok && isRetryableFailure(health)) {
-    const queued = await enqueuePendingDirectly("commitSession", ovSessionId, {});
+    const queued = await enqueueCommitAfterWrites(ovSessionId);
     log("commit", { ovSessionId, ok: false, queued: queued.ok, reason: "health_retryable" });
     return;
   }

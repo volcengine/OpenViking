@@ -43,15 +43,4 @@ export class OpenVikingClient {
       { actorPeerId },
     );
   }
-
-  async commitSession(sessionId, actorPeerId, options = {}) {
-    return this.fetchJSON(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      {
-        method: "POST",
-        body: JSON.stringify({ keep_recent_count: 0 }),
-      },
-      { timeoutMs: options.timeoutMs ?? 30000, actorPeerId },
-    );
-  }
 }

@@ -132,7 +132,10 @@ test("TRAE prompt hook injects recall and Stop captures dedicated event fields",
       runHook("stop", "trae-cn", { ...base, last_assistant_message: "the retry budget is three attempts" }, env),
       runHook("stop", "trae-cn", { ...base, last_assistant_message: "the retry budget is three attempts" }, env),
     ]);
-    assert.equal(messages.length, 2);
+    assert.deepEqual(messages.map((item) => item.body), [
+      { role: "user", parts: [{ type: "text", text: "remember this" }] },
+      { role: "assistant", parts: [{ type: "text", text: "the retry budget is three attempts" }] },
+    ]);
     assert.equal(commits.length, 1, "the completed TRAE turn must be committed immediately");
     assert.ok(messages.every((item) => item.url.includes("trcn-same-session")));
 
@@ -140,6 +143,13 @@ test("TRAE prompt hook injects recall and Stop captures dedicated event fields",
     await runHook("stop", "trae-cn", { ...base, last_assistant_message: "the retry budget is three attempts" }, env);
     assert.equal(messages.length, 4, "a later identical turn must not be mistaken for a duplicate Hook run");
     assert.equal(commits.length, 2);
+
+    const userOnly = { ...env, OPENVIKING_CAPTURE_ASSISTANT_TURNS: "0" };
+    await runHook("user-prompt-submit", "trae-cn", { ...base, prompt: "ok", generation_id: "prompt-3" }, userOnly);
+    await runHook("stop", "trae-cn", { ...base, last_assistant_message: "done" }, userOnly);
+    assert.deepEqual(messages.slice(4).map((item) => item.body), [
+      { role: "user", parts: [{ type: "text", text: "ok" }] },
+    ], "with assistant turns off only the user's words are sent, short ones included");
   } finally {
     server.close();
     rmSync(root, { recursive: true, force: true });

@@ -78,8 +78,12 @@ test("PreCompact pushes the turn in progress before it commits", async () => {
       assert.deepEqual(events, []);
       const result = expectExit(await runHookScript(join(SCRIPTS, "pre-compact.mjs"), { input, env: hookEnv(root, baseUrl) }));
       assert.deepEqual(JSON.parse(result.stdout), { decision: "approve" });
+      // With autoCommitOnCompact off the catch-up still runs; only the commit is skipped.
+      await appendFile(input.transcript_path, `\n${rec("user", "q2")}`);
+      const noCommit = { ...hookEnv(root, baseUrl), OPENVIKING_AUTO_COMMIT_ON_COMPACT: "0" };
+      expectExit(await runHookScript(join(SCRIPTS, "pre-compact.mjs"), { input, env: noCommit }));
     });
-    assert.deepEqual(events, ["q1", "a1 in progress", "commit"]);
+    assert.deepEqual(events, ["q1", "a1 in progress", "commit", "q2"]);
   } finally {
     restore();
     await rm(root, { recursive: true, force: true });

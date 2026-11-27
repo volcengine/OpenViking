@@ -4,16 +4,18 @@ import {
   commitAgentSession,
   stableHash,
 } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import {
-  extractPartsFromPayload,
-  filterCaptureTurns,
-  isCaptureEnabled,
-  shapeCaptureParts,
-} from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { buildCaptureMessage, isCaptureEnabled } from "../../memory-plugin-shared/lib/capture-utils.mjs";
 import { sendSessionMessages } from "../../memory-plugin-shared/lib/batch-send.mjs";
+import { commitsOnCompaction } from "../../memory-plugin-shared/lib/session-model.mjs";
 import { denyCursorPermission, evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import { parseCursorTranscript } from "./cursor-transcript.mjs";
 import { withoutHistorySession } from "./history-session.mjs";
+
+const TOOL_EVENTS = new Set(["postToolUse", "postToolUseFailure", "afterMCPExecution"]);
+
+// Cursor prefixes an MCP server's key with where it was configured:
+// `user-openviking`, `project-<path>-openviking`, `plugin-<plugin>-openviking`.
+const OPENVIKING_MCP_SERVER = /^(?:(?:user|project-.+|plugin-.+)-)?openviking$/;
 
 async function readTranscript(ctx) {
   const transcriptPath = ctx.input.transcript_path || ctx.input.transcriptPath;
@@ -21,15 +23,14 @@ async function readTranscript(ctx) {
   try { return parseCursorTranscript(await readFile(transcriptPath, "utf8")); } catch { return null; }
 }
 
-async function recordMcpResult(ctx) {
-  const input = ctx.input;
-  // The managed installation registers this exact server key. A tool named
-  // "read" on another MCP server must never become an OpenViking read.
-  if (input.mcp_server_name !== "openviking") return;
-  if (typeof input.tool_use_id !== "string" || !input.tool_use_id.trim()
-    || typeof input.tool_name !== "string" || !input.tool_name.trim()) {
-    ctx.log("capture_skip", { reason: "missing_mcp_tool_identity" });
-    return;
+function nonEmpty(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function parseMcpCompletion(ctx, input) {
+  if (!nonEmpty(input.mcp_server_name)) {
+    ctx.log("capture_skip", { reason: "missing_mcp_server" });
+    return null;
   }
   let toolInput, result;
   try {
@@ -37,28 +38,64 @@ async function recordMcpResult(ctx) {
     result = JSON.parse(input.result_json);
   } catch {
     ctx.log("capture_skip", { reason: "invalid_mcp_tool_json" });
-    return;
+    return null;
   }
   if (!toolInput || typeof toolInput !== "object" || Array.isArray(toolInput)
     || !result || typeof result !== "object" || Array.isArray(result)) {
     ctx.log("capture_skip", { reason: "invalid_mcp_tool_payload" });
-    return;
+    return null;
   }
   const failed = Boolean(result.isError || result.error || result.rejected || result.permissionDenied);
   if (!failed && !Array.isArray(result.content)) {
     ctx.log("capture_skip", { reason: "missing_mcp_tool_result" });
+    return null;
+  }
+  // The server recognises its own tools by the `mcp__openviking__` name, so a
+  // tool called "read" on another server must keep that server's name.
+  const server = OPENVIKING_MCP_SERVER.test(input.mcp_server_name)
+    ? "openviking"
+    : input.mcp_server_name.replace(/^user-/, "");
+  return { name: `mcp__${server}__${input.tool_name}`, input: toolInput, output: result, failed };
+}
+
+/**
+ * One finished tool call as a sidecar record. Cursor's own tools report through
+ * postToolUse / postToolUseFailure; MCP calls through afterMCPExecution, the only
+ * event that names the server, so the post events skip their `MCP:<tool>` copy.
+ */
+async function recordToolCompletion(ctx, event) {
+  const input = ctx.input;
+  if (!nonEmpty(input.tool_use_id) || !nonEmpty(input.tool_name)) {
+    ctx.log("capture_skip", { reason: "missing_tool_identity" });
     return;
   }
-  const [part] = shapeCaptureParts(extractPartsFromPayload({
+  let completion;
+  if (event === "afterMCPExecution") {
+    completion = parseMcpCompletion(ctx, input);
+  } else if (input.tool_name.startsWith("MCP:")) {
+    return;
+  } else if (event === "postToolUseFailure") {
+    completion = {
+      name: input.tool_name,
+      input: input.tool_input,
+      output: input.error_message || input.failure_type || "",
+      failed: true,
+    };
+  } else {
+    completion = { name: input.tool_name, input: input.tool_input, output: input.tool_output ?? "", failed: false };
+  }
+  if (!completion) return;
+  const message = buildCaptureMessage({
     type: "tool_result",
     tool_use_id: input.tool_use_id,
-    name: `mcp__openviking__${input.tool_name}`,
-    state: { input: toolInput, output: result },
-    is_error: failed,
-  }, { toolMaxChars: ctx.cfg.captureToolMaxChars }), "assistant", ctx.cfg).parts;
+    name: completion.name,
+    state: { input: completion.input, output: completion.output },
+    is_error: completion.failed,
+  }, "assistant", ctx.cfg);
+  if (!message) return;
   // The hook's session lock also serializes this append. Keep result bodies
   // out of the checkpoint: each completion writes only its own record.
-  const record = { afterTurn: (await readTranscript(ctx))?.length ?? null, part };
+  const record = { afterTurn: (await readTranscript(ctx))?.length ?? null, part: message.parts[0] };
   await appendFile(`${ctx.stateFile}.tools.jsonl`, `${JSON.stringify(record)}\n`, { mode: 0o600 });
 }
 
@@ -106,17 +143,14 @@ async function captureTranscript(ctx, state) {
     // Cursor transcripts do not expose a stable message id. Include the
     // transcript position so two legitimate identical turns are retained,
     // while duplicate Hook executions over the same transcript still dedupe.
-    // Hash the raw turn, not the filtered text, so raising captureMaxLength
-    // never resends a turn the server already holds in truncated form.
     const hash = stableHash(index, turn.role, turn.content);
     if (capturedHashes.has(hash)) continue;
-    const { kept, dropped } = filterCaptureTurns([turn], ctx.cfg);
-    if (!kept.length) {
-      ctx.log("capture_skip", dropped[0]);
+    const message = buildCaptureMessage({ role: turn.role, content: turn.content }, turn.role, ctx.cfg);
+    if (!message) {
       capturedHashes.add(hash);
       continue;
     }
-    toSend.push({ hash, position: index * 2, turn: kept[0] });
+    toSend.push({ hash, position: index * 2, turn: message });
   }
   let toolPosition = -1;
   for (const item of toolRecords) {
@@ -155,9 +189,10 @@ async function captureTranscript(ctx, state) {
       ...state,
       capturedHashes: [...capturedHashes].slice(-1000),
       capturedToolOffset,
-      capturedToolIds: [...acceptedToolIds],
+      capturedToolIds: [...acceptedToolIds].slice(-1000),
+      // Tool records do not count toward commitTurnThreshold.
       capturedSinceCommit: Number(state.capturedSinceCommit || 0)
-        + acknowledged.filter((item) => typeof item.turn.content === "string").length,
+        + acknowledged.filter((item) => !item.toolId).length,
     },
   };
 }
@@ -168,6 +203,8 @@ export const cursor = {
     sessionStart: 25_000,
     beforeSubmitPrompt: 17_000,
     preToolUse: 1_000,
+    postToolUse: 2_000,
+    postToolUseFailure: 2_000,
     afterMCPExecution: 2_000,
     stop: 25_000,
     preCompact: 25_000,
@@ -177,6 +214,8 @@ export const cursor = {
     sessionStart: "start",
     beforeSubmitPrompt: "prompt",
     preToolUse: "fill",
+    postToolUse: "capture",
+    postToolUseFailure: "capture",
     afterMCPExecution: "capture",
     stop: "capture",
     preCompact: "capture",
@@ -213,12 +252,14 @@ export const cursor = {
   prompt: (input) => (typeof input.prompt === "string" ? input.prompt.trim() : ""),
   async capture(ctx, state, event) {
     if (!isCaptureEnabled(ctx.cfg)) return state;
-    if (event === "afterMCPExecution") return recordMcpResult(ctx);
+    if (TOOL_EVENTS.has(event)) return recordToolCompletion(ctx, event);
     const { state: next, complete } = await captureTranscript(ctx, state);
     if (!complete) return next;
     // Only a plain Stop waits for the threshold: a compaction or a session end
     // is the last chance this transcript has to reach the server.
-    const shouldCommit = event !== "stop" || next.capturedSinceCommit >= ctx.cfg.commitTurnThreshold;
+    const shouldCommit = event === "stop"
+      ? next.capturedSinceCommit >= ctx.cfg.commitTurnThreshold
+      : event !== "preCompact" || commitsOnCompaction(ctx.cfg);
     if (shouldCommit) {
       const result = await commitAgentSession(ctx.fetchJSON, ctx.sessionId, ctx.log);
       if (result.ok || result.pendingQueued) next.capturedSinceCommit = 0;

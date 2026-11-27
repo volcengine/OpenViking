@@ -6,16 +6,17 @@
  *
  *   {"type":"message","role":"user"|"assistant","content":[{"type":"input_text"|"output_text"|"text","text":"…"}]}
  *   {"type":"function_call","name":"Bash","arguments":"…","callId":"call_…"}
- *   {"type":"function_call_result","name":"Bash","callId":"call_…","status":"success","output":"…"}
+ *   {"type":"function_call_result","name":"Bash","callId":"call_…","status":"completed"|"incomplete","output":{"type":"text","text":"…"}}
  *   {"type":"reasoning"|"reasoning_text"|"file-history-snapshot"|"summary"|"turn-metrics"|…}
  *
  * Two things differ from what `capture-utils` walks, and both are handled here:
  *
- * 1. **Tool results are named differently.** CodeBuddy calls them
- *    `function_call_result`; the shared set only knows `tool_result` /
- *    `function_call_output`. Records are re-typed on the way in, so the shared
- *    part builder sees a shape it understands. `function_call` is already in
- *    the shared call set, so calls pass through as-is.
+ * 1. **Tool records are shaped differently.** CodeBuddy calls results
+ *    `function_call_result`, where the shared set only knows `tool_result` /
+ *    `function_call_output`, writes their output as a text block, and calls a
+ *    deferred tool (every MCP tool) through `DeferExecuteTool`. Records are
+ *    re-typed and the deferred call unwrapped on the way in, so the shared
+ *    part builder sees a shape it understands.
  *
  * 2. **The human ask is not always the raw user text, and not always wrapped.**
  *    When the host injects context it wraps the ask in `<user_query>` and
@@ -129,8 +130,35 @@ function blocksFrom(content) {
   return out;
 }
 
+// Deferred tools (MCP tools among them) are called through `DeferExecuteTool`
+// with the real tool in `toolName`; the part names that tool, so its result
+// pairs with it and OpenViking's own tools are recognised.
+function unwrapDeferredCall(record) {
+  let args = record.arguments;
+  if (record.name !== "DeferExecuteTool") return { name: record.name, arguments: args };
+  if (typeof args === "string") {
+    try { args = JSON.parse(args); } catch { return { name: record.name, arguments: record.arguments }; }
+  }
+  const toolName = args?.toolName;
+  if (typeof toolName !== "string" || !toolName) return { name: record.name, arguments: record.arguments };
+  return { name: toolName, arguments: args.params ?? {} };
+}
+
+// A result's output is a string or one `{type: "text", text}` block.
+function resultOutput(output) {
+  return output && typeof output === "object" && !Array.isArray(output) && typeof output.type === "string"
+    ? [output]
+    : output;
+}
+
+// A failed tool call is `incomplete`, but a failed shell command is
+// `completed` and says so only in `providerData.toolResult.rawResponse`.
+function isErrorResult(record) {
+  return record.status === "incomplete" || record.providerData?.toolResult?.rawResponse?.is_error === true;
+}
+
 /** CodeBuddy records → the payload shapes `capture-utils` walks. */
-function payloadForRecord(record) {
+function payloadForRecord(record, namesByCallId) {
   const type = String(record?.type || "");
   if (type === "message") {
     const role = normalizeCaptureRole(record.role);
@@ -148,30 +176,25 @@ function payloadForRecord(record) {
     if (texts.length === 0) return null;
     return { kind: "message", role, text: texts.join("\n") };
   }
+  const callId = record?.callId || record?.call_id;
   if (type === "function_call") {
+    const call = unwrapDeferredCall(record);
+    if (callId) namesByCallId.set(callId, call.name);
     return {
       kind: "tool",
-      payload: {
-        type: "function_call",
-        name: record.name,
-        arguments: record.arguments,
-        call_id: record.callId || record.call_id,
-      },
+      payload: { type: "function_call", name: call.name, arguments: call.arguments, call_id: callId },
     };
   }
-  if (type === "function_call_result") {
+  // `in_progress` marks a streamed partial result; the finished one follows.
+  if (type === "function_call_result" && record.status !== "in_progress") {
     const payload = {
       // Re-typed: the shared set has no `function_call_result`.
       type: "tool_result",
-      name: record.name,
-      output: record.output,
-      call_id: record.callId || record.call_id,
+      name: namesByCallId.get(callId) || record.name,
+      output: resultOutput(record.output),
+      call_id: callId,
     };
-    // The shared builder derives the part's status from `is_error`; passing
-    // CodeBuddy's own "success" through verbatim would surface as an unknown
-    // status instead of "completed".
-    const status = String(record.status || "").toLowerCase();
-    if (status && status !== "success" && status !== "completed") payload.is_error = true;
+    if (isErrorResult(record)) payload.is_error = true;
     return { kind: "tool", payload };
   }
   return null;
@@ -190,8 +213,9 @@ export function extractCodebuddyTurns(records) {
     collected.push(current);
   };
 
+  const namesByCallId = new Map();
   (records || []).forEach((record, index) => {
-    const normalized = payloadForRecord(record);
+    const normalized = payloadForRecord(record, namesByCallId);
     if (!normalized) return;
     if (normalized.kind === "message") {
       // A new message always opens a new turn; tool records that follow an

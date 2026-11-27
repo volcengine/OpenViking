@@ -17,8 +17,9 @@ export function apply(ctx, input = {}) {
     // The shared loader preserves host/env precedence over workspace settings.
     resolveConfig(input, process.env, cwd)
   ));
-  const skipMemory = session => (
-    config.skipSubagentSessions && session?.header?.origin === "subagent"
+  const skipMemory = session => Boolean(session) && (
+    (config.skipSubagentSessions && session.header?.origin === "subagent")
+    || runtime.isBypassed(session)
   );
   ctx.provide("openvikingMemory", runtime);
   ctx.effect(

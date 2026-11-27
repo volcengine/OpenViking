@@ -198,7 +198,6 @@ test("the Claude Code adapter is the extractCaptureTurns its callers import", as
   const vendored = await import("../claude-code-memory-plugin/scripts/shared/capture-utils.mjs")
 
   assert.notEqual(cc.extractCaptureTurns, vendored.extractCaptureTurns)
-  assert.equal(cc.sanitizeCapturedText, vendored.sanitizeCapturedText)
 
   // Claude nests a tool result in a content array; both flatten it to text.
   const anthropic = [{
@@ -208,7 +207,7 @@ test("the Claude Code adapter is the extractCaptureTurns its callers import", as
       content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "tool output" }] }],
     },
   }]
-  assert.equal(cc.extractCaptureTurns(anthropic, CAPTURE_CONFIG)[0].parts[0].tool_output, "tool output")
+  assert.equal(cc.extractCaptureTurns(anthropic, CAPTURE_CONFIG)[0].message.parts[0].tool_output, "tool output")
   assert.equal(
     vendored.extractCaptureTurns(anthropic, CAPTURE_CONFIG)[0].parts[0].tool_output,
     "tool output",
@@ -405,14 +404,29 @@ test("shouldCaptureText reports a filtered drop and can be asked to skip filters
   )
 })
 
-test("extractCaptureTurns drops filtered turns and keeps turn.text unfiltered", () => {
-  const entries = [userEntry("please remember the retry policy"), userEntry("scratch: throwaway note")]
+test("extractCaptureTurns drops filtered turns and keeps short replies", () => {
+  const entries = [
+    userEntry("please remember the retry policy"),
+    userEntry("scratch: throwaway note"),
+    userEntry("ok"),
+    userEntry("/compact"),
+  ]
   const cfg = { captureFilters: ["d/^scratch:/", "s/^please\\s+//"] }
   const turns = extractCaptureTurns(entries, cfg)
-  assert.equal(turns.length, 1)
+  assert.deepEqual(turns.map((turn) => turn.text), ["remember the retry policy", "ok", "/compact"])
   assert.deepEqual(turns[0].parts, [{ type: "text", text: "remember the retry policy" }])
-  // parts are on the wire, so the text path stayed faithful for keyword scanning
-  assert.equal(turns[0].text, "please remember the retry policy")
+})
+
+test("extractCaptureTurns with captureAssistantTurns off keeps only the user's text", () => {
+  const turns = extractCaptureTurns([
+    { payload: { role: "user", content: [
+      { type: "text", text: "run it" },
+      { type: "tool_result", tool_use_id: "t1", content: "done" },
+    ] } },
+    { payload: { role: "assistant", content: "ran it" } },
+    { payload: { type: "function_call_output", call_id: "t1", output: "done" } },
+  ], { captureAssistantTurns: false })
+  assert.deepEqual(turns, [{ role: "user", text: "run it", parts: [{ type: "text", text: "run it" }] }])
 })
 
 test("extractCaptureTurns falls back to the text path when a turn has no parts", () => {

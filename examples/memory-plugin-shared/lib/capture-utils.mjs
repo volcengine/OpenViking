@@ -512,19 +512,54 @@ export function shapeCapturePayload(payload, role, cfg = {}, { toolNameById = {}
 
 /**
  * One host message as the session message to send, or null when nothing in it
- * is worth capturing. Text follows the capture rules (injected context, filters,
- * acknowledgements, `captureMaxLength`); tool calls and results stay structured
- * parts and never decide keep or drop.
+ * is to be captured. `role` is the host's own role for the message. Text parts
+ * lose injected context and go through `captureFilters`; tool calls and results
+ * stay structured parts, in the order the host had them, and never decide keep
+ * or drop. With `captureAssistantTurns` off only what the user wrote is sent:
+ * no assistant message, no tool call and no tool result.
  */
-export function buildCaptureMessage(payload, role, cfg = {}, options = {}) {
-  const shaped = shapeCapturePayload(payload, role, cfg, options);
-  if (shaped.dropped) return null;
-  const toolParts = shaped.parts.filter((part) => part?.type !== "text");
-  if (toolParts.length === 0) return shaped.text ? { role, content: shaped.text } : null;
-  const hasText = shaped.text && shaped.parts.some((part) => part?.type === "text");
-  return { role, parts: [...(hasText ? [{ type: "text", text: shaped.text }] : []), ...toolParts] };
+export function buildCaptureMessage(payload, role, cfg = {}, { toolNameById = {} } = {}) {
+  const wireRole = normalizeCaptureRole(role);
+  if (!wireRole) return null;
+  const userOnly = cfg.captureAssistantTurns === false;
+  if (userOnly && isAssistantSideCaptureRole(role)) return null;
+
+  const options = { toolMaxChars: cfg.captureToolMaxChars, toolNameById };
+  let parts = extractPartsFromPayload(payload, options);
+  if (parts.length === 0) {
+    // Some hosts supply an array of plain strings: text, but no structured parts.
+    const text = extractTextFromPayload(payload, options);
+    if (text) parts = [{ type: "text", text }];
+  }
+  if (userOnly) parts = parts.filter((part) => part?.type === "text");
+  const shaped = shapeCaptureParts(parts, wireRole, cfg).parts;
+  return shaped.length ? { role: wireRole, parts: shaped } : null;
 }
 
+// What `captureMode: "keyword"` looks for in a user's words: an explicit ask to
+// remember something, or a statement that reads as a lasting personal fact.
+const CAPTURE_TRIGGERS = [
+  /\b(remember|memorize|store|save|capture|note|record)\b|记住|保存|记录|记忆/i,
+  /preference|prefer|important|decision|decided|always|never/i,
+  /偏好|喜欢|喜爱|崇拜|讨厌|害怕|重要|决定|总是|永远|优先|习惯|爱好|擅长|最爱|不喜欢/i,
+  /[\w.-]+@[\w.-]+\.\w+/,
+  /\+\d{10,}/,
+  /(?:我|my)\s*(?:是|叫|名字|name|住在|live|来自|from|生日|birthday|电话|phone|邮箱|email)/i,
+  /(?:我|i)\s*(?:喜欢|崇拜|讨厌|害怕|擅长|不会|爱|恨|想要|需要|希望|觉得|认为|相信)/i,
+  /(?:favorite|favourite|love|hate|enjoy|dislike|admire|idol|fan of)/i,
+];
+
+/** Whether a user's text carries a `captureMode: "keyword"` trigger. */
+export function hasCaptureTrigger(text) {
+  const sanitized = sanitizeCapturedText(text);
+  return CAPTURE_TRIGGERS.some((trigger) => trigger.test(sanitized));
+}
+
+/**
+ * Rollout entries (`{ payload }` or bare messages) as session messages, one per
+ * entry that `buildCaptureMessage` keeps. `text` is the message's text parts
+ * joined, so on a user turn it is what the user wrote.
+ */
 export function extractCaptureTurns(rolloutEntries, cfg = {}) {
   const toolNameById = collectToolNamesByIdFromEntries(rolloutEntries);
   const turns = [];
@@ -533,13 +568,13 @@ export function extractCaptureTurns(rolloutEntries, cfg = {}) {
     const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : entry;
     const message = payload.message && typeof payload.message === "object" ? payload.message : null;
     const rawRole = message?.role || payload.role || payload.type || payload.kind;
-    const role = normalizeCaptureRole(rawRole);
-    if (!role) continue;
-    if (isAssistantSideCaptureRole(rawRole) && !cfg.captureAssistantTurns) continue;
-
-    const shaped = shapeCapturePayload(payload, role, cfg, { toolNameById });
-    if (shaped.dropped || (!shaped.text && shaped.parts.length === 0)) continue;
-    turns.push({ role, text: shaped.parts.length ? shaped.signalText : shaped.text, parts: shaped.parts });
+    const built = buildCaptureMessage(payload, rawRole, cfg, { toolNameById });
+    if (!built) continue;
+    const text = built.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n\n");
+    turns.push({ role: built.role, text, parts: built.parts });
   }
   return turns;
 }

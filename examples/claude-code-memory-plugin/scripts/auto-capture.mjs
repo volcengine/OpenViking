@@ -16,7 +16,7 @@
  * Incremental tracking: state file per CC session_id records capturedTurnCount.
  *
  * Ported from openclaw-plugin/ context-engine.ts + text-utils.ts
- * (MEMORY_TRIGGERS / extractNewTurnMessages).
+ * (extractNewTurnMessages).
  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
-import { extractCaptureTurns, parseTranscript, sanitizeCapturedText } from "./cc-transcript.mjs";
+import { extractCaptureTurns, parseTranscript } from "./cc-transcript.mjs";
 import {
   commitSession,
   deriveOvSessionId,
@@ -39,7 +39,7 @@ import { readJsonState, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage, withAgentHookLock } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
-import { shapeCaptureParts } from "./shared/capture-utils.mjs";
+import { buildCaptureMessage, hasCaptureTrigger } from "./shared/capture-utils.mjs";
 import { thresholdCommitDue } from "./shared/session-model.mjs";
 
 if (!isPluginEnabled()) {
@@ -139,51 +139,16 @@ async function reconcileKnownFailedCapture(cfg, sessionId, ovSessionId, state) {
   }
 }
 
-// Keyword-mode gate (ported from openclaw-plugin/text-utils.ts).
-const MEMORY_TRIGGERS = [
-  /remember|preference|prefer|important|decision|decided|always|never/i,
-  /记住|偏好|喜欢|喜爱|崇拜|讨厌|害怕|重要|决定|总是|永远|优先|习惯|爱好|擅长|最爱|不喜欢/i,
-  /[\w.-]+@[\w.-]+\.\w+/,
-  /\+\d{10,}/,
-  /(?:我|my)\s*(?:是|叫|名字|name|住在|live|来自|from|生日|birthday|电话|phone|邮箱|email)/i,
-  /(?:我|i)\s*(?:喜欢|崇拜|讨厌|害怕|擅长|不会|爱|恨|想要|需要|希望|觉得|认为|相信)/i,
-  /(?:favorite|favourite|love|hate|enjoy|dislike|admire|idol|fan of)/i,
-];
-
-function formatTurnsAsText(turns) {
-  const lines = [];
-  for (const t of turns) {
-    const toolNames = t.parts
-      .filter((p) => p.type === "tool" && p.tool_status === "running" && p.tool_name)
-      .map((p) => p.tool_name);
-    if (t.role === "assistant" && toolNames.length > 0) {
-      const uniq = Array.from(new Set(toolNames)).join(", ");
-      if (t.text) lines.push(`[assistant]: ${t.text}`);
-      lines.push(`[assistant used tools: ${uniq}]`);
-    } else if (t.text) {
-      lines.push(`[${t.role}]: ${t.text}`);
-    }
-  }
-  return lines.join("\n");
-}
-
 // ---------------------------------------------------------------------------
 // Persistent-session capture
 // ---------------------------------------------------------------------------
 
-async function pushTurnsToOv(ovSessionId, turns, peerId = "", cfg = {}) {
-  const payloads = [];
-  for (const turn of turns) {
-    // Send structured parts: tool calls/results are dedicated `tool` parts, not
-    // inlined into content, so the server can process them separately.
-    // Shape at the send site: capturedTurnCount indexes the unfiltered turns.
-    const parts = shapeCaptureParts(turn.parts, turn.role, cfg).parts;
-    if (parts.length === 0) continue;
+function toPayload(turn, peerId) {
+  return peerId ? { ...turn.message, peer_id: peerId } : turn.message;
+}
 
-    const payload = { role: turn.role, parts };
-    if (peerId) payload.peer_id = peerId;
-    payloads.push(payload);
-  }
+async function pushTurnsToOv(ovSessionId, turns, peerId = "") {
+  const payloads = turns.map((turn) => toPayload(turn, peerId));
   const res = await sendSessionMessages(fetchJSON, ovSessionId, payloads, {
     enqueueOnRetryable: true,
   });
@@ -196,16 +161,11 @@ async function pushTurnsToOv(ovSessionId, turns, peerId = "", cfg = {}) {
   };
 }
 
-async function enqueueTurnsToPending(ovSessionId, turns, peerId = "", cfg = {}) {
+async function enqueueTurnsToPending(ovSessionId, turns, peerId = "") {
   let queued = 0;
   let failed = 0;
   for (const turn of turns) {
-    const parts = shapeCaptureParts(turn.parts, turn.role, cfg).parts;
-    if (parts.length === 0) continue;
-
-    const payload = { role: turn.role, parts };
-    if (peerId) payload.peer_id = peerId;
-    const res = await enqueuePendingDirectly("addMessage", ovSessionId, payload);
+    const res = await enqueuePendingDirectly("addMessage", ovSessionId, toPayload(turn, peerId));
     if (res.ok) queued++;
     else failed++;
   }
@@ -220,6 +180,11 @@ function isMissingSessionState(error) {
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+
+function userWroteTrigger(turn) {
+  if (turn.message.role !== "user") return false;
+  return hasCaptureTrigger(turn.message.parts.filter((p) => p.type === "text").map((p) => p.text).join("\n"));
+}
 
 // last_assistant_message is the text of the turn's final message, which
 // follows its last tool result; the transcript writes each block as a line.
@@ -274,18 +239,20 @@ async function main({ cfg, input, cwd }) {
     ? String(input.last_assistant_message || "").trim()
     : "";
   if (finalAnswer && !holdsAnswer(allTurns, finalAnswer)) {
-    newTurns.push({ role: "assistant", text: finalAnswer, parts: [{ type: "text", text: finalAnswer }] });
+    newTurns.push({
+      role: "assistant",
+      parts: [{ type: "text", text: finalAnswer }],
+      message: buildCaptureMessage({ role: "assistant", content: finalAnswer }, "assistant", cfg),
+    });
   }
   // The cursor counts host-authored turns; only the conversation is sent.
-  const captureTurns = newTurns.filter(
-    (turn) => !turn.hostAuthored && (cfg.captureAssistantTurns || turn.role === "user"),
-  );
+  const captureTurns = newTurns.filter((turn) => !turn.hostAuthored && turn.message);
   log("transcript_parse", {
     totalTurns: allTurns.length,
     previouslyCaptured: state.capturedTurnCount,
     newTurns: newTurns.length,
     captureTurns: captureTurns.length,
-    assistantTurnsSkipped: newTurns.length - captureTurns.length,
+    turnsSkipped: newTurns.length - captureTurns.length,
   });
 
   if (newTurns.length === 0) {
@@ -298,52 +265,19 @@ async function main({ cfg, input, cwd }) {
       ...state,
       capturedTurnCount: allTurns.length,
     });
-    log("state_update", { newCapturedTurnCount: allTurns.length, reason: "assistant_only_increment" });
+    log("state_update", { newCapturedTurnCount: allTurns.length, reason: "nothing_to_send" });
     return;
   }
 
-  // Batch-level capture decision. A per-message filter (length bounds,
-  // command/punctuation/question-only) misfires on a multi-turn batch
-  // concatenated by formatTurnsAsText():
-  //   - tool I/O inlining easily pushes combined text over captureMaxLength → entire
-  //     batch silently dropped + state advanced → permanent data loss
-  //   - JSON-shaped tool I/O can match a punctuation-only rule → non_content drop
-  //   - a leading `/cmd` user turn flips the whole batch to `command` → drop
-  //   - a question-shaped user turn ("why?") tags the whole batch as question_only
-  // For batches we only need: skip empty batches, and (keyword mode) require *some*
-  // user turn to carry a trigger phrase. Per-turn substance is already bounded by
-  // captureToolMaxChars during harvest.
-  const combined = formatTurnsAsText(captureTurns);
-  if (!sanitizeCapturedText(combined)) {
-    log("skip", { stage: "batch_empty" });
+  // Keyword mode needs a trigger in what the user wrote in this batch.
+  if (cfg.captureMode === "keyword" && !captureTurns.some(userWroteTrigger)) {
+    log("skip", { stage: "keyword_mode_no_trigger", turns: captureTurns.length });
     await saveState(sessionId, {
       ...state,
       capturedTurnCount: allTurns.length,
     });
     return;
   }
-
-  if (cfg.captureMode === "keyword") {
-    const hasTrigger = captureTurns.some(
-      (t) =>
-        t.role === "user" &&
-        MEMORY_TRIGGERS.some((re) => re.test(sanitizeCapturedText(t.text))),
-    );
-    if (!hasTrigger) {
-      log("skip", { stage: "keyword_mode_no_trigger", turns: captureTurns.length });
-      await saveState(sessionId, {
-        ...state,
-        capturedTurnCount: allTurns.length,
-      });
-      return;
-    }
-  }
-
-  log("should_capture", {
-    capture: true,
-    reason: cfg.captureMode === "keyword" ? "keyword_trigger_matched" : "semantic",
-    combinedLength: combined.length,
-  });
 
   const health = await fetchJSON("/health");
   let result;
@@ -355,10 +289,10 @@ async function main({ cfg, input, cwd }) {
     } catch (err) {
       logError("pending-replay", err);
     }
-    result = await pushTurnsToOv(ovSessionId, captureTurns, effectivePeer.peerId, cfg);
+    result = await pushTurnsToOv(ovSessionId, captureTurns, effectivePeer.peerId);
   } else if (isRetryableFailure(health)) {
     logError("health_check", "server unreachable or unhealthy; enqueuing capture");
-    result = await enqueueTurnsToPending(ovSessionId, captureTurns, effectivePeer.peerId, cfg);
+    result = await enqueueTurnsToPending(ovSessionId, captureTurns, effectivePeer.peerId);
     log("push_turns", {
       ovSessionId,
       ok: result.ok,

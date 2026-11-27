@@ -65,7 +65,8 @@ export interface TakeoverIo {
   syncBranch?: (branch: any[]) => Promise<SyncBranchResult> | SyncBranchResult;
   /** Drain this session's queue within `budgetMs`; true once nothing of it is undelivered. */
   flush?: (budgetMs?: number) => Promise<boolean> | boolean;
-  commit?: (opts?: { queueOnFailure?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean }) => Promise<unknown> | unknown;
+  /** `queue: false` sends the commit once: no waiting behind queued writes, no queueing on failure. */
+  commit?: (opts?: { queue?: boolean; keepRecentCount?: number; timeoutMs?: number; enableWorkingMemory?: boolean }) => Promise<unknown> | unknown;
   /** Read one archive's `.overview.md` by its uri; null until it is ready. */
   readArchiveOverview?: (archiveUri: string, timeoutMs?: number) => Promise<string | null> | string | null;
   /** An archive's terminal state from its `.done` / `.failed.json` markers; null when unknown. */

@@ -20,6 +20,9 @@ These facts were verified against a live ZCode installation (built-in `zcode-gui
 | Hook runner enablement | Auto-enabled when any plugin contributes a hook |
 | Timeout units | `command` type: `timeout` in **seconds**; `process` type: `timeoutMs` in milliseconds |
 | `async` field | No runtime effect — hooks always run inline |
+| Hook payload identity | Every event carries `sessionId`/`session_id` and the prompt's `turnId`, shared by all events and model calls of that prompt (observed, CLI 0.18.0 in ZCode 4.0.0) |
+| `PostToolUse` / `PostToolUseFailure` | `toolCallId`/`tool_use_id`, `toolName`, `toolInput`, `toolResponse` (the tool's raw object) or `error` (a string) — not registered: the rollout already holds every result (observed) |
+| Rollout file | `~/.zcode/cli/rollout/model-io-<sessionId>.jsonl`, one `model_io` line per model call (observed) |
 
 ## Key design decisions
 
@@ -37,7 +40,7 @@ ZCode imports the shared runtime across the plugin boundary, the way Cursor and 
 
 ### 3. Four events only (ZCode-supported subset)
 
-ZCode supports 7 events but NOT `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`. The host wires 4 events. The commit-on-`Stop` strategy compensates for the absence of `PreCompact`/`SessionEnd`; the Stop parent detaches before reading stdin so network writes do not block ZCode.
+ZCode supports 7 events but NOT `PreCompact`/`SessionEnd`/`SubagentStart`/`SubagentStop`. The host wires 4 events. The commit-on-`Stop` strategy compensates for the absence of `PreCompact`/`SessionEnd`: a Stop commits whatever it and earlier Stops left uncommitted; the Stop parent detaches before reading stdin so network writes do not block ZCode.
 
 **Provenance**: Adversarial review R1 — confirmed all 4 event names valid; R4 — unsupported events silently dropped.
 
@@ -58,11 +61,19 @@ with the integration, the doctor reads its version, and repository checks keep
 that version aligned with each host's `openviking.integration.json`. No host
 probes or loads it as a native plugin manifest.
 
+### 6. Tool calls come from the rollout file
+
+Each rollout line records one model call: `request.messages` (the conversation sent, marked `messagesKind` `full`, `tail` or `delta` with a `messageOffset`, so a line may hold only what is new) and `response` (`text` and `toolCalls: [{ id, name, input }]`). A tool's result is a later line's `{ role: "tool", content, toolCallId, toolName, isError }` message; the assistant message that made the call keeps it in `toolCalls`, and ZCode's own reminders and hook context are separate user messages. Lines whose `querySource` is not `main_turn` (compaction, subagents, web fetch and search, memory recall) and failed attempts (`error`, retried on a line of their own) are not the conversation.
+
+`zcode-turns.mjs` therefore builds a turn from what each line of a `turnId` adds — the tool results answering calls made earlier in the turn, then the response's text and calls — and takes the prompt from the turn's first line: the newest user message with text left after the injected blocks are stripped, never one past an assistant or tool message. Every model call of one prompt shares its `turnId`, so the turn's calls, results and reply go out as one assistant message, in host order, next to the prompt. Since the rollout holds every result with its id, the `PostToolUse` hooks are not registered.
+
+Observed on a live session: `full` lines only; `tail` and `delta` and the 64 MB file reset (`modelIOReset`) are read from the CLI bundle. After a reset the cursor's `turnId` is gone from the file, so the turns are read again and the dedup keys keep them from being sent twice.
+
 ## Primary unknowns
 
-1. **Hook stdin field names**: Verified via ZCode source reverse-engineering (#3127 by @quinn-zenith). The Stop hook exposes `responseText`/`responsePreview` for assistant content. User content is NOT in stdin — the parser falls back to ZCode's rollout file (`~/.zcode/cli/rollout/model-io-<sessionId>.jsonl`) which contains the complete conversation per line: `{ sessionId, turnId, request: { messages: [...] }, response: { text } }`.
-2. **Output schema acceptance**: Whether `hookSpecificOutput` wrapper is accepted as-is. Must be tested against a live ZCode session.
-3. **MCP tool name format**: Namespaced as `plugin:openviking:openviking` — verify tool names match expectations.
+1. **Hook stdin field names**: The Stop hook carries `responseText`/`responsePreview`/`last_assistant_message` and `toolCallCount`, but not the prompt or the tool calls; the parser reads the rollout file and uses stdin only when that cannot be read.
+2. **Output schema acceptance**: `UserPromptSubmit`'s `hookSpecificOutput.additionalContext` reaches the model, as a user message of its own (`<system-reminder>UserPromptSubmit hook additional context: …`) placed before the prompt (observed). `SessionStart` and `PreToolUse` output was not exercised live.
+3. **MCP tool name format**: a server registered in `config.json` → `mcp.servers` as `echo` exposed its tool as `mcp__echo__echo_upper` (observed), so the OpenViking server's tools are `mcp__openviking__<tool>`.
 4. **Turn identity**: Rollout entries carry a monotonic `turnId`. The rollout is the authoritative incremental source whenever it is readable; stdin is a compatibility fallback only. The adapter sends this identity as OpenViking's `turn_id`, records both role-specific dedup keys only after messages are sent or durably queued, and advances `lastTurnId` only through complete acknowledged rollout entries.
 
 ## Adversarial review incorporation

@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { createLogger } from "./debug-log.mjs";
 import { sendSessionMessages } from "./batch-send.mjs";
 import { createOvHttp } from "./ov-http.mjs";
-import { deferCommitBehindPendingWrites, enqueue, replayPending } from "./pending-queue.mjs";
+import { commitSession, enqueue, replayPending } from "./pending-queue.mjs";
 import { buildProfileBlock } from "./profile-inject.mjs";
 import { buildRecallBlock, isRecallEnabled } from "./recall-core.mjs";
 import { buildPluginConfig } from "./plugin-config.mjs";
@@ -249,17 +249,18 @@ export async function addAgentMessages(fetchJSON, sessionId, payloads, peerId = 
 }
 
 export async function commitAgentSession(fetchJSON, sessionId, log = () => {}, payload = {}) {
-  const body = payload || {};
-  const deferred = await deferCommitBehindPendingWrites(fetchJSON, sessionId, body, log);
-  if (deferred) {
-    log("commit", { sessionId, ok: false, queued: deferred.ok, reason: "pending_writes" });
-    return { ok: false, pendingQueued: deferred.ok, pendingEnqueueFailed: !deferred.ok };
+  const result = await commitSession(fetchJSON, sessionId, payload || {}, { log });
+  if (result.deferred) {
+    log("commit", { sessionId, ok: false, queued: result.pendingQueued, reason: "pending_writes" });
+    return result;
   }
-  const result = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-  await notePendingWrite("commitSession", sessionId, body, result);
+  if (!result.ok && !isRetryableFailure(result)) {
+    const detail = result.error?.message || result.error?.code || "";
+    process.stderr.write(
+      `[ov] commitSession failed with non-retryable status ${result.status || "unknown"};`
+        + ` not enqueuing pending retry${detail ? ` (${detail})` : ""}\n`,
+    );
+  }
   log("commit", {
     sessionId,
     ok: result.ok,
@@ -305,6 +306,7 @@ export async function recallForPrompt(fetchJSON, cfg, prompt, cwd, log = () => {
 }
 
 export async function buildAgentProfile(fetchJSON, cfg, cwd) {
+  if (cfg.noAutoInject) return null;
   const peer = resolveEffectivePeerId({ cfg, cwd });
   const profile = await buildProfileBlock(fetchJSON, cfg.profileTokenBudget, peer.peerId, cfg);
   return profile?.block || null;

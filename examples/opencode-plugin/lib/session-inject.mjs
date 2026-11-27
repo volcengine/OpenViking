@@ -9,6 +9,7 @@ export function createSessionInject({ config, sessionManager }) {
   const injectedAfter = new Map()
 
   async function buildSessionContext(input) {
+    if (sessionManager.isBypassed?.(input.sessionID)) return false
     const block = await buildStartContext(input)
     const pointer = historyPointer(input)
     return pointer ? [block, pointer].filter(Boolean).join("\n") : block

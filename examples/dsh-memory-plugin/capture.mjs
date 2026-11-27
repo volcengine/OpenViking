@@ -41,9 +41,7 @@ function isSyntheticUserMessage(message) {
 export function captureEvent(event, config, toolNames = new Map()) {
   if (!event || typeof event !== "object") return null;
   if (event.type === "tool/call") {
-    if (config.captureToolResults === true) {
-      toolNames.set(String(event.data.callId), event.data.name);
-    }
+    toolNames.set(String(event.data.callId), event.data.name);
     return null;
   }
 
@@ -64,14 +62,12 @@ function captureMessage(event, message, config, toolNames) {
   // user-role messages with an explicit non-user/tool kind as synthetic;
   // untagged legacy messages stay capturable for backward compatibility.
   if (isSyntheticUserMessage(message)) return null;
-  if (message.role === "assistant" && config.captureAssistantTurns === false) {
-    return null;
-  }
-  if (message.source?.kind === "tool" && config.captureToolResults !== true) {
-    return null;
-  }
 
-  const role = message.role === "assistant" ? "assistant" : "user";
+  // DSH records a tool result as a user-role message of kind "tool"; naming it
+  // a tool message keeps it on the assistant side of captureAssistantTurns.
+  const role = event.type === "tool/result" || message.source?.kind === "tool"
+    ? "tool"
+    : message.role;
   const toolNameById = Object.fromEntries(toolNames);
   const payload = buildCaptureMessage(message, role, config, { toolNameById });
   if (!payload) return null;

@@ -11,7 +11,7 @@ import {
   collectToolNamesByIdFromEntries,
   normalizeCaptureRole,
 } from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { thresholdCommitDue } from "../../memory-plugin-shared/lib/session-model.mjs";
+import { commitsOnCompaction, thresholdCommitDue } from "../../memory-plugin-shared/lib/session-model.mjs";
 
 export function turnDedupKey(turn) {
   return turn.turnId
@@ -31,7 +31,6 @@ export function buildIncrementalCapturePlan(turns, state = {}, cfg = {}, { toolN
   );
   const candidates = [];
   for (const turn of turns) {
-    if (turn.role === "assistant" && cfg.captureAssistantTurns === false) continue;
     const message = buildCaptureMessage(
       turn.payload || { role: turn.role, content: turn.content },
       turn.role,
@@ -145,7 +144,7 @@ export function readUnseenTurns(transcriptPath, lastTurnId, extract) {
   const toolNameById = collectToolNamesByIdFromEntries(turns);
   const lastIndex = lastTurnId == null || lastTurnId === ""
     ? -1
-    : turns.findIndex((turn) => turn.turnId === String(lastTurnId));
+    : turns.findLastIndex((turn) => turn.turnId === String(lastTurnId));
   return { status: "ok", turns: lastIndex === -1 ? turns : turns.slice(lastIndex + 1), toolNameById };
 }
 
@@ -184,7 +183,7 @@ export async function captureIncrementalTurns(ctx, state, event, transcript, {
     return null;
   }
   const boundary = event === "pre-compact" || endEvents.includes(event);
-  const commitsAtBoundary = boundary && !(event === "pre-compact" && ctx.cfg.autoCommitOnCompact === false);
+  const commitsAtBoundary = boundary && (event !== "pre-compact" || commitsOnCompaction(ctx.cfg));
   const uncommitted = Number(state.capturedSinceCommit || 0);
 
   const plan = buildIncrementalCapturePlan(transcript.turns, state, ctx.cfg, {
@@ -208,6 +207,7 @@ export async function captureIncrementalTurns(ctx, state, event, transcript, {
   let due = commitsAtBoundary && capturedSinceCommit > 0;
   if (!boundary && sent > 0) {
     const meta = await getAgentSession(ctx.fetchJSON, ctx.sessionId);
+    if (!meta) ctx.log("commit_check_skipped", { reason: "session_read_failed" });
     due = Boolean(meta) && await thresholdCommitDue(ctx.fetchJSON, ctx.sessionId, ctx.cfg, meta);
   }
   if (due) {
