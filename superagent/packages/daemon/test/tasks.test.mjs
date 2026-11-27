@@ -1246,4 +1246,24 @@ describe('TaskManager', () => {
     assert.deepEqual(executor.turns.map((turn) => turn.task.id), ['t1', 't2'], 'the next slot starts the queued task');
     assert.deepEqual(tasks.overview({ recent: 0 }).slots, { used: 2, of: 2, reserved: 0, reservedOf: 1 });
   });
+
+  it('runs the reserved slots on top of the others, and a follow-up waits out a lowered limit too', async (t) => {
+    let limits = { slots: 3, reservedSlots: 1 };
+    const { tasks, executor } = setup(t, { runtimes: { limits: () => limits, modelFor: () => ({ model: '', effort: '' }) } });
+    for (const title of ['A', 'B', 'C']) tasks.create({ rows: [row()], title, runtime: 'pi' });
+    tasks.create({ rows: [row({ content: 'follow-up' })], title: 'A2', runtime: 'pi', parent: 't1' });
+    assert.deepEqual(executor.turns.map((turn) => turn.task.id), ['t1', 't2', 't3', 't4'], 'three slots plus one reserved: four turns');
+    assert.deepEqual(tasks.overview({ recent: 0 }).slots, { used: 3, of: 3, reserved: 1, reservedOf: 1 });
+    limits = { slots: 1, reservedSlots: 1 };
+    tasks.create({ rows: [row({ content: 'another follow-up' })], title: 'B2', runtime: 'pi', parent: 't2' });
+    executor.turns[3].finish({ text: 'a2' });
+    await settle();
+    assert.equal(executor.turns.length, 4, 'three normal turns still running against a limit of 1 + 1: the follow-up waits');
+    executor.turns[0].finish({ text: 'a' });
+    await settle();
+    assert.equal(executor.turns.length, 4, 'two still running: the limit of 1 + 1 is reached');
+    executor.turns[2].finish({ text: 'c' });
+    await settle();
+    assert.equal(executor.turns.at(-1).task.id, 't5', 'one left running: the follow-up takes the reserved slot');
+  });
 });

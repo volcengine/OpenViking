@@ -323,9 +323,9 @@ OpenCode and Ark have no worker mode, and `task_create` tells the router to
 handle the request itself when workers are set to run there. A task keeps its
 runtime while it works (see Runtime, model and effort).
 Three turns run at once by default, plus one slot only a follow-up to an
-existing task may take; both counts can be set per instance and changed at
-runtime (see Slots). Each task works in a directory under `<workspace>/tasks/`
-(see Task directories).
+existing task may take; both counts can be set in the daemon env and changed
+for one instance at runtime (see Slots). Each task works in a directory under
+`<workspace>/tasks/` (see Task directories).
 
 A worker's own shell is not capped like the router's: it may build, test and
 wait. Pi's `bash` alone has no default timeout, so a Pi worker's command
@@ -430,18 +430,22 @@ runtime is only marked out.
 
 ### Slots
 
-How many worker turns run at once is the instance's to set:
-`OV_SUPERAGENT_WORKER_SLOTS` and `OV_SUPERAGENT_WORKER_RESERVED_SLOTS` in the
-daemon env (`env` in `config.json`), read at start. The owner changes it at
-runtime with `/workers slots 6 2` in a direct chat (`/workers slots 6` keeps
-the reserved count, `/workers slots default` goes back to the instance's).
-That setting is kept in SQLite like the runtime, model and effort, and applies
-to the next slot that frees: raising it starts tasks waiting in the queue at
-once, lowering it stops nothing already running. The reserved count is how
-many of those slots only a follow-up to an existing task (one that has run, or
-one that follows another) may take, so new work cannot keep a person waiting
-on the task they are already in; `0` makes every slot equal. `/workers` and
-`/tasks` show the counts in force.
+`OV_SUPERAGENT_WORKER_SLOTS` worker turns run at once (3 by default), plus up
+to `OV_SUPERAGENT_WORKER_RESERVED_SLOTS` more (1 by default) that only a
+follow-up to an existing task (one that has run, or one that follows another)
+may take, so new work cannot keep a person waiting on the task they are
+already in, so at most the sum runs at once (4 by default); a reserved count of `0`
+makes every slot equal. Both are daemon env, read at start: `env` in
+`config.json` sets them for every instance of the deployment.
+
+The owner changes them for one instance with `/workers slots 6 2` in a direct
+chat (`/workers slots 6` leaves the reserved count as it is, `/workers slots
+default` goes back to the env's). That setting is kept in SQLite like the
+runtime, model and effort, outlasts a restart and wins over the env. It
+applies to the next turn the scheduler starts: raising it starts tasks waiting
+in the queue at once; lowering it stops nothing already running, and no turn
+starts, a follow-up's included, until the running ones are under the new
+counts. `/workers` and `/tasks` show the counts in force.
 
 The default is the old 3 and 1. More slots buy more concurrent turns only
 while the endpoint, the machine and the router can carry them: each turn is

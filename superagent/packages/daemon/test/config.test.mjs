@@ -245,8 +245,10 @@ describe('configuration safety', { concurrency: false }, () => {
     setEnv('OV_SUPERAGENT_WORKER_SLOTS', 'many');
     assert.throws(() => getConfig(), /OV_SUPERAGENT_WORKER_SLOTS must be an integer between 1 and 64/);
     setEnv('OV_SUPERAGENT_WORKER_SLOTS', undefined);
-    setEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', '64');
-    assert.throws(() => getConfig(), /OV_SUPERAGENT_WORKER_RESERVED_SLOTS must be an integer between 0 and 63/);
+    setEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', '5');
+    assert.equal(getConfig().workerReservedSlots, 5, 'the reserved slots come on top of the others, so they may outnumber them');
+    setEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', '65');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_WORKER_RESERVED_SLOTS must be an integer between 0 and 64/);
     setEnv('OV_SUPERAGENT_WORKER_RESERVED_SLOTS', undefined);
   });
   it('searches OV per line only on an instance that opts in; preferences need no switch', () => {

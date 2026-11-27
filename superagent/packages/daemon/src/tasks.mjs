@@ -1110,16 +1110,16 @@ export class TaskManager {
     this.pump();
   }
 
-  // Slots in force now: the instance's defaults, overridden by the workers'
-  // settings when the owner set a value (/workers slots). Read on every pump
-  // and in the overview, so a raised limit starts waiting tasks at once and a
-  // lowered one drains: no running turn is stopped.
+  // Slots in force now: `slots` turns at once, plus up to `reservedSlots`
+  // more that only a follow-up may take. The instance's counts, overridden by
+  // what the owner set (/workers slots). Read on every pump and in the
+  // overview, so a raised limit starts waiting tasks at once and a lowered
+  // one drains: no running turn is stopped.
   limits() {
     const set = this.runtimes?.limits?.({ slots: this.slots, reservedSlots: this.reservedSlots }) ?? {};
     const slots = Number.isInteger(set.slots) && set.slots > 0 ? set.slots : this.slots;
-    const reserved = Number.isInteger(set.reservedSlots) && set.reservedSlots >= 0 && set.reservedSlots <= slots
-      ? set.reservedSlots : Math.min(this.reservedSlots, slots);
-    return { slots, reservedSlots: reserved };
+    const reservedSlots = Number.isInteger(set.reservedSlots) && set.reservedSlots >= 0 ? set.reservedSlots : this.reservedSlots;
+    return { slots, reservedSlots };
   }
 
   pump() {
@@ -1128,8 +1128,10 @@ export class TaskManager {
       const reserved = [...this.running.values()].filter((slot) => slot.reserved).length;
       const normal = this.running.size - reserved;
       let index = normal < slots ? 0 : -1;
-      // Beyond the normal slots only a follow-up to a task that already ran.
-      if (index < 0 && reserved < reservedSlots) {
+      // Beyond the normal slots only a follow-up to a task that already ran,
+      // and only while all turns together stay under both counts: after a
+      // lowered limit, the normal turns past it use up the reserved slots too.
+      if (index < 0 && this.running.size < slots + reservedSlots) {
         index = this.pending.findIndex((id) => { const task = this.get(id); return (task?.turns ?? 0) > 0 || Boolean(task?.parent_id); });
       }
       if (index < 0) return;

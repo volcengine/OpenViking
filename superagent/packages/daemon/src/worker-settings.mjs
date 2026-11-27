@@ -61,6 +61,10 @@ export function isWorkerRuntime(runtime) {
   return WORKER_RUNTIMES.includes(runtime);
 }
 
+// The most worker slots, and the most reserved ones, an instance may set
+// (config.mjs bounds its env the same).
+export const MAX_WORKER_SLOTS = 64;
+
 export class WorkerSettings {
   // router(): the router's { runtime, model, effort } now.
   constructor({ store, config = {}, router = () => ({}), now = Date.now, logger = null }) {
@@ -76,9 +80,9 @@ export class WorkerSettings {
     this.store.setSetting(`worker_${key}`, value ?? '');
   }
 
-  // Slots (tasks.mjs): how many worker turns run at once, and how many of
-  // them only a follow-up to an existing task may take. Unset, the instance's
-  // configured values (OV_SUPERAGENT_WORKER_SLOTS, ..._RESERVED_SLOTS).
+  // Slots (tasks.mjs): how many worker turns run at once, plus how many more
+  // only a follow-up to an existing task may take. A count the owner has not
+  // set is the instance's (OV_SUPERAGENT_WORKER_SLOTS, ..._RESERVED_SLOTS).
   limits(fallback = {}) {
     return { slots: this.number('slots', fallback.slots), reservedSlots: this.number('reserved_slots', fallback.reservedSlots) };
   }
@@ -88,19 +92,32 @@ export class WorkerSettings {
     return Number.isInteger(value) ? value : fallback;
   }
 
-  // Set by /workers slots: both values, already resolved against the slots in
-  // force; an invalid one changes nothing.
+  // Set by /workers slots. Without `reservedSlots` that count stays as it is
+  // (the owner's, or the instance's); an invalid value changes nothing.
   setSlots(slots, reservedSlots) {
-    if (!Number.isInteger(slots) || slots < 1 || slots > 64) return { ok: false, text: '槽位数要是 1 到 64 的整数' };
-    if (!Number.isInteger(reservedSlots) || reservedSlots < 0 || reservedSlots > slots) return { ok: false, text: `预留槽位要是 0 到 ${slots} 的整数` };
-    this.write('slots', String(slots));
-    this.write('reserved_slots', String(reservedSlots));
-    return { ok: true, slots, reservedSlots };
+    if (!Number.isInteger(slots) || slots < 1 || slots > MAX_WORKER_SLOTS) {
+      return { ok: false, text: `槽位数要是 1 到 ${MAX_WORKER_SLOTS} 的整数` };
+    }
+    if (reservedSlots !== undefined && (!Number.isInteger(reservedSlots) || reservedSlots < 0 || reservedSlots > MAX_WORKER_SLOTS)) {
+      return { ok: false, text: `跟进预留要是 0 到 ${MAX_WORKER_SLOTS} 的整数` };
+    }
+    this.together(() => {
+      this.write('slots', String(slots));
+      if (reservedSlots !== undefined) this.write('reserved_slots', String(reservedSlots));
+    });
+    return { ok: true };
   }
 
   clearSlots() {
-    this.write('slots', '');
-    this.write('reserved_slots', '');
+    this.together(() => {
+      this.write('slots', '');
+      this.write('reserved_slots', '');
+    });
+  }
+
+  // Both counts or neither: a half-written pair would mix two settings.
+  together(fn) {
+    return this.store.transaction ? this.store.transaction(fn) : fn();
   }
 
   // The runtime set with /workers runtime, or null: workers follow the router.
