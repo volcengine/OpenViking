@@ -84,7 +84,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
         source_archive_uri: str = "",
         extraction_scope: str = "",
         output_language_override: str | None = None,
-        is_session_commit: bool = False,
     ):
         self.messages = list(messages) if isinstance(messages, list) else messages
         self.latest_archive_overview = latest_archive_overview
@@ -112,7 +111,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._link_enabled = config.memory.link_enabled if config.memory else False
         self._vision_messages_prepared = False
         self._vision_vlm = None
-        self._is_session_commit = is_session_commit
         self._directory_roots: dict[str, str] = {}
         self._directory_inventory: dict[str, dict[str, Any]] = {}
 
@@ -834,7 +832,8 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return None
 
     def supports_directory_merges(self) -> bool:
-        if not self._is_session_commit:
+        # Specialized providers define their own tools and prefetch flows.
+        if type(self) is not SessionExtractContextProvider or self._isolation_handler is None:
             return False
         schemas = self.get_memory_schemas(self._ctx)
         return all(schema.memory_type != "directory_merges" for schema in schemas) and any(

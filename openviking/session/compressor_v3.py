@@ -786,7 +786,6 @@ class SessionCompressorV3:
             memory_registry=registry,
             vlm_config=vlm_config,
             output_language_override=output_language_override,
-            is_session_commit=bool(archive_uri),
         )
         await context_provider.prepare_extraction_messages()
         extract_context = context_provider.get_extract_context()
