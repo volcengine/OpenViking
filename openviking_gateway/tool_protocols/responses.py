@@ -282,11 +282,15 @@ class ResponsesProtocol(ToolProtocol):
                 if index in self.indices:
                     self.visible[self.indices[index]] = item
         self.calls = [
-            call(
-                item["call_id"],
-                (item.get("namespace", "") + "." if item.get("namespace") else "") + item["name"],
-                item.get("arguments", item.get("input", "")),
-            )
+            {
+                **call(
+                    item["call_id"],
+                    (item.get("namespace", "") + "." if item.get("namespace") else "")
+                    + item["name"],
+                    item.get("arguments", item.get("input", "")),
+                ),
+                **({"custom": True} if item["type"] == "custom_tool_call" else {}),
+            }
             for item in self.output
             if item["type"] in CLIENT_CALLS
         ]
@@ -358,8 +362,13 @@ class ResponsesProtocol(ToolProtocol):
         ]
 
     def results(self, results):
+        # Only a client call the gateway answers itself can be a custom one.
         return [
-            {"type": "function_call_output", "call_id": r["tool_call_id"], "output": r["content"]}
+            {
+                "type": ("custom_tool_call" if r.get("custom") else "function_call") + "_output",
+                "call_id": r["tool_call_id"],
+                "output": r["content"],
+            }
             for r in results
         ]
 

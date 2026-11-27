@@ -3,6 +3,7 @@
 """One hidden-tool lifecycle shared by native model protocol adapters."""
 
 import asyncio
+import re
 import sys
 import time
 
@@ -20,6 +21,14 @@ from .tool_protocols.common import PREFIX, ToolLoopError, ToolRound, add_usage
 from .windows import ALONE, NEW_CONTEXT, window_number
 
 REFUSED = "OpenViking tools are unavailable for the rest of this request; continue without them."
+# A gateway tool called from the code a client tool runs, such as Codex's exec. Models
+# also guess a prefix there (tools.mcp__openviking_search), so the name only has to end it.
+NESTED = re.compile(r"\btools(?:\.|\[[\"'])\w*(" + PREFIX + r"\w+)(?:[\"']\])?\s*\(")
+RETURNED = (
+    "Not run: {} is an OpenViking Gateway tool. The gateway runs it, so it does not exist "
+    "inside this tool. Call openviking_* tools directly as function calls and send this "
+    "call again without them; if it only mentions the name, send it again unchanged."
+)
 STREAM_ERROR_MESSAGE = "Model stream failed"
 # Transport failures of the model provider; a stream error event carries them as its type.
 TRANSPORT_REASONS = {"upstream_timeout", "upstream_disconnected", "upstream_unreachable"}
@@ -78,6 +87,7 @@ class HiddenToolLoop:
         self.final = self.sent = None
         self.hidden, self.window = False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
+        self.returned = False
         self.round = ToolRound([], [], {}, False)
         self.observe_upstream = None
         self.failed_response = None
@@ -174,21 +184,45 @@ class HiddenToolLoop:
         # Adapters update visible history either way; only streams send events.
         return [self.adapter.encode(e) for e in events] if self.body.get("stream") else []
 
-    async def execute(self, calls):
-        """Run gateway-owned calls, yielding the visible notice for each one.
-
-        In a closed request, or once rounds or tokens run out, the calls are refused so
-        the model goes on with the client's tools; calling again right after a refused
-        round ends the request.
-        """
+    def closed(self):
         budget = self.policy.get("tool_total_tokens") or float("inf")
         rounds = self.policy.get("tool_max_rounds") or float("inf")
-        closed = (
+        return (
             self.prepared.tools_closed
             or self.adapter.tool_choice(self.body) == "none"
             or self.rounds >= rounds
             or self.token_cost >= budget
         )
+
+    def nested(self, calls):
+        """Each client call with the gateway tool it reaches for from inside its code.
+
+        The client cannot run such a call: gateway tools exist only here. The gateway
+        answers instead, once per request and only when it can answer every client call
+        of the round; otherwise the calls go to the client as written. Only a call whose
+        input is free text can be code: JSON arguments quote a command far more often.
+        """
+        if not self.allowed or self.returned or not self.round.tool_stop or self.closed():
+            return []
+        found = []
+        for call in calls:
+            names = NESTED.findall(call["function"]["arguments"]) if call.get("custom") else ()
+            name = next((name for name in names if name in self.allowed), None)
+            if not name:
+                return []
+            found.append((call, name))
+        return found
+
+    async def execute(self, calls, returned=()):
+        """Run gateway-owned calls, yielding the visible notice for each one.
+
+        In a closed request, or once rounds or tokens run out, the calls are refused so
+        the model goes on with the client's tools; calling again right after a refused
+        round ends the request. ``returned`` are the client calls ``nested`` found: they
+        get an answer that names the gateway tool, and no notice.
+        """
+        budget = self.policy.get("tool_total_tokens") or float("inf")
+        closed = self.closed()
         if closed and self.refused:
             raise ToolLoopError(
                 "Model exceeded the hidden tool round limit", code="tool_loop_limit"
@@ -196,7 +230,7 @@ class HiddenToolLoop:
         self.refused = closed
         if not self.rounds:
             self.token_cost += added_tokens(calls)
-        show = self.policy.get("show_tool_calls", True)
+        show = self.policy.get("show_tool_calls", True) and bool(calls)
         events = self.adapter.open_notice() if show else []
         results, window = [], None
         # A new window replaces the whole context, so it cannot share a round.
@@ -238,6 +272,17 @@ class HiddenToolLoop:
             events.extend([*self.adapter.notice("\n\n"), *self.adapter.close_notice()])
             for event in self.stream(events):
                 yield event
+        for call, name in returned:
+            result = {
+                "role": "tool",
+                "tool_call_id": call["id"],
+                "content": RETURNED.format(name),
+                "failed": True,
+                "custom": True,
+            }
+            results.append(result)
+            self.token_cost += added_tokens(result)
+            self.returned = True
         if window:
             self.reset(*window)
             # Later rounds of this request may search the part the cut replaced.
@@ -339,20 +384,23 @@ class HiddenToolLoop:
                                 "Model called an unavailable gateway tool", code="tool_call_invalid"
                             )
                         (owned if name in self.allowed else client).append(call)
-                    if owned:
-                        if not self.round.tool_stop:
-                            raise ToolLoopError(
-                                "Gateway tool call has an invalid stop reason",
-                                code="tool_call_invalid",
-                            )
-                        async for event in self.execute(owned):
+                    if owned and not self.round.tool_stop:
+                        raise ToolLoopError(
+                            "Gateway tool call has an invalid stop reason",
+                            code="tool_call_invalid",
+                        )
+                    returned = self.nested(client)
+                    if returned:
+                        client = []
+                    if owned or returned:
+                        async for event in self.execute(owned, returned):
                             yield event
                     published = self.adapter.publish_calls(client)
                     if self.unsealer and published and self.body.get("stream"):
                         published = await self.unsealer.events(self.protocol, published)
                     for event in self.stream(published):
                         yield event
-                    if client or not owned:
+                    if client or not (owned or returned):
                         await self.persist()
                         self.sent = self.final
                         if self.unsealer:
