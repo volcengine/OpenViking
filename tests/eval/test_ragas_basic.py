@@ -1,137 +1,107 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 import json
-import queue
-import tempfile
 import threading
-from pathlib import Path
 
-from openviking.eval.ragas.generator import DatasetGenerator
+import httpx
+
 from openviking.eval.ragas.pipeline import RAGQueryPipeline
-from openviking.eval.ragas.types import EvalDataset, EvalSample
-from openviking.eval.recorder.async_writer import AsyncRecordWriter
+from openviking.eval.ragas.rag_eval import load_questions
+from openviking.eval.recorder import async_writer
 
 
-def test_eval_types():
-    sample = EvalSample(
-        query="test query",
-        context=["context1", "context2"],
-        response="test response",
-        ground_truth="test ground truth",
-    )
-    assert sample.query == "test query"
-    assert len(sample.context) == 2
+async def test_async_record_writer_drains_records_before_stop_sentinel(tmp_path, monkeypatch):
+    path = tmp_path / "records.jsonl"
+    first_write = threading.Event()
+    release_write = threading.Event()
 
-    dataset = EvalDataset(samples=[sample])
-    assert len(dataset) == 1
+    def gated_open(*args, **kwargs):
+        first_write.set()
+        release_write.wait(timeout=5)
+        return open(*args, **kwargs)
 
+    monkeypatch.setattr(async_writer, "open", gated_open, raising=False)
+    writer = async_writer.AsyncRecordWriter(str(path), batch_size=1)
+    records: list[dict] = [{"id": 1}, {"id": 2}, {"id": 3, "uri": "viking://resources/文档"}]
+    try:
+        writer.write_record(records[0])
+        assert await asyncio.to_thread(first_write.wait, 5)
+        for record in records[1:]:
+            writer.write_record(record)
+        stop = asyncio.create_task(asyncio.to_thread(writer.stop))
+        try:
+            assert await asyncio.to_thread(writer._stop_event.wait, 5)
+        finally:
+            release_write.set()
+            await stop
+    finally:
+        release_write.set()
+        writer.stop()
 
-def test_generator_initialization():
-    gen = DatasetGenerator()
-    assert gen.llm is None
-
-
-def test_pipeline_initialization():
-    pipeline = RAGQueryPipeline(config_path="./test.conf", server_url="http://openviking.test")
-    assert pipeline.config_path == "./test.conf"
-    assert pipeline.server_url == "http://openviking.test"
-    assert pipeline._client is None
-
-
-def test_async_record_writer_drains_records_before_stop_sentinel():
-    writer = AsyncRecordWriter.__new__(AsyncRecordWriter)
-    writer._queue = queue.Queue()
-    writer._stop_event = threading.Event()
-    writer._stop_event.set()
-    writer.batch_size = 100
-    writer.flush_interval = 60
-    writer._queue.put({"id": 1})
-    writer._queue.put({"id": 2})
-    writer._queue.put(None)
-    flushed = []
-    writer._flush_batch = lambda batch: flushed.extend(batch)
-
-    writer._writer_loop()
-
-    assert flushed == [{"id": 1}, {"id": 2}]
+    assert [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] == records
 
 
-def test_pipeline_query_consumes_http_result_and_generates_answer():
-    class Client:
-        def search(self, query, **kwargs):
-            return {
-                "memories": [
-                    {
-                        "uri": "viking://user/memories/profile.md",
-                        "overview": "Profile overview",
-                    }
-                ],
-                "resources": [
-                    {
-                        "uri": "viking://resources/guide.md",
-                        "abstract": "Guide abstract",
-                    }
-                ],
-                "skills": [],
-            }
+def test_pipeline_query_consumes_http_result_and_generates_answer(tmp_path, monkeypatch):
+    http_client = httpx.AsyncClient
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(tmp_path / "missing.conf"))
+
+    def search(request):
+        assert request.url.path == "/api/v1/search/search"
+        assert json.loads(request.content)["query"] == "How does it work?"
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "result": {
+                    "memories": [
+                        {"uri": "viking://user/memories/profile.md", "overview": "Profile overview"}
+                    ],
+                    "resources": [
+                        {"uri": "viking://resources/guide.md", "abstract": "Guide abstract"},
+                        {"uri": "viking://resources/empty.md"},
+                    ],
+                    "skills": [],
+                },
+            },
+        )
 
     class LLM:
         def get_completion(self, prompt):
+            assert "Profile overview\n\n---\n\nGuide abstract" in prompt
+            assert "Question: How does it work?" in prompt
             return "Generated answer"
 
-    pipeline = RAGQueryPipeline()
-    pipeline._client = Client()
-    pipeline._llm = LLM()
-
-    result = pipeline.query("How does it work?")
-
-    assert result["contexts"] == ["Profile overview", "Guide abstract"]
-    assert result["retrieved_uris"] == [
-        "viking://user/memories/profile.md",
-        "viking://resources/guide.md",
-    ]
-    assert result["answer"] == "Generated answer"
-
-
-def test_question_loader():
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        f.write('{"question": "What is OpenViking?"}\n')
-        f.write('{"question": "How does memory work?", "ground_truth": "Hierarchical"}\n')
-        f.write("\n")
-        f.write('{"invalid": "no question field"}\n')
-        temp_path = f.name
-
+    monkeypatch.setattr(
+        "openviking_sdk.client.httpx.AsyncClient",
+        lambda **kwargs: http_client(**kwargs, transport=httpx.MockTransport(search)),
+    )
+    pipeline = RAGQueryPipeline(server_url="http://openviking.test")
+    monkeypatch.setattr(pipeline, "_llm", LLM())
     try:
-        questions = []
-        with open(temp_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    item = json.loads(line)
-                    if "question" in item:
-                        questions.append(item)
-                except json.JSONDecodeError:
-                    pass
-
-        assert len(questions) == 2
-        assert questions[0]["question"] == "What is OpenViking?"
-        assert questions[1]["ground_truth"] == "Hierarchical"
+        result = pipeline.query("How does it work?")
     finally:
-        Path(temp_path).unlink()
+        pipeline.close()
+
+    assert result == {
+        "question": "How does it work?",
+        "contexts": ["Profile overview", "Guide abstract"],
+        "retrieved_uris": ["viking://user/memories/profile.md", "viking://resources/guide.md"],
+        "answer": "Generated answer",
+    }
 
 
-def test_eval_dataset_operations():
-    samples = [
-        EvalSample(query="q1", context=["c1"], response="r1"),
-        EvalSample(query="q2", context=["c2"], response="r2"),
+def test_question_loader(tmp_path):
+    path = tmp_path / "questions.jsonl"
+    path.write_text(
+        '{"question":"What is OpenViking?"}\n'
+        '{"question":"How does memory work?","ground_truth":"Hierarchical"}\n'
+        '\n{"invalid":"no question field"}\n{"question":\n',
+        encoding="utf-8",
+    )
+
+    assert load_questions(str(path)) == [
+        {"question": "What is OpenViking?"},
+        {"question": "How does memory work?", "ground_truth": "Hierarchical"},
     ]
-
-    dataset = EvalDataset(name="test_dataset", samples=samples)
-    assert len(dataset) == 2
-    assert dataset.name == "test_dataset"
-
-    dataset.samples.append(EvalSample(query="q3", context=["c3"]))
-    assert len(dataset) == 3

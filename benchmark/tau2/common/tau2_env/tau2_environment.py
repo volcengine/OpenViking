@@ -226,11 +226,6 @@ class Tau2BenchEnv:
             return "Task Terminated"
         return response
 
-    def append_agent_message(self, content: str) -> None:
-        append_message = getattr(self._impl, "append_agent_message", None)
-        if callable(append_message):
-            append_message(content)
-
     def _get_reward(self):
         return self._impl._get_reward()
 
@@ -279,36 +274,12 @@ class _GymTau2BenchEnv:
         self.terminated = terminated
         return _clean_obs(obs)
 
-    def append_agent_message(self, content: str) -> None:
-        if not content.strip():
-            return
-        simulation = self._simulation_run_from_env_info()
-        if simulation is None:
-            return
-
-        from tau2.data_model.message import AssistantMessage
-
-        simulation.messages.append(AssistantMessage(role="assistant", content=content))
-        self.env._simulation_run = simulation
-        self.simulation_run = simulation.model_dump_json(indent=2)
-
     def _get_reward(self):
         reward, reward_info = self.env._get_reward()
         try:
             return reward, json.loads(reward_info)
         except (TypeError, json.JSONDecodeError):
             return reward, reward_info
-
-    def _simulation_run_from_env_info(self):
-        simulation_run_json = self.env._get_info().get("simulation_run")
-        if not simulation_run_json:
-            return None
-        try:
-            from tau2.data_model.simulation import SimulationRun
-
-            return SimulationRun.model_validate_json(simulation_run_json)
-        except Exception:
-            return None
 
 
 class _NativeTau2BenchEnv:
@@ -383,12 +354,6 @@ class _NativeTau2BenchEnv:
         tool_message = self.env.get_response(tool_call)
         self._messages.extend([assistant_message, tool_message])
         return _clean_obs(tool_message.content or "")
-
-    def append_agent_message(self, content: str) -> None:
-        from tau2.data_model.message import AssistantMessage
-
-        if content.strip():
-            self._messages.append(AssistantMessage(role="assistant", content=content))
 
     def _get_reward(self):
         from tau2.data_model.simulation import SimulationRun

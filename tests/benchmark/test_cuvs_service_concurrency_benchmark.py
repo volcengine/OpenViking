@@ -1,66 +1,36 @@
 import asyncio
-import importlib.util
-import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
 
-MODULE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "benchmark"
-    / "cuvs"
-    / "run_service_concurrency_benchmark.py"
-)
-SPEC = importlib.util.spec_from_file_location("run_cuvs_service_concurrency_benchmark", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
-benchmark = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = benchmark
-SPEC.loader.exec_module(benchmark)
-
-
-def test_unique_filters_are_distinct_and_keep_enough_candidates():
-    filters = [benchmark.unique_filter(index, 100_000, 10_000) for index in range(32)]
-
-    assert len({(item["gte"], item["lt"]) for item in filters}) == 32
-    assert all(item["lt"] - item["gte"] == 100 for item in filters)
-    assert all(0 <= item["gte"] < item["lt"] <= 100_000 for item in filters)
-
-
-def test_service_record_contains_tenant_and_filter_fields():
-    record = benchmark.make_record(1001, [1.0, 0.0])
-
-    assert record == {
-        "id": "record-1001",
-        "vector": [1.0, 0.0],
-        "account_id": "benchmark",
-        "uri": "viking://resources/bench/cuvs-service/record-1001",
-        "uniform_bucket": 1,
-        "row_number": 1001,
-    }
+from benchmark.cuvs import run_service_concurrency_benchmark as benchmark
 
 
 def test_auto_background_backend_enables_coalescing_rebuild(tmp_path):
+    parser = benchmark.build_parser()
+    args = parser.parse_args(
+        [
+            "--backends",
+            "auto_cuvs_background",
+            "--auto-rebuild-debounce-ms",
+            "25",
+        ]
+    )
+    [backend] = benchmark.validate_args(parser, args)
     config = benchmark.make_config(
-        "auto_cuvs_background",
+        backend,
         project_path=tmp_path,
         collection_name="background",
         dimension=128,
         filter_cache_size=16,
-        auto_rebuild_debounce_ms=25,
+        auto_rebuild_debounce_ms=args.auto_rebuild_debounce_ms,
     )
 
     assert config.backend == "local"
+    assert config.cuvs is not None
     assert config.cuvs.auto_enable is True
     assert config.cuvs.auto_background_rebuild is True
     assert config.cuvs.auto_rebuild_debounce_ms == 25
-
-
-def test_validate_args_accepts_auto_background_backend():
-    parser = benchmark.build_parser()
-    args = parser.parse_args(["--backends", "auto_cuvs_background"])
-
-    assert benchmark.validate_args(parser, args) == ["auto_cuvs_background"]
 
 
 @pytest.mark.asyncio

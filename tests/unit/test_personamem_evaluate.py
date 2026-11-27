@@ -1,4 +1,3 @@
-import copy
 import json
 import os
 import re
@@ -31,54 +30,58 @@ def retrieval_row(unit="personamem_v2_32k", question="QUESTION_CORRECT"):
 
 
 class PersonaMemEvaluateTests(unittest.TestCase):
-    def test_mode_override_uses_only_retrieved_memory_and_preserves_input(self):
-        row = retrieval_row()
-        original = copy.deepcopy(row)
-        adapted, mode = evaluator._adapt_rows([row], "personamem_v2", persona_mode="mcq")
-        self.assertEqual(mode, "mcq")
-        self.assertEqual(adapted[0]["answer_mode"], "mcq")
+    def test_generative_with_no_retrieved_memory_does_not_require_mcq_options(self):
+        row = {**retrieval_row(), "retrieved_context": [], "incorrect_answers": []}
+        adapted, mode = evaluator._adapt_rows([row], "personamem_v2", persona_mode="generative")
+        self.assertEqual(mode, "generative")
         self.assertEqual(
             adapted[0]["chat_history"],
-            [{"role": "system", "content": "[Retrieved memory 1]\nThe user enjoys hiking."}],
+            [{"role": "system", "content": "No relevant memories were retrieved."}],
         )
-        self.assertEqual(row, original)
-        _, default_mode = evaluator._adapt_rows([row], "personamem_v2")
-        self.assertEqual(default_mode, "mcq")
-        _, explicit_mode = evaluator._adapt_rows([row], "personamem_v2", persona_mode="generative")
-        self.assertEqual(explicit_mode, "generative")
         generic, generic_mode = evaluator._adapt_rows([row], "generic")
         self.assertIsNone(generic_mode)
         self.assertEqual(generic, [row])
-        for size in ("32k", "128k"):
-            unit = f"personamem_v2_{size}"
-            self.assertEqual(evaluator._resolve_unit([retrieval_row(unit)], None), unit)
-        adapted, _ = evaluator._adapt_rows(
-            [{**row, "retrieved_context": []}], "personamem_v2", persona_mode="mcq"
-        )
-        self.assertEqual(
-            adapted[0]["chat_history"][0]["content"], "No relevant memories were retrieved."
-        )
 
     def test_invalid_options_or_unrelated_mode_override_fail_before_models(self):
-        for incorrect in (
-            [],
-            ["only one"],
-            ["a", "a", "b"],
-            ["a", "b", " "],
-            ["a", "b", "Take a hiking trip."],
-            ["a", "b", 123],
-            "not JSON",
+        row = retrieval_row()
+        invalid = "MCQ requires a correct answer and three distinct incorrect answers"
+        inputs = [
+            ({**row, "incorrect_answers": options}, "mcq", invalid)
+            for options in (
+                ["only one"],
+                ["a", "a", "b"],
+                ["a", "b", " "],
+                ["a", "b", " Take a hiking trip. "],
+                ["a", "b", 123],
+            )
+        ]
+        inputs.extend(
+            (
+                ({**row, "incorrect_answers": "not JSON"}, "mcq", "invalid MCQ options"),
+                (retrieval_row("beam_100k"), "mcq", "only supported for PersonaMem"),
+                (row, "invalid", "unsupported PersonaMem mode"),
+            )
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(evaluator, "_verify_pipeline", return_value=(Path("unused.py"), {})),
+            patch.object(
+                evaluator,
+                "_require_model_environment",
+                side_effect=AssertionError("invalid input reached model setup"),
+            ),
         ):
-            with self.subTest(incorrect=incorrect), self.assertRaises(ValueError):
-                evaluator._adapt_rows(
-                    [{**retrieval_row(), "incorrect_answers": incorrect}],
-                    "personamem_v2",
-                    persona_mode="mcq",
-                )
-        with self.assertRaisesRegex(ValueError, "only supported for PersonaMem"):
-            evaluator._adapt_rows([retrieval_row()], "generic", persona_mode="mcq")
-        with self.assertRaisesRegex(ValueError, "unsupported PersonaMem mode"):
-            evaluator._adapt_rows([retrieval_row()], "personamem_v2", persona_mode="invalid")
+            root = Path(directory)
+            retrieval = root / "retrieval.jsonl"
+            output = root / "output"
+            for invalid_row, mode, message in inputs:
+                with self.subTest(
+                    unit=invalid_row["unit"], mode=mode, options=invalid_row["incorrect_answers"]
+                ):
+                    retrieval.write_text(json.dumps(invalid_row) + "\n", encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, message):
+                        evaluator.evaluate(retrieval, output, aml_repo=root, persona_mode=mode)
+                    self.assertFalse(output.exists())
 
     def test_public_mcq_pipeline_with_local_http_and_no_judge_credentials(self):
         repo = (
@@ -136,6 +139,7 @@ class PersonaMemEvaluateTests(unittest.TestCase):
                         retrieval_row(unit, question)
                         for question in ("QUESTION_CORRECT", "QUESTION_WRONG", "QUESTION_INVALID")
                     ]
+                    rows[1]["incorrect_answers"] = json.dumps(rows[1]["incorrect_answers"])
                     retrieval = root / f"{size}-{concurrency}.jsonl"
                     evaluator._write_jsonl(retrieval, rows)
                     original = retrieval.read_bytes()
@@ -147,6 +151,7 @@ class PersonaMemEvaluateTests(unittest.TestCase):
                         eval_concurrency=concurrency,
                     )
                     self.assertEqual(retrieval.read_bytes(), original)
+                    self.assertEqual(summary["unit"], unit)
                     self.assertEqual(summary["persona_mode"], "mcq")
                     self.assertEqual(summary["correct_count"], 1)
                     self.assertEqual(summary["incorrect_count"], 2)

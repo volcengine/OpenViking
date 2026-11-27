@@ -807,15 +807,6 @@ def _tau2_case_lookup(case: Case) -> dict[str, Any]:
     }
 
 
-def _append_final_answer_for_tau2_evaluation(provider_env: Any, final_content: str | None) -> None:
-    if not final_content or not str(final_content).strip():
-        return
-    target = getattr(provider_env, "_impl", provider_env)
-    append_message = getattr(target, "append_agent_message", None)
-    if callable(append_message):
-        append_message(str(final_content))
-
-
 # User STOP closes dialogue only; transfer/out-of-scope still end the task.
 _TAU2_USER_STOP_TOKENS = ("###STOP###",)
 _TAU2_USER_TRANSFER_TOKENS = ("###TRANSFER###", "###OUT-OF-SCOPE###")

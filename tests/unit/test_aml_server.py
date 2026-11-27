@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from typing import Any
 
 import httpx
 import pytest
@@ -29,6 +30,7 @@ def adapter_client(monkeypatch, tmp_path):
                 openviking_api_key="test-ov-key",
                 aml_api_key="test-aml-key",
                 retry_delay_seconds=0.001,
+                task_poll_seconds=0.001,
             )
         )
         return client_type(
@@ -42,6 +44,7 @@ def adapter_client(monkeypatch, tmp_path):
 
 async def test_search_uses_native_find_and_preserves_user_scope_and_aml_response(adapter_client):
     seen = []
+    image_attempts = []
 
     async def handle(request):
         assert request.method == "POST"
@@ -57,6 +60,13 @@ async def test_search_uses_native_find_and_preserves_user_scope_and_aml_response
         assert "mode" not in body
         assert not body.get("session_id")
         assert not body.get("read_content")
+        if user == "carol":
+            assert body["query"] == ""
+            assert body["image_url"] == IMAGES[0]
+            image_attempts.append(body)
+            if len(image_attempts) == 1:
+                raise httpx.ReadTimeout("temporary failure", request=request)
+            return httpx.Response(200, json={"status": "ok", "result": {"memories": []}})
         assert body.get("image_url") == (IMAGES if user == "bob" else None)
         seen.append((user, body["query"]))
         await asyncio.sleep(0)
@@ -94,6 +104,14 @@ async def test_search_uses_native_find_and_preserves_user_scope_and_aml_response
                 },
             ),
         )
+        image_only = await client.post(
+            "/search",
+            json={
+                "user_id": "carol",
+                "query": [{"type": "image_url", "image_url": {"url": IMAGES[0]}}],
+                "top_k": 2,
+            },
+        )
     assert sorted(seen) == [
         ("alice", "Where?"),
         ("bob", "Which?\nCompare both.\n\nAnswer options:\n1. A\n2. B"),
@@ -106,9 +124,13 @@ async def test_search_uses_native_find_and_preserves_user_scope_and_aml_response
                 {"id": f"viking://user/{user}/memories/b", "content": "summary"},
             ]
         }
+    assert image_only.status_code == 200
+    assert image_only.json() == {"data": []}
+    first, retried = image_attempts
+    assert retried == first
 
 
-async def test_add_commits_native_parts_and_image_search_retries(adapter_client, monkeypatch):
+async def test_add_waits_for_its_commit_and_reports_task_failure(adapter_client, monkeypatch):
     requests = []
     parts = [
         {"type": "text", "text": "Remember these receipts."},
@@ -126,11 +148,13 @@ async def test_add_commits_native_parts_and_image_search_retries(adapter_client,
     }
 
     def handle(request):
-        requests.append(request)
+        path = request.url.path
+        requests.append(path)
+        result: dict[str, Any]
         assert request.headers["X-OpenViking-User"] == "alice"
         assert request.headers["X-OpenViking-Account"] == "competition"
         assert request.headers["X-API-Key"] == "test-ov-key"
-        if request.url.path == "/api/v1/sessions/session-1/messages/batch":
+        if path.endswith("/messages/batch"):
             assert json.loads(request.content) == {
                 "messages": [
                     {"role": "user", "parts": parts, "created_at": "1970-01-01T00:00:00.000Z"},
@@ -138,17 +162,17 @@ async def test_add_commits_native_parts_and_image_search_retries(adapter_client,
                 ]
             }
             result = {"added": 2}
-        elif request.url.path == "/api/v1/sessions/session-1/commit":
+        elif path.endswith("/commit"):
             assert json.loads(request.content) == {"keep_recent_count": 0}
-            result = {"status": "accepted", "task_id": "task-1"}
-        elif request.url.path == "/api/v1/tasks/task-1":
+            task_id = "task-1" if path == "/api/v1/sessions/session-1/commit" else "task-2"
+            result = {"status": "accepted", "task_id": task_id}
+        elif path == "/api/v1/tasks/task-1":
             assert request.method == "GET"
-            result = {"status": "completed"}
+            result = {"status": "running" if requests.count(path) == 1 else "completed"}
         else:
-            assert request.url.path == "/api/v1/search/find"
-            if len(requests) == 4:
-                raise httpx.ReadTimeout("temporary failure", request=request)
-            result = {"memories": []}
+            assert path == "/api/v1/tasks/task-2"
+            assert request.method == "GET"
+            result = {"status": "failed", "error": "extraction failed"}
         return httpx.Response(200, json={"status": "ok", "result": result})
 
     async with adapter_client(handle) as client:
@@ -158,7 +182,7 @@ async def test_add_commits_native_parts_and_image_search_retries(adapter_client,
         assert rejected.status_code == 422
         assert requests == []
         monkeypatch.setattr(server, "MAX_ADD_IMAGE_BYTES", 2)
-        added = await client.post("/add", json=payload)
+        added = await asyncio.wait_for(client.post("/add", json=payload), timeout=5)
         assert added.status_code == 200
         assert added.json() == {
             "success": True,
@@ -166,18 +190,20 @@ async def test_add_commits_native_parts_and_image_search_retries(adapter_client,
             "user_id": "alice",
             "session_id": "session-1",
         }
-        assert [request.url.path for request in requests] == [
-            "/api/v1/sessions/session-1/messages/batch",
-            "/api/v1/sessions/session-1/commit",
-            "/api/v1/tasks/task-1",
-        ]
-        response = await client.post(
-            "/search", json={"user_id": "alice", "query": [parts[1]], "top_k": 2}
+        failed = await asyncio.wait_for(
+            client.post(
+                "/add", json={**payload, "request_id": "request-2", "session_id": "session-2"}
+            ),
+            timeout=5,
         )
-    assert response.status_code == 200
-    assert response.json() == {"data": []}
-    assert len(requests) == 5
-    assert json.loads(requests[-1].content)["query"] == ""
-    assert json.loads(requests[-1].content)["image_url"] == IMAGES[0]
-    assert requests[-2].content == requests[-1].content
-    assert requests[-2].headers == requests[-1].headers
+    assert failed.status_code == 503
+    assert failed.json() == {"detail": "OpenViking commit failed: extraction failed"}
+    assert requests == [
+        "/api/v1/sessions/session-1/messages/batch",
+        "/api/v1/sessions/session-1/commit",
+        "/api/v1/tasks/task-1",
+        "/api/v1/tasks/task-1",
+        "/api/v1/sessions/session-2/messages/batch",
+        "/api/v1/sessions/session-2/commit",
+        "/api/v1/tasks/task-2",
+    ]

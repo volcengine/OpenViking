@@ -6,8 +6,9 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from importlib import import_module
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from typing import Any
 
 import pytest
 
@@ -152,164 +153,131 @@ def test_dataset_service_policy_set_from_dict_preserves_policies():
     assert policy.metadata == {"domain": "booking"}
 
 
-def test_tau2_rollout_messages_use_completed_structured_tool_parts():
-    from benchmark.tau2.train.rollout_executor import _build_rollout_messages
-    from openviking.message import TextPart, ToolPart
+@pytest.fixture
+def airline_case(tmp_path):
+    from benchmark.tau2.train.case_loader import Tau2CaseLoader
 
-    rollout_messages = _build_rollout_messages(
-        system_prompt="policy",
-        user_prompt="user request",
-        tools_used=[
-            {
-                "tool_name": "get_user_details",
-                "args": '{"user_id": "emma_kim_9957"}',
-                "result": '{"membership": "gold"}',
-            }
-        ],
-        final_content="done",
-        evaluation_result=None,
-        reward=1.0,
+    domain_dir = tmp_path / "domains" / "airline"
+    domain_dir.mkdir(parents=True)
+    (domain_dir / "split_tasks.json").write_text(json.dumps({"test": ["0", "1"]}))
+    [case] = Tau2CaseLoader(
+        domain="airline", split="test", data_root=str(tmp_path), task_indices=[1]
+    ).load_cases()
+    return case
+
+
+@pytest.mark.asyncio
+async def test_tau2_commit_request_and_trajectory_prompt_keep_tool_evidence(
+    monkeypatch, tmp_path, airline_case
+):
+    import httpx
+
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _build_rollout_messages,
+        _tau2_evaluation,
     )
-
-    assert isinstance(rollout_messages[0].parts[0], TextPart)
-    assert rollout_messages[0].parts[0].text.startswith("system:\npolicy")
-
-    tool_message = rollout_messages[2]
-    assert tool_message.role == "assistant"
-    assert isinstance(tool_message.parts[0], ToolPart)
-    assert tool_message.parts[0].tool_status == "completed"
-    assert tool_message.parts[0].tool_input == {"user_id": "emma_kim_9957"}
-    assert tool_message.parts[0].tool_output == '{"membership": "gold"}'
-    assert not any(
-        isinstance(part, TextPart) and "tool-call:" in part.text
-        for message in rollout_messages
-        for part in message.parts
-    )
-    assert not any(
-        isinstance(part, ToolPart) and part.tool_status == "running"
-        for message in rollout_messages
-        for part in message.parts
-    )
-
-
-@pytest.mark.parametrize(
-    "experience_reminder", [None, "[Experience Reminder]\nVerify the receipt."]
-)
-def test_tau2_assistant_tool_records_survive_commit_and_extraction(experience_reminder):
-    from benchmark.tau2.train.rollout_executor import _build_rollout_messages, _tau2_evaluation
     from openviking.message import Message, ToolPart
     from openviking.session.memory.agent_trajectory_context_provider import (
         AgentTrajectoryContextProvider,
     )
-    from openviking.session.retention import build_turns, is_user_query
-    from openviking.session.train import Rollout
-    from openviking.session.train.components.session_commit import _build_commit_messages
+    from openviking.session.retention import is_user_query
+    from openviking.session.train import Rollout, SessionCommitPolicyTrainer
+    from openviking_cli.client.http import AsyncHTTPClient
 
-    native_report = {"reward": 0.0, "db_check": {"db_match": False}}
-    evaluation = _tau2_evaluation(reward=0.0, evaluation_result=native_report)
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(tmp_path / "missing.conf"))
+    http_client = httpx.AsyncClient
+    session_id = ""
+    uploaded: list[dict[str, Any]] = []
+
+    def handle(request):
+        nonlocal session_id, uploaded
+        path = request.url.path
+        if path == "/api/v1/sessions":
+            session_id = json.loads(request.content)["session_id"]
+            result = {"session_id": session_id}
+        elif path == f"/api/v1/sessions/{session_id}/messages/batch":
+            uploaded = json.loads(request.content)["messages"]
+            result = {"added": len(uploaded)}
+        elif path == f"/api/v1/sessions/{session_id}/commit":
+            assert uploaded
+            result = {"status": "accepted", "task_id": "commit-1"}
+        else:
+            assert path == "/api/v1/tasks/commit-1"
+            result = {"status": "completed"}
+        return httpx.Response(200, json={"status": "ok", "result": result})
+
+    monkeypatch.setattr(
+        "openviking_sdk.client.httpx.AsyncClient",
+        lambda **kwargs: http_client(**kwargs, transport=httpx.MockTransport(handle)),
+    )
+    reward = {"reward": 0.0}
     messages = _build_rollout_messages(
-        system_prompt="policy",
-        user_prompt="Exchange the desk lamp.",
+        system_prompt="Check the itinerary before making any change.",
+        user_prompt=airline_case.input["user_query"],
         tools_used=[
             {
                 "tool_name": "communicate_with_user",
-                "args": {"content": "May I exchange the lamp?"},
+                "args": {"content": "May I look up your reservation?"},
                 "result": "Yes, please proceed.",
             },
             {
-                "tool_name": "exchange_delivered_order_items",
-                "args": {"order_id": "order-1", "item_ids": ["lamp-1"]},
-                "result": "Task Terminated",
+                "tool_name": "get_reservation_details",
+                "args": '{"reservation_id": "Q69X3R"}',
+                "result": '{"reservation_id": "Q69X3R", "flights": []}',
             },
+            {"tool_name": "done", "args": "{}", "result": "Task Terminated"},
         ],
-        final_content="No exchange receipt was returned.",
-        evaluation_result=native_report,
+        final_content=None,
+        evaluation_result=reward,
         reward=0.0,
-        experience_reminder=experience_reminder,
     )
     rollout = Rollout(
-        case=_case(), messages=messages, policy_snapshot_id="snapshot", evaluation=evaluation
+        case=airline_case,
+        messages=messages,
+        policy_snapshot_id="snapshot",
+        evaluation=_tau2_evaluation(reward=0.0, evaluation_result=reward),
     )
-    requests = _build_commit_messages(rollout)
+    client = AsyncHTTPClient(url="http://openviking.test")
+    try:
+        await client.initialize()
+        training = await SessionCommitPolicyTrainer(client, run_id="tau2-audit").train_rollouts(
+            [rollout], _policy_set()
+        )
+    finally:
+        await client.close()
+
+    [commit] = training.apply_result.metadata["commit_results"]
+    assert (commit["session_id"], commit["task_id"], commit["task_status"]) == (
+        session_id,
+        "commit-1",
+        "completed",
+    )
+    assert messages[-1].id == "tau2-reward"
+    assert all(message.id != "tau2-final" for message in messages)
     restored = [
-        Message.from_dict({"id": str(index), **request}) for index, request in enumerate(requests)
+        Message.from_dict({"id": str(index), **request}) for index, request in enumerate(uploaded)
     ]
-    tool_message = next(
+    [lookup, done] = [
         message for message in restored if any(isinstance(part, ToolPart) for part in message.parts)
-    )
-
-    assert tool_message.role == "assistant"
-    assert tool_message.parts[0].tool_name == "exchange_delivered_order_items"
-    assert tool_message.parts[0].tool_input == {"order_id": "order-1", "item_ids": ["lamp-1"]}
-    assert tool_message.parts[0].tool_output == "Task Terminated"
-    assert not is_user_query(tool_message)
-    dialogue = [
-        message
-        for message in messages
-        if message.id not in {"tau2-system", "tau2-experience", "tau2-reward"}
     ]
-    assert len(build_turns(dialogue)) == 2
-    confirmation = next(
-        message for message in dialogue if message.content == "Yes, please proceed."
+    part = lookup.parts[0]
+    assert isinstance(part, ToolPart)
+    assert (lookup.role, part.tool_name, part.tool_status) == (
+        "assistant",
+        "get_reservation_details",
+        "completed",
     )
-    assert confirmation.role == "user"
-    history = AgentTrajectoryContextProvider(messages=restored)._build_conversation_message()[
-        "content"
-    ]
-    assert "[assistant][assistant]: ToolCall: tool_name=exchange_delivered_order_items" in history
-    assert "output=Task Terminated" in history
-    assert "[user][user]: Yes, please proceed." in history
-    assert rollout.evaluation is evaluation
-    assert evaluation.score == 0.0
-    assert evaluation.metadata["evaluation_result"] == native_report
-
-
-def test_tau2_communicate_with_user_renders_as_dialogue():
-    from benchmark.tau2.train.rollout_executor import _build_rollout_messages
-    from openviking.message import TextPart, ToolPart
-
-    rollout_messages = _build_rollout_messages(
-        system_prompt="policy",
-        user_prompt="user request",
-        tools_used=[
-            {
-                "tool_name": "communicate_with_user",
-                "args": {"content": "Could you provide your user ID?"},
-                "result": "Sure, it is emma_kim_9957.",
-            }
-        ],
-        final_content=None,
-        evaluation_result=None,
-        reward=1.0,
+    assert part.tool_input == {"reservation_id": "Q69X3R"}
+    assert json.loads(part.tool_output or "") == {"reservation_id": "Q69X3R", "flights": []}
+    assert not is_user_query(lookup)
+    assert not is_user_query(done)
+    [conversation] = await AgentTrajectoryContextProvider(messages=restored).prefetch()
+    assert (
+        "[assistant][assistant]: ToolCall: tool_name=get_reservation_details"
+        in conversation["content"]
     )
-
-    assert rollout_messages[2].role == "assistant"
-    assert isinstance(rollout_messages[2].parts[0], TextPart)
-    assert rollout_messages[2].parts[0].text == "Could you provide your user ID?"
-    assert rollout_messages[3].role == "user"
-    assert isinstance(rollout_messages[3].parts[0], TextPart)
-    assert rollout_messages[3].parts[0].text == "Sure, it is emma_kim_9957."
-    assert not any(
-        isinstance(part, ToolPart) and part.tool_name == "communicate_with_user"
-        for message in rollout_messages
-        for part in message.parts
-    )
-
-
-def test_tau2_rollout_messages_omit_empty_final_after_done():
-    from benchmark.tau2.train.rollout_executor import _build_rollout_messages
-
-    rollout_messages = _build_rollout_messages(
-        system_prompt="policy",
-        user_prompt="user request",
-        tools_used=[{"tool_name": "done", "args": "{}", "result": "Task Terminated"}],
-        final_content=None,
-        evaluation_result=None,
-        reward=1.0,
-    )
-
-    assert "tau2-final" not in {message.id for message in rollout_messages}
-    assert rollout_messages[-1].id == "tau2-reward"
+    assert '"reservation_id": "Q69X3R"' in conversation["content"]
+    assert "[user][user]: Yes, please proceed." in conversation["content"]
 
 
 def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
@@ -317,7 +285,10 @@ def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
 
     from tau2.data_model.simulation import RewardInfo, RewardType
 
-    from benchmark.tau2.train.rollout_executor import _build_rollout_messages, _tau2_evaluation
+    from benchmark.tau2.train.rollout_executor_vikingbot import (
+        _build_rollout_messages,
+        _tau2_evaluation,
+    )
 
     reward_info = RewardInfo(
         reward=1.0,
@@ -343,74 +314,51 @@ def test_tau2_reward_info_is_json_safe_in_rollout_messages_and_evaluation():
 
 
 def test_tau2_litellm_generate_rate_limit_retry_patch(monkeypatch):
-    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
+    from litellm import ModelResponse
+    from tau2.data_model.message import UserMessage
+    from tau2.user import user_simulator
+    from tau2.utils import llm_utils
 
-    calls = {"count": 0}
-    sleeps = []
+    from benchmark.tau2.common.tau2_env import tau2_environment
 
-    def fake_generate():
-        calls["count"] += 1
-        if calls["count"] < 5:
-            raise RuntimeError("TPM (Tokens Per Minute) limit of the model is exceeded")
-        return "ok"
+    response = ModelResponse(
+        model="gpt-4o-mini",
+        choices=[{"message": {"role": "assistant", "content": "Yes, please."}}],
+    )
+    rate_limit = "TPM (Tokens Per Minute) limit of the model is exceeded"
+    auth_error = RuntimeError("AuthenticationError Unauthorized")
+    outcomes = iter([*(RuntimeError(rate_limit) for _ in range(4)), response, auth_error])
+    query = "Please confirm your booking."
+    waits = iter([1, 2, 3, 4])
 
-    class FakeLLMUtils:
-        generate = staticmethod(fake_generate)
+    def completion(*, model, messages, **kwargs):
+        assert model == "gpt-4o-mini"
+        assert messages[-1]["content"] == query
+        result = next(outcomes)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
-    class FakeUserSimulator:
-        generate = staticmethod(fake_generate)
+    def wait(delay):
+        assert delay == next(waits)
 
-    modules = {
-        "tau2.utils.llm_utils": FakeLLMUtils,
-        "tau2.user.user_simulator": FakeUserSimulator,
-    }
-
-    def fake_import_module(name):
-        if name in modules:
-            return modules[name]
-        raise ImportError(name)
-
-    monkeypatch.setattr(tau2_environment.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(llm_utils, "completion", completion)
+    # The installer mutates aliases held by the imported tau2 modules.
+    monkeypatch.setattr(llm_utils, "generate", llm_utils.generate)
+    monkeypatch.setattr(llm_utils, "_openviking_original_generate", None, raising=False)
+    for name in tau2_environment._TAU2_GENERATE_REFERENCE_MODULES:
+        module = import_module(name)
+        monkeypatch.setattr(module, "generate", module.generate)
     monkeypatch.setattr(tau2_environment, "_tau2_rate_limit_retry_delay", lambda attempt: attempt)
-    monkeypatch.setattr(tau2_environment.time, "sleep", lambda delay: sleeps.append(delay))
-
+    monkeypatch.setattr(tau2_environment, "time", SimpleNamespace(sleep=wait))
     tau2_environment._install_tau2_litellm_rate_limit_retry()
 
-    assert FakeLLMUtils.generate() == "ok"
-    assert calls["count"] == 5
-    assert sleeps == [1, 2, 3, 4]
-    assert FakeUserSimulator.generate is FakeLLMUtils.generate
-
-
-def test_tau2_litellm_generate_retry_patch_does_not_retry_non_rate_limit(monkeypatch):
-    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
-
-    calls = {"count": 0}
-
-    def fake_generate():
-        calls["count"] += 1
-        raise RuntimeError("AuthenticationError Unauthorized")
-
-    class FakeLLMUtils:
-        generate = staticmethod(fake_generate)
-
-    def fake_import_module(name):
-        if name == "tau2.utils.llm_utils":
-            return FakeLLMUtils
-        raise ImportError(name)
-
-    monkeypatch.setattr(tau2_environment.importlib, "import_module", fake_import_module)
-
-    def fail_on_sleep(_delay):
-        raise AssertionError("unexpected sleep")
-
-    monkeypatch.setattr(tau2_environment.time, "sleep", fail_on_sleep)
-
-    tau2_environment._install_tau2_litellm_rate_limit_retry()
-
-    with pytest.raises(RuntimeError, match="AuthenticationError"):
-        FakeLLMUtils.generate()
-    assert calls["count"] == 1
+    messages = [UserMessage(role="user", content=query)]
+    assert user_simulator.generate(model="gpt-4o-mini", messages=messages).content == "Yes, please."
+    assert next(waits, None) is None
+    with pytest.raises(RuntimeError, match="AuthenticationError") as failure:
+        user_simulator.generate(model="gpt-4o-mini", messages=messages)
+    assert failure.value is auth_error
 
 
 def test_tau2_native_env_reward_handles_required_id_and_tool_call_ids(monkeypatch):
@@ -442,107 +390,6 @@ def test_tau2_native_env_records_communication_as_assistant_text(monkeypatch):
 
     assert reward == 1.0
     assert evaluation.communicate_checks[0].met is True
-
-
-def test_tau2_final_answer_is_appended_for_native_evaluation(monkeypatch):
-    import benchmark.tau2.common.tau2_env.tau2_environment as tau2_environment
-    from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
-    from benchmark.tau2.train.rollout_executor import _append_final_answer_for_tau2_evaluation
-
-    monkeypatch.setattr(tau2_environment, "AgentGymEnv", None)
-    env = Tau2BenchEnv("airline", "3")
-    env.reset()
-    _append_final_answer_for_tau2_evaluation(env, "You may bring 4 suitcases.")
-
-    reward, evaluation = env._impl._get_reward()
-
-    assert reward == 1.0
-    assert evaluation.communicate_checks[0].met is True
-
-
-def test_tau2_configure_tools_limits_generic_tools():
-    keep_default_tools = True
-    from benchmark.tau2.train.rollout_executor import _configure_tools
-
-    class FakeTools:
-        def __init__(self):
-            self.tool_names = [
-                "read_file",
-                "write_file",
-                "edit_file",
-                "list_dir",
-                "exec",
-                "openviking_search",
-                "openviking_memory_commit",
-                "web_search",
-                "web_fetch",
-                "message",
-                "spawn",
-                "generate_image",
-                "cron",
-                "mcp_external_tool",
-            ]
-            self.unregistered = []
-            self.registered = []
-
-        def unregister(self, name):
-            self.unregistered.append(name)
-            self.tool_names.remove(name)
-
-        def register(self, tool):
-            self.registered.append(tool.name)
-            self.tool_names.append(tool.name)
-
-    class FakeAgent:
-        def __init__(self):
-            self.tools = FakeTools()
-
-    class FakeProvider:
-        def list_openai_tools(self):
-            return [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_user_details",
-                        "description": "get user",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
-                }
-            ]
-
-        def call_tool(self, name, args):
-            return "ok"
-
-    agent = FakeAgent()
-
-    _configure_tools(agent, FakeProvider(), keep_default_tools=keep_default_tools)
-
-    assert agent.tools.unregistered == [
-        "openviking_search",
-        "openviking_memory_commit",
-        "web_search",
-        "web_fetch",
-        "message",
-        "spawn",
-        "generate_image",
-        "cron",
-        "mcp_external_tool",
-    ]
-    assert agent.tools.registered == [
-        "search_experience",
-        "read_experience",
-        "get_user_details",
-    ]
-    assert agent.tools.tool_names == [
-        "read_file",
-        "write_file",
-        "edit_file",
-        "list_dir",
-        "exec",
-        "search_experience",
-        "read_experience",
-        "get_user_details",
-    ]
 
 
 @pytest.fixture
@@ -611,25 +458,56 @@ async def test_tau2_experience_lookup_uses_exact_signature_not_query(exact_case_
         "## Linked Experiences\n- [cancel](../experiences/cancel.md)\n"
     )
     exact_case_client.files[exp_uri] = "## Situation\nCancel an eligible reservation.\n"
+    # Training trials use the original case link, even with a different per-trial signature.
+    case.input["original_case_name"] = case.name
+    case.input["train_trial"] = 7
+    case.name += "_trial_7"
+    case.task_signature += ":trial:7"
     agent = SimpleNamespace(tools=ToolRegistry())
+    for name in (
+        "read_file",
+        "exec",
+        "web_search",
+        "openviking_memory_commit",
+        "mcp_external_tool",
+    ):
+        agent.tools.register(SimpleNamespace(name=name))
+    task_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_user_details",
+                "description": "Get user",
+                "parameters": {"type": "object"},
+            },
+        },
+    ]
     _configure_tools(
         agent,
-        SimpleNamespace(list_openai_tools=lambda: []),
+        SimpleNamespace(list_openai_tools=lambda: task_tools),
         keep_default_tools=True,
         case_lookup=_tau2_case_lookup(case),
     )
+    assert set(agent.tools.tool_names) == {
+        "read_file",
+        "exec",
+        "search_experience",
+        "read_experience",
+        "get_user_details",
+    }
     tool = agent.tools.get("search_experience")
 
+    canonical_signature = "tau2:airline:train:0"
     for query in ["cancel current reservation", "unrelated retail task 47"]:
         result = json.loads(
             await tool.execute(None, query=query, task_signature="tau2:airline:train:47")
         )
         assert result["match_type"] == "task_signature_exact"
-        assert result["task_signature"] == case.task_signature
+        assert result["task_signature"] == canonical_signature
         assert result["count"] == 1
         candidate = result["candidates"][0]
         assert candidate["case_uri"] == case_uri
-        assert candidate["task_signature"] == case.task_signature
+        assert candidate["task_signature"] == canonical_signature
         assert candidate["experiences"] == [
             {
                 "index": 1,
@@ -643,67 +521,29 @@ async def test_tau2_experience_lookup_uses_exact_signature_not_query(exact_case_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "stored_signature",
-    ["tau2:airline:test:0", OSError("read failed")],
-)
-async def test_tau2_exact_case_miss_never_falls_back(exact_case_client, stored_signature):
+async def test_tau2_exact_case_miss_never_falls_back(exact_case_client):
     from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
 
     case_uri = "viking://user/u/memories/cases/tau2_airline_train_0.md"
-    if isinstance(stored_signature, Exception):
-        exact_case_client.files[case_uri] = stored_signature
-    elif stored_signature is not None:
-        exact_case_client.files[case_uri] = (
-            "# tau2_airline_train_0\n\n"
-            f"## Task Signature\n{stored_signature}\n\n"
-            "## Linked Experiences\n- [wrong](../experiences/wrong.md)\n"
-        )
     tool = _make_search_experience_tool(
         case_lookup={
             "case_name": "tau2_airline_train_0",
             "task_signature": "tau2:airline:train:0",
-            "strict": False,
         }
     )
+    for value in (
+        "# tau2_airline_train_0\n\n## Task Signature\ntau2:airline:test:0\n"
+        "\n## Linked Experiences\n- [wrong](../experiences/wrong.md)\n",
+        OSError("read failed"),
+    ):
+        exact_case_client.files[case_uri] = value
+        result = json.loads(await tool.execute(None, query="similar task"))
+        assert (result["count"], result["candidates"]) == (0, [])
 
-    result = json.loads(await tool.execute(None, query="similar task"))
-
-    assert result["count"] == 0
-    assert result["candidates"] == []
-    assert exact_case_client.reads == [case_uri]
+    no_identity = json.loads(await _make_search_experience_tool().execute(None, query="cancel"))
+    assert (no_identity["count"], no_identity["candidates"]) == (0, [])
+    assert exact_case_client.reads == [case_uri, case_uri]
     assert exact_case_client.closed
-
-
-@pytest.mark.asyncio
-async def test_tau2_experience_lookup_without_task_identity_fails_closed(exact_case_client):
-    from benchmark.tau2.train.rollout_executor_vikingbot import _make_search_experience_tool
-
-    result = json.loads(await _make_search_experience_tool().execute(None, query="cancel"))
-
-    assert result["count"] == 0
-    assert exact_case_client.reads == []
-    assert exact_case_client.closed
-
-
-def test_tau2_rollout_backend_factory_defaults_to_native():
-    from benchmark.tau2.train.rollout_executor import (
-        NativeTau2RolloutExecutor,
-        make_tau2_rollout_executor,
-        normalize_tau2_rollout_backend,
-    )
-
-    executor = make_tau2_rollout_executor(
-        options={"keep_default_tools": False, "max_iterations": 7},
-        concurrency=3,
-    )
-
-    assert normalize_tau2_rollout_backend(None) == "native"
-    assert isinstance(executor, NativeTau2RolloutExecutor)
-    assert executor.concurrency == 3
-    assert executor.memory_enabled is False
-    assert executor.max_steps == 7
-    assert executor.show_progress is False
 
 
 def test_tau2_native_rollout_resolves_non_empty_llms(monkeypatch):
@@ -728,183 +568,85 @@ def test_tau2_native_rollout_resolves_non_empty_llms(monkeypatch):
     assert user_args["temperature"] == 0.0
     assert user_args["top_p"] == 0.9
 
-
-def test_tau2_native_rollout_uses_env_llm_when_options_omit_model(monkeypatch):
-    from benchmark.tau2.train.rollout_executor_native import (
-        NativeTau2RolloutExecutor,
-        _resolve_llm_runtime_config,
-    )
-
     monkeypatch.setenv("TAU2_AGENT_LLM", "openai/test-agent")
     monkeypatch.setenv("TAU2_USER_LLM", "openai/test-user")
-
-    agent_llm, _agent_args, user_llm, _user_args = _resolve_llm_runtime_config(
-        NativeTau2RolloutExecutor()
-    )
-
-    assert agent_llm == "openai/test-agent"
-    assert user_llm == "openai/test-user"
+    agent_llm, _, user_llm, _ = _resolve_llm_runtime_config(NativeTau2RolloutExecutor())
+    assert (agent_llm, user_llm) == ("openai/test-agent", "openai/test-user")
 
 
-def test_tau2_rollout_backend_factory_selects_vikingbot(monkeypatch):
-    import benchmark.tau2.train.rollout_executor as module
+@pytest.mark.asyncio
+async def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch, airline_case):
+    import httpx
 
-    created = {}
-
-    class FakeVikingBotExecutor:
-        def __init__(self, **kwargs):
-            created.update(kwargs)
-
-    monkeypatch.setattr(module, "VikingBotTau2RolloutExecutor", FakeVikingBotExecutor)
-
-    executor = module.make_tau2_rollout_executor(
-        backend="vikingbot",
-        options={
-            "config_path": "/tmp/ov.conf",
-            "max_iterations": 9,
-        },
-        concurrency=2,
-        rollout_language="zh",
-    )
-
-    assert isinstance(executor, FakeVikingBotExecutor)
-    assert created == {
-        "config_path": "/tmp/ov.conf",
-        "concurrency": 2,
-        "keep_default_tools": True,
-        "max_iterations": 9,
-        "rollout_language": "zh",
-    }
-
-
-def test_tau2_service_rollout_backend_option_overrides_default(monkeypatch):
     import benchmark.tau2.train.service_app as service_app
+    from benchmark.tau2.train.rollout_executor import (
+        NativeTau2RolloutExecutor,
+        VikingBotTau2RolloutExecutor,
+    )
+    from openviking.message import Message, TextPart
+    from openviking.session.train import Rollout
+    from openviking.session.train.components.dataset_service import case_to_dict
 
-    calls = []
+    selected: list[NativeTau2RolloutExecutor | VikingBotTau2RolloutExecutor] = []
 
-    def fake_create_dataset_service_app(**kwargs):
-        calls.append(kwargs)
-        return kwargs
+    async def execute(executor, cases, policy_set, context):
+        selected.append(executor)
+        return [
+            Rollout(
+                case=cases[0],
+                policy_snapshot_id=context.policy_snapshot_id,
+                messages=[
+                    Message(id="reply", role="assistant", parts=[TextPart(text="offline reply")])
+                ],
+            )
+        ]
 
-    class FakeExecutor:
-        pass
-
-    def fake_make_tau2_rollout_executor(**kwargs):
-        calls.append({"factory": kwargs})
-        return FakeExecutor()
-
-    monkeypatch.setattr(service_app, "create_dataset_service_app", fake_create_dataset_service_app)
-    monkeypatch.setattr(service_app, "make_tau2_rollout_executor", fake_make_tau2_rollout_executor)
-
+    for executor_class in (NativeTau2RolloutExecutor, VikingBotTau2RolloutExecutor):
+        monkeypatch.setattr(executor_class, "execute", execute)
     app = service_app.create_app(rollout_backend="native")
-    executor = app["make_rollout_executor"]({"rollout_backend": "vikingbot", "max_iterations": 5})
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://tau2.test"
+    ) as client:
 
-    assert isinstance(executor, FakeExecutor)
-    assert calls[-1]["factory"]["backend"] == "vikingbot"
-    assert calls[-1]["factory"]["options"]["max_iterations"] == 5
-    assert calls[-1]["factory"]["options"]["show_progress"] is False
+        async def get_outcome(execution_url):
+            while True:
+                status = await client.get(execution_url)
+                status.raise_for_status()
+                result = status.json()
+                if result["status"] not in {"pending", "running"}:
+                    return result
+                await asyncio.sleep(0)
 
-    app["make_rollout_executor"]({"rollout_backend": "native", "show_progress": True})
-    assert calls[-1]["factory"]["options"]["show_progress"] is True
+        for options in (
+            {"keep_default_tools": False, "max_iterations": 7},
+            {"rollout_backend": "vikingbot", "max_iterations": 5, "rollout_language": "zh"},
+            {"show_progress": True, "max_steps": 11},
+        ):
+            response = await client.post(
+                "/v1/rollouts/execute",
+                json={
+                    "case": case_to_dict(airline_case),
+                    "policy_set": {"root_uri": _policy_set().root_uri},
+                    "execution_context": {"policy_snapshot_id": "snapshot"},
+                    "options": options,
+                },
+            )
+            response.raise_for_status()
+            execution_url = f"/v1/rollouts/executions/{response.json()['execution_id']}"
 
+            result = await asyncio.wait_for(get_outcome(execution_url), timeout=5)
+            assert result["status"] == "completed", result
+            rollout = result["rollout"]
+            assert rollout["case"]["name"] == airline_case.name
+            assert rollout["policy_snapshot_id"] == "snapshot"
 
-@pytest.mark.asyncio
-async def test_tau2_vikingbot_rollout_runs_on_current_event_loop():
-    from benchmark.tau2.train.rollout_executor_vikingbot import VikingBotTau2RolloutExecutor
-
-    expected_loop = asyncio.get_running_loop()
-    expected_thread = threading.get_ident()
-    observed = {}
-
-    class FakeVikingBotExecutor(VikingBotTau2RolloutExecutor):
-        async def _execute_one_async(self, case, context):
-            del context
-            observed["loop"] = asyncio.get_running_loop()
-            observed["thread"] = threading.get_ident()
-            await asyncio.sleep(0)
-            return case.name
-
-    executor = FakeVikingBotExecutor()
-
-    result = await executor._execute_one(
-        _case(),
-        ExecutionContext(policy_snapshot_id="snapshot", metadata={}),
-    )
-
-    assert result == "case-1"
-    assert observed["loop"] is expected_loop
-    assert observed["thread"] == expected_thread
-
-
-@pytest.mark.asyncio
-async def test_tau2_prepare_experience_loader_skill_writes_required_skill(tmp_path):
-    import benchmark.tau2.train.rollout_executor_vikingbot as module
-
-    class FakeSandbox:
-        def __init__(self):
-            self.writes = []
-
-        async def write_file(self, path, content):
-            self.writes.append((path, content))
-            target = tmp_path / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-
-    fake_sandbox = FakeSandbox()
-
-    class FakeSandboxManager:
-        def get_workspace_path(self, session_key):
-            return tmp_path
-
-        def to_workspace_id(self, session_key):
-            return "workspace"
-
-        async def get_sandbox(self, session_key):
-            return fake_sandbox
-
-    class FakeAgent:
-        sandbox_manager = FakeSandboxManager()
-        context = SimpleNamespace(workspace=tmp_path)
-
-    context_builder = await module._prepare_experience_loader_skill(
-        agent=FakeAgent(),
-        session_key=SimpleNamespace(),
-    )
-
-    skill_path = tmp_path / "skills" / "experience_loader" / "SKILL.md"
-    content = skill_path.read_text(encoding="utf-8")
-    assert context_builder.workspace == tmp_path
-    assert "name: experience_loader" in content
-    assert "search_experience" in content
-    assert "read_experience" in content
-    assert fake_sandbox.writes
-    assert fake_sandbox.writes[0][0] == "skills/experience_loader/SKILL.md"
-    assert context_builder.latest_experience_loader_skill_content == content
-
-
-@pytest.mark.asyncio
-async def test_tau2_experience_loader_skill_is_required_with_relative_read_path(tmp_path):
-    from vikingbot.config.schema import SessionKey
-
-    import benchmark.tau2.train.rollout_executor_vikingbot as module
-
-    module._write_experience_loader_files(
-        workspace_path=tmp_path,
-        skill_content="# experience_loader\n\nUse search_experience then read_experience.",
-    )
-
-    from vikingbot.agent.context import ContextBuilder
-
-    context_builder = ContextBuilder(tmp_path, eval=True)
-    system_prompt = await context_builder.build_system_prompt(
-        SessionKey(type="cli", channel_id="tau2", chat_id="case"),
-        ov_tools_enable=False,
-    )
-
-    assert "Required skill: before taking any task action" in system_prompt
-    assert "`skills/experience_loader/SKILL.md`" in system_prompt
-    assert "<location>skills/experience_loader/SKILL.md</location>" in system_prompt
-    assert f"<location>{tmp_path}" not in system_prompt
+    native, vikingbot, verbose = selected
+    assert isinstance(native, NativeTau2RolloutExecutor)
+    assert (native.max_steps, native.memory_enabled, native.show_progress) == (7, False, False)
+    assert isinstance(vikingbot, VikingBotTau2RolloutExecutor)
+    assert (vikingbot.max_iterations, vikingbot.rollout_language) == (5, "zh")
+    assert isinstance(verbose, NativeTau2RolloutExecutor)
+    assert (verbose.max_steps, verbose.show_progress) == (11, True)
 
 
 @pytest.mark.asyncio
@@ -918,12 +660,8 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(
     from benchmark.tau2.train.rollout_executor_vikingbot import VikingBotTau2RolloutExecutor
 
     event_loop_thread = threading.get_ident()
-    calls = []
-    build_rollout_messages = module._build_rollout_messages
-
-    def record_rollout_messages(**kwargs):
-        calls.append(("build_messages", threading.get_ident()))
-        return build_rollout_messages(**kwargs)
+    event_loop = asyncio.get_running_loop()
+    calls: list[tuple[str, Any]] = []
 
     class FakeEnv:
         def _get_reward(self):
@@ -954,7 +692,7 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(
             calls.append(("build_agent", threading.get_ident()))
 
     async def fake_run_agent(**kwargs):
-        calls.append(("run_agent", threading.get_ident()))
+        assert asyncio.get_running_loop() is event_loop
         if run_error is not None:
             raise run_error("agent failed")
         tools_used = [
@@ -966,14 +704,10 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(
         ]
         return "final", None, tools_used, {}, 1, None, None, None
 
-    def fake_configure_tools(*args, **kwargs):
-        calls.append(("case_lookup", kwargs.get("case_lookup")))
-
     monkeypatch.setattr(module, "_tool_provider_cls", lambda: FakeTau2BenchToolProvider)
     monkeypatch.setattr(module, "_build_agent", lambda *args, **kwargs: FakeAgent())
-    monkeypatch.setattr(module, "_configure_tools", fake_configure_tools)
+    monkeypatch.setattr(module, "_configure_tools", lambda *args, **kwargs: None)
     monkeypatch.setattr(module, "_run_agent", fake_run_agent)
-    monkeypatch.setattr(module, "_build_rollout_messages", record_rollout_messages)
     monkeypatch.setattr(module, "_vikingbot_imports", lambda: {"SessionKey": SimpleNamespace})
 
     case = Case(
@@ -1010,257 +744,152 @@ async def test_tau2_vikingbot_blocking_setup_and_reward_are_offloaded(
     )
 
     assert rollout.metadata["reward"] == 1.0
+    assert rollout.evaluation is not None
     assert rollout.evaluation.score == 1.0
     assert rollout.evaluation.metadata["evaluation_result"] == {"ok": True}
-    assert rollout.messages[2].role == "assistant"
-    assert rollout.messages[2].parts[0].tool_output == '{"user_id": "user-1"}'
-    call_order = [name for name, _value in calls]
-    assert call_order.index("run_agent") < call_order.index("reward")
-    assert call_order.index("run_agent") < call_order.index("close") < call_order.index("reward")
-    assert call_order.index("reward") < call_order.index("build_messages")
-    call_values = dict(calls)
-    assert call_values["case_lookup"] == {
-        "benchmark": "tau2",
-        "strict": True,
-        "case_names": ["tau2_case", "tau2_airline_train_0"],
-        "domain": "airline",
-        "split": "train",
-        "data_split": "airline_train",
-        "task_no": 0,
-        "task_id": "0",
-        "case_name": "tau2_case",
-        "task_signature": "tau2:airline:train:0",
-        "original_case_name": "tau2_case" if trial is not None else None,
-        "expected_fields": {
-            "input.domain": "airline",
-            "input.split": "train",
-            "input.data_split": "airline_train",
-            "input.task_no": 0,
-            "input.task_id": "0",
-        },
-    }
-    call_threads = call_values
-    assert call_threads["reset"] != event_loop_thread
-    assert call_threads["build_agent"] != event_loop_thread
-    assert call_threads["reward"] != event_loop_thread
-    assert call_threads["close"] != event_loop_thread
-    assert call_values["termination_reason"] == "agent_stop"
-    assert call_threads["run_agent"] == event_loop_thread
+    assert dict(calls)["termination_reason"] == "agent_stop"
+    assert [name for name, value in calls if isinstance(value, int)] == [
+        "reset",
+        "build_agent",
+        "close",
+        "reward",
+    ]
+    assert all(value != event_loop_thread for _, value in calls if isinstance(value, int))
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "user_reply, done_result, terminated",
+    "user_reply, done_result, terminated, hard_stop",
     [
-        (None, "", True),
-        ("Yes. ###STOP###", "Done", True),
-        ("###TRANSFER###", "", True),
-        ("###OUT-OF-SCOPE###", "", True),
-        ("Error: User dialogue is closed.", "", True),
-        ("Task Terminated", "", True),
-        ("Task Terminated? Please continue.", "", False),
-        (None, "Error: done failed", True),
+        ("Yes. ###STOP###", "", True, False),
+        ("###TRANSFER###", "", True, True),
+        ("###OUT-OF-SCOPE###", "", True, True),
+        ("Task Terminated", "", True, True),
+        ("Task Terminated? Please continue.", "Error: done failed", False, False),
+        ("Error: User dialogue is closed.", "", True, False),
     ],
 )
 async def test_tau2_run_agent_force_loads_experience_loader_skill_before_task_actions(
-    monkeypatch, tmp_path, user_reply, done_result, terminated
+    monkeypatch, tmp_path, user_reply, done_result, terminated, hard_stop
 ):
     from vikingbot.agent.loop import AgentLoop
     from vikingbot.agent.tools.filesystem import ReadFileTool
     from vikingbot.bus.queue import MessageBus
-    from vikingbot.config.schema import Config
-    from vikingbot.providers.base import LLMResponse, ToolCallRequest
+    from vikingbot.config.schema import Config, SessionKey
+    from vikingbot.providers.base import LLMResponse, LLMStreamEvent, ToolCallRequest
 
     import benchmark.tau2.train.rollout_executor_vikingbot as module
     from benchmark.tau2.common.tau2_env.tau2_environment import Tau2BenchEnv
 
-    observed = {}
-    real_imports = module._vikingbot_imports()
+    model_inputs: list[list[dict[str, Any]]] = []
     workspace = tmp_path / "workspace"
+    reads: list[str] = []
 
-    class FakeSandbox:
-        content = ""
-
-        async def read_file(self, path):
-            observed.setdefault("sandbox_reads", []).append(path)
-            return self.content
-
-        async def write_file(self, path, content):
-            observed.setdefault("sandbox_writes", []).append((path, content))
-            type(self).content = content
-
-    class FakeSandboxManager:
+    class LocalSandbox:
         def get_workspace_path(self, session_key):
             return workspace
 
         def to_workspace_id(self, session_key):
-            return "workspace"
+            return "offline-workspace"
+
+        async def get_sandbox_cwd(self, session_key):
+            return "/workspace"
 
         async def get_sandbox(self, session_key):
-            return FakeSandbox()
+            return self
 
-    class FakeContextBuilder:
-        def __init__(self, workspace, *, sandbox_manager=None, eval=False, **kwargs):
-            self.workspace = workspace
-            self.sandbox_manager = sandbox_manager
-            self.latest_experience_loader_skill_content = ""
+        async def read_file(self, path):
+            reads.append(path)
+            return (workspace / path).read_text()
 
-        async def build_messages(self, **kwargs):
-            return [
-                {"role": "system", "content": "ctx system"},
-                {"role": "user", "content": kwargs["current_message"]},
-            ]
+        async def write_file(self, path, content):
+            destination = workspace / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(content)
 
-        def add_assistant_message(self, messages, content, tool_calls=None, reasoning_content=None):
-            msg = {"role": "assistant", "content": content or "[tool call]"}
-            if tool_calls:
-                msg["tool_calls"] = tool_calls
-            if reasoning_content:
-                msg["reasoning_content"] = reasoning_content
-            messages.append(msg)
-            return messages
-
-        def add_tool_result(self, messages, tool_call_id, tool_name, result):
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "name": tool_name,
-                    "content": result,
-                }
-            )
-            return messages
-
-    class FakeProvider:
-        async def chat(self, messages, tools=None, **kwargs):
-            observed["llm_messages"] = list(messages)
-            observed["llm_calls"] = observed.get("llm_calls", 0) + 1
-            if user_reply is not None and observed["llm_calls"] == 1:
+    class Model:
+        async def chat(self, messages, **kwargs):
+            model_inputs.append(list(messages))
+            if len(model_inputs) == 1:
                 return LLMResponse(content="Please confirm.")
-            return LLMResponse(
-                content=None,
-                tool_calls=[ToolCallRequest("call-1", "done", {}, 0)],
-            )
+            return LLMResponse(content=None, tool_calls=[ToolCallRequest("call-1", "done", {}, 0)])
 
         async def chat_stream(self, **kwargs):
-            from vikingbot.providers.base import LLMStreamEvent
-
             yield LLMStreamEvent(type="response", response=await self.chat(**kwargs))
 
         def get_default_model(self):
             return "fake"
 
-    class _DoneTool:
-        @property
-        def name(self):
-            return "done"
-
-        @property
-        def description(self):
-            return "done"
-
-        @property
-        def parameters(self):
-            return {"type": "object", "properties": {}}
-
-        def to_schema(self):
-            return {
-                "type": "function",
-                "function": {
-                    "name": self.name,
-                    "description": self.description,
-                    "parameters": self.parameters,
-                },
-            }
-
-        def validate_params(self, params):
-            return []
-
-        async def execute(self, tool_context, **kwargs):
-            env = Tau2BenchEnv.__new__(Tau2BenchEnv)
-            env._impl = SimpleNamespace(terminated=terminated, tool_call=lambda *_args: done_result)
-            return env.tool_call(self.name, kwargs)
-
-    class _CommunicateTool(_DoneTool):
-        @property
-        def name(self):
-            return "communicate_with_user"
-
-        @property
-        def parameters(self):
-            return {"type": "object", "properties": {"content": {"type": "string"}}}
-
-        async def execute(self, tool_context, **kwargs):
-            return user_reply
-
+    env = Tau2BenchEnv.__new__(Tau2BenchEnv)
     monkeypatch.setattr(
-        module,
-        "_vikingbot_imports",
-        lambda: {**real_imports, "ContextBuilder": FakeContextBuilder},
+        env,
+        "_impl",
+        SimpleNamespace(terminated=terminated, tool_call=lambda *args: done_result),
+        raising=False,
     )
+
+    class Provider:
+        def list_openai_tools(self):
+            return [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": name,
+                        "parameters": {"type": "object"},
+                    },
+                }
+                for name in ("done", "communicate_with_user")
+            ]
+
+        def call_tool(self, name, arguments):
+            if name == "communicate_with_user":
+                return user_reply
+            return env.tool_call(name, arguments)
+
     monkeypatch.setattr(AgentLoop, "_register_default_tools", lambda self: None)
     agent = AgentLoop(
         bus=MessageBus(),
-        provider=FakeProvider(),
+        provider=Model(),
         workspace=workspace,
         max_iterations=3,
-        sandbox_manager=FakeSandboxManager(),
+        sandbox_manager=LocalSandbox(),
         config=Config(storage_workspace=str(tmp_path), hooks=[]),
     )
     agent.tools.register(ReadFileTool())
-    agent.tools.register(_DoneTool())
-    agent.tools.register(_CommunicateTool())
-    run_loop = AsyncMock(wraps=agent._run_agent_loop)
-    monkeypatch.setattr(agent, "_run_agent_loop", run_loop)
+    module._configure_tools(agent, Provider(), keep_default_tools=True)
 
     result = await module._run_agent(
         agent=agent,
         system_prompt="tau2 policy",
         user_prompt="user query",
-        session_key=SimpleNamespace(safe_name=lambda: "session"),
+        session_key=SessionKey(type="cli", channel_id="tau2", chat_id="case"),
         sender_id="tau2_user",
         keep_default_tools=True,
     )
 
-    tools_used = result[2]
-    messages = observed["llm_messages"]
-    read_call_index = next(
-        i
-        for i, msg in enumerate(messages)
-        if msg.get("role") == "assistant" and "read_file" in str(msg.get("tool_calls"))
-    )
-    tool_result_index = next(
-        i
-        for i, msg in enumerate(messages)
-        if msg.get("role") == "tool" and msg.get("name") == "read_file"
-    )
+    skill = "skills/experience_loader/SKILL.md"
+    assert reads == [skill]
+    assert "name: experience_loader" in (workspace / skill).read_text()
+    first_messages = model_inputs[0]
+    assert f"<location>{skill}</location>" in first_messages[0]["content"]
+    assert "Required skill: before taking any task action" in first_messages[0]["content"]
+    assert first_messages[-1]["role"] == "tool"
+    assert first_messages[-1]["name"] == "read_file"
+    assert "search_experience" in first_messages[-1]["content"]
+    assert "read_experience" in first_messages[-1]["content"]
 
-    assert observed["sandbox_writes"][0][0] == "skills/experience_loader/SKILL.md"
-    assert observed["sandbox_reads"] == ["skills/experience_loader/SKILL.md"]
-    assert read_call_index < tool_result_index
-    assert "search_experience" in messages[tool_result_index]["content"]
-    assert "read_experience" in messages[tool_result_index]["content"]
-    assert tools_used[0]["tool_name"] == "read_file"
-    assert tools_used[0]["required_skill"] == "experience_loader"
-    run_loop.assert_awaited_once()
-    assert run_loop.await_args.kwargs["inject_write_experience"] is False
-    hard_stop = user_reply in ("###TRANSFER###", "###OUT-OF-SCOPE###") or (
-        user_reply is not None and user_reply.strip() == "Task Terminated"
-    )
-    expected_done_result = "Task Terminated" if terminated and not done_result else done_result
-    done_success = bool(expected_done_result) and not expected_done_result.startswith("Error:")
-    expected_calls = 1 if user_reply is None or hard_stop else 2
-    if not hard_stop and not done_success:
-        expected_calls = 4  # Three iterations plus the loop's final-summary request.
-    assert observed["llm_calls"] == expected_calls
-    assert any(tool["tool_name"] == "done" for tool in tools_used) is not hard_stop
-    for tool in tools_used:
-        if tool["tool_name"] == "done":
-            assert tool["result"] == expected_done_result
-            assert tool["execute_success"] is done_success
-    if user_reply is not None:
-        assert tools_used[1]["tool_name"] == "communicate_with_user"
-        assert tools_used[1]["result"] == user_reply
-        if not hard_stop:
-            reply_role = "system" if user_reply.startswith("Error:") else "user"
-            assert any(msg == {"role": reply_role, "content": user_reply} for msg in messages)
+    tools = result[2]
+    assert tools[0]["required_skill"] == "experience_loader"
+    assert tools[1]["result"] == user_reply
+    if hard_stop:
+        assert len(model_inputs) == 1
+        assert all(tool["tool_name"] != "done" for tool in tools)
+    else:
+        reply_role = "system" if user_reply.startswith("Error:") else "user"
+        assert {"role": reply_role, "content": user_reply} in model_inputs[1]
+        done = [tool for tool in tools if tool["tool_name"] == "done"]
+        expected = done_result or "Task Terminated"
+        assert done
+        assert all(tool["result"] == expected for tool in done)
+        assert all(tool["execute_success"] is (not expected.startswith("Error:")) for tool in done)

@@ -1913,8 +1913,11 @@ async def test_session_commit_policy_trainer_can_still_use_explicit_timeout():
     assert commit_result["error"] == "commit task timeout"
 
 
-def test_tau2_case_loader_selects_exact_task_indices(tmp_path: Path, monkeypatch):
+async def test_tau2_case_loader_selects_exact_task_indices(tmp_path: Path, monkeypatch):
+    import httpx
+
     from benchmark.tau2.train import case_loader as tau2_case_loader
+    from benchmark.tau2.train.service_app import create_app
 
     domain_dir = tmp_path / "domains" / "airline"
     domain_dir.mkdir(parents=True)
@@ -1931,26 +1934,28 @@ def test_tau2_case_loader_selects_exact_task_indices(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(tau2_case_loader, "_load_tau2_task", lambda _domain, task_id: Task(task_id))
 
-    loader = tau2_case_loader.Tau2CaseLoader(
-        domain="airline",
-        split="train",
-        data_root=str(tmp_path),
-        task_indices=[1],
-    )
+    app = create_app(data_root=str(tmp_path))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://tau2.test"
+    ) as client:
+        query = {"dataset": "tau2", "domain": "airline", "split": "train"}
+        response = await client.post(
+            "/v1/cases/query", json={**query, "filters": {"task_indices": ["1"]}}
+        )
+        response.raise_for_status()
+        [case] = response.json()["cases"]
+        assert (case["input"]["task_id"], case["input"]["task_no"], case["name"]) == (
+            "b",
+            1,
+            "tau2_airline_train_1",
+        )
 
-    cases = loader.load_cases()
+        response = await client.post("/v1/cases/query", json=query)
+        response.raise_for_status()
+        assert [case["input"]["task_id"] for case in response.json()["cases"]] == ["a", "b", "c"]
 
-    assert [case.input["task_id"] for case in cases] == ["b"]
-    assert [case.input["task_no"] for case in cases] == [1]
-    assert cases[0].name == "tau2_airline_train_1"
-
-
-def test_tau2_service_filter_parses_task_indices():
-    from benchmark.tau2.train.service_app import _task_indices_from_filters
-
-    assert _task_indices_from_filters({}) is None
-    assert _task_indices_from_filters({"task_indices": [0, "3"]}) == [0, 3]
-    with pytest.raises(ValueError, match="task_indices filter must be a list"):
-        _task_indices_from_filters({"task_indices": 2})
-    with pytest.raises(ValueError, match="task index must be >= 0"):
-        _task_indices_from_filters({"task_indices": [-1]})
+        for invalid, message in ((2, "must be a list"), ([-1], "task index must be >= 0")):
+            with pytest.raises(ValueError, match=message):
+                await client.post(
+                    "/v1/cases/query", json={**query, "filters": {"task_indices": invalid}}
+                )
