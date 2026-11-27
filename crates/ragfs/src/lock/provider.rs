@@ -932,6 +932,7 @@ impl FilesystemPathLockProvider {
         holder: &str,
         now: u128,
         stale_before: u128,
+        acquisition_started_at: Instant,
         source: Option<&str>,
     ) -> PathLockResult<AtomicAcquisition> {
         self.check_ancestor_tree_locks(&plan.request.path, owner, stale_before)
@@ -947,6 +948,15 @@ impl FilesystemPathLockProvider {
         for _ in 0..16 {
             let mut replacement = LockToken::held(owner, holder, plan.request.kind, now);
             let previous = self.read_token(&plan.lock_path).await?;
+            // A source can expire while this plan performs filesystem reads.
+            let (now, stale_before) = if source.is_some() {
+                let elapsed = acquisition_started_at.elapsed().as_nanos();
+                let now = now.saturating_add(elapsed);
+                replacement = LockToken::held(owner, holder, plan.request.kind, now);
+                (now, stale_before.saturating_add(elapsed))
+            } else {
+                (now, stale_before)
+            };
             if let Some(source) = source {
                 validate_handoff_source(
                     previous.as_ref(),
@@ -1263,6 +1273,7 @@ impl PathLockProvider for FilesystemPathLockProvider {
                 "invalid holder acquisition".into(),
             ));
         }
+        let acquisition_started_at = Instant::now();
         let plans = self.acquisition_plans(requests).await?;
         if let Some(source) = source {
             for plan in &plans {
@@ -1282,16 +1293,30 @@ impl PathLockProvider for FilesystemPathLockProvider {
         let mut in_flight: FuturesUnordered<
             BoxFuture<'_, (usize, PathLockResult<AtomicAcquisition>)>,
         > = FuturesUnordered::new();
+        // One source spans the full handoff batch, so its replacements must commit in order.
+        let max_in_flight = if source.is_some() {
+            1
+        } else {
+            FILESYSTEM_HOLDER_PARALLELISM
+        };
 
-        while next_plan < plans.len() && in_flight.len() < FILESYSTEM_HOLDER_PARALLELISM {
+        while next_plan < plans.len() && in_flight.len() < max_in_flight {
             let index = next_plan;
             next_plan += 1;
             let plan = &plans[index];
             in_flight.push(Box::pin(async move {
                 (
                     index,
-                    self.acquire_plan(plan, owner, holder, now, stale_before, source)
-                        .await,
+                    self.acquire_plan(
+                        plan,
+                        owner,
+                        holder,
+                        now,
+                        stale_before,
+                        acquisition_started_at,
+                        source,
+                    )
+                    .await,
                 )
             }));
         }
@@ -1309,8 +1334,16 @@ impl PathLockProvider for FilesystemPathLockProvider {
                 in_flight.push(Box::pin(async move {
                     (
                         index,
-                        self.acquire_plan(plan, owner, holder, now, stale_before, source)
-                            .await,
+                        self.acquire_plan(
+                            plan,
+                            owner,
+                            holder,
+                            now,
+                            stale_before,
+                            acquisition_started_at,
+                            source,
+                        )
+                        .await,
                     )
                 }));
             }
