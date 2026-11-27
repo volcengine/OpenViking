@@ -22,12 +22,15 @@ import hashlib
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from collections.abc import Iterator
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote
 
 import yaml
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
@@ -141,6 +144,89 @@ class _Layout:
     ops: List[_LayoutOp] = field(default_factory=list)
     meta: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+
+
+def _paragraphs(tokens: list[Token], lines: list[str]) -> Iterator[tuple[int, str]]:
+    """Yield top-level inline tokens and their complete source lines."""
+    for index, token in enumerate(tokens):
+        if token.type == "paragraph_open" and token.level == 0 and token.map:
+            start, end = token.map
+            yield index + 1, "\n".join(lines[start:end])
+
+
+def _preserve_section_references(source: str, sections: list[_LayoutOp], max_chars: int) -> None:
+    """Copy definitions only when a split artifact can recover the source links safely."""
+    reader = MarkdownIt("commonmark", {"store_labels": True})
+    source = source.replace("\r\n", "\n").replace("\r", "\n")
+    source_lines = source.split("\n")
+    source_env: dict = {}
+    source_tokens = reader.parse(source, source_env)
+    conflicts = {ref["label"] for ref in source_env.get("duplicate_refs", [])}
+    definitions = {}
+    for label, ref in source_env.get("references", {}).items():
+        if label not in conflicts and ref["href"].lower().startswith(("http://", "https://")):
+            start, end = ref["map"]
+            definitions[label] = "\n".join(source_lines[start:end])
+    if not definitions:
+        return
+
+    # Reject duplicate text anywhere in the source, including inside code fences
+    # and within lines that the section splitter could cut mid-paragraph.
+    source_paragraphs = {}
+    for index, text in _paragraphs(source_tokens, source_lines):
+        children = source_tokens[index].children or []
+        labels = {
+            child.meta.get("label")
+            for child in children
+            if child.type == "link_open" and child.meta.get("label") in definitions
+        }
+        if labels and source.find(text) == source.rfind(text):
+            source_paragraphs[text] = (children, labels)
+    if not source_paragraphs:
+        return
+
+    for section in sections:
+        body = section.content or ""
+        if "[" not in body or len(body) >= max_chars:
+            continue
+        env: dict = {}
+        expected = reader.parse(body, env)
+        existing = env.get("references", {})
+        wanted: set[str] = set()
+        lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        for index, text in _paragraphs(expected, lines):
+            if text not in source_paragraphs:
+                continue
+            children, labels = source_paragraphs[text]
+            missing = labels - existing.keys()
+            if not missing:
+                continue
+
+            # Existing link destinations and images in this paragraph must survive.
+            old_links = [
+                (token.type, token.attrs)
+                for token in expected[index].children or []
+                if token.type in {"link_open", "image"}
+            ]
+            kept_links = [
+                (token.type, token.attrs)
+                for token in children
+                if token.type == "image"
+                or (token.type == "link_open" and token.meta.get("label") not in missing)
+            ]
+            if old_links == kept_links:
+                expected[index] = replace(expected[index], children=children)
+                wanted.update(missing)
+        if not wanted:
+            continue
+        candidate = "\n\n".join([body, *(definitions[label] for label in sorted(wanted))])
+        # Discard the addition if it changes any other block or inline tokens.
+        candidate_env: dict = {}
+        if len(candidate) > max_chars or reader.parse(candidate, candidate_env) != expected:
+            continue
+        references = candidate_env.get("references", {})
+        if references.keys() == existing.keys() | wanted:
+            section.content = candidate
 
 
 @dataclass
@@ -452,6 +538,10 @@ class MarkdownParser(BaseParser):
             doc_name,
             split_content=kwargs.get("split_content", True),
         )
+        if "]:" in content:
+            sections = [op for op in ops if op.kind == "write"]
+            if len(sections) > 1:
+                _preserve_section_references(content, sections, self.config.max_section_chars)
 
         return _Layout(
             temp_uri=temp_uri,

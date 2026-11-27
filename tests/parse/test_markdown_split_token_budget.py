@@ -1,10 +1,76 @@
 """Native section limits use characters, independently of legacy token settings."""
 
 import pytest
+from markdown_it import MarkdownIt
 
 from openviking.parse.output import LocalParseOutputStore, read_artifact_manifest
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking_cli.utils.config.parser_config import ParserConfig
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    ["cross_section", "same_section", "inline", "no_split", "tight_budget", "conflict", "heading"],
+)
+async def test_split_reference_links_keep_destination_and_title(tmp_path, case):
+    destination = "https://example.com/help/install"
+    definition = f'[setup]: {destination} "Setup guide"'
+    link = (
+        f'[setup guide]({destination} "Setup guide")'
+        if case == "inline"
+        else "[setup guide][setup]"
+    )
+    filler = "This guide describes the ordinary steps and provides a worked example."
+    heading = "# Prepare [setup]" if case == "heading" else "# Prepare"
+    prepare = "\n".join([heading, "", f"Read the {link}", *([filler] * 9)])
+    install = "\n".join(["# Install", "", *([filler] * 10)])
+    if case == "same_section":
+        prepare += f"\n\n{definition}"
+    elif case != "inline":
+        install += f"\n\n{definition}"
+    if case == "conflict":
+        install += '\n\n[SETUP]: https://example.com/other "Other guide"'
+    content = f"{prepare}\n\n{install}"
+    source = tmp_path / "guide.md"
+    source.write_text(content, encoding="utf-8")
+    store = LocalParseOutputStore(str(tmp_path / "out"))
+    budget = len(prepare) + len(definition) + 1 if case == "tight_budget" else 900
+
+    result = await MarkdownParser(config=ParserConfig(max_section_chars=budget)).parse(
+        source, parse_output_store=store, split_content=case != "no_split"
+    )
+
+    assert result.artifact_ref is not None
+    files = await read_artifact_manifest(store, result.artifact_ref)
+    artifacts = {
+        path: (await store.read_bytes(result.artifact_ref, path)).decode() for path in files
+    }
+    if case == "no_split":
+        assert artifacts == {"guide/guide.md": content}
+        return
+
+    assert all(len(artifact) <= budget for artifact in artifacts.values())
+    section = artifacts["guide/Prepare_setup.md" if case == "heading" else "guide/Prepare.md"]
+    if case != "tight_budget":
+        assert artifacts["guide/Install.md"] == install
+    if case != "cross_section":
+        assert section == prepare
+
+    reader = MarkdownIt("commonmark")
+
+    def links(markdown):
+        return [
+            (child.attrGet("href"), child.attrGet("title"))
+            for token in reader.parse(markdown)
+            for child in token.children or []
+            if child.type == "link_open"
+        ]
+
+    source_link = (destination, "Setup guide")
+    assert links(content) == [source_link] * (2 if case == "heading" else 1)
+    expected = [] if case in {"tight_budget", "conflict", "heading"} else [source_link]
+    assert links(section) == expected
 
 
 @pytest.mark.parametrize("character", ["中", "a", "🙂"])
