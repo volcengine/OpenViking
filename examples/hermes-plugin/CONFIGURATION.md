@@ -366,6 +366,29 @@ When enabled, the default request timeout and total recall budget become 55 seco
 Explicit recall timeout settings still take precedence. Older servers fall back
 to the existing search path within that deadline.
 
+### Event time-decay protection
+
+Automatic recall forwards `events_time_decay_protection` so that event memories
+keep their score inside the protection window and decay only after it. Without
+it, a superseded event stored earlier can outrank the newer event that replaced
+it on status questions, because server similarity scores sit in a narrow band.
+
+The default is `30d`, matching the shared JavaScript memory plugins. Set a
+different window (`0`, `<n>m`, `<n>h`, or `<n>d`) in the active profile's
+`config.yaml`:
+
+```yaml
+memory:
+  openviking:
+    recall_events_decay_protection: 7d
+```
+
+`OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` overrides the YAML value. `off` or
+an empty value stops sending the parameter, which leaves the server's own
+default in force; the same happens for a value the server would reject, so
+recall never fails validation because of this setting. The window applies to
+records tagged `memory_type=events` only.
+
 ### Active-session commits
 
 The plugin checks OpenViking's `pending_tokens` after each successful
