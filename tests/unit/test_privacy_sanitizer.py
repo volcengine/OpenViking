@@ -400,6 +400,19 @@ async def test_seal_reports_code_point_offsets_after_cjk_and_emoji():
         assert text[item["start"] : item["end"]] == secret
 
 
+async def test_seal_replaces_a_registered_value_typed_next_to_cjk_text():
+    secret = "passwd" + "-cjk-42"
+    catalog = _PrivacyCatalog({"credential": {"svc": {"token": secret}}})
+    catalog.settings = ResolvedPrivacyConfig(mode="off")
+    reference = build_privacy_field_reference("alice", "credential", "svc", "token")
+
+    result = await seal_texts(
+        catalog, PrivacySanitizer(catalog), _ctx(), [SealText(f"使用密码{secret}登录")]
+    )
+
+    assert result["texts"][0]["text"] == f"使用密码{reference}登录"
+
+
 async def test_seal_matcher_reads_earlier_versions_once_per_revision_and_marks_auto_temporary():
     old, new, enrolled = "rotated-old-value-1", "rotated-new-value-2", "enrolled-value-3"
     catalog = _PrivacyCatalog(

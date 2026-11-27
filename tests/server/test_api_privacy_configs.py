@@ -677,6 +677,21 @@ async def test_privacy_seal_replaces_registered_values_when_mode_is_off(
     assert again == {"revision": revision, "texts": [None]}
 
 
+async def test_privacy_seal_replaces_a_new_token_typed_next_to_cjk_text(client: httpx.AsyncClient):
+    token = _github_token("cjk-adjacent")
+    response = await _seal(
+        client,
+        {"text": f"密钥是{token}请保存", "enroll": True},
+        f"历史消息里的{token}也要替换",
+    )
+    assert response.status_code == 200, response.text
+    sealed, history = response.json()["result"]["texts"]
+    reference = sealed["replaced"][0]["reference"]
+    assert sealed["replaced"][0]["created"] is True
+    assert sealed["text"] == f"密钥是{reference}请保存"
+    assert history["text"] == f"历史消息里的{reference}也要替换"
+
+
 async def test_privacy_seal_enrolls_new_tokens_once(client: httpx.AsyncClient, service):
     token = _github_token("enroll-once")
     first = await _seal(
