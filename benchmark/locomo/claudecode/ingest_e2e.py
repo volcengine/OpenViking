@@ -98,7 +98,7 @@ def build_session_speaker_prompts(item: dict) -> List[dict]:
             line = format_locomo_message(msg)
             if idx == 0:
                 # First message includes the dated header so the
-                # auto-capture-locomo regex picks up the LoCoMo date for
+                # capture hook's regex picks up the LoCoMo date for
                 # created_at injection.
                 text = f"[group chat conversation: {date_time}]\n\n{line}"
             else:

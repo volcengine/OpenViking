@@ -83,6 +83,8 @@ export interface Turn {
   content: string;
   /** The host's id for the turn, sent as `turn_id`. */
   turnId?: string;
+  /** When the turn happened (ISO 8601), where the host knows and it is not now; sent as `created_at`. */
+  createdAt?: string;
   /** The host message, when the turn has tool calls or results beside its text. */
   payload?: { role: string; content: unknown };
 }

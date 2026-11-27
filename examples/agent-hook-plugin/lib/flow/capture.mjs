@@ -61,7 +61,12 @@ export function turnMessages(decoded, cfg) {
       cfg,
       { toolNameById: decoded.toolNames },
     );
-    return message && turn.turnId ? { ...message, turn_id: turn.turnId } : message;
+    if (!message) return message;
+    return {
+      ...message,
+      ...(turn.turnId ? { turn_id: turn.turnId } : {}),
+      ...(turn.createdAt ? { created_at: turn.createdAt } : {}),
+    };
   });
 }
 

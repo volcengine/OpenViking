@@ -73,9 +73,13 @@ export function decode({ cursor, payload = {}, cfg = {} }) {
     delete toolNames[String(message.source?.callId || message.content?.[0]?.toolCallId || "")];
   }
   const role = message.role === "assistant" ? "assistant" : "user";
+  // The event's own time: a write replayed from the offline queue must not
+  // land on the day of the replay.
+  const time = Number(event.time);
   return done([{
     role,
     content: extractTextFromPayload(message),
     payload: { role, content: message.content },
+    ...(Number.isFinite(time) && time >= 0 ? { createdAt: new Date(time).toISOString() } : {}),
   }]);
 }

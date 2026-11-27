@@ -6,7 +6,7 @@
 #   - Each LoCoMo session is fed turn-by-turn into one `claude -p`
 #     subprocess (stream-json input). Plugin's auto-capture (Stop hook) and
 #     session-end (SessionEnd hook) push memories into OpenViking. The
-#     benchmark's auto-capture wrapper adds per-message `created_at` so
+#     benchmark's capture hook adds per-message `created_at` so
 #     event archive dates line up with conv timestamps.
 #   - After ingest, snapshot HOME + OV data.
 #   - QA loops over conv-* in series; before each conv we restore the OV

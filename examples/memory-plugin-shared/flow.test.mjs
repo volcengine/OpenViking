@@ -3,6 +3,7 @@ import { appendFileSync, chmodSync, mkdirSync, readdirSync, readFileSync, rmSync
 import { join } from "node:path";
 import test from "node:test";
 
+import { turnMessages } from "../agent-hook-plugin/lib/flow/capture.mjs";
 import { mayDetach, runStage, toolCall } from "../agent-hook-plugin/lib/flow/index.mjs";
 import { parseJsonl, resumeTurns } from "../agent-hook-plugin/lib/flow/turns.mjs";
 import {
@@ -451,6 +452,14 @@ test("a tool call is judged from its payload alone", () => {
   const history = { session_id: "s1", tool_name: "session_history", tool_input: { action: "overview" } };
   assert.deepEqual(toolCall(host, history), { input: { action: "overview", session: "ft-s1" } });
   assert.deepEqual(toolCall(host, { ...history, tool_input: { action: "overview", session: "other" } }), {});
+});
+
+test("a turn's id and its own time travel with its message", () => {
+  const turn = { role: "user", content: "moved to Lisbon", turnId: "7", createdAt: "2023-02-12T16:02:00.000Z" };
+  const [message] = turnMessages({ turns: [turn] }, {});
+  assert.equal(message.turn_id, "7");
+  assert.equal(message.created_at, "2023-02-12T16:02:00.000Z");
+  assert.equal("created_at" in turnMessages({ turns: [{ role: "user", content: "hi" }] }, {})[0], false);
 });
 
 test("resumeTurns holds the cursor at a turn id until every message of it is acknowledged", () => {
