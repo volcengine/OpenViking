@@ -22,6 +22,10 @@ import { deferContext } from "./pointer.mjs";
 const BOUNDARY = { compactSoon: "compact", end: "end" };
 const LOCK_WAIT_MS = 5000;
 const STALE_LOCK_MS = 60_000;
+const LOCK_HEARTBEAT_MS = 10_000;
+// An in-process host's events queue behind one another in this process and
+// have no transcript to catch up from, so they wait for their turn.
+const IN_PROCESS_WAIT_MS = 10 * 60_000;
 
 export async function readTranscript(host, ref) {
   const kind = host.facts?.transcript;
@@ -110,11 +114,13 @@ async function captureTurns(ctx, state, stateFile) {
     const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, sends, ctx.peerId);
     sent = result.sent;
     captured = result.sent + result.queued;
-    // Content the server refused will never land, so it is settled like a sent
-    // message. What could not even be queued, or was refused for the
-    // credentials, stays for the next capture.
-    const unsettled = result.enqueueFailed + (isAuthFailure(result) ? result.failed : 0);
-    settled = settledTurns(messages, sends.length - unsettled);
+    // Content the server refused will never land, so the request it refused
+    // is settled like a sent one. What was refused for the credentials, could
+    // not even be queued, or came after the refused request and was never
+    // sent, stays for the next capture.
+    const taken = result.sent + result.queued + (isAuthFailure(result) ? 0 : result.refused);
+    const unsettled = sends.length - taken;
+    settled = settledTurns(messages, taken);
     log("capture", { sent, queued: result.queued, failed: result.failed, held: unsettled });
     ctx.outcome.capture = { sent, queued: result.queued, failed: result.failed, held: unsettled };
   }
@@ -138,6 +144,7 @@ async function captureTurns(ctx, state, stateFile) {
  * to the stale-lock age, one the host is waiting for half its budget.
  */
 function lockWaitMs(ctx) {
+  if (ctx.inProcess) return IN_PROCESS_WAIT_MS;
   if (!BOUNDARY[ctx.stage]) return LOCK_WAIT_MS;
   return ctx.detached ? STALE_LOCK_MS : Math.max(LOCK_WAIT_MS, ctx.budgetMs / 2);
 }
@@ -154,7 +161,7 @@ export async function capture(ctx) {
     }
     if (state !== read) await writeHookState(host.id, ctx.stateKey, state);
     return true;
-  }, { waitMs: enabled ? lockWaitMs(ctx) : LOCK_WAIT_MS });
+  }, { waitMs: enabled ? lockWaitMs(ctx) : LOCK_WAIT_MS, staleMs: STALE_LOCK_MS, heartbeatMs: LOCK_HEARTBEAT_MS });
   if (!done) ctx.log("capture_lock_timeout");
   return {};
 }

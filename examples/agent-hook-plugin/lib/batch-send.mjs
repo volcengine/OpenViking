@@ -13,6 +13,7 @@ function makeResult() {
     queued: 0,
     enqueueFailed: 0,
     failed: 0,
+    refused: 0,
     status: 0,
     retryable: false,
     usedBatch: true,
@@ -20,10 +21,15 @@ function makeResult() {
   };
 }
 
-async function enqueueRemainder(sessionId, payloads, startIndex, result, retryable, res) {
+function recordFailure(result, res, retryable, requestSize) {
   result.retryable = retryable;
   result.status = Number(res?.status || 0);
   result.lastError = res?.error ?? res ?? null;
+  if (!retryable) result.refused = requestSize;
+}
+
+async function enqueueRemainder(sessionId, payloads, startIndex, result, retryable, res, requestSize) {
+  recordFailure(result, res, retryable, requestSize);
 
   if (!retryable) {
     result.failed += Math.max(0, payloads.length - startIndex);
@@ -63,11 +69,9 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
 
     const retryable = isRetryableSendFailure(res);
     if (opts.enqueueOnRetryable) {
-      return enqueueRemainder(sessionId, payloads, i, result, retryable, res);
+      return enqueueRemainder(sessionId, payloads, i, result, retryable, res, 1);
     }
-    result.retryable = retryable;
-    result.status = Number(res?.status || 0);
-    result.lastError = res?.error ?? res ?? null;
+    recordFailure(result, res, retryable, 1);
     result.failed += payloads.length - i;
     return result;
   }
@@ -83,8 +87,10 @@ async function sendSerial(fetchJSON, sessionId, payloads, startIndex, opts, resu
  * @param {object} opts
  * @param {boolean} opts.enqueueOnRetryable - enqueue unsent payloads after a retryable failure
  * @param {Function} opts.onSent - called with the number of messages durably sent after each success
- * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,status:number,retryable:boolean,usedBatch:boolean,lastError:any}>}
- *   `status` is the HTTP status of the response that stopped the send, 0 when none did
+ * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,refused:number,status:number,retryable:boolean,usedBatch:boolean,lastError:any}>}
+ *   `status` is the HTTP status of the response that stopped the send, 0 when none did.
+ *   `failed` counts every payload not delivered once a request failed for good;
+ *   `refused` only those in that request, which the server saw and will never take.
  */
 export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts = {}) {
   const result = makeResult();
@@ -112,11 +118,9 @@ export async function sendSessionMessages(fetchJSON, sessionId, payloads, opts =
 
     const retryable = isRetryableSendFailure(res);
     if (opts.enqueueOnRetryable) {
-      return enqueueRemainder(sessionId, messages, start, result, retryable, res);
+      return enqueueRemainder(sessionId, messages, start, result, retryable, res, chunk.length);
     }
-    result.retryable = retryable;
-    result.status = Number(res?.status || 0);
-    result.lastError = res?.error ?? res ?? null;
+    recordFailure(result, res, retryable, chunk.length);
     result.failed += messages.length - start;
     return result;
   }

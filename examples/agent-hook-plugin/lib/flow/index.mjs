@@ -105,6 +105,7 @@ export async function runStage(host, event, payload = {}, { detached = false, cf
     cfg,
     cwd,
     detached,
+    inProcess: Boolean(given),
     nativeSessionId: nativeId,
     // A child session has state, a lock and an OpenViking session of its own.
     stateKey: child ? `${nativeId}__${child.replace(/[^A-Za-z0-9._-]/g, "-")}` : nativeId,

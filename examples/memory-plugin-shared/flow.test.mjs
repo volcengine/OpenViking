@@ -240,6 +240,18 @@ test("refused credentials hold the cursor; refused content does not block what f
     const last = calls("/messages/batch").at(-1).body.messages;
     assert.deepEqual(last.map((message) => message.parts[0].text), ["two"]);
   });
+
+  // Only the request the server refused is settled: what came after it was never sent.
+  let refuse = true;
+  const refuseOnce = () => { if (!refuse) return undefined; refuse = false; return 422; };
+  await withFlow(t, { "/messages/batch": refuseOnce }, async ({ run, say, calls }) => {
+    for (let index = 0; index < 150; index += 1) say(index % 2 ? "assistant" : "user", `turn ${index}`);
+    await run("stop");
+    await run("stop");
+    const batches = calls("/messages/batch").map((entry) => entry.body.messages);
+    assert.deepEqual(batches.map((messages) => messages.length), [100, 50]);
+    assert.equal(batches[1][0].parts[0].text, "turn 100");
+  });
 });
 
 test("a transcript that cannot be read acknowledges nothing", async (t) => {

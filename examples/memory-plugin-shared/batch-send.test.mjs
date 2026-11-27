@@ -54,6 +54,7 @@ test("sendSessionMessages chunks batches at the server limit", async () => {
     queued: 0,
     enqueueFailed: 0,
     failed: 0,
+    refused: 0,
     status: 0,
     retryable: false,
     usedBatch: true,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SHARED_REL="../../memory-plugin-shared/install.sh"
+SHARED_REL="../../../../memory-plugin-shared/install.sh"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 LOCAL_SHARED="$SCRIPT_DIR/$SHARED_REL"
 
