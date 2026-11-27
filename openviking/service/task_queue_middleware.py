@@ -78,12 +78,12 @@ class TaskWorkQueueMiddleware(QueueMiddleware):
                 user_id=metadata.user_id,
             )
 
-        await run_to_completion(register)
-        if registration is WorkRegistration.REJECTED:
-            raise TaskWorkRejected(
-                f"Task {metadata.task_id} is unavailable; rejected work for {ctx.queue}"
-            )
         try:
+            await run_to_completion(register)
+            if registration is WorkRegistration.REJECTED:
+                raise TaskWorkRejected(
+                    f"Task {metadata.task_id} is unavailable; rejected work for {ctx.queue}"
+                )
             message_id = await call_next(ctx)
         except BaseException as exc:
             if ctx.committed:
