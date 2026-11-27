@@ -1,155 +1,57 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""
-Unit tests for FileEncryptor.
-"""
-
-import os
-import secrets
-import tempfile
+"""Tests for the persisted encryption envelope."""
 
 import pytest
 
 from openviking.crypto.encryptor import FileEncryptor
+from openviking.crypto.exceptions import (
+    AuthenticationFailedError,
+    CorruptedCiphertextError,
+    EncryptionError,
+    KeyMismatchError,
+)
 from openviking.crypto.providers import LocalFileProvider
 
 
 @pytest.fixture
-async def encryptor():
-    """Create a FileEncryptor instance with LocalFileProvider."""
-    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
-        # Generate valid 32-byte key in hex format
-        root_key = secrets.token_bytes(32)
-        f.write(root_key.hex())
-    temp_path = f.name
-    # Set correct permissions (0o600)
-    os.chmod(temp_path, 0o600)
-
-    try:
-        provider = LocalFileProvider(key_file=temp_path)
-        yield FileEncryptor(provider)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+def encryptor():
+    return FileEncryptor(LocalFileProvider(root_key=bytes(range(32)).hex()))
 
 
-@pytest.mark.asyncio
 async def test_encrypt_decrypt_roundtrip(encryptor):
-    """Test encryption and decryption roundtrip."""
-    account_id = "test_account"
     plaintext = b"Hello, OpenViking!"
+    ciphertext = await encryptor.encrypt("account1", plaintext)
 
-    # Encrypt
-    ciphertext = await encryptor.encrypt(account_id, plaintext)
-    assert ciphertext != plaintext
-    assert ciphertext.startswith(b"OVE1")
-
-    # Decrypt
-    decrypted = await encryptor.decrypt(account_id, ciphertext)
-    assert decrypted == plaintext
-
-
-@pytest.mark.asyncio
-async def test_decrypt_unencrypted_data(encryptor):
-    """Test decrypting unencrypted data."""
-    account_id = "test_account"
-    plaintext = b"Unencrypted data"
-
-    # Decrypt should return the same data
-    decrypted = await encryptor.decrypt(account_id, plaintext)
-    assert decrypted == plaintext
+    assert ciphertext.startswith(b"OVE1\x01\x01")
+    assert plaintext not in ciphertext
+    assert await encryptor.decrypt("account1", ciphertext) == plaintext
+    with pytest.raises(EncryptionError) as failure:
+        await encryptor.decrypt("account1", ciphertext[:-1] + bytes([ciphertext[-1] ^ 1]))
+    assert isinstance(failure.value, AuthenticationFailedError)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("plaintext", [b"", b"a", b"ab", b"abc"])
-async def test_decrypt_unencrypted_short_plaintext(encryptor, plaintext):
-    """Test decrypting unencrypted plaintext shorter than the magic header."""
-    account_id = "test_account"
-
-    decrypted = await encryptor.decrypt(account_id, plaintext)
-    assert decrypted == plaintext
+@pytest.mark.parametrize("plaintext", [b"", b"O", b"OV", b"OVE", b"Unencrypted data"])
+async def test_decrypt_unencrypted_data(encryptor, plaintext):
+    assert await encryptor.decrypt("account1", plaintext) == plaintext
 
 
-@pytest.mark.asyncio
 async def test_decrypt_corrupted_ciphertext(encryptor):
-    """Test decrypting corrupted ciphertext."""
-    account_id = "test_account"
-    corrupted = b"OVE1invalid"
-
-    from openviking.crypto.exceptions import CorruptedCiphertextError
-
-    with pytest.raises(CorruptedCiphertextError):
-        await encryptor.decrypt(account_id, corrupted)
+    with pytest.raises(EncryptionError) as failure:
+        await encryptor.decrypt("account1", b"OVE1")
+    assert isinstance(failure.value, CorruptedCiphertextError)
 
 
-@pytest.mark.asyncio
 async def test_encrypt_empty_data(encryptor):
-    """Test encrypting empty data."""
-    account_id = "test_account"
-    plaintext = b""
+    ciphertext = await encryptor.encrypt("account1", b"")
 
-    ciphertext = await encryptor.encrypt(account_id, plaintext)
     assert ciphertext.startswith(b"OVE1")
-
-    decrypted = await encryptor.decrypt(account_id, ciphertext)
-    assert decrypted == b""
+    assert await encryptor.decrypt("account1", ciphertext) == b""
 
 
-@pytest.mark.asyncio
-async def test_decrypt_empty_plaintext(encryptor):
-    """Test decrypting empty plaintext bytes (not encrypted-empty, but raw b'').
-
-    Regression test: decrypt() used to raise 'Ciphertext too short' on empty
-    files because it checked length before the magic header.
-    """
-    account_id = "test_account"
-    decrypted = await encryptor.decrypt(account_id, b"")
-    assert decrypted == b""
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("data", [b"X", b"AB", b"ABC"])
-async def test_decrypt_short_plaintext_less_than_4_bytes(encryptor, data):
-    """Test decrypting plaintext shorter than 4 bytes (magic length).
-
-    Regression test: these used to raise InvalidMagicError('Ciphertext too short')
-    because length was checked before the magic prefix.
-    """
-    account_id = "test_account"
-    decrypted = await encryptor.decrypt(account_id, data)
-    assert decrypted == data
-
-
-@pytest.mark.asyncio
-async def test_decrypt_magic_prefix_without_full_header(encryptor):
-    """Test decrypting data that starts with 'OVE1' but has no valid envelope.
-
-    Should raise CorruptedCiphertextError because the envelope header is
-    incomplete (needs at least 12 bytes).
-    """
-    account_id = "test_account"
-    from openviking.crypto.exceptions import CorruptedCiphertextError
-
-    with pytest.raises(CorruptedCiphertextError):
-        await encryptor.decrypt(account_id, b"OVE1")
-
-
-@pytest.mark.asyncio
 async def test_different_accounts(encryptor):
-    """Test encryption/decryption across different accounts."""
-    account1 = "account1"
-    account2 = "account2"
-    plaintext = b"Test data"
+    ciphertext = await encryptor.encrypt("account1", b"Account 1 private data")
 
-    # Encrypt with account1
-    ciphertext = await encryptor.encrypt(account1, plaintext)
-
-    # Decrypt with account1 should work
-    decrypted1 = await encryptor.decrypt(account1, ciphertext)
-    assert decrypted1 == plaintext
-
-    from openviking.crypto.exceptions import KeyMismatchError
-
-    # Decrypt with account2 should fail
-    with pytest.raises(KeyMismatchError):
-        await encryptor.decrypt(account2, ciphertext)
+    with pytest.raises(EncryptionError) as failure:
+        await encryptor.decrypt("account2", ciphertext)
+    assert isinstance(failure.value, KeyMismatchError)

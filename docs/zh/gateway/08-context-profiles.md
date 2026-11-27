@@ -12,7 +12,7 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 
 嵌入式 dev 模式在启动时将 `default_profile` 一次性写入 `default` 账号；之后修改 `ov.conf` 不会改变已保存的配置，请在 Studio 中修改。
 
-除了名称和[允许客户端覆盖设置](#client-overrides)开关，一份配置分为四个部分，下表中的默认值也就是推荐设置：
+除了名称、[允许客户端覆盖设置](#client-overrides)开关和它下方的两个[封存密钥](#seal-secrets)开关，一份配置分为四个部分，下表中的默认值也就是推荐设置：
 
 | 部分 | 作用 | 主要设置和默认值 |
 | --- | --- | --- |
@@ -124,15 +124,26 @@ description: 创建上下文配置，决定 OpenViking 网关为每个网关密�
 X-OpenViking-Context: {"recall":false,"max_tokens":800,"context_types":["memory"]}
 ```
 
-- **能改什么。** 除 `name` 和 `client_overrides` 以外的所有设置。请求头没有给出的字段沿用配置中的值。工具权限只能收窄：请求头里的 `disabled_tools` 会追加到配置已取消勾选的工具上，`gateway_tools` 只能关闭 OpenViking 工具、不能重新打开，所以 `{"disabled_tools":[]}` 或 `{"gateway_tools":true}` 不会提供配置不提供的工具。
+- **能改什么。** 除 `name`、`client_overrides`、`seal_secrets` 和 `enroll_tool_secrets` 以外的所有设置。请求头没有给出的字段沿用配置中的值。工具权限只能收窄：请求头里的 `disabled_tools` 会追加到配置已取消勾选的工具上，`gateway_tools` 只能关闭 OpenViking 工具、不能重新打开，所以 `{"disabled_tools":[]}` 或 `{"gateway_tools":true}` 不会提供配置不提供的工具。
 - **何时生效。** 与保存配置的修改一样，对话会沿用开始时的设置：只有对话第一个请求里的请求头决定设置。之后的请求头仍会校验，所以无效的请求头，或开关关闭后的任何请求头，仍会报错。
 - **错误。** 开关关闭时，带这个请求头的请求一律返回 403 `context_override_not_allowed`，而不是按已保存的设置处理。开关开启时，请求头有下列情况之一会返回 400 `context_override_invalid`：
   - 不是 JSON 对象；
-  - 出现未知字段或 `name`、`client_overrides`；
+  - 出现未知字段或 `name`、`client_overrides`、`seal_secrets`、`enroll_tool_secrets`；
   - 取值越界。
 - **请求日志。** [请求详情](10-overview-and-requests.md#request-details)中列出客户端在请求头里传入了哪些字段，只记名称，不记取值。
 
 这个开关默认开启，所以持有使用这份配置的密钥的人可以修改任意字段，包括预算，也可以再排除更多工具。对 `default` 配置来说，这也包括所有[直接使用 OpenViking API 密钥](09-gateway-keys.md#openviking-keys)的客户端。需要锁定的配置请关闭它。各客户端如何发送这个请求头，见[覆盖上下文配置](03-connect-clients.md#override-profile-settings)。
+
+## 封存密钥 {#seal-secrets}
+
+**允许客户端覆盖设置**下方有两个开关，默认都关闭，用来让用户已登记的密钥和用户新输入的 token 不发给模型服务商：网关在请求发给模型之前把它们换成引用，并让客户端工具拿到真值。封存需要 OpenViking Server 0.5.7 或更高版本。打开后，无法封存的请求会被拒绝，不会未经封存发出。
+
+- **封存密钥**（`seal_secrets`）：打开封存。
+- **同时登记工具输出中的密钥**（`enroll_tool_secrets`）：工具结果和附带内容块中的新 token 也会登记。
+
+第二个开关只在**封存密钥**打开时生效。两个开关都读取配置的当前值，对之前开始的对话同样生效，`X-OpenViking-Context` 无法修改它们。
+
+封存如何工作、覆盖哪些内容、无法封存时会怎样，见[网关中的密钥封存](14-seal-secrets.md)。
 
 ## 下一步 {#next-steps}
 

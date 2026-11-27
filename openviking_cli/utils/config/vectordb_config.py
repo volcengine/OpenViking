@@ -36,6 +36,12 @@ class VolcengineConfig(BaseModel):
             "Used together with `api_key` for data-plane-only access."
         ),
     )
+    console_host: Optional[str] = Field(
+        default=None, description="Optional AK/SK management API hostname, without a URL scheme"
+    )
+    data_host: Optional[str] = Field(
+        default=None, description="Optional AK/SK data API hostname, without a URL scheme"
+    )
 
 
 class VikingDBConfig(BaseModel):
@@ -394,6 +400,19 @@ class CuVSConfig(BaseModel):
         return self
 
 
+class FilteredKnnOptions(BaseModel):
+    """Validated envelope-v1 request budgets; SQL is never configurable."""
+
+    mode: Literal["adaptive", "exact"] = "adaptive"
+    exact_threshold: int = Field(default=1000, ge=0, le=100000)
+    search_width: int = Field(default=100, ge=1, le=100000)
+    max_graph_visits: int = Field(default=20000, ge=1, le=1000000)
+    max_heap_fetches: int = Field(default=200000, ge=1, le=10000000)
+    eligible_memory_limit: int = Field(default=67108864, ge=1048576, le=4294967296)
+    recover: bool = False
+    model_config = {"extra": "forbid", "strict": True}
+
+
 class PgvectorConfig(BaseModel):
     """PostgreSQL + pgvector. Credentials are resolved from a DSN environment variable."""
 
@@ -405,6 +424,15 @@ class PgvectorConfig(BaseModel):
     m: int = Field(default=16, ge=2, le=100)
     ef_construction: int = Field(default=64, ge=4, le=1000)
     ef_search: int = Field(default=100, ge=1, le=1000)
+    search_implementation: Literal["native", "enhanced"] = Field(
+        default="native",
+        description=(
+            "Dense search implementation: community pgvector SQL or ByteDance enhanced "
+            "search, independent of filters. Enhanced requires envelope v1 and a "
+            "supported HNSW index; unavailable capabilities raise an error."
+        ),
+    )
+    filtered_knn_options: FilteredKnnOptions = Field(default_factory=FilteredKnnOptions)
 
     @model_validator(mode="after")
     def validate_pool(self):
@@ -544,8 +572,11 @@ class VectorDBBackendConfig(BaseModel):
                 raise ValueError("VectorDB http backend requires 'url' to be set")
 
         elif self.backend == "volcengine":
-            if self.volcengine and self.volcengine.host:
-                self.volcengine.host = self.volcengine.host.strip().rstrip("/")
+            if self.volcengine:
+                for field_name in ("host", "console_host", "data_host"):
+                    host = getattr(self.volcengine, field_name)
+                    if host is not None:
+                        setattr(self.volcengine, field_name, host.strip().rstrip("/"))
 
             uses_api_key = bool(self.volcengine and self.volcengine.api_key)
             if uses_api_key:

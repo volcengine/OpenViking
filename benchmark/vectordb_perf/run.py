@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence
 
+from benchmark.vector_config import BenchmarkVectorConfigResolver
 from benchmark.vectordb_perf.async_utils import map_bounded_as_completed
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.collection_schemas import CollectionSchemas
@@ -1285,6 +1286,9 @@ async def run_benchmark_async(options: BenchOptions) -> RunResult:
     vectordb_config.dimension = workload.dim
     backend = VikingVectorIndexBackend(config=vectordb_config)
     ctx = benchmark_context()
+    backend.set_vector_config_resolver(
+        BenchmarkVectorConfigResolver(ctx.account_id, vectordb_config)
+    )
 
     progress(
         "start "

@@ -329,6 +329,11 @@ async def test_full_device_flow(app_with_oauth, client):
     assert body["client_name"] == "Claude"
     pending = await store.load_pending_authorization(pending_id)
     assert pending["verified_key_fp"] == "f" * 64
+    repeated = await client.post(
+        "/api/v1/auth/oauth-verify", json={"code": display_code, "decision": "approve"}
+    )
+    assert repeated.status_code == 400
+    assert repeated.json()["error_description"] == "Invalid or expired verification code"
 
     # Status after verify: approved + redirect_url with code/state.
     post = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
@@ -370,6 +375,21 @@ async def test_full_device_flow(app_with_oauth, client):
     refresh_record = await store.peek_refresh(tokens["refresh_token"])
     assert record.authorizing_key_fp == refresh_record["authorizing_key_fp"] == "f" * 64
 
+    refresh_form = {
+        "grant_type": "refresh_token",
+        "refresh_token": tokens["refresh_token"],
+        "client_id": client_id,
+    }
+    rotated = await client.post("/token", data=refresh_form)
+    assert rotated.status_code == 200, rotated.text
+    replacement = rotated.json()
+    assert replacement["access_token"] != tokens["access_token"]
+    assert replacement["refresh_token"] != tokens["refresh_token"]
+
+    replay = await client.post("/token", data=refresh_form)
+    assert replay.status_code == 400
+    assert replay.json()["error"] == "invalid_grant"
+
 
 @pytest.mark.asyncio
 async def test_oauth_pending_info_endpoint(app_with_oauth, client):
@@ -392,36 +412,13 @@ async def test_oauth_pending_info_endpoint(app_with_oauth, client):
     record = await store.load_pending_authorization(pending_id)
     assert record is not None and record["display_code"]
 
-
-@pytest.mark.asyncio
-async def test_oauth_pending_info_404_when_missing(client):
-    resp = await client.get("/api/v1/auth/oauth/pending/doesnotexist")
-    assert resp.status_code == 404
-    status = await client.get("/oauth/authorize/page/status", params={"pending": "doesnotexist"})
-    assert status.status_code == 410
-    assert status.json() == {"status": "expired"}
-
-
-@pytest.mark.asyncio
-async def test_oauth_verify_by_pending_id(app_with_oauth, client):
-    """Studio consent path: verify with pending_id instead of display_code."""
-    _, store, _ = app_with_oauth
-    client_id, pending_id, _, _ = await _start_authorize(
-        client, redirect_uri="https://claude.ai/cb", state="abc"
+    verified = await client.post(
+        "/api/v1/auth/oauth-verify", json={"pending_id": pending_id, "decision": "approve"}
     )
-
-    verify = await client.post(
-        "/api/v1/auth/oauth-verify",
-        json={"pending_id": pending_id, "decision": "approve"},
-    )
-    assert verify.status_code == 200, verify.text
-    body = verify.json()
-    assert body["status"] == "approved"
-    assert body["client_id"] == client_id
-
-    record = await store.load_pending_authorization(pending_id)
-    assert record is not None
-    assert record["verified"] is True
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["status"] == "approved"
+    assert verified.json()["client_id"] == client_id
+    assert (await store.load_pending_authorization(pending_id))["verified"] is True
 
 
 @pytest.mark.asyncio
@@ -430,17 +427,11 @@ async def test_oauth_verify_requires_pending_or_code(client):
     assert resp.status_code == 400
     assert resp.json()["error_description"] == "Must provide either 'pending_id' or 'code'"
 
-
-@pytest.mark.asyncio
-async def test_oauth_verify_unknown_code(app_with_oauth, client):
-    _, _, _ = app_with_oauth
-    resp = await client.post(
-        "/api/v1/auth/oauth-verify",
-        json={"code": "BOGUS1", "decision": "approve"},
+    unknown = await client.post(
+        "/api/v1/auth/oauth-verify", json={"code": "BOGUS1", "decision": "approve"}
     )
-    assert resp.status_code == 400
-    body = resp.json()
-    assert "Invalid" in body.get("error_description", "") or "Invalid" in body.get("message", "")
+    assert unknown.status_code == 400
+    assert "Invalid" in unknown.json()["error_description"]
 
 
 @pytest.mark.asyncio
@@ -459,69 +450,8 @@ async def test_oauth_verify_deny_destroys_pending(app_with_oauth, client):
     # Pending row gone — page polling now returns 410.
     status = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
     assert status.status_code == 410
-
-
-@pytest.mark.asyncio
-async def test_oauth_verify_idempotency(app_with_oauth, client):
-    """A second verify with the same code must fail — pending is one-shot."""
-    _, store, _ = app_with_oauth
-    _, pending_id, _, _ = await _start_authorize(client)
-    record = await store.load_pending_authorization(pending_id)
-    code = record["display_code"]
-
-    first = await client.post(
-        "/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"}
-    )
-    assert first.status_code == 200
-    second = await client.post(
-        "/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"}
-    )
-    # The pending row's verified flag now blocks find_pending_by_display_code.
-    assert second.status_code == 400
-    assert second.json()["error_description"] == "Invalid or expired verification code"
-
-
-@pytest.mark.asyncio
-async def test_refresh_token_rotation(app_with_oauth, client):
-    _, store, _ = app_with_oauth
-    client_id, pending_id, _, verifier = await _start_authorize(
-        client, redirect_uri="https://x.test/cb"
-    )
-    code = (await store.load_pending_authorization(pending_id))["display_code"]
-
-    await client.post("/api/v1/auth/oauth-verify", json={"code": code, "decision": "approve"})
-    status = await client.get("/oauth/authorize/page/status", params={"pending": pending_id})
-    auth_code = status.json()["redirect_url"].split("code=")[1].split("&")[0]
-    token_resp = await client.post(
-        "/token",
-        data={
-            "grant_type": "authorization_code",
-            "code": auth_code,
-            "redirect_uri": "https://x.test/cb",
-            "client_id": client_id,
-            "code_verifier": verifier,
-        },
-    )
-    assert token_resp.status_code == 200, token_resp.text
-    rt1 = token_resp.json()["refresh_token"]
-    at1 = token_resp.json()["access_token"]
-
-    rotated = await client.post(
-        "/token",
-        data={"grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id},
-    )
-    assert rotated.status_code == 200
-    rt2 = rotated.json()["refresh_token"]
-    at2 = rotated.json()["access_token"]
-    assert rt2 != rt1 and at2 != at1
-
-    # Replay rejected.
-    replay = await client.post(
-        "/token",
-        data={"grant_type": "refresh_token", "refresh_token": rt1, "client_id": client_id},
-    )
-    assert replay.status_code == 400
-    assert replay.json()["error"] == "invalid_grant"
+    assert status.json() == {"status": "expired"}
+    assert (await client.get(f"/api/v1/auth/oauth/pending/{pending_id}")).status_code == 404
 
 
 # ---------------------------------------------------------------------------

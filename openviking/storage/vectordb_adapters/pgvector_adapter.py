@@ -14,6 +14,7 @@ import math
 import os
 import re
 import threading
+from typing import Literal, cast
 
 from openviking.observability.log_safety import short_hash
 from openviking.storage.vectordb.collection.collection import Collection
@@ -21,7 +22,7 @@ from openviking.storage.vectordb.collection.result import SearchItemResult, Sear
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
 from openviking_cli.exceptions import FailedPreconditionError
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config.vectordb_config import PgvectorConfig
+from openviking_cli.utils.config.vectordb_config import FilteredKnnOptions, PgvectorConfig
 
 from .opengauss.catalog import _create_collection_table, _ensure_meta_table, _load_collection_meta
 from .opengauss.collection import OpenGaussCollection, _PgIndex
@@ -42,7 +43,95 @@ logger = get_logger(__name__)
 
 
 class PgvectorCollection(OpenGaussCollection):
-    """SQL collection with flat or native pgvector HNSW dense search."""
+    """SQL collection with native pgvector or ByteDance enhanced dense search."""
+
+    _search_implementation: Literal["native", "enhanced"]
+    _filtered_knn_schema: str | None
+    _filtered_knn_options: FilteredKnnOptions
+
+    def _uses_enhanced_search(self, index_name):
+        if getattr(self, "_search_implementation", "native") == "native":
+            return False
+        meta = self._indexes[index_name]
+        supported = (
+            getattr(self, "_filtered_knn_schema", None) is not None
+            and meta["_pg_index_type"] == "hnsw"
+            and meta["_distance"] in {"l2", "cosine", "ip"}
+        )
+        if not supported:
+            raise FailedPreconditionError(
+                "pgvector search_implementation='enhanced' requires envelope v1 "
+                "and an L2/cosine/IP HNSW index"
+            )
+        return True
+
+    def _dense_candidate_ctes(self, index_name, vector_text, budget, filters):
+        if not self._uses_enhanced_search(index_name):
+            # Native SQL retains explicit filters, MVCC, RLS and pagination.
+            return super()._dense_candidate_ctes(index_name, vector_text, budget, filters)
+        if not 1 <= budget <= 100000:
+            raise ValueError(
+                "pgvector filtered_knn candidate budget must be between 1 and 100000 "
+                "(limit + offset for dense pagination)"
+            )
+        schema = _quote_identifier(cast(str, self._filtered_knn_schema))
+        index = self._indexes[index_name]["_pg_index_name"]
+        qualified_index = f"{_quote_identifier('public')}.{_quote_identifier(index)}"
+        options = self._filtered_knn_options.model_dump()
+        options["search_width"] = max(options["search_width"], budget)
+        normalized_filter = self._normalize_filter_date_times(filters)
+        # The extension accepts SQL NULL, but JSON null is not a filter AST.
+        filter_json = None if normalized_filter is None else json.dumps(normalized_filter)
+        return [
+            f"dense_envelope AS MATERIALIZED (SELECT {schema}.ov_filtered_knn("
+            "%s::regclass, %s::vector, %s::jsonb, %s::integer, %s::jsonb) AS body)",
+            "dense_candidates AS (SELECT x.id AS _ov_candidate_id "
+            "FROM dense_envelope, jsonb_to_recordset(body->'results') "
+            "AS x(id text, public_distance double precision))",
+        ], [
+            qualified_index,
+            vector_text,
+            filter_json,
+            budget,
+            json.dumps(options),
+        ]
+
+    def _candidate_query_sql(self, ctes, select):
+        if not any(cte.startswith("dense_envelope ") for cte in ctes):
+            return super()._candidate_query_sql(ctes, select)
+        # A sentinel row retains diagnostics for an empty result. Fields and
+        # envelope still share the caller's single SQL statement snapshot.
+        return (
+            "WITH " + ", ".join(ctes) + " SELECT r.*, e.body - 'results' AS _ov_diagnostics "
+            "FROM dense_envelope e LEFT JOIN LATERAL (" + select + ") r ON TRUE"
+        )
+
+    def _consume_candidate_rows(self, columns, rows, index_name):
+        if columns[-1] != "_ov_diagnostics":
+            return columns, rows
+        if rows:
+            diagnostics = rows[0][-1]
+            stats = diagnostics["stats"]
+            safe_diagnostics = {
+                "route": diagnostics["route"],
+                "stop_reason": diagnostics["stop_reason"],
+                "approximate": diagnostics["approximate"],
+                "stats": {
+                    key: stats[key]
+                    for key in (
+                        "eligible_count_known",
+                        "eligible_count",
+                        "graph_visits",
+                        "heap_fetches",
+                        "filter_build_ms",
+                        "search_ms",
+                        "returned_count",
+                    )
+                },
+            }
+            logger.debug("pgvector filtered_knn diagnostics=%s", json.dumps(safe_diagnostics))
+        id_pos = columns.index("id")
+        return columns[:-1], [row[:-1] for row in rows if row[id_pos] is not None]
 
     def _normalized_index_meta(self, index_name, meta_data):
         meta = dict(meta_data)
@@ -251,19 +340,37 @@ class PgvectorCollection(OpenGaussCollection):
         vector = _validate_vector(dense_vector, self._dim)
         metric, op = self._resolve_distance_and_op(index_name)
         vector_text = str(vector)
-        where, params = _build_where_clause(
-            self._normalize_filter_date_times(filters), self._array_fields
-        )
-        condition = f"({where}) AND " if where else ""
-        columns, rows = self._query_rows(
-            f"SELECT {self._select_output_columns(output_fields)}, "
-            f"vector {op} %s::vector AS _ov_distance "
-            f"FROM {_quote_identifier(self._name)} "
-            f'WHERE {condition}"vector" IS NOT NULL '
-            f"ORDER BY vector {op} %s::vector, id LIMIT %s OFFSET %s",
-            [vector_text, *params, vector_text, limit, offset],
-            index_name,
-        )
+        if self._uses_enhanced_search(index_name):
+            ctes, params = self._dense_candidate_ctes(
+                index_name, vector_text, limit + offset, filters
+            )
+            columns, rows = self._query_rows(
+                self._candidate_query_sql(
+                    ctes,
+                    f"SELECT {self._select_output_columns(output_fields)}, "
+                    f"vector {op} %s::vector AS _ov_distance "
+                    f"FROM {_quote_identifier(self._name)} "
+                    "WHERE id IN (SELECT _ov_candidate_id FROM dense_candidates) "
+                    f'ORDER BY vector {op} %s::vector, id COLLATE "C" LIMIT %s OFFSET %s',
+                ),
+                [*params, vector_text, vector_text, limit, offset],
+                index_name,
+            )
+            columns, rows = self._consume_candidate_rows(columns, rows, index_name)
+        else:
+            where, params = _build_where_clause(
+                self._normalize_filter_date_times(filters), self._array_fields
+            )
+            condition = f"({where}) AND " if where else ""
+            columns, rows = self._query_rows(
+                f"SELECT {self._select_output_columns(output_fields)}, "
+                f"vector {op} %s::vector AS _ov_distance "
+                f"FROM {_quote_identifier(self._name)} "
+                f'WHERE {condition}"vector" IS NOT NULL '
+                f"ORDER BY vector {op} %s::vector, id LIMIT %s OFFSET %s",
+                [vector_text, *params, vector_text, limit, offset],
+                index_name,
+            )
         items = []
         for row in rows:
             # NaN zero-vector distances sort last, so removing them after native
@@ -283,6 +390,8 @@ class PgvectorCollection(OpenGaussCollection):
 
 class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
     """pgvector backend using PostgreSQL MVCC and pooled transactions."""
+
+    _filtered_knn_schema: str | None
 
     mode = "pgvector"
     USE_CONTENT_FIELD = True
@@ -329,6 +438,7 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             options="-c client_encoding=UTF8 -c search_path=public",
         )
         self._conn = None
+        self._filtered_knn_schema = None
         try:
             self._conn = _PooledConnectionProxy(self._pool)
             cursor = self._conn.cursor()
@@ -342,6 +452,8 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
                 release = re.match(r"^(\d+)\.(\d+)\.(\d+)", version[0])
                 if not release or tuple(map(int, release.groups())) < (0, 8, 0):
                     raise RuntimeError("OpenViking requires pgvector >= 0.8.0")
+                if self._config.search_implementation == "enhanced":
+                    self._filtered_knn_schema = self._discover_filtered_knn(cursor)
                 cursor.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                     ("openviking.pgvector.catalog",),
@@ -359,6 +471,49 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
                 self._conn = None
                 self._pool = None
             raise
+
+    def _discover_filtered_knn(self, cursor):
+        # Exact signatures and extension dependency certify a capability, not
+        # merely a same-named user function in search_path.
+        cursor.execute("""
+            SELECT n.nspname,
+                   has_schema_privilege(n.oid, 'USAGE'),
+                   has_function_privilege(p.oid, 'EXECUTE'),
+                   has_function_privilege(v.oid, 'EXECUTE')
+            FROM pg_extension e
+            JOIN pg_namespace n ON n.oid = e.extnamespace
+            JOIN pg_proc p ON p.pronamespace = n.oid
+            JOIN pg_proc v ON v.pronamespace = n.oid
+            JOIN pg_depend pd ON pd.classid = 'pg_proc'::regclass
+                 AND pd.objid = p.oid AND pd.refclassid = 'pg_extension'::regclass
+                 AND pd.refobjid = e.oid AND pd.deptype = 'e'
+            JOIN pg_depend vd ON vd.classid = 'pg_proc'::regclass
+                 AND vd.objid = v.oid AND vd.refclassid = 'pg_extension'::regclass
+                 AND vd.refobjid = e.oid AND vd.deptype = 'e'
+            WHERE e.extname = 'vector'
+              AND current_setting('server_version_num')::integer / 10000 = 17
+              AND p.proname = 'ov_filtered_knn'
+              AND p.proargtypes = ARRAY[
+                  'regclass'::regtype::oid, 'vector'::regtype::oid,
+                  'jsonb'::regtype::oid, 'integer'::regtype::oid,
+                  'jsonb'::regtype::oid]::oidvector
+              AND p.prorettype = 'jsonb'::regtype
+              AND p.provolatile = 's' AND NOT p.prosecdef
+              AND p.proparallel = 'u' AND NOT p.proleakproof
+              AND v.proname = 'ov_filtered_knn_version' AND v.pronargs = 0
+              AND v.prorettype = 'integer'::regtype AND NOT v.prosecdef
+              AND v.provolatile IN ('s', 'i')
+        """)
+        row = cursor.fetchone()
+        if row:
+            if not all(row[1:]):
+                raise FailedPreconditionError("filtered_knn function/schema permissions missing")
+            cursor.execute(f"SELECT {_quote_identifier(row[0])}.ov_filtered_knn_version()")
+            if cursor.fetchone()[0] == 1:
+                return row[0]
+        raise FailedPreconditionError(
+            "pgvector search_implementation='enhanced' envelope v1 capability is unavailable"
+        )
 
     @classmethod
     def from_config(cls, config):
@@ -444,6 +599,9 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             self._conn, self._collection_name, meta, meta["_dim"], self._distance_metric
         )
         self._configure_retrieval(raw)
+        raw._search_implementation = self._config.search_implementation
+        raw._filtered_knn_schema = self._filtered_knn_schema
+        raw._filtered_knn_options = self._config.filtered_knn_options
         # Search settings can change without rebuilding the physical index.
         if self._index_name in raw._indexes:
             raw._indexes[self._index_name]["search_params"] = dict(self._search_params)

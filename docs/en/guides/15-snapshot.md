@@ -172,15 +172,23 @@ Provider choices:
 | Provider | Use case |
 | --- | --- |
 | `sqlite` | Single-node deployments. By default the DB is stored at `{storage.workspace}/_system/snapshot/log/snapshot_log.db`; override with an absolute `git.snapshot.log.sqlite.path` if needed |
-| `mysql` | Multi-instance deployments. Set the DSN in the environment variable named by `git.snapshot.log.mysql.dsn_env` |
+| `mysql` | Multi-instance deployments. Provision the table first, then set the DSN in the environment variable named by `git.snapshot.log.mysql.dsn_env` |
 | `postgres` | Multi-instance deployments. Provision the schema first, then configure `git.snapshot.log.postgres.dsn_env` |
 | `none` | Disable the index and keep the original history scan path |
 
-For MySQL:
+For MySQL, provision the table once with a deployment role that has DDL privileges:
 
 ```bash
+mysql "$OPENVIKING_SNAPSHOT_LOG_ADMIN_DSN" \
+  < openviking/service/sql/snapshot_log_mysql_init.sql
 export OPENVIKING_SNAPSHOT_LOG_DSN='mysql://user:password@host:3306/openviking'
 ```
+
+Runtime startup does not create or migrate MySQL tables. The runtime role needs
+only `SELECT` and `INSERT` on `snapshot_log`, so DDL and DML privileges can stay
+separate. Every row carries the top-level `service_name`, and the unique key plus
+all indexes are prefixed with it, so several OV deployments can share one database
+without cross-talk; a dedicated database per deployment still works.
 
 For PostgreSQL (14+), provision the schema once with a deployment role:
 
@@ -210,8 +218,13 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 
 Runtime startup does not create or migrate PostgreSQL tables. The runtime role
 needs `SELECT` and `INSERT` on `snapshot_log`, and `USAGE` on its identity sequence.
-Use a dedicated database or schema per OV deployment; accounts and branches
-are isolated within that index. When using a custom schema, set the URL's
+Provision the table with the supplied DDL before deploying.
+Rows, indexes and append locks are scoped by the top-level `service_name`,
+so deployments can share one database or schema. Use the same name for replicas
+of one deployment and distinct names for separate deployments.
+`service_name` accepts 1–64 ASCII letters, digits, `.`, `_` or `-`; `account` is
+limited to 64 bytes. A dedicated database or schema per deployment also works.
+When using a custom schema, set the URL's
 `options` parameter to a URL-encoded `-c search_path=your_schema`.
 No PostgreSQL extension or Python database extra is required: the driver is
 part of the Rust binding (`ragfs/postgres` for standalone Rust consumers).
@@ -224,12 +237,11 @@ Git when the index is unavailable. A write transaction that times out before
 commit is rolled back.
 Increase `operation_timeout_ms` if normal index operations exceed the default.
 
-Each account/branch append is serialized with a transaction advisory lock,
+Each service/account/branch append is serialized with a transaction advisory lock,
 including the first append to an empty index. All rows are committed atomically
 only when the latest indexed commit matches the expected parent.
-Path indexes use `md5(path)` to stay within PostgreSQL B-tree width limits;
-queries also check the original path. A digest collision for the same commit
-rejects the append rather than silently dropping a path.
+Path indexes use the complete path for lookups and uniqueness.
+PostgreSQL indexes branches up to 128 bytes and paths up to 2048 bytes.
 Switching providers does not copy an existing index. Path queries trigger
 background backfill from Git history when needed. An unavailable database or
 missing schema disables the index for that service instance at startup and

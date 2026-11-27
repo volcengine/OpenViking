@@ -24,6 +24,7 @@ class AccountEmbeddingCredential(BaseModel):
     api_version: Optional[str] = RuntimeField(default=None)
     ak: Optional[str] = RuntimeField(default=None)
     sk: Optional[str] = RuntimeField(default=None)
+    session_token: Optional[str] = RuntimeField(default=None)
     region: Optional[str] = RuntimeField(default=None)
     host: Optional[str] = RuntimeField(default=None)
     extra_headers: Optional[Dict[str, str]] = RuntimeField(default=None)
@@ -63,6 +64,7 @@ class AccountEmbeddingModelConfig(BaseModel):
                 "api_version": credential.api_version,
                 "ak": credential.ak,
                 "sk": credential.sk,
+                "session_token": credential.session_token,
                 "region": credential.region,
                 "host": credential.host,
             }
@@ -121,6 +123,8 @@ class AccountVolcengineVectorConfig(BaseModel):
     session_token: Optional[str] = RuntimeField(default=None, dynamic=False)
     region: Optional[str] = RuntimeField(default=None, dynamic=False)
     host: Optional[str] = RuntimeField(default=None, dynamic=False)
+    console_host: Optional[str] = RuntimeField(default=None, dynamic=False)
+    data_host: Optional[str] = RuntimeField(default=None, dynamic=False)
 
 
 class AccountVikingDBVectorConfig(BaseModel):

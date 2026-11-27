@@ -1,6 +1,5 @@
 export default {
   schedule: {
-    lastRunFailed: '上次编译失败，请查看技术详情。',
     listDescription:
       '直接开启、关闭自动更新，或调整执行时间。计划统一使用北京时间（Asia/Shanghai）。',
     autoUpdate: '自动更新',
@@ -24,9 +23,14 @@ export default {
     noSchedule: '未配置定时计划',
     nextRun: '下次执行',
     notScheduled: '暂无计划',
-    execution: '执行状态',
-    running: '运行中',
-    idle: '空闲',
+    lastRun: '上次执行',
+    neverRun: '尚未执行',
+    name: '计划名称',
+    nameHint:
+      '用于标识此计划。可使用字母、数字、汉字、下划线或连字符（不能以连字符开头）；最长 64 个字符，含汉字时最长 32 个。',
+    nameRequired: '请输入计划名称。',
+    nameInvalid:
+      '只能使用字母、数字、汉字、下划线或连字符，不能以连字符开头，且不超过长度限制。',
     tasksTab: '执行记录',
     plansTab: '定时计划',
     enabled: '定时自动更新',

@@ -798,7 +798,7 @@ memory 目录 L0/L1 分别要求有效且非空的 `.abstract.md`/`.overview.md`
 
 resource/skill 的两种模式共用一次正式内容扫描和一次轻量向量记录读取。每个来源只读取一次，并在后续处理中复用。`force=true` 会跳过指纹相等判断并重新处理范围内全部可用 level；完整性检查仍然执行。
 
-对 resource/skill 目录设置 `recursive=false` 时，两种模式都只处理目标目录自身的 L0/L1。直接子项只用于聚合目标目录，不会被扫描或重建。namespace 容器自身没有索引记录，因此 namespace 目标不接受 `recursive=false`，避免请求静默成为 no-op。memory 仍使用原有 reindex 链路。
+对 resource/skill 目录设置 `recursive=false` 时，两种模式都只处理目标目录自身的 L0/L1。直接子项只用于聚合目标目录，不会被扫描或重建。namespace 重建按子树执行，使用目录中已有的摘要和概览补建命名空间根目录的 L0/L1，并要求 `recursive=true`。memory 仍使用原有 reindex 链路。
 
 传入非空 `tags` 时，标签会随 reindex 生成的向量记录在同一次写入中保存，不会在完成后额外调用 `set_tags`。目录或 namespace reindex 会把标签应用到本次成功重建的目录 L0/L1 和叶子 L2 记录。`replace` 覆盖已有标签，`append` 按 key 合并；`replace` 配合空数组时不修改已有标签。`clear` 不要求传 `tags`，会清空已有标签；即使同时传入标签值也会忽略。
 

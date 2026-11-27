@@ -243,6 +243,27 @@ The profile block is built at session start and added to pi's system prompt on e
 
 Bypass now runs through the same matcher every other OpenViking harness uses, so the patterns are real globs: `*` stops at a path separator and `**` crosses them. A bare path used to match its subdirectories as a prefix, and no longer does — write `"/tmp/scratch**"` where `"/tmp/scratch"` used to be enough.
 
+### Secret sealing
+
+| Field                    | Default    | Description                                                              |
+|--------------------------|------------|--------------------------------------------------------------------------|
+| `sealSecrets`            | `false`    | Keep secrets the OpenViking server knows out of what the model sees, and give tools the real values. Env: `OPENVIKING_SEAL_SECRETS` |
+| `enrollToolSecrets`      | `false`    | With `sealSecrets` on, also store new secrets found in tool results (not only in what you type). Env: `OPENVIKING_ENROLL_TOOL_SECRETS` |
+
+None has a workspace key, so a repository's committed `.openviking/config.json` cannot turn them off; set them in `ovcli.conf`'s `plugin.pi` (or `plugin`) section or through the environment. Sealing needs OpenViking server 0.5.7 or newer (a development build such as `0.5.7.dev44` counts as 0.5.7): on the first hook that needs it, the extension reads the server's version from `/health` once for the session and compares it with the feature table it ships (`shared/server-features.json`).
+
+With `sealSecrets` on, the extension calls the server at three points:
+
+- **What you type** (`input`): registered secrets are replaced with their references (`{{ov_privacy:…}}`), and tokens the server's detector recognises are stored under `viking://~/privacy/auto/…` and replaced too. pi stores and sends the sealed text. When a new secret was stored this way, the model gets a note for that turn telling it to save the secret under a proper name. Empty input is left alone; text starting with `/` is sealed as well, because everything that reaches `input` (skill and template arguments included) goes to the model. When sealing cannot be done, the message is not sent and you are told why.
+- **Tool results** (`tool_result`): every text block, the persisted `details` and `structuredContent` are sealed (with `enroll` only when `enrollToolSecrets` is on); images are left as they are. When sealing cannot be done, the result is replaced with a short "withheld" text and marked as an error, so the model never sees the original.
+- **Tool arguments** (`tool_call`): a reference the model wrote is replaced with the real value for the tool that runs, after the server resolved it and a round trip through the seal endpoint gave the same reference back. pi keeps what the model wrote in the session. OpenViking's own tools (`openviking_*`), agent-spawning tools (`subagent`, `agent`) and any string containing an `ov privacy` command get the references as written. A reference the server does not know is left as it is; any other failure blocks the call with a reason.
+
+Sealing cannot be done when the server is older than 0.5.7, its `/health` fails (the version is unknown), or a seal or resolve call fails (unreachable, an error, a bad answer, a timeout). Each of these stops at the points above. The message pi shows names the reason (for a version, the required and the actual one) and what to do: upgrade or reach the server, or turn `sealSecrets` off. To a server that is too old or whose version is unknown, no seal or resolve call is made at all. The version is read again for the next message, so sealing resumes once the server can seal.
+
+The model is also told, in the system prompt of every turn, how references work. The session file holds references, not the values.
+
+Not covered, because it reaches the model without passing these events: the system prompt and context files (`AGENTS.md`), the text of skills and prompt templates (`/skill:…`, `/template` expand after `input`), recall blocks injected from OpenViking, compaction and branch summaries pi asks the model for, and history written before sealing was turned on. A bypassed directory does no sealing either. A tool this extension did not register counts as OpenViking's only when its name contains `openviking`, so an OpenViking MCP server bridged in under another name gets the values in place of the references in its arguments.
+
 ## Architecture
 
 ```
@@ -277,8 +298,11 @@ When the model calls `openviking_session_history` without `session`, the extensi
 | Pi Event               | Extension Action                                                                 |
 |------------------------|----------------------------------------------------------------------------------|
 | `session_start`        | Health check → derive OV session → build profile context → restore takeover state |
-| `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall              |
+| `input`                | With `sealSecrets`: seal the typed text; stop it when sealing fails              |
+| `before_agent_start`   | Idempotent startup for `pi -c` + queue the current prompt for recall; with `sealSecrets`, add the sealing paragraph and the turn's enrollment note |
 | `context`              | Run current-prompt recall after UI rendering, then inject takeover and recall context |
+| `tool_call`            | URI guard, then with `sealSecrets`: put the real values in for references         |
+| `tool_result`          | With `sealSecrets`: seal the result (or withhold it), then the viking:// notice   |
 | `turn_end`             | Extract branch entries → write or pending-queue OV messages → maybe advance boundary |
 | `session_before_compact`| Takeover mode returns OV overview as pi compaction summary; otherwise commits pending messages unless `autoCommitOnCompact` is `false` |
 | `session_shutdown`     | Persist takeover state or final non-takeover commit                              |
@@ -407,6 +431,7 @@ pi-coding-agent-extension/
 ├── lib/mcp-result.mjs   # pi content conversion and output limit
 ├── lib/takeover-core.mjs # Pure context-takeover state machine
 ├── lib/recall-ledger.mjs # Injected recall blocks, replayed to keep prompt caches warm
+├── lib/seal-adapter.mjs # Secret sealing on input, tool_call and tool_result (shared/seal-core.mjs)
 ├── index.ts             # Extension entry point (event handlers + /viking command)
 ├── scripts/ov-memory-doctor.mjs # Client-side doctor (install, config, connection)
 ├── skills/              # generated by memory-plugin-shared/sync.mjs

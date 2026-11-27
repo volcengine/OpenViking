@@ -140,12 +140,10 @@ viking://user/{user_id}/peers/{peer_id}/resources/
 ```
 viking://agent/skills/search-web                    # 某个技能定义
 viking://agent/skills/                              # 所有技能定义
-viking://agent/endpoints/                           # 通信端点（a2a, anp 等）（规划中）
-viking://agent/tools/mcp/                           # MCP 工具配置（规划中）
-viking://agent/payments/ap2/                        # 支付配置（规划中）
+viking://agent/tools/                               # 共享的 MCP 工具定义
 ```
 
-`viking://agent/...` 是 account 内公共能力与配置目录，可包含 skills、endpoints、tools、payments 等子目录。
+`viking://agent/...` 是账号内共享的能力与配置目录，预设 `skills` 和 `tools` 两个子目录。
 目录名不表示 Agent 身份，`actor_peer_id` 不过滤该目录；共享范围限于当前账号。
 Peer 数据使用 `viking://user/<user_id>/peers/<peer_id>/...`。
 

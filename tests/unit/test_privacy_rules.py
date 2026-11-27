@@ -10,10 +10,13 @@ from openviking.privacy.sanitizer import (
     DEFAULT_SANITIZER_MAX_CONTENT_BYTES,
     DEFAULT_SANITIZER_MAX_REPLACEMENTS,
 )
+from openviking.server.api_keys.key_mgr import generate_api_key
 from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError
 
 SECRET = "AKLT" + "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+BODY = "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"
+HEX = "0a1b2c3d4e5f60718293a4b5c6d7e8f9"
 
 
 def test_unicode_spans_preserve_markdown_and_existing_references():
@@ -40,6 +43,47 @@ def test_unicode_spans_preserve_markdown_and_existing_references():
 )
 def test_business_values_code_and_masked_examples_are_not_credentials(content):
     assert find_privacy_matches(content) == []
+
+
+@pytest.mark.parametrize(
+    ("detector_id", "value"),
+    [
+        ("openviking_root_key", "ovrk_" + HEX + HEX),
+        ("openviking_gateway_key", "ovgw_" + BODY + BODY[:11]),
+        ("openviking_oauth_token", "ovat_" + BODY + BODY[:22]),
+        ("sk_hex32", "sk-" + HEX),
+        ("telegram_bot_token", "bot1234567890:A" + BODY + BODY[:2]),
+        ("groq-api-key", "gsk_" + BODY + BODY[:20]),
+        ("gitlab-pat", "glpat-" + BODY[:20]),
+    ],
+)
+def test_openviking_and_provider_tokens_are_detected_in_context(detector_id, value):
+    content = f'curl -H "Authorization: Bearer {value}" "https://example.test/v1?key={value}&m=1"'
+    matches = find_privacy_matches(content)
+    assert [(content[m.start : m.end], m.detector_id) for m in matches] == [
+        (value, detector_id)
+    ] * 2
+    assert is_sensitive_value(value)
+
+
+def test_text_in_other_scripts_does_not_hide_an_adjacent_token():
+    content = f"我的key是{SECRET}请保存，另一个是{SECRET}。"
+    matches = find_privacy_matches(content)
+    assert [content[m.start : m.end] for m in matches] == [SECRET, SECRET]
+    assert find_privacy_matches(f"x{SECRET}") == []
+
+
+@pytest.mark.parametrize(
+    ("account_id", "user_id"),
+    [("default", "default"), ("acme", "alice@example.com"), ("a-b_c.d", "u" * 64)],
+)
+def test_generated_user_keys_match_the_built_in_format(account_id, user_id):
+    for seed in (None, "seed"):
+        key = generate_api_key(account_id, user_id, seed=seed)
+        content = f"X-API-Key: {key}\nexport OPENVIKING_API_KEY='{key}'"
+        matches = find_privacy_matches(content)
+        assert [content[m.start : m.end] for m in matches] == [key, key]
+        assert {m.detector_id for m in matches} == {"openviking_api_key"}
 
 
 @pytest.mark.parametrize("unit", ["x", "中", "🙂"])

@@ -169,15 +169,21 @@ provider 取值：
 | Provider | 适用场景 |
 | --- | --- |
 | `sqlite` | 单机部署。默认数据库位于 `{storage.workspace}/_system/snapshot/log/snapshot_log.db`；如需覆盖，设置绝对路径 `git.snapshot.log.sqlite.path` |
-| `mysql` | 多实例部署。DSN 从 `git.snapshot.log.mysql.dsn_env` 指定的环境变量读取 |
+| `mysql` | 多实例部署。先建表，DSN 从 `git.snapshot.log.mysql.dsn_env` 指定的环境变量读取 |
 | `postgres` | 多实例部署。先建表，再配置 `git.snapshot.log.postgres.dsn_env` |
 | `none` | 关闭索引，保留原有历史扫描逻辑 |
 
-MySQL 示例：
+MySQL 部署时，由具备 DDL 权限的部署角色一次性建表：
 
 ```bash
+mysql "$OPENVIKING_SNAPSHOT_LOG_ADMIN_DSN" \
+  < openviking/service/sql/snapshot_log_mysql_init.sql
 export OPENVIKING_SNAPSHOT_LOG_DSN='mysql://user:password@host:3306/openviking'
 ```
+
+运行时不会创建或迁移 MySQL 表。运行账号只需要 `snapshot_log` 的 `SELECT`、`INSERT`
+权限，DDL 和 DML 权限可以分离。每行都带顶层 `service_name`，唯一键和全部索引都以它为
+前缀，因此多个 OV 部署可以共用同一个数据库而不串扰；每个部署使用独立库也仍然可行。
 
 PostgreSQL（14+）部署时，由管理员或 migration role 一次性建表：
 
@@ -207,7 +213,11 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 
 运行时不会创建或迁移 PostgreSQL 表。运行账号只需 `snapshot_log` 的
 `SELECT`、`INSERT` 权限，以及 identity sequence 的 `USAGE` 权限。
-不同 OV 部署应使用独立数据库或 schema；同一索引内按账号、分支隔离。
+部署前使用提供的 DDL 建表。
+记录、索引和追加锁都按顶层 `service_name` 隔离，多个部署可以共用数据库或 schema。
+同一部署的副本使用相同名称，不同部署使用不同名称。
+`service_name` 允许 1–64 个 ASCII 字母、数字、`.`、`_` 或 `-`；`account` 上限为 64 字节。
+每个部署使用独立数据库或 schema 也仍然可行。
 自定义 schema 可通过连接 URL 的 `options` 参数指定
 `-c search_path=your_schema`，参数值需要 URL 编码。
 
@@ -219,10 +229,10 @@ PostgreSQL 索引操作有执行期限，连接同时设置 `statement_timeout` 
 无需安装 PostgreSQL 扩展或 Python 数据库 extra，驱动由 Rust binding 提供；
 独立 Rust 接入需启用 `ragfs/postgres` feature。
 
-同一账号、分支的索引追加使用事务 advisory lock 串行化，包括空索引的首次写入。
+同一服务、账号、分支的索引追加使用事务 advisory lock 串行化，包括空索引的首次写入。
 仅当最新索引提交等于预期父提交时，整批路径记录才会原子提交。
-路径索引使用 `md5(path)` 避免超过 PostgreSQL B-tree 键宽限制，
-查询同时校验原始路径；同一提交发生摘要冲突时会拒绝整批追加，不会静默丢失路径。
+路径索引使用完整路径查询和保证唯一性。
+PostgreSQL 索引的分支上限为 128 字节，路径上限为 2048 字节。
 切换 provider 不会复制旧索引，按路径查询会在需要时触发从 Git 历史后台回填。
 启动时数据库不可用或缺少表，会为该实例关闭索引并回退到历史扫描；
 恢复后需重启实例。回退扫描仍受 1000 个候选提交上限约束。

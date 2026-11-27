@@ -76,6 +76,18 @@ export const ASSEMBLED_ROOTS = [
 
 export const GENERATED_HEADER = "// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.\n";
 
+// A data file a module reads beside itself (`new URL("./x.json",
+// import.meta.url)`) is part of that module's closure like an import, but its
+// copies are byte-identical: JSON cannot carry the generated-file header.
+export const DATA_EXTENSION = ".json";
+
+// Copies of lib/ data files outside the plugins: the gateway reads the server
+// feature table from its own package, so both sides answer from one source.
+// Each copy is committed; CI fails a pull request whose copy differs.
+export const DATA_TARGETS = [
+  { file: "server-features.json", dir: join(ROOT, "openviking_gateway") },
+];
+
 // Skills are copied verbatim — a generated-from banner ahead of the `---`
 // frontmatter would break every skill loader.
 //
@@ -284,11 +296,12 @@ const SKIPPED_DIRS = new Set(["node_modules", ".git", "dist", "coverage"]);
 const STATIC_IMPORT_RE = /(?:^|[\s;(=])(?:import|export)\b[^;'"]*?from\s*["']([^"']+)["']/g;
 const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
 const SIDE_EFFECT_IMPORT_RE = /(?:^|[\s;])import\s*["']([^"']+)["']/g;
+const DATA_FILE_RE = /\bnew\s+URL\s*\(\s*["'](\.\/[^"']+\.json)["']\s*,\s*import\.meta\.url\s*\)/g;
 
-/** Every module specifier a source file names, in any of the three forms. */
+/** Every module specifier a source file names, in any of the three forms, and the data files it reads beside itself. */
 export function importSpecifiers(source) {
   const found = [];
-  for (const re of [STATIC_IMPORT_RE, DYNAMIC_IMPORT_RE, SIDE_EFFECT_IMPORT_RE]) {
+  for (const re of [STATIC_IMPORT_RE, DYNAMIC_IMPORT_RE, SIDE_EFFECT_IMPORT_RE, DATA_FILE_RE]) {
     for (const match of source.matchAll(re)) found.push(match[1]);
   }
   return found;
@@ -439,7 +452,8 @@ export async function resolveTargets() {
  */
 async function copySharedFile(file, targetDir, typed) {
   await mkdir(targetDir, { recursive: true });
-  const names = typed ? [file, `${file.slice(0, -4)}.d.mts`] : [file];
+  const data = file.endsWith(DATA_EXTENSION);
+  const names = typed && !data ? [file, `${file.slice(0, -4)}.d.mts`] : [file];
   for (const name of names) {
     const body = await readFile(join(SHARED_DIR, name), "utf-8").catch(() => null);
     if (body === null) continue;
@@ -448,7 +462,7 @@ async function copySharedFile(file, targetDir, typed) {
     // test is byte-comparing the copies.
     const target = join(targetDir, name);
     const staging = `${target}.${process.pid}.tmp`;
-    await writeFile(staging, `${GENERATED_HEADER}${body}`, "utf-8");
+    await writeFile(staging, data ? body : `${GENERATED_HEADER}${body}`, "utf-8");
     await rename(staging, target);
   }
 }
@@ -477,6 +491,11 @@ async function copySkill(skill, targetDir) {
 async function staleCopies(target, keep) {
   const stale = [];
   for (const name of (await readdir(target.dir).catch(() => [])).sort()) {
+    if (name.endsWith(DATA_EXTENSION)) {
+      // No banner to tell a copy by: one named after a lib/ data file is ours.
+      if (!keep.includes(name) && (await exists(join(SHARED_DIR, name)))) stale.push(name);
+      continue;
+    }
     const module = name.endsWith(".d.mts") ? `${name.slice(0, -6)}.mjs` : name;
     if (!module.endsWith(".mjs") || keep.includes(module)) continue;
     const body = await readFile(join(target.dir, name), "utf-8");
@@ -508,6 +527,11 @@ async function main() {
     .sort();
   for (const file of unclaimed) {
     process.stdout.write(`unused lib/${file} — no target imports it\n`);
+  }
+
+  for (const { file, dir } of DATA_TARGETS) {
+    await copySharedFile(file, dir, false);
+    process.stdout.write(`synced ${file} -> ${relative(ROOT, dir)}\n`);
   }
 
   for (const { skill, dir } of SKILL_TARGETS) {

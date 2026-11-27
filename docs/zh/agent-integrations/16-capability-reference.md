@@ -163,7 +163,7 @@ OpenClaw 注册自己的工具，不转发 MCP 工具。
 无论删除来自哪个工具或命令，服务端都做同样的检查：
 
 - 调用方需要对该 URI 有 manage 权限；正在被删除的用户会被拒绝。
-- `viking://`、`viking://user` 和 `viking://agent` 不能删除。删除 `viking://resources` 或整个用户根（如 `viking://user/<id>`）需要 ROOT 角色。非 root 调用方不能写 `viking://temp` 根。
+- `viking://` 和 `viking://user` 不能删除。删除 `viking://resources`、`viking://agent` 或整个用户根（如 `viking://user/<id>`）需要 ROOT 角色。非 root 调用方不能写 `viking://temp` 根。
 - 调用方的 actor-peer 视图中不可见的 URI 会被拒绝。
 
 这些检查保护的是命名空间，不区分内容类型。按类型的限制来自客户端：

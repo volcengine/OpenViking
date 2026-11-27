@@ -431,6 +431,31 @@ def _compute_delay(
     return delay
 
 
+def _retry_delay(
+    error: BaseException,
+    attempt: int,
+    *,
+    base_delay: float,
+    max_delay: float,
+    jitter: bool,
+) -> float:
+    """Pick the backoff to wait before the next attempt.
+
+    Rate-limit errors use the dedicated LLM backoff (5s -> 120s). The generic
+    backoff (0.5s -> 8s by default) is short enough to keep a provider's
+    limiter saturated: the retries themselves consume the quota, so the limit
+    window never recovers and the work unit fails with the raw 429.
+    """
+    if is_retryable_rate_limit_error(error):
+        return rate_limit_retry_delay(attempt + 1)
+    return _compute_delay(
+        attempt,
+        base_delay=base_delay,
+        max_delay=max_delay,
+        jitter=jitter,
+    )
+
+
 def _retry_limit(
     error: Exception,
     *,
@@ -481,7 +506,8 @@ def retry_sync(
             if attempt >= retry_limit:
                 raise
 
-            delay = _compute_delay(
+            delay = _retry_delay(
+                e,
                 attempt,
                 base_delay=base_delay,
                 max_delay=max_delay,
@@ -529,7 +555,8 @@ async def retry_async(
             if attempt >= retry_limit:
                 raise
 
-            delay = _compute_delay(
+            delay = _retry_delay(
+                e,
                 attempt,
                 base_delay=base_delay,
                 max_delay=max_delay,

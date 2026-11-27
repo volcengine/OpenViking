@@ -2088,7 +2088,7 @@ def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | No
     if existing_key:
         key_options.append(("Keep existing key", f"({_mask_secret(existing_key)})"))
     key_options.append(
-        ("Generate one for me", "(recommended — 64-char random key, shown once below)")
+        ("Generate one for me", "(recommended — random ovrk_ key, shown once below)")
     )
     key_options.append(("Enter my own", ""))
 
@@ -2098,7 +2098,8 @@ def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | No
     if existing_key and key_source == 1:
         root_api_key = existing_key
     elif key_source == 1 + offset:
-        root_api_key = secrets.token_hex(32)
+        # The prefix makes the key a recognizable format for privacy detection.
+        root_api_key = "ovrk_" + secrets.token_hex(32)
         print(f"\n  {_green('Generated root API key — copy it now, clients need it:')}")
         print(f"\n    {_bold(root_api_key)}\n")
         print(f"  {_dim('It is also saved in ov.conf (server.root_api_key).')}")

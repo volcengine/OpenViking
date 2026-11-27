@@ -27,10 +27,13 @@ import numpy as np
 BENCHMARK_DIR = Path(__file__).resolve().parent
 if str(BENCHMARK_DIR) not in sys.path:
     sys.path.insert(0, str(BENCHMARK_DIR))
+if not __package__:
+    sys.path.insert(0, str(BENCHMARK_DIR.parents[1]))
 
 from run_collection_benchmark import parse_positive_int_list  # noqa: E402
 from run_index_benchmark import percentile, prepare_dataset, runtime_metadata  # noqa: E402
 
+from benchmark.vector_config import BenchmarkVectorConfigResolver  # noqa: E402
 from openviking.server.identity import RequestContext, Role  # noqa: E402
 from openviking.storage.viking_vector_index_backend import (  # noqa: E402
     VikingVectorIndexBackend,
@@ -52,18 +55,21 @@ def collection_schema(collection_name: str, dimension: int) -> dict[str, Any]:
             {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
             {"FieldName": "vector", "FieldType": "vector", "Dim": dimension},
             {"FieldName": "account_id", "FieldType": "string"},
+            {"FieldName": "uri", "FieldType": "path"},
             {"FieldName": "uniform_bucket", "FieldType": "int64"},
             {"FieldName": "row_number", "FieldType": "int64"},
         ],
-        "ScalarIndex": ["account_id", "uniform_bucket", "row_number"],
+        "ScalarIndex": ["account_id", "uri", "uniform_bucket", "row_number"],
     }
 
 
 def make_record(row_index: int, vector: Sequence[float]) -> dict[str, Any]:
+    record_id = f"record-{row_index}"
     return {
-        "id": f"record-{row_index}",
+        "id": record_id,
         "vector": list(vector),
         "account_id": ACCOUNT_ID,
+        "uri": f"viking://resources/bench/cuvs-service/{record_id}",
         "uniform_bucket": row_index % 1000,
         "row_number": row_index,
     }
@@ -401,6 +407,7 @@ async def run_backend(
     )
     manager = VikingVectorIndexBackend(config)
     ctx = RequestContext(user=UserIdentifier(ACCOUNT_ID, "user"), role=Role.USER)
+    manager.set_vector_config_resolver(BenchmarkVectorConfigResolver(ctx.account_id, config))
     try:
         created = await manager.create_collection(
             collection_name,

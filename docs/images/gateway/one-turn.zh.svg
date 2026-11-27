@@ -117,9 +117,9 @@
 <text x="355" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">消息 1</text>
 <rect x="402" y="738" width="86" height="44" rx="4" fill="#FFFFFF" stroke="#8F959E" stroke-width="1.5" stroke-dasharray="5 4"/>
 <text x="445" y="765" font-size="14" font-weight="400" fill="#8F959E" text-anchor="middle">无</text>
-<rect x="492" y="738" width="86" height="44" rx="4" fill="#E3F5E1" stroke="#2EA121" stroke-width="1.5"/>
+<rect x="492" y="738" width="86" height="44" rx="4" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
 <text x="535" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">回复 1</text>
-<rect x="582" y="738" width="86" height="44" rx="4" fill="#E3F5E1" stroke="#2EA121" stroke-width="1.5"/>
+<rect x="582" y="738" width="86" height="44" rx="4" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
 <text x="625" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">消息 2</text>
 <rect x="672" y="738" width="86" height="44" rx="4" fill="#FFFFFF" stroke="#F54A45" stroke-width="1.5" stroke-dasharray="5 4"/>
 <text x="715" y="765" font-size="14" font-weight="400" fill="#F54A45" text-anchor="middle">缺失</text>
@@ -129,14 +129,14 @@
 <text x="905" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">新消息 3</text>
 <rect x="962" y="738" width="96" height="44" rx="4" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
 <text x="1010" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">本轮召回</text>
-<line x1="192" y1="728" x2="668" y2="728" stroke="#2EA121" stroke-width="1.5"/>
+<line x1="192" y1="728" x2="398" y2="728" stroke="#2EA121" stroke-width="1.5"/>
 <line x1="192" y1="728" x2="192" y2="734" stroke="#2EA121" stroke-width="1.5"/>
-<line x1="668" y1="728" x2="668" y2="734" stroke="#2EA121" stroke-width="1.5"/>
-<text x="430" y="721" font-size="14" font-weight="700" fill="#2EA121" text-anchor="middle">和上一轮相同，命中</text>
-<line x1="672" y1="728" x2="1058" y2="728" stroke="#F54A45" stroke-width="1.5"/>
-<line x1="672" y1="728" x2="672" y2="734" stroke="#F54A45" stroke-width="1.5"/>
+<line x1="398" y1="728" x2="398" y2="734" stroke="#2EA121" stroke-width="1.5"/>
+<text x="295" y="721" font-size="14" font-weight="700" fill="#2EA121" text-anchor="middle">和上一轮相同，命中</text>
+<line x1="402" y1="728" x2="1058" y2="728" stroke="#F54A45" stroke-width="1.5"/>
+<line x1="402" y1="728" x2="402" y2="734" stroke="#F54A45" stroke-width="1.5"/>
 <line x1="1058" y1="728" x2="1058" y2="734" stroke="#F54A45" stroke-width="1.5"/>
-<text x="865" y="721" font-size="14" font-weight="700" fill="#F54A45" text-anchor="middle">从上一轮补充记忆的位置起按原价重算</text>
+<text x="730" y="721" font-size="14" font-weight="700" fill="#F54A45" text-anchor="middle">从缺失记忆的位置起，后面全部按原价重算</text>
 <rect x="1100" y="652" width="26" height="18" rx="3" fill="#EDE6FF" stroke="#2EA121" stroke-width="1.5"/>
 <text x="1136" y="667" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">网关补充的记忆</text>
 <rect x="1100" y="682" width="26" height="18" rx="3" fill="#E3F5E1" stroke="#2EA121" stroke-width="1.5"/>
@@ -146,7 +146,7 @@
 <rect x="1100" y="742" width="26" height="18" rx="3" fill="#FFFFFF" stroke="#8F959E" stroke-width="1.5"/>
 <text x="1136" y="757" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">本轮新内容</text>
 <text x="40" y="812" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">客户端的历史里没有网关补充的内容，网关自己记下，并在每个请求里放回原位。</text>
-<text x="40" y="832" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">不放回时，每轮都从上一轮补充记忆的位置起重算，具体还取决于服务商的缓存断点。</text>
+<text x="40" y="832" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">不放回时，前缀在记忆 A 本该出现的位置断开，后面的内容全部按原价重算；具体还取决于服务商的缓存断点。</text>
 <rect x="40" y="856" width="760" height="180" rx="12" fill="#F7F3FF" stroke="#7F3BF5" stroke-width="1.5"/>
 <text x="62" y="888" font-size="17" font-weight="700" fill="#1F2329" text-anchor="start">跨轮：保存对话，提取记忆</text>
 <rect x="62" y="904" width="159.5" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>

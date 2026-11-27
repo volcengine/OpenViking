@@ -27,6 +27,8 @@ import { createMcpBridge, DEFAULT_HANDSHAKE_BUDGET_MS } from "./lib/mcp-bridge.m
 import { registerMcpTools, TOOL_NAME_PREFIX } from "./tools.js";
 import { createTakeoverManager } from "./takeover.js";
 import { HANDLER_BUDGET_MS, describeSkip } from "./lib/takeover-core.mjs";
+import { createSealHandlers, createSealPost } from "./lib/seal-adapter.mjs";
+import { featureStatus, healthVersion } from "./shared/server-features.mjs";
 
 /** This extension's directory, published for the experimental fork's probe. */
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
@@ -83,6 +85,24 @@ export default async function (pi: ExtensionAPI) {
       // No "memory" in the name: every plugin identity is moving to plain
       // `openviking`, and a new identifier starts out on the new spelling.
       clientInfo: { name: "openviking-pi", version: EXTENSION_VERSION },
+    })
+    : null;
+
+  // Plugin-side sealing (`sealSecrets`). Whether the server supports it is read
+  // from its own /health on the first hook that needs it, and again while it
+  // cannot seal. When sealing
+  // cannot be done the traffic is stopped. A bypassed directory does not touch
+  // OpenViking at all, sealing included.
+  const seal = (config as any).sealSecrets === true && !isBypassed(config, { cwd })
+    ? createSealHandlers({
+      post: createSealPost((path, init, options) => client.fetchJSON(path, init, options)),
+      enrollToolSecrets: (config as any).enrollToolSecrets === true,
+      check: async () => featureStatus(
+        "privacy_seal",
+        await healthVersion((path, init, options) => client.fetchJSON(path, init, options)),
+      ),
+      ownToolNames: () => toolNames,
+      tell: tellUser,
     })
     : null;
 
@@ -329,6 +349,13 @@ export default async function (pi: ExtensionAPI) {
     };
   });
 
+  // --- sealing: input, and the session text and note of each run ---
+  // After the handler above, so the session text follows the profile block.
+  if (seal) {
+    pi.on("input", async (event, ctx) => seal.onInput(event, ctx));
+    pi.on("before_agent_start", async (event, _ctx) => seal.onBeforeAgentStart(event));
+  }
+
   // --- context ---
   pi.on("context", async (event, ctx) => {
     if (!connected || bypassed) return;
@@ -392,13 +419,19 @@ export default async function (pi: ExtensionAPI) {
   });
 
   // --- tool_call ---
+  // The URI guard first, so it judges what the model wrote; then sealing puts
+  // the real values in for the references, in place.
   pi.on("tool_call", async (event, _ctx) => {
     const decision = guardVikingUriToolCall(event);
     if (!decision) return;
     return decision;
   });
+  if (seal) pi.on("tool_call", async (event, _ctx) => seal.onToolCall(event));
 
   // --- tool_result ---
+  // Sealing first, so the notice below is added to the sealed result and is
+  // kept even when the result had to be withheld.
+  if (seal) pi.on("tool_result", async (event, _ctx) => seal.onToolResult(event));
   pi.on("tool_result", async (event, _ctx) => {
     const notice = noticeVikingUriToolResult(event);
     if (!notice) return;
@@ -599,6 +632,18 @@ async function fetchArchiveOverview(
   } catch {
     return "";
   }
+}
+
+/**
+ * Reach the user when sealing stops something. A notification in the TUI,
+ * stderr in print and JSON modes, where pi's notifications do nothing.
+ */
+function tellUser(ctx: any, message: string): void {
+  if (ctx?.hasUI) {
+    ctx.ui.notify(message, "error");
+    return;
+  }
+  process.stderr.write(`${message}\n`);
 }
 
 /**
