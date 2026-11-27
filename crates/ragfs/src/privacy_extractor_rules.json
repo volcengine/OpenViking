@@ -244,46 +244,6 @@
         ["0a1b2c3d4e5f60718293a4b5c6d7e8f9", ".", "aB3dE5gH7jK9mN2pQ4sT6vW8"],
         ["0A1B2C3D4E5F60718293A4B5C6D7E8F9", ".", "aB3dE5gH7jK9mN2p"]
       ]
-    },
-    {
-      "id": "alibaba_access_key_id",
-      "pattern": "LTAI[A-Za-z0-9]{17,21}",
-      "reject_repeated": true,
-      "positive": [
-        ["LTAI", "aB3dE5gH7jK9mN2pQ"],
-        ["LTAI", "aB3dE5gH7jK9mN2pQ4sT"]
-      ],
-      "negative": [
-        ["LTAI", "aB3dE5gH7jK9mN2p"],
-        ["LTAI", "aB3dE5gH7jK9mN2pQ4sT6v"],
-        ["LTAI", "EXAMPLE", "aB3dE5gH7jK9m"]
-      ]
-    },
-    {
-      "id": "vault",
-      "pattern": "hvs\\.[A-Za-z0-9_-]{90,120}",
-      "reject_repeated": true,
-      "positive": [
-        ["hvs.", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5gH7jK9mN2pQ4sT6vW8yZ"]
-      ],
-      "negative": [
-        ["hvs.", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rU"],
-        ["hvs.", "your-vault-token"]
-      ]
-    },
-    {
-      "id": "telegram_bot_token",
-      "pattern": "(?:bot)?[0-9]{5,16}:A[A-Za-z0-9_-]{34}",
-      "reject_repeated": true,
-      "positive": [
-        ["1234567890:A", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB"],
-        ["bot1234567890:A", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB"]
-      ],
-      "negative": [
-        ["1234:A", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB"],
-        ["1234567890:B", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUaB"],
-        ["1234567890:A", "aB3dE5gH7jK9mN2pQ4sT6vW8yZ0cF1rUa"]
-      ]
     }
   ],
   "reference_pattern": "\\{\\{[ \\t]*ov_privacy:[^{}\\r\\n]+\\}\\}"
