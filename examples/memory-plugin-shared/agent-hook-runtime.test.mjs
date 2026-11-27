@@ -363,6 +363,20 @@ async function stageRun({ raw = "{}", cfg = {}, input = {}, ...rest } = {}, run 
   return { seen, value };
 }
 
+test("an install with no config file and no server in the environment is not configured", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ov-unconfigured-"));
+  const env = { OPENVIKING_CLI_CONFIG_FILE: join(dir, "ovcli.conf"), OPENVIKING_CONFIG_FILE: join(dir, "ov.conf") };
+  try {
+    assert.equal(loadAgentHookConfig("cursor", dir, { env }).configured, false);
+    assert.equal(loadAgentHookConfig("cursor", dir, { env: { ...env, OPENVIKING_URL: "http://127.0.0.1:1" } }).configured, true);
+    assert.equal(loadAgentHookConfig("cursor", dir, { env: { ...env, OPENVIKING_MEMORY_ENABLED: "1" } }).configured, true);
+    writeFileSync(env.OPENVIKING_CLI_CONFIG_FILE, JSON.stringify({ url: "http://127.0.0.1:1" }));
+    assert.equal(loadAgentHookConfig("cursor", dir, { env }).configured, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the hook stage reloads the config for the payload's directory", async () => {
   const stages = [];
   const { seen, value } = await stageRun(

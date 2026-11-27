@@ -113,7 +113,9 @@ async function captureTurns(ctx, state, stateFile) {
   }
 
   let next = state;
-  if (settled > 0) next = { ...next, cursor: decoded.cursorAfter(settled) };
+  // An adopted cursor is stored even when nothing new settled, so the earlier
+  // version's file is read once.
+  if (settled > 0 || legacy !== undefined) next = { ...next, cursor: decoded.cursorAfter(settled) };
   // Every turn the notes could add to is settled, so they have served.
   if (notes.length > 0 && settled > 0 && settled === decoded.turns.length) await clearNotes(stateFile);
   if (boundary || sent > 0) {

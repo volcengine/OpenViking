@@ -30,6 +30,8 @@ export function stableHash(...values) {
     .digest("hex");
 }
 
+const PLUGIN_MANIFEST = new URL("../plugin.json", import.meta.url);
+
 /**
  * The config for one of the thin hook harnesses.
  *
@@ -45,15 +47,28 @@ export function stableHash(...values) {
  * file may not carry connection or credential keys, so the base URL and API key
  * cannot move under a logger or fetch helper already built from the first load.
  */
-export function loadAgentHookConfig(clientId, cwd = process.cwd(), { env = process.env } = {}) {
+export function loadAgentHookConfig(
+  clientId,
+  cwd = process.cwd(),
+  { env = process.env, logFile = "", rootKeyFallback = false } = {},
+) {
+  const config = buildPluginConfig(clientId, {
+    cwd,
+    env,
+    // An installer-written entry names the version it installed; otherwise it
+    // is the plugin's own.
+    version: env.OPENVIKING_INTEGRATION_VERSION,
+    manifestUrl: PLUGIN_MANIFEST,
+    logFile: logFile || `${clientId}-hooks.log`,
+    rootKeyFallback,
+  });
   return {
-    ...buildPluginConfig(clientId, {
-      cwd,
-      env,
-      version: env.OPENVIKING_INTEGRATION_VERSION,
-      logFile: `${clientId}-hooks.log`,
-    }),
+    ...config,
     clientId,
+    // Installed but never set up: no config file and no server named in the
+    // environment. Nothing runs against the default address by accident.
+    configured: Boolean(config.cliPath || config.ovPath || env.OPENVIKING_URL || env.OPENVIKING_BASE_URL)
+      || /^(1|true|yes)$/i.test(String(env.OPENVIKING_MEMORY_ENABLED || "").trim()),
   };
 }
 

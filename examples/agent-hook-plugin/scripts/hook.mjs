@@ -35,7 +35,7 @@ function answer(output = {}, payload = {}) {
 }
 
 async function main() {
-  const cfg = loadAgentHookConfig(host.id);
+  const cfg = loadAgentHookConfig(host.id, undefined, host.config);
   // The write path answers before it works, so the worker is started while
   // stdin is still unread.
   const detach = mayDetach(host, event, cfg);

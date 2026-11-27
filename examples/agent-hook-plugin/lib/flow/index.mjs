@@ -87,7 +87,7 @@ export async function runStage(host, event, payload = {}, { detached = false, cf
 
   const read = host.read(event, payload, { text: transcriptReader(host) }) || {};
   const cwd = read.cwd || resolveAgentCwd(payload);
-  const cfg = given || loadAgentHookConfig(host.id, cwd);
+  const cfg = given || loadAgentHookConfig(host.id, cwd, host.config);
   const { log, logError } = createAgentLogger(host.id, event, cfg);
   const nativeId = nativeSessionId(host, event, payload, read);
   const child = String(read.child || "");
@@ -117,6 +117,7 @@ export async function runStage(host, event, payload = {}, { detached = false, cf
   };
   const skip = read.skip
     || (cfg.enabled === false && "disabled")
+    || (cfg.configured === false && "unconfigured")
     || (isBypassed(cfg, { sessionId: nativeId, cwd }) && "bypass")
     || (child && cfg.skipSubagentSessions && "subagent");
   let output = {};

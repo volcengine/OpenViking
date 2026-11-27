@@ -121,7 +121,7 @@ export interface Output {
 
 /** What an event did, as `observe` is told. */
 export interface Outcome {
-  /** The event was left alone: "disabled", "bypass", "subagent", or the host's own reason. */
+  /** The event was left alone: "disabled", "unconfigured", "bypass", "subagent", or the host's own reason. */
   skip?: string;
   /** The context the event answered with. */
   context?: string;
@@ -163,6 +163,12 @@ export interface Host {
   /** Write events the host gives too little time: detached whatever `writePathAsync` says. */
   detachEvents?: string[];
   facts?: HostFacts;
+  /**
+   * How this host's config differs from the default: the log file's name where
+   * it is not `<id>-hooks.log`, and whether a missing ovcli.conf key falls back
+   * to ov.conf's `server.root_api_key`.
+   */
+  config?: { logFile?: string; rootKeyFallback?: boolean };
   /** Replacement tools and example calls the URI guard names; the shared table when absent. */
   toolHints?: Record<string, { tool: unknown; example: unknown }>;
   read(event: string, payload: Record<string, any>, io: { text(ref: unknown): string | null }): EventRead;
