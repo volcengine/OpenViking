@@ -28,6 +28,8 @@ export interface HostFacts {
   profileAt?: "start" | "firstPrompt";
   /** The host's compaction drops the profile the session started with. */
   compactionDropsProfile?: boolean;
+  /** After a compaction the host no longer hands over the turns before it, so nothing waits for a later capture. */
+  compactionDropsTranscript?: boolean;
   /** "default": the plugin fills session_history's `session`; "explicit": the model must pass it. */
   historySession?: "default" | "explicit";
   /** How the session-history note names the tool, when not the plain MCP name. */
@@ -191,7 +193,7 @@ export interface Host {
   /** The context as this host shows it, where it adds something of its own to what the flow built. */
   present?(ctx: EventContext, context: string): string;
   /** A local recall compressor run through the host's own CLI, or null when it cannot run. */
-  compress?(cfg: Record<string, any>, log: EventContext["log"]): unknown;
+  compress?(cfg: Record<string, any>, log: EventContext["log"], ctx: EventContext): unknown;
   /**
    * Told after every event what it did, for files the host keeps for its own
    * interface (a statusline snapshot, a session binding). It cannot change the

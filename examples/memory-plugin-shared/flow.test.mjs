@@ -148,6 +148,26 @@ test("a compaction and a session end commit what turn ends left uncommitted, onc
     assert.equal(calls("/commit").length, 2);
     assert.equal(calls("/messages/batch").length, 2);
   });
+
+  // A host that no longer hands the turn over after the compaction sends it now.
+  await withFlow(t, {}, async ({ run, say, sentTexts }) => {
+    say("user", "question");
+    say("assistant", "an answer");
+    await run("compact");
+    assert.deepEqual(sentTexts(), ["question", "an answer"]);
+  }, { as: { ...host, facts: { compactionDropsTranscript: true } } });
+});
+
+test("events of one session handed over at once are written in the order they came", async (t) => {
+  await withFlow(t, {}, async ({ run, say, sentTexts }) => {
+    const order = [];
+    for (const text of ["one", "two", "three", "four"]) {
+      say(text === "one" ? "user" : "assistant", text);
+      order.push(run("stop"));
+    }
+    await Promise.all(order);
+    assert.deepEqual(sentTexts(), ["one", "two", "three", "four"]);
+  });
 });
 
 test("a session end waits for the turn end that holds the session lock", async (t) => {
@@ -323,6 +343,13 @@ test("a session opens with the profile, and a resume adds only what the model no
     assert.doesNotMatch(resumed.context, /prefers short answers/);
     assert.match(resumed.context, /earlier: the build was fixed/);
   }, { env: { OPENVIKING_RESUME_ARCHIVE_INJECT: "1" } });
+
+  // Where a start cannot reach the model, the overview waits for the first prompt.
+  await withFlow(t, answers, async ({ run }) => {
+    assert.deepEqual(await run("start", { source: "resume" }), {});
+    assert.match((await run("prompt", { prompt: "where were we with the build?" })).context, /earlier: the build was fixed/);
+    assert.doesNotMatch((await run("prompt", { prompt: "and what about the tests then?" })).context || "", /earlier: the build/);
+  }, { as: { ...host, facts: { profileAt: "firstPrompt" } }, env: { OPENVIKING_RESUME_ARCHIVE_INJECT: "1", OPENVIKING_AUTO_RECALL: "0" } });
 });
 
 test("the host is told what each event did", async (t) => {

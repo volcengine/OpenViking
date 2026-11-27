@@ -51,6 +51,7 @@ export function deferContext(ctx, state) {
   const pointer = pointerEnabled(ctx) ? pointerFor(state, kind) : "";
   if (pointer) next = { ...next, historyPointer: pointer };
   if (kind === "compact" && ctx.host.facts?.compactionDropsProfile) next = { ...next, profileStale: true };
+  if (ctx.cfg.resumeArchiveInject && !next.archivePending) next = { ...next, archivePending: true };
   return next;
 }
 

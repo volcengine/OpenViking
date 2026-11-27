@@ -87,8 +87,10 @@ async function captureTurns(ctx, state, stateFile) {
     cfg,
   });
   // A compaction can fire in the middle of a turn, so the last assistant
-  // message may still grow and waits for the next capture.
-  const held = boundary === "compact" && decoded.turns.at(-1)?.role === "assistant" ? 1 : 0;
+  // message may still grow and waits for the next capture, where the host's
+  // transcript will still have it.
+  const held = boundary === "compact" && !host.facts?.compactionDropsTranscript
+    && decoded.turns.at(-1)?.role === "assistant" ? 1 : 0;
   const messages = turnMessages(decoded, cfg).slice(0, decoded.turns.length - held);
   // Keyword mode keeps a batch only when the user said something worth
   // remembering; a batch it drops is settled.

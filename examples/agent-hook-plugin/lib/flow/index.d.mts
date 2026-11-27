@@ -1,4 +1,4 @@
-import type { Host, Output } from "./host.d.mts";
+import type { Host, Outcome, Output } from "./host.d.mts";
 
 export type { EventContext, EventRead, Host, Outcome, Output, Stage, Turn } from "./host.d.mts";
 
@@ -9,6 +9,6 @@ export function runStage(
   host: Host,
   event: string,
   payload?: Record<string, any>,
-  options?: { detached?: boolean; cfg?: Record<string, any> },
+  options?: { detached?: boolean; cfg?: Record<string, any>; outcome?: Outcome },
 ): Promise<Output>;
 export function toolCall(host: Host, payload: Record<string, any>, event?: string): Output;

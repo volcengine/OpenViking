@@ -33,9 +33,12 @@ export async function profileBlock(ctx) {
   return contextBlock("session-start", await profile(ctx));
 }
 
-/** With `resumeArchiveInject`, the session's latest archive overview after a compaction or a resume. */
-async function archiveBlock(ctx, maxBytes) {
-  if (!ctx.cfg.resumeArchiveInject || !contextEvent(ctx)) return "";
+/**
+ * With `resumeArchiveInject`, the session's latest archive overview after a
+ * compaction or a resume; `owed` when an earlier event left it waiting.
+ */
+export async function archiveBlock(ctx, maxBytes, owed = false) {
+  if (!ctx.cfg.resumeArchiveInject || !(owed || contextEvent(ctx))) return "";
   const context = await getAgentSessionContext(ctx.fetchJSON, ctx.sessionId, ctx.cfg.resumeContextBudget);
   let overview = String(context?.latest_archive_overview || "").trim();
   if (!overview) return "";
@@ -85,8 +88,8 @@ export async function sessionStart(ctx) {
       .catch((error) => logError("pending", error));
     if (!reaches) return "";
     const opened = await opening(ctx, delivered.pointer, next.profileHash);
-    if (opened.profileHash !== next.profileHash) {
-      await writeHookState(host.id, ctx.stateKey, { ...next, profileHash: opened.profileHash });
+    if (opened.profileHash !== next.profileHash || next.archivePending) {
+      await writeHookState(host.id, ctx.stateKey, { ...next, profileHash: opened.profileHash, archivePending: undefined });
     }
     return [opened.block, delivered.pointer].filter(Boolean).join("\n\n");
   });

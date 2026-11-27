@@ -13,7 +13,7 @@ import {
 import { isCaptureEnabled } from "../capture-utils.mjs";
 import { appendNote } from "./notes.mjs";
 import { deliverPointer } from "./pointer.mjs";
-import { profileBlock } from "./start.mjs";
+import { archiveBlock, contextBlock, profileBlock } from "./start.mjs";
 
 const DUPLICATE_PROMPT_MS = 500;
 
@@ -46,11 +46,17 @@ export async function promptSubmit(ctx) {
       }
     }
 
+    if (state.archivePending) {
+      const max = Number(ctx.cfg.sessionStartMaxBytes) || 0;
+      const archive = await archiveBlock(ctx, Math.floor(max / 2), true).catch(() => "");
+      if (archive) parts.push(contextBlock("session-start", archive));
+    }
+
     let recallBlock = state.promptHash === promptHash ? state.recallBlock : "";
     if (!recallBlock) {
       const recall = await recallDetailsForPrompt(ctx.fetchJSON, ctx.cfg, prompt, ctx.cwd, ctx.log, {
         sessionId: ctx.sessionId,
-        runCompressor: await host.compress?.(ctx.cfg, ctx.log),
+        runCompressor: await host.compress?.(ctx.cfg, ctx.log, ctx),
       }).catch((error) => {
         logError("recall", error);
         return { block: "", stage: "error" };
@@ -71,6 +77,7 @@ export async function promptSubmit(ctx) {
       promptAt: now,
       recallBlock,
       profileStale,
+      archivePending: undefined,
       ...(compaction !== undefined ? { profileCompaction: compaction } : {}),
       ...(firstPrompt ? { profileInjected } : {}),
     });

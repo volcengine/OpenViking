@@ -77,10 +77,11 @@ function transcriptReader(host) {
  * Run one host event and return what to answer: `{ context }` for the model,
  * `{ deny }`, `{ notice }` or `{ input }` for a tool call, or `{}`. The caller
  * hands it to `host.emit`. A host that lives in its harness's process passes
- * the config it resolved as `cfg`; a hook process leaves it to be loaded for
+ * the config it resolved as `cfg`, and an `outcome` object when it wants to
+ * know what the event did; a hook process leaves the config to be loaded for
  * the event's directory.
  */
-export async function runStage(host, event, payload = {}, { detached = false, cfg: given } = {}) {
+export async function runStage(host, event, payload = {}, { detached = false, cfg: given, outcome = {} } = {}) {
   const stage = stageOf(host, event);
   if (!stage) return {};
   if (stage === "toolCall") return toolCall(host, payload, event);
@@ -91,7 +92,10 @@ export async function runStage(host, event, payload = {}, { detached = false, cf
   const { log, logError } = createAgentLogger(host.id, event, cfg);
   const nativeId = nativeSessionId(host, event, payload, read);
   const child = String(read.child || "");
-  const agent = makeAgentFetchJSON(cfg, cwd);
+  // A write would rather be retried than settled by an answer that is not the
+  // server's (a proxy's HTML page), and gets the longer of the two timeouts.
+  const writes = isWriteStage(stage);
+  const agent = makeAgentFetchJSON(cfg, cwd, { requireJsonBody: writes });
   const ctx = {
     host,
     event,
@@ -106,14 +110,14 @@ export async function runStage(host, event, payload = {}, { detached = false, cf
     stateKey: child ? `${nativeId}__${child.replace(/[^A-Za-z0-9._-]/g, "-")}` : nativeId,
     sessionId: eventSessionId(host, read, nativeId),
     budgetMs: host.budgets?.[event] || 0,
-    fetchJSON: withRequestBudget(agent.fetchJSON, host.budgets?.[event], cfg.timeoutMs),
+    fetchJSON: withRequestBudget(agent.fetchJSON, host.budgets?.[event], writes ? cfg.captureTimeoutMs : cfg.timeoutMs),
     // The peer the actor-peer header already carries, stamped into captured
     // messages because session writes read it from the body only.
     get peerId() { return agent.effectivePeer.peerId; },
     log,
     logError,
-    // What the event did, for `host.observe`.
-    outcome: {},
+    // What the event did, for `host.observe` and an in-process caller.
+    outcome,
   };
   const skip = read.skip
     || (cfg.enabled === false && "disabled")
