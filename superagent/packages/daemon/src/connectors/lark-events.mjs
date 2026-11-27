@@ -215,10 +215,10 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
     visited.add('header');
   }
   for (const key of priorityKeys) {
-    if (Object.hasOwn(value, key)) {
-      collectText(value[key], output, mediaKeys, depth + 1);
-      visited.add(key);
-    }
+    // A field a language map already replaced is not read a second time.
+    if (visited.has(key) || !Object.hasOwn(value, key)) continue;
+    collectText(value[key], output, mediaKeys, depth + 1);
+    visited.add(key);
   }
   for (const field of translated) collectText(field, output, mediaKeys, depth + 1);
   for (const [key, child] of Object.entries(value)) {

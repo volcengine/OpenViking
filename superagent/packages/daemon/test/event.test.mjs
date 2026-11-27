@@ -323,6 +323,20 @@ describe('normalizeEvent', () => {
     assert.equal(event.content, 'Deployment failed\nPlease retry the deployment');
   });
 
+  it('lets a translated title replace the default one instead of reading both', () => {
+    const event = cardEvent({
+      header: { title: { tag: 'plain_text', content: '部署失败',
+        i18n: { zh_cn: '部署失败', en_us: 'Deployment failed' } } },
+      elements: [{ tag: 'markdown', content: '请重试部署' }],
+    });
+    assert.equal(event.content, 'Deployment failed\n请重试部署');
+    const chinese = cardEvent({
+      header: { title: { tag: 'plain_text', content: '部署失败', i18n: { zh_cn: '部署失败' } } },
+      elements: [{ tag: 'markdown', content: '请重试部署' }],
+    });
+    assert.equal(chinese.content, '部署失败\n请重试部署');
+  });
+
   it('reads a header configured in one language', () => {
     const event = cardEvent({
       i18n_header: { zh_cn: { title: { tag: 'plain_text', content: '部署失败' } } },
