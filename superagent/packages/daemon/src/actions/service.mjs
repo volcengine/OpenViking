@@ -14,7 +14,7 @@ import { OVUnavailableError } from '../ov-connection.mjs';
 import { OVSessionClient, withoutWorkingMemory } from '../ov-session-context.mjs';
 import { OVToolClient } from '../ov-tools.mjs';
 import { opaqueRef, redactSensitive, safeError } from '../logger.mjs';
-import { BOT_SENDERS, isoMinute, readMetadataTag, senderLabel } from '../runtime-input.mjs';
+import { BOT_SENDERS, isoMinute, metadataTag, oneLine, readMetadataTag, senderLabel } from '../runtime-input.mjs';
 import { personDirectory, personId } from '../ov-person.mjs';
 import { TimerSchedule } from '../timers.mjs';
 import {
@@ -34,6 +34,10 @@ const BOT_REPLY_FUSE = 20;
 // stay_silent, send or timer) before the daemon ends that turn. One repeat is
 // a harmless retry; this many is a model that cannot stop.
 const LOOP_BREAK_AFTER = 3;
+// A refusal quotes the last inputs there, each clipped: enough to reconsider
+// on, and all of it within the 2,000 characters the action API returns.
+const QUOTE_INPUTS = 5;
+const QUOTE_CHARS = 200;
 
 const HANDLERS = {
   send_message: 'sendMessage',
@@ -88,8 +92,10 @@ const WORKER_TOOLS = new Set([
 const SETTLING = new Set(['send_message', 'notify_owner', 'reply_message', 'stay_silent']);
 
 // A refusal the model can act on; `code` is what logs and activities record.
-function blocked(code, message) {
-  return Object.assign(new Error(message), { code });
+// `detail` (an input it quotes) goes to the model after the message, never
+// into a log or an activity.
+function blocked(code, message, detail = null) {
+  return Object.assign(new Error(message), { code, ...(detail ? { detail } : {}) });
 }
 
 // Tools whose success changes something (a delivery, a decision, a timer), as
@@ -787,13 +793,33 @@ export class ActionService {
     const newerSeq = this.store.newerAcceptedSeq(decision.scope_key, decision.seq);
     if (newerSeq !== null) {
       caller.trace.newerSeq = newerSeq;
-      const waiting = this.deliverWaiting(decision.scope_key);
-      if (waiting > 0) {
-        caller.trace.inboxDelivered = waiting;
-        throw blocked('stale_decision', `Delivery blocked: ${waiting} newer input(s) in the same chat/thread, or about the same subject, were waiting in your inbox; they follow as your next input. Read them, then use the newest event= as decision_id if the action still fits.`);
-      }
-      throw blocked('stale_decision', 'Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. Reconsider with the new input, then use its event= as decision_id if the action still fits.');
+      const next = this.saidThere(decision.scope_key, decision.seq, caller);
+      throw blocked('stale_decision', `Delivery blocked: a newer authenticated input arrived in the same chat/thread, or about the same subject. ${next.text}`, next.quote);
     }
+  }
+
+  // Where a refusal sends the model: inputs still waiting in the scope go to it
+  // now; else those accepted there after `seq` are quoted (the last few), since
+  // ones it was shown before are no longer in its inbox and no tool reads them
+  // back by event=. A quote has no msg=, which is never a decision_id.
+  saidThere(scopeKey, seq, caller) {
+    const waiting = this.deliverWaiting(scopeKey);
+    if (waiting > 0) {
+      caller.trace.inboxDelivered = waiting;
+      return { text: `${waiting} newer input(s) there were waiting in your inbox; they follow as your next input. Read them, then use the newest event= as decision_id if the action still fits.` };
+    }
+    const { rows, total } = this.store.newerAccepted(scopeKey, seq, QUOTE_INPUTS);
+    if (rows.length === 0) return { text: 'Decide on an input from there.' };
+    const quote = (event) => {
+      const chars = [...oneLine([event.title, event.content, ...(event.attachments ?? [])
+        .map((item) => `[${item.type || 'attachment'}]`)].filter(Boolean).join(' '))];
+      const text = chars.length > QUOTE_CHARS ? `${chars.slice(0, QUOTE_CHARS).join('')}…` : chars.join('');
+      return `event=${metadataTag(event.eventId)} time=${isoMinute(event.createTimeMs)} from=${senderLabel(event)}: ${text}`;
+    };
+    return {
+      text: `Reconsider with what was said there, quoted below oldest first${total > rows.length ? ` (the last ${rows.length} of ${total})` : ''}, then use the newest event= as decision_id if the action still fits.`,
+      quote: rows.map(quote).join('\n'),
+    };
   }
 
   // A safety fuse, not a rule the agent works by: whether to answer a bot is
@@ -886,7 +912,7 @@ export class ActionService {
     // A card action's msg= is internal (ca_...); replies go to its card= id.
     const target = ['card_action', 'reaction'].includes(fence.message_type) ? fence.parent_id : fence.message_id;
     throw blocked('thread_target_mismatch',
-      `Delivery blocked: decision_id is a message inside a thread, and send_message to its chat posts outside that thread. Answer inside the thread with reply_message, message_id=${target}, reply_in_thread=true. ${NO_ACTION}`);
+      `Delivery blocked: decision_id is a message inside a thread, and send_message to its chat posts outside that thread. Answer inside the thread with reply_message, message_id=${target}, reply_in_thread=true. If this message does not answer that thread but carries out a request made in another conversation, decide on the newest input where that request was made instead. ${NO_ACTION}`);
   }
 
   isTimerReminder(fence) {

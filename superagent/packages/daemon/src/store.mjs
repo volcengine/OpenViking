@@ -1628,6 +1628,16 @@ export class Store {
     return newer?.seq == null ? null : number(newer.seq);
   }
 
+  // The inbounds newerAcceptedSeq counts after seq: the last `limit` of them,
+  // oldest first, and how many there are.
+  newerAccepted(scopeKey, seq, limit) {
+    const where = `scope_key = ? AND status = 'DONE' AND seq > ? AND kind NOT LIKE 'message.reaction.%'`;
+    const total = number(this.db.prepare(`SELECT COUNT(*) AS n FROM connector_events WHERE ${where}`).get(scopeKey, seq).n);
+    const rows = this.db.prepare(`SELECT * FROM connector_events WHERE ${where} ORDER BY seq DESC LIMIT ?`)
+      .all(scopeKey, seq, limit);
+    return { total, rows: rows.reverse().map(rowToInbound) };
+  }
+
   // The last message a person wrote in this chat/thread, up to `seq`; 0 if none.
   lastPersonSeq(scopeKey, seq = Number.MAX_SAFE_INTEGER) {
     return number(this.db.prepare(`
