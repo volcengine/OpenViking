@@ -6,7 +6,7 @@ async fn make_snapshot_log_store() -> Arc<dyn SnapshotLogStore> {
     #[cfg(feature = "postgres")]
     if let Ok(dsn) = std::env::var("SNAPSHOT_LOG_TEST_PG_DSN") {
         return Arc::new(
-            crate::git::PostgresSnapshotLogStore::connect(&dsn, 4, 5_000)
+            crate::git::PostgresSnapshotLogStore::connect("test-service", &dsn, 4, 5_000)
                 .await
                 .expect("PostgreSQL SnapshotLog schema must be provisioned"),
         );
@@ -215,9 +215,11 @@ async fn test_snapshot_log_postgres_restore_completes_with_locked_index_and_back
     let account = uuid::Uuid::new_v4().simple().to_string();
     let (_dir, vfs, _object_store, _ref_store, svc) = make_service(&account);
     let store = Arc::new(
-        crate::git::PostgresSnapshotLogStore::connect_with_timeout(&dsn, 2, 5_000, 200)
-            .await
-            .unwrap(),
+        crate::git::PostgresSnapshotLogStore::connect_with_timeout(
+            "test-service", &dsn, 2, 5_000, 200,
+        )
+        .await
+        .unwrap(),
     );
     let svc = svc.with_snapshot_log(Some(store.clone()));
     vfs.put("proj/a.md", b"v1");
@@ -232,7 +234,7 @@ async fn test_snapshot_log_postgres_restore_completes_with_locked_index_and_back
         .unwrap();
     let mut lock = pool.begin().await.unwrap();
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("{}:{}main", account.len(), account))
+        .bind(format!("12:test-service|{}:{}main", account.len(), account))
         .execute(&mut *lock)
         .await
         .unwrap();

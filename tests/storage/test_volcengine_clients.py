@@ -140,6 +140,115 @@ def test_console_client_prepare_request_includes_session_token():
     assert "Authorization" in request.headers
 
 
+@pytest.mark.parametrize(
+    "custom_console,custom_data", [(False, False), (True, False), (False, True), (True, True)]
+)
+def test_adapter_routes_management_and_data_calls_to_separate_hosts(
+    monkeypatch, custom_console, custom_data
+):
+    captured = []
+
+    def console_request(client, method, req_params=None, req_body=None):
+        request = client.prepare_request(method, params=req_params, data=req_body)
+        captured.append(("console", request.host, request.headers["X-Security-Token"]))
+        return SimpleNamespace(
+            status_code=200, json=lambda: {"Result": {"CollectionName": "context"}}
+        )
+
+    def data_request(client, method, path, req_params=None, req_body=None):
+        request = client.prepare_request(method, path, params=req_params, data=req_body)
+        captured.append(("data", request.host, request.headers["X-Security-Token"]))
+        return SimpleNamespace(status_code=200, json=lambda: {"result": {}})
+
+    monkeypatch.setattr(ClientForConsoleApi, "do_req", console_request)
+    monkeypatch.setattr(ClientForDataApi, "do_req", data_request)
+    config = VectorDBBackendConfig.model_validate(
+        {
+            "backend": "volcengine",
+            "volcengine": {
+                "ak": "test-ak",
+                "sk": "test-sk",
+                "session_token": "test-token",
+                "region": "ap-southeast-1",
+                "console_host": " vikingdb.ap-southeast-1.byteplusapi.com/ "
+                if custom_console
+                else None,
+                "data_host": " api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com/ "
+                if custom_data
+                else None,
+            },
+        }
+    )
+    adapter = VolcengineCollectionAdapter.from_config(config)
+    assert adapter.collection_exists()
+    adapter.get_collection().fetch_data(["test-record"])
+    console = (
+        "vikingdb.ap-southeast-1.byteplusapi.com"
+        if custom_console
+        else "vikingdb.ap-southeast-1.volcengineapi.com"
+    )
+    data = (
+        "api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com"
+        if custom_data
+        else "api-vikingdb.vikingdb.ap-southeast-1.volces.com"
+    )
+    assert captured == [
+        ("console", console, "test-token"),
+        ("data", data, "test-token"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "custom_console,custom_data", [(False, False), (True, False), (False, True), (True, True)]
+)
+def test_collection_creation_keeps_both_custom_hosts(monkeypatch, custom_console, custom_data):
+    from openviking.storage.vectordb.collection.volcengine_collection import (
+        get_or_create_volcengine_collection,
+    )
+
+    hosts = []
+
+    def console_request(client, method, req_params=None, req_body=None):
+        hosts.append(("console", client.host))
+        return SimpleNamespace(status_code=200, json=lambda: {"Result": {}})
+
+    def data_request(client, method, path, req_params=None, req_body=None):
+        hosts.append(("data", client.host))
+        return SimpleNamespace(status_code=200, json=lambda: {"result": {}})
+
+    monkeypatch.setattr(ClientForConsoleApi, "do_req", console_request)
+    monkeypatch.setattr(ClientForDataApi, "do_req", data_request)
+    collection = get_or_create_volcengine_collection(
+        {
+            "AK": "test-ak",
+            "SK": "test-sk",
+            "Region": "ap-southeast-1",
+            "ConsoleHost": "vikingdb.ap-southeast-1.byteplusapi.com" if custom_console else None,
+            "DataHost": "api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com"
+            if custom_data
+            else None,
+        },
+        {"CollectionName": "new-test-collection"},
+    )
+    collection.get_meta_data()
+    collection.fetch_data(["test-record"])
+    console = (
+        "vikingdb.ap-southeast-1.byteplusapi.com"
+        if custom_console
+        else "vikingdb.ap-southeast-1.volcengineapi.com"
+    )
+    data = (
+        "api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com"
+        if custom_data
+        else "api-vikingdb.vikingdb.ap-southeast-1.volces.com"
+    )
+    assert hosts == [
+        ("console", console),
+        ("console", console),
+        ("data", data),
+    ]
+
+
 def test_console_client_do_req_uses_signed_query_params(monkeypatch):
     captured = {}
 

@@ -23,7 +23,7 @@ In API key mode, the server derives the account, user, and role from the credent
 The platform administrator first backs up the active `ov.conf`. Generate a random key in a local terminal, for example:
 
 ```bash
-python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+python3 -c 'import secrets; print("ovrk_" + secrets.token_hex(32))'
 ```
 
 Store the generated value securely and enter it in the server configuration. Keep the existing model, storage, and other server settings:

@@ -2949,18 +2949,18 @@ async def test_register_user(admin_client: httpx.AsyncClient, caller):
 
     for user_id, registration in (("alice", created), ("bob", resp)):
         listing = await admin_client.get(
-            "/api/v1/fs/ls",
+            "/api/v1/fs/tree",
             params={
                 "uri": f"viking://user/{user_id}/memories",
                 "output": "original",
-                "include_abstract": True,
-                "include_overview": True,
+                "show_all_hidden": True,
+                "level_limit": 2,
             },
             headers={"X-API-Key": registration.json()["result"]["user_key"]},
         )
         assert listing.status_code == 200, listing.text
-        directories = [entry for entry in listing.json()["result"] if entry["isDir"]]
-        assert {entry["name"] for entry in directories} == {
+        entries = listing.json()["result"]
+        assert {entry["name"] for entry in entries if entry["isDir"]} == {
             "preferences",
             "entities",
             "events",
@@ -2968,9 +2968,7 @@ async def test_register_user(admin_client: httpx.AsyncClient, caller):
             "trajectories",
             "experiences",
         }
-        for directory in directories:
-            assert directory["abstract"] and directory["abstract"] != "[.abstract.md is not ready]"
-            assert directory["overview"] and directory["overview"] != "[.overview.md is not ready]"
+        assert not any(not entry["isDir"] and "/" in entry["rel_path"] for entry in entries)
 
 
 @pytest.mark.parametrize("caller", ["root", "admin"])

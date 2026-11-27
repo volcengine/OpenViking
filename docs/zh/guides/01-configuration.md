@@ -522,6 +522,9 @@ Hybrid 是否支持图片取决于 dense 通道。图文完整输入进入 dense
 
 **vikingdb provider 配置示例:**
 
+使用临时 VikingDB 凭证时，还需设置 `session_token`。BytePlus 的端点与已验证的模型配置见
+[BytePlus VikingDB 配置指南](28-byteplus-vikingdb.md)。
+
 ```json
 {
   "embedding": {
@@ -2101,6 +2104,9 @@ Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
 <details>
 <summary><b>volcengine vikingDB</b></summary>
 支持火山引擎云上部署的 VikingDB
+
+连接 BytePlus 时，使用 `console_host` 和 `data_host` 分别指定 AK/SK 管理面与数据面端点。
+完整配置见 [BytePlus VikingDB 配置指南](28-byteplus-vikingdb.md)。
 
 ```json
 {

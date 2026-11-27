@@ -1872,7 +1872,7 @@ class AsyncHTTPClient:
 
     async def grep(
         self,
-        uri: str,
+        uri: Union[str, List[str]],
         pattern: str,
         case_insensitive: bool = False,
         node_limit: int = 256,
@@ -1882,7 +1882,7 @@ class AsyncHTTPClient:
         level_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         request_json = {
-            "uri": VikingURI.normalize(uri),
+            "uri": self._normalize_target_uri(uri),
             "pattern": pattern,
             "case_insensitive": case_insensitive,
             "node_limit": node_limit,
@@ -1901,7 +1901,7 @@ class AsyncHTTPClient:
     async def glob(
         self,
         pattern: str,
-        uri: str = "viking://",
+        uri: Union[str, List[str]] = "viking://",
         node_limit: int = 256,
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
@@ -1909,7 +1909,7 @@ class AsyncHTTPClient:
     ) -> Dict[str, Any]:
         json_body: Dict[str, Any] = {
             "pattern": pattern,
-            "uri": VikingURI.normalize(uri),
+            "uri": self._normalize_target_uri(uri),
             "node_limit": node_limit,
         }
         if extra_fields is not None:
@@ -3532,7 +3532,7 @@ class SyncHTTPClient:
 
     def grep(
         self,
-        uri: str,
+        uri: Union[str, List[str]],
         pattern: str,
         case_insensitive: bool = False,
         node_limit: int = 256,
@@ -3557,7 +3557,7 @@ class SyncHTTPClient:
     def glob(
         self,
         pattern: str,
-        uri: str = "viking://",
+        uri: Union[str, List[str]] = "viking://",
         node_limit: int = 256,
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,

@@ -725,8 +725,19 @@ async def test_reindex_user_namespace_partitions_memory_skill_and_resource(monke
     scopes = {call.kwargs["uri"]: call.kwargs for call in executor._reindex_rfv.await_args_list}
     assert set(scopes) == {
         root + suffix
-        for suffix in ("/resources", "/skills/live", "/skills/gone", "/notes", "/persona.md")
+        for suffix in (
+            "",
+            "/resources",
+            "/skills",
+            "/skills/live",
+            "/skills/gone",
+            "/peers",
+            "/notes",
+            "/persona.md",
+        )
     }
+    for marker_uri in (root, root + "/skills", root + "/peers"):
+        assert scopes[marker_uri]["recursive"] is False
     assert scopes[root + "/skills/gone"]["root_exists"] is False
     assert set(scopes[root + "/skills/gone"]["vector_inventory"]) == {"skill"}
     memories = {
@@ -770,13 +781,16 @@ async def test_reindex_global_namespace_partitions_user_and_resources(monkeypatc
         uri="viking://", mode="vectors_only", run=_make_reindex_run(ctx, _ReindexCounters())
     )
 
-    assert {
-        (call.kwargs["uri"], call.kwargs["context_type"])
-        for call in executor._reindex_rfv.await_args_list
-    } == {
-        ("viking://resources", "resource"),
-        ("viking://agent/skills/demo", "skill"),
+    scopes = {call.kwargs["uri"]: call.kwargs for call in executor._reindex_rfv.await_args_list}
+    assert set(scopes) == {
+        "viking://resources",
+        "viking://agent",
+        "viking://agent/tools",
+        "viking://agent/skills",
+        "viking://agent/skills/demo",
     }
+    assert scopes["viking://agent/tools"]["context_type"] == "resource"
+    assert scopes["viking://agent/skills/demo"]["context_type"] == "skill"
     assert [call.kwargs["uri"] for call in executor._reindex_user_namespace.await_args_list] == [
         "viking://user/bob"
     ]

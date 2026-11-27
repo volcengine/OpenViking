@@ -44,6 +44,8 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         project_name: str,
         collection_name: str,
         index_name: str,
+        console_host: str | None = None,
+        data_host: str | None = None,
         collection_meta: Dict[str, Any] | None = None,
     ):
         super().__init__(collection_name=collection_name, index_name=index_name)
@@ -55,6 +57,8 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         self._session_token = session_token
         self._api_key = api_key
         self._host = host
+        self._console_host = console_host
+        self._data_host = data_host
         self._project_name = project_name
         self._collection_meta = deepcopy(collection_meta) if collection_meta is not None else {}
         for field, expected in (("ProjectName", project_name), ("CollectionName", collection_name)):
@@ -84,6 +88,8 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             project_name=config.project_name or "default",
             collection_name=config.name or "context",
             index_name=config.index_name or "default",
+            console_host=cfg.console_host,
+            data_host=cfg.data_host,
             collection_meta=cfg.collection_meta,
         )
 
@@ -106,6 +112,8 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             "SessionToken": self._session_token,
             "ApiKey": self._api_key,
             "Host": self._host,
+            "ConsoleHost": self._console_host,
+            "DataHost": self._data_host,
         }
 
     def _uses_api_key_auth(self) -> bool:
@@ -130,6 +138,8 @@ class VolcengineCollectionAdapter(CollectionAdapter):
                 region=self._region,
                 session_token=self._session_token,
                 meta_data=self._meta(),
+                console_host=self._console_host,
+                data_host=self._data_host,
             )
         )
 

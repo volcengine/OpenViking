@@ -46,6 +46,8 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
     sk = config.get("SK")
     region = config.get("Region")
     session_token = config.get("SessionToken")
+    console_host = config.get("ConsoleHost")
+    data_host = config.get("DataHost")
     if not ak or not sk or not region:
         raise ValueError("AK, SK, and Region are required in config")
 
@@ -54,7 +56,7 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
         raise ValueError("CollectionName is required in config")
 
     # Initialize Console client for creating Collection
-    client = ClientForConsoleApi(ak, sk, region, session_token=session_token)
+    client = ClientForConsoleApi(ak, sk, region, host=console_host, session_token=session_token)
 
     # Try to create Collection
     try:
@@ -83,6 +85,8 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
             region,
             session_token=session_token,
             meta_data=meta_data,
+            console_host=console_host,
+            data_host=data_host,
         )
     )
 
@@ -96,19 +100,22 @@ class VolcengineCollection(ICollection):
         host: Optional[str] = None,
         session_token: Optional[str] = None,
         meta_data: Optional[Dict[str, Any]] = None,
+        *,
+        console_host: Optional[str] = None,
+        data_host: Optional[str] = None,
     ):
         self.console_client = ClientForConsoleApi(
             ak,
             sk,
             region,
-            host,
+            console_host or host,
             session_token=session_token,
         )
         self.data_client = ClientForDataApi(
             ak,
             sk,
             region,
-            host,
+            data_host or host,
             session_token=session_token,
         )
         self.meta_data = meta_data if meta_data is not None else {}

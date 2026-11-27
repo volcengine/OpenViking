@@ -229,7 +229,8 @@ export const sections: DocSection[] = [
         p('getting-started/04-setup-for-agent'),
         p('guides/01-configuration'),
         p('guides/02-volcengine-purchase-guide'),
-        p('guides/27-byteplus-setup')
+        p('guides/27-byteplus-setup'),
+        p('guides/28-byteplus-vikingdb')
       ]),
       g('Enterprise deployment', '企业私有化部署', [
         p('guides/19-deployment-checklist'),

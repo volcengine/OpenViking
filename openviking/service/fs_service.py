@@ -9,7 +9,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 import asyncio
 import hashlib
 import time
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Hashable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -1633,9 +1633,68 @@ class FSService:
             raise InvalidArgumentError(f"overview is not supported for namespace: {uri}")
         return await viking_fs.overview(uri, ctx=ctx)
 
+    async def _search_pattern_scopes(
+        self,
+        uri: str | Sequence[str],
+        ctx: RequestContext,
+        run_for_scope: Callable[[str, RequestContext, bool], Awaitable[Dict]],
+        *,
+        validate_scope: Callable[[str, RequestContext], Awaitable[object]],
+        match_key: Callable[[Any], Hashable],
+        node_limit: int | None,
+        uses_tags: bool,
+        unsupported_fields: set[str] | None = None,
+    ) -> tuple[list[Dict], list[Any], bool]:
+        viking_fs = self._ensure_initialized()
+        scopes = list(dict.fromkeys([uri] if isinstance(uri, str) else uri))
+        if not scopes:
+            raise InvalidArgumentError("uri must contain at least one search scope")
+        if len(scopes) > 1:
+            ctx = viking_fs.authorize_read(ctx, scopes)
+
+        limit = node_limit if node_limit is not None and node_limit > 0 else None
+        results = []
+        matches_by_key = {}
+        skipped_scopes = False
+        for scope in scopes:
+            try:
+                file_only = (
+                    namespace_policy_for_uri(scope).processing_mode
+                    is NamespaceProcessingMode.FILE_ONLY
+                )
+                if file_only:
+                    await viking_fs._ensure_access(scope, ctx)
+                    if uses_tags:
+                        raise InvalidArgumentError(f"tags are not supported for namespace: {scope}")
+                    if unsupported_fields:
+                        raise InvalidArgumentError(
+                            f"fields are not supported for namespace {scope}: "
+                            + ", ".join(sorted(unsupported_fields))
+                        )
+                if limit is not None and len(matches_by_key) >= limit:
+                    await validate_scope(scope, ctx)
+                    skipped_scopes = True
+                    continue
+                result = await run_for_scope(scope, ctx, file_only)
+            except Exception as exc:
+                mapped = map_exception(exc, resource=scope, resource_type="file")
+                if mapped is None or mapped is exc:
+                    raise
+                raise mapped from exc
+            if len(scopes) == 1:
+                return [result], result["matches"], False
+            results.append(result)
+            for match in result["matches"]:
+                matches_by_key.setdefault(match_key(match), match)
+
+        matches = list(matches_by_key.values())
+        if limit is not None and len(matches) > limit:
+            return results, matches[:limit], True
+        return results, matches, skipped_scopes
+
     async def grep(
         self,
-        uri: str,
+        uri: str | Sequence[str],
         pattern: str,
         ctx: RequestContext,
         exclude_uri: Optional[str] = None,
@@ -1649,11 +1708,6 @@ class FSService:
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
-        namespace_policy = namespace_policy_for_uri(uri)
-        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
-            await viking_fs._ensure_access(uri, ctx)
-            if tags or include_tags:
-                raise InvalidArgumentError(f"tags are not supported for namespace: {uri}")
         normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         tag_filter = None
         if normalized_tags:
@@ -1665,28 +1719,59 @@ class FSService:
             "case_insensitive": case_insensitive,
             "node_limit": node_limit,
             "level_limit": level_limit,
-            "ctx": ctx,
             "tag_filter": tag_filter,
             "include_tags": include_tags or bool(normalized_tags),
             "before_context": before_context,
             "after_context": after_context,
-            "force_fs": namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY,
         }
-        if _may_include_memory_content(uri):
-            kwargs["content_transform"] = _visible_grep_content
-        result = dict(await viking_fs.grep(uri, pattern, **kwargs))
-        matches = result.get("matches", [])
-        if include_tags and not normalized_tags and any("tags" not in match for match in matches):
-            matches = await self._attach_and_filter_tags(matches, ctx, None, include_tags=True)
-        result["matches"] = matches
-        result["count"] = len(matches)
+
+        async def grep_scope(scope: str, scope_ctx: RequestContext, file_only: bool) -> Dict:
+            scope_kwargs = dict(kwargs, ctx=scope_ctx, force_fs=file_only)
+            if _may_include_memory_content(scope):
+                scope_kwargs["content_transform"] = _visible_grep_content
+            result = dict(await viking_fs.grep(scope, pattern, **scope_kwargs))
+            matches = result.get("matches", [])
+            if include_tags and not normalized_tags and any("tags" not in m for m in matches):
+                matches = await self._attach_and_filter_tags(
+                    matches, scope_ctx, None, include_tags=True
+                )
+            result["matches"] = matches
+            result["count"] = len(matches)
+            return result
+
+        results, matches, truncated = await self._search_pattern_scopes(
+            uri,
+            ctx,
+            grep_scope,
+            validate_scope=lambda scope, scope_ctx: viking_fs._validate_grep_scope(
+                scope, scope_ctx
+            ),
+            match_key=lambda match: (match["uri"], match["line"]),
+            node_limit=node_limit,
+            uses_tags=bool(tags or include_tags),
+        )
+        if len(results) == 1 and not truncated:
+            return results[0]
+
+        result = {
+            "matches": matches,
+            "count": len(matches),
+            "match_count": len(matches),
+            "files_scanned": sum(scope["files_scanned"] for scope in results),
+        }
+        if truncated or any("limit_reached" in scope for scope in results):
+            result["limit_reached"] = truncated or any(
+                scope.get("limit_reached") for scope in results
+            )
+        if any(scope.get("candidate_limit_reached") for scope in results):
+            result["candidate_limit_reached"] = True
         return result
 
     async def glob(
         self,
         pattern: str,
         ctx: RequestContext,
-        uri: str = "viking://",
+        uri: str | Sequence[str] = "viking://",
         node_limit: Optional[int] = None,
         extra_fields: Optional[List[str]] = None,
         tags: Optional[List[str]] = None,
@@ -1694,21 +1779,9 @@ class FSService:
     ) -> Dict:
         """File pattern matching."""
         viking_fs = self._ensure_initialized()
-        namespace_policy = namespace_policy_for_uri(uri)
-        if namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY:
-            await viking_fs._ensure_access(uri, ctx)
-            if tags or include_tags:
-                raise InvalidArgumentError(f"tags are not supported for namespace: {uri}")
         unsupported_fields = {"id", "count", "abstract", "overview", "tags"}.intersection(
             extra_fields or []
         )
-        if unsupported_fields and (
-            namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY
-        ):
-            raise InvalidArgumentError(
-                f"fields are not supported for namespace {uri}: "
-                + ", ".join(sorted(unsupported_fields))
-            )
         normalized_tags = normalize_search_tags(tags, discard_invalid=True)
         project_tags = bool(normalized_tags) or include_tags
         tag_filter = None
@@ -1716,30 +1789,47 @@ class FSService:
             from openviking.utils.tags import build_search_tags_filter
 
             tag_filter = build_search_tags_filter(normalized_tags)
-        result = dict(
-            await viking_fs.glob(
-                pattern,
-                uri=uri,
-                node_limit=node_limit,
-                ctx=ctx,
-                extra_fields=extra_fields
-                if extra_fields is not None
-                else ([] if project_tags else None),
-                tag_filter=tag_filter,
-                force_fs=namespace_policy.processing_mode is NamespaceProcessingMode.FILE_ONLY,
+
+        async def glob_scope(scope: str, scope_ctx: RequestContext, file_only: bool) -> Dict:
+            result = dict(
+                await viking_fs.glob(
+                    pattern,
+                    uri=scope,
+                    node_limit=node_limit,
+                    ctx=scope_ctx,
+                    extra_fields=extra_fields
+                    if extra_fields is not None
+                    else ([] if project_tags else None),
+                    tag_filter=tag_filter,
+                    force_fs=file_only,
+                )
             )
-        )
-        if not project_tags:
+            if project_tags:
+                matches = await self._attach_and_filter_tags(
+                    result.get("matches", []), scope_ctx, normalized_tags, include_tags=True
+                )
+                if node_limit is not None and node_limit > 0:
+                    matches = matches[:node_limit]
+                result["matches"] = matches
+                result["count"] = len(matches)
             return result
 
-        matches = await self._attach_and_filter_tags(
-            result.get("matches", []), ctx, normalized_tags, include_tags=True
+        results, matches, truncated = await self._search_pattern_scopes(
+            uri,
+            ctx,
+            glob_scope,
+            validate_scope=lambda scope, scope_ctx: viking_fs._validate_glob_scope(
+                scope, scope_ctx
+            ),
+            match_key=lambda match: match if isinstance(match, str) else match["uri"],
+            node_limit=node_limit,
+            uses_tags=bool(tags or include_tags),
+            unsupported_fields=unsupported_fields,
         )
-        if node_limit is not None and node_limit > 0:
-            matches = matches[:node_limit]
-        result["matches"] = matches
-        result["count"] = len(matches)
-        return result
+        if len(results) == 1 and not truncated:
+            return results[0]
+
+        return {"matches": matches, "count": len(matches)}
 
     async def read_file_bytes(self, uri: str, ctx: RequestContext) -> bytes:
         """Read file as raw bytes."""

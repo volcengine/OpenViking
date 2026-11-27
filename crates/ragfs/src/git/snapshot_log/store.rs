@@ -20,7 +20,7 @@ impl Default for SnapshotLogLimits {
     fn default() -> Self {
         Self {
             account_bytes: 64,
-            branch_bytes: 512,
+            branch_bytes: 128,
             path_bytes: 2048,
             max_rows_per_commit: SNAPSHOT_LOG_MAX_ROWS_PER_COMMIT,
         }

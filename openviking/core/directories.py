@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from openviking.storage.viking_fs import VikingFS
     from openviking.system_assets.sync import SystemAssetSynchronizer
 
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 
 
 @dataclass
@@ -152,8 +152,7 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
     "agent": DirectoryDefinition(
         path="",
         abstract="Shared agent capabilities and configuration available across the account.",
-        overview="Account-wide capability definitions, organized into skills, communication "
-        "endpoints, tools, and payments. Each category has its own directory.",
+        overview="Stores account-wide skill and tool definitions in the skills and tools directories.",
         children=[
             DirectoryDefinition(
                 path="skills",
@@ -163,22 +162,10 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
                 "User-private skills remain under viking://user/{user_id}/skills.",
             ),
             DirectoryDefinition(
-                path="endpoints",
-                abstract="Shared communication endpoint configuration for agent capabilities.",
-                overview="Stores definitions of external communication endpoints, organized "
-                "by protocol or service, such as A2A and ANP.",
-            ),
-            DirectoryDefinition(
                 path="tools",
                 abstract="Shared tool configuration for agent capabilities.",
                 overview="Stores tool integration definitions, organized by protocol or "
                 "provider, such as MCP server configurations.",
-            ),
-            DirectoryDefinition(
-                path="payments",
-                abstract="Shared payment capability configuration for agents.",
-                overview="Stores payment capability definitions, organized by protocol "
-                "or provider, such as AP2 configurations.",
             ),
         ],
     ),
@@ -245,7 +232,7 @@ class DirectoryInitializer:
     async def initialize_user_directories(
         self, ctx: RequestContext, *, lease_ref: Any = None
     ) -> int:
-        """Provision the user workspace and return the number of directories seeded with summaries."""
+        """Provision the user workspace and return the number of directories initialized."""
         if "user" not in PRESET_DIRECTORIES:
             return 0
         user_root, user_children = self._user_directory_targets(ctx)
@@ -259,30 +246,37 @@ class DirectoryInitializer:
         self, user_root: _DirectoryTarget, *, lease_ref: Any = None
     ) -> int:
         ctx = user_root.ctx
-        directories = [
-            _DirectoryTarget(
-                uri=f"{user_root.uri}/{parent.path}/{child.path}",
-                parent_uri=f"{user_root.uri}/{parent.path}",
-                definition=child,
-                scope=user_root.scope,
-                ctx=ctx,
-            )
-            for parent in user_root.definition.children
-            for child in parent.children
-        ]
-        # Seed browsing descriptions here. Memory updates index the summaries derived from content.
+        viking_fs = self._get_viking_fs()
+
+        async def create_directory(uri: str) -> bool:
+            try:
+                existing = await viking_fs.stat(uri, ctx=ctx, skip_count=True)
+            except (FileNotFoundError, NotFoundError):
+                await viking_fs.mkdir(uri, exist_ok=True, ctx=ctx, lease_ref=lease_ref)
+                return True
+            if not existing["isDir"]:
+                raise InvalidArgumentError(f"Expected a preset directory at {uri}")
+            return False
+
+        # Memory updates generate and index directory summaries after content is written.
         results = await asyncio.gather(
-            *(self._ensure_agfs_directory(target, lease_ref=lease_ref) for target in directories),
+            *(
+                create_directory(f"{user_root.uri}/{parent.path}/{child.path}")
+                for parent in user_root.definition.children
+                for child in parent.children
+            ),
             return_exceptions=True,
         )
-        created, error = self._partition_directory_results(results)
-        if error is not None:
-            raise error
-        viking_fs = self._get_viking_fs()
+        created = 0
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+            created += result
+
         await ensure_agent_file(viking_fs, ctx, lease_ref=lease_ref)
         if self.user_config_defaults.preset_global_policy:
             await ensure_global_policy_file(viking_fs, ctx, lease_ref=lease_ref)
-        return len(created)
+        return created
 
     async def _initialize_directory_trees(
         self,

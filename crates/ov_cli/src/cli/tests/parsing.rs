@@ -260,6 +260,8 @@ fn cli_parses_grep_context_lines() {
         "grep",
         "--uri",
         "viking://resources",
+        "-u",
+        "viking://~/resources",
         "-a",
         "2",
         "-b",
@@ -270,10 +272,12 @@ fn cli_parses_grep_context_lines() {
 
     match cli.command {
         Commands::Grep {
+            uri,
             after_context,
             before_context,
             ..
         } => {
+            assert_eq!(uri, ["viking://resources", "viking://~/resources"]);
             assert_eq!(after_context, 2);
             assert_eq!(before_context, 3);
         }

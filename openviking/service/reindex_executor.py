@@ -661,6 +661,11 @@ class ReindexExecutor:
                 vector_inventory=groups.get(root, {}),
             )
 
+        if exists:
+            await self._reindex_rfv(
+                uri=uri, recursive=False, run=run, formal_entries=[], vector_inventory=inventory
+            )
+
     async def _reindex_peer_scopes(
         self,
         *,
@@ -728,6 +733,11 @@ class ReindexExecutor:
                     formal_entries=memory_facts[2],
                     vector_inventory=content_groups.get(memories, {}),
                 )
+
+        if exists:
+            await self._reindex_rfv(
+                uri=uri, recursive=False, run=run, formal_entries=[], vector_inventory=inventory
+            )
 
     async def _memory_scopes(
         self,
@@ -1034,10 +1044,10 @@ class ReindexExecutor:
         self,
         *,
         uri: str,
-        mode: str,
-        context_type: str,
         recursive: bool,
         run: _ReindexRunContext,
+        mode: str = "vectors_only",
+        context_type: str | None = None,
         root_is_dir: bool | None = None,
         formal_entries: list[dict[str, Any]] | None = None,
         root_exists: bool = True,
@@ -1048,6 +1058,8 @@ class ReindexExecutor:
         from openviking.storage.resource_rnfv import RequestIntent
         from openviking.utils.resource_processor import ResourceProcessor
 
+        if context_type is None:
+            context_type = context_type_for_uri(uri)
         service = get_service()
         request = RequestIntent.from_ingest_options(
             target_uri=uri,
@@ -1058,7 +1070,7 @@ class ReindexExecutor:
             # when their md5 values are unchanged (the public API regression
             # contract relies on this), while other RFV targets retain the
             # caller-controlled force behavior.
-            force=run.force or (context_type == "skill" and mode == "vectors_only"),
+            force=run.force or (classify_uri(uri).is_skill_root and mode == "vectors_only"),
             scalar_target_levels=frozenset({0, 1, 2}),
         )
         resolved_root_is_dir = run.root_is_dir if root_is_dir is None else root_is_dir
@@ -1073,6 +1085,13 @@ class ReindexExecutor:
                 recursive=recursive,
                 include_direct_children=bool(resolved_root_is_dir) and not recursive,
             )
+        if root_exists and resolved_root_is_dir and not recursive and formal_entries == []:
+            # Descendants have their own scopes. Only reconcile the directory's summaries here.
+            vector_inventory = {
+                record_id: record
+                for record_id, record in vector_inventory.items()
+                if record.get("uri") == uri and record.get("level") in {0, 1}
+            }
         snapshot = await build_rfv_snapshot(
             viking_fs=service.viking_fs,
             vikingdb=service.vikingdb_manager,
@@ -1454,6 +1473,9 @@ class ReindexExecutor:
         for name in ("skills", "peers"):
             if facts[name][0] and not facts[name][1]:
                 raise InvalidArgumentError(f"{name} namespace must be a directory: {roots[name]}")
+        await self._reindex_rfv(
+            uri=uri, recursive=False, run=run, formal_entries=[], vector_inventory=direct_inventory
+        )
         await self._resource_scope(
             uri=roots["resources"],
             mode=mode,
@@ -1510,29 +1532,48 @@ class ReindexExecutor:
         self._ensure_reconciliation_scope_visible(uri, run.ctx)
         if not recursive:
             return
-        resources, skills = "viking://resources", "viking://agent/skills"
+        agent = "viking://agent"
+        resources, tools, skills = "viking://resources", f"{agent}/tools", f"{agent}/skills"
+        resource_roots = (resources, tools)
         inventories = {}
-        for root in (resources, skills):
+        for root in (*resource_roots, skills):
             inventories[root] = await self._read_reindex_inventory(
                 get_service().vikingdb_manager,
                 uri=root,
                 ctx=run.ctx,
                 recursive=True,
             )
-        resource_facts = await self._namespace_facts(resources, ctx=run.ctx)
+        agent_exists, agent_is_dir, _ = await self._namespace_facts(agent, ctx=run.ctx)
+        agent_inventory = None
+        if agent_exists and agent_is_dir:
+            agent_inventory = await self._read_reindex_inventory(
+                get_service().vikingdb_manager, uri=agent, ctx=run.ctx, recursive=False
+            )
+        resource_facts = {
+            root: await self._namespace_facts(root, ctx=run.ctx) for root in resource_roots
+        }
         skill_facts = await self._namespace_facts(skills, ctx=run.ctx, list_children=True)
         _, _, users = await self._namespace_facts(
             "viking://user",
             ctx=run.ctx,
             list_children=True,
         )
-        await self._resource_scope(
-            uri=resources,
-            mode=mode,
-            run=run,
-            facts=resource_facts,
-            inventory=inventories[resources],
-        )
+        if agent_inventory is not None:
+            await self._reindex_rfv(
+                uri=agent,
+                recursive=False,
+                run=run,
+                formal_entries=[],
+                vector_inventory=agent_inventory,
+            )
+        for root in resource_roots:
+            await self._resource_scope(
+                uri=root,
+                mode=mode,
+                run=run,
+                facts=resource_facts[root],
+                inventory=inventories[root],
+            )
         await self._reindex_skill_namespace(
             uri=skills,
             mode=mode,
