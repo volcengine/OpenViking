@@ -157,6 +157,35 @@ function parseJson(value) {
   }
 }
 
+// The media references a composite keeps (the model can still resolve them)
+// and where its embedded card JSON starts. The first `{` whose remainder
+// parses is the payload: the prefix is the client's fallback text, and a `{`
+// inside that prefix never parses because the card JSON follows it.
+const MEDIA_REFERENCE = /\[(?:image|file|audio|media|video|sticker)[^\]]*\]/g;
+
+// Reads one language out of interactive content, or null when no embedded
+// object parses (the caller keeps the string as it was). The one-language
+// rule is collectText's: the default field when the card carries one beside
+// its i18n map, then the locale priority.
+function humanizeCompositeCard(text) {
+  if (typeof text !== 'string' || !text.includes('{')) return null;
+  let card = null;
+  let index = -1;
+  while ((index = text.indexOf('{', index + 1)) !== -1) {
+    const candidate = parseJson(text.slice(index).trim());
+    if (candidate !== null && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      card = candidate;
+      break;
+    }
+  }
+  if (card === null) return null;
+  const refs = text.match(MEDIA_REFERENCE) ?? [];
+  const parts = [];
+  collectText(card, parts);
+  if (parts.length === 0) return refs.length > 0 ? refs.join('\n') : '[card]';
+  return [...refs, ...parts].join('\n').trim();
+}
+
 function collectText(value, output, mediaKeys = new Set(), depth = 0) {
   if (depth > 8 || value === null || value === undefined) return;
   if (typeof value === 'string') {
@@ -222,7 +251,10 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
   }
   for (const field of translated) collectText(field, output, mediaKeys, depth + 1);
   for (const [key, child] of Object.entries(value)) {
-    if (visited.has(key) || /^i18n/i.test(key) || ['tag', 'style', 'language'].includes(key)
+    // Layout metadata a card carries beside its text: reading it would put
+    // `vertical`, `12px 12px` and `2.0` in front of every card's sentence.
+    if (visited.has(key) || /^i18n/i.test(key)
+      || ['tag', 'style', 'language', 'schema', 'direction', 'padding', 'fallback'].includes(key)
       || /(?:_key|_id|url|token|secret)$/i.test(key)) continue;
     collectText(child, output, mediaKeys, depth + 1);
   }
@@ -231,6 +263,15 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
 export function humanizeContent(messageType, rawContent) {
   if (messageType === 'interactive' && (rawContent == null
     || (typeof rawContent === 'string' && !rawContent.trim()))) return '[card]';
+  // A card arrives as clean JSON, as a composite (media references and a
+  // "please upgrade the client" note around the card's JSON), or as the note
+  // alone. Left verbatim, every language copy in a composite travels into the
+  // journal and the OV session sync, so interactive content is read through
+  // the same one-language rule whatever shape it arrives in.
+  if (messageType === 'interactive') {
+    const humanized = humanizeCompositeCard(rawContent);
+    if (humanized !== null) return humanized;
+  }
   if (typeof rawContent === 'string' && !rawContent.trim().startsWith('{') && !rawContent.trim().startsWith('[')) {
     return rawContent.trim();
   }
