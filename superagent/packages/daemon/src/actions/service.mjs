@@ -255,7 +255,7 @@ export class ActionService {
     }
     if (input.follows && !tasks.get(input.follows)) throw blocked('unknown_task', `No task ${input.follows} to follow. ${NO_ACTION}`);
     const requester = senderLabel(this.store.inboundBySeq(rows[0].seq));
-    const task = tasks.create({ rows, title: input.title, note: input.note ?? '', requester, runtime, parent: input.follows ?? null });
+    const task = tasks.create({ rows, title: input.title, note: input.note ?? '', leads: input.leads ?? '', requester, runtime, parent: input.follows ?? null });
     this.routedDecisions(rows);
     return {
       text: `Created ${task.id}${task.parent_id ? `, following ${task.parent_id}` : ''}: ${task.status === 'running' ? 'a worker is on it' : 'it waits for a free worker'}. Tell the requester once that you are on it; the result comes back as a [task report] input.`,

@@ -2064,8 +2064,10 @@ describe('workers scheduler', () => {
     const { turns } = attachTasks(service, store, workspace);
     const first = store.ingest(chatEvent({ messageId: 'om_taskOrigin1234', chatType: 'group', content: '帮我查下 X' })).inbound;
     const second = store.ingest(chatEvent({ messageId: 'om_taskMore123456', chatType: 'group', content: '只看上周' })).inbound;
-    const created = await call('task_create', { trigger_ids: ['message:om_taskMore123456', 'message:om_taskOrigin1234'], title: '查 X', note: 'Alice asked' });
+    const created = await call('task_create', { trigger_ids: ['message:om_taskMore123456', 'message:om_taskOrigin1234'], title: '查 X', note: 'Alice asked',
+      leads: 'viking://user/x/memories/events/x-slow.md — X 上周因缓存失效变慢' });
     assert.match(created.text, /^Created t1: a worker is on it\./);
+    assert.match(turns[0].prompt, /Leads from the agent's memory lookups\.[^\n]*\n\| viking:\/\/user\/x\/memories\/events\/x-slow\.md — X 上周因缓存失效变慢/);
     assert.match(turns[0].prompt, new RegExp(`line ${first.seq}\nline ${second.seq}`), 'oldest first; the origin answers');
     assert.equal(store.coveringDecision(first.scopeKey, first.seq), 'silent');
     assert.match((await call('task_list', {})).text, /^t1 \[running\] "查 X"/);

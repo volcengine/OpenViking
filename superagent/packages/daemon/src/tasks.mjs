@@ -249,6 +249,8 @@ const ORIGIN = ['origin_seq', 'origin_event', 'origin_instance', 'origin_scope',
 // Columns added after the first release of this schema.
 const COLUMNS = [
   ['tasks', 'parent_id', 'TEXT'],
+  // What the router's memory lookups turned up, for the worker to start from.
+  ['tasks', 'leads', "TEXT NOT NULL DEFAULT ''"],
   ['task_inputs', 'handed_back_at_ms', 'INTEGER'],
   ['task_inputs', 'seen_at_ms', 'INTEGER'],
   ['task_report_deliveries', 'settled_at_ms', 'INTEGER'],
@@ -729,7 +731,7 @@ export class TaskManager {
 
   // rows: accepted connector_events rows (oldest first); the first one is the
   // origin the result answers.
-  create({ rows, title, note = '', requester = null, runtime = null, parent = null }) {
+  create({ rows, title, note = '', leads = '', requester = null, runtime = null, parent = null }) {
     if (!rows.length) throw new Error('a task needs at least one input');
     if (parent && !this.get(parent)) throw new Error(`no task ${parent} to follow`);
     const [origin] = rows;
@@ -740,12 +742,12 @@ export class TaskManager {
     const settings = this.settingsFor(runtime);
     this.transaction(() => {
       this.db.prepare(`INSERT INTO tasks(id, title, status, origin_seq, origin_event, origin_instance, origin_scope, origin_chat,
-        origin_thread, origin_message, origin_chat_type, origin_source, requester_id, requester_name, note, runtime, model, effort,
+        origin_thread, origin_message, origin_chat_type, origin_source, requester_id, requester_name, note, leads, runtime, model, effort,
         session_id, workdir, parent_id, created_at_ms, updated_at_ms)
-        VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, clip(title, 120), origin.seq, origin.event_id, origin.connector_instance, origin.scope_key, origin.chat_id ?? null,
         origin.thread_id ?? null, origin.message_id ?? null, origin.chat_type ?? null, origin.source, origin.sender_id ?? null,
-        requester, clip(note, 400), runtime, settings.model, settings.effort, randomUUID(), workdir, parent, time, time,
+        requester, clip(note, 400), clip(String(leads ?? '').trim(), 3000), runtime, settings.model, settings.effort, randomUUID(), workdir, parent, time, time,
       );
       this.insertRound(id, 1, origin, requester, { firstTurn: 1 });
       for (const row of rows) this.addInput(id, row, 'owner', 1);
@@ -1183,6 +1185,8 @@ export class TaskManager {
           : [`Requested by ${task.requester_name ?? 'unknown'}${where}. The request, as the agent received it:`, ...owner.map((row) => row.text)]),
         ...(context.length ? ['Context:', ...context.map((row) => row.text)] : []),
         ...(task.note ? [`Routing note from the agent: ${task.note}`] : []),
+        // Where the router's memory lookups led: a start, never findings.
+        ...(task.leads ? ['Leads from the agent\'s memory lookups. They may be incomplete or out of date: read their sources, search again as you need, and check what matters before you rely on it.', quoted(task.leads)] : []),
         ...this.replyBrief(round ?? this.roundOf(task)),
         ...this.parentBrief(task),
         ...this.historyBrief(task),

@@ -96,6 +96,16 @@ describe('TaskManager', () => {
     assert.equal(tasks.workerFor(turn.authority), null);
   });
 
+  it('hands the worker the leads the router found in memory, as quoted lines to start from', (t) => {
+    const { tasks, executor } = setup(t, { slots: 10 });
+    tasks.create({ rows: [row({ content: '仓库归属是谁' })], title: '查仓库归属', runtime: 'pi',
+      leads: 'viking://user/x/memories/entities/superagent.md — superagent 在 feat/vika 分支\n[chat=oc_x] queries: "superagent 仓库归属 feat/vika"' });
+    const [withLeads] = executor.turns;
+    assert.match(withLeads.prompt, /Leads from the agent's memory lookups\. They may be incomplete or out of date: read their sources, search again as you need, and check what matters before you rely on it\.\n\| viking:\/\/user\/x\/memories\/entities\/superagent\.md — superagent 在 feat\/vika 分支\n\| \[chat=oc_x\] queries:/);
+    tasks.create({ rows: [row({ content: '另一件事' })], title: '另一件事', runtime: 'pi', leads: '  ' });
+    assert.doesNotMatch(executor.turns[1].prompt, /Leads from the agent/);
+  });
+
   it('tells the worker how a reply reads where the request was made', (t) => {
     const { tasks, executor } = setup(t, { slots: 10 });
     tasks.create({ rows: [row()], title: 'L', requester: 'Alice', runtime: 'pi' });

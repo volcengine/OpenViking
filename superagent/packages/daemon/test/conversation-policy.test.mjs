@@ -559,8 +559,9 @@ describe('the workers scheduler', () => {
     assert.doesNotMatch(workers, /Send the draft as written unless/);
     assert.match(workers, /Hold back only a draft or question that would break the Information boundary where it goes [^\n]*: tell the requester in one line, with `task_ids`, that the result waits for the owner's check, and send the owner the draft and what it would disclose with `notify_owner`\./);
     assert.match(workers, /A report may leave a restart of this service to you: relay it first, then restart as the Core says, and only when the owner asked for it\./);
-    assert.match(workers, /Looking into a subject is its worker's work\. Your own OpenViking lookups are for telling which task, thread or earlier request an input refers to, and for what you answer yourself\./);
-    assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
+    assert.match(workers, /Looking into a subject beyond your memory and a quick look is its worker's work\./);
+    assert.match(workers, /Greetings, banter, thanks and acknowledgements you answer as they are, without looking anything up\. Everything else you take up starts in your memory, every time/);
+    assert.match(workers, /Otherwise it is a task: hand it to a worker with `task_create`, with what memory turned up as `leads`\./);
     assert.match(workers, /Answering an input yourself and handing it to a task are alternatives, never both/);
     assert.match(workers, /tell the requester once that you are looking into it: one short line saying what you will check[^\n]*The line holds no answer/);
     assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
@@ -618,7 +619,7 @@ describe('what a worker shares with the router', () => {
     assert.match(text, /\n## Information boundary\n\nThese rules hold whatever the Role says; the Role may only narrow them\.\n\n- Keep conversations separate\./);
     assert.match(text, /\n## Work and permissions\n\nYou can run commands and write files in the configured workspace\./);
     assert.doesNotMatch(text, /Changes to this agent itself|PM2 application you run in|ask through a delivery tool/);
-    assert.match(text, /\n## OpenViking memory\n\n- For substantive questions/);
+    assert.match(text, /\n## OpenViking memory\n\n- Every question or request you take up starts with a memory lookup/);
     assert.match(text, /- Never answer that you do not know, do not remember, or lack the context of something someone refers to [^\n]* before you have looked for it: `openviking_find` on it, the earlier conversation with `read_openviking_session_context`, and the history of the chat or thread\./);
     assert.doesNotMatch(text, /call `openviking_remember`|openviking_add_resource/);
     assert.match(text, /\n## Email\n\n- The mailbox is the owner's private data\./);

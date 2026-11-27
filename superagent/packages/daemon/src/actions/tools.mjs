@@ -215,6 +215,7 @@ export const TOOLS = [
         description: 'event= values of the input lines that make up the request, oldest first; the first is the one the result answers.' },
       title: { type: 'string', minLength: 1, maxLength: 120, description: 'A short title, in the request\'s language.' },
       note: { type: 'string', maxLength: 400, description: 'Optional, at most 30 words: routing facts only (who asked, constraints the person stated). Never a plan.' },
+      leads: { type: 'string', maxLength: 3000, description: 'What your memory lookups for this request turned up, for the worker to start from: one line per useful hit (its viking:// URI and what it says), then the queries you ran. Omit it when they found nothing.' },
       follows: { ...TASK_ID, description: 'The task whose result this separate work builds on: the new worker starts from what that task produced. Not for changing that result itself: that is task_route to that task.' },
       decision_instance: DECISION_INSTANCE,
     }, ['trigger_ids', 'title']),
@@ -493,9 +494,9 @@ export const TOOLS = [
     name: 'openviking_find',
     openviking: true,
     title: 'Find in OpenViking',
-    description: 'Start here for substantive questions, troubleshooting, project discussions, past decisions and progress: search for earlier answers and relevant context before researching elsewhere or asking someone to repeat it. Reuse evidence already retrieved for this question. Searches events, entities, people\'s preferences, stored resources and skills; returns ranked abstracts and URIs to expand with openviking_read. Apply privacy constraints already available, and look up missing ones before disclosure. Greetings and self-contained text transformations need no search.',
+    description: 'Start here for every question or request you take up, other than greetings and banter: search for earlier answers and relevant context before answering from what you know, researching elsewhere or asking someone to repeat it. Reuse evidence already retrieved for this question. Searches events, entities, people\'s preferences, stored resources and skills; returns ranked abstracts and URIs to expand with openviking_read. Apply privacy constraints already available, and look up missing ones before disclosure. Greetings and banter need no search.',
     inputSchema: schema({
-      query: { type: 'string', minLength: 1, maxLength: 1000, description: 'What to look for, in natural language.' },
+      query: { type: 'string', minLength: 1, maxLength: 1000, description: 'The thing itself, not a question: its names, numbers, commands, paths or accounts, and the attribute you want (who owns it, who may change it, which branch); a spoken question as who + action + object ("Alice asked me fix issue open PR repository", not "which repo did Alice want fixed?"). Exact names, numbers and commands go to openviking_search with keywords.' },
       limit: LIMIT(50, 10),
       target_uri: { type: 'string', ...VIKING_URI, description: 'Optional viking:// directory to search within.' },
       context_type: { type: 'string', enum: ['memory', 'resource', 'skill'], description: 'Optional kind of context to return.' },
@@ -507,7 +508,7 @@ export const TOOLS = [
     name: 'openviking_search',
     openviking: true,
     title: 'Search OpenViking broadly',
-    description: 'The wider retrieval of the OpenViking long-term memory: the same ranked hits as openviking_find, plus a keywords mode for exact terms. Use it when find missed something phrased differently.',
+    description: 'The wider retrieval of the OpenViking long-term memory: the same ranked hits as openviking_find, plus a keywords mode for exact terms. Use keywords for product names, ids, accounts and commands: a few terms, not a sentence. Use it too when find missed something phrased differently. Keywords scores are on another scale than find\'s: compare hits within one search only.',
     inputSchema: schema({
       query: { type: 'string', minLength: 1, maxLength: 1000, description: 'What to look for; with search_type=keywords it is matched literally and must not be empty.' },
       limit: LIMIT(50, 10),
