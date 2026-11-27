@@ -42,11 +42,25 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       subject: { type: 'issue', id: 'owner/repo#123' },
       content: { title: 'Review requested', text: '/help is part of the issue body' },
     }));
-    if (mode() === 'exit-after-start') {
+    const currentMode = mode();
+    if (currentMode === 'exit-after-start') {
       setTimeout(() => {
+        process.stderr.write(`${JSON.stringify({ level: 'error', message: 'earlier worker error' })}\n`);
         write(statusMessage(connector, 'failed', { error: 'session expired; run the QR login command again' }));
         process.exit(1);
       }, 30);
+    } else if (['exit-with-error-log', 'exit-with-plain-error', 'exit-with-info-log'].includes(currentMode)) {
+      const info = JSON.stringify({ level: 'info', message: 'routine worker log' });
+      const lines = [];
+      if (currentMode === 'exit-with-error-log') {
+        lines.push(JSON.stringify({ level: 'error', message: 'older error' }));
+        lines.push(JSON.stringify({ level: 'error', message: 'worker failed',
+          error: `upstream session expired ${'x'.repeat(400)}` }));
+      } else if (currentMode === 'exit-with-plain-error') {
+        lines.push('TypeError [ERR_FIXTURE]: worker could not initialize');
+      }
+      lines.push(info);
+      setTimeout(() => process.stderr.write(`${lines.join('\n')}\n`, () => process.exit(1)), 30);
     }
   } else {
     write(resultMessage(request.id, {}));
