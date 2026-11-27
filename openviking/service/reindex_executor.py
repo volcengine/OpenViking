@@ -19,7 +19,6 @@ from openviking.core.context import (
     Vectorize,
 )
 from openviking.core.namespace import (
-    AGENT_SKILLS_ROOT,
     classify_uri,
     content_owner_context_for_uri,
     context_type_for_uri,
@@ -1542,69 +1541,48 @@ class ReindexExecutor:
         self._ensure_reconciliation_scope_visible(uri, run.ctx)
         if not recursive:
             return
-        resources, agent = "viking://resources", "viking://agent"
-        service = get_service()
+        agent = "viking://agent"
+        resources, tools, skills = "viking://resources", f"{agent}/tools", f"{agent}/skills"
+        resource_roots = (resources, tools)
         inventories = {}
-        for root in (resources, agent):
+        for root in (*resource_roots, skills):
             inventories[root] = await self._read_reindex_inventory(
-                service.vikingdb_manager,
+                get_service().vikingdb_manager,
                 uri=root,
                 ctx=run.ctx,
                 recursive=True,
             )
-        resource_facts = await self._namespace_facts(resources, ctx=run.ctx)
         agent_exists, agent_is_dir, _ = await self._namespace_facts(agent, ctx=run.ctx)
-        skill_facts = await self._namespace_facts(
-            AGENT_SKILLS_ROOT, ctx=run.ctx, list_children=True
-        )
+        agent_inventory = None
+        if agent_exists and agent_is_dir:
+            agent_inventory = await self._read_reindex_inventory(
+                get_service().vikingdb_manager, uri=agent, ctx=run.ctx, recursive=False
+            )
+        resource_facts = {
+            root: await self._namespace_facts(root, ctx=run.ctx) for root in resource_roots
+        }
+        skill_facts = await self._namespace_facts(skills, ctx=run.ctx, list_children=True)
         _, _, users = await self._namespace_facts(
             "viking://user",
             ctx=run.ctx,
             list_children=True,
         )
-        # Skill packages have their own indexing rules. Everything else in agent
-        # uses one resource rebuild, including the agent root.
-        skill_inventory = {}
-        agent_resource_inventory = {}
-        for record_id, record in inventories[agent].items():
-            inventory = (
-                skill_inventory
-                if classify_uri(str(record["uri"])).is_skill
-                else agent_resource_inventory
-            )
-            inventory[record_id] = record
-        if agent_exists or agent_resource_inventory:
-            entries = (
-                await self._tree_all(get_viking_fs(), agent, show_all_hidden=True, ctx=run.ctx)
-                if agent_exists and agent_is_dir
-                else []
-            )
-            await self._reindex_rfv(
-                uri=agent,
+        if agent_inventory is not None:
+            await self._reindex_namespace_markers(uri=agent, run=run, inventory=agent_inventory)
+        for root in resource_roots:
+            await self._resource_scope(
+                uri=root,
                 mode=mode,
-                context_type="resource",
-                recursive=True,
                 run=run,
-                root_is_dir=agent_is_dir,
-                root_exists=agent_exists,
-                formal_entries=[
-                    entry for entry in entries if not classify_uri(str(entry["uri"])).is_skill
-                ],
-                vector_inventory=agent_resource_inventory,
+                facts=resource_facts[root],
+                inventory=inventories[root],
             )
-        await self._resource_scope(
-            uri=resources,
-            mode=mode,
-            run=run,
-            facts=resource_facts,
-            inventory=inventories[resources],
-        )
         await self._reindex_skill_namespace(
-            uri=AGENT_SKILLS_ROOT,
+            uri=skills,
             mode=mode,
             run=run,
             facts=skill_facts,
-            vector_inventory=skill_inventory,
+            vector_inventory=inventories[skills],
         )
         for entry in users:
             child = str(entry["uri"])
