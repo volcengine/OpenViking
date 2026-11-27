@@ -22,6 +22,7 @@ from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_
 from openviking.parse.image_rewrite import rewrite_image_uris
 from openviking.parse.mode import ParseMode, normalize_parse_mode
 from openviking.parse.tree_builder import TreeBuilder
+from openviking.parse.understanding_api import parser_key_scope
 from openviking.privacy.sanitizer import PrivacySanitizer
 from openviking.resource.processing_mode import (
     DEFAULT_PROCESSING_MODE,
@@ -312,21 +313,11 @@ class ResourceProcessor:
             storage=self.media_storage,
         )
 
-    async def _parser_api_config_kwargs(
-        self,
-        ctx: RequestContext,
-        kwargs: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Add the owning Account's parser config for one operation without persisting it."""
+    def _parser_api_config_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Use the published cluster endpoint and upload settings for this operation."""
         if self.runtime_config_manager is None:
             return kwargs
-        from openviking.config.parser_api import get_effective_parser_api_config
-
-        result = dict(kwargs)
-        result["parser_api_config"] = await get_effective_parser_api_config(
-            self.runtime_config_manager, ctx.account_id
-        )
-        return result
+        return {**kwargs, "parser_api_config": get_openviking_config().parser_api}
 
     def _build_parse_output_store(self):
         """Return the configured parse output store, or None for AGFS mode.
@@ -802,14 +793,16 @@ class ResourceProcessor:
     async def submit_understanding(
         self, source: Union[str, "LocalResource"], *, ctx: RequestContext, **kwargs
     ) -> str:
-        kwargs = await self._parser_api_config_kwargs(ctx, kwargs)
-        return await self._get_media_processor().submit_understanding(source, **kwargs)
+        kwargs = self._parser_api_config_kwargs(kwargs)
+        with parser_key_scope(ctx.api_key):
+            return await self._get_media_processor().submit_understanding(source, **kwargs)
 
     async def upload_understanding_file(
         self, source: Union[str, "LocalResource"], *, ctx: RequestContext
     ) -> str:
-        kwargs = await self._parser_api_config_kwargs(ctx, {})
-        return await self._get_media_processor().upload_understanding_file(source, **kwargs)
+        kwargs = self._parser_api_config_kwargs({})
+        with parser_key_scope(ctx.api_key):
+            return await self._get_media_processor().upload_understanding_file(source, **kwargs)
 
     async def build_index(
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
@@ -913,8 +906,11 @@ class ResourceProcessor:
                 else:
                     await _set_stage("parsing")
                 kwargs = await self._source_config_kwargs(path, ctx, kwargs)
-                kwargs = await self._parser_api_config_kwargs(ctx, kwargs)
-                with viking_fs.bind_request_context(ctx):
+                kwargs = self._parser_api_config_kwargs(kwargs)
+                with (
+                    viking_fs.bind_request_context(ctx),
+                    parser_key_scope(getattr(ctx, "api_key", None)),
+                ):
                     parse_result = await media_processor.process(
                         source=path,
                         instruction=effective_instruction,

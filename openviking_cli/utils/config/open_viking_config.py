@@ -164,8 +164,6 @@ class ParserApiConfig(BaseModel):
         if self.enable:
             if not self.host.strip():
                 raise ValueError("parser_api.host is required when parser_api.enable=true")
-            # The credential may be supplied by Account runtime configuration.
-            # UnderstandingAPI validates it when an operation starts.
         if self.host and "://" not in self.host:
             raise ValueError("parser_api.host must include scheme (e.g., https://...)")
         if self.upload_simple_max_bytes <= 0:

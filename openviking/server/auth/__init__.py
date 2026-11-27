@@ -299,7 +299,9 @@ async def get_upload_request_context(
         except UploadTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         request.state.signed_upload = consumed
-        return await _context_from_signed_token(request, consumed)
+        ctx = await _context_from_signed_token(request, consumed)
+        ctx.api_key = consumed.api_key
+        return ctx
 
     identity = await resolve_identity(
         request, x_api_key, authorization, x_openviking_account, x_openviking_user

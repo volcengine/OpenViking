@@ -7,6 +7,7 @@ Provides resource management operations: add_resource, add_skill, wait_processed
 """
 
 import asyncio
+import base64
 import contextlib
 import inspect
 import json
@@ -15,6 +16,7 @@ import signal
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -28,6 +30,7 @@ from openviking.connector.auth import (
     validate_feishu_auth_args,
 )
 from openviking.core.namespace import classify_uri, is_content_root_uri
+from openviking.crypto.encryptor import MAGIC, FileEncryptor, build_credential_encryptor
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.parse.backend import ParserBackend, normalize_parser_backend
 from openviking.parse.mode import ParseMode, normalize_parse_mode
@@ -101,6 +104,7 @@ from openviking_cli.exceptions import (
     OpenVikingError,
 )
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 if TYPE_CHECKING:
     from openviking.connector.delegate import ConnectorDelegate
@@ -112,6 +116,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_UNDERSTANDING_KEY_FIELD = "understanding_api_key_ciphertext"
 
 _ADD_RESOURCE_ARGS_RESERVED_FIELDS = frozenset(
     {
@@ -441,6 +446,7 @@ class ResourceService:
         build_index: bool,
         summarize: bool,
         processing_mode: ProcessingMode,
+        parse_mode: ParseMode,
         processor_kwargs: Dict[str, Any],
         watch_auth_state: Optional[Dict[str, Any]],
         ctx: RequestContext,
@@ -477,6 +483,20 @@ class ResourceService:
                         "source changes."
                     )
                 try:
+                    # A refresh can route to Understanding even if the first import was native.
+                    if (
+                        ctx.api_key
+                        and parse_mode is ParseMode.DEFAULT
+                        and _UNDERSTANDING_KEY_FIELD not in (watch_auth_state or {})
+                        and not is_external_feishu_auth(watch_auth_state)
+                        and get_openviking_config().parser_api.enable
+                    ):
+                        watch_auth_state = {
+                            **(watch_auth_state or {}),
+                            _UNDERSTANDING_KEY_FIELD: await self._encrypt_understanding_key(
+                                ctx.account_id, ctx.api_key
+                            ),
+                        }
                     sanitized = self._sanitize_watch_processor_kwargs(processor_kwargs)
                     watch = await self._handle_watch_task_creation(
                         path=path,
@@ -791,6 +811,23 @@ class ResourceService:
         self._background_tasks.add(background)
         background.add_done_callback(self._background_tasks.discard)
 
+    @cached_property
+    def _task_credential_encryptor(self) -> FileEncryptor:
+        return build_credential_encryptor(get_openviking_config().encryption)
+
+    async def _encrypt_understanding_key(self, account_id: str, api_key: str) -> str:
+        ciphertext = await self._task_credential_encryptor.encrypt(account_id, api_key.encode())
+        return base64.b64encode(ciphertext).decode("ascii")
+
+    async def _restore_understanding_context(
+        self, ctx: RequestContext, encoded: str
+    ) -> RequestContext:
+        ciphertext = base64.b64decode(encoded, validate=True)
+        if not ciphertext.startswith(MAGIC):
+            raise FailedPreconditionError("Invalid Understanding task credential")
+        key = await self._task_credential_encryptor.decrypt(ctx.account_id, ciphertext)
+        return replace(ctx, api_key=key.decode())
+
     async def _enqueue_add_resource_job(
         self,
         msg: Any,
@@ -986,6 +1023,11 @@ class ResourceService:
 
                 internal_kwargs[PREPARED_FILE_ID_ARG] = msg.understanding_file_id
             try:
+                if task_auth and _UNDERSTANDING_KEY_FIELD in task_auth:
+                    task_auth = dict(task_auth)
+                    ctx = await self._restore_understanding_context(
+                        ctx, task_auth.pop(_UNDERSTANDING_KEY_FIELD)
+                    )
                 async with feishu_auth_scope(
                     self._connector,
                     path=msg.path,
@@ -1429,7 +1471,32 @@ class ResourceService:
         defer_target_resolution = False
         staged_enqueued = False
         first_watch = None
+        queue_name = (
+            QueueManager.EXTERNAL_PARSE
+            if plan.understanding_response_id is not None or plan.understanding_file_id is not None
+            else QueueManager.ADD_RESOURCE
+        )
         try:
+            task_auth = plan.task_auth
+            # Unprepared sources, directories and ZIPs can route individual files in the worker.
+            deferred_parser = plan.staged_source is None or plan.source_identity.source_format in (
+                "directory",
+                "zip",
+            )
+            if (
+                ctx.api_key
+                and mode is ParseMode.DEFAULT
+                and (
+                    queue_name == QueueManager.EXTERNAL_PARSE
+                    or (deferred_parser and get_openviking_config().parser_api.enable)
+                )
+            ):
+                task_auth = {
+                    **task_auth,
+                    _UNDERSTANDING_KEY_FIELD: await self._encrypt_understanding_key(
+                        ctx.account_id, ctx.api_key
+                    ),
+                }
             (
                 root_uri,
                 resource_lock,
@@ -1519,12 +1586,6 @@ class ResourceService:
                 nonlocal staged_enqueued
                 staged_enqueued = True
 
-            queue_name = (
-                QueueManager.EXTERNAL_PARSE
-                if plan.understanding_response_id is not None
-                or plan.understanding_file_id is not None
-                else QueueManager.ADD_RESOURCE
-            )
             enqueue_lock = resource_lock
             resource_lock = None
 
@@ -1554,6 +1615,7 @@ class ResourceService:
                         build_index=build_index,
                         summarize=summarize,
                         processing_mode=processing_mode,
+                        parse_mode=mode,
                         processor_kwargs=self._watch_processor_kwargs(
                             {
                                 **processor_kwargs,
@@ -1566,7 +1628,7 @@ class ResourceService:
                             tags,
                             tag_mode,
                         ),
-                        watch_auth_state=plan.task_auth or None,
+                        watch_auth_state=task_auth or None,
                         ctx=ctx,
                         initial_run_id=record.task_id,
                         lease_ref=enqueue_lock,
@@ -1582,7 +1644,7 @@ class ResourceService:
                 msg,
                 queue_name=queue_name,
                 resource_lock=enqueue_lock,
-                task_auth=plan.task_auth,
+                task_auth=task_auth,
                 on_enqueued=(transfer_staged_source if plan.staged_source is not None else None),
                 on_failed_with_lock=cleanup_enqueue_failure,
                 on_task_created=register_task,
@@ -1865,9 +1927,14 @@ class ResourceService:
         task_id: Optional[str] = None,
         wait_for_completion: Optional[bool] = None,
         on_task_created: Optional[Callable[[Any], Awaitable[None]]] = None,
+        watch_auth_state: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Submit a scheduled refresh without changing its watch task."""
+        if not ctx.api_key and watch_auth_state and _UNDERSTANDING_KEY_FIELD in watch_auth_state:
+            ctx = await self._restore_understanding_context(
+                ctx, watch_auth_state[_UNDERSTANDING_KEY_FIELD]
+            )
         return await self._submit_resource_ingestion(
             path=path,
             ctx=ctx,
@@ -2453,6 +2520,7 @@ class ResourceService:
                     build_index=build_index,
                     summarize=summarize,
                     processing_mode=processing_mode,
+                    parse_mode=mode,
                     processor_kwargs=self._watch_processor_kwargs(kwargs, tags, tag_mode),
                     watch_auth_state=watch_auth_state,
                     ctx=ctx,
@@ -2484,6 +2552,7 @@ class ResourceService:
                     build_index=build_index,
                     summarize=summarize,
                     processing_mode=processing_mode,
+                    parse_mode=mode,
                     processor_kwargs=self._watch_processor_kwargs(kwargs, tags, tag_mode),
                     watch_auth_state=watch_auth_state,
                     ctx=ctx,

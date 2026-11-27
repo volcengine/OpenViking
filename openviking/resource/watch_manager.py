@@ -731,6 +731,7 @@ class WatchManager:
                 kwargs["git_head_sha_hint"] = checkpoint["head_sha"]
                 if checkpoint == task.source_checkpoint:
                     return WatchRunResult(status="completed", execution_task_id=task.last_task_id)
+        kwargs["watch_auth_state"] = auth
         return await self._resource_service.refresh_resource(
             path=task.path,
             ctx=ctx,

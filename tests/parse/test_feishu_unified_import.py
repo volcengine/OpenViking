@@ -147,7 +147,7 @@ async def test_directory_executes_url_with_auth_and_preserves_output_parent(
     calls = []
 
     async def parse_api(self, source, **options):
-        assert self._api_key == "feishu-key"
+        assert "X-API-Key" not in self._auth_headers()
         calls.append((source, options))
         await options["_response_checkpoint"]("response-1")
         await fs.mkdir("viking://temp/doc/Cloud", exist_ok=True)

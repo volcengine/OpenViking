@@ -848,14 +848,11 @@ Only ROOT can read, update or reset it:
 {"settings": {"parser_api": {"api_key": "<account-parser-key>"}}}
 ```
 
-The external parser uses this key for the owning Account's uploads, submission,
-polling and recovery; operational settings remain in Cluster `parser_api`.
-An absent Account section retains the legacy Cluster key. Queues carry owner and
-remote IDs, without credentials. A running call retains its acquired key;
-the next execution or recovery reads the current key. Rotation must preserve
-access to existing IDs under the same remote identity. Remote errors do not trigger
-credential fallback or resubmission. Account settings use the existing configuration
-source and AGFS file encryption when enabled; this does not encrypt `ov.conf`.
+This field is retained for compatibility. Understanding uses the caller's
+OpenViking API key for uploads, submission and polling, including after a worker
+resumes a task. See [External parser API](../guides/01-configuration.md#parser-api).
+Account settings use the existing configuration source and AGFS file encryption
+when enabled.
 
 **Other Account Configuration Sections**
 

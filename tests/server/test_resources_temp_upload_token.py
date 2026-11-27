@@ -97,6 +97,7 @@ async def test_token_upload_auto_ingests_and_returns_result(
         # Exercise the actual kernel authorization, without an embedding/native stack.
         assert ctx.user == UserIdentifier("acct", "user")
         assert ctx.actor_peer_id == "bot-a"
+        assert ctx.api_key == "mcp-caller-key"
         await fs.prepare_acl_update(to, acl, ctx)
         imported.append(Path(path).read_bytes())
         return {"root_uri": to}
@@ -106,7 +107,11 @@ async def test_token_upload_auto_ingests_and_returns_result(
     monkeypatch.setattr(mcp_endpoint, "get_server_config", lambda: config)
     monkeypatch.setattr(resource_ingest, "get_service", lambda: service)
     identity = RequestContext(
-        UserIdentifier("acct", "user"), Role.ADMIN, actor_peer_id="bot-a", from_oauth=True
+        UserIdentifier("acct", "user"),
+        Role.ADMIN,
+        actor_peer_id="bot-a",
+        from_oauth=True,
+        api_key="mcp-caller-key",
     )
 
     async def issue():
@@ -115,6 +120,7 @@ async def test_token_upload_auto_ingests_and_returns_result(
             instruction = await mcp_endpoint.add_resource(path="/tmp/hello.md", to=target, acl=acl)
         finally:
             mcp_endpoint._mcp_ctx.reset(identity_token)
+        assert identity.api_key not in instruction
         upload_url = next(line.strip() for line in instruction.splitlines() if "?token=" in line)
         return parse_qs(urlparse(upload_url).query)["token"][0]
 

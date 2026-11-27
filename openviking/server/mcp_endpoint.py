@@ -2261,6 +2261,7 @@ async def add_resource(
         ttl_seconds=ttl_seconds,
         role=ctx.role,
         from_oauth=ctx.from_oauth,
+        api_key=ctx.api_key,
         to=to,
         parent=parent,
         reason=description,

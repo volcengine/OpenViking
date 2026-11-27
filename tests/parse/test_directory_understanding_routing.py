@@ -133,7 +133,7 @@ async def test_materialized_html_webpage_routes_to_understanding(monkeypatch, tm
     parse_file = _fake_understanding_parse(calls)
 
     async def parse_api(api, source, **kwargs):
-        assert api._api_key == "account-key"
+        assert "X-API-Key" not in api._auth_headers()
         return await parse_file(api, source, **kwargs)
 
     with (
@@ -899,7 +899,7 @@ async def test_nested_zip_leaf_failures_are_promoted_with_remote_ids(
 
     async def parse(api, source, **kwargs):
         assert Path(source).name == "bad.pdf"
-        assert api._api_key == "zip-key"
+        assert "X-API-Key" not in api._auth_headers()
         raise UnderstandingAPIError(
             "remote parse failed",
             {"file_id": "file-bad", "response_id": "response-bad"},
