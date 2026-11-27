@@ -137,7 +137,8 @@ it('sends a choice card and feeds a click to the agent with durable routing and 
   const sent = f.calls[0].args;
   assert.equal(sent[sent.indexOf('--msg-type') + 1], 'interactive');
   const card = JSON.parse(sent[sent.indexOf('--content') + 1]);
-  assert.equal(card.elements[1].actions[1].value.superagent_choice, 'full');
+  const rows = card.body.elements.filter((element) => element.tag === 'interactive_container');
+  assert.deepEqual(rows.map((row) => row.behaviors[0].value.superagent_choice), ['small', 'full']);
   // Reopen the database to prove this is not a process-local callback map.
   const reopened = new Store(f.databasePath, logger);
   t.after(() => reopened.close());
@@ -183,6 +184,27 @@ it('sends a choice card and feeds a click to the agent with durable routing and 
   reopened.ingest(cancel);
   assert.throws(() => f.service.fence({ decision_id: inbound.eventId }, { trace: {} }), /newer authenticated input/);
   harness.stop();
+});
+
+it('lays a long option out as a wrapping row instead of a button label a phone cuts', async (t) => {
+  const f = fixture(t);
+  const labels = ['给图片配 VLM 描述（141 张 png + 15 张 jpg 现在等于零信息）', '补 .mldatx：Stateflow 生成的用例 30 个成员只解出 8 个'];
+  await f.call('send_message', { chat_id: chatId, decision_id: decisionEvent,
+    choices: { prompt: '选一个我推下去', options: [{ key: 'vlm', label: labels[0] }, { key: 'mldatx', label: labels[1] }] } });
+  const args = f.calls[0].args;
+  const card = JSON.parse(args[args.indexOf('--content') + 1]);
+  assert.equal(card.schema, '2.0');
+  // Nothing in the card is a button: a button label renders on one line, and
+  // Lark ends an option that does not fit with "…" on a phone.
+  assert.equal(JSON.stringify(card).includes('"tag":"button"'), false);
+  const rows = card.body.elements.filter((element) => element.tag === 'interactive_container');
+  assert.deepEqual(rows.map((row) => row.elements[0]), labels.map((label) => ({ tag: 'markdown', content: label })));
+  assert.deepEqual(rows.map((row) => row.behaviors), labels.map((_, index) => [{ type: 'callback',
+    value: { superagent_choice: ['vlm', 'mldatx'][index] } }]));
+  // The answered card keeps the chosen label whole.
+  const settled = settledChoiceCard({ question: { prompt: 'p', options: [{ key: 'vlm', label: labels[0] }] },
+    answer: { key: 'vlm', label: labels[0] } });
+  assert.deepEqual(settled.body.elements.at(-1), { tag: 'div', text: { tag: 'plain_text', content: `已选择：${labels[0]}` } });
 });
 
 it('rejects unknown cards, wrong app/chat/user, invalid options, expired questions and ignored senders', async (t) => {

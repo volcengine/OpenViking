@@ -64,19 +64,30 @@ function freezeCardImages(card, images, { workspace, tempDir }) {
   } catch (error) { cleanup(); throw error; }
 }
 
+function plainText(content) {
+  return { tag: 'div', text: { tag: 'plain_text', content } };
+}
+
+// A button label is drawn on one line and cut with "…" when it does not fit, so
+// a phone shows only the first characters of a real option. Every option is
+// therefore its own tappable row (Card 2.0 interactive_container) whose text
+// wraps; the click still reports { superagent_choice: key }, which is what the
+// answer path reads, so nothing outside this function changes.
 export function choiceCard(question, answer = null) {
-  const elements = [{ tag: 'div', text: { tag: 'plain_text', content: question.prompt } }];
+  const elements = [plainText(question.prompt)];
   if (answer) {
-    elements.push({ tag: 'div', text: { tag: 'plain_text', content: `已选择：${answer.label}` } });
+    elements.push(plainText(`已选择：${answer.label}`));
   } else {
-    for (let index = 0; index < question.options.length; index += 4) {
-      elements.push({ tag: 'action', actions: question.options.slice(index, index + 4).map((option) => ({
-        tag: 'button', text: { tag: 'plain_text', content: option.label }, type: 'default',
-        value: { superagent_choice: option.key },
-      })) });
+    for (const option of question.options) {
+      elements.push({
+        tag: 'interactive_container', width: 'fill', has_border: true, corner_radius: '6px',
+        padding: '8px 12px',
+        behaviors: [{ type: 'callback', value: { superagent_choice: option.key } }],
+        elements: [{ tag: 'markdown', content: option.label }],
+      });
     }
   }
-  return { config: { wide_screen_mode: true, update_multi: true }, elements };
+  return { schema: '2.0', config: { update_multi: true }, body: { elements } };
 }
 
 // Resolves exactly one message body into the Connector payload, the canonical
