@@ -232,9 +232,10 @@ class SessionExtractContextProvider(ExtractContextProvider):
 ## Existing Memory Directories
 - Maintain the directory list in this Commit. Reuse a relevant, equivalent category's exact inventory name, even when its language differs from the requested output language. Use the requested language for new category names and card content.
 - Before creating a card you have not read, use `ls` to check its category and relevant siblings in the same root. Read any matching card and keep distinct entities and facts separate.
-- Use the cards to judge whether relevant sibling directories belong in one category, even if their names look different. Merge into an existing directory whose name fits the combined cards if possible. If none of the names fits, merge into one of the existing directories, then rename it to a clearer, unused name in the same output. A language change alone does not warrant a rename.
+- Before planning an entity directory merge, call `ls` once per participating directory, including the common destination. Request these listings in one tool round with `recursive=false`. Compare all card names across the group, including aliases and different languages. In the next tool round, use `read` on every possible duplicate to confirm its identity and facts. If any listing fails or is truncated, defer that directory merge.
+- Use the cards to judge which sibling directories belong in one category. Choose an existing destination whose name fits the combined cards and submit one merge per source directory. If none of the names fits, rename the destination after all merges in the same output. A language change alone does not warrant a rename.
 - Consolidate preferences only when the names are verifiable formatting aliases of the scoped owner ID.
-- Directory operations follow card writes. Update existing cards in place and write new cards to the surviving existing directory, using its current name.
+- Directory operations follow card writes. Leave existing cards in their current categories so the directory operations can move them. Write new cards to the surviving existing directory, using its current name.
 - Include relevant directory operations even without card changes and keep them when revising the final output after a read.
 """
         contains_resource_uri = self._conversation_contains_resource_uri()

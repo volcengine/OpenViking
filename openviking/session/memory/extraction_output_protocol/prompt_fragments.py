@@ -37,8 +37,16 @@ PYTHON_COMMIT_RULE = (
 )
 PYTHON_METHODS_HEADER = ("", "Available write methods for this extraction:")
 DIRECTORY_CATEGORY_RULES = (
-    "- Compare the cards in candidate directories. Merge siblings whose contents fit one useful "
-    "category, even if their names differ or cover only part of the combined category.",
+    "- Merge siblings whose cards fit one useful category, even if their names differ or cover "
+    "only part of the combined category. For several sources, use one merge operation per "
+    "source and the same existing destination.",
+    "- For every entity confirmed to have multiple cards in the merge group, pick one existing "
+    "canonical card, preferably in the destination. Update it with the distinct facts from all "
+    "copies. Submit a delete-with-replacement for every other copy, including aliases with "
+    "different filenames, pointing to that same canonical card. Keep distinct or uncertain "
+    "identities separate.",
+    "- A directory merge moves remaining cards as they are. Leave distinct cards in their "
+    "current categories for the directory merge to move.",
     "- Keep the destination name if it describes the combined cards. Otherwise, include one "
     "rename of that destination to an unused sibling in the same final output.",
 )
