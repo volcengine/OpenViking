@@ -638,19 +638,19 @@ async def test_grep_case_insensitive(client_with_resource):
     assert match["content"] == "## Introduction"
 
 
-async def test_grep_missing_uri_returns_not_found(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/search/grep",
-        json={
-            "uri": "viking://resources/nonexistent_grep_test_xyz",
-            "pattern": "test",
-        },
-    )
+async def test_grep_missing_uri_returns_not_found(client_with_resource):
+    client, root = client_with_resource
+    missing_uri = "viking://resources/nonexistent_grep_test_xyz"
+    for uri in (missing_uri, [root, missing_uri]):
+        resp = await client.post(
+            "/api/v1/search/grep",
+            json={"uri": uri, "pattern": "Introduction", "node_limit": 1},
+        )
 
-    assert resp.status_code == 404
-    error = resp.json()["error"]
-    assert error["code"] == "NOT_FOUND"
-    assert "viking://resources/nonexistent_grep_test_xyz" in error["message"]
+        assert resp.status_code == 404, resp.text
+        error = resp.json()["error"]
+        assert error["code"] == "NOT_FOUND"
+        assert error["details"]["resource"] == missing_uri
 
 
 async def test_grep_level_limit_filters_by_relative_match_path(
@@ -712,10 +712,27 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
         )
         assert added.status_code == 200, added.text
         files[group] = f"{added.json()['result']['root_uri']}/{source.name}"
-    payload = {"uri": "viking://resources", "pattern": "OpenViking"}
+    payload = {
+        "uri": [
+            "viking://resources/group_a",
+            "viking://resources/group_a/cache",
+            "viking://resources/group_b",
+        ],
+        "pattern": "OpenViking",
+        "node_limit": 2,
+    }
     baseline = await client.post("/api/v1/search/grep", json=payload)
     assert baseline.status_code == 200, baseline.text
-    assert {m["uri"] for m in baseline.json()["result"]["matches"]} == set(files.values())
+    result = baseline.json()["result"]
+    assert [m["uri"] for m in result["matches"]] == list(files.values())
+    assert result["count"] == result["match_count"] == 2
+
+    limited = await client.post("/api/v1/search/grep", json={**payload, "node_limit": 1})
+    assert limited.status_code == 200, limited.text
+    result = limited.json()["result"]
+    assert [m["uri"] for m in result["matches"]] == [files["group_a"]]
+    assert result["limit_reached"] is True
+    assert result["files_scanned"] == 1
 
     response = await client.post(
         "/api/v1/search/grep", json={**payload, "exclude_uri": "viking://resources/group_a/cache"}
@@ -738,18 +755,61 @@ async def test_glob(client_with_resource):
     assert all(isinstance(match, str) for match in matches)
 
 
-async def test_glob_explicit_empty_extra_fields_returns_entry_objects(client_with_resource):
+async def test_glob_merges_search_roots_with_entry_results(
+    client_with_resource, service, monkeypatch
+):
     client, root = client_with_resource
+    second_root = "viking://resources/multi-glob"
+    second_file = f"{second_root}/second.txt"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.viking_fs.write_file(second_file, "other resource", ctx=ctx)
+    scopes = [root, second_root] + ["viking://resources"] * 8
+    payload = {
+        "uri": scopes,
+        "pattern": "**/*",
+        "extra_fields": [],
+    }
     resp = await client.post(
         "/api/v1/search/glob",
-        json={"pattern": "**/*.md", "extra_fields": []},
+        json=payload,
     )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     matches = resp.json()["result"]["matches"]
-    assert any(m["uri"] == f"{root}/sample.md" and m["isDir"] is False for m in matches)
     assert all(isinstance(match, dict) for match in matches)
     assert all("uri" in match and "isDir" in match for match in matches)
+    assert [match["uri"] for match in matches if not match["isDir"]] == [
+        f"{root}/sample.md",
+        second_file,
+    ]
+
+    glob_directory = service.viking_fs._async_agfs.glob_directory
+
+    async def glob_first_scope_only(path, *args, **kwargs):
+        if not path.endswith("/" + root.removeprefix("viking://")):
+            raise RuntimeError(f"unexpected glob scan beyond the result limit: {path}")
+        return await glob_directory(path, *args, **kwargs)
+
+    with monkeypatch.context() as limited_scope:
+        limited_scope.setattr(
+            service.viking_fs._async_agfs, "glob_directory", glob_first_scope_only
+        )
+        limited = await client.post("/api/v1/search/glob", json={**payload, "node_limit": 1})
+    assert limited.status_code == 200, limited.text
+    assert limited.json()["result"]["matches"] == matches[:1]
+
+    missing_uri = "viking://resources/missing-glob-scope"
+    missing = await client.post(
+        "/api/v1/search/glob",
+        json={**payload, "uri": [root, missing_uri], "node_limit": 1},
+    )
+    assert missing.status_code == 404, missing.text
+    assert missing.json()["error"]["details"]["resource"] == missing_uri
+
+    for invalid_scopes in ([], [*scopes, root]):
+        invalid = await client.post("/api/v1/search/glob", json={**payload, "uri": invalid_scopes})
+        assert invalid.status_code == 400, invalid.text
+        assert invalid.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_glob_filters_and_projects_resource_tags(client_with_resource):

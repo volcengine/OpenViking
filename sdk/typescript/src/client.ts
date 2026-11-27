@@ -83,6 +83,11 @@ const pathPart = (value: string): string => encodeURIComponent(value);
 export const normalizeURI = (uri: string): string =>
   uri.startsWith("viking://") ? uri : `viking://${uri.replace(/^\/+/, "")}`;
 
+const normalizeSearchScope = (uri: string | readonly string[]) =>
+  typeof uri === "string"
+    ? normalizeURI(uri)
+    : uri.map((scope) => scope && normalizeURI(scope));
+
 /** HTTP client for an existing OpenViking server. */
 export class OpenVikingClient {
   readonly baseUrl: string;
@@ -620,13 +625,13 @@ export class OpenVikingClient {
   }
   /** Search file contents by pattern. */
   grep(
-    uri: string,
+    uri: string | readonly string[],
     pattern: string,
     options: GrepOptions = {},
   ): Promise<JsonObject> {
     return this.request("POST", "/api/v1/search/grep", {
       body: compact({
-        uri: normalizeURI(uri),
+        uri: normalizeSearchScope(uri),
         pattern,
         case_insensitive: options.caseInsensitive ?? false,
         node_limit: options.nodeLimit ?? 256,
@@ -642,7 +647,7 @@ export class OpenVikingClient {
   /** Find files by glob pattern. */
   glob(
     pattern: string,
-    uri = "viking://",
+    uri: string | readonly string[] = "viking://",
     options: GlobOptions | number = {},
   ): Promise<JsonObject> {
     const resolvedOptions: GlobOptions =
@@ -650,7 +655,7 @@ export class OpenVikingClient {
     return this.request("POST", "/api/v1/search/glob", {
       body: compact({
         pattern,
-        uri: normalizeURI(uri),
+        uri: normalizeSearchScope(uri),
         node_limit: resolvedOptions.nodeLimit ?? 256,
         tags: resolvedOptions.tags,
         include_tags: resolvedOptions.includeTags || undefined,

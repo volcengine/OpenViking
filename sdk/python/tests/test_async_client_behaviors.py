@@ -653,7 +653,7 @@ async def test_grep_normalizes_uri_and_exclude_uri():
     client._handle_response = lambda _response: {"count": 0, "matches": []}
 
     await client.grep(
-        "/resources/demo",
+        ["/resources/demo", "viking://~/resources"],
         pattern="Sample",
         case_insensitive=True,
         node_limit=12,
@@ -663,7 +663,7 @@ async def test_grep_normalizes_uri_and_exclude_uri():
     fake_http.post.assert_awaited_once_with(
         "/api/v1/search/grep",
         json={
-            "uri": "viking://resources/demo",
+            "uri": ["viking://resources/demo", "viking://~/resources"],
             "pattern": "Sample",
             "case_insensitive": True,
             "node_limit": 12,

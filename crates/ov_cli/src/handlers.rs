@@ -2160,7 +2160,7 @@ pub async fn handle_acl(action: crate::cli::AclCommands, ctx: CliContext) -> Res
 }
 
 pub async fn handle_grep(
-    uri: String,
+    uri: Vec<String>,
     exclude_uri: Option<String>,
     pattern: String,
     ignore_case: bool,
@@ -2173,17 +2173,17 @@ pub async fn handle_grep(
     ctx: CliContext,
 ) -> Result<()> {
     // Prevent grep from root directory to avoid excessive server load and timeouts
-    if uri == "viking://" || uri == "viking:///" {
+    if uri
+        .iter()
+        .any(|scope| scope == "viking://" || scope == "viking:///")
+    {
         return Err(Error::Client(format!(
             "Cannot grep from root directory 'viking://'. Use a more specific scope, for example `ov grep --uri=viking://resources {pattern}`."
         )));
     }
 
-    let mut params = vec![
-        format!("--uri={}", uri),
-        format!("-n {}", node_limit),
-        format!("-L {}", level_limit),
-    ];
+    let mut params: Vec<_> = uri.iter().map(|scope| format!("--uri={scope}")).collect();
+    params.extend([format!("-n {node_limit}"), format!("-L {level_limit}")]);
     if let Some(excluded) = &exclude_uri {
         params.push(format!("-x {}", excluded));
     }
@@ -2225,18 +2225,15 @@ pub async fn handle_grep(
 
 pub async fn handle_glob(
     pattern: String,
-    uri: String,
+    uri: Vec<String>,
     node_limit: i32,
     simple: bool,
     fields: Option<Vec<String>>,
     tags: Vec<String>,
     ctx: CliContext,
 ) -> Result<()> {
-    let mut params = vec![
-        format!("--uri={}", uri),
-        format!("-n {}", node_limit),
-        format!("\"{}\"", pattern),
-    ];
+    let mut params: Vec<_> = uri.iter().map(|scope| format!("--uri={scope}")).collect();
+    params.extend([format!("-n {node_limit}"), format!("\"{pattern}\"")]);
     if simple {
         params.push("-s".to_string());
     }
