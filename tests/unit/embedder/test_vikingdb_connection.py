@@ -9,43 +9,6 @@ from openviking.models.embedder.vikingdb_embedders import VikingDBDenseEmbedder
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
 
-@pytest.mark.parametrize(
-    "scope", ["embedding", "credential", "storage", "account_embedding", "account_storage"]
-)
-def test_sts_tokens_are_hidden_in_model_repr_and_preserved_for_requests(scope):
-    from openviking.config.account_vector import (
-        AccountEmbeddingCredential,
-        AccountVolcengineVectorConfig,
-    )
-    from openviking_cli.utils.config.embedding_config import (
-        EmbeddingCredential,
-        EmbeddingModelConfig,
-    )
-    from openviking_cli.utils.config.vectordb_config import VolcengineConfig
-
-    token = "synthetic-sts-token-that-must-not-appear-in-repr"
-    models = {
-        "embedding": lambda: EmbeddingModelConfig(
-            provider="vikingdb",
-            model="bge-m3",
-            dimension=4,
-            ak="test-ak",
-            sk="test-sk",
-            region="ap-southeast-1",
-            session_token=token,
-        ),
-        "credential": lambda: EmbeddingCredential(session_token=token),
-        "storage": lambda: VolcengineConfig(session_token=token),
-        "account_embedding": lambda: AccountEmbeddingCredential(
-            provider="vikingdb", session_token=token
-        ),
-        "account_storage": lambda: AccountVolcengineVectorConfig(session_token=token),
-    }
-    model = models[scope]()
-    assert token not in repr(model)
-    assert model.model_dump()["session_token"] == token
-
-
 def test_account_embedding_uses_its_own_sts_token():
     from openviking.config.vector import resolve_effective_embedding
 

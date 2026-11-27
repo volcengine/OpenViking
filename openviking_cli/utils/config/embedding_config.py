@@ -46,9 +46,7 @@ class EmbeddingCredential(BaseModel):
     api_version: Optional[str] = Field(default=None, description="API version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
     sk: Optional[str] = Field(default=None, description="Access Key Secret for VikingDB API")
-    session_token: Optional[str] = Field(
-        default=None, repr=False, description="STS token for VikingDB API"
-    )
+    session_token: Optional[str] = Field(default=None, description="STS token for VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
     extra_headers: Optional[dict[str, str]] = Field(default=None, description="Extra HTTP headers")
@@ -98,9 +96,7 @@ class EmbeddingModelConfig(BaseModel):
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
-    session_token: Optional[str] = Field(
-        default=None, repr=False, description="STS token for VikingDB API"
-    )
+    session_token: Optional[str] = Field(default=None, description="STS token for VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
     extra_headers: Optional[dict[str, str]] = Field(

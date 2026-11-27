@@ -24,7 +24,6 @@ class VolcengineConfig(BaseModel):
     )
     session_token: Optional[str] = Field(
         default=None,
-        repr=False,
         description="Optional Volcengine STS security token for temporary credentials",
     )
     region: Optional[str] = Field(
