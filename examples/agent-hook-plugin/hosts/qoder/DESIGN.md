@@ -1,6 +1,6 @@
 # Qoder CLI host contract
 
-Established facts for the Qoder CLI host, per the host docs (`docs.qoder.com/cli/hooks`, `/cli/hooks-reference`, `/cli/plugins`, `/cli/plugins-reference`, `/cli/settings-reference`), plus the design of the `qoder` adapter that implements them (`hosts/qoder.mjs` and `hosts/qoder-turns.mjs` beside this file).
+Established facts for the Qoder CLI host, per the host docs (`docs.qoder.com/cli/hooks`, `/cli/hooks-reference`, `/cli/plugins`, `/cli/plugins-reference`, `/cli/settings-reference`), plus the design of the `qoder` adapter that implements them (`host.mjs` and `decode.mjs` beside this file).
 
 **Verified against**: Qoder CLI **v1.1.88** (npm `@qoder-ai/qodercli`, `entrypoint: "cli"` and `version: "1.1.88"` on every transcript record), macOS / darwin 27.2.0, 2026-11-13; capture re-verified on **v1.1.99**, 2026-11-27 (run 13).
 

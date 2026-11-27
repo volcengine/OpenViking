@@ -2,13 +2,11 @@
 
 > **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
 
-Long-term semantic memory and context takeover for [pi](https://github.com/earendil-works/pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and OpenViking can own long-term context by replacing committed history with an archive overview in pi's `context` hook.
+Long-term semantic memory and optional context takeover for [pi](https://github.com/earendil-works/pi) sessions, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens after every turn, and, when takeover is turned on (it is off by default), OpenViking can own long-term context by replacing committed history with an archive overview in pi's `context` hook.
 
-> **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
-> caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
-> `viking://user/memories` shorthand is rejected by newer servers.
+> **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less `viking://user/memories` shorthand is rejected by newer servers.
 
-> Design informed by lessons from all three OpenViking agent plugins: synchronous recall from OpenClaw, production-hardened capture/ranking from Claude Code, and anti-patterns dodged from Hermes's stale prefetch approach. See [DESIGN.md](./DESIGN.md) for the module-by-module design, including the context-takeover layer.
+User guide: [pi](../../docs/en/agent-integrations/11-pi.md). Shared behaviour (capture and commits, recall, session-start context, offline retries, subagents, compaction) and every shared setting: [capability reference](../../docs/en/agent-integrations/16-capability-reference.md) and [client configuration](../../docs/en/configuration/02-client.md). Module-by-module design, including the context-takeover layer: [DESIGN.md](./DESIGN.md).
 
 ## Quick Start
 
@@ -57,63 +55,23 @@ Credentials are resolved from `OPENVIKING_*` environment variables, `~/.openviki
 node ~/.pi/agent/extensions/openviking/scripts/setup.mjs
 ```
 
-Behaviour and peer-scoping knobs live in `~/.openviking/ovcli.conf` beside the credentials, in the shared `plugin` section or in the `plugin.pi` override. The extension has no configuration file of its own:
+Settings live in `~/.openviking/ovcli.conf` beside the credentials, in the shared `plugin` section or in the `plugin.pi` override (which wins for pi). The extension has no configuration file of its own:
 
 ```json
 {
   "url": "http://127.0.0.1:1933",
   "api_key": "your-api-key-here",
   "plugin": {
-    "recallLimit": 6,
     "pi": {
       "enabled": true,
       "autoCapture": true,
-      "peerId": "",
-      "workspacePeer": true,
-      "recallPeerScope": "all",
-      "recallTokenBudget": 2000,
-      "scoreThreshold": 0.35,
-      "minQueryLength": 3,
-      "profileTokenBudget": 10000,
-      "skillCatalog": true,
-      "skillCatalogTokenBudget": 1200,
-      "resumeContextBudget": 32000,
-      "commitTokenThreshold": 20000,
-      "takeoverEnabled": false,
-      "takeoverTokenThreshold": 30000,
-      "takeoverKeepRecentTurns": 3,
-      "takeoverOverviewBudget": 3000,
-      "takeoverOverviewPollMs": 2000,
-      "takeoverOverviewPollMax": 15
+      "takeoverEnabled": false
     }
   }
 }
 ```
 
-Keys in `plugin` apply to every harness; keys in `plugin.pi` apply to this extension and override them. Resolution is `OPENVIKING_*` environment variables → the workspace's `.openviking/config.json`, `.openviking/config.local.json` and machine registry entry → `plugin.pi` → `plugin` → built-in defaults. Every knob, with its type, default, range, environment variable and accepted older spellings, is declared in [`examples/agent-hook-plugin/lib/config-schema.mjs`](../agent-hook-plugin/lib/config-schema.mjs); `syncTurns` still works wherever `autoCapture` is written above.
-
-Credential environment variables:
-
-| Env Var | Meaning |
-|---------|---------|
-| `OPENVIKING_URL` | OpenViking server URL |
-| `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | Bearer token |
-| `OPENVIKING_ACCOUNT` | Trusted-mode account |
-| `OPENVIKING_USER` | Trusted-mode user |
-| `OPENVIKING_PEER_ID` | Actor peer id |
-| `OPENVIKING_WORKSPACE_PEER` | Derive an actor peer from the workspace's git identity by default; set `0` to send no peer |
-| `OPENVIKING_RECALL_PEER_SCOPE` | `all` recalls other project memories with a score penalty; `actor` only sees global plus the current project |
-| `OPENVIKING_DEBUG_LOG` | Write JSON Lines debug records to this path. `OV_DEBUG_LOG` is a deprecated alias kept for existing setups |
-
-Recall asks the server to assemble the context block in one request
-(`POST /api/v1/search/search` with `mode="context"`), so token budgeting, detail
-tiers and cross-turn dedup are shared with every other harness. Deployments
-without that endpoint fall back to `/api/v1/search/recall`, and that outcome is
-cached so only the first turn pays for the probe.
-
-API keys are sent as `Authorization: Bearer ...`. By default the extension derives a peer from the git identity of the process workspace path: the normalized `origin` URL of the repository the workspace sits in, else that repository's root path. Outside a git repository no peer is sent at all, and what is remembered there goes to the user-level space `viking://user/<you>/memories`. `git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`; the path fallback keeps the older naming rule where every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking`. One repository therefore keeps one peer across subdirectories, worktrees, clones and machines, while a fork's different origin keeps it separate. The extension reads the workspace's `.openviking/config.json`, so a `peer.id` or `peer.source` written there applies. The effective peer is sent as `X-OpenViking-Actor-Peer` and stored as `peer_id` on captured session messages. `OPENVIKING_PEER_ID` takes precedence over every file; below it, a workspace `peer.id` or the `plugin` section's `peerId` takes precedence over `ovcli.conf`'s `actor_peer_id` and `ov.conf`'s `pi.peerId`; and a peer from any of those takes precedence over workspace derivation. Memories written under the older path-derived peer stay reachable under the default broad recall, which sweeps every peer under the user.
-
-Recall defaults to the broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces penalized and rendered later. Set `OPENVIKING_RECALL_PEER_SCOPE=actor` for the isolation mode, which only sees global memory plus the current workspace. In deployments where one bot serves multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode with an explicit actor peer so one person's memories are not recalled into another person's session.
+Resolution order, identity headers, peers, recall isolation and every shared setting are described in [client configuration](../../docs/en/configuration/02-client.md); every knob is declared in [`examples/agent-hook-plugin/lib/config-schema.mjs`](../agent-hook-plugin/lib/config-schema.mjs). `syncTurns` still works wherever `autoCapture` is written. `OPENVIKING_DEBUG_LOG` writes JSON Lines debug records to that path (`OV_DEBUG_LOG` is a deprecated alias kept for existing setups).
 
 ### 4. Start Pi
 
@@ -125,90 +83,27 @@ The extension shows an `[OpenViking]` status line on startup. The server's own M
 
 ## Configuration Reference
 
-### Tuning fields
-
-All fields below live in `ovcli.conf`'s `plugin` section, or in the `plugin.pi` override. Defaults are shown.
+The settings below are specific to pi or behave differently on pi. They live in `ovcli.conf`'s `plugin` section, or in the `plugin.pi` override. Defaults are shown. Shared recall, capture, commit and session-start settings are listed in [client configuration](../../docs/en/configuration/02-client.md#plugin-settings).
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
-| `enabled`                | `true`     | Set `false` to disable the extension entirely                            |
-| `autoCapture`            | `true`     | Enable auto-capture of conversation turns. `syncTurns` is the older name and still works |
-
-### Peer scoping
-
-| Field                    | Default    | Description                                                              |
-|--------------------------|------------|--------------------------------------------------------------------------|
-| `peerId`                 | `""`      | Local explicit peer fallback; shared credential sources take precedence  |
-| `workspacePeer`          | `true`     | Derive a peer from the workspace's git identity when no explicit peer is set; `false` sends no peer |
-| `recallPeerScope`        | `"all"`   | Use `"actor"` for strict current-peer recall or `"all"` for broad recall |
-
-### Recall tuning
-
-| Field                    | Default    | Description                                                              |
-|--------------------------|------------|--------------------------------------------------------------------------|
-| `recallTokenBudget`      | `2000`     | Token budget for inline recall content                                   |
-| `recallMaxContentChars`  | `500`      | Per-item content cap for search results                                  |
-| `recallPreferAbstract`   | `true`     | Prefer L0 abstract over L2 full body when available                      |
-| `recallLimit`            | `10`       | Legacy quota-scaling input converted to six coding quotas, not a final cap |
-| `scoreThreshold`         | `0.35`     | Min relevance score (0–1)                                                |
-| `minQueryLength`         | `3`        | Skip recall for queries shorter than N characters                        |
-| `recallQueryFilters`     | `[]`       | sed-style rules applied to the prompt before recall (`s///`, `d//`, `k//`) |
-| `recallExcludeUris`      | `[]`       | URIs the recall search must never return (sent as `exclude_uris`)        |
 | `recallLedger`           | `true`     | Persist injected blocks and re-apply them to historical user messages so provider prompt-prefix caches keep hitting |
+| `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: capture keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
+| `commitTokenThreshold`   | `100000`   | Pending-token threshold the server commits at (set as the session's auto-commit policy); not used with takeover on |
+| `logLevel`               | `"error"`  | `"silent"`, `"error"`, or `"info"`                                      |
+| `debugLogPath`           | `""`       | Write JSON Lines debug records to this path; empty disables the log      |
 
 ### Recall injection ledger
 
-Pi's `context` hook hands extensions a deep copy of the session messages, so
-an injected `<openviking-context>` block is never written back to session
-storage. Without compensation, every request's history diverges from what the
-provider saw last turn, and strict-prefix prompt caches (DeepSeek and other
-OpenAI-compatible providers) miss from the first injected message onward
-(#4137). The ledger records exactly which block was injected into which user
-message (keyed by stable Pi entry id + content hash) in
-`~/.openviking/pi-recall-ledger/<session>.json` and re-applies them on every
-request, keeping the prefix byte-identical across turns while the newest
-message still gets fresh, current-query recall. Disable with
-`"recallLedger": false` or `OPENVIKING_RECALL_LEDGER=0`. Losing the ledger
-file only costs one cache miss; alignment resumes on the next turn. Stable
-entry ids let compacted retained messages and `/tree` branches recover their
-own original blocks even when active-context positions change.
-
-Explicit `recallLimit` values from 1 through 5 produce an effective total
-quota of 6 because each coding category keeps one retrieval slot. Direct API
-integrations should configure category `quotas` when they need exact ceilings.
-
-### Capture tuning
-
-| Field                    | Default    | Description                                                              |
-|--------------------------|------------|--------------------------------------------------------------------------|
-| `captureMode`            | `"semantic"` | `"semantic"` (always capture) or `"keyword"` (trigger-based)           |
-| `captureMaxLength`       | `24000`    | Max sanitized text length for the capture decision                       |
-| `captureAssistantTurns`  | `true`     | Include assistant turns (text + tool USE inputs)                         |
-| `captureToolResults`     | `false`    | Declared in the shared schema, but this extension never reads it: capture keeps every structured tool part, so tool results are captured either way, bounded by `captureToolMaxChars` |
-| `captureToolMaxChars`    | `1000000`  | Guard cap on one tool part's `tool_output`; the server externalizes oversized output |
-| `commitTokenThreshold`   | `100000`   | Pending-token threshold the server commits at (set as the session's auto-commit policy); not used with takeover on |
+Pi's `context` hook hands extensions a deep copy of the session messages, so an injected `<openviking-context>` block is never written back to session storage. Without compensation, every request's history diverges from what the provider saw last turn, and strict-prefix prompt caches (DeepSeek and other OpenAI-compatible providers) miss from the first injected message onward (#4137). The ledger records exactly which block was injected into which user message (keyed by stable Pi entry id + content hash) in `~/.openviking/pi-recall-ledger/<session>.json` and re-applies them on every request, keeping the prefix byte-identical across turns while the newest message still gets fresh, current-query recall. Disable with `"recallLedger": false` or `OPENVIKING_RECALL_LEDGER=0`. Losing the ledger file only costs one cache miss; alignment resumes on the next turn. Stable entry ids let compacted retained messages and `/tree` branches recover their own original blocks even when active-context positions change.
 
 ### Context takeover
 
-Takeover is disabled by default; Pi manages compaction. When explicitly enabled, OpenViking commits archived history, reads the
-overview of that exact archive, then the `context` hook replaces covered
-conversation turns with a synthetic `[OpenViking Session Context]` user message
-while keeping the recent live tail. The boundary advances only after every
-captured message in the cut has reached the server and the new archive has a
-non-empty overview. Permanent capture gaps leave the local history with Pi.
+Takeover is disabled by default; Pi manages compaction. When explicitly enabled, OpenViking commits archived history, reads the overview of that exact archive, then the `context` hook replaces covered conversation turns with a synthetic `[OpenViking Session Context]` user message while keeping the recent live tail. The boundary advances only after every captured message in the cut has reached the server and the new archive has a non-empty overview. Permanent capture gaps leave the local history with Pi.
 
-Takeover never waits for the summary inside a turn: pi hosts cap each extension
-event handler at 30s, so a summary that is not ready yet is checked once per
-later turn and before the next prompt. An archive the server marks finished
-or failed without a summary (for example with Working Memory disabled) is
-dropped instead of being checked forever.
+Takeover never waits for the summary inside a turn: pi hosts cap each extension event handler at 30s, so a summary that is not ready yet is checked once per later turn and before the next prompt. An archive the server marks finished or failed without a summary (for example with Working Memory disabled) is dropped instead of being checked forever.
 
-When `openviking_list` and `openviking_read` are active, the injected overview
-also includes the archive URI and a short recovery instruction. `openviking_list`
-locates the archive and `openviking_read` reads `messages.jsonl` in `offset` /
-`limit` chunks. This file contains captured historical messages; semantic search
-does not return the archive source verbatim, and capture may have sanitized,
-filtered or truncated the original Pi transcript.
+When `openviking_list` and `openviking_read` are active, the injected overview also includes the archive URI and a short recovery instruction. `openviking_list` locates the archive and `openviking_read` reads `messages.jsonl` in `offset` / `limit` chunks. This file contains captured historical messages; semantic search does not return the archive source verbatim, and capture may have sanitized, filtered or truncated the original Pi transcript.
 
 | Field                    | Default    | Description                                                              |
 |--------------------------|------------|--------------------------------------------------------------------------|
@@ -219,27 +114,11 @@ filtered or truncated the original Pi transcript.
 | `takeoverOverviewPollMs` | `2000`     | Delay between overview reads while answering pi's compaction             |
 | `takeoverOverviewPollMax`| `15`       | Max overview reads for pi's compaction; capped by the 25s handler budget |
 
-### Injection tuning
+### Session-start context on pi
 
-| Field                    | Default    | Description                                                              |
-|--------------------------|------------|--------------------------------------------------------------------------|
-| `profileTokenBudget`     | `10000`    | Token budget for user profile block                                      |
-| `skillCatalog`           | `true`     | Add the `<available-skills>` catalog to the profile block. Env: `OPENVIKING_SKILL_CATALOG` |
-| `skillCatalogTokenBudget`| `1200`     | Separate token budget for the skill catalog (0–20000; `0` turns it off). Env: `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` |
-| `resumeContextBudget`    | `32000`    | Token budget for archive overview on session resume                      |
-| `sessionHistoryPointer`  | `true`     | After a compaction or resume, add a note naming the session's OV id and how to look up exact details with `openviking_session_history`. Env: `OPENVIKING_SESSION_HISTORY_POINTER` |
+The profile block is built at session start and added to pi's system prompt on every turn. The model reads a skill's `SKILL.md` with `openviking_read` before following it.
 
-The profile block is built at session start and added to pi's system prompt on every turn. Its `<available-skills>` catalog comes from one `GET /api/v1/skills`: your own skills first, then the ones shared under `viking://agent/skills`, leaving out a shared skill that has the same name as one of yours, with each description cut to about 40 tokens. When the descriptions do not fit `skillCatalogTokenBudget`, the catalog lists names only (with a `... +N more` tail if even the names do not all fit), and when not even one name fits, a one-line count. With no skills, or on a server without that endpoint, it is left out. The model reads a skill's `SKILL.md` with `viking_read` before following it.
-
-### Misc
-
-| Field                    | Default    | Description                                                              |
-|--------------------------|------------|--------------------------------------------------------------------------|
-| `bypassSessionPatterns`  | `[]`       | Glob patterns matched against the cwd; a hit skips all OpenViking work for the session. `bypassPatterns` is the older name and still works. Env: `OPENVIKING_BYPASS_SESSION_PATTERNS` (CSV), `OPENVIKING_BYPASS_SESSION=1` |
-| `logLevel`               | `"error"`  | `"silent"`, `"error"`, or `"info"`                                      |
-| `debugLogPath`           | `""`       | Write JSON Lines debug records to this path; empty disables the log      |
-
-Bypass now runs through the same matcher every other OpenViking harness uses, so the patterns are real globs: `*` stops at a path separator and `**` crosses them. A bare path used to match its subdirectories as a prefix, and no longer does — write `"/tmp/scratch**"` where `"/tmp/scratch"` used to be enough.
+`bypassSessionPatterns` globs follow the shared matcher: `*` stops at a path separator and `**` crosses them, so a bare path does not match its subdirectories; write `"/tmp/scratch**"` to cover a directory tree.
 
 ### Secret sealing
 
@@ -313,16 +192,6 @@ Unlike Hermes's stale prefetch (recall from previous turn's query, injected one 
 - **Topic switches** within a session get correct recall
 - No waiting for the next turn to see relevant memories
 
-### Memory Pollution Prevention
-
-Before pushing turns to OpenViking, shared capture sanitization strips injected context blocks such as `<openviking-context>` to prevent a self-referential pollution loop where recall context is captured back as user messages.
-
-Acknowledgments and short turns are captured too, in every mode: under takeover they may later be represented only through the OV archive overview. Empty text is dropped and `captureFilters` apply.
-
-### Tool Use Preservation
-
-Tool capture preserves structured tool parts with bounded inputs and outputs. The memory extractor sees what the agent did without indexing unbounded raw output.
-
 ## LLM Tools
 
 The extension keeps no tool catalogue of its own. At session start it asks the server's `/mcp` endpoint for `tools/list` and registers one pi tool per descriptor it gets back, named `openviking_` + the server's own name, with the server's description and argument schema. A server that gains, drops or re-documents a tool changes pi's tool surface at the next session, with no extension release.
@@ -352,25 +221,13 @@ That table is a snapshot of one server, not a contract; `/viking` reports how ma
 
 The extension also ships the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, and `openviking-rule-search` skills, which tell the model when to use which of these tools, and `ov-memory-doctor`, which runs the extension's doctor. It adds them through pi's `resources_discover` event, and leaves them out when `mcpEnabled` is `false`.
 
-On a server advertising `rule_search`, `openviking_rule_search` takes `task_context`
-and an optional `rule_probability_threshold` (default `0.65`). It returns complete
-compiled Rules for a constraint check before a planned action or response.
-Rule results share the 50 KiB / 2,000-line inline budget. Delivery stops between
-complete Rule blocks so no condition or exception is cut off; omitted Rules are
-explicitly marked with `delivery.complete=false` and a retrieval URI when available.
-Check remaining Rules before acting. Reconnect after a server upgrade to refresh the tools.
+On a server advertising `rule_search`, `openviking_rule_search` takes `task_context` and an optional `rule_probability_threshold` (default `0.65`). It returns complete compiled Rules for a constraint check before a planned action or response. Rule results share the 50 KiB / 2,000-line inline budget. Delivery stops between complete Rule blocks so no condition or exception is cut off; omitted Rules are explicitly marked with `delivery.complete=false` and a retrieval URI when available. Check remaining Rules before acting. Reconnect after a server upgrade to refresh the tools.
 
 The canonical `/viking` command (type `/viking` in pi's chat) displays session info, how many tools registered — or the handshake error when none did — and accepts `commit` for manual synchronous commit.
 
 ## Upgrading from 0.3.x
 
-0.4.2 makes context takeover conservative: it keeps Pi's system/tool state,
-anchors the trim boundary on a Pi entry id, waits for confirmed capture
-delivery, reads the overview belonging to the exact new archive without
-blocking a turn on it, and exposes a paginated archive-recovery hint when the
-required MCP tools are active. Sessions with a permanent capture gap stay on
-Pi's native compaction. A boundary saved by 0.4.1 or earlier is converted on
-the first request.
+0.4.2 makes context takeover conservative: it keeps Pi's system/tool state, anchors the trim boundary on a Pi entry id, waits for confirmed capture delivery, reads the overview belonging to the exact new archive without blocking a turn on it, and exposes a paginated archive-recovery hint when the required MCP tools are active. Sessions with a permanent capture gap stay on Pi's native compaction. A boundary saved by 0.4.1 or earlier is converted on the first request.
 
 0.4.0 replaces the seven hand-written `viking_*` REST tools with the server's own MCP tool surface. There is no alias period: the old names are gone.
 
@@ -398,20 +255,6 @@ Pi has a built-in `MEMORY.md` file system. This extension **complements** it:
 | Capacity     | Context-limited                    | Unlimited (server-side storage)                   |
 | Extraction   | Manual rules                      | LLM-powered entity / preference / event extraction|
 | Subagents    | Same as parent                    | Isolated session + typed agent namespace          |
-
-## Compared to Claude Code Plugin
-
-Both plugins share the same core design (informed by each other):
-
-| Feature             | Claude Code Plugin                     | Pi Extension                           |
-|---------------------|----------------------------------------|----------------------------------------|
-| Architecture        | Hook scripts (.mjs) + MCP delegation   | Native TypeScript extension            |
-| Recall timing       | Synchronous (UserPromptSubmit hook)     | Synchronous (context event)            |
-| Tool delivery       | OV server's MCP endpoint (count follows the server) | Official MCP client, published through pi.registerTool() (same count) |
-| Write path          | Detached worker (async)                 | Async promise (pi's event loop)        |
-| Installation        | `claude plugin install` + setup script  | Copy directory → auto-discovered       |
-| Memory index        | Shared profile block (memories + skills), injected at session start | Same block, folded into the system prompt every turn |
-| Subagent isolation  | Explicit hook management                | Natural process-level isolation        |
 
 ## Extension Structure
 

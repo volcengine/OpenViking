@@ -1,14 +1,12 @@
 # OpenViking Memory Plugin for Claude Code
 
-> **Working memory is now opt-in.** Update installed plugins separately from the OV server, then restart the host. Existing explicit settings still take precedence. See the [default-off upgrade guide](../../../../docs/en/guides/working-memory-default-off.md) for native history, re-enabling WM, and old-conversation handoffs.
+Long-term semantic memory for Claude Code, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt and capture after every turn; the model does not need to call any MCP tool.
 
-Long-term semantic memory for Claude Code, powered by [OpenViking](https://github.com/volcengine/OpenViking). Recall happens automatically before every prompt, capture happens automatically after every turn — no MCP tool calls required from the model.
+This README covers installing the plugin and what only the Claude Code integration has. Recall, capture, commits, session-start context, the offline queue and every setting are shared with the other hosts and documented in:
 
-> **Requires an OpenViking server with `viking://~` home-alias support.** Recall targets the
-> caller's own context space through `viking://~/memories` and `viking://~/skills`; the uid-less
-> `viking://user/memories` shorthand is rejected by newer servers.
-
-> Installable straight from the repo's marketplace catalog — no separate distribution repo. See [Manual setup](#manual-setup) for the two-command remote install.
+- [Claude Code integration guide](../../../../docs/en/agent-integrations/02-claude-code.md)
+- [Capability reference](../../../../docs/en/agent-integrations/16-capability-reference.md) (shared behaviour, settings, host events)
+- [Client configuration](../../../../docs/en/configuration/02-client.md) (plugin settings in `ovcli.conf`)
 
 ## Quick Start
 
@@ -50,7 +48,7 @@ Easiest path — write `~/.openviking/ovcli.conf` (the same file `ov` CLI uses):
 
 For purely local mode (`http://127.0.0.1:1933` with no auth) you can skip this step entirely — the plugin will silently use the local default.
 
-If `ov.conf` is what you already maintain, the plugin reads it too — see [Configuration](#configuration) for the full priority chain and per-field overrides.
+If `ov.conf` is what you already maintain, the plugin reads it too — see [Client configuration](../../../../docs/en/configuration/02-client.md) for the priority chain and every setting.
 
 #### 3. Install the plugin
 
@@ -107,324 +105,26 @@ claude
 
 If it doesn't seem to fire, set `OPENVIKING_DEBUG=1` and check `~/.openviking/logs/cc-hooks.log`.
 
-## Configuring MCP
-
-The plugin's hooks and MCP entry now use the same configuration chain. The checked-in `.mcp.json` starts `servers/mcp-proxy.mjs` as a local stdio MCP server; that proxy reads `OPENVIKING_*`, `~/.openviking/ovcli.conf`, and `~/.openviking/ov.conf`, then forwards JSON-RPC to the OpenViking server's native `/mcp` endpoint with the right auth and identity headers.
-
-For normal plugin installs, there is nothing extra to export and no `.mcp.json` value to render. Update `ovcli.conf` or the relevant `OPENVIKING_*` env vars and restart Claude Code; the proxy will use the same target as the hook scripts.
-
-The proxy requires Node.js 18+ and writes debug logs only when `OPENVIKING_DEBUG=1` or `claude_code.debug=true` is configured. stdout is reserved for MCP protocol bytes.
-
-## Configuration
-
-### Resolution priority
-
-Every plugin field follows this chain (highest → lowest):
-
-1. **Environment variables** (`OPENVIKING_*` — see tables below)
-2. **Workspace registry** — this machine's entry for the current repository, `~/.openviking/workspaces/<slot>.json`
-3. **`<repo-root>/.openviking/config.local.json`** — private, gitignored workspace settings
-4. **`<repo-root>/.openviking/config.json`** — workspace settings the team commits
-5. **`ovcli.conf`** — CLI client config (`~/.openviking/ovcli.conf` or `OPENVIKING_CLI_CONFIG_FILE`); connection fields (`url`, `api_key`, `account`, `user`) plus the `plugin` section, `plugin.claude_code` ahead of the shared `plugin`
-6. **`ov.conf`** — server config (`~/.openviking/ov.conf` or `OPENVIKING_CONFIG_FILE`); the plugin reads `server.url`, `server.root_api_key`, and a legacy `claude_code` block if present (see [Legacy `claude_code` block](#legacy-claude_code-block-in-ovconf))
-7. **Built-in defaults** (`http://127.0.0.1:1933`, no auth)
-
-The three workspace layers carry only the settings listed under [Workspace configuration files](#workspace-configuration-files); connection and credentials are never read from them.
-
-The same connection and identity fields are also used by the stdio MCP proxy.
-
-### Environment variables
-
-All plugin behavior can be set via env vars. Connection / identity vars affect both hooks and the MCP proxy; tuning vars only affect hooks.
-
-#### Connection / identity
-
-| Env Var                                          | Description                                                              |
-|--------------------------------------------------|--------------------------------------------------------------------------|
-| `OPENVIKING_URL` / `OPENVIKING_BASE_URL`         | Full server URL (e.g. `https://remote.example.com`)                      |
-| `OPENVIKING_API_KEY` / `OPENVIKING_BEARER_TOKEN` | API key; sent as `Authorization: Bearer <key>`                           |
-| `OPENVIKING_ACCOUNT`                             | Multi-tenant account (`X-OpenViking-Account` header)                     |
-| `OPENVIKING_USER`                                | Multi-tenant user (`X-OpenViking-User` header)                           |
-| `OPENVIKING_PEER_ID`                             | Optional stable peer for recall and captured session messages            |
-| `OPENVIKING_PEER_SOURCE`                         | How the workspace peer is derived: `git` (default), `cwd`, `none`, or a template |
-| `OPENVIKING_WORKSPACE_PEER`                      | Derive a peer from the current workspace by default; set `0` to disable  |
-
-By default the plugin derives the peer from git rather than from where the repository happens to sit: the normalized `origin` URL, else the repository root path. Outside a repository nothing is sent, and what is remembered there goes to your user-level space at `viking://user/<you>/memories`. In `/Users/x/Dev/OpenViking` with origin `git@github.com:volcengine/OpenViking.git` the peer is `github.com-volcengine-openviking`, and it stays that from any subdirectory, worktree, machine or clone — so every clone of one repository shares one project memory, while a fork, having a different origin, stays separate. Data-plane recall/profile requests send the effective peer as `X-OpenViking-Actor-Peer`; captured session messages store it as body `peer_id`. `OPENVIKING_PEER_ID` overrides the derived value. Subagent capture uses the parent workspace peer when available, and falls back to Claude's `agent_id` only when no explicit or workspace peer exists.
-
-`OPENVIKING_PEER_SOURCE` (or `plugin.peerSource` / `plugin.claude_code.peerSource` in `ovcli.conf`, or `peer.source` in a workspace config file) picks the rule:
-
-| Value        | Meaning                                                                                                                     |
-|--------------|-----------------------------------------------------------------------------------------------------------------------------|
-| `git`        | Default. Same as `["{git_remote}", "{git_root}"]`: normalized origin, else repository root. Outside a repository nothing is sent. No prefix is added |
-| `cwd`        | The previous behaviour, byte for byte — every non-letter-or-digit character becomes `-`, so `/Users/x/Dev/OpenViking` becomes `-Users-x-Dev-OpenViking` |
-| `none`       | Send no peer at all; `OPENVIKING_WORKSPACE_PEER=0` still means this                                                          |
-| a template   | `"git-{git_remote}"`, `"team-{dir}"`, or a list tried in order; a template with an empty variable falls through to the next   |
-
-The variables are `{git_remote}`, `{git_root}`, `{cwd}` and `{dir}` — see [Workspace Peers](../../../memory-plugin-shared/README.md#workspace-peers) for what each resolves to. `{git_root}` is empty outside a repository; `{cwd}` is never empty but sits in no default chain, so a bare path becomes a peer only when you ask for one; `{dir}` is the workspace root's directory name — the repository root, or the directory holding `.openviking/config.json` — and is empty when the directory is not a workspace. Derivation is pure filesystem work, no `git` subprocess, so it also holds where `git` is missing from `PATH` or would refuse the repository over dubious ownership.
-
-To give a directory that is not a repository its own peer, create `.openviking/config.json` there holding `{"version": 1, "peer": {"id": "my-project"}}`.
-
-Upgrading from the path-derived peer needs no action: memories written under the old id stay reachable. With the default `peer_scope: "all"` the server's cross-peer sweep already covers them at no cost; with `actor` scope the plugin asks the old peer separately. There is no deadline, and `OPENVIKING_PEER_SOURCE=cwd` restores the old id outright.
-
-#### Recall tuning
-
-| Env Var                                | Default      | Description                                                              |
-|----------------------------------------|--------------|--------------------------------------------------------------------------|
-| `OPENVIKING_AUTO_RECALL`               | `true`       | Enable auto-recall on every user prompt                                  |
-| `OPENVIKING_RECALL_LIMIT`              | `10`         | Legacy quota-scaling input; converted to six coding quotas, not a final cap |
-| `OPENVIKING_RECALL_TOKEN_BUDGET`       | `2000`       | Inline token budget for the final raw-find fallback only                 |
-| `OPENVIKING_RECALL_MAX_CONTENT_CHARS`  | `500`        | Per-item content cap                                                     |
-| `OPENVIKING_RECALL_PREFER_ABSTRACT`    | `true`       | Prefer abstract over full body when available                            |
-| `OPENVIKING_RECALL_PEER_SCOPE`          | `all`        | `all` can recall other project memories with a score penalty; `actor` only sees global plus the current project |
-| `OPENVIKING_RECALL_MAX_TOKENS`         | `1600`       | Token budget for the server-assembled context block (independent of local compression limits) |
-| `OPENVIKING_RECALL_DEDUP_TURNS`        | `5`          | Cross-turn cooldown: URIs served in the last N turns are skipped          |
-| `OPENVIKING_RECALL_EVENTS_DECAY_PROTECTION` | `30d` | Auto recall keeps event scores unchanged for this long after the event record was updated and decays them afterward. Set `off` to disable decay, or set another period such as `7d` or `12h`. |
-| `OPENVIKING_RECALL_QUERY_EXPANSION`    | `auto`       | `auto` lets the server widen short prompts using session context; `off` disables it |
-| `OPENVIKING_RECALL_COMPRESS`           | `auto`       | Digest compression: `off`, `client` (host CLI), `server`, or `auto` (local first, server fallback) |
-| `OPENVIKING_RECALL_COMPRESS_MAX_BULLETS` | `6`        | Digest bullet ceiling                                                     |
-| `OPENVIKING_SCORE_THRESHOLD`           | `0.35`       | Min relevance score (0–1)                                                |
-| `OPENVIKING_MIN_QUERY_LENGTH`          | `3`          | Skip recall for very short queries                                       |
-| `OPENVIKING_RECALL_QUERY_FILTERS`      | `""`         | CSV of regex rules applied to the prompt before it becomes a search query — see [Input filters](#input-filters) |
-| `OPENVIKING_LOG_RANKING_DETAILS`       | `false`      | Per-candidate scoring logs (verbose)                                     |
-
-Recall defaults to the broad mode: global memory, the current workspace, and other workspace memories can all be recalled, with other workspaces penalized and rendered later. Set `OPENVIKING_RECALL_PEER_SCOPE=actor` for the isolation mode, which only sees global memory plus the current workspace. In deployments where one bot serves multiple real people, such as zouk, vikingbot, or AstrBot, use the isolation mode with an explicit actor peer so one person's memories are not recalled into another person's session.
-
-Recall covers skills as well as memories: the server-assembled context block can carry skill entries (`type="skills"`), from your own skills and the ones shared with your account.
-
-#### Capture tuning
-
-| Env Var                                | Default      | Description                                                              |
-|----------------------------------------|--------------|--------------------------------------------------------------------------|
-| `OPENVIKING_AUTO_CAPTURE`              | `true`       | Enable auto-capture; also gates write hooks (PreCompact / SessionEnd / SubagentStop) |
-| `OPENVIKING_CAPTURE_MODE`              | `semantic`   | `semantic` (always capture) or `keyword` (trigger-based)                 |
-| `OPENVIKING_CAPTURE_MAX_LENGTH`        | `24000`      | Max sanitized text length for the capture decision                       |
-| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`       | Include assistant turns (text + tool I/O). Set to `0` for user-only.     |
-| `OPENVIKING_CAPTURE_TOOL_MAX_CHARS`    | `1000000`    | Guard cap on one tool part's `tool_output`; oversized output is externalized server-side |
-| `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `20000`      | Pending-token threshold for client-driven commit                         |
-| `OPENVIKING_RESUME_CONTEXT_BUDGET`     | `32000`      | Token budget when fetching archive overview on session resume            |
-| `OPENVIKING_CAPTURE_FILTERS`           | `""`         | CSV of regex rules applied to every captured turn — see [Input filters](#input-filters) |
-
-#### Session-start injection
-
-| Env Var                                  | Default   | Description                                                              |
-|------------------------------------------|-----------|--------------------------------------------------------------------------|
-| `OPENVIKING_NO_AUTO_INJECT`              | `false`   | Skip the profile, memory index, and skill catalog at session start; the resume/compact archive overview and per-prompt recall still run |
-| `OPENVIKING_PROFILE_TOKEN_BUDGET`        | `10000`   | CJK-aware token budget for `profile.md` plus the `preferences/` and `entities/` indexes |
-| `OPENVIKING_SKILL_CATALOG`               | `true`    | Add the `<available-skills>` catalog to the session-start block          |
-| `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`  | `1200`    | Token budget for `<available-skills>` (0–20000), not taken from the profile budget; `0` drops the catalog |
-| `OPENVIKING_SESSION_START_MAX_BYTES`    | `9500`    | Byte cap on the whole SessionStart context so it stays under Claude Code's 10,000-character inline limit; the archive takes up to half on resume/compact; `0` removes the cap |
-| `OPENVIKING_SESSION_HISTORY_POINTER`    | `true`    | On resume/compact, add a short note naming the session's OV id and how to look up exact details with the server's `session_history` MCP tool; the MCP proxy fills that tool's `session` with the current session |
-
-In `ovcli.conf` the same knobs are `noAutoInject`, `profileTokenBudget`, `skillCatalog`, `skillCatalogTokenBudget`, and `sessionHistoryPointer`, under `plugin` or `plugin.claude_code`.
-
-Every `SessionStart` (`startup`, `clear`, `resume`, `compact`) injects one `<openviking-context>` block: `<user-profile>`, `<available-memories>`, and `<available-skills>`, followed on `resume`/`compact` by the latest archive overview. The skill catalog comes from one `GET /api/v1/skills?node_limit=200` call. It lists your own skills first, then the ones shared with the account under `viking://agent/skills`, leaving out any shared skill with the same name as one of yours. Each description is cut to about 40 tokens, and tags such as `<openviking-context>` inside it are escaped. When the full catalog does not fit its budget, it lists names only, ending with `... +N more, search OpenViking skills to find the rest` if the names run over too; when not even one name fits, it becomes the single line `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`. With no skills, or on a server without `GET /api/v1/skills`, the catalog is left out.
-
-```text
-<openviking-context source="startup">
-<user-profile uri="viking://user/default/memories/profile.md">...</user-profile>
-<available-memories>...</available-memories>
-<available-skills>
-  OpenViking skills (stored in OpenViking, not local files). Before following one, read <dir>/<name>/SKILL.md with the OpenViking read tool.
-  viking://user/default/skills/
-    - pr-review — Review a pull request against the team checklist.
-  viking://agent/skills/
-    - deploy-runbook — Shared deployment runbook for the payments service.
-</available-skills>
-</openviking-context>
-```
-
-The bundled `openviking-skills` skill tells Claude what to do with the catalog: find and use a skill, create, install, or share one with the MCP `add_skill` tool, delete one, and, when you ask, move local skills from `~/.claude/skills` or `<repo>/.claude/skills` into OpenViking. Skills tied to this machine (shipped by a plugin, symlinked in by a CLI installer, or needing a local binary) stay local, and nothing is uploaded until you approve that skill.
-
-#### Lifecycle / behavior / misc
-
-| Env Var                                | Default      | Description                                                              |
-|----------------------------------------|--------------|--------------------------------------------------------------------------|
-| `OPENVIKING_TIMEOUT_MS`                | `15000`      | HTTP timeout for recall + general requests (ms)                          |
-| `OPENVIKING_CAPTURE_TIMEOUT_MS`        | `30000`      | HTTP timeout for capture path (must stay under the `Stop` hook timeout)  |
-| `OPENVIKING_WRITE_PATH_ASYNC`          | `true`       | Detach write hooks into a background worker so CC isn't blocked on commit RTT |
-| `OPENVIKING_BYPASS_SESSION`            | `false`      | One-shot: `1`/`true` skips every hook in the current process             |
-| `OPENVIKING_BYPASS_SESSION_PATTERNS`   | `""`         | CSV of glob patterns matched against `session_id` or `cwd`               |
-| `OPENVIKING_SKIP_SUBAGENT_SESSIONS`    | `false`      | `1`/`true` skips SubagentStart / SubagentStop, so subagent transcripts are never captured or committed |
-| `OPENVIKING_MEMORY_ENABLED`            | (auto)       | `0`/`false`/`no`=force off; `1`/`true`/`yes`=force on                    |
-| `OPENVIKING_DEBUG`                     | `false`      | `1`/`true`=write hook logs to `~/.openviking/logs/cc-hooks.log`          |
-| `OPENVIKING_DEBUG_LOG`                 | `~/.openviking/logs/cc-hooks.log` | Override log path                                   |
-| `OPENVIKING_CONFIG_FILE`               | `~/.openviking/ov.conf`           | Override `ov.conf` path                             |
-| `OPENVIKING_CLI_CONFIG_FILE`           | `~/.openviking/ovcli.conf`        | Override `ovcli.conf` path                          |
-| `OPENVIKING_SEAL_SECRETS`              | `false`      | Replace secrets with Privacy references in what Claude reads, and give tools the values back; see [Seal secrets](#seal-secrets) |
-| `OPENVIKING_ENROLL_TOOL_SECRETS`       | `false`      | With sealing on, also enroll new secrets found in tool output; see [Seal secrets](#seal-secrets) |
-
-Pure-env example (no config file required):
-
-```bash
-OPENVIKING_MEMORY_ENABLED=1 \
-OPENVIKING_URL=https://openviking.example.com \
-OPENVIKING_API_KEY=sk-xxx \
-OPENVIKING_ACCOUNT=my-team \
-OPENVIKING_USER=alice \
-OPENVIKING_RECALL_LIMIT=8 \
-claude
-```
-
-### Enable / disable
-
-1. **`OPENVIKING_MEMORY_ENABLED` env var** — `0`/`false`/`no` forces off; `1`/`true`/`yes` forces on (when forced on without config files, connection info must come from env vars)
-2. **`claude_code.enabled` in `ov.conf`** — `false` disables
-3. **Config file existence** — enabled if `ov.conf` or `ovcli.conf` exists; otherwise silently disabled (no error, hooks pass through)
-
-### Bypass a session
-
-Use Claude Code in a `/tmp` PoC directory without polluting your long-term memory:
-
-```bash
-# Persistent: any session whose session_id or cwd matches a pattern
-export OPENVIKING_BYPASS_SESSION_PATTERNS='/tmp/**,**/scratch/**,/Users/me/Dev/throwaway/*'
-
-# Or one-shot:
-OPENVIKING_BYPASS_SESSION=1 claude
-```
-
-When bypass is active, every hook approves immediately without contacting OpenViking.
-
-### Seal secrets
-
-Off by default; it runs on your machine and needs OpenViking server 0.5.7 or newer. Two settings in `ovcli.conf`, each with an environment override:
-
-```json
-{ "plugin": { "claude_code": { "sealSecrets": true, "enrollToolSecrets": false } } }
-```
-
-- `sealSecrets` (`OPENVIKING_SEAL_SECRETS`) turns sealing on.
-- `enrollToolSecrets` (`OPENVIKING_ENROLL_TOOL_SECRETS`) also sends tool results with enrollment, so a secret first seen in a command's output or a file is saved too. It has no effect while `sealSecrets` is off.
-
-With `sealSecrets` on, Claude reads `{{ov_privacy:…}}` references in place of secrets, and tools get the real values:
-
-- **Your prompt.** Each prompt goes to OpenViking (`POST /api/v1/privacy-configs/seal`) before Claude Code sends it. Secrets already saved in Privacy are replaced with their references. Tokens the server's detector recognises (its built-in rules plus your `custom_rules`, minus `never_mask`) are saved as new entries in the `auto` category, such as `auto/github-k3j2m8`, and replaced too. While a prompt holds such a temporary entry, Claude gets a note telling it to save the entry under a proper name with a short description unless it is clearly for one-off use, use the reference that returns (for example with `ov privacy run`), and tell you what it stored. Slash commands and empty prompts are left alone.
-- **Tool results.** Every string in a tool's result (Bash output, a file Read returns, an MCP tool's answer, a failed command's error) is sealed before Claude reads it. Saved secrets are replaced; new ones are enrolled only with `enrollToolSecrets`. The transcript stores the sealed result.
-- **Tool arguments.** A reference Claude writes in a tool call is replaced by its value before the tool runs, so the command or the file gets the real secret, while the conversation keeps the reference Claude wrote. Only a whole reference to your own `credential` or `auto` entries is replaced, and only when the server resolves it and the value seals back to the same reference. A string with an `ov privacy` command, OpenViking's own tools, and tools that pass their arguments to a model (`Agent`, `Task`, `SendMessage`, `Workflow`, `Skill`) keep the references as written.
-- **Attached and `@`-mentioned files, and reminders.** The text Claude Code injects for the model (a mentioned file's contents, `CLAUDE.md` files found while working, reminders, other hooks' context) is sealed without enrolling. The transcript keeps the engine's own record of these, with the original text.
-
-How it runs and fails:
-
-- **Read once per session.** The plugin runs `node hosts/claude-code/seal-prompt.mjs` once per session to read the settings, how to reach the server (the URL and headers every other hook uses), and whether the server can seal: the helper reads the version from the server's `/health` and compares it with the feature table the plugin ships (`lib/server-features.json`), where sealing needs 0.5.7 (a development build such as `0.5.7.dev44` counts as 0.5.7). The hooks module then sends every seal and resolve call from the hooks module itself, through Claude Code's HTTP API. A changed setting takes effect in a new session (`/clear` counts as one). After a stopped prompt, the next prompt reads all of this again, so sealing resumes once the server can seal. While it is off, nothing is run after that first read.
-- **When sealing cannot be done, it stops.** That is: the server is older than 0.5.7, its `/health` fails (the version is unknown), a seal or resolve call fails (the server cannot be reached, answers with an error or a malformed answer, or too slowly: 10 s per call), or `OPENVIKING_SEAL_SECRETS` turns sealing on but the setting helper gives no answer. The prompt is not sent and Claude Code shows why (for a version, the required and the actual one) and what to do: upgrade or reach the server, or turn `sealSecrets` off. A tool result is replaced by a short note saying it was withheld (the tool did run); a tool call whose reference cannot be resolved is blocked with the reason; an attachment is replaced by a short note. To a server that is too old or whose version is unknown, no seal call is made at all. `OPENVIKING_SEAL_SECRETS=0` turns sealing off without running anything, even when the plugin's own helper is broken.
-- **The session text** (what Claude is told about references) comes with the first prompt the hooks module seals in a session, and again with the first one after a compaction or after the module reloads.
-- **Cost.** One server call per prompt, per tool result and per injected attachment (Claude Code asks once per attachment and keeps the answer), plus a resolve call and a check per reference in a tool call.
-- **Not covered.** The system prompt, slash-command arguments, skill bodies, and history written before sealing was turned on are not sealed. OpenViking's own tools are recognised by a name containing `openviking`: with the OpenViking MCP server registered under another name, references in the arguments of its `privacy_upsert`, `write` or `remember` are replaced by their values before the call.
-- **Undoing a false positive.** Delete the entry (`ov privacy delete auto <target>`), and add the value to `never_mask` so it is not enrolled again.
-- **Requirements.** Sealing is part of the plugin's hooks module (`mods/seal/`), so it needs what [Source cards](#source-cards) need. On a Claude Code that does not load the module it does not run, and nothing is sealed. Reading the setting needs Claude Code's process API (the CLI has it). Where it is missing (or the helper gives no answer), sealing stays off without a message, whatever `ovcli.conf` says; set `OPENVIKING_SEAL_SECRETS=1` there and prompts are stopped with a message that the settings could not be read.
-- No sealing setting is a workspace setting, so a repository's `.openviking/config.json` cannot switch them.
-
-To try it with a local server: save a value (`ov privacy upsert credential demo --values-json '{"token":"<value>"}'`), turn `sealSecrets` on, start `claude`, and ask it to `echo` the value: the answer it reads holds `{{ov_privacy:…}}`. Ask it to run `printf '%s' '{{ov_privacy:…}}' > /tmp/t` with that reference: `/tmp/t` holds the value.
-
-### Input filters
-
-Two knobs put an ordered list of regex rules in front of the text the plugin sends:
-
-- `recallQueryFilters` / `OPENVIKING_RECALL_QUERY_FILTERS` — the prompt, before it becomes a search query.
-- `captureFilters` / `OPENVIKING_CAPTURE_FILTERS` — every turn on the write path (`Stop`, `PreCompact`, `SessionEnd`, `SubagentStop`), before it is stored.
-
-Rules are sed-style strings applied in order to one piece of text:
-
-| Form | Meaning |
-|------|---------|
-| `s<d>pattern<d>replacement<d>[flags]` | substitute; `$1`, `$&`, `$$` work in the replacement |
-| `d<d>pattern<d>[flags]` | drop the text when the pattern matches |
-| `k<d>pattern<d>[flags]` | keep the text only when the pattern matches (chain them for AND) |
-| `user:` / `assistant:` prefix | apply the rule to that role only |
-
-`<d>` is any punctuation delimiter — `/`, `|`, `#`, `:` — and `\` escapes it inside the pattern. Flags are `i`, `m`, `s`, `u` and `g` (`g` replaces every match; it means nothing on `d`/`k` and is dropped there).
-
-| Rule | Effect |
-|------|--------|
-| `s/^\s*(ultrathink\|think harder?)\s+//i` | strip a thinking-keyword prefix from the query |
-| `d\|^\s*[/!]\|` | skip recall for slash commands and `!` bash-mode prompts (a `\|` delimiter keeps the `/` unescaped) |
-| `k/^\?ov\b/` then `s/^\?ov\s*//` | opt-in recall: only prompts starting with `?ov`, with the trigger stripped |
-| `s/\b(sk\|ghp\|xoxb)_[A-Za-z0-9_-]+/[redacted]/g` | redact tokens before they are stored |
-| `user:d/^\s*\/(clear\|compact)\b/` | never store those command turns, user role only |
-| `s/^(请\|麻烦)(你\|帮我)?//` | strip a Chinese politeness prefix |
-
-In `ovcli.conf` the rules are a JSON array, so backslashes are doubled:
-
-```json
-{
-  "plugin": {
-    "claude_code": {
-      "recallQueryFilters": ["s/^\\s*ultrathink\\s+//i", "d|^\\s*[/!]|"],
-      "captureFilters": ["s/\\b(sk|ghp)_[A-Za-z0-9_-]{10,}/[redacted]/g"]
-    }
-  }
-}
-```
-
-- **The env vars are comma-separated lists**, split before parsing, so a rule that needs a literal comma — a bounded `{10,}`, say — belongs in the array above. (`\x2c` covers a literal comma elsewhere in a pattern, but it is not quantifier syntax.)
-- **Order matters and drops win.** The first `d` that matches, or `k` that does not, ends the decision. Filters run before `OPENVIKING_MIN_QUERY_LENGTH` and before the built-in ack / slash-command heuristics, so a prefix stripped down to `ok` is discarded as an ack. Text a substitution empties is not a drop — an emptied query is simply too short to recall on.
-- **Filters shape what is sent, not what is stored.** Adding a `d`/`k` rule mid-session also shortens the turn list the capture cursor counts, which reads as a transcript rewrite and replays from the last user turn — the same thing toggling `OPENVIKING_CAPTURE_ASSISTANT_TURNS` does.
-- **Substitutions reach tool calls, verdicts do not.** On the capture path an `s` rule also rewrites every string value in a tool call's input and a tool result's output, so a redaction rule covers a secret that reached a command or its output. `d`/`k` rules look only at the turn's text.
-- **A bad rule is skipped, never fatal.** `ov-memory-doctor` lists the active rules and reports the exact parse or RegExp error for the ones it could not compile.
-
-### Plugin settings in `ovcli.conf`
-
-Client-side tuning belongs in `~/.openviking/ovcli.conf` under a `plugin` section. Shared keys apply to every harness; a per-harness object overrides them:
-
-```json
-{
-  "url": "http://127.0.0.1:1933",
-  "plugin": {
-    "recallCompress": "auto"
-  }
-}
-```
-
-Resolution order: env vars → the workspace layers → `plugin.claude_code` → `plugin` → the legacy `claude_code` block in `ov.conf` → built-in defaults.
-The plugin omits server-owned Context defaults such as `limit=10`, `max_tokens=1600`,
-and `query_expansion="auto"` unless you explicitly override them.
-An explicit legacy `recallLimit` is converted to per-category coding quotas,
-not enforced as a final result cap. Values from 1 through 5 therefore produce
-an effective total quota of 6, one retrieval slot for each coding domain. New
-direct API integrations should configure `quotas` instead.
-
-### Workspace configuration files
-
-A repository can carry its own plugin settings in `<repo-root>/.openviking/config.json`, which the team commits, and `<repo-root>/.openviking/config.local.json`, which stays private and gitignored. A third layer, this machine's entry under `~/.openviking/workspaces/`, outranks both.
-
-```json
-{
-  "version": 1,
-  "peer": { "source": "git" },
-  "recall": { "peer_scope": "actor" },
-  "bypass": { "session_patterns": ["**/fixtures/**"] }
-}
-```
-
-`version: 1` is required; a file declaring another version is skipped with a warning. Schema v1 is `peer.source`, `peer.id`, `recall.enabled`, `recall.peer_scope`, `recall.dedup_turns`, `recall.max_items`, `recall.score_threshold`, `capture.enabled`, `capture.commit_token_threshold`, `bypass.session_patterns`, and `labels`. Lists union across layers, and a leading `"!reset"` drops what was inherited. Unknown keys are kept and ignored.
-
-These files are trusted without a prompt, because a hook is non-interactive and an approval gate would mean one command per workspace. What is refused is structural: connection and credential keys (`url`, `api_key`, `account`, `user`, `extra_headers`, …) are stripped with a warning and `${VAR}` is never expanded in them. What a committed file switches off is announced by `ov-memory-doctor` rather than blocked.
-
-Keep `.gitignore` from ignoring all of `.openviking/`, or `config.json` can never be committed — narrow the rule to `.openviking/media/` and `.openviking/downloads/`. The doctor warns while the blanket rule is in place.
-
-### Digest compression
-
-`recallCompress` decides where the digest is produced and defaults to `auto`. `client` always compresses locally through `claude -p` (Haiku with low effort by default), keeping the token cost on your own subscription. `server` asks OpenViking for the digest. `auto` prefers local and falls back to the server when no healthy host CLI is found. Compressor execution or output-validation failures fall back to the uncompressed context block; an exact `NO_RELEVANT_MEMORY` response from either compressor is a successful empty result and injects nothing. The compressor subprocess runs with all OpenViking hooks disabled so it cannot recurse. The former `OPENVIKING_RECALL_REWRITE` environment variable and `recallRewrite` config key remain supported as lower-priority compatibility aliases.
-
-### Legacy `claude_code` block in `ov.conf`
-
-Earlier plugin versions configured tuning fields under a `claude_code` block in `~/.openviking/ov.conf`. That still works for backward compatibility — every env var above has a camelCase counterpart (`OPENVIKING_RECALL_LIMIT` → `claude_code.recallLimit`, `OPENVIKING_BYPASS_SESSION_PATTERNS` → `claude_code.bypassSessionPatterns` as a JSON array, etc.). Env vars take priority. New deployments should prefer env vars and shell rc — server config files shouldn't carry per-developer-machine tuning.
+## Verify
+
+- Run `/openviking-memory:ov` in Claude Code: it prints the server, identity, last injection / recall and toggles (`hosts/claude-code/ov-status.mjs`).
+- The statusline under the input box shows `OV ✓` once the server answers (see [Statusline](#statusline)).
+- Run the doctor (see [Troubleshooting](#troubleshooting)).
 
 ## Hook timeouts
 
 Defaults in `hooks/hooks.json`:
 
-| Hook                | Timeout | Notes                                                                                                  |
-|---------------------|---------|--------------------------------------------------------------------------------------------------------|
-| `SessionStart`      | `120s`  | Generous because resume/compact may pull a large archive overview                                      |
-| `UserPromptSubmit`  | `60s`   | Allows the default local compressor to finish; its own timeout remains shorter so the hook can degrade safely |
-| `Stop`              | `45s`   | Auto-capture parses transcript + pushes turns; async detach makes the user-perceived time near-zero    |
-| `PreCompact`        | `30s`   | Synchronous commit before Claude Code mutates the transcript                                           |
-| `SessionEnd`        | `30s`   | Final commit; async-detached                                                                           |
-| `SubagentStart`     | `10s`   | Lightweight: just persists isolation state                                                             |
-| `SubagentStop`      | `45s`   | Reads subagent transcript and commits; async-detached                                                  |
-
-Keep `claude_code.captureTimeoutMs` below the `Stop` timeout so the script can fail gracefully and still update its incremental state.
+| Hook | Timeout | Notes |
+|------|---------|-------|
+| `SessionStart` | `120s` | Generous because resume/compact may pull a large archive overview |
+| `UserPromptSubmit` | `60s` | Allows the local compressor to finish; its own timeout remains shorter so the hook can degrade safely |
+| `PreToolUse` | `5s` | `scripts/uri-guard.mjs claude-code` |
+| `PostToolUse` (`Read`) | `5s` | Skill experience, off by default |
+| `Stop` | `45s` | Capture; detached, so the user does not wait |
+| `PreCompact` | `30s` | Synchronous commit before Claude Code rewrites the transcript |
+| `SessionEnd` | `30s` | Final commit; detached |
+| `SubagentStop` | `45s` | Subagent capture and commit; detached |
 
 ## Statusline
 
@@ -447,7 +147,7 @@ For the full segment glossary and personalization recipes (hide segments, recolo
 
 Data flow:
 
-- `auto-recall.mjs` / `auto-capture.mjs` / `session-start.mjs` write small snapshots to `~/.openviking/state/{last-recall,last-capture,last-session-event,daily-stats}.json` after each turn.
+- After each event the hook (`hosts/claude-code/host.mjs`, through `state.mjs`) writes small snapshots to `~/.openviking/state/{last-recall,last-capture,last-session-event,daily-stats}.json` after each turn.
 - `scripts/statusline.mjs` reads those snapshots plus a 5 s shared cache of `GET /health`.
 - Network calls have a hard 1 s timeout. Cache is shared across CC sessions to prevent stampedes.
 
@@ -457,6 +157,7 @@ Disable / customize:
 - `NO_COLOR=1` (or non-TTY) — strip ANSI colors automatically.
 - Remove entirely: `jq 'del(.statusLine)' ~/.claude/settings.json > t && mv t ~/.claude/settings.json`.
 - Already had a custom statusline? The installer prompts replace / skip / manual-compose.
+
 
 ## Source cards
 
@@ -496,12 +197,48 @@ It keeps each answer's source URIs, scores, redacted search queries, and the tra
 
 **Development.** `claude plugin test examples/agent-hook-plugin` runs `mods/usage/sources.test.ts` and `mods/seal/seal.test.ts`. Prompt sealing's decisions are also tested with `node --test` in `hosts/claude-code/prompt-seal.test.mjs` and `hosts/claude-code/seal-prompt.test.mjs`. After `claude --plugin-dir examples/agent-hook-plugin` has generated `.claude-plugin/types/`, run `tsc -p examples/agent-hook-plugin/mods/usage` (or `mods/seal`) to type-check the module.
 
-## Debug logging
+## Seal secrets
 
-Set `claude_code.debug: true` in `ov.conf` or `OPENVIKING_DEBUG=1` to write hook logs to `~/.openviking/logs/cc-hooks.log`.
+Off by default; it runs on your machine and needs OpenViking server 0.5.7 or newer. Two settings in `ovcli.conf`, each with an environment override:
 
-- `auto-recall` logs key stages plus a compact `ranking_summary` by default.
-- Set `claude_code.logRankingDetails: true` only when investigating per-candidate scoring; output is verbose.
+```json
+{ "plugin": { "claude_code": { "sealSecrets": true, "enrollToolSecrets": false } } }
+```
+
+- `sealSecrets` (`OPENVIKING_SEAL_SECRETS`) turns sealing on.
+- `enrollToolSecrets` (`OPENVIKING_ENROLL_TOOL_SECRETS`) also sends tool results with enrollment, so a secret first seen in a command's output or a file is saved too. It has no effect while `sealSecrets` is off.
+
+With `sealSecrets` on, Claude reads `{{ov_privacy:…}}` references in place of secrets, and tools get the real values:
+
+- **Your prompt.** Each prompt goes to OpenViking (`POST /api/v1/privacy-configs/seal`) before Claude Code sends it. Secrets already saved in Privacy are replaced with their references. Tokens the server's detector recognises (its built-in rules plus your `custom_rules`, minus `never_mask`) are saved as new entries in the `auto` category, such as `auto/github-k3j2m8`, and replaced too. While a prompt holds such a temporary entry, Claude gets a note telling it to save the entry under a proper name with a short description unless it is clearly for one-off use, use the reference that returns (for example with `ov privacy run`), and tell you what it stored. Slash commands and empty prompts are left alone.
+- **Tool results.** Every string in a tool's result (Bash output, a file Read returns, an MCP tool's answer, a failed command's error) is sealed before Claude reads it. Saved secrets are replaced; new ones are enrolled only with `enrollToolSecrets`. The transcript stores the sealed result.
+- **Tool arguments.** A reference Claude writes in a tool call is replaced by its value before the tool runs, so the command or the file gets the real secret, while the conversation keeps the reference Claude wrote. Only a whole reference to your own `credential` or `auto` entries is replaced, and only when the server resolves it and the value seals back to the same reference. A string with an `ov privacy` command, OpenViking's own tools, and tools that pass their arguments to a model (`Agent`, `Task`, `SendMessage`, `Workflow`, `Skill`) keep the references as written.
+- **Attached and `@`-mentioned files, and reminders.** The text Claude Code injects for the model (a mentioned file's contents, `CLAUDE.md` files found while working, reminders, other hooks' context) is sealed without enrolling. The transcript keeps the engine's own record of these, with the original text.
+
+How it runs and fails:
+
+- **Read once per session.** The plugin runs `node hosts/claude-code/seal-prompt.mjs` once per session to read the settings, how to reach the server (the URL and headers every other hook uses), and whether the server can seal: the helper reads the version from the server's `/health` and compares it with the feature table the plugin ships (`lib/server-features.json`), where sealing needs 0.5.7 (a development build such as `0.5.7.dev44` counts as 0.5.7). The hooks module then sends every seal and resolve call from the hooks module itself, through Claude Code's HTTP API. A changed setting takes effect in a new session (`/clear` counts as one). After a stopped prompt, the next prompt reads all of this again, so sealing resumes once the server can seal. While it is off, nothing is run after that first read.
+- **When sealing cannot be done, it stops.** That is: the server is older than 0.5.7, its `/health` fails (the version is unknown), a seal or resolve call fails (the server cannot be reached, answers with an error or a malformed answer, or too slowly: 10 s per call), or `OPENVIKING_SEAL_SECRETS` turns sealing on but the setting helper gives no answer. The prompt is not sent and Claude Code shows why (for a version, the required and the actual one) and what to do: upgrade or reach the server, or turn `sealSecrets` off. A tool result is replaced by a short note saying it was withheld (the tool did run); a tool call whose reference cannot be resolved is blocked with the reason; an attachment is replaced by a short note. To a server that is too old or whose version is unknown, no seal call is made at all. `OPENVIKING_SEAL_SECRETS=0` turns sealing off without running anything, even when the plugin's own helper is broken.
+- **The session text** (what Claude is told about references) comes with the first prompt the hooks module seals in a session, and again with the first one after a compaction or after the module reloads.
+- **Cost.** One server call per prompt, per tool result and per injected attachment (Claude Code asks once per attachment and keeps the answer), plus a resolve call and a check per reference in a tool call.
+- **Not covered.** The system prompt, slash-command arguments, skill bodies, and history written before sealing was turned on are not sealed. OpenViking's own tools are recognised by a name containing `openviking`: with the OpenViking MCP server registered under another name, references in the arguments of its `privacy_upsert`, `write` or `remember` are replaced by their values before the call.
+- **Undoing a false positive.** Delete the entry (`ov privacy delete auto <target>`), and add the value to `never_mask` so it is not enrolled again.
+- **Requirements.** Sealing is part of the plugin's hooks module (`mods/seal/`), so it needs what [Source cards](#source-cards) need. On a Claude Code that does not load the module it does not run, and nothing is sealed. Reading the setting needs Claude Code's process API (the CLI has it). Where it is missing (or the helper gives no answer), sealing stays off without a message, whatever `ovcli.conf` says; set `OPENVIKING_SEAL_SECRETS=1` there and prompts are stopped with a message that the settings could not be read.
+- No sealing setting is a workspace setting, so a repository's `.openviking/config.json` cannot switch them.
+
+To try it with a local server: save a value (`ov privacy upsert credential demo --values-json '{"token":"<value>"}'`), turn `sealSecrets` on, start `claude`, and ask it to `echo` the value: the answer it reads holds `{{ov_privacy:…}}`. Ask it to run `printf '%s' '{{ov_privacy:…}}' > /tmp/t` with that reference: `/tmp/t` holds the value.
+
+## Local recall compressor
+
+`recallCompress` defaults to `off`. With `client`, the recall digest is produced locally through `claude -p` (Haiku with low effort by default, `recallCompressModel` overrides the model), so the token cost stays on your own subscription. With `auto`, the local compressor is used when a healthy `claude` CLI is found, otherwise the server's digest. The compressor subprocess runs with every OpenViking hook disabled so it cannot recurse; a compressor failure falls back to the uncompressed context block. See [Recall digest](../../../../docs/en/agent-integrations/16-capability-reference.md#recall-digest).
+
+## Skill experience
+
+An optional `PostToolUse` hook on `Read` (`hosts/claude-code/skill-experience.mjs`). With `skillExperience` on (`OPENVIKING_SKILL_EXPERIENCE`, default off), reading a `SKILL.md` under a skills directory injects a small block of relevant experience memories from OpenViking, at most `skillExperienceLimit` (default 3).
+
+## Subagent capture
+
+Claude Code is the only hook host that captures subagents: on `SubagentStop` the plugin reads the subagent's transcript and captures it into its own session `cc-<session_id>__subagent-<agent_id>`, then commits. `skipSubagentSessions` turns this off. See [Subagents](../../../../docs/en/agent-integrations/16-capability-reference.md#subagents).
 
 ## Troubleshooting
 
@@ -513,123 +250,41 @@ node "$(jq -r '.plugins["openviking-memory@openviking"][0].installPath' ~/.claud
 
 Or just ask Claude to check the plugin: the `ov-memory-doctor` skill runs the same script and walks the report. When the server runs on the same machine (loopback url) the report adds a Server health section — whether anything listens on the port, plugin-only keys in ov.conf that stop the server from starting, and `GET /ready`; everything else server-side (config validation, live embedding probe, native engine, disk) stays with `openviking-server doctor`.
 
-| Symptom                                    | Cause                                                        | Fix                                                                                                |
-|--------------------------------------------|--------------------------------------------------------------|----------------------------------------------------------------------------------------------------|
-| Plugin not activating                      | No `ov.conf` / `ovcli.conf` found                            | Create one, or set `OPENVIKING_MEMORY_ENABLED=1` plus the URL/API_KEY env vars                     |
-| Hooks fire but recall is empty             | OpenViking server not running, or wrong URL                  | `curl http://localhost:1933/health` (or your remote URL)                                           |
-| Auto-capture extracts 0 memories           | Wrong embedding/extraction model in `ov.conf`                | Check `embedding` / `vlm` config; review server logs                                               |
-| MCP tools hit the wrong server              | stale `ovcli.conf` / env vars, or Claude Code not restarted after config change | See [Configuring MCP](#configuring-mcp), verify `~/.openviking/ovcli.conf`, then restart Claude Code |
-| Remote auth 401 / 403                      | API key / account / user header mismatch                     | Verify `OPENVIKING_API_KEY`, `OPENVIKING_ACCOUNT`, `OPENVIKING_USER` (or their `ov.conf` counterparts) |
-| `Stop` hook times out                      | Server slow + sync write path                                | Leave `writePathAsync: true` (default), or raise the `Stop` timeout in `hooks/hooks.json`          |
-| Old context keeps re-appearing in OV       | Pre-fix versions captured the recall block back into OV      | Update to current version — `auto-capture` now strips `<openviking-context>` before pushing        |
-| Logs are noisy                             | `logRankingDetails: true` left on                            | Set `false`; the compact `ranking_summary` stays in the log                                        |
+Set `OPENVIKING_DEBUG=1` to write hook logs to `~/.openviking/logs/cc-hooks.log`.
 
-## Compared to Claude Code's built-in memory
+## Plugin structure
 
-Claude Code has a built-in `MEMORY.md` file system. This plugin **complements** it:
-
-| Feature      | Built-in `MEMORY.md`              | OpenViking plugin                                  |
-|--------------|-----------------------------------|----------------------------------------------------|
-| Storage      | Flat markdown                     | Vector DB + structured extraction                  |
-| Search       | Loaded into context wholesale     | Semantic similarity + ranking + token budget       |
-| Scope        | Per-project                       | Cross-project, cross-session, peer-scoped          |
-| Capacity     | ~200 lines (context limit)        | Unlimited (server-side storage)                    |
-| Extraction   | Manual rules                      | LLM-powered entity / preference / event extraction |
-| Subagents    | Same as parent                    | Isolated session + peer-scoped capture             |
-
----
-
-## Architecture
-
-```
-┌────────────────────────────────────────────────────────────┐
-│                      Claude Code                           │
-│                                                            │
-│  SessionStart   UserPromptSubmit   Stop   PreCompact       │
-│  SessionEnd     SubagentStart      SubagentStop            │
-└────┬───────────────┬───────────────┬───────────┬───────────┘
-     │               │               │           │
-     │   ┌───────────▼───────────┐   │           │
-     │   │  hook scripts (.mjs)  │   │           │     ┌──────────────┐
-     │   │  read transcript +    │───┼───────────┼────►│              │
-     │   │  call OV HTTP API     │   │           │     │  OpenViking  │
-     │   └───────────────────────┘   │           │     │  Server      │
-     │                               │           │     │  (Python)    │
-     │                  ┌────────────▼───────────▼───►│              │
-     │                  │  MCP tools (stdio proxy → /mcp)            │
-     │                  │ find/search/recall/remember/… │              │
-     └─────────────────►│                             │              │
-        OV session      └─────────────────────────────►              │
-        context inject                                └──────────────┘
-```
-
-There is no TypeScript build step and no runtime npm bootstrap. Hooks are plain `.mjs` files that talk to OpenViking over HTTP; MCP uses `servers/mcp-proxy.mjs` as a zero-dependency stdio bridge to the OpenViking server's `/mcp` endpoint. The source-card module in `mods/usage/` is TypeScript that Claude Code compiles itself.
-
-A persistent OpenViking session is created on first contact and reused for the entire Claude Code session. The OV session ID is `cc-<cc_session_id>` (the CC session_id verbatim, no hashing), so resume / compact / multi-hook events all target the same session. Archival + memory extraction is triggered client-side: the `Stop` hook commits when server-reported pending tokens cross `commitTokenThreshold` (default 20000), and `PreCompact` / `SessionEnd` / `SubagentStop` commit unconditionally.
-
-### Hook responsibilities
-
-| Hook                  | Trigger                                  | Action                                                                                            |
-|-----------------------|------------------------------------------|---------------------------------------------------------------------------------------------------|
-| `UserPromptSubmit`    | Each user turn                           | Search OV → rank → inject `<openviking-context>` block within a token budget                      |
-| `Stop`                | Claude finishes a response               | Parse transcript → push new user turns to OV session → commit when pending tokens cross threshold |
-| `SessionStart`        | New / resumed / post-compact session     | Inject `profile.md`, the memory index, and `<available-skills>`; on `resume`/`compact`, also the latest archive overview |
-| `PreCompact`          | Before Claude Code rewrites the transcript | Commit pending messages so they become an archive before CC mutates the transcript                |
-| `SessionEnd`          | Claude Code session closes               | Final commit so the last window is archived                                                       |
-| `SubagentStart`       | Parent spawns a subagent via Task tool   | Derive an isolated OV session ID for the subagent, persist start state                            |
-| `SubagentStop`        | Subagent finishes                        | Read subagent transcript → push to an isolated session with subagent peer identity → commit       |
-| `PreToolUse`          | Native `Read` / `Glob` / `Grep` / `Edit` / `Write` whose path is a `viking://` URI | Deny the call and point Claude to the equivalent OpenViking MCP tool; a `Write` / `Edit` on a skill URI (`viking://~/skills/...`, `viking://user/<id>/skills/...`, `viking://agent/skills/...`) is pointed to `add_skill` |
-| `PreToolUse`          | `Bash` command that contains a `viking://` URI | Let the command run and attach a notice pointing Claude to the OpenViking MCP tools in case it meant OpenViking content |
-| `PostToolUse`         | `Read` of a `SKILL.md` file              | Optional (default off): inject an experience block when OV has relevant skill-experience memories |
-
-### Async write path
-
-`Stop`, `SessionEnd`, and `SubagentStop` use a detached-worker pattern: the parent hook drains stdin, prints `{decision:"approve"}` to unblock Claude Code, then spawns a detached clone to do the HTTP work. The user never waits for OV. `PreCompact` stays synchronous because Claude Code mutates the transcript right after.
-
-Disable with `claude_code.writePathAsync: false` if you need deterministic ordering during debugging.
-
-### Memory pollution prevention
-
-`auto-capture` strips `<openviking-context>`, `<system-reminder>`, `<relevant-memories>`, and `[Subagent Context]` blocks from each turn before pushing to OV. Without this, the recall context the plugin injects this turn would be captured back as part of the user's "message" next turn, creating a self-referential pollution loop.
-
-### MCP tools available from the server
-
-The plugin's `.mcp.json` starts a local stdio proxy, which connects to the OpenViking server's native HTTP MCP endpoint at `/mcp`. Claude can call the server's retrieval, memory, resource, skill, watch, filesystem, and code-navigation tools on demand. `add_skill` creates or replaces a skill; `write` and `edit` refuse your own `skills/` subtree, and `add_resource` refuses skill targets.
-
-See the [MCP integration guide](../../../../docs/en/guides/06-mcp-integration.md) for the canonical tool list and parameters.
-
-### Plugin structure
+Claude Code uses the plugin root's default locations; the files below `hosts/claude-code/` are what only Claude Code has.
 
 ```
 agent-hook-plugin/
-├── .claude-plugin/
-│   └── plugin.json          # Claude Code plugin manifest
-├── hooks/
-│   └── hooks.json           # Claude Code hook registrations + hooks module
-├── commands/
-│   └── ov.md                # /ov status command
+├── .claude-plugin/plugin.json   # Claude Code plugin manifest
+├── hooks/hooks.json             # hook registrations + hooks module
+├── .mcp.json                    # MCP server config (local stdio proxy)
+├── commands/ov.md               # /openviking-memory:ov
 ├── mods/
-│   ├── register.ts          # hooks module entry
-│   ├── seal/                # seal secrets in prompts, tool calls/results and attachments
-│   └── usage/               # source cards
-├── skills/                  # openviking-memory, openviking-skills, ov-experience-memory, openviking-rule-search, ov-memory-doctor
-├── servers/
-│   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp bridge, shared by every host
+│   ├── register.ts              # hooks module entry
+│   ├── seal/                    # seal secrets
+│   └── usage/                   # source cards
 ├── scripts/
-│   ├── hook.mjs             # every hook event: `hook.mjs <Event> claude-code`
-│   ├── uri-guard.mjs        # PreToolUse guard
-│   └── statusline.mjs       # Claude Code statusline
-├── lib/                     # the shared runtime and the hook flow (lib/flow/)
-├── hosts/claude-code/
-│   ├── host.mjs             # how the flow reads Claude Code's payloads and transcripts
-│   ├── ov-status.mjs        # /ov status report
-│   ├── ov-memory-doctor.mjs # diagnostics script (ov-memory-doctor skill)
-│   ├── skill-experience.mjs # PostToolUse(Read) skill experience hint
-│   ├── seal-prompt.mjs      # setting helper for mods/seal
-│   └── setup.mjs            # interactive ovcli.conf wizard
-└── .mcp.json                # MCP server config (local stdio proxy)
+│   ├── hook.mjs                 # every hook event: `hook.mjs <Event> claude-code`
+│   ├── uri-guard.mjs            # PreToolUse guard
+│   └── statusline.mjs           # statusline
+├── servers/mcp-proxy.mjs        # stdio -> OpenViking /mcp bridge
+├── skills/                      # bundled skills
+├── lib/                         # shared library and the hook flow (lib/flow/)
+└── hosts/claude-code/
+    ├── host.mjs                 # how the flow reads Claude Code's payloads and transcripts
+    ├── state.mjs                # statusline snapshots
+    ├── compressor.mjs           # local recall compressor
+    ├── ov-status.mjs            # /openviking-memory:ov report
+    ├── ov-memory-doctor.mjs     # diagnostics (ov-memory-doctor skill)
+    ├── skill-experience.mjs     # PostToolUse(Read) skill experience
+    ├── seal-prompt.mjs          # setting helper for mods/seal
+    ├── setup.mjs                # interactive ovcli.conf wizard
+    └── STATUSLINE.md            # statusline glossary
 ```
 
 ## License
 
-Apache-2.0 — same as [OpenViking](https://github.com/volcengine/OpenViking).
+Apache-2.0, same as [OpenViking](https://github.com/volcengine/OpenViking).
