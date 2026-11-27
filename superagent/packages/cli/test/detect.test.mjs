@@ -212,6 +212,46 @@ test('runtimes: installed and logged-in CLIs are offered, the rest say what is m
   assert.match(runtimes[3].note, /OPENAI_API_KEY/);
 });
 
+test('runtimes: a Codex configured with a custom model provider needs no OpenAI login', async (t) => {
+  const bin = tempDir(t, 'superagent-codex-bin-');
+  fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\n', { mode: 0o755 });
+  const home = tempDir(t, 'superagent-codex-home-');
+  const writeConfig = (text) => {
+    fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.codex', 'config.toml'), text);
+  };
+  const execFileImpl = async (command, args) => {
+    if (command.endsWith('codex')) throw Object.assign(new Error('exit 1'), { stdout: '', stderr: 'Not logged in\n' });
+    if (args.includes('--list-models')) return { stdout: '' };
+    if (args.includes('-e')) return { stdout: '[]' };
+    return { stdout: '' };
+  };
+  const detect = async () => (await detectRuntimes({ env: { PATH: bin, HOME: home }, execFileImpl, piBin: '/managed/pi.js' }))
+    .find(({ id }) => id === 'codex');
+
+  // Installed with neither a login nor a provider: still refused, with the login hint.
+  const plain = await detect();
+  assert.equal(plain.available, false);
+  assert.match(plain.note, /codex login/);
+
+  writeConfig('model = "deepseek-v4.1-flash:1017"\nmodel_provider = "ollama-cloud"\n\n'
+    + '[model_providers.ollama-cloud]\nname = "Ollama Cloud"\nbase_url = "https://ollama.com/v1"\n'
+    + 'env_key = "OLLAMA_API_KEY"\nrequires_openai_auth = false\n');
+  const custom = await detect();
+  assert.equal(custom.available, true);
+  assert.match(custom.note, /ollama-cloud/);
+  assert.doesNotMatch(custom.note, /codex login/);
+
+  // A provider that insists on the OpenAI login is not a way around it.
+  writeConfig('model_provider = "openai-proxy"\n\n[model_providers.openai-proxy]\nbase_url = "https://proxy.example/v1"\n'
+    + 'requires_openai_auth = true\n');
+  assert.equal((await detect()).available, false);
+
+  // A provider named but never defined is a broken config, not a usable one.
+  writeConfig('model_provider = "ghost"\n');
+  assert.equal((await detect()).available, false);
+});
+
 test('runtimes: durable is offered when a provider has credentials', async () => {
   const execFileImpl = async (command, args) => {
     if (args.includes('-e')) return { stdout: '["openai/gpt-4o"]' };

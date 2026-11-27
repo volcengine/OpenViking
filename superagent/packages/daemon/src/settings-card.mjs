@@ -22,7 +22,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { RUNTIME_IDS, compatibleModelEffort, currentModelEntry, getRuntimeDefinition, modelIdPattern, staticModelEntries } from './runtime-catalog.mjs';
+import { RUNTIME_IDS, compatibleModelEffort, currentModelEntry, getRuntimeDefinition, isRuntimeDefaultModel, modelIdPattern, staticModelEntries } from './runtime-catalog.mjs';
+import { UNAVAILABLE_REASONS } from './runtime-availability.mjs';
 import { isWorkerRuntime } from './worker-settings.mjs';
 import { WORKER_RUNTIMES } from './worker-executor.mjs';
 
@@ -58,10 +59,27 @@ function select(options, initial, extra = {}) {
   };
 }
 
+// The router's model as the card may offer it: a runtime with no model chosen
+// reports its canonical default (the manifest's runtime selector, e.g. "pi"),
+// which is not an id to prepend to the list or to label an inherited option
+// with, so it reads as "no model chosen" here.
+function routerModelOf(snapshot) {
+  const model = snapshot.model || '';
+  return isRuntimeDefaultModel(snapshot.runtime, model) ? '' : model;
+}
+
+// What the "现在" table says for the router's model. The runtime's own default
+// is a fact worth naming; the selector that stands for it is not.
+function routerModelCell(snapshot) {
+  const model = routerModelOf(snapshot);
+  if (model) return model;
+  return snapshot.resolvedModel ? `默认（${snapshot.resolvedModel}）` : '默认';
+}
+
 // What is set now. `worker` is null where there are no workers, or for
 // someone other than the owner.
 export function currentSettings(snapshot, settings) {
-  const router = { runtime: snapshot.runtime ?? '', model: snapshot.model || '', effort: snapshot.effort || '' };
+  const router = { runtime: snapshot.runtime ?? '', model: routerModelOf(snapshot), effort: snapshot.effort || '' };
   if (!settings) return { router, worker: null };
   const runtime = settings.preferred();
   const own = isWorkerRuntime(runtime) ? settings.own(runtime) : { model: '', effort: '' };
@@ -93,7 +111,7 @@ function modelsOf(runtime, snapshot) {
 
 // The rows of the "now" table, as the commands report them.
 function nowRows(snapshot, settings) {
-  const rows = [{ who: 'router', runtime: snapshot.runtime ?? '—', model: snapshot.model || '默认', effort: snapshot.effort || '—' }];
+  const rows = [{ who: 'router', runtime: snapshot.runtime ?? '—', model: routerModelCell(snapshot), effort: snapshot.effort || '—' }];
   if (settings) {
     const runtime = settings.preferred();
     const model = isWorkerRuntime(runtime) ? settings.modelFor(runtime) : { model: null, effort: null };
@@ -111,6 +129,26 @@ function row(columns) {
 
 const label = (text) => ({ tag: 'div', text: plain(text, NOTE) });
 
+// What a dropdown may offer: the runtimes this machine can start, plus the ones
+// already chosen. A runtime in use stays listed even when the probe no longer finds
+// it, because the card has to be able to name where the agent actually runs.
+function offeredRuntimes(ids, availability, keep = []) {
+  if (!availability) return ids;
+  return ids.filter((id) => availability[id]?.available !== false || keep.includes(id));
+}
+
+// The runtimes the card leaves out, by why, so a short dropdown says what it left out.
+function unavailableNotes(hidden, availability) {
+  const byReason = new Map();
+  for (const id of hidden) {
+    const reason = availability?.[id]?.reason || UNAVAILABLE_REASONS.COMMAND;
+    byReason.set(reason, [...(byReason.get(reason) ?? []), id]);
+  }
+  return [...byReason].map(([reason, ids]) => note(reason === UNAVAILABLE_REASONS.KEY
+    ? `未列出（没有配置 ARK_API_KEY）：${ids.join('、')}`
+    : `未列出（这台机器上找不到命令）：${ids.join('、')}`));
+}
+
 const nowTable = (snapshot, settings) => table([['who', '', '80px'], ['runtime', 'Runtime'], ['model', '模型'], ['effort', '推理档位']],
   nowRows(snapshot, settings));
 
@@ -118,7 +156,7 @@ const nowTable = (snapshot, settings) => table([['who', '', '80px'], ['runtime',
 // what was set when the card was first drawn (a submission refuses to apply
 // over a change made since). `saved(runtime)` is the model and effort the
 // router last had on a runtime: what it takes again when switched back there.
-export function settingsCard({ snapshot, settings = null, draft = null, seen = null, saved = () => ({}) }) {
+export function settingsCard({ snapshot, settings = null, draft = null, seen = null, saved = () => ({}), availability = null }) {
   const now = currentSettings(snapshot, settings);
   seen ??= JSON.stringify(now);
   draft ??= { router: now.router.runtime, worker: now.worker?.runtime ?? null };
@@ -129,7 +167,7 @@ export function settingsCard({ snapshot, settings = null, draft = null, seen = n
   // default model, and the model's own default effort). Its model is always
   // offered, listed or not.
   const sameRouter = draft.router === snapshot.runtime;
-  const kept = sameRouter ? { model: snapshot.model || '', effort: snapshot.effort || '' }
+  const kept = sameRouter ? { model: routerModelOf(snapshot), effort: snapshot.effort || '' }
     : { model: saved(draft.router)?.model || '', effort: saved(draft.router)?.effort || '' };
   const listed = modelsOf(draft.router, snapshot);
   const routerModels = kept.model && !listed.some(({ id }) => id === kept.model)
@@ -140,11 +178,20 @@ export function settingsCard({ snapshot, settings = null, draft = null, seen = n
   const routerEffort = routerEfforts.includes(kept.effort) ? kept.effort
     : compatibleModelEffort({ efforts: routerEfforts, defaultEffort: routerEntry?.defaultEffort }, kept.effort) ?? '';
 
+  // Which runtimes the dropdowns offer, and why the rest are left out
+  // (runtime-availability.mjs): an install without codex or claude should not offer
+  // them as if choosing one could work.
+  const keep = [snapshot.runtime, draft.router, draft.worker === FOLLOW ? null : draft.worker,
+    settings?.configuredRuntime() ?? null].filter(Boolean);
+  const routerIds = offeredRuntimes(RUNTIME_IDS, availability, keep);
+  const workerIds = offeredRuntimes(WORKER_RUNTIMES, availability, keep);
+  const notOffered = availability ? RUNTIME_IDS.filter((id) => !routerIds.includes(id)) : [];
+
   // Laid out in rows, a label then its dropdowns side by side, so the card
   // stays short: the runtimes in one row above the form, then one row each
   // for the router's and the workers' model and effort.
-  const routerRuntime = select(RUNTIME_IDS.map((id) => [id, id]), draft.router,
-    { behaviors: [{ type: 'callback', value: value('runtime', { side: 'router' }) }] });
+  const routerRuntime = select(routerIds.map((id) => [id, id]), draft.router,
+    { name: 'router_runtime', behaviors: [{ type: 'callback', value: value('runtime', { side: 'router' }) }] });
   const routerModel_ = select([...(kept.model ? [] : [[DEFAULT, 'Runtime 默认']]), ...routerModels.map(({ id }) => [id, id])], routerModel,
     { name: 'router_model', placeholder: plain('模型') });
   const routerEffort_ = select(routerEfforts.map((level) => [level, level]), routerEffort,
@@ -164,8 +211,8 @@ export function settingsCard({ snapshot, settings = null, draft = null, seen = n
     const workerModels = runs ? modelsOf(runtime, snapshot) : [];
     if (own.model && !workerModels.some(({ id }) => id === own.model)) workerModels.unshift({ id: own.model });
     const unset = (inherited) => (runtime === draft.router && inherited ? inherited : 'CLI 默认');
-    runtimes.push([1, [label('worker')]], [3, [select(WORKER_RUNTIMES.map((id) => [draft.worker === FOLLOW && id === draft.router ? FOLLOW : id, id]), draft.worker,
-      { behaviors: [{ type: 'callback', value: value('runtime', { side: 'worker' }) }] })]]);
+    runtimes.push([1, [label('worker')]], [3, [select(workerIds.map((id) => [draft.worker === FOLLOW && id === draft.router ? FOLLOW : id, id]), draft.worker,
+      { name: 'worker_runtime', behaviors: [{ type: 'callback', value: value('runtime', { side: 'worker' }) }] })]]);
     rows.push(row([[1, [label('worker')]],
       [4, [select([[DEFAULT, unset(kept.model)], ...workerModels.map(({ id }) => [id, id])], own.model || DEFAULT,
         { name: 'worker_model', placeholder: plain('模型'), ...(runs ? {} : { disabled: true }) })]],
@@ -179,6 +226,7 @@ export function settingsCard({ snapshot, settings = null, draft = null, seen = n
     { tag: 'markdown', content: '**当前**' }, nowTable(snapshot, settings),
     { tag: 'markdown', content: '**① Runtime**<font color="grey">（改选后卡片会刷新下面的选项）</font>' },
     row(runtimes),
+    ...unavailableNotes(notOffered, availability),
     { tag: 'markdown', content: '**② 模型与推理档位**' },
     {
       tag: 'form', name: 'settings',
@@ -201,12 +249,12 @@ export function settingsCard({ snapshot, settings = null, draft = null, seen = n
 }
 
 // A runtime chosen above the form: the card again, with that choice.
-export function redrawn({ interaction, snapshot, settings, saved }) {
+export function redrawn({ interaction, snapshot, settings, saved, availability = null }) {
   const { draft, seen, side } = interaction.value ?? {};
   const option = interaction.option;
   const valid = side === 'router' ? RUNTIME_IDS.includes(option) : side === 'worker' && settings ? [FOLLOW, ...WORKER_RUNTIMES].includes(option) : false;
   if (!valid || !draft) return null;
-  return settingsCard({ snapshot, settings, saved, seen, draft: { ...draft, [side]: option } });
+  return settingsCard({ snapshot, settings, saved, seen, availability, draft: { ...draft, [side]: option } });
 }
 
 function firstLine(text) {

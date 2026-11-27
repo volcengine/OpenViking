@@ -42,6 +42,43 @@ async function run(execFileImpl, command, args, env) {
   }
 }
 
+// Codex can serve turns without an OpenAI login: a config that names a custom
+// model provider (`model_provider = "ollama-cloud"` plus its
+// `[model_providers.ollama-cloud]` table) makes `codex login status` answer
+// "not logged in" while the CLI is perfectly usable, as with an Ollama,
+// OpenRouter or self-hosted endpoint. Setup must not refuse that install just
+// because the OpenAI login check failed. The provider is returned for the note;
+// the one it does not trust is a provider that insists on OpenAI auth.
+function codexCustomProvider(env) {
+  const home = env.HOME || os.homedir();
+  const file = path.join(env.CODEX_HOME || path.join(home, '.codex'), 'config.toml');
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return ''; }
+  const provider = /^[ \t]*model_provider[ \t]*=[ \t]*["']([^"']+)["'][ \t]*$/m.exec(text)?.[1] ?? '';
+  if (!provider || provider === 'openai') return '';
+  // The table that defines it: a provider named but not defined is a broken
+  // config, and Codex would not start on it either.
+  const escaped = provider.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const table = new RegExp(`^[ \\t]*\\[model_providers\\."?${escaped}"?\\][ \\t]*$`, 'm').exec(text);
+  if (!table) return '';
+  // Everything after the header, up to the next table header.
+  const body = text.slice(table.index + table[0].length).split(/^[ \t]*\[/m)[0];
+  if (/^[ \t]*requires_openai_auth[ \t]*=[ \t]*true[ \t]*$/m.test(body)) return '';
+  return provider;
+}
+
+// Claude Code can be pointed at an Anthropic-compatible endpoint
+// (ANTHROPIC_BASE_URL, as with an Ollama, OpenRouter or gateway deployment) or
+// given a key in the environment: `claude auth status` then reports
+// loggedIn=false while the CLI works. The official API host still needs its own
+// credential, so it does not count as a way around the login.
+function claudeEndpointAuth(env) {
+  const base = String(env.ANTHROPIC_BASE_URL ?? '').trim();
+  if (base) return /^https?:\/\/api\.anthropic\.com(?:\/|$)/i.test(base) ? '' : base;
+  return String(env.ANTHROPIC_AUTH_TOKEN ?? '').trim() || String(env.ANTHROPIC_API_KEY ?? '').trim()
+    ? t('环境变量里的 API Key', 'an API key in the environment') : '';
+}
+
 // [{ id, label, model, bin, binEnv, available, note }], in the order setup offers them.
 // [{ id, label, model, bin, binEnv, available, note }], in the order setup offers them.
 export async function detectRuntimes({
@@ -57,20 +94,31 @@ export async function detectRuntimes({
 
   const codex = which('codex', env);
   const codexLogin = codex ? await run(execFileImpl, codex, ['login', 'status'], env) : null;
+  const codexProvider = codex && !codexLogin?.ok ? codexCustomProvider(env) : '';
   runtimes.push({
     id: 'codex', label: 'Codex', model: 'codex:', bin: codex, binEnv: 'CODEX_BIN',
-    available: Boolean(codexLogin?.ok),
-    note: !codex ? t('未安装', 'not installed') : codexLogin.ok ? t('已登录', 'logged in') : t('未登录：先运行 codex login', 'not logged in: run codex login first'),
+    available: Boolean(codex) && Boolean(codexLogin?.ok || codexProvider),
+    note: !codex ? t('未安装', 'not installed')
+      : codexLogin?.ok ? t('已登录', 'logged in')
+        : codexProvider ? t(`未登录 OpenAI，但配置了自定义 model provider「${codexProvider}」，可以直接用`,
+          `no OpenAI login, but the custom model provider "${codexProvider}" is configured: usable as is`)
+          : t('未登录：先运行 codex login（或配置自定义 model provider）',
+            'not logged in: run codex login first (or configure a custom model provider)'),
   });
 
   const claude = which('claude', env);
   const claudeStatus = claude ? await run(execFileImpl, claude, ['auth', 'status'], env) : null;
   let claudeLoggedIn = false;
   try { claudeLoggedIn = JSON.parse(claudeStatus?.stdout || '{}').loggedIn === true; } catch {}
+  const claudeElsewhere = claude && !claudeLoggedIn ? claudeEndpointAuth(env) : '';
   runtimes.push({
     id: 'claude', label: 'Claude Code', model: 'claude:', bin: claude, binEnv: 'CLAUDE_BIN',
-    available: claudeLoggedIn,
-    note: !claude ? t('未安装', 'not installed') : claudeLoggedIn ? t('已登录', 'logged in') : t('未登录：先运行 claude auth login', 'not logged in: run claude auth login first'),
+    available: claudeLoggedIn || Boolean(claudeElsewhere),
+    note: !claude ? t('未安装', 'not installed')
+      : claudeLoggedIn ? t('已登录', 'logged in')
+        : claudeElsewhere ? t(`未登录 Anthropic，但用 ${claudeElsewhere}，可以直接用`,
+          `no Anthropic login, but ${claudeElsewhere} is configured: usable as is`)
+          : t('未登录：先运行 claude auth login', 'not logged in: run claude auth login first'),
   });
 
   const piModels = await run(execFileImpl, process.execPath, [piBin, '--list-models'], { ...env, PI_OFFLINE: '1' });
@@ -226,7 +274,7 @@ export async function detectDsh({
   const bin = explicit ? locateBinary(explicit, env) : which('dsh', env);
   const result = {
     id: 'dsh', label: 'DeepSeek Harness', model: 'dsh', bin, binEnv: 'DSH_BIN',
-    installed: Boolean(bin), available: false, note: '', route: '', fallbackRoute: '',
+    installed: Boolean(bin), available: false, note: '', route: '', fallbackRoute: '', needsModel: false,
   };
   if (!bin) {
     result.note = explicit
@@ -271,6 +319,10 @@ export async function detectDsh({
     return result;
   }
   result.available = true;
+  // No route served a model: setup adds one (ensureDshModel) before it saves
+  // the instance, so the runtime stays selectable but is not advertised as
+  // ready. The summary line says so instead of naming it like a finished choice.
+  result.needsModel = !handshake.route;
   const via = handshake.route || handshake.fallbackRoute || DSH_DEFAULT_MODEL;
   if (handshake.route) {
     result.note = t(`SDK bridge 兼容（${versionLabel}），model route ${via}`,

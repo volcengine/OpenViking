@@ -13,6 +13,7 @@ import { WorkerExecutor } from './worker-executor.mjs';
 import { WorkerSettings } from './worker-settings.mjs';
 import { formatInboundLine, resolveReplyTarget } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { runtimeAvailability } from './runtime-availability.mjs';
 import { executeCommand, statusHeadline } from './commands.mjs';
 import { settingsModels } from './settings-models.mjs';
 import { SETTINGS_CARD, applySettings, redrawn, settingsCard, settledCard, statusCard, workerStatusLine } from './settings-card.mjs';
@@ -566,9 +567,10 @@ export class PersonalAgentDaemon {
         // On Lark /runtime and /status answer with a card too (settings-card.mjs).
         // The workers' settings are the owner's to change, as with /workers.
         runtimeCard: async (snapshot) => settingsCard({ snapshot: await settingsModels(snapshot, [snapshot.runtime, this.workerSettings?.preferred()], this.config), settings: this.connectors.isOwner(event) ? this.workerSettings ?? null : null,
-          saved: (runtime) => this.routerSaved(runtime) }),
+          saved: (runtime) => this.routerSaved(runtime), availability: this.runtimesAvailableHere() }),
         statusCard: (snapshot) => statusCard({ ...statusHeadline(snapshot), snapshot, settings: this.workerSettings ?? null,
           tasksLine: taskStatusLine(this.tasks), slots: this.tasks?.overview({ recent: 0 }).slots ?? null }),
+        availability: this.runtimesAvailableHere(),
       });
     } catch (error) {
       const resumed = error?.resumedInputs > 0 ? `\n被打断的 ${error.resumedInputs} 条消息已交回当前 Runtime` : '';
@@ -660,6 +662,19 @@ export class PersonalAgentDaemon {
     return { model: this.store.getSetting(`${runtime}_model`) || '', effort: this.store.getSetting(`${runtime}_effort`) || '' };
   }
 
+  // Whether each runtime in the catalogue can start here
+  // (runtime-availability.mjs), asked by /runtime and by the settings card. Kept
+  // for a moment like the model catalogues: a drop-down that re-probes every
+  // draw would still be right, but a runtime installed a second ago should
+  // show up on the next command rather than never.
+  runtimesAvailableHere() {
+    const now = Date.now();
+    if (!this._runtimesHere || now - this._runtimesHere.at > 30_000) {
+      this._runtimesHere = { at: now, value: runtimeAvailability(this.config) };
+    }
+    return this._runtimesHere.value;
+  }
+
   // A choice on the Runtime and model card, made in the direct chat it was
   // sent to: a runtime chosen above the form redraws the card; the form
   // submitted applies what changed, as the commands it stands for; cancel
@@ -675,7 +690,7 @@ export class PersonalAgentDaemon {
     else if (action === 'runtime') {
       const draft = { ...interaction.value.draft, [interaction.value.side]: interaction.option };
       snapshot = await settingsModels(snapshot, [draft.router, draft.worker === 'router' ? draft.router : draft.worker], this.config);
-      card = redrawn({ interaction, snapshot, settings, saved: (runtime) => this.routerSaved(runtime) });
+      card = redrawn({ interaction, snapshot, settings, saved: (runtime) => this.routerSaved(runtime), availability: this.runtimesAvailableHere() });
     }
     else if (action === 'apply') {
       const run = (name, arg) => executeCommand({ name, arg }, this.agentRuntime).catch((error) => ({ ok: false, text: safeError(error) }));
