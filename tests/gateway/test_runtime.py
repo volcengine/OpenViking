@@ -16,7 +16,7 @@ def gateway_config():
     return {"health_interval_seconds": 1}
 
 
-async def converse(gateway, session, key=None, idle_seconds=600):
+async def converse(gateway, session, key=None, idle_seconds=1800):
     _, client, _, minted, _, _ = gateway
     response = await client.post(
         "/v1/chat/completions",
@@ -115,9 +115,9 @@ async def test_openviking_commits_by_itself_when_configured(
         await converse(gateway, "first")
         (created,) = app.state.test_backend["sessions"]
         assert created["auto_commit_policy"] == {
-            "pending_token_threshold": 20000,
+            "pending_token_threshold": 100000,
             "message_count_threshold": 0,
-            "idle_timeout_seconds": 600,
+            "idle_timeout_seconds": 1800,
             "keep_recent_count": 10,
         }
     assert "commits" not in app.state.test_backend

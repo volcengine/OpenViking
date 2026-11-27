@@ -101,8 +101,8 @@ A conversation is always written to the same OpenViking session. Each save write
 
 The gateway then **commits** the session: OpenViking archives the saved messages and extracts memories from them in the background. A saved turn becomes memory only after a commit. There are two kinds of commit, and both work with any OpenViking server:
 
-- When a turn ends with **Commit after** (20,000 tokens by default) or more uncommitted tokens in the session, the gateway commits at once and keeps the latest **Keep recent messages** (10 by default) in the session.
-- Once no turn of the conversation has ended for **Commit when idle for** (600 seconds by default), the gateway commits everything left. The commit's due time is recorded with the conversation's saving state in the gateway storage, so it does not depend on the gateway process that saved the turn: when that process is gone (a restart, a crash, a replaced pod) or its commit failed, any gateway process on the same storage makes the commit within a minute or two of its due time.
+- When a turn ends with **Commit after** (100,000 tokens by default) or more uncommitted tokens in the session, the gateway commits at once and keeps the latest **Keep recent messages** (10 by default) in the session.
+- Once no turn of the conversation has ended for **Commit when idle for** (1800 seconds by default), the gateway commits everything left. The commit's due time is recorded with the conversation's saving state in the gateway storage, so it does not depend on the gateway process that saved the turn: when that process is gone (a restart, a crash, a replaced pod) or its commit failed, any gateway process on the same storage makes the commit within a minute or two of its due time.
 
 With `openviking_auto_commit: true` in the gateway configuration, the gateway leaves both to OpenViking's session auto-commit, which suits OpenViking servers that have session auto-commit enabled. See [Save conversations](08-context-profiles.md#save-conversations) for the differences.
 

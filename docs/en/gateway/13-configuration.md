@@ -222,8 +222,8 @@ Explained in [Save conversations](08-context-profiles.md#save-conversations). Wi
 | Studio label | API name | Default | Range | Meaning |
 | --- | --- | --- | --- | --- |
 | Save conversations | `capture` | `true` | | Save finished turns to OpenViking. |
-| Commit when idle for | `idle_seconds` | `600` (seconds) | 1 or more; with `openviking_auto_commit`, values below 300 count as 300 | Time after the conversation's last finished turn at which everything left in the session is committed. With `openviking_auto_commit`, needs `memory.session_auto_commit.enabled: true` on the OpenViking server. |
-| Commit after | `commit_tokens` | `20000` | 1 or more; with `openviking_auto_commit`, values above 1,000,000 count as 1,000,000 | Uncommitted tokens at the end of a turn at which the session is committed at once. |
+| Commit when idle for | `idle_seconds` | `1800` (seconds) | 1 or more; with `openviking_auto_commit`, values below 300 count as 300 | Time after the conversation's last finished turn at which everything left in the session is committed. With `openviking_auto_commit`, needs `memory.session_auto_commit.enabled: true` on the OpenViking server. |
+| Commit after | `commit_tokens` | `100000` | 1 or more; with `openviking_auto_commit`, values above 1,000,000 count as 1,000,000 | Uncommitted tokens at the end of a turn at which the session is committed at once. |
 | Keep recent messages | `keep_recent_messages` | `10` | 0–1,000 | Latest messages a **Commit after** commit leaves in the session. |
 | (API only) | `capture_memory_types` | `null` (inherit the user's policy on Server 0.5.0+) | Memory type names, such as `preferences` or `events`; `[]` extracts none | Memory types OpenViking extracts from saved conversations. An explicit list sets a session policy. |
 
