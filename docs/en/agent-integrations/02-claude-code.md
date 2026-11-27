@@ -92,6 +92,8 @@ Configuration priority: Environment variables > `ovcli.conf` > `ov.conf` > Built
 | `OPENVIKING_RECALL_LIMIT` | `10` | Legacy width override converted to per-category coding quotas |
 | `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | Inline token budget for the final raw-find fallback |
 | `OPENVIKING_AUTO_CAPTURE` | `true` | Auto-capture after each turn |
+| `OPENVIKING_CAPTURE_MODE` | `semantic` | `keyword` sends a turn's messages only when what you wrote carries a trigger (an ask to remember, a preference, a personal fact), and captures no subagent sessions |
+| `OPENVIKING_AUTO_COMMIT_ON_COMPACT` | `true` | Commit before compaction; `0` still captures the turn in progress but skips the commit |
 | `OPENVIKING_SKILL_CATALOG` | `true` | Inject the `<available-skills>` catalog at session start |
 | `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` | `1200` | Token budget for `<available-skills>`, separate from the profile budget; `0` turns the catalog off |
 | `OPENVIKING_SESSION_START_MAX_BYTES` | `9500` | Byte cap on the whole SessionStart context, kept under Claude Code's 10,000-character limit so the block stays inline instead of being saved to a file; on resume or compact the session archive takes up to half. `0` removes the cap |

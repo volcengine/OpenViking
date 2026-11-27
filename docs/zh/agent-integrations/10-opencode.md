@@ -117,7 +117,7 @@ node examples/opencode-plugin/scripts/setup.mjs
 }
 ```
 
-配置项按优先级从高到低解析：`OPENVIKING_*` 环境变量、工作区的 `.openviking/config.json` 与 `config.local.json`、`plugin.opencode`、`plugin`，最后是内置默认值。`autoRecall: false` 关闭自动召回，`autoCapture: false` 让插件不再回写对话。
+配置项按优先级从高到低解析：`OPENVIKING_*` 环境变量、工作区的 `.openviking/config.json` 与 `config.local.json`、`plugin.opencode`、`plugin`，最后是内置默认值。`autoRecall: false` 关闭自动召回，`autoCapture: false` 让插件不再回写对话。`autoCommitOnCompact: false` 保留压缩前后的捕获，但跳过压缩时的提交。`bypassSession: true`，或匹配 OpenCode 会话 id 或项目目录的 `bypassSessionPatterns` glob，会让该会话没有会话开场上下文、召回、捕获和提交。
 
 每个 session 的第一条消息会带上一个隐藏的 `<openviking-context source="session-start">` 块，里面有你的 `profile.md`、`preferences/` 和 `entities/` 记忆索引，以及 `<available-skills>` skill 清单：先列你自己的 skill，再列 `viking://agent/skills` 下账号共享的 skill；共享 skill 与你自己的 skill 同名时不再列出。agent 照某个 skill 做事之前，先用 `openviking_read` 读它的 `SKILL.md`；创建或共享 skill 用 `openviking_add_skill`。`profileTokenBudget` 只管 profile 和记忆索引，skill 清单有独立的预算 `skillCatalogTokenBudget`（默认 `1200`，环境变量 `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`）。放不下描述时只列 skill 名，名字也列不全时末尾注明 `... +N more`；连一个名字都放不下时，只写一行 skill 总数。设置 `skillCatalog: false`（`OPENVIKING_SKILL_CATALOG=0`）或把预算设为 `0` 即可关闭 skill 清单；没有 skill，或服务端没有 `GET /api/v1/skills` 接口时，这一块会直接省略。
 
@@ -141,7 +141,7 @@ API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`
 - `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`、`openviking_add_skill`
 - `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
 
-OpenCode 2 在每次 execution 结束时抓取本轮用户消息、助手回复和工具结果，并在压缩前补齐即将移出上下文的对话；达到 token 阈值时提交，compaction、session 删除和插件 cleanup 会强制提交。OpenCode 2 会在无活动 60 分钟、服务停止或本地插件热重载时执行 cleanup。
+OpenCode 2 在每次 execution 结束时抓取本轮用户消息、助手回复以及工具调用和结果，并在压缩前补齐即将移出上下文的对话；达到 token 阈值时提交，compaction（关闭 `autoCommitOnCompact` 时除外）、session 删除和插件 cleanup 会强制提交。OpenCode 2 会在无活动 60 分钟、服务停止或本地插件热重载时执行 cleanup。
 
 工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result) 读回。
 

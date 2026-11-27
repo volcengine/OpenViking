@@ -118,7 +118,7 @@ To remove the bundle, use **Uninstall** on its Plugins page entry, or quit Deskt
 
 ## How it works
 
-The bundle runs inside DSH as a Cordis plugin rather than as external hooks, so it follows the session in-process. At session start it injects your OpenViking profile block, an index of available memories, and an `<available-skills>` catalog of your OpenViking skills; when a compaction summarizes that block away, the next model step sends it again. When a model step takes new user input, it searches OpenViking with the text the user typed and appends what it finds to that step as a durable message, so the injection replays with the session and is visible to compaction. Context that DSH or other plugins inject (for example `time-context` or job notices) and tool results neither trigger recall nor enter the query. It captures user, assistant, and (optionally) tool-result messages straight from DSH's event stream, skipping injected context, and commits to OpenViking once pending tokens cross the threshold or when DSH begins a compaction, archiving every captured message. Writes that fail land in a pending queue and replay at the next session start.
+The bundle runs inside DSH as a Cordis plugin rather than as external hooks, so it follows the session in-process. At session start it injects your OpenViking profile block, an index of available memories, and an `<available-skills>` catalog of your OpenViking skills; when a compaction summarizes that block away, the next model step sends it again. When a model step takes new user input, it searches OpenViking with the text the user typed and appends what it finds to that step as a durable message, so the injection replays with the session and is visible to compaction. Context that DSH or other plugins inject (for example `time-context` or job notices) and tool results neither trigger recall nor enter the query. It captures user and assistant messages, tool calls, and tool results straight from DSH's event stream, skipping injected context, and commits to OpenViking once pending tokens cross the threshold or when DSH begins a compaction (unless `autoCommitOnCompact` is `false`), archiving every captured message; a compaction commit waits behind writes still in the pending queue. Writes that fail land in a pending queue and replay at the next session start.
 
 Each DSH session maps to `dsh-<session-id>` in OpenViking, and every subagent gets its own session.
 
@@ -182,11 +182,12 @@ Behavior knobs live in the profile's Cordis patch entry:
   config:
     recallTokenBudget: 2000
     scoreThreshold: 0.35
-    captureToolResults: true
     commitTokenThreshold: 100000
 ```
 
 `mcpEnabled: false` in that block, or in `ovcli.conf`'s `plugin` or `plugin.dsh`, mounts neither the OpenViking MCP tools nor the bundled skills; recall and capture continue.
+
+`noAutoInject: true` in that block leaves out the session-start profile, memory index, and skill catalog; recall continues. `bypassSession: true`, or a `bypassSessionPatterns` glob matching the DSH session id or the session's working directory, gives a session no injection, recall, capture, or commit.
 
 `syncTurns: false` in that block disables automatic capture, commit, and replay of pending writes. Profile injection and recall continue; queued writes remain for a later writing session. This does not revoke the model’s MCP write tools or change server permissions.
 

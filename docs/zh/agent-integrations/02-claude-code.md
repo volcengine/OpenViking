@@ -92,6 +92,8 @@ skill 清单就是 `<available-skills>` 块，列出存放在 OpenViking 中的 
 | `OPENVIKING_RECALL_LIMIT` | `10` | 遗留宽度覆盖，会转换为各分类 coding 配额 |
 | `OPENVIKING_RECALL_TOKEN_BUDGET` | `2000` | 最终 raw-find fallback 的内联 Token 预算 |
 | `OPENVIKING_AUTO_CAPTURE` | `true` | 每轮对话结束后自动捕获新记忆 |
+| `OPENVIKING_CAPTURE_MODE` | `semantic` | `keyword` 只在你写的内容带有触发词（要求记住、偏好、个人信息）时发送该轮消息，并且不捕获子代理会话 |
+| `OPENVIKING_AUTO_COMMIT_ON_COMPACT` | `true` | 压缩前提交；设为 `0` 时仍捕获进行中的这一轮，但跳过提交 |
 | `OPENVIKING_SKILL_CATALOG` | `true` | 会话启动时注入 `<available-skills>` skill 清单 |
 | `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` | `1200` | `<available-skills>` 的 Token 预算，与用户画像的预算相互独立；设为 `0` 即关闭清单 |
 | `OPENVIKING_SESSION_START_MAX_BYTES` | `9500` | SessionStart 注入的总字节上限，保证整块低于 Claude Code 的 10,000 字符限制、直接进入上下文而不是被存成文件；resume 或 compact 时会话归档最多占一半。设为 `0` 取消上限 |

@@ -56,7 +56,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | TRAE, TRAE CN | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
 | ZCode | Yes, session-aware | Profile, memory index, skills | Every turn | No exit event; turns are already committed | No pre-compaction event |
 | Kimi Code | Yes, session-aware | Profile, memory index, skills, at the first prompt | At 100,000 pending tokens | Yes | Commits uncommitted messages |
-| CodeBuddy Code | Yes, session-aware, in the interactive TUI only | Profile, memory index, skills | At 100,000 pending tokens | Yes, in the interactive TUI only | Commits uncommitted messages |
+| CodeBuddy Code | Yes, session-aware; in headless runs from CodeBuddy Code 2.185.0 | Profile, memory index, skills | At 100,000 pending tokens | Yes, in the interactive TUI only | Commits uncommitted messages |
 | Qoder CLI | Yes, session-aware | Profile, memory index, skills | At 100,000 pending tokens | Yes | Commits uncommitted messages |
 | Antigravity | Yes, session-aware, at the first model call of each turn | Profile, memory index, skills | Every turn | No exit hook; turns are already committed | No pre-compaction hook |
 | OpenCode | Yes, session-aware | Profile, memory index, skills, indexed repositories | At 100,000 pending tokens, when idle | Yes, within the host's cleanup time | Commits around compaction |
@@ -221,9 +221,9 @@ The table shows the default path. Turning on [recall digests](#recall-digest) ch
 | Codex, TraeCode CLI 2.0 | Every `UserPromptSubmit`; the whole hook has a 120-second deadline | The prompt | `<openviking-context source="auto-recall">` |
 | Cursor | `beforeSubmitPrompt` | The prompt; repeated events within 500 ms reuse the previous result | `additional_context` |
 | TRAE, TRAE CN | `UserPromptSubmit` | The prompt, with earlier injected blocks removed | `additionalContext` |
-| ZCode | `UserPromptSubmit` | The prompt, with three kinds of injected block removed, including `<system-reminder>` | `additionalContext`, strict JSON |
+| ZCode | `UserPromptSubmit` | The prompt, with injected blocks removed, including `<system-reminder>` | `additionalContext`, strict JSON |
 | Kimi Code | `UserPromptSubmit` | The prompt | Plain context text, not JSON |
-| CodeBuddy Code | `UserPromptSubmit`, interactive TUI only | The prompt | `<openviking-context>` in `additionalContext` |
+| CodeBuddy Code | `UserPromptSubmit`; in headless runs from 2.185.0 | The prompt | `<openviking-context>` in `additionalContext` |
 | Qoder CLI | `UserPromptSubmit`, interactive and headless | The prompt | `<openviking-context>` in `additionalContext` |
 | Antigravity | `PreInvocation` with `invocationNum` 0, once per user turn; later calls in a tool loop and reactive wakeups skip it | `lastUserInput`, with injected `<openviking-context>` blocks removed | A `systemMessage` step in `injectSteps`, which stays in the conversation |
 | OpenCode | v1: every `chat.message`; v2: every prompt | Text parts of the message | v1 prepends a synthetic part. v2 stores the result in message metadata and injects it before that message at each model step, without a new request |
@@ -330,7 +330,7 @@ These settings apply to automatic recall only. An explicit MCP `search` call use
 
 ### Keeping injected context out of capture
 
-Injected context is wrapped in fixed tags such as `<openviking-context>`, and capture removes those blocks before sending a turn, so recalled memories are not stored again as new conversation. The shared capture code also removes digest blocks, metadata fences, and timestamp prefixes. TRAE and ZCode use their own cleaning functions; ZCode's removes three kinds of injected block. OpenClaw removes `<relevant-memories>` both when it captures a turn and when it builds the next recall query. Hermes drops the calls and results of its three read-only tools from the captured batch and keeps write-tool calls.
+Injected context is wrapped in fixed tags such as `<openviking-context>`, and capture removes those blocks before sending a turn, so recalled memories are not stored again as new conversation. The shared capture code, which every integration except OpenClaw and Hermes uses, also removes `<system-reminder>` blocks, digest blocks, metadata fences, and timestamp prefixes. OpenClaw removes `<relevant-memories>` both when it captures a turn and when it builds the next recall query. Hermes drops the calls and results of its three read-only tools from the captured batch and keeps write-tool calls.
 
 <a id="_3-3-session-and-commit-lifecycle"></a>
 
@@ -348,6 +348,28 @@ Injected context is wrapped in fixed tags such as `<openviking-context>`, and ca
 - **Large tool output is stored separately.** The server moves tool output above 20,000 characters into a separate record and leaves a `tool_output_ref`. Plugins raise their own limit (`captureToolMaxChars`) to 1,000,000 only as a safety net.
 - **Some writes run in the background.** Claude Code, Codex, and ZCode hand the `Stop` write to a detached worker by default (`OPENVIKING_WRITE_PATH_ASYNC`), so the host does not wait. The worker survives the terminal closing once it has started, but network errors or process termination can still interrupt it. While this is on, `Stop` no longer prints the `appended N turn(s)` notice.
 
+### What each integration captures
+
+| Integration | Read from | Tool calls and results |
+|---|---|---|
+| Claude Code | The session transcript at `Stop`; a subagent's transcript at `SubagentStop` | Yes |
+| Codex, TraeCode CLI 2.0 | The Codex rollout file | Yes |
+| Cursor | The text transcript at `stop`, plus a local log of tool completions: `postToolUse` and `postToolUseFailure` for Cursor's own tools, `afterMCPExecution` for MCP calls | Yes. OpenViking MCP calls are named `mcp__openviking__<tool>`; calls to other MCP servers, `mcp__<server>__<tool>` |
+| TRAE, TRAE CN | The prompt and final reply carried by `Stop` | No; text only |
+| ZCode | The rollout file `~/.zcode/cli/rollout/model-io-<sid>.jsonl` | Yes |
+| Kimi Code | `wire.jsonl` | Yes |
+| CodeBuddy Code | The session transcript | Yes |
+| Qoder CLI | The conversation records of the session transcript | Yes; an `mcp_call` is unwrapped to the tool it names |
+| Antigravity | The finished steps of `transcriptPath` | Yes; MCP calls are named `mcp__<server>__<tool>`. A failing command is recorded as completed, with the failure only in its output text |
+| OpenCode | v1 message and part events; v2 the session context at the end of each execution | Yes |
+| DSH | `session/event` | Yes |
+| pi | The session branch at `turn_end` | Yes |
+
+These integrations apply one rule to every message. Text loses injected context (see [Keeping injected context out of capture](#_3-2-6-injection-backflow-protection)) and passes `captureFilters`; tool calls and results stay structured `tool` parts in the order the host recorded them, with output capped at `captureToolMaxChars`. Nothing else is dropped or shortened: acknowledgements, short replies, and slash commands are sent as written, and extraction decides what is worth remembering. Two settings change what is sent:
+
+- `captureAssistantTurns: false` (`OPENVIKING_CAPTURE_ASSISTANT_TURNS=0`) sends only the user's own text: no assistant message, tool call, or tool result.
+- `captureMode: "keyword"` (`OPENVIKING_CAPTURE_MODE`) is read only by Claude Code and Codex, which share one trigger list: an explicit ask to remember, a stated preference or decision, or a personal fact, in what the user wrote. Claude Code drops the turns of a `Stop` whose user text carries no trigger, and does not capture subagent sessions. Codex sends nothing until a user turn carries a trigger, then sends the turns before it along with it.
+
 <a id="_3-3-2-regular-commit-triggers"></a>
 
 ### When each integration commits
@@ -356,10 +378,10 @@ Thresholds in this table are client-side. They read the server's pending-token c
 
 | Integration | During the session | On an explicit action or boundary | Before or after compaction |
 |---|---|---|---|
-| Claude Code | `Stop` at 100,000 pending tokens | `SessionEnd` and `SubagentStop` always commit; `SessionStart` replays queued writes | `PreCompact` always commits, synchronously |
+| Claude Code | `Stop` at 100,000 pending tokens | `SessionEnd` and `SubagentStop` always commit; `SessionStart` replays queued writes | `PreCompact` commits synchronously, queued behind the session's queued writes if it has any |
 | Codex | `Stop` at 100,000 pending tokens | `SessionEnd` (Codex 0.145+) catches up missed turns, then commits in a detached worker. `SessionStart` on startup or clear commits sessions marked as ended or idle for more than 30 minutes | `PreCompact` catches up and commits everything |
 | TraeCode CLI 2.0 | Same as Codex | Same as Codex; without `SessionEnd`, only the start-up sweep | Same as Codex |
-| Cursor | `stop` after 8 captured messages since the last commit (`commitTurnThreshold`), counted locally | `sessionEnd` is registered but does not run in practice | `preCompact` always commits |
+| Cursor | `stop` after 8 captured messages since the last commit (`commitTurnThreshold`), counted locally | `sessionEnd` is registered but does not run in practice | `preCompact` commits |
 | TRAE, TRAE CN | Every `Stop` that captured content | None | No pre-compaction event |
 | ZCode | Every `Stop`; turns a missed `Stop` skipped are caught up from the rollout file at the next `Stop` | None | No pre-compaction event |
 | Kimi Code | `Stop` at 100,000 pending tokens | `SessionEnd` and `Interrupt` commit everything not yet committed, including messages `Stop` already sent | `PreCompact` commits everything not yet committed |
@@ -367,12 +389,14 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Qoder CLI | `Stop` at 100,000 pending tokens | `SessionEnd` commits everything not yet committed, including messages `Stop` already sent; `SessionStart` replays queued writes | `PreCompact` commits everything not yet committed |
 | Antigravity | Every `Stop` that captured content; steps a missed `Stop` left behind are captured at the next `Stop` | None; `SessionStart` replays queued writes | No pre-compaction hook |
 | OpenCode | v1 `session.idle`, v2 end of execution: at 100,000 pending tokens | Session deletion, v1 `session.error`, v1 dispose, and v2 cleanup force a commit | v1 before and after compaction; v2 once after compaction ends |
-| DSH | `turn/end` at 100,000 pending tokens | Cordis teardown commits each session | `compaction/start` commits without the threshold check |
+| DSH | `turn/end` at 100,000 pending tokens | Cordis teardown commits each session | `compaction/start` commits without the threshold check, queued behind the session's queued writes if it has any |
 | pi, takeover on | Locally estimated 30,000 tokens with more than 3 user turns | `/viking commit` | `session_before_compact` |
 | pi, takeover off (default) | 100,000 pending tokens after each sync | `session_shutdown` and `/viking commit` | `session_before_compact` |
 | OpenClaw | After a turn, at `tokenBudget × commitTokenThresholdRatio` (128,000 × 0.5 by default) | `/new`, `/reset`, and `memory_store` commit and wait | `compact()` commits and waits up to 5 minutes for extraction |
 | Hermes (bundled) | None | Session end, session switch (`/new`, `/resume`, `/branch`, fork-style compaction), gateway cache eviction, and an exit handler; `/undo` and in-place compaction do not commit | At fork-style compaction only |
 | ov CLI | None | `ov session commit`; `ov add-memory` creates, fills, and commits its own session | Not applicable |
+
+`autoCommitOnCompact: false` (`OPENVIKING_AUTO_COMMIT_ON_COMPACT=0`) skips the commit in the last column for Claude Code, Codex, Cursor, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, DSH, and pi with takeover off. Capture still runs, and the session is committed later by the threshold or at the end of the session.
 
 `OPENVIKING_SERVER_AUTO_COMMIT=1` (`serverAutoCommit`, off by default) leaves the pending-token commit in the "During the session" column to the server, for Claude Code, Codex, TraeCode CLI 2.0, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, DSH, and pi with takeover off. The integration sets the session's `auto_commit_policy` from its own settings: `pending_token_threshold` from `commitTokenThreshold`, an idle commit after `commitIdleSeconds` (`OPENVIKING_COMMIT_IDLE_SECONDS`, 1,800 by default; 0 for none, otherwise at least 300), the message-count trigger off, and `keep_recent_count` 0. Once the session carries that policy the integration stops committing at its own threshold; the other two columns still apply.
 
@@ -395,14 +419,14 @@ Thresholds in this table are client-side. They read the server's pending-token c
 | Cursor | No | No | No | No | No | Closing or switching a chat fires no event. `sessionEnd` fires only on window close, after the host has already stopped running hook commands. Messages below the 8-message threshold wait for later messages in the same session |
 | TRAE, TRAE CN | No | No | No | No | No | Every `Stop` already committed, so at most the turn in progress is lost |
 | ZCode | No | Conditional | No | No | No | Ctrl+C after that turn's `Stop` fired lets the detached worker finish. Every `Stop` commits, and missed turns are caught up at the next `Stop` |
-| Kimi Code | Commits | Conditional | Not verified | Not verified | No | `SessionEnd` and `Interrupt` commit everything not yet committed, including messages `Stop` already sent. `Interrupt` shares a 2-second request budget between capture and commit, so a slow capture leaves the commit to the next commit of the same session |
+| Kimi Code | Commits | Conditional | Not verified | Not verified | No | `SessionEnd` and `Interrupt` commit everything not yet committed, including messages `Stop` already sent. `Interrupt` shares a 2-second request budget between capture and commit, so a slow capture leaves the commit to the next commit of the same session. `kimi -p` fires neither `Stop` nor `SessionEnd`, so a prompt-mode run is not captured |
 | CodeBuddy Code | Conditional | No | No | No | No | `SessionEnd` fires only in the interactive TUI, where it commits everything not yet committed, including messages `Stop` already sent; a headless run is committed at the 100,000-token threshold, and one that stays below it waits for a later `SessionEnd` of the same session in the TUI, `/compact`, or the server's idle commit under `OPENVIKING_SERVER_AUTO_COMMIT`. The capture runs in a detached worker that the hook's own timeout does not reach |
 | Qoder CLI | Commits | Not verified | Not verified | Not verified | No | `SessionEnd` fires on `/exit` and at the end of a headless `-p` run, and commits everything not yet committed, including messages `Stop` already sent. The capture runs in a detached worker that the hook's own timeout does not reach |
 | Antigravity | No | No | No | No | No | No exit hook is registered. Every `Stop` that captured content already committed, so at most the turn in progress is left; its finished steps are captured at the next `Stop` of the same conversation |
 | OpenCode | Conditional | Conditional | Conditional | Conditional | No | v1 1.15.11+ `dispose` and v2 cleanup commit every session, but host cleanup time is limited, so slow requests or many sessions can be cut off. v2 cleanup also runs after 60 minutes idle and on plugin hot reload |
 | DSH | Commits | Commits | Commits | No | No | Teardown gives each session one 3-second commit, queued behind any slow write, inside a 5-second process grace period. A second Ctrl+C force-quits without it. Closing a browser tab in the web form does not tear down |
 | pi, takeover on | No | No | No | No | No | `session_shutdown` saves takeover state but does not commit. The next run that reaches the threshold, or `/viking commit` |
-| pi, takeover off | Commits | Commits | Commits | Commits | No | A failed commit goes to the offline queue |
+| pi, takeover off | Commits | Commits | Commits | Commits | No | A commit that fails with a retryable error goes to the offline queue |
 | OpenClaw | No | No | No | No | No | The `session_end` handler does not commit. Archiving relies on `/new`, `/reset`, and the threshold |
 | Hermes (bundled) | Conditional | Conditional | Conditional | Conditional | No | The exit handler drains uploads for up to 10 seconds, then commits; if the drain does not finish, it skips the commit instead of committing half a session. SIGTERM and SIGHUP get a 1.5-second grace period by default, and the Hermes exit watchdog can cut a slow commit short |
 | LangChain, Open WebUI, Agent Plugins, MCP clients | No | No | No | No | No | No session hooks. The `DELETE /mcp` an MCP proxy sends on exit only closes the protocol session. LangChain relies on the caller's `close()` |
@@ -421,7 +445,7 @@ What this means in practice:
 |---|---|
 | Claude Code, CodeBuddy Code, Qoder CLI, Antigravity, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run (2 for Kimi Code) and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
 | Cursor | New captures are not queued. The text transcript and local tool records retain unsent content; progress advances only after server acknowledgement. Later capture in the same conversation retries it, and incomplete capture prevents a commit. `SessionStart` still replays legacy queued writes |
-| Codex, TraeCode CLI 2.0 | New captures are not queued. The transcript cursor moves only past messages the server accepted, so the next capture or start-up sweep resends the rest. `SessionStart` still replays queued entries |
+| Codex, TraeCode CLI 2.0 | New captures and commits are not queued. The transcript cursor moves only past messages the server accepted, so the next capture or start-up sweep resends the rest; a session whose commit failed stays marked for the next sweep. `SessionStart` still replays queued entries |
 | OpenClaw | No queue. A failed turn is not sent again |
 | Hermes (bundled) | Uploads run in in-process threads and are not replayed from disk. Pending-commit markers under `$HERMES_HOME/openviking/pending_sessions/` let a later start commit sessions left by a dead run (POSIX only) |
 | LangChain | A failed commit is retried on the next record, in memory only. A partial write raises `OpenVikingPartialWriteError` with counts that let the caller retry the remaining messages |
@@ -433,7 +457,7 @@ What this means in practice:
 
 | Integration | Subagent handling |
 |---|---|
-| Claude Code | Each subagent gets its own session, `cc-<id>__subagent-<agent_id>`. `SubagentStop` sends its transcript and commits |
+| Claude Code | Each subagent gets its own session, `cc-<id>__subagent-<agent_id>`. `SubagentStop` sends its transcript and commits. In `keyword` capture mode subagent sessions are not captured |
 | Codex, TraeCode CLI 2.0 | Subagent output is folded into the main session |
 | OpenCode | Subagents get `oc-<parent>__subagent-<child>` sessions. Session-start context is skipped for them; recall is not |
 | DSH | Each subagent is a separate `dsh-<id>` session with no link to its parent, and each gets its own session-start context |
@@ -462,6 +486,8 @@ When the host shortens its context, most integrations make sure the dropped mess
 | pi | Takeover, off by default | Commits and waits for the archive overview | The overview replaces pi's summary; on failure pi compacts as usual |
 | OpenClaw | The plugin owns compaction | `compact()` commits and waits | The next context assembly rebuilds history from the server |
 | Hermes (bundled) | Host summarizes | Fork-style compaction commits the old session; in-place compaction does nothing | Nothing |
+
+With `autoCommitOnCompact` off, the integrations that commit before compaction still capture what the host is about to summarize, but skip the commit; pi's takeover is not affected.
 
 <a id="_3-4-2-pi-takeover"></a>
 
@@ -597,8 +623,10 @@ Settings that apply only to some integrations:
 - `OPENVIKING_COMMIT_TURN_THRESHOLD`: Cursor only. TRAE, TRAE CN, ZCode, and Antigravity commit every turn.
 - `OPENVIKING_SERVER_AUTO_COMMIT` and `OPENVIKING_COMMIT_IDLE_SECONDS`: Claude Code, Codex, TraeCode CLI 2.0, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, DSH, and pi with takeover off. Cursor, which counts captured messages, and the integrations that commit every turn keep their own commits.
 - `OPENVIKING_WRITE_PATH_ASYNC`: Claude Code, Codex, ZCode, and Antigravity.
+- `OPENVIKING_CAPTURE_MODE=keyword`: Claude Code and Codex. The others capture every turn.
+- `OPENVIKING_AUTO_COMMIT_ON_COMPACT`: the integrations with a pre-compaction event: Claude Code, Codex, Cursor, Kimi Code, CodeBuddy Code, Qoder CLI, OpenCode, DSH, and pi with takeover off.
 - `OPENVIKING_RECALL_COMPRESS=client`: Claude Code and Codex. `server` and `auto` work for every integration listed under [Recall digest](#recall-digest).
-- The workspace files, the `ovcli.conf` `plugin` section, `OPENVIKING_RECALL_DEDUP_TURNS`, `OPENVIKING_RECALL_QUERY_EXPANSION`, `OPENVIKING_PEER_SOURCE`, and the skill catalog settings: every integration built on the shared plugin code, not OpenClaw or Hermes.
+- The workspace files, the `ovcli.conf` `plugin` section, `OPENVIKING_CAPTURE_ASSISTANT_TURNS`, `OPENVIKING_CAPTURE_FILTERS`, `OPENVIKING_NO_AUTO_INJECT`, `OPENVIKING_BYPASS_SESSION` and `bypassSessionPatterns`, `OPENVIKING_RECALL_DEDUP_TURNS`, `OPENVIKING_RECALL_QUERY_EXPANSION`, `OPENVIKING_PEER_SOURCE`, and the skill catalog settings: every integration built on the shared plugin code, not OpenClaw or Hermes.
 
 <a id="_3-7-additional-ux-comparison"></a>
 
@@ -649,14 +677,17 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - `Stop` and `SessionEnd` write in a detached worker. A per-session lock orders the `Stop` worker, `PreCompact`, the `SessionEnd` worker, and the sweep.
 - There is no URI guard. Codex writes a `PreToolUse` notice into the history between a tool call and its output, and Responses servers that check the history as chat messages, such as Volcengine Ark, reject that order with HTTP 400.
 - Codex keeps a trust record per hook. After an upgrade that adds hooks, approve the new ones in `/hooks`.
+- A commit the server answers with 404, because it no longer has the session, releases the session instead of retrying it at every `SessionStart`.
 - TraeCode CLI 2.0 (binary `traecli`, config `~/.trae/traecli.toml`) is a Codex-family CLI and installs this same plugin. Only version 2.0 is supported; the earlier standalone plugin for 1.0 has been removed, and `--harness trae-cli --uninstall` still removes a copy an old install left behind. A build without `SessionEnd` ignores that hook.
 
 ### Cursor
 
-[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration with 7 hooks (`sessionStart`, `beforeSubmitPrompt`, `beforeReadFile`, `afterMCPExecution`, `stop`, `preCompact`, `sessionEnd`), an always-on rule, and 5 skills.
+[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration with 10 hooks (`sessionStart`, `beforeSubmitPrompt`, `beforeReadFile`, `preToolUse`, `postToolUse`, `postToolUseFailure`, `afterMCPExecution`, `stop`, `preCompact`, `sessionEnd`), an always-on rule, and 5 skills.
 
 - The URI guard runs on `beforeReadFile` only, independent of the plugin switch. Shell commands are not checked, and an upgrade removes the `beforeShellExecution` entry older installs registered.
-- `afterMCPExecution` retains completed OpenViking tool calls, uploaded with the conversation at Stop. Successful Experience reads can link to trajectories produced by that commit; failed or unfinished calls and automatic injection do not count as successful reads.
+- `postToolUse` and `postToolUseFailure` record every finished Cursor tool, and `afterMCPExecution` every MCP call, in a local log that `stop` uploads with the conversation. The post events skip their `MCP:<tool>` copy of an MCP call, which carries no server name, so each call is recorded once. OpenViking MCP calls are named `mcp__openviking__<tool>`, and calls to other MCP servers `mcp__<server>__<tool>`.
+- `preToolUse` matches only `MCP:session_history` and fills its `session` argument when the Agent leaves it out.
+- Successful Experience reads can link to trajectories produced by that commit; failed or unfinished calls and automatic injection do not count as successful reads.
 - `sessionEnd` fires only on window close, after Cursor has stopped running hook commands, so it does not commit in practice.
 - With the server unreachable, every turn waits out the 15-second recall timeout.
 
@@ -677,9 +708,8 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 [Community integrations: ZCode](./08-community-plugins.md#zcode-memory-integration). Hook and MCP configuration with 4 hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse` on Read, Glob, and Grep, and `Stop`, plus 5 skills.
 
 - The skills are installed into `~/.zcode/skills/<name>`. A skill the user edited, or an unmanaged directory of the same name, is preserved on upgrade and uninstall.
-- The rollout file `~/.zcode/cli/rollout/model-io-<sid>.jsonl` is the source of captured turns; turns a missed `Stop` skipped are caught up at the next `Stop`.
+- The rollout file `~/.zcode/cli/rollout/model-io-<sid>.jsonl` is the source of captured turns, including each turn's tool calls and results, which go into its assistant message as tool parts; turns a missed `Stop` skipped are caught up at the next `Stop`.
 - The first capture reads the whole rollout, so installing into a long-running session produces one large upload.
-- Capture removes injected blocks but does no other text cleanup.
 - `Stop` writes in a detached worker by default.
 
 <a id="kimicode"></a>
@@ -690,6 +720,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 - Captured turns come from `wire.jsonl`; a turn's tool calls and their results go into its assistant message as tool parts. A turn moves the cursor only after it is sent or stored in the offline queue.
 - Session-start context is injected at the first prompt and retried on later prompts until it succeeds.
+- Kimi fires `Stop` only after a completed turn and `Interrupt` only after a cancelled one. `kimi -p` fires neither `Stop` nor `SessionEnd`, so a prompt-mode run is not captured.
 - `Stop`, `PreCompact`, and `SessionEnd` may write in the background. `Interrupt` stays synchronous with a 2-second request budget.
 - `UserPromptSubmit` returns plain context text, not JSON.
 - Installation keeps other plugin records and does not edit the older `config.toml` or `mcp.json`.
@@ -698,7 +729,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 [CodeBuddy Code](./20-codebuddy.md). A plugin with 6 hooks, an MCP proxy, and 5 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like ZCode and Kimi Code.
 
-- `UserPromptSubmit` and `SessionEnd` fire **only in the interactive TUI**. A headless run (`-p`, `--input-format stream-json`) captures on `Stop` and never sends the final commit.
+- `SessionEnd` fires **only in the interactive TUI**, and `UserPromptSubmit` fires only there before CodeBuddy Code 2.185.0. A headless run (`-p`, `--input-format stream-json`) captures on `Stop` and never sends the final commit.
 - The URI guard denies file tools whose path is a `viking://` URI. The denial reaches the model as the failed tool result; an `allow` carries no text through, so this host has no advisory channel. Shell commands are not checked, so `ov` calls and literal `viking://` arguments still work.
 - Tool calls and their results are captured as tool parts of the turn's assistant message.
 - `SessionStart` carries no `cwd` and can be delivered twice in one session, so the hook is idempotent and falls back to the process working directory.
@@ -722,8 +753,8 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 - `PreInvocation` runs before every model call, including each call in a tool loop (`invocationNum` above 0) and each reactive wakeup for a background task, subagent message, or `Stop` continuation. Recall runs only when `invocationNum` is 0 and no `MODEL` step has run since the latest `USER_INPUT` step in `transcriptPath`, so a turn injects once. A `lastUserInput` that differs from that step's request is a new turn the transcript has not recorded yet, and recalls too.
 - Antigravity hooks use their own `hooks.json` format, with each top-level key naming a hook. Context goes back as a `systemMessage` step in `injectSteps`, which stays in the conversation.
-- `Stop` carries no message text. Capture reads the finished steps of `transcriptPath` after the last captured step, preferring the untruncated `transcript_full.jsonl` beside it, in a detached worker, then commits. A planner step's tool calls and the result steps after it go out as tool parts of that assistant message; results are paired with calls by position, and only when there are as many results as calls; otherwise the calls go out without results. A step still in progress is read again by the next `Stop`; when the server takes only part of a write, the next `Stop` resends the turns it did not take.
-- The plugin directory's `mcp_config.json` registers the OpenViking MCP server, the shared stdio proxy. When `~/.gemini/config/mcp_config.json` already defines a server named `openviking`, the installer keeps the user's server and does not write the plugin's `mcp_config.json`, so no tool appears twice.
+- `Stop` carries no message text. Capture reads the finished turns of `transcriptPath` that no earlier `Stop` has sent, in step order, preferring the untruncated `transcript_full.jsonl` beside it, in a detached worker, then commits. A planner step's tool calls and the result steps after it go out as tool parts of that assistant message; results are paired with calls by position, and only when there are as many results as calls; otherwise the calls go out without results. MCP calls, which Antigravity routes through `call_mcp_tool`, are named after the tool they reach, `mcp__<server>__<tool>`. A failing command is recorded as completed, so its failure shows only in the output text. A step still in progress is read again by the next `Stop`; when the server takes only part of a write, the next `Stop` resends the turns it did not take.
+- The plugin directory's `mcp_config.json` registers the OpenViking MCP server, the shared stdio proxy. When `~/.gemini/config/mcp_config.json` already defines a server whose name contains `openviking`, the installer keeps the user's server and does not write the plugin's `mcp_config.json`, so no tool appears twice.
 - The skills live in the plugin directory as `skills/<name>/SKILL.md`, and each is also invocable as `/<name>`.
 - `PreToolUse` (matcher `*`) runs the URI guard: a file tool whose location argument (an argument whose name ends in `Path`, `File`, or `Directory`) is a `viking://` URI is denied, and the reason reaches the model as a failed tool call pointing at the OpenViking MCP tools. Shell commands (`run_command`) are not checked and get no notice.
 - If `~/.gemini/config/plugins/openviking-memory` exists and OpenViking did not write it, the installer stops and `--uninstall` leaves it in place.
@@ -747,7 +778,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - It listens to `agent/session-start`, `agent/pre-step`, `session/event`, `session/flush`, `tools/pre-execute`, and `tools/post-execute`.
 - `ctx.provide("openvikingMemory")` lets other Cordis plugins build on it.
 - The installer uses the `web` profile unless `--dsh-profile` names another. On macOS it installs into DeepSeek Harness Desktop's `desktop` profile as a separate harness, `dsh-desktop`, through Desktop's own `dsh` command ([DeepSeek Harness Desktop](./17-dsh.md#deepseek-harness-desktop)). Every mode except `dev` installs the published npm package.
-- Tool results are captured by default (`captureToolResults: true`), so `ov-experience-memory` runs its full loop; turning capture off leaves it able only to find and apply Experience.
+- Tool calls and results are captured, so `ov-experience-memory` runs its full loop; with `captureAssistantTurns` off it can only find and apply Experience.
 - The URI guard lowercases tool names, denies file tools on `viking://` paths in `tools/pre-execute`, and adds a notice to `bash` commands, and to `pwsh` commands on Windows, in `tools/post-execute`.
 - Credentials named in the Cordis patch override every other source. For behavior settings the patch is the lowest layer.
 - `mcpEnabled: false` (in `ovcli.conf` `plugin` or `plugin.dsh`, or in the Cordis patch) mounts neither the MCP tools nor the bundled skills.
@@ -881,7 +912,7 @@ Use a user or admin API key; the server reads the account and user from it. `X-O
 
 For automatic recall, capture, commits, and offline retries, reuse the existing code instead of writing it again:
 
-- **`examples/memory-plugin-shared/lib/`** (Node.js) holds the shared modules: recall with its fallbacks, session-start context, capture cleaning, the offline queue, batch sending, the MCP proxy, session IDs, and credentials. Hosts configured through hook files can add an adapter to `examples/agent-hook-plugin/hosts/`, as Cursor, TRAE, ZCode, and Kimi Code do.
+- **`examples/memory-plugin-shared/lib/`** (Node.js) holds the shared modules: recall with its fallbacks, session-start context, capture cleaning, the offline queue, batch sending, the MCP proxy, session IDs, and credentials. Hosts configured through hook files can add an adapter to `examples/agent-hook-plugin/hosts/`, as Cursor, TRAE, ZCode, Kimi Code, CodeBuddy Code, Qoder CLI, and Antigravity do.
 - **The Agent Plugins package** (`agent-plugins/`) is a portable `plugin.json`, `skills/`, and `mcp.json` with a stdio-to-HTTP proxy and no hooks. Its `plugin.test.mjs` checks conformance with the Agent Plugins specification and can serve as a lint baseline for your own package.
 
 The [plugin development guide](./18-plugin-development.md) covers module ownership, configuration, generated copies, installers, and tests. Whatever you build, keep three rules so it behaves like the existing integrations:
@@ -911,7 +942,7 @@ The comparisons above were checked against these locations. They help when you n
 - Write and delete checks: `openviking/storage/content_write.py` and `openviking/storage/viking_fs/_access.py`.
 - Server auto-commit: `openviking_cli/utils/config/memory_config.py` and `openviking/session/auto_commit_policy.py`.
 - Plugin settings and defaults: `examples/memory-plugin-shared/lib/config-schema.mjs`.
-- Hook hosts: `examples/agent-hook-plugin/hosts/` for Cursor, TRAE, ZCode, and Kimi Code.
+- Hook hosts: `examples/agent-hook-plugin/hosts/` for Cursor, TRAE, ZCode, Kimi Code, CodeBuddy Code, Qoder CLI, and Antigravity.
 - pi takeover: `examples/pi-coding-agent-extension/lib/takeover-core.mjs`.
 - OpenClaw tools and lifecycle hooks: `examples/openclaw-plugin/registries/openviking-tools.ts` and `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`.
 - Hermes: the bundled provider from earlier releases at the pinned commit linked

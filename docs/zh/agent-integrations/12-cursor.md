@@ -29,7 +29,7 @@ curl -fsSL https://openviking.ai/install | bash
 - 生命周期 Hook：自动加载画像、按问题召回、捕获对话、提交会话并保护 `viking://` URI。
 - OpenViking MCP Server：提供 `search`、`read`、`remember`、`add_skill` 等工具；`search` 的 `mode="context"` 可返回组装后的上下文。
 - always-on Rule 和 `openviking-memory` Skill：告诉 Agent 如何使用已注入的上下文和记忆工具；另有 `openviking-skills` Skill，讲如何查找、使用、创建（`add_skill`）、共享和迁移存放在 OpenViking 里的 skill。
-- `ov-experience-memory` Skill：让 Agent 在执行类任务前检索并应用以往任务的 Experience。成功的 OpenViking MCP `read` 会与对话一起上报；包含该读取记录的 `session commit` 生成轨迹后，可查询经验的应用轨迹。
+- `ov-experience-memory` Skill：让 Agent 在执行类任务前检索并应用以往任务的 Experience。成功的 OpenViking MCP `read` 会与其他工具调用一起随对话上报；包含该读取记录的 `session commit` 生成轨迹后，可查询经验的应用轨迹。
 - `openviking-rule-search` Skill：检索适用于当前操作的 OpenViking Rule，并检查是否合规。
 - `ov-memory-doctor` Skill：运行 `node ~/.openviking/agent-integrations/cursor/scripts/ov-memory-doctor.mjs`，诊断并修复集成安装、客户端配置以及与 OpenViking 服务端的连接。
 
@@ -46,12 +46,12 @@ curl -fsSL https://openviking.ai/install | bash
 - `sessionStart`：加载用户画像、当前项目的记忆索引，以及 OpenViking skill 清单 `<available-skills>`。
 - `beforeSubmitPrompt`：根据当前问题召回上下文并通过 `additional_context` 注入，召回范围包括你自己的 skill 和账号内共享在 `viking://agent/skills` 下的 skill。
 - `beforeReadFile`：阻止把 `viking://` 虚拟路径当作本地文件读取，并提示改用 OpenViking MCP 工具；shell 命令不做检查。
-- `afterMCPExecution`：将 `openviking` MCP 服务的工具完成记录追加到本地工具日志，保留真实调用 ID、输入、输出和成功或失败状态；此时不向服务端写入消息，也不重写此前的结果。
+- `postToolUse` / `postToolUseFailure` 与 `afterMCPExecution`：前两者把每次完成的 Cursor 工具调用、后者把每次 MCP 调用追加到本地工具日志，保留真实调用 ID、输入、输出和成功或失败状态；此时不向服务端写入消息，也不重写此前的结果。post 事件会跳过 MCP 调用的 `MCP:<tool>` 副本（它不带服务名），所以每次调用只记录一次。`openviking` MCP 服务的调用记为 `mcp__openviking__<tool>`，其他 MCP 服务的调用记为 `mcp__<server>__<tool>`。
 - `stop`：将新增对话与本地工具记录一起通过 `add message` 上报；成功后才推进捕获位置，达到原有消息阈值时执行 `session commit`。工具记录不额外增加该阈值的消息计数。
-- `preCompact` / `sessionEnd`：提交尚未处理的消息，触发记忆抽取。压缩之后，下一次 `beforeSubmitPrompt` 还会追加一段简短说明，给出会话的 OpenViking id（`cu-<conversation id>`）以及用来查回之前确切细节的 `session_history` MCP 工具。
+- `preCompact` / `sessionEnd`：提交尚未处理的消息，触发记忆抽取；关闭 `autoCommitOnCompact`（`OPENVIKING_AUTO_COMMIT_ON_COMPACT=0`）时，`preCompact` 仍会上报消息，但不提交。压缩之后，下一次 `beforeSubmitPrompt` 还会追加一段简短说明，给出会话的 OpenViking id（`cu-<conversation id>`）以及用来查回之前确切细节的 `session_history` MCP 工具。
 - `preToolUse`：只匹配 `MCP:session_history`，Agent 没传 `session` 参数时补上当前会话。
 
-工具采集要求 `afterMCPExecution` 提供 `tool_use_id`、`mcp_server_name`、`tool_name`、`tool_input` 和 `result_json`。缺少身份或结果的事件会跳过，不会推断为成功。上传失败时保留本地记录，等待同一会话的后续采集重试；消息未传完整时不提交。
+工具采集要求每个事件提供 `tool_use_id` 和 `tool_name`；`afterMCPExecution` 还要提供 `mcp_server_name`、`tool_input` 和 `result_json`。缺少身份或结果的事件会跳过，不会推断为成功。上传失败时保留本地记录，等待同一会话的后续采集重试；消息未传完整时不提交。
 
 工具日志与会话状态文件放在同一目录。Stop 只读取尚未确认的日志尾部；状态文件保留字节位置和已确认的调用 ID，去重时不需要重读旧结果正文。收到确认后才推进上传位置，工具调用不占用文本的去重额度。
 

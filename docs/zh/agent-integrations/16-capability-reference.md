@@ -56,7 +56,7 @@
 | TRAE、TRAE CN | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
 | ZCode | 是，带会话 | profile、记忆索引、skill | 每轮 | 没有退出事件；每轮已提交 | 没有压缩前事件 |
 | Kimi Code | 是，带会话 | profile、记忆索引、skill，在首次提问时 | 待提交 token 达到 100,000 | 是 | 提交尚未提交的消息 |
-| CodeBuddy Code | 是，带会话，仅限交互式 TUI | profile、记忆索引、skill | 待提交 token 达到 100,000 | 是，仅限交互式 TUI | 提交尚未提交的消息 |
+| CodeBuddy Code | 是，带会话；headless 运行从 CodeBuddy Code 2.185.0 起支持 | profile、记忆索引、skill | 待提交 token 达到 100,000 | 是，仅限交互式 TUI | 提交尚未提交的消息 |
 | Qoder CLI | 是，带会话 | profile、记忆索引、skill | 待提交 token 达到 100,000 | 是 | 提交尚未提交的消息 |
 | Antigravity | 是，带会话，在每轮第一次模型调用时 | profile、记忆索引、skill | 每轮 | 没有退出 hook；每轮已提交 | 没有压缩前 hook |
 | OpenCode | 是，带会话 | profile、记忆索引、skill、已索引的仓库 | 空闲时，待提交 token 达到 100,000 | 是，在宿主的清理时限内 | 在压缩前后提交 |
@@ -219,9 +219,9 @@ skill 走单独的路径。创建、安装或替换 skill 用 MCP `add_skill` �
 | Codex、TraeCode CLI 2.0 | 每次 `UserPromptSubmit`；整个 hook 有 120 秒截止时间 | 提问 | `<openviking-context source="auto-recall">` |
 | Cursor | `beforeSubmitPrompt` | 提问；500 ms 内的重复事件复用上次结果 | `additional_context` |
 | TRAE、TRAE CN | `UserPromptSubmit` | 去掉之前注入块的提问 | `additionalContext` |
-| ZCode | `UserPromptSubmit` | 去掉三类注入块（含 `<system-reminder>`）的提问 | `additionalContext`，严格 JSON |
+| ZCode | `UserPromptSubmit` | 去掉注入块（含 `<system-reminder>`）的提问 | `additionalContext`，严格 JSON |
 | Kimi Code | `UserPromptSubmit` | 提问 | 纯文本上下文，不是 JSON |
-| CodeBuddy Code | `UserPromptSubmit`，仅交互式 TUI | 提问 | `additionalContext` 中的 `<openviking-context>` |
+| CodeBuddy Code | `UserPromptSubmit`；headless 运行从 2.185.0 起支持 | 提问 | `additionalContext` 中的 `<openviking-context>` |
 | Qoder CLI | `UserPromptSubmit`，交互式与 headless 均触发 | 提问 | `additionalContext` 中的 `<openviking-context>` |
 | Antigravity | `invocationNum` 为 0 的 `PreInvocation`，每个用户轮一次；工具循环中的后续调用和被动唤醒跳过召回 | `lastUserInput`，去掉注入的 `<openviking-context>` 块 | `injectSteps` 中的 `systemMessage` step，会留在对话中 |
 | OpenCode | v1：每次 `chat.message`；v2：每次提问 | 消息的文本部分 | v1 在消息前插入一个合成 part。v2 把结果存进消息 metadata，每个模型 step 在该消息前注入，不发新请求 |
@@ -328,7 +328,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 ### 避免注入内容被重复捕获
 
-注入的上下文用固定标签包裹，例如 `<openviking-context>`。捕获时先去掉这些块再发送，召回的记忆就不会被当成新对话再次存储。共享捕获代码还会去掉摘要块、元数据围栏和时间戳前缀。TRAE 和 ZCode 使用各自的清理函数，ZCode 的清理函数会去掉三类注入块。OpenClaw 在捕获一轮对话和构造下一次召回查询时都会去掉 `<relevant-memories>`。Hermes 从捕获批次中丢弃三个只读工具的调用和结果，保留写入类工具的调用。
+注入的上下文用固定标签包裹，例如 `<openviking-context>`。捕获时先去掉这些块再发送，召回的记忆就不会被当成新对话再次存储。除 OpenClaw 和 Hermes 外的所有集成都使用共享捕获代码，它还会去掉 `<system-reminder>` 块、摘要块、元数据围栏和时间戳前缀。OpenClaw 在捕获一轮对话和构造下一次召回查询时都会去掉 `<relevant-memories>`。Hermes 从捕获批次中丢弃三个只读工具的调用和结果，保留写入类工具的调用。
 
 <a id="_3-3-会话与-commit-生命周期"></a>
 
@@ -346,6 +346,28 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 - **大块工具输出单独存放**。服务端把超过 20,000 字符的工具输出移到单独的记录中，留下 `tool_output_ref`。插件把自己的上限（`captureToolMaxChars`）提高到 1,000,000，只作为兜底。
 - **部分写入在后台运行**。Claude Code、Codex 和 ZCode 默认把 `Stop` 的写入交给一个分离的 worker（`OPENVIKING_WRITE_PATH_ASYNC`），宿主不用等待。worker 启动后，关闭终端不影响它，但网络错误或进程被终止仍可能打断它。开启这项设置时，`Stop` 不再输出 `appended N turn(s)` 提示。
 
+### 各集成捕获什么
+
+| 集成 | 读取来源 | 工具调用与结果 |
+|---|---|---|
+| Claude Code | `Stop` 时读会话 transcript；`SubagentStop` 时读子代理的 transcript | 是 |
+| Codex、TraeCode CLI 2.0 | Codex 的 rollout 文件 | 是 |
+| Cursor | `stop` 时读文本 transcript，加上一份本地的工具完成记录：Cursor 自身工具来自 `postToolUse` 和 `postToolUseFailure`，MCP 调用来自 `afterMCPExecution` | 是。OpenViking MCP 调用命名为 `mcp__openviking__<tool>`；其他 MCP 服务的调用命名为 `mcp__<server>__<tool>` |
+| TRAE、TRAE CN | `Stop` 携带的提问和最终回复 | 否；只有文本 |
+| ZCode | rollout 文件 `~/.zcode/cli/rollout/model-io-<sid>.jsonl` | 是 |
+| Kimi Code | `wire.jsonl` | 是 |
+| CodeBuddy Code | 会话 transcript | 是 |
+| Qoder CLI | 会话 transcript 中的对话记录 | 是；`mcp_call` 会展开为它指向的工具 |
+| Antigravity | `transcriptPath` 中已完成的 step | 是；MCP 调用命名为 `mcp__<server>__<tool>`。失败的命令也记为已完成，失败只体现在输出文本里 |
+| OpenCode | v1 读消息和 part 事件；v2 在每次执行结束时读会话上下文 | 是 |
+| DSH | `session/event` | 是 |
+| pi | `turn_end` 时读会话分支 | 是 |
+
+这些集成对每条消息使用同一条规则。文本去掉注入的上下文（见[避免注入内容被重复捕获](#_3-2-6-注入回流防护)）并经过 `captureFilters`；工具调用和结果保持为结构化的 `tool` part，按宿主记录的顺序排列，输出上限为 `captureToolMaxChars`。除此之外不丢弃、不截断任何内容：确认语、简短回复和斜杠命令都按原样发送，值不值得记住由记忆提取决定。有两个设置会改变发送的内容：
+
+- `captureAssistantTurns: false`（`OPENVIKING_CAPTURE_ASSISTANT_TURNS=0`）只发送用户自己写的文本：没有 assistant 消息、工具调用或工具结果。
+- `captureMode: "keyword"`（`OPENVIKING_CAPTURE_MODE`）只有 Claude Code 和 Codex 读取，两者共用一份触发词表：用户写的内容中明确要求记住、表达偏好或决定，或包含个人信息。Claude Code 在一次 `Stop` 的用户文本没有触发词时丢弃这些轮次，并且不捕获子代理会话。Codex 在出现带触发词的用户轮之前什么都不发送，出现后连同之前的轮次一起发送。
+
 <a id="_3-3-2-常规-commit-触发条件"></a>
 
 ### 各集成何时提交
@@ -354,10 +376,10 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 集成 | 会话中 | 显式操作或会话边界 | 压缩前后 |
 |---|---|---|---|
-| Claude Code | `Stop` 时待提交 token 达到 100,000 | `SessionEnd` 和 `SubagentStop` 总是提交；`SessionStart` 重放排队的写入 | `PreCompact` 总是同步提交 |
+| Claude Code | `Stop` 时待提交 token 达到 100,000 | `SessionEnd` 和 `SubagentStop` 总是提交；`SessionStart` 重放排队的写入 | `PreCompact` 同步提交；会话有排队的写入时，排在它们之后 |
 | Codex | `Stop` 时待提交 token 达到 100,000 | `SessionEnd`（Codex 0.145+）补齐漏掉的轮次，然后在分离的 worker 中提交。startup 或 clear 的 `SessionStart` 会提交已标记结束或空闲超过 30 分钟的会话 | `PreCompact` 补齐后提交全部内容 |
 | TraeCode CLI 2.0 | 同 Codex | 同 Codex；没有 `SessionEnd` 时只有启动时的扫描 | 同 Codex |
-| Cursor | 距上次提交捕获满 8 条消息时，在 `stop` 提交（`commitTurnThreshold`），本地计数 | `sessionEnd` 已注册，但实际不会运行 | `preCompact` 总是提交 |
+| Cursor | 距上次提交捕获满 8 条消息时，在 `stop` 提交（`commitTurnThreshold`），本地计数 | `sessionEnd` 已注册，但实际不会运行 | `preCompact` 提交 |
 | TRAE、TRAE CN | 每个捕获到内容的 `Stop` | 无 | 没有压缩前事件 |
 | ZCode | 每个 `Stop`；漏掉的 `Stop` 对应的轮次，在下一个 `Stop` 从 rollout 文件补齐 | 无 | 没有压缩前事件 |
 | Kimi Code | `Stop` 时待提交 token 达到 100,000 | `SessionEnd` 和 `Interrupt` 提交所有尚未提交的消息，包括 `Stop` 已经发送的 | `PreCompact` 提交所有尚未提交的消息 |
@@ -365,12 +387,14 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Qoder CLI | `Stop` 时待提交 token 达到 100,000 | `SessionEnd` 提交所有尚未提交的消息，包括 `Stop` 已经发送的；`SessionStart` 重放排队的写入 | `PreCompact` 提交所有尚未提交的消息 |
 | Antigravity | 每个捕获到内容的 `Stop`；漏掉的 `Stop` 留下的 step 在下一个 `Stop` 补齐 | 无；`SessionStart` 重放排队的写入 | 没有压缩前 hook |
 | OpenCode | v1 `session.idle`、v2 执行结束时：待提交 token 达到 100,000 | 删除会话、v1 `session.error`、v1 dispose 和 v2 cleanup 强制提交 | v1 在压缩前后各一次；v2 在压缩结束后一次 |
-| DSH | `turn/end` 时待提交 token 达到 100,000 | Cordis teardown 提交每个会话 | `compaction/start` 提交，跳过阈值检查 |
+| DSH | `turn/end` 时待提交 token 达到 100,000 | Cordis teardown 提交每个会话 | `compaction/start` 提交，跳过阈值检查；会话有排队的写入时，排在它们之后 |
 | pi，takeover 开 | 本地估算达到 30,000 token，且用户轮多于 3 个 | `/viking commit` | `session_before_compact` |
 | pi，takeover 关（默认） | 每次同步后待提交 token 达到 100,000 | `session_shutdown` 和 `/viking commit` | `session_before_compact` |
 | OpenClaw | 每轮结束后达到 `tokenBudget × commitTokenThresholdRatio`（默认 128,000 × 0.5） | `/new`、`/reset` 和 `memory_store` 提交并等待 | `compact()` 提交，并最多等待 5 分钟完成抽取 |
 | Hermes（内置） | 无 | 会话结束、会话切换（`/new`、`/resume`、`/branch`、fork 型压缩）、gateway 缓存驱逐，以及退出处理器；`/undo` 和原地压缩不提交 | 只在 fork 型压缩时 |
 | ov CLI | 无 | `ov session commit`；`ov add-memory` 会创建、写入并提交自己的会话 | 不适用 |
+
+`autoCommitOnCompact: false`（`OPENVIKING_AUTO_COMMIT_ON_COMPACT=0`）会让 Claude Code、Codex、Cursor、Kimi Code、CodeBuddy Code、Qoder CLI、OpenCode、DSH 和关闭 takeover 的 pi 跳过最后一列的提交。捕获照常进行，会话稍后由阈值或会话结束时提交。
 
 设置 `OPENVIKING_SERVER_AUTO_COMMIT=1`（`serverAutoCommit`，默认关闭）后，Claude Code、Codex、TraeCode CLI 2.0、Kimi Code、CodeBuddy Code、Qoder CLI、OpenCode、DSH 和关闭 takeover 的 pi 把“会话中”一列按待提交 token 的提交交给服务端。集成用自己的配置设置会话的 `auto_commit_policy`：`pending_token_threshold` 取 `commitTokenThreshold`，空闲 `commitIdleSeconds` 秒后提交（`OPENVIKING_COMMIT_IDLE_SECONDS`，默认 1,800；0 表示不提交，否则至少 300），关闭消息数触发，`keep_recent_count` 为 0。会话带上这个策略后，集成不再按自己的阈值提交，另外两列不变。
 
@@ -393,14 +417,14 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | Cursor | 否 | 否 | 否 | 否 | 否 | 关闭或切换对话不触发任何事件。`sessionEnd` 只在关闭窗口时触发，而此时宿主已停止执行 hook 命令。不足 8 条消息阈值的部分要等同一会话的后续消息 |
 | TRAE、TRAE CN | 否 | 否 | 否 | 否 | 否 | 每个 `Stop` 已经提交，最多丢失正在进行的那一轮 |
 | ZCode | 否 | 视情况 | 否 | 否 | 否 | 按 Ctrl+C 时如果该轮的 `Stop` 已触发，分离的 worker 会写完。每个 `Stop` 都提交，漏掉的轮次在下一个 `Stop` 补齐 |
-| Kimi Code | 提交 | 视情况 | 未验证 | 未验证 | 否 | `SessionEnd` 和 `Interrupt` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。`Interrupt` 的捕获和提交共用 2 秒请求预算，捕获慢时提交留给同一会话的下一次提交 |
+| Kimi Code | 提交 | 视情况 | 未验证 | 未验证 | 否 | `SessionEnd` 和 `Interrupt` 提交所有尚未提交的消息，包括 `Stop` 已经发送的。`Interrupt` 的捕获和提交共用 2 秒请求预算，捕获慢时提交留给同一会话的下一次提交。`kimi -p` 既不触发 `Stop` 也不触发 `SessionEnd`，所以 prompt 模式的运行不会被捕获 |
 | CodeBuddy Code | 视情况 | 否 | 否 | 否 | 否 | `SessionEnd` 只在交互式 TUI 触发，会提交所有尚未提交的消息，包括 `Stop` 已经发送的；headless 运行在达到 100,000 token 阈值时提交，一直低于阈值的则要等同一会话之后在 TUI 中的 `SessionEnd`、`/compact`，或 `OPENVIKING_SERVER_AUTO_COMMIT` 下服务端的空闲提交。捕获由分离的 worker 完成，hook 自身的超时不会波及它 |
 | Qoder CLI | 提交 | 未验证 | 未验证 | 未验证 | 否 | `SessionEnd` 在 `/exit` 和 headless `-p` 运行结束时触发，会提交所有尚未提交的消息，包括 `Stop` 已经发送的。捕获由分离的 worker 完成，hook 自身的超时不会波及它 |
 | Antigravity | 否 | 否 | 否 | 否 | 否 | 没有注册退出 hook。每个捕获到内容的 `Stop` 已经提交，最多留下正在进行的那一轮；它已完成的 step 在同一对话的下一个 `Stop` 捕获 |
 | OpenCode | 视情况 | 视情况 | 视情况 | 视情况 | 否 | v1 1.15.11+ 的 `dispose` 和 v2 cleanup 会提交所有会话，但宿主留给清理的时间有限，慢请求或会话较多时可能被截断。v2 cleanup 还会在空闲 60 分钟和插件热重载时运行 |
 | DSH | 提交 | 提交 | 提交 | 否 | 否 | teardown 给每个会话一次 3 秒的提交，排在慢写入之后，整体处于 5 秒的进程宽限期内。第二次 Ctrl+C 会强制退出，跳过提交。Web 形态下关闭浏览器标签页不会触发 teardown |
 | pi，takeover 开 | 否 | 否 | 否 | 否 | 否 | `session_shutdown` 保存 takeover 状态但不提交。等下次运行达到阈值，或执行 `/viking commit` |
-| pi，takeover 关 | 提交 | 提交 | 提交 | 提交 | 否 | 失败的提交进入离线队列 |
+| pi，takeover 关 | 提交 | 提交 | 提交 | 提交 | 否 | 因可重试错误失败的提交进入离线队列 |
 | OpenClaw | 否 | 否 | 否 | 否 | 否 | `session_end` 处理器不提交。归档依赖 `/new`、`/reset` 和阈值 |
 | Hermes（内置） | 视情况 | 视情况 | 视情况 | 视情况 | 否 | 退出处理器最多用 10 秒等待上传完成，然后提交；上传没有完成就跳过提交，不提交半个会话。SIGTERM 和 SIGHUP 默认有 1.5 秒宽限期，Hermes 的退出看门狗可能中断较慢的提交 |
 | LangChain、Open WebUI、Agent Plugins、MCP 客户端 | 否 | 否 | 否 | 否 | 否 | 没有会话 hook。MCP 代理退出时发送的 `DELETE /mcp` 只关闭协议会话。LangChain 依赖调用方的 `close()` |
@@ -419,7 +443,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 |---|---|
 | Claude Code、CodeBuddy Code、Qoder CLI、Antigravity、TRAE、TRAE CN、ZCode、Kimi Code、OpenCode、DSH、pi | 可重试的失败进入 `~/.openviking/pending` 下的磁盘队列，在会话开始时重放：每次最多 50 条（Kimi Code 为 2 条），每条最多 3 次，保留 7 天。网络错误、408、429 和 5xx 可重试；其他 4xx（含 401 和 403）不入队。某条消息重放失败时停止，以保证顺序 |
 | Cursor | 新捕获不入离线队列。文本 transcript 与本地工具记录保留未上报内容，服务端确认后才推进进度；同一会话后续采集重试。消息未传完整时不提交。`SessionStart` 仍重放旧队列中的写入 |
-| Codex、TraeCode CLI 2.0 | 新捕获的内容不入队。transcript 游标只越过服务端已接受的消息，下次捕获或启动扫描会重发剩余部分。`SessionStart` 仍会重放已排队的条目 |
+| Codex、TraeCode CLI 2.0 | 新捕获的内容和提交都不入队。transcript 游标只越过服务端已接受的消息，下次捕获或启动扫描会重发剩余部分；提交失败的会话保留标记，留给下一次扫描。`SessionStart` 仍会重放已排队的条目 |
 | OpenClaw | 没有队列，失败的轮次不会重发 |
 | Hermes（内置） | 上传在进程内线程中运行，不从磁盘重放。`$HERMES_HOME/openviking/pending_sessions/` 下的待提交标记让之后的启动能提交已退出进程留下的会话（仅 POSIX） |
 | LangChain | 提交失败时在下一次 record 时重试，只保存在内存中。部分写入会抛出 `OpenVikingPartialWriteError`，附带计数，调用方可据此重试剩余消息 |
@@ -431,7 +455,7 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 
 | 集成 | 子代理处理 |
 |---|---|
-| Claude Code | 每个子代理有自己的会话 `cc-<id>__subagent-<agent_id>`。`SubagentStop` 发送它的 transcript 并提交 |
+| Claude Code | 每个子代理有自己的会话 `cc-<id>__subagent-<agent_id>`。`SubagentStop` 发送它的 transcript 并提交。`keyword` 捕获模式下不捕获子代理会话 |
 | Codex、TraeCode CLI 2.0 | 子代理输出并入主会话 |
 | OpenCode | 子代理使用 `oc-<parent>__subagent-<child>` 会话。会话开场上下文对它们跳过，召回不跳过 |
 | DSH | 每个子代理是单独的 `dsh-<id>` 会话，与父会话没有关联，各自获得会话开场上下文 |
@@ -460,6 +484,8 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 | pi | takeover，默认关闭 | 提交并等待归档概览 | 用概览替换 pi 的摘要；失败时 pi 照常压缩 |
 | OpenClaw | 插件接管压缩 | `compact()` 提交并等待 | 下一次上下文组装从服务端重建历史 |
 | Hermes（内置） | 宿主摘要 | fork 型压缩提交旧会话；原地压缩不做任何处理 | 无 |
+
+关闭 `autoCommitOnCompact` 时，压缩前会提交的集成仍会捕获宿主即将摘要的内容，但跳过提交；pi 的 takeover 不受影响。
 
 <a id="_3-4-2-pi-takeover"></a>
 
@@ -595,8 +621,10 @@ Claude Code 和 Codex 默认 `auto`，其他集成默认 `off`。支持服务端
 - `OPENVIKING_COMMIT_TURN_THRESHOLD`：仅 Cursor。TRAE、TRAE CN、ZCode 和 Antigravity 每轮都提交。
 - `OPENVIKING_SERVER_AUTO_COMMIT` 和 `OPENVIKING_COMMIT_IDLE_SECONDS`：Claude Code、Codex、TraeCode CLI 2.0、Kimi Code、CodeBuddy Code、Qoder CLI、OpenCode、DSH 和关闭 takeover 的 pi。按捕获消息数提交的 Cursor 和每轮都提交的集成保留自己的提交。
 - `OPENVIKING_WRITE_PATH_ASYNC`：Claude Code、Codex、ZCode 和 Antigravity。
+- `OPENVIKING_CAPTURE_MODE=keyword`：Claude Code 和 Codex。其他集成捕获每一轮。
+- `OPENVIKING_AUTO_COMMIT_ON_COMPACT`：有压缩前事件的集成：Claude Code、Codex、Cursor、Kimi Code、CodeBuddy Code、Qoder CLI、OpenCode、DSH 和关闭 takeover 的 pi。
 - `OPENVIKING_RECALL_COMPRESS=client`：Claude Code 和 Codex。`server` 和 `auto` 适用于[召回摘要](#召回摘要)中列出的所有集成。
-- 工作区文件、`ovcli.conf` 的 `plugin` 段、`OPENVIKING_RECALL_DEDUP_TURNS`、`OPENVIKING_RECALL_QUERY_EXPANSION`、`OPENVIKING_PEER_SOURCE` 和 skill 清单相关设置：所有基于共享插件代码的集成，不包括 OpenClaw 和 Hermes。
+- 工作区文件、`ovcli.conf` 的 `plugin` 段、`OPENVIKING_CAPTURE_ASSISTANT_TURNS`、`OPENVIKING_CAPTURE_FILTERS`、`OPENVIKING_NO_AUTO_INJECT`、`OPENVIKING_BYPASS_SESSION` 和 `bypassSessionPatterns`、`OPENVIKING_RECALL_DEDUP_TURNS`、`OPENVIKING_RECALL_QUERY_EXPANSION`、`OPENVIKING_PEER_SOURCE` 和 skill 清单相关设置：所有基于共享插件代码的集成，不包括 OpenClaw 和 Hermes。
 
 <a id="_3-7-附加-ux-对照"></a>
 
@@ -647,14 +675,17 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 - `Stop` 和 `SessionEnd` 在分离的 worker 中写入。每个会话一把锁，按顺序处理 `Stop` worker、`PreCompact`、`SessionEnd` worker 和扫描。
 - 不安装 URI guard。Codex 会把 `PreToolUse` 的提示写在工具调用和它的输出之间，火山方舟 Ark 这类按 chat 消息校验历史的 Responses 服务端会因此返回 HTTP 400。
 - Codex 为每个 hook 保存信任记录。升级新增 hook 后，需要在 `/hooks` 中批准新的 hook。
+- 服务端对提交返回 404（它已没有这个会话）时，插件释放该会话，不再在每次 `SessionStart` 时重试。
 - TraeCode CLI 2.0（可执行文件 `traecli`，配置 `~/.trae/traecli.toml`）是 Codex 系 CLI，安装同一个插件。只支持 2.0；早期面向 1.0 的独立插件已移除，`--harness trae-cli --uninstall` 仍可删除旧安装留下的副本。不带 `SessionEnd` 的版本会忽略该 hook。
 
 ### Cursor
 
-[Cursor](./12-cursor.md)。hook 与 MCP 配置，包含 7 个 hook（`sessionStart`、`beforeSubmitPrompt`、`beforeReadFile`、`afterMCPExecution`、`stop`、`preCompact`、`sessionEnd`）、一条常驻 rule 和 5 个 skill。
+[Cursor](./12-cursor.md)。hook 与 MCP 配置，包含 10 个 hook（`sessionStart`、`beforeSubmitPrompt`、`beforeReadFile`、`preToolUse`、`postToolUse`、`postToolUseFailure`、`afterMCPExecution`、`stop`、`preCompact`、`sessionEnd`）、一条常驻 rule 和 5 个 skill。
 
 - URI guard 只在 `beforeReadFile` 运行，不受插件开关影响。shell 命令不检查，升级会移除旧版本注册的 `beforeShellExecution` 条目。
-- `afterMCPExecution` 保留 OpenViking 工具完成记录，Stop 与对话一起上报。成功读取的 Experience 可关联到同次提交生成的轨迹；失败、未完成调用和自动注入不计为成功读取。
+- `postToolUse` 和 `postToolUseFailure` 记录每次完成的 Cursor 工具调用，`afterMCPExecution` 记录每次 MCP 调用，都写入本地日志，由 `stop` 与对话一起上报。post 事件会跳过 MCP 调用的 `MCP:<tool>` 副本（它不带服务名），所以每次调用只记录一次。OpenViking MCP 调用命名为 `mcp__openviking__<tool>`，其他 MCP 服务的调用命名为 `mcp__<server>__<tool>`。
+- `preToolUse` 只匹配 `MCP:session_history`，在 Agent 没传 `session` 参数时补上它。
+- 成功读取的 Experience 可关联到同次提交生成的轨迹；失败、未完成调用和自动注入不计为成功读取。
 - `sessionEnd` 只在关闭窗口时触发，此时 Cursor 已停止执行 hook 命令，因此实际不会提交。
 - 服务端不可达时，每轮都要等满 15 秒召回超时。
 
@@ -675,9 +706,8 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 [社区插件：ZCode](./08-community-plugins.md#zcode-记忆集成)。hook 与 MCP 配置，包含 4 个 hook：`SessionStart`、`UserPromptSubmit`、作用于 Read、Glob 和 Grep 的 `PreToolUse`，以及 `Stop`，另有 5 个 skill。
 
 - skill 安装到 `~/.zcode/skills/<name>`。用户修改过的 skill 或同名的非托管目录在升级和卸载时保留。
-- 捕获的轮次来自 rollout 文件 `~/.zcode/cli/rollout/model-io-<sid>.jsonl`；漏掉的 `Stop` 对应的轮次在下一个 `Stop` 补齐。
+- 捕获的轮次来自 rollout 文件 `~/.zcode/cli/rollout/model-io-<sid>.jsonl`，包括每轮的工具调用和结果，它们以 tool part 的形式放进该轮的 assistant 消息；漏掉的 `Stop` 对应的轮次在下一个 `Stop` 补齐。
 - 第一次捕获读取整个 rollout，所以在长时间运行的会话中安装会产生一次大上传。
-- 捕获只去掉注入块，不做其他文本清理。
 - `Stop` 默认在分离的 worker 中写入。
 
 <a id="kimicode"></a>
@@ -688,6 +718,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 
 - 捕获的轮次来自 `wire.jsonl`；一轮中的工具调用及其结果以 tool part 的形式放进该轮的 assistant 消息。一轮对话只有在发送成功或存入离线队列后才会推进游标。
 - 会话开场上下文在首次提问时注入，失败后在后续提问中重试，直到成功。
+- Kimi 只在一轮完成后触发 `Stop`，只在一轮被取消后触发 `Interrupt`。`kimi -p` 既不触发 `Stop` 也不触发 `SessionEnd`，所以 prompt 模式的运行不会被捕获。
 - `Stop`、`PreCompact` 和 `SessionEnd` 可以在后台写入。`Interrupt` 保持同步，请求预算 2 秒。
 - `UserPromptSubmit` 返回纯文本上下文，不是 JSON。
 - 安装时保留其他插件记录，不修改旧的 `config.toml` 或 `mcp.json`。
@@ -696,7 +727,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 
 [CodeBuddy Code](./20-codebuddy.md)。带 6 个 hook、一个 MCP 代理和 5 个 skill 的插件，由统一安装器以本地 marketplace 的形式安装；与 ZCode、Kimi Code 一样是 `agent-hook-plugin` 的宿主适配器。
 
-- `UserPromptSubmit` 与 `SessionEnd` **只在交互式 TUI 触发**。headless 运行（`-p`、`--input-format stream-json`）只在 `Stop` 捕获，永远不发收尾提交。
+- `SessionEnd` **只在交互式 TUI 触发**，`UserPromptSubmit` 在 CodeBuddy Code 2.185.0 之前也只在 TUI 触发。headless 运行（`-p`、`--input-format stream-json`）只在 `Stop` 捕获，永远不发收尾提交。
 - URI guard 会拒绝路径为 `viking://` URI 的文件类工具。拒绝以「工具调用失败」的形式到达模型；`allow` 携带的文字到不了模型，因此本宿主没有劝告通道。Shell 命令不做检查，`ov` 调用与字面量 `viking://` 参数照常可用。
 - 工具调用及其结果以 tool part 的形式捕获到所在轮次的 assistant 消息中。
 - `SessionStart` 不带 `cwd`，且同一会话内可能投递两次，因此该 hook 是幂等的，并以进程工作目录兜底。
@@ -720,8 +751,8 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 
 - `PreInvocation` 在每次模型调用前运行，包括工具循环中的每次调用（`invocationNum` 大于 0），以及后台任务、子代理消息或 `Stop` 续跑引起的每次被动唤醒。只有 `invocationNum` 为 0、且 `transcriptPath` 中最近一个 `USER_INPUT` step 之后还没有 `MODEL` step 运行时才召回，所以每轮只注入一次。`lastUserInput` 与该 step 的请求不同时，说明是 transcript 尚未记下的新一轮，同样召回。
 - Antigravity 的 hook 使用自己的 `hooks.json` 格式，每个顶层 key 是一个 hook 的名字。上下文以 `injectSteps` 中的 `systemMessage` step 返回，会留在对话中。
-- `Stop` 不携带消息文本。捕获在分离的 worker 中读取 `transcriptPath` 里上次捕获之后已完成的 step，旁边有未截断的 `transcript_full.jsonl` 时优先读它，然后提交。planner step 中的工具调用和其后的结果 step 以 tool part 的形式放进该 assistant 消息；结果按位置与调用配对，且只在结果数与调用数相等时配对，否则只发送调用、不带结果。仍在进行中的 step 由下一个 `Stop` 重新读取；服务端只接收了部分写入时，下一个 `Stop` 重发它没有接收的轮次。
-- 插件目录中的 `mcp_config.json` 注册 OpenViking MCP 服务，即共享的 stdio 代理。`~/.gemini/config/mcp_config.json` 已定义名为 `openviking` 的服务时，安装器保留用户的服务，不写插件的 `mcp_config.json`，避免每个工具出现两次。
+- `Stop` 不携带消息文本。捕获在分离的 worker 中按 step 顺序读取 `transcriptPath` 里此前的 `Stop` 尚未发送的已完成轮次，旁边有未截断的 `transcript_full.jsonl` 时优先读它，然后提交。planner step 中的工具调用和其后的结果 step 以 tool part 的形式放进该 assistant 消息；结果按位置与调用配对，且只在结果数与调用数相等时配对，否则只发送调用、不带结果。Antigravity 通过 `call_mcp_tool` 调用 MCP 工具，捕获时按实际到达的工具命名为 `mcp__<server>__<tool>`。失败的命令也记为已完成，失败只体现在输出文本里。仍在进行中的 step 由下一个 `Stop` 重新读取；服务端只接收了部分写入时，下一个 `Stop` 重发它没有接收的轮次。
+- 插件目录中的 `mcp_config.json` 注册 OpenViking MCP 服务，即共享的 stdio 代理。`~/.gemini/config/mcp_config.json` 已定义名称中含 `openviking` 的服务时，安装器保留用户的服务，不写插件的 `mcp_config.json`，避免每个工具出现两次。
 - skill 位于插件目录的 `skills/<name>/SKILL.md`，每个 skill 也可以用 `/<name>` 调用。
 - `PreToolUse`（matcher `*`）运行 URI guard：文件工具的位置参数（名称以 `Path`、`File` 或 `Directory` 结尾的参数）是 `viking://` URI 时，调用被拒绝，拒绝原因以失败的工具调用送达模型，并指向 OpenViking MCP 工具。Shell 命令（`run_command`）不做检查，也不附加提示。
 - 如果 `~/.gemini/config/plugins/openviking-memory` 已存在且不是 OpenViking 写入的，安装器会停止，`--uninstall` 也会保留它。
@@ -745,7 +776,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 - 监听 `agent/session-start`、`agent/pre-step`、`session/event`、`session/flush`、`tools/pre-execute` 和 `tools/post-execute`。
 - `ctx.provide("openvikingMemory")` 让其他 Cordis 插件可以在它之上构建功能。
 - 安装器默认使用 `web` profile，可以用 `--dsh-profile` 指定其他 profile。在 macOS 上，它还会把 DeepSeek Harness Desktop 的 `desktop` profile 作为单独的 harness `dsh-desktop`，通过 Desktop 自带的 `dsh` 命令安装（见 [DeepSeek Harness Desktop](./17-dsh.md#deepseek-harness-desktop)）。除 `dev` 外的所有模式都安装已发布的 npm 包。
-- 默认捕获工具结果（`captureToolResults: true`），所以 `ov-experience-memory` 能完整运行；关闭捕获后，只能检索和应用 Experience。
+- 工具调用和结果都会被捕获，所以 `ov-experience-memory` 能完整运行；关闭 `captureAssistantTurns` 后，只能检索和应用 Experience。
 - URI guard 先把工具名转成小写，在 `tools/pre-execute` 拒绝对 `viking://` 路径的文件工具调用，在 `tools/post-execute` 为包含这种路径的 `bash` 命令（Windows 上是 `pwsh` 命令）附加提示。
 - Cordis patch 中写明的凭据优先于其他所有来源；对行为配置来说，patch 是优先级最低的一层。
 - `mcpEnabled: false`（写在 `ovcli.conf` 的 `plugin` 或 `plugin.dsh` 中，或写在 Cordis patch 中）时，既不挂载 MCP 工具，也不挂载内置 skill。
@@ -877,7 +908,7 @@ CLI 提供而插件没有的能力：多个 `ovcli.conf` profile、账户与用�
 
 需要自动召回、捕获、提交和离线重试时，复用现有代码，不必重写：
 
-- **`examples/memory-plugin-shared/lib/`**（Node.js）包含共享模块：带回退的召回、会话开场上下文、捕获清理、离线队列、批量发送、MCP 代理、会话 ID 和凭据。通过 hook 文件配置的宿主可以在 `examples/agent-hook-plugin/hosts/` 下添加适配器，Cursor、TRAE、ZCode 和 Kimi Code 都是这样接入的。
+- **`examples/memory-plugin-shared/lib/`**（Node.js）包含共享模块：带回退的召回、会话开场上下文、捕获清理、离线队列、批量发送、MCP 代理、会话 ID 和凭据。通过 hook 文件配置的宿主可以在 `examples/agent-hook-plugin/hosts/` 下添加适配器，Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI 和 Antigravity 都是这样接入的。
 - **Agent Plugins 插件包**（`agent-plugins/`）由可移植的 `plugin.json`、`skills/` 和 `mcp.json` 组成，带 stdio 到 HTTP 的代理，没有 hook。它的 `plugin.test.mjs` 检查是否符合 Agent Plugins 规范，可以作为你自己插件包的 lint 基线。
 
 [插件开发指南](./18-plugin-development.md)介绍模块职责、配置、生成副本、安装器和测试。无论构建什么，都遵守以下三条规则，让它的行为与现有集成一致：
@@ -907,7 +938,7 @@ CLI 提供而插件没有的能力：多个 `ovcli.conf` profile、账户与用�
 - 写入与删除检查：`openviking/storage/content_write.py` 和 `openviking/storage/viking_fs/_access.py`。
 - 服务端自动提交：`openviking_cli/utils/config/memory_config.py` 和 `openviking/session/auto_commit_policy.py`。
 - 插件配置与默认值：`examples/memory-plugin-shared/lib/config-schema.mjs`。
-- hook 宿主：`examples/agent-hook-plugin/hosts/`，对应 Cursor、TRAE、ZCode 和 Kimi Code。
+- hook 宿主：`examples/agent-hook-plugin/hosts/`，对应 Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI 和 Antigravity。
 - pi takeover：`examples/pi-coding-agent-extension/lib/takeover-core.mjs`。
 - OpenClaw 工具和生命周期 hook：`examples/openclaw-plugin/registries/openviking-tools.ts` 和 `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`。
 - Hermes：[Hermes](#hermes) 中链接的旧版内置 provider 固定提交，以及目录插件的

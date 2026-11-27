@@ -11,7 +11,7 @@ The ZCode community integration adds cross-project, cross-session memory through
 - **SessionStart** injects the user profile.
 - **UserPromptSubmit** recalls relevant memories.
 - **PreToolUse** redirects direct `viking://` reads to MCP tools.
-- **Stop** captures unseen rollout turns in a detached worker, then commits the OpenViking session.
+- **Stop** captures unseen rollout turns in a detached worker, with tool calls and their results as tool parts of the turn's assistant message, then commits the OpenViking session.
 
 ZCode does not expose `PreCompact`, `SessionEnd`, or subagent lifecycle hooks. The adapter therefore commits on `Stop`, uses ZCode rollout files as the authoritative incremental transcript, and falls back to hook stdin only when no rollout file is available.
 
@@ -60,7 +60,7 @@ transcript decoding, output formatting, and commit policy:
 
 - **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
 - **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
-- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns, with tool calls and their results as tool parts of the turn's assistant message; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget. `Stop` commits once the session's pending tokens reach 100,000; the other three commit whatever is still uncommitted.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns, with tool calls and their results as tool parts of the turn's assistant message; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget. `Stop` commits once the session's pending tokens reach 100,000; the other three commit whatever is still uncommitted (`PreCompact` only while `autoCommitOnCompact` is on). `kimi -p` fires neither `Stop` nor `SessionEnd`, so a prompt-mode run is not captured.
 - The plugin manifest exposes the OpenViking MCP server and the 5 skills under the plugin root's `skills/` (`openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor`) without editing Kimi's legacy config files.
 
 ### Install
@@ -103,7 +103,7 @@ The Antigravity integration serves the Antigravity desktop app and the `agy` CLI
 - **SessionStart** injects the user profile.
 - **PreInvocation** recalls relevant memories on the first model call of each turn. Antigravity runs this hook before every model call, so later calls in a tool loop skip recall.
 - **PreToolUse** denies file tool calls whose location argument is a `viking://` URI and points to the OpenViking MCP tools. Shell commands (`run_command`) are not checked.
-- **Stop** captures the finished steps of the conversation transcript in a detached worker, tool calls and their results included as tool parts, then commits the OpenViking session.
+- **Stop** captures, in a detached worker and in step order, the finished turns of the conversation transcript that no earlier Stop has sent, tool calls and their results included as tool parts, then commits the OpenViking session. MCP calls are named `mcp__<server>__<tool>`. Antigravity records a failing command as completed, so the failure is only in its output text.
 
 Antigravity hooks use their own `hooks.json` format: each top-level key names a hook, and context is returned as `injectSteps` system messages. A Claude Code `hooks.json` therefore cannot be reused.
 
@@ -119,12 +119,12 @@ This noninteractive command uses the connection saved in `~/.openviking/ovcli.co
 curl -fsSL https://openviking.ai/install | bash -s -- --yes --harness antigravity
 ```
 
-The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The plugin directory holds `plugin.json`, `hooks.json`, `mcp_config.json`, and `skills/`. If `~/.gemini/config/mcp_config.json` already defines an MCP server named `openviking`, the installer keeps yours and does not write the plugin's `mcp_config.json`, so no tool appears twice.
+The installer writes the plugin to `~/.gemini/config/plugins/openviking-memory` and its runtime to `~/.openviking/agent-integrations/antigravity`. If a directory of that name exists and OpenViking did not write it, the installer leaves it in place and stops. Connection settings come from `~/.openviking/ovcli.conf` as for the other integrations. The plugin directory holds `plugin.json`, `hooks.json`, `mcp_config.json`, and `skills/`. If `~/.gemini/config/mcp_config.json` already defines an MCP server whose name contains `openviking`, the installer keeps yours and does not write the plugin's `mcp_config.json`, so no tool appears twice.
 
 Restart the Antigravity app or start a new `agy` session, then verify that:
 
 - the `agy` log under `~/.gemini/antigravity-cli/log/` reports `loaded 1 named hooks`;
-- after a turn, `~/.openviking/hook-state/antigravity/<conversation-id>.json` records `lastStep`;
+- after a turn, `~/.openviking/hook-state/antigravity/<conversation-id>.json` records `lastTurnId`;
 - the plugin directory contains `skills/openviking-memory/SKILL.md`, and `mcp_config.json` unless your own configuration already has an `openviking` server.
 
 To uninstall:

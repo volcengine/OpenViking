@@ -118,7 +118,7 @@ Windows 上安装器不可用，只能用这种方式；macOS 上不想跑安装
 
 ## 工作方式
 
-插件以 Cordis 插件的形式跑在 DSH 进程内，而不是外挂 hook，因此能贴着会话走。会话开始时注入 OpenViking 画像块、可用记忆索引和 OpenViking 技能清单 `<available-skills>`，压缩把这块内容摘要掉后，下一个模型步骤会重新发送；模型步骤带有新的用户输入时，用用户输入的文本做语义检索，把结果作为持久消息追加到同一步骤，因此注入会随会话重放，也对压缩可见。DSH 或其他插件注入的上下文（例如 `time-context`、job 通知）和工具结果既不触发召回，也不拼进检索文本。它直接从 DSH 的事件流捕获 user、assistant 以及（可选的）工具结果消息，并跳过注入的上下文，待同步 token 超过阈值或 DSH 开始压缩时即 commit，每次 commit 都归档全部已捕获的消息。写入失败会进入待写队列，在下次会话开始时重放。
+插件以 Cordis 插件的形式跑在 DSH 进程内，而不是外挂 hook，因此能贴着会话走。会话开始时注入 OpenViking 画像块、可用记忆索引和 OpenViking 技能清单 `<available-skills>`，压缩把这块内容摘要掉后，下一个模型步骤会重新发送；模型步骤带有新的用户输入时，用用户输入的文本做语义检索，把结果作为持久消息追加到同一步骤，因此注入会随会话重放，也对压缩可见。DSH 或其他插件注入的上下文（例如 `time-context`、job 通知）和工具结果既不触发召回，也不拼进检索文本。它直接从 DSH 的事件流捕获 user、assistant 消息以及工具调用和工具结果，并跳过注入的上下文，待同步 token 超过阈值或 DSH 开始压缩时即 commit（`autoCommitOnCompact` 为 `false` 时压缩不 commit），每次 commit 都归档全部已捕获的消息；压缩时的 commit 会排在待写队列中尚未写完的写入之后。写入失败会进入待写队列，在下次会话开始时重放。
 
 每个 DSH 会话映射为 OpenViking 中的 `dsh-<session-id>`，子 agent 各自拥有独立会话。
 
@@ -176,11 +176,12 @@ adapter 可能继续请求，但迟到的结果不会注入。辅助消息不追
   config:
     recallTokenBudget: 2000
     scoreThreshold: 0.35
-    captureToolResults: true
     commitTokenThreshold: 100000
 ```
 
 在这个 `config` 块、或 `ovcli.conf` 的 `plugin` / `plugin.dsh` 中设置 `mcpEnabled: false` 时，既不挂载 OpenViking MCP 工具，也不挂载内置技能；召回和捕获照常。
+
+同一个 `config` 块里的 `noAutoInject: true` 不注入会话开场的画像、记忆索引和技能清单，召回照常。`bypassSession: true`，或匹配 DSH 会话 id 或会话工作目录的 `bypassSessionPatterns` glob，会让该会话既不注入、不召回，也不捕获、不 commit。
 
 同一个 `config` 块里的 `syncTurns: false` 关闭自动捕获、commit 和待写队列重放，画像注入和召回照常。排队的写入保留到后续开启写入的会话处理；该开关不会撤销模型的 MCP 写工具或改变服务端权限。
 
