@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -959,9 +960,7 @@ class TestServerWizard:
 
         assert result is not None
         key = result["root_api_key"]
-        # 64-char hex, matching the repo's root-key convention (token_hex(32)).
-        assert len(key) == 64
-        int(key, 16)  # raises if not hex
+        assert re.fullmatch(r"ovrk_[0-9a-f]{64}", key)
         assert result == {"host": "0.0.0.0", "port": 1933, "root_api_key": key}
         # The full key must be displayed to the user exactly once.
         output = "\n".join(
@@ -1022,7 +1021,7 @@ class TestServerWizardCurrentDefaults:
 
         assert result is not None
         assert result["root_api_key"] != self.CURRENT["root_api_key"]
-        assert len(result["root_api_key"]) == 64
+        assert re.fullmatch(r"ovrk_[0-9a-f]{64}", result["root_api_key"])
 
 
 class TestGatewayWizard:
