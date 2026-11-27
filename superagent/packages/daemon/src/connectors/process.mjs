@@ -330,12 +330,16 @@ export class ConnectorProcess {
       // Cover extraction runs before the CLI send.
       timeoutMs += LARK_VIDEO_PREP_MS + 1000;
     } else if (this.type === 'lark' && input.content?.type === 'file' && isLarkAudio(input.content.path)) {
-      if (needsVoiceConversion(input.content.path)) {
+      const convert = needsVoiceConversion(input.content.path);
+      if (convert) {
         // Re-encoding to the Ogg Opus a voice message needs runs before the CLI send.
         timeoutMs += LARK_AUDIO_PREP_MS + 1000;
       }
-      if (this.config.larkVoiceExactDuration) {
-        // The length is uploaded with the file first, so the send is a second CLI call.
+      // Either choice can end in two CLI calls: the exact length uploads before
+      // it sends, and the file fallback can still upload and attach after a
+      // conversion that fails. One delivery does at most one of the two, so the
+      // budget grows by one CLI timeout, not two.
+      if (this.config.larkVoiceExactDuration || (convert && this.config.larkVoiceFileFallback)) {
         timeoutMs += (this.config.sendTimeoutMs ?? 30_000) + 1000;
       }
     }

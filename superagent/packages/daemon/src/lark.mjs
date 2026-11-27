@@ -438,9 +438,16 @@ export class LarkClient {
   async sendAudioAsFile(target, content, suffix) {
     const dir = path.dirname(content.path);
     const name = path.basename(content.path);
+    // An upload that fails ends the delivery here: nothing was sent.
     const key = await this.uploadAudio('upload audio attachment',
       { file_type: 'stream', file_name: name }, `./${name}`, dir);
-    return await this.im([...target, '--file', key, ...suffix], 'send attachment', { cwd: dir });
+    try {
+      return await this.im([...target, '--file', key, ...suffix], 'send attachment', { cwd: dir });
+    } catch (error) {
+      // The upload is not covered by the send's idempotency key.
+      this.logger.warn('lark_voice_upload_orphaned', { file: name, error: error.message });
+      throw error;
+    }
   }
 
   async uploadAudio(label, body, relative, dir) {

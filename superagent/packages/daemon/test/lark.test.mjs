@@ -102,6 +102,16 @@ it('gives only a voice send that has to be converted its ffmpeg time', () => {
   assert.equal(exactBudget('reply.opus'), 5000 + 6000, 'one more CLI timeout');
   assert.equal(exactBudget('reply.mp3'), 5000 + 6000 + LARK_AUDIO_PREP_MS + 1000);
   assert.equal(exactBudget('notes.txt'), 5000);
+  // With the file fallback a failed conversion still uploads and attaches: two
+  // CLI calls on top of the conversion, not one.
+  const fallback = new ConnectorProcess('lark', { sendTimeoutMs: 5000, larkVoiceFileFallback: true }, null, quietLogger);
+  Object.assign(fallback, { child: {}, checked: true, request: (_operation, _payload, timeoutMs) => timeoutMs });
+  const fallbackBudget = (name) => fallback.invoke('message.send',
+    { content: { type: 'file', path: path.join(tempDir, name), name } });
+  assert.equal(fallbackBudget('reply.opus'), 5000, 'Ogg Opus is one CLI call either way');
+  assert.equal(fallbackBudget('reply.mp3'), 5000 + LARK_AUDIO_PREP_MS + 1000 + 6000,
+    'conversion, then upload and send when it fails');
+  assert.equal(fallbackBudget('notes.txt'), 5000);
 });
 
 it('reads a voice message length from the Ogg Opus granule and nothing else', () => {
@@ -336,6 +346,26 @@ describe('Lark IM operations', () => {
     assert.equal(send.args[send.args.indexOf('--file') + 1], 'file_v3_audio123456');
     assert.ok(send.args.includes('--reply-in-thread'));
     assert.ok(!send.args.includes('--audio'));
+  });
+
+  it('warns about the unused upload when the fallback attachment send fails', async () => {
+    const warnings = [];
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    fs.writeFileSync(path.join(tempDir, 'reply.mp3'), 'mp3 bytes');
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000, larkVoiceFileFallback: true }, {
+      async run(command, args) {
+        if (command === 'ffmpeg') throw Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' });
+        if (args.includes('files')) {
+          return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data: { file_key: 'file_v3_audio123456' } }), stderr: '' };
+        }
+        return { code: 1, timedOut: false, stdout: JSON.stringify({ ok: false, error: { message: 'send failed' } }), stderr: '' };
+      },
+    }, { ...quietLogger, warn: (message, fields) => warnings.push({ message, fields }) });
+    await assert.rejects(lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'reply.mp3'), name: 'reply.mp3' }, idempotency_key: 'ko' }),
+    /send attachment failed: send failed/);
+    assert.deepEqual(warnings.map(({ message }) => message), ['lark_voice_fallback_to_file', 'lark_voice_upload_orphaned']);
   });
 
   it('still fails the delivery when the fallback is off', async () => {
