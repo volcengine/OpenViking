@@ -11,6 +11,7 @@ import { safeError } from '../logger.mjs';
 import { connectorManifest, parseProtocolLine, requestMessage } from './protocol.mjs';
 import { mentionTarget } from '../runtime-input.mjs';
 import { LARK_VIDEO_PREP_MS, isLarkVideo } from '../lark-video.mjs';
+import { LARK_AUDIO_PREP_MS, isLarkAudio, needsVoiceConversion } from '../lark-audio.mjs';
 
 const defaultWorkerPath = fileURLToPath(new URL('./worker.mjs', import.meta.url));
 // Backoff between restarts of one failed Connector; the last delay repeats.
@@ -87,6 +88,10 @@ export function childConfig(config, instance) {
     meetingNotes: instance.type === 'lark' && Boolean(config.meetingNotes),
     // A bot-only Lark bot has no user login to tell its owner by.
     larkOwnerOpenId: instance.type === 'lark' ? config.larkOwnerOpenId ?? null : null,
+    // How a voice message gets its length, and what to do when the audio cannot
+    // become one (see agent/lark-message-formats.md).
+    larkVoiceExactDuration: instance.type === 'lark' ? Boolean(config.larkVoiceExactDuration) : false,
+    larkVoiceFileFallback: instance.type === 'lark' ? Boolean(config.larkVoiceFileFallback) : false,
     // A mailbox stores each mail in OV before reporting it; so does the Lark
     // Connector each meeting note.
     openVikingConfigPath: instance.type === 'email' || (instance.type === 'lark' && config.meetingNotes)
@@ -324,6 +329,19 @@ export class ConnectorProcess {
     } else if (this.type === 'lark' && input.content?.type === 'file' && isLarkVideo(input.content.path)) {
       // Cover extraction runs before the CLI send.
       timeoutMs += LARK_VIDEO_PREP_MS + 1000;
+    } else if (this.type === 'lark' && input.content?.type === 'file' && isLarkAudio(input.content.path)) {
+      const convert = needsVoiceConversion(input.content.path);
+      if (convert) {
+        // Re-encoding to the Ogg Opus a voice message needs runs before the CLI send.
+        timeoutMs += LARK_AUDIO_PREP_MS + 1000;
+      }
+      // Either choice can end in two CLI calls: the exact length uploads before
+      // it sends, and the file fallback can still upload and attach after a
+      // conversion that fails. One delivery does at most one of the two, so the
+      // budget grows by one CLI timeout, not two.
+      if (this.config.larkVoiceExactDuration || (convert && this.config.larkVoiceFileFallback)) {
+        timeoutMs += (this.config.sendTimeoutMs ?? 30_000) + 1000;
+      }
     }
     return this.request('action', { name, input }, timeoutMs);
   }

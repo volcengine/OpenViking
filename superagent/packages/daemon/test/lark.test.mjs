@@ -9,9 +9,49 @@ import { describe, it } from 'node:test';
 import { LarkClient, SUBSCRIBED_EVENT_TYPES, renderMentions } from '../src/lark.mjs';
 import { sanitizeNonArkChildEnv } from '../src/process-utils.mjs';
 import { LARK_VIDEO_PREP_MS, LARK_VIDEO_STEP_TIMEOUT_MS, unsendableVideoError } from '../src/lark-video.mjs';
+import { LARK_AUDIO_PREP_MS, LARK_AUDIO_CONVERT_TIMEOUT_MS, isLarkAudio, needsOpusConversion, probeVoiceDurationMs } from '../src/lark-audio.mjs';
 import { ConnectorProcess } from '../src/connectors/process.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
+
+// A minimal Ogg Opus file: the Opus identification header alone on the first
+// page (RFC 7845) and a granule position on the last one, which is where Lark
+// reads a voice message's length.
+function voiceFile(directory, name, seconds) {
+  const file = path.join(directory, name);
+  const head = Buffer.alloc(28 + 19);
+  head.write('OggS', 0, 'latin1');
+  head[5] = 2; // beginning of stream
+  head[26] = 1; // one segment, 19 bytes long: the identification header
+  head[27] = 19;
+  head.write('OpusHead', 28, 'latin1');
+  const last = Buffer.alloc(20);
+  last.write('OggS', 0, 'latin1');
+  last.writeBigUInt64LE(BigInt(Math.round(seconds * 48_000)), 6);
+  fs.writeFileSync(file, Buffer.concat([head, last]));
+  return file;
+}
+
+// An Ogg stream whose first packet is Vorbis, with the word OpusHead in a later
+// page: the name inside the stream does not make it Opus.
+function vorbisFile(directory, name) {
+  const head = Buffer.alloc(28 + 19);
+  head.write('OggS', 0, 'latin1');
+  head[26] = 1;
+  head[27] = 19;
+  head.write('\x01vorbis', 28, 'latin1');
+  const comment = Buffer.alloc(27 + 1 + 31);
+  comment.write('OggS', 0, 'latin1');
+  comment[26] = 1;
+  comment[27] = 31;
+  comment.write('OpusHead in a comment, not a codec', 28, 'latin1');
+  const last = Buffer.alloc(20);
+  last.write('OggS', 0, 'latin1');
+  last.writeBigUInt64LE(48_000n, 6);
+  const file = path.join(directory, name);
+  fs.writeFileSync(file, Buffer.concat([head, comment, last]));
+  return file;
+}
 
 it('updates an answered card using bot message patch without callback credentials', async () => {
   const calls = [];
@@ -39,6 +79,52 @@ it('gives a Lark video send its cover extraction time on top of the send timeout
   assert.equal(budget('demo.mp4'), 5000 + LARK_VIDEO_PREP_MS + 1000);
   assert.equal(budget('demo.mov'), 5000 + LARK_VIDEO_PREP_MS + 1000);
   assert.equal(budget('report.pdf'), 5000);
+});
+
+it('gives only a voice send that has to be converted its ffmpeg time', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+  voiceFile(tempDir, 'reply.opus', 13);
+  voiceFile(tempDir, 'reply.ogg', 13);
+  fs.writeFileSync(path.join(tempDir, 'raw.opus'), 'OpusHead without an Ogg page');
+  const lark = new ConnectorProcess('lark', { sendTimeoutMs: 5000 }, null, quietLogger);
+  Object.assign(lark, { child: {}, checked: true, request: (_operation, _payload, timeoutMs) => timeoutMs });
+  const budget = (name) => lark.invoke('message.send', { content: { type: 'file', path: path.join(tempDir, name), name } });
+  assert.equal(budget('reply.opus'), 5000, 'Ogg Opus goes out as it is');
+  assert.equal(budget('reply.ogg'), 5000);
+  assert.equal(budget('raw.opus'), 5000 + LARK_AUDIO_PREP_MS + 1000, 'a bare Opus stream is converted');
+  assert.equal(budget('reply.mp3'), 5000 + LARK_AUDIO_PREP_MS + 1000);
+  assert.equal(budget('notes.txt'), 5000);
+  // With the exact length the upload is its own CLI call, before the send.
+  const exact = new ConnectorProcess('lark', { sendTimeoutMs: 5000, larkVoiceExactDuration: true }, null, quietLogger);
+  Object.assign(exact, { child: {}, checked: true, request: (_operation, _payload, timeoutMs) => timeoutMs });
+  const exactBudget = (name) => exact.invoke('message.send',
+    { content: { type: 'file', path: path.join(tempDir, name), name } });
+  assert.equal(exactBudget('reply.opus'), 5000 + 6000, 'one more CLI timeout');
+  assert.equal(exactBudget('reply.mp3'), 5000 + 6000 + LARK_AUDIO_PREP_MS + 1000);
+  assert.equal(exactBudget('notes.txt'), 5000);
+  // With the file fallback a failed conversion still uploads and attaches: two
+  // CLI calls on top of the conversion, not one.
+  const fallback = new ConnectorProcess('lark', { sendTimeoutMs: 5000, larkVoiceFileFallback: true }, null, quietLogger);
+  Object.assign(fallback, { child: {}, checked: true, request: (_operation, _payload, timeoutMs) => timeoutMs });
+  const fallbackBudget = (name) => fallback.invoke('message.send',
+    { content: { type: 'file', path: path.join(tempDir, name), name } });
+  assert.equal(fallbackBudget('reply.opus'), 5000, 'Ogg Opus is one CLI call either way');
+  assert.equal(fallbackBudget('reply.mp3'), 5000 + LARK_AUDIO_PREP_MS + 1000 + 6000,
+    'conversion, then upload and send when it fails');
+  assert.equal(fallbackBudget('notes.txt'), 5000);
+});
+
+it('reads a voice message length from the Ogg Opus granule and nothing else', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+  assert.equal(probeVoiceDurationMs(voiceFile(tempDir, 'reply.opus', 13)), 13_000);
+  // The extension does not matter to the probe; a .oga is still converted,
+  // because lark-cli --audio accepts only .opus and .ogg.
+  assert.equal(probeVoiceDurationMs(voiceFile(tempDir, 'reply.oga', 13)), 13_000);
+  fs.writeFileSync(path.join(tempDir, 'raw.opus'), 'OpusHead in a bare stream');
+  assert.equal(probeVoiceDurationMs(path.join(tempDir, 'raw.opus')), null);
+  assert.equal(probeVoiceDurationMs(vorbisFile(tempDir, 'vorbis.ogg')), null,
+    'a Vorbis first packet is not Opus, whatever a later page says');
+  assert.equal(probeVoiceDurationMs(path.join(tempDir, 'missing.opus')), null);
 });
 
 describe('Lark IM operations', () => {
@@ -170,6 +256,208 @@ describe('Lark IM operations', () => {
       assert.match(unsendableVideoError(`/frozen/${name}`).message, new RegExp(`cannot send ${name.replace('.', '\\.')}.*\\.mp4.*Drive`));
     }
     for (const name of ['clip.mp4', 'clip.mov', 'clip.m4v', 'report.pdf']) assert.equal(unsendableVideoError(`/frozen/${name}`), null);
+  });
+
+  it('sends Ogg Opus audio as a voice message instead of an attachment', async () => {
+    const { lark, calls, tempDir } = client(() => ({ message_id: 'om_voice12345678' }));
+    voiceFile(tempDir, 'reply.OPUS', 13);
+    const sent = await lark.replyMessage({ message_id: 'om_target1234567', reply_in_thread: true,
+      content: { type: 'file', path: path.join(tempDir, 'reply.OPUS'), name: 'reply.OPUS' }, idempotency_key: 'ka' });
+    assert.deepEqual(sent, { message_id: 'om_voice12345678' });
+    const send = calls.at(-1);
+    assert.equal(send.options.cwd, tempDir);
+    assert.ok(send.args.includes('--reply-in-thread'));
+    assert.equal(send.args[send.args.indexOf('--audio') + 1], './reply.OPUS');
+    assert.ok(!send.args.includes('--file'));
+    assert.equal(send.args[send.args.indexOf('--idempotency-key') + 1], 'ka');
+    assert.equal(calls.length, 1, 'Ogg Opus needs no conversion');
+  });
+
+  it('converts a .opus that is a bare Opus stream instead of sending a 00:01 bubble', async () => {
+    const calls = [];
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    fs.writeFileSync(path.join(tempDir, 'reply.opus'), 'OpusHead in a bare stream, no Ogg page');
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000 }, {
+      async run(command, args, options) {
+        calls.push({ command, args, options });
+        if (command === 'ffmpeg') {
+          voiceFile(path.dirname(args.at(-1)), path.basename(args.at(-1)), 10);
+          return { code: 0, timedOut: false, stdout: '', stderr: '' };
+        }
+        return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data: { message_id: 'om_voice12345678' } }), stderr: '' };
+      },
+    }, quietLogger);
+    await lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'reply.opus'), name: 'reply.opus' }, idempotency_key: 'kr' });
+    assert.equal(calls.filter(({ command }) => command === 'ffmpeg').length, 1);
+    assert.match(calls.at(-1).args[calls.at(-1).args.indexOf('--audio') + 1], /^\.\/\.voice-[^/]+\/voice\.opus$/);
+  });
+
+  it('uploads the exact length and sends the file key when the deployment asks for it', async () => {
+    const calls = [];
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    voiceFile(tempDir, 'reply.opus', 13);
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000, larkVoiceExactDuration: true }, {
+      async run(command, args, options) {
+        calls.push({ command, args, options });
+        const data = args.includes('files') ? { file_key: 'file_v3_voice123456' } : { message_id: 'om_voice12345678' };
+        return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data }), stderr: '' };
+      },
+    }, quietLogger);
+    const sent = await lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'reply.opus'), name: 'reply.opus' }, idempotency_key: 'kx' });
+    assert.deepEqual(sent, { message_id: 'om_voice12345678' });
+    const upload = calls[0];
+    assert.deepEqual(upload.args.slice(2, 7), ['im', 'files', 'create', '--as', 'bot'], 'the upload is its own call');
+    const body = JSON.parse(upload.args[upload.args.indexOf('--data') + 1]);
+    assert.deepEqual(body, { file_type: 'opus', file_name: 'reply.opus', duration: 13_000 },
+      'duration is the exact millisecond count, not lark-cli rounds it up to whole seconds');
+    assert.equal(upload.args[upload.args.indexOf('--file') + 1], 'file=./reply.opus');
+    assert.equal(upload.options.cwd, tempDir);
+    const send = calls.at(-1);
+    assert.equal(send.args[send.args.indexOf('--audio') + 1], 'file_v3_voice123456');
+    assert.equal(send.args[send.args.indexOf('--idempotency-key') + 1], 'kx');
+    assert.ok(!send.args.includes('--file'), 'the key is sent as a voice message, not an attachment');
+  });
+
+  it('sends the bytes as an attachment when the deployment allows it and no conversion is possible', async () => {
+    const calls = [];
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    fs.writeFileSync(path.join(tempDir, 'reply.mp3'), 'mp3 bytes');
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000, larkVoiceFileFallback: true }, {
+      async run(command, args) {
+        calls.push({ command, args });
+        if (command === 'ffmpeg') throw Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' });
+        const data = args.includes('files') ? { file_key: 'file_v3_audio123456' } : { message_id: 'om_file123456789' };
+        return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data }), stderr: '' };
+      },
+    }, quietLogger);
+    const sent = await lark.replyMessage({ message_id: 'om_target1234567', reply_in_thread: true,
+      content: { type: 'file', path: path.join(tempDir, 'reply.mp3'), name: 'reply.mp3' }, idempotency_key: 'kf' });
+    assert.deepEqual(sent, { message_id: 'om_file123456789' });
+    const upload = calls.find(({ args }) => args.includes('files'));
+    const body = JSON.parse(upload.args[upload.args.indexOf('--data') + 1]);
+    assert.deepEqual(body, { file_type: 'stream', file_name: 'reply.mp3' },
+      'stream keeps an opus-typed file message from being rejected with 230055');
+    const send = calls.at(-1);
+    assert.equal(send.args[send.args.indexOf('--file') + 1], 'file_v3_audio123456');
+    assert.ok(send.args.includes('--reply-in-thread'));
+    assert.ok(!send.args.includes('--audio'));
+  });
+
+  it('warns about the unused upload when the fallback attachment send fails', async () => {
+    const warnings = [];
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    fs.writeFileSync(path.join(tempDir, 'reply.mp3'), 'mp3 bytes');
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000, larkVoiceFileFallback: true }, {
+      async run(command, args) {
+        if (command === 'ffmpeg') throw Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' });
+        if (args.includes('files')) {
+          return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data: { file_key: 'file_v3_audio123456' } }), stderr: '' };
+        }
+        return { code: 1, timedOut: false, stdout: JSON.stringify({ ok: false, error: { message: 'send failed' } }), stderr: '' };
+      },
+    }, { ...quietLogger, warn: (message, fields) => warnings.push({ message, fields }) });
+    await assert.rejects(lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'reply.mp3'), name: 'reply.mp3' }, idempotency_key: 'ko' }),
+    /send attachment failed: send failed/);
+    assert.deepEqual(warnings.map(({ message }) => message), ['lark_voice_fallback_to_file', 'lark_voice_upload_orphaned']);
+  });
+
+  it('still fails the delivery when the fallback is off', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000 }, {
+      async run(command) {
+        if (command === 'ffmpeg') throw Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' });
+        return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data: {} }), stderr: '' };
+      },
+    }, quietLogger);
+    await assert.rejects(lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'reply.wav'), name: 'reply.wav' }, idempotency_key: 'kn' }),
+    /voice messages only as Ogg Opus.*ffmpeg could not run/);
+  });
+
+  it('converts another audio container to Opus from the frozen directory and sends that', async () => {
+    const calls = [];
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000 }, {
+      async run(command, args, options) {
+        calls.push({ command, args, options });
+        if (command === 'ffmpeg') {
+          voiceFile(path.dirname(args.at(-1)), path.basename(args.at(-1)), 10);
+          return { code: 0, timedOut: false, stdout: '', stderr: '' };
+        }
+        return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data: { message_id: 'om_voice12345678' } }), stderr: '' };
+      },
+    }, quietLogger);
+    const sent = await lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'reply.mp3'), name: 'reply.mp3' }, idempotency_key: 'kc' });
+    assert.equal(sent.message_id, 'om_voice12345678');
+    const convert = calls.find(({ command }) => command === 'ffmpeg');
+    assert.deepEqual(convert.args.slice(0, 2), ['-y', '-i']);
+    assert.equal(convert.args[2], path.join(tempDir, 'reply.mp3'));
+    for (const flag of ['-ac', '1', '-ar', '48000', '-c:a', 'libopus']) assert.ok(convert.args.includes(flag), flag);
+    assert.equal(convert.options.timeoutMs, LARK_AUDIO_CONVERT_TIMEOUT_MS);
+    const send = calls.at(-1);
+    assert.equal(send.options.cwd, tempDir);
+    assert.match(send.args[send.args.indexOf('--audio') + 1], /^\.\/\.voice-[^/]+\/voice\.opus$/);
+    assert.ok(!send.args.includes('--file'));
+    assert.deepEqual(fs.readdirSync(tempDir), [], 'the converted copy is removed');
+  });
+
+  it('keeps the conversion error and never falls back to a file when ffmpeg cannot run', async () => {
+    const calls = [];
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000 }, {
+      async run(command, args) {
+        calls.push({ command, args });
+        if (command === 'ffmpeg') throw Object.assign(new Error('spawn ffmpeg ENOENT'), { code: 'ENOENT' });
+        return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data: { message_id: 'om_file123456789' } }), stderr: '' };
+      },
+    }, quietLogger);
+    await assert.rejects(lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'reply.wav'), name: 'reply.wav' }, idempotency_key: 'kw' }),
+    /voice messages only as Ogg Opus.*ffmpeg could not run.*-c:a libopus reply\.opus/);
+    assert.ok(!calls.some(({ args }) => args.includes('--file') || args.includes('--audio')));
+    assert.deepEqual(fs.readdirSync(tempDir), []);
+  });
+
+  it('reports the rejected voice send with a way forward instead of resending it as a file', async () => {
+    const calls = [];
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
+    const lark = new LarkClient({ profile: 'bot-profile', larkCliBin: '/fake/lark-cli', projectDir: '/project',
+      tempDir, sendTimeoutMs: 5000 }, {
+      async run(command, args) {
+        calls.push({ command, args });
+        if (args.includes('--audio')) {
+          return { code: 1, timedOut: false, stdout: JSON.stringify({ ok: false, error: { message: 'file type not supported' } }), stderr: '' };
+        }
+        return { code: 0, timedOut: false, stdout: JSON.stringify({ ok: true, data: { message_id: 'om_file123456789' } }), stderr: '' };
+      },
+    }, quietLogger);
+    voiceFile(tempDir, 'clip.ogg', 5);
+    await assert.rejects(lark.sendMessage({ chat_id: 'oc_chat12345678',
+      content: { type: 'file', path: path.join(tempDir, 'clip.ogg'), name: 'clip.ogg' }, idempotency_key: 'ko' }),
+    /send voice message failed: file type not supported.*Ogg Opus.*convert the audio to \.opus/);
+    assert.ok(!calls.some(({ args }) => args.includes('--file')));
+  });
+
+  it('tells audio extensions apart from ordinary attachments', () => {
+    for (const name of ['a.opus', 'a.OGG', 'a.mp3', 'a.wav', 'a.m4a', 'a.flac', 'a.oga']) {
+      assert.equal(isLarkAudio(`/frozen/${name}`), true, name);
+    }
+    for (const name of ['a.mp4', 'a.pdf', 'a.txt', 'a.zip']) assert.equal(isLarkAudio(`/frozen/${name}`), false, name);
+    assert.equal(needsOpusConversion('/frozen/a.opus'), false);
+    assert.equal(needsOpusConversion('/frozen/a.ogg'), false);
+    assert.equal(needsOpusConversion('/frozen/a.oga'), true, 'lark-cli --audio takes only .opus and .ogg');
+    assert.equal(needsOpusConversion('/frozen/a.mp3'), true);
   });
 
   it('renders inline and prefixed mentions without ever sending @all', () => {

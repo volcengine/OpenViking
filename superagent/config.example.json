@@ -53,6 +53,8 @@
       "explicitSilence": true,
       "stagedReplies": false,
       "naturalWriting": true,
+      "larkVoiceExactDuration": false,
+      "larkVoiceFileFallback": false,
       "scheduler": "workers",
       "model": "codex"
     },

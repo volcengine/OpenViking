@@ -278,6 +278,20 @@ describe('configuration safety', { concurrency: false }, () => {
     assert.throws(() => getConfig(), /OV_SUPERAGENT_LARK_OWNER_OPEN_ID must be a Feishu\/Lark open_id/);
     setEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID', undefined);
   });
+  it('lets a deployment choose the voice-message trade-offs', () => {
+    setEnv('OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION', undefined);
+    setEnv('OV_SUPERAGENT_LARK_VOICE_FILE_FALLBACK', undefined);
+    assert.equal(getConfig().larkVoiceExactDuration, false);
+    assert.equal(getConfig().larkVoiceFileFallback, false);
+    setEnv('OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION', 'true');
+    setEnv('OV_SUPERAGENT_LARK_VOICE_FILE_FALLBACK', 'true');
+    assert.equal(getConfig().larkVoiceExactDuration, true);
+    assert.equal(getConfig().larkVoiceFileFallback, true);
+    setEnv('OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION', 'sometimes');
+    assert.throws(() => getConfig(), /OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION must be a boolean/);
+    setEnv('OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION', undefined);
+    setEnv('OV_SUPERAGENT_LARK_VOICE_FILE_FALLBACK', undefined);
+  });
   it('stores meeting notes only on an instance that opts in and has Feishu/Lark', () => {
     setEnv('OV_SUPERAGENT_MEETING_NOTES', undefined);
     assert.equal(getConfig().meetingNotes, false);

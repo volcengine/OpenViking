@@ -13,7 +13,7 @@ export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 export const CONTENT_PROPERTIES = {
   markdown: { type: 'string', minLength: 1, description: 'Message text (Markdown where the connector supports it). Mutually exclusive with file_path/file_key/card/choices.' },
-  file_path: { type: 'string', minLength: 1, description: 'Local file relative to the agent workspace, at most 20 MiB; images are sent as images. No URLs, absolute paths, traversal, or symlinks escaping the workspace.' },
+  file_path: { type: 'string', minLength: 1, description: 'Local file relative to the agent workspace, at most 20 MiB. Images are sent as images; on Lark, audio (.opus/.ogg, or mp3/wav/m4a and similar, converted to Opus) is sent as a voice message, and .mp4/.mov as a video. No URLs, absolute paths, traversal, or symlinks escaping the workspace.' },
   file_key: { type: 'string', pattern: '^file_[A-Za-z0-9_-]{8,}$', description: 'Lark only: existing IM file key from trusted tool output, sent without uploading.' },
   card: { type: 'object', description: 'Lark only: inline interactive card JSON (Card 1.0 elements or Card 2.0 body.elements), at most 30 KiB. Callback controls arrive as user input, never executed by the daemon. For a single-choice question prefer choices.' },
   card_images: { type: 'object', minProperties: 1, maxProperties: MAX_CARD_IMAGES,
