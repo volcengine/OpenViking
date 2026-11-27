@@ -978,28 +978,19 @@ class _PythonProgramCompiler:
         if method in {"merge_dirs", "rename_dir"}:
             if not self.context.supports_directory_merges:
                 self._error(node, f"sdk.{method}() is unavailable in this extraction")
-            arguments = {item.arg: item.value for item in node.keywords}
-            if (
-                not statement
-                or node.args
-                or len(node.keywords) != 2
-                or arguments.keys() != {"source_uri", "target_uri"}
+            if any(
+                not isinstance(item.value, ast.Constant) or not isinstance(item.value.value, str)
+                for item in node.keywords
             ):
+                self._error(node, f"sdk.{method}() requires literal directory URI strings")
+            kwargs = self._eval_keywords(node)
+            if not statement or node.args or set(kwargs) != {"source_uri", "target_uri"}:
                 self._error(
                     node,
                     f"sdk.{method}() requires a standalone call with source_uri= and target_uri=",
                 )
-            if any(
-                not isinstance(argument, ast.Constant) or not isinstance(argument.value, str)
-                for argument in arguments.values()
-            ):
-                self._error(node, f"sdk.{method}() requires literal directory URI strings")
             self.directory_merges.append(
-                {
-                    "source_uri": arguments["source_uri"].value,
-                    "target_uri": arguments["target_uri"].value,
-                    "operation": "rename" if method == "rename_dir" else "merge",
-                }
+                {**kwargs, "operation": "rename" if method == "rename_dir" else "merge"}
             )
             return None
         if method == "commit":
