@@ -47,6 +47,15 @@ class RerankConfig(BaseModel):
         default=None, description="Extra HTTP headers for OpenAI-compatible providers"
     )
 
+    extra_body: Optional[Dict[str, object]] = Field(
+        default=None,
+        description=(
+            "Extra JSON body fields merged into every Jev and OpenAI-compatible rerank "
+            "request (for example provider routing such as data_collection or provider "
+            "order). The client's own protocol fields win on conflict."
+        ),
+    )
+
     timeout: float = Field(
         default=30.0,
         description=(

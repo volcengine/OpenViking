@@ -128,3 +128,61 @@ def test_invalid_provider_response_signals_vector_score_fallback(provider_post, 
     assert reranker is not None
     assert reranker.rerank_batch("search", DOCUMENTS) is None
     provider_post.assert_called_once()
+
+
+def test_flat_body_merges_configured_extra_body(provider_post):
+    """Regression for #7620: rerank.extra_body was silently dropped."""
+    provider_post.return_value = provider_response(
+        {"results": [{"index": 0, "relevance_score": 0.5}]}
+    )
+    reranker = RerankClient.from_config(
+        RerankConfig(
+            provider="openai",
+            api_key="test-key",
+            api_base=COMPATIBLE_URL,
+            model="qwen3-rerank",
+            extra_body={"data_collection": "deny"},
+        )
+    )
+    assert reranker.rerank_batch("search", ["doc A"]) == [0.5]
+    body = provider_post.call_args.kwargs["json"]
+    assert body["data_collection"] == "deny"
+    assert body["model"] == "qwen3-rerank"
+
+
+def test_native_body_merges_configured_extra_body(provider_post):
+    provider_post.return_value = provider_response(
+        {"output": {"results": [{"index": 0, "relevance_score": 0.8}]}}
+    )
+    reranker = RerankClient.from_config(
+        RerankConfig(
+            provider="openai",
+            api_key="test-key",
+            api_base=NATIVE_URL,
+            model="gte-rerank-v2",
+            extra_body={"data_collection": "deny"},
+        )
+    )
+    assert reranker.rerank_batch("search", ["doc A"]) == [0.8]
+    body = provider_post.call_args.kwargs["json"]
+    assert body["data_collection"] == "deny"
+    assert body["input"]["query"] == "search"
+
+
+def test_client_fields_win_over_configured_extra_body(provider_post):
+    provider_post.return_value = provider_response(
+        {"results": [{"index": 0, "relevance_score": 0.5}]}
+    )
+    reranker = RerankClient.from_config(
+        RerankConfig(
+            provider="openai",
+            api_key="test-key",
+            api_base=COMPATIBLE_URL,
+            model="real-model",
+            extra_body={"model": "override", "top_n": 99},
+        )
+    )
+    reranker.rerank_batch("search", ["doc A"])
+    body = provider_post.call_args.kwargs["json"]
+    assert body["model"] == "real-model"
+    assert body["top_n"] == 1
