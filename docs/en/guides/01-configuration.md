@@ -528,6 +528,10 @@ For Azure OpenAI, `model` must be the embedding deployment name configured in Az
 
 **vikingdb provider example:**
 
+Set `session_token` alongside `ak` and `sk` when using temporary STS credentials. Set `host`
+to override the regional embedding endpoint. The BytePlus Johor embedding host is
+`api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com`.
+
 ```json
 {
   "embedding": {
@@ -2140,7 +2144,14 @@ Default local mode
 
 <details>
 <summary><b>volcengine vikingDB</b></summary>
-Supports cloud-deployed VikingDB on Volcengine
+Supports cloud-deployed VikingDB on Volcengine and BytePlus.
+
+With AK/SK authentication, set `storage.vectordb.volcengine.console_host` for management
+requests and `storage.vectordb.volcengine.host` for data requests. Supply hostnames without
+schemes. Each omitted host uses the regional Volcengine default. For BytePlus Johor
+(`ap-southeast-1`), use `vikingdb.ap-southeast-1.byteplusapi.com` and
+`api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com` respectively. Include `session_token`
+with temporary AK/SK credentials.
 
 ```json
 {

@@ -2,14 +2,90 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for VikingDB non-symmetric embedding support."""
 
+from functools import partial
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
 import pytest
+import requests
 
+from openviking.config.vector import resolve_effective_embedding
 from openviking.models.embedder.vikingdb_embedders import (
     VikingDBDenseEmbedder,
     VikingDBHybridEmbedder,
 )
+from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credentials_mode", ["direct", "credential", "long-lived", "account"])
+async def test_vikingdb_dense_from_config_signs_and_reads_embedding(monkeypatch, credentials_mode):
+    byteplus_host = "api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com"
+    default_host = "api-vikingdb.vikingdb.ap-southeast-1.volces.com"
+    token = "test-session-token" if credentials_mode in ("direct", "credential") else None
+    dense = {
+        "provider": "vikingdb",
+        "model": "bge-m3",
+        "dimension": 1024,
+        "input": "text",
+        "region": "ap-southeast-1",
+        "ak": "test-ak",
+        "sk": "test-sk",
+    }
+    if token:
+        dense["host"] = byteplus_host
+        if credentials_mode == "credential":
+            dense["credentials"] = [{"session_token": token}]
+        else:
+            dense["session_token"] = token
+    host = byteplus_host if token else default_host
+    vector = [0.125] * 1024
+    field = "dense" if token else "dense_embedding"
+    payload = {"result": {"data": [{field: vector}]}}
+
+    def check_request(url, headers):
+        assert str(url) == f"https://{host}/api/vikingdb/embedding"
+        assert headers["Host"] == host
+        assert headers.get("X-Security-Token") == token
+        assert "Authorization" in headers
+
+    def sync_request(self, *, url, headers, **kwargs):
+        check_request(url, headers)
+        return SimpleNamespace(status_code=200, json=lambda: payload)
+
+    def async_request(request):
+        check_request(request.url, request.headers)
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(requests.Session, "request", sync_request)
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        partial(httpx.AsyncClient, transport=httpx.MockTransport(async_request)),
+    )
+
+    account = None
+    if credentials_mode == "account":
+        dense["session_token"] = "cluster-session-token"
+        account = {
+            "dense": {
+                "model": "bge-m3",
+                "dimension": 1024,
+                "credentials": [
+                    {
+                        "provider": "vikingdb",
+                        "ak": "account-ak",
+                        "sk": "account-sk",
+                        "region": "ap-southeast-1",
+                    }
+                ],
+            },
+        }
+    cluster = EmbeddingConfig.model_validate({"dense": dense})
+    embedder = resolve_effective_embedding(cluster, account).get_embedder()
+    assert embedder.embed("hello").dense_vector == vector
+    assert (await embedder.embed_async("hello")).dense_vector == vector
 
 
 @pytest.fixture

@@ -43,6 +43,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         project_name: str,
         collection_name: str,
         index_name: str,
+        console_host: str | None = None,
     ):
         super().__init__(collection_name=collection_name, index_name=index_name)
         self._collection: Collection | None = None
@@ -53,6 +54,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         self._session_token = session_token
         self._api_key = api_key
         self._host = host
+        self._console_host = console_host
         self._project_name = project_name
 
     @classmethod
@@ -74,6 +76,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             session_token=cfg.session_token,
             api_key=cfg.api_key,
             host=cfg.host,
+            console_host=cfg.console_host,
             project_name=config.project_name or "default",
             collection_name=config.name or "context",
             index_name=config.index_name or "default",
@@ -98,6 +101,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             "SessionToken": self._session_token,
             "ApiKey": self._api_key,
             "Host": self._host,
+            "ConsoleHost": self._console_host,
         }
 
     def _uses_api_key_auth(self) -> bool:
@@ -122,6 +126,8 @@ class VolcengineCollectionAdapter(CollectionAdapter):
                 region=self._region,
                 session_token=self._session_token,
                 meta_data=self._meta(),
+                data_host=self._host,
+                console_host=self._console_host,
             )
         )
 

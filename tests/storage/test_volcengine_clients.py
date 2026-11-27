@@ -4,6 +4,7 @@ import pytest
 import requests
 from volcengine.base.Request import Request
 
+from openviking.config.vector import resolve_effective_vectordb
 from openviking.storage.errors import ConnectionError
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.volcengine_clients import (
@@ -12,6 +13,7 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForDataApiWithApiKey,
 )
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
+from openviking.storage.vectordb_adapters import create_collection_adapter
 from openviking.storage.vectordb_adapters.base import VIKINGDB_STRING_FIELD_BYTE_LIMIT
 from openviking.storage.vectordb_adapters.local_adapter import LocalCollectionAdapter
 from openviking.storage.vectordb_adapters.vikingdb_private_adapter import (
@@ -40,6 +42,59 @@ def test_console_client_prepare_request_includes_session_token():
 
     assert request.headers["X-Security-Token"] == "test-session-token"
     assert "Authorization" in request.headers
+
+
+@pytest.mark.parametrize(
+    "custom_console,custom_data", [(True, True), (True, False), (False, True), (False, False)]
+)
+def test_volcengine_ak_sk_routes_collection_requests(monkeypatch, custom_console, custom_data):
+    console_host = "vikingdb.ap-southeast-1.byteplusapi.com"
+    data_host = "api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com"
+    volcengine = {
+        "ak": "test-ak",
+        "sk": "test-sk",
+        "region": "ap-southeast-1",
+        "session_token": "test-session-token",
+    }
+    if custom_console:
+        volcengine["console_host"] = console_host
+    if custom_data:
+        volcengine["host"] = data_host
+    config = VectorDBBackendConfig.model_validate(
+        {"backend": "volcengine", "volcengine": volcengine}
+    )
+    config = resolve_effective_vectordb(config, None)
+    console = console_host if custom_console else "vikingdb.ap-southeast-1.volcengineapi.com"
+    data = data_host if custom_data else "api-vikingdb.vikingdb.ap-southeast-1.volces.com"
+    calls = []
+    created = False
+
+    def fake_request(self, *, url, headers, params, **kwargs):
+        nonlocal created
+        assert headers["X-Security-Token"] == "test-session-token"
+        assert "Authorization" in headers
+        action = (params or {}).get("Action")
+        calls.append((action, url))
+        if action == "CreateVikingdbCollection":
+            created = True
+        payload = {"Result": {"CollectionName": "context"}} if created else {}
+        return SimpleNamespace(status_code=200, json=lambda: payload)
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    adapter = create_collection_adapter(config)
+    assert adapter.create_collection(
+        "context", {}, distance="cosine", sparse_weight=0, index_name="default"
+    )
+    assert adapter.upsert({"id": "record"}) == ["record"]
+    assert create_collection_adapter(config).upsert({"id": "record"}) == ["record"]
+    assert calls == [
+        ("GetVikingdbCollection", f"https://{console}/"),
+        ("CreateVikingdbCollection", f"https://{console}/"),
+        ("CreateVikingdbIndex", f"https://{console}/"),
+        (None, f"https://{data}/api/vikingdb/data/upsert"),
+        ("GetVikingdbCollection", f"https://{console}/"),
+        (None, f"https://{data}/api/vikingdb/data/upsert"),
+    ]
 
 
 def test_console_client_do_req_uses_signed_query_params(monkeypatch):

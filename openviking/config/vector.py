@@ -27,6 +27,7 @@ PROVIDER_BINDING = frozenset(
         "api_version",
         "ak",
         "sk",
+        "session_token",
         "region",
         "host",
         "extra_headers",

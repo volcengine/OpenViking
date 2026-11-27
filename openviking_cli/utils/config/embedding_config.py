@@ -36,6 +36,11 @@ class EmbeddingCredential(BaseModel):
     api_version: Optional[str] = Field(default=None, description="API version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
     sk: Optional[str] = Field(default=None, description="Access Key Secret for VikingDB API")
+    session_token: Optional[str] = Field(
+        default=None,
+        repr=False,
+        description="STS security token for temporary VikingDB credentials",
+    )
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
     extra_headers: Optional[dict[str, str]] = Field(default=None, description="Extra HTTP headers")
@@ -85,6 +90,11 @@ class EmbeddingModelConfig(BaseModel):
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
+    session_token: Optional[str] = Field(
+        default=None,
+        repr=False,
+        description="STS security token for temporary VikingDB credentials",
+    )
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
     extra_headers: Optional[dict[str, str]] = Field(
@@ -857,10 +867,11 @@ class EmbeddingConfig(BaseModel):
                     "model_version": cfg.version,
                     "ak": cfg.ak,
                     "sk": cfg.sk,
+                    "session_token": cfg.session_token,
                     "region": cfg.region,
                     "host": cfg.host,
                     "dimension": cfg.dimension,
-                    "input_type": cfg.input,
+                    "embedding_type": cfg.input,
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
@@ -873,6 +884,7 @@ class EmbeddingConfig(BaseModel):
                     "model_version": cfg.version,
                     "ak": cfg.ak,
                     "sk": cfg.sk,
+                    "session_token": cfg.session_token,
                     "region": cfg.region,
                     "host": cfg.host,
                     "config": dict(runtime_config),
@@ -885,10 +897,11 @@ class EmbeddingConfig(BaseModel):
                     "model_version": cfg.version,
                     "ak": cfg.ak,
                     "sk": cfg.sk,
+                    "session_token": cfg.session_token,
                     "region": cfg.region,
                     "host": cfg.host,
                     "dimension": cfg.dimension,
-                    "input_type": cfg.input,
+                    "embedding_type": cfg.input,
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
@@ -1094,6 +1107,7 @@ class EmbeddingConfig(BaseModel):
                 version=config.version,
                 ak=cred.ak or config.ak,
                 sk=cred.sk or config.sk,
+                session_token=cred.session_token or config.session_token,
                 region=cred.region or config.region,
                 host=cred.host or config.host,
                 api_key=cred.api_key or config.api_key,

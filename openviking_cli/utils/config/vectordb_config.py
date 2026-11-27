@@ -31,10 +31,11 @@ class VolcengineConfig(BaseModel):
     )
     host: Optional[str] = Field(
         default=None,
-        description=(
-            "Optional VikingDB data API host. "
-            "Used together with `api_key` for data-plane-only access."
-        ),
+        description="Optional VikingDB data API host",
+    )
+    console_host: Optional[str] = Field(
+        default=None,
+        description="Optional VikingDB management API host for AK/SK authentication",
     )
 
 
@@ -571,6 +572,8 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "volcengine":
             if self.volcengine and self.volcengine.host:
                 self.volcengine.host = self.volcengine.host.strip().rstrip("/")
+            if self.volcengine and self.volcengine.console_host:
+                self.volcengine.console_host = self.volcengine.console_host.strip().rstrip("/")
 
             uses_api_key = bool(self.volcengine and self.volcengine.api_key)
             if uses_api_key:
@@ -586,12 +589,6 @@ class VectorDBBackendConfig(BaseModel):
                     )
                 if not self.volcengine.region:
                     raise ValueError("VectorDB volcengine backend requires 'region' to be set")
-            if self.volcengine and self.volcengine.host and not uses_api_key:
-                logger.info(
-                    "vector backend custom host ignored; using region-based hosts region_hash=%s",
-                    short_hash(str(self.volcengine.region or "")),
-                    extra={"degraded": True},
-                )
 
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:

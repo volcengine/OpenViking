@@ -522,6 +522,9 @@ Hybrid 是否支持图片取决于 dense 通道。图文完整输入进入 dense
 
 **vikingdb provider 配置示例:**
 
+使用临时 STS 凭证时，请在 `ak` 和 `sk` 之外设置 `session_token`。可通过 `host` 覆盖地域默认的
+向量化端点。BytePlus 柔佛地域的向量化主机名为 `api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com`。
+
 ```json
 {
   "embedding": {
@@ -2100,7 +2103,14 @@ Python 的 `cache_runtime()` 仅能取得由这些消费者创建的 Runtime；
 
 <details>
 <summary><b>volcengine vikingDB</b></summary>
-支持火山引擎云上部署的 VikingDB
+支持火山引擎和 BytePlus 云上部署的 VikingDB。
+
+使用 AK/SK 鉴权时，通过 `storage.vectordb.volcengine.console_host` 指定管理面主机，
+通过 `storage.vectordb.volcengine.host` 指定数据面主机。请填写不带协议的主机名。
+未指定的主机使用对应地域的火山引擎默认端点。对于 BytePlus 柔佛地域（`ap-southeast-1`），
+管理面和数据面主机分别为 `vikingdb.ap-southeast-1.byteplusapi.com` 和
+`api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com`。使用临时 AK/SK 凭证时，请同时设置
+`session_token`。
 
 ```json
 {
