@@ -29,10 +29,8 @@ from openviking.service.compile_targets import (
     is_versioned,
     new_record,
     parse_schedule,
-    run_view,
     split_control_args,
     validate_compile_name,
-    validate_task_id,
 )
 from openviking.service.external_task_service import (
     ENQUEUE_FAILURE,
@@ -759,7 +757,7 @@ class CompileService:
         assert normalized.to is not None
         CompileLifecycle.validate_layout(normalized.to, normalized.from_)
         payload, private_payload = self._split_payload(normalized)
-        payload["compile"] = {}
+        payload["compile"] = {"trigger": trigger}
         if trigger == "scheduled":
             payload["compile"]["scheduled_slot"] = scheduled_slot
         if record is not None:
@@ -773,7 +771,6 @@ class CompileService:
                 update_schedule=record["update_schedule"],
                 input_signature=execution_signature(record),
             )
-        private_payload["compile_execution_format"] = "task"
 
         async def record_created(task: TaskRecord) -> None:
             await self._require_lifecycle().record_queued(task, locked_record=locked_record)
@@ -782,9 +779,7 @@ class CompileService:
         # Private task state retains the authenticated executor for asynchronous filesystem access.
         return await self._tasks.create(
             self.task_type,
-            resource_id=str(record["config_id"])
-            if record is not None
-            else ", ".join(normalized.from_),
+            resource_id=", ".join(normalized.from_),
             payload=payload,
             private_payload=private_payload,
             connection={**connection, "role": str(ctx.role), "group_ids": list(ctx.group_ids)},
@@ -795,22 +790,6 @@ class CompileService:
             if idempotency_key or compile_name
             else None,
             on_task_created=record_created if compile_name else None,
-            metadata={
-                "compile": {
-                    "trigger": "initial"
-                    if record is not None and record["last_run_time"] is None
-                    else trigger,
-                    **dict.fromkeys(
-                        (
-                            "mode",
-                            "base_snapshot",
-                            "start_snapshot",
-                            "finish_snapshot",
-                            "skill_snapshot_id",
-                        )
-                    ),
-                },
-            },
             retry_enqueue=trigger == "scheduled",
         )
 
@@ -1101,7 +1080,7 @@ class CompileService:
                 )
             else:
                 replacement["execution_context"].pop("private_args", None)
-            for field in ("config_id", "task_first_create_time", "last_run_time"):
+            for field in ("task_first_create_time", "last_run_time"):
                 replacement[field] = record[field]
             if (record["auto_update"], record["update_schedule"]) == (
                 replacement["auto_update"],
@@ -1182,27 +1161,9 @@ class CompileService:
         self, compile_name: str, ctx: RequestContext, limit: int, cursor: str | None
     ) -> dict[str, Any]:
         """Page the caller's run history."""
-        from openviking.service.task_tracker import get_task_tracker
-
-        record = await self._require_lifecycle().get_config(
-            ctx.account_id, ctx.user.user_id, compile_name
+        runs = await self._require_lifecycle().store.list_runs(
+            ctx.account_id, ctx.user.user_id, compile_name, cursor=cursor, limit=limit + 1
         )
-        if record is None:
-            return {"runs": [], "next_cursor": None}
-        tracker = get_task_tracker()
-        scope = {
-            "account_id": ctx.account_id,
-            "task_type": "compile",
-            "resource_id": str(record["config_id"]),
-        }
-        before = None
-        if cursor:
-            anchor = await tracker.list_tasks(**scope, task_id=validate_task_id(cursor), limit=1)
-            if not anchor:
-                raise InvalidArgumentError("Run cursor does not exist")
-            before = anchor[0].created_at, anchor[0].task_id
-        tasks = await tracker.list_tasks(**scope, before=before, limit=limit + 1)
-        runs = [run_view(task) for task in tasks]
         page = runs[:limit]
         return {"runs": page, "next_cursor": page[-1]["task_id"] if len(runs) > limit else None}
 

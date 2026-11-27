@@ -331,12 +331,14 @@ class TaskTracker:
 
     TTL_COMPLETED = 86_400
     TTL_FAILED = 604_800
-    CLEANUP_INTERVAL = 3600
+    CLEANUP_INTERVAL = 300
     CLEANUP_BATCH = 256
 
     def __init__(self, store: TaskWorkStore) -> None:
         self._store = store
         self._cleanup_task: Optional[asyncio.Task[Any]] = None
+        # Bound after Compile storage initialization; shares the cleanup clock and batch size.
+        self.compile_history_cleanup: Optional[Callable[..., Awaitable[int]]] = None
         self._cancel_poll_task: Optional[asyncio.Task[Any]] = None
         self._work_index = TaskWorkIndex()
         self._running: ContextVar[tuple[str, str, str, bool] | None] = ContextVar(
@@ -476,6 +478,11 @@ class TaskTracker:
 
     async def delete_expired(self) -> DeleteExpiredResult:
         now = time.time()
+        if self.compile_history_cleanup is not None:
+            try:
+                await self.compile_history_cleanup(now=now, limit=self.CLEANUP_BATCH)
+            except Exception:
+                logger.exception("[TaskTracker] Compile history cleanup error")
         result = await self._store.delete_expired(
             TaskRetentionPolicy(self.TTL_COMPLETED, self.TTL_FAILED),
             now=now,
@@ -957,7 +964,6 @@ class TaskTracker:
         user_id: Optional[str] = None,
         include_internal: bool = True,
         *,
-        task_id: Optional[str] = None,
         before: tuple[float, str] | None = None,
         q: Optional[str] = None,
     ) -> List[TaskRecord]:
@@ -973,13 +979,11 @@ class TaskTracker:
             before=before,
             include_internal=include_internal,
             q=q,
-            **({"task_id": task_id} if task_id is not None else {}),
         )
         visible = {
             task.task_id: task
             for task in records
-            if (task_id is None or task.task_id == task_id)
-            and (before is None or (task.created_at, task.task_id) < before)
+            if (before is None or (task.created_at, task.task_id) < before)
             and matches(
                 task.to_dict(),
                 task_type=task_type,

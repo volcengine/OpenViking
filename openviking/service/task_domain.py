@@ -108,13 +108,8 @@ class TaskPatch:
 class TaskRetentionPolicy:
     completed_seconds: float
     failed_seconds: float
-    compile_seconds: float = 7 * 24 * 3600
 
-    def is_expired(self, status: str, updated_at: float, now: float, task_type: str = "") -> bool:
-        if task_type == "compile":
-            return status in ("completed", "failed", "cancelled") and (
-                now - updated_at > self.compile_seconds
-            )
+    def is_expired(self, status: str, updated_at: float, now: float) -> bool:
         if status in ("completed", "cancelled"):
             return now - updated_at > self.completed_seconds
         return status == "failed" and now - updated_at > self.failed_seconds
@@ -252,8 +247,6 @@ class TaskRecord:
     auth: Dict[str, Any] = field(default_factory=dict, repr=False)
     execution_events: Optional[Any] = None
     processing_seconds: Optional[float] = None
-    started_at: Optional[float] = None
-    finished_at: Optional[float] = None
     _extra_fields: Dict[str, Any] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -275,8 +268,6 @@ class TaskRecord:
             "status": self.status.value,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "started_at": self.started_at,
-            "finished_at": self.finished_at,
             "processing_seconds": self.processing_seconds,
             "resource_id": self.resource_id,
             "meta": sanitize_task_result(public_meta),
@@ -497,6 +488,4 @@ def finalize_task(task: TaskRecord, works: Iterable[WorkRecord]) -> bool:
         task.stage = task.status.value
         task.auth = {}
     task.processing_seconds = processing_seconds(works)
-    if task.finished_at is None:
-        task.finished_at = time.time()
     return True

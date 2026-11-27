@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Shared relational persistence for Compile configurations."""
+"""Shared relational persistence for Compile configurations and runs."""
 
 from __future__ import annotations
 
@@ -18,11 +18,14 @@ from openviking.core.identifiers import (
     validate_identifier_length,
     validate_user_id,
 )
-from openviking.service.compile_store_sql_schema import make_compile_table
+from openviking.service.compile_store_sql_schema import make_compile_tables
 from openviking.service.compile_targets import (
+    RUN_FIELDS,
     STATE_FIELDS,
+    TERMINAL,
     same_json_value,
     validate_compile_name,
+    validate_task_id,
 )
 from openviking.storage.sql_runtime import (
     get_shared_sql_runtime,
@@ -34,7 +37,16 @@ from openviking_cli.exceptions import ConflictError, InvalidArgumentError, NotFo
 from openviking_cli.utils.config.config_utils import normalize_service_name
 
 _PAGE_SIZE = 128
+_RUN_STATUSES = TERMINAL | {"queued", "running", "committing"}
 _SCHEDULE = ("frequency", "hour", "minute", "weekday")
+_RUN_META = (
+    "trigger",
+    "mode",
+    "base_snapshot",
+    "start_snapshot",
+    "finish_snapshot",
+    "skill_snapshot_id",
+)
 _CONFIG_COLUMNS = {key: (key,) for key in sorted(STATE_FIELDS)}
 _CONFIG_COLUMNS.update(
     {
@@ -44,6 +56,20 @@ _CONFIG_COLUMNS.update(
         "update_schedule": tuple(f"schedule_{key}" for key in _SCHEDULE),
     }
 )
+_RUN_COLUMNS = {
+    key: (key,)
+    for key in (
+        "task_id",
+        "status",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "params",
+        "result",
+        "error",
+    )
+}
+_RUN_COLUMNS.update(actor=("actor_user_id",), meta=_RUN_META)
 
 
 def _require_fields(values: Mapping[str, Any], fields: Mapping[str, tuple[str, ...]]) -> None:
@@ -67,6 +93,8 @@ def _decode(row, fields, keys) -> dict:
                 for part, name in zip(_SCHEDULE, names, strict=True)
                 if row[name] is not None
             } or None
+        elif key == "meta":
+            result[key] = {name: row[name] for name in names}
         else:
             result[key] = row[names[0]]
     return result
@@ -102,13 +130,30 @@ def _config_values(changes: Mapping[str, Any], owner: str) -> dict:
     return values
 
 
-def _after(columns, values):
+def _run_values(changes: Mapping[str, Any], dialect: str) -> dict:
+    _require_fields(changes, _RUN_COLUMNS)
+    if "status" in changes and changes["status"] not in _RUN_STATUSES:
+        raise InvalidArgumentError("Invalid Compile run status")
+    values = {}
+    for key, value in changes.items():
+        if key == "meta":
+            if value.keys() - set(_RUN_META):
+                raise InvalidArgumentError("Unexpected Compile run metadata")
+            values.update({name: value.get(name) for name in _RUN_META})
+        else:
+            if key == "error" and dialect == "postgresql" and isinstance(value, str):
+                value = value.replace("\x00", r"\u0000")
+            values[_RUN_COLUMNS[key][0]] = value
+    return values
+
+
+def _after(columns, values, descending: bool = False):
     """Expand lexicographic keyset comparison for MySQL 5.7 range optimization."""
     return or_(
         *(
             and_(
                 *(column == value for column, value in zip(columns[:i], values[:i], strict=True)),
-                column > values[i],
+                column < values[i] if descending else column > values[i],
             )
             for i, column in enumerate(columns)
         )
@@ -134,7 +179,9 @@ class SQLCompileStore:
 
     def __init__(self, params: dict[str, object], service_name: str) -> None:
         options = dict(params)
-        self._configs = make_compile_table(options.pop("table", "ov_compile"), self.dialect)
+        self._configs, self._runs = make_compile_tables(
+            options.pop("table", "ov_compile"), self.dialect
+        )
         self._service_name = normalize_service_name(service_name)
         if len(self._service_name) > 255:
             raise ValueError("Compile SQL service_name must not exceed 255 characters")
@@ -176,7 +223,8 @@ class SQLCompileStore:
             await self._prepare_schema(engine)
             sessions = async_sessionmaker(engine, class_=SQLAsyncSession, expire_on_commit=False)
             async with sessions() as session:
-                await session.execute(select(*self._configs.c).limit(0))
+                for table in (self._configs, self._runs):
+                    await session.execute(select(*table.c).limit(0))
         except ImportError:
             await wait_sql_cleanup(cleanup())
             raise RuntimeError(
@@ -231,6 +279,15 @@ class SQLCompileStore:
             "compile_name": validate_compile_name(name),
         }
 
+    def _config_ids(self, key):
+        table = self._configs
+        return select(table.c.config_id).where(*_where_key(table, key))
+
+    def _run_scope(self, key, task_id: str | None = None):
+        c = self._runs.c
+        scope = (c.config_id == self._config_ids(key).scalar_subquery(),)
+        return (*scope, c.task_id == validate_task_id(task_id)) if task_id is not None else scope
+
     async def _insert(self, table, values) -> bool:
         try:
             async with self._write() as session:
@@ -282,7 +339,6 @@ class SQLCompileStore:
             if row is None:
                 raise NotFoundError(compile_name, "compile configuration")
             current = _decode(row, _CONFIG_COLUMNS, keys)
-            current["config_id"] = row["config_id"]
             if any(not same_json_value(current.get(k), v) for k, v in fields.items()):
                 return False
             if check_schedule:
@@ -300,15 +356,21 @@ class SQLCompileStore:
         """Delete an account's configs, optionally limited to one owner, in this service."""
         if not account_id:
             raise ValueError("Compile account cleanup requires a non-empty account_id")
-        configs = self._configs
+        configs, runs = self._configs, self._runs
         scope = (
             configs.c.service_name == self._service_name,
             configs.c.account_id == account_id,
         )
         if owner_user_id is not None:
             scope += (configs.c.owner_user_id == owner_user_id,)
+        lock_configs = select(configs.c.config_id).where(*scope).order_by(configs.c.config_id)
         async with self._write() as session:
-            await session.execute(delete(configs).where(*scope))
+            # Match create_run's lock order so registration cannot leave an orphan.
+            config_ids = (await session.scalars(lock_configs.with_for_update())).all()
+            for start in range(0, len(config_ids), _PAGE_SIZE):
+                batch = config_ids[start : start + _PAGE_SIZE]
+                await session.execute(delete(runs).where(runs.c.config_id.in_(batch)))
+                await session.execute(delete(configs).where(configs.c.config_id.in_(batch)))
 
     async def list_configs(
         self,
@@ -350,7 +412,6 @@ class SQLCompileStore:
                 else c.compile_name > name
             )
         query = select(
-            c.config_id,
             c.account_id,
             c.owner_user_id,
             c.compile_name,
@@ -365,7 +426,6 @@ class SQLCompileStore:
             rows = await self._sql_runtime.run(lambda statement=page: self._fetch(statement))
             for row in rows:
                 record = _decode(row, _CONFIG_COLUMNS, _CONFIG_COLUMNS)
-                record["config_id"] = row["config_id"]
                 record["execution_context"]["owner_user_id"] = row["owner_user_id"]
                 yield row["account_id"], row["compile_name"], record
             if len(rows) < batch_size or not order:
@@ -377,3 +437,189 @@ class SQLCompileStore:
     async def _fetch(self, statement):
         async with self._session() as session:
             return (await session.execute(statement)).mappings().all()
+
+    async def _list_run_keys(
+        self,
+        finished_before: float | None,
+        statuses: frozenset[str] | None,
+        limit: int,
+        after_key: tuple[float, int, str] | None,
+    ) -> list[dict]:
+        configs, runs = self._configs, self._runs
+        c, r = configs.c, runs.c
+        order = (r.finished_at, r.config_id, r.task_id)
+        service_config = (
+            select(c.config_id)
+            .where(c.config_id == r.config_id, c.service_name == self._service_name)
+            .correlate(runs)
+        )
+        query = (
+            select(*order)
+            .where(service_config.exists(), r.finished_at >= 0)
+            .order_by(*order)
+            .limit(limit)
+        )
+        if finished_before is not None:
+            query = query.where(r.finished_at < finished_before)
+        if statuses is not None:
+            query = query.where(r.status.in_(statuses))
+        if after_key is not None:
+            query = query.where(r.finished_at >= after_key[0], _after(order, after_key))
+        # Page Run keys before joining their owners so the expiry range drives the scan.
+        page = query.subquery()
+        keys = (page.c.finished_at, page.c.config_id, page.c.task_id)
+        statement = (
+            select(c.account_id, c.owner_user_id, c.compile_name, *keys)
+            .select_from(page.join(configs, page.c.config_id == c.config_id))
+            .order_by(*keys)
+        )
+        return [dict(row) for row in await self._fetch(statement)]
+
+    async def list_runs(
+        self,
+        account_id: str | None = None,
+        owner_user_id: str | None = None,
+        compile_name: str | None = None,
+        task_id: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        keys_only: bool = False,
+        finished_before: float | None = None,
+        statuses: frozenset[str] | None = None,
+        after_key: tuple[float, int, str] | None = None,
+    ) -> list[dict]:
+        if limit is not None and limit <= 0:
+            return []
+        if keys_only and account_id is owner_user_id is compile_name is None:
+            if limit is None or task_id is not None or cursor is not None:
+                raise InvalidArgumentError(
+                    "Service-wide Run keys require a limit and use after_key for pagination"
+                )
+            return await self._list_run_keys(
+                finished_before=finished_before, statuses=statuses, limit=limit, after_key=after_key
+            )
+        if account_id is None or owner_user_id is None or compile_name is None:
+            raise InvalidArgumentError("A Compile configuration is required for run history")
+        if (
+            keys_only
+            or finished_before is not None
+            or statuses is not None
+            or after_key is not None
+        ):
+            raise InvalidArgumentError("Invalid filters for configuration run history")
+        table = self._runs
+        c = table.c
+        key = self._key(account_id, owner_user_id, compile_name)
+        where = self._run_scope(key, task_id)
+        query = select(*_project(table, _RUN_COLUMNS, _RUN_COLUMNS)).where(*where)
+        async with self._session() as session:
+            if task_id is None:
+                if cursor:
+                    cursor_error = None
+                    try:
+                        cursor_id = validate_task_id(cursor)
+                    except InvalidArgumentError as exc:
+                        cursor_error = exc
+                        anchor = None
+                    else:
+                        anchor = await session.scalar(
+                            select(c.created_at).where(*where, c.task_id == cursor_id)
+                        )
+                    if anchor is None:
+                        if await session.scalar(select(c.task_id).where(*where).limit(1)) is None:
+                            return []
+                        if cursor_error is not None:
+                            raise cursor_error
+                        raise InvalidArgumentError("Run cursor does not exist")
+                    query = query.where(
+                        _after((c.created_at, c.task_id), (anchor, cursor), descending=True)
+                    )
+                query = query.order_by(c.created_at.desc(), c.task_id.desc()).limit(limit)
+            rows = (await session.execute(query)).mappings().all()
+        return [_decode(row, _RUN_COLUMNS, _RUN_COLUMNS) for row in rows]
+
+    async def create_run(
+        self, account_id: str, owner_user_id: str, compile_name: str, run: dict
+    ) -> bool:
+        key = self._key(account_id, owner_user_id, compile_name)
+        task_id = validate_task_id(run["task_id"])
+        _validate_id(run["actor"], "user_id", validate_user_id)
+        values = _run_values(run, self.dialect)
+        runs = self._runs
+        async with self._write() as session:
+            # Serialize Run registration for this config.
+            config_id = await session.scalar(self._config_ids(key).with_for_update())
+            if config_id is None:
+                raise NotFoundError(compile_name, "compile configuration")
+            existing = await session.scalar(
+                select(runs.c.task_id).where(
+                    runs.c.config_id == config_id, runs.c.task_id == task_id
+                )
+            )
+            if existing is not None:
+                return False
+            await session.execute(insert(runs).values(config_id=config_id, **values))
+        return True
+
+    async def update_run(
+        self,
+        account_id: str,
+        owner_user_id: str,
+        compile_name: str,
+        task_id: str,
+        changes: dict,
+        expected: Mapping[str, Any] | None = None,
+        replace: bool = False,
+    ) -> bool:
+        if replace and RUN_FIELDS - changes.keys():
+            raise InvalidArgumentError("Compile run replacement requires a complete record")
+        table = self._runs
+        key = self._key(account_id, owner_user_id, compile_name)
+        async with self._write() as session:
+            where = await self._matching_run_key(session, key, task_id, expected or {})
+            if where is None:
+                return False
+            if changes.get("task_id", task_id) != task_id:
+                raise InvalidArgumentError("Compile run task ID cannot change")
+            values = _run_values(changes, self.dialect)
+            values.pop("task_id", None)
+            if "actor" in changes:
+                _validate_id(changes["actor"], "user_id", validate_user_id)
+            if values:
+                await session.execute(update(table).where(*where).values(**values))
+        return True
+
+    async def delete_run(
+        self,
+        account_id: str,
+        owner_user_id: str,
+        compile_name: str,
+        task_id: str,
+        expected: Mapping[str, Any],
+    ) -> bool:
+        key = self._key(account_id, owner_user_id, compile_name)
+        table = self._runs
+        async with self._write() as session:
+            where = await self._matching_run_key(session, key, task_id, expected)
+            if where is None:
+                return False
+            return (await session.execute(delete(table).where(*where))).rowcount > 0
+
+    async def _matching_run_key(self, session, key, task_id, expected):
+        table = self._runs
+        columns = [table.c.config_id, *_project(table, _RUN_COLUMNS, expected)]
+        row = (
+            (
+                await session.execute(
+                    select(*columns).where(*self._run_scope(key, task_id)).with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        current = _decode(row, _RUN_COLUMNS, expected)
+        if not all(current.get(k) == v for k, v in expected.items()):
+            return None
+        return (table.c.config_id == row["config_id"], table.c.task_id == task_id)

@@ -12,9 +12,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from openviking.server.auth import get_request_context
+from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
-from openviking.service.task_domain import TaskRecord
+from openviking.service.task_domain import TaskRecord, TaskStatus
 from openviking.service.task_store import SYSTEM_TASK_ACCOUNT_ID, SYSTEM_TASK_USER_ID
 from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import (
@@ -93,6 +94,14 @@ async def cancel_task(
             code="NOT_FOUND",
             details={"resource": task_id, "type": "task"},
         )
+    if (
+        task.task_type == "compile"
+        and task.status == TaskStatus.CANCELLED
+        and task.stage == "queued"
+    ):
+        lifecycle = get_service().compile.lifecycle
+        if lifecycle is not None:
+            await lifecycle.cancel_queued_run(task)
     return Response(status="ok", result=task.to_dict())
 
 

@@ -27,3 +27,27 @@ CREATE TABLE ov_compile_configs (
     CONSTRAINT uq_ov_compile_configs_name
         UNIQUE (service_name, account_id, compile_name, owner_user_id)
 );
+
+CREATE TABLE ov_compile_runs (
+    config_id BIGINT NOT NULL,
+    task_id VARCHAR(68) COLLATE "C" NOT NULL,
+    actor_user_id VARCHAR(255) COLLATE "C" NOT NULL CHECK (actor_user_id ~ '^[A-Za-z0-9_.@-]+$'),
+    status VARCHAR(16) COLLATE "C" NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL,
+    started_at DOUBLE PRECISION NULL,
+    finished_at DOUBLE PRECISION NULL,
+    "trigger" VARCHAR(16) COLLATE "C" NOT NULL,
+    mode VARCHAR(16) COLLATE "C" NULL,
+    base_snapshot VARCHAR(255) COLLATE "C" NULL,
+    start_snapshot VARCHAR(255) COLLATE "C" NULL,
+    finish_snapshot VARCHAR(255) COLLATE "C" NULL,
+    skill_snapshot_id VARCHAR(255) COLLATE "C" NULL,
+    params JSONB NOT NULL,
+    result JSONB NULL,
+    error TEXT NULL,
+    PRIMARY KEY (config_id, task_id)
+);
+CREATE INDEX ix_ov_compile_runs_history
+    ON ov_compile_runs (config_id, created_at, task_id);
+CREATE INDEX ix_ov_compile_runs_expiry
+    ON ov_compile_runs (finished_at, config_id, task_id);

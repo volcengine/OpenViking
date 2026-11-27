@@ -198,7 +198,7 @@ Python 示例使用 `SyncHTTPClient`；使用 `AsyncHTTPClient` 时添加 `await
 
 手动与定时提交均更新 `last_run_time`。`last_triggered_slot`、`next_triggered_slot` 仅用于调度，手动执行不推进 slot。
 
-run 是 Task 的视图，包含 `task_id`、`actor`、`status`、`created_at`、`started_at`、`finished_at`、`params`、`result`、`error`、`meta`。`started_at` 记录首次进入运行态的时间，`finished_at` 记录 Work 收敛后首次进入终态的时间；开始前取消的任务 `started_at` 为 null。run 状态为 `queued`、`running`、`committing`、`cancelling`、`completed`、`failed`、`cancelled`。`params` 是本次受理时冻结的完整公开输入及调度配置；`result` 包含 `created`、`updated`、`deleted` 数量。`meta` 仅包含：
+run 冻结保存 `task_id`、`actor`、`status`、`created_at`、`started_at`、`finished_at`、`params`、`result`、`error`、`meta`。`params` 是本次受理时的完整公开输入及调度配置；`result` 包含 `created`、`updated`、`deleted` 数量。`meta` 仅包含：
 
 | 字段 | 含义 |
 |------|------|
@@ -210,8 +210,6 @@ run 是 Task 的视图，包含 `task_id`、`actor`、`status`、`created_at`、
 | `skill_snapshot_id` | Skill 快照；系统 Skill 为 null |
 
 无变化时可复用开始快照。失败、取消不推进成功源基线。公开的配置、运行记录和任务响应不返回执行凭据。
-
-命名执行历史通过配置 ID 关联，也包含其他用户代执行的任务。所有终态 Compile Task 及其历史通过 Task 存储保留七天。
 
 VikingBot 在已知来源、worker 或写入失败仍未解决时返回 `result.completion_status: "partial"`。
 已确认输出会保留，命名 Compile 保留原成功源基线，使遗漏且未再次变化的输入仍能进入下一轮。

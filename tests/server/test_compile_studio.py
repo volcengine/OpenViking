@@ -740,8 +740,8 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
     tracker = TaskTracker(store)
     owner = {"account_id": "acme", "user_id": "alice"}
     for task_id, status, days in [
-        ("expired-complete", TaskStatus.COMPLETED, 8),
-        ("expired-cancelled", TaskStatus.CANCELLED, 8),
+        ("expired-complete", TaskStatus.COMPLETED, 2),
+        ("expired-cancelled", TaskStatus.CANCELLED, 2),
         ("expired-failed", TaskStatus.FAILED, 8),
         ("recent-failed", TaskStatus.FAILED, 2),
         ("active", TaskStatus.RUNNING, 8),
@@ -754,7 +754,9 @@ async def test_cursor_prunes_cold_expired_records_without_loading_cache():
         agfs.files[path] = json.dumps(payload).encode()
     store = PersistentTaskStore(agfs)
     tracker = TaskTracker(store)
+    tracker.compile_history_cleanup = AsyncMock(side_effect=OSError("history cleanup"))
     await tracker.delete_expired()
+    tracker.compile_history_cleanup.assert_awaited_once()
     page = await asyncio.wait_for(
         tracker.list_tasks(
             **owner,
@@ -785,7 +787,7 @@ async def test_cursor_cleanup_preserves_recreated_task(monkeypatch):
     await tracker.complete(task.task_id, {"original": True}, **owner)
     path = f"/local/acme/_system/tasks/alice/{task.task_id}.json"
     payload = json.loads(agfs.files[path])
-    payload["updated_at"] = time.time() - 8 * 86400
+    payload["updated_at"] = time.time() - 2 * 86400
     agfs.files[path] = json.dumps(payload).encode()
 
     store = PersistentTaskStore(agfs)

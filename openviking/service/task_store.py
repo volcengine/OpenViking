@@ -205,7 +205,6 @@ class TaskWorkStore(Protocol):
         account_id: Optional[str] = None,
         *,
         user_id: Optional[str] = None,
-        task_id: Optional[str] = None,
         task_type: Optional[str] = None,
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -592,8 +591,6 @@ class PersistentTaskStore(TaskWorkStore):
             if task.status not in (TaskStatus.PENDING, TaskStatus.RUNNING):
                 return _task_state_rejection(task.status.value, "Task cannot be started")
             task.status = TaskStatus.RUNNING
-            if task.started_at is None:
-                task.started_at = time.time()
             if stage is not None:
                 task.stage = stage
             return StoreOperationResult.applied()
@@ -893,8 +890,6 @@ class PersistentTaskStore(TaskWorkStore):
             work.finished_at = None
             work.updated_at = now
             task.status = TaskStatus.RUNNING
-            if task.started_at is None:
-                task.started_at = now
             return _WorkMutationResult(True, work)
 
         return await self._mutate_work(task_id, work_id, account_id, user_id, mutate)
@@ -1125,7 +1120,6 @@ class PersistentTaskStore(TaskWorkStore):
         account_id: Optional[str] = None,
         *,
         user_id: Optional[str] = None,
-        task_id: Optional[str] = None,
         task_type: Optional[str] = None,
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -1143,26 +1137,10 @@ class PersistentTaskStore(TaskWorkStore):
 
         if limit is not None and limit <= 0:
             return []
-        if task_id is not None:
-            task = await self.get_task(task_id, account_id=account_id, user_id=user_id)
-            if task is not None:
-                if (
-                    before is not None and (task.created_at, task.task_id) >= before
-                ) or not matches(
-                    task.to_dict(),
-                    task_type=task_type,
-                    status=status,
-                    resource_id=resource_id,
-                    include_internal=include_internal,
-                    q=q,
-                ):
-                    return []
-                return [task]
         if account_id and user_id and limit is not None:
             return await self._list_owner_page(
                 account_id,
                 user_id=user_id,
-                task_id=task_id,
                 limit=limit,
                 before=before,
                 task_type=task_type,
@@ -1194,8 +1172,7 @@ class PersistentTaskStore(TaskWorkStore):
         tasks = [
             task
             for task in tasks
-            if (task_id is None or task.task_id == task_id)
-            and (before is None or (task.created_at, task.task_id) < before)
+            if (before is None or (task.created_at, task.task_id) < before)
             and matches(
                 task.to_dict(),
                 task_type=task_type,
@@ -1242,7 +1219,6 @@ class PersistentTaskStore(TaskWorkStore):
         account_id: str,
         *,
         user_id: str,
-        task_id: Optional[str],
         limit: int,
         before: tuple[float, str] | None = None,
         task_type: Optional[str],
@@ -1275,8 +1251,6 @@ class PersistentTaskStore(TaskWorkStore):
                 if cached is not None:
                     record = self._copy_task(cached, self._work_sets.get(owner))
             record.execution_events = None
-            if task_id is not None and record.task_id != task_id:
-                continue
             key = (record.created_at, record.task_id)
             if before is not None and key >= before:
                 continue
@@ -1469,7 +1443,6 @@ class PersistentTaskStore(TaskWorkStore):
                         str(payload.get("status", "")),
                         float(payload.get("updated_at", 0.0)),
                         now,
-                        str(payload.get("task_type", "")),
                     )
                 except (TypeError, ValueError):
                     expired = False
@@ -1488,9 +1461,7 @@ class PersistentTaskStore(TaskWorkStore):
                     work_set = self._work_sets.get(owner)
                     if task is None or (work_set is not None and work_set.open_count):
                         continue
-                    if not policy.is_expired(
-                        task.status.value, task.updated_at, now, task.task_type
-                    ):
+                    if not policy.is_expired(task.status.value, task.updated_at, now):
                         continue
                     try:
                         await self._delete_task_unlocked(owner, task_exists=True)
@@ -1923,8 +1894,6 @@ def _task_to_payload(task: TaskRecord) -> Dict[str, Any]:
         "status": task.status.value,
         "created_at": task.created_at,
         "updated_at": task.updated_at,
-        "started_at": task.started_at,
-        "finished_at": task.finished_at,
         "processing_seconds": task.processing_seconds,
         "resource_id": task.resource_id,
         "account_id": task.account_id,

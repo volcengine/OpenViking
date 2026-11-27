@@ -1411,7 +1411,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 | `vectordb` | object | 向量库存储配置 | {} |
 | `task_store` | object | 持久化 Task/Work 后端配置 | `{"provider":"file"}` |
 | `watch_store` | object | Watch 存储：`file`（单进程）、`sqlite`（同机）或 `mysql` / `postgres`（多节点共享） | `{"provider":"file"}` |
-| `compile_store` | object | Compile 配置的存储后端 | `{"provider":"file"}` |
+| `compile_store` | object | Compile 配置和运行历史的存储后端 | `{"provider":"file"}` |
 
 
 ```json
@@ -1512,24 +1512,16 @@ Task/Work/Event 更新使用 READ COMMITTED 事务，先锁 Task 行，再修改
 
 Task 表结构变更通过 `openviking/service/sql/changes/` 下的独立文件维护，
 已发布的 init 文件保持不变。运维根据后端和当前表结构选择增量脚本，在升级前执行。
-新增可空的 `started_at` / `finished_at` 字段时，MySQL 使用
-`0002_task_lifecycle_times.sql`，PostgreSQL 使用
-`0002_task_lifecycle_times_postgres.sql`。新库也需在 init 后执行相应的增量脚本；
-两个字段都已存在时跳过本次变更。自定义表名前缀需替换脚本中的 `ov_tasks`。
-
-SQLite 在启动时自动建表，并在写事务内补齐这两个可空时间字段。
-已有任务的时间保持 null，直到发生相应的生命周期状态转换。
+自定义表名前缀需替换脚本中的 `ov_tasks`。SQLite 在启动时自动建表。
 
 #### Compile store
 
 在 `ov.conf` 中设置 `storage.compile_store`。这项配置只影响已保存的 Compile
-配置。执行历史使用 `storage.task_store`，所有终态 Compile 任务保留七天，
-由每小时运行的 Task 清理统一回收。
+配置和运行历史；Task/Work 存储独立配置。
 
-从文件 Run 历史版本升级时，应保留原有 Task 存储和 Compile 工作目录。
-在途执行继续使用原 Run 文件或私有检查点收尾，包括快照回滚与基线推进；
-新执行的历史保存在 Task 中。旧终态历史不会迁移，也不会并入新的运行列表。
-这项兼容不包含 provider 迁移、新旧版本混合写入，或补造旧检查点缺失的基线撤销记录。
+File 后端沿用原有配置和 Run 路径。命名执行的快照和结果保存在选定的
+Compile 存储中，一次性执行在 Task 中保留私有恢复检查点。
+切换 provider 不会自动迁移已有配置或运行记录。
 
 | `provider` | 部署方式 |
 |------------|----------|
@@ -1544,7 +1536,7 @@ MySQL 和 PostgreSQL 按需配置 `params.host`、`params.port`、`params.user`�
 ASCII 字母开头，只含 ASCII 字母、数字或下划线；MySQL 最多 51 个字符，
 PostgreSQL 最多 47 个字符。共享 Compile 数据的实例须使用相同的数据库、表前缀和 `service_name`。
 
-切换后端不会自动迁移已有配置。已有部署切换前应先停止 Compile 写入并迁移配置数据。
+切换后端不会自动迁移已有配置或历史。已有部署切换前应先停止 Compile 写入并迁移数据。
 初始化脚本和 SQLite 自动建表均不会升级已有 SQL 表。
 
 #### watch_store

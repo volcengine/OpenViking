@@ -1407,7 +1407,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 | `vectordb` | object | Vector database storage configuration | {} |
 | `task_store` | object | Durable Task/Work backend configuration | `{"provider":"file"}` |
 | `watch_store` | object | Watch store: `file` (single process), `sqlite` (one host), or `mysql` / `postgres` (shared) | `{"provider":"file"}` |
-| `compile_store` | object | Compile configuration storage | `{"provider":"file"}` |
+| `compile_store` | object | Compile configuration and run history storage | `{"provider":"file"}` |
 
 
 ```json
@@ -1514,28 +1514,18 @@ tasks; plan the data migration before switching a deployed store.
 Task schema changes are maintained as separate files under
 `openviking/service/sql/changes/`; published init files remain unchanged.
 Operators select the scripts for their backend and current schema and execute
-them before upgrading. For the nullable `started_at` / `finished_at` columns, use
-`0002_task_lifecycle_times.sql` on MySQL or
-`0002_task_lifecycle_times_postgres.sql` on PostgreSQL. Fresh databases also apply
-the relevant scripts after init; skip this change if both columns already exist.
-Replace `ov_tasks` when using a custom table prefix.
-
-SQLite creates its tables and upgrades the two nullable lifecycle columns
-automatically at startup, under a write transaction. Existing timestamps remain
-null until the corresponding lifecycle transition occurs.
+them before upgrading. Replace `ov_tasks` when using a custom table prefix.
+SQLite creates its tables automatically at startup.
 
 #### Compile store
 
 Configure `storage.compile_store` in `ov.conf`. This setting controls saved
-Compile configurations. Execution history uses `storage.task_store`; all terminal
-Compile tasks are retained for seven days and cleaned up by the hourly Task cleanup.
+Compile configurations and their run history; Task/Work storage is configured separately.
 
-During an upgrade from file-backed Run history, keep the existing Task store and
-Compile workspace available. In-flight executions finish using their original Run
-files or private checkpoints, including snapshot rollback and baseline publication.
-New executions store history in Task. Old terminal history is not migrated or
-included in the new run listing. This compatibility does not migrate providers,
-support mixed old/new writers, or reconstruct baseline undo missing from old checkpoints.
+The file provider retains the original configuration and Run paths. Named
+executions persist their snapshots and outcomes in the selected Compile store;
+one-off executions retain private recovery checkpoints in Task. Switching
+providers does not migrate existing configurations or runs.
 
 | `provider` | Setup |
 |------------|-------|
@@ -1552,7 +1542,7 @@ must start with an ASCII letter, contain only ASCII letters, digits, or
 underscores, and fit within 51 characters on MySQL or 47 on PostgreSQL. Instances
 sharing Compile data must use the same database, table prefix, and `service_name`.
 
-Changing providers does not migrate existing configurations. Stop
+Changing providers does not migrate existing configurations or history. Stop
 Compile writes and migrate existing data before switching a deployment. The
 initialization scripts and SQLite startup do not upgrade pre-existing SQL tables.
 

@@ -663,8 +663,6 @@ async def test_public_serialization_skips_private_payloads(tracker: TaskTracker)
     public = task.to_dict()
     assert set(public) == {
         "processing_seconds",
-        "started_at",
-        "finished_at",
         "task_id",
         "task_type",
         "status",

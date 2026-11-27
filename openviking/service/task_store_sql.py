@@ -260,8 +260,6 @@ class SQLTaskWorkStore(TaskWorkStore):
             status=TaskStatus(row.status),
             created_at=float(row.created_at),
             updated_at=float(row.updated_at),
-            started_at=float(row.started_at) if row.started_at is not None else None,
-            finished_at=float(row.finished_at) if row.finished_at is not None else None,
             resource_id=row.resource_id,
             account_id=row.account_id,
             user_id=row.user_id,
@@ -479,8 +477,6 @@ class SQLTaskWorkStore(TaskWorkStore):
             "status": stored.status.value,
             "created_at": stored.created_at,
             "updated_at": stored.updated_at,
-            "started_at": stored.started_at,
-            "finished_at": stored.finished_at,
             "resource_id": stored.resource_id,
             "resource_id_hash": _resource_id_hash(stored.resource_id),
             "account_id": account_id,
@@ -665,7 +661,6 @@ class SQLTaskWorkStore(TaskWorkStore):
         account_id: Optional[str] = None,
         *,
         user_id: Optional[str] = None,
-        task_id: Optional[str] = None,
         task_type: Optional[str] = None,
         status: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -685,8 +680,6 @@ class SQLTaskWorkStore(TaskWorkStore):
                 predicates.append(Task.account_id == account_id)
             if user_id is not None:
                 predicates.append(Task.user_id == user_id)
-            if task_id is not None:
-                predicates.append(Task.task_id == task_id)
             if task_type is not None:
                 predicates.append(Task.task_type == task_type)
             if status is not None:
@@ -910,19 +903,12 @@ class SQLTaskWorkStore(TaskWorkStore):
                 Task.service_name == self._service_name,
                 or_(
                     and_(
-                        Task.task_type != "compile",
                         Task.status.in_([TaskStatus.COMPLETED.value, TaskStatus.CANCELLED.value]),
                         Task.updated_at < completed_cutoff,
                     ),
                     and_(
-                        Task.task_type != "compile",
                         Task.status == TaskStatus.FAILED.value,
                         Task.updated_at < failed_cutoff,
-                    ),
-                    and_(
-                        Task.task_type == "compile",
-                        Task.status.in_([status.value for status in TERMINAL_TASK_STATUSES]),
-                        Task.updated_at < now - policy.compile_seconds,
                     ),
                 ),
             )
@@ -1002,7 +988,6 @@ class SQLTaskWorkStore(TaskWorkStore):
             .values(
                 status=task.status.value,
                 updated_at=task.updated_at,
-                finished_at=task.finished_at,
                 stage=task.stage,
                 result=_json_copy(task.result),
                 error=task.error,
@@ -1027,7 +1012,7 @@ class SQLTaskWorkStore(TaskWorkStore):
         Task = self._models.Task
         async with self._transaction() as session:
             row = await session.execute(
-                select(Task.status, Task.stage, Task.updated_at, Task.started_at)
+                select(Task.status, Task.stage, Task.updated_at)
                 .where(*self._task_query(Task, task_id, account_id, user_id))
                 .with_for_update()
             )
@@ -1054,7 +1039,6 @@ class SQLTaskWorkStore(TaskWorkStore):
                 .where(*self._task_query(Task, task_id, account_id, user_id))
                 .values(
                     status=task.status.value,
-                    started_at=row.started_at if row.started_at is not None else time.time(),
                     stage=task.stage,
                     updated_at=TaskRecord.next_updated_at(row.updated_at),
                 )
@@ -1661,7 +1645,7 @@ class SQLTaskWorkStore(TaskWorkStore):
         async with self._transaction() as session:
             task_row = (
                 await session.execute(
-                    select(Task.status, Task.stage, Task.updated_at, Task.started_at)
+                    select(Task.status, Task.stage, Task.updated_at)
                     .where(*self._task_query(Task, task_id, account_id, user_id))
                     .with_for_update()
                 )
@@ -1727,9 +1711,6 @@ class SQLTaskWorkStore(TaskWorkStore):
                     .where(*self._task_query(Task, task_id, account_id, user_id))
                     .values(
                         status=TaskStatus.RUNNING.value,
-                        started_at=(
-                            task_row.started_at if task_row.started_at is not None else now
-                        ),
                         updated_at=TaskRecord.next_updated_at(task_row.updated_at),
                     )
                 )

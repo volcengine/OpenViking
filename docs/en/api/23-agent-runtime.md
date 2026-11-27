@@ -199,7 +199,7 @@ Creation and execution times are in Unix seconds.
 
 Manual and scheduled submissions both update `last_run_time`. `last_triggered_slot` and `next_triggered_slot` belong only to scheduling. Manual execution does not advance them.
 
-A run is a view of its Task with `task_id`, `actor`, `status`, `created_at`, `started_at`, `finished_at`, `params`, `result`, `error`, and `meta`. `started_at` records the first transition to running; `finished_at` records the first terminal transition after Work settles. A task cancelled before starting has null `started_at`. Run statuses are `queued`, `running`, `committing`, `cancelling`, `completed`, `failed`, and `cancelled`. `params` contains the frozen public inputs and scheduling configuration accepted for that run. `result` contains `created`, `updated`, and `deleted` counts. Its metadata is limited to:
+A saved run freezes `task_id`, `actor`, `status`, `created_at`, `started_at`, `finished_at`, `params`, `result`, `error`, and `meta`. `params` contains the full public inputs and scheduling configuration accepted for that run. `result` contains `created`, `updated`, and `deleted` counts. Its metadata is limited to:
 
 | Field | Meaning |
 |-------|---------|
@@ -211,8 +211,6 @@ A run is a view of its Task with `task_id`, `actor`, `status`, `created_at`, `st
 | `skill_snapshot_id` | Skill snapshot, or null for a system Skill |
 
 No-op runs may reuse the start snapshot. Failure and cancellation do not advance the successful source baseline. Public configuration, run and task responses do not expose execution credentials.
-
-Named execution history is linked to the configuration ID and includes delegated executions by other users. All terminal Compile Tasks and their history are retained for seven days through Task storage.
 
 VikingBot reports `result.completion_status: "partial"` when known source, worker or write
 failures remain after execution. Confirmed output is retained, and a named Compile keeps

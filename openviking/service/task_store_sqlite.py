@@ -21,7 +21,7 @@ class SQLiteTaskWorkStore(SQLTaskWorkStore):
     provider_name = "SQLite"
     dependency_extra = "sqlite"
     dialect_name = "sqlite"
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 1
 
     @staticmethod
     def _connection_options(values: dict[str, object]) -> tuple[URL, dict[str, object]]:
@@ -62,21 +62,10 @@ class SQLiteTaskWorkStore(SQLTaskWorkStore):
             async with connection.begin():
                 await connection.execute(text("BEGIN IMMEDIATE"))
                 version = await connection.scalar(text("PRAGMA user_version"))
-                if version not in (0, 1, self.SCHEMA_VERSION):
+                if version not in (0, self.SCHEMA_VERSION):
                     raise RuntimeError(f"Unsupported SQLite task schema version: {version}")
                 await connection.run_sync(self._models.Base.metadata.create_all)
-                # user_version covers the whole database; another table prefix may
-                # already have upgraded it. Check this Task table under the write lock.
-                table = connection.dialect.identifier_preparer.quote(self._models.table_prefix)
-                columns = {
-                    row[1] for row in await connection.execute(text(f"PRAGMA table_info({table})"))
-                }
-                for column in ("started_at", "finished_at"):
-                    if column not in columns:
-                        await connection.execute(
-                            text(f"ALTER TABLE {table} ADD COLUMN {column} DOUBLE NULL")
-                        )
-                if version != self.SCHEMA_VERSION:
+                if version == 0:
                     await connection.execute(text(f"PRAGMA user_version={self.SCHEMA_VERSION}"))
 
     @asynccontextmanager
