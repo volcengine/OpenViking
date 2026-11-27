@@ -395,7 +395,9 @@ class SchemaModelGenerator:
                     else:
                         # Single value (not None)
                         return False
-            return not (getattr(self, "delete_ids", []) or getattr(self, "directory_merges", []))
+            if directory_merges_enabled and self.directory_merges:
+                return False
+            return len(getattr(self, "delete_ids", [])) == 0
 
         def to_legacy_operations(self) -> Dict[str, Any]:
             """Convert new per-type structure to legacy write_uris/edit_uris format."""

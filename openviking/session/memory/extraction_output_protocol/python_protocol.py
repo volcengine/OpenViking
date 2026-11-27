@@ -328,12 +328,14 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
                 '("""...""") so embedded quotes and '
                 "newlines stay inside the literal."
             )
-        if self.keep_tools_enabled_after_parse_error(error):
+        if error and "unknown SDK method sdk.ls()" in error and "ls" in self._inspection_tools:
+            tool_guidance = " Use the native ls tool, then regenerate the complete program."
+        elif self.keep_tools_enabled_after_parse_error(error):
             tool_guidance = (
                 " The memory SDK is write-only. Call the available native "
                 f"{'/'.join(self._inspection_tools)} tool now; "
-                "use the tool result and then return the complete program. "
-                "Do not emit sdk.search(), sdk.read(), or sdk.ls()."
+                "after its result is returned, update the system-provided object variable. "
+                "Do not emit sdk.search(), sdk.read(), or construct a memory URI in Python."
             )
         return (
             "Your previous output was not a valid restricted Python memory SDK program."
@@ -376,8 +378,9 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         details = json.dumps(issues, ensure_ascii=False, indent=2)
         return (
             "Some sdk.create_events(...) calls could not resolve a safe write target. "
-            "Re-emit ONLY corrected create_events() calls for the failed items below. "
-            "The server has preserved all successful operations from the previous program. "
+            "Re-emit ONLY corrected create_events() calls for the failed items below; do not "
+            "emit any other memory type, delete, or link statements. The server has preserved "
+            "all successful operations from the previous program. "
             "For event ranges, pass ranges= with valid in-bounds message indexes that include the "
             "user-role message establishing the event so its owner can be resolved (e.g. "
             'ranges="3-5"). Do not target a disallowed or ambiguous peer. Keep the same event_name '

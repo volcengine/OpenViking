@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 """
-Memory tools for the extraction loop.
+Memory tools - encapsulate VikingFS read operations for ReAct loop.
 
 Reference: bot/vikingbot/agent/tools/base.py design pattern
 """
@@ -326,7 +326,8 @@ class MemoryReadTool(MemoryTool):
                 "uri": {
                     "type": "string",
                     "description": (
-                        "Memory URI to read. e.g., current user: 'viking://~/memories/profile.md'"
+                        "Memory URI to read. e.g., current user: "
+                        "'viking://~/memories/profile.md'"
                     ),
                 },
                 "offset": {
@@ -487,7 +488,8 @@ class MemoryLsTool(MemoryTool):
                 "uri": {
                     "type": "string",
                     "description": (
-                        "Directory URI to list. e.g., current user: 'viking://~/memories'"
+                        "Directory URI to list. e.g., current user: "
+                        "'viking://~/memories'"
                     ),
                 },
                 "recursive": {

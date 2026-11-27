@@ -139,8 +139,8 @@ class JsonExtractionOutputProtocol(ExtractionOutputProtocol):
         details = json.dumps(issues, ensure_ascii=False, indent=2)
         return (
             "Some event operations could not resolve a safe write target. "
-            "Return only corrected event operations for the failed items below; leave all "
-            "unrelated operation fields empty. The server has preserved "
+            "Return only corrected event operations for the failed items below; leave every "
+            "other memory-type field, delete_ids, and links empty. The server has preserved "
             "all successful operations from the previous response. "
             "Reuse exactly the page_id shown for each failed event. "
             "For event ranges, use valid in-bounds message indexes and include the user-role "

@@ -19,7 +19,11 @@ from openviking.session.memory.dataclass import (
     DirectoryOperation,
     MemoryFile,
 )
-from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+from openviking.session.memory.memory_isolation_handler import (
+    MemoryIsolationHandler,
+    RoleScope,
+    peer_user_space,
+)
 from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
     get_default_registry,
@@ -32,6 +36,7 @@ from openviking.session.memory.tools import (
     verified_preference_directory_owner,
 )
 from openviking.session.memory.utils.resource_refs import contains_resource_uri
+from openviking.session.memory.utils.uri import render_template
 from openviking.session.memory.vision_message_normalizer import (
     replace_image_parts_with_descriptions,
 )
@@ -92,6 +97,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
         )
         self._output_language = self._detect_language()
         self._registry = memory_registry  # Lazy defaults if no account snapshot was supplied.
+        self._schema_directories = None
         self._extract_context = None  # 缓存 ExtractContext 实例
         self._isolation_handler = isolation_handler
         self._read_file_contents: Dict[str, MemoryFile] = {}
@@ -221,7 +227,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
 
     def instruction(self) -> str:
         output_language = self._output_language
-        tools = "read/search"
+        tools = "the available tools (read/search)"
         tool_rule = "ONLY read and search tools are available - DO NOT use write tool"
         directory_rules = ""
         if self.supports_directory_merges():
@@ -272,8 +278,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
 - ONLY read URIs that are explicitly listed in ls/search tool results, returned by previous tool calls{resource_deletion_read_source}
 
 ## Target Output Language
-All memory content MUST be written in {output_language}.
-{directory_rules}
+All memory content MUST be written in {output_language}.{directory_rules}
 
 ## URI Handling
 The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
@@ -665,19 +670,55 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         pre_fetch_messages = []
         pre_fetch_messages.append(self._build_conversation_message())
 
-        search_dirs = set()
-        read_files = set()
+        # 触发 registry 加载，过滤掉 agent stage 的 schema（trajectory/experience 由执行提取处理）
+        schemas = [
+            s
+            for s in self._get_registry().list_all(include_disabled=False)
+            if getattr(s, "stage", "user") == "user"
+        ]
+        if self._isolation_handler:
+            schemas = [s for s in schemas if self._isolation_handler.allows_schema(s)]
+
+        # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
+        ls_dirs = set()  # directories to ls (for multi-file schemas)
+        read_files = set()  # files to read directly (for single-file schemas)
+
+        rolescope: RoleScope = self._isolation_handler.get_read_scope()
+
         maintain_directories = self.supports_directory_merges()
-        for schema in self.get_memory_schemas(self._ctx):
-            if not schema.directory or schema.operation_mode == "add_only":
+        for schema in schemas:
+            if not schema.directory:
                 continue
-            for directory in self._isolation_handler.render_schema_directories(schema):
-                if schema.filename_has_variables():
-                    search_dirs.add(directory)
+
+            # 根据 operation_mode 决定是否需要 ls 和读取其他文件
+            if schema.operation_mode == "add_only":
+                continue
+
+            schema_dirs = set()
+            if self._isolation_handler:
+                schema_dirs.update(self._isolation_handler.render_schema_directories(schema))
+            else:
+                for user_id in rolescope.user_ids:
+                    dir_path = render_template(
+                        schema.directory,
+                        {"user_space": user_id},
+                    )
+                    schema_dirs.add(dir_path)
+                    for peer_id in rolescope.peer_ids:
+                        dir_path = render_template(
+                            schema.directory,
+                            {"user_space": peer_user_space(user_id, peer_id)},
+                        )
+                        schema_dirs.add(dir_path)
+            if schema.filename_has_variables():
+                for dir_path in schema_dirs:
+                    ls_dirs.add(dir_path)
                     if maintain_directories and schema.memory_type in _DIRECTORY_MEMORY_TYPES:
-                        self._register_directory_root(directory, schema.memory_type)
-                else:
-                    read_files.add(f"{directory}/{schema.filename_template}")
+                        self._register_directory_root(dir_path, schema.memory_type)
+            else:
+                for dir_path in schema_dirs:
+                    file_uri = f"{dir_path}/{schema.filename_template}"
+                    read_files.add(file_uri)
 
         if self._directory_roots:
             inventory = await self._build_directory_inventory()
@@ -691,11 +732,17 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 )
 
         call_id_seq = 0
+        # Step 2: Execute search for each ls directory (instead of ls)
+
+        # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
+        # 为 overview 读取创建一个基本的 tool_ctx
+
+        # 在每个之前 ls 的目录内执行 search（替换原来的 ls操作）
         files_to_read_from_search = []  # 收集需要读取的文件（eager_prefetch 模式）
 
         # 批量 search：所有目录一次搜索
-        if search_dirs:
-            dir_list = list(search_dirs)
+        if ls_dirs:
+            dir_list = list(ls_dirs)
             search_query = self._build_prefetch_search_query()
             if not search_query:
                 search_query = "conversation"
@@ -768,7 +815,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         """获取可用的工具列表"""
         if self.supports_directory_merges():
             return ["read", "ls"]
-        return [] if self._eager_prefetch else ["read"]
+        if self._eager_prefetch:
+            # eager_prefetch 模式下不提供工具，所有内容已在 prefetch 中加载
+            return []
+        return ["read"]
 
     def directory_merge_source_for_target(
         self, uri: str, plans: list[DirectoryOperation]

@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Session Compressor V3.
 
-V3 keeps the V2 extraction interface with a patch-merge flow.
-Ordinary memories can be batched; cases and execution memories retain
+V3 keeps the V2 extraction interface with a patch-merge flow and no directory-level
+memory locks for card writes. Ordinary memories can be batched; cases and execution memories retain
 the complete task. Cases use ExtractLoop and are submitted with the commit rollout
 to the process-global StreamingPolicyTrainer.
 """
@@ -348,19 +348,38 @@ class SessionCompressorV3:
             if old_file and old_file.uri and old_file.uri not in op.uris:
                 delete_by_uri.setdefault(old_file.uri, old_file)
 
-        for uris, edited in ((result.written_uris, False), (result.edited_uris, True)):
-            for uri in uris:
-                op = upsert_by_uri.get(uri)
-                memory_type = (
-                    op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
+        for uri in result.written_uris:
+            op = upsert_by_uri.get(uri)
+            memory_type = (
+                op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
+            )
+            old_file = op.old_memory_file_content if op else None
+            if old_file and (not old_file.uri or old_file.uri == uri):
+                updates.append(
+                    {
+                        "uri": uri,
+                        "memory_type": memory_type,
+                        "before": old_file.content,
+                        "after": "",
+                    }
                 )
-                entry = {"uri": uri, "memory_type": memory_type, "after": ""}
-                old_file = op.old_memory_file_content if op else None
-                if edited or (old_file and (not old_file.uri or old_file.uri == uri)):
-                    entry["before"] = old_file.content if old_file else ""
-                    updates.append(entry)
-                else:
-                    adds.append(entry)
+            else:
+                adds.append({"uri": uri, "memory_type": memory_type, "after": ""})
+
+        for uri in result.edited_uris:
+            op = upsert_by_uri.get(uri)
+            memory_type = (
+                op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
+            )
+            old_file = op.old_memory_file_content if op and op.old_memory_file_content else None
+            updates.append(
+                {
+                    "uri": uri,
+                    "memory_type": memory_type,
+                    "before": old_file.content if old_file else "",
+                    "after": "",
+                }
+            )
 
         for uri in result.deleted_uris:
             deleted = delete_by_uri.get(uri)
