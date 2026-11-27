@@ -328,14 +328,11 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
                 '("""...""") so embedded quotes and '
                 "newlines stay inside the literal."
             )
-        if error and "unknown SDK method sdk.ls()" in error and "ls" in self._inspection_tools:
-            tool_guidance = " Use the native ls tool, then regenerate the complete program."
-        elif self.keep_tools_enabled_after_parse_error(error):
+        if self.keep_tools_enabled_after_parse_error(error):
             tool_guidance = (
                 " The memory SDK is write-only. Call the available native "
-                f"{'/'.join(self._inspection_tools)} tool now; "
-                "after its result is returned, update the system-provided object variable. "
-                "Do not emit sdk.search(), sdk.read(), or construct a memory URI in Python."
+                f"{'/'.join(self._inspection_tools)} tool now and use its result to regenerate "
+                "the complete program. Do not emit sdk.search(), sdk.read(), or sdk.ls()."
             )
         return (
             "Your previous output was not a valid restricted Python memory SDK program."
@@ -978,11 +975,6 @@ class _PythonProgramCompiler:
         if method in {"merge_dirs", "rename_dir"}:
             if not self.context.supports_directory_merges:
                 self._error(node, f"sdk.{method}() is unavailable in this extraction")
-            if any(
-                not isinstance(item.value, ast.Constant) or not isinstance(item.value.value, str)
-                for item in node.keywords
-            ):
-                self._error(node, f"sdk.{method}() requires literal directory URI strings")
             kwargs = self._eval_keywords(node)
             if not statement or node.args or set(kwargs) != {"source_uri", "target_uri"}:
                 self._error(

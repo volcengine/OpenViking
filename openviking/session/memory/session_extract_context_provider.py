@@ -58,7 +58,6 @@ _PREFETCH_SEARCH_TEXT_PART_MAX_CHARS = 1000
 _PREFETCH_SEARCH_ASSISTANT_TEXT_PART_MAX_CHARS = 500
 _PREFETCH_SEARCH_TOOL_FIELD_MAX_CHARS = 500
 _DIRECTORY_MEMORY_TYPES = {"entities", "preferences"}
-_MAX_DIRECTORY_MERGE_PLANS = 8
 _RESOURCE_REASON_LANGUAGE_RE = re.compile(
     r"(?im)^\s*(?:User reason|用户说明|用户原因|用户理由)[:：]\s*(.+?)\s*$"
 )
@@ -629,8 +628,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     ) -> list[DirectoryOperation]:
         plans: list[DirectoryOperation] = []
         for operation in operations:
-            if len(plans) >= _MAX_DIRECTORY_MERGE_PLANS:
-                break
             plan = self._resolve_directory_merge(operation)
             if plan is None or any(
                 existing.source_uri in {plan.source_uri, plan.target_uri}

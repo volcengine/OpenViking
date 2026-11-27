@@ -1164,6 +1164,7 @@ class ExtractLoop:
 
         incomplete: set[str] = set()
         uri_changes: dict[str, str] = {}
+        preference_cards: dict[str, MemoryFile] = {}
         for plan in plans:
             source, target = plan.source_uri, plan.target_uri
             rename = plan.operation == "rename"
@@ -1204,7 +1205,11 @@ class ExtractLoop:
                             if is_dir or name.startswith(".") or not name.endswith(".md"):
                                 continue
                             uri = f"{directory}/{name}"
-                            card = MemoryFileUtils.read(await fs.read_file(uri, ctx=ctx), uri=uri)
+                            card = preference_cards.get(uri)
+                            if card is None:
+                                raw = await fs.read_file(uri, ctx=ctx)
+                                card = MemoryFileUtils.read(raw, uri=uri)
+                                preference_cards[uri] = card
                             if card.memory_type == "preferences" and not self._matches_owner(
                                 card, owner
                             ):
@@ -1230,8 +1235,10 @@ class ExtractLoop:
                         continue
                     op = writes.get(uri)
                     if op is None:
-                        raw = await fs.read_file(uri, ctx=ctx)
-                        card = MemoryFileUtils.read(raw, uri=uri)
+                        card = preference_cards.get(uri)
+                        if card is None:
+                            raw = await fs.read_file(uri, ctx=ctx)
+                            card = MemoryFileUtils.read(raw, uri=uri)
                         if card.memory_type != plan.memory_type:
                             remaining = True
                             continue

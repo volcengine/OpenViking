@@ -58,7 +58,7 @@ PYTHON_DIRECTORY_MERGE_RULES = (
     "existing target.",
     "- sdk.rename_dir(source_uri='...', target_uri='...') renames a directory to an unused sibling URI. "
     "Write cards in the source category until the rename. Let rename_dir change the category.",
-    "- Use standalone calls with literal URIs, even when these are the only changes. "
+    "- Use standalone calls with directory URI strings, even when these are the only changes. "
     "Put any rename of a merge destination after all merge calls. "
     "Directory operations run after card writes.",
 )

@@ -246,11 +246,25 @@ class StreamingMemoryUpdater:
         reports = []
         deleted = set(result.deleted_uris)
         written_directories = {uri.rsplit("/", 1)[0] for uri in result.written_uris}
-        for plan in request.operations.directory_merges:
+        plans = request.operations.directory_merges
+        directory_groups: dict[str, str] = {}
+        for plan in plans:
+            if plan._status == "pending":
+                # A merge into B and a subsequent rename of B share the same group.
+                group = plan.source_uri if plan.operation == "rename" else plan.target_uri
+                directory_groups[plan.source_uri] = group
+                directory_groups[plan.target_uri] = group
+        group_errors: Counter[str] = Counter()
+        for uri, _ in result.errors:
+            group = directory_groups.get(uri) or directory_groups.get(uri.rpartition("/")[0])
+            if group:
+                group_errors[group] += 1
+        for plan in plans:
             source, target = plan.source_uri, plan.target_uri
             moved = len(plan._moved_sources & deleted)
             rename = plan.operation == "rename"
-            status, pruned, remaining, errors = plan._status, False, [], 0
+            errors = group_errors[source if rename else target]
+            status, pruned, remaining = plan._status, False, []
             if status == "pending":
                 root = source.rsplit("/", 1)[0]
                 try:
@@ -278,11 +292,7 @@ class StreamingMemoryUpdater:
                                     remaining.append(uri)
                             if not stat.get("isDir"):
                                 remaining.append(source)
-                            if (
-                                not remaining
-                                and not result.errors
-                                and moved == len(plan._moved_sources)
-                            ):
+                            if not remaining and not errors and moved == len(plan._moved_sources):
                                 if rename and target not in written_directories:
                                     await fs.mkdir(target, ctx=ctx, lease_ref=lease)
                                 await fs.rm(source, recursive=True, ctx=ctx, lease_ref=lease)
@@ -309,8 +319,7 @@ class StreamingMemoryUpdater:
                     "remaining": remaining,
                     "conflicts": plan._conflicts,
                     "pruned": pruned,
-                    "errors": errors
-                    + sum(uri.startswith((source + "/", target + "/")) for uri, _ in result.errors),
+                    "errors": errors,
                 }
             )
         return reports

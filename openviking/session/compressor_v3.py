@@ -340,13 +340,10 @@ class SessionCompressorV3:
         deletes: list[dict[str, Any]] = []
 
         upsert_by_uri = {}
-        delete_by_uri = {dc.uri: dc for dc in operations.delete_file_contents}
         for op in operations.upsert_operations:
             for uri in op.uris:
                 upsert_by_uri[uri] = op
-            old_file = op.old_memory_file_content
-            if old_file and old_file.uri and old_file.uri not in op.uris:
-                delete_by_uri.setdefault(old_file.uri, old_file)
+        delete_by_uri = {dc.uri: dc for dc in operations.delete_file_contents}
 
         for uri in result.written_uris:
             op = upsert_by_uri.get(uri)
@@ -2304,8 +2301,6 @@ def _merge_memory_diffs(
 def _memory_diff_has_changes(diff: Any) -> bool:
     if not isinstance(diff, dict):
         return False
-    if diff.get("directory_merges"):
-        return True
     summary = diff.get("summary")
     if not isinstance(summary, dict):
         return False
