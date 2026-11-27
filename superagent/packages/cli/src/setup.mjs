@@ -1535,9 +1535,12 @@ function greeting({ name, newInstance, primary }) {
 
 const found = (labels) => t(`找到 ${list(labels)}`, `Found ${list(labels)}`);
 
-// What the machine offers, in one line, once the check is done.
+// What the machine offers, in one line, once the check is done. A runtime that
+// is selectable but has nothing to run yet (DSH without a model route: setup
+// asks for one before saving) says so rather than reading as ready.
 function foundLine(runtimes) {
-  const ready = runtimes.filter((runtime) => runtime.available).map((runtime) => runtime.label);
+  const ready = runtimes.filter((runtime) => runtime.available)
+    .map((runtime) => (runtime.needsModel ? `${runtime.label}${t('（需配置模型）', ' (needs model setup)')}` : runtime.label));
   return ready.length ? found(ready) : t('还没有能用的 agent', 'No usable agent yet');
 }
 

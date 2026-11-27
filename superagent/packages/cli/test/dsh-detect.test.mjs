@@ -66,6 +66,7 @@ test('DSH: a route in the bridge catalogue makes the runtime available without D
   });
   assert.equal(runtime.available, true, runtime.note);
   assert.equal(probed.length, 1);
+  assert.equal(runtime.needsModel, false);
   assert.match(runtime.note, /deepseek\/deepseek-chat/);
   assert.doesNotMatch(runtime.note, /实验|experimental/);
 });
@@ -86,6 +87,7 @@ test('DSH: without a servable route the note stays about the protocol', async t 
   // throwaway DSH home and can never see the routes a real instance has, so
   // hiding the runtime behind this catalogue would hide a configured instance.
   assert.equal(runtime.available, true);
+  assert.equal(runtime.needsModel, true, 'selectable, but setup must add a model route before saving');
   assert.match(runtime.note, /ov-superagent dsh model list/, 'routes are pointed at DSH, not at an OpenViking SuperAgent file');
   assert.match(runtime.note, /DEEPSEEK_API_KEY/);
   assert.match(runtime.note, /deepseek-official: 0 models/, 'the catalogue answer is surfaced');
