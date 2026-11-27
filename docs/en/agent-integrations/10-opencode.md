@@ -8,7 +8,7 @@ Source: [examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree
 
 Requirements: [OpenCode](https://opencode.ai/) 2.0.15+, Node.js 18+, and an OpenViking server (managed or self-hosted). For a local server, verify with `curl http://localhost:1933/health`. You also need an OpenViking API key when the server requires authentication.
 
-> **Upgrading from OpenCode 1.x:** plugin 1.0 and later support OpenCode 2 only and do nothing on OpenCode 1.x. Upgrade OpenCode, or stay on the plugin's 0.x line.
+> **Upgrading from OpenCode 1.x:** the plugin supports OpenCode 2 only and does nothing on OpenCode 1.x. Upgrade OpenCode, or pin `@openviking/opencode-plugin@2026.11.26`, the last release that supports OpenCode 1.x.
 
 ### One-line installer (recommended)
 
@@ -66,7 +66,7 @@ If something is wrong, run `node ~/.config/opencode/plugins/openviking/scripts/o
 
 ## What is different on OpenCode
 
-- **OpenCode 2 only** from plugin 1.0; OpenCode 1.x users stay on the 0.x line.
+- **OpenCode 2 only**; OpenCode 1.x users pin `@openviking/opencode-plugin@2026.11.26`.
 - **Profile at the first prompt:** the session-start block (profile and skill catalog) is delivered with the first prompt, not at session creation.
 - **Tool names:** OpenCode prefixes MCP tools with the server name, so the tools are `openviking_find`, `openviking_read`, `openviking_search`, and so on. The plugin sets the MCP server to `codemode: false`, so the tools stay directly callable instead of being folded into Code Mode.
 - **Subagents:** a subagent session is captured into its own OpenViking session `oc-<parent>__subagent-<child>`; `skipSubagentSessions` skips them.

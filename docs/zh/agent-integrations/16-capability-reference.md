@@ -670,7 +670,7 @@ Claude Code、Cursor、TRAE、ZCode、Kimi Code、CodeBuddy Code、Qoder CLI、A
 
 ### OpenCode
 
-[OpenCode 插件](./10-opencode.md)。npm 插件 `@openviking/opencode-plugin` 在 OpenCode 内运行共享流程。插件 1.0 及以上只支持 OpenCode 2；OpenCode 1.x 需要使用 0.x 插件线。
+[OpenCode 插件](./10-opencode.md)。npm 插件 `@openviking/opencode-plugin` 在 OpenCode 内运行共享流程。插件只支持 OpenCode 2；OpenCode 1.x 需要使用 `@openviking/opencode-plugin@2026.11.26`，这是最后一个支持它的版本。
 
 - 每次提问只召回一次，结果存进用户消息的 metadata；后续模型 step 直接复用，不发新请求，prompt 缓存因此保持稳定。会话开场上下文随首次提问发送。
 - MCP 工具保留 `openviking_` 前缀，并设置 `codemode: false`。5 个 skill 只在插件注册自己的 MCP 服务时加入，hook-only 模式或关闭 `mcp.openviking` 时不加入。

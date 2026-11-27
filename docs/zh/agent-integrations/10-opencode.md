@@ -8,7 +8,7 @@
 
 前置条件：[OpenCode](https://opencode.ai/) 2.0.15+、Node.js 18+，以及一个 OpenViking 服务（托管或自建；本地服务可用 `curl http://localhost:1933/health` 检查）。服务端启用了鉴权时，还需要 OpenViking API key。
 
-> **从 OpenCode 1.x 升级：** 插件 1.0 及以后只支持 OpenCode 2，在 OpenCode 1.x 上不做任何事。请升级 OpenCode，或继续使用插件 0.x 版本线。
+> **从 OpenCode 1.x 升级：** 插件只支持 OpenCode 2，在 OpenCode 1.x 上不做任何事。请升级 OpenCode，或固定使用 `@openviking/opencode-plugin@2026.11.26`，这是最后一个支持 OpenCode 1.x 的版本。
 
 ### 一键安装（推荐）
 
@@ -66,7 +66,7 @@ cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 
 ## OpenCode 上的不同之处
 
-- **只支持 OpenCode 2**（插件 1.0 起）；OpenCode 1.x 用户留在 0.x 版本线。
+- **只支持 OpenCode 2**；OpenCode 1.x 用户固定使用 `@openviking/opencode-plugin@2026.11.26`。
 - **画像在首个 prompt 注入：** session-start 块（画像和 skill 目录）随第一个 prompt 送达，而不是在会话创建时。
 - **工具名：** OpenCode 给 MCP 工具加上 server 名前缀，所以工具是 `openviking_find`、`openviking_read`、`openviking_search` 等。插件把 MCP server 设为 `codemode: false`，工具保持可直接调用，不会被折叠进 Code Mode。
 - **子 agent：** 子 agent 会话捕获进独立的 OpenViking session `oc-<parent>__subagent-<child>`；`skipSubagentSessions` 可跳过。

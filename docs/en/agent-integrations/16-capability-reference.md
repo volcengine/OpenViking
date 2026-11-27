@@ -670,7 +670,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### OpenCode
 
-[OpenCode Plugin](./10-opencode.md). The npm plugin `@openviking/opencode-plugin` runs the shared flow inside OpenCode. Plugin 1.0 and later support OpenCode 2 only; OpenCode 1.x needs the 0.x plugin line.
+[OpenCode Plugin](./10-opencode.md). The npm plugin `@openviking/opencode-plugin` runs the shared flow inside OpenCode. The plugin supports OpenCode 2 only; OpenCode 1.x needs `@openviking/opencode-plugin@2026.11.26`, the last release that supports it.
 
 - Recall runs once per prompt and is stored in the user message's metadata; later model steps reuse it without new requests, which keeps the prompt cache stable. The session-start context goes with the first prompt.
 - MCP tools keep the `openviking_` prefix, with `codemode: false`. The 5 skills are added only when the plugin registers its MCP server, not in hook-only mode or with `mcp.openviking` disabled.
