@@ -11,7 +11,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from openviking_cli.utils.config.config_loader import expand_config_environment
-from openviking_cli.utils.config.embedding_config import EmbeddingCredential
+from openviking_cli.utils.config.embedding_config import (
+    EmbeddingCredential,
+    resolve_vikingdb_session_token,
+)
 from openviking_cli.utils.config.open_viking_config import (
     OpenVikingConfig,
     OpenVikingConfigSingleton,
@@ -49,6 +52,12 @@ def _binding_values(binding, parent, embedding: bool, original: dict, index: int
         if embedding
         else binding.model_dump(exclude_none=True)
     )
+    if embedding:
+        token = resolve_vikingdb_session_token(binding, parent)
+        if token is None:
+            values.pop("session_token", None)
+        else:
+            values["session_token"] = token
     explicit = original.get("credentials") or []
     source = explicit[index] if index < len(explicit) else {}
     if not embedding and "model" not in source and (explicit or index == 0):
@@ -230,6 +239,13 @@ def _merge_credentials(old: dict, changes: dict, embedding: bool) -> dict:
     # null/empty values must mean clearing, not re-inheriting obsolete secrets.
     defaults = {key: value for key, value in defaults.items() if key in fields}
     result["credentials"] = [_merge(defaults, binding) for binding in changes["credentials"]]
+    if embedding:
+        for supplied, binding in zip(changes["credentials"], result["credentials"], strict=True):
+            token = resolve_vikingdb_session_token(supplied, defaults)
+            if token is None:
+                binding.pop("session_token", None)
+            else:
+                binding["session_token"] = token
     for key in fields:
         result.pop(key, None)
     result.pop("backend", None)
