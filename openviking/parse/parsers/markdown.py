@@ -24,10 +24,12 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import unquote
 
 import yaml
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.parse.accessors.mime_types import IANA_MEDIA_TYPE_TO_EXTENSION
@@ -453,6 +455,8 @@ class MarkdownParser(BaseParser):
             split_content=kwargs.get("split_content", True),
         )
 
+        self._preserve_external_references(content, ops)
+
         return _Layout(
             temp_uri=temp_uri,
             root_dir=root_dir,
@@ -462,6 +466,102 @@ class MarkdownParser(BaseParser):
             meta=meta,
             warnings=warnings,
         )
+
+    def _preserve_external_references(self, content: str, ops: List[_LayoutOp]) -> None:
+        """Restore source-backed definitions in unchanged, standalone section spans."""
+        if "]:" not in content:
+            return
+        parts = [op for op in ops if op.kind == "write"]
+        if len(parts) < 2:
+            return
+
+        parser = MarkdownIt("commonmark", {"inline_definitions": True, "store_labels": True})
+        source = content.replace("\r\n", "\n").replace("\r", "\n")
+        lines = source.split("\n")
+        source_env: Dict[str, Any] = {}
+        source_tokens = parser.parse(source, source_env)
+        definitions = {}
+        for token in source_tokens:
+            if token.type != "definition" or token.level != 0 or token.map is None:
+                continue
+            label = token.meta["id"]
+            if (
+                token.meta["label"].startswith("^")
+                or source_env["references"][label]["map"] != token.map
+            ):
+                continue
+            if token.meta["url"].lower().startswith(("https://", "http://")):
+                start, end = token.map
+                block = "\n".join(lines[start:end])
+                # The later relative-link and media rewriters must not
+                # reinterpret text in a definition that we add to this part.
+                if "<" not in block and not _MD_LINK_RE.search(block):
+                    definitions[label] = (start, block)
+        if not definitions:
+            return
+
+        paragraphs = {
+            line: token for _, line, token in self._reference_paragraphs(source_tokens)
+        }
+        padded_source = "\n" + source + "\n"
+        min_extra_chars = 2 + min(len(block) for _, block in definitions.values())
+        max_section_chars = self.config.max_section_chars
+        for op in parts:
+            text = op.content
+            if text is None or "[" not in text:
+                continue
+            if len(text) + min_extra_chars > max_section_chars:
+                continue
+            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+            needle = "\n" + normalized.rstrip("\n") + "\n"
+            offset = padded_source.find(needle)
+            if offset < 0 or padded_source.find(needle, offset + 1) != -1:
+                continue
+            # MarkdownIt line maps let us verify this paragraph also existed in
+            # the source at this position, rather than exposing fenced text.
+            first_line = padded_source.count("\n", 1, offset + 1)
+            env: Dict[str, Any] = {}
+            artifact_tokens = parser.parse(text, env)
+            missing: set[str] = set()
+            for index, line, token in self._reference_paragraphs(artifact_tokens):
+                original = paragraphs.get(first_line + line)
+                if original is None or original.content != token.content:
+                    continue
+                children = original.children or []
+                if any(child.type == "image" for child in children):
+                    continue
+                labels = {
+                    child.meta["label"]
+                    for child in children
+                    if child.type == "link_open" and "label" in child.meta
+                }
+                absent = labels.intersection(definitions).difference(env.get("references", {}))
+                if absent:
+                    missing.update(absent)
+                    artifact_tokens[index].children = children
+            if not missing:
+                continue
+
+            # Reparse to prove only the source-backed paragraphs change, even if
+            # a copied label also appears in literal text or another block.
+            blocks = [block for _, block in sorted(definitions[label] for label in missing)]
+            candidate = text + "\n\n" + "\n\n".join(blocks)
+            if len(candidate) <= max_section_chars:
+                expected = [token for token in artifact_tokens if token.type != "definition"]
+                actual = [
+                    token for token in parser.parse(candidate) if token.type != "definition"
+                ]
+                if actual == expected:
+                    op.content = candidate
+
+    @staticmethod
+    def _reference_paragraphs(tokens: List[Token]) -> Iterable[Tuple[int, int, Token]]:
+        for index, token in enumerate(tokens[:-1]):
+            if token.type == "paragraph_open" and token.level == 0:
+                inline = tokens[index + 1]
+                if inline.type == "inline" and inline.map is not None:
+                    yield index + 1, inline.map[0], inline
+
 
     async def _apply_layout(
         self,
