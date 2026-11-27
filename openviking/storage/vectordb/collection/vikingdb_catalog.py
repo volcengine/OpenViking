@@ -212,7 +212,6 @@ class VikingDBCatalog:
             "capabilities",
             "configure",
             "resolve",
-            "upsert_nodes",
             "declare_item",
             "validate_resource_update",
         ):
@@ -236,9 +235,6 @@ class VikingDBCatalog:
             }
         if op == "resolve":
             return self._resolve(scope, [_uri(uri) for uri in request["uris"]], mode)
-        if op == "upsert_nodes":
-            return {}  # Directory registration is part of the regular root write.
-
         uri = _uri(request["uri"])
         record_id = _id(scope, uri)
         # The filesystem update plan already enumerates the real child directories.

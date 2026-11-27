@@ -520,13 +520,7 @@ async def test_item_reimport_replaces_resource_snapshot_and_preserves_uuid(servi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("occupant", ["file", "directory"])
-async def test_item_import_does_not_reserve_original_paths(
-    service, tmp_path, occupant, monkeypatch
-):
-    from unittest.mock import AsyncMock
-
-    from openviking.storage.catalog import delete_catalog_subtree
-
+async def test_item_import_does_not_reserve_original_paths(service, tmp_path, occupant):
     fs, owner = service.viking_fs, ctx()
     root = "viking://resources/original-target-conflict"
     await service.fs.mkdir(root, owner, as_item=True)
@@ -542,9 +536,6 @@ async def test_item_import_does_not_reserve_original_paths(
         "# Input\n\n"
         + "\n\n".join(f"## Part {i}\n\n" + ("New source bytes. " * 200) for i in range(4))
     )
-    cleanup = AsyncMock(wraps=delete_catalog_subtree)
-    monkeypatch.setattr("openviking.storage.catalog.delete_catalog_subtree", cleanup)
-
     result = await service.resources.add_resource(
         str(source),
         to=root,
@@ -556,7 +547,6 @@ async def test_item_import_does_not_reserve_original_paths(
     )
     assert result["status"] == "success", result
     assert not await fs.exists(root + "/.original", ctx=owner)
-    cleanup.assert_awaited_once()
     current = await backend.catalog_execute({"op": "resolve", "uris": [root]}, ctx=owner)
     assert current["data"][0]["item_uuid"] == identity["data"][0]["item_uuid"]
 
@@ -565,7 +555,7 @@ async def test_item_import_does_not_reserve_original_paths(
 @pytest.mark.parametrize(
     ("first_is_directory", "fail_first_delete"), [(False, False), (True, True)]
 )
-async def test_item_reimport_reconciles_file_directory_replacements(
+async def test_item_reimport_preserves_uuid_after_file_directory_replacements(
     service, tmp_path, monkeypatch, first_is_directory, fail_first_delete
 ):
     source = tmp_path / "source"
@@ -595,15 +585,6 @@ async def test_item_reimport_reconciles_file_directory_replacements(
     else:
         entry.unlink()
     write_entry(not first_is_directory)
-    requests = []
-    execute = storage.catalog_execute
-
-    async def track_catalog(request, **kwargs):
-        if request.get("preserve_item_root"):
-            requests.append(dict(request))
-        return await execute(request, **kwargs)
-
-    monkeypatch.setattr(storage, "catalog_execute", track_catalog)
     if fail_first_delete:
         remove = service.viking_fs.remove_files
         failed = False
@@ -626,7 +607,6 @@ async def test_item_reimport_reconciles_file_directory_replacements(
     assert result["status"] == "success", result
     resolved = await storage.catalog_execute({"op": "resolve", "uris": [root]}, ctx=owner)
     assert resolved["data"][0]["item_uuid"] == original
-    assert len(requests) == (2 if fail_first_delete else 1)
     stat = await service.viking_fs.stat(root + "/swap.py", ctx=owner, skip_count=True)
     assert stat["isDir"] is (not first_is_directory)
 

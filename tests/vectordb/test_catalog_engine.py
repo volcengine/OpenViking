@@ -20,15 +20,6 @@ def call(engine, op, scope="a", **kwargs):
     return engine.execute({"op": op, "scope": scope, **kwargs})
 
 
-def nodes(engine, *uris, scope="a"):
-    return call(
-        engine,
-        "upsert_nodes",
-        scope=scope,
-        nodes=[{"uri": uri, "node_type": "dir"} for uri in uris],
-    )
-
-
 def declare(engine, uri, item_uuid, attrs=None, *, scope="a", include_attrs=True):
     request = {"uri": uri, "item_uuids": [item_uuid]}
     if include_attrs:
@@ -40,13 +31,6 @@ def test_declaration_is_shadowed_but_item_attrs_do_not_inherit():
     engine = CatalogEngine()
     assert call(engine, "capabilities")["enabled"] is False
     call(engine, "configure", item_identity_mode="shadow")
-    nodes(
-        engine,
-        "/resources/A",
-        "/resources/A/frame",
-        "/resources/A/shot",
-        "/resources/A/shot/frame",
-    )
     first = declare(engine, "/resources/A", "uuid-a", ["asset_id=V1"])
     nested = declare(engine, "/resources/A/shot", "uuid-shot", ["kind=shot"])
 
@@ -70,7 +54,6 @@ def test_declaration_is_shadowed_but_item_attrs_do_not_inherit():
 
 def test_declaration_retries_reuse_uuid_and_attributes_are_immutable():
     engine = CatalogEngine()
-    nodes(engine, "/resources/A")
     declared = declare(engine, "/resources/A", "uuid-a", ["asset_id=V1"])
 
     omitted = declare(
@@ -93,7 +76,6 @@ def test_list_identity_protocol_and_persisted_union_mode(tmp_path):
     path = str(tmp_path / "union-catalog")
     engine = CatalogEngine(path)
     assert call(engine, "capabilities")["item_identity_mode"] == "union"
-    nodes(engine, "/resources/A/B", "/resources/elsewhere")
     call(
         engine, "declare_item", uri="/resources/A", item_uuids=["uuid-a"], item_attrs=["project=A"]
     )
@@ -140,7 +122,6 @@ def test_list_identity_protocol_and_persisted_union_mode(tmp_path):
 def test_shadow_filter_frontier_handles_prefix_siblings_and_deep_items():
     engine = CatalogEngine()
     call(engine, "configure", item_identity_mode="shadow")
-    nodes(engine, "/resources/A/B/C", "/resources/A-sibling")
     declare(engine, "/resources/A", "a", ["kind=asset"])
     declare(engine, "/resources/A-sibling", "sibling", ["kind=other"])
     declare(engine, "/resources/A/B", "b", ["kind=other"])
@@ -159,7 +140,6 @@ def test_identity_mode_is_collection_wide_but_declarations_and_revisions_are_sco
     engine = CatalogEngine(path)
     call(engine, "configure", item_identity_mode="shadow")
     for scope in ("a", "b"):
-        nodes(engine, "/resources/A/B", scope=scope)
         declare(engine, "/resources/A", "parent", [f"account={scope}"], scope=scope)
         declare(engine, "/resources/A/B", "child", [f"account={scope}"], scope=scope)
 
@@ -184,7 +164,6 @@ def test_identity_mode_is_collection_wide_but_declarations_and_revisions_are_sco
     call(engine, "configure", scope="b", item_identity_mode="union")
     call(engine, "configure", scope="new-account")
     assert {scope: resolve(scope)["revision"] for scope in scopes} == changed
-    nodes(engine, "/resources/new", scope="a")
     declare(engine, "/resources/new", "only-a", scope="a")
     assert resolve("a")["revision"] != changed["a"]
     assert resolve("b")["revision"] == changed["b"]
@@ -228,7 +207,6 @@ def test_collection_default_union_survives_reload_before_activation(tmp_path):
     assert caps["enabled"] is False
     assert caps["item_identity_mode"] == "union"
     assert not (path / "catalog").exists()
-    collection.catalog_execute({"op": "upsert_nodes", "scope": "a", "nodes": []})
     collection.catalog_execute({"op": "configure", "scope": "a", "item_identity_mode": "shadow"})
     collection.close()
     collection = get_or_create_local_collection(path=str(path))
@@ -250,7 +228,6 @@ def test_collection_default_union_survives_reload_before_activation(tmp_path):
 )
 def test_duplicate_labels_contribute_each_input_row(mode, aggregation, sign, max_members):
     engine = CatalogEngine()
-    nodes(engine, "/resources/A/B")
     declare(engine, "/resources/A", "parent")
     declare(engine, "/resources/A/B", "child")
     call(engine, "configure", item_identity_mode=mode)
@@ -280,18 +257,8 @@ def test_duplicate_labels_contribute_each_input_row(mode, aggregation, sign, max
         assert set(group["candidate_members_uri"]).issubset({row["uri"] for row in inputs})
 
 
-def test_noop_registrations_do_not_advance_identity_revision():
-    engine = CatalogEngine()
-    nodes(engine, "/resources/A")
-    declare(engine, "/resources/A", "a")
-    before = call(engine, "resolve", uris=["/resources/A/hit"])["revision"]
-    nodes(engine, "/resources/A", "/resources/unrelated/new")
-    assert call(engine, "resolve", uris=["/resources/A/hit"])["revision"] == before
-
-
 def test_group_evidence_budget_does_not_truncate_scores_or_counts():
     engine = CatalogEngine()
-    nodes(engine, "/resources/A")
     declare(engine, "/resources/A", "a", ["kind=asset"])
     result = call(
         engine,
@@ -314,15 +281,6 @@ def test_group_evidence_budget_does_not_truncate_scores_or_counts():
 def test_item_attrs_filter_uses_each_item_roots_own_values():
     engine = CatalogEngine()
     call(engine, "configure", item_identity_mode="shadow")
-    nodes(
-        engine,
-        "/resources/A",
-        "/resources/A/frame",
-        "/resources/A/shot",
-        "/resources/A/shot/frame",
-        "/resources/B",
-        "/resources/B/frame",
-    )
     declare(engine, "/resources/A", "uuid-a", ["asset_id=V1"])
     declare(engine, "/resources/A/shot", "uuid-shot", ["asset_id=V2"])
     declare(engine, "/resources/B", "uuid-b", [])
@@ -359,7 +317,6 @@ def test_item_attrs_filter_uses_each_item_roots_own_values():
 
 def test_grouping_aggregates_in_engine_and_has_stable_ordering():
     engine = CatalogEngine()
-    nodes(engine, "/resources/A", "/resources/A/a", "/resources/A/b", "/resources/B/x")
     declare(engine, "/resources/A", "uuid-a", [])
     declare(engine, "/resources/B", "uuid-b", [])
     candidates = [
@@ -401,8 +358,6 @@ def test_grouping_aggregates_in_engine_and_has_stable_ordering():
 def test_persistence_delete_and_account_scoped_revisions(tmp_path):
     path = str(tmp_path / "catalog")
     engine = CatalogEngine(path)
-    nodes(engine, "/resources/A")
-    nodes(engine, "/resources/B", scope="b")
     declare(engine, "/resources/A", "uuid-a", ["asset_id=A"])
     revision_a = call(engine, "resolve", uris=["/resources/A"])["revision"]
     declare(engine, "/resources/B", "uuid-b", [], scope="b")
@@ -411,7 +366,13 @@ def test_persistence_delete_and_account_scoped_revisions(tmp_path):
     gc.collect()
 
     engine = CatalogEngine(path)
-    assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuid"] == "uuid-a"
+    assert declare(engine, "/resources/A", "retry", include_attrs=False)["item_attrs"] == [
+        "asset_id=A"
+    ]
+    assert (
+        call(engine, "resolve", uris=["/resources/A/child/frame"])["data"][0]["item_uuid"]
+        == "uuid-a"
+    )
     call(engine, "delete_subtree", uri="/resources/A")
     assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuids"] == []
 
@@ -419,13 +380,6 @@ def test_persistence_delete_and_account_scoped_revisions(tmp_path):
 def test_move_subtree_preserves_item_identity_attrs_and_nested_items():
     engine = CatalogEngine()
     call(engine, "configure", item_identity_mode="shadow")
-    nodes(
-        engine,
-        "/resources/A",
-        "/resources/A/frame",
-        "/resources/A/shot",
-        "/resources/A/shot/frame",
-    )
     declare(engine, "/resources/A", "uuid-a", ["asset_id=V1"])
     declare(engine, "/resources/A/shot", "uuid-shot", ["kind=shot"])
 
@@ -435,7 +389,7 @@ def test_move_subtree_preserves_item_identity_attrs_and_nested_items():
         from_uri="/resources/A",
         to_uri="/resources/B",
     )
-    assert moved["moved_nodes"] == 4
+    assert moved["moved_nodes"] == 2
     assert call(
         engine,
         "resolve",
@@ -473,8 +427,6 @@ def test_move_subtree_preserves_item_identity_attrs_and_nested_items():
 def test_move_subtree_merges_and_undo_restores_both_trees(source_is_item, identity_mode):
     engine = CatalogEngine()
     call(engine, "configure", item_identity_mode=identity_mode)
-    nodes(engine, "/resources/source", "/resources/source/a")
-    nodes(engine, "/resources/target", "/resources/target/kept")
     if source_is_item:
         declare(engine, "/resources/source", "uuid-source", ["asset_id=source"])
     declare(engine, "/resources/target", "uuid-target", ["asset_id=target"])
@@ -488,7 +440,7 @@ def test_move_subtree_merges_and_undo_restores_both_trees(source_is_item, identi
         from_uri="/resources/source",
         to_uri="/resources/target",
     )
-    assert moved["moved_nodes"] == 2
+    assert moved["moved_nodes"] == int(source_is_item)
     assert call(
         engine,
         "resolve",
@@ -516,7 +468,10 @@ def test_move_subtree_merges_and_undo_restores_both_trees(source_is_item, identi
         == moved_attrs
     )
 
-    call(engine, "restore_move", undo=moved["undo"])
+    if source_is_item:
+        call(engine, "restore_move", undo=moved["undo"])
+    else:
+        assert "undo" not in moved
     assert call(
         engine,
         "resolve",
@@ -541,13 +496,12 @@ def test_move_subtree_merges_and_undo_restores_both_trees(source_is_item, identi
 @pytest.mark.parametrize(
     "payload",
     [
-        {"op": "upsert_nodes", "scope": "a", "nodes": ["bad"]},
-        {"op": "upsert_nodes", "scope": "a", "nodes": [{"uri": "/a/../b", "node_type": "dir"}]},
-        {"op": "upsert_nodes", "scope": "a\0b", "nodes": []},
+        {"op": "declare_item", "scope": "a", "uri": "/a/../b", "item_uuids": ["uuid"]},
+        {"op": "declare_item", "scope": "a\0b", "uri": "/a", "item_uuids": ["uuid"]},
         {
             "op": "declare_item",
             "scope": "a",
-            "uri": "/missing",
+            "uri": "/a",
             "item_uuid": "uuid",
             "item_attrs": ["bad"],
         },
@@ -573,9 +527,6 @@ def adapter(tmp_path):
 
 
 def declare_adapter_item(adapter, uri, item_uuid, attrs):
-    adapter.catalog_execute(
-        {"op": "upsert_nodes", "scope": "a", "nodes": [{"uri": uri, "node_type": "dir"}]}
-    )
     adapter.catalog_execute(
         {
             "op": "declare_item",
@@ -628,35 +579,42 @@ def test_item_recall_excludes_ordinary_records_and_keeps_sum_stable(adapter, mon
     ]
 
 
-def test_local_adapter_filters_then_groups_candidates(adapter):
+def test_local_adapter_filters_then_groups_candidates(adapter, monkeypatch):
     root = "viking://resources/items"
     declare_adapter_item(adapter, f"{root}/A", "uuid-a", ["asset_id=V1"])
     declare_adapter_item(adapter, f"{root}/B", "uuid-b", ["asset_id=V2"])
-    adapter.upsert(
-        [
-            {
-                "id": "a1",
-                "account_id": "a",
-                "uri": f"{root}/A/frame1",
-                "vector": [1, 0, 0, 0],
-                "level": 2,
-            },
-            {
-                "id": "a2",
-                "account_id": "a",
-                "uri": f"{root}/A/frame2",
-                "vector": [0.9, 0.1, 0, 0],
-                "level": 2,
-            },
-            {
-                "id": "b1",
-                "account_id": "a",
-                "uri": f"{root}/B/frame1",
-                "vector": [0.8, 0.2, 0, 0],
-                "level": 2,
-            },
-        ]
-    )
+    collection = adapter.get_collection()._Collection__collection
+
+    def reject_catalog_write(request):
+        pytest.fail(f"Member upsert called Catalog operation {request['op']}")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(collection, "catalog_execute", reject_catalog_write)
+        adapter.upsert(
+            [
+                {
+                    "id": "a1",
+                    "account_id": "a",
+                    "uri": f"{root}/A/frame1",
+                    "vector": [1, 0, 0, 0],
+                    "level": 2,
+                },
+                {
+                    "id": "a2",
+                    "account_id": "a",
+                    "uri": f"{root}/A/frame2",
+                    "vector": [0.9, 0.1, 0, 0],
+                    "level": 2,
+                },
+                {
+                    "id": "b1",
+                    "account_id": "a",
+                    "uri": f"{root}/B/frame1",
+                    "vector": [0.8, 0.2, 0, 0],
+                    "level": 2,
+                },
+            ]
+        )
     result = adapter.search_item_groups(
         query_vector=[1, 0, 0, 0],
         filter=And([Eq("account_id", "a"), Eq("item_attrs", "asset_id=V2")]),
@@ -1066,90 +1024,17 @@ def test_semantic_item_scan_retries_after_index_replacement(monkeypatch):
         adapter.close()
 
 
-def test_noop_node_updates_do_not_invalidate_every_item_recall(adapter, monkeypatch):
-    root = "viking://resources/read-item"
-    declare_adapter_item(adapter, root, "uuid-read", [])
-    declare_adapter_item(adapter, "viking://resources/unrelated", "uuid-unrelated", [])
-    adapter.upsert(
-        [
-            {
-                "id": "hit",
-                "account_id": "a",
-                "uri": root + "/hit.md",
-                "level": 2,
-                "vector": [1, 0, 0, 0],
-            }
-        ]
-    )
-    collection = adapter.get_collection()._Collection__collection
-    index = collection.indexes.get("default")
-    original_search = index.search_items
-    recalls = []
-
-    def search_then_noop_upsert(*args, **kwargs):
-        recalled = original_search(*args, **kwargs)
-        before = recalled["revision"]
-        after = collection.catalog_execute(
-            {
-                "op": "upsert_nodes",
-                "scope": "a",
-                "nodes": [{"uri": "/resources/unrelated", "node_type": "dir"}],
-            }
-        )["revision"]
-        recalls.append({"before": before, "after": after})
-        return recalled
-
-    monkeypatch.setattr(index, "search_items", search_then_noop_upsert)
-    result = adapter.search_item_groups(
-        query_vector=[1, 0, 0, 0], filter=Eq("account_id", "a"), max_groups=1
-    )
-    assert result["groups"][0]["entity_id"] == "uuid-read"
-    assert len(recalls) == 1
-    assert recalls[0]["before"] == recalls[0]["after"]
-
-
 def test_item_root_type_is_validated_before_a_resource_replacement():
     engine = CatalogEngine()
-    nodes(engine, "/resources/A")
     declare(engine, "/resources/A", "stable")
     with pytest.raises(ValueError, match="Cannot change an Item root node type"):
         call(engine, "validate_resource_update", uri="/resources/A", node_type="file")
     assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuids"] == ["stable"]
 
 
-def test_file_catalog_node_cannot_be_declared_as_item():
-    engine = CatalogEngine()
-    uri = "/resources/leaf.md"
-    call(engine, "upsert_nodes", nodes=[{"uri": uri, "node_type": "file"}])
-    with pytest.raises(ValueError, match="require a directory Catalog node"):
-        declare(engine, uri, "leaf")
-
-
-def test_resource_catalog_reset_preserves_declaration_and_rejects_independent_children():
-    engine = CatalogEngine()
-    nodes(engine, "/resources/A")
-    declared = declare(engine, "/resources/A", "stable", ["kind=asset"])
-    call(engine, "upsert_nodes", nodes=[{"uri": "/resources/A/swap", "node_type": "file"}])
-    reset = call(engine, "delete_subtree", uri="/resources/A", preserve_item_root=True)
-    assert reset["revision"] == declared["revision"]
-    nodes(engine, "/resources/A/swap/inner")  # The old file type no longer conflicts.
-    assert call(engine, "resolve", uris=["/resources/A"])["data"][0]["item_uuid"] == "stable"
-    assert declare(engine, "/resources/A", "_read", include_attrs=False)["item_attrs"] == [
-        "kind=asset"
-    ]
-    declare(engine, "/resources/A/swap", "independent")
-    with pytest.raises(ValueError, match="independent child Items"):
-        call(engine, "delete_subtree", uri="/resources/A", preserve_item_root=True)
-    assert call(engine, "resolve", uris=["/resources/A/swap/inner"])["data"][0]["item_uuids"] == [
-        "independent",
-        "stable",
-    ]
-
-
 def test_uuid_collision_and_concurrent_declaration_replays_are_atomic(tmp_path):
     path = str(tmp_path / "uuid-catalog")
     engine = CatalogEngine(path)
-    nodes(engine, "/resources/A", "/resources/B")
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(
             pool.map(lambda uuid: declare(engine, "/resources/A", uuid), ["first", "second"])

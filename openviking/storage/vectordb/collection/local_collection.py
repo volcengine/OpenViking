@@ -363,14 +363,8 @@ class LocalCollection(ICollection):
         return self._catalog
 
     def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        if not self._catalog_enabled and request["op"] in (
-            "configure",
-            "upsert_nodes",
-            "declare_item",
-        ):
-            # Publish activation under the same barrier as vector writes. Item
-            # declarations may be introduced after unrelated ordinary records;
-            # only writes made after activation need Catalog node registration.
+        if not self._catalog_enabled and request["op"] in ("configure", "declare_item"):
+            # Publish activation under the same barrier as vector writes.
             with self._index_mutation_barrier.exclusive_mutation():
                 with self._catalog_lock:
                     result = self._open_catalog().execute(request)
@@ -1180,21 +1174,6 @@ class LocalCollection(ICollection):
         barrier = self._index_mutation_barrier
         with barrier.mutation() as mutation:
             barrier.reserve_labels(mutation, (str(candidate.label) for candidate in cands_list))
-            # Catalog must be enabled by an explicit declaration. Ordinary local
-            # collections keep their historical write path and are not backfilled.
-            if getattr(self, "_catalog_enabled", False):
-                scopes: Dict[str, List[Dict[str, str]]] = {}
-                for data in data_list:
-                    if data.get("uri") and data.get("account_id"):
-                        scopes.setdefault(data["account_id"], []).append(
-                            {
-                                "uri": data["uri"],
-                                "node_type": "dir" if data.get("level") in (0, 1) else "file",
-                            }
-                        )
-                for scope, nodes in scopes.items():
-                    self.catalog_execute({"op": "upsert_nodes", "scope": scope, "nodes": nodes})
-
             need_record_delta = True if self.indexes.count() > 0 else False
             delta_list = self.store_mgr.add_cands_data(
                 cands_list,

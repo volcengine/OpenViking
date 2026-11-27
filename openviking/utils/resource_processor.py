@@ -627,19 +627,6 @@ class ResourceProcessor:
         content_commit_started_at = time.perf_counter()
         try:
             with telemetry.measure("resource.content_commit"):
-                if any(
-                    action.operation
-                    in {ContentTreeOperation.DELETE, ContentTreeOperation.REPLACE_KIND}
-                    for action in context_plan.content_tree_actions
-                ):
-                    from openviking.storage.catalog import delete_catalog_subtree
-
-                    # One reconciliation per resource, under the existing tree
-                    # lease. Ordinary nodes can be registered again from vectors;
-                    # the root declaration must retain its UUID and attributes.
-                    await delete_catalog_subtree(
-                        get_viking_fs(), root_uri, ctx, preserve_item_root=True
-                    )
                 await execute_content_tree_actions(
                     context_plan.content_tree_actions,
                     store=commit_store,

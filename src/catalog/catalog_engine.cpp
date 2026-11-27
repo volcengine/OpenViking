@@ -55,9 +55,8 @@ class CatalogEngine::Impl {
   };
 
   std::shared_ptr<KVStore> store_;
-  std::map<std::string, std::string> nodes_;
-  // Sparse declaration indexes: ordinary member registration never needs to
-  // parse all nodes, and UUID lookup does not scan the collection.
+  // Persisted collection settings and explicit Item declarations.
+  std::map<std::string, std::string> records_;
   std::map<std::string, ResolvedItem> declarations_;
   std::map<std::string, std::string> uuid_roots_;
   std::map<std::string, std::set<std::string>> attribute_roots_;
@@ -73,8 +72,8 @@ class CatalogEngine::Impl {
                                           const std::string& uri) const;
   bool union_mode() const;
   std::string identity_revision(const std::string& scope) const;
-  void unindex_node(const std::string& node_key);
-  void index_node(const std::string& node_key, const std::string& value);
+  void unindex_declaration(const std::string& record_key);
+  void index_declaration(const std::string& record_key, const JsonValue& record);
   JsonValue compile_filter(const std::string& scope, const JsonValue& filter,
                            JsonAllocator& allocator) const;
   JsonValue compile_item_filter(const std::string& scope, const JsonValue& filter,
@@ -133,6 +132,20 @@ std::string required_string(const JsonValue& obj, const char* name) {
     throw std::invalid_argument("Catalog strings cannot contain NUL");
   }
   return value;
+}
+
+std::string required_item_uuid(const JsonValue& record) {
+  if (!record.HasMember("item_uuids") || !record["item_uuids"].IsArray() ||
+      record["item_uuids"].Size() != 1 || !record["item_uuids"][0].IsString() ||
+      record["item_uuids"][0].GetStringLength() == 0) {
+    throw std::invalid_argument("An Item root must declare one item_uuids string");
+  }
+  const auto& id = record["item_uuids"][0];
+  std::string uuid(id.GetString(), id.GetStringLength());
+  if (uuid.find('\0') != std::string::npos) {
+    throw std::invalid_argument("item_uuids cannot contain NUL");
+  }
+  return uuid;
 }
 
 std::string canonical(std::string uri) {
@@ -255,9 +268,12 @@ CatalogEngine::Impl::Impl(const std::string& path) {
                         : std::shared_ptr<KVStore>(new PersistStore(path));
   for (const auto& entry :
        store_->seek_range("", std::string(1, static_cast<char>(0xff)))) {
-    parse(entry.second);  // Fail closed on corrupt persisted metadata.
-    nodes_.insert(entry);
-    index_node(entry.first, entry.second);
+    const auto record = parse(entry.second);
+    if (entry.first == "@catalog" || entry.first == kIdentityModeKey ||
+        record.HasMember("item_uuids")) {
+      records_.insert(entry);
+      index_declaration(entry.first, record);
+    }
   }
   const auto read_mode = [](const std::string& value) {
     const auto mode = required_string(parse(value), "item_identity_mode");
@@ -266,8 +282,8 @@ CatalogEngine::Impl::Impl(const std::string& path) {
     }
     return mode == "union";
   };
-  const auto config = nodes_.find(kIdentityModeKey);
-  if (config != nodes_.end()) {
+  const auto config = records_.find(kIdentityModeKey);
+  if (config != records_.end()) {
     collection_union_mode_ = read_mode(config->second);
     return;
   }
@@ -281,71 +297,59 @@ void CatalogEngine::Impl::commit(
   for (const auto& entry : updates) {
     operations.push_back({StorageOp::PUT_OP, entry.first, entry.second});
   }
-  for (const auto& node_key : deletes) {
-    if (updates.count(node_key) == 0) {
-      operations.push_back({StorageOp::DELETE_OP, node_key, ""});
+  for (const auto& record_key : deletes) {
+    if (updates.count(record_key) == 0) {
+      operations.push_back({StorageOp::DELETE_OP, record_key, ""});
     }
   }
   if (store_->exec_op(operations) != 0) {
     throw std::runtime_error("Catalog transaction failed");
   }
-  for (const auto& node_key : deletes) {
-    unindex_node(node_key);
-    nodes_.erase(node_key);
+  for (const auto& record_key : deletes) {
+    unindex_declaration(record_key);
+    records_.erase(record_key);
   }
-  for (const auto& entry : updates) unindex_node(entry.first);
+  for (const auto& entry : updates) unindex_declaration(entry.first);
   for (const auto& entry : updates) {
-    nodes_[entry.first] = entry.second;
-    index_node(entry.first, entry.second);
+    records_[entry.first] = entry.second;
+    index_declaration(entry.first, parse(entry.second));
   }
 }
 
-void CatalogEngine::Impl::unindex_node(const std::string& node_key) {
-  const auto found = declarations_.find(node_key);
+void CatalogEngine::Impl::unindex_declaration(const std::string& record_key) {
+  const auto found = declarations_.find(record_key);
   if (found == declarations_.end()) return;
-  const auto scope = node_key.substr(0, node_key.find('\0'));
+  const auto scope = record_key.substr(0, record_key.find('\0'));
   uuid_roots_.erase(key(scope, found->second.item_uuid));
   for (const auto& attr : found->second.item_attrs) {
     const auto posting = attribute_roots_.find(key(scope, attr));
     if (posting == attribute_roots_.end()) continue;
-    posting->second.erase(node_key);
+    posting->second.erase(record_key);
     if (posting->second.empty()) attribute_roots_.erase(posting);
   }
   declarations_.erase(found);
 }
 
-void CatalogEngine::Impl::index_node(const std::string& node_key,
-                                      const std::string& value) {
-  const auto separator = node_key.find('\0');
-  if (separator == std::string::npos || node_key[separator + 1] != '/') return;
-  const auto node = parse(value);
-  std::string uuid;
-  if (node.HasMember("item_uuids")) {
-    const auto& ids = node["item_uuids"];
-    if (!ids.IsArray() || ids.Size() != 1 || !ids[0].IsString() ||
-        ids[0].GetStringLength() == 0) {
-      throw std::invalid_argument("An Item root must declare one item_uuids string");
-    }
-    uuid.assign(ids[0].GetString(), ids[0].GetStringLength());
-  } else {
-    return;
-  }
+void CatalogEngine::Impl::index_declaration(const std::string& record_key,
+                                            const JsonValue& record) {
+  const auto separator = record_key.find('\0');
+  if (separator == std::string::npos || record_key[separator + 1] != '/') return;
   ResolvedItem item;
   item.found = true;
-  item.item_uuid = uuid;
-  item.root_uri = node_key.substr(separator + 1);
-  if (node.HasMember("item_attrs")) {
-    validate_item_attrs(node["item_attrs"]);
-    for (const auto& attr : node["item_attrs"].GetArray()) {
+  item.item_uuid = required_item_uuid(record);
+  item.root_uri = record_key.substr(separator + 1);
+  if (record.HasMember("item_attrs")) {
+    validate_item_attrs(record["item_attrs"]);
+    for (const auto& attr : record["item_attrs"].GetArray()) {
       item.item_attrs.emplace_back(attr.GetString(), attr.GetStringLength());
     }
   }
-  const auto scope = node_key.substr(0, separator);
-  uuid_roots_[key(scope, uuid)] = node_key;
+  const auto scope = record_key.substr(0, separator);
+  uuid_roots_[key(scope, item.item_uuid)] = record_key;
   for (const auto& attr : item.item_attrs) {
-    attribute_roots_[key(scope, attr)].insert(node_key);
+    attribute_roots_[key(scope, attr)].insert(record_key);
   }
-  declarations_[node_key] = std::move(item);
+  declarations_[record_key] = std::move(item);
 }
 
 bool CatalogEngine::Impl::union_mode() const {
@@ -826,17 +830,16 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
   auto& allocator = result.GetAllocator();
 
   if (op == "capabilities") {
-    result.AddMember("enabled", nodes_.count("@catalog") != 0, allocator);
+    result.AddMember("enabled", records_.count("@catalog") != 0, allocator);
     result.AddMember("version", 1, allocator);
     put_string(result, "item_identity_mode", union_mode() ? "union" : "shadow", allocator);
     JsonValue modes(rapidjson::kArrayType);
     modes.PushBack("shadow", allocator).PushBack("union", allocator);
     result.AddMember("item_identity_modes", modes, allocator);
     result.AddMember("item_attrs_inherit", false, allocator);
-    result.AddMember("preserve_item_root", true, allocator);
   } else if (op == "configure") {
     std::map<std::string, std::string> updates;
-    if (nodes_.count("@catalog") == 0) updates["@catalog"] = "{}";
+    if (records_.count("@catalog") == 0) updates["@catalog"] = "{}";
     bool accumulate;
     if (req.HasMember("item_identity_mode")) {
       const auto mode = required_string(req, "item_identity_mode");
@@ -851,7 +854,7 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     put_string(config, "item_identity_mode", accumulate ? "union" : "shadow",
                config.GetAllocator());
     const auto encoded = encode(config);
-    if (nodes_.count(kIdentityModeKey) == 0 || nodes_.at(kIdentityModeKey) != encoded) {
+    if (records_.count(kIdentityModeKey) == 0 || records_.at(kIdentityModeKey) != encoded) {
       updates[kIdentityModeKey] = encoded;
     }
     const bool changed = accumulate != collection_union_mode_;
@@ -861,51 +864,12 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       // The same field configuration affects every account in the collection.
       mode_revision_ = ++revision_;
     }
-  } else if (op == "upsert_nodes") {
-    if (!req.HasMember("nodes") || !req["nodes"].IsArray()) {
-      throw std::invalid_argument("Catalog requires nodes");
-    }
-    std::map<std::string, std::string> updates;
-    if (nodes_.count("@catalog") == 0) updates["@catalog"] = "{}";
-    for (const auto& input : req["nodes"].GetArray()) {
-      const auto uri = canonical(required_string(input, "uri"));
-      const auto node_type = required_string(input, "node_type");
-      if (node_type != "file" && node_type != "dir") {
-        throw std::invalid_argument("Invalid Catalog node_type");
-      }
-      for (std::string current = uri; !current.empty(); current = parent(current)) {
-        const auto node_key = key(scope, current);
-        const std::string current_type = current == uri ? node_type : "dir";
-        const auto pending = updates.find(node_key);
-        const auto existing = nodes_.find(node_key);
-        if (pending != updates.end() || existing != nodes_.end()) {
-          const auto stored = parse(pending != updates.end() ? pending->second
-                                                             : existing->second);
-          if (!stored.HasMember("node_type") || !stored["node_type"].IsString() ||
-              std::string(stored["node_type"].GetString(),
-                          stored["node_type"].GetStringLength()) != current_type) {
-            throw std::invalid_argument(
-                "Catalog node type conflicts with existing node");
-          }
-          continue;
-        }
-        JsonDoc node(rapidjson::kObjectType);
-        auto& node_allocator = node.GetAllocator();
-        put_string(node, "uri", current, node_allocator);
-        put_string(node, "node_type", current_type, node_allocator);
-        updates[node_key] = encode(node);
-      }
-    }
-    if (!updates.empty()) commit(updates);
-    // Member nodes do not change effective Item identity or attribute filters.
   } else if (op == "validate_resource_update") {
     const auto uri = canonical(required_string(req, "uri"));
     const auto own = declarations_.find(key(scope, uri));
-    if (own != declarations_.end() && req.HasMember("node_type")) {
-      const auto stored = parse(nodes_.at(key(scope, uri)));
-      if (required_string(req, "node_type") != required_string(stored, "node_type")) {
-        throw std::invalid_argument("Cannot change an Item root node type");
-      }
+    if (own != declarations_.end() && req.HasMember("node_type") &&
+        required_string(req, "node_type") != "dir") {
+      throw std::invalid_argument("Cannot change an Item root node type");
     }
     if (req.HasMember("item_attrs")) {
       validate_item_attrs(req["item_attrs"]);
@@ -933,29 +897,12 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     result.AddMember("has_item", resolve_item(scope, uri).found, allocator);
   } else if (op == "declare_item") {
     const auto uri = canonical(required_string(req, "uri"));
-    std::string generated_uuid;
-    if (!req.HasMember("item_uuids") || !req["item_uuids"].IsArray() ||
-        req["item_uuids"].Size() != 1 || !req["item_uuids"][0].IsString() ||
-        req["item_uuids"][0].GetStringLength() == 0) {
-      throw std::invalid_argument("An Item root must declare one item_uuids string");
-    }
-    const auto& id = req["item_uuids"][0];
-    generated_uuid.assign(id.GetString(), id.GetStringLength());
-    if (generated_uuid.find('\0') != std::string::npos) {
-      throw std::invalid_argument("item_uuids cannot contain NUL");
-    }
-    const auto found = nodes_.find(key(scope, uri));
-    if (found == nodes_.end()) {
-      throw std::invalid_argument("Catalog node does not exist");
-    }
+    auto generated_uuid = required_item_uuid(req);
     const bool attrs_supplied = req.HasMember("item_attrs");
     if (attrs_supplied) validate_item_attrs(req["item_attrs"]);
-    auto node = parse(found->second);
-    if (required_string(node, "node_type") != "dir") {
-      throw std::invalid_argument("Item declarations require a directory Catalog node");
-    }
-    auto& node_allocator = node.GetAllocator();
-    const auto existing_item = declarations_.find(key(scope, uri));
+    const auto item_key = key(scope, uri);
+    const auto existing_item = declarations_.find(item_key);
+    JsonDoc declaration(rapidjson::kObjectType);
     if (existing_item != declarations_.end()) {
       if (attrs_supplied) {
         std::vector<std::string> attrs;
@@ -970,17 +917,20 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
         }
       }
       generated_uuid = existing_item->second.item_uuid;
+      declaration = parse(records_.at(item_key));
     } else {
       if (uuid_roots_.count(key(scope, generated_uuid))) {
         throw std::invalid_argument("item_uuid already belongs to another root");
       }
+      auto& declaration_allocator = declaration.GetAllocator();
+      put_string(declaration, "uri", uri, declaration_allocator);
       JsonValue ids(rapidjson::kArrayType);
-      ids.PushBack(JsonValue(generated_uuid.c_str(), node_allocator), node_allocator);
-      node.AddMember("item_uuids", ids, node_allocator);
+      ids.CopyFrom(req["item_uuids"], declaration_allocator);
+      declaration.AddMember("item_uuids", ids, declaration_allocator);
       JsonValue attrs(rapidjson::kArrayType);
-      if (attrs_supplied) attrs.CopyFrom(req["item_attrs"], node_allocator);
-      node.AddMember("item_attrs", attrs, node_allocator);
-      commit({{"@catalog", "{}"}, {key(scope, uri), encode(node)}});
+      if (attrs_supplied) attrs.CopyFrom(req["item_attrs"], declaration_allocator);
+      declaration.AddMember("item_attrs", attrs, declaration_allocator);
+      commit({{"@catalog", "{}"}, {item_key, encode(declaration)}});
       scope_revisions_[scope] = ++revision_;
     }
     put_string(result, "uri", uri, allocator);
@@ -989,7 +939,9 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     ids.PushBack(JsonValue(generated_uuid.c_str(), allocator), allocator);
     result.AddMember("item_uuids", ids, allocator);
     JsonValue attrs(rapidjson::kArrayType);
-    if (node.HasMember("item_attrs")) attrs.CopyFrom(node["item_attrs"], allocator);
+    if (declaration.HasMember("item_attrs")) {
+      attrs.CopyFrom(declaration["item_attrs"], allocator);
+    }
     result.AddMember("item_attrs", attrs, allocator);
   } else if (op == "resolve") {
     if (!req.HasMember("uris") || !req["uris"].IsArray()) {
@@ -1048,32 +1000,26 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
           "Catalog move source and target subtrees must not overlap");
     }
 
-    // Capture source nodes and overwritten targets before committing the move.
-    // If the transfer later fails, these snapshots and the list of created
-    // targets allow the caller to restore the original trees.
-    const std::string prefix = scope + '\0' + '/';
+    // Snapshot changed Item declarations for rollback if the transfer fails.
+    const auto prefix = key(scope, "/");
     std::vector<std::string> source_keys;
     std::map<std::string, std::string> updates;
     JsonValue source_nodes(rapidjson::kArrayType);
     JsonValue target_nodes(rapidjson::kArrayType);
     JsonValue created_target_uris(rapidjson::kArrayType);
-    for (auto it = nodes_.lower_bound(prefix);
-         it != nodes_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
+    for (auto it = records_.lower_bound(prefix);
+         it != records_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
       const auto uri = it->first.substr(scope.size() + 1);
       if (!in_tree(uri, from_uri)) continue;
       const auto suffix = uri.substr(from_uri.size());
       const auto moved_uri = to_uri + suffix;
       const auto moved_key = key(scope, moved_uri);
-      auto node = parse(it->second);
-      source_nodes.PushBack(JsonValue(node, allocator), allocator);
-      const auto existing = nodes_.find(moved_key);
-      if (existing != nodes_.end()) {
-        const auto target_node = parse(existing->second);
-        target_nodes.PushBack(JsonValue(target_node, allocator), allocator);
-        // Merging an ordinary directory must not undeclare the target Item.
-        if (!node.HasMember("item_uuids") && target_node.HasMember("item_uuids")) {
-          node.CopyFrom(target_node, node.GetAllocator());
-        }
+      auto declaration = parse(it->second);
+      source_nodes.PushBack(JsonValue(declaration, allocator), allocator);
+      const auto existing = records_.find(moved_key);
+      if (existing != records_.end()) {
+        const auto target = parse(existing->second);
+        target_nodes.PushBack(JsonValue(target, allocator), allocator);
       } else {
         created_target_uris.PushBack(
             JsonValue(moved_uri.c_str(),
@@ -1081,9 +1027,9 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
                       allocator),
             allocator);
       }
-      put_string(node, "uri", moved_uri, node.GetAllocator());
+      put_string(declaration, "uri", moved_uri, declaration.GetAllocator());
       source_keys.push_back(it->first);
-      updates[moved_key] = encode(node);
+      updates[moved_key] = encode(declaration);
     }
     if (!source_keys.empty()) {
       commit(updates, source_keys);
@@ -1119,34 +1065,23 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     }
 
     std::map<std::string, std::string> updates;
-    const auto restore_nodes = [&](const JsonValue& snapshots,
-                                   const std::string& root) {
+    const auto restore_declarations = [&](const JsonValue& snapshots,
+                                          const std::string& root) {
       for (const auto& snapshot : snapshots.GetArray()) {
         const auto uri = canonical(required_string(snapshot, "uri"));
         if (!in_tree(uri, root)) {
           throw std::invalid_argument(
-              "Catalog restore node is outside its subtree");
+              "Catalog restore declaration is outside its subtree");
         }
-        const auto node_type = required_string(snapshot, "node_type");
-        if (node_type != "file" && node_type != "dir") {
-          throw std::invalid_argument("Invalid Catalog node_type");
-        }
-        if (snapshot.HasMember("item_uuid")) required_string(snapshot, "item_uuid");
-        if (snapshot.HasMember("item_uuids")) {
-          const auto& ids = snapshot["item_uuids"];
-          if (!ids.IsArray() || ids.Size() != 1 || !ids[0].IsString() ||
-              ids[0].GetStringLength() == 0) {
-            throw std::invalid_argument("Invalid restored item_uuids");
-          }
-        }
+        required_item_uuid(snapshot);
         if (snapshot.HasMember("item_attrs")) {
           validate_item_attrs(snapshot["item_attrs"]);
         }
         updates[key(scope, uri)] = encode(snapshot);
       }
     };
-    restore_nodes(undo["source_nodes"], from_uri);
-    restore_nodes(undo["target_nodes"], to_uri);
+    restore_declarations(undo["source_nodes"], from_uri);
+    restore_declarations(undo["target_nodes"], to_uri);
 
     std::vector<std::string> deletes;
     for (const auto& value : undo["created_target_uris"].GetArray()) {
@@ -1162,7 +1097,7 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       }
       deletes.push_back(key(scope, uri));
     }
-    // Restore saved nodes and remove move-created targets in one store
+    // Restore saved declarations and remove move-created targets in one store
     // transaction before advancing the account revision.
     commit(updates, deletes);
     if (!updates.empty() || !deletes.empty()) {
@@ -1172,31 +1107,16 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
                      allocator);
   } else if (op == "delete_subtree") {
     const auto uri = canonical(required_string(req, "uri"));
-    if (req.HasMember("preserve_item_root") && !req["preserve_item_root"].IsBool()) {
-      throw std::invalid_argument("preserve_item_root must be a boolean");
-    }
-    const bool preserve_root = req.HasMember("preserve_item_root") &&
-                               req["preserve_item_root"].GetBool();
-    const std::string prefix = scope + '\0' + '/';
+    const auto prefix = key(scope, "/");
     std::vector<std::string> keys;
-    for (auto it = nodes_.lower_bound(prefix);
-         it != nodes_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
-      const auto node_uri = it->first.substr(scope.size() + 1);
-      if (!in_tree(node_uri, uri)) continue;
-      if (preserve_root && declarations_.count(it->first)) {
-        if (node_uri == uri) continue;
-        throw std::invalid_argument("Cannot reset a resource containing independent child Items");
-      }
-      keys.push_back(it->first);
+    for (auto it = declarations_.lower_bound(prefix);
+         it != declarations_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
+      if (in_tree(it->second.root_uri, uri)) keys.push_back(it->first);
     }
-    if (store_->delete_data(keys) != 0) {
-      throw std::runtime_error("Catalog deletion failed");
+    if (!keys.empty()) {
+      commit({}, keys);
+      scope_revisions_[scope] = ++revision_;
     }
-    for (const auto& node_key : keys) {
-      unindex_node(node_key);
-      nodes_.erase(node_key);
-    }
-    if (!keys.empty() && !preserve_root) scope_revisions_[scope] = ++revision_;
   } else {
     throw std::invalid_argument("Unknown Catalog operation: " + op);
   }

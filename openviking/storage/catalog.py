@@ -86,13 +86,6 @@ async def declare_item(
         raise NotInitializedError("Catalog storage")
 
     try:
-        await storage.catalog_execute(
-            {
-                "op": "upsert_nodes",
-                "nodes": [{"uri": uri, "node_type": "dir"}],
-            },
-            ctx=ctx,
-        )
         request: dict[str, Any] = {
             "op": "declare_item",
             "uri": uri,
@@ -178,7 +171,7 @@ async def require_existing_item_root(storage, uri: str, ctx) -> None:
     )
 
 
-async def delete_catalog_subtree(fs, uri: str, ctx, *, preserve_item_root: bool = False) -> None:
+async def delete_catalog_subtree(fs, uri: str, ctx) -> None:
     from openviking.core.namespace_policy import is_system_uri
     from openviking_cli.exceptions import UnimplementedError
 
@@ -189,10 +182,7 @@ async def delete_catalog_subtree(fs, uri: str, ctx, *, preserve_item_root: bool 
     if execute is None:
         return
     try:
-        request: dict[str, Any] = {"op": "delete_subtree", "uri": uri}
-        if preserve_item_root:
-            request["preserve_item_root"] = True
-        await execute(request, ctx=ctx)
+        await execute({"op": "delete_subtree", "uri": uri}, ctx=ctx)
     except UnimplementedError:
         return
 

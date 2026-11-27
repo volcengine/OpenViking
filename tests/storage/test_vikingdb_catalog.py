@@ -139,7 +139,6 @@ def call(collection, op, scope="a", **kwargs):
 
 
 def declare(collection, uri, item_uuid, *, scope="a", **kwargs):
-    call(collection, "upsert_nodes", scope, nodes=[{"uri": uri, "node_type": "dir"}])
     result = call(collection, "declare_item", scope, uri=uri, item_uuids=[item_uuid], **kwargs)
     if result.pop("index_with_root"):
         collection.upsert_data(

@@ -501,8 +501,6 @@ class CollectionAdapter(ABC):
                 request[field] = self._encode_uri_field_value(request[field])
         if "uris" in request:
             request["uris"] = [self._encode_uri_field_value(uri) for uri in request["uris"]]
-        if "nodes" in request:
-            request["nodes"] = [self._normalize_record_for_write(node) for node in request["nodes"]]
         result = collection.catalog_execute(request)
 
         def decode(row):
