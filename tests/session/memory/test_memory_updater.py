@@ -47,6 +47,7 @@ from openviking.session.memory.utils import (
 from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.queuefs.semantic_executor import SemanticTreeExecutor
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking.storage.queuefs.semantic_processor import logger as semantic_logger
 from openviking.system_assets import builtin_memory_templates_dir
 from openviking_cli.exceptions import ConflictError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -359,9 +360,25 @@ class TestMemoryUpdater:
         submit.assert_awaited_once_with(directory, 2, ctx=ctx)
 
     @pytest.mark.asyncio
-    async def test_generate_events_overview_without_extract_context_uses_summary_or_filename(self):
+    @pytest.mark.parametrize(
+        "additional_card",
+        [
+            pytest.param(None, id="valid-cards"),
+            pytest.param(
+                'Invalid event.\n\n<!-- MEMORY_FIELDS\n{"links": "legacy-value"}\n-->',
+                id="invalid-memory-fields",
+            ),
+            pytest.param(FileNotFoundError("card disappeared"), id="missing-card"),
+            pytest.param(AGFSIoError("storage read failed"), id="storage-error"),
+        ],
+    )
+    async def test_generate_events_overview_without_extract_context_uses_summary_or_filename(
+        self, additional_card, caplog, request
+    ):
         directory = "viking://user/alice/memories/events/2026/06/16"
         event_uri = f"{directory}/kept.md"
+        additional_uri = f"{directory}/a-extra.md"
+        overview_uri = f"{directory}/.overview.md"
         files = {
             event_uri: MemoryFileUtils.write(
                 MemoryFile(
@@ -373,25 +390,43 @@ class TestMemoryUpdater:
             ),
             f"{directory}/plain.md": "Plain event.",
         }
+        if additional_card is not None:
+            files[additional_uri] = additional_card
 
-        async def read_file(uri, **kwargs):
-            if uri not in files:
-                raise FileNotFoundError(uri)
-            return files[uri]
+        class EventsFS(_FakeFS):
+            async def read_file(self, uri, ctx=None):
+                if uri not in self.files:
+                    raise FileNotFoundError(uri)
+                raw = self.files[uri]
+                if isinstance(raw, Exception):
+                    raise raw
+                return raw
 
-        template = "# Events Overview\n{% for item in items %}\n- [{{ item.file_content.summary|default(item.file_name, true) }}](./{{ item.file_name }})\n{% endfor %}"
+            async def exists(self, uri, ctx=None):
+                return uri == directory
+
+            async def ls(self, uri, *, node_limit, ctx=None):
+                return [
+                    {"name": uri.rsplit("/", 1)[-1], "isDir": False} for uri in sorted(self.files)
+                ]
+
+        fs = EventsFS(files)
         registry = MemoryTypeRegistry(load_schemas=False)
         registry.load_from_yaml(str(builtin_memory_templates_dir() / "events.yaml"))
-        schema = registry.get("events")
-        schema.overview_template = template
-        schema.abstract_template = "Event memories."
         model = AsyncMock(side_effect=AssertionError("directory refresh must use stored fields"))
         processor = SemanticProcessor(vlm_resolver=SimpleNamespace(get_vlm=model))
         ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)
+        config = SimpleNamespace(semantic=SemanticConfig(), output_language_override="en")
+        semantic_logger.addHandler(caplog.handler)
+        request.addfinalizer(lambda: semantic_logger.removeHandler(caplog.handler))
         with (
             patch(
                 "openviking.storage.queuefs.semantic_processor.get_viking_fs",
-                return_value=SimpleNamespace(read_file=read_file),
+                return_value=fs,
+            ),
+            patch(
+                "openviking.storage.queuefs.semantic_executor.get_viking_fs",
+                return_value=fs,
             ),
             patch(
                 "openviking.session.memory.memory_type_registry.get_default_registry",
@@ -399,27 +434,47 @@ class TestMemoryUpdater:
             ),
             patch(
                 "openviking.storage.queuefs.semantic_processor.get_openviking_config",
-                return_value=SimpleNamespace(
-                    semantic=SemanticConfig(), output_language_override="en"
-                ),
+                return_value=config,
+            ),
+            patch(
+                "openviking.storage.queuefs.semantic_executor.get_openviking_config",
+                return_value=config,
             ),
         ):
-            result = await processor._generate_directory_semantics(
-                directory,
-                [
-                    {"name": "kept.md", "summary": "Kept event."},
-                    {"name": "plain.md", "summary": "Plain event."},
-                ],
-                [],
-                ctx=ctx,
-                total_entries=2,
+            executor = SemanticTreeExecutor(
+                processor,
+                "memory",
+                1,
+                ctx,
+                target_uri=directory,
+                recursive=False,
+                incremental_update=True,
+                skip_vectorization=True,
+                generation_trigger="directory_refresh",
             )
-        assert result.abstract == "Event memories."
-        assert "- [kept event](./kept.md)" in result.overview
-        assert "- [plain.md](./plain.md)" in result.overview
-        assert "Directory navigation" in result.overview
-        assert "Access guide" in result.overview
-        assert "# Events Overview" not in result.overview
+            if isinstance(additional_card, AGFSIoError):
+                with pytest.raises(AGFSIoError) as error:
+                    await executor.run(directory)
+                assert error.value is additional_card
+                assert overview_uri not in fs.files
+                return
+            await executor.run(directory)
+
+        overview = parse_abstract_overview(fs.files[overview_uri]).body
+        abstract = parse_abstract_overview(fs.files[f"{directory}/.abstract.md"]).body
+        assert abstract == "Remembered events, decisions, and milestones for 2026/06/16.\n"
+        assert "- [kept event](./kept.md)" in overview
+        assert "- [plain.md](./plain.md)" in overview
+        assert "./a-extra.md" not in overview
+        assert "Directory navigation" in overview
+        assert "Access guide" in overview
+        assert "# Events Overview" not in overview
+        degraded = [
+            record
+            for record in caplog.records
+            if record.name == semantic_logger.name and getattr(record, "degraded", False)
+        ]
+        assert len(degraded) == int(isinstance(additional_card, str))
         model.assert_not_awaited()
 
     @pytest.mark.asyncio
