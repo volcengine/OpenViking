@@ -72,7 +72,7 @@ async fn cleanup(account: &str) {
 async fn postgres_snapshot_log_history_scope_width_and_watermark() {
     let store = store().await;
     let account = uuid::Uuid::new_v4().simple().to_string() + &"a".repeat(32);
-    let branch = "b".repeat(512);
+    let branch = "b".repeat(128);
     // Varied four-byte characters exercise the full 2048-byte path limit.
     let wide: String = (0..512)
         .map(|i| char::from_u32(0x10000 + i).unwrap())

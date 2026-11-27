@@ -218,8 +218,7 @@ export OPENVIKING_SNAPSHOT_LOG_POSTGRES_DSN='postgresql://user:password@host:543
 
 Runtime startup does not create or migrate PostgreSQL tables. The runtime role
 needs `SELECT` and `INSERT` on `snapshot_log`, and `USAGE` on its identity sequence.
-Create or rebuild the table with the current DDL before deploying;
-`IF NOT EXISTS` does not update an existing schema.
+Provision the table with the supplied DDL before deploying.
 Rows, indexes and append locks are scoped by the top-level `service_name`,
 so deployments can share one database or schema. Use the same name for replicas
 of one deployment and distinct names for separate deployments.
@@ -241,9 +240,8 @@ Increase `operation_timeout_ms` if normal index operations exceed the default.
 Each service/account/branch append is serialized with a transaction advisory lock,
 including the first append to an empty index. All rows are committed atomically
 only when the latest indexed commit matches the expected parent.
-Path indexes use `md5(path)` to stay within PostgreSQL B-tree width limits;
-queries also check the original path. A digest collision for the same commit
-rejects the append rather than silently dropping a path.
+Path indexes use the complete path for lookups and uniqueness.
+PostgreSQL indexes branches up to 128 bytes and paths up to 2048 bytes.
 Switching providers does not copy an existing index. Path queries trigger
 background backfill from Git history when needed. An unavailable database or
 missing schema disables the index for that service instance at startup and
