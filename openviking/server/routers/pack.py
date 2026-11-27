@@ -132,7 +132,7 @@ async def backup_ovpack(
     body: BackupRequest | None = None,
     ctx: RequestContext = Depends(get_request_context),
 ):
-    """Back up all public OpenViking scopes as a restore-only .ovpack file."""
+    """Back up the current account as a restore-only .ovpack file."""
     service = get_service()
     temp_dir = tempfile.gettempdir()
     temp_file = os.path.join(temp_dir, f"backup_{os.urandom(16).hex()}.ovpack")
