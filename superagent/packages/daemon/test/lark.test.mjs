@@ -14,17 +14,42 @@ import { ConnectorProcess } from '../src/connectors/process.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
-// A minimal Ogg Opus file: an Opus head on the first page and a granule
-// position on the last one, which is where Lark reads a voice message's length.
+// A minimal Ogg Opus file: the Opus identification header alone on the first
+// page (RFC 7845) and a granule position on the last one, which is where Lark
+// reads a voice message's length.
 function voiceFile(directory, name, seconds) {
   const file = path.join(directory, name);
-  const head = Buffer.alloc(28);
+  const head = Buffer.alloc(28 + 19);
   head.write('OggS', 0, 'latin1');
-  head.write('OpusHead', 8, 'latin1');
+  head[5] = 2; // beginning of stream
+  head[26] = 1; // one segment, 19 bytes long: the identification header
+  head[27] = 19;
+  head.write('OpusHead', 28, 'latin1');
   const last = Buffer.alloc(20);
   last.write('OggS', 0, 'latin1');
   last.writeBigUInt64LE(BigInt(Math.round(seconds * 48_000)), 6);
   fs.writeFileSync(file, Buffer.concat([head, last]));
+  return file;
+}
+
+// An Ogg stream whose first packet is Vorbis, with the word OpusHead in a later
+// page: the name inside the stream does not make it Opus.
+function vorbisFile(directory, name) {
+  const head = Buffer.alloc(28 + 19);
+  head.write('OggS', 0, 'latin1');
+  head[26] = 1;
+  head[27] = 19;
+  head.write('\x01vorbis', 28, 'latin1');
+  const comment = Buffer.alloc(27 + 1 + 31);
+  comment.write('OggS', 0, 'latin1');
+  comment[26] = 1;
+  comment[27] = 31;
+  comment.write('OpusHead in a comment, not a codec', 28, 'latin1');
+  const last = Buffer.alloc(20);
+  last.write('OggS', 0, 'latin1');
+  last.writeBigUInt64LE(48_000n, 6);
+  const file = path.join(directory, name);
+  fs.writeFileSync(file, Buffer.concat([head, comment, last]));
   return file;
 }
 
@@ -74,10 +99,13 @@ it('gives only a voice send that has to be converted its ffmpeg time', () => {
 it('reads a voice message length from the Ogg Opus granule and nothing else', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-im-'));
   assert.equal(probeVoiceDurationMs(voiceFile(tempDir, 'reply.opus', 13)), 13_000);
+  // The extension does not matter to the probe; a .oga is still converted,
+  // because lark-cli --audio accepts only .opus and .ogg.
+  assert.equal(probeVoiceDurationMs(voiceFile(tempDir, 'reply.oga', 13)), 13_000);
   fs.writeFileSync(path.join(tempDir, 'raw.opus'), 'OpusHead in a bare stream');
   assert.equal(probeVoiceDurationMs(path.join(tempDir, 'raw.opus')), null);
-  fs.writeFileSync(path.join(tempDir, 'vorbis.ogg'), Buffer.concat([Buffer.from('OggS'), Buffer.from('vorbis')]));
-  assert.equal(probeVoiceDurationMs(path.join(tempDir, 'vorbis.ogg')), null);
+  assert.equal(probeVoiceDurationMs(vorbisFile(tempDir, 'vorbis.ogg')), null,
+    'a Vorbis first packet is not Opus, whatever a later page says');
   assert.equal(probeVoiceDurationMs(path.join(tempDir, 'missing.opus')), null);
 });
 
@@ -322,8 +350,8 @@ describe('Lark IM operations', () => {
     for (const name of ['a.mp4', 'a.pdf', 'a.txt', 'a.zip']) assert.equal(isLarkAudio(`/frozen/${name}`), false, name);
     assert.equal(needsOpusConversion('/frozen/a.opus'), false);
     assert.equal(needsOpusConversion('/frozen/a.ogg'), false);
+    assert.equal(needsOpusConversion('/frozen/a.oga'), true, 'lark-cli --audio takes only .opus and .ogg');
     assert.equal(needsOpusConversion('/frozen/a.mp3'), true);
-    assert.equal(needsOpusConversion('/frozen/a.oga'), true);
   });
 
   it('renders inline and prefixed mentions without ever sending @all', () => {

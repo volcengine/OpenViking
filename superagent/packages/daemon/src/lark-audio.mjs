@@ -5,14 +5,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // Lark renders a voice message (a playable bubble with a transcript) only for
-// Ogg Opus: lark-cli uploads `--audio` as a voice message for .opus and .ogg,
-// and takes every other audio container as an ordinary file. The extension
-// alone does not make a file Ogg Opus though (a .opus can hold a bare Opus
-// stream, a .ogg Vorbis), and Lark takes the length it shows from the Ogg page
-// granule of the uploaded file, so a file that is not Ogg Opus uploads without
-// one and renders as a 00:01 bubble. These two are therefore checked before the
-// send, the containers below are converted to Opus first, and everything else
-// (.m4v, .pdf, ...) stays a plain attachment.
+// Ogg Opus: lark-cli uploads `--audio` as a voice message, but its flag takes
+// only the .opus and .ogg names (a .oga is rejected before any upload), and
+// every other audio container goes out as an ordinary file. The name alone does
+// not make a file Ogg Opus either (a .opus can hold a bare Opus stream, a .ogg
+// Vorbis or FLAC), and Lark takes the length it shows from the Ogg page granule
+// of the uploaded file, so a file that is not Ogg Opus uploads without one and
+// renders as a 00:01 bubble. The two names lark-cli accepts are therefore
+// checked before the send, the containers below are converted to Opus first,
+// and everything else (.m4v, .pdf, ...) stays a plain attachment.
 const VOICE_TYPES = new Set(['.opus', '.ogg']);
 const CONVERTIBLE_AUDIO_TYPES = new Set([
   '.mp3', '.wav', '.m4a', '.aac', '.flac', '.amr', '.wma', '.aiff', '.aif', '.caf', '.oga',
@@ -44,6 +45,16 @@ function readRange(fd, position, length) {
   return buffer.subarray(0, read);
 }
 
+// RFC 7845 puts the Opus identification header alone in the first packet of the
+// first Ogg page, so it sits right after that page's segment table. The string
+// appearing anywhere else does not make the file Opus, and an Ogg Vorbis or
+// FLAC stream is what a .ogg often holds.
+function startsWithOggOpus(head) {
+  if (head.length < 28 || head.toString('latin1', 0, 4) !== 'OggS') return false;
+  const packet = 27 + head[26];
+  return head.length >= packet + 8 && head.toString('latin1', packet, packet + 8) === 'OpusHead';
+}
+
 // The length in milliseconds Lark will show for `file`, read from the granule
 // position of its last Ogg page the way lark-cli reads it before uploading a
 // voice message; null when the file is not Ogg Opus, which is exactly when
@@ -53,8 +64,7 @@ export function probeVoiceDurationMs(file) {
   try {
     fd = fs.openSync(file, 'r');
     const size = fs.fstatSync(fd).size;
-    const head = readRange(fd, 0, Math.min(size, 4_096));
-    if (head.length < 4 || head.toString('latin1', 0, 4) !== 'OggS' || !head.includes('OpusHead')) return null;
+    if (!startsWithOggOpus(readRange(fd, 0, Math.min(size, 1_024)))) return null;
     const tail = readRange(fd, Math.max(0, size - OGG_OPUS_TAIL_BYTES), Math.min(size, OGG_OPUS_TAIL_BYTES));
     const page = tail.lastIndexOf('OggS');
     if (page < 0 || page + 14 > tail.length) return null;
