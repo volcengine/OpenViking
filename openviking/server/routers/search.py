@@ -353,10 +353,13 @@ class RecallRequest(BaseModel):
         return self
 
 
+PatternSearchURI = Annotated[list[str], Field(min_length=1, max_length=10)] | str
+
+
 class GrepRequest(BaseModel):
     """Request model for grep."""
 
-    uri: str | Annotated[list[str], Field(min_length=1)]
+    uri: PatternSearchURI
     exclude_uri: Optional[str] = None
     pattern: str
     case_insensitive: bool = False
@@ -372,7 +375,7 @@ class GlobRequest(BaseModel):
     """Request model for glob."""
 
     pattern: str
-    uri: str | Annotated[list[str], Field(min_length=1)] = "viking://"
+    uri: PatternSearchURI = "viking://"
     node_limit: Optional[int] = 256
     extra_fields: Optional[list[str]] = None
     tags: Optional[List[str]] = None

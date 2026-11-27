@@ -759,8 +759,9 @@ async def test_glob_merges_search_roots_with_entry_results(client_with_resource,
     second_file = f"{second_root}/second.txt"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     await service.viking_fs.write_file(second_file, "other resource", ctx=ctx)
+    scopes = [root, second_root] + ["viking://resources"] * 8
     payload = {
-        "uri": [root, second_root, "viking://resources"],
+        "uri": scopes,
         "pattern": "**/*",
         "extra_fields": [],
     }
@@ -782,8 +783,10 @@ async def test_glob_merges_search_roots_with_entry_results(client_with_resource,
     assert limited.status_code == 200, limited.text
     assert limited.json()["result"]["matches"] == matches[:1]
 
-    empty = await client.post("/api/v1/search/glob", json={**payload, "uri": []})
-    assert empty.status_code == 400, empty.text
+    for invalid_scopes in ([], [*scopes, root]):
+        invalid = await client.post("/api/v1/search/glob", json={**payload, "uri": invalid_scopes})
+        assert invalid.status_code == 400, invalid.text
+        assert invalid.json()["error"]["code"] == "INVALID_ARGUMENT"
 
 
 async def test_glob_filters_and_projects_resource_tags(client_with_resource):

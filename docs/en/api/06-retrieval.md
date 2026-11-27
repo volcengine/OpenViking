@@ -871,7 +871,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str \| list[str] | Yes | - | One Viking URI or a non-empty list of search roots |
+| uri | str \| list[str] | Yes | - | One Viking URI or a list of 1 to 10 URIs |
 | pattern | str | Yes | - | Search pattern in Rust `regex` syntax, matched against individual lines |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
@@ -1050,7 +1050,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
-| uri | str \| list[str] | No | "viking://" | One Viking URI or a non-empty list of search roots |
+| uri | str \| list[str] | No | "viking://" | One Viking URI or a list of 1 to 10 URIs |
 | node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; pass a larger integer when you need more results |
 | extra_fields | list[str] | No | None | Extra fields to include per match. Recognized names: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`. When omitted, the response contains URI strings only; when provided, `result.matches` becomes a list of entry objects |
 | tags | string[] | No | Unset | Retain only matches that have every supplied `k=v` retrieval tag |

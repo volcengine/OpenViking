@@ -870,7 +870,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str \| list[str] | 是 | - | 一个 Viking URI，或非空的搜索范围列表 |
+| uri | str \| list[str] | 是 | - | 一个 Viking URI，或包含 1 至 10 个 URI 的列表 |
 | pattern | str | 是 | - | 搜索模式，使用 Rust `regex` 语法逐行匹配 |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
@@ -1049,7 +1049,7 @@ HTTP `POST /api/v1/search/grep` 在不做过滤时可传 `include_tags: true` �
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`）|
-| uri | str \| list[str] | 否 | "viking://" | 一个起始 URI，或非空的搜索范围列表 |
+| uri | str \| list[str] | 否 | "viking://" | 一个起始 URI，或包含 1 至 10 个 URI 的列表 |
 | node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | extra_fields | list[str] | 否 | None | 每条命中的额外字段。省略时返回 URI 字符串；提供后 `result.matches` 返回条目对象 |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的结果 |
