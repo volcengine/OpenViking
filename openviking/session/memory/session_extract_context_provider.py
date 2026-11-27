@@ -627,8 +627,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     async def resolve_directory_merges(
         self, operations: list[DirectoryOperation]
     ) -> list[DirectoryOperation]:
-        if not self.supports_directory_merges():
-            return []
         plans: list[DirectoryOperation] = []
         for operation in operations:
             if len(plans) >= _MAX_DIRECTORY_MERGE_PLANS:

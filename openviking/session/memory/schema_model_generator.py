@@ -340,10 +340,7 @@ class SchemaModelGenerator:
 
         # Preserve an existing account schema that already uses this field name.
         directory_merges_enabled = (
-            self._allow_directory_merges
-            and has_deletable_schema
-            and not self.consolidation
-            and "directory_merges" not in field_definitions
+            self._allow_directory_merges and "directory_merges" not in field_definitions
         )
         if directory_merges_enabled:
             field_definitions["directory_merges"] = (
