@@ -58,7 +58,7 @@ Kimi Code 集成是原生 managed plugin。它复用 OpenViking 的共享 Hook �
 
 - **UserPromptSubmit** 召回记忆，并输出 Kimi 可直接注入的原始文本。
 - **PreToolUse** 拒绝 Read/Glob/Grep 直接访问 `viking://` URI。
-- **Stop**、**PreCompact** 和 **SessionEnd** 增量捕获 `wire.jsonl` 回合；**Interrupt** 同步执行同一捕获流程，全部 OpenViking 请求共用 2 秒总预算。
+- **Stop**、**PreCompact** 和 **SessionEnd** 增量捕获 `wire.jsonl` 回合，工具调用及其结果以 tool part 的形式放进该回合的 assistant 消息；**Interrupt** 同步执行同一捕获流程，全部 OpenViking 请求共用 2 秒总预算。`Stop` 在会话待提交 token 达到 100,000 时 commit，其余三个 commit 所有尚未提交的内容。
 - 原生插件 manifest 提供 OpenViking MCP server 和插件根目录 `skills/` 下的 `openviking-memory`、`openviking-skills`、`ov-experience-memory`、`openviking-rule-search`、`ov-memory-doctor` 5 个 skill，不修改 Kimi 的旧式配置文件。
 
 ### 安装
@@ -100,7 +100,7 @@ Antigravity 集成同时服务 Antigravity 桌面 app 与 `agy` CLI，两者从 
 - **SessionStart** 注入用户画像。
 - **PreInvocation** 在每轮的第一次模型调用时召回相关记忆。Antigravity 在每次模型调用前都会运行这个 Hook，工具循环中的后续调用会跳过召回。
 - **PreToolUse** 拒绝位置参数为 `viking://` URI 的文件工具调用，并引导至 OpenViking MCP 工具。Shell 命令（`run_command`）不检查。
-- **Stop** 在后台进程中采集对话 transcript 里已完成的步骤，然后 commit OpenViking 会话。
+- **Stop** 在后台进程中采集对话 transcript 里已完成的步骤（工具调用及其结果以 tool part 的形式一并采集），然后 commit OpenViking 会话。
 
 Antigravity 的 `hooks.json` 格式与 Claude Code 不同：顶层 key 是 Hook 名，上下文以 `injectSteps` 系统消息返回，因此不能直接复用 Claude Code 的 `hooks.json`。
 

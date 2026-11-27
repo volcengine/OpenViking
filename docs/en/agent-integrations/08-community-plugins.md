@@ -60,7 +60,7 @@ transcript decoding, output formatting, and commit policy:
 
 - **UserPromptSubmit** recalls memory and prints raw context text for Kimi to inject.
 - **PreToolUse** blocks direct Read/Glob/Grep access to `viking://` URIs.
-- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget.
+- **Stop**, **PreCompact**, and **SessionEnd** capture new `wire.jsonl` turns, with tool calls and their results as tool parts of the turn's assistant message; **Interrupt** runs the same capture synchronously within one two-second OpenViking request budget. `Stop` commits once the session's pending tokens reach 100,000; the other three commit whatever is still uncommitted.
 - The plugin manifest exposes the OpenViking MCP server and the 5 skills under the plugin root's `skills/` (`openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor`) without editing Kimi's legacy config files.
 
 ### Install
@@ -103,7 +103,7 @@ The Antigravity integration serves the Antigravity desktop app and the `agy` CLI
 - **SessionStart** injects the user profile.
 - **PreInvocation** recalls relevant memories on the first model call of each turn. Antigravity runs this hook before every model call, so later calls in a tool loop skip recall.
 - **PreToolUse** denies file tool calls whose location argument is a `viking://` URI and points to the OpenViking MCP tools. Shell commands (`run_command`) are not checked.
-- **Stop** captures the finished steps of the conversation transcript in a detached worker, then commits the OpenViking session.
+- **Stop** captures the finished steps of the conversation transcript in a detached worker, tool calls and their results included as tool parts, then commits the OpenViking session.
 
 Antigravity hooks use their own `hooks.json` format: each top-level key names a hook, and context is returned as `injectSteps` system messages. A Claude Code `hooks.json` therefore cannot be reused.
 
