@@ -229,7 +229,12 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
   // fields are in, so a card reads in its own order.
   const translated = [];
   for (const [key, base] of Object.entries(LOCAL_I18N)) {
-    if (!Object.hasOwn(value, key) || Object.hasOwn(value, base)) continue;
+    // The default field shields its translations only while it says something:
+    // an empty default (content: "") leaves the card's text in the map, and
+    // reading nothing there would drop the whole card to [card].
+    const shields = Object.hasOwn(value, base)
+      && (typeof value[base] !== 'string' || value[base].trim() !== '');
+    if (!Object.hasOwn(value, key) || shields) continue;
     if (readLocale(value[key], translated, mediaKeys, depth)) visited.add(key);
   }
   for (const [key, base] of Object.entries(GLOBAL_I18N)) {
@@ -254,7 +259,8 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
     // Layout metadata a card carries beside its text: reading it would put
     // `vertical`, `12px 12px` and `2.0` in front of every card's sentence.
     if (visited.has(key) || /^i18n/i.test(key)
-      || ['tag', 'style', 'language', 'schema', 'direction', 'padding', 'fallback'].includes(key)
+      || ['tag', 'style', 'language', 'schema', 'direction', 'padding', 'fallback',
+        'template', 'type', 'size', 'width'].includes(key)
       || /(?:_key|_id|url|token|secret)$/i.test(key)) continue;
     collectText(child, output, mediaKeys, depth + 1);
   }

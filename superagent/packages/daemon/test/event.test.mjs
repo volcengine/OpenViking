@@ -518,6 +518,35 @@ describe('a composite interactive content string', () => {
     assert.equal(event.content, '[card] 请升级至最新版本客户端，以查看内容');
   });
 
+  it('reads a title-prefixed composite through the same rule', () => {
+    const content = ['Oncall Notice', '请升级至最新版本客户端，以查看内容', JSON.stringify({
+      i18n_elements: { zh_cn: [{ tag: 'div', text: { content: '中文正文' } }], en_us: [{ tag: 'div', text: { content: 'EN body' } }] },
+    })].join('\n');
+    const event = cardEvent(content, 'om-composite-title');
+    assert.match(event.content, /中文正文|EN body/);
+    assert.doesNotMatch(event.content, /Oncall Notice|请升级至最新版本客户端|i18n_elements/);
+  });
+
+  it('reads the translations of an empty default instead of dropping the card', () => {
+    const content = JSON.stringify({
+      elements: [{ tag: 'markdown', content: '', i18n_content: { zh_cn: '只有翻译的正文' } }],
+    });
+    const event = cardEvent(content, 'om-empty-default');
+    assert.equal(event.content, '只有翻译的正文');
+  });
+
+  it('skips button and template metadata', () => {
+    const content = JSON.stringify({
+      template: 'blue',
+      elements: [
+        { tag: 'div', text: { content: '提交表单后无响应' } },
+        { tag: 'button', text: { content: '提交' }, type: 'primary', size: 'medium', width: 'default' },
+      ],
+    });
+    const event = cardEvent(content, 'om-button-card');
+    assert.equal(event.content, '提交表单后无响应\n提交');
+  });
+
   it('falls back to the card placeholder when the embedded object has no text', () => {
     const content = `请升级\n${JSON.stringify({ config: { streaming_mode: false }, schema: '2.0' })}`;
     const event = cardEvent(content, 'om-composite-notext');
