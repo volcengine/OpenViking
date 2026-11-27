@@ -409,13 +409,13 @@ def is_retryable_rate_limit_error(exc: BaseException) -> bool:
     )
 
 
-def rate_limit_retry_delay(attempt: int) -> float:
-    """Exponential backoff delay with jitter for LLM rate-limit retries."""
+def rate_limit_retry_delay(attempt: int, *, jitter: bool = True) -> float:
+    """Exponential backoff delay with optional jitter for LLM rate-limit retries."""
     delay = min(
         RATE_LIMIT_RETRY_MAX_DELAY_SECONDS,
         RATE_LIMIT_RETRY_BASE_DELAY_SECONDS * (2 ** max(0, attempt - 1)),
     )
-    return delay * random.uniform(0.8, 1.2)
+    return delay * random.uniform(0.8, 1.2) if jitter else delay
 
 
 def _compute_delay(
@@ -446,8 +446,11 @@ def _retry_delay(
     limiter saturated: the retries themselves consume the quota, so the limit
     window never recovers and the work unit fails with the raw 429.
     """
-    if is_retryable_rate_limit_error(error):
-        return rate_limit_retry_delay(attempt + 1)
+    kind = model_error_kind(error)
+    if kind is ModelErrorKind.RATE_LIMIT_ERROR or (
+        kind in (None, ModelErrorKind.UNKNOWN) and is_retryable_rate_limit_error(error)
+    ):
+        return rate_limit_retry_delay(attempt + 1, jitter=jitter)
     return _compute_delay(
         attempt,
         base_delay=base_delay,
