@@ -27,9 +27,9 @@ test("disabled Claude Code and Codex hooks make no requests or session writes", 
     const transcript = join(home, "transcript.jsonl");
     writeFileSync(transcript, JSON.stringify({ payload: { message: { role: "user", content: "remember disabled hooks" } } }));
     await withMockOpenViking((_req, res) => writeJson(res, { status: "ok", result: {} }), async (baseUrl, requests) => {
-      for (const plugin of ["agent-hook-plugin", "codex-memory-plugin"]) {
-        const root = new URL(`../${plugin}/`, import.meta.url);
-        const manifest = JSON.parse(readFileSync(new URL("hooks/hooks.json", root), "utf-8"));
+      const root = new URL("../agent-hook-plugin/", import.meta.url);
+      for (const [plugin, hooks] of [["claude-code", "hooks/hooks.json"], ["codex", "hosts/codex/hooks.json"]]) {
+        const manifest = JSON.parse(readFileSync(new URL(hooks, root), "utf-8"));
         for (const [event, entries] of Object.entries(manifest.hooks)) {
           if (event === "PreToolUse") continue; // URI guard has no memory I/O.
           const [script, ...argv] = entries[0].hooks[0].command.split("_ROOT}/")[1].replaceAll('"', '').split(" ");

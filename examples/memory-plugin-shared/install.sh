@@ -2739,8 +2739,8 @@ copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destinat
     [ "$(basename "$other")" = "$host" ] || rm -rf "$other"
   done
   rm -rf "$tmp/hosts/$host/fixtures"
-  # The plugin root is also the Claude Code plugin; its packaging is Claude's alone.
-  rm -rf "$tmp/.claude-plugin" "$tmp/.mcp.json" "$tmp/hooks" "$tmp/commands" "$tmp/mods" "$tmp/skills" "$tmp/scripts/statusline.mjs"
+  # The plugin root is also the Claude Code and Codex plugin; their packaging is theirs alone.
+  rm -rf "$tmp/.claude-plugin" "$tmp/.codex-plugin" "$tmp/.mcp.json" "$tmp/hooks" "$tmp/commands" "$tmp/mods" "$tmp/skills" "$tmp/scripts/statusline.mjs"
   # Preserve the first-install timestamp across managed upgrades. The package
   # descriptor is copied from source; integration.json records this machine's
   # installation and must survive replacing the runtime directory.
@@ -3762,7 +3762,7 @@ process.stdout.write(command);
   fi
   if [ -n "$MKT_DIR" ] && [ -f "$MKT_DIR/agent-hook-plugin/hosts/claude-code/marketplace.test.mjs" ] && [ -d "$MKT_DIR/../.git" ]; then
     node --test "$MKT_DIR/agent-hook-plugin/hosts/claude-code/marketplace.test.mjs" \
-      "$MKT_DIR/codex-memory-plugin/scripts/marketplace.test.mjs" || ok=0
+      "$MKT_DIR/agent-hook-plugin/hosts/codex/marketplace.test.mjs" || ok=0
   fi
   if [ "$agent_fatal" -ne 0 ]; then
     err "$(t 'Installation validation failed. No success result will be reported.' '安装校验失败，不会报告安装成功。')"

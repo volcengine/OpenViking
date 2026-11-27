@@ -184,31 +184,6 @@ test("findLastHumanTurnIndex reports -1 when no human turn survives", () => {
   assert.equal(findLastHumanTurnIndex([]), -1)
 })
 
-/**
- * Codex wraps this module in an adapter that reads its own transcript shape
- * and exports it under the same name. `export *` beside a
- * same-named local export lets the local one win with no diagnostic, so a
- * reader of the import cannot tell which function they hold; this is the
- * adapter, and the shared names beside it are the shared ones. The adapter
- * re-exports from its own vendored copy of this module, so the comparison is
- * against that copy rather than against lib/.
- */
-test("the Codex adapter is the extractCaptureTurns its callers import", async () => {
-  const codex = await import("../codex-memory-plugin/scripts/capture-utils.mjs")
-  const vendored = await import("../codex-memory-plugin/scripts/shared/capture-utils.mjs")
-
-  assert.notEqual(codex.extractCaptureTurns, vendored.extractCaptureTurns)
-  assert.equal(codex.findLastHumanTurnIndex, vendored.findLastHumanTurnIndex)
-
-  // Codex's newer tool events carry no role at all until the adapter maps them.
-  const rollout = [
-    { type: "response_item", payload: { type: "custom_tool_call", call_id: "c1", name: "shell", input: "ls" } },
-    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "c1", output: "file.txt" } },
-  ]
-  assert.equal(codex.extractCaptureTurns(rollout, CAPTURE_CONFIG).length, 2)
-  assert.deepEqual(extractCaptureTurns(rollout, CAPTURE_CONFIG), [])
-})
-
 const TOOL_PART = { type: "tool", tool_name: "bash", tool_input: "ls" }
 
 function userEntry(text) {

@@ -97,8 +97,8 @@ jobs:
           bash -n examples/memory-plugin-shared/install.sh
           bash -n examples/agent-hook-plugin/hosts/claude-code/setup-helper/install.sh
           bash -n examples/agent-hook-plugin/hosts/claude-code/setup-helper/tos-install.sh
-          bash -n examples/codex-memory-plugin/setup-helper/install.sh
-          bash -n examples/codex-memory-plugin/setup-helper/tos-install.sh
+          bash -n examples/agent-hook-plugin/hosts/codex/setup-helper/install.sh
+          bash -n examples/agent-hook-plugin/hosts/codex/setup-helper/tos-install.sh
 
   openclaw-tests:
     needs: check-deps

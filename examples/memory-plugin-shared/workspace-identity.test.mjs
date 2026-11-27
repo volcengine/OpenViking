@@ -83,7 +83,7 @@ test("sanitizePeerId keeps long ids unique after truncation", () => {
 test("the workspace root is the repo, from any depth below it", async () => {
   const root = await tempRoot("root");
   await makeRepo(root, { remote: "git@github.com:volcengine/OpenViking.git" });
-  const deep = join(root, "examples", "codex-memory-plugin");
+  const deep = join(root, "examples", "agent-hook-plugin");
   await mkdir(deep, { recursive: true });
 
   for (const cwd of [root, join(root, "examples"), deep]) {
@@ -232,7 +232,7 @@ test("readGitRemoteUrl reads only origin, and does not follow includes", async (
 test("identity exposes every template variable, git and non-git alike", async () => {
   const root = await tempRoot("vars");
   await makeRepo(root, { remote: "git@github.com:volcengine/OpenViking.git" });
-  const deep = join(root, "examples", "codex-memory-plugin");
+  const deep = join(root, "examples", "agent-hook-plugin");
   await mkdir(deep, { recursive: true });
   const env = { HOME: "/nonexistent-home", OPENVIKING_STATE_DIR: join(root, ".state") };
 

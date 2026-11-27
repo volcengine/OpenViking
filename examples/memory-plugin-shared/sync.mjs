@@ -29,11 +29,6 @@ export const TARGETS = [
     committed: false,
   },
   {
-    root: join(ROOT, "examples", "codex-memory-plugin"),
-    dir: join(ROOT, "examples", "codex-memory-plugin", "scripts", "shared"),
-    committed: true,
-  },
-  {
     root: join(ROOT, "agent-plugins"),
     dir: join(ROOT, "agent-plugins", "servers", "shared"),
     committed: true,
@@ -93,7 +88,7 @@ export const SKILL_TARGETS = [
   // deliberately different hook-free variant.
   {
     skill: "openviking-memory",
-    dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codex", "skills"),
     committed: true,
   },
   {
@@ -136,7 +131,7 @@ export const SKILL_TARGETS = [
   // that the skills in OpenViking exist.
   {
     skill: "openviking-skills",
-    dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codex", "skills"),
     committed: true,
   },
   {
@@ -185,7 +180,7 @@ export const SKILL_TARGETS = [
   // trajectory back to the server.
   {
     skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "codex-memory-plugin", "skills"),
+    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codex", "skills"),
     committed: true,
   },
   {
@@ -237,7 +232,7 @@ export const SKILL_TARGETS = [
   // through its REST client. Ship the workflow wherever the host bundles skills.
   ...[
     ["examples", "agent-hook-plugin", "skills"],
-    ["examples", "codex-memory-plugin", "skills"],
+    ["examples", "agent-hook-plugin", "hosts", "codex", "skills"],
     ["examples", "agent-hook-plugin", "hosts", "cursor", "skills"],
     ["examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"],
     ["examples", "agent-hook-plugin", "hosts", "qoder", "skills"],
@@ -336,7 +331,8 @@ export async function directSharedImports({ root, dir }) {
   for (const file of await sourceFilesUnder(root, dir)) {
     const source = await readFile(file, "utf-8");
     for (const spec of importSpecifiers(source)) {
-      if (!spec.startsWith(".")) continue;
+      // A declaration named in a JSDoc type import travels with its module.
+      if (!spec.startsWith(".") || spec.endsWith(".d.mts")) continue;
       const resolved = resolvePath(dirname(file), spec);
       if (!resolved.startsWith(dir + sep)) continue;
       const name = resolved.slice(dir.length + 1);
@@ -474,6 +470,8 @@ async function staleCopies(target, keep) {
     }
     const module = name.endsWith(".d.mts") ? `${name.slice(0, -6)}.mjs` : name;
     if (!module.endsWith(".mjs") || keep.includes(module)) continue;
+    // A declaration with no module of its own came with the one that imports it.
+    if (name.endsWith(".d.mts") && !(await exists(join(SHARED_DIR, module)))) continue;
     const body = await readFile(join(target.dir, name), "utf-8");
     if (body.startsWith(GENERATED_HEADER)) stale.push(name);
   }

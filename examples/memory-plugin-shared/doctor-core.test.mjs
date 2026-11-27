@@ -329,7 +329,7 @@ test("no doctor wrapper redefines a name doctor-core already exports", () => {
   assert.ok(exported.has("inspectConfigFiles"));
   for (const rel of [
     "../agent-hook-plugin/hosts/claude-code/ov-memory-doctor.mjs",
-    "../codex-memory-plugin/scripts/ov-memory-doctor.mjs",
+    "../agent-hook-plugin/hosts/codex/ov-memory-doctor.mjs",
     "../agent-hook-plugin/scripts/ov-memory-doctor.mjs",
     "../opencode-plugin/scripts/ov-memory-doctor.mjs",
     "../pi-coding-agent-extension/scripts/ov-memory-doctor.mjs",

@@ -175,9 +175,9 @@ jobs:
           SHARED_INSTALL="/tmp/memory-plugin-shared-install.sh"
           SHARED_BOOTSTRAP="examples/memory-plugin-shared/bootstrap.sh"
           CLAUDE_INSTALL="examples/agent-hook-plugin/hosts/claude-code/setup-helper/install.sh"
-          CODEX_INSTALL="examples/codex-memory-plugin/setup-helper/install.sh"
+          CODEX_INSTALL="examples/agent-hook-plugin/hosts/codex/setup-helper/install.sh"
           CLAUDE_TOS_INSTALL="examples/agent-hook-plugin/hosts/claude-code/setup-helper/tos-install.sh"
-          CODEX_TOS_INSTALL="examples/codex-memory-plugin/setup-helper/tos-install.sh"
+          CODEX_TOS_INSTALL="examples/agent-hook-plugin/hosts/codex/setup-helper/tos-install.sh"
 
           # Versioned, immutable copies
           upload "${SOURCE_ZIP}" "releases/${RELEASE_TAG}/openviking-${RELEASE_TAG}-source.zip" "${ZIP_CONTENT_TYPE}" "${IMMUTABLE_CACHE_CONTROL}"

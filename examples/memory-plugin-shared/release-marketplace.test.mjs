@@ -540,7 +540,7 @@ test("the docs download tree holds what the installer fetches, under the address
 
     const cloned = run("git", ["clone", "-q", join(out, "plugins", "memory-plugins.git"), join(tmp, "clone")], { env: gitEnv });
     assert.equal(cloned.status, 0, cloned.stderr);
-    assert.ok(existsSync(join(tmp, "clone", "codex-memory-plugin", ".codex-plugin", "plugin.json")));
+    assert.ok(existsSync(join(tmp, "clone", "agent-hook-plugin", ".codex-plugin", "plugin.json")));
     assert.ok(existsSync(join(out, "plugins", "memory-plugins.git", "info", "refs")), "dumb HTTP clients read info/refs");
 
     // Built later from the same plugins, it serves git clients the same files.

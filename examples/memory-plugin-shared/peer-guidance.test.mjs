@@ -39,7 +39,7 @@ function walk(dir, match, out = []) {
 
 const REFERENCES = [
   "examples/agent-hook-plugin/skills/ov-memory-doctor/reference.md",
-  "examples/codex-memory-plugin/skills/ov-memory-doctor/reference.md",
+  "examples/agent-hook-plugin/hosts/codex/skills/ov-memory-doctor/reference.md",
 ];
 
 test("every surface that teaches the peer file quotes the same snippet", () => {

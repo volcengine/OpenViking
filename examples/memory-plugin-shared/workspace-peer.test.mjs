@@ -56,7 +56,7 @@ test("an explicit peer id still wins over every rule", async () => {
 
 test("the default is the repository, from any subdirectory or clone", async () => {
   const { root, env } = await repo();
-  const deep = join(root, "examples", "codex-memory-plugin");
+  const deep = join(root, "examples", "agent-hook-plugin");
   await mkdir(deep, { recursive: true });
 
   const top = resolve(root, env);

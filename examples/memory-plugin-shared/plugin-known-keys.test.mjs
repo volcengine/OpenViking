@@ -16,7 +16,6 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // declare, and a key the doctor therefore has to accept inside `plugin`.
 const KNOB_READERS = [
   "examples/agent-hook-plugin/lib/plugin-config.mjs",
-  "examples/codex-memory-plugin/scripts/config.mjs",
   "examples/opencode-plugin/lib/config.mjs",
   "examples/dsh-memory-plugin/config.mjs",
   "examples/pi-coding-agent-extension/config.ts",
