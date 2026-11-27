@@ -908,6 +908,23 @@ describe('TaskManager', () => {
     assert.equal(tasks.routerTurnEnded({ receiptIds: [receipt], ok: true }), 0, 'not a third time');
     assert.ok(delivery().settled_at_ms);
     assert.equal(activities.at(-1).kind, 'task.report_unrelayed');
+    assert.match(tasks.card(tasks.get('t1'), { detail: true }), /draft never sent/);
+    // It goes out later after all: a delivery naming t1 settles it as sent,
+    // one that does not name it leaves it, and nothing is offered again.
+    const offeredBefore = relayed.length;
+    assert.equal(tasks.settleReports({ seqs: [origin.seq], by: 'reply_message' }), 0);
+    db.prepare('INSERT INTO outbox(id, inbound_seq, remote_message_id) VALUES (9, ?, ?)').run(origin.seq, 'om_bot_late');
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], seqs: [origin.seq], by: 'reply_message', outboxId: 9 }), 1);
+    assert.equal(tasks.delivery(tasks.get('t1')).state, 'sent');
+    assert.doesNotMatch(tasks.card(tasks.get('t1'), { detail: true }), /never sent/);
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], seqs: [origin.seq], by: 'reply_message', outboxId: 10 }), 0, 'sent stays sent');
+    assert.equal(db.prepare('SELECT outbox_id FROM task_report_deliveries WHERE report_id = 1').get().outbox_id, 9);
+    assert.equal(relayed.length, offeredBefore);
+    // Another round's unrelayed report is not the one a delivery for round 1 answered.
+    const roundTwo = db.prepare("INSERT INTO task_reports(task_id, round, state, structured, created_at_ms) VALUES ('t1', 2, 'done', 1, ?)").run(Date.now()).lastInsertRowid;
+    db.prepare("INSERT INTO task_report_deliveries(report_id, inbox_id, created_at_ms, settled_at_ms, settled_by) VALUES (?, 1, ?, ?, 'unrelayed')").run(roundTwo, Date.now(), Date.now());
+    assert.equal(tasks.settleReports({ taskIds: ['t1'], seqs: [origin.seq], by: 'reply_message', outboxId: 11 }), 0);
+    assert.equal(db.prepare('SELECT settled_by FROM task_report_deliveries WHERE report_id = ?').get(roundTwo).settled_by, 'unrelayed');
 
     // A failed router turn: offered again as it was, until the router answers.
     tasks.create({ rows: [row({ content: '查 Y' })], title: 'Y', runtime: 'pi' });

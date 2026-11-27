@@ -1529,9 +1529,16 @@ export class TaskManager {
       WHERE settled_at_ms IS NULL AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ?)`);
     const settleRound = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
       WHERE settled_at_ms IS NULL AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ? AND round = ?)`);
+    // A report the daemon stopped offering ('unrelayed') may still go out
+    // later. A delivery that names its task settles it then, for the round it
+    // answers only; silence or an earlier delivery stays as it was, and nothing
+    // is offered again.
+    const settleLate = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
+      WHERE settled_by = 'unrelayed' AND report_id IN (SELECT id FROM task_reports WHERE task_id = ? AND round = ?)`);
     for (const [id, round] of targets) {
       settled += Number((round == null ? settleTask.run(this.now(), by, outboxId ?? null, id)
         : settleRound.run(this.now(), by, outboxId ?? null, id, round)).changes);
+      if (round != null && named.has(id)) settled += Number(settleLate.run(this.now(), by, outboxId ?? null, id, round).changes);
     }
     return settled;
   }
