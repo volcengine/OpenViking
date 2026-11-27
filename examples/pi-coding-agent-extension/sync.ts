@@ -20,9 +20,6 @@ import { ovOrigin } from "./shared/ov-http.mjs";
 import { extractBranchCapturePayloads } from "./lib/capture-adapter.mjs";
 import { countUndeliveredForSession, estimatePayloadTokens } from "./lib/takeover-core.mjs";
 
-/** The commit request's timeout; queue replays ahead of it keep the client default. */
-const COMMIT_TIMEOUT_MS = 30000;
-
 // --- SyncManager ---
 
 export interface AddPayloadResult {
@@ -151,7 +148,7 @@ export class SyncManager {
       if (sid && await hasProcessingMessage(sid)) return;
     }
     await replayPending(
-      this.queueFetch((path: string, init?: any) => this.client.fetchJSON(path, init)),
+      this.fetchJSON,
       (stage: string, data: unknown) => this.logger.log(stage, data),
     );
   }
@@ -270,7 +267,8 @@ export class SyncManager {
     }) as T & { origin: string };
   }
 
-  private fetchJSON = this.queueFetch((path: string, init?: any) => this.client.fetchJSON(path, init));
+  private fetchJSON = this.queueFetch((path: string, init?: any, options?: any) =>
+    this.client.fetchJSON(path, init, { timeoutMs: this.config.captureTimeoutMs, ...options }));
 
   async syncBranch(branch: any[]): Promise<SyncBranchResult> {
     if (!this.ovSessionId) {
@@ -395,7 +393,7 @@ export class SyncManager {
     }
     const response = await commitSession(
       this.queueFetch((path: string, init?: any) => this.client.fetchJSON(path, init, {
-        timeoutMs: opts.timeoutMs ?? (path.endsWith("/commit") ? COMMIT_TIMEOUT_MS : undefined),
+        timeoutMs: opts.timeoutMs ?? this.config.captureTimeoutMs,
       })),
       sid,
       { keep_recent_count: opts.keepRecentCount ?? 0, enable_working_memory: opts.enableWorkingMemory },

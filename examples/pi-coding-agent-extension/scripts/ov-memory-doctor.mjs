@@ -149,6 +149,8 @@ const HOST = {
   pluginRoot: PLUGIN_ROOT,
   cliName: "pi",
   launcherHint: "pi",
+  // No hook timeouts to check against; this only puts the capture budget on the timeouts line.
+  timeoutBudgets: { capture: "captureTimeoutMs" },
   onCliFound: (report, cli) => report.ok(`pi ${cli.stdout.split("\n")[0]}`),
   loadConfig: () => loadConfig(process.cwd()),
   checkInstall,

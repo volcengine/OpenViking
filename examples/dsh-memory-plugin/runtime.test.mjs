@@ -155,17 +155,21 @@ test("compaction/start commits below the token threshold without reading session
   process.env.OPENVIKING_PENDING_DIR = pendingDir;
   let getSessionCalls = 0;
   let commitCalls = 0;
+  let commitTimeoutMs;
   const client = {
     async getSession() {
       getSessionCalls += 1;
       return { pending_tokens: 5 };
     },
-    async fetchJSON(path) {
-      if (path.endsWith("/commit")) commitCalls += 1;
+    async fetchJSON(path, _init, options) {
+      if (path.endsWith("/commit")) {
+        commitCalls += 1;
+        commitTimeoutMs = options?.timeoutMs;
+      }
       return { ok: true };
     },
   };
-  const runtime = new OpenVikingRuntime(client, config(), { debug() {} });
+  const runtime = new OpenVikingRuntime(client, { ...config(), captureTimeoutMs: 45000 }, { debug() {} });
   const session = { id: "compaction-commit", header: { cwd: "/workspace" } };
   runtime.stateFor(session).ready = true;
 
@@ -174,6 +178,7 @@ test("compaction/start commits below the token threshold without reading session
 
   assert.equal(getSessionCalls, 0);
   assert.equal(commitCalls, 1);
+  assert.equal(commitTimeoutMs, 45000);
 
   runtime.maybeCommit(session, { type: "compaction/end" });
   await runtime.flush(session);

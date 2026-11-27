@@ -187,6 +187,8 @@ const HOST = {
   pluginRoot: PLUGIN_ROOT,
   cliName: "opencode",
   launcherHint: "OpenCode",
+  // No hook timeouts to check against; this only puts the capture budget on the timeouts line.
+  timeoutBudgets: { capture: "captureTimeoutMs" },
   loadConfig: loadOpencodeConfig,
   checkInstall,
   checkConfig,

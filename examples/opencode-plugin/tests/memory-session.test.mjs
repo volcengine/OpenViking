@@ -412,6 +412,45 @@ test("session.idle event flushes pending OpenCode capture", async () => {
   })
 })
 
+test("a capture send is cut off at captureTimeoutMs and queued", async () => {
+  await withPendingDir(async () => {
+    const server = createServer(async (req, res) => {
+      for await (const _ of req) { /* drain */ }
+      res.setHeader("Content-Type", "application/json")
+      if (req.url === "/health") return res.end(JSON.stringify({ status: "ok" }))
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      res.end(JSON.stringify({ status: "ok", result: { accepted: true } }))
+    })
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+    try {
+      await withTempDir("ov-oc-session-", async (dir) => {
+        const endpoint = `http://127.0.0.1:${server.address().port}`
+        const config = { ...baseConfig(endpoint), captureTimeoutMs: 1000 }
+        const manager = createMemorySessionManager({ config, pluginRoot: dir })
+        const sessionID = "oc-session-slow"
+        await manager.init()
+        await manager.handleEvent({
+          type: "message.updated",
+          properties: { info: { id: "msg-slow", sessionID, role: "user" } },
+        })
+        await manager.handleEvent({
+          type: "message.part.updated",
+          properties: {
+            part: { id: "part-slow", messageID: "msg-slow", sessionID, type: "text", text: "Remember the slow turn." },
+          },
+        })
+
+        await manager.flushSession(sessionID, { commit: false })
+
+        assert.deepEqual((await listPending()).map(({ entry }) => entry.type), ["addMessage"])
+      })
+    } finally {
+      server.closeAllConnections()
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
+})
+
 test("the threshold commit is the plugin's, or the server's under serverAutoCommit", async () => {
   const policy = { pending_token_threshold: 20000, message_count_threshold: 0, idle_timeout_seconds: 1800, keep_recent_count: 0, min_commit_interval_seconds: 0 }
   for (const serverAutoCommit of [false, true]) {

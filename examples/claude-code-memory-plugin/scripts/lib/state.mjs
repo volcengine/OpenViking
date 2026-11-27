@@ -11,8 +11,9 @@
  */
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 
 const OV_HOME = process.env.OPENVIKING_HOME && process.env.OPENVIKING_HOME.trim()
   ? process.env.OPENVIKING_HOME.replace(/^~(?=$|\/)/, homedir())
@@ -56,4 +57,52 @@ export function readJsonState(name, { maxAgeMs } = {}) {
     return null;
   }
   return parsed;
+}
+
+// Per-session capture cursors, `kind` being "capture" or "subagent". A cursor
+// lost to a temp-dir purge would resend the whole transcript, so they live
+// here; a cursor still in the temp dir from an older release is read until the
+// first write replaces it.
+function cursorName(id) {
+  return `${String(id).replace(/[^a-zA-Z0-9_-]/g, "_")}.json`;
+}
+
+export function cursorPath(kind, id) {
+  return join(STATE_DIR, `cc-${kind}-state`, cursorName(id));
+}
+
+function legacyCursorPath(kind, id) {
+  return join(tmpdir(), `openviking-cc-${kind}-state`, cursorName(id));
+}
+
+export async function readCursor(kind, id) {
+  for (const path of [cursorPath(kind, id), legacyCursorPath(kind, id)]) {
+    let raw;
+    try {
+      raw = await readFile(path, "utf-8");
+    } catch (err) {
+      if (err?.code === "ENOENT") continue;
+      return null;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function writeCursor(kind, id, value) {
+  const target = cursorPath(kind, id);
+  await mkdir(dirname(target), { recursive: true });
+  const tmp = `${target}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify(value));
+  await rename(tmp, target);
+  await unlink(legacyCursorPath(kind, id)).catch(() => {});
+}
+
+export async function removeCursor(kind, id) {
+  await Promise.all([cursorPath(kind, id), legacyCursorPath(kind, id)]
+    .map((path) => unlink(path).catch(() => {})));
 }

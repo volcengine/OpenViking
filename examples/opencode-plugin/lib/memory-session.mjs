@@ -37,6 +37,8 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
   // What reaches the pending queue carries the server it was meant for.
   const origin = ovOrigin({ ...config, baseUrl: config.endpoint })
   const queueFetch = (fn) => Object.assign(fn, { origin })
+  const writeFetch = queueFetch((endpoint, init = {}, options = {}) =>
+    fetchJSON(config, endpoint, init, { timeoutMs: config.captureTimeoutMs, ...options }))
   // Serialize saves: concurrent saveState() calls (a debounced save racing
   // with flushAll / flushSession / session deletion) all share the same
   // `${statePath}.tmp` temp file, so one rename can fail with ENOENT after
@@ -59,7 +61,7 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
       const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
       if (!health.ok) return
       await replayPending(
-        queueFetch((endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options)),
+        writeFetch,
         (stage, data) => log("DEBUG", "pending", stage, data),
       )
     }).catch((error) => {
@@ -222,7 +224,7 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
     const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
     if (health.ok) {
       await replayPending(
-        queueFetch((endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, options)),
+        writeFetch,
         (stage, data) => log("DEBUG", "pending", stage, data),
       )
     }
@@ -497,7 +499,7 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
       }
     } else {
       const res = await sendSessionMessages(
-        queueFetch((endpoint, init = {}, options = {}) => fetchJSON(config, endpoint, init, { timeoutMs: 10000, ...options })),
+        writeFetch,
         state.ovSessionId,
         toSend.map((item) => item.body),
         { enqueueOnRetryable: true },
@@ -550,7 +552,7 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
   async function commitOvSession(ovSessionId, { reason = "manual", abortSignal } = {}) {
     const res = await postSessionCommit(
       queueFetch((endpoint, init = {}, options = {}) =>
-        fetchJSON(config, endpoint, { ...init, signal: abortSignal }, { timeoutMs: 30000, ...options })),
+        fetchJSON(config, endpoint, { ...init, signal: abortSignal }, { timeoutMs: config.captureTimeoutMs, ...options })),
       ovSessionId,
       { keep_recent_count: 0 },
       { log: (stage, data) => log("DEBUG", "pending", stage, data) },

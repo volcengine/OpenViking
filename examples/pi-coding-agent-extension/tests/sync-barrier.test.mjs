@@ -44,8 +44,14 @@ async function withPendingDir(fn) {
 
 test("syncBranch returns added token accounting and delivered status", async () => {
   await withPendingDir(async () => {
-    const c = client();
-    const sync = new SyncManager(c, config({ takeoverEnabled: false }));
+    const timeouts = [];
+    const c = client({
+      fetchJSON: async (_path, _init, options) => {
+        timeouts.push(options?.timeoutMs);
+        return { ok: true, result: {} };
+      },
+    });
+    const sync = new SyncManager(c, config({ takeoverEnabled: false, captureTimeoutMs: 45000 }));
     await sync.ensureSession("pi-session");
 
     const result = await sync.syncBranch([
@@ -56,6 +62,7 @@ test("syncBranch returns added token accounting and delivered status", async () 
     assert.ok(result.tokens > 0);
     assert.equal(result.allDelivered, true);
     assert.equal(sync.syncedCount, 1);
+    assert.deepEqual(timeouts, [45000]);
   });
 });
 

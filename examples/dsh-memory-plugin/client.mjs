@@ -40,7 +40,7 @@ export class OpenVikingClient {
         method: "POST",
         body: JSON.stringify(payload),
       },
-      { actorPeerId },
+      { actorPeerId, timeoutMs: this.config.captureTimeoutMs },
     );
   }
 }

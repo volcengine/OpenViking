@@ -10,10 +10,8 @@
  * auto-compaction in the middle of a long turn, looks it up in its session
  * history. The Stop capture runs over the same transcript, in its own process
  * as the Stop hook's detached worker does. The hook waits for it up to
- * CATCH_UP_WAIT_MS; past that it stops waiting but never kills it (a kill
- * mid-POST could leave a stored batch with an unsaved cursor, sent again by
- * the next Stop), so the push lands in the live tail after the commit, as it
- * did before this catch-up existed.
+ * CATCH_UP_WAIT_MS; a push still running then lands in the live tail after
+ * the commit.
  *
  * Then, unless autoCommitOnCompact is off, the persistent OV session is
  * committed so pending messages become an archive before the transcript is
@@ -21,10 +19,6 @@
  * additionalContext output (platform-verified), so injection happens later in
  * session-start.mjs when source="compact".
  */
-
-import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
@@ -34,6 +28,7 @@ import {
   isRetryableFailure,
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
+import { catchUpTranscript } from "./lib/catch-up.mjs";
 import { enqueueCommitAfterWrites } from "./lib/pending-queue.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { commitsOnCompaction } from "./shared/session-model.mjs";
@@ -53,40 +48,9 @@ const CATCH_UP_WAIT_MS = (() => {
   const v = Number(process.env.OPENVIKING_CC_PRECOMPACT_CATCH_UP_WAIT_MS);
   return Number.isFinite(v) && v >= 0 ? Math.floor(v) : 20000;
 })();
-const AUTO_CAPTURE = join(dirname(fileURLToPath(import.meta.url)), "auto-capture.mjs");
 
 function approve() {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
-}
-
-// The Stop hook's capture as a detached worker (OV_HOOK_WORKER keeps it from
-// detaching again), so it can outlive this hook.
-function catchUpTranscript(raw) {
-  return new Promise((resolve) => {
-    let child;
-    try {
-      child = spawn(process.execPath, [AUTO_CAPTURE], {
-        detached: true,
-        env: { ...process.env, OV_HOOK_WORKER: "1" },
-        stdio: ["pipe", "ignore", "ignore"],
-      });
-    } catch (err) {
-      resolve({ ok: false, error: err?.message });
-      return;
-    }
-    const timer = setTimeout(() => {
-      child.unref();
-      child.stdin.unref?.();
-      resolve({ ok: false, backgrounded: true });
-    }, CATCH_UP_WAIT_MS);
-    child.on("error", (err) => { clearTimeout(timer); resolve({ ok: false, error: err?.message }); });
-    child.on("exit", (code, signal) => {
-      clearTimeout(timer);
-      resolve({ ok: code === 0, code, signal: signal || undefined });
-    });
-    child.stdin.on("error", () => {});
-    child.stdin.end(raw);
-  });
 }
 
 runHookStage({
@@ -103,7 +67,7 @@ runHookStage({
     return;
   }
 
-  log("catch_up", await catchUpTranscript(raw));
+  log("catch_up", await catchUpTranscript(raw, CATCH_UP_WAIT_MS));
 
   const ovSessionId = deriveOvSessionId(sessionId);
   if (!commitsOnCompaction(cfg)) {

@@ -291,7 +291,7 @@ export class OpenVikingRuntime {
   // While the session has queued writes the commit is queued behind them
   // without a send: the drainer owns replay, and the shared commitSession would
   // replay the whole queue inline under this session's actor peer.
-  async commit(state, stage, timeoutMs = 30000) {
+  async commit(state, stage, timeoutMs = state.config.captureTimeoutMs) {
     const body = { keep_recent_count: 0 };
     if (state.hasPendingWrites) {
       this.notePendingCommit(state, await enqueueCommitAfterWrites(state.ovSessionId, body, {
@@ -430,7 +430,10 @@ export class OpenVikingRuntime {
    */
   async replayPendingQueue(options = {}) {
     await replayPending(
-      Object.assign((path, init) => this.client.fetchJSON(path, init), { origin: this.client.fetchJSON?.origin }),
+      Object.assign(
+        (path, init) => this.client.fetchJSON(path, init, { timeoutMs: this.config.captureTimeoutMs }),
+        { origin: this.client.fetchJSON?.origin },
+      ),
       (stage, data) => this.log(stage, data),
       options,
     );

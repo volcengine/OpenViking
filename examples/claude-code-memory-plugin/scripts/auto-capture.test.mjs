@@ -120,7 +120,7 @@ test("failed non-retryable capture keeps the cursor for a later retry", async ()
     assert.equal(batches.length, 1);
     assert.equal(batches[0].messages.length, 2);
     const state = JSON.parse(
-      await readFile(join(root, "openviking-cc-capture-state", `${sessionId}.json`), "utf-8"),
+      await readFile(join(root, ".openviking", "state", "cc-capture-state", `${sessionId}.json`), "utf-8"),
     );
     assert.equal(state.capturedTurnCount, 2);
   } finally {
@@ -307,7 +307,7 @@ test("legacy advanced cursor rewinds when the server session is empty", async ()
     assert.equal(batches.length, 1);
     assert.equal(batches[0].messages.length, 2);
     const state = JSON.parse(
-      await readFile(join(stateDir, `${sessionId}.json`), "utf-8"),
+      await readFile(join(root, ".openviking", "state", "cc-capture-state", `${sessionId}.json`), "utf-8"),
     );
     assert.equal(state.capturedTurnCount, 2);
   } finally {
@@ -516,7 +516,7 @@ test("capture filters rewrite and drop turns at the send site", async () => {
       "noted, I will retain that context",
     ]);
     const state = JSON.parse(
-      await readFile(join(root, "openviking-cc-capture-state", `${sessionId}.json`), "utf-8"),
+      await readFile(join(root, ".openviking", "state", "cc-capture-state", `${sessionId}.json`), "utf-8"),
     );
     // The cursor counts extracted turns, so the dropped one still advances it.
     assert.equal(state.capturedTurnCount, 3);
@@ -601,7 +601,7 @@ test("host-authored user records are skipped, and a cursor from before the upgra
       ccRecord("user", "second question"),
       ccRecord("assistant", "second answer"),
     ].map((record) => JSON.stringify(record)).join("\n"));
-    // Written by the previous plugin version, which counted the caveat among the turns it had sent.
+    // Written by the previous plugin version, under the temp dir, which counted the caveat among the turns it had sent.
     const stateDir = join(root, "openviking-cc-capture-state");
     await mkdir(stateDir, { recursive: true });
     await writeFile(join(stateDir, "upgrade.json"), JSON.stringify({ capturedTurnCount: 3 }));
@@ -626,8 +626,11 @@ test("host-authored user records are skipped, and a cursor from before the upgra
       message.parts.filter((p) => p.type === "text").map((p) => p.text).join(""),
     ]);
     assert.deepEqual(sent, [["user", "second question"], ["assistant", "second answer"]]);
-    const state = JSON.parse(await readFile(join(stateDir, "upgrade.json"), "utf-8"));
+    const state = JSON.parse(
+      await readFile(join(root, ".openviking", "state", "cc-capture-state", "upgrade.json"), "utf-8"),
+    );
     assert.equal(state.capturedTurnCount, 7);
+    await assert.rejects(readFile(join(stateDir, "upgrade.json")), { code: "ENOENT" });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -786,7 +789,7 @@ test("Stop captures the whole final answer when only part of it is in the transc
     ]);
 
     const state = JSON.parse(
-      await readFile(join(root, "openviking-cc-capture-state", "final-answer.json"), "utf-8"),
+      await readFile(join(root, ".openviking", "state", "cc-capture-state", "final-answer.json"), "utf-8"),
     );
     assert.equal(state.capturedTurnCount, 2);
   } finally {

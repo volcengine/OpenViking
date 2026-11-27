@@ -7,6 +7,11 @@
  * the final turn's pending messages become an archive — without this hook,
  * the last window of messages would linger as pending until the next
  * Stop/PreCompact on a resumed session.
+ *
+ * The last turn's Stop worker may still be posting, or the turn may have had
+ * no Stop at all (interrupted). The Stop capture runs once more over the
+ * transcript, as at PreCompact, and the commit then waits for the session's
+ * capture lock so it lands after the last push.
  */
 
 import { isPluginEnabled, loadConfig } from "./config.mjs";
@@ -18,8 +23,9 @@ import {
   makeFetchJSON,
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
+import { catchUpTranscript } from "./lib/catch-up.mjs";
 import { enqueueCommitAfterWrites } from "./lib/pending-queue.mjs";
-import { runHookStage } from "./shared/agent-hook-runtime.mjs";
+import { runHookStage, withAgentHookLock } from "./shared/agent-hook-runtime.mjs";
 
 if (!isPluginEnabled()) {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -52,33 +58,46 @@ async function main() {
     gates: { enabled: (cfg) => cfg.autoCapture },
     envelope: approve,
     onSkip: (reason) => log("skip", { reason }),
-  }, async ({ sessionId }) => {
+  }, async ({ cfg, input, raw, sessionId }) => {
     if (!sessionId) {
       log("skip", { reason: "no session_id" });
       return;
     }
 
-    const ovSessionId = deriveOvSessionId(sessionId);
-    const health = await fetchJSON("/health");
-    if (!health.ok && isRetryableFailure(health)) {
-      const queued = await enqueueCommitAfterWrites(ovSessionId, {}, { origin: fetchJSON.origin });
-      log("commit", { ovSessionId, ok: false, queued: queued.ok, reason: "health_retryable" });
-      return;
+    const waitMs = 2 * cfg.captureTimeoutMs;
+    if (input.transcript_path) log("catch_up", await catchUpTranscript(raw, waitMs));
+    const ran = await withAgentHookLock("claude-code", sessionId, async () => {
+      await commitAtEnd(sessionId);
+      return true;
+    }, { waitMs, staleMs: 60_000, heartbeatMs: 10_000 });
+    if (!ran) {
+      log("lock", { reason: "a capture of this session is still running; committing without it", sessionId });
+      await commitAtEnd(sessionId);
     }
-    if (!health.ok) {
-      logError("health_check", `non-retryable status ${health.status || "unknown"}`);
-      return;
-    }
+  });
+}
 
-    const res = await commitSession(fetchJSON, ovSessionId);
-    log("commit", {
-      ovSessionId,
-      ok: res.ok,
-      trace_id: res.traceId || res.result?.trace_id,
-      queued: Boolean(res.pendingQueued),
-      enqueueFailed: Boolean(res.pendingEnqueueFailed),
-      error: res.ok ? undefined : res.error?.message,
-    });
+async function commitAtEnd(sessionId) {
+  const ovSessionId = deriveOvSessionId(sessionId);
+  const health = await fetchJSON("/health");
+  if (!health.ok && isRetryableFailure(health)) {
+    const queued = await enqueueCommitAfterWrites(ovSessionId, {}, { origin: fetchJSON.origin });
+    log("commit", { ovSessionId, ok: false, queued: queued.ok, reason: "health_retryable" });
+    return;
+  }
+  if (!health.ok) {
+    logError("health_check", `non-retryable status ${health.status || "unknown"}`);
+    return;
+  }
+
+  const res = await commitSession(fetchJSON, ovSessionId);
+  log("commit", {
+    ovSessionId,
+    ok: res.ok,
+    trace_id: res.traceId || res.result?.trace_id,
+    queued: Boolean(res.pendingQueued),
+    enqueueFailed: Boolean(res.pendingEnqueueFailed),
+    error: res.ok ? undefined : res.error?.message,
   });
 }
 

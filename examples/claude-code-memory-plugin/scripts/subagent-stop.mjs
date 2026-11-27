@@ -21,9 +21,7 @@
  * parent session id and Claude's subagent id.
  */
 
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { extractCaptureTurns, parseTranscript } from "./cc-transcript.mjs";
@@ -36,6 +34,7 @@ import {
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { enqueueCommitAfterWrites } from "./lib/pending-queue.mjs";
+import { readCursor, removeCursor, writeCursor } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
@@ -48,15 +47,8 @@ if (!isPluginEnabled()) {
 const baseCfg = loadConfig();
 const { log, logError } = createLogger("subagent-stop");
 
-const STATE_DIR = join(tmpdir(), "openviking-cc-subagent-state");
-
 function approve() {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
-}
-
-function stateFile(subagentId) {
-  const safe = String(subagentId).replace(/[^a-zA-Z0-9_-]/g, "_");
-  return join(STATE_DIR, `${safe}.json`);
 }
 
 function peerIdFromSubagent(cfg, subagentId, state, sessionId, cwd) {
@@ -67,19 +59,9 @@ function peerIdFromSubagent(cfg, subagentId, state, sessionId, cwd) {
   return String(subagentId || "").replace(/[^A-Za-z0-9._-]/g, "-") || null;
 }
 
-async function loadState(subagentId) {
-  try {
-    const data = await readFile(stateFile(subagentId), "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return null;
-  }
-}
-
 async function saveState(subagentId, state) {
   try {
-    await mkdir(STATE_DIR, { recursive: true });
-    await writeFile(stateFile(subagentId), JSON.stringify(state));
+    await writeCursor("subagent", subagentId, state);
   } catch (err) {
     logError("state_write", err);
   }
@@ -179,7 +161,7 @@ async function main() {
 
     // Prefer state from SubagentStart (may carry ovSessionId from config snapshot);
     // fall back to live derivation if state file is missing.
-    const state = await loadState(subagentId);
+    const state = await readCursor("subagent", subagentId);
     const ovSessionId = state?.ovSessionId || deriveOvSessionId(sessionId, `subagent:${subagentId}`);
 
     let transcript;
@@ -203,7 +185,7 @@ async function main() {
     });
 
     if (turns.length === 0) {
-      await unlink(stateFile(subagentId)).catch(() => {});
+      await removeCursor("subagent", subagentId);
       return;
     }
 

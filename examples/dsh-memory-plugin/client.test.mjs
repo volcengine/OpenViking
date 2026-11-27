@@ -43,6 +43,17 @@ test("client sends OpenViking identity headers and preserves response trace ids"
   assert.equal(seen.init.headers["X-OpenViking-Actor-Peer"], "peer-a");
 });
 
+test("addMessage runs on the capture timeout", async () => {
+  const client = new OpenVikingClient({ endpoint: "http://127.0.0.1:1933", requestTimeoutMs: 1000, captureTimeoutMs: 45000 });
+  let options;
+  client.fetchJSON = async (_path, _init, opts) => {
+    options = opts;
+    return { ok: true };
+  };
+  await client.addMessage("dsh-1", { role: "user", parts: [] }, "peer-a");
+  assert.deepEqual(options, { actorPeerId: "peer-a", timeoutMs: 45000 });
+});
+
 test("per-session actor peer overrides the process default", async () => {
   let headers;
   globalThis.fetch = async (_url, init) => {

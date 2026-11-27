@@ -164,6 +164,8 @@ const HOST = {
   pluginRoot: PLUGIN_ROOT,
   cliName: "dsh",
   launcherHint: "DeepSeek Harness",
+  // No hook timeouts to check against; this only puts the capture budget on the timeouts line.
+  timeoutBudgets: { capture: "captureTimeoutMs" },
   loadConfig: () => resolveConfig({}, process.env, process.cwd()),
   checkInstall,
   checkConfig,

@@ -289,7 +289,9 @@ function checkActivity(report, cfg, connection) {
   if (states.length) {
     const newest = states[0];
     report.info(`${states.length} session state file(s) in ${homeShort(dir)}; newest ${fmtAge(newest.mtimeMs)}`);
-    const captured = states.filter((state) => (state.data?.capturedHashes?.length || state.data?.capturedTurnIds?.length || 0) > 0);
+    const captured = states.filter((state) => state.data?.capturedHashes?.length
+      || state.data?.capturedTurnIds?.length
+      || state.data?.capturedThrough >= 0);
     if (states.length > 3 && !captured.length) {
       report.warn("no session has ever captured a turn", "the Stop hook runs but never appends messages", "check the Connection section; set OPENVIKING_DEBUG=1 and read the hook log");
     }

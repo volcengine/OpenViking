@@ -15,6 +15,8 @@ export interface OVConfig {
   authMode: string;
   sendIdentityHeaders: boolean;
   peerId: string;
+  timeoutMs: number;
+  captureTimeoutMs: number;
   /** The pre-git workspace id, when it differs — recall still reaches it. */
   legacyPeerId: string;
   userAgent: string;

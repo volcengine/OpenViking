@@ -19,9 +19,7 @@
  * (extractNewTurnMessages).
  */
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { extractCaptureTurns, parseTranscript } from "./cc-transcript.mjs";
@@ -35,7 +33,7 @@ import {
 } from "./lib/ov-session.mjs";
 import { maybeDetach, readHookStdin } from "./lib/async-writer.mjs";
 import { replayPending } from "./lib/pending-queue.mjs";
-import { readJsonState, writeJsonState } from "./lib/state.mjs";
+import { readCursor, readJsonState, writeCursor, writeJsonState } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage, withAgentHookLock } from "./shared/agent-hook-runtime.mjs";
 import { sendSessionMessages } from "./shared/batch-send.mjs";
@@ -51,8 +49,6 @@ const baseCfg = loadConfig();
 const { log, logError } = createLogger("auto-capture");
 const fetchJSON = makeFetchJSON(baseCfg, "captureTimeoutMs");
 
-const STATE_DIR = join(tmpdir(), "openviking-cc-capture-state");
-
 function output(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
@@ -63,25 +59,14 @@ function approve(msg) {
   output(out);
 }
 
-function stateFilePath(sessionId) {
-  const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return join(STATE_DIR, `${safe}.json`);
-}
-
 async function loadState(sessionId) {
-  try {
-    const data = await readFile(stateFilePath(sessionId), "utf-8");
-    return { capturedTurnCount: 0, ...JSON.parse(data) };
-  } catch {
-    return { capturedTurnCount: 0 };
-  }
+  return { capturedTurnCount: 0, ...(await readCursor("capture", sessionId)) };
 }
 
 // The cursor only moves forward unless a caller rewinds it on purpose: a
 // capture that started from an older snapshot must not undo a newer one's.
 async function saveState(sessionId, state, { rewind = false } = {}) {
   try {
-    await mkdir(STATE_DIR, { recursive: true });
     let next = state;
     if (!rewind) {
       const current = await loadState(sessionId);
@@ -89,7 +74,7 @@ async function saveState(sessionId, state, { rewind = false } = {}) {
         next = { ...state, capturedTurnCount: current.capturedTurnCount };
       }
     }
-    await writeFile(stateFilePath(sessionId), JSON.stringify(next));
+    await writeCursor("capture", sessionId, next);
   } catch { /* best effort */ }
 }
 

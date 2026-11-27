@@ -1,11 +1,11 @@
 import { appendFile, open, readFile } from "node:fs/promises";
 
 import {
+  addAgentMessages,
   commitAgentSession,
   stableHash,
 } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { buildCaptureMessage, isCaptureEnabled } from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { sendSessionMessages } from "../../memory-plugin-shared/lib/batch-send.mjs";
 import { commitsOnCompaction } from "../../memory-plugin-shared/lib/session-model.mjs";
 import { denyCursorPermission, evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import { parseCursorTranscript } from "./cursor-transcript.mjs";
@@ -125,6 +125,27 @@ async function readToolRecords(ctx, offset) {
   });
 }
 
+// Cursor transcripts carry no message id, so a turn is known by its position
+// and text: two identical turns at different positions are both kept.
+function turnHash(index, turn) {
+  return stableHash(index, turn.role, turn.content);
+}
+
+/**
+ * The index of the last turn that, with every turn before it, is settled; -1
+ * for none. A transcript that no longer holds that turn as it was captured was
+ * rewritten, and is read again from the start. State without the index keeps
+ * the content hashes of what it captured instead.
+ */
+function capturedThrough(state, turns) {
+  if (Number.isInteger(state.capturedThrough)) {
+    const index = state.capturedThrough;
+    return index >= 0 && turns[index] && turnHash(index, turns[index]) === state.capturedThroughHash ? index : -1;
+  }
+  const hashes = new Set(Array.isArray(state.capturedHashes) ? state.capturedHashes : []);
+  return turns.findLastIndex((turn, index) => hashes.has(turnHash(index, turn)));
+}
+
 async function captureTranscript(ctx, state) {
   const turns = await readTranscript(ctx);
   if (!turns) {
@@ -137,20 +158,10 @@ async function captureTranscript(ctx, state) {
   // can be deduplicated without rereading its result body.
   const acceptedToolIds = new Set(state.capturedToolIds || []);
   const seenToolIds = new Set(acceptedToolIds);
-  const capturedHashes = new Set(Array.isArray(state.capturedHashes) ? state.capturedHashes : []);
   const toSend = [];
-  for (const [index, turn] of turns.entries()) {
-    // Cursor transcripts do not expose a stable message id. Include the
-    // transcript position so two legitimate identical turns are retained,
-    // while duplicate Hook executions over the same transcript still dedupe.
-    const hash = stableHash(index, turn.role, turn.content);
-    if (capturedHashes.has(hash)) continue;
-    const message = buildCaptureMessage({ role: turn.role, content: turn.content }, turn.role, ctx.cfg);
-    if (!message) {
-      capturedHashes.add(hash);
-      continue;
-    }
-    toSend.push({ hash, position: index * 2, turn: message });
+  for (let index = capturedThrough(state, turns) + 1; index < turns.length; index++) {
+    const message = buildCaptureMessage({ role: turns[index].role, content: turns[index].content }, turns[index].role, ctx.cfg);
+    if (message) toSend.push({ index, position: index * 2, turn: message });
   }
   let toolPosition = -1;
   for (const item of toolRecords) {
@@ -165,31 +176,26 @@ async function captureTranscript(ctx, state) {
     });
   }
   toSend.sort((a, b) => a.position - b.position);
-  // Both local sources own retries. Advance only after upload, without a
-  // second copy in the offline queue.
-  const payloads = toSend.map(({ turn }) => ({
-    ...turn,
-    ...(ctx.peerId ? { peer_id: ctx.peerId } : {}),
-  }));
-  const result = await sendSessionMessages(ctx.fetchJSON, ctx.sessionId, payloads);
-  const captured = result.sent;
-  // Refused messages are acknowledged too; only the unsent tail is kept.
+  const result = await addAgentMessages(ctx.fetchJSON, ctx.sessionId, toSend.map(({ turn }) => turn), ctx.peerId);
+  // Sent, queued and refused messages are settled; only the unsent tail is kept.
   const settled = toSend.length - result.retryLater - result.enqueueFailed;
   const acknowledged = toSend.slice(0, settled);
   for (const item of acknowledged) {
     if (item.toolId) acceptedToolIds.add(item.toolId);
-    else capturedHashes.add(item.hash);
   }
   for (const item of toolRecords) {
     if (!acceptedToolIds.has(item.part.tool_id)) break;
     capturedToolOffset = item.endOffset;
   }
+  const firstUnsent = toSend.slice(settled).find((item) => !item.toolId);
+  const through = firstUnsent ? firstUnsent.index - 1 : turns.length - 1;
   return {
-    captured,
     complete: settled === toSend.length,
     state: {
       ...state,
-      capturedHashes: [...capturedHashes].slice(-1000),
+      capturedHashes: undefined,
+      capturedThrough: through,
+      capturedThroughHash: through >= 0 ? turnHash(through, turns[through]) : undefined,
       capturedToolOffset,
       capturedToolIds: [...acceptedToolIds].slice(-1000),
       // Tool records do not count toward commitTurnThreshold.

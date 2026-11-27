@@ -17,12 +17,10 @@
  * fire — SubagentStart/Stop are the only two events we see for subagents.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 import { isPluginEnabled, loadConfig } from "./config.mjs";
 import { createLogger } from "./debug-log.mjs";
 import { deriveOvSessionId } from "./lib/ov-session.mjs";
+import { readCursor, writeCursor } from "./lib/state.mjs";
 import { getEffectivePeerId } from "./lib/workspace-peer.mjs";
 import { runHookStage } from "./shared/agent-hook-runtime.mjs";
 
@@ -33,15 +31,8 @@ if (!isPluginEnabled()) {
 
 const { log, logError } = createLogger("subagent-start");
 
-const STATE_DIR = join(tmpdir(), "openviking-cc-subagent-state");
-
 function approve() {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
-}
-
-function stateFile(subagentId) {
-  const safe = String(subagentId).replace(/[^a-zA-Z0-9_-]/g, "_");
-  return join(STATE_DIR, `${safe}.json`);
 }
 
 runHookStage({
@@ -72,26 +63,19 @@ runHookStage({
 
   // A resumed subagent keeps its agent_id; keep the capture cursor so its next
   // stop does not resend turns an earlier stop already pushed.
-  let capturedTurnCount;
-  try {
-    capturedTurnCount = JSON.parse(await readFile(stateFile(subagentId), "utf-8")).capturedTurnCount;
-  } catch { /* no earlier state */ }
+  const capturedTurnCount = (await readCursor("subagent", subagentId))?.capturedTurnCount;
 
   try {
-    await mkdir(STATE_DIR, { recursive: true });
-    await writeFile(
-      stateFile(subagentId),
-      JSON.stringify({
-        parentSessionId: sessionId,
-        subagentId,
-        agentType,
-        ovSessionId,
-        peerId: effectivePeer.peerId,
-        peerSource: effectivePeer.source,
-        startedAt: Date.now(),
-        capturedTurnCount,
-      }),
-    );
+    await writeCursor("subagent", subagentId, {
+      parentSessionId: sessionId,
+      subagentId,
+      agentType,
+      ovSessionId,
+      peerId: effectivePeer.peerId,
+      peerSource: effectivePeer.source,
+      startedAt: Date.now(),
+      capturedTurnCount,
+    });
   } catch (err) {
     logError("state_write", err);
   }

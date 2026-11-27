@@ -75,7 +75,7 @@ export class OVClient {
     this.cfg = config;
     this.http = createOvHttp(
       { ...config, baseUrl: config.endpoint.replace(/\/+$/, "") },
-      { defaultTimeoutMs: 10000, resolveActorPeerId: () => config.peerId },
+      { defaultTimeoutMs: config.timeoutMs, resolveActorPeerId: () => config.peerId },
     );
   }
 

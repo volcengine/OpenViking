@@ -20,6 +20,9 @@ export const kimicode = {
   requestBudgets: {
     "session-start": 25_000,
     "user-prompt-submit": 17_000,
+    stop: 25_000,
+    "pre-compact": 25_000,
+    "session-end": 25_000,
     interrupt: 2_000,
   },
   stages: {

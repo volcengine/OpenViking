@@ -44,7 +44,7 @@ async function until(check, ms = 10000) {
 }
 
 function cursor(root) {
-  return readFile(join(root, "openviking-cc-capture-state", "s.json"), "utf-8")
+  return readFile(join(root, ".openviking", "state", "cc-capture-state", "s.json"), "utf-8")
     .then((raw) => JSON.parse(raw).capturedTurnCount, () => undefined);
 }
 
@@ -159,6 +159,28 @@ test("a slow Stop worker neither duplicates the catch-up's turns nor moves the c
       await until(async () => (await cursor(root)) === 5);
     });
     assert.deepEqual(sent.filter((e) => e !== "commit"), ["q1", "a1", "q2", "a2 in progress", "a2 done"]);
+  } finally {
+    restore();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("SessionEnd commits after a Stop still posting and after turns no Stop captured", async () => {
+  const restore = scrubOpenVikingEnv();
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-session-end-"));
+  const input = { session_id: "s", transcript_path: join(root, "t.jsonl"), cwd: root };
+  const events = [];
+  try {
+    await writeFile(input.transcript_path, [rec("user", "q1"), rec("assistant", "a1")].join("\n"));
+    await withMockOpenViking(mockServer(events, (n) => (n === 0 ? 1500 : 0)), async (baseUrl) => {
+      expectExit(await runHookScript(join(SCRIPTS, "auto-capture.mjs"), { input, env: hookEnv(root, baseUrl) }));
+      await sleep(300);
+      await appendFile(input.transcript_path, `\n${rec("user", "q2 interrupted")}`);
+      const end = { ...input, hook_event_name: "SessionEnd", reason: "prompt_input_exit" };
+      expectExit(await runHookScript(join(SCRIPTS, "session-end.mjs"), { input: end, env: hookEnv(root, baseUrl) }));
+      await until(async () => events.includes("commit"));
+    });
+    assert.deepEqual(events, ["q1", "a1", "q2 interrupted", "commit"]);
   } finally {
     restore();
     await rm(root, { recursive: true, force: true });

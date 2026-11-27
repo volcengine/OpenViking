@@ -20,11 +20,11 @@ and `OPENVIKING_PENDING_DIR` relocate individual pieces.
 | `~/.claude/settings.json` | `enabledPlugins`, `statusLine`, optional `env`, legacy `hooks`. |
 | `~/.openviking/marketplaces/openviking-claude/` | Directory marketplace that older installers generated for GitHub installs; its manifest points at `git-subdir` `examples/claude-code-memory-plugin`. The installer no longer writes it, and a re-run moves the registration to the TOS URL marketplace. |
 | `~/.openviking/memory-plugin-marketplace/` | Unpacked plugin bundle from the release; the Claude Code marketplace only before Claude Code 2.1.224, and cannot self-update. |
-| `~/.openviking/state/` | `last-recall.json`, `last-capture.json`, `last-session-event.json`, `daily-stats.json`, `server-probe.json`, `host-cli-probe.json`, `context-face.json`, `recall-digest.json`, `ws-peer-<session>.json`, `ws-identity-<hash>.json` (60s cache of the git identity behind the peer). Anything else there is residue. |
+| `~/.openviking/state/` | `last-recall.json`, `last-capture.json`, `last-session-event.json`, `daily-stats.json`, `server-probe.json`, `host-cli-probe.json`, `context-face.json`, `recall-digest.json`, `ws-peer-<session>.json`, `ws-identity-<hash>.json` (60s cache of the git identity behind the peer), and the capture cursors below. Anything else there is residue. |
 | `~/.openviking/last_inject.md` | Full text of the last SessionStart injection. |
 | `~/.openviking/logs/cc-hooks.log` | JSONL hook + proxy log; written only when `OPENVIKING_DEBUG=1` or `debug: true`. |
 | `~/.openviking/pending/` | Offline write queue (retryable failures only); drained at SessionStart after `/health` passes. |
-| `$TMPDIR/openviking-cc-capture-state/<session>.json` | Capture cursor (`capturedTurnCount`). macOS purges `$TMPDIR`, which forces a re-push. |
+| `~/.openviking/state/cc-capture-state/<session>.json`, `cc-subagent-state/<agent>.json` | Capture cursors (`capturedTurnCount`) for the main session and each subagent. A cursor still under `$TMPDIR/openviking-cc-*-state/` from an older release is read until the next capture moves it. |
 
 ## Config resolution
 

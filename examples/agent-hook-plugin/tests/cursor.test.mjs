@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { syncBuiltinESMExports } from "node:module";
@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { stableHash } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { expectExit, runHookScript } from "../../memory-plugin-shared/testing/support.mjs";
 import { cursor } from "../hosts/cursor.mjs";
 import { evaluateHostUriGuard } from "../scripts/uri-guard.mjs";
@@ -162,6 +163,52 @@ test("Cursor captures a busy session without replaying text or rereading uploade
   }
 });
 
+test("Cursor sends each turn of a long transcript once, also after an upgrade from content hashes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "openviking-cursor-long-"));
+  const transcript = join(root, "transcript.jsonl");
+  const sent = [];
+  const ctx = {
+    cfg: { enabled: true, autoCapture: true, commitTurnThreshold: 1_000_000 },
+    sessionId: "cu-long",
+    stateFile: join(root, "state.json"),
+    input: { transcript_path: transcript },
+    peerId: "",
+    log: () => {},
+    fetchJSON: async (path, request) => {
+      if (path.endsWith("/messages/batch")) sent.push(...JSON.parse(request.body).messages.map((m) => m.parts[0].text));
+      return { ok: true };
+    },
+  };
+  const turns = [];
+  const write = (count) => {
+    for (let i = 0; i < count; i++) {
+      const n = turns.length;
+      turns.push({ role: n % 2 ? "assistant" : "user", content: `turn ${n}` });
+    }
+    writeFileSync(transcript, turns.map((turn) => JSON.stringify(turn)).join("\n"));
+  };
+  try {
+    write(1200);
+    let state = await cursor.capture(ctx, {}, "stop");
+    write(2);
+    state = await cursor.capture(ctx, state, "stop");
+    await cursor.capture(ctx, state, "stop");
+    assert.deepEqual(sent, turns.map((turn) => turn.content));
+
+    // An earlier version kept only the hashes of the last 1000 captured turns.
+    const capturedHashes = turns.map((turn, index) => stableHash(index, turn.role, turn.content)).slice(-1000);
+    sent.length = 0;
+    write(1);
+    state = await cursor.capture(ctx, { capturedHashes }, "stop");
+    assert.deepEqual(sent, ["turn 1202"]);
+    assert.equal(state.capturedHashes, undefined);
+    await cursor.capture(ctx, state, "stop");
+    assert.deepEqual(sent, ["turn 1202"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("Cursor captures text and every completed tool together before commit", async () => {
   const messages = [];
   const actorPeers = [];
@@ -303,7 +350,7 @@ test("Cursor captures text and every completed tool together before commit", asy
   }
 });
 
-test("Cursor retries the unreported tail after a partial capture before committing", async () => {
+test("Cursor queues the unsent tail of a partial capture and the commit behind it", async () => {
   const messages = [];
   const archives = [];
   let offline = true;
@@ -363,10 +410,11 @@ test("Cursor retries the unreported tail after a partial capture before committi
     assert.equal(archives.length, 0, "commit must not overtake unreported messages");
     assert.equal(messages.length, 3);
     assert.equal(messages[2].parts[0].tool_id, "offline-read");
-    assert.equal(existsSync(pendingDir), false, "the local capture source owns retries");
+    assert.equal(readdirSync(pendingDir).length, 2, "the unsent tool record and the commit are queued");
 
+    // Any later hook replays the queue, not only this conversation's next capture.
     offline = false;
-    await runHook("preCompact", input, env);
+    await runHook("sessionStart", { conversation_id: "cursor-other", cwd: "/workspace" }, env);
     assert.deepEqual(messages, [
       { role: "user", parts: [{ type: "text", text: "offline question" }] },
       { role: "assistant", parts: [{ type: "text", text: "offline answer" }] },
@@ -386,7 +434,7 @@ test("Cursor retries the unreported tail after a partial capture before committi
       },
     ]);
     assert.deepEqual(archives, [messages]);
-    assert.equal(existsSync(pendingDir), false);
+    assert.deepEqual(readdirSync(pendingDir), []);
 
     await runHook("stop", input, env);
     assert.equal(messages.length, 4, "acknowledged turns are not stored twice");

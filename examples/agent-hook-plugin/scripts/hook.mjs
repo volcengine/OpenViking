@@ -236,7 +236,8 @@ async function main() {
     cfg = resolved;
     const payload = normalize(input);
     if (!stageName) return "";
-    const agent = makeAgentFetchJSON(cfg, cwd);
+    const timeoutMs = stageName.startsWith("capture") ? cfg.captureTimeoutMs || cfg.timeoutMs : cfg.timeoutMs;
+    const agent = makeAgentFetchJSON(cfg, cwd, { defaultTimeoutMs: timeoutMs });
     const baseFetchJSON = agent.fetchJSON;
     const ctx = {
       cfg,
@@ -244,7 +245,7 @@ async function main() {
       input: payload,
       nativeSessionId: resolveNativeSessionId(payload),
       sessionId: deriveAgentSessionId(host.prefix, payload),
-      fetchJSON: withRequestBudget(baseFetchJSON, host.requestBudgets?.[event], cfg.timeoutMs),
+      fetchJSON: withRequestBudget(baseFetchJSON, host.requestBudgets?.[event], timeoutMs),
       // The peer the actor-peer header already carries, stamped into captured
       // messages because session writes read it from the body only.
       get peerId() { return agent.effectivePeer.peerId; },
