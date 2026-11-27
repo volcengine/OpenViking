@@ -49,10 +49,28 @@ Each Connector fails on its own. When a worker exits unexpectedly, or fails
 1 min, then every 5 min) while the runtime and the other Connectors keep
 running. It counts as recovered after 30 s of running, and its backoff starts
 over. A Connector that cannot go on (an expired login, a lost long connection)
-should send `STATUS failed` with a short `detail.error`, then exit; the Core
-shows that reason in Activity. Actions for a Connector that is down are refused
-before any outbox reservation (`connector_unavailable`). Startup fails only
-when no Connector passes `check` and `start`.
+should send `STATUS failed` with a short `detail.error` and, when it saw one,
+the `detail.code` and `detail.signal` of the process that ended; the Core shows
+that exit in Activity, and falls back to the worker's stderr only for a crash
+that reported nothing. Actions for a Connector that is down are refused before
+any outbox reservation (`connector_unavailable`). Startup fails only when no
+Connector passes `check` and `start`.
+
+An exit the operating system causes is not a failure. Windows does not ask a
+session's processes to stop, it terminates them: a worker gets 0x40010004
+(`DBG_TERMINATE_PROCESS`), and a process started while the session is already
+logging off gets 0xC0000142 (`STATUS_DLL_INIT_FAILED`); a console closed under a
+process gives it 0xC000013A (`STATUS_CONTROL_C_EXIT`). On any of those the Core
+reports nothing, retries nothing — a restart could not start anyway — and stops
+itself, leaving the supervisor to start it again at the next login. The same
+holds when such a code ends the worker the Core just restarted.
+
+That call needs a Core that has been up for at least 30 s. In its first seconds
+the same codes mean a broken environment — a DLL that will not initialize — and
+taking them for a session end would make the Core stop and the supervisor start
+it again, indefinitely, without an error line. So the window is what keeps a
+restart loop visible; a session end during the first 30 s of a Core is reported
+as the failure it looks like.
 
 Example manifest:
 

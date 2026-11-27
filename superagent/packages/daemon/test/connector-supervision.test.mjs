@@ -29,8 +29,10 @@ function lineCount(file) {
   try { return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).length; } catch { return 0; }
 }
 
-// Two fixture Connectors, alpha and beta, each steered by a mode file.
-function setup(t, { modes = {}, delays = [50, 100] } = {}) {
+// Two fixture Connectors, alpha and beta, each steered by a mode file. A
+// session-end exit counts from the first second on unless a test asks for the
+// uptime window the daemon uses.
+function setup(t, { modes = {}, delays = [50, 100], windowMs = 0 } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'connector-supervision-'));
   const setMode = (id, mode) => fs.writeFileSync(path.join(dataDir, `${id}.mode`), mode);
   for (const [id, mode] of Object.entries(modes)) setMode(id, mode);
@@ -38,6 +40,7 @@ function setup(t, { modes = {}, delays = [50, 100] } = {}) {
   const manager = new ConnectorManager({
     connectors: ['alpha', 'beta'], dataDir, projectDir: process.cwd(), maxEventBytes: 100_000,
     connectorWorkerPath: fixture, connectorRestartDelaysMs: delays, connectorStableAfterMs: 100,
+    connectorSessionEndWindowMs: windowMs,
   }, registry, logger);
   const events = [];
   const statuses = [];
@@ -118,6 +121,17 @@ describe('Connector supervision', () => {
     await assert.rejects(manager.preflight(), /alpha: .*login expired.*; beta: .*login expired/);
   });
 
+  it('gives the exit reason, not the last routine stderr line, and keeps that tail in the report', async (t) => {
+    const { manager, statuses, start } = setup(t, { modes: { alpha: 'exit-code-only' }, delays: [60_000] });
+    await manager.preflight();
+    await start();
+    await waitFor(() => statuses.length === 1);
+    assert.equal(statuses[0].error, 'connector alpha exited with code 3');
+    assert.equal(statuses[0].code, 1);
+    // The worker's own stderr stays available for a crash, in the report alone.
+    assert.match(statuses[0].stderr, /meeting_notes_scanned/);
+  });
+
   it('schedules no restart once shutdown pauses the subscriptions, even if a worker exits first', async (t) => {
     const { manager, statuses, spawns, start } = setup(t, { modes: { beta: 'exit-after-start' }, delays: [200] });
     await manager.preflight();
@@ -131,6 +145,46 @@ describe('Connector supervision', () => {
     assert.equal(statuses.length, 1);
     assert.equal(spawns('beta'), 1);
     assert.deepEqual(Object.values(manager.snapshot()).map((connector) => connector.state), ['stopped', 'stopped']);
+  });
+
+  it('treats a Windows session-end exit as the session ending, not a Connector failure', async (t) => {
+    const { manager, statuses, spawns, start } = setup(t, { modes: { beta: 'exit-session-end' }, delays: [50] });
+    await manager.preflight();
+    await start();
+    await waitFor(() => statuses.length === 1);
+    // The worker saw its subscriber killed with 0x40010004 and exited 1 itself:
+    // the reported exit is the one that counts, and the session is over.
+    assert.deepEqual(statuses.map((status) => status.status), ['session_end']);
+    assert.deepEqual([statuses[0].connector, statuses[0].code, statuses[0].reportedCode], ['beta', 1, 0x40010004]);
+    // Nothing is retried: no 5-second reconnect that could only fail.
+    await delay(300);
+    assert.equal(spawns('beta'), 1);
+    assert.deepEqual(Object.values(manager.snapshot()).map((connector) => connector.state), ['running', 'stopped']);
+  });
+
+  it('reports a session-end code inside the uptime window as a failure, so a restart loop cannot hide', async (t) => {
+    const { manager, statuses, spawns, start } = setup(t, {
+      modes: { alpha: 'exit-session-end' }, delays: [60_000], windowMs: 30_000,
+    });
+    await manager.preflight();
+    await start();
+    await waitFor(() => statuses.length === 1);
+    // The Core was started seconds ago: the same code is a broken environment,
+    // not the session ending, and the supervisor must see it.
+    assert.equal(statuses[0].status, 'failed');
+    assert.match(statuses[0].error, /with code 1073807364 \(DBG_TERMINATE_PROCESS\)/);
+    assert.equal(spawns('alpha'), 1);
+  });
+
+  it('treats a session end that lands while a Connector starts as the session ending', async (t) => {
+    const { manager, statuses, spawns, start } = setup(t, { modes: { alpha: 'exit-session-end-check' }, delays: [50] });
+    // alpha dies during check, before its subscription ever counts as running.
+    await manager.preflight();
+    await start();
+    assert.deepEqual(statuses.map((status) => status.status), ['session_end']);
+    assert.equal(statuses[0].connector, 'alpha');
+    await delay(200);
+    assert.equal(spawns('alpha'), 1);
   });
 });
 
@@ -182,7 +236,11 @@ describe('daemon with a failing Connector (mock env)', { concurrency: false }, (
       await waitFor(() => env.activities('system.connector_failed').length >= 2);
       const [failed] = env.activities('system.connector_failed');
       assert.equal(failed.metadata.connector, 'weixin');
+      assert.equal(failed.metadata.code, 1);
       assert.match(failed.summary, /weixin Connector 不可用，1 秒后重连：.*session expired/);
+      // The reason names the exit that happened; the summary stays short and
+      // the whole text is in the detail.
+      assert.equal(failed.metadata.error, 'connector weixin exited: session expired; run the QR login command again');
       assert.equal(env.daemon.shuttingDown, false);
       assert.equal(env.daemon.serviceSnapshot().ready, true);
       // Each failing worker started before it failed; none of that is recovery.
@@ -200,6 +258,39 @@ describe('daemon with a failing Connector (mock env)', { concurrency: false }, (
       const spawns = fs.readFileSync(path.join(env.dir, 'data', 'weixin.spawns'), 'utf8').split('\n').filter(Boolean).length;
       await env.waitForCodexInput(new RegExp(`source=weixin kind=issue.opened event=issue-open-123-${spawns} `));
       assert.equal(env.codexSpawnArgs().length, 1, 'the runtime was never restarted');
+    } finally {
+      await env.stop();
+    }
+  });
+
+  it('stops quietly when the session ends instead of reporting the Connector unavailable', async () => {
+    const env = await startMockEnv({
+      config: { connectorWorkerPath: fixture, connectorRestartDelaysMs: [50], connectorStableAfterMs: 100,
+        connectorSessionEndWindowMs: 0 },
+      prepare: (dir) => fs.mkdirSync(path.join(dir, 'data'), { recursive: true }),
+    });
+    try {
+      // What the daemon records from here on, since its store closes on stop.
+      const recorded = [];
+      const record = env.daemon.recordSystemActivity.bind(env.daemon);
+      env.daemon.recordSystemActivity = (kind, fields, suffix) => {
+        recorded.push({ kind, summary: fields.summary, metadata: fields.metadata });
+        return record(kind, fields, suffix);
+      };
+      // The daemon is up and serving; then the session goes down under it, as
+      // Windows does when the user shuts the machine down.
+      fs.writeFileSync(path.join(env.dir, 'data', 'lark.mode'), 'exit-session-end');
+      await waitFor(() => env.daemon.shuttingDown);
+      // A Connector killed by the session going down is not unavailable, and
+      // nothing is retried into a session that is logging off.
+      assert.equal(recorded.filter((entry) => entry.kind === 'system.connector_failed').length, 0);
+      const stopping = recorded.filter((entry) => entry.kind === 'system.stopping');
+      assert.equal(stopping.length, 1);
+      assert.equal(stopping[0].metadata.reason, 'session_end');
+      await delay(400);
+      assert.equal(fs.readFileSync(path.join(env.dir, 'data', 'lark.spawns'), 'utf8')
+        .split('\n').filter(Boolean).length, 1);
+      assert.equal(env.daemon.serviceSnapshot({ includeState: false }).ready, false);
     } finally {
       await env.stop();
     }

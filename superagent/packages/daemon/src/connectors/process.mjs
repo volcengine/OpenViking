@@ -6,7 +6,7 @@ import { spawnDetached, processOptions } from '../platform/index.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { sanitizeNonArkChildEnv, terminateProcessTree } from '../process-utils.mjs';
+import { describeFailure, sanitizeNonArkChildEnv, sessionEndedExit, terminateProcessTree } from '../process-utils.mjs';
 import { safeError } from '../logger.mjs';
 import { connectorManifest, parseProtocolLine, requestMessage } from './protocol.mjs';
 import { mentionTarget } from '../runtime-input.mjs';
@@ -18,9 +18,23 @@ const defaultWorkerPath = fileURLToPath(new URL('./worker.mjs', import.meta.url)
 // backoff starts over. An expired login starts fine and fails seconds later.
 const RESTART_DELAYS_MS = [5_000, 15_000, 60_000, 300_000];
 const STABLE_AFTER_MS = 30_000;
+// A session-end exit code only means the session ended once the Core has run
+// for a while. In its first seconds the same code is a broken environment (a
+// DLL that will not initialize), and taking that for a session end would stop
+// the Core and let the supervisor start it again, forever, without an error
+// line: a restart loop that hides itself.
+const SESSION_END_WINDOW_MS = 30_000;
 
 function unavailable(id) {
   return Object.assign(new Error(`connector ${id} is temporarily unavailable`), { code: 'connector_unavailable' });
+}
+
+// Whether this exit carries a code the OS uses for a session ending, either for
+// the worker itself or for the process it reported ended. Whether that is the
+// session ending here is the ConnectorManager's call, which owns the uptime
+// window.
+function sessionEndExit(exit) {
+  return Boolean(exit) && (sessionEndedExit(exit.code) || sessionEndedExit(exit.reported?.code));
 }
 
 // The owner as a Connector reported it at check: `id` is how the owner appears
@@ -117,7 +131,13 @@ export class ConnectorProcess {
     this.stopping = false;
     this.onEvent = null;
     this.onUnexpectedExit = null;
-    this.reportedError = null;
+    // The last exit the worker reported with STATUS failed, and the last exit
+    // this process observed, both { code, signal } plus the reported detail.
+    this.reportedExit = null;
+    this.lastExit = null;
+    // Set by the ConnectorManager: whether an exit means the session ended
+    // rather than the Connector failing.
+    this.sessionEnd = null;
     // Supervision state, kept by ConnectorManager.
     this.failures = 0;
     this.lastError = null;
@@ -133,7 +153,8 @@ export class ConnectorProcess {
     this.stdoutBuffer = '';
     this.stderrTail = '';
     this.stderrBuffer = '';
-    this.reportedError = null;
+    this.reportedExit = null;
+    this.lastExit = null;
     const externalCommand = this.instance.command;
     if (externalCommand !== undefined && !path.isAbsolute(externalCommand)) {
       throw new Error(`connector ${this.id} command must be an absolute path`);
@@ -171,14 +192,22 @@ export class ConnectorProcess {
       this.checked = false;
       this.started = false;
       this.onUnexpectedExit = null;
-      // The worker's own failure report says why (an expired login, say);
-      // the stderr tail is the fallback for a crash.
-      const detail = this.reportedError || this.stderrTail.trim().slice(-2_000);
-      const error = new Error(`connector ${this.id} exited ${code ?? signal ?? 'unknown'}${detail ? `: ${detail}` : ''}`);
+      const reported = this.reportedExit;
+      this.reportedExit = null;
+      const stderr = this.stderrTail.trim().slice(-2_000);
+      this.lastExit = { code, signal, reported };
+      // The worker's own failure report says what it saw end and why (an
+      // expired login, say). Only a crash that reported nothing is explained by
+      // the stderr tail: on its own it is the last routine log line, which is no
+      // reason at all.
+      const reason = reported
+        ? describeFailure(reported.code, reported.signal, reported.error)
+        : describeFailure(code, signal, stderr);
+      const error = new Error(`connector ${this.id} exited${reason || ' unexpectedly'}`);
       this.failPending(error);
       if (!wasStopping) {
         terminateProcessTree(child, 'SIGKILL');
-        onUnexpectedExit?.({ code, signal, stderr: safeError(error) });
+        onUnexpectedExit?.({ code, signal, reported, error: safeError(error), stderr });
       }
     });
   }
@@ -240,10 +269,23 @@ export class ConnectorProcess {
       return;
     }
     if (message.type === 'STATUS' && message.status === 'failed' && !this.stopping) {
-      if (typeof message.detail?.error === 'string') this.reportedError = message.detail.error.slice(-2_000);
-      this.logger.error('connector_reported_failure', {
+      const detail = message.detail ?? {};
+      const error = typeof detail.error === 'string' ? detail.error.slice(-2_000) : '';
+      // The sort of exit a Connector reports, not the one this process makes:
+      // a worker reports the subscriber that died, then exits 1 itself.
+      this.reportedExit = {
+        code: Number.isInteger(detail.code) ? detail.code : null,
+        signal: typeof detail.signal === 'string' ? detail.signal : null,
+        error,
+      };
+      // A subscriber the OS terminated at logoff is not a failure to report in
+      // red; the Connector says so here a moment before this process exits.
+      const ending = this.sessionEnd?.(this.reportedExit) === true;
+      this.logger[ending ? 'info' : 'error'](ending ? 'connector_reported_session_end' : 'connector_reported_failure', {
         connector: this.id,
-        error: message.detail?.error,
+        code: this.reportedExit.code,
+        signal: this.reportedExit.signal,
+        error,
       });
     }
   }
@@ -371,13 +413,18 @@ export class ConnectorManager {
   constructor(config, registry, logger) {
     this.config = config;
     this.logger = logger;
+    this.startedAt = Date.now();
     this.connectors = new Map(connectorInstances(config).map((instance) => [
       instance.id,
       new ConnectorProcess(instance, config, registry, logger.child({ connector: instance.id })),
     ]));
+    for (const connector of this.connectors.values()) {
+      connector.sessionEnd = (exit) => this.endedWithSession(exit);
+    }
     this.profile = config.profile || null;
     this.restartDelaysMs = config.connectorRestartDelaysMs ?? RESTART_DELAYS_MS;
     this.stableAfterMs = config.connectorStableAfterMs ?? STABLE_AFTER_MS;
+    this.sessionEndWindowMs = config.connectorSessionEndWindowMs ?? SESSION_END_WINDOW_MS;
     this.onEvent = null;
     this.onStatus = null;
     // Subscriptions were started and not yet paused: inbound may arrive.
@@ -455,11 +502,47 @@ export class ConnectorManager {
     clearTimeout(connector.stableTimer);
     connector.stableTimer = null;
     connector.runningSince = null;
-    this.fail(connector, exit.stderr, { code: exit.code, signal: exit.signal });
+    // Windows terminates a session's processes; that says nothing about the
+    // Connector, and nothing can be restarted while the session logs off.
+    if (this.endedWithSession(exit)) {
+      this.sessionEnded(connector, exit);
+      return;
+    }
+    this.fail(connector, exit.error, { code: exit.code, signal: exit.signal, stderr: exit.stderr });
+  }
+
+  // The session is ending: no Connector is down, so none is reported as failed
+  // and none is restarted. Supervision stops; the Core stops with it, and the
+  // supervisor starts both again at the next login.
+  //
+  // The uptime window is what keeps a restart loop out of this path: a Core the
+  // supervisor just started cannot call the same exit a session end again, so a
+  // broken environment stays an error the operator can see.
+  endedWithSession(exit) {
+    return sessionEndExit(exit) && Date.now() - this.startedAt >= this.sessionEndWindowMs;
+  }
+
+  sessionEnded(connector, exit) {
+    if (this.closed) return;
+    this.close();
+    this.onStatus?.({
+      status: 'session_end',
+      connector: connector.id,
+      code: exit?.code ?? null,
+      signal: exit?.signal ?? null,
+      reportedCode: exit?.reported?.code ?? null,
+      reportedSignal: exit?.reported?.signal ?? null,
+    });
   }
 
   fail(connector, error, exit = {}) {
     if (this.closed) return;
+    // An exit during the session ending is not a failure wherever it is
+    // noticed: the worker may be gone before its subscription counts as up.
+    if (this.endedWithSession(exit) || this.endedWithSession(connector.lastExit)) {
+      this.sessionEnded(connector, this.endedWithSession(exit) ? exit : connector.lastExit);
+      return;
+    }
     const retryInMs = this.restartDelaysMs[Math.min(connector.failures, this.restartDelaysMs.length - 1)];
     connector.failures += 1;
     connector.lastError = error || `connector ${connector.id} failed`;
@@ -468,7 +551,8 @@ export class ConnectorManager {
     connector.retryTimer = setTimeout(() => void this.restart(connector), retryInMs);
     connector.retryTimer.unref?.();
     this.onStatus?.({ status: 'failed', connector: connector.id, error: connector.lastError,
-      failures: connector.failures, retryInMs, code: exit.code ?? null, signal: exit.signal ?? null });
+      failures: connector.failures, retryInMs, code: exit.code ?? null, signal: exit.signal ?? null,
+      ...(exit.stderr ? { stderr: exit.stderr } : {}) });
   }
 
   // A fresh worker through the whole check and start again. A Weixin login
@@ -483,7 +567,14 @@ export class ConnectorManager {
       if (this.closed) throw new Error('connectors are stopping');
       await this.subscribe(connector);
     } catch (error) {
+      const lastExit = connector.lastExit;
       connector.discard();
+      // A session that ends between the retry and the new worker shows up here
+      // too: the replacement cannot start, and that is still not a failure.
+      if (this.endedWithSession(lastExit)) {
+        this.sessionEnded(connector, lastExit);
+        return;
+      }
       this.fail(connector, safeError(error));
       return;
     }
