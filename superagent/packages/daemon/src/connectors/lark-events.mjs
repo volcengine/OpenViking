@@ -103,6 +103,45 @@ const AGENT_VISIBLE_MESSAGE_TYPES = new Set([
 ]);
 const IMAGE_KEY = /^img_[A-Za-z0-9_-]{8,}$/;
 
+// A card can carry its text in up to 16 languages, and the client shows the
+// one its own language asks for. The message JSON keeps them all, so one
+// locale is read, once: English first, then Chinese, then whatever the card
+// lists first. Reading every copy would put the same sentence in the prompt
+// two or three times, in languages the reader never chose.
+const LOCALES = new Set([
+  'zh_cn', 'zh_hk', 'zh_tw', 'en_us', 'ja_jp', 'id_id', 'vi_vn', 'th_th',
+  'pt_br', 'es_es', 'ko_kr', 'de_de', 'fr_fr', 'it_it', 'ru_ru', 'ms_my',
+]);
+const LOCALE_PRIORITY = ['en', 'zh'];
+// A field translated per language beside the field it translates
+// (局部多语言): that field keeps the default text and stays the one read.
+const LOCAL_I18N = { i18n_content: 'content', i18n_default_value: 'default_value' };
+// A block configured in every language in place of a whole field (全局多语言):
+// the locale map decides the field, and the field it replaces is not read.
+const GLOBAL_I18N = { i18n: 'content', i18n_text_tag_list: 'text_tag_list', i18n_elements: 'elements' };
+
+function localeRank(locale) {
+  const rank = LOCALE_PRIORITY.indexOf(String(locale).toLowerCase().split('_')[0]);
+  return rank === -1 ? LOCALE_PRIORITY.length : rank;
+}
+
+function hasText(value) {
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return Boolean(value && typeof value === 'object' && Object.keys(value).length > 0);
+}
+
+// The one locale to read out of a locale-keyed map ({en_us: ..., zh_cn: ...}).
+function pickLocale(map) {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
+  const filled = Object.entries(map)
+    .filter(([locale, text]) => LOCALES.has(locale.toLowerCase()) && hasText(text));
+  if (filled.length === 0) return null;
+  // The sort is stable, so locales of one rank keep the card's own order.
+  filled.sort(([left], [right]) => localeRank(left) - localeRank(right));
+  return filled[0][1];
+}
+
 function parseJson(value) {
   if (typeof value !== 'string') return value;
   try {
@@ -144,16 +183,46 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
     return;
   }
 
-  const priorityKeys = ['text', 'title', 'content', 'name', 'file_name'];
   const visited = new Set();
+  // Text read through a locale map, kept until the title and the other plain
+  // fields are in, so a card reads in its own order.
+  const translated = [];
+  // A multi-language post carries its whole body under a locale key
+  // ({zh_cn: {...}, en_us: {...}}), so it is read through the same rule.
+  if (Object.keys(value).every((key) => LOCALES.has(key.toLowerCase()))) {
+    const chosen = pickLocale(value);
+    if (chosen !== null) collectText(chosen, output, mediaKeys, depth + 1);
+    return;
+  }
+  for (const [key, base] of Object.entries(LOCAL_I18N)) {
+    if (!Object.hasOwn(value, key) || Object.hasOwn(value, base)) continue;
+    const chosen = pickLocale(value[key]);
+    if (chosen !== null) translated.push(chosen);
+    visited.add(key);
+  }
+  for (const [key, base] of Object.entries(GLOBAL_I18N)) {
+    if (!Object.hasOwn(value, key)) continue;
+    const chosen = pickLocale(value[key]);
+    if (chosen === null) continue;
+    translated.push(chosen);
+    visited.add(key).add(base);
+  }
+  const priorityKeys = ['text', 'title', 'content', 'name', 'file_name'];
+  // A card's title sits under header and reads before the body.
+  if (Object.hasOwn(value, 'header')) {
+    collectText(value.header, output, mediaKeys, depth + 1);
+    visited.add('header');
+  }
   for (const key of priorityKeys) {
     if (Object.hasOwn(value, key)) {
       collectText(value[key], output, mediaKeys, depth + 1);
       visited.add(key);
     }
   }
+  for (const field of translated) collectText(field, output, mediaKeys, depth + 1);
   for (const [key, child] of Object.entries(value)) {
-    if (visited.has(key) || ['tag', 'style', 'language'].includes(key) || /(?:_key|_id|url|token|secret)$/i.test(key)) continue;
+    if (visited.has(key) || /^i18n/i.test(key) || ['tag', 'style', 'language'].includes(key)
+      || /(?:_key|_id|url|token|secret)$/i.test(key)) continue;
     collectText(child, output, mediaKeys, depth + 1);
   }
 }
