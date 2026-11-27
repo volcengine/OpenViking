@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import and_, delete, insert, or_, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.sql.elements import ColumnElement
 
 from openviking.core.identifiers import (
     validate_account_id,
@@ -283,10 +284,12 @@ class SQLCompileStore:
         table = self._configs
         return select(table.c.config_id).where(*_where_key(table, key))
 
-    def _run_scope(self, key, task_id: str | None = None):
+    def _run_scope(self, key, task_id: str | None = None) -> ColumnElement[bool]:
         c = self._runs.c
-        scope = (c.config_id == self._config_ids(key).scalar_subquery(),)
-        return (*scope, c.task_id == validate_task_id(task_id)) if task_id is not None else scope
+        scope = c.config_id == self._config_ids(key).scalar_subquery()
+        if task_id is not None:
+            return and_(scope, c.task_id == validate_task_id(task_id))
+        return scope
 
     async def _insert(self, table, values) -> bool:
         try:
@@ -511,7 +514,7 @@ class SQLCompileStore:
         c = table.c
         key = self._key(account_id, owner_user_id, compile_name)
         where = self._run_scope(key, task_id)
-        query = select(*_project(table, _RUN_COLUMNS, _RUN_COLUMNS)).where(*where)
+        query = select(*_project(table, _RUN_COLUMNS, _RUN_COLUMNS)).where(where)
         async with self._session() as session:
             if task_id is None:
                 if cursor:
@@ -523,10 +526,10 @@ class SQLCompileStore:
                         anchor = None
                     else:
                         anchor = await session.scalar(
-                            select(c.created_at).where(*where, c.task_id == cursor_id)
+                            select(c.created_at).where(where, c.task_id == cursor_id)
                         )
                     if anchor is None:
-                        if await session.scalar(select(c.task_id).where(*where).limit(1)) is None:
+                        if await session.scalar(select(c.task_id).where(where).limit(1)) is None:
                             return []
                         if cursor_error is not None:
                             raise cursor_error
@@ -611,7 +614,7 @@ class SQLCompileStore:
         row = (
             (
                 await session.execute(
-                    select(*columns).where(*self._run_scope(key, task_id)).with_for_update()
+                    select(*columns).where(self._run_scope(key, task_id)).with_for_update()
                 )
             )
             .mappings()
