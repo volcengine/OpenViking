@@ -238,3 +238,25 @@ def test_abstract_truncation_does_not_treat_a_decimal_as_a_list_marker():
     # A real sentence end still wins when it falls inside the limit.
     mixed = "Raised 2.5 million. The rest of this sentence is cut off by the limit."
     assert _truncate_generated_text(mixed, 40) == "Raised 2.5 million."
+
+
+@pytest.mark.parametrize("terminal", ["?", "!"])
+def test_abstract_truncation_keeps_a_question_or_exclamation_after_a_number(terminal):
+    from openviking.storage.queuefs.semantic_ops.directory_generation import (
+        _truncate_generated_text,
+    )
+
+    text = (
+        f"The release shipped in 2026{terminal} It also shipped a lot of other things "
+        "that go well past the limit."
+    )
+    assert _truncate_generated_text(text, 40) == f"The release shipped in 2026{terminal}"
+
+
+def test_abstract_truncation_treats_a_sentence_end_on_a_year_as_an_end():
+    from openviking.storage.queuefs.semantic_ops.directory_generation import (
+        _truncate_generated_text,
+    )
+
+    text = "We grew in 2026. Then the rest of this sentence continues far beyond the limit."
+    assert _truncate_generated_text(text, 40) == "We grew in 2026."

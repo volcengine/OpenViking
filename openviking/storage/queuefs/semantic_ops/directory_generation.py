@@ -43,11 +43,19 @@ _LIST_MARKER_DIGITS = re.compile(r"\d{1,9}\Z")
 
 
 def _is_numbered_list_marker(text: str, period_index: int) -> bool:
+    # Only a period can end a list marker: "...2026?" and "...2026!" are ordinary
+    # sentence ends and must keep counting.
+    if text[period_index] != ".":
+        return False
     digits = _LIST_MARKER_DIGITS.match(text[:period_index])
     if digits is None:
         return False
-    start = period_index - len(digits.group())
-    if start > 0 and not text[start - 1].isspace():
+    # An ordered-list marker starts a line; a sentence may also end on a number
+    # ("We grew in 2026. Then ..."), and that period is a real sentence end.
+    line_start = period_index - len(digits.group()) - 1
+    while line_start >= 0 and text[line_start] in " \t":
+        line_start -= 1
+    if line_start >= 0 and text[line_start] != "\n":
         return False
     return period_index + 1 == len(text) or text[period_index + 1].isspace()
 
