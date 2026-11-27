@@ -841,6 +841,7 @@ class LocalCollection(ICollection):
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
         keywords_query: Optional[str] = None,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Search and group Item members under the appropriate collection snapshot."""
         if keywords_query is not None and not filter_only:

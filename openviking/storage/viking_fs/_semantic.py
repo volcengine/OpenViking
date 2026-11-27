@@ -155,6 +155,7 @@ class _SemanticMixin:
         options: SearchAsItemOptions | Dict[str, Any],
         events_time_decay_protection: Optional[str] = None,
         filter_only: bool = False,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> FindResult:
         """Ask the storage engine for ordered groups, then attach Item roots."""
         from openviking.models.embedder.base import embed_compat, embedder_supports_multimodal
@@ -204,6 +205,7 @@ class _SemanticMixin:
             score_threshold=None if filter_only else score_threshold,
             filter_only=filter_only,
             keywords_query=query if not filter_only and search_type == "keywords" else None,
+            keywords_args=keywords_args,
         )
         groups = grouped.get("groups", [])
         if not isinstance(groups, list) or not groups:
@@ -591,6 +593,7 @@ class _SemanticMixin:
                 options=search_as_item,
                 events_time_decay_protection=events_time_decay_protection,
                 filter_only=filter_only,
+                keywords_args=args,
             )
 
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever

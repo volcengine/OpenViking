@@ -886,12 +886,19 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
         }
       }
     }
-    const auto prefix = key(scope, uri == "/" ? "/" : uri + "/");
-    const auto nested = declarations_.lower_bound(prefix);
-    if (nested != declarations_.end() && nested->first.rfind(prefix, 0) == 0 &&
-        nested->second.root_uri != uri) {
-      throw std::invalid_argument(
-          "Cannot replace a resource root containing independent child Items");
+    if (req.HasMember("uris")) {
+      if (!req["uris"].IsArray()) {
+        throw std::invalid_argument("Catalog resource update expects a list of removed URIs");
+      }
+      for (const auto& value : req["uris"].GetArray()) {
+        if (!value.IsString()) throw std::invalid_argument("URI must be a string");
+        const auto removed_uri = canonical(
+            std::string(value.GetString(), value.GetStringLength()));
+        if (removed_uri != uri && declarations_.count(key(scope, removed_uri))) {
+          throw std::invalid_argument(
+              "Cannot replace a resource root containing independent child Items");
+        }
+      }
     }
     result.AddMember("valid", true, allocator);
     result.AddMember("has_item", resolve_item(scope, uri).found, allocator);

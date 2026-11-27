@@ -480,9 +480,7 @@ class _OpsMixin:
 
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="cp")
         await self._ensure_file_changes_allowed([new_uri], ctx, recursive=is_dir)
-        target_preexisted = await self._ensure_transfer_target_type(
-            new_path, new_uri, is_dir=is_dir
-        )
+        await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
         lock_requests = (
             self._directory_transfer_lock_requests(old_path, new_path)
             if is_dir
@@ -540,17 +538,16 @@ class _OpsMixin:
                         ctx=copy_ctx,
                     )
                 except Exception:
-                    if not target_preexisted:
-                        try:
-                            await self._cleanup_transfer_target(
-                                new_path, is_dir=is_dir, ctx=copy_ctx, lease_ref=lease
-                            )
-                        except Exception as _log_error:
-                            logger.info(
-                                "Failed to clean copy target %s error_type=%s",
-                                safe_uri_for_log(str(new_uri)),
-                                type(_log_error).__name__,
-                            )
+                    try:
+                        await self._cleanup_transfer_target(
+                            new_path, is_dir=is_dir, ctx=copy_ctx, lease_ref=lease
+                        )
+                    except Exception as _log_error:
+                        logger.info(
+                            "Failed to clean copy target %s error_type=%s",
+                            safe_uri_for_log(str(new_uri)),
+                            type(_log_error).__name__,
+                        )
                     raise
             result: Dict[str, Any] = {
                 "operation_id": operation_id,
@@ -579,20 +576,19 @@ class _OpsMixin:
         finally:
             await self._async_agfs.pathlock_release(lease)
 
-    async def _ensure_transfer_target_type(self, path: str, uri: str, *, is_dir: bool) -> bool:
+    async def _ensure_transfer_target_type(self, path: str, uri: str, *, is_dir: bool) -> None:
         """Allow overwrite/merge, but never replace a file with a directory or vice versa."""
         try:
             stat = await self._async_agfs.stat(path)
         except Exception as exc:
             if is_not_found_error(exc):
-                return False
+                return
             mapped = map_exception(exc, resource=uri)
             if mapped is not None:
                 raise mapped from exc
             raise
         if bool(stat.get("isDir", False)) != is_dir:
             raise InvalidArgumentError(f"transfer source and target types differ: {uri}")
-        return True
 
     async def _prepare_transfer_entries(
         self,
@@ -768,6 +764,12 @@ class _OpsMixin:
             recursive=is_dir,
             fs_ctx=self._pathlock_fs_ctx(ctx, lease_ref),
         )
+        if is_dir:
+            from openviking.storage.catalog import delete_catalog_subtree
+
+            await delete_catalog_subtree(
+                self, self._path_to_uri(path, ctx=ctx), self._ctx_or_default(ctx)
+            )
 
     async def mv(
         self,
@@ -820,9 +822,7 @@ class _OpsMixin:
             await self._ensure_access(old_uri, ctx, action=AclAction.MANAGE)
         await self._ensure_file_changes_allowed([old_uri, new_uri], ctx, recursive=is_dir)
         await self._ensure_transfer_parent_directory(new_path, new_uri, operation="mv")
-        target_preexisted = await self._ensure_transfer_target_type(
-            new_path, new_uri, is_dir=is_dir
-        )
+        await self._ensure_transfer_target_type(new_path, new_uri, is_dir=is_dir)
 
         if not is_dir:
             if new_uri.rstrip("/") != new_uri:
@@ -957,17 +957,16 @@ class _OpsMixin:
                             safe_uri_for_log(str(new_uri)),
                             type(_log_error).__name__,
                         )
-                if not target_preexisted:
-                    try:
-                        await self._cleanup_transfer_target(
-                            new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
-                        )
-                    except Exception as _log_error:
-                        logger.info(
-                            "Failed to clean move target %s error_type=%s",
-                            safe_uri_for_log(str(new_uri)),
-                            type(_log_error).__name__,
-                        )
+                try:
+                    await self._cleanup_transfer_target(
+                        new_path, is_dir=is_dir, ctx=ctx, lease_ref=lease
+                    )
+                except Exception as _log_error:
+                    logger.info(
+                        "Failed to clean move target %s error_type=%s",
+                        safe_uri_for_log(str(new_uri)),
+                        type(_log_error).__name__,
+                    )
                 raise
 
             # Old mv semantics: source deletion is the last step, with no copy-back on failure.

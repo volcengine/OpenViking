@@ -41,6 +41,7 @@ class ICollection(ABC):
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
         keywords_query: Optional[str] = None,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         raise NotImplementedError("Item grouping is not supported by this collection")
 

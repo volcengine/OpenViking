@@ -581,13 +581,14 @@ class ResourceProcessor:
                     source_metadata=source_metadata,
                     root_is_file=root_is_file,
                 )
-            replaces_directory = any(
-                action.old_kind == "directory"
+            removed_directories = [
+                root_uri.rstrip("/") + "/" + action.relative_path
+                for action in context_plan.content_tree_actions
+                if action.old_kind == "directory"
                 and action.operation
                 in {ContentTreeOperation.DELETE, ContentTreeOperation.REPLACE_KIND}
-                for action in context_plan.content_tree_actions
-            )
-            if target_preexisting and (as_item or replaces_directory):
+            ]
+            if target_preexisting and (as_item or removed_directories):
                 await validate_resource_item_update(
                     self.vikingdb,
                     root_uri,
@@ -595,11 +596,7 @@ class ResourceProcessor:
                     as_item=as_item,
                     item_attrs=item_attrs,
                     is_dir=not root_is_file,
-                    directory_uris=[
-                        root_uri.rstrip("/") + "/" + path
-                        for path, entry in rnfv.formal.entries.items()
-                        if path and entry.is_dir
-                    ],
+                    directory_uris=removed_directories,
                 )
         except Exception:
             telemetry.set(

@@ -25,6 +25,7 @@ def build_item_group_request(
     aggregation: str,
     filter_only: bool,
     keywords_query: str | None = None,
+    keywords_args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not filter_only and keywords_query is None and not dense_vector:
         raise ValueError("VikingDB Item search requires a dense query vector")
@@ -67,6 +68,13 @@ def build_item_group_request(
     }
     if keywords_query is not None:
         request["query"] = keywords_query
+        if keywords_args:
+            request.update(
+                {key: keywords_args[key] for key in ("bm25_k1", "bm25_b") if key in keywords_args}
+            )
+            input_limit = keywords_args.get("post_process_input_limit")
+            if input_limit is not None:
+                request["advance"] = {"post_process_input_limit": max(input_limit, max_groups)}
     else:
         request["dense_vector"] = dense_vector
         if sparse_vector:

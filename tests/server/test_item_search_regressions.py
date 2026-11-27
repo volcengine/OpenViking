@@ -251,7 +251,8 @@ async def test_ordinary_directory_merge_preserves_target_item(service, tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_parent_reimport_does_not_delete_independent_child_item(service, tmp_path):
+@pytest.mark.parametrize("keep_child", [False, True])
+async def test_parent_reimport_checks_only_removed_child_items(service, tmp_path, keep_child):
     source = tmp_path / "source"
     (source / "nested").mkdir(parents=True)
     (source / "keep.md").write_text("# Parent\nkeep")
@@ -263,21 +264,25 @@ async def test_parent_reimport_does_not_delete_independent_child_item(service, t
     child_declaration = await service.fs.mkdir(
         child, owner, as_item=True, item_attrs={"asset_id": "child"}
     )
-    await service.viking_fs.write_file(child + "/child.md", "Independent child", ctx=owner)
-    child_files = await stored_files(service.viking_fs, child, owner)
-    child_content_uri = next(uri for uri in child_files if uri.endswith("/child.md"))
-    assert await service.viking_fs.exists(child_content_uri, ctx=owner)
+    child_content_uri = child + "/child.py"
+    child_content = "independent_child = True\n"
+    await service.viking_fs.write_file(child_content_uri, child_content, ctx=owner)
+    if keep_child:
+        (source / "independent").mkdir()
+        (source / "independent" / "child.py").write_text(child_content)
     shutil.rmtree(source / "nested")
     result = await service.resources.add_resource(
         str(source), to=root, ctx=owner, wait=True, build_index=False
     )
-    assert result["status"] == "error", result
-    exists = await service.viking_fs.exists(child_content_uri, ctx=owner)
+    assert result["status"] == ("success" if keep_child else "error"), result
+    if not keep_child:
+        assert "independent child Items" in str(result["errors"]), result
+    assert await service.viking_fs.exists(root + "/nested", ctx=owner) is (not keep_child)
     resolved = await service.viking_fs._get_vector_store().catalog_execute(
         {"op": "resolve", "uris": [child]}, ctx=owner
     )
     assert resolved["data"][0]["item_uuid"] == child_declaration["item_uuid"]
-    assert exists, "Parent reimport deleted content of an independent child Item"
+    assert await service.viking_fs.read_file(child_content_uri, ctx=owner) == child_content
 
 
 @pytest.mark.asyncio

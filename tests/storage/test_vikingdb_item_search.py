@@ -246,17 +246,24 @@ def test_ordinary_search_never_checks_item_metadata_or_adds_grouping(collection)
     assert "partition_by" not in request
 
 
-def test_keywords_use_native_groups_and_preserve_filters(collection):
+def test_keywords_use_native_groups_and_preserve_filters_and_args(collection):
     collection.client.result = {"groups": [group("a", 2.5, ["kind=root"])]}
     filters = {"op": "must", "field": "account_id", "conds": ["a"]}
     result = collection.search_item_groups(
-        "index", keywords_query="fresh", filters=filters, aggregation="sum"
+        "index",
+        keywords_query="fresh",
+        filters=filters,
+        aggregation="sum",
+        keywords_args={"bm25_k1": 1.2, "bm25_b": 0.0, "post_process_input_limit": 32},
     )
     assert result["groups"][0]["entity_score"] == 2.5
     assert len(collection.client.calls) == 1
     _, path, request = collection.client.calls[0]
     assert path == "/api/vikingdb/data/search/keywords"
     assert request["query"] == "fresh"
+    assert request["bm25_k1"] == 1.2
+    assert request["bm25_b"] == 0.0
+    assert request["advance"] == {"post_process_input_limit": 32}
     assert request["filter"] == filters
     assert request["group_by"]["op"] == "sum"
     assert "dense_vector" not in request

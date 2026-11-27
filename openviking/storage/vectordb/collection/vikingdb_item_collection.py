@@ -58,6 +58,7 @@ class VikingDBItemCollectionMixin:
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
         keywords_query: Optional[str] = None,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         from .vikingdb_item_search import (
             build_item_group_request,
@@ -76,6 +77,7 @@ class VikingDBItemCollectionMixin:
             aggregation=aggregation,
             filter_only=filter_only,
             keywords_query=keywords_query,
+            keywords_args=keywords_args,
         )
         if filter_only:
             return self._catalog.filter_item_groups(

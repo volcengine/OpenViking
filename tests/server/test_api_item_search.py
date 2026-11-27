@@ -440,12 +440,14 @@ async def test_item_keywords_reach_the_backend_without_embedding(client, service
     monkeypatch.setattr(VikingDBManagerProxy, "search_items_in_tenant", grouping)
     embedding = AsyncMock(side_effect=AssertionError("Keyword search must not embed"))
     monkeypatch.setattr("openviking.models.embedder.base.embed_compat", embedding)
+    args = {"bm25_k1": 1.2, "bm25_b": 0.0, "post_process_input_limit": 32}
     result = await _post_result(
         client,
         "search/search",
-        {"query": "a Skill", "search_type": "keywords", "search_as_item": {}},
+        {"query": "a Skill", "search_type": "keywords", "search_as_item": {}, "args": args},
     )
     assert result == {"memories": [], "resources": [], "skills": [], "total": 0}
     assert grouping.await_args.kwargs["keywords_query"] == "a Skill"
+    assert grouping.await_args.kwargs["keywords_args"] == args
     assert grouping.await_args.kwargs["query_vector"] is None
     embedding.assert_not_awaited()

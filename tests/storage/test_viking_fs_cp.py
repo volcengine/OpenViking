@@ -585,7 +585,7 @@ async def test_cp_removes_target_file_when_vector_copy_fails(monkeypatch):
     ("operation", "vector_method"),
     [("cp", "_copy_vector_store_uris"), ("mv", "_update_vector_store_uris")],
 )
-async def test_transfer_keeps_preexisting_target_when_vector_write_fails(
+async def test_transfer_cleans_preexisting_target_when_vector_write_fails(
     monkeypatch, operation, vector_method
 ):
     agfs = _CopyAGFS(target_exists=True)
@@ -603,8 +603,8 @@ async def test_transfer_keeps_preexisting_target_when_vector_write_fails(
             ctx=_ctx(),
         )
 
-    assert agfs.target_exists
-    assert not any(
+    assert not agfs.target_exists
+    assert any(
         event[0:3] == ("rm", "/local/acct/resources/target.md", False) for event in agfs.events
     )
 

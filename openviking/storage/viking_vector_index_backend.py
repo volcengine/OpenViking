@@ -1026,6 +1026,7 @@ class _SingleAccountBackend:
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
         keywords_query: Optional[str] = None,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         self._validate_vector_dimension(query_vector)
         return await self._async_adapter.call(
@@ -1038,6 +1039,7 @@ class _SingleAccountBackend:
             score_threshold=score_threshold,
             filter_only=filter_only,
             keywords_query=keywords_query,
+            keywords_args=keywords_args,
         )
 
     @_backend_operation
@@ -2122,6 +2124,7 @@ class VikingVectorIndexBackend:
         score_threshold: Optional[float] = None,
         filter_only: bool = False,
         keywords_query: Optional[str] = None,
+        keywords_args: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         acl_enabled = await self._acl_enabled(ctx)
         scope_filter = self._build_scope_filter(
@@ -2143,6 +2146,7 @@ class VikingVectorIndexBackend:
                 score_threshold=score_threshold,
                 filter_only=filter_only,
                 keywords_query=keywords_query,
+                keywords_args=keywords_args,
             )
         except NotImplementedError as exc:
             raise UnimplementedError(str(exc)) from exc

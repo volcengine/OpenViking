@@ -237,7 +237,7 @@ class VikingDBCatalog:
             return self._resolve(scope, [_uri(uri) for uri in request["uris"]], mode)
         uri = _uri(request["uri"])
         record_id = _id(scope, uri)
-        # The filesystem update plan already enumerates the real child directories.
+        # The filesystem update plan lists the directories being removed.
         child_ids = [_id(scope, _uri(p)) for p in request.get("uris", [])]
         rows = self._fetch(scope, list(dict.fromkeys([record_id, *child_ids])))
         own = rows.get(record_id, {})
