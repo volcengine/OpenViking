@@ -14,7 +14,7 @@ import { prepareLarkMediaDirectory } from './lark-media.mjs';
 import { MAX_CARD_IMAGE_BYTES, cardImageFormat, checkCardImageTemplate, replaceCardImages, validImageKey } from './card-images.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 import { isLarkVideo, videoCover } from './lark-video.mjs';
-import { isLarkAudio, needsOpusConversion, toOpus } from './lark-audio.mjs';
+import { convertHint, isLarkAudio, needsVoiceConversion, probeVoiceDurationMs, toOpus } from './lark-audio.mjs';
 import { LarkImageCache } from './lark-image-cache.mjs';
 import {
   DOC_COMMENT_EVENT, WHOLE_COMMENT_TYPES, commentContent, commentMessageId, commentPeople, docChatId, isDocChatId,
@@ -359,17 +359,25 @@ export class LarkClient {
   }
 
   // Sends audio as a voice message: a bubble Lark can transcribe, not a file
-  // attachment. lark-cli takes only Opus, so another container (mp3, wav, m4a,
-  // ...) is converted with ffmpeg first, from the frozen file's own directory.
+  // attachment. lark-cli takes only Ogg Opus, so another container (mp3, wav,
+  // m4a, ...) and a .opus/.ogg that is not Ogg Opus, is converted with ffmpeg
+  // first, from the frozen file's own directory.
   async deliverVoice(target, content, suffix) {
     const dir = path.dirname(content.path);
-    const work = needsOpusConversion(content.path) ? fs.mkdtempSync(path.join(dir, '.voice-')) : null;
+    const work = needsVoiceConversion(content.path) ? fs.mkdtempSync(path.join(dir, '.voice-')) : null;
     try {
-      const audio = work
-        ? `./${path.relative(dir, await toOpus(this.registry, content.path, work, this.logger)).split(path.sep).join('/')}`
-        : `./${path.basename(content.path)}`;
+      const file = work ? await toOpus(this.registry, content.path, work, this.logger) : content.path;
+      // Lark shows the length it reads from the uploaded file, and 00:01 when it
+      // finds none, so the file that leaves here has to carry one.
+      const durationMs = probeVoiceDurationMs(file);
+      if (durationMs === null) {
+        throw new Error(`ffmpeg did not produce Ogg Opus from ${path.basename(content.path)}, and Lark shows any `
+          + `other audio as a 00:01 voice message; ${convertHint(content.path)}`);
+      }
+      this.logger.debug('lark_voice_send', { file: path.basename(content.path), duration_ms: durationMs });
       try {
-        return await this.im([...target, '--audio', audio, ...suffix], 'send voice message', { cwd: dir });
+        return await this.im([...target, '--audio', `./${path.relative(dir, file).split(path.sep).join('/')}`, ...suffix],
+          'send voice message', { cwd: dir });
       } catch (error) {
         throw new Error(`${error.message}; Lark shows a voice message only for Ogg Opus (.opus, or Ogg Opus .ogg), `
           + 'so convert the audio to .opus and retry; to send the bytes unchanged, attach them in a document instead');
