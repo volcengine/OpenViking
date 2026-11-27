@@ -4,10 +4,10 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve as resolvePath } from "node:path";
 
-import { deriveAgentSessionId, loadAgentHookConfig } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { createLogger } from "../../memory-plugin-shared/lib/debug-log.mjs";
-import { toMcpProxyConfig } from "../../memory-plugin-shared/lib/mcp-proxy-config.mjs";
-import { createOpenVikingMcpProxy } from "../../memory-plugin-shared/lib/mcp-proxy-core.mjs";
+import { deriveAgentSessionId, loadAgentHookConfig } from "../lib/agent-hook-runtime.mjs";
+import { createLogger } from "../lib/debug-log.mjs";
+import { toMcpProxyConfig } from "../lib/mcp-proxy-config.mjs";
+import { createOpenVikingMcpProxy } from "../lib/mcp-proxy-core.mjs";
 import { HOSTS } from "../hosts/index.mjs";
 
 export function readProxyConfig(env = process.env) {

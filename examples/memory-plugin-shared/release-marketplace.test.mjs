@@ -272,9 +272,7 @@ test("release marketplace archive supports ZCode and pi TOS installs", () => {
     // directories are not copied with it.
     assert.equal(existsSync(join(integrationRoot, "hosts", "zcode", "hooks.json")), true);
     assert.equal(existsSync(join(integrationRoot, "hosts", "cursor")), false);
-    // ZCode imports the runtime the installer assembles beside it, the way
-    // cursor and trae do, rather than a copy committed into its own tree.
-    const sharedRoot = join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib");
+    const sharedRoot = join(integrationRoot, "lib");
     assert.ok(existsSync(join(sharedRoot, "async-writer.mjs")));
     assert.ok(existsSync(join(sharedRoot, "capture-utils.mjs")));
     assert.ok(existsSync(join(sharedRoot, "mcp-proxy-config.mjs")));
@@ -290,9 +288,8 @@ test("release marketplace archive supports ZCode and pi TOS installs", () => {
     ]);
     assert.ok(config.mcp.servers.openviking);
 
-    // The hook commands point across the plugin boundary at the runtime the
-    // installer assembles from the archive, so an entry the manifest forgot to
-    // carry is a hooks.json naming a script that is not there.
+    // An entry the archive forgot to carry is a hooks.json naming a script
+    // that is not there.
     const commands = JSON.stringify(config.hooks.events)
       .split(/"/u)
       .filter((part) => part.includes("# openviking-memory"));
@@ -330,7 +327,7 @@ test("release marketplace archive supports ZCode and pi TOS installs", () => {
     const kimiRoot = join(home, ".kimi-code", "plugins", "managed", "openviking-memory");
     assert.ok(existsSync(join(kimiRoot, "kimi.plugin.json")));
     assert.ok(existsSync(join(kimiRoot, "agent-integrations", "kimicode", "scripts", "hook.mjs")));
-    assert.ok(existsSync(join(kimiRoot, "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
+    assert.ok(existsSync(join(kimiRoot, "agent-integrations", "kimicode", "lib", "agent-hook-runtime.mjs")));
 
     writeFileSync(join(bin, "pi"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const piArgs = [installer, "--harness", "pi", "--dist", "tos", "--source", "archive",

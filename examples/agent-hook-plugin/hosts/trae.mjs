@@ -2,9 +2,9 @@ import {
   addAgentMessages,
   commitAgentSession,
   stableHash,
-} from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { preToolUseOutput } from "../../memory-plugin-shared/lib/uri-guard.mjs";
+} from "../lib/agent-hook-runtime.mjs";
+import { filterCaptureTurns } from "../lib/capture-utils.mjs";
+import { preToolUseOutput } from "../lib/uri-guard.mjs";
 import { buildTraeTurns, cleanTraeText } from "./trae-turns.mjs";
 
 const INJECTION_EVENTS = {

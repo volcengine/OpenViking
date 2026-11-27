@@ -3,15 +3,15 @@ import { appendFile, open, readFile } from "node:fs/promises";
 import {
   commitAgentSession,
   stableHash,
-} from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+} from "../lib/agent-hook-runtime.mjs";
 import {
   extractPartsFromPayload,
   filterCaptureTurns,
   isCaptureEnabled,
   shapeCaptureParts,
-} from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { sendSessionMessages } from "../../memory-plugin-shared/lib/batch-send.mjs";
-import { denyCursorPermission, evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
+} from "../lib/capture-utils.mjs";
+import { sendSessionMessages } from "../lib/batch-send.mjs";
+import { denyCursorPermission, evaluateUriGuard } from "../lib/uri-guard.mjs";
 import { parseCursorTranscript } from "./cursor-transcript.mjs";
 import { withoutHistorySession } from "./history-session.mjs";
 

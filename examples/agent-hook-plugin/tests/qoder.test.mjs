@@ -13,7 +13,7 @@ import {
   writeCredentialFiles,
   writeJson,
 } from "../../memory-plugin-shared/testing/support.mjs";
-import { loadAgentHookConfig } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+import { loadAgentHookConfig } from "../lib/agent-hook-runtime.mjs";
 import { qoder } from "../hosts/qoder.mjs";
 import { shouldCommitCapture } from "../hosts/incremental-turn-capture.mjs";
 

@@ -1,5 +1,5 @@
-import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
+import { addAgentMessages, commitAgentSession } from "../lib/agent-hook-runtime.mjs";
+import { evaluateUriGuard } from "../lib/uri-guard.mjs";
 import {
   applyIncrementalCaptureResult,
   buildIncrementalCapturePlan,

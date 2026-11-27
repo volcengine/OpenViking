@@ -80,7 +80,7 @@ test("SessionStart replays a bounded batch of queued writes", async (t) => {
     if (previous === undefined) delete process.env.OPENVIKING_PENDING_DIR;
     else process.env.OPENVIKING_PENDING_DIR = previous;
   });
-  const { enqueue, listPending } = await import("../../memory-plugin-shared/lib/pending-queue.mjs");
+  const { enqueue, listPending } = await import("../lib/pending-queue.mjs");
   for (const text of ["one", "two", "three"]) {
     await enqueue("addMessage", "kc-queued", { role: "user", content: text });
   }

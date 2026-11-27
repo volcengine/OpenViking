@@ -3,7 +3,7 @@
 An OpenViking server published behind an authenticating gateway (Cloudflare Access,
 oauth2-proxy, an mTLS-terminating proxy) requires a client header on every request.
 The JS side has carried this for a while (``OPENVIKING_EXTRA_HEADERS`` in
-``memory-plugin-shared/lib/mcp-proxy-config.mjs``, plus ``extra_headers`` in the
+``agent-hook-plugin/lib/mcp-proxy-config.mjs``, plus ``extra_headers`` in the
 linked ``ovcli.conf``); these tests pin the same behaviour for this plugin.
 """
 

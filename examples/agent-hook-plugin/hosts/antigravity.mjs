@@ -21,9 +21,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
-import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
+import { addAgentMessages, commitAgentSession } from "../lib/agent-hook-runtime.mjs";
+import { filterCaptureTurns } from "../lib/capture-utils.mjs";
+import { evaluateUriGuard } from "../lib/uri-guard.mjs";
 
 // The host wraps a typed request as `<USER_REQUEST>…</USER_REQUEST>` followed by
 // metadata blocks. Only that record is unwrapped, and only an envelope that

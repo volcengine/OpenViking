@@ -24,11 +24,11 @@ The installer asks which harnesses to install and for your OpenViking credential
 
 The root `plugin.json` is host-neutral package metadata used for version checks and diagnostics. Kimi's native manifest lives under `hosts/kimicode/` and is copied to the root of its assembled installation.
 
-`hosts/<host>/` holds host configuration or native-manifest files; executable adapters stay one level up. The `../../memory-plugin-shared/lib` import resolves in the repository, config-driven installs, and Kimi's assembled native bundle.
+`hosts/<host>/` holds host configuration or native-manifest files; executable adapters stay one level up. The `../lib` import resolves in the repository, config-driven installs, and Kimi's assembled native bundle.
 
 `examples/memory-plugin-shared/sync.mjs` copies the shared skills from `examples/skills`, `ov-memory-doctor` among them, into each `hosts/<host>/skills`.
 
-The memory logic itself is not here: recall, batching, the pending queue, credential resolution and the MCP proxy all come from `examples/memory-plugin-shared/lib`, which the installer copies to `~/.openviking/agent-integrations/memory-plugin-shared/lib`.
+The memory logic itself is not here: recall, batching, the pending queue, credential resolution and the MCP proxy all come from `lib/`, which the installer copies with the rest of this directory.
 
 ## Host notes
 

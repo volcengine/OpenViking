@@ -868,7 +868,7 @@ CLI 提供而插件没有的能力：多个 `ovcli.conf` profile、账户与用�
 
 需要自动召回、捕获、提交和离线重试时，复用现有代码，不必重写：
 
-- **`examples/memory-plugin-shared/lib/`**（Node.js）包含共享模块：带回退的召回、会话开场上下文、捕获清理、离线队列、批量发送、MCP 代理、会话 ID 和凭据。通过 hook 文件配置的宿主可以在 `examples/agent-hook-plugin/hosts/` 下添加适配器，Cursor、TRAE、ZCode 和 Kimi Code 都是这样接入的。
+- **`examples/agent-hook-plugin/lib/`**（Node.js）包含共享模块：带回退的召回、会话开场上下文、捕获清理、离线队列、批量发送、MCP 代理、会话 ID 和凭据。通过 hook 文件配置的宿主可以在 `examples/agent-hook-plugin/hosts/` 下添加适配器，Cursor、TRAE、ZCode 和 Kimi Code 都是这样接入的。
 - **Agent Plugins 插件包**（`agent-plugins/`）由可移植的 `plugin.json`、`skills/` 和 `mcp.json` 组成，带 stdio 到 HTTP 的代理，没有 hook。它的 `plugin.test.mjs` 检查是否符合 Agent Plugins 规范，可以作为你自己插件包的 lint 基线。
 
 [插件开发指南](./18-plugin-development.md)介绍模块职责、配置、生成副本、安装器和测试。无论构建什么，都遵守以下三条规则，让它的行为与现有集成一致：
@@ -897,7 +897,7 @@ CLI 提供而插件没有的能力：多个 `ovcli.conf` profile、账户与用�
 - 服务端 MCP 工具：`openviking/server/mcp_endpoint.py`，以其中的 `@mcp.tool` 注册为准。
 - 写入与删除检查：`openviking/storage/content_write.py` 和 `openviking/storage/viking_fs/_access.py`。
 - 服务端自动提交：`openviking_cli/utils/config/memory_config.py` 和 `openviking/session/auto_commit_policy.py`。
-- 插件配置与默认值：`examples/memory-plugin-shared/lib/config-schema.mjs`。
+- 插件配置与默认值：`examples/agent-hook-plugin/lib/config-schema.mjs`。
 - hook 宿主：`examples/agent-hook-plugin/hosts/`，对应 Cursor、TRAE、ZCode 和 Kimi Code。
 - pi takeover：`examples/pi-coding-agent-extension/lib/takeover-core.mjs`。
 - OpenClaw 工具和生命周期 hook：`examples/openclaw-plugin/registries/openviking-tools.ts` 和 `examples/openclaw-plugin/plugin/openviking-lifecycle-hooks.ts`。

@@ -1,4 +1,4 @@
-// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
+// GENERATED FROM examples/agent-hook-plugin/lib. DO NOT EDIT.
 /**
  * Shared structured debug logger for OpenViking memory plugin hook scripts.
  *

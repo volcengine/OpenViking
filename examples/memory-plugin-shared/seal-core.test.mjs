@@ -20,7 +20,7 @@ import {
   sealValue,
   unsealValue,
   withheld,
-} from "./lib/seal-core.mjs";
+} from "../agent-hook-plugin/lib/seal-core.mjs";
 
 const ref = (target, category = "credential", owner = "alice") =>
   `{{ov_privacy:${owner}:viking://~/privacy/${category}/${target}#/values/token}}`;

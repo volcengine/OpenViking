@@ -167,8 +167,8 @@ test("Kimi installs a self-contained native bundle without legacy config edits",
     assert.equal(manifest.skills, "./skills/");
     for (const skill of HOST_SKILLS) assert.ok(existsSync(join(root, "skills", skill, "SKILL.md")), skill);
     assert.ok(existsSync(join(root, "agent-integrations", "kimicode", "scripts", "hook.mjs")));
-    assert.ok(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
-    assert.equal(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "install")), false);
+    assert.ok(existsSync(join(root, "agent-integrations", "kimicode", "lib", "agent-hook-runtime.mjs")));
+    assert.equal(existsSync(join(root, "agent-integrations", "memory-plugin-shared")), false);
     assert.equal(existsSync(join(root, "agent-integrations", "kimicode", "tests")), false);
     assert.equal(existsSync(join(root, "agent-integrations", "kimicode", "hosts", "cursor.mjs")), false);
     assert.equal(existsSync(join(root, "agent-integrations", "kimicode", "hosts", "zcode.mjs")), false);
@@ -256,7 +256,7 @@ exit 0
     const mcp = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf8"));
     assert.equal(mcp.mcpServers.openviking.env.OPENVIKING_HOOK_SOURCE, "qoder");
     assert.ok(existsSync(join(root, "skills", "openviking-memory", "SKILL.md")));
-    assert.ok(existsSync(join(root, "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
+    assert.ok(existsSync(join(root, "agent-integrations", "qoder", "lib", "agent-hook-runtime.mjs")));
     const hostsDir = join(root, "agent-integrations", "qoder", "hosts");
     assert.ok(existsSync(join(hostsDir, "qoder.mjs")));
     assert.ok(existsSync(join(hostsDir, "qoder-turns.mjs")));
@@ -631,7 +631,7 @@ test("combined hook-host install preserves unrelated hooks and is idempotent", (
     assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-memory", "SKILL.md"), "utf8"), /OpenViking Memory/);
     assert.match(readFileSync(join(home, ".cursor", "skills", "ov-experience-memory", "SKILL.md"), "utf8"), /OpenViking Experience Memory/);
     assert.match(readFileSync(join(home, ".cursor", "skills", "openviking-rule-search", "SKILL.md"), "utf8"), /OpenViking Rule Search/);
-    const shared = join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib");
+    const shared = join(home, ".openviking", "agent-integrations", "cursor", "lib");
     assert.ok(existsSync(join(shared, "agent-hook-runtime.mjs")));
     assert.ok(existsSync(join(shared, "batch-send.mjs")));
     assert.ok(existsSync(join(shared, "mcp-proxy-core.mjs")));
@@ -966,9 +966,9 @@ test("Antigravity installs its plugin directory, replaces a hand-made copy and u
     // One host's installation carries no other host's configuration.
     assert.equal(existsSync(join(runtime, "hosts", "cursor")), false);
 
-    // Antigravity still runs from the shared runtime after Cursor is removed.
+    // Antigravity still runs from its own runtime after Cursor is removed.
     runUninstall(home, "cursor");
-    assert.ok(existsSync(join(home, ".openviking", "agent-integrations", "memory-plugin-shared", "lib", "agent-hook-runtime.mjs")));
+    assert.ok(existsSync(join(runtime, "lib", "agent-hook-runtime.mjs")));
 
     runUninstall(home, "antigravity");
     assert.equal(existsSync(pluginDir), false);

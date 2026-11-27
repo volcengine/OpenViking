@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
-import { stableHash } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { shouldCaptureText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { stableHash } from "../lib/agent-hook-runtime.mjs";
+import { shouldCaptureText } from "../lib/capture-utils.mjs";
 
 export function turnDedupKey(turn) {
   return turn.turnId

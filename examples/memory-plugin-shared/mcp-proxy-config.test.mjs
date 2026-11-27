@@ -4,8 +4,8 @@ import { rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { KNOB_BY_NAME } from "./lib/config-schema.mjs";
-import { buildProxyConnection, CONNECTION_ENV_VARS, resolveConnection } from "./lib/credentials.mjs";
+import { KNOB_BY_NAME } from "../agent-hook-plugin/lib/config-schema.mjs";
+import { buildProxyConnection, CONNECTION_ENV_VARS, resolveConnection } from "../agent-hook-plugin/lib/credentials.mjs";
 import {
   buildMcpProxyConfig,
   DEFAULT_PROXY_TIMEOUT_MS,
@@ -17,8 +17,8 @@ import {
   resolveMcpActorPeerId,
   toMcpProxyConfig,
   trimSlash,
-} from "./lib/mcp-proxy-config.mjs";
-import { createOpenVikingMcpProxy } from "./lib/mcp-proxy-core.mjs";
+} from "../agent-hook-plugin/lib/mcp-proxy-config.mjs";
+import { createOpenVikingMcpProxy } from "../agent-hook-plugin/lib/mcp-proxy-core.mjs";
 import { ROOT } from "./sync.mjs";
 import { writeCredentialFiles } from "./testing/support.mjs";
 

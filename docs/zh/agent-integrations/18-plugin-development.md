@@ -17,7 +17,7 @@ Before changing any OpenViking agent plugin, read and follow
 docs/en/agent-integrations/18-plugin-development.md
 (Chinese: docs/zh/agent-integrations/18-plugin-development.md).
 
-Inspect examples/memory-plugin-shared/lib/ and the Claude Code and Codex
+Inspect examples/agent-hook-plugin/lib/ and the Claude Code and Codex
 plugins. Also inspect agent-hook-plugin, OpenCode, DSH, or another existing
 integration when its host model matches the task. Verify the target host's
 events, payloads, output schema, time limits, and installation contract.
@@ -98,22 +98,22 @@ buildPluginConfig / credentials 为两条链提供配置和身份
 sync / install / pack 负责把这张依赖图完整交付到机器上
 ```
 
-共享能力的源文件位于 [`examples/memory-plugin-shared/lib/`](https://github.com/volcengine/OpenViking/tree/main/examples/memory-plugin-shared/lib/)。下表是定位规则的入口，不是需要在每个插件重建的目录模板。
+共享能力的源文件位于 [`examples/agent-hook-plugin/lib/`](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin/lib/)。下表是定位规则的入口，不是需要在每个插件重建的目录模板。
 
 | 责任 | 权威模块 | 宿主可以提供的差异 |
 | --- | --- | --- |
-| 配置声明、默认值、别名、范围 | [config-schema.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/config-schema.mjs) | 有证据的宿主默认值差异，仍在 schema 声明 |
-| 分层配置、完整配置对象 | [plugin-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/plugin-config.mjs) | harness ID、manifest、日志文件名、宿主原生参数 |
-| 凭据和鉴权模式 | [credentials.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/credentials.mjs) | 已有兼容要求；不得再写 fallback 链 |
-| workspace、peer 身份 | [workspace-peer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-peer.mjs)、[workspace-identity.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-identity.mjs) | 当前会话的真实 cwd、宿主明确传入的 peer |
-| hook 初始化、bypass、单次输出 | [agent-hook-runtime.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/agent-hook-runtime.mjs) | 输入读取、session ID 解析、启用谓词、输出 envelope |
-| HTTP 头、超时、错误结果 | [ov-http.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/ov-http.mjs) | 请求路径、正文、调用预算、当前 actor peer |
-| 召回和上下文构建 | [recall-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/recall-core.mjs)、[profile-inject.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/profile-inject.mjs) | 查询、会话身份、本地压缩器回调、宿主显示 |
-| 消息清洗、角色和结构化内容 | [capture-utils.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/capture-utils.mjs)、[input-filters.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/input-filters.mjs) | transcript 格式解码、原生工具事件归一化 |
-| 批量发送、离线重放、重试分类 | [batch-send.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/batch-send.mjs)、[pending-queue.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/pending-queue.mjs)、[retryable.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/retryable.mjs) | 何时调用、发送成功后如何推进宿主游标 |
-| 后台写入 | [async-writer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/async-writer.mjs) | 宿主允许的 detach 时机和恢复措施 |
-| MCP 配置与协议 | [mcp-proxy-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/mcp-proxy-config.mjs)、[mcp-proxy-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/mcp-proxy-core.mjs) | 配置投影、日志工厂、确有必要的本地工具 |
-| 虚拟 URI 检查、诊断 | [uri-guard.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/uri-guard.mjs)、[doctor-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/doctor-core.mjs) | 工具名、拒绝与提示 envelope、宿主安装与状态检查 |
+| 配置声明、默认值、别名、范围 | [config-schema.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/config-schema.mjs) | 有证据的宿主默认值差异，仍在 schema 声明 |
+| 分层配置、完整配置对象 | [plugin-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/plugin-config.mjs) | harness ID、manifest、日志文件名、宿主原生参数 |
+| 凭据和鉴权模式 | [credentials.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/credentials.mjs) | 已有兼容要求；不得再写 fallback 链 |
+| workspace、peer 身份 | [workspace-peer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/workspace-peer.mjs)、[workspace-identity.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/workspace-identity.mjs) | 当前会话的真实 cwd、宿主明确传入的 peer |
+| hook 初始化、bypass、单次输出 | [agent-hook-runtime.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/agent-hook-runtime.mjs) | 输入读取、session ID 解析、启用谓词、输出 envelope |
+| HTTP 头、超时、错误结果 | [ov-http.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/ov-http.mjs) | 请求路径、正文、调用预算、当前 actor peer |
+| 召回和上下文构建 | [recall-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/recall-core.mjs)、[profile-inject.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/profile-inject.mjs) | 查询、会话身份、本地压缩器回调、宿主显示 |
+| 消息清洗、角色和结构化内容 | [capture-utils.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/capture-utils.mjs)、[input-filters.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/input-filters.mjs) | transcript 格式解码、原生工具事件归一化 |
+| 批量发送、离线重放、重试分类 | [batch-send.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/batch-send.mjs)、[pending-queue.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/pending-queue.mjs)、[retryable.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/retryable.mjs) | 何时调用、发送成功后如何推进宿主游标 |
+| 后台写入 | [async-writer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/async-writer.mjs) | 宿主允许的 detach 时机和恢复措施 |
+| MCP 配置与协议 | [mcp-proxy-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/mcp-proxy-config.mjs)、[mcp-proxy-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/mcp-proxy-core.mjs) | 配置投影、日志工厂、确有必要的本地工具 |
+| 虚拟 URI 检查、诊断 | [uri-guard.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/uri-guard.mjs)、[doctor-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/doctor-core.mjs) | 工具名、拒绝与提示 envelope、宿主安装与状态检查 |
 
 依赖必须从宿主适配器指向共享能力。共享能力不能 import 某个宿主目录；需要宿主动作时，由调用者传入小而明确的回调。不要为一次文件读取引入通用插件容器、服务定位器或继承体系。共享模块也不能反向依赖安装器、测试代码或用户界面。
 
@@ -167,7 +167,7 @@ sync / install / pack 负责把这张依赖图完整交付到机器上
 
 连接和身份必须走 `credentials.mjs` 的 `resolveConnection()`，`buildPluginConfig()` 就是调用它。`OPENVIKING_CREDENTIAL_SOURCE` 的 `auto`、`cli`、`env` 控制凭据来源，不能简单套用行为配置优先级。MCP proxy 导出 `readProxyConfig(env)`，经与 hook 相同的 loader 解析，再用 `toMcpProxyConfig()` 映射，不手工挑字段，也不直接调用 `credentials.mjs`。宿主若只把白名单里的环境变量交给 MCP 进程，白名单必须覆盖 `MCP_PROXY_ENV_VARS`；宿主若给的是封闭环境，就用 `forwardConnectionEnv()` 转发解析好的连接。新 proxy 必须加入 `mcp-hook-parity.test.mjs`，缺行时该测试会失败。
 
-workspace 文件不得包含 URL、API key、用户凭据等禁止字段，也不做环境变量插值。规则由 [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-config.mjs) 执行，不在每个宿主增加自己的白名单。安装器不得把解析后的 API key 固化到 `.mcp.json`，也不得替换用户已选择的云端连接。
+workspace 文件不得包含 URL、API key、用户凭据等禁止字段，也不做环境变量插值。规则由 [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/workspace-config.mjs) 执行，不在每个宿主增加自己的白名单。安装器不得把解析后的 API key 固化到 `.mcp.json`，也不得替换用户已选择的云端连接。
 
 请求头由 `buildOvHeaders()` 构造：API key 使用 `Authorization: Bearer`，不再另发 `X-API-Key`；只有解析结果 `sendIdentityHeaders` 为真时才发送 account/user 头。保留 `User-Agent` 和错误中的 `traceId`，便于确认实际运行版本和追踪请求。不要在健康检查、状态栏或诊断探针里另写鉴权。
 
@@ -326,9 +326,9 @@ examples/<host>-memory-plugin/ 独立原生插件需要时才创建
 | --- | --- | --- |
 | 宿主直接加载 Git 中的插件目录 | Claude Code、Codex、`agent-plugins`、OpenClaw（`ov-install` 的 GitHub 源） | 共享副本提交到 Git，checkout 后即可加载 |
 | npm 包或安装归档 | OpenCode、DSH、Pi | 在 prepack 或 staging 时生成；运行时副本不提交 Git |
-| 安装器组装相邻运行时目录 | Cursor、TRAE、TRAE CN、ZCode | 使用 `ASSEMBLED_ROOTS` 推导 `lib/MANIFEST`，按 manifest 复制共享运行时 |
+| 插件目录自带共享源码 | Cursor、TRAE、TRAE CN、ZCode | 直接导入 `examples/agent-hook-plugin/lib`；安装器连同插件目录一起复制 |
 
-[`sync.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/sync.mjs) 是上述目标的登记处。新增独立插件登记 `TARGETS` 的 source root、目标目录和 `committed`；新增组装根才扩展 `ASSEMBLED_ROOTS`，普通薄宿主通常已被现有根覆盖。是否交付 Skill 另外登记 `SKILL_TARGETS`。不要维护一份“需要复制的 20 个模块”清单。
+[`sync.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/sync.mjs) 是上述目标的登记处。新增独立插件登记 `TARGETS` 的 source root、目标目录和 `committed`；是否交付 Skill 另外登记 `SKILL_TARGETS`。不要维护一份“需要复制的 20 个模块”清单。
 
 修改共享源码后运行：
 
@@ -445,7 +445,7 @@ node --test --test-concurrency=1 \
 | 共享行为修复 | 修改权威模块、验证受影响宿主、生成副本、检查所有相关分发产物和版本 |
 | 宿主 payload 或事件升级 | 更新适配器、真实格式 fixture、最低版本/降级说明；不修改其他宿主的默认行为 |
 | 新增配置项 | schema、真实消费者、configured 语义、诊断来源、用户文档；不得只加解析 |
-| 增加公共模块依赖 | 同目录类型声明、sync 闭包、`lib/MANIFEST`、归档和离线安装验证 |
+| 增加公共模块依赖 | 同目录类型声明、sync 闭包、归档和离线安装验证 |
 | 目录或包名变更 | import、manifest、installer、marketplace、CI path filter、Skill、链接与卸载识别 |
 | 删除兼容逻辑 | 明确支持版本与迁移说明；不能顺手删除仍承诺支持的配置别名 |
 | 纯文档改动 | 校验与现状一致、相对链接有效；不为说明文字改动无关行为 |

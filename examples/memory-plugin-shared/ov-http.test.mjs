@@ -8,8 +8,8 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { createServer } from "node:http";
 
-import { buildOvHeaders, createOvHttp } from "./lib/ov-http.mjs";
-import { isRetryableFailure } from "./lib/retryable.mjs";
+import { buildOvHeaders, createOvHttp } from "../agent-hook-plugin/lib/ov-http.mjs";
+import { isRetryableFailure } from "../agent-hook-plugin/lib/retryable.mjs";
 import { withMockOpenViking, writeJson } from "./testing/support.mjs";
 
 const CFG = {

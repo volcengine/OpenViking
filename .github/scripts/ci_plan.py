@@ -62,7 +62,7 @@ def plan(paths, full=False):
             r"^\.github/workflows/(pr|python-langchain-release)\.yml$"
         ),
         "openclaw_changed": changed(
-            r"^examples/openclaw-plugin/|^examples/memory-plugin-shared/(lib/|sync\.mjs)|"
+            r"^examples/openclaw-plugin/|^examples/memory-plugin-shared/(lib/|sync\.mjs)|^examples/agent-hook-plugin/lib/|"
             r"^\.github/workflows/pr\.yml$"
         ),
         "sdk_python_changed": changed(r"^sdk/python/|^\.github/workflows/pr\.yml$"),

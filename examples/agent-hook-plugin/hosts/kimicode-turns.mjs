@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { sanitizeCapturedText } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { sanitizeCapturedText } from "../lib/capture-utils.mjs";
 
 export function cleanKimicodeText(value) {
   if (value == null) return "";

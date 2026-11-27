@@ -12,8 +12,8 @@ import {
   readGitRemoteUrl,
   resolveWorkspaceIdentity,
   sanitizePeerId,
-} from "./lib/workspace-identity.mjs";
-import { deriveWorkspacePeerId } from "./lib/workspace-peer.mjs";
+} from "../agent-hook-plugin/lib/workspace-identity.mjs";
+import { deriveWorkspacePeerId } from "../agent-hook-plugin/lib/workspace-peer.mjs";
 
 async function tempRoot(name) {
   return realpathSync(await mkdtemp(join(tmpdir(), `ov-${name}-`)));

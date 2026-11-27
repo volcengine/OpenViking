@@ -25,7 +25,7 @@ These facts were verified against a live ZCode installation (built-in `zcode-gui
 
 ### 1. Assemble the shared runtime at install time (no vendored copy)
 
-ZCode imports the shared runtime across the plugin boundary, the way Cursor and TRAE do. The installer copies the modules `lib/MANIFEST` names to `~/.openviking/agent-integrations/memory-plugin-shared/lib`, which is exactly where `../../memory-plugin-shared/lib` resolves from an installed `hosts/` or `scripts/` file — so the same relative path works in this repository and on a user's machine, and no generated copy has to be kept in git.
+ZCode imports the shared runtime from `../lib`, the way Cursor and TRAE do. The installer copies the plugin directory with its `lib/`, so the same relative path works in this repository and on a user's machine, and no generated copy has to be kept in git.
 
 ### 2. Config-file hooks (not plugin-manifest hooks)
 

@@ -5,8 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { filterCaptureTurns } from "./lib/capture-utils.mjs";
-import { listPending } from "./lib/pending-queue.mjs";
+import { filterCaptureTurns } from "../agent-hook-plugin/lib/capture-utils.mjs";
+import { listPending } from "../agent-hook-plugin/lib/pending-queue.mjs";
 import { expectExit, runHookScript, withMockOpenViking, withPendingDir, writeJson } from "./testing/support.mjs";
 
 import {
@@ -17,7 +17,7 @@ import {
   resolveNativeSessionId,
   runHookStage,
   withAgentHookLock,
-} from "./lib/agent-hook-runtime.mjs";
+} from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
 
 test("disabled Claude Code and Codex hooks make no requests or session writes", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "ov-disabled-hooks-"));

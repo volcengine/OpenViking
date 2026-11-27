@@ -132,7 +132,7 @@ export { OpenVikingPlugin, default } from "./openviking/index.mjs"
 }
 ```
 
-`plugin` 里的键对所有 harness 生效；`plugin.opencode` 里的键只对本插件生效，并覆盖前者。解析顺序是 `OPENVIKING_*` 环境变量 → 工作区的 `.openviking/config.json`、`.openviking/config.local.json` 和本机 registry 条目 → `plugin.opencode` → `plugin` → 内置默认值。每个旋钮的类型、默认值、取值范围、环境变量名和兼容的旧拼写都声明在 [`examples/memory-plugin-shared/lib/config-schema.mjs`](../memory-plugin-shared/lib/config-schema.mjs)。
+`plugin` 里的键对所有 harness 生效；`plugin.opencode` 里的键只对本插件生效，并覆盖前者。解析顺序是 `OPENVIKING_*` 环境变量 → 工作区的 `.openviking/config.json`、`.openviking/config.local.json` 和本机 registry 条目 → `plugin.opencode` → `plugin` → 内置默认值。每个旋钮的类型、默认值、取值范围、环境变量名和兼容的旧拼写都声明在 [`examples/agent-hook-plugin/lib/config-schema.mjs`](../agent-hook-plugin/lib/config-schema.mjs)。
 
 `recallLimit` 是遗留的配额缩放输入，不是最终结果上限。显式设置为
 1 到 5 时，有效总配额仍为 6，因为六个 coding 分类会各保留一个检索槽位。

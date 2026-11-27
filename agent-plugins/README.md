@@ -10,7 +10,7 @@ Agent Plugins 1.0 is a vendor-neutral packaging format for extending AI coding a
 plugin.json                          # Agent Plugins 1.0 manifest
 mcp.json                             # stdio MCP server: "openviking"
 servers/mcp-proxy.mjs                # stdio -> streamable-HTTP proxy to the OV server's /mcp
-servers/shared/                      # generated from examples/memory-plugin-shared/lib (do not edit)
+servers/shared/                      # generated from examples/agent-hook-plugin/lib (do not edit)
 skills/openviking-memory/SKILL.md    # teaches the model the recall + persist loop
 skills/ov-memory-troubleshoot/       # read-only extraction troubleshooting
 skills/ov-experience-memory/         # retrieve and apply prior task Experience
@@ -80,7 +80,7 @@ Per the spec, client-specific integrations may later be embedded in this package
 node --test agent-plugins/plugin.test.mjs
 ```
 
-`servers/shared/*.mjs` are generated, verbatim copies from `examples/memory-plugin-shared/lib` — do not edit them here. This directory is a target of the shared-lib sync script, so refresh them with:
+`servers/shared/*.mjs` are generated, verbatim copies from `examples/agent-hook-plugin/lib` — do not edit them here. This directory is a target of the shared-lib sync script, so refresh them with:
 
 ```bash
 node examples/memory-plugin-shared/sync.mjs

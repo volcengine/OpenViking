@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { sendSessionMessages } from "./lib/batch-send.mjs";
-import { listPending } from "./lib/pending-queue.mjs";
+import { sendSessionMessages } from "../agent-hook-plugin/lib/batch-send.mjs";
+import { listPending } from "../agent-hook-plugin/lib/pending-queue.mjs";
 
 function payloads(count, offset = 0) {
   return Array.from({ length: count }, (_, i) => ({

@@ -3,12 +3,12 @@ import { afterEach, test } from "node:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildPluginConfig } from "./lib/plugin-config.mjs";
-import { buildProxyConnection } from "./lib/credentials.mjs";
-import { createOvHttp } from "./lib/ov-http.mjs";
+import { buildPluginConfig } from "../agent-hook-plugin/lib/plugin-config.mjs";
+import { buildProxyConnection } from "../agent-hook-plugin/lib/credentials.mjs";
+import { createOvHttp } from "../agent-hook-plugin/lib/ov-http.mjs";
 import { withMockOpenViking, writeJson } from "./testing/support.mjs";
 
-import { makeAgentFetchJSON } from "./lib/agent-hook-runtime.mjs";
+import { makeAgentFetchJSON } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
 import { makeFetchJSON as ccMakeFetchJSON } from "../claude-code-memory-plugin/scripts/lib/ov-session.mjs";
 import { makeFetchJSON as codexMakeFetchJSON } from "../codex-memory-plugin/scripts/ov-session.mjs";
 import { OpenVikingClient } from "../dsh-memory-plugin/client.mjs";

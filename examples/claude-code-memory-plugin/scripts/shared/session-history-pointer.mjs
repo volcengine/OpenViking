@@ -1,4 +1,4 @@
-// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
+// GENERATED FROM examples/agent-hook-plugin/lib. DO NOT EDIT.
 /**
  * The note a plugin adds to the context after a host compaction (or a resume),
  * telling the model that OpenViking holds the full record of the session and

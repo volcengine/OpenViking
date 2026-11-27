@@ -24,11 +24,11 @@ curl -fsSL https://openviking.ai/install | bash
 
 根目录的 `plugin.json` 是宿主无关的包元数据，只用于版本检查和诊断。Kimi 的原生 manifest 位于 `hosts/kimicode/`，安装组装时复制到插件根目录。
 
-`hosts/<host>/` 只放宿主配置或原生 manifest；可执行适配器放在上一层。`../../memory-plugin-shared/lib` 这条相对路径在源码树、配置型安装和 Kimi 组装后的原生插件里都成立。
+`hosts/<host>/` 只放宿主配置或原生 manifest；可执行适配器放在上一层。`../lib` 这条相对路径在源码树、配置型安装和 Kimi 组装后的原生插件里都成立。
 
 `examples/memory-plugin-shared/sync.mjs` 把 `examples/skills` 下的共享 skill（包括 `ov-memory-doctor`）复制到各个 `hosts/<host>/skills`。
 
-记忆逻辑本身不在这里：召回、批量写入、待处理队列、凭据解析与 MCP 代理都来自 `examples/memory-plugin-shared/lib`，由安装脚本复制到 `~/.openviking/agent-integrations/memory-plugin-shared/lib`。
+记忆逻辑本身不在这里：召回、批量写入、待处理队列、凭据解析与 MCP 代理都来自 `lib/`，安装脚本会连同本目录一起复制。
 
 ## 各宿主差异
 

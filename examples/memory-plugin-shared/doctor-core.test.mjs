@@ -23,7 +23,7 @@ import {
   unknownOvcliKeys,
   whichCommand,
   WORKSPACE_PEER_HINT,
-} from "./lib/doctor-core.mjs";
+} from "../agent-hook-plugin/lib/doctor-core.mjs";
 
 const b64 = (s) => Buffer.from(s).toString("base64url");
 
@@ -323,7 +323,7 @@ test("checkWorkspace warns when the workspace asks for a newer client", () => {
 test("no doctor wrapper redefines a name doctor-core already exports", () => {
   const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf-8");
   const exported = new Set(
-    [...read("./lib/doctor-core.mjs").matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]),
+    [...read("../agent-hook-plugin/lib/doctor-core.mjs").matchAll(/^export (?:async function|function|const) (\w+)/gm)].map((m) => m[1]),
   );
   assert.ok(exported.has("runDoctor"));
   assert.ok(exported.has("inspectConfigFiles"));

@@ -10,7 +10,7 @@ import {
   loadAgentHookConfig,
   makeAgentFetchJSON,
   recallForPrompt,
-} from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+} from "../lib/agent-hook-runtime.mjs";
 import { HOSTS } from "../hosts/index.mjs";
 import { withRequestBudget } from "../scripts/request-budget.mjs";
 

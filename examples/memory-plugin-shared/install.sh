@@ -2160,7 +2160,7 @@ plugin_dir_on_disk() { # plugin_dir_on_disk <plugin-subdir>
 # The installer's own JavaScript: the JSONC editor OpenCode's config needs and
 # the hooks/mcp merge every config-driven host installs through. It is not part
 # of the runtime the plugins ship, so it travels with whatever copy of this
-# script is running rather than with `lib/MANIFEST`.
+# script is running rather than with the plugins.
 #
 # `--uninstall` runs before any bundle is fetched, and the documented uninstall
 # pipes this script from a URL, where there is no sibling directory to read. So
@@ -2557,6 +2557,9 @@ remove_legacy_trae_cli_integration() {
     && [ ! -d "$OV_HOME/agent-integrations/trae-cn" ] \
     && [ ! -d "$OV_HOME/agent-integrations/trae-cli" ] \
     && [ ! -d "$OV_HOME/agent-integrations/zcode" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/kimicode" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/codebuddy" ] \
+    && [ ! -d "$OV_HOME/agent-integrations/qoder" ] \
     && [ ! -d "$OV_HOME/agent-integrations/antigravity" ]; then
     rm -rf "$OV_HOME/agent-integrations/memory-plugin-shared"
   fi
@@ -2747,47 +2750,31 @@ copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destinat
   printf '%s' "$dest"
 }
 
-# Thin hook hosts keep only their client-specific adapters in the repository.
-# Assemble a self-contained installation by adding the canonical shared runtime
-# at install time instead of committing generated copies for every client.
+# The integration carries its own lib/. Config-driven installs also keep the
+# uninstall helpers under memory-plugin-shared/lib/install; a native Kimi bundle
+# persists its one helper outside the plugin.
 assemble_agent_integration() { # assemble_agent_integration <host> <dest-name> [bundle-root]
-  local host="$1" dest_name="$2" bundle_root="${3:-}" root_dest root shared shared_dest manifest file
+  local host="$1" dest_name="$2" bundle_root="${3:-}" root_dest root shared install_dest
   if [ -n "$bundle_root" ]; then
     root_dest="$bundle_root/agent-integrations/$dest_name"
-    shared_dest="$bundle_root/agent-integrations/memory-plugin-shared/lib"
   else
     root_dest="$OV_HOME/agent-integrations/$dest_name"
-    shared_dest="$OV_HOME/agent-integrations/memory-plugin-shared/lib"
   fi
   root="$(copy_agent_integration "$host" "$dest_name" "$root_dest")" || return 1
-  shared="$(plugin_dir_on_disk memory-plugin-shared)" || {
-    err "$(t 'Shared agent runtime not found.' '未找到共享 Agent 运行时。')"
-    return 1
-  }
-  # The closure of what the hook hosts import, written by sync.mjs and
-  # shipped beside the modules. Regenerating it here is not an option: the
-  # generator finds no plugin sources in a flat marketplace archive.
-  manifest="$shared/lib/MANIFEST"
-  [ -s "$manifest" ] || {
-    err "$(t 'Shared runtime manifest is missing or empty:' '共享运行时清单缺失或为空：') $manifest"
-    return 1
-  }
-  rm -rf "$shared_dest.tmp"
-  mkdir -p "$shared_dest.tmp"
-  while read -r file || [ -n "$file" ]; do
-    [ -n "$file" ] || continue
-    cp "$shared/lib/$file" "$shared_dest.tmp/$file" || return 1
-  done < "$manifest"
-  cp "$manifest" "$shared_dest.tmp/MANIFEST"
-  # Config-driven installs retain the uninstall helpers beside the shared
-  # runtime. A native Kimi bundle persists its one helper outside the plugin,
-  # so carrying every installer module inside that bundle would be dead weight.
   if [ -z "$bundle_root" ]; then
-    cp -R "$shared/lib/install" "$shared_dest.tmp/install" || return 1
+    shared="$(plugin_dir_on_disk memory-plugin-shared)" || {
+      err "$(t 'Shared agent runtime not found.' '未找到共享 Agent 运行时。')"
+      return 1
+    }
+    # Hosts installed by an older installer still import the runtime modules
+    # beside this directory, so only install/ is replaced.
+    install_dest="$OV_HOME/agent-integrations/memory-plugin-shared/lib/install"
+    rm -rf "$install_dest.tmp"
+    mkdir -p "$(dirname "$install_dest")"
+    cp -R "$shared/lib/install" "$install_dest.tmp" || return 1
+    rm -rf "$install_dest"
+    mv "$install_dest.tmp" "$install_dest"
   fi
-  rm -rf "$shared_dest"
-  mkdir -p "$(dirname "$shared_dest")"
-  mv "$shared_dest.tmp" "$shared_dest"
   printf '%s' "$root"
 }
 
@@ -3298,7 +3285,7 @@ validate_marketplace_host() { # validate_marketplace_host <host> "<cli>..." <sub
     && [ -f "$ai/scripts/hook.mjs" ] \
     && [ -f "$ai/scripts/uri-guard.mjs" ] \
     && [ -f "$ai/servers/mcp-proxy.mjs" ] \
-    && [ -f "$root/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ]; then
+    && [ -f "$ai/lib/agent-hook-runtime.mjs" ]; then
     "$NODE_BIN" --check "$ai/scripts/hook.mjs" || { ok=0; agent_fatal=1; }
     if ! printf '%s' '{}' | OPENVIKING_MEMORY_ENABLED=0 \
       "$NODE_BIN" "$ai/scripts/hook.mjs" session-start "$host" >/dev/null; then
@@ -3344,9 +3331,8 @@ install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>...
   done
   rm -rf "$root/hosts/$host"
   # The host copies the plugin directory into its cache, so it has to carry
-  # the whole agent-hook layout: the adapters import `../../memory-plugin-shared/lib`,
-  # which only resolves when the shared runtime sits beside them under
-  # agent-integrations/ (the shape the Kimi Code bundle uses).
+  # the whole agent-hook layout under agent-integrations/ (the shape the Kimi
+  # Code bundle uses).
   mkdir -p "$bundle/openviking-memory"
   mv "$bundle/agent-integrations" "$bundle/openviking-memory/agent-integrations" || { rm -rf "$bundle"; return 1; }
   root="$bundle/openviking-memory"
@@ -3556,7 +3542,7 @@ install_pi() {
 # in where their hooks, MCP entries and skills live and in the session-start
 # event name.
 validate_hook_host() { # validate_hook_host <client>
-  local client="$1" root="$OV_HOME/agent-integrations/$1" shared="$OV_HOME/agent-integrations/memory-plugin-shared/lib"
+  local client="$1" root="$OV_HOME/agent-integrations/$1" shared="$OV_HOME/agent-integrations/$1/lib"
   local hooks mcp event file skill complete=1
   set -- "$root/scripts/hook.mjs" "$root/scripts/uri-guard.mjs" "$root/integration.json" "$shared/agent-hook-runtime.mjs"
   case "$client" in
@@ -3647,7 +3633,7 @@ EOF
       && [ -f "$kimi_root/agent-integrations/kimicode/scripts/uri-guard.mjs" ] \
       && [ -f "$kimi_root/agent-integrations/kimicode/servers/mcp-proxy.mjs" ] \
       && [ -f "$kimi_root/skills/openviking-memory/SKILL.md" ] \
-      && [ -f "$kimi_root/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ]; then
+      && [ -f "$kimi_root/agent-integrations/kimicode/lib/agent-hook-runtime.mjs" ]; then
       "$NODE_BIN" --check "$kimi_root/agent-integrations/kimicode/scripts/hook.mjs" \
         || { ok=0; agent_fatal=1; }
       if ! printf '%s' '{}' | env HOME="$HOME" OPENVIKING_MEMORY_ENABLED=0 \
@@ -3685,7 +3671,7 @@ process.stdout.write(command);
       && [ -f "$ag_root/scripts/uri-guard.mjs" ] \
       && [ -f "$ag_root/servers/mcp-proxy.mjs" ] \
       && [ -f "$ag_root/integration.json" ] \
-      && [ -f "$OV_HOME/agent-integrations/memory-plugin-shared/lib/agent-hook-runtime.mjs" ] \
+      && [ -f "$ag_root/lib/agent-hook-runtime.mjs" ] \
       && [ -n "$ag_command" ]; then
       "$NODE_BIN" --check "$ag_root/scripts/hook.mjs" \
         && "$NODE_BIN" --check "$ag_root/scripts/uri-guard.mjs" \

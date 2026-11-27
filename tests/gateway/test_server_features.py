@@ -10,7 +10,7 @@ from openviking_gateway.client import FEATURES, VikingClient, VikingError, suppo
 from openviking_gateway.models import Policy
 
 ROOT = Path(__file__).parents[2]
-SOURCE = ROOT / "examples/memory-plugin-shared/lib/server-features.json"
+SOURCE = ROOT / "examples/agent-hook-plugin/lib/server-features.json"
 COPY = ROOT / "openviking_gateway/server-features.json"
 # The plugin reader's test suite reads the same cases, so both readers are proven to
 # answer alike for every string in it.

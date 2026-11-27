@@ -24,7 +24,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadAgentHookConfig } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+import { loadAgentHookConfig } from "../lib/agent-hook-runtime.mjs";
 import {
   credentialSources,
   existsPath,
@@ -41,7 +41,7 @@ import {
   scanDebugLog,
   sweepEnv,
   tryJson,
-} from "../../memory-plugin-shared/lib/doctor-core.mjs";
+} from "../lib/doctor-core.mjs";
 
 const PLUGIN_ROOT = resolvePath(dirname(fileURLToPath(import.meta.url)), "..");
 const REQUIRED_PLUGIN_FILES = ["scripts/hook.mjs", "scripts/uri-guard.mjs", "servers/mcp-proxy.mjs", "hosts/index.mjs"];
@@ -188,12 +188,11 @@ function checkInstall(report) {
   if (missing.length) report.fail("plugin files missing", missing.join(", "), `curl -fsSL https://openviking.ai/install | bash -s -- --harness ${CLIENT}`);
   else report.ok("plugin files present (hook entry, URI guard, MCP proxy, host adapters)");
 
-  // The runtime is not vendored: it sits beside the integration, assembled from
-  // lib/MANIFEST at install time. A stale or absent copy is ERR_MODULE_NOT_FOUND
-  // on the first hook, which the host reports as nothing at all.
-  const shared = resolvePath(PLUGIN_ROOT, "..", "memory-plugin-shared", "lib");
+  // An absent runtime is ERR_MODULE_NOT_FOUND on the first hook, which the host
+  // reports as nothing at all.
+  const shared = join(PLUGIN_ROOT, "lib");
   const modules = existsPath(shared) ? readdirSync(shared).filter((name) => name.endsWith(".mjs")) : [];
-  if (!modules.length) report.fail("the shared runtime is not assembled beside this integration", homeShort(shared), `re-run the installer with --harness ${CLIENT}`);
+  if (!modules.length) report.fail("the shared runtime is missing from this integration", homeShort(shared), `re-run the installer with --harness ${CLIENT}`);
   else report.ok(`shared runtime: ${modules.length} modules in ${homeShort(shared)}`);
   if (!SPEC.manifest && !existsPath(join(PLUGIN_ROOT, "hosts", HOST_DIR, "hooks.json"))) {
     report.fail(`no hooks template for ${CLIENT}`, "", "re-run the installer");

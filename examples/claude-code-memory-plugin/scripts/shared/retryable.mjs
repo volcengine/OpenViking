@@ -1,4 +1,4 @@
-// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
+// GENERATED FROM examples/agent-hook-plugin/lib. DO NOT EDIT.
 export function isRetryableFailure(result) {
   if (!result || result.ok) return false;
   const status = Number(result.status || 0);

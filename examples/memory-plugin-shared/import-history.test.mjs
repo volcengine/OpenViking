@@ -31,11 +31,11 @@ import {
 } from "./import-history.mjs";
 import { HOSTS as HOOK_HOSTS } from "../agent-hook-plugin/hosts/index.mjs";
 import { deriveDshSessionId } from "../dsh-memory-plugin/session-id.mjs";
-import { deriveAgentSessionId } from "./lib/agent-hook-runtime.mjs";
-import { resolveConnection as libConnection } from "./lib/credentials.mjs";
-import { buildPluginConfig } from "./lib/plugin-config.mjs";
-import { deriveCodexSessionId, deriveHarnessSessionId } from "./lib/session-model.mjs";
-import { resolveEffectivePeerId } from "./lib/workspace-peer.mjs";
+import { deriveAgentSessionId } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
+import { resolveConnection as libConnection } from "../agent-hook-plugin/lib/credentials.mjs";
+import { buildPluginConfig } from "../agent-hook-plugin/lib/plugin-config.mjs";
+import { deriveCodexSessionId, deriveHarnessSessionId } from "../agent-hook-plugin/lib/session-model.mjs";
+import { resolveEffectivePeerId } from "../agent-hook-plugin/lib/workspace-peer.mjs";
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "import-history.mjs");
 const NOW = Date.parse("2026-10-13T12:00:00Z");

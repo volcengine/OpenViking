@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import test from "node:test";
-import { runSetupWizard } from "./lib/setup-wizard.mjs";
+import { runSetupWizard } from "../agent-hook-plugin/lib/setup-wizard.mjs";
 
 /**
  * Drive the wizard with scripted answers: readline writes a prompt without a

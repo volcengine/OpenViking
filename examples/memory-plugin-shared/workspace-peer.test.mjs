@@ -12,8 +12,8 @@ import {
   renderPeerTemplate,
   resolveEffectivePeerId,
   resolvePluginPeerId,
-} from "./lib/workspace-peer.mjs";
-import { resolveWorkspaceIdentity } from "./lib/workspace-identity.mjs";
+} from "../agent-hook-plugin/lib/workspace-peer.mjs";
+import { resolveWorkspaceIdentity } from "../agent-hook-plugin/lib/workspace-identity.mjs";
 
 async function repo({ remote = "git@github.com:volcengine/OpenViking.git", git = true, marked = false } = {}) {
   const root = realpathSync(await mkdtemp(join(tmpdir(), "ov-peer-")));

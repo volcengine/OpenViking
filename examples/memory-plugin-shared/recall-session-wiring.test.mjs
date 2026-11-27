@@ -85,12 +85,12 @@ for (const { name, file, pattern } of TIMEOUT_PASSTHROUGH) {
 // are declared once now — the knob in the schema, the flag in the one builder
 // every loader calls — and `plugin-config.test.mjs` checks each harness gets it.
 test("the query-expansion opt-out is declared once and reported for every harness", async () => {
-  const { KNOB_BY_NAME } = await import("./lib/config-schema.mjs");
+  const { KNOB_BY_NAME } = await import("../agent-hook-plugin/lib/config-schema.mjs");
   const knob = KNOB_BY_NAME.get("recallQueryExpansion");
   assert.equal(knob.env, "OPENVIKING_RECALL_QUERY_EXPANSION");
   assert.deepEqual(knob.values, ["auto", "off"]);
   assert.equal(knob.sendOnlyWhenConfigured, true);
 
-  const builder = join(ROOT, "examples", "memory-plugin-shared", "lib", "plugin-config.mjs");
+  const builder = join(ROOT, "examples", "agent-hook-plugin", "lib", "plugin-config.mjs");
   assert.match(await readFile(builder, "utf-8"), /`\$\{knob\.name\}Configured`/);
 });

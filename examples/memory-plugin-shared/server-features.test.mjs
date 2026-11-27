@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { SERVER_FEATURES, featureStatus, healthVersion, requiredVersion, supports } from "./lib/server-features.mjs";
+import { SERVER_FEATURES, featureStatus, healthVersion, requiredVersion, supports } from "../agent-hook-plugin/lib/server-features.mjs";
 
 // The gateway's test suite reads the same cases, so the two readers are proven
 // to answer alike for every string in it.
@@ -11,7 +11,7 @@ const CASES = JSON.parse(
 );
 
 test("the table is the source file", () => {
-  const source = readFileSync(new URL("./lib/server-features.json", import.meta.url), "utf-8");
+  const source = readFileSync(new URL("../agent-hook-plugin/lib/server-features.json", import.meta.url), "utf-8");
   assert.deepEqual(SERVER_FEATURES, JSON.parse(source));
   assert.ok(Object.isFrozen(SERVER_FEATURES));
   assert.equal(requiredVersion("working_memory_opt_in"), "0.5.0");

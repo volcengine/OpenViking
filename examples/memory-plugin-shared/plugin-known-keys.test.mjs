@@ -4,8 +4,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { HARNESS_KEYS, KNOBS, KNOB_BY_KEY, WORKSPACE_KNOB_MAP, resolveKnobs } from "./lib/config-schema.mjs";
-import { KNOWN_PLUGIN_KEYS, unknownPluginKeys } from "./lib/doctor-core.mjs";
+import { HARNESS_KEYS, KNOBS, KNOB_BY_KEY, WORKSPACE_KNOB_MAP, resolveKnobs } from "../agent-hook-plugin/lib/config-schema.mjs";
+import { KNOWN_PLUGIN_KEYS, unknownPluginKeys } from "../agent-hook-plugin/lib/doctor-core.mjs";
 import { buildConfigForTest } from "./testing/support.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -15,13 +15,13 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // they were resolved from: a `settings.<key>` here is a key the schema has to
 // declare, and a key the doctor therefore has to accept inside `plugin`.
 const KNOB_READERS = [
-  "examples/memory-plugin-shared/lib/plugin-config.mjs",
+  "examples/agent-hook-plugin/lib/plugin-config.mjs",
   "examples/claude-code-memory-plugin/scripts/config.mjs",
   "examples/codex-memory-plugin/scripts/config.mjs",
   "examples/opencode-plugin/lib/config.mjs",
   "examples/dsh-memory-plugin/config.mjs",
   "examples/pi-coding-agent-extension/config.ts",
-  "examples/memory-plugin-shared/lib/agent-hook-runtime.mjs",
+  "examples/agent-hook-plugin/lib/agent-hook-runtime.mjs",
 ];
 
 test("every knob a loader reads is declared in the schema", async () => {
@@ -56,7 +56,7 @@ test("exactly the knobs recall-core gates are marked send-only-when-configured",
     "recallQueryExpansion",
   ]);
 
-  const source = await readFile(join(ROOT, "examples/memory-plugin-shared/lib/recall-core.mjs"), "utf-8");
+  const source = await readFile(join(ROOT, "examples/agent-hook-plugin/lib/recall-core.mjs"), "utf-8");
   const gated = new Set();
   for (const match of source.matchAll(/\bcfg\.([a-zA-Z0-9_]+)Configured\b/g)) gated.add(match[1]);
   assert.deepEqual([...gated].sort(), marked.sort());

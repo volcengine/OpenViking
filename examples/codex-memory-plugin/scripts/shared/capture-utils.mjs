@@ -1,4 +1,4 @@
-// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.
+// GENERATED FROM examples/agent-hook-plugin/lib. DO NOT EDIT.
 import { applyInputFilters, compileInputFilters } from "./input-filters.mjs";
 
 const TEXT_BLOCK_TYPES = new Set(["text", "input_text", "output_text"]);

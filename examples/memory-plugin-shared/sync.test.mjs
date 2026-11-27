@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import test from "node:test";
 
 // Imported, not re-declared: the copies kept here had drifted from sync.mjs
@@ -15,9 +15,10 @@ import {
   SHARED_DIR,
   SKILLS_DIR,
   SKILL_TARGETS,
-  assembledClosure,
+  directSharedImports,
   importSpecifiers,
   resolveTargets,
+  sharedClosure,
 } from "./sync.mjs";
 
 const SYNC = join(ROOT, "examples", "memory-plugin-shared", "sync.mjs");
@@ -148,9 +149,9 @@ test("the portable agent-plugins bundle stays connection-only", async () => {
 test("every shared module is reachable from some plugin", async () => {
   const targets = await resolveTargets();
   const claimed = new Set(targets.flatMap((target) => target.files));
-  // cursor, trae and zcode vendor nothing: the installer assembles their
-  // runtime instead, so they claim through the manifest it reads.
-  for (const entry of await assembledClosure()) claimed.add(entry);
+  // agent-hook-plugin owns lib/ and imports it in place.
+  const { seeds } = await directSharedImports({ root: dirname(SHARED_DIR), dir: SHARED_DIR });
+  for (const entry of await sharedClosure(seeds)) claimed.add(entry);
   // The plugin reader of the server feature table: the gateway reads the same
   // table today. Its first consumer is the privacy seal change, whose plugins
   // import server-features.mjs for featureStatus and healthVersion; that change

@@ -3,8 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { KNOB_BY_NAME } from "./lib/config-schema.mjs";
-import { CONNECTION_ENV_VARS, CREDENTIAL_ENV_VARS, resolveConnection } from "./lib/credentials.mjs";
+import { KNOB_BY_NAME } from "../agent-hook-plugin/lib/config-schema.mjs";
+import { CONNECTION_ENV_VARS, CREDENTIAL_ENV_VARS, resolveConnection } from "../agent-hook-plugin/lib/credentials.mjs";
 
 /**
  * Run `fn` against an ovcli.conf / ov.conf pair in a throwaway directory. A

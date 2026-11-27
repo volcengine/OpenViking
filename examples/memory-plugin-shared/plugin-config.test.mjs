@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { HARNESS_KEYS, KNOBS } from "./lib/config-schema.mjs";
-import { buildContextSearchBody } from "./lib/recall-core.mjs";
-import { buildPluginConfig } from "./lib/plugin-config.mjs";
-import { loadAgentHookConfig } from "./lib/agent-hook-runtime.mjs";
+import { HARNESS_KEYS, KNOBS } from "../agent-hook-plugin/lib/config-schema.mjs";
+import { buildContextSearchBody } from "../agent-hook-plugin/lib/recall-core.mjs";
+import { buildPluginConfig } from "../agent-hook-plugin/lib/plugin-config.mjs";
+import { loadAgentHookConfig } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
 import { loadConfig as loadClaudeCode } from "../claude-code-memory-plugin/scripts/config.mjs";
 import { loadConfig as loadCodex } from "../codex-memory-plugin/scripts/config.mjs";
 import { loadConfig as loadOpencode } from "../opencode-plugin/lib/config.mjs";

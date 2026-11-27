@@ -90,7 +90,7 @@ Behaviour and peer-scoping knobs live in `~/.openviking/ovcli.conf` beside the c
 }
 ```
 
-Keys in `plugin` apply to every harness; keys in `plugin.pi` apply to this extension and override them. Resolution is `OPENVIKING_*` environment variables → the workspace's `.openviking/config.json`, `.openviking/config.local.json` and machine registry entry → `plugin.pi` → `plugin` → built-in defaults. Every knob, with its type, default, range, environment variable and accepted older spellings, is declared in [`examples/memory-plugin-shared/lib/config-schema.mjs`](../memory-plugin-shared/lib/config-schema.mjs); `syncTurns` still works wherever `autoCapture` is written above.
+Keys in `plugin` apply to every harness; keys in `plugin.pi` apply to this extension and override them. Resolution is `OPENVIKING_*` environment variables → the workspace's `.openviking/config.json`, `.openviking/config.local.json` and machine registry entry → `plugin.pi` → `plugin` → built-in defaults. Every knob, with its type, default, range, environment variable and accepted older spellings, is declared in [`examples/agent-hook-plugin/lib/config-schema.mjs`](../agent-hook-plugin/lib/config-schema.mjs); `syncTurns` still works wherever `autoCapture` is written above.
 
 Credential environment variables:
 

@@ -14,7 +14,7 @@ import http from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildPluginConfig } from "../lib/plugin-config.mjs";
+import { buildPluginConfig } from "../../agent-hook-plugin/lib/plugin-config.mjs";
 
 /**
  * A built config resolved against nothing at all, for callers that only need

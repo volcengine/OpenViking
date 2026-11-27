@@ -17,7 +17,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 
-import { loadAgentHookConfig } from "./lib/agent-hook-runtime.mjs";
+import { loadAgentHookConfig } from "../agent-hook-plugin/lib/agent-hook-runtime.mjs";
 import { ROOT } from "./sync.mjs";
 import { scrubOpenVikingEnv, writeCredentialFiles } from "./testing/support.mjs";
 import { HOSTS } from "../agent-hook-plugin/hosts/index.mjs";

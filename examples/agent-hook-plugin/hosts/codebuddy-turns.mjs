@@ -53,7 +53,7 @@ import {
   extractPartsFromPayload,
   normalizeCaptureRole,
   sanitizeCapturedText,
-} from "../../memory-plugin-shared/lib/capture-utils.mjs";
+} from "../lib/capture-utils.mjs";
 import { readUnseenTurns, textFromToolParts } from "./incremental-turn-capture.mjs";
 
 export { parseJsonlTranscript as parseTranscript } from "./incremental-turn-capture.mjs";

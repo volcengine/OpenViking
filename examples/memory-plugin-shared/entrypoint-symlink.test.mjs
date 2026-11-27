@@ -88,12 +88,13 @@ test("sync runs through a symlinked directory", () => {
   withTemp((tmp) => {
     const tree = join(tmp, "tree");
     const shared = join(tree, "examples/memory-plugin-shared");
-    mkdirSync(join(shared, "lib"), { recursive: true });
+    mkdirSync(shared, { recursive: true });
+    mkdirSync(join(tree, "examples/agent-hook-plugin/lib"), { recursive: true });
     copyFileSync(join(ROOT, "examples/memory-plugin-shared/sync.mjs"), join(shared, "sync.mjs"));
     for (const { skill } of SKILL_TARGETS) mkdirSync(join(tree, "examples/skills", skill), { recursive: true });
     const result = runThroughLink(tmp, tree, "examples/memory-plugin-shared/sync.mjs");
     assert.equal(result.status, 0, output(result));
-    assert.ok(existsSync(join(shared, "lib/MANIFEST")), output(result));
+    assert.match(result.stdout, /synced /, output(result));
   });
 });
 

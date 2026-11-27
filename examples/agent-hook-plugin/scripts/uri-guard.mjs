@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { runUriGuardHook } from "../../memory-plugin-shared/lib/uri-guard.mjs";
+import { runUriGuardHook } from "../lib/uri-guard.mjs";
 import { HOSTS } from "../hosts/index.mjs";
 
 // The envelope is the host's: Cursor answers its own permission shape,

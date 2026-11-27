@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 
-import { sanitizeCapturedText } from "./lib/capture-utils.mjs";
-import { buildPluginConfig } from "./lib/plugin-config.mjs";
-import { formatSessionHistoryPointer } from "./lib/session-history-pointer.mjs";
+import { sanitizeCapturedText } from "../agent-hook-plugin/lib/capture-utils.mjs";
+import { buildPluginConfig } from "../agent-hook-plugin/lib/plugin-config.mjs";
+import { formatSessionHistoryPointer } from "../agent-hook-plugin/lib/session-history-pointer.mjs";
 import { buildConfigForTest } from "./testing/support.mjs";
 
 test("the pointer names the OV session and the three actions", () => {

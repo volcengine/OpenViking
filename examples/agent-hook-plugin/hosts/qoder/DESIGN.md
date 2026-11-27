@@ -168,7 +168,7 @@ The Claude Code envelope works on both injection events: `{"hookSpecificOutput":
 | The **non-detached** child never wrote its line | **unlike CodeBuddy, the kill reaches the hook's process group** |
 | `qodercli -p` exited only after the `SessionEnd` hooks of both sessions had finished or timed out | `SessionEnd` hooks hold up exit |
 
-> **Design consequence**: the shared async writer spawns its worker with `detached: true` (`memory-plugin-shared/lib/async-writer.mjs`), so `detachesCapture` is safe here (run 11 captured and committed through the detached worker); any helper that is not detached dies with the hook. Every hook has an explicit `timeout`, since with the 600 s default a stuck `SessionEnd` would block `qodercli` exit for ten minutes.
+> **Design consequence**: the shared async writer spawns its worker with `detached: true` (`agent-hook-plugin/lib/async-writer.mjs`), so `detachesCapture` is safe here (run 11 captured and committed through the detached worker); any helper that is not detached dies with the hook. Every hook has an explicit `timeout`, since with the 600 s default a stuck `SessionEnd` would block `qodercli` exit for ten minutes.
 
 Debugging aid: `~/.qoder/logs/sessions/<cwd-slug>/<session_id>/segments/*.jsonl` logs every hook run (`hook.started` / `hook.finished` with `plugin_id`, `duration_ms`, `exit_code`, `error`).
 
@@ -223,7 +223,7 @@ Debugging aid: `~/.qoder/logs/sessions/<cwd-slug>/<session_id>/segments/*.jsonl`
 | CodeBuddy piece | Qoder counterpart |
 | --- | --- |
 | `hosts/codebuddy.mjs` | `hosts/qoder.mjs`, prefix `qd-`, the same stage map: `session-start` → start, `user-prompt-submit` → prompt, `stop` / `pre-compact` / `session-end` → capture |
-| `hosts/codebuddy-turns.mjs` | `hosts/qoder-turns.mjs`, decoding §8 into the incremental turns the dispatcher sends, with `memory-plugin-shared/lib/capture-utils.mjs` building the text and tool parts |
+| `hosts/codebuddy-turns.mjs` | `hosts/qoder-turns.mjs`, decoding §8 into the incremental turns the dispatcher sends, with `agent-hook-plugin/lib/capture-utils.mjs` building the text and tool parts |
 | `hosts/codebuddy/plugin.json` | `hosts/qoder/plugin.json`, copied to `.qoder-plugin/plugin.json` |
 | `hosts/codebuddy/hooks.json` | `hosts/qoder/hooks.json`, with the `{ "hooks": … }` wrapper, a quoted `${QODER_PLUGIN_ROOT}` path and an explicit `timeout` on every hook |
 | `hosts/codebuddy/.mcp.json` | `hosts/qoder/.mcp.json` |

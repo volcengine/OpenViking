@@ -11,6 +11,7 @@ on:
       - "examples/dsh-memory-plugin/**"
       - "examples/opencode-plugin/**"
       - "examples/magpie-memory-plugin/**"
+      - "examples/agent-hook-plugin/lib/**"
       - "examples/memory-plugin-shared/lib/**"
       - "examples/memory-plugin-shared/sync.mjs"
       - ".github/workflows/plugin-npm-release.yml"

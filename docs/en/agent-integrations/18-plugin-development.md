@@ -17,7 +17,7 @@ Before changing any OpenViking agent plugin, read and follow
 docs/en/agent-integrations/18-plugin-development.md
 (Chinese: docs/zh/agent-integrations/18-plugin-development.md).
 
-Inspect examples/memory-plugin-shared/lib/ and the Claude Code and Codex
+Inspect examples/agent-hook-plugin/lib/ and the Claude Code and Codex
 plugins. Also inspect agent-hook-plugin, OpenCode, DSH, or another existing
 integration when its host model matches the task. Verify the target host's
 events, payloads, output schema, time limits, and installation contract.
@@ -98,22 +98,22 @@ buildPluginConfig / credentials configure both paths and their identity
 sync / install / pack deliver the complete dependency graph
 ```
 
-Authoritative capability sources live in [`examples/memory-plugin-shared/lib/`](https://github.com/volcengine/OpenViking/tree/main/examples/memory-plugin-shared/lib/). The following table helps locate rules; it is not a template to recreate inside every plugin.
+Authoritative capability sources live in [`examples/agent-hook-plugin/lib/`](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin/lib/). The following table helps locate rules; it is not a template to recreate inside every plugin.
 
 | Responsibility | Authoritative module | What a host may supply |
 | --- | --- | --- |
-| Configuration declarations, defaults, aliases, ranges | [config-schema.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/config-schema.mjs) | Justified host-specific defaults, still declared in the schema |
-| Layered resolution and the complete config object | [plugin-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/plugin-config.mjs) | Harness ID, manifest, log filename, native host parameters |
-| Credentials and authentication mode | [credentials.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/credentials.mjs) | Existing compatibility requirements; no separate fallback chain |
-| Workspace and peer identity | [workspace-peer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-peer.mjs), [workspace-identity.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-identity.mjs) | Actual session cwd and an explicitly provided peer |
-| Hook initialization, bypass, single output | [agent-hook-runtime.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/agent-hook-runtime.mjs) | Input reader, session ID resolver, enablement predicate, output envelope |
-| HTTP headers, timeouts, error results | [ov-http.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/ov-http.mjs) | Request path and body, time budget, current actor peer |
-| Recall and context construction | [recall-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/recall-core.mjs), [profile-inject.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/profile-inject.mjs) | Query, session identity, local compressor callback, host presentation |
-| Message sanitation, roles, structured content | [capture-utils.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/capture-utils.mjs), [input-filters.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/input-filters.mjs) | Transcript decoding and native tool event normalization |
-| Batch sending, offline replay, retry classification | [batch-send.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/batch-send.mjs), [pending-queue.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/pending-queue.mjs), [retryable.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/retryable.mjs) | When to call them and how acknowledgements advance the host cursor |
-| Background writes | [async-writer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/async-writer.mjs) | Host-supported detach timing and recovery measures |
-| MCP configuration and protocol | [mcp-proxy-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/mcp-proxy-config.mjs), [mcp-proxy-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/mcp-proxy-core.mjs) | Configuration projection, logger factory, necessary local tools |
-| Virtual URI checks and diagnostics | [uri-guard.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/uri-guard.mjs), [doctor-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/doctor-core.mjs) | Tool names, deny and notice envelopes, host installation/state checks |
+| Configuration declarations, defaults, aliases, ranges | [config-schema.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/config-schema.mjs) | Justified host-specific defaults, still declared in the schema |
+| Layered resolution and the complete config object | [plugin-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/plugin-config.mjs) | Harness ID, manifest, log filename, native host parameters |
+| Credentials and authentication mode | [credentials.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/credentials.mjs) | Existing compatibility requirements; no separate fallback chain |
+| Workspace and peer identity | [workspace-peer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/workspace-peer.mjs), [workspace-identity.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/workspace-identity.mjs) | Actual session cwd and an explicitly provided peer |
+| Hook initialization, bypass, single output | [agent-hook-runtime.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/agent-hook-runtime.mjs) | Input reader, session ID resolver, enablement predicate, output envelope |
+| HTTP headers, timeouts, error results | [ov-http.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/ov-http.mjs) | Request path and body, time budget, current actor peer |
+| Recall and context construction | [recall-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/recall-core.mjs), [profile-inject.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/profile-inject.mjs) | Query, session identity, local compressor callback, host presentation |
+| Message sanitation, roles, structured content | [capture-utils.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/capture-utils.mjs), [input-filters.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/input-filters.mjs) | Transcript decoding and native tool event normalization |
+| Batch sending, offline replay, retry classification | [batch-send.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/batch-send.mjs), [pending-queue.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/pending-queue.mjs), [retryable.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/retryable.mjs) | When to call them and how acknowledgements advance the host cursor |
+| Background writes | [async-writer.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/async-writer.mjs) | Host-supported detach timing and recovery measures |
+| MCP configuration and protocol | [mcp-proxy-config.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/mcp-proxy-config.mjs), [mcp-proxy-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/mcp-proxy-core.mjs) | Configuration projection, logger factory, necessary local tools |
+| Virtual URI checks and diagnostics | [uri-guard.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/uri-guard.mjs), [doctor-core.mjs](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/doctor-core.mjs) | Tool names, deny and notice envelopes, host installation/state checks |
 
 Dependencies must point from host adapters to shared capabilities. Shared code must not import a host directory. Pass a small, explicit callback when a capability needs a host action. Do not introduce a plugin container, service locator, or inheritance hierarchy for a single file read. Shared runtime modules must not depend on installers, tests, or user interfaces.
 
@@ -167,7 +167,7 @@ Switches must govern actual behavior. Disabling recall prevents automatic recall
 
 Resolve connections and identity through `resolveConnection()` in `credentials.mjs`, which `buildPluginConfig()` calls. The `auto`, `cli`, and `env` modes of `OPENVIKING_CREDENTIAL_SOURCE` select credential sources; they do not simply follow the behavior-setting precedence above. An MCP proxy exports `readProxyConfig(env)`, resolves through the same loader as its hooks, and maps the result with `toMcpProxyConfig()`; it never picks fields by hand or calls `credentials.mjs` itself. If the host hands MCP servers an allowlisted environment, the allowlist must cover `MCP_PROXY_ENV_VARS`; if it hands them a closed one, forward the resolved connection with `forwardConnectionEnv()`. Add every new proxy to `mcp-hook-parity.test.mjs`, which fails until it has a row.
 
-Workspace files must not contain forbidden connection or credential fields such as URLs, API keys, and user credentials, and must not interpolate environment variables. [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/lib/workspace-config.mjs) owns this rule; do not add a separate allowlist per host. Installers must not write resolved API keys into `.mcp.json` or replace the user's selected cloud connection.
+Workspace files must not contain forbidden connection or credential fields such as URLs, API keys, and user credentials, and must not interpolate environment variables. [`workspace-config.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/lib/workspace-config.mjs) owns this rule; do not add a separate allowlist per host. Installers must not write resolved API keys into `.mcp.json` or replace the user's selected cloud connection.
 
 Build request headers with `buildOvHeaders()`. Send API keys as `Authorization: Bearer`, without a duplicate `X-API-Key`; send account/user headers only when the resolved `sendIdentityHeaders` is true. Preserve `User-Agent` and error `traceId` values to identify the running version and trace requests. Health checks, status lines, and diagnostic probes must not reimplement authentication.
 
@@ -326,9 +326,9 @@ Use explicit relative imports. Where shared modules have TypeScript consumers, k
 | --- | --- | --- |
 | Host loads a plugin directory directly from Git | Claude Code, Codex, `agent-plugins`, OpenClaw (`ov-install` GitHub source) | Commit shared copies so a checkout is loadable |
 | npm package or installation archive | OpenCode, DSH, Pi | Generate during prepack or staging; do not commit runtime copies |
-| Installer assembles an adjacent runtime directory | Cursor, TRAE, TRAE CN, ZCode | Derive `lib/MANIFEST` from `ASSEMBLED_ROOTS` and copy runtime modules from it |
+| Plugin directory owns the shared source | Cursor, TRAE, TRAE CN, ZCode | Import `examples/agent-hook-plugin/lib` in place; the installer copies the plugin directory with it |
 
-Register these targets in [`sync.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/sync.mjs). For separate plugins, add the source root, output directory, and `committed` policy to `TARGETS`. Extend `ASSEMBLED_ROOTS` only for a new assembled root; ordinary thin hosts are usually covered already. Register skill delivery separately in `SKILL_TARGETS`. Do not maintain a manual list of runtime modules to copy.
+Register these targets in [`sync.mjs`](https://github.com/volcengine/OpenViking/blob/main/examples/memory-plugin-shared/sync.mjs). For separate plugins, add the source root, output directory, and `committed` policy to `TARGETS`. Register skill delivery separately in `SKILL_TARGETS`. Do not maintain a manual list of runtime modules to copy.
 
 After changing shared source, run:
 
@@ -445,7 +445,7 @@ Acceptance evidence should identify the artifact, host version, scenario, and ob
 | Shared behavior fix | Edit the authoritative module, verify affected hosts, generate copies, inspect relevant artifacts and versions |
 | Host payload or event update | Update adapter, real-format fixtures, minimum-version/fallback notes; preserve other hosts' defaults |
 | New setting | Schema, actual consumer, configured semantics, diagnostic source, user documentation; parsing alone is insufficient |
-| New shared dependency | Colocated types where needed, sync closure, `lib/MANIFEST`, archive and offline installation validation |
+| New shared dependency | Colocated types where needed, sync closure, archive and offline installation validation |
 | Directory or package rename | Imports, manifests, installer, marketplace, CI path filters, skills, links, uninstall identification |
 | Compatibility removal | Supported versions and migration notes; preserve configuration aliases still promised to users |
 | Documentation only | Accuracy and working links; do not change unrelated behavior to update prose |

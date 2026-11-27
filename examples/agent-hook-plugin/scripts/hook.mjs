@@ -24,10 +24,10 @@ import {
   stableHash,
   withAgentHookLock,
   writeHookState,
-} from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
-import { maybeDetach, readHookStdin } from "../../memory-plugin-shared/lib/async-writer.mjs";
-import { isCaptureEnabled } from "../../memory-plugin-shared/lib/capture-utils.mjs";
-import { formatSessionHistoryPointer } from "../../memory-plugin-shared/lib/session-history-pointer.mjs";
+} from "../lib/agent-hook-runtime.mjs";
+import { maybeDetach, readHookStdin } from "../lib/async-writer.mjs";
+import { isCaptureEnabled } from "../lib/capture-utils.mjs";
+import { formatSessionHistoryPointer } from "../lib/session-history-pointer.mjs";
 import { HOSTS } from "../hosts/index.mjs";
 import { withRequestBudget } from "./request-budget.mjs";
 

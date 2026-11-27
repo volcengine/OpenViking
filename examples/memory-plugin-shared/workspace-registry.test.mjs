@@ -10,7 +10,7 @@ import {
   readEntry,
   registryDir,
   slotName,
-} from "./lib/workspace-registry.mjs";
+} from "../agent-hook-plugin/lib/workspace-registry.mjs";
 
 async function home() {
   return { OPENVIKING_HOME: await mkdtemp(join(tmpdir(), "ov-registry-")) };

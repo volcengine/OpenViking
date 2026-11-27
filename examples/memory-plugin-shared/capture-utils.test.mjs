@@ -10,7 +10,7 @@ import {
   shapeCapturePayload,
   shapeCaptureParts,
   shouldCaptureText,
-} from "./lib/capture-utils.mjs"
+} from "../agent-hook-plugin/lib/capture-utils.mjs"
 
 const CAPTURE_CONFIG = {
   captureAssistantTurns: true,

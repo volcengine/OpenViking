@@ -15,7 +15,7 @@ import {
   mergeConfigLayers,
   normalizeWorkspaceConfig,
   readWorkspaceFile,
-} from "./lib/workspace-config.mjs";
+} from "../agent-hook-plugin/lib/workspace-config.mjs";
 
 async function workspace(files = {}) {
   const root = realpathSync(await mkdtemp(join(tmpdir(), "ov-wsconf-")));

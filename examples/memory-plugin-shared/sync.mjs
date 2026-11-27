@@ -6,7 +6,7 @@ import { dirname, join, relative, resolve as resolvePath, sep } from "node:path"
 import { fileURLToPath } from "node:url";
 
 export const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const SHARED_DIR = join(ROOT, "examples", "memory-plugin-shared", "lib");
+export const SHARED_DIR = join(ROOT, "examples", "agent-hook-plugin", "lib");
 
 // What a plugin ships equals what it imports, and neither side is written down.
 // Hand-kept lists were the drift: a group named after one harness got spread
@@ -67,14 +67,7 @@ export const TARGETS = [
   },
 ];
 
-// cursor, trae, trae-cn and zcode vendor no runtime: the installer copies the
-// canonical runtime to `$OV_HOME/agent-integrations/memory-plugin-shared/lib`
-// and they import it by the relative path that resolves both there and here.
-export const ASSEMBLED_ROOTS = [
-  join(ROOT, "examples", "agent-hook-plugin"),
-];
-
-export const GENERATED_HEADER = "// GENERATED FROM examples/memory-plugin-shared/lib. DO NOT EDIT.\n";
+export const GENERATED_HEADER = "// GENERATED FROM examples/agent-hook-plugin/lib. DO NOT EDIT.\n";
 
 // A data file a module reads beside itself (`new URL("./x.json",
 // import.meta.url)`) is part of that module's closure like an import, but its
@@ -387,25 +380,6 @@ export async function sharedClosure(seeds) {
   return [...generated].sort();
 }
 
-// The installer reads this file instead of computing the closure itself: it
-// runs against a marketplace archive, a flat layout where this generator finds
-// no plugin sources and would silently resolve an empty list.
-export const MANIFEST_PATH = join(SHARED_DIR, "MANIFEST");
-
-/** The closure the installer has to assemble for the harnesses that vendor nothing. */
-export async function assembledClosure() {
-  const seeds = new Set();
-  for (const root of ASSEMBLED_ROOTS) {
-    const { seeds: found, missing } = await directSharedImports({ root, dir: SHARED_DIR });
-    if (missing.length) {
-      const detail = missing.map((m) => `${m.name} (imported by ${m.importer})`).join(", ");
-      throw new Error(`the assembled runtime is missing: ${detail}`);
-    }
-    for (const seed of found) seeds.add(seed);
-  }
-  return sharedClosure([...seeds]);
-}
-
 /**
  * Whether TypeScript in the plugin imports the shared copies, so they need
  * their `.d.mts` declarations. TypeScript that imports none of them (a Claude
@@ -467,12 +441,6 @@ async function copySharedFile(file, targetDir, typed) {
   }
 }
 
-async function writeManifest(files) {
-  const staging = `${MANIFEST_PATH}.${process.pid}.tmp`;
-  await writeFile(staging, files.map((file) => `${file}\n`).join(""), "utf-8");
-  await rename(staging, MANIFEST_PATH);
-}
-
 async function copySkill(skill, targetDir) {
   const sourceDir = join(SKILLS_DIR, skill);
   for (const file of (await readdir(sourceDir)).sort()) {
@@ -517,10 +485,8 @@ async function main() {
     }
   }
 
-  const assembled = await assembledClosure();
-  await writeManifest(assembled);
-  process.stdout.write(`wrote ${relative(ROOT, MANIFEST_PATH)}\n`);
-  for (const file of assembled) claimed.add(file);
+  const { seeds } = await directSharedImports({ root: dirname(SHARED_DIR), dir: SHARED_DIR });
+  for (const file of await sharedClosure(seeds)) claimed.add(file);
 
   const unclaimed = (await readdir(SHARED_DIR))
     .filter((file) => file.endsWith(".mjs") && !claimed.has(file))

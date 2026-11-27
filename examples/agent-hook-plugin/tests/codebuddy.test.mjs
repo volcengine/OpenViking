@@ -5,7 +5,7 @@ import test from "node:test";
 import {
   writeCredentialFiles,
 } from "../../memory-plugin-shared/testing/support.mjs";
-import { loadAgentHookConfig } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
+import { loadAgentHookConfig } from "../lib/agent-hook-runtime.mjs";
 import { codebuddy } from "../hosts/codebuddy.mjs";
 
 const event = (toolName, toolInput) => ({
