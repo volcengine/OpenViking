@@ -14,13 +14,22 @@ from openviking.core.namespace import uri_parts
 from openviking.core.uri_validation import validate_request_viking_uri
 from openviking.session.memory.utils import add_line_numbers, line_count, slice_content_lines
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, _serialize_datetime
+from openviking.session.memory.utils.uri import render_template
+from openviking.storage.abstract_overview import parse_abstract_overview
+from openviking.storage.expr import And, Eq
+from openviking.storage.internal_names import (
+    MULTIWRITE_EXACT_LOCK_FILE_PREFIX,
+    MULTIWRITE_PATH_LOCK_FILE,
+)
 from openviking.telemetry import tracer
+from openviking.utils.tags import normalize_search_tags
 from openviking.utils.token_estimation import estimate_text_tokens
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from openviking.server.identity import RequestContext, ToolContext
+    from openviking.session.memory.dataclass import MemoryTypeSchema
 
 logger = get_logger(__name__)
 
@@ -56,6 +65,71 @@ async def list_memory_directory_entries(ctx: "ToolContext", uri: str) -> dict[st
         ):
             entries.append({"name": name, "uri": entry_uri, "isDir": bool(entry.get("isDir"))})
     return {"entries": entries, "truncated": len(rows) > _DIRECTORY_LIST_MAX_ENTRIES}
+
+
+async def memory_directory_entries(fs, uri: str, ctx: "RequestContext") -> dict[str, bool]:
+    # A browseable listing can omit ACL-filtered, hidden or internal files.
+    # The caller has authorized the directory, and each card is authorized on use.
+    entries = await fs._ls_entries(fs._uri_to_path(uri, ctx=ctx), filter_internal=False, ctx=ctx)
+    return {
+        entry["name"]: bool(fs._normalize_ls_entry(dict(entry)).get("isDir"))
+        for entry in entries
+        if entry["name"] != MULTIWRITE_PATH_LOCK_FILE
+        and not entry["name"].startswith(MULTIWRITE_EXACT_LOCK_FILE_PREFIX)
+    }
+
+
+async def discardable_memory_directory_file(
+    fs, uri: str, name: str, schema: "MemoryTypeSchema", ctx: "RequestContext"
+) -> bool:
+    if name not in {".abstract.md", ".overview.md", ".relations.json"}:
+        return False
+    raw = await fs.read_file(uri, ctx=ctx)
+    if not raw.strip():
+        return True
+    if name == ".relations.json":
+        return json.loads(raw) in ([], {})
+    document = parse_abstract_overview(raw)
+    generated_by = document.metadata.get("generated_by", {})
+    if document.legacy:
+        return False
+    generated_by_semantics = generated_by.get("component") == "SemanticProcessor"
+    if document.is_manual_abstract:
+        if name != ".abstract.md" or not generated_by_semantics or not schema.abstract_template:
+            return False
+        # The semantic processor also marks memory template presets as manual.
+        # Keep any edit to that preset and only discard the reproducible text.
+        category = uri.rsplit("/", 2)[1]
+        preset = render_template(
+            schema.abstract_template,
+            {
+                "memory_type": schema.memory_type,
+                "directory_name": category,
+                "subdirectory": category,
+            },
+        ).strip()
+        return bool(preset) and document.body.strip() == preset
+    return generated_by_semantics or generated_by == (
+        {"component": "MemoryUpdater", "trigger": "memory_update"}
+    )
+
+
+async def memory_search_tags(store, uri: str, ctx: "RequestContext") -> list[str]:
+    if store is None:
+        return []
+    records, cursor = await store.scroll(
+        filter=And([Eq("uri", uri), Eq("level", 2)]),
+        limit=2,
+        output_fields=["search_tags"],
+        ctx=ctx,
+    )
+    if len(records) > 1 or cursor is not None:
+        raise ValueError("Multiple detail index records for one memory file")
+    return (
+        normalize_search_tags(records[0].get("search_tags"), discard_invalid=True)
+        if records
+        else []
+    )
 
 
 def verified_preference_directory_owner(

@@ -27,7 +27,6 @@ from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFST
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
-    DirectoryOperation,
     MemoryFile,
     MemoryOperationSkipCode,
     ResolvedOperation,
@@ -915,15 +914,12 @@ class MemoryUpdater:
         registry: Optional[MemoryTypeRegistry] = None,
         vikingdb=None,
         transaction_handle: Any = None,
-        *,
-        directory_migration: DirectoryOperation | None = None,
     ):
         """Create a memory updater with an optional pathlock transaction handle."""
         self._viking_fs = None
         self._registry = registry
         self._vikingdb = vikingdb
         self._transaction_handle = transaction_handle
-        self._directory_migration = directory_migration
 
     def _get_viking_fs(self):
         """Get or create VikingFS instance."""
@@ -1141,12 +1137,6 @@ class MemoryUpdater:
 
         uri_memory_type_map = {}
         for resolved_op in applicable_upserts:
-            if (
-                self._directory_migration
-                and self._directory_migration.operation == "rename"
-                and result.errors
-            ):
-                break
             add_result = (
                 result.add_edited
                 if resolved_op.is_edit() and not self._is_uri_migration(resolved_op)
@@ -1376,7 +1366,7 @@ class MemoryUpdater:
         )
 
         changed_uris = uri_memory_type_map.keys() | deleted_uris
-        if changed_uris and self._directory_migration is None:
+        if changed_uris:
             await self._submit_directory_changes(changed_uris, ctx)
         return result
 
@@ -1711,13 +1701,7 @@ class MemoryUpdater:
                     old_content.links,
                 )
             metadata.update(resolved_op.memory_fields)
-            plan = self._directory_migration
-            directory_migration = (
-                is_uri_migration
-                and plan is not None
-                and source_content.uri.rpartition("/")[0] == plan.source_uri
-                and uri.rpartition("/")[0] == plan.target_uri
-            )
+            directory_migration = is_uri_migration and resolved_op.directory_migration
             source = getattr(resolved_op, "source", None)
             source_extraction_id = getattr(source, "extraction_id", None) if source else None
             if source_extraction_id:
@@ -1835,7 +1819,11 @@ class MemoryUpdater:
             mf = MemoryFile.from_parsed(uri=uri, parsed=metadata)
             new_full_content = MemoryFileUtils.write(
                 mf,
-                content_template=None if directory_migration else schema.content_template,
+                content_template=(
+                    None
+                    if directory_migration and "content" not in resolved_op.memory_fields
+                    else schema.content_template
+                ),
                 account_content_template_type=(
                     schema.memory_type if schema._account_content_template else None
                 ),
@@ -2049,6 +2037,7 @@ class MemoryUpdater:
             operation.uris[0]: operation.old_memory_file_content.uri
             for operation in operations.upsert_operations
             if self._is_uri_migration(operation)
+            and not operation.directory_migration
             and len(operation.uris) == 1
             and operation.old_memory_file_content
             and operation.old_memory_file_content.uri
@@ -2065,11 +2054,7 @@ class MemoryUpdater:
             # avoid a redundant rewrite. Contributions from other deleted
             # replacements (e.g. a duplicate merged into the same target) are
             # still folded in here.
-            excluded_source = (
-                implicit_migration_source_by_target.get(uri)
-                if self._directory_migration is None
-                else None
-            )
+            excluded_source = implicit_migration_source_by_target.get(uri)
             filtered_links = [link for src, link in link_groups["links"] if src != excluded_source]
             filtered_backlinks = [
                 link for src, link in link_groups["backlinks"] if src != excluded_source

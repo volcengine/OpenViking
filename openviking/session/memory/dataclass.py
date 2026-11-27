@@ -384,6 +384,7 @@ class ResolvedOperation(BaseModel):
     # operation's memories in the vector index. None means "no tags"; used by
     # event-memory auto-tagging. Not persisted in the memory file content.
     search_tags: Optional[List[str]] = None
+    directory_migration: bool = Field(default=False, exclude=True)
 
     def is_edit(self):
         return self.old_memory_file_content is not None
@@ -397,6 +398,11 @@ class DirectoryOperation(BaseModel):
     source_uri: StrictStr = Field(min_length=1)
     target_uri: StrictStr = Field(min_length=1)
     operation: Literal["merge", "rename"] = "merge"
+
+    # Runtime state for the archive, excluded from the model output schema.
+    _status: str = PrivateAttr(default="pending")
+    _conflicts: list[str] = PrivateAttr(default_factory=list)
+    _moved_sources: set[str] = PrivateAttr(default_factory=set)
 
     @property
     def memory_type(self) -> str:

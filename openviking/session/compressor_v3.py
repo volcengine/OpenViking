@@ -334,10 +334,6 @@ class SessionCompressorV3:
         viking_fs: Any,
         ctx: RequestContext,
         archive_uri: str = "",
-        *,
-        moved_away: set[str] | None = None,
-        transient: set[str] | None = None,
-        before_directory_moves: dict[str, MemoryFile] | None = None,
     ) -> dict[str, Any]:
         adds: list[dict[str, Any]] = []
         updates: list[dict[str, Any]] = []
@@ -354,8 +350,6 @@ class SessionCompressorV3:
 
         for uris, edited in ((result.written_uris, False), (result.edited_uris, True)):
             for uri in uris:
-                if moved_away and uri in moved_away:
-                    continue
                 op = upsert_by_uri.get(uri)
                 memory_type = (
                     op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
@@ -369,9 +363,7 @@ class SessionCompressorV3:
                     adds.append(entry)
 
         for uri in result.deleted_uris:
-            if transient and uri in transient:
-                continue
-            deleted = (before_directory_moves or {}).get(uri) or delete_by_uri.get(uri)
+            deleted = delete_by_uri.get(uri)
             deletes.append(
                 {
                     "uri": uri,
@@ -850,12 +842,6 @@ class SessionCompressorV3:
         if strict_extract_errors and result.errors:
             raise MemoryUpdateError(result)
 
-        directory_results = (
-            update_result.directory_merge_results if operations.directory_merges else []
-        )
-        moved_away = {
-            uri for _, migration in directory_results for uri in migration.result.deleted_uris
-        }
         memory_diff = None
         if archive_uri and viking_fs and result is not None:
             memory_diff = await self._build_memory_diff(
@@ -864,57 +850,11 @@ class SessionCompressorV3:
                 viking_fs=viking_fs,
                 ctx=ctx,
                 archive_uri=archive_uri,
-                moved_away=moved_away,
             )
+            if update_result.directory_merge_results:
+                memory_diff["directory_merges"] = update_result.directory_merge_results
 
-        contexts = _contexts_from_update_result(result, moved_away=moved_away)
-        if directory_results:
-            diffs = [memory_diff] if memory_diff is not None else []
-            reports = []
-            # A card first created by this Commit and then moved has one final add.
-            before_directory_moves = {
-                old.uri: old
-                for op in patch_operations.upsert_operations
-                if (old := op.old_memory_file_content)
-                and old.uri in op.uris
-                and old.uri in moved_away
-            }
-            transient = set(result.written_uris) - before_directory_moves.keys()
-            for plan, migration in directory_results:
-                reports.append(
-                    {
-                        "memory_type": plan.memory_type,
-                        "operation": plan.operation,
-                        "source_uri": plan.source_uri,
-                        "target_uri": plan.target_uri,
-                        "status": migration.status,
-                        "moved": len(set(migration.result.deleted_uris)),
-                        "remaining": migration.remaining,
-                        "conflicts": migration.conflicts,
-                        "pruned": migration.pruned,
-                        "errors": len(migration.result.errors),
-                    }
-                )
-                contexts.extend(
-                    _contexts_from_update_result(
-                        migration.result, moved_away=moved_away, transient=transient
-                    )
-                )
-                diffs.append(
-                    await self._build_memory_diff(
-                        result=migration.result,
-                        operations=migration.operations,
-                        viking_fs=viking_fs,
-                        ctx=ctx,
-                        moved_away=moved_away,
-                        transient=transient,
-                        before_directory_moves=before_directory_moves,
-                    )
-                )
-                transient.update(migration.result.written_uris)
-            memory_diff = _merge_memory_diffs(diffs, archive_uri=archive_uri or "")
-            memory_diff["directory_merges"] = reports
-
+        contexts = _contexts_from_update_result(result)
         canonical_cases = await _canonical_cases_from_update_result(
             operations=patch_operations,
             result=result,
@@ -1544,19 +1484,14 @@ class _V3AppliedMemory:
     memory_diff: dict[str, Any] | None = None
 
 
-def _contexts_from_update_result(
-    result: Any, *, moved_away: set[str] | None = None, transient: set[str] | None = None
-) -> list[Context]:
+def _contexts_from_update_result(result: Any) -> list[Context]:
     contexts = []
     for uri in result.written_uris:
-        if not moved_away or uri not in moved_away:
-            contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
+        contexts.append(Context(uri=uri, category="memory_write", context_type="memory"))
     for uri in result.edited_uris:
-        if not moved_away or uri not in moved_away:
-            contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
+        contexts.append(Context(uri=uri, category="memory_edit", context_type="memory"))
     for uri in result.deleted_uris:
-        if not transient or uri not in transient:
-            contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
+        contexts.append(Context(uri=uri, category="memory_delete", context_type="memory"))
     return contexts
 
 
