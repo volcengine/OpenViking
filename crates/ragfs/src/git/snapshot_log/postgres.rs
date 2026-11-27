@@ -103,7 +103,7 @@ impl PostgresSnapshotLogStore {
             .await?;
             Ok(Self {
                 pool,
-                limits: SnapshotLogLimits::default(),
+                limits: SnapshotLogLimits { branch_bytes: 128, ..Default::default() },
                 operation_timeout,
                 service_name: service_name.to_string(),
             })
