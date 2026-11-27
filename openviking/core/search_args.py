@@ -81,3 +81,15 @@ def validate_search_args(
             )
 
     return normalized
+
+
+def keyword_recall_options(args: Mapping[str, Any] | None, limit: int) -> dict[str, Any]:
+    """Translate public keyword options for the effective backend recall limit."""
+    if not args:
+        return {}
+    options = {key: args[key] for key in ("bm25_k1", "bm25_b") if key in args}
+    input_limit = args.get("post_process_input_limit")
+    if input_limit is not None:
+        # Reranking can request more candidates than the caller's original limit.
+        options["advance"] = {"post_process_input_limit": max(input_limit, limit)}
+    return options

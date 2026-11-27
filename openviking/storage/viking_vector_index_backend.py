@@ -32,6 +32,7 @@ from openviking.core.namespace import (
     uri_parts,
     visible_roots,
 )
+from openviking.core.search_args import keyword_recall_options
 from openviking.observability.log_safety import safe_log_fields, safe_uri_for_log, short_hash
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker_concurrency import KeyedAsyncLockPool, run_to_completion
@@ -2224,17 +2225,6 @@ class VikingVectorIndexBackend:
             acl_enabled=acl_enabled,
         )
         backend = await self._get_backend_for_context(ctx)
-        bm25_k1 = None
-        bm25_b = None
-        advance = None
-        if keywords_args:
-            bm25_k1 = keywords_args.get("bm25_k1")
-            bm25_b = keywords_args.get("bm25_b")
-            post_process_input_limit = keywords_args.get("post_process_input_limit")
-            if post_process_input_limit is not None:
-                # Rerank multiplies the recall limit; keep the engine-side input
-                # limit at least as large as what this call actually asks for.
-                advance = {"post_process_input_limit": max(post_process_input_limit, limit)}
         return await backend.search_by_keywords(
             query=query,
             mode="bm25",
@@ -2243,9 +2233,7 @@ class VikingVectorIndexBackend:
             limit=limit,
             offset=offset,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
-            bm25_k1=bm25_k1,
-            bm25_b=bm25_b,
-            advance=advance,
+            **keyword_recall_options(keywords_args, limit),
         )
 
     async def filter_in_tenant(

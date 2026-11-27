@@ -255,9 +255,6 @@ class VikingDBManagerProxy:
     async def get_collection_meta(self) -> Optional[Dict[str, Any]]:
         return await self._manager.get_collection_meta(ctx=self._ctx)
 
-    async def catalog_execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        return await self._manager.catalog_execute(request, ctx=self._ctx)
-
     async def update_collection_description(self, description: str) -> bool:
         backend = await self._manager.get_account_backend(self._ctx.account_id)
         return await backend.update_collection_description(description)
@@ -412,9 +409,6 @@ class VikingDBManagerProxy:
     # =========================================================================
     # Tenant-Aware 方法（自动携带 ctx）
     # =========================================================================
-
-    async def search_items_in_tenant(self, **kwargs: Any) -> Dict[str, Any]:
-        return await self._manager.search_items_in_tenant(self._ctx, **kwargs)
 
     async def search_in_tenant(
         self,

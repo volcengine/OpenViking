@@ -160,7 +160,6 @@ class _SemanticMixin:
         """Ask the storage engine for ordered groups, then attach Item roots."""
         from openviking.models.embedder.base import embed_compat, embedder_supports_multimodal
         from openviking.storage.catalog import decode_item_attrs
-        from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 
         try:
             options = validate_item_search_request(
@@ -193,8 +192,8 @@ class _SemanticMixin:
             query_vector = embedded.dense_vector
             sparse_query_vector = embedded.sparse_vector or None
 
-        proxy = VikingDBManagerProxy(storage, ctx)
-        grouped = await proxy.search_items_in_tenant(
+        grouped = await storage.search_items_in_tenant(
+            ctx,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             target_directories=target_directories,

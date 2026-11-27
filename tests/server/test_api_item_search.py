@@ -11,7 +11,6 @@ from openviking.models.embedder.base import EmbedResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service import fs_service as fs_module
 from openviking.storage.abstract_overview import body_for_preview
-from openviking.storage.vikingdb_manager import VikingDBManagerProxy
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -54,6 +53,13 @@ async def test_mkdir_and_search_as_item_end_to_end(client, service, monkeypatch)
                     "processing_mode": "vectors_only",
                 },
             )
+
+    listing = await client.get("/api/v1/fs/ls", params={"uri": root, "output": "original"})
+    listing.raise_for_status()
+    entries = listing.json()["result"]
+    assert sorted(entry["uri"] for entry in entries) == sorted(declared_uuids)
+    item_fields = {"as_item", "item_uuid", "item_uuids", "item_attrs", "item_extra_info"}
+    assert all(entry["isDir"] and item_fields.isdisjoint(entry) for entry in entries)
 
     request = {"query": "boy on the beach", "target_uri": root, "search_as_item": {}, "limit": 5}
     filters = {
@@ -266,11 +272,11 @@ async def test_add_resource_declares_the_actual_resolved_root(service, sample_ma
         item_attrs={"source": "sample"},
     )
     root_uri = result["root_uri"]
-    proxy = VikingDBManagerProxy(service.viking_fs._get_vector_store(), ctx)
-    resolved = await proxy.catalog_execute({"op": "resolve", "uris": [root_uri]})
+    storage = service.viking_fs._get_vector_store()
+    resolved = await storage.catalog_execute({"op": "resolve", "uris": [root_uri]}, ctx=ctx)
     item_uuid = resolved["data"][0]["item_uuid"]
-    declaration = await proxy.catalog_execute(
-        {"op": "declare_item", "uri": root_uri, "item_uuids": [item_uuid]}
+    declaration = await storage.catalog_execute(
+        {"op": "declare_item", "uri": root_uri, "item_uuids": [item_uuid]}, ctx=ctx
     )
     assert declaration["uri"] == root_uri
     assert declaration["item_uuid"] == item_uuid
@@ -437,7 +443,7 @@ async def test_search_route_only_loads_a_session_for_ordinary_search(
 
 async def test_item_keywords_reach_the_backend_without_embedding(client, service, monkeypatch):
     grouping = AsyncMock(return_value={"groups": []})
-    monkeypatch.setattr(VikingDBManagerProxy, "search_items_in_tenant", grouping)
+    monkeypatch.setattr(service.viking_fs._get_vector_store(), "search_items_in_tenant", grouping)
     embedding = AsyncMock(side_effect=AssertionError("Keyword search must not embed"))
     monkeypatch.setattr("openviking.models.embedder.base.embed_compat", embedding)
     args = {"bm25_k1": 1.2, "bm25_b": 0.0, "post_process_input_limit": 32}
