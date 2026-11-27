@@ -871,7 +871,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI to search in |
+| uri | str \| list[str] | Yes | - | One Viking URI or a non-empty list of search roots |
 | pattern | str | Yes | - | Search pattern in Rust `regex` syntax, matched against individual lines |
 | case_insensitive | bool | No | False | Ignore case |
 | exclude_uri | str | No | None | URI prefix to exclude from search |
@@ -883,6 +883,8 @@ The `grep()` method performs regex pattern matching search in the file system, u
 | after_context | int | No | 0 | Number of context lines returned after each match; supported by the HTTP API and CLI |
 
 Patterns that use unsupported syntax, such as lookaround or backreferences, are invalid.
+
+When you pass multiple URIs, grep merges matches in URI order and returns each matching line in a file once. `node_limit` caps the combined results.
 
 `tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
 
@@ -965,6 +967,9 @@ fmt.Println(result["count"])
 # Basic search
 ov grep "authentication" --uri viking://resources
 
+# Search two scopes
+ov grep "authentication" --uri viking://resources/docs --uri viking://resources/sdk
+
 # Ignore case
 ov grep "authentication" --uri viking://resources --ignore-case
 
@@ -1045,11 +1050,13 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
-| uri | str | No | "viking://" | Starting URI |
+| uri | str \| list[str] | No | "viking://" | One Viking URI or a non-empty list of search roots |
 | node_limit | int | No | 256 | Maximum number of matches to return. Omitted requests default to 256; pass a larger integer when you need more results |
 | extra_fields | list[str] | No | None | Extra fields to include per match. Recognized names: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`. When omitted, the response contains URI strings only; when provided, `result.matches` becomes a list of entry objects |
 | tags | string[] | No | Unset | Retain only matches that have every supplied `k=v` retrieval tag |
 | include_tags | bool | No | `false` | Return retrieval tags for each match without filtering |
+
+Glob matches the pattern relative to each root and merges unique matches in URI order. `node_limit` caps the combined results.
 
 `tags` uses AND semantics and is applied before `node_limit`. A tagged or `include_tags=true` request returns entry objects with a `tags` array; ordinary glob requests retain URI-string results and do not read tags from VectorDB.
 
@@ -1124,6 +1131,9 @@ fmt.Println(result["count"])
 ```bash
 # Find all markdown files
 ov glob "**/*.md" --uri viking://resources
+
+# Match in two scopes
+ov glob "**/*.md" --uri viking://resources/docs --uri viking://resources/sdk
 
 # Find all Python files
 ov glob "**/*.py"

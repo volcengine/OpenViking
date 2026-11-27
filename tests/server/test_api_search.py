@@ -712,10 +712,25 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
         )
         assert added.status_code == 200, added.text
         files[group] = f"{added.json()['result']['root_uri']}/{source.name}"
-    payload = {"uri": "viking://resources", "pattern": "OpenViking"}
+    payload = {
+        "uri": [
+            "viking://resources/group_a",
+            "viking://resources/group_a/cache",
+            "viking://resources/group_b",
+        ],
+        "pattern": "OpenViking",
+    }
     baseline = await client.post("/api/v1/search/grep", json=payload)
     assert baseline.status_code == 200, baseline.text
-    assert {m["uri"] for m in baseline.json()["result"]["matches"]} == set(files.values())
+    result = baseline.json()["result"]
+    assert [m["uri"] for m in result["matches"]] == list(files.values())
+    assert result["count"] == result["match_count"] == 2
+
+    limited = await client.post("/api/v1/search/grep", json={**payload, "node_limit": 1})
+    assert limited.status_code == 200, limited.text
+    result = limited.json()["result"]
+    assert [m["uri"] for m in result["matches"]] == [files["group_a"]]
+    assert result["limit_reached"] is True
 
     response = await client.post(
         "/api/v1/search/grep", json={**payload, "exclude_uri": "viking://resources/group_a/cache"}
@@ -738,18 +753,37 @@ async def test_glob(client_with_resource):
     assert all(isinstance(match, str) for match in matches)
 
 
-async def test_glob_explicit_empty_extra_fields_returns_entry_objects(client_with_resource):
+async def test_glob_merges_search_roots_with_entry_results(client_with_resource, service):
     client, root = client_with_resource
+    second_root = "viking://resources/multi-glob"
+    second_file = f"{second_root}/second.txt"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.viking_fs.write_file(second_file, "other resource", ctx=ctx)
+    payload = {
+        "uri": [root, second_root, "viking://resources"],
+        "pattern": "**/*",
+        "extra_fields": [],
+    }
     resp = await client.post(
         "/api/v1/search/glob",
-        json={"pattern": "**/*.md", "extra_fields": []},
+        json=payload,
     )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     matches = resp.json()["result"]["matches"]
-    assert any(m["uri"] == f"{root}/sample.md" and m["isDir"] is False for m in matches)
     assert all(isinstance(match, dict) for match in matches)
     assert all("uri" in match and "isDir" in match for match in matches)
+    assert [match["uri"] for match in matches if not match["isDir"]] == [
+        f"{root}/sample.md",
+        second_file,
+    ]
+
+    limited = await client.post("/api/v1/search/glob", json={**payload, "node_limit": 1})
+    assert limited.status_code == 200, limited.text
+    assert limited.json()["result"]["matches"] == matches[:1]
+
+    empty = await client.post("/api/v1/search/glob", json={**payload, "uri": []})
+    assert empty.status_code == 400, empty.text
 
 
 async def test_glob_filters_and_projects_resource_tags(client_with_resource):

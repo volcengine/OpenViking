@@ -2578,7 +2578,7 @@ async def cancel_watch(to_uri: str) -> str:
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def grep(
-    uri: str,
+    uri: str | Annotated[list[str], Field(min_length=1)],
     pattern: str | list[str],
     case_insensitive: bool = False,
     node_limit: int = 10,
@@ -2604,7 +2604,11 @@ async def grep(
 
     service = get_service()
     ctx = _get_ctx()
-    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+    resolved_uri = (
+        _resolve_mcp_workspace_uri(uri, ctx)
+        if isinstance(uri, str)
+        else [_resolve_mcp_workspace_uri(scope, ctx) for scope in uri]
+    )
     patterns = [pattern] if isinstance(pattern, str) else pattern
     semaphore = asyncio.Semaphore(10)
 
@@ -2783,11 +2787,19 @@ async def session_history(
 
 @_mcp_error_results()
 @mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
-async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
+async def glob(
+    pattern: str,
+    uri: str | Annotated[list[str], Field(min_length=1)] = "viking://",
+    node_limit: int = 100,
+) -> str:
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()
     ctx = _get_ctx()
-    resolved_uri = _resolve_mcp_workspace_uri(uri, ctx)
+    resolved_uri = (
+        _resolve_mcp_workspace_uri(uri, ctx)
+        if isinstance(uri, str)
+        else [_resolve_mcp_workspace_uri(scope, ctx) for scope in uri]
+    )
 
     try:
         result = await service.fs.glob(pattern, ctx=ctx, uri=resolved_uri, node_limit=node_limit)

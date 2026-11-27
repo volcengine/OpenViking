@@ -870,7 +870,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| uri | str | 是 | - | 要搜索的 Viking URI |
+| uri | str \| list[str] | 是 | - | 一个 Viking URI，或非空的搜索范围列表 |
 | pattern | str | 是 | - | 搜索模式，使用 Rust `regex` 语法逐行匹配 |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 | node_limit | int | 否 | 256 | 最大返回节点数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
@@ -882,6 +882,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | after_context | int | 否 | 0 | 每条匹配行之后返回的上下文行数；仅 HTTP API 和 CLI 支持 |
 
 环视、反向引用等超出支持范围的写法属于无效正则。
+
+传入多个 URI 时，按 URI 顺序合并结果，重叠范围内的同一文件同一行只返回一次。`node_limit` 限制合并后的结果总数。
 
 `tags` 使用 AND 语义，并在内容匹配与 `node_limit` 截断之前过滤候选文件。例如 `["team=search", "env=prod"]` 只匹配同时具有两个标签的文件。
 
@@ -964,6 +966,9 @@ fmt.Println(result["count"])
 # 基础搜索
 ov grep "authentication" --uri viking://resources
 
+# 在两个范围内搜索
+ov grep "authentication" --uri viking://resources/docs --uri viking://resources/sdk
+
 # 忽略大小写
 ov grep "authentication" --uri viking://resources --ignore-case
 
@@ -1044,11 +1049,13 @@ HTTP `POST /api/v1/search/grep` 在不做过滤时可传 `include_tags: true` �
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`）|
-| uri | str | 否 | "viking://" | 起始 URI |
+| uri | str \| list[str] | 否 | "viking://" | 一个起始 URI，或非空的搜索范围列表 |
 | node_limit | int | 否 | 256 | 最大返回匹配数。省略时默认使用 256；如需更多结果，请显式传入更大的整数 |
 | extra_fields | list[str] | 否 | None | 每条命中的额外字段。省略时返回 URI 字符串；提供后 `result.matches` 返回条目对象 |
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的结果 |
 | include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
+
+传入多个 URI 时，模式相对于每个起始 URI 匹配，结果按 URI 顺序合并和去重。`node_limit` 限制合并后的结果总数。
 
 `tags` 使用 AND 语义，并在 `node_limit` 截断前应用。传入 `tags` 或 `include_tags=true` 时，响应返回带 `tags` 数组的条目对象；普通 glob 继续返回 URI 字符串，且不会为了 tags 读取 VectorDB。
 
@@ -1121,6 +1128,9 @@ fmt.Println(result["count"])
 ```bash
 # 查找所有 markdown 文件
 ov glob "**/*.md" --uri viking://resources
+
+# 在两个范围内匹配
+ov glob "**/*.md" --uri viking://resources/docs --uri viking://resources/sdk
 
 # 查找所有 Python 文件
 ov glob "**/*.py"

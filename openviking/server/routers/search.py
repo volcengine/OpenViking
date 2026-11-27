@@ -4,7 +4,7 @@
 
 import asyncio
 import math
-from typing import Any, Dict, List, Literal, Optional, Sequence, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Union
 
 from fastapi import APIRouter, Depends, Request
 from fastapi import Response as FastAPIResponse
@@ -14,7 +14,6 @@ from openviking.core.path_variables import resolve_path_variables
 from openviking.core.retrieval_types import SearchType
 from openviking.core.search_args import validate_search_args
 from openviking.core.uri_validation import validate_request_viking_uri
-from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
 from openviking.retrieve.context_assembler import (
     CATEGORY_KEYS,
     DEFAULT_LIMIT,
@@ -33,7 +32,6 @@ from openviking.retrieve.context_assembler.recall_preset import (
 )
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
@@ -47,7 +45,7 @@ from openviking.utils.search_filters import (
 )
 from openviking.utils.tags import build_search_tags_filter
 from openviking.utils.time_decay import validate_event_time_decay_request
-from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType
 
 
@@ -103,14 +101,15 @@ def resolve_search_filter(
 def _resolve_uri_or_uris(uri: Union[str, List[str]], ctx: RequestContext) -> Union[str, List[str]]:
     """Resolve path variables in a single URI or list of URIs."""
     if isinstance(uri, list):
-        return [validate_request_viking_uri(resolve_path_variables(u), ctx) for u in uri]
+        return _resolve_uri_list(uri, ctx)
     if not uri:
         return ""
     return validate_request_viking_uri(resolve_path_variables(uri), ctx)
 
 
 def _resolve_uri_list(uris: Sequence[str], ctx: RequestContext) -> list[str]:
-    return [validate_request_viking_uri(resolve_path_variables(uri), ctx) for uri in uris]
+    scopes = [uris] if isinstance(uris, str) else uris
+    return [validate_request_viking_uri(resolve_path_variables(uri), ctx) for uri in scopes]
 
 
 def _resolve_image_url(
@@ -357,7 +356,7 @@ class RecallRequest(BaseModel):
 class GrepRequest(BaseModel):
     """Request model for grep."""
 
-    uri: str
+    uri: str | Annotated[list[str], Field(min_length=1)]
     exclude_uri: Optional[str] = None
     pattern: str
     case_insensitive: bool = False
@@ -373,7 +372,7 @@ class GlobRequest(BaseModel):
     """Request model for glob."""
 
     pattern: str
-    uri: str = "viking://"
+    uri: str | Annotated[list[str], Field(min_length=1)] = "viking://"
     node_limit: Optional[int] = 256
     extra_fields: Optional[list[str]] = None
     tags: Optional[List[str]] = None
@@ -594,38 +593,25 @@ async def grep(
 ):
     """Content search with pattern."""
     service = get_service()
-    resolved_uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
+    resolved_scopes = _resolve_uri_list(request.uri, _ctx)
     resolved_exclude_uri = None
     if request.exclude_uri:
         resolved_exclude_uri = validate_request_viking_uri(
             resolve_path_variables(request.exclude_uri), _ctx, field_name="exclude_uri"
         )
-    try:
-        result = await service.fs.grep(
-            resolved_uri,
-            request.pattern,
-            ctx=_ctx,
-            exclude_uri=resolved_exclude_uri,
-            case_insensitive=request.case_insensitive,
-            node_limit=request.node_limit,
-            level_limit=request.level_limit,
-            tags=request.tags,
-            include_tags=request.include_tags,
-            before_context=request.before_context,
-            after_context=request.after_context,
-        )
-    except AGFSNotFoundError:
-        raise NotFoundError(resolved_uri, "file")
-    except AGFSClientError as e:
-        mapped = map_exception(e, resource=resolved_uri, resource_type="file")
-        if mapped is not None:
-            raise mapped from e
-        raise
-    except Exception as exc:
-        mapped = map_exception(exc, resource=resolved_uri, resource_type="file")
-        if mapped is not None:
-            raise mapped from exc
-        raise
+    result = await service.fs.grep(
+        resolved_scopes,
+        request.pattern,
+        ctx=_ctx,
+        exclude_uri=resolved_exclude_uri,
+        case_insensitive=request.case_insensitive,
+        node_limit=request.node_limit,
+        level_limit=request.level_limit,
+        tags=request.tags,
+        include_tags=request.include_tags,
+        before_context=request.before_context,
+        after_context=request.after_context,
+    )
     return Response(status="ok", result=result)
 
 
@@ -636,27 +622,13 @@ async def glob(
 ):
     """File pattern matching."""
     service = get_service()
-    resolved_uri = validate_request_viking_uri(resolve_path_variables(request.uri), _ctx)
-    try:
-        result = await service.fs.glob(
-            request.pattern,
-            ctx=_ctx,
-            uri=resolved_uri,
-            node_limit=request.node_limit,
-            extra_fields=request.extra_fields,
-            tags=request.tags,
-            include_tags=request.include_tags,
-        )
-    except AGFSNotFoundError:
-        raise NotFoundError(resolved_uri or request.pattern, "file")
-    except AGFSClientError as e:
-        mapped = map_exception(e, resource=resolved_uri or request.pattern, resource_type="file")
-        if mapped is not None:
-            raise mapped from e
-        raise
-    except Exception as exc:
-        mapped = map_exception(exc, resource=request.uri, resource_type="file")
-        if mapped is not None:
-            raise mapped from exc
-        raise
+    result = await service.fs.glob(
+        request.pattern,
+        ctx=_ctx,
+        uri=_resolve_uri_list(request.uri, _ctx),
+        node_limit=request.node_limit,
+        extra_fields=request.extra_fields,
+        tags=request.tags,
+        include_tags=request.include_tags,
+    )
     return Response(status="ok", result=result)
