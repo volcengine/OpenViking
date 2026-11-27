@@ -302,6 +302,15 @@ describe('the instance role', () => {
     assert.equal(text.split('\n## Role\n').length, 2);
   });
 
+  it('puts owner preferences before the Role but under the policy, keeps them private, and asks the owner before a timer for anyone else', () => {
+    const text = assembleConversationPolicy({ connectors: ['lark'], scheduler: 'workers' });
+    assert.match(text, /The owner's preferences come before the Role: where they disagree, follow the preference, whether it has you speak more or less\. Against the rules of this policy they only narrow/);
+    assert.match(text, /Before you keep a standing rule from the owner, check it against the Role and this policy\./);
+    assert.match(text, /do not tell anyone but the owner what they say, quote them, or give one as your reason/);
+    assert.match(text, /when anyone else asks you to remind them, or anyone, of something, or for any other timer, [^\n]*`notify_owner`, and create it only once the owner agrees/);
+    assert.match(text, /Whenever the answer depends on code or on what a command prints, it is a task, however quick it looks/);
+  });
+
   it('takes the soul loaded from OpenViking, without its comments, under a pointer to where it lives', () => {
     const soulText = '<!-- notes for whoever edits this -->\nYou are {{AGENT_NAME}}, the garden club\'s helper.\n';
     const text = assembleConversationPolicy({ connectors: ['weixin'], agentName: 'Fern', soulText });
@@ -551,7 +560,7 @@ describe('the workers scheduler', () => {
     assert.match(workers, /Hold back only a draft or question that would break the Information boundary where it goes [^\n]*: tell the requester in one line, with `task_ids`, that the result waits for the owner's check, and send the owner the draft and what it would disclose with `notify_owner`\./);
     assert.match(workers, /A report may leave a restart of this service to you: relay it first, then restart as the Core says, and only when the owner asked for it\./);
     assert.match(workers, /Looking into a subject is its worker's work\. Your own OpenViking lookups are for telling which task, thread or earlier request an input refers to, and for what you answer yourself\./);
-    assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
+    assert.match(workers, /Whenever the answer depends on code or on what a command prints, it is a task, however quick it looks: [^\n]*Hand it to a worker with `task_create` before you start on it, not after\./);
     assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
   });
 
