@@ -219,7 +219,7 @@ function collectText(value, output, mediaKeys = new Set(), depth = 0) {
   // Any card image counts, not only an img element: a cover or background
   // ({img_key}), the items of an img_combination, a list or panel picture.
   // A custom_icon is decoration and stays out.
-  if (value.tag !== 'custom_icon' && (value.tag === 'img' || value.tag === 'image'
+  if (!['custom_icon', 'media', 'file'].includes(value.tag) && (value.tag === 'img' || value.tag === 'image'
     || 'img_key' in value || 'image_key' in value || 'i18n_img_key' in value)) {
     // Posts name the image image_key; card img elements name it img_key, or
     // only i18n_img_key per language, read by the same one-language rule.
