@@ -181,8 +181,18 @@ def test_4096_flat_roundtrip():
         {"index_type": "ivfflat"},
         {"dsn_env": ""},
         {"unknown_option": True},
+        {"filtered_knn": "off"},
+        {"filtered_knn": "auto"},
+        {"filtered_knn": "required"},
+        {"unfiltered_use_native": False},
+        {"unfiltered_use_native": True},
         {"unfiltered_use_native": "false"},
         {"unfiltered_use_native": 1},
+        {"search_implementation": "auto"},
+        {"search_implementation": "off"},
+        {"search_implementation": "required"},
+        {"search_implementation": True},
+        {"search_implementation": None},
     ],
 )
 def test_invalid_pgvector_settings(settings):
@@ -190,9 +200,13 @@ def test_invalid_pgvector_settings(settings):
         PgvectorConfig(**settings)
 
 
-def test_unfiltered_use_native_preserves_existing_default():
-    assert PgvectorConfig().unfiltered_use_native is False
-    assert PgvectorConfig(unfiltered_use_native=True).unfiltered_use_native is True
+def test_search_implementation_default_and_choices():
+    assert PgvectorConfig().search_implementation == "native"
+    for implementation in ("native", "enhanced"):
+        assert (
+            PgvectorConfig(search_implementation=implementation).search_implementation
+            == implementation
+        )
 
 
 @pytest.fixture
@@ -201,10 +215,9 @@ def dense_pagination_collection(monkeypatch):
     collection._name = "pagination"
     collection._dim = 3
     collection._array_fields = set()
-    collection._filtered_knn_mode = "auto"
+    collection._search_implementation = "enhanced"
     collection._filtered_knn_schema = "public"
     collection._filtered_knn_options = PgvectorConfig().filtered_knn_options
-    collection._unfiltered_use_native = False
     collection._indexes = {
         "default": {
             "_pg_index_type": "hnsw",
@@ -248,21 +261,88 @@ def test_enhanced_dense_pagination_accepts_budget_and_raises_width(
     assert params[-2:] == [10, offset]
 
 
-@pytest.mark.parametrize("route", ["off", "unavailable", "native"])
 def test_native_dense_pagination_does_not_apply_extension_budget(
-    dense_pagination_collection, route
+    dense_pagination_collection,
 ):
     collection = dense_pagination_collection
-    if route == "off":
-        collection._filtered_knn_mode = "off"
-    elif route == "unavailable":
-        collection._filtered_knn_schema = None
-    else:
-        collection._unfiltered_use_native = True
+    collection._search_implementation = "native"
+    collection._filtered_knn_schema = None
     collection.search_by_vector("default", [1, 0, 0], limit=10, offset=100000)
     sql, params, _ = collection._query_rows.call_args.args
     assert "ov_filtered_knn(" not in sql
     assert params[-2:] == [10, 100000]
+
+
+@pytest.mark.parametrize("implementation", ["native", "enhanced"])
+@pytest.mark.parametrize("mode", ["adaptive", "exact"])
+@pytest.mark.parametrize(
+    "filters",
+    [None, {}, {"op": "must", "field": "account_id", "conds": ["tenant-a"]}],
+)
+def test_search_implementation_independent_of_filters(
+    dense_pagination_collection, implementation, mode, filters
+):
+    collection = dense_pagination_collection
+    collection._search_implementation = implementation
+    collection._filtered_knn_options = PgvectorConfig(
+        filtered_knn_options={"mode": mode}
+    ).filtered_knn_options
+    collection.search_by_vector("default", [1, 0, 0], limit=10, filters=filters)
+    sql, params, _ = collection._query_rows.call_args.args
+    assert ("ov_filtered_knn(" in sql) == (implementation == "enhanced")
+    if implementation == "enhanced":
+        assert params[2] == (None if filters is None else json.dumps(filters))
+    elif filters:
+        assert '"account_id"' in sql
+        assert "tenant-a" in params
+
+    # Hybrid and time-decay reuse this candidate hook.
+    ctes, params = collection._dense_candidate_ctes("default", "[1,0,0]", 20, filters)
+    sql = " ".join(ctes)
+    assert ("ov_filtered_knn(" in sql) == (implementation == "enhanced")
+    if implementation == "enhanced":
+        assert params[2] == (None if filters is None else json.dumps(filters))
+    elif filters:
+        assert '"account_id"' in sql
+        assert "tenant-a" in params
+
+
+@pytest.mark.parametrize("unsupported", ["capability", "flat", "l1"])
+def test_enhanced_search_rejects_unavailable_or_unsupported(
+    dense_pagination_collection, unsupported
+):
+    collection = dense_pagination_collection
+    if unsupported == "capability":
+        collection._filtered_knn_schema = None
+    elif unsupported == "flat":
+        collection._indexes["default"]["_pg_index_type"] = "flat"
+    else:
+        collection._indexes["default"]["_distance"] = "l1"
+    with pytest.raises(FailedPreconditionError, match="enhanced.*HNSW"):
+        collection.search_by_vector("default", [1, 0, 0])
+    with pytest.raises(FailedPreconditionError, match="enhanced.*HNSW"):
+        collection._dense_candidate_ctes("default", "[1,0,0]", 20, None)
+    collection._query_rows.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "row,version,error",
+    [
+        (None, None, "capability"),
+        (("public", True, True, True), 2, "capability"),
+        (("public", False, True, True), 1, "permissions"),
+        (("public", True, False, True), 1, "permissions"),
+        (("public", True, True, False), 1, "permissions"),
+    ],
+)
+def test_enhanced_capability_probe_fails_explicitly(row, version, error):
+    adapter = pgvector_adapter.PgvectorCollectionAdapter.__new__(
+        pgvector_adapter.PgvectorCollectionAdapter
+    )
+    cursor = Mock()
+    cursor.fetchone.side_effect = [row, (version,)]
+    with pytest.raises(FailedPreconditionError, match=error):
+        adapter._discover_filtered_knn(cursor)
 
 
 def test_enhanced_dense_zero_limit_skips_budget_check(dense_pagination_collection):

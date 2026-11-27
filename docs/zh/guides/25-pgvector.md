@@ -110,46 +110,41 @@ Sparse term 以 JSONB 和倒排表存储。Sparse-only 只召回有正向 term o
 
 ## 目录过滤调优
 
-### 可选 filtered KNN 能力
+### 选择检索实现
 
-同一 adapter 可以调用兼容 vector 扩展的 `ov_filtered_knn` envelope-v1 API，
-普通 pgvector 安装仍受支持。`pgvector.filtered_knn` 可设为 `off`（默认）、
-`auto` 或 `required`。`auto` 在建立连接时校验扩展归属、函数签名、PG 版本和
-权限，对 L2/cosine/IP HNSW 使用新入口；能力缺失或索引结构不支持时使用原生
-候选路径。`required` 对能力缺失或不支持的 dense 索引明确报错。
-运行时错误、权限错误和预算不足直接传播。
+`pgvector.search_implementation` 只接受 `native`（默认）和 `enhanced`：
+
+- `native` 使用社区原生 pgvector SQL，由 PostgreSQL 选择执行计划。
+- `enhanced` 使用字节增强检索，当前通过 `ov_filtered_knn` envelope-v1 API 实现。
+  初始化时校验扩展归属、函数签名、PG 版本和权限；能力缺失或 dense 索引不支持时
+  明确报错，不自动回退。运行时错误、权限错误和预算不足直接传播。
+
+选择与过滤条件无关：无过滤、账号、ACL 和路径过滤查询均使用所选实现。
+正常账号绑定搜索仍添加 `account_id`，两种实现都保留这些条件、MVCC 和 RLS。
+此配置选择查询实现，不更换数据库扩展二进制，也不选择或创建索引；
+安装字节扩展的数据库也可以使用 `native`。
+
+旧配置 `filtered_knn` 和 `unfiltered_use_native` 已移除，传入会触发配置校验错误。
+迁移时明确选择 `search_implementation`；`filtered_knn_options` 保留为增强入口的参数，
+仅在 `enhanced` 下使用。其 `mode="exact"` 选择增强算法，不改变检索实现。
 
 能力探测只在 adapter 初始化的 `_connect()` 中执行，结果会缓存并复制到 Collection。
-如果 `auto` 初始化时连接的是普通 pgvector，之后数据库升级为兼容扩展，
-现有 adapter 不会自动重新探测；连接池补建或替换连接、重新加载 Collection 都不会刷新能力。
-升级完成后需要重新创建 adapter 及其 Collection，通常通过重启或滚动重启服务完成。
+`native` 不探测增强能力。数据库升级为字节扩展或修改检索实现后，
+需要重新创建 adapter 及其 Collection，通常通过重启或滚动重启服务完成。
+连接池补建或替换连接、重新加载 Collection 不会刷新实现选择和能力探测结果。
 
 目前新能力支持 PostgreSQL 17、最多 2000 维的全精度 HNSW 向量。
 Dense、hybrid 和 time-decay 共用候选 hook，sparse-only 沿用倒排路径。
 候选和字段在同一条 SQL 中读取，单次 DEBUG 日志包含 route、stop_reason 和预算统计，
 空结果也保留这些信息。
 
-`unfiltered_use_native` 默认为 `false`，保留增强遍历的现有行为。设置为 `true` 并启用
-filtered KNN 后，真正没有显式过滤条件的
-adaptive dense 候选查询使用原生 SQL，避免构建完整资格集合。执行计划由 PostgreSQL
-选择，这个配置不选择或创建 HNSW 索引；hybrid 和
-time-decay 的 dense 候选也使用这一规则。MVCC 和 RLS 由 PostgreSQL 查询执行器
-正常检查，显式 tenant、ACL、路径过滤仍使用 filtered KNN。
-`mode="exact"` 继续使用精确候选入口。能力探测和 `required` 的错误规则仍然适用。
-原生路径中的 HNSW 扫描使用 `ef_search`（1–1000），不使用增强入口的 search width、访问预算或
-recover；编译后的空过滤对象同样使用原生路径，非空 AST 保留在增强入口。
-
-这里的“无过滤”指 adapter 实际收到 `None` 或 `{}`。正常账号绑定搜索即使用户
-未提供过滤，也会添加 `account_id`。例如 `/api/v1/search/find` 经
-`SearchService.find`、`VikingFS.find`、`HierarchicalRetriever.retrieve`、
-`search_in_tenant` 到 `_SingleAccountBackend.query`，后者补上账号条件后再调用
-adapter。共享库和独立账号库都保留这个条件，因此标准服务搜索不会触发该开关；
-它目前主要用于直接调用 adapter 的测试和实验，不代表正常服务搜索的原生旁路。
+原生路径中的 HNSW 扫描使用 `ef_search`（1–1000），不使用增强入口的 search width、
+访问预算或 recover。增强路径对于 adapter 收到的 `None` 或 `{}` 同样调用增强入口。
 
 ```json
 {
   "index_type": "hnsw",
-  "filtered_knn": "auto",
+  "search_implementation": "enhanced",
   "filtered_knn_options": {
     "mode": "adaptive",
     "exact_threshold": 1000,
@@ -182,7 +177,7 @@ Search width 至少等于候选预算。ANN 可能返回部分合格结果，并
 合法预算内，ANN 候选不足可能导致分页少于 `limit` 条，甚至为空；
 停止原因仅记录在 DEBUG 诊断中，不作为 `SearchResult` 的额外字段返回。
 
-测试无过滤恢复机制时，设置 `unfiltered_use_native=false`，确保查询进入增强遍历。
+测试恢复机制时，设置 `search_implementation="enhanced"`，确保查询进入增强遍历。
 以下配置固定 width=2000、开启恢复并限制总图访问次数；可分别测试
 `max_graph_visits=100000`、`200000`、`400000`，对比 Recall@10 和延迟。
 恢复取消启发式停止，但仍受总访问次数、heap 和内存预算限制；访问上限不保证召回率。
@@ -190,8 +185,7 @@ Search width 至少等于候选预算。ANN 可能返回部分合格结果，并
 ```json
 {
   "index_type": "hnsw",
-  "filtered_knn": "required",
-  "unfiltered_use_native": false,
+  "search_implementation": "enhanced",
   "filtered_knn_options": {
     "search_width": 2000,
     "exact_threshold": 10000,

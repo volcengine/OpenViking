@@ -65,12 +65,11 @@ def diagnostics(monkeypatch):
 
 def config(
     db="enhanced",
-    mode="required",
+    implementation="enhanced",
     metric="cosine",
     index_type="hnsw",
     options=None,
     name=None,
-    unfiltered_use_native=False,
 ):
     return VectorDBBackendConfig(
         backend="pgvector",
@@ -82,10 +81,8 @@ def config(
             {
                 "dsn_env": f"OV_{db.upper()}_TEST_DSN",
                 "index_type": index_type,
-                "filtered_knn": mode,
+                "search_implementation": implementation,
                 "filtered_knn_options": options or {},
-                # Existing tests exercise the envelope, including absent predicates.
-                "unfiltered_use_native": unfiltered_use_native,
                 "candidate_limit": 20,
             }
         ),
@@ -187,7 +184,7 @@ def test_public_collection_unfiltered_search(route, kind, filter_args, diagnosti
     )
     with (
         collection(options=options) as enhanced,
-        collection(db="native", mode="off", index_type="flat") as baseline,
+        collection(db="native", implementation="native", index_type="flat") as baseline,
     ):
         enhanced.upsert(rows())
         baseline.upsert(rows())
@@ -223,7 +220,9 @@ def test_dense_filters_fields_and_paging(metric, route, diagnostics):
     )
     with (
         collection(metric=metric, options=options) as enhanced,
-        collection(db="native", mode="off", metric=metric, index_type="flat") as baseline,
+        collection(
+            db="native", implementation="native", metric=metric, index_type="flat"
+        ) as baseline,
     ):
         enhanced.upsert(rows())
         baseline.upsert(rows())
@@ -271,7 +270,7 @@ def test_shared_ranked_hook(route, kind, diagnostics):
     options = {"mode": "exact"} if route == "exact" else {"exact_threshold": 0, "recover": True}
     with (
         collection(options=options) as enhanced,
-        collection(db="native", mode="off", index_type="flat") as baseline,
+        collection(db="native", implementation="native", index_type="flat") as baseline,
     ):
         enhanced.upsert(rows())
         baseline.upsert(rows())
@@ -307,10 +306,13 @@ def test_shared_ranked_hook(route, kind, diagnostics):
 
 @pytest.mark.parametrize("kind", ["dense", "hybrid", "decay", "hybrid_decay"])
 @pytest.mark.parametrize("empty_filter", [None, {}, And([])])
-def test_unfiltered_use_native_shared_hook(kind, empty_filter, diagnostics, monkeypatch):
+@pytest.mark.parametrize("implementation", ["native", "enhanced"])
+def test_search_implementation_shared_hook(
+    kind, empty_filter, implementation, diagnostics, monkeypatch
+):
     with (
-        collection(unfiltered_use_native=True) as enhanced,
-        collection(db="native", mode="off", index_type="flat") as baseline,
+        collection(implementation=implementation) as enhanced,
+        collection(db="native", implementation="native", index_type="flat") as baseline,
     ):
         enhanced.upsert(rows())
         baseline.upsert(rows())
@@ -346,30 +348,37 @@ def test_unfiltered_use_native_shared_hook(kind, empty_filter, diagnostics, monk
                 "time_decay": {"protection": "0", "origin": "2026-11-19T00:00:00Z"}
             }
         assert_equal(enhanced.query(**kwargs), baseline.query(**kwargs))
-        assert not diagnostics
-        assert captured and all("ov_filtered_knn(" not in sql for sql in captured)
-        assert '"vector" IS NOT NULL' in captured[-1]
-        # Supplying a real predicate still goes through the filtered envelope.
+        assert bool(diagnostics) == (implementation == "enhanced")
+        assert captured
+        assert ("ov_filtered_knn(" in captured[-1]) == (implementation == "enhanced")
+        # A real account predicate must preserve the selected implementation.
         kwargs["filter"] = Eq("account_id", "allowed")
         assert_equal(enhanced.query(**kwargs), baseline.query(**kwargs))
-        assert diagnostics[-1]["stats"]["eligible_count"] == 8
-        assert "ov_filtered_knn(" in captured[-1]
+        assert ("ov_filtered_knn(" in captured[-1]) == (implementation == "enhanced")
+        if implementation == "enhanced":
+            assert diagnostics[-1]["stats"]["eligible_count"] == 8
+        else:
+            assert not diagnostics
+            assert '"account_id"' in captured[-1]
         kwargs["filter"] = Or([])
         assert enhanced.query(**kwargs) == []
-        assert diagnostics[-1]["stats"]["eligible_count"] == 0
+        if implementation == "enhanced":
+            assert diagnostics[-1]["stats"]["eligible_count"] == 0
+        else:
+            assert not diagnostics
 
 
-def test_unfiltered_use_native_preserves_explicit_exact(diagnostics):
-    with collection(unfiltered_use_native=True, options={"mode": "exact"}) as a:
+def test_enhanced_preserves_explicit_exact(diagnostics):
+    with collection(options={"mode": "exact"}) as a:
         a.upsert(rows())
         assert a.query(query_vector=[1, 0.1, 0.1], limit=4)
         assert diagnostics[-1]["route"] == "exact"
 
 
 @pytest.mark.parametrize("hybrid", [False, True])
-def test_unfiltered_use_native_preserves_rls(hybrid, monkeypatch, diagnostics):
+def test_native_preserves_rls(hybrid, monkeypatch, diagnostics):
     role = "e2e_native_" + uuid.uuid4().hex[:8]
-    with collection(unfiltered_use_native=True) as owner, admin() as cursor:
+    with collection(implementation="native") as owner, admin() as cursor:
         owner.upsert(rows())
         table = owner.collection_name
         restricted = None
@@ -382,7 +391,7 @@ def test_unfiltered_use_native_preserves_rls(hybrid, monkeypatch, diagnostics):
             monkeypatch.setenv(
                 "OV_ROLE_TEST_DSN", os.environ["OV_ENHANCED_TEST_DSN"] + f" user={role}"
             )
-            cfg = config(mode="auto", name=table, unfiltered_use_native=True)
+            cfg = config(implementation="native", name=table)
             cfg.pgvector.dsn_env = "OV_ROLE_TEST_DSN"
             restricted = create_collection_adapter(cfg)
             query: dict[str, Any] = {"query_vector": [1, 0.1, 0.1], "limit": 20}
@@ -400,24 +409,24 @@ def test_unfiltered_use_native_preserves_rls(hybrid, monkeypatch, diagnostics):
 
 
 @pytest.mark.parametrize("db", ["native", "enhanced"])
-@pytest.mark.parametrize("mode", ["off", "auto", "required"])
-def test_capability_modes(db, mode, diagnostics):
-    if db == "native" and mode == "required":
+@pytest.mark.parametrize("implementation", ["native", "enhanced"])
+def test_search_implementations(db, implementation, diagnostics):
+    if db == "native" and implementation == "enhanced":
         with pytest.raises(FailedPreconditionError, match="capability"):
-            create_collection_adapter(config(db=db, mode=mode))
+            create_collection_adapter(config(db=db, implementation=implementation))
         return
-    with collection(db=db, mode=mode) as a:
+    with collection(db=db, implementation=implementation) as a:
         a.upsert(rows())
         assert a.query(query_vector=[1, 0, 0])
-        assert bool(diagnostics) == (db == "enhanced" and mode != "off")
+        assert bool(diagnostics) == (implementation == "enhanced")
 
 
 @pytest.mark.parametrize("metric,index_type", [("l1", "hnsw"), ("cosine", "flat")])
-@pytest.mark.parametrize("mode", ["auto", "required"])
-def test_unsupported_structure(metric, index_type, mode, diagnostics):
-    with collection(metric=metric, index_type=index_type, mode=mode) as a:
+@pytest.mark.parametrize("implementation", ["native", "enhanced"])
+def test_unsupported_structure(metric, index_type, implementation, diagnostics):
+    with collection(metric=metric, index_type=index_type, implementation=implementation) as a:
         a.upsert(rows())
-        if mode == "required":
+        if implementation == "enhanced":
             with pytest.raises(FailedPreconditionError, match="HNSW"):
                 a.query(query_vector=[1, 0, 0])
         else:
@@ -426,7 +435,7 @@ def test_unsupported_structure(metric, index_type, mode, diagnostics):
 
 
 def test_budget_error_propagates_and_pool_recovers(diagnostics):
-    with collection(mode="auto", options={"mode": "exact", "max_heap_fetches": 1}) as a:
+    with collection(options={"mode": "exact", "max_heap_fetches": 1}) as a:
         a.upsert(rows())
         with pytest.raises(psycopg2.Error):
             a.query(query_vector=[1, 0, 0])
@@ -446,7 +455,7 @@ def test_ann_partial_budget_is_observable(diagnostics):
 
 
 def test_unknown_ast_error_never_falls_back(diagnostics):
-    with collection(mode="auto") as a:
+    with collection() as a:
         a.upsert(rows())
         with pytest.raises(psycopg2.Error):
             a.query(
@@ -518,7 +527,7 @@ def test_large_memory_budget(memory_limit, route, diagnostics):
         options["mode"] = "exact"
     with (
         collection(options=options) as enhanced,
-        collection(db="native", mode="off", index_type="flat") as baseline,
+        collection(db="native", implementation="native", index_type="flat") as baseline,
     ):
         enhanced.upsert(rows())
         baseline.upsert(rows())
@@ -567,8 +576,7 @@ def test_sql_memory_budget_validation(memory_limit, error):
             )
 
 
-@pytest.mark.parametrize("mode", ["auto", "required"])
-def test_version_mismatch(mode):
+def test_version_mismatch():
     with admin() as cursor:
         cursor.execute("SELECT pg_get_functiondef('ov_filtered_knn_version()'::regprocedure)")
         original = cursor.fetchone()[0]
@@ -577,18 +585,8 @@ def test_version_mismatch(mode):
                 "CREATE OR REPLACE FUNCTION ov_filtered_knn_version() RETURNS integer "
                 "LANGUAGE SQL IMMUTABLE AS 'SELECT 2'"
             )
-            if mode == "required":
-                with pytest.raises(FailedPreconditionError, match="capability"):
-                    create_collection_adapter(config(mode=mode))
-            else:
-                a = cast(
-                    pgvector_adapter.PgvectorCollectionAdapter,
-                    create_collection_adapter(config(mode=mode)),
-                )
-                try:
-                    assert a._filtered_knn_schema is None
-                finally:
-                    a.close()
+            with pytest.raises(FailedPreconditionError, match="capability"):
+                create_collection_adapter(config())
         finally:
             cursor.execute(original)
 
@@ -622,7 +620,7 @@ def test_capability_probe_error_is_not_absence():
                 RETURNS integer LANGUAGE plpgsql STABLE AS $body$
                 BEGIN RAISE EXCEPTION 'probe failure'; END $body$""")
             with pytest.raises(psycopg2.Error, match="probe failure"):
-                create_collection_adapter(config(mode="auto"))
+                create_collection_adapter(config())
         finally:
             cursor.execute(original)
 
@@ -631,7 +629,7 @@ def test_capability_probe_error_is_not_absence():
 def test_rls_and_runtime_execute_revocation(route, monkeypatch, diagnostics):
     role = "e2e_role_" + uuid.uuid4().hex[:8]
     options = {"mode": "exact"} if route == "exact" else {"exact_threshold": 0, "recover": True}
-    with collection(mode="auto", options=options) as owner, admin() as cursor:
+    with collection(options=options) as owner, admin() as cursor:
         owner.upsert(rows())
         table = owner.collection_name
         restricted = None
@@ -643,7 +641,7 @@ def test_rls_and_runtime_execute_revocation(route, monkeypatch, diagnostics):
             cursor.execute(f"CREATE POLICY allowed ON \"{table}\" USING (account_id = 'allowed')")
             dsn = os.environ["OV_ENHANCED_TEST_DSN"] + f" user={role}"
             monkeypatch.setenv("OV_ROLE_TEST_DSN", dsn)
-            cfg = config(mode="auto", options=options, name=table)
+            cfg = config(options=options, name=table)
             cfg.pgvector.dsn_env = "OV_ROLE_TEST_DSN"
             restricted = create_collection_adapter(cfg)
             visible = restricted.query(query_vector=[1, 0.1, 0.1], limit=20)
