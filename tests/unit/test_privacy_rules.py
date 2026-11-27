@@ -66,6 +66,13 @@ def test_openviking_and_provider_tokens_are_detected_in_context(detector_id, val
     assert is_sensitive_value(value)
 
 
+def test_text_in_other_scripts_does_not_hide_an_adjacent_token():
+    content = f"我的key是{SECRET}请保存，另一个是{SECRET}。"
+    matches = find_privacy_matches(content)
+    assert [content[m.start : m.end] for m in matches] == [SECRET, SECRET]
+    assert find_privacy_matches(f"x{SECRET}") == []
+
+
 @pytest.mark.parametrize(
     ("account_id", "user_id"),
     [("default", "default"), ("acme", "alice@example.com"), ("a-b_c.d", "u" * 64)],

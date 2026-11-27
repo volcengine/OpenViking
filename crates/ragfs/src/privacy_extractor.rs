@@ -391,8 +391,9 @@ impl PrivacyExtractor {
     }
 }
 
+/// Credential formats are ASCII, so text in other scripts next to a token is a boundary.
 fn token_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '_' | '-')
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-')
 }
 
 fn has_repeated_chars(value: &str) -> bool {
@@ -495,6 +496,7 @@ mod tests {
                 ("", ""),
                 ("key=\"", "\"&m=1"),
                 ("令牌：", "，"),
+                ("密钥是", "请保存"),
                 ("(", ")."),
             ] {
                 let text = format!("{prefix}{value}{suffix}");
