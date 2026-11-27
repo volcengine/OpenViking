@@ -33,8 +33,28 @@ OUTPUT = Path(__file__).resolve().parents[3] / (
     "crates/ragfs/src/privacy_extractor_rules_betterleaks.json"
 )
 
-# Formats that privacy_extractor_rules.json already covers with its own fixtures.
-HAND_WRITTEN = re.compile(r"^(?:anthropic|aws-access-token|github|jwt|openai|private-key|slack)")
+# Formats that privacy_extractor_rules.json covers, or deliberately rejects, with its own fixtures.
+HAND_WRITTEN = re.compile(
+    r"^(?:anthropic|aws-access-token|github|jwt|openai|private-key"
+    r"|slack-(?:app|bot|config-access|legacy|user)-)"
+)
+EXCLUDED = {
+    # The prefix and body also fit ordinary identifiers such as prf_hmac_sha256_expand_label.
+    "brave-search-api-key": "matches ordinary identifiers",
+    "lichess-personal-access-token": "matches ordinary identifiers",
+    "polar-oauth-access-token": "matches ordinary identifiers",
+    "proof-full-access-api-key": "matches ordinary identifiers",
+    "thunderstore-api-token.1": "matches ordinary identifiers",
+    # Their lazy DFAs do not fit the per-pattern cache of the built-in detectors.
+    "authress-service-client-access-key": "too large for the built-in cache budget",
+    "azure-servicebus-connection-string": "too large for the built-in cache budget",
+}
+# Upstream relies on a trailing \b to reach the longer branch or to stop early; the
+# extractor checks boundaries after matching, so these need the full token spelled out.
+OVERRIDES = {
+    "buildkite-user-access-token": "bkua_(?:[a-z0-9]{53}|[a-z0-9]{40})",
+    "datastax-astra-application-token": "AstraCS:[A-Za-z0-9]{20,}:[a-f0-9]{64}",
+}
 # Real tokens of these rules contain long runs of one character.
 KEEP_REPEATED = {"flyio-access-token"}
 MIN_PREFIX = 3
@@ -60,7 +80,12 @@ def to_rust(pattern: str) -> str:
                 out.append(body if in_class else f"[{body}]")
             elif escape == "b" and not in_class:
                 out.append(r"(?-u:\b)")
-            elif escape == "" or escape in "WDSBQEpPAzC" or escape.isdigit():
+            elif (
+                escape == ""
+                or escape in "WDSBQEpPAzC<>"
+                or escape.isdigit()
+                or pattern.startswith("x{", i + 1)
+            ):
                 raise Skip(f"unsupported escape \\{escape}")
             else:
                 out.append(pattern[i : i + 2])
@@ -214,18 +239,21 @@ def convert(rules: list[dict]) -> tuple[list[dict], dict[str, str]]:
         try:
             if HAND_WRITTEN.match(rule_id):
                 raise Skip("covered by a hand-written detector")
+            if rule_id in EXCLUDED:
+                raise Skip(EXCLUDED[rule_id])
             if not rule.get("regex") or rule.get("path"):
                 raise Skip("matches file paths")
             if rule.get("skipReport"):
                 raise Skip("only reported together with another rule")
-            if any(not part.get("optional") for part in rule.get("components", [])):
-                raise Skip("requires another rule nearby")
             if rule.get("valueGroup"):
                 raise Skip("secret is not the whole token")
             pattern = secret_pattern(rule["regex"])
-            if literal_prefix(pattern)[0] < MIN_PREFIX:
+            prefix, fixed = literal_prefix(pattern)
+            if prefix < MIN_PREFIX:
                 raise Skip("no fixed prefix")
-            detector = {"id": rule_id, "pattern": to_rust(pattern)}
+            if fixed:
+                raise Skip("fixed string without a secret part")
+            detector = {"id": rule_id, "pattern": to_rust(OVERRIDES.get(rule_id, pattern))}
             if rule_id not in KEEP_REPEATED:
                 detector["reject_repeated"] = True
             detectors.append(detector)

@@ -116,12 +116,12 @@ struct Compiler {
 }
 
 impl Compiler {
-    fn new(limit: usize, pattern_count: usize) -> Self {
+    fn new(limit: usize, cache_bytes: usize, pattern_count: usize) -> Self {
         Self {
             limit,
             remaining: limit,
             // Each search thread keeps its own lazy DFA caches for every pattern.
-            cache_limit: limit / pattern_count.max(1) / LAZY_DFA_CACHES_PER_PATTERN,
+            cache_limit: cache_bytes / pattern_count.max(1) / LAZY_DFA_CACHES_PER_PATTERN,
             program_bytes: 0,
         }
     }
@@ -188,9 +188,11 @@ fn builtins() -> Result<&'static Builtins, String> {
                 .into_iter()
                 .chain(imported.detectors)
                 .collect();
-            let mut compiler = Compiler::new(BUILTIN_COMPILED_BYTES, configs.len() + 1);
-            compiler.cache_limit =
-                BUILTIN_DFA_CACHE_BYTES / (configs.len() + 1) / LAZY_DFA_CACHES_PER_PATTERN;
+            let mut compiler = Compiler::new(
+                BUILTIN_COMPILED_BYTES,
+                BUILTIN_DFA_CACHE_BYTES,
+                configs.len() + 1,
+            );
             let detectors = configs
                 .into_iter()
                 .map(|detector| {
@@ -258,7 +260,11 @@ impl PrivacyExtractor {
         }
         let builtins = builtins()?;
         let mut detectors = builtins.detectors.clone();
-        let mut compiler = Compiler::new(limits.max_compiled_bytes, rules.len());
+        let mut compiler = Compiler::new(
+            limits.max_compiled_bytes,
+            limits.max_compiled_bytes,
+            rules.len(),
+        );
         let custom_count = rules.len();
         // Stored settings are not revalidated when detectors are added to the built-in
         // set, so custom IDs only need to be unique among themselves.
