@@ -420,12 +420,13 @@ class PgvectorConfig(BaseModel):
     ef_search: int = Field(default=100, ge=1, le=1000)
     filtered_knn: Literal["off", "auto", "required"] = "off"
     filtered_knn_options: FilteredKnnOptions = Field(default_factory=FilteredKnnOptions)
-    unfiltered_hnsw: bool = Field(
+    unfiltered_use_native: bool = Field(
         default=False,
         strict=True,
         description=(
-            "With filtered_knn enabled, use native HNSW for adaptive dense candidates "
-            "without an explicit filter. Disable to test filtered traversal and recovery. "
+            "With filtered_knn enabled, use native SQL for adaptive dense candidates "
+            "without an explicit filter; PostgreSQL chooses the execution plan. "
+            "Disable to test filtered traversal and recovery. "
             "Explicit filtered_knn_options.mode='exact' still uses exact candidates."
         ),
     )

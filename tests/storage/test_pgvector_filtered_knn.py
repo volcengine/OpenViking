@@ -70,7 +70,7 @@ def config(
     index_type="hnsw",
     options=None,
     name=None,
-    unfiltered_hnsw=False,
+    unfiltered_use_native=False,
 ):
     return VectorDBBackendConfig(
         backend="pgvector",
@@ -85,7 +85,7 @@ def config(
                 "filtered_knn": mode,
                 "filtered_knn_options": options or {},
                 # Existing tests exercise the envelope, including absent predicates.
-                "unfiltered_hnsw": unfiltered_hnsw,
+                "unfiltered_use_native": unfiltered_use_native,
                 "candidate_limit": 20,
             }
         ),
@@ -307,9 +307,9 @@ def test_shared_ranked_hook(route, kind, diagnostics):
 
 @pytest.mark.parametrize("kind", ["dense", "hybrid", "decay", "hybrid_decay"])
 @pytest.mark.parametrize("empty_filter", [None, {}, And([])])
-def test_unfiltered_native_hnsw_shared_hook(kind, empty_filter, diagnostics, monkeypatch):
+def test_unfiltered_use_native_shared_hook(kind, empty_filter, diagnostics, monkeypatch):
     with (
-        collection(unfiltered_hnsw=True) as enhanced,
+        collection(unfiltered_use_native=True) as enhanced,
         collection(db="native", mode="off", index_type="flat") as baseline,
     ):
         enhanced.upsert(rows())
@@ -359,17 +359,17 @@ def test_unfiltered_native_hnsw_shared_hook(kind, empty_filter, diagnostics, mon
         assert diagnostics[-1]["stats"]["eligible_count"] == 0
 
 
-def test_unfiltered_native_hnsw_preserves_explicit_exact(diagnostics):
-    with collection(unfiltered_hnsw=True, options={"mode": "exact"}) as a:
+def test_unfiltered_use_native_preserves_explicit_exact(diagnostics):
+    with collection(unfiltered_use_native=True, options={"mode": "exact"}) as a:
         a.upsert(rows())
         assert a.query(query_vector=[1, 0.1, 0.1], limit=4)
         assert diagnostics[-1]["route"] == "exact"
 
 
 @pytest.mark.parametrize("hybrid", [False, True])
-def test_unfiltered_native_hnsw_preserves_rls(hybrid, monkeypatch, diagnostics):
+def test_unfiltered_use_native_preserves_rls(hybrid, monkeypatch, diagnostics):
     role = "e2e_native_" + uuid.uuid4().hex[:8]
-    with collection(unfiltered_hnsw=True) as owner, admin() as cursor:
+    with collection(unfiltered_use_native=True) as owner, admin() as cursor:
         owner.upsert(rows())
         table = owner.collection_name
         restricted = None
@@ -382,7 +382,7 @@ def test_unfiltered_native_hnsw_preserves_rls(hybrid, monkeypatch, diagnostics):
             monkeypatch.setenv(
                 "OV_ROLE_TEST_DSN", os.environ["OV_ENHANCED_TEST_DSN"] + f" user={role}"
             )
-            cfg = config(mode="auto", name=table, unfiltered_hnsw=True)
+            cfg = config(mode="auto", name=table, unfiltered_use_native=True)
             cfg.pgvector.dsn_env = "OV_ROLE_TEST_DSN"
             restricted = create_collection_adapter(cfg)
             query: dict[str, Any] = {"query_vector": [1, 0.1, 0.1], "limit": 20}

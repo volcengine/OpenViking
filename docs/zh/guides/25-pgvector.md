@@ -124,13 +124,14 @@ Dense、hybrid 和 time-decay 共用候选 hook，sparse-only 沿用倒排路径
 候选和字段在同一条 SQL 中读取，单次 DEBUG 日志包含 route、stop_reason 和预算统计，
 空结果也保留这些信息。
 
-`unfiltered_hnsw` 默认为 `false`，保留增强遍历的现有行为。设置为 `true` 并启用
+`unfiltered_use_native` 默认为 `false`，保留增强遍历的现有行为。设置为 `true` 并启用
 filtered KNN 后，真正没有显式过滤条件的
-adaptive dense 候选查询使用原生 HNSW，避免构建完整资格集合；hybrid 和
+adaptive dense 候选查询使用原生 SQL，避免构建完整资格集合。执行计划由 PostgreSQL
+选择，这个配置不选择或创建 HNSW 索引；hybrid 和
 time-decay 的 dense 候选也使用这一规则。MVCC 和 RLS 由 PostgreSQL 查询执行器
 正常检查，显式 tenant、ACL、路径过滤仍使用 filtered KNN。
 `mode="exact"` 继续使用精确候选入口。能力探测和 `required` 的错误规则仍然适用。
-原生路径使用 `ef_search`（1–1000），不使用增强入口的 search width、访问预算或
+原生路径中的 HNSW 扫描使用 `ef_search`（1–1000），不使用增强入口的 search width、访问预算或
 recover；编译后的空过滤对象同样使用原生路径，非空 AST 保留在增强入口。
 
 ```json
@@ -159,7 +160,7 @@ recover；编译后的空过滤对象同样使用原生路径，非空 AST 保�
 Search width 至少等于候选预算。ANN 可能返回部分合格结果，并记录停止原因。
 当前资格构建仍扫描完整过滤集合；生产启用前需验证召回率、扫描成本和 p99。
 
-测试无过滤恢复机制时，设置 `unfiltered_hnsw=false`，确保查询进入增强遍历。
+测试无过滤恢复机制时，设置 `unfiltered_use_native=false`，确保查询进入增强遍历。
 以下配置固定 width=2000、开启恢复并限制总图访问次数；可分别测试
 `max_graph_visits=100000`、`200000`、`400000`，对比 Recall@10 和延迟。
 恢复取消启发式停止，但仍受总访问次数、heap 和内存预算限制；访问上限不保证召回率。
@@ -168,7 +169,7 @@ Search width 至少等于候选预算。ANN 可能返回部分合格结果，并
 {
   "index_type": "hnsw",
   "filtered_knn": "required",
-  "unfiltered_hnsw": false,
+  "unfiltered_use_native": false,
   "filtered_knn_options": {
     "search_width": 2000,
     "exact_threshold": 10000,

@@ -48,7 +48,7 @@ class PgvectorCollection(OpenGaussCollection):
     _filtered_knn_mode: Literal["off", "auto", "required"]
     _filtered_knn_schema: str | None
     _filtered_knn_options: FilteredKnnOptions
-    _unfiltered_hnsw: bool
+    _unfiltered_use_native: bool
 
     def _filtered_knn_enabled(self, index_name):
         mode = getattr(self, "_filtered_knn_mode", "off")
@@ -71,7 +71,7 @@ class PgvectorCollection(OpenGaussCollection):
             return False
         return not (
             (filters is None or filters == {})
-            and getattr(self, "_unfiltered_hnsw", False)
+            and getattr(self, "_unfiltered_use_native", False)
             and self._filtered_knn_options.mode != "exact"
         )
 
@@ -610,7 +610,7 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
         raw._filtered_knn_mode = self._config.filtered_knn
         raw._filtered_knn_schema = self._filtered_knn_schema
         raw._filtered_knn_options = self._config.filtered_knn_options
-        raw._unfiltered_hnsw = self._config.unfiltered_hnsw
+        raw._unfiltered_use_native = self._config.unfiltered_use_native
         # Search settings can change without rebuilding the physical index.
         if self._index_name in raw._indexes:
             raw._indexes[self._index_name]["search_params"] = dict(self._search_params)

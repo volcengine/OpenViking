@@ -128,21 +128,22 @@ The same adapter can use the optional `ov_filtered_knn` envelope-v1 API in a
 compatible vector extension. Ordinary pgvector installations remain supported.
 Set `pgvector.filtered_knn` to `off` (default), `auto`, or `required`.
 
-`pgvector.unfiltered_hnsw` defaults to `false`, preserving enhanced traversal.
+`pgvector.unfiltered_use_native` defaults to `false`, preserving enhanced traversal.
 When set to `true` and filtered KNN is enabled,
-adaptive dense candidates without an explicit predicate use native HNSW,
-avoiding complete eligibility-set construction. Hybrid and time-decay dense
+adaptive dense candidates without an explicit predicate use native SQL,
+avoiding complete eligibility-set construction. PostgreSQL chooses the execution
+plan; this option does not select or create an HNSW index. Hybrid and time-decay dense
 candidates share this routing. PostgreSQL still applies MVCC and RLS, while
 explicit tenant, ACL and path filters retain the filtered envelope. Explicit
 `filtered_knn_options.mode="exact"` also retains the envelope. Capability
 checks and the `required` contract still apply.
 
-Native candidates use `ef_search` (1–1000), rather than filtered search width,
-visit budgets or recovery. Set `unfiltered_hnsw=false` to test the enhanced
+Native HNSW scans use `ef_search` (1–1000), rather than filtered search width,
+visit budgets or recovery. Set `unfiltered_use_native=false` to test the enhanced
 unfiltered traversal. Compiled empty filter objects also use native routing;
 non-empty ASTs retain filtered routing.
 
-For bounded recovery experiments, disable `unfiltered_hnsw`, fix
+For bounded recovery experiments, disable `unfiltered_use_native`, fix
 `search_width=2000`, set `recover=true`, and compare `max_graph_visits` of
 100000, 200000 and 400000 with the same heap and memory budgets. Recovery
 disables the heuristic stop but remains bounded by total visits, heap fetches
