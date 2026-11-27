@@ -784,7 +784,7 @@ fn search_result_text(item: &Value, object: Option<&serde_json::Map<String, Valu
 
 pub async fn grep(
     client: &HttpClient,
-    uri: &str,
+    uri: &[String],
     exclude_uri: Option<String>,
     pattern: &str,
     ignore_case: bool,
@@ -1001,7 +1001,7 @@ fn pluralize<'a>(count: u64, singular: &'a str, plural: &'a str) -> &'a str {
 pub async fn glob(
     client: &HttpClient,
     pattern: &str,
-    uri: &str,
+    uri: &[String],
     node_limit: i32,
     output_format: OutputFormat,
     compact: bool,

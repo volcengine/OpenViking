@@ -863,7 +863,7 @@ pub(crate) enum Commands {
     },
     /// [Data] Run content pattern search
     Grep {
-        /// Target URI
+        /// Search root URI (repeat to search multiple roots)
         #[arg(
             short,
             long,
@@ -871,7 +871,7 @@ pub(crate) enum Commands {
             value_name = "uri",
             help_heading = "Common options"
         )]
-        uri: String,
+        uri: Vec<String>,
         /// Excluded URI range. Any entry whose URI falls under this URI prefix is skipped
         #[arg(
             short = 'x',
@@ -949,7 +949,7 @@ pub(crate) enum Commands {
         /// Glob pattern
         #[arg(value_name = "pattern")]
         pattern: String,
-        /// Search root URI
+        /// Search root URI (repeat to search multiple roots)
         #[arg(
             short,
             long,
@@ -957,7 +957,7 @@ pub(crate) enum Commands {
             value_name = "uri",
             help_heading = "Common options"
         )]
-        uri: String,
+        uri: Vec<String>,
         /// Maximum number of results
         #[arg(
             short = 'n',

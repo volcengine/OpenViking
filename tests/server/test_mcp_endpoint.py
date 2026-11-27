@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import FastAPI
+from jsonschema import Draft202012Validator
 from mcp.types import AudioContent, CallToolResult, ImageContent, TextContent, Tool, ToolAnnotations
 from starlette.routing import Route
 
@@ -479,6 +480,14 @@ async def test_tool_schemas_are_portable():
     assert tools
     for tool in tools:
         assert_portable(tool.inputSchema, tool.name)
+
+    schemas = {tool.name: tool.inputSchema for tool in tools}
+    uri = "viking://resources/docs"
+    for name, pattern in (("grep", ["TODO"]), ("glob", "**/*.md")):
+        validator = Draft202012Validator(schemas[name])
+        assert validator.is_valid({"uri": uri, "pattern": pattern})
+        assert not validator.is_valid({"uri": [uri], "pattern": pattern})
+    assert schemas["glob"]["properties"]["uri"]["default"] == "viking://"
 
 
 def test_portable_schema_collapses_unions():
