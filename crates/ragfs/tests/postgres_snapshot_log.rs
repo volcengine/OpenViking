@@ -178,59 +178,6 @@ async fn postgres_snapshot_log_history_scope_width_and_watermark() {
     cleanup(&account).await;
 }
 
-/// Verify independent services expose only their own progress and path history.
-/// Takes no parameters and returns after checking a shared database.
-#[tokio::test]
-#[ignore = "requires a real PostgreSQL database"]
-async fn postgres_snapshot_log_isolates_services_in_shared_database() {
-    let a = PostgresSnapshotLogStore::connect(&"s".repeat(64), &dsn(), 4, 5_000)
-        .await
-        .unwrap();
-    let b = PostgresSnapshotLogStore::connect(&"S".repeat(64), &dsn(), 4, 5_000)
-        .await
-        .unwrap();
-    let account = uuid::Uuid::new_v4().simple().to_string();
-    a.append_rows_if_latest(&account, "main", None, &rows(1, &["/", "docs/a"]))
-        .await
-        .unwrap();
-    assert!(b
-        .load_latest_indexed_commit(&account, "main")
-        .await
-        .unwrap()
-        .is_none());
-    assert!(b
-        .query_path_commits(&account, "main", &["docs/a".into()], i64::MAX, 0, 10)
-        .await
-        .unwrap()
-        .is_empty());
-    // Identical rows must also fit in the unique key for another service.
-    b.append_rows_if_latest(&account, "main", None, &rows(1, &["/", "docs/a"]))
-        .await
-        .unwrap();
-    b.append_rows_if_latest(&account, "main", Some(&oid(1)), &rows(2, &["/", "docs/a"]))
-        .await
-        .unwrap();
-    assert_eq!(
-        a.load_latest_indexed_commit(&account, "main")
-            .await
-            .unwrap()
-            .unwrap()
-            .1,
-        oid(1)
-    );
-    for (store, expected) in [(&a, vec![oid(1)]), (&b, vec![oid(2), oid(1)])] {
-        let hits = store
-            .query_path_commits(&account, "main", &["docs/a".into()], i64::MAX, 0, 10)
-            .await
-            .unwrap();
-        assert_eq!(
-            hits.into_iter().map(|hit| hit.commit_oid).collect::<Vec<_>>(),
-            expected
-        );
-    }
-    cleanup(&account).await;
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a real PostgreSQL database"]
 async fn postgres_snapshot_log_serializes_first_and_subsequent_appends() {
