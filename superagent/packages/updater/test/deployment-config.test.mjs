@@ -672,6 +672,34 @@ test('Lark message access is the owner\'s unless an instance keeps to the bot\'s
   });
 });
 
+test('the voice-message trade-offs are chosen per Lark instance and pinned in its daemon env', () => {
+  const manifest = validManifest();
+  Object.assign(manifest.agents[1], { larkVoiceExactDuration: true, larkVoiceFileFallback: true });
+  withManifest(manifest, (manifestPath) => {
+    const env = { OV_SUPERAGENT_CONFIG: manifestPath };
+    const deployment = loadDeploymentManifest(env);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').larkVoiceExactDuration, false);
+    assert.equal(selectDeploymentAgent(deployment, 'alpha').larkVoiceFileFallback, false);
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION, 'true');
+    assert.equal(env.OV_SUPERAGENT_LARK_VOICE_FILE_FALLBACK, 'true');
+    applyDeploymentAgentEnv(env, deployment, 'alpha');
+    assert.equal(env.OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION, 'false');
+    assert.equal(env.OV_SUPERAGENT_LARK_VOICE_FILE_FALLBACK, 'false');
+  });
+  const wrong = validManifest();
+  wrong.agents[0].larkVoiceFileFallback = 'yes';
+  withManifest(wrong, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[0\]\.larkVoiceFileFallback must be a boolean/);
+  });
+  const elsewhere = validManifest();
+  Object.assign(elsewhere.agents[2], { channel: 'weixin', connectors: ['weixin'], larkVoiceExactDuration: true });
+  delete elsewhere.agents[2].profile;
+  withManifest(elsewhere, (manifestPath) => {
+    assert.throws(() => loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath }), /agents\[2\]\.larkVoiceExactDuration is only used by the lark connector/);
+  });
+});
+
 test('a bot-only instance\'s owner is pinned in its daemon env, and never leaks into another instance', () => {
   const manifest = validManifest();
   Object.assign(manifest.agents[1], { larkMessageAccess: 'bot', larkOwnerOpenId: 'ou_owner12345678' });

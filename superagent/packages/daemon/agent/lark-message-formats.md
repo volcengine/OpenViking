@@ -40,6 +40,8 @@
 
 语音只能走 `file_path`。上传时 `file_type=opus`，发送时必须配 `msg_type=audio`；把一段音频的 `file_key` 再用 `file_key` 正文发一次，发的是 `msg_type=file`，飞书直接回 230055（整条发不出去，不是显示问题），所以重发同一段语音要再给一次 `file_path`。上传上限 30 MB、不收空文件，daemon 的 file 正文上限 20 MiB 会先撞上。
 
+部署可以按实例选两种取舍：`agents[].larkVoiceExactDuration` 用精确毫秒上传（气泡显示真实时长，多一次 lark-cli 调用），默认关，走 lark-cli 一次调用、时长按整秒向上取整；`agents[].larkVoiceFileFallback` 在音频无法变成语音条时改发文件附件，默认关，改为直接报错。
+
 语音条没有文字说明区，一次决策只发一条语音；要附带说明就另发一条 `markdown`。文本转语音不在 daemon 里做：需要语音回复时，先用工作区里可用的 TTS 工具生成音频文件再 `file_path` 发送，生成 `.opus` 最省事。
 
 ## 卡片与用户选择

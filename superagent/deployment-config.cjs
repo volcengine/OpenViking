@@ -105,6 +105,8 @@ const AGENT_FIELDS = Object.freeze([
   'profile',
   'larkMessageAccess',
   'larkOwnerOpenId',
+  'larkVoiceExactDuration',
+  'larkVoiceFileFallback',
   'port',
   'dataDir',
   'tempDir',
@@ -427,6 +429,17 @@ function parseAgent(value, index, ignored) {
     && (typeof value.larkOwnerOpenId !== 'string' || !/^ou_[A-Za-z0-9_-]+$/.test(value.larkOwnerOpenId))) {
     throw new Error(`${label}.larkOwnerOpenId must be a Feishu/Lark open_id (ou_...)`);
   }
+  // The two voice-message trade-offs a deployment can pick (see
+  // agent/lark-message-formats.md): how a voice bubble gets its length, and
+  // what happens to audio that cannot be turned into one.
+  for (const key of ['larkVoiceExactDuration', 'larkVoiceFileFallback']) {
+    if (!connectors.includes('lark') && value[key] !== undefined) {
+      throw new Error(`${label}.${key} is only used by the lark connector`);
+    }
+    if (value[key] !== undefined && typeof value[key] !== 'boolean') {
+      throw new Error(`${label}.${key} must be a boolean`);
+    }
+  }
   if (value.ovAutoRecall !== undefined && typeof value.ovAutoRecall !== 'boolean') {
     throw new Error(`${label}.ovAutoRecall must be a boolean`);
   }
@@ -484,6 +497,8 @@ function parseAgent(value, index, ignored) {
     profile: connectors.includes('lark') ? manifestString(value.profile, `${label}.profile`) : null,
     larkMessageAccess: connectors.includes('lark') ? value.larkMessageAccess ?? 'owner' : null,
     larkOwnerOpenId: connectors.includes('lark') ? value.larkOwnerOpenId ?? null : null,
+    larkVoiceExactDuration: connectors.includes('lark') ? value.larkVoiceExactDuration ?? false : null,
+    larkVoiceFileFallback: connectors.includes('lark') ? value.larkVoiceFileFallback ?? false : null,
     port: value.port,
     dataDir: manifestAbsolutePath(value.dataDir, `${label}.dataDir`),
     tempDir: value.tempDir == null ? null : manifestAbsolutePath(value.tempDir, `${label}.tempDir`),
@@ -752,6 +767,14 @@ function applyDeploymentAgentEnv(env, deployment, requestedId) {
   // Set or removed, so another instance's owner never leaks in.
   if (agent.larkOwnerOpenId) env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID = agent.larkOwnerOpenId;
   else delete env.OV_SUPERAGENT_LARK_OWNER_OPEN_ID;
+  // Always set, so neither the shell nor another instance's value leaks in.
+  if (agent.profile) {
+    env.OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION = agent.larkVoiceExactDuration ? 'true' : 'false';
+    env.OV_SUPERAGENT_LARK_VOICE_FILE_FALLBACK = agent.larkVoiceFileFallback ? 'true' : 'false';
+  } else {
+    delete env.OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION;
+    delete env.OV_SUPERAGENT_LARK_VOICE_FILE_FALLBACK;
+  }
   Object.assign(env, openVikingAgentEnv(agent));
   // Always set, so neither the shell nor another instance's value leaks in.
   env.OV_SUPERAGENT_OV_AUTO_RECALL = agent.ovAutoRecall ? 'true' : 'false';

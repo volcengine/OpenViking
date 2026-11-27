@@ -362,29 +362,93 @@ export class LarkClient {
   // attachment. lark-cli takes only Ogg Opus, so another container (mp3, wav,
   // m4a, ...) and a .opus/.ogg that is not Ogg Opus, is converted with ffmpeg
   // first, from the frozen file's own directory.
+  //
+  // Two choices belong to the deployment (agents[].larkVoiceExactDuration and
+  // .larkVoiceFileFallback): how the bubble gets its length, and what to do with
+  // audio that cannot become one at all.
   async deliverVoice(target, content, suffix) {
     const dir = path.dirname(content.path);
     const work = needsVoiceConversion(content.path) ? fs.mkdtempSync(path.join(dir, '.voice-')) : null;
     try {
-      const file = work ? await toOpus(this.registry, content.path, work, this.logger) : content.path;
+      let file;
+      try {
+        file = work ? await toOpus(this.registry, content.path, work, this.logger) : content.path;
+      } catch (error) {
+        if (!this.config.larkVoiceFileFallback) throw error;
+        this.logger.warn('lark_voice_fallback_to_file', {
+          file: path.basename(content.path), error: error.message,
+        });
+        return await this.sendAudioAsFile(target, content, suffix);
+      }
       // Lark shows the length it reads from the uploaded file, and 00:01 when it
       // finds none, so the file that leaves here has to carry one.
       const durationMs = probeVoiceDurationMs(file);
       if (durationMs === null) {
+        if (this.config.larkVoiceFileFallback) {
+          this.logger.warn('lark_voice_fallback_to_file', { file: path.basename(content.path), error: 'no length' });
+          return await this.sendAudioAsFile(target, content, suffix);
+        }
         throw new Error(`ffmpeg did not produce Ogg Opus from ${path.basename(content.path)}, and Lark shows any `
           + `other audio as a 00:01 voice message; ${convertHint(content.path)}`);
       }
       this.logger.debug('lark_voice_send', { file: path.basename(content.path), duration_ms: durationMs });
-      try {
-        return await this.im([...target, '--audio', `./${path.relative(dir, file).split(path.sep).join('/')}`, ...suffix],
-          'send voice message', { cwd: dir });
-      } catch (error) {
-        throw new Error(`${error.message}; Lark shows a voice message only for Ogg Opus (.opus, or Ogg Opus .ogg), `
-          + 'so convert the audio to .opus and retry; to send the bytes unchanged, attach them in a document instead');
+      const relative = `./${path.relative(dir, file).split(path.sep).join('/')}`;
+      if (this.config.larkVoiceExactDuration) {
+        return await this.sendVoiceWithDuration(target, file, relative, durationMs, suffix, dir);
       }
+      return await this.sendVoice(target, relative, suffix, dir);
     } finally {
       if (work) fs.rmSync(work, { recursive: true, force: true });
     }
+  }
+
+  // The upload API's `duration` is the only place a voice message's length comes
+  // from, and lark-cli's own `--audio` upload rounds it up to whole seconds
+  // (13.0 s shows 00:14). Uploading the file here with the exact milliseconds
+  // and sending the file key keeps the bubble at its real length, at the cost of
+  // the upload being a separate call: the send's idempotency key cannot cover
+  // it, so a failed send leaves an unused file key behind.
+  async sendVoiceWithDuration(target, file, relative, durationMs, suffix, dir) {
+    const key = await this.uploadAudio('upload voice message',
+      { file_type: 'opus', file_name: path.basename(file), duration: durationMs }, relative, dir);
+    try {
+      return await this.sendVoice(target, key, suffix, dir);
+    } catch (error) {
+      this.logger.warn('lark_voice_upload_orphaned', { file: path.basename(file), error: error.message });
+      throw error;
+    }
+  }
+
+  // A voice send lark-cli rejected is reported with a way forward; the upload
+  // that may precede it is not.
+  async sendVoice(target, audio, suffix, dir) {
+    try {
+      return await this.im([...target, '--audio', audio, ...suffix], 'send voice message', { cwd: dir });
+    } catch (error) {
+      throw new Error(`${error.message}; Lark shows a voice message only for Ogg Opus (.opus, or Ogg Opus .ogg), `
+        + 'so convert the audio to .opus and retry; to send the bytes unchanged, attach them in a document instead');
+    }
+  }
+
+  // `agents[].larkVoiceFileFallback`: the bytes cannot become a voice message
+  // (no ffmpeg, or a container ffmpeg cannot read), so they go out as an
+  // attachment instead of failing the delivery. Uploaded as `stream` because a
+  // .opus or .ogg name would be typed opus, and Lark rejects an opus-typed file
+  // message (230055) instead of showing it as an attachment.
+  async sendAudioAsFile(target, content, suffix) {
+    const dir = path.dirname(content.path);
+    const name = path.basename(content.path);
+    const key = await this.uploadAudio('upload audio attachment',
+      { file_type: 'stream', file_name: name }, `./${name}`, dir);
+    return await this.im([...target, '--file', key, ...suffix], 'send attachment', { cwd: dir });
+  }
+
+  async uploadAudio(label, body, relative, dir) {
+    const data = await this.cli(['im', 'files', 'create', '--as', 'bot', '--data', JSON.stringify(body),
+      '--file', `file=${relative}`, '--format', 'json'], label, { cwd: dir });
+    const key = data?.file_key;
+    if (typeof key !== 'string' || !key) throw new Error(`lark-cli ${label} returned no file_key`);
+    return key;
   }
 
   async cardWithImages({ card, card_images: assets }) {

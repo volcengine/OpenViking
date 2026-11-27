@@ -88,6 +88,10 @@ export function childConfig(config, instance) {
     meetingNotes: instance.type === 'lark' && Boolean(config.meetingNotes),
     // A bot-only Lark bot has no user login to tell its owner by.
     larkOwnerOpenId: instance.type === 'lark' ? config.larkOwnerOpenId ?? null : null,
+    // How a voice message gets its length, and what to do when the audio cannot
+    // become one (see agent/lark-message-formats.md).
+    larkVoiceExactDuration: instance.type === 'lark' ? Boolean(config.larkVoiceExactDuration) : false,
+    larkVoiceFileFallback: instance.type === 'lark' ? Boolean(config.larkVoiceFileFallback) : false,
     // A mailbox stores each mail in OV before reporting it; so does the Lark
     // Connector each meeting note.
     openVikingConfigPath: instance.type === 'email' || (instance.type === 'lark' && config.meetingNotes)
@@ -325,10 +329,15 @@ export class ConnectorProcess {
     } else if (this.type === 'lark' && input.content?.type === 'file' && isLarkVideo(input.content.path)) {
       // Cover extraction runs before the CLI send.
       timeoutMs += LARK_VIDEO_PREP_MS + 1000;
-    } else if (this.type === 'lark' && input.content?.type === 'file' && isLarkAudio(input.content.path)
-      && needsVoiceConversion(input.content.path)) {
-      // Re-encoding to the Ogg Opus a voice message needs runs before the CLI send.
-      timeoutMs += LARK_AUDIO_PREP_MS + 1000;
+    } else if (this.type === 'lark' && input.content?.type === 'file' && isLarkAudio(input.content.path)) {
+      if (needsVoiceConversion(input.content.path)) {
+        // Re-encoding to the Ogg Opus a voice message needs runs before the CLI send.
+        timeoutMs += LARK_AUDIO_PREP_MS + 1000;
+      }
+      if (this.config.larkVoiceExactDuration) {
+        // The length is uploaded with the file first, so the send is a second CLI call.
+        timeoutMs += (this.config.sendTimeoutMs ?? 30_000) + 1000;
+      }
     }
     return this.request('action', { name, input }, timeoutMs);
   }

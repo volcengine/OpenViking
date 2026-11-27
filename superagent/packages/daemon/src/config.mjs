@@ -450,6 +450,15 @@ export function getConfig() {
     // agents[].larkOwnerOpenId: the owner of a bot-only instance, which has no
     // user login to tell them by (setup keeps who confirmed the app's scan).
     larkOwnerOpenId: openIdEnv('OV_SUPERAGENT_LARK_OWNER_OPEN_ID'),
+    // agents[].larkVoiceExactDuration: a voice message's length comes from the
+    // upload's own `duration`, which lark-cli computes and rounds up to whole
+    // seconds. On, the daemon uploads the Ogg Opus itself with the exact
+    // milliseconds and sends the file key, at the cost of one more CLI call.
+    larkVoiceExactDuration: boolEnv('OV_SUPERAGENT_LARK_VOICE_EXACT_DURATION', false),
+    // agents[].larkVoiceFileFallback: audio that cannot become a voice message
+    // (no ffmpeg, or a container it cannot read) is sent as a file attachment
+    // instead of failing the delivery. Off, it is an error.
+    larkVoiceFileFallback: boolEnv('OV_SUPERAGENT_LARK_VOICE_FILE_FALLBACK', false),
     // Opt-in per instance (agents[].meetingNotes), on one instance at most:
     // the owner's Feishu/Lark meeting notes are stored in OV.
     meetingNotes: boolEnv('OV_SUPERAGENT_MEETING_NOTES', false) && connectors.includes('lark'),
