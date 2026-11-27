@@ -11,6 +11,7 @@ import {
   matchPrefix,
   parseCommand,
 } from '../src/commands.mjs';
+import { RUNTIME_IDS } from '../src/runtime-catalog.mjs';
 
 function fakeCodex(overrides = {}) {
   const calls = [];
@@ -396,6 +397,15 @@ describe('executeCommand', () => {
     assert.match(result.text, /claude/);
     assert.match(result.text, /ark/);
     assert.deepEqual(agent.calls, []);
+  });
+
+  it('lists the runtimes this machine can start, not the whole catalogue', async () => {
+    const agent = fakeCodex();
+    const availability = Object.fromEntries(RUNTIME_IDS.map((id) => [id, { available: ['pi', 'durable', 'dsh'].includes(id), reason: 'command' }]));
+    const result = await executeCommand({ name: 'runtime', arg: '' }, agent, { availability });
+
+    assert.match(result.text, /^当前 Runtime：codex\n可选：pi、durable、dsh\n/);
+    assert.doesNotMatch(result.text, /traex|claude|ark|opencode/);
   });
 
   it('selects runtime aliases and treats the current runtime as a no-op', async () => {

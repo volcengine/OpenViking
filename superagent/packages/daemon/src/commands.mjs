@@ -217,7 +217,9 @@ function modelMenuLines(models, runtime) {
 // own event/config context and do not wait for or change the model session.
 // `runtimeCard(snapshot)` and `statusCard(snapshot)` answer /runtime (with no
 // argument) and /status with a card too, where the caller can send one.
-export async function executeCommand(command, runtime, { primary, tasks, workers, statusExtra = () => '', runtimeCard = null, statusCard = null } = {}) {
+// `availability` is what runtime-availability.mjs reports for this machine: /runtime
+// lists the runtimes it can start, not every runtime the catalogue knows.
+export async function executeCommand(command, runtime, { primary, tasks, workers, statusExtra = () => '', runtimeCard = null, statusCard = null, availability = null } = {}) {
   if (command.name === 'primary') {
     return primary ? primary(command) : { ok: false, text: '当前环境不支持 /primary。' };
   }
@@ -251,7 +253,9 @@ export async function executeCommand(command, runtime, { primary, tasks, workers
   }
 
   if (command.name === 'runtime') {
-    const options = RUNTIME_IDS.map((id) => id === 'volc' ? 'volc（ark）' : id).join('、');
+    const startable = availability
+      ? RUNTIME_IDS.filter((id) => availability[id]?.available !== false) : RUNTIME_IDS;
+    const options = (startable.length ? startable : RUNTIME_IDS).map((id) => id === 'volc' ? 'volc（ark）' : id).join('、');
     if (!command.arg) {
       let card;
       if (runtimeCard) {

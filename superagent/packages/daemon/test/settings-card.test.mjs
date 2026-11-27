@@ -50,6 +50,21 @@ function tables(card) {
 
 const routerModelOptions = (card) => selects(card).find((select) => select.name === 'router_model');
 const workerModelOptions = (card) => selects(card).find((select) => select.name === 'worker_model');
+const runtimeOptions = (card, name = 'router_runtime') => selects(card).find((select) => select.name === name);
+
+// What runtime-availability.mjs reports for an install that has the two bundled
+// runtimes plus DSH, which is what a fresh install looks like.
+const ONE_MACHINE = {
+  pi: { available: true, reason: '' },
+  durable: { available: true, reason: '' },
+  dsh: { available: true, reason: '' },
+  codex: { available: false, reason: 'command' },
+  traex: { available: false, reason: 'command' },
+  claude: { available: false, reason: 'command' },
+  opencode: { available: false, reason: 'command' },
+  agy: { available: false, reason: 'command' },
+  volc: { available: false, reason: 'key' },
+};
 
 describe('runtime settings card', () => {
   it('never offers the runtime default selector as a model', () => {
@@ -94,6 +109,48 @@ describe('runtime settings card', () => {
     // must not arrive there as a model either.
     assert.deepEqual(now.worker, { runtime: 'router', model: '', effort: '' });
     assert.equal(settings.modelFor('pi').model, null);
+  });
+
+  it('offers only the runtimes this machine can start', () => {
+    const card = settingsCard({ snapshot: snapshotFor(), settings: settingsOn({ runtime: 'pi', model: 'pi', effort: 'max' }),
+      availability: ONE_MACHINE });
+
+    // The catalogue has nine runtimes; this machine runs three, and the dropdown
+    // says so instead of offering five that would fail to start.
+    assert.deepEqual(runtimeOptions(card).options.map((option) => option.value), ['pi', 'durable', 'dsh']);
+    // The workers run on a subset of the same catalogue; Pi is the router's runtime
+    // here, so the worker list offers following it.
+    assert.deepEqual(runtimeOptions(card, 'worker_runtime').options.map((option) => option.value), ['router']);
+    // What was left out is named, once per reason.
+    const notes = JSON.stringify(card.body);
+    assert.match(notes, /未列出（这台机器上找不到命令）：codex、traex、claude、opencode、agy/);
+    assert.match(notes, /未列出（没有配置 ARK_API_KEY）：volc/);
+  });
+
+  it('keeps the runtimes in use listed even when the probe no longer finds them', () => {
+    // Runtimes that disappeared from PATH after the daemon started are still where
+    // the agent runs and where /workers points: the card has to name them rather
+    // than draw a dropdown that omits them.
+    const values = new Map([['worker_runtime', 'codex']]);
+    const settings = new WorkerSettings({ router: () => ({ runtime: 'claude', model: 'sonnet', effort: '' }),
+      store: { getSetting: (key) => values.get(key) ?? '', setSetting: (key, value) => values.set(key, value) } });
+    const card = settingsCard({ snapshot: snapshotFor({ runtime: 'claude', model: 'sonnet' }), settings,
+      availability: ONE_MACHINE });
+
+    // Catalogue order: the keep list is what the instance is set to, not where it is.
+    assert.deepEqual(runtimeOptions(card).options.map((option) => option.value), ['codex', 'claude', 'pi', 'durable', 'dsh']);
+    assert.equal(runtimeOptions(card).initial, 'claude');
+    assert.deepEqual(runtimeOptions(card, 'worker_runtime').options.map((option) => option.value), ['pi', 'codex', 'claude']);
+    assert.equal(runtimeOptions(card, 'worker_runtime').initial, 'codex');
+    assert.match(JSON.stringify(card.body), /未列出（这台机器上找不到命令）：traex、opencode、agy/);
+  });
+
+  it('offers the whole catalogue when the caller knows nothing about this machine', () => {
+    // Cards drawn without a probe (older callers, tests) keep the catalogue list.
+    const card = settingsCard({ snapshot: snapshotFor() });
+    assert.deepEqual(runtimeOptions(card).options.map((option) => option.value),
+      ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'dsh', 'opencode', 'agy']);
+    assert.doesNotMatch(JSON.stringify(card.body), /未列出/);
   });
 
   it('does not turn a submitted selector into a model change', async () => {
