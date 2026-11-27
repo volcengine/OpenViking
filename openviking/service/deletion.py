@@ -396,9 +396,6 @@ class DeletionService:
                 runtime_config = self._service.runtime_config_manager
                 if runtime_config is not None:
                     await run_to_completion(lambda: runtime_config.delete_account(account_id))
-                compile_cleanup = getattr(self._service, "compile_account_cleanup", None)
-                if compile_cleanup is not None:
-                    await run_to_completion(lambda: compile_cleanup(account_id))
                 await run_to_completion(lambda: self._delete_account_files(account_id))
             else:
                 await run_to_completion(lambda: self._delete_uploads(ctx))
@@ -408,6 +405,9 @@ class DeletionService:
                     )
                 )
 
+            compile_cleanup = getattr(self._service, "compile_config_cleanup", None)
+            if compile_cleanup is not None:
+                await run_to_completion(lambda: compile_cleanup(account_id, user_id))
             deleted = await run_to_completion(
                 lambda: self._manager.finish_deletion(account_id, user_id, task_id)
             )

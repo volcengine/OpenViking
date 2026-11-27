@@ -142,7 +142,9 @@ class OpenVikingService:
         self._server_config: Optional[ServerConfig] = None
         self._compile_scheduler: Optional[CompileScheduler] = None
         self._close_compile_store: Optional[Callable[[], Awaitable[None]]] = None
-        self.compile_account_cleanup: Optional[Callable[[str], Awaitable[None]]] = None
+        self.compile_config_cleanup: Optional[Callable[[str, Optional[str]], Awaitable[None]]] = (
+            None
+        )
         self._encryptor: Optional[Any] = None
         self._privacy_config_service: Optional[UserPrivacyConfigService] = None
         self._privacy_sanitizer: Optional[PrivacySanitizer] = None
@@ -879,7 +881,7 @@ class OpenVikingService:
         if sql_compile_store is not None:
             await sql_compile_store.load()
             self._close_compile_store = sql_compile_store.close
-            self.compile_account_cleanup = sql_compile_store.delete_config
+            self.compile_config_cleanup = sql_compile_store.delete_config
             compile_store = sql_compile_store
         else:
             compile_store = CompileStateStore(self._agfs_client)
@@ -1206,7 +1208,7 @@ class OpenVikingService:
         if close_compile_store is not None:
             await close_compile_store()
             self._close_compile_store = None
-            self.compile_account_cleanup = None
+            self.compile_config_cleanup = None
 
         close_vlm_resolver = getattr(vlm_resolver, "close", None)
         if callable(close_vlm_resolver):

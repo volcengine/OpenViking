@@ -3522,6 +3522,8 @@ async def test_user_list_hides_other_prefixes_and_mismatched_keys():
 async def test_sqlite_identity_cleanup_with_tasks_exceeding_variable_limit(
     admin_client, admin_service, admin_app, monkeypatch, tmp_path, scope
 ):
+    from openviking.service.compile_store_sqlite import SQLiteCompileStore
+    from openviking.service.compile_targets import new_record
     from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
     from openviking.service.task_tracker import TaskTracker, set_task_tracker
     from tests.service.test_task_store_sql_deletion import _LimitedConnection, _seed, _snapshot
@@ -3531,7 +3533,13 @@ async def test_sqlite_identity_cleanup_with_tasks_exceeding_variable_limit(
     store._engine_options["connect_args"]["factory"] = _LimitedConnection
     await store.load()
     set_task_tracker(TaskTracker(store))
+    compile_params = {"path": str(tmp_path / "compile.db"), "maxsize": 1}
+    compile_store = SQLiteCompileStore(compile_params, "cleanup")
+    other_compile_store = SQLiteCompileStore(compile_params, "other-service")
     try:
+        await compile_store.load()
+        await other_compile_store.load()
+        monkeypatch.setattr(admin_service, "compile_config_cleanup", compile_store.delete_config)
         await admin_app.state.deletion_service.initialize()
         acct = _uid()
         response = await admin_client.post(
@@ -3548,6 +3556,19 @@ async def test_sqlite_identity_cleanup_with_tasks_exceeding_variable_limit(
         assert response.status_code == 200, response.text
         await _seed(store, [f"task-{i:03}" for i in range(80)], account=acct, user="bob")
         await _seed(store, ["alice-task"], account=acct, user="alice")
+        foreign_account = _uid()
+        record = new_record(
+            {
+                "from": ["viking://resources/source"],
+                "to": "viking://resources/output",
+                "skill": "viking://system/compile/example-skills/llm-wiki",
+                "auto_update": True,
+                "update_schedule": {"frequency": "daily", "hour": 8, "minute": 0},
+            }
+        )
+        for account, user in ((acct, "bob"), (acct, "alice"), (foreign_account, "bob")):
+            await compile_store.create_config(account, user, "wiki", record)
+        await other_compile_store.create_config(acct, "bob", "wiki", record)
         ctx = RequestContext(user=UserIdentifier(acct, "bob"), role=Role.USER)
         uri = "viking://user/bob/memories/private.md"
         await admin_service.viking_fs.write_file(uri, "private", ctx=ctx)
@@ -3576,8 +3597,15 @@ async def test_sqlite_identity_cleanup_with_tasks_exceeding_variable_limit(
             assert not any(row["task_id"].startswith("task-") for row in rows)
         alice = await store.get_task("alice-task", account_id=acct, user_id="alice")
         assert (alice is None) == (scope == "account")
+        assert not [item async for item in compile_store.list_configs(acct, "bob")]
+        alice_configs = [item async for item in compile_store.list_configs(acct, "alice")]
+        assert len(alice_configs) == (0 if scope == "account" else 1)
+        assert len([item async for item in compile_store.list_configs(foreign_account)]) == 1
+        assert len([item async for item in other_compile_store.list_configs(acct, "bob")]) == 1
     finally:
         set_task_tracker(original_tracker)
+        await other_compile_store.close()
+        await compile_store.close()
         await store.close()
 
 

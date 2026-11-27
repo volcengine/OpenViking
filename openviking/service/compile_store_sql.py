@@ -126,7 +126,7 @@ def _validate_id(value: str, name: str, validator) -> None:
 
 @sql_runtime_store
 class SQLCompileStore:
-    """Persist Compile state with atomic writes and scoped account cleanup."""
+    """Persist Compile state with atomic writes and scoped identity cleanup."""
 
     dialect: str
     dependency: str
@@ -296,8 +296,8 @@ class SQLCompileStore:
                 )
         return True
 
-    async def delete_config(self, account_id: str) -> None:
-        """Delete all configs for the given account in this service."""
+    async def delete_config(self, account_id: str, owner_user_id: str | None = None) -> None:
+        """Delete an account's configs, optionally limited to one owner, in this service."""
         if not account_id:
             raise ValueError("Compile account cleanup requires a non-empty account_id")
         configs = self._configs
@@ -305,6 +305,8 @@ class SQLCompileStore:
             configs.c.service_name == self._service_name,
             configs.c.account_id == account_id,
         )
+        if owner_user_id is not None:
+            scope += (configs.c.owner_user_id == owner_user_id,)
         async with self._write() as session:
             await session.execute(delete(configs).where(*scope))
 
