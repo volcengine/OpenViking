@@ -370,6 +370,30 @@ test("the hook hosts' doctor reports no hook-budget overrun at any request timeo
   }
 });
 
+test("the hook hosts' doctor hands Claude Code and Codex over to their own doctors", () => {
+  const home = mkdtempSync(join(tmpdir(), "ov-doctor-handover-"));
+  const doctor = fileURLToPath(new URL("../agent-hook-plugin/scripts/ov-memory-doctor.mjs", import.meta.url));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("OPENVIKING_") && !key.startsWith("CLAUDE") && !key.startsWith("CODEX")));
+  const runningFrom = (args, extra = {}) => {
+    const run = spawnSync(process.execPath, [doctor, ...args, "--offline", "--json"], {
+      cwd: home,
+      env: { ...env, ...extra, HOME: home, PATH: dirname(process.execPath) },
+      encoding: "utf8",
+    });
+    const install = JSON.parse(run.stdout).sections.find((section) => section.title === "Plugin install");
+    return install.findings.find((finding) => finding.title.startsWith("running from")).title;
+  };
+  try {
+    assert.match(runningFrom(["claude-code"]), /directory install \/ dev checkout/);
+    assert.match(runningFrom(["codex"]), /marketplace checkout \/ dev directory/);
+    assert.match(runningFrom([], { CLAUDECODE: "1" }), /directory install \/ dev checkout/);
+    assert.match(runningFrom([], { CODEX_THREAD_ID: "t" }), /marketplace checkout \/ dev directory/);
+    assert.match(runningFrom(["cursor"], { CLAUDECODE: "1" }), /client cursor/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 const CLI_PATH = "/nowhere/.openviking/ovcli.conf";
 const OV_PATH = "/nowhere/.openviking/ov.conf";
 const cliConf = (data) => ({ ok: true, path: CLI_PATH, data });

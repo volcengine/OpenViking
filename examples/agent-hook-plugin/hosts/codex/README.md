@@ -449,8 +449,11 @@ Then re-run the extraction check above.
 ```
 agent-hook-plugin/
 ├── .codex-plugin/
-│   └── plugin.json              # Codex manifest: points hooks, MCP and skills at hosts/codex/, "commands": []
+│   └── plugin.json              # Codex manifest: points hooks and MCP at hosts/codex/, skills at skills/, "commands": []
 ├── scripts/hook.mjs             # Every lifecycle hook: hook.mjs <Event> codex
+├── scripts/ov-memory-doctor.mjs # Doctor entry; hands over to hosts/codex/ov-memory-doctor.mjs
+├── skills/                      # openviking-memory, openviking-skills, ov-experience-memory,
+│                                  openviking-rule-search, ov-memory-doctor
 ├── servers/mcp-proxy.mjs        # Shared stdio -> OpenViking /mcp bridge (OPENVIKING_HOOK_SOURCE=codex)
 ├── lib/                         # Shared config, HTTP, recall, capture and the hook flow (lib/flow/)
 └── hosts/codex/
@@ -458,8 +461,6 @@ agent-hook-plugin/
     ├── hooks.json               # SessionStart + UserPromptSubmit + Stop + SessionEnd + PreCompact
     │                              + the usage hooks (Codex's native ${PLUGIN_ROOT} token)
     ├── .mcp.json                # stdio MCP wiring
-    ├── skills/                  # openviking-memory, openviking-skills, ov-experience-memory,
-    │                              openviking-rule-search, ov-memory-doctor
     ├── host-compressor.mjs, recall-compressor-profile.mjs, codex-launch.mjs  # local recall compressor
     ├── usage/                   # OV-Usage source summaries (track-lookup, report)
     ├── ov-memory-doctor.mjs     # Diagnostics script ($ov-memory-doctor skill)

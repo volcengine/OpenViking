@@ -227,7 +227,7 @@ The library lives in `examples/agent-hook-plugin/lib/`. Hook hosts import it in 
 - Each entry in `TARGETS` names only where a plugin's own code lives, where its copies go, and whether the copies are `committed`. The file set is the transitive closure of what that code imports (static imports, literal dynamic imports, and JSON files read through `new URL("./x.json", import.meta.url)`), plus `.d.mts` declarations when the plugin's TypeScript imports the copies.
 - Copies carry the header `// GENERATED FROM examples/agent-hook-plugin/lib. DO NOT EDIT.`; JSON data files are copied byte-identical.
 - `committed: true` is for plugins a host installs by pointing at a directory in this repository (Agent Plugins, OpenClaw); a bot regenerates them on main. `committed: false` is for plugins built into a package or tarball (OpenCode, DSH, pi), which generate their copies at pack time.
-- `DATA_TARGETS` copies lib data files outside the plugins (the gateway's `server-features.json`); `SKILL_TARGETS` copies skills verbatim.
+- `DATA_TARGETS` copies lib data files outside the plugins (the gateway's `server-features.json`); `SKILL_TARGETS` copies skills verbatim: committed into `agent-hook-plugin/skills/` (the one copy every hook host installs from), OpenClaw and Agent Plugins, generated at pack time for OpenCode, DSH and pi.
 - The script reports a copy nothing imports any more (`stale`) and a lib module no target imports (`unused`).
 
 After changing the library, run:

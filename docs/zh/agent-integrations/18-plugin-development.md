@@ -227,7 +227,7 @@ hook 自动完成生命周期行为；MCP 暴露由模型决定调用的工具�
 - `TARGETS` 中每一项只写插件自身代码的位置、副本输出位置，以及副本是否 `committed`。文件集合是该代码 import 的传递闭包（静态 import、字面量动态 import，以及通过 `new URL("./x.json", import.meta.url)` 读取的 JSON 文件）；插件的 TypeScript import 这些副本时，还会带上 `.d.mts` 声明。
 - 副本带有文件头 `// GENERATED FROM examples/agent-hook-plugin/lib. DO NOT EDIT.`；JSON 数据文件逐字节复制。
 - `committed: true` 用于宿主直接指向本仓库目录安装的插件（Agent Plugins、OpenClaw），由 bot 在 main 上重新生成。`committed: false` 用于构建成 npm 包或 tarball 的插件（OpenCode、DSH、pi），在打包时生成副本。
-- `DATA_TARGETS` 把 lib 数据文件复制到插件之外（gateway 的 `server-features.json`）；`SKILL_TARGETS` 原样复制 skill。
+- `DATA_TARGETS` 把 lib 数据文件复制到插件之外（gateway 的 `server-features.json`）；`SKILL_TARGETS` 原样复制 skill：`agent-hook-plugin/skills/`（每个 hook 宿主都从这一份安装）、OpenClaw 和 Agent Plugins 的副本提交到仓库，OpenCode、DSH 和 pi 的副本在打包时生成。
 - 脚本会报告不再被 import 的副本（`stale`）和没有任何 target import 的 lib 模块（`unused`）。
 
 修改共享库后运行：

@@ -47,10 +47,10 @@ for (const [label, catalogPath, base] of [
   });
 }
 
-test("the Codex manifest points hooks, MCP, skills and assets at hosts/codex and declares no commands", () => {
+test("the Codex manifest points hooks, MCP and assets at hosts/codex, skills at the plugin's own, and declares no commands", () => {
   assert.equal(manifest.hooks, "./hosts/codex/hooks.json");
   assert.equal(manifest.mcpServers, "./hosts/codex/.mcp.json");
-  assert.equal(manifest.skills, "./hosts/codex/skills/");
+  assert.equal(manifest.skills, "./skills/");
   assert.deepEqual(manifest.commands, []);
   for (const rel of [manifest.hooks, manifest.mcpServers, manifest.interface.logo, manifest.interface.composerIcon]) {
     assert.ok(existsSync(fromManifest(rel)), rel);

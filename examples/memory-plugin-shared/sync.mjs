@@ -72,206 +72,21 @@ export const DATA_TARGETS = [
 ];
 
 // Skills are copied verbatim — a generated-from banner ahead of the `---`
-// frontmatter would break every skill loader.
-//
-// One entry per copy, the shape TARGETS uses, so the same assertions reach both
-// kinds of generated file. `committed` is true for every skill copy: .gitignore
-// covers the vendored shared/ directories only, and each host installs a skill
-// by copying its path out of this repository, so a copy git does not hold ships
-// nothing. Being a skill under examples/skills is not what ships it — an entry
-// here is.
+// frontmatter would break every skill loader. `committed` means what it means
+// for TARGETS. agent-plugins keeps its own hook-free openviking-memory, and
+// OpenClaw its own operator skill in that one's place.
 export const SKILLS_DIR = join(ROOT, "examples", "skills");
-export const SKILL_TARGETS = [
-  // openviking-memory is not shipped to openclaw-plugin: its REST tool surface
-  // has its own operator skill (openviking-context-database) with different
-  // tool names. Nor to agent-plugins, whose copy of this one skill is a
-  // deliberately different hook-free variant.
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codex", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-memory",
-    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
-    committed: true,
-  },
-  // The harnesses that bundle skills. agent-plugins has no hooks, so no
-  // session-start catalog: there the skill is the only way the model learns
-  // that the skills in OpenViking exist.
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codex", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "agent-plugins", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
-    committed: true,
-  },
-  {
-    skill: "openviking-skills",
-    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
-    committed: true,
-  },
-  // The harnesses that ship the experience workflow today. Where capture sends
-  // no tool parts (agent-plugins, Cursor; dsh with captureToolResults off),
-  // the copy only retrieves and applies Experience, and its reads feed no
-  // trajectory back to the server.
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codex", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "agent-plugins", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "openclaw-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "cursor", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", "qoder", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "dsh-memory-plugin", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "pi-coding-agent-extension", "skills"),
-    committed: true,
-  },
-  {
-    skill: "ov-experience-memory",
-    dir: join(ROOT, "examples", "opencode-plugin", "skills"),
-    committed: true,
-  },
-  // MCP hosts discover rule_search dynamically. OpenClaw exposes ov_rule_search
-  // through its REST client. Ship the workflow wherever the host bundles skills.
-  ...[
-    ["examples", "agent-hook-plugin", "skills"],
-    ["examples", "agent-hook-plugin", "hosts", "codex", "skills"],
-    ["examples", "agent-hook-plugin", "hosts", "cursor", "skills"],
-    ["examples", "agent-hook-plugin", "hosts", "codebuddy", "skills"],
-    ["examples", "agent-hook-plugin", "hosts", "qoder", "skills"],
-    ["examples", "dsh-memory-plugin", "skills"],
-    ["examples", "pi-coding-agent-extension", "skills"],
-    ["examples", "opencode-plugin", "skills"],
-    ["examples", "openclaw-plugin", "skills"],
-    ["agent-plugins", "skills"],
-  ].map((path) => ({
-    skill: "openviking-rule-search",
-    dir: join(ROOT, ...path),
-    committed: true,
-  })),
-  // TRAE and ZCode read these from the user's skills directory, Kimi Code and
-  // Antigravity from the plugin itself.
-  ...["trae", "zcode", "kimicode", "antigravity"].flatMap((host) => [
-    "openviking-memory",
-    "openviking-skills",
-    "ov-experience-memory",
-    "openviking-rule-search",
-  ].map((skill) => ({
-    skill,
-    dir: join(ROOT, "examples", "agent-hook-plugin", "hosts", host, "skills"),
-    committed: true,
-  }))),
-  // Claude Code and Codex each document a doctor of their own under this name;
-  // every other harness shares this one.
-  ...[
-    ...["cursor", "trae", "zcode", "kimicode", "codebuddy", "qoder", "antigravity"]
-      .map((host) => ["agent-hook-plugin", "hosts", host, "skills"]),
-    ["opencode-plugin", "skills"],
-    ["pi-coding-agent-extension", "skills"],
-    ["dsh-memory-plugin", "skills"],
-  ].map((path) => ({
-    skill: "ov-memory-doctor",
-    dir: join(ROOT, "examples", ...path),
-    committed: true,
-  })),
+const HOOK_HOST_SKILLS = ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search", "ov-memory-doctor"];
+const SKILL_DIRS = [
+  { dir: "examples/agent-hook-plugin/skills", skills: HOOK_HOST_SKILLS, committed: true },
+  { dir: "examples/opencode-plugin/skills", skills: HOOK_HOST_SKILLS, committed: false },
+  { dir: "examples/dsh-memory-plugin/skills", skills: HOOK_HOST_SKILLS, committed: false },
+  { dir: "examples/pi-coding-agent-extension/skills", skills: HOOK_HOST_SKILLS, committed: false },
+  { dir: "examples/openclaw-plugin/skills", skills: ["ov-experience-memory", "openviking-rule-search"], committed: true },
+  { dir: "agent-plugins/skills", skills: ["openviking-skills", "ov-experience-memory", "openviking-rule-search"], committed: true },
 ];
+export const SKILL_TARGETS = SKILL_DIRS.flatMap(({ dir, skills, committed }) =>
+  skills.map((skill) => ({ skill, dir: join(ROOT, ...dir.split("/")), committed })));
 
 const SOURCE_EXTENSIONS = new Set([".mjs", ".js", ".cjs", ".ts", ".mts"]);
 const SKIPPED_DIRS = new Set(["node_modules", ".git", "dist", "coverage"]);

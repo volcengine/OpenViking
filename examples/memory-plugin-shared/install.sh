@@ -1538,6 +1538,8 @@ dsh_pack_local() { # dsh_pack_local <plugin-dir> -> tarball path
     warn "$(t 'npm not found; installing the published dsh package instead of the local checkout.' '未找到 npm，将安装已发布的 dsh 包而非本地 checkout。')" >&2
     return 1
   }
+  # The generated copies are part of what gets packed, so they are fingerprinted too.
+  sync_shared_runtime >&2 || return 1
   fingerprint="$(dsh_source_fingerprint "$dir")" || {
     warn "$(t 'no sha256 tool found; installing the published dsh package instead of the local checkout.' '未找到 sha256 工具，将安装已发布的 dsh 包而非本地 checkout。')" >&2
     return 1
@@ -2740,7 +2742,7 @@ copy_agent_integration() { # copy_agent_integration <host> <dest-name> [destinat
   done
   rm -rf "$tmp/hosts/$host/fixtures"
   # The plugin root is also the Claude Code and Codex plugin; their packaging is theirs alone.
-  rm -rf "$tmp/.claude-plugin" "$tmp/.codex-plugin" "$tmp/.mcp.json" "$tmp/hooks" "$tmp/commands" "$tmp/mods" "$tmp/skills" "$tmp/scripts/statusline.mjs"
+  rm -rf "$tmp/.claude-plugin" "$tmp/.codex-plugin" "$tmp/.mcp.json" "$tmp/hooks" "$tmp/commands" "$tmp/mods" "$tmp/scripts/statusline.mjs"
   # Preserve the first-install timestamp across managed upgrades. The package
   # descriptor is copied from source; integration.json records this machine's
   # installation and must survive replacing the runtime directory.
@@ -3036,7 +3038,7 @@ install_cursor() {
   agent_write_json_configs cursor "$hooks_path" "$mcp_path" "$root" cursor "$NODE_BIN"
   mkdir -p "$HOME/.cursor/rules"
   cp "$root/hosts/cursor/rules/openviking-memory.mdc" "$HOME/.cursor/rules/openviking-memory.mdc"
-  install_host_skills cursor "$root/hosts/cursor/skills" "$HOME/.cursor/skills" || return 1
+  install_host_skills cursor "$root/skills" "$HOME/.cursor/skills" || return 1
   info "$(t 'Cursor hooks installed:' 'Cursor hooks 已安装：') $hooks_path"
   info "$(t 'Cursor MCP installed:' 'Cursor MCP 已安装：') $mcp_path"
   info "$(t 'Cursor Rule and Skill installed under ~/.cursor.' 'Cursor Rule 与 Skill 已安装到 ~/.cursor。')"
@@ -3071,7 +3073,7 @@ install_zcode() {
   # Merge the generated hooks.json and mcp.json into config.json so ZCode picks them up.
   zcode_merge_config "$config_path" "$hooks_path" "$mcp_path" \
     || { warn "$(t 'Failed to merge ZCode config' 'ZCode 配置合并失败')"; return 1; }
-  install_host_skills zcode "$root/hosts/zcode/skills" "$HOME/.zcode/skills" || return 1
+  install_host_skills zcode "$root/skills" "$HOME/.zcode/skills" || return 1
   info "$(t 'ZCode hooks installed:' 'ZCode hooks 已安装：') $config_path (hooks.events)"
   info "$(t 'ZCode MCP installed:' 'ZCode MCP 已安装：') $config_path (mcp.servers)"
   info "$(t 'ZCode skills installed:' 'ZCode skill 已安装：') $HOME/.zcode/skills"
@@ -3137,7 +3139,7 @@ fs.rmSync(tmp, { recursive: true, force: true });
 fs.mkdirSync(tmp, { recursive: true });
 fs.copyFileSync(path.join(hostDir, "plugin.json"), path.join(tmp, "plugin.json"));
 fs.writeFileSync(path.join(tmp, "hooks.json"), JSON.stringify(hooks, null, 2) + "\n", { mode: 0o600 });
-fs.cpSync(path.join(hostDir, "skills"), path.join(tmp, "skills"), { recursive: true });
+fs.cpSync(path.join(root, "skills"), path.join(tmp, "skills"), { recursive: true });
 if (!userHasServer) {
   // MCP commands run without a shell and expand no environment variables, so
   // every value is written out in full.
@@ -3198,7 +3200,7 @@ install_kimicode() {
     return 1
   }
   # The manifest names ./skills/, resolved from the plugin root.
-  cp -R "$root/hosts/kimicode/skills" "$bundle/skills" || {
+  mv "$root/skills" "$bundle/skills" || {
     rm -rf "$bundle"
     return 1
   }
@@ -3312,6 +3314,7 @@ install_marketplace_host() { # install_marketplace_host <host> <label> "<cli>...
   # layout the host reads.
   config="$bundle/$host-config"
   cp -R "$root/hosts/$host" "$config" || { rm -rf "$bundle"; return 1; }
+  mv "$root/skills" "$config/skills" || { rm -rf "$bundle"; return 1; }
   find "$root/hosts/$host" -mindepth 1 -maxdepth 1 ! -name '*.mjs' -exec rm -rf {} +
   # The host copies the plugin directory into its cache, so it has to carry
   # the whole agent-hook layout under agent-integrations/ (the shape the Kimi
@@ -3388,7 +3391,7 @@ install_trae_variant() { # install_trae_variant <trae|trae-cn>
   hooks_path="$HOME/.$client_id/hooks.json"
   mcp_path="$(trae_mcp_path "$client_id")"
   agent_write_json_configs trae "$hooks_path" "$mcp_path" "$root" "$client_id" "$NODE_BIN"
-  install_host_skills "$client_id" "$root/hosts/trae/skills" "$HOME/.$client_id/skills" || return 1
+  install_host_skills "$client_id" "$root/skills" "$HOME/.$client_id/skills" || return 1
   info "$client_id hooks: $hooks_path"
   info "$client_id MCP: $mcp_path"
   info "$client_id skills: $HOME/.$client_id/skills"

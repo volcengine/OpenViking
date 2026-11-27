@@ -45,9 +45,10 @@ test("the tool hooks keep their matchers", () => {
     'node "${CLAUDE_PLUGIN_ROOT}/hosts/claude-code/skill-experience.mjs"');
 });
 
-test("the doctor skill names the doctor script", () => {
+test("the doctor skill names the doctor entry, which hands over to Claude Code's doctor", () => {
   const skill = readFileSync(join(pluginDir, "skills", "ov-memory-doctor", "SKILL.md"), "utf-8");
-  assert.match(skill, /node \$\{CLAUDE_PLUGIN_ROOT\}\/hosts\/claude-code\/ov-memory-doctor\.mjs/);
+  assert.match(skill, /node <directory of this skill>\/\.\.\/\.\.\/scripts\/ov-memory-doctor\.mjs/);
+  assert.ok(existsSync(join(pluginDir, "scripts", "ov-memory-doctor.mjs")));
   assert.ok(existsSync(join(pluginDir, "hosts", "claude-code", "ov-memory-doctor.mjs")));
   assert.match(readFileSync(join(pluginDir, "commands", "ov.md"), "utf-8"), /hosts\/claude-code\/ov-status\.mjs/);
 });

@@ -57,7 +57,7 @@ node ~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/ag
 node ~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/agent-integrations/qoder/scripts/ov-memory-doctor.mjs --offline
 ```
 
-Drop `--offline` to probe the server as well, and add `--json` for a machine-readable report. In a session, the `ov-memory-doctor` skill runs the doctor for the host it runs in. Claude Code's doctor is `hosts/claude-code/ov-memory-doctor.mjs`; see its docs page.
+Drop `--offline` to probe the server as well, and add `--json` for a machine-readable report. In a session, the `ov-memory-doctor` skill runs the doctor for the host it runs in. For Claude Code and Codex, `scripts/ov-memory-doctor.mjs` in the installed plugin hands over to `hosts/claude-code/ov-memory-doctor.mjs` or `hosts/codex/ov-memory-doctor.mjs`, taking the host from its argument (`claude-code`, `codex`) or the environment; see their docs pages.
 
 ## Tests
 

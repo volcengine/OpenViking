@@ -57,7 +57,7 @@ node ~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/ag
 node ~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/agent-integrations/qoder/scripts/ov-memory-doctor.mjs --offline
 ```
 
-去掉 `--offline` 会连带探测服务端，加 `--json` 输出机器可读报告。在会话中，`ov-memory-doctor` skill 会为当前宿主运行体检。Claude Code 的体检脚本是 `hosts/claude-code/ov-memory-doctor.mjs`，见其文档页。
+去掉 `--offline` 会连带探测服务端，加 `--json` 输出机器可读报告。在会话中，`ov-memory-doctor` skill 会为当前宿主运行体检。对 Claude Code 和 Codex，已安装插件里的 `scripts/ov-memory-doctor.mjs` 会转交给 `hosts/claude-code/ov-memory-doctor.mjs` 或 `hosts/codex/ov-memory-doctor.mjs`，宿主取自参数（`claude-code`、`codex`）或运行环境；见各自的文档页。
 
 ## 测试
 

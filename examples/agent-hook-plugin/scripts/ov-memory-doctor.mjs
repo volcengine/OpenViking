@@ -11,17 +11,21 @@
  * Antigravity, Kimi Code, CodeBuddy Code and Qoder CLI load a plugin directory
  * instead, where the equivalent failure is a plugin the host never registered.
  * The configuration and connection sections are the ones every harness shares.
+ * Claude Code and Codex have doctors of their own, and this script hands over
+ * to them.
  *
  * Usage:
  *   node ov-memory-doctor.mjs [<client>] [--json] [--offline] [--timeout <ms>] [--no-color]
  *
- * The client defaults to the one this copy was installed for. Exit code 1 when
- * any check fails, 0 otherwise. Never prints a full api key.
+ * The client defaults to the one this copy was installed for, else the host
+ * the environment names. Exit code 1 when any check fails, 0 otherwise. Never
+ * prints a full api key.
  */
 
+import { spawnSync } from "node:child_process";
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadAgentHookConfig } from "../lib/agent-hook-runtime.mjs";
@@ -161,6 +165,27 @@ function resolveClient(argv) {
   const installed = tryJson(join(PLUGIN_ROOT, "integration.json"))?.client;
   if (CLIENTS[installed]) return installed;
   return CLIENTS[basename(PLUGIN_ROOT)] ? basename(PLUGIN_ROOT) : "cursor";
+}
+
+// The hosts with a doctor of their own, under the names a user may pass.
+const OWN_DOCTORS = { "claude-code": "claude-code", claude: "claude-code", codex: "codex" };
+
+/**
+ * Claude Code or Codex, when nothing names one of the clients above: the
+ * argument, else where this copy sits, else what the host puts in the
+ * environment of the commands it runs.
+ */
+function ownDoctorHost(argv) {
+  const named = argv.find((arg) => OWN_DOCTORS[arg] || CLIENTS[arg]);
+  if (named) return OWN_DOCTORS[named] || "";
+  if (CLIENTS[tryJson(join(PLUGIN_ROOT, "integration.json"))?.client] || CLIENTS[basename(PLUGIN_ROOT)]) return "";
+  const under = (dir) => Boolean(dir) && `${PLUGIN_ROOT}${sep}`.startsWith(`${resolvePath(dir)}${sep}`);
+  const env = process.env;
+  if (under(env.CLAUDE_CONFIG_DIR) || PLUGIN_ROOT.includes(`${sep}.claude${sep}`)) return "claude-code";
+  if (under(env.CODEX_HOME) || PLUGIN_ROOT.includes(`${sep}.codex${sep}`)) return "codex";
+  if (env.CLAUDECODE || env.CLAUDE_PLUGIN_ROOT) return "claude-code";
+  if (env.CODEX_THREAD_ID || env.CODEX_SANDBOX || env.PLUGIN_ROOT) return "codex";
+  return "";
 }
 
 const CLIENT = resolveClient(process.argv.slice(2));
@@ -326,7 +351,13 @@ function isDirectRun() {
   }
 }
 
-if (isDirectRun()) {
+const handover = isDirectRun() ? ownDoctorHost(process.argv.slice(2)) : "";
+if (handover) {
+  const args = process.argv.slice(2).filter((arg) => !OWN_DOCTORS[arg]);
+  const run = spawnSync(process.execPath, [join(PLUGIN_ROOT, "hosts", handover, "ov-memory-doctor.mjs"), ...args], { stdio: "inherit" });
+  if (run.error) console.error("ov-memory-doctor failed:", run.error.message);
+  process.exit(run.status ?? 2);
+} else if (isDirectRun()) {
   runDoctor(HOST).catch((err) => {
     console.error("ov-memory-doctor failed:", err?.stack || err?.message || err);
     process.exit(2);
