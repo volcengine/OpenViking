@@ -4,11 +4,6 @@ The OVPack API imports, exports, backs up, and restores OpenViking data.
 
 ## API Reference
 
-Hidden files in the package scope are preserved. Vector checks, snapshots, and
-restore-time indexing skip dot-prefixed files and entire dot-prefixed
-directory trees. The `.abstract.md` and `.overview.md` files in regular
-directories still supply those directories' L0/L1 records.
-
 ### export_ovpack
 
 Export a resource tree as a `.ovpack` file.
@@ -177,7 +172,7 @@ Imports a `.ovpack` file to a specified location for restoring or migrating data
 - Packages whose manifest `format_version` is not the current supported version (`3`) are rejected.
 - `.abstract.md` and `.overview.md` are restored as semantic sidecars. `.relations.json` and OVPack internals are excluded.
 - Manifest `context_type`, when present in index scalar metadata, must match the final import path semantics.
-- Top-level packages such as `viking://resources` and `viking://agent` must be imported to `viking://`. Overwriting an existing `resources` or `agent` root requires the ROOT role.
+- Top-level scope packages such as `viking://resources/` must be imported to `viking://`.
 - OVPack does not add import package-size, file-count, or directory-depth limits; the practical limit comes from ZIP, the storage backend, and the runtime environment.
 
 #### 3. Usage Examples
@@ -310,17 +305,15 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 
 ### backup_ovpack
 
-Back up the current account as a restore-only `.ovpack` file. The backup includes
-`viking://resources`, all `viking://user/{user_id}` content, and `viking://agent`. Sessions
+Back up public scope roots as a restore-only `.ovpack` file. The backup includes
+`resources` and all `user/{user_id}` content in the current account; sessions
 are included through the user namespace under `user/{user_id}/sessions`. It
 excludes internal runtime data such as `temp` and `queue`, as well as user
 accounts and the keys used to authenticate to OpenViking. Files under user privacy-config directories are included and can contain external-service secrets. Only ROOT or ADMIN can call this endpoint. Set
 `include_vectors=true` to include compatible
 pure-dense vector snapshots; hybrid index types reject vector snapshot export.
 
-The ZIP contains the exported file contents without encryption. Restoring a backup
-that contains `agent` requires a server that supports that scope. The updated
-server still accepts OVPack v3 backups containing only `resources` and `user`.
+Here, “public scope” names the exportable URI roots; it does not mean that user files are public. The ZIP contains exported file contents and is not an encrypted backup format.
 
 Backup reads live files and does not provide an atomic point-in-time snapshot.
 Callers that require strict consistency should pause writes during the backup window.
@@ -376,16 +369,16 @@ The Go SDK and CLI write the stream to the requested path and return or print th
 
 ### restore_ovpack
 
-Restore a backup package created by `backup_ovpack` to the corresponding URI
-roots in the target account. Regular import rejects backup packages. Vector handling follows
+Restore a backup package created by `backup_ovpack` to the original public scope
+roots. Regular import rejects backup packages. Vector handling follows
 `vector_mode`; session files under the user namespace are restored without
 vectorization. Only ROOT or ADMIN can call this endpoint, and it restores all
 packaged user paths in the current account.
 
 `on_conflict=overwrite` performs a merge-upsert: package paths missing from the
 target are created, matching paths are overwritten, and target-only paths are
-preserved. It does not delete the full `viking://resources`, `viking://user`, or
-`viking://agent` tree. Only added or overwritten package content has its vectors updated. `skip`
+preserved. It does not delete the full `viking://resources` or `viking://user`
+tree. Only added or overwritten package content has its vectors updated. `skip`
 remains a scope-root-level skip, but the complete manifest, content checksums,
 and vector metadata are validated before it can return. Corrupt backups fail
 even with `skip`.

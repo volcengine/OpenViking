@@ -4,9 +4,6 @@ OVPack API 用于导入、导出、备份和恢复 OpenViking 数据。
 
 ## API 参考
 
-备份和导出会保留包内的隐藏文件。以 `.` 开头的文件和目录子树跳过向量校验、快照和恢复重算。
-普通目录下的 `.abstract.md` 和 `.overview.md` 仍用于该目录的 L0/L1。
-
 ### export_ovpack
 
 将资源树导出为 `.ovpack` 文件。
@@ -175,7 +172,7 @@ ov export viking://resources/my-project/ ./exports/my-project.ovpack --include-v
 - manifest `format_version` 不是当前支持版本（`3`）的包会被拒绝。
 - `.abstract.md` 和 `.overview.md` 会作为语义侧边文件恢复；`.relations.json` 和 OVPack 内部文件会被排除。
 - manifest index 标量中的 `context_type` 如果存在，必须和最终导入路径语义一致。
-- `viking://resources` 和 `viking://agent` 等顶级目录包必须导入到 `viking://`。覆盖已存在的 `resources` 或 `agent` 根需要 ROOT 权限。
+- `viking://resources/` 这类顶级 scope 包必须导入到 `viking://`。
 - OVPack 不额外设置导入包大小、文件数量或目录深度上限；实际可处理规模由 ZIP、存储后端和运行环境决定。
 
 #### 3. 使用示例
@@ -308,13 +305,13 @@ ov import ./exports/my-project.ovpack viking://resources/imported/ --vector-mode
 
 ### backup_ovpack
 
-将当前账号的内容备份为只能通过 restore 恢复的 `.ovpack` 文件。备份包含
-`viking://resources`、所有 `viking://user/{user_id}` 和 `viking://agent`。Session 会通过 user 命名空间下的
+将公开 scope root 备份为只能通过 restore 恢复的 `.ovpack` 文件。备份包含
+`resources` 和当前账号下所有 `user/{user_id}` 内容；session 会通过 user 命名空间下的
 `user/{user_id}/sessions` 一起包含，不包含 `temp`、`queue` 等内部运行态数据，也不包含
 用户账号或用于登录 OpenViking 的 API Key。用户 privacy 配置目录会包含在备份中，其中可能有外部服务密钥。该接口仅允许 ROOT 或 ADMIN 调用。
 设置 `include_vectors=true` 时，会额外导出兼容的纯 dense 向量快照；底层 index type 为 hybrid 时会拒绝导出向量快照。
 
-ZIP 包含导出文件的内容，本身不提供备份加密。含 `agent` 的备份需要支持该范围的服务端来恢复。新版服务端仍可恢复仅含 `resources` 和 `user` 的 OVPack v3 备份。
+这里的“公开 scope”指可导出的 URI 根目录，不表示用户文件公开可读。ZIP 包含导出文件的内容，本身不提供备份加密。
 
 备份是在线逐文件读取，不保证同一时刻的原子快照。需要严格一致性时，调用方应在备份窗口暂停写入。
 
@@ -369,12 +366,12 @@ Go SDK 和 CLI 将字节流写入指定路径，并返回或输出该本地路�
 
 ### restore_ovpack
 
-将 `backup_ovpack` 生成的备份包恢复到目标账号内对应的 URI 根目录。普通 import 不接受备份包。
+恢复 `backup_ovpack` 生成的备份包到原始公开 scope root。普通 import 不接受备份包。
 向量处理遵循 `vector_mode`；user 命名空间下的 session 文件只恢复文件状态，不触发向量化。
 该接口仅允许 ROOT 或 ADMIN 调用，并恢复当前账号下包内所有用户路径。
 
 `on_conflict=overwrite` 使用合并覆盖：包内缺失于目标的路径会创建，同路径会覆盖，目标独有路径
-会保留；不会删除整个 `viking://resources`、`viking://user` 或 `viking://agent`。向量只更新包内新增或覆盖的
+会保留；不会删除整个 `viking://resources` 或 `viking://user`。向量只更新包内新增或覆盖的
 内容。`skip` 仍是 scope root 级跳过，但返回前也会完整校验 manifest、内容 checksum 和向量元数据。
 损坏的备份不会因为 `skip` 而返回成功。
 

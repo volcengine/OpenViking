@@ -15,7 +15,6 @@ from openviking.core.namespace import (
     owner_fields_for_uri,
 )
 from openviking.server.identity import RequestContext
-from openviking.server.skill_history import is_skill_history_uri
 from openviking.storage.ovpack.format import (
     OVPACK_DENSE_PATH,
     dense_values_bytes,
@@ -304,11 +303,7 @@ async def restore_vector_snapshot(
         if manifest_entry is None:
             continue
         target_uri = manifest_entry_target_uri(root_uri, rel_path, manifest_entry)
-        if (
-            target_uri == "viking://user"
-            or is_session_uri(target_uri)
-            or is_skill_history_uri(target_uri)
-        ):
+        if target_uri == "viking://user" or is_session_uri(target_uri):
             continue
         owner_ctx = content_owner_context_for_uri(target_uri, ctx)
         await _upsert_vector_snapshot_record(
