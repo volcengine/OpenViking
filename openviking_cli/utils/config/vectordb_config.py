@@ -418,18 +418,15 @@ class PgvectorConfig(BaseModel):
     m: int = Field(default=16, ge=2, le=100)
     ef_construction: int = Field(default=64, ge=4, le=1000)
     ef_search: int = Field(default=100, ge=1, le=1000)
-    filtered_knn: Literal["off", "auto", "required"] = "off"
-    filtered_knn_options: FilteredKnnOptions = Field(default_factory=FilteredKnnOptions)
-    unfiltered_use_native: bool = Field(
-        default=False,
-        strict=True,
+    search_implementation: Literal["native", "enhanced"] = Field(
+        default="native",
         description=(
-            "With filtered_knn enabled, use native SQL for adaptive dense candidates "
-            "without an explicit filter; PostgreSQL chooses the execution plan. "
-            "Disable to test filtered traversal and recovery. "
-            "Explicit filtered_knn_options.mode='exact' still uses exact candidates."
+            "Dense search implementation: community pgvector SQL or ByteDance enhanced "
+            "search, independent of filters. Enhanced requires envelope v1 and a "
+            "supported HNSW index; unavailable capabilities raise an error."
         ),
     )
+    filtered_knn_options: FilteredKnnOptions = Field(default_factory=FilteredKnnOptions)
 
     @model_validator(mode="after")
     def validate_pool(self):

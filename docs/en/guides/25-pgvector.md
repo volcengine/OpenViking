@@ -122,54 +122,45 @@ meaning.
 
 ## Directory filter tuning
 
-### Optional filtered KNN capability
+### Select the search implementation
 
-The same adapter can use the optional `ov_filtered_knn` envelope-v1 API in a
-compatible vector extension. Ordinary pgvector installations remain supported.
-Set `pgvector.filtered_knn` to `off` (default), `auto`, or `required`.
+`pgvector.search_implementation` accepts only `native` (default) and `enhanced`:
 
-`pgvector.unfiltered_use_native` defaults to `false`, preserving enhanced traversal.
-When set to `true` and filtered KNN is enabled,
-adaptive dense candidates without an explicit predicate use native SQL,
-avoiding complete eligibility-set construction. PostgreSQL chooses the execution
-plan; this option does not select or create an HNSW index. Hybrid and time-decay dense
-candidates share this routing. PostgreSQL still applies MVCC and RLS, while
-explicit tenant, ACL and path filters retain the filtered envelope. Explicit
-`filtered_knn_options.mode="exact"` also retains the envelope. Capability
-checks and the `required` contract still apply.
+- `native` uses community pgvector SQL. PostgreSQL chooses the execution plan.
+- `enhanced` uses ByteDance enhanced search, currently implemented through the
+  `ov_filtered_knn` envelope-v1 API. Initialization validates extension membership,
+  signatures, PostgreSQL version and permissions. Missing capabilities and unsupported
+  dense indexes raise errors without automatic fallback. Execution, permission and
+  budget errors propagate.
 
-Native HNSW scans use `ef_search` (1–1000), rather than filtered search width,
-visit budgets or recovery. Set `unfiltered_use_native=false` to test the enhanced
-unfiltered traversal. Compiled empty filter objects also use native routing;
-non-empty ASTs retain filtered routing.
+The choice is independent of filters: unfiltered, account, ACL and path queries
+all use the selected implementation. Normal account-bound service searches still
+add `account_id`; both implementations retain these predicates, MVCC and RLS.
+This setting selects query behavior, not the database extension binary, and does
+not select or create an index. A database with the ByteDance extension can also use
+`native`.
 
-"Unfiltered" means the adapter actually receives `None` or `{}`. Normal
-account-bound service searches add `account_id` even when the user supplies no
-filter. For example, `/api/v1/search/find` calls `SearchService.find`,
-`VikingFS.find`, `HierarchicalRetriever.retrieve`, `search_in_tenant`, and
-`_SingleAccountBackend.query`, which adds the account predicate before calling
-the adapter. Shared and dedicated account databases both retain this predicate.
-Standard service searches therefore do not trigger this option; it is currently
-mainly useful for direct adapter tests and experiments.
+The old `filtered_knn` and `unfiltered_use_native` settings have been removed and
+are rejected by configuration validation. Choose `search_implementation` explicitly
+when migrating. `filtered_knn_options` remains the enhanced API parameter group and
+only applies to `enhanced`. Its `mode="exact"` selects an enhanced algorithm without
+changing the search implementation.
 
-For bounded recovery experiments, disable `unfiltered_use_native`, fix
+Native HNSW scans use `ef_search` (1–1000), rather than enhanced search width,
+visit budgets or recovery. Enhanced search also uses the envelope when the adapter
+receives `None` or `{}`.
+
+For bounded recovery experiments, set `search_implementation="enhanced"`, fix
 `search_width=2000`, set `recover=true`, and compare `max_graph_visits` of
 100000, 200000 and 400000 with the same heap and memory budgets. Recovery
 disables the heuristic stop but remains bounded by total visits, heap fetches
 and memory. A visit limit does not guarantee a particular recall.
-`auto` discovers extension membership, signatures, PostgreSQL version and
-permissions at connection time, then uses the capability for L2/cosine/IP HNSW
-indexes. Missing capabilities or unsupported indexes use native candidates.
-`required` rejects missing capabilities and unsupported dense index structures.
-Execution errors, permission failures and budget errors always propagate.
-
 Discovery runs only during adapter initialization in `_connect()`. Its result is
-cached and copied into each Collection. If `auto` initially connects to stock
-pgvector, upgrading the database to a compatible extension does not refresh
-existing adapters. Creating or replacing physical pooled connections and
-reloading a Collection do not rediscover the capability. Recreate the adapter
-and its Collections after upgrading, typically by restarting or rolling
-restarting the service.
+cached and copied into each Collection. `native` does not probe enhanced capabilities.
+Recreate the adapter and its Collections after upgrading the database extension or
+changing the implementation, typically by restarting or rolling restarting the service.
+Creating or replacing physical pooled connections and reloading a Collection do not
+refresh the selected implementation or rediscover capabilities.
 
 The current capability supports PostgreSQL 17 and full-precision HNSW vectors
 up to 2000 dimensions. Dense, hybrid and time-decay share its candidate hook;
@@ -180,7 +171,7 @@ statistics, including empty results.
 ```json
 {
   "index_type": "hnsw",
-  "filtered_knn": "auto",
+  "search_implementation": "enhanced",
   "filtered_knn_options": {
     "mode": "adaptive",
     "exact_threshold": 1000,

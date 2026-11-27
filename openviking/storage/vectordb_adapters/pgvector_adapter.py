@@ -43,16 +43,14 @@ logger = get_logger(__name__)
 
 
 class PgvectorCollection(OpenGaussCollection):
-    """SQL collection with flat or native pgvector HNSW dense search."""
+    """SQL collection with native pgvector or ByteDance enhanced dense search."""
 
-    _filtered_knn_mode: Literal["off", "auto", "required"]
+    _search_implementation: Literal["native", "enhanced"]
     _filtered_knn_schema: str | None
     _filtered_knn_options: FilteredKnnOptions
-    _unfiltered_use_native: bool
 
-    def _filtered_knn_enabled(self, index_name):
-        mode = getattr(self, "_filtered_knn_mode", "off")
-        if mode == "off":
+    def _uses_enhanced_search(self, index_name):
+        if getattr(self, "_search_implementation", "native") == "native":
             return False
         meta = self._indexes[index_name]
         supported = (
@@ -60,26 +58,16 @@ class PgvectorCollection(OpenGaussCollection):
             and meta["_pg_index_type"] == "hnsw"
             and meta["_distance"] in {"l2", "cosine", "ip"}
         )
-        if not supported and mode == "required":
+        if not supported:
             raise FailedPreconditionError(
-                "filtered_knn requires envelope v1 and an L2/cosine/IP HNSW index"
+                "pgvector search_implementation='enhanced' requires envelope v1 "
+                "and an L2/cosine/IP HNSW index"
             )
-        return supported
-
-    def _uses_filtered_knn(self, index_name, filters):
-        if not self._filtered_knn_enabled(index_name):
-            return False
-        return not (
-            (filters is None or filters == {})
-            and getattr(self, "_unfiltered_use_native", False)
-            and self._filtered_knn_options.mode != "exact"
-        )
+        return True
 
     def _dense_candidate_ctes(self, index_name, vector_text, budget, filters):
-        if not self._uses_filtered_knn(index_name, filters):
-            # PostgreSQL's index scan applies MVCC and RLS itself. A query
-            # without an explicit predicate needs no complete eligibility set.
-            # Reuse native SQL, including equal-distance ordering and paging.
+        if not self._uses_enhanced_search(index_name):
+            # Native SQL retains explicit filters, MVCC, RLS and pagination.
             return super()._dense_candidate_ctes(index_name, vector_text, budget, filters)
         if not 1 <= budget <= 100000:
             raise ValueError(
@@ -352,7 +340,7 @@ class PgvectorCollection(OpenGaussCollection):
         vector = _validate_vector(dense_vector, self._dim)
         metric, op = self._resolve_distance_and_op(index_name)
         vector_text = str(vector)
-        if self._uses_filtered_knn(index_name, filters):
+        if self._uses_enhanced_search(index_name):
             ctes, params = self._dense_candidate_ctes(
                 index_name, vector_text, limit + offset, filters
             )
@@ -464,7 +452,7 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
                 release = re.match(r"^(\d+)\.(\d+)\.(\d+)", version[0])
                 if not release or tuple(map(int, release.groups())) < (0, 8, 0):
                     raise RuntimeError("OpenViking requires pgvector >= 0.8.0")
-                if self._config.filtered_knn != "off":
+                if self._config.search_implementation == "enhanced":
                     self._filtered_knn_schema = self._discover_filtered_knn(cursor)
                 cursor.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -523,10 +511,9 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             cursor.execute(f"SELECT {_quote_identifier(row[0])}.ov_filtered_knn_version()")
             if cursor.fetchone()[0] == 1:
                 return row[0]
-        if self._config.filtered_knn == "required":
-            raise FailedPreconditionError("filtered_knn envelope v1 capability is unavailable")
-        logger.info("pgvector filtered_knn capability unavailable; selecting legacy candidates")
-        return None
+        raise FailedPreconditionError(
+            "pgvector search_implementation='enhanced' envelope v1 capability is unavailable"
+        )
 
     @classmethod
     def from_config(cls, config):
@@ -612,10 +599,9 @@ class PgvectorCollectionAdapter(OpenGaussCollectionAdapter):
             self._conn, self._collection_name, meta, meta["_dim"], self._distance_metric
         )
         self._configure_retrieval(raw)
-        raw._filtered_knn_mode = self._config.filtered_knn
+        raw._search_implementation = self._config.search_implementation
         raw._filtered_knn_schema = self._filtered_knn_schema
         raw._filtered_knn_options = self._config.filtered_knn_options
-        raw._unfiltered_use_native = self._config.unfiltered_use_native
         # Search settings can change without rebuilding the physical index.
         if self._index_name in raw._indexes:
             raw._indexes[self._index_name]["search_params"] = dict(self._search_params)
