@@ -47,33 +47,33 @@ class CatalogEngine::Impl {
   void group_candidates(const JsonValue& request, const std::string& scope,
                         JsonDoc& result, const CandidateSource& source) const;
 
-  struct ResolvedItem {
-    bool found = false;
+  struct Declaration {
     std::string item_uuid;
     std::string root_uri;
     std::vector<std::string> item_attrs;
+    // Use the original declaration when building a move/undo snapshot.
+    std::string payload;
   };
 
   std::shared_ptr<KVStore> store_;
-  // Persisted collection settings and explicit Item declarations.
-  std::map<std::string, std::string> records_;
-  std::map<std::string, ResolvedItem> declarations_;
+  std::map<std::string, Declaration> declarations_;
   std::map<std::string, std::string> uuid_roots_;
   std::map<std::string, std::set<std::string>> attribute_roots_;
   std::mutex mutex_;
   uint64_t revision_ = 0;
   uint64_t mode_revision_ = 0;
   std::map<std::string, uint64_t> scope_revisions_;
-  bool collection_union_mode_ = true;
+  bool enabled_ = false;
+  std::optional<bool> collection_union_mode_;
 
-  ResolvedItem resolve_item(const std::string& scope,
-                            const std::string& uri) const;
-  std::vector<ResolvedItem> resolve_items(const std::string& scope,
-                                          const std::string& uri) const;
+  const Declaration* resolve_item(const std::string& scope,
+                                  const std::string& uri) const;
+  std::vector<const Declaration*> resolve_items(const std::string& scope,
+                                                 const std::string& uri) const;
   bool union_mode() const;
   std::string identity_revision(const std::string& scope) const;
   void unindex_declaration(const std::string& record_key);
-  void index_declaration(const std::string& record_key, const JsonValue& record);
+  void load_record(const std::string& record_key, const std::string& payload);
   JsonValue compile_filter(const std::string& scope, const JsonValue& filter,
                            JsonAllocator& allocator) const;
   JsonValue compile_item_filter(const std::string& scope, const JsonValue& filter,
@@ -192,16 +192,18 @@ void put_string(JsonValue& obj, const char* name, const std::string& value,
   obj.AddMember(k, v, allocator);
 }
 
-void validate_item_attrs(const JsonValue& attrs) {
+std::vector<std::string> read_item_attrs(const JsonValue& attrs) {
   if (!attrs.IsArray()) {
     throw std::invalid_argument("item_attrs must be a string list in the engine");
   }
   std::set<std::string> keys;
+  std::vector<std::string> values;
+  values.reserve(attrs.Size());
   for (const auto& entry : attrs.GetArray()) {
     if (!entry.IsString()) {
       throw std::invalid_argument("item_attrs must contain strings");
     }
-    const std::string value(entry.GetString(), entry.GetStringLength());
+    std::string value(entry.GetString(), entry.GetStringLength());
     const auto separator = value.find('=');
     if (separator == std::string::npos || separator == 0 ||
         value.find('\0') != std::string::npos) {
@@ -210,28 +212,26 @@ void validate_item_attrs(const JsonValue& attrs) {
     if (!keys.insert(value.substr(0, separator)).second) {
       throw std::invalid_argument("item_attrs keys must be unique");
     }
+    values.push_back(std::move(value));
+  }
+  return values;
+}
+
+void require_unchanged_attrs(std::vector<std::string> supplied,
+                             std::vector<std::string> stored) {
+  std::sort(supplied.begin(), supplied.end());
+  std::sort(stored.begin(), stored.end());
+  if (supplied != stored) {
+    throw std::invalid_argument("item_attrs cannot change after an Item is declared");
   }
 }
 
-bool matches_item_attrs(const std::vector<std::string>& attrs,
-                        const JsonValue& filter) {
-  const auto op = required_string(filter, "op");
-  if (op != "must" && op != "must_not") {
-    throw std::invalid_argument(
-        "item_attrs filters support must and must_not only");
+bool read_union_mode(const JsonValue& record) {
+  const auto mode = required_string(record, "item_identity_mode");
+  if (mode != "shadow" && mode != "union") {
+    throw std::invalid_argument("item_identity_mode must be shadow or union");
   }
-  if (!filter.HasMember("conds") || !filter["conds"].IsArray()) {
-    throw std::invalid_argument("item_attrs filter requires conds");
-  }
-  bool found = false;
-  for (const auto& cond : filter["conds"].GetArray()) {
-    if (!cond.IsString()) {
-      throw std::invalid_argument("item_attrs filter conds must be strings");
-    }
-    const std::string wanted(cond.GetString(), cond.GetStringLength());
-    found = found || std::find(attrs.begin(), attrs.end(), wanted) != attrs.end();
-  }
-  return op == "must" ? found : !found;
+  return mode == "union";
 }
 
 JsonValue impossible_filter(JsonAllocator& allocator) {
@@ -268,24 +268,7 @@ CatalogEngine::Impl::Impl(const std::string& path) {
                         : std::shared_ptr<KVStore>(new PersistStore(path));
   for (const auto& entry :
        store_->seek_range("", std::string(1, static_cast<char>(0xff)))) {
-    const auto record = parse(entry.second);
-    if (entry.first == "@catalog" || entry.first == kIdentityModeKey ||
-        record.HasMember("item_uuids")) {
-      records_.insert(entry);
-      index_declaration(entry.first, record);
-    }
-  }
-  const auto read_mode = [](const std::string& value) {
-    const auto mode = required_string(parse(value), "item_identity_mode");
-    if (mode != "shadow" && mode != "union") {
-      throw std::invalid_argument("item_identity_mode must be shadow or union");
-    }
-    return mode == "union";
-  };
-  const auto config = records_.find(kIdentityModeKey);
-  if (config != records_.end()) {
-    collection_union_mode_ = read_mode(config->second);
-    return;
+    load_record(entry.first, entry.second);
   }
 }
 
@@ -305,15 +288,9 @@ void CatalogEngine::Impl::commit(
   if (store_->exec_op(operations) != 0) {
     throw std::runtime_error("Catalog transaction failed");
   }
-  for (const auto& record_key : deletes) {
-    unindex_declaration(record_key);
-    records_.erase(record_key);
-  }
+  for (const auto& record_key : deletes) unindex_declaration(record_key);
   for (const auto& entry : updates) unindex_declaration(entry.first);
-  for (const auto& entry : updates) {
-    records_[entry.first] = entry.second;
-    index_declaration(entry.first, parse(entry.second));
-  }
+  for (const auto& entry : updates) load_record(entry.first, entry.second);
 }
 
 void CatalogEngine::Impl::unindex_declaration(const std::string& record_key) {
@@ -330,20 +307,25 @@ void CatalogEngine::Impl::unindex_declaration(const std::string& record_key) {
   declarations_.erase(found);
 }
 
-void CatalogEngine::Impl::index_declaration(const std::string& record_key,
-                                            const JsonValue& record) {
+void CatalogEngine::Impl::load_record(const std::string& record_key,
+                                      const std::string& payload) {
+  const auto record = parse(payload);
+  if (record_key == "@catalog") {
+    enabled_ = true;
+    return;
+  }
+  if (record_key == kIdentityModeKey) {
+    collection_union_mode_ = read_union_mode(record);
+    return;
+  }
+  if (!record.HasMember("item_uuids")) return;
   const auto separator = record_key.find('\0');
   if (separator == std::string::npos || record_key[separator + 1] != '/') return;
-  ResolvedItem item;
-  item.found = true;
-  item.item_uuid = required_item_uuid(record);
-  item.root_uri = record_key.substr(separator + 1);
-  if (record.HasMember("item_attrs")) {
-    validate_item_attrs(record["item_attrs"]);
-    for (const auto& attr : record["item_attrs"].GetArray()) {
-      item.item_attrs.emplace_back(attr.GetString(), attr.GetStringLength());
-    }
-  }
+  Declaration item{
+      required_item_uuid(record), record_key.substr(separator + 1),
+      record.HasMember("item_attrs") ? read_item_attrs(record["item_attrs"])
+                                     : std::vector<std::string>{},
+      payload};
   const auto scope = record_key.substr(0, separator);
   uuid_roots_[key(scope, item.item_uuid)] = record_key;
   for (const auto& attr : item.item_attrs) {
@@ -353,7 +335,7 @@ void CatalogEngine::Impl::index_declaration(const std::string& record_key,
 }
 
 bool CatalogEngine::Impl::union_mode() const {
-  return collection_union_mode_;
+  return collection_union_mode_.value_or(true);
 }
 
 std::string CatalogEngine::Impl::identity_revision(const std::string& scope) const {
@@ -362,26 +344,24 @@ std::string CatalogEngine::Impl::identity_revision(const std::string& scope) con
   return std::to_string(std::max(mode_revision_, scope_revision));
 }
 
-std::vector<CatalogEngine::Impl::ResolvedItem> CatalogEngine::Impl::resolve_items(
+std::vector<const CatalogEngine::Impl::Declaration*> CatalogEngine::Impl::resolve_items(
     const std::string& scope, const std::string& uri) const {
-  std::vector<ResolvedItem> items;
-  const bool accumulate = union_mode();
-  for (std::string current = uri; !current.empty(); current = parent(current)) {
-    const auto found = declarations_.find(key(scope, current));
-    if (found == declarations_.end()) continue;
-    items.push_back(found->second);
-    if (!accumulate) break;
+  std::vector<const Declaration*> items;
+  for (auto item = resolve_item(scope, uri); item;
+       item = resolve_item(scope, parent(item->root_uri))) {
+    items.push_back(item);
+    if (!union_mode()) break;
   }
   return items;
 }
 
-CatalogEngine::Impl::ResolvedItem CatalogEngine::Impl::resolve_item(
+const CatalogEngine::Impl::Declaration* CatalogEngine::Impl::resolve_item(
     const std::string& scope, const std::string& uri) const {
   for (std::string current = uri; !current.empty(); current = parent(current)) {
     const auto found = declarations_.find(key(scope, current));
-    if (found != declarations_.end()) return found->second;
+    if (found != declarations_.end()) return &found->second;
   }
-  return {};
+  return nullptr;
 }
 
 JsonValue CatalogEngine::Impl::compile_filter(const std::string& scope,
@@ -419,25 +399,30 @@ JsonValue CatalogEngine::Impl::compile_filter(const std::string& scope,
   // by that child. This keeps wide and nested filters linear in declarations.
   std::set<std::string> matched;
   const auto op = required_string(filter, "op");
-  matches_item_attrs({}, filter);  // Validate the predicate even for an empty catalog.
+  if (op != "must" && op != "must_not") {
+    throw std::invalid_argument("item_attrs filters support must and must_not only");
+  }
+  if (!filter.HasMember("conds") || !filter["conds"].IsArray()) {
+    throw std::invalid_argument("item_attrs filter requires conds");
+  }
   for (const auto& cond : filter["conds"].GetArray()) {
+    if (!cond.IsString()) {
+      throw std::invalid_argument("item_attrs filter conds must be strings");
+    }
     const auto posting = attribute_roots_.find(
         key(scope, std::string(cond.GetString(), cond.GetStringLength())));
     if (posting != attribute_roots_.end()) {
       matched.insert(posting->second.begin(), posting->second.end());
     }
   }
-  const bool accumulate = union_mode();
   std::map<std::string, std::vector<std::string>> children;
-  const std::string prefix = scope + '\0' + '/';
-  for (auto it = declarations_.lower_bound(prefix);
-       it != declarations_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
-    const auto& uri = it->second.root_uri;
-    if (accumulate) continue;
-    for (auto ancestor = parent(uri); !ancestor.empty(); ancestor = parent(ancestor)) {
-      if (declarations_.count(key(scope, ancestor))) {
-        children[ancestor].push_back(uri);
-        break;
+  const auto prefix = key(scope, "/");
+  if (!union_mode()) {
+    for (auto it = declarations_.lower_bound(prefix);
+         it != declarations_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
+      const auto& uri = it->second.root_uri;
+      if (const auto* ancestor = resolve_item(scope, parent(uri))) {
+        children[ancestor->root_uri].push_back(uri);
       }
     }
   }
@@ -480,11 +465,7 @@ JsonValue CatalogEngine::Impl::compile_item_filter(
        it != declarations_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
     const auto& uri = it->second.root_uri;
     // An ancestor's path already covers this subtree in either inheritance mode.
-    auto ancestor = parent(uri);
-    while (!ancestor.empty() && !declarations_.count(key(scope, ancestor))) {
-      ancestor = parent(ancestor);
-    }
-    if (ancestor.empty()) {
+    if (!resolve_item(scope, parent(uri))) {
       // Direct collection writes can keep the URI scheme in the path index.
       const auto qualified_uri = "viking:/" + uri;
       for (const auto* path : {&uri, &qualified_uri}) {
@@ -558,10 +539,10 @@ void CatalogEngine::Impl::group_candidates(
   // Union mode credits every declared ancestor of the candidate. Shadow mode
   // credits its nearest declaration.
   source([&](const Candidate& candidate) {
-    for (const auto& item : resolve_items(scope, candidate.uri)) {
+    for (const auto* item : resolve_items(scope, candidate.uri)) {
       const auto entry = grouped.emplace(
-          item.item_uuid,
-          Group{item.item_uuid,
+          item->item_uuid,
+          Group{item->item_uuid,
                 aggregation == "max" ? -std::numeric_limits<double>::infinity()
                                      : 0.0,
                 0,
@@ -830,7 +811,7 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
   auto& allocator = result.GetAllocator();
 
   if (op == "capabilities") {
-    result.AddMember("enabled", records_.count("@catalog") != 0, allocator);
+    result.AddMember("enabled", enabled_, allocator);
     result.AddMember("version", 1, allocator);
     put_string(result, "item_identity_mode", union_mode() ? "union" : "shadow", allocator);
     JsonValue modes(rapidjson::kArrayType);
@@ -839,27 +820,17 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     result.AddMember("item_attrs_inherit", false, allocator);
   } else if (op == "configure") {
     std::map<std::string, std::string> updates;
-    if (records_.count("@catalog") == 0) updates["@catalog"] = "{}";
-    bool accumulate;
-    if (req.HasMember("item_identity_mode")) {
-      const auto mode = required_string(req, "item_identity_mode");
-      if (mode != "shadow" && mode != "union") {
-        throw std::invalid_argument("item_identity_mode must be shadow or union");
-      }
-      accumulate = mode == "union";
-    } else {
-      accumulate = union_mode();
+    if (!enabled_) updates["@catalog"] = "{}";
+    const bool accumulate = req.HasMember("item_identity_mode") ? read_union_mode(req)
+                                                                 : union_mode();
+    if (collection_union_mode_ != accumulate) {
+      JsonDoc config(rapidjson::kObjectType);
+      put_string(config, "item_identity_mode", accumulate ? "union" : "shadow",
+                 config.GetAllocator());
+      updates[kIdentityModeKey] = encode(config);
     }
-    JsonDoc config(rapidjson::kObjectType);
-    put_string(config, "item_identity_mode", accumulate ? "union" : "shadow",
-               config.GetAllocator());
-    const auto encoded = encode(config);
-    if (records_.count(kIdentityModeKey) == 0 || records_.at(kIdentityModeKey) != encoded) {
-      updates[kIdentityModeKey] = encoded;
-    }
-    const bool changed = accumulate != collection_union_mode_;
+    const bool changed = accumulate != union_mode();
     if (!updates.empty()) commit(updates);
-    collection_union_mode_ = accumulate;
     if (changed) {
       // The same field configuration affects every account in the collection.
       mode_revision_ = ++revision_;
@@ -872,18 +843,9 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       throw std::invalid_argument("Cannot change an Item root node type");
     }
     if (req.HasMember("item_attrs")) {
-      validate_item_attrs(req["item_attrs"]);
+      auto attrs = read_item_attrs(req["item_attrs"]);
       if (own != declarations_.end()) {
-        std::vector<std::string> attrs;
-        for (const auto& attr : req["item_attrs"].GetArray()) {
-          attrs.emplace_back(attr.GetString(), attr.GetStringLength());
-        }
-        auto stored = own->second.item_attrs;
-        std::sort(attrs.begin(), attrs.end());
-        std::sort(stored.begin(), stored.end());
-        if (attrs != stored) {
-          throw std::invalid_argument("item_attrs cannot change after an Item is declared");
-        }
+        require_unchanged_attrs(std::move(attrs), own->second.item_attrs);
       }
     }
     if (req.HasMember("uris")) {
@@ -901,55 +863,46 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       }
     }
     result.AddMember("valid", true, allocator);
-    result.AddMember("has_item", resolve_item(scope, uri).found, allocator);
+    result.AddMember("has_item", resolve_item(scope, uri) != nullptr, allocator);
   } else if (op == "declare_item") {
     const auto uri = canonical(required_string(req, "uri"));
-    auto generated_uuid = required_item_uuid(req);
+    const auto generated_uuid = required_item_uuid(req);
     const bool attrs_supplied = req.HasMember("item_attrs");
-    if (attrs_supplied) validate_item_attrs(req["item_attrs"]);
+    auto attrs = attrs_supplied ? read_item_attrs(req["item_attrs"])
+                                : std::vector<std::string>{};
     const auto item_key = key(scope, uri);
     const auto existing_item = declarations_.find(item_key);
-    JsonDoc declaration(rapidjson::kObjectType);
     if (existing_item != declarations_.end()) {
       if (attrs_supplied) {
-        std::vector<std::string> attrs;
-        for (const auto& attr : req["item_attrs"].GetArray()) {
-          attrs.emplace_back(attr.GetString(), attr.GetStringLength());
-        }
-        auto stored = existing_item->second.item_attrs;
-        std::sort(attrs.begin(), attrs.end());
-        std::sort(stored.begin(), stored.end());
-        if (attrs != stored) {
-          throw std::invalid_argument("item_attrs cannot change after an Item is declared");
-        }
+        require_unchanged_attrs(std::move(attrs), existing_item->second.item_attrs);
       }
-      generated_uuid = existing_item->second.item_uuid;
-      declaration = parse(records_.at(item_key));
     } else {
       if (uuid_roots_.count(key(scope, generated_uuid))) {
         throw std::invalid_argument("item_uuid already belongs to another root");
       }
+      JsonDoc declaration(rapidjson::kObjectType);
       auto& declaration_allocator = declaration.GetAllocator();
       put_string(declaration, "uri", uri, declaration_allocator);
       JsonValue ids(rapidjson::kArrayType);
       ids.CopyFrom(req["item_uuids"], declaration_allocator);
       declaration.AddMember("item_uuids", ids, declaration_allocator);
-      JsonValue attrs(rapidjson::kArrayType);
-      if (attrs_supplied) attrs.CopyFrom(req["item_attrs"], declaration_allocator);
-      declaration.AddMember("item_attrs", attrs, declaration_allocator);
+      JsonValue encoded_attrs(rapidjson::kArrayType);
+      if (attrs_supplied) encoded_attrs.CopyFrom(req["item_attrs"], declaration_allocator);
+      declaration.AddMember("item_attrs", encoded_attrs, declaration_allocator);
       commit({{"@catalog", "{}"}, {item_key, encode(declaration)}});
       scope_revisions_[scope] = ++revision_;
     }
+    const auto& item = declarations_.at(item_key);
     put_string(result, "uri", uri, allocator);
-    put_string(result, "item_uuid", generated_uuid, allocator);
+    put_string(result, "item_uuid", item.item_uuid, allocator);
     JsonValue ids(rapidjson::kArrayType);
-    ids.PushBack(JsonValue(generated_uuid.c_str(), allocator), allocator);
+    ids.PushBack(JsonValue(item.item_uuid.c_str(), allocator), allocator);
     result.AddMember("item_uuids", ids, allocator);
-    JsonValue attrs(rapidjson::kArrayType);
-    if (declaration.HasMember("item_attrs")) {
-      attrs.CopyFrom(declaration["item_attrs"], allocator);
+    JsonValue encoded_attrs(rapidjson::kArrayType);
+    for (const auto& value : item.item_attrs) {
+      encoded_attrs.PushBack(JsonValue(value.c_str(), allocator), allocator);
     }
-    result.AddMember("item_attrs", attrs, allocator);
+    result.AddMember("item_attrs", encoded_attrs, allocator);
   } else if (op == "resolve") {
     if (!req.HasMember("uris") || !req["uris"].IsArray()) {
       throw std::invalid_argument("Catalog resolve requires uris");
@@ -963,13 +916,13 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
       JsonValue row(rapidjson::kObjectType);
       put_string(row, "uri", uri, allocator);
       if (!items.empty()) {
-        const auto& item = items.front();
-        put_string(row, "item_uuid", item.item_uuid, allocator);
-        put_string(row, "item_root_uri", item.root_uri, allocator);
+        const auto* item = items.front();
+        put_string(row, "item_uuid", item->item_uuid, allocator);
+        put_string(row, "item_root_uri", item->root_uri, allocator);
       }
       JsonValue ids(rapidjson::kArrayType);
-      for (const auto& effective : items) {
-        ids.PushBack(JsonValue(effective.item_uuid.c_str(), allocator), allocator);
+      for (const auto* effective : items) {
+        ids.PushBack(JsonValue(effective->item_uuid.c_str(), allocator), allocator);
       }
       row.AddMember("item_uuids", ids, allocator);
       data.PushBack(row, allocator);
@@ -1014,18 +967,18 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
     JsonValue source_nodes(rapidjson::kArrayType);
     JsonValue target_nodes(rapidjson::kArrayType);
     JsonValue created_target_uris(rapidjson::kArrayType);
-    for (auto it = records_.lower_bound(prefix);
-         it != records_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
-      const auto uri = it->first.substr(scope.size() + 1);
+    for (auto it = declarations_.lower_bound(prefix);
+         it != declarations_.end() && it->first.rfind(prefix, 0) == 0; ++it) {
+      const auto& uri = it->second.root_uri;
       if (!in_tree(uri, from_uri)) continue;
       const auto suffix = uri.substr(from_uri.size());
       const auto moved_uri = to_uri + suffix;
       const auto moved_key = key(scope, moved_uri);
-      auto declaration = parse(it->second);
+      auto declaration = parse(it->second.payload);
       source_nodes.PushBack(JsonValue(declaration, allocator), allocator);
-      const auto existing = records_.find(moved_key);
-      if (existing != records_.end()) {
-        const auto target = parse(existing->second);
+      const auto existing = declarations_.find(moved_key);
+      if (existing != declarations_.end()) {
+        const auto target = parse(existing->second.payload);
         target_nodes.PushBack(JsonValue(target, allocator), allocator);
       } else {
         created_target_uris.PushBack(
@@ -1081,9 +1034,7 @@ std::string CatalogEngine::Impl::execute(const std::string& request_json) {
               "Catalog restore declaration is outside its subtree");
         }
         required_item_uuid(snapshot);
-        if (snapshot.HasMember("item_attrs")) {
-          validate_item_attrs(snapshot["item_attrs"]);
-        }
+        if (snapshot.HasMember("item_attrs")) read_item_attrs(snapshot["item_attrs"]);
         updates[key(scope, uri)] = encode(snapshot);
       }
     };
