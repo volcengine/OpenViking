@@ -13,7 +13,7 @@
 // task, to another runtime, through a handover (tasks.mjs).
 
 import { classifyRuntimeFailure } from './notices.mjs';
-import { getRuntimeDefinition } from './runtime-catalog.mjs';
+import { currentModelEntry, getRuntimeDefinition } from './runtime-catalog.mjs';
 import { WORKER_RUNTIMES } from './worker-executor.mjs';
 
 // How long a runtime whose quota ran out is left out of new work and of the
@@ -179,17 +179,22 @@ export class WorkerSettings {
   // The model and effort a task starting on `runtime` takes: what /workers
   // set for that runtime, else the router's when it runs on the same one,
   // else the CLI's own default (null).
+  //
+  // The router's effort follows the router's model: a worker set to another
+  // model on the same runtime does not take it, because that level was chosen
+  // for a model the worker will not run (and may not exist on it at all).
   modelFor(runtime) {
     const own = this.own(runtime);
     const router = this.router();
     const same = router.runtime === runtime;
     const routerModel = same && router.model && router.model !== runtime ? router.model : null;
+    const sharesModel = !own.model || (routerModel !== null && own.model === routerModel);
     return {
       model: own.model || routerModel || null,
-      effort: own.effort || (same ? router.effort || null : null),
+      effort: own.effort || (same && sharesModel ? router.effort || null : null),
       // Where each value came from, for /workers.
       modelSource: own.model ? 'set' : routerModel ? 'router' : 'default',
-      effortSource: own.effort ? 'set' : same && router.effort ? 'router' : 'default',
+      effortSource: own.effort ? 'set' : same && sharesModel && router.effort ? 'router' : 'default',
     };
   }
 
@@ -235,7 +240,15 @@ export class WorkerSettings {
     return null;
   }
 
-  efforts(runtime) {
+  // The effort levels a worker may be set to on `runtime`, for the model it
+  // will run: `models` are catalogue entries (`id`, `efforts`, optional
+  // `defaultEffort`/`effortsKnown`) from the router's live snapshot or
+  // settings-models.mjs. A model whose catalogue reports no levels, or no
+  // catalogue at all, keeps the runtime's static union (as /effort does for
+  // the router).
+  efforts(runtime, model = null, models = []) {
+    const entry = currentModelEntry({ runtime, model: model ?? '', resolvedModel: model ?? '', models });
+    if (entry?.effortsKnown !== false && Array.isArray(entry?.efforts) && entry.efforts.length) return entry.efforts;
     return getRuntimeDefinition(runtime)?.efforts ?? [];
   }
 }

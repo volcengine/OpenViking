@@ -158,11 +158,14 @@ export function settingsCard({ snapshot, settings = null, draft = null, seen = n
     const runtime = draft.worker === FOLLOW ? draft.router : draft.worker;
     const runs = isWorkerRuntime(runtime);
     const own = runs ? settings.own(runtime) : { model: '', effort: '' };
-    const efforts = runs ? settings.efforts(runtime) : [];
     // Unset, a worker on the router's runtime takes the router's model and
     // effort (WorkerSettings.modelFor); elsewhere the CLI's own default.
     const workerModels = runs ? modelsOf(runtime, snapshot) : [];
     if (own.model && !workerModels.some(({ id }) => id === own.model)) workerModels.unshift({ id: own.model });
+    // The effort choices belong to the model this worker will run: its own,
+    // else the router's on the same runtime, else the CLI's default.
+    const workerModel = own.model || (runtime === draft.router ? kept.model : '');
+    const efforts = runs ? settings.efforts(runtime, workerModel, workerModels) : [];
     const unset = (inherited) => (runtime === draft.router && inherited ? inherited : 'CLI 默认');
     runtimes.push([1, [label('worker')]], [3, [select(WORKER_RUNTIMES.map((id) => [draft.worker === FOLLOW && id === draft.router ? FOLLOW : id, id]), draft.worker,
       { behaviors: [{ type: 'callback', value: value('runtime', { side: 'worker' }) }] })]]);

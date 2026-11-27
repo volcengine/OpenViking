@@ -66,6 +66,35 @@ describe('WorkerSettings', () => {
     assert.throws(() => settings.setRuntime('dsh'), /workers do not run on dsh/);
   });
 
+  it('keeps the router\'s effort out of a worker set to another model on the same runtime', () => {
+    const { settings } = settingsWith({ router: { runtime: 'codex', model: 'gpt-6-astra', effort: 'high' } });
+    // An explicit model means an explicit choice: the router's effort was
+    // chosen for another model, so it is not inherited.
+    settings.setModel('codex', 'gpt-5.6-sol');
+    assert.deepEqual(settings.modelFor('codex'), { model: 'gpt-5.6-sol', effort: null, modelSource: 'set', effortSource: 'default' });
+    settings.setEffort('codex', 'medium');
+    assert.equal(settings.modelFor('codex').effort, 'medium');
+    // Back on the router's model, an unset effort follows the router again.
+    settings.setModel('codex', 'gpt-6-astra');
+    settings.setEffort('codex', '');
+    assert.deepEqual(settings.modelFor('codex'), { model: 'gpt-6-astra', effort: 'high', modelSource: 'set', effortSource: 'router' });
+  });
+
+  it('offers the effort levels of the worker\'s model, and the runtime union only when the model reports none', () => {
+    const { settings } = settingsWith();
+    const models = [
+      { id: 'gpt-6-astra', efforts: ['low', 'high', 'max'], defaultEffort: 'high' },
+      { id: 'gpt-6-luna', efforts: ['low', 'medium'], isDefault: true },
+      { id: 'gpt-5.6-sol', efforts: [], effortsKnown: false },
+    ];
+    assert.deepEqual(settings.efforts('codex', 'gpt-6-astra', models), ['low', 'high', 'max']);
+    assert.deepEqual(settings.efforts('codex', 'gpt-6-luna', models), ['low', 'medium']);
+    assert.deepEqual(settings.efforts('codex', 'gpt-5.6-sol', models), ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], 'an unreported catalogue keeps the union');
+    assert.deepEqual(settings.efforts('codex', 'unknown', models), ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], 'an unknown model keeps the union');
+    assert.deepEqual(settings.efforts('codex', null, models), ['low', 'medium'], 'no model takes the default entry');
+    assert.deepEqual(settings.efforts('codex'), ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], 'without a catalogue it is the union');
+  });
+
   it('sends new work and moving tasks past a runtime whose quota ran out, and back once the pause is over', () => {
     const { settings, clock } = settingsWith({ config: { fallbackRuntime: 'pi' } });
     assert.equal(settings.fallback(), 'pi');
@@ -154,6 +183,24 @@ describe('/workers', () => {
     assert.match((await run(settings, 'effort ultra')).text, /^worker 在 codex 上的推理档位已设为 ultra。/);
     assert.match((await run(settings, 'effort turbo')).text, /^不支持的档位：turbo\n可选：none、minimal、low、medium、high、xhigh、max、ultra$/);
     assert.match((await run(settings, 'bogus')).text, /^用法：/);
+  });
+
+  it('checks a worker effort against the model it will run, not the runtime\'s whole list', async () => {
+    const { settings } = settingsWith({ router: { runtime: 'codex', model: 'gpt-6-astra', effort: 'high' } });
+    const catalogue = { runtime: 'codex', snapshot: async () => ({ runtime: 'codex', models: [
+      { id: 'gpt-6-astra', efforts: ['low', 'high', 'max'], defaultEffort: 'high', isDefault: true },
+      { id: 'gpt-5.6-sol', efforts: ['low', 'medium'], defaultEffort: 'medium' },
+    ] }) };
+    const send = (arg) => executeWorkersCommand({ name: 'workers', arg }, { event: OWNER_DM, connectors, settings, tasks, router: catalogue, now: 1_000_000 });
+    assert.match((await send('effort')).text, /\n模型：gpt-6-astra（跟随 router）\n推理档位：high（跟随 router）\n可选：low、high、max\n/);
+    assert.match((await send('effort ultra')).text, /^不支持的档位：ultra\n可选：low、high、max$/);
+    assert.equal((await send('effort max')).ok, true);
+    // Another model on the same runtime lists its own levels, and the max set
+    // for the first one is dropped because this model does not offer it.
+    assert.match((await send('model gpt-5.6')).text, /没有 max 这一档，已恢复默认档位/);
+    assert.equal(settings.own('codex').effort, '');
+    assert.match((await send('effort')).text, /\n模型：gpt-5.6-sol（单独设置）\n推理档位：CLI 默认\n可选：low、medium\n/);
+    assert.match((await send('effort high')).text, /^不支持的档位：high\n可选：low、medium$/);
   });
 
   it('sets how many worker turns run at once, plus how many more only follow-ups may take', async () => {
