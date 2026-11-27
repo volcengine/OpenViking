@@ -255,6 +255,143 @@ describe('normalizeEvent', () => {
     });
     assert.equal(event.content, '打个 reaction 就行');
   });
+
+  // A card's text exists in up to 16 languages in one JSON, and the client
+  // shows one. One locale is read, English first, then Chinese.
+  it('reads the default text of a card translated per field, not every language', () => {
+    const event = cardEvent({
+      header: { title: { tag: 'plain_text', content: '会议室签到提醒',
+        i18n_content: { zh_cn: '会议室签到提醒', en_us: 'Check-in reminder' } } },
+      elements: [{
+        tag: 'markdown', content: '**会议室**\n北京-F1',
+        i18n_content: { zh_cn: '**会议室**\n北京-F1', en_us: '**Room**\nBeijing-F1' },
+      }],
+    });
+    assert.equal(event.content, '会议室签到提醒\n**会议室**\n北京-F1');
+  });
+
+  it('reads the English text of a field translated without a default', () => {
+    const event = cardEvent({ elements: [{ tag: 'plain_text',
+      i18n_content: { zh_cn: '签到时间到', en_us: "It's time to check in" } }] });
+    assert.equal(event.content, "It's time to check in");
+  });
+
+  it('reads one language of a card configured in every language', () => {
+    const event = cardEvent({
+      header: { title: { tag: 'plain_text', i18n: { zh_cn: '中文模板', en_us: 'English template' } } },
+      i18n_elements: {
+        zh_cn: [{ tag: 'markdown', content: '中文模板正文' }],
+        ja_jp: [{ tag: 'markdown', content: '日本語テンプレート' }],
+        en_us: [{ tag: 'markdown', content: 'English template body' }],
+      },
+    });
+    assert.equal(event.content, 'English template\nEnglish template body');
+  });
+
+  it('falls back to Chinese, then to the card order, when there is no English', () => {
+    const chinese = cardEvent({ i18n_elements: {
+      ja_jp: [{ tag: 'markdown', content: '日本語テンプレート' }],
+      zh_cn: [{ tag: 'markdown', content: '中文模板' }],
+    } });
+    assert.equal(chinese.content, '中文模板');
+    const japanese = cardEvent({ i18n_elements: {
+      ja_jp: [{ tag: 'markdown', content: '日本語テンプレート' }],
+      ko_kr: [{ tag: 'markdown', content: '한국어 템플릿' }],
+    } });
+    assert.equal(japanese.content, '日本語テンプレート');
+  });
+
+  it('skips an empty language and a translated image key', () => {
+    const event = cardEvent({
+      i18n_elements: { en_us: [], zh_cn: [{ tag: 'markdown', content: '中文模板' }] },
+      elements: [{ tag: 'img', i18n_img_key: { en_us: 'img_v3_02ce_0980b834' } }],
+    });
+    assert.equal(event.content, '中文模板');
+  });
+
+  it('keeps the title of a JSON 1.0 card whose header is configured per language', () => {
+    const event = cardEvent({
+      i18n_header: {
+        zh_cn: { title: { tag: 'plain_text', content: '部署失败' } },
+        en_us: { title: { tag: 'plain_text', content: 'Deployment failed' } },
+      },
+      i18n_elements: {
+        zh_cn: [{ tag: 'markdown', content: '请重试部署' }],
+        en_us: [{ tag: 'markdown', content: 'Please retry the deployment' }],
+      },
+    });
+    assert.equal(event.content, 'Deployment failed\nPlease retry the deployment');
+  });
+
+  it('lets a translated title replace the default one instead of reading both', () => {
+    const event = cardEvent({
+      header: { title: { tag: 'plain_text', content: '部署失败',
+        i18n: { zh_cn: '部署失败', en_us: 'Deployment failed' } } },
+      elements: [{ tag: 'markdown', content: '请重试部署' }],
+    });
+    assert.equal(event.content, 'Deployment failed\n请重试部署');
+    const chinese = cardEvent({
+      header: { title: { tag: 'plain_text', content: '部署失败', i18n: { zh_cn: '部署失败' } } },
+      elements: [{ tag: 'markdown', content: '请重试部署' }],
+    });
+    assert.equal(chinese.content, '部署失败\n请重试部署');
+  });
+
+  it('reads a header configured in one language', () => {
+    const event = cardEvent({
+      i18n_header: { zh_cn: { title: { tag: 'plain_text', content: '部署失败' } } },
+      elements: [{ tag: 'markdown', content: '请重试部署' }],
+    });
+    assert.equal(event.content, '部署失败\n请重试部署');
+  });
+
+  it('reads the next language when the one before it holds no text', () => {
+    const event = cardEvent({
+      i18n_elements: {
+        en_us: [{ tag: 'hr' }],
+        zh_cn: [{ tag: 'markdown', content: '请重试部署' }],
+      },
+    });
+    assert.equal(event.content, '请重试部署');
+  });
+
+  it('reads the field a language map replaced when that map reads nothing', () => {
+    const event = cardEvent({
+      i18n_elements: { en_us: [], zh_cn: [] },
+      elements: [{ tag: 'markdown', content: '请重试部署' }],
+    });
+    assert.equal(event.content, '请重试部署');
+  });
+
+  it('reads one language of a post too, instead of both copies', () => {
+    const event = normalizeEvent({
+      type: 'im.message.receive_v1',
+      message_id: 'om-post-i18n',
+      chat_id: 'oc-post',
+      chat_type: 'group',
+      message_type: 'post',
+      content: JSON.stringify({
+        zh_cn: { title: '结论', content: [[{ tag: 'text', text: '已经完成' }]] },
+        en_us: { title: 'Result', content: [[{ tag: 'text', text: 'Done' }]] },
+      }),
+      sender_id: 'ou-post',
+      timestamp: String(Date.now()),
+    });
+    assert.equal(event.content, 'Result\nDone');
+  });
+
+  function cardEvent(body) {
+    return normalizeEvent({
+      type: 'im.message.receive_v1',
+      message_id: 'om-card-i18n',
+      chat_id: 'oc-card',
+      chat_type: 'group',
+      message_type: 'interactive',
+      content: JSON.stringify(body),
+      sender_id: 'ou-user',
+      timestamp: String(Date.now()),
+    });
+  }
 });
 
 describe('deterministicFilter', () => {

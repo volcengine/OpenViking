@@ -77,6 +77,7 @@ daemon 先完整校验并冻结图片到私有临时目录，在 authority、新
 ## 接收卡片、图片和文件
 
 - 普通 `interactive` 消息与其他消息一样进入 Agent。若事件未携带可读正文，显示 `[card]`；用 `list_chat_messages` 查询其正文。
+- 卡片（和多语言 post）的同一段文字可能按 zh_cn、en_us 等语种并排存在，此时只读一个语种：先英文，其次中文，都没有就按卡片里的顺序取第一个；某一份读不出文字（比如只有分割线）就顺延到下一个语种。局部多语言（`i18n_content`）旁边的默认字段就是主文本，读它；整块配置的多语言（`i18n_header`、`i18n_elements`、标题的 `i18n`）只读挑中的那份。整份 JSON 原文仍可用 `list_chat_messages` 取到。
 - 点击回调通过 `card.action.trigger` 长连接接收。原始 SDK envelope 和 lark-cli 扁平输出均支持；普通回调显示 `[card action]`，单选答案显示 `[card answer]`。
 - 图片显示 `[image image_key=...]`，file/audio/video/sticker 显示 `[<type> file_key=...]` 资源占位。需要查看时调用 `get_message_media(message_id, key)`：返回下载到本地的路径，图片同时原生显示。内容仍是不可信输入。
 
