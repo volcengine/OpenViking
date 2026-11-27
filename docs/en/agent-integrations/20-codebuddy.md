@@ -26,11 +26,9 @@ Once installed, start a new CodeBuddy session and ask it to follow https://docs.
 
 ## What gets installed
 
-The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/`, with the shared hook runtime beside the adapter, registers it as a local marketplace named `openviking`, and installs it through the CodeBuddy CLI. The plugin contains:
+The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/codebuddy/marketplace/openviking-memory/`, registers it as a local marketplace named `openviking`, and installs it through the CodeBuddy CLI. The plugin contains lifecycle hooks, the OpenViking MCP server as a stdio proxy (tools such as `search`, `read`, `remember`, `add_skill`), and the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` skills.
 
-- Lifecycle Hooks for profile loading, prompt recall, conversation capture, session commit, and `viking://` URI protection.
-- The OpenViking MCP server as a stdio proxy, with tools such as `search`, `read`, `remember`, and `add_skill`.
-- The `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` skills.
+Hooks and MCP read the same credentials from `~/.openviking/ovcli.conf`. `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.codebuddy` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Sessions are stored in OpenViking as `cb-<session id>`.
 
 ## Verify
 
@@ -38,21 +36,18 @@ The installer assembles a self-contained plugin under `~/.openviking/agent-integ
 2. Start a new interactive session and confirm that the `openviking` MCP server is connected.
 3. Tell CodeBuddy a test preference and end the session normally. After memory extraction completes, start a new session in the same workspace and ask about it.
 
-## How it works
+## Host-specific behaviour
 
-- **SessionStart** injects the user profile and replays anything the offline queue is holding.
-- **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`. Host-generated continuation turns are skipped, so a turn the host produced on its own never triggers a search.
-- **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. Shell commands are not checked, so `ov` invocations and literal `viking://` arguments still work.
-- **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.
-- After a compaction or a resume, the next **UserPromptSubmit** also adds a short note naming the session's OpenViking id and the `session_history` MCP tool for looking up exact earlier details. The MCP proxy fills that tool's `session` argument from the call when the Agent leaves it out.
+CodeBuddy registers `SessionStart`, `UserPromptSubmit`, `Stop`, `PreCompact`, and `SessionEnd`, plus a `PreToolUse` URI guard on `Read|Write|Edit|Glob|Grep`. Capture, commits, recall, the offline queue, and everything else shared are described in the [Capability Reference](./16-capability-reference.md).
 
-Hooks and MCP read the same credentials from `~/.openviking/ovcli.conf`, so they cannot disagree about the server, account, or user. `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.codebuddy` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Sessions are stored in OpenViking as `cb-<session id>`.
+- `SessionEnd` fires **only in the interactive TUI**. A headless session (`-p`, `--input-format stream-json`) is captured at each `Stop` but gets no session-end commit.
+- `UserPromptSubmit` fires only in the TUI before CodeBuddy Code 2.185.0; from 2.185.0 it fires in headless `-p` runs too. Without it there is no recall.
+- Host-generated continuation turns are not treated as prompts, so they never trigger recall.
+- Context added at `SessionStart` is dropped after a compaction or a `--resume`, so the profile and the session-history note are delivered with the next `UserPromptSubmit`.
+- Shell commands are not checked by the URI guard: on this host `PreToolUse` can only deny, so only file tools are matched.
+- Subagents are not captured.
 
-### Behaviour that follows from the host
-
-`SessionEnd` fires **only in the interactive TUI**, so a headless session (`-p`, `--input-format stream-json`) captures on `Stop` but never sends the final commit. `UserPromptSubmit` also fires only in the TUI before CodeBuddy Code 2.185.0; from 2.185.0 it fires in headless `-p` runs too. `SessionStart` carries no `cwd` and can be delivered twice per session, so the session-start hook is idempotent and falls back to the process working directory. A hook that overruns its timeout is killed, but its child processes are not, which is what lets commits run in a detached worker after the hook process returns.
-
-Subagent capture is not supported yet: the host fires `SubagentStart`/`SubagentStop`, but the shared dispatcher has no subagent stage. The verified host contract and transcript format are recorded in [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md).
+The verified host contract and transcript format are recorded in [`hosts/codebuddy/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/codebuddy/DESIGN.md).
 
 ## Upgrade and uninstall
 

@@ -1,36 +1,32 @@
 # OpenCode
 
-为 [OpenCode](https://opencode.ai/) 提供跨项目、跨会话的长期记忆和已索引仓库上下文。安装后，每次对话都会通过 OpenCode plugin hooks 自动召回相关记忆并捕获新内容；模型可调用工具来自 Claude Code / Codex 记忆插件同款的 OpenViking stdio MCP 代理。
+为 [OpenCode](https://opencode.ai/) 提供跨项目、跨会话的长期记忆。插件运行在 OpenCode 进程内：每次提问时召回相关记忆，把每一轮对话捕获进 OpenViking session，并向模型提供 OpenViking MCP 工具。
 
 源码：[examples/opencode-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)
 
 ## 安装
 
-前置条件：[OpenCode](https://opencode.ai/) 1.15.7+ 或 2.0.15+、Node.js 18+，以及一个可访问的 OpenViking 服务（托管或自建；仅本地服务使用 `curl http://localhost:1933/health` 检查）；服务端启用了鉴权时，还需要一个可用的 OpenViking API key。
+前置条件：[OpenCode](https://opencode.ai/) 2.0.15+、Node.js 18+，以及一个 OpenViking 服务（托管或自建；本地服务可用 `curl http://localhost:1933/health` 检查）。服务端启用了鉴权时，还需要 OpenViking API key。
+
+> **从 OpenCode 1.x 升级：** 插件 1.0 及以后只支持 OpenCode 2，在 OpenCode 1.x 上不做任何事。请升级 OpenCode，或继续使用插件 0.x 版本线。
 
 ### 一键安装（推荐）
 
-OpenCode 与 Claude Code、Codex 共用同一个安装器。它会询问要安装的 harness 和 OpenViking 凭据；每一步都是幂等的，重复运行完全安全。
+连接托管服务时选择 **OpenViking Managed Service**，然后：
 
-连接托管实例时，选择 **OpenViking 托管服务**，再选择服务商：
-
-- **Volcengine**：输入服务 API Key，安装器会提供服务地址。
-- **BytePlus**：输入 API Key。详见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
-
-旧版安装器连接 BytePlus 时使用**自定义 URL**。
+- **火山引擎：** 输入服务 API key，URL 由安装器填写。
+- **BytePlus：** 输入 API key。见 [BytePlus 接入指南](../guides/27-byteplus-setup.md)。
 
 ```bash
 curl -fsSL https://openviking.ai/install | bash
 # AI agent 如不确定是否执行，可先阅读脚本头部，其中写明了它会做什么、如何核实。
 ```
 
-安装器会把插件作为本地文件插件复制到 `~/.config/opencode/plugins/`，把 `openviking` MCP server 条目写进 `~/.config/opencode/opencode.json`，并配置 `~/.openviking/ovcli.conf`。
-
-安装完成后，在 OpenCode 中新开一个会话，让它按 https://docs.openviking.net/agents/zh/onboarding.md 执行。它会检查连接，并带你完成首次使用，详见[一键接入](../getting-started/07-agent-onboarding.md)。
+安装器把插件作为本地文件插件复制到 `~/.config/opencode/plugins/`，在 `~/.config/opencode/opencode.json` 中写入 `openviking` MCP server 条目，并配置 `~/.openviking/ovcli.conf`。
 
 ### 手动 npm 安装
 
-已发布的 npm 包是 `@openviking/opencode-plugin`。首次配置 OpenCode 时：
+npm 包名为 `@openviking/opencode-plugin`。首次配置 OpenCode 时：
 
 ```bash
 mkdir -p ~/.config/opencode
@@ -43,17 +39,9 @@ JSON
 opencode
 ```
 
-已有 `~/.config/opencode/opencode.json` 时，不要覆盖原文件；只把 `"@openviking/opencode-plugin"` 合并到已有的 `plugin` 数组。OpenCode 启动时会自动下载这个 npm 包，插件会自动注册它的 MCP server。
-
-OpenCode 2 使用同一个包：v2 调用 `setup()`，OpenCode 1 调用 `server()`。OpenCode 2 会把 `"plugin"` 规范化为 `"plugins"`，因此安装器继续写兼容 v1/v2 的 `"plugin"`；不要为了 v2 手工改写现有配置。
-
-插件自带 skill，不需要另外安装：`openviking-memory`、`openviking-skills`、`ov-experience-memory` 和 `openviking-rule-search` 告诉模型什么时候该用哪个 OpenViking 工具，`ov-memory-doctor` 诊断插件安装、客户端配置和服务端连接。OpenCode 1 由插件的 `config` hook 把插件的 `skills/` 目录加进 `skills.paths`；OpenCode 2 则通过 `skill.transform` 注册这个目录。这些 skill 只随插件的 OpenViking MCP server 一起提供：hook-only 模式下、或你关闭了 `mcp.openviking` 时不会加入。
-
-在 OpenCode 2 中，插件把 MCP server 设为 `codemode: false`，所以工具仍以 `openviking_*` 直接暴露，不会收进 Code Mode。OpenCode 2 没有插件 toast API，服务不可用等信息只写入插件日志。
+如果 `~/.config/opencode/opencode.json` 已存在，不要覆盖，只把 `"@openviking/opencode-plugin"` 合并进现有的 `plugin` 数组。OpenCode 启动时下载 npm 包，插件会自动注册 MCP server。
 
 ### 源码安装
-
-如果当前环境不能通过 package 安装：
 
 ```bash
 git clone https://github.com/volcengine/OpenViking.git
@@ -66,109 +54,28 @@ cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
 
-`sync.mjs` 会生成 `lib/shared/`，插件和 MCP 代理都从这里 import 共享模块。这个目录不在 git 里，所以复制前要先运行；之后每次 `git pull` 也要重新运行再复制。
+`sync.mjs` 生成不在 git 中的 `lib/shared/`；复制前先运行，每次 `git pull` 后再运行一次。
 
-源码安装后，OpenCode 能发现的目录结构应类似：
-
-```text
-~/.config/opencode/plugins/
-├── openviking.js
-└── openviking/
-    ├── index.mjs
-    ├── package.json
-    ├── lib/
-    └── servers/
-```
-
-顶层 `openviking.js` 只是一个 wrapper，用来把 OpenCode 可发现的一级插件入口转发到实际安装目录。
-源码安装请使用 `.js` wrapper；OpenCode 的本地插件扫描器会发现 JavaScript/TypeScript 插件文件。
-
-## 配置
-
-凭据与 Claude Code / Codex 记忆插件共用。可以在仓库根目录运行一次 setup 向导，或使用 `OPENVIKING_*` 环境变量。向导同样 import `lib/shared/`，所以要先生成：
-
-```bash
-node examples/memory-plugin-shared/sync.mjs
-node examples/opencode-plugin/scripts/setup.mjs
-```
-
-行为配置写在 `~/.openviking/ovcli.conf` 的 `plugin` 段，与向导写入的连接字段同一个文件。共享键对所有记忆插件生效；`plugin.opencode` 下的键只对本插件生效，并覆盖共享键：
-
-```json
-{
-  "plugin": {
-    "recallLimit": 6,
-    "scoreThreshold": 0.35,
-    "recallMaxContentChars": 500,
-    "recallPreferAbstract": true,
-    "recallTokenBudget": 2000,
-    "minQueryLength": 3,
-    "commitTokenThreshold": 20000,
-    "profileTokenBudget": 10000,
-    "skillCatalog": true,
-    "skillCatalogTokenBudget": 1200,
-    "resumeContextBudget": 32000,
-    "opencode": {
-      "timeoutMs": 30000,
-      "repoContext": true,
-      "repoContextCacheTtlMs": 60000
-    }
-  }
-}
-```
-
-配置项按优先级从高到低解析：`OPENVIKING_*` 环境变量、工作区的 `.openviking/config.json` 与 `config.local.json`、`plugin.opencode`、`plugin`，最后是内置默认值。`autoRecall: false` 关闭自动召回，`autoCapture: false` 让插件不再回写对话。
-
-每个 session 的第一条消息会带上一个隐藏的 `<openviking-context source="session-start">` 块，里面有你的 `profile.md`、`preferences/` 和 `entities/` 记忆索引，以及 `<available-skills>` skill 清单：先列你自己的 skill，再列 `viking://agent/skills` 下账号共享的 skill；共享 skill 与你自己的 skill 同名时不再列出。agent 照某个 skill 做事之前，先用 `openviking_read` 读它的 `SKILL.md`；创建或共享 skill 用 `openviking_add_skill`。`profileTokenBudget` 只管 profile 和记忆索引，skill 清单有独立的预算 `skillCatalogTokenBudget`（默认 `1200`，环境变量 `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET`）。放不下描述时只列 skill 名，名字也列不全时末尾注明 `... +N more`；连一个名字都放不下时，只写一行 skill 总数。设置 `skillCatalog: false`（`OPENVIKING_SKILL_CATALOG=0`）或把预算设为 `0` 即可关闭 skill 清单；没有 skill，或服务端没有 `GET /api/v1/skills` 接口时，这一块会直接省略。
-
-环境变量优先级高于 `ovcli.conf`：
-
-```bash
-export OPENVIKING_API_KEY="your-api-key-here"
-export OPENVIKING_ACCOUNT="default"   # 可选，仅 trusted-mode 部署需要
-export OPENVIKING_USER="opencode"     # 可选，仅 trusted-mode 部署需要
-export OPENVIKING_PEER_ID="opencode"  # 可选，peer 维度记忆路由需要
-```
-
-API key 会由 hooks 和 MCP proxy 作为 `Authorization: Bearer ...` 发送；`account` 和 `user` 是 trusted-mode headers；`peerId` 会作为 `X-OpenViking-Actor-Peer` 和捕获 session message 的 `peer_id` 使用。
+凭据从 `OPENVIKING_*` 环境变量或 `~/.openviking/ovcli.conf` 读取；向导 `node examples/opencode-plugin/scripts/setup.mjs` 会写入该文件。`ovcli.conf` 中 `plugin.opencode` 下的设置覆盖共享的 `plugin` 键。
 
 ## 验证
 
-安装后重启 OpenCode。进入 OpenCode session 后，插件应暴露 `openviking` MCP server，透传服务端完整 MCP 工具集（17 个工具）。OpenCode 会给 MCP 工具加 `openviking_` 前缀：
+重启 OpenCode 并开启会话。`openviking` MCP server 应已连接，工具以 `openviking_*` 列出。问一件之前会话里提过的事，确认召回生效。插件日志在 `~/.config/opencode/openviking/openviking-memory.log`。
 
-- `openviking_find`、`openviking_search`（`openviking_search` 的 `mode="context"` 替代原 recall 工具）
-- `openviking_read`、`openviking_download`、`openviking_list`、`openviking_tree`、`openviking_grep`、`openviking_glob`
-- `openviking_remember`、`openviking_write`、`openviking_edit`、`openviking_add_resource`、`openviking_add_skill`
-- `openviking_list_watches`、`openviking_cancel_watch`、`openviking_forget`、`openviking_health`
+出现问题时，运行 `node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs`，或让 agent 使用 `ov-memory-doctor` skill。
 
-OpenCode 2 在每次 execution 结束时抓取本轮用户消息、助手回复和工具结果，并在压缩前补齐即将移出上下文的对话；达到 token 阈值时提交，compaction、session 删除和插件 cleanup 会强制提交。OpenCode 2 会在无活动 60 分钟、服务停止或本地插件热重载时执行 cleanup。
+## OpenCode 上的不同之处
 
-工具调用和结果会作为独立的 `tool` part 捕获，`tool_output` 原样上报。截断由服务端负责：超过 `tool_output_externalization.threshold_chars`（默认 `20000`）的输出会写入 session 的 tool-result 存储，part 中只保留 synopsis stub 和 `tool_output_ref`，原文仍可通过 [`/api/v1/sessions/{id}/tool-results`](../api/05-sessions.md#read-tool-result) 读回。
+- **只支持 OpenCode 2**（插件 1.0 起）；OpenCode 1.x 用户留在 0.x 版本线。
+- **画像在首个 prompt 注入：** session-start 块（画像和 skill 目录）随第一个 prompt 送达，而不是在会话创建时。
+- **工具名：** OpenCode 给 MCP 工具加上 server 名前缀，所以工具是 `openviking_find`、`openviking_read`、`openviking_search` 等。插件把 MCP server 设为 `codemode: false`，工具保持可直接调用，不会被折叠进 Code Mode。
+- **子 agent：** 子 agent 会话捕获进独立的 OpenViking session `oc-<parent>__subagent-<child>`；`skipSubagentSessions` 可跳过。
+- **事件：** 在 `execution.ended` 捕获，压缩前和 `session.deleted` 时提交。没有 transcript 文件，插件从 OpenCode 读取会话消息。
+- **Skills：** 插件通过 OpenCode 的 `skill.transform` 注册自带的 skills；OpenViking MCP server 被禁用时不注册。
 
-OpenCode 1.15.7 不会调用插件 dispose。v1 的短时 CLI 运行也可能在异步捕获完成前退出，这一行为在 v2 适配前已存在。使用常驻 v1 服务可以让 idle 捕获完成；OpenCode 1.18.32 会在 instance dispose 时调用插件的 dispose。
-
-可以让 OpenCode 搜索或浏览 OpenViking memory。运行时状态和错误日志会写入：
-
-```bash
-~/.config/opencode/openviking/openviking-memory.log
-~/.config/opencode/openviking/openviking-session-state.json
-```
-
-## 故障排查
-
-先运行诊断：`node ~/.config/opencode/plugins/openviking/scripts/ov-memory-doctor.mjs` 检查插件安装、客户端配置和服务端连接，并为发现的每个问题给出修复方法（支持 `--json`、`--offline`、`--timeout <ms>`、`--no-color`）。npm 包在 `scripts/` 下带有同一个脚本，会话中也可以用 `ov-memory-doctor` skill 运行它。
-
-| 问题 | 排查方向 |
-|------|----------|
-| 插件没有加载 | 确认 `~/.config/opencode/opencode.json` 的 `plugin` 数组引用了 `@openviking/opencode-plugin`；源码安装时确认 `~/.config/opencode/plugins/openviking.js` 存在 |
-| 加载时报找不到 `lib/shared/*.mjs` | 源码复制前没有运行 `sync.mjs`。在仓库根目录运行 `node examples/memory-plugin-shared/sync.mjs` 后重新复制 `lib/` |
-| MCP tools 连到了错误的 server | 检查 `~/.openviking/ovcli.conf`，或用 `OPENVIKING_*` 环境变量；`OPENVIKING_CLI_CONFIG_FILE` 可让插件改读另一份 ovcli.conf |
-| OpenViking 返回 401 / 403 | 检查 `OPENVIKING_API_KEY`；trusted-mode 部署还要检查 `OPENVIKING_ACCOUNT` 和 `OPENVIKING_USER` |
-| recall 为空 | 确认 OpenViking server 中已有 memories/resources，且 `autoRecall` 没有被设成 `false` |
-| 本地 `openviking_add_resource` 失败 | 传入文件路径而不是目录；目前还不支持自动上传本地目录 |
-
-完整 tools、配置字段和运行时文件说明见 [插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)。
+召回、捕获、提交、离线重试等与其他集成共用：见 [集成能力参考](./16-capability-reference.md)。
 
 ## 参见
 
 - [集成能力参考](./16-capability-reference.md)
+- [插件 README](https://github.com/volcengine/OpenViking/tree/main/examples/opencode-plugin)

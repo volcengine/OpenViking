@@ -28,13 +28,11 @@ If you installed the Claude Code plugin into Qoder from the OpenViking GitHub ma
 
 ## What gets installed
 
-The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/`, with the shared hook runtime beside the adapter, registers it as a local marketplace named `openviking`, and installs it with `qodercli plugins install`. The plugin contains:
-
-- Lifecycle Hooks for profile loading, prompt recall, conversation capture, session commit, and `viking://` URI protection.
-- The OpenViking MCP server as a stdio proxy, with tools such as `search`, `read`, `remember`, and `add_skill`.
-- The `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` skills, listed under the plugin's name, for example `openviking-memory:openviking-skills`.
+The installer assembles a self-contained plugin under `~/.openviking/agent-integrations/qoder/marketplace/openviking-memory/`, registers it as a local marketplace named `openviking`, and installs it with `qodercli plugins install`. The plugin contains lifecycle hooks, the OpenViking MCP server as a stdio proxy (tools such as `search`, `read`, `remember`, `add_skill`), and the `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, and `ov-memory-doctor` skills, listed under the plugin's name, for example `openviking-memory:openviking-skills`.
 
 Every Qoder CLI build on `PATH` gets the plugin: `qodercli` in `~/.qoder` (`QODER_CONFIG_DIR`), and the CN build `qoderclicn` in `~/.qoder-cn` (`QODERCN_CONFIG_DIR`). Uninstall removes it from both.
+
+Hooks and MCP read the same credentials from `~/.openviking/ovcli.conf`. `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.qoder` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Sessions are stored in OpenViking as `qd-<session id>`.
 
 ## Verify
 
@@ -42,23 +40,18 @@ Every Qoder CLI build on `PATH` gets the plugin: `qodercli` in `~/.qoder` (`QODE
 2. Start a new session and confirm that the `openviking` MCP server is connected.
 3. Tell Qoder a test preference and end the session normally. After memory extraction completes, start a new session in the same workspace and ask about it.
 
-## How it works
+## Host-specific behaviour
 
-- **SessionStart** injects the user profile and replays anything the offline queue is holding.
-- **UserPromptSubmit** recalls relevant memories and injects them as an `<openviking-context>` block in `additionalContext`.
-- **PreToolUse** denies reading or writing a `viking://` URI as a local path and points the Agent at the OpenViking MCP tools. A Bash command that contains such a URI still runs, with a notice pointing at the same tools, so `ov` invocations and literal `viking://` arguments still work. A second `PreToolUse` entry on `mcp_call` adds the current session as the `session` argument of a `session_history` call that leaves it out.
-- After a compaction or a resume, **SessionStart** also adds a short note naming the session's OpenViking id and the `session_history` MCP tool for looking up exact earlier details.
-- **Stop**, **PreCompact**, and **SessionEnd** capture new transcript turns incrementally in a detached worker. `Stop` commits the OpenViking session every 8 captured messages (`commitTurnThreshold`); `PreCompact` and `SessionEnd` commit everything not yet committed, including messages `Stop` already sent.
+Qoder registers `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `Stop`, `PreCompact`, and `SessionEnd`. Capture, commits, recall, the offline queue, and everything else shared are described in the [Capability Reference](./16-capability-reference.md).
 
-Hooks and MCP read the same credentials from `~/.openviking/ovcli.conf`, so they cannot disagree about the server, account, or user. `OPENVIKING_URL` and `OPENVIKING_API_KEY` override that file, and per-plugin settings live under `plugin.qoder` (see [Plugin Settings](../configuration/02-client.md#plugin-settings)). Sessions are stored in OpenViking as `qd-<session id>`.
+- `UserPromptSubmit` and `SessionEnd` fire in the TUI and in headless `-p` runs alike. Every `-p` run also ends an auxiliary session that has no transcript; nothing is captured from it.
+- Qoder loads MCP tools lazily: the model reaches them through `mcp_call`, so the URI guard's deny message names the `mcp_call` form. In headless runs with the default permission mode, the MCP tools need a permission rule or a permissive mode.
+- The URI guard covers `Read|Write|Edit|Glob|Grep|Bash`: file tools on a `viking://` URI are denied, and a Bash command containing one still runs with a notice. A second `PreToolUse` entry on `mcp_call` fills in the current session for a `session_history` call that leaves it out.
+- Qoder records injected context as separate attachment records in its transcript; capture reads only conversation records, so recalled memories are never captured back.
+- Use `qodercli` for the plugin commands: `qoder` opens the Qoder IDE for some arguments.
+- Subagents are not captured.
 
-### Behaviour that follows from the host
-
-`UserPromptSubmit` and `SessionEnd` fire in the TUI and in headless `-p` runs alike, so a headless session is recalled and committed too. Qoder records injected context in its transcript as separate attachment records; capture reads only the conversation records, so recalled memories are never captured back. Every `-p` run also ends an auxiliary session that has no transcript; its `SessionEnd` is ignored.
-
-Qoder loads MCP tools lazily through `mcp_call`. In headless runs with the default permission mode, the MCP tools need a permission rule or a permissive mode. Use the `qodercli` command for the plugin commands: `qoder` also opens the Qoder IDE for some arguments.
-
-Subagent capture is not supported yet: the host fires `SubagentStart`/`SubagentStop`, but the shared dispatcher has no subagent stage. The verified host contract and transcript format are recorded in [`hosts/qoder/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/qoder/DESIGN.md).
+The verified host contract and transcript format are recorded in [`hosts/qoder/DESIGN.md`](https://github.com/volcengine/OpenViking/blob/main/examples/agent-hook-plugin/hosts/qoder/DESIGN.md).
 
 ## Upgrade and uninstall
 

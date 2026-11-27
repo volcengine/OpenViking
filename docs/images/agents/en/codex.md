@@ -67,4 +67,4 @@ The agent checks the connection and walks you through the first use.
 
 - Docs on Manual Settings: [Codex](https://docs.openviking.net/en/agent-integrations/04-codex)
 - Blog about how it works: [OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
-- Code: [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin)
+- Code: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)

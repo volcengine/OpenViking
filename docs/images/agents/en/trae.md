@@ -60,4 +60,4 @@ The agent checks the connection and walks you through the first use.
 ## Reference
 
 - Docs on Manual Settings: [TRAE](https://docs.openviking.net/en/agent-integrations/13-trae)
-- Code: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) (TRAE / TRAE CN), [examples/codex-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/codex-memory-plugin) (TraeCode CLI 2.0)
+- Code: [examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin) (TRAE / TRAE CN); TraeCode CLI 2.0 uses the same directory

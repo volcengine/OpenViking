@@ -75,4 +75,4 @@ Agent 会检查连接，并带你完成首次使用。
 
 - 手动配置文档：[Claude Code](https://docs.openviking.net/zh/agent-integrations/02-claude-code)
 - 原理博客：[OpenViking for coding agents](https://blog.openviking.ai/post/openviking-coding-agent/)
-- 源码：[examples/claude-code-memory-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/claude-code-memory-plugin)
+- 源码：[examples/agent-hook-plugin](https://github.com/volcengine/OpenViking/tree/main/examples/agent-hook-plugin)
