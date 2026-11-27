@@ -398,6 +398,8 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
             sparse_vector = {}
             if "dense" in item:
                 dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
+            elif "dense_embedding" in item:
+                dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
             if "sparse" in item:
                 sparse_vector = item["sparse"]
 

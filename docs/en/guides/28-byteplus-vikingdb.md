@@ -13,10 +13,14 @@ BytePlus Johor uses region `ap-southeast-1` and two separate API hosts:
 | Collection and index management | `vikingdb.ap-southeast-1.byteplusapi.com` |
 | Data, search and embeddings | `api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com` |
 
+On BytePlus, set both `console_host` and `data_host`. An omitted field uses the
+corresponding Volcengine Johor host for `ap-southeast-1`.
+
 Use the `volcengine` vector backend with `console_host` and `data_host`. These
 fields override the corresponding AK/SK endpoints independently. Omit them to
 retain the existing region-based Volcengine hosts. Supply bare hostnames, without
-`https://` or a path. The existing `host` field remains the API-key data endpoint;
+`https://` or a path. Leading/trailing whitespace and trailing slashes are removed.
+The existing `host` field remains the API-key data endpoint;
 it does not select the two AK/SK endpoints.
 
 Add these sections to the server's `ov.conf`:

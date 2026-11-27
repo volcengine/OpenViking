@@ -9,6 +9,88 @@ from openviking.models.embedder.vikingdb_embedders import VikingDBDenseEmbedder
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
 
+@pytest.mark.parametrize(
+    "scope", ["embedding", "credential", "storage", "account_embedding", "account_storage"]
+)
+def test_sts_tokens_are_hidden_in_model_repr_and_preserved_for_requests(scope):
+    from openviking.config.account_vector import (
+        AccountEmbeddingCredential,
+        AccountVolcengineVectorConfig,
+    )
+    from openviking_cli.utils.config.embedding_config import (
+        EmbeddingCredential,
+        EmbeddingModelConfig,
+    )
+    from openviking_cli.utils.config.vectordb_config import VolcengineConfig
+
+    token = "synthetic-sts-token-that-must-not-appear-in-repr"
+    models = {
+        "embedding": lambda: EmbeddingModelConfig(
+            provider="vikingdb",
+            model="bge-m3",
+            dimension=4,
+            ak="test-ak",
+            sk="test-sk",
+            region="ap-southeast-1",
+            session_token=token,
+        ),
+        "credential": lambda: EmbeddingCredential(session_token=token),
+        "storage": lambda: VolcengineConfig(session_token=token),
+        "account_embedding": lambda: AccountEmbeddingCredential(
+            provider="vikingdb", session_token=token
+        ),
+        "account_storage": lambda: AccountVolcengineVectorConfig(session_token=token),
+    }
+    model = models[scope]()
+    assert token not in repr(model)
+    assert model.model_dump()["session_token"] == token
+
+
+def test_account_embedding_uses_its_own_sts_token():
+    from openviking.config.vector import resolve_effective_embedding
+
+    cluster = EmbeddingConfig.model_validate(
+        {
+            "max_retries": 0,
+            "dense": {
+                "provider": "vikingdb",
+                "model": "bge-m3",
+                "dimension": 4,
+                "ak": "cluster-ak",
+                "sk": "cluster-sk",
+                "session_token": "cluster-token",
+                "region": "ap-southeast-1",
+            },
+        }
+    )
+    effective = resolve_effective_embedding(
+        cluster,
+        {
+            "dense": {
+                "model": "bge-m3",
+                "dimension": 4,
+                "credentials": [
+                    {
+                        "provider": "vikingdb",
+                        "ak": "account-ak",
+                        "sk": "account-sk",
+                        "region": "ap-southeast-1",
+                        "session_token": "account-token",
+                        "host": "api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com",
+                    }
+                ],
+            }
+        },
+    )
+    embedder = provider_embedder(effective.get_embedder())
+    try:
+        request = embedder.client.prepare_request("POST", "/api/vikingdb/embedding", data={})
+        assert request.headers["X-Security-Token"] == "account-token"
+        assert request.host == "api-vikingdb.vikingdb.ap-southeast-1.bytepluses.com"
+    finally:
+        embedder.client._session.close()
+
+
 def provider_embedder(embedder):
     while hasattr(embedder, "inner"):
         embedder = embedder.inner
@@ -55,6 +137,24 @@ def test_dense_embedder_reads_provider_vector_field(monkeypatch, field):
         "request",
         lambda **kwargs: SimpleNamespace(
             status_code=200, json=lambda: {"result": {"data": [{field: vector}]}}
+        ),
+    )
+    try:
+        assert embedder.embed("test document").dense_vector == vector
+    finally:
+        embedder.client._session.close()
+
+
+@pytest.mark.parametrize("field", ["dense", "dense_embedding"])
+def test_hybrid_sync_embedder_reads_both_dense_vector_fields(monkeypatch, field):
+    embedder = configured_embedder("hybrid")
+    vector = [1.0, 0.0, 0.0, 0.0]
+    monkeypatch.setattr(
+        embedder.client._session,
+        "request",
+        lambda **kwargs: SimpleNamespace(
+            status_code=200,
+            json=lambda: {"result": {"data": [{field: vector, "sparse": {}}]}},
         ),
     )
     try:

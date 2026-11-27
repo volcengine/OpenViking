@@ -24,6 +24,7 @@ class VolcengineConfig(BaseModel):
     )
     session_token: Optional[str] = Field(
         default=None,
+        repr=False,
         description="Optional Volcengine STS security token for temporary credentials",
     )
     region: Optional[str] = Field(
@@ -575,8 +576,11 @@ class VectorDBBackendConfig(BaseModel):
                 raise ValueError("VectorDB http backend requires 'url' to be set")
 
         elif self.backend == "volcengine":
-            if self.volcengine and self.volcengine.host:
-                self.volcengine.host = self.volcengine.host.strip().rstrip("/")
+            if self.volcengine:
+                for field_name in ("host", "console_host", "data_host"):
+                    host = getattr(self.volcengine, field_name)
+                    if host is not None:
+                        setattr(self.volcengine, field_name, host.strip().rstrip("/"))
 
             uses_api_key = bool(self.volcengine and self.volcengine.api_key)
             if uses_api_key:

@@ -528,6 +528,9 @@ For Azure OpenAI, `model` must be the embedding deployment name configured in Az
 
 **vikingdb provider example:**
 
+Temporary VikingDB credentials also require `session_token`. For BytePlus
+endpoints and a tested model configuration, see [BytePlus VikingDB setup](28-byteplus-vikingdb.md).
+
 ```json
 {
   "embedding": {
@@ -2141,6 +2144,9 @@ Default local mode
 <details>
 <summary><b>volcengine vikingDB</b></summary>
 Supports cloud-deployed VikingDB on Volcengine
+
+For BytePlus, set separate `console_host` and `data_host` overrides for AK/SK
+access. See [BytePlus VikingDB setup](28-byteplus-vikingdb.md) for the full example.
 
 ```json
 {
