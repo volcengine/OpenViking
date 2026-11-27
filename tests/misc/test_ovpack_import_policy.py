@@ -1212,7 +1212,7 @@ async def _restricted_pack_source(indexed_fs):
 
 @pytest.mark.asyncio
 async def test_account_backup_includes_restricted_originals_without_crossing_accounts(
-    indexed_fs, tmp_path
+    indexed_fs, tmp_path, monkeypatch
 ):
     fs, admin, reader, outsider, original = await _restricted_pack_source(indexed_fs)
     _, backend = indexed_fs
@@ -1273,6 +1273,27 @@ async def test_account_backup_includes_restricted_originals_without_crossing_acc
     assert await fs.read_file_bytes(other_uri, ctx=other_admin) == b"other-account content"
     with pytest.raises(PermissionDeniedError):
         await fs.read_file_bytes(original, ctx=outsider)
+
+    vectorize_file = AsyncMock()
+    vectorize_directory = AsyncMock()
+    monkeypatch.setattr("openviking.storage.ovpack.operations.vectorize_file", vectorize_file)
+    monkeypatch.setattr(
+        "openviking.storage.ovpack.operations.vectorize_directory_meta", vectorize_directory
+    )
+    await pack.restore_ovpack(
+        str(archive), ctx=other_admin, on_conflict="overwrite", vector_mode="recompute"
+    )
+
+    target_reader = RequestContext(user=UserIdentifier("other", "reader"), role=Role.USER)
+    for path in ("settings/user_config.json", "GLOBAL_POLICY.md"):
+        assert await fs.read_file_bytes(f"{user_root}/{path}", ctx=target_reader) == file_only[path]
+    assert {call.kwargs["file_path"] for call in vectorize_file.await_args_list} == {
+        original,
+        memory_uri,
+    }
+    recomputed_directories = {call.args[0] for call in vectorize_directory.await_args_list}
+    assert f"{user_root}/memories/preferences/example" in recomputed_directories
+    assert f"{user_root}/privacy/example" not in recomputed_directories
 
 
 @pytest.mark.asyncio

@@ -93,14 +93,15 @@ def _entry_uri(root_uri: str, entry: dict[str, Any]) -> str:
     return _join_uri(root_uri, rel_path)
 
 
-def _expects_index(uri: str, *, is_directory: bool) -> bool:
+def is_index_source_uri(uri: str, *, is_directory: bool) -> bool:
+    """Identify content paths eligible for index validation or recomputation."""
     try:
         parts = uri_parts(uri)
     except ValueError:
         return False
     if not parts or parts[0] in NON_INDEX_SCOPES or is_session_uri(uri):
         return False
-    if is_skill_history_uri(uri):
+    if (not is_directory and parts[-1].startswith(".")) or is_skill_history_uri(uri):
         return False
     if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
         return False
@@ -108,9 +109,14 @@ def _expects_index(uri: str, *, is_directory: bool) -> bool:
         return True
     if parts[2] in NON_INDEX_USER_DIRECTORIES:
         return False
-    if is_directory:
-        return parts[2] != "memories"
     return parts[2:] != ["memories", SOUL_FILENAME] and not is_user_global_policy_uri(uri)
+
+
+def _expects_directory_index(uri: str) -> bool:
+    if not is_index_source_uri(uri, is_directory=True):
+        return False
+    parts = uri_parts(uri)
+    return not (parts[0] == "user" and parts[2:3] == ["memories"])
 
 
 def _leaf_name(uri_or_path: str) -> str:
@@ -132,14 +138,14 @@ def _directory_candidates(
     entries: list[dict[str, Any]],
 ) -> list[tuple[str, str]]:
     candidates: list[tuple[str, str]] = []
-    if _expects_index(root_uri, is_directory=True):
+    if _expects_directory_index(root_uri):
         candidates.append((root_uri, ""))
 
     for entry in entries:
         if not entry.get("isDir"):
             continue
         uri = _entry_uri(root_uri, entry)
-        if not _expects_index(uri, is_directory=True):
+        if not _expects_directory_index(uri):
             continue
         rel_path = str(entry.get("rel_path") or "")
         candidates.append((uri, rel_path))
@@ -158,12 +164,10 @@ def _file_candidates(
         if isinstance(size, int) and not isinstance(size, bool) and size == 0:
             continue
         uri = _entry_uri(root_uri, entry)
-        if not _expects_index(uri, is_directory=False):
+        if not is_index_source_uri(uri, is_directory=False):
             continue
         rel_path = str(entry.get("rel_path") or "")
         name = str(entry.get("name") or _leaf_name(rel_path))
-        if name.startswith("."):
-            continue
         candidates.append((uri, rel_path, name))
     return candidates
 
