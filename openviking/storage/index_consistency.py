@@ -9,6 +9,7 @@ from typing import Any
 
 from openviking.core.context import ResourceContentType
 from openviking.core.namespace import is_session_uri, uri_parts
+from openviking.core.namespace_policy import NamespaceProcessingMode, namespace_policy_for_uri
 from openviking.observability.log_safety import safe_uri_for_log
 from openviking.privacy.global_policy import is_user_global_policy_uri
 from openviking.server.identity import RequestContext
@@ -97,6 +98,8 @@ def _expects_index(uri: str, *, is_directory: bool) -> bool:
     except ValueError:
         return False
     if not parts or parts[0] in NON_INDEX_SCOPES or is_session_uri(uri):
+        return False
+    if namespace_policy_for_uri(uri).processing_mode is NamespaceProcessingMode.FILE_ONLY:
         return False
     if parts[0] != "user" or len(parts) < 3:
         return True
