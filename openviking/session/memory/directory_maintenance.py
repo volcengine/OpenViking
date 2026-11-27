@@ -5,15 +5,13 @@
 from __future__ import annotations
 
 import json
-from contextlib import AsyncExitStack
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from openviking.core.namespace import classify_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
-from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session.memory.dataclass import (
     DirectoryOperation,
     MemoryFile,
@@ -21,7 +19,7 @@ from openviking.session.memory.dataclass import (
     ResolvedOperations,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
+from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.session.memory.tools import verified_preference_directory_owner
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import generate_uri, render_template
@@ -41,7 +39,6 @@ if TYPE_CHECKING:
 
 _IDENTITY_FIELDS = {"entities": ("category", "name"), "preferences": ("user", "topic")}
 _DERIVED_FILES = frozenset({".abstract.md", ".overview.md", ".relations.json"})
-_LOCK_ATTEMPTS = 4
 _LOCK_TIMEOUT_SECONDS = 5
 
 
@@ -262,23 +259,6 @@ async def _prepare_operations(
     return report
 
 
-async def _linked_paths(fs, operations: ResolvedOperations, root: str, ctx) -> set[str]:
-    paths = set()
-    for operation in operations.upsert_operations:
-        old_file = operation.old_memory_file_content
-        for link in (*old_file.links, *old_file.backlinks):
-            for uri in (link.get("from_uri"), link.get("to_uri")):
-                if (
-                    uri
-                    and classify_uri(uri).is_memory
-                    and uri != root
-                    and not uri.startswith(f"{root}/")
-                ):
-                    await fs._ensure_access(uri, ctx, action=AclAction.WRITE)
-                    paths.add(fs._uri_to_path(uri, ctx=ctx))
-    return paths
-
-
 async def _is_discardable_sidecar(
     fs, uri: str, name: str, schema: MemoryTypeSchema, ctx: RequestContext
 ) -> bool:
@@ -354,61 +334,19 @@ async def _cleanup_empty_rename_target(fs, plan, target_path, ctx, lease, report
         report.result.add_error(plan.target_uri, exc)
 
 
-def _combine_results(destination: MemoryUpdateResult, source: MemoryUpdateResult) -> None:
-    destination.written_uris.extend(source.written_uris)
-    destination.edited_uris.extend(source.edited_uris)
-    destination.deleted_uris.extend(source.deleted_uris)
-    destination.skipped_operations.extend(source.skipped_operations)
-    destination.errors.extend(source.errors)
-
-
-async def _apply_cards(
-    updater, report: DirectoryMergeResult, ctx: RequestContext, *, stop_on_error: bool = False
-) -> None:
-    # Move one card at a time. A link to another card should point to its
-    # current URI until that card's own move has actually succeeded.
-    search_tags = {
-        operation.uris[0]: operation.search_tags
-        for operation in report.operations.upsert_operations
-        if operation.search_tags
-    }
-    for operation in report.operations.upsert_operations:
-        batch = ResolvedOperations(
-            upsert_operations=[operation], delete_file_contents=[], errors=[]
-        )
-        applied = await run_to_completion(
-            partial(updater.apply_operations, batch, ctx, search_tags_by_uri=search_tags)
-        )
-        _combine_results(report.result, applied)
-        report.operations.delete_file_contents.extend(batch.delete_file_contents)
-        report.operations.delete_replacements.update(batch.delete_replacements)
-        if stop_on_error and (applied.errors or not applied.deleted_uris):
-            break
-    written_or_deleted = set(report.result.written_uris + report.result.deleted_uris)
-    report.result.edited_uris = list(
-        dict.fromkeys(uri for uri in report.result.edited_uris if uri not in written_or_deleted)
-    )
-
-
-async def merge_memory_directories(
+async def apply_directory_operation(
     plan: DirectoryOperation,
     *,
     registry: MemoryTypeRegistry,
-    vikingdb,
     ctx: RequestContext,
+    apply: Callable[[ResolvedOperations, dict[str, Any]], Awaitable[MemoryUpdateResult]],
 ) -> DirectoryMergeResult:
-    """Move validated cards via the ordinary memory migration path.
-
-    The provider supplies the same-category or same-owner judgment. The
-    executor enforces storage scope, identity consistency and absence of
-    collisions. A partial migration never overwrites an occupied destination.
-    """
+    """Expand one directory declaration into ordinary card writes, then prune its source."""
     report = DirectoryMergeResult()
     try:
         schema, user_space, preference_owner = _check_plan(plan, registry, ctx)
         fs = get_viking_fs()
         root = plan.source_uri.rsplit("/", 1)[0]
-        root_path = fs._uri_to_path(root, ctx=ctx)
         source_path = fs._uri_to_path(plan.source_uri, ctx=ctx)
         target_path = fs._uri_to_path(plan.target_uri, ctx=ctx)
         fs._validate_transfer_paths(source_path, target_path)
@@ -417,72 +355,54 @@ async def merge_memory_directories(
         rename = plan.operation == "rename"
         if status := await _check_endpoints(fs, plan, ctx):
             return DirectoryMergeResult(status=status)
-
-        exact_paths: set[str] = set()
-        updater = MemoryUpdater(
-            registry=registry,
-            vikingdb=vikingdb,
-            directory_migration=(plan.source_uri, plan.target_uri),
+        # Lock the existing parent. A Tree lock on a missing endpoint could create it.
+        lease = await fs._async_agfs.pathlock_acquire_tree(
+            fs._uri_to_path(root, ctx=ctx), timeout_secs=_LOCK_TIMEOUT_SECONDS
         )
-        for _ in range(_LOCK_ATTEMPTS):
-            lease = await fs._async_agfs.pathlock_acquire_exact_tree_batch(
-                sorted(exact_paths),
-                # RagFS's filesystem Tree locks create their lock directory if
-                # absent. A child lease could recreate a concurrently deleted
-                # merge endpoint. Lock their existing schema root and recheck.
-                [root_path],
-                timeout_secs=_LOCK_TIMEOUT_SECONDS,
+        try:
+            if status := await _check_endpoints(fs, plan, ctx):
+                return DirectoryMergeResult(status=status)
+            report = await _prepare_operations(
+                fs,
+                plan,
+                schema,
+                user_space,
+                preference_owner,
+                await _entries(fs, source_path, ctx),
+                {} if rename else await _entries(fs, target_path, ctx),
+                ctx,
             )
-            async with AsyncExitStack() as cleanup:
-                cleanup.push_async_callback(fs._async_agfs.pathlock_release, lease)
-                if status := await _check_endpoints(fs, plan, ctx):
-                    return DirectoryMergeResult(status=status)
-                source_entries = await _entries(fs, source_path, ctx)
-                target_entries = {} if rename else await _entries(fs, target_path, ctx)
-                report = await _prepare_operations(
-                    fs,
-                    plan,
-                    schema,
-                    user_space,
-                    preference_owner,
-                    source_entries,
-                    target_entries,
-                    ctx,
-                )
-                if report.status == "blocked":
-                    return report
-                discovered = await _linked_paths(fs, report.operations, root, ctx)
-                if not discovered.issubset(exact_paths):
-                    exact_paths.update(discovered)
-                    continue
-                updater._transaction_handle = lease
-                if rename:
-                    cleanup.push_async_callback(
-                        _cleanup_empty_rename_target, fs, plan, target_path, ctx, lease, report
-                    )
-                    if not report.operations.upsert_operations:
-                        await fs.mkdir(plan.target_uri, ctx=ctx, lease_ref=lease)
-                await _apply_cards(updater, report, ctx, stop_on_error=rename)
+            if report.status == "blocked":
+                return report
+            try:
+                if report.operations.upsert_operations:
+                    applied = await apply(report.operations, lease)
+                    applied.errors[:0] = report.result.errors
+                    report.result = applied
+                elif rename:
+                    await fs.mkdir(plan.target_uri, ctx=ctx, lease_ref=lease)
                 await _finish_source(fs, plan, schema, source_path, ctx, lease, report)
-                break
-        else:
-            raise RuntimeError("Directory merge could not stabilize linked-memory lock coverage")
+            finally:
+                if rename:
+                    await _cleanup_empty_rename_target(fs, plan, target_path, ctx, lease, report)
+        finally:
+            await fs._async_agfs.pathlock_release(lease)
 
-        changed = set(report.result.written_uris + report.result.deleted_uris)
-        if report.pruned:
-            changed.difference_update(report.result.deleted_uris)
-        if changed:
-            await updater._submit_directory_changes(changed, ctx)
-        if report.pruned:
-            from openviking.storage.queuefs.semantic_ops.directory_refresh import (
-                enqueue_directory_refresh,
+        from openviking.storage.queuefs.semantic_ops.directory_refresh import (
+            enqueue_directory_refresh,
+        )
+
+        if report.result.written_uris:
+            await enqueue_directory_refresh(
+                plan.target_uri, len(report.result.written_uris), ctx=ctx
             )
-
-            await enqueue_directory_refresh(root, 1, ctx=ctx)
         if report.pruned:
-            report.status = "renamed" if rename else "merged"
-        else:
-            report.status = "partial"
+            await enqueue_directory_refresh(root, 1, ctx=ctx)
+        elif report.result.deleted_uris:
+            await enqueue_directory_refresh(
+                plan.source_uri, len(report.result.deleted_uris), ctx=ctx
+            )
+        report.status = ("renamed" if rename else "merged") if report.pruned else "partial"
     except Exception as exc:
         report.status = "failed"
         report.result.add_error(plan.source_uri, exc)

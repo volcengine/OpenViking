@@ -16,10 +16,12 @@ import threading
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any, Hashable
 
 from openviking.config.generation import get_output_language_override
 from openviking.config.vlm import VLMResolver
+from openviking.core.namespace import classify_uri
 from openviking.core.peer_id import safe_peer_id
 from openviking.message import Message
 from openviking.observability.log_safety import short_hash
@@ -38,7 +40,7 @@ from openviking.session.memory.dataclass import (
 )
 from openviking.session.memory.directory_maintenance import (
     DirectoryMergeResult,
-    merge_memory_directories,
+    apply_directory_operation,
 )
 from openviking.session.memory.extract_loop import ExtractLoop
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -65,6 +67,7 @@ from openviking.session.memory.utils.streaming_batcher import (
     StreamingBatcher,
     StreamingBatcherConfig,
 )
+from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
@@ -250,9 +253,18 @@ class StreamingMemoryUpdater:
             if plan.operation == "rename" and plan.source_uri in incomplete_targets:
                 outcome = DirectoryMergeResult(status="skipped_incomplete_merge")
             else:
-                outcome = await merge_memory_directories(
-                    plan, registry=registry, vikingdb=self.vikingdb, ctx=request.ctx
-                )
+                async with self._apply_lock:
+                    outcome = await apply_directory_operation(
+                        plan,
+                        registry=registry,
+                        ctx=request.ctx,
+                        apply=partial(
+                            self._write_operations,
+                            request=replace(request, memory_registry=registry),
+                            messages=request.messages,
+                            directory_migration=plan,
+                        ),
+                    )
             if plan.operation == "merge" and outcome.status != "merged":
                 incomplete_targets.add(plan.target_uri)
             outcomes.append((plan, outcome))
@@ -587,30 +599,43 @@ class StreamingMemoryUpdater:
         request: MemoryUpdateRequest,
         messages: list[Message],
     ) -> MemoryUpdateResult:
+        async with self._apply_lock:
+            return await self._write_operations(operations, request=request, messages=messages)
+
+    async def _write_operations(
+        self,
+        operations: ResolvedOperations,
+        owner_lease_ref: dict[str, Any] | None = None,
+        *,
+        request: MemoryUpdateRequest,
+        messages: list[Message],
+        directory_migration: DirectoryOperation | None = None,
+    ) -> MemoryUpdateResult:
         extract_context = ExtractContext(messages)
         isolation_handler = _make_isolation_handler(request, extract_context)
-        async with self._apply_lock:
-            viking_fs = safe_get_viking_fs()
-            lease = await acquire_memory_operation_lease(
-                operations,
-                viking_fs,
-                request.ctx,
+        viking_fs = safe_get_viking_fs()
+        lease = await acquire_memory_operation_lease(
+            operations, viking_fs, request.ctx, owner_lease_ref=owner_lease_ref
+        )
+        try:
+            directory_options = (
+                {"directory_migration": directory_migration} if directory_migration else {}
             )
-            try:
-                updater = MemoryUpdater(
-                    registry=request.memory_registry or self.registry,
-                    vikingdb=self.vikingdb,
-                    transaction_handle=lease,
-                )
-                return await updater.apply_operations(
-                    operations,
-                    request.ctx,
-                    extract_context=extract_context,
-                    isolation_handler=isolation_handler,
-                )
-            finally:
-                if lease is not None:
-                    await viking_fs._async_agfs.pathlock_release(lease)
+            updater = MemoryUpdater(
+                registry=request.memory_registry or self.registry,
+                vikingdb=self.vikingdb,
+                transaction_handle=lease or owner_lease_ref,
+                **directory_options,
+            )
+            return await updater.apply_operations(
+                operations,
+                request.ctx,
+                extract_context=extract_context,
+                isolation_handler=isolation_handler,
+            )
+        finally:
+            if lease is not None:
+                await viking_fs._async_agfs.pathlock_release(lease)
 
     async def _merge_requests(
         self, requests: list[MemoryUpdateRequest]
@@ -2333,12 +2358,26 @@ async def acquire_memory_operation_lease(
     operations: ResolvedOperations,
     viking_fs: Any | None,
     ctx: RequestContext,
+    *,
+    owner_lease_ref: dict[str, Any] | None = None,
 ) -> Any | None:
     # Materialize implicit URI changes only at the final apply boundary. Doing
     # this before second-stage patch merging would present the same rename as
     # both an update patch and a delete patch.
     MemoryUpdater._materialize_uri_migrations(operations)
-    required_exact_paths = set(_operation_lock_paths(operations, viking_fs, ctx))
+    owner = {}
+    if owner_lease_ref is None:
+        required_exact_paths = set(_operation_lock_paths(operations, viking_fs, ctx))
+    else:
+        # The directory Tree lease already protects the source cards. Read their
+        # links under that lease before acquiring exact locks on related memories.
+        write_uris = _operation_uri_set(operations)
+        relation_uris = await _persisted_delete_relation_uris(operations, viking_fs, ctx)
+        neighbors = {uri for uri in relation_uris - write_uris if classify_uri(uri).is_memory}
+        for uri in sorted(neighbors):
+            await viking_fs._ensure_access(uri, ctx, action=AclAction.WRITE)
+        required_exact_paths = set(_uri_lock_paths(write_uris | neighbors, viking_fs, ctx))
+        owner = {"owner_lease_ref": owner_lease_ref}
     if not required_exact_paths:
         return None
 
@@ -2346,7 +2385,10 @@ async def acquire_memory_operation_lease(
         lease = await viking_fs._async_agfs.pathlock_acquire_exact_batch(
             sorted(required_exact_paths),
             timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+            **owner,
         )
+        if owner_lease_ref is not None:
+            return lease
         try:
             relation_uris = await _persisted_delete_relation_uris(
                 operations,

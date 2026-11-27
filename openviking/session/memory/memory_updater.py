@@ -27,6 +27,7 @@ from openviking.pyagfs.exceptions import AGFSConnectionError, AGFSIoError, AGFST
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
+    DirectoryOperation,
     MemoryFile,
     MemoryOperationSkipCode,
     ResolvedOperation,
@@ -915,7 +916,7 @@ class MemoryUpdater:
         vikingdb=None,
         transaction_handle: Any = None,
         *,
-        directory_migration: Tuple[str, str] | None = None,
+        directory_migration: DirectoryOperation | None = None,
     ):
         """Create a memory updater with an optional pathlock transaction handle."""
         self._viking_fs = None
@@ -1140,6 +1141,12 @@ class MemoryUpdater:
 
         uri_memory_type_map = {}
         for resolved_op in applicable_upserts:
+            if (
+                self._directory_migration
+                and self._directory_migration.operation == "rename"
+                and result.errors
+            ):
+                break
             add_result = (
                 result.add_edited
                 if resolved_op.is_edit() and not self._is_uri_migration(resolved_op)
@@ -1704,9 +1711,12 @@ class MemoryUpdater:
                     old_content.links,
                 )
             metadata.update(resolved_op.memory_fields)
-            directory_migration = is_uri_migration and self._directory_migration == (
-                source_content.uri.rsplit("/", 1)[0],
-                uri.rsplit("/", 1)[0],
+            plan = self._directory_migration
+            directory_migration = (
+                is_uri_migration
+                and plan is not None
+                and source_content.uri.rpartition("/")[0] == plan.source_uri
+                and uri.rpartition("/")[0] == plan.target_uri
             )
             source = getattr(resolved_op, "source", None)
             source_extraction_id = getattr(source, "extraction_id", None) if source else None
@@ -1790,12 +1800,14 @@ class MemoryUpdater:
             ):
                 from openviking.session.memory.merge_op.link_merge import merge_links
 
+                # Other cards in a directory may still fail to move. Rewrite their
+                # endpoints only when this batch has determined the successful moves.
+                link_remap = {source_content.uri: uri} if directory_migration else uri_remap or {}
+
                 # Merge links
                 existing_links = old_content.links if has_existing_links else []
                 if is_uri_migration:
-                    existing_links = [
-                        _remap_link_dict(link, uri_remap or {}) for link in existing_links
-                    ]
+                    existing_links = [_remap_link_dict(link, link_remap) for link in existing_links]
                 if incoming_links:
                     merged_links = merge_links(
                         existing_links,
@@ -1809,7 +1821,7 @@ class MemoryUpdater:
                 existing_backlinks = old_content.backlinks if has_existing_links else []
                 if is_uri_migration:
                     existing_backlinks = [
-                        _remap_link_dict(link, uri_remap or {}) for link in existing_backlinks
+                        _remap_link_dict(link, link_remap) for link in existing_backlinks
                     ]
                 if incoming_backlinks:
                     merged_backlinks = merge_links(
@@ -2053,7 +2065,11 @@ class MemoryUpdater:
             # avoid a redundant rewrite. Contributions from other deleted
             # replacements (e.g. a duplicate merged into the same target) are
             # still folded in here.
-            excluded_source = implicit_migration_source_by_target.get(uri)
+            excluded_source = (
+                implicit_migration_source_by_target.get(uri)
+                if self._directory_migration is None
+                else None
+            )
             filtered_links = [link for src, link in link_groups["links"] if src != excluded_source]
             filtered_backlinks = [
                 link for src, link in link_groups["backlinks"] if src != excluded_source
