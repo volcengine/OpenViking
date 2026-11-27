@@ -883,7 +883,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 环视、反向引用等超出支持范围的写法属于无效正则。
 
-传入多个 URI 时，按 URI 顺序合并结果，重叠范围内的同一文件同一行只返回一次。`node_limit` 限制合并后的结果总数。
+传入多个 URI 时，按 URI 顺序合并结果，重叠范围内的同一文件同一行只返回一次。合并结果达到 `node_limit` 后，其余范围只检查存在性和访问权限。跳过后续匹配时，返回 `limit_reached: true`。
 
 `tags` 使用 AND 语义，并在内容匹配与 `node_limit` 截断之前过滤候选文件。例如 `["team=search", "env=prod"]` 只匹配同时具有两个标签的文件。
 
@@ -1055,7 +1055,7 @@ HTTP `POST /api/v1/search/grep` 在不做过滤时可传 `include_tags: true` �
 | tags | string[] | 否 | 未设置 | 仅保留同时匹配全部 `k=v` 检索标签的结果 |
 | include_tags | bool | 否 | `false` | 不过滤时也在每条命中中返回检索标签 |
 
-传入多个 URI 时，模式相对于每个起始 URI 匹配，结果按 URI 顺序合并和去重。`node_limit` 限制合并后的结果总数。
+传入多个 URI 时，模式相对于每个起始 URI 匹配，结果按 URI 顺序合并和去重。合并结果达到 `node_limit` 后，其余范围只检查存在性和访问权限。
 
 `tags` 使用 AND 语义，并在 `node_limit` 截断前应用。传入 `tags` 或 `include_tags=true` 时，响应返回带 `tags` 数组的条目对象；普通 glob 继续返回 URI 字符串，且不会为了 tags 读取 VectorDB。
 

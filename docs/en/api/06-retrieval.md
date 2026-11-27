@@ -884,7 +884,7 @@ The `grep()` method performs regex pattern matching search in the file system, u
 
 Patterns that use unsupported syntax, such as lookaround or backreferences, are invalid.
 
-When you pass multiple URIs, grep merges matches in URI order and returns each matching line in a file once. `node_limit` caps the combined results.
+When you pass multiple URIs, grep merges matches in URI order and returns each matching line in a file once. Once the merged results reach `node_limit`, grep checks the remaining roots for existence and read access only. It returns `limit_reached: true` when it skips matching in any remaining root.
 
 `tags` uses AND semantics and filters candidate files before content matching and `node_limit` truncation. For example, `["team=search", "env=prod"]` matches only files carrying both tags.
 
@@ -1056,7 +1056,7 @@ The `glob()` method uses file wildcard pattern matching URIs, similar to Unix sh
 | tags | string[] | No | Unset | Retain only matches that have every supplied `k=v` retrieval tag |
 | include_tags | bool | No | `false` | Return retrieval tags for each match without filtering |
 
-Glob matches the pattern relative to each root and merges unique matches in URI order. `node_limit` caps the combined results.
+Glob matches the pattern relative to each root and merges unique matches in URI order. Once the merged results reach `node_limit`, glob checks the remaining roots for existence and read access only.
 
 `tags` uses AND semantics and is applied before `node_limit`. A tagged or `include_tags=true` request returns entry objects with a `tags` array; ordinary glob requests retain URI-string results and do not read tags from VectorDB.
 
