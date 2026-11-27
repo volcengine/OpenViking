@@ -2098,7 +2098,7 @@ def _wizard_server(current: dict[str, Any] | None = None) -> dict[str, Any] | No
     if existing_key and key_source == 1:
         root_api_key = existing_key
     elif key_source == 1 + offset:
-        # The prefix lets privacy detection recognize the key wherever it is pasted.
+        # The prefix makes the key a recognizable format for privacy detection.
         root_api_key = "ovrk_" + secrets.token_hex(32)
         print(f"\n  {_green('Generated root API key — copy it now, clients need it:')}")
         print(f"\n    {_bold(root_api_key)}\n")

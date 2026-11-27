@@ -1021,7 +1021,7 @@ class TestServerWizardCurrentDefaults:
 
         assert result is not None
         assert result["root_api_key"] != self.CURRENT["root_api_key"]
-        assert result["root_api_key"].startswith("ovrk_")
+        assert re.fullmatch(r"ovrk_[0-9a-f]{64}", result["root_api_key"])
 
 
 class TestGatewayWizard:

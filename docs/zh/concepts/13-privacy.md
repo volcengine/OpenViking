@@ -73,7 +73,7 @@ viking://user/{user_id}/privacy/{category}/{target_key}/
 
 > `ov privacy resolve` 不受这些开关限制。
 
-自动发现敏感值，使用的是内置凭据格式检测器，覆盖 OpenViking 自身的密钥（用户密钥、`ovrk_` root key、`ovgw_` 和 `ovgm_` 网关密钥、OAuth token）、火山引擎与方舟密钥、JWT、私钥，以及模型服务商、云平台、代码托管等服务带固定前缀的 token。服务商格式大多来自 [Betterleaks](https://github.com/betterleaks/betterleaks) 规则集。没有固定格式的凭据不会被自动发现，包括加 `ovrk_` 前缀之前生成的 root key、密码和无前缀的 secret key；这类值可自行存入 `credential` 或通过 `custom_rules` 配置识别规则。修改设置后，对后续读写请求生效。
+自动发现敏感值，使用的是内置凭据格式检测器，覆盖 OpenViking 自身的密钥（用户密钥、`ovrk_` root key、`ovgw_` 和 `ovgm_` 网关密钥、OAuth token）、火山引擎与方舟密钥、JWT、私钥，以及模型服务商、云平台、代码托管等服务带固定前缀的 token。服务商格式大多来自 [Betterleaks](https://github.com/betterleaks/betterleaks) 规则集。没有固定格式的凭据不会被自动发现，包括不带 `ovrk_` 前缀的 root key（旧版本生成或手动设置的）、密码和无前缀的 secret key；这类值可自行存入 `credential` 或通过 `custom_rules` 配置识别规则。修改设置后，对后续读写请求生效。
 
 ---
 
