@@ -459,3 +459,97 @@ describe('deterministicFilter', () => {
     })), null);
   });
 });
+
+describe('a composite interactive content string', () => {
+  // The event delivers some cards not as clean JSON but as media references
+  // and a client-upgrade note around the card JSON; left verbatim, every
+  // language copy in that JSON reaches the journal and the OV session sync.
+  const aimeCard = [
+    '[image image_key=img_v3_02ad_e19fca1f]',
+    '请升级至最新版本客户端，以查看内容',
+    JSON.stringify({
+      body: { direction: 'vertical', padding: '12px 12px 12px 12px', elements: [{
+        tag: 'markdown',
+        content: '朋友们好！我是 **Oncall 助手**，期待为大家效力！',
+        i18n_content: {
+          en_us: 'Hello friends! I am the Oncall assistant!',
+          zh_cn: '朋友们好！我是 **Oncall 助手**，期待为大家效力！',
+          pt_br: 'Olá amigos! Eu sou o assistente!',
+          ja_jp: 'こんにちは！私はアシスタントです！',
+        },
+        element_id: '_2',
+      }] },
+      config: { enable_forward_interaction: false, streaming_mode: false },
+      schema: '2.0',
+    }),
+  ].join('\n');
+
+  const cardEvent = (content, messageId) => normalizeEvent({
+    schema: '2.0',
+    header: { event_id: `evt-${messageId}`, event_type: 'im.message.receive_v1', tenant_key: 'tenant-1' },
+    event: {
+      sender: { sender_id: { open_id: 'ou-user' }, sender_type: 'user' },
+      message: {
+        message_id: messageId,
+        chat_id: 'oc-chat',
+        chat_type: 'group',
+        message_type: 'interactive',
+        content,
+        create_time: '1790000000',
+      },
+    },
+  });
+
+  it('reads the default content once and drops every other language', () => {
+    const event = cardEvent(aimeCard, 'om-composite');
+    assert.match(event.content, /朋友们好！我是 \*\*Oncall 助手\*\*/);
+    assert.doesNotMatch(event.content, /Hello friends|Olá amigos|こんにちは/);
+  });
+
+  it('keeps the media reference and drops layout metadata', () => {
+    const event = cardEvent(aimeCard, 'om-composite');
+    assert.match(event.content, /\[image image_key=img_v3_02ad_e19fca1f\]/);
+    assert.doesNotMatch(event.content, /请升级至最新版本客户端/);
+    assert.doesNotMatch(event.content, /i18n_content|vertical|12px|2\.0/);
+  });
+
+  it('keeps a composite without any embedded object as it was', () => {
+    const event = cardEvent('[card] 请升级至最新版本客户端，以查看内容', 'om-composite-nojson');
+    assert.equal(event.content, '[card] 请升级至最新版本客户端，以查看内容');
+  });
+
+  it('reads a title-prefixed composite through the same rule', () => {
+    const content = ['Oncall Notice', '请升级至最新版本客户端，以查看内容', JSON.stringify({
+      i18n_elements: { zh_cn: [{ tag: 'div', text: { content: '中文正文' } }], en_us: [{ tag: 'div', text: { content: 'EN body' } }] },
+    })].join('\n');
+    const event = cardEvent(content, 'om-composite-title');
+    assert.match(event.content, /中文正文|EN body/);
+    assert.doesNotMatch(event.content, /Oncall Notice|请升级至最新版本客户端|i18n_elements/);
+  });
+
+  it('reads the translations of an empty default instead of dropping the card', () => {
+    const content = JSON.stringify({
+      elements: [{ tag: 'markdown', content: '', i18n_content: { zh_cn: '只有翻译的正文' } }],
+    });
+    const event = cardEvent(content, 'om-empty-default');
+    assert.equal(event.content, '只有翻译的正文');
+  });
+
+  it('skips button and template metadata', () => {
+    const content = JSON.stringify({
+      template: 'blue',
+      elements: [
+        { tag: 'div', text: { content: '提交表单后无响应' } },
+        { tag: 'button', text: { content: '提交' }, type: 'primary', size: 'medium', width: 'default' },
+      ],
+    });
+    const event = cardEvent(content, 'om-button-card');
+    assert.equal(event.content, '提交表单后无响应\n提交');
+  });
+
+  it('falls back to the card placeholder when the embedded object has no text', () => {
+    const content = `请升级\n${JSON.stringify({ config: { streaming_mode: false }, schema: '2.0' })}`;
+    const event = cardEvent(content, 'om-composite-notext');
+    assert.equal(event.content, '[card]');
+  });
+});
