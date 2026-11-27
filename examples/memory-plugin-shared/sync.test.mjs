@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import test from "node:test";
 
 // Imported, not re-declared: the copies kept here had drifted from sync.mjs
@@ -23,10 +23,18 @@ import {
 
 const SYNC = join(ROOT, "examples", "memory-plugin-shared", "sync.mjs");
 
-test("vendored shared modules are synchronized", async () => {
-  const files = (await readdir(SHARED_DIR))
-    .filter((file) => file.endsWith(".mjs") || file.endsWith(DATA_EXTENSION))
+/** Every file under `dir`, as paths relative to it. */
+async function filesUnder(dir) {
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(dir, join(entry.parentPath, entry.name)).split(sep).join("/"))
     .sort();
+}
+
+test("vendored shared modules are synchronized", async () => {
+  const files = (await filesUnder(SHARED_DIR))
+    .filter((file) => file.endsWith(".mjs") || file.endsWith(DATA_EXTENSION));
   assert.ok(files.length > 0, "expected shared modules");
 
   for (const target of await resolveTargets()) {
@@ -53,10 +61,11 @@ test("vendored shared modules are synchronized", async () => {
 test("what each plugin ships equals the closure of what it imports", async () => {
   for (const target of await resolveTargets()) {
     const onDisk = [];
-    for (const name of (await readdir(target.dir)).sort()) {
+    const shared = await filesUnder(SHARED_DIR);
+    for (const name of await filesUnder(target.dir)) {
       // A data file has no banner: one named after a lib/ data file is a copy.
       if (name.endsWith(DATA_EXTENSION)) {
-        if ((await readdir(SHARED_DIR)).includes(name)) onDisk.push(name);
+        if (shared.includes(name)) onDisk.push(name);
         continue;
       }
       if (!name.endsWith(".mjs")) continue;

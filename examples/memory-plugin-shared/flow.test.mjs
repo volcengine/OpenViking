@@ -345,6 +345,12 @@ test("a session opens with the profile, and a resume adds only what the model no
     assert.match(resumed.context, /earlier: the build was fixed/);
   }, { env: { OPENVIKING_RESUME_ARCHIVE_INJECT: "1" } });
 
+  // Off unless asked for.
+  await withFlow(t, answers, async ({ run, calls }) => {
+    assert.doesNotMatch((await run("start", { source: "resume" })).context, /session-archive/);
+    assert.equal(calls("/context").length, 0);
+  });
+
   // Where a start cannot reach the model, the overview waits for the first prompt.
   await withFlow(t, answers, async ({ run }) => {
     assert.deepEqual(await run("start", { source: "resume" }), {});
