@@ -24,6 +24,11 @@ export function ovSessionId(host, nativeId, child = "") {
   return deriveHarnessSessionId(host.sessionPrefix, nativeId, child);
 }
 
+/** The same for an event: a host with a derivation of its own names the session in `read.session`. */
+export function eventSessionId(host, read, nativeId) {
+  return read?.session || ovSessionId(host, nativeId, String(read?.child || ""));
+}
+
 /** `session_history` arguments with this session filled in, or null when the model named one. */
 function withHistorySession(args, session) {
   if (!args || typeof args !== "object" || Array.isArray(args)) return null;
@@ -36,7 +41,9 @@ export function toolCall(host, payload, event = "") {
   const call = host.tool?.(payload);
   if (!call) return {};
   if (call.history !== undefined) {
-    const input = withHistorySession(call.history, ovSessionId(host, nativeSessionId(host, event, payload)));
+    const read = host.read(event, payload, NO_FILES);
+    const session = eventSessionId(host, read, nativeSessionId(host, event, payload, read));
+    const input = withHistorySession(call.history, session);
     return input ? { input } : {};
   }
   const options = host.toolHints ? { hints: host.toolHints } : {};

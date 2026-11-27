@@ -18,7 +18,7 @@ import { capture } from "./capture.mjs";
 import { deliverPointer } from "./pointer.mjs";
 import { promptSubmit } from "./prompt.mjs";
 import { sessionStart } from "./start.mjs";
-import { nativeSessionId, ovSessionId, toolCall } from "./tool.mjs";
+import { eventSessionId, nativeSessionId, toolCall } from "./tool.mjs";
 
 export { toolCall };
 
@@ -104,7 +104,7 @@ export async function runStage(host, event, payload = {}, { detached = false, cf
     nativeSessionId: nativeId,
     // A child session has state, a lock and an OpenViking session of its own.
     stateKey: child ? `${nativeId}__${child.replace(/[^A-Za-z0-9._-]/g, "-")}` : nativeId,
-    sessionId: ovSessionId(host, nativeId, child),
+    sessionId: eventSessionId(host, read, nativeId),
     budgetMs: host.budgets?.[event] || 0,
     fetchJSON: withRequestBudget(agent.fetchJSON, host.budgets?.[event], cfg.timeoutMs),
     // The peer the actor-peer header already carries, stamped into captured

@@ -45,6 +45,8 @@ export interface HostFacts {
 export interface EventRead {
   /** The host's own id for the session; the payload's usual spellings are tried when absent. */
   sessionId?: string;
+  /** The OpenViking session, for a host that derives it its own way; `sessionPrefix` + the host's id otherwise. */
+  session?: string;
   /**
    * The event belongs to a child of the session (a subagent), named so that it
    * is unique within the parent: it is captured into an OpenViking session of
