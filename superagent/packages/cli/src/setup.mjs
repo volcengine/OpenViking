@@ -24,7 +24,7 @@ import {
   superagentHome, withChangedInstance, withDefaultTempDir, withInstance, writeManifest,
 } from './manifest.mjs';
 import { OVRegistrations, detectOpenViking, instanceOvConfig, writeInstanceOvConfig } from './ov.mjs';
-import { configureOpenViking, prepareInstanceOpenViking, readOVSoul, saveOVConnection, takenIdentities, writeOVSoul } from './ov-setup.mjs';
+import { configureOpenViking, hasLegacySoulExtraction, prepareInstanceOpenViking, readOVSoul, saveOVConnection, takenIdentities, writeOVSoul } from './ov-setup.mjs';
 import { detectDsh, detectRuntimes, which } from './runtimes.mjs';
 import {
   collectDshModelDraft, dshSettingsDocument, validateDshModelDraft, writeDshModelDraft,
@@ -305,6 +305,8 @@ function initialState({ id, env, homeDir, current, runtimes, kept }) {
     externalConnectors: current?.externalConnectors ?? [],
     channel: current?.channel ?? connectors[0],
     ovConfig: current?.ovConfig,
+    soulUri: current?.soulUri ?? OV_SOUL_URI,
+    ovVersion: null,
     // A DSH route this run adds, kept in memory until the instance is saved;
     // the route the instance's own home reports, and the home it was read from.
     dshModel: null,
@@ -433,6 +435,25 @@ async function seedSoul({ prompter, soul }, { role, configPath, uri }) {
     prompter.warn(t(`没能写入 soul：${error.message}；之后再运行 setup 选角色`,
       `Could not write the soul: ${error.message}; run setup again and choose the role later`));
   }
+}
+
+// On an OV release whose extraction can rewrite the default soul, offer an
+// instance-specific URI instead. An existing custom soul is already protected
+// from that default-path extraction and is left alone.
+async function askLegacySoulUri({ prompter }, state) {
+  if (!hasLegacySoulExtraction(state.ovVersion) || state.soulUri !== OV_SOUL_URI) return;
+  if (!await prompter.confirm(t('要为这个实例设置自定义 soulUri 吗？', 'Set a custom soulUri for this instance?'), false)) return;
+  state.soulUri = await prompter.text(t('soulUri（OpenViking 地址或本机绝对路径）', 'soulUri (an OpenViking URI or an absolute local path)'), {
+    initial: `viking://~/memories/${state.id}-soul.md`,
+    label: 'Soul URI',
+    validate: (value) => {
+      if (!/^viking:\/\/[^\s%\\?#]+$/.test(value) && !path.isAbsolute(value)) {
+        return t('请输入 viking:// 地址或本机绝对路径', 'Enter a viking:// URI or an absolute local path');
+      }
+      if (value === OV_SOUL_URI) return t('请换一个不同于默认路径的地址', 'Choose a URI different from the default soul path');
+      return null;
+    },
+  });
 }
 
 async function askRuntime(ctx, state) {
@@ -1928,6 +1949,8 @@ async function setupFlow({
       preferredConfigPath: state.ovConfig, title: `OpenViking · ${current.id}`, canGoBack: true,
       leaveTo: t('返回实例设置', 'Back to instance settings'),
       taken: takenIdentities({ agents: manifest.agents, exclude: current.id, homeDir }), instanceId: current.id });
+    state.ovVersion = detected.version;
+    await askLegacySoulUri(ctx, state);
     const pending = new Set();
     try {
       const target = await prepareInstanceOpenViking({
@@ -1981,6 +2004,7 @@ async function setupFlow({
     ov = await configureOV({ prompter, env, homeDir, fetchImpl, detect: detect.openViking, title: null, canGoBack: others, previous: ov,
       // Not named yet: the name is asked after the connection.
       taken: takenIdentities({ agents: manifest?.agents ?? [], homeDir }) });
+    state.ovVersion = ov.version;
   };
 
   // The instance as the manifest will hold it.
@@ -2015,6 +2039,8 @@ async function setupFlow({
     if (larkBotOnly(state, current) && owner) agent.larkOwnerOpenId = owner;
     else delete agent.larkOwnerOpenId;
     agent.ovConfig = state.ovConfig;
+    if (state.soulUri === OV_SOUL_URI) delete agent.soulUri;
+    else agent.soulUri = state.soulUri;
     // Retired OpenViking options: peers are gone, and remember is always on.
     delete agent.ovRecallScope;
     delete agent.ovRemember;
@@ -2078,7 +2104,7 @@ async function setupFlow({
       [t('消息渠道', 'Channels'), channels],
       ...(larkSource(state, null) ? [[t('飞书机器人', 'Feishu/Lark bot'), larkAppShown(state, null)]] : []),
       ...(addresses.length ? [[t('邮箱', 'Email'), list(addresses)]] : []),
-      [t('记忆', 'Memory'), 'OpenViking'],
+      [t('记忆', 'Memory'), `OpenViking${state.soulUri === OV_SOUL_URI ? '' : ` · ${state.soulUri}`}`],
       [t('其他设置', 'Other settings'), t(`${switchesShown(state)}（以后在修改实例里调）`, `${switchesShown(state)} (change them later by changing the instance)`)],
       [t('工作目录', 'Workspace'), shortenHome(state.workspace, homeDir)],
       [t('数据目录', 'Data'), shortenHome(state.dataDir, homeDir)],
@@ -2097,7 +2123,7 @@ async function setupFlow({
 
   const steps = current ? [] : [
     { section: { title: t('OpenViking 记忆', 'OpenViking memory'), step: 1, total: 4 }, ask: chooseOV },
-    { section: { title: t('机器人', 'Bot'), step: 2, total: 4 }, ask: askId }, { ask: askName }, { ask: askRole }, { ask: askWorkspace }, { ask: askRuntime },
+    { section: { title: t('机器人', 'Bot'), step: 2, total: 4 }, ask: askId }, { ask: askLegacySoulUri }, { ask: askName }, { ask: askRole }, { ask: askWorkspace }, { ask: askRuntime },
     { ask: prepareOV },
     { section: { title: t('消息渠道', 'Channels'), step: 3, total: 4 }, ask: askIms }, { ask: askChannel }, { ask: askLarkApp }, { ask: askMail },
     { section: { title: t('确认', 'Confirm'), step: 4, total: 4 }, ask: confirmNew },
@@ -2433,6 +2459,9 @@ function describeChanges(before, after, mailboxes, homeDir, state) {
   const changes = [];
   const was = connectorsOf(before);
   if (before.ovConfig !== after.ovConfig) changes.push(t('更新 OpenViking 连接', 'Update the OpenViking connection'));
+  const beforeSoul = before.soulUri ?? OV_SOUL_URI;
+  const afterSoul = after.soulUri ?? OV_SOUL_URI;
+  if (beforeSoul !== afterSoul) changes.push(`Soul URI: ${beforeSoul} → ${afterSoul}`);
   if (before.displayName !== after.displayName) changes.push(`${t('机器人名字：', 'Bot name: ')}${before.displayName} → ${after.displayName}`);
   if (state?.role) {
     const label = roleShown(state);
