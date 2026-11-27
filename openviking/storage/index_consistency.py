@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from typing import Any
 
 from openviking.core.context import ResourceContentType
-from openviking.core.namespace import is_session_uri
+from openviking.core.namespace import is_session_uri, uri_parts
 from openviking.observability.log_safety import safe_uri_for_log
+from openviking.privacy.global_policy import is_user_global_policy_uri
 from openviking.server.identity import RequestContext
+from openviking.session.memory.agent_file import SOUL_FILENAME
 from openviking.storage.expr import Eq
 from openviking.utils.embedding_utils import get_resource_content_type
 from openviking_cli.utils.logger import get_logger
@@ -19,6 +21,7 @@ from openviking_cli.utils.uri import VikingURI
 logger = get_logger(__name__)
 
 NON_INDEX_SCOPES = frozenset({"session"})
+NON_INDEX_USER_DIRECTORIES = frozenset({"settings", "privacy"})
 PUBLIC_MISSING_RECORD_LIMIT = 20
 ERROR_DETAILS_MISSING_RECORD_LIMIT = 1
 
@@ -88,11 +91,20 @@ def _entry_uri(root_uri: str, entry: dict[str, Any]) -> str:
     return _join_uri(root_uri, rel_path)
 
 
-def _is_index_scope(uri: str) -> bool:
+def _expects_index(uri: str, *, is_directory: bool) -> bool:
     try:
-        return VikingURI(uri).scope not in NON_INDEX_SCOPES and not is_session_uri(uri)
-    except Exception:
+        parts = uri_parts(uri)
+    except ValueError:
         return False
+    if not parts or parts[0] in NON_INDEX_SCOPES or is_session_uri(uri):
+        return False
+    if parts[0] != "user" or len(parts) < 3:
+        return True
+    if parts[2] in NON_INDEX_USER_DIRECTORIES:
+        return False
+    if is_directory:
+        return parts[2] != "memories"
+    return parts[2:] != ["memories", SOUL_FILENAME] and not is_user_global_policy_uri(uri)
 
 
 def _leaf_name(uri_or_path: str) -> str:
@@ -114,14 +126,14 @@ def _directory_candidates(
     entries: list[dict[str, Any]],
 ) -> list[tuple[str, str]]:
     candidates: list[tuple[str, str]] = []
-    if root_uri != "viking://" and _is_index_scope(root_uri):
+    if _expects_index(root_uri, is_directory=True):
         candidates.append((root_uri, ""))
 
     for entry in entries:
         if not entry.get("isDir"):
             continue
         uri = _entry_uri(root_uri, entry)
-        if not _is_index_scope(uri):
+        if not _expects_index(uri, is_directory=True):
             continue
         rel_path = str(entry.get("rel_path") or "")
         candidates.append((uri, rel_path))
@@ -140,7 +152,7 @@ def _file_candidates(
         if isinstance(size, int) and not isinstance(size, bool) and size == 0:
             continue
         uri = _entry_uri(root_uri, entry)
-        if not _is_index_scope(uri):
+        if not _expects_index(uri, is_directory=False):
             continue
         rel_path = str(entry.get("rel_path") or "")
         name = str(entry.get("name") or _leaf_name(rel_path))

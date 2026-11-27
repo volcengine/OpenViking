@@ -1212,25 +1212,58 @@ async def test_account_backup_includes_restricted_originals_without_crossing_acc
     indexed_fs, tmp_path
 ):
     fs, admin, reader, outsider, original = await _restricted_pack_source(indexed_fs)
-    peer_uri = "viking://user/reader/memories/notes.md"
-    await fs.write_file_bytes(peer_uri, b"same-account private notes", ctx=reader)
+    _, backend = indexed_fs
+    user_root = "viking://user/reader"
+    file_only = {
+        "settings/user_config.json": b"{}",
+        "privacy/example/current.json": b"{}",
+        "privacy/example/.abstract.md": b"Privacy description",
+        "GLOBAL_POLICY.md": b"Access policy",
+        "memories/soul.md": b"Agent instructions",
+        "memories/preferences/example/.abstract.md": b"Memory summary",
+        "memories/preferences/example/.overview.md": b"Memory overview",
+    }
+    for path, content in file_only.items():
+        await fs.write_file_bytes(f"{user_root}/{path}", content, ctx=reader)
+    memory_uri = f"{user_root}/memories/preferences/example/notes.md"
+    await fs.write_file_bytes(memory_uri, b"same-account private notes", ctx=reader)
     other_admin = RequestContext(user=UserIdentifier("other", "admin"), role=Role.ADMIN)
     other_uri = "viking://resources/other-account-only.md"
     await fs.write_file_bytes(other_uri, b"other-account content", ctx=other_admin)
-    pack = PackService(fs)
+    pack = PackService(fs, vector_store=backend, vector_config_resolver=FakeVectorStore())
     archive = tmp_path / "account.ovpack"
 
     with pytest.raises(PermissionDeniedError):
-        await pack.backup_ovpack(str(archive), ctx=reader)
+        await pack.backup_ovpack(str(archive), ctx=reader, include_vectors=True)
     assert not archive.exists()
-    await pack.backup_ovpack(str(archive), ctx=admin)
+    with pytest.raises(
+        InvalidArgumentError, match="incomplete OpenViking vector index snapshot"
+    ) as exc:
+        await pack.backup_ovpack(str(archive), ctx=admin, include_vectors=True)
+    assert exc.value.details["missing_record_count"] == 1
+    assert exc.value.details["missing_records"] == [
+        "user/reader/memories/preferences/example/notes.md#level=2"
+    ]
+    await backend.upsert(
+        {"id": memory_uri, "uri": memory_uri, "level": 2, "vector": [0.1, 0.2, 0.3, 0.4]},
+        ctx=reader,
+    )
+    await pack.backup_ovpack(str(archive), ctx=admin, include_vectors=True)
 
     with zipfile.ZipFile(archive) as zf:
         prefix = "openviking-backup/files/"
         assert zf.read(prefix + "resources/repo/nested/guide.md") == await fs.read_file_bytes(
             original, ctx=admin
         )
-        assert zf.read(prefix + "user/reader/memories/notes.md") == b"same-account private notes"
+        for path, content in file_only.items():
+            assert zf.read(f"{prefix}user/reader/{path}") == content
+        memory = "user/reader/memories/preferences/example/notes.md"
+        assert zf.read(prefix + memory) == b"same-account private notes"
+        records = [
+            json.loads(line)
+            for line in zf.read("openviking-backup/_ovpack/index_records.jsonl").splitlines()
+        ]
+        assert any(record["path"] == memory and record["vector"]["dense"] for record in records)
         assert prefix + "resources/other-account-only.md" not in zf.namelist()
         assert all(zf.read(name) != b"other-account content" for name in zf.namelist())
     assert await fs.read_file_bytes(other_uri, ctx=other_admin) == b"other-account content"
