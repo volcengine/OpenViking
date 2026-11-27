@@ -15,9 +15,11 @@ from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session.memory.dataclass import (
-    DirectoryMergePlan as DirectoryMergePlan,
+    DirectoryOperation,
+    MemoryFile,
+    ResolvedOperation,
+    ResolvedOperations,
 )
-from openviking.session.memory.dataclass import MemoryFile, ResolvedOperation, ResolvedOperations
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
 from openviking.session.memory.tools import verified_preference_directory_owner
@@ -58,7 +60,7 @@ class DirectoryMergeResult:
 
 
 def _check_plan(
-    plan: DirectoryMergePlan, registry: MemoryTypeRegistry, ctx: RequestContext
+    plan: DirectoryOperation, registry: MemoryTypeRegistry, ctx: RequestContext
 ) -> tuple[MemoryTypeSchema, str, str | None]:
     if plan.operation not in {"merge", "rename"}:
         raise ValueError("Unsupported memory directory operation")
@@ -108,7 +110,7 @@ async def _directory_stat(fs, uri: str, ctx: RequestContext) -> dict[str, Any] |
         return None
 
 
-async def _check_endpoints(fs, plan: DirectoryMergePlan, ctx: RequestContext) -> str | None:
+async def _check_endpoints(fs, plan: DirectoryOperation, ctx: RequestContext) -> str | None:
     source = await _directory_stat(fs, plan.source_uri, ctx)
     if source is None:
         return "source_missing"
@@ -177,7 +179,7 @@ async def _get_search_tags(store, uri: str, ctx: RequestContext) -> list[str]:
 
 async def _prepare_operations(
     fs,
-    plan: DirectoryMergePlan,
+    plan: DirectoryOperation,
     schema: MemoryTypeSchema,
     user_space: str,
     preference_owner: str | None,
@@ -389,7 +391,7 @@ async def _apply_cards(
 
 
 async def merge_memory_directories(
-    plan: DirectoryMergePlan,
+    plan: DirectoryOperation,
     *,
     registry: MemoryTypeRegistry,
     vikingdb,

@@ -18,7 +18,7 @@ from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
     DeleteId,
-    DirectoryMergePlan,
+    DirectoryOperation,
     MemoryFile,
     MemoryOperationSkip,
     MemoryOperationSkipCode,
@@ -1110,7 +1110,7 @@ class ExtractLoop:
 
     @staticmethod
     def _stage_directory_rename_writes(
-        operations: list[ResolvedOperation], plans: list[DirectoryMergePlan]
+        operations: list[ResolvedOperation], plans: list[DirectoryOperation]
     ) -> None:
         # Keep card writes in the source until the directory rename can move them together.
         renames = {plan.target_uri: plan for plan in plans if plan.operation == "rename"}

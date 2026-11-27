@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from openviking.session.memory.dataclass import DirectoryMergeRequest, MemoryFile, MemoryTypeSchema
+from openviking.session.memory.dataclass import DirectoryOperation, MemoryFile, MemoryTypeSchema
 from openviking.session.memory.extraction_output_protocol import prompt_fragments as prompts
 from openviking.session.memory.merge_op import FieldType, MergeOp
 
@@ -67,7 +67,7 @@ class ExtractionOutputContext:
     @property
     def supports_directory_merges(self) -> bool:
         field_info = self.operations_model.model_fields.get("directory_merges")
-        return field_info is not None and field_info.annotation == list[DirectoryMergeRequest]
+        return field_info is not None and field_info.annotation == list[DirectoryOperation]
 
     @property
     def add_only(self) -> bool:

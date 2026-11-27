@@ -16,8 +16,7 @@ from openviking.message.part import TextPart, ToolPart
 from openviking.server.identity import RequestContext, ToolContext
 from openviking.session.memory.core import ExtractContextProvider
 from openviking.session.memory.dataclass import (
-    DirectoryMergePlan,
-    DirectoryMergeRequest,
+    DirectoryOperation,
     MemoryFile,
 )
 from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
@@ -593,10 +592,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             return {"error": "List an allowed memory root or one of its visible direct directories"}
         return await self._directory_listing(uri)
 
-    def _resolve_directory_merge(self, request: DirectoryMergeRequest) -> DirectoryMergePlan | None:
+    def _resolve_directory_merge(self, operation: DirectoryOperation) -> DirectoryOperation | None:
         try:
-            source = validate_request_viking_uri(request.source_uri, self._ctx).rstrip("/")
-            target = validate_request_viking_uri(request.target_uri, self._ctx).rstrip("/")
+            source = validate_request_viking_uri(operation.source_uri, self._ctx).rstrip("/")
+            target = validate_request_viking_uri(operation.target_uri, self._ctx).rstrip("/")
         except InvalidURIError:
             return None
         root = self._visible_directory_root(source)
@@ -608,7 +607,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             or source.casefold() == target.casefold()
         ):
             return None
-        if request.operation == "rename":
+        if operation.operation == "rename":
             entries = self._directory_inventory[root]["entries"]
             if any(entry["name"].casefold() == target_name.casefold() for entry in entries):
                 return None
@@ -619,23 +618,18 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             source, target, self._ctx
         ):
             return None
-        return DirectoryMergePlan(
-            memory_type=memory_type,
-            source_uri=source,
-            target_uri=target,
-            operation=request.operation,
-        )
+        return operation.model_copy(update={"source_uri": source, "target_uri": target})
 
     async def resolve_directory_merges(
-        self, requests: list[DirectoryMergeRequest]
-    ) -> list[DirectoryMergePlan]:
+        self, operations: list[DirectoryOperation]
+    ) -> list[DirectoryOperation]:
         if not self.supports_directory_merges():
             return []
-        plans: list[DirectoryMergePlan] = []
-        for request in requests:
+        plans: list[DirectoryOperation] = []
+        for operation in operations:
             if len(plans) >= _MAX_DIRECTORY_MERGE_PLANS:
                 break
-            plan = self._resolve_directory_merge(request)
+            plan = self._resolve_directory_merge(operation)
             if plan is None or any(
                 existing.source_uri in {plan.source_uri, plan.target_uri}
                 or (
@@ -776,7 +770,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         return [] if self._eager_prefetch else ["read"]
 
     def directory_merge_source_for_target(
-        self, uri: str, plans: list[DirectoryMergePlan]
+        self, uri: str, plans: list[DirectoryOperation]
     ) -> str | None:
         parent, _, name = uri.rpartition("/")
         for plan in plans:

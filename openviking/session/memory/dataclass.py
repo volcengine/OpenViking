@@ -6,7 +6,6 @@ Core domain data classes for memory system.
 
 import json
 import re
-from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import (
@@ -390,24 +389,20 @@ class ResolvedOperation(BaseModel):
         return self.old_memory_file_content is not None
 
 
-class DirectoryMergeRequest(BaseModel):
-    """Model output naming the source and destination of a directory operation."""
+class DirectoryOperation(BaseModel):
+    """A directory operation in an extraction result."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_uri: StrictStr = Field(min_length=1)
     target_uri: StrictStr = Field(min_length=1)
     operation: Literal["merge", "rename"] = "merge"
 
-
-@dataclass(frozen=True)
-class DirectoryMergePlan:
-    """Directory operation resolved against the extraction's allowed memory roots."""
-
-    memory_type: str
-    source_uri: str
-    target_uri: str
-    operation: Literal["merge", "rename"] = "merge"
+    @property
+    def memory_type(self) -> str:
+        """Return the type encoded in the validated source directory URI."""
+        parent, _, _ = self.source_uri.rpartition("/")
+        return parent.rsplit("/", 1)[-1]
 
 
 class ResolvedOperations(BaseModel):
@@ -416,7 +411,7 @@ class ResolvedOperations(BaseModel):
     errors: List[str]
     resolved_links: List[StoredLink] = Field(default_factory=list)
     delete_replacements: Dict[str, str] = Field(default_factory=dict)
-    directory_merges: list[DirectoryMergePlan] = Field(default_factory=list)
+    directory_merges: list[DirectoryOperation] = Field(default_factory=list)
 
     def has_errors(self) -> bool:
         return len(self.errors) > 0

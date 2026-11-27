@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 from openviking.server.identity import RequestContext
 
 if TYPE_CHECKING:
-    from openviking.session.memory.dataclass import DirectoryMergePlan, DirectoryMergeRequest
+    from openviking.session.memory.dataclass import DirectoryOperation
 
 
 class ExtractContextProvider(ABC):
@@ -40,12 +40,12 @@ class ExtractContextProvider(ABC):
         return False
 
     async def resolve_directory_merges(
-        self, requests: list["DirectoryMergeRequest"]
-    ) -> list["DirectoryMergePlan"]:
+        self, operations: list["DirectoryOperation"]
+    ) -> list["DirectoryOperation"]:
         return []
 
     def directory_merge_source_for_target(
-        self, uri: str, plans: list["DirectoryMergePlan"]
+        self, uri: str, plans: list["DirectoryOperation"]
     ) -> str | None:
         """Find an existing counterpart of a proposed write to a canonical directory."""
         return None

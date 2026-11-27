@@ -26,7 +26,7 @@ from openviking.observability.log_safety import short_hash
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session.memory.dataclass import (
-    DirectoryMergePlan,
+    DirectoryOperation,
     MemoryFile,
     MemoryOperationSkipCode,
     MemoryOperationSource,
@@ -132,7 +132,7 @@ class StreamingMemoryUpdateResult:
     apply_result: MemoryUpdateResult
     request_count: int
     metadata: dict[str, Any] = field(default_factory=dict)
-    directory_merge_results: list[tuple[DirectoryMergePlan, DirectoryMergeResult]] = field(
+    directory_merge_results: list[tuple[DirectoryOperation, DirectoryMergeResult]] = field(
         default_factory=list
     )
 
@@ -242,7 +242,7 @@ class StreamingMemoryUpdater:
 
     async def _apply_directory_merges(
         self, request: MemoryUpdateRequest
-    ) -> list[tuple[DirectoryMergePlan, DirectoryMergeResult]]:
+    ) -> list[tuple[DirectoryOperation, DirectoryMergeResult]]:
         registry = request.memory_registry or self.registry or get_default_registry()
         outcomes = []
         incomplete_targets: set[str] = set()

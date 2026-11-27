@@ -15,7 +15,7 @@ from pydantic.config import ConfigDict
 
 from openviking.session.memory.dataclass import (
     DeleteId,
-    DirectoryMergeRequest,
+    DirectoryOperation,
     FaultTolerantBaseModel,
     MemoryTypeSchema,
     WikiLink,
@@ -347,7 +347,7 @@ class SchemaModelGenerator:
         )
         if directory_merges_enabled:
             field_definitions["directory_merges"] = (
-                list[DirectoryMergeRequest],
+                list[DirectoryOperation],
                 Field(
                     default_factory=list,
                     description=(

@@ -14,12 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, get_args, get_origin
 
 from openviking.core.peer_id import safe_peer_id
-from openviking.session.memory.dataclass import (
-    DirectoryMergeRequest,
-    MemoryField,
-    MemoryFile,
-    MemoryTypeSchema,
-)
+from openviking.session.memory.dataclass import MemoryField, MemoryFile, MemoryTypeSchema
 from openviking.session.memory.extraction_output_protocol import prompt_fragments as prompts
 from openviking.session.memory.extraction_output_protocol.base import (
     ExtractionOutputContext,
@@ -656,7 +651,7 @@ class _PythonProgramCompiler:
         self.objects: dict[str, _MemoryObject] = {}
         self.values: dict[str, Any] = {}
         self.links: list[dict[str, Any]] = []
-        self.directory_merges: list[DirectoryMergeRequest] = []
+        self.directory_merges: list[dict[str, str]] = []
         self._singleton_identities: set[tuple[str, tuple[tuple[str, Any], ...]]] = set()
         self._next_new_page_id = self._find_next_new_page_id(100)
         self._committed = False
@@ -997,11 +992,11 @@ class _PythonProgramCompiler:
             ):
                 self._error(node, f"sdk.{method}() requires literal directory URI strings")
             self.directory_merges.append(
-                DirectoryMergeRequest(
-                    source_uri=arguments["source_uri"].value,
-                    target_uri=arguments["target_uri"].value,
-                    operation="rename" if method == "rename_dir" else "merge",
-                )
+                {
+                    "source_uri": arguments["source_uri"].value,
+                    "target_uri": arguments["target_uri"].value,
+                    "operation": "rename" if method == "rename_dir" else "merge",
+                }
             )
             return None
         if method == "commit":
