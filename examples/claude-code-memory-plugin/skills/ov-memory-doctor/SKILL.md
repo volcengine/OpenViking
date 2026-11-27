@@ -56,7 +56,7 @@ Connection, Server health, Recent activity — and a Summary listing every ✗/�
 with a fix.
 Read the whole report before acting: a single root cause usually shows up in
 several sections (for example a bad key → "api key rejected" + "system/status
-→ 401" + `turns_failed > 0`).
+→ 401" + `turns_held > 0`).
 
 If the report says "this script is not running from the registered install",
 rerun it from the path it prints — Claude Code executes hooks from that copy.
@@ -92,7 +92,7 @@ Work top-down; fix the first ✗ and rerun before chasing the next.
 | `POST /mcp tools/list → 404/406/502/504` while /health is fine | Reverse proxy not forwarding `/mcp`, rewriting `Accept`, or buffering SSE | Fix the proxy (`proxy_buffering off`, forward `/mcp`, pass `Authorization`). |
 | `proxy variables set` + curl works but doctor/hook fails | Node's fetch ignores `HTTP(S)_PROXY`; the plugin ships no proxy/CA handling | `NODE_USE_ENV_PROXY=1` or `NODE_EXTRA_CA_CERTS=<ca.pem>` in the environment that launches Claude Code (`env` block of `~/.claude/settings.json`). |
 | `last auto-recall … reason=offline/bypass/disabled/short_query` | The hook ran and chose not to inject | `offline` → connection; `bypass` → `OPENVIKING_BYPASS_SESSION*`; `short_query` → prompt shorter than `minQueryLength`; only `no_results`/`filtered_out` mean the search actually ran. Note that a 401 on the search call also reads as `no_results`. |
-| `turns_failed > 0` / `capture payload(s) waiting` | Writes rejected (401/403/404 are dropped, not queued) or server was down (queued, replayed at next SessionStart) | Fix credentials/connection; `OPENVIKING_WRITE_PATH_ASYNC=0` makes the error visible on stderr. |
+| `turns_held > 0` / `turns_failed > 0` / `capture payload(s) waiting` | Writes refused: 401/403/404 are held (kept, sent again at the next Stop), other refusals are dropped; or server was down (queued, replayed at next SessionStart) | Fix credentials/connection; `OPENVIKING_WRITE_PATH_ASYNC=0` makes the error visible on stderr. |
 | `MCP proxy last started against <other url>` | The proxy is a long-lived process; a changed url only takes effect after restart | Restart Claude Code or `/mcp` → reconnect. Key rotation self-heals after a 401 if ovcli.conf changed on disk. |
 | `recall is pinned to the legacy /search/recall endpoint` | One 4xx mentioning "mode" pins recall for 6h | `rm ~/.openviking/state/context-face.json`. |
 | `no hook log … debug is on but no hook has run` | Hooks are not being spawned at all | Registration/enablement/node problem, not a server problem. |

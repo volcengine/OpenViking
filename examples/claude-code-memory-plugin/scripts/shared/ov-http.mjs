@@ -22,14 +22,16 @@ import { createHash } from "node:crypto";
 import { parseExtraHeaders } from "./mcp-proxy-config.mjs";
 
 /**
- * A short hash of the server and identity a config talks to. The pending queue
- * stamps it on what it parks, so a write queued for one server or account is
- * never replayed to another.
+ * A short hash of the server and identity a config talks to (account, user and
+ * api key; a key can name the user on its own). The pending queue stamps it on
+ * what it parks, so a write queued for one server or account is never replayed
+ * to another.
  */
 export function ovOrigin(cfg = {}) {
   const baseUrl = String(cfg.baseUrl || cfg.endpoint || "").trim().replace(/\/+$/, "");
+  const keyHash = cfg.apiKey ? createHash("sha256").update(String(cfg.apiKey)).digest("hex") : "";
   return createHash("sha256")
-    .update([baseUrl, cfg.account || "", cfg.user || ""].join("\n"))
+    .update([baseUrl, cfg.account || "", cfg.user || "", keyHash].join("\n"))
     .digest("hex")
     .slice(0, 16);
 }

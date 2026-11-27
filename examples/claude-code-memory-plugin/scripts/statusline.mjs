@@ -226,6 +226,11 @@ async function main() {
     if (Number(capture.turns_failed) > 0) {
       parts.push(red(`✗ ${capture.turns_failed} dropped`));
     }
+    // Held turns (refused credentials, missing session) are kept and sent
+    // again at the next Stop.
+    if (Number(capture.turns_held) > 0) {
+      parts.push(yellow(`⏸ ${capture.turns_held} held`));
+    }
   }
 
   // Resumed/compact indicator: 1-minute TTL so it shows once after the

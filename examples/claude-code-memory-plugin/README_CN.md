@@ -166,7 +166,7 @@ claude
 |----------------------------------------|---------------|--------------------------------------------------------------------|
 | `OPENVIKING_AUTO_CAPTURE`              | `true`        | 启用自动捕获；同时 gate 写 hook（PreCompact / SessionEnd / SubagentStop） |
 | `OPENVIKING_CAPTURE_MODE`              | `semantic`    | `semantic`（总是捕获）或 `keyword`：一次 Stop 的回合里用户写的内容带有触发词（要求记住、偏好、个人信息）时才发送。`keyword` 模式下不捕获 subagent 会话，因为它的提示词来自父 agent，而不是你 |
-| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`        | 捕获 assistant 回合(文本 + tool 输入/输出)。设为 `0` 时只发送用户写的内容：不发 assistant 文本、工具调用和工具结果，subagent 会话同样如此 |
+| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`        | 捕获 assistant 回合(文本 + tool 输入/输出)。设为 `0` 时只发送用户写的内容：不发 assistant 文本、工具调用和工具结果。此时不捕获 subagent 会话，因为其中的用户文本是父 agent 的提示词 |
 | `OPENVIKING_AUTO_COMMIT_ON_COMPACT`    | `true`        | `PreCompact` 在 Claude Code compact 之前 commit 会话；设为 `0` 时仍捕获进行中的回合，只跳过 commit |
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `100000`      | client-driven commit 的 pending-token 阈值                         |
 | `OPENVIKING_SERVER_AUTO_COMMIT`        | `false`       | 阈值 commit 交给服务端：插件用 `OPENVIKING_COMMIT_TOKEN_THRESHOLD` 设置会话的 `auto_commit_policy`，自己只在会话结束、subagent 结束和 compact 时 commit |

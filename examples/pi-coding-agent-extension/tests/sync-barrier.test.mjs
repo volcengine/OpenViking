@@ -498,6 +498,53 @@ test("refused payloads are dropped and passed over; refused credentials keep the
   });
 });
 
+test("credentials refused mid-turn queue the unsent tail instead of resending the delivered part", async () => {
+  await withPendingDir(async () => {
+    const msg = (text) => ({ type: "message", message: { role: "user", content: text } });
+    const { c, calls } = batchClient({
+      respond: (_n, path) => String(path).endsWith("/batch")
+        ? { ok: false, status: 405 }
+        : calls.at(-1).body.parts[0].text.includes("second") ? { ok: false, status: 401 } : { ok: true, result: {} },
+    });
+    const sync = new SyncManager(c, config({ takeoverEnabled: false }));
+    await sync.ensureSession("pi-session");
+
+    const result = await sync.syncBranch([msg("first message"), msg("second message")]);
+    assert.equal(result.added, 2);
+    assert.equal(result.queued, 1);
+    assert.equal(sync.droppedCount, 0);
+    assert.deepEqual((await listPending()).map((p) => p.entry.payload.parts[0].text), ["second message"]);
+  });
+});
+
+test("takeover drains its own backlog through the tracked drainer and queues new payloads behind what remains", async () => {
+  await withPendingDir(async () => {
+    const { c, calls } = batchClient({
+      respond: (n) => JSON.stringify(calls[n - 1].body).includes("poison")
+        ? { ok: false, status: 422 }
+        : { ok: true, result: {} },
+    });
+    const sync = new SyncManager(c, config());
+    await sync.ensureSession("pi-session");
+    await enqueue("addMessage", sync.sessionId, { role: "user", parts: [{ type: "text", text: "poison" }] });
+
+    const result = await sync.syncBranch([{ type: "message", message: { role: "user", content: "new turn" } }]);
+    assert.equal(result.allDelivered, true);
+    assert.equal(sync.droppedCount, 1, "a queued entry the server refuses is a capture gap");
+    assert.ok(calls.every((call) => call.path.endsWith("/messages/batch")));
+
+    const offline = batchClient({ respond: () => ({ ok: false, status: 401 }) });
+    const later = new SyncManager(offline.c, config());
+    await later.ensureSession("pi-session");
+    await enqueue("addMessage", later.sessionId, { role: "user", parts: [{ type: "text", text: "older" }] });
+    const held = await later.syncBranch([{ type: "message", message: { role: "user", content: "newer" } }]);
+    assert.equal(held.added, 1);
+    assert.equal(held.queued, 1);
+    assert.equal(offline.calls.length, 1, "nothing is sent past this session's backlog");
+    assert.deepEqual((await listPending()).map((p) => p.entry.payload.parts[0].text), ["older", "newer"]);
+  });
+});
+
 test("retry queue write failure records a permanent capture gap", async () => {
   const previous = process.env.OPENVIKING_PENDING_DIR;
   process.env.OPENVIKING_PENDING_DIR = "/dev/null/unwritable";

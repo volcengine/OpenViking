@@ -24,7 +24,7 @@
  */
 
 import { mkdir, readdir, readFile, rename, writeFile, unlink, stat, chmod, utimes } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { isAuthFailure, isRetryableFailure } from "./retryable.mjs";
@@ -187,6 +187,9 @@ async function recoverStaleProcessing(dir) {
 /**
  * Enqueue a failed operation to local disk.
  *
+ * Identical commits for a session and origin are queued once; messages are
+ * always queued separately.
+ *
  * @param {string} type - "addMessage" or "commitSession"
  * @param {string} sessionId - OV session ID
  * @param {object} payload - the data that failed to send
@@ -198,7 +201,8 @@ export async function enqueue(type, sessionId, payload, options = {}) {
   const dir = getPendingDir();
   const now = Number.isFinite(options.createdAt) ? options.createdAt : Date.now();
   const origin = options.origin || undefined;
-  const dedupKey = makeDedupKey(type, sessionId, payload, origin);
+  const dedup = type !== "addMessage";
+  const dedupKey = dedup ? makeDedupKey(type, sessionId, payload, origin) : randomUUID();
   const filename = pendingFilename(dedupKey, 0);
   const entry = {
     type,
@@ -216,7 +220,7 @@ export async function enqueue(type, sessionId, payload, options = {}) {
     return { ok: false, error: err?.message || String(err), dedupKey };
   }
 
-  const existing = await findExistingByDedupKey(dir, dedupKey);
+  const existing = dedup ? await findExistingByDedupKey(dir, dedupKey) : null;
   if (existing) {
     return { ok: true, path: existing.filename, deduped: true, dedupKey };
   }
@@ -512,11 +516,29 @@ export async function replayPending(fetchJSON, log, options = {}) {
   return { replayed, failed, skipped, deferred };
 }
 
-/** Whether the queue still holds messages for this session (and origin). */
+/**
+ * Whether the queue still holds messages for this session (and origin),
+ * counting those another process has claimed and is replaying right now.
+ */
 export async function hasPendingWrites(sessionId, origin) {
-  return (await listPending()).some(
-    ({ entry }) => entry.type === "addMessage" && entry.sessionId === sessionId && matchesOrigin(entry, origin),
-  );
+  const dir = getPendingDir();
+  await recoverStaleProcessing(dir);
+  let files;
+  try {
+    files = await readdir(dir);
+  } catch {
+    return false;
+  }
+  for (const f of files) {
+    if (!f.endsWith(".json") && !f.endsWith(".processing")) continue;
+    try {
+      const entry = await readEntry(dir, f);
+      if (entry?.type === "addMessage" && entry.sessionId === sessionId && matchesOrigin(entry, origin)) return true;
+    } catch {
+      // Replayed meanwhile, or corrupted.
+    }
+  }
+  return false;
 }
 
 /**

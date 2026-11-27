@@ -1,3 +1,5 @@
+import { userTurnText } from "./codebuddy-turns.mjs";
+
 export function extractCursorText(content) {
   if (typeof content === "string") return content.trim();
   if (!Array.isArray(content)) return "";
@@ -9,6 +11,8 @@ export function extractCursorText(content) {
     .trim();
 }
 
+const TIMESTAMP_RE = /<timestamp\s*>.*?<\/timestamp\s*>/gis;
+
 export function parseCursorTranscript(raw) {
   const turns = [];
   for (const line of String(raw || "").split("\n")) {
@@ -16,7 +20,9 @@ export function parseCursorTranscript(raw) {
     let item;
     try { item = JSON.parse(line); } catch { continue; }
     if (item?.role !== "user" && item?.role !== "assistant") continue;
-    const content = extractCursorText(item.message?.content ?? item.content);
+    const text = extractCursorText(item.message?.content ?? item.content);
+    // Cursor stamps each ask and wraps it: `<timestamp>…</timestamp><user_query>…</user_query>`.
+    const content = item.role === "user" ? userTurnText(text.replace(TIMESTAMP_RE, " ")) : text;
     if (!content) continue;
     turns.push({ role: item.role, content });
   }

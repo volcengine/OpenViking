@@ -288,6 +288,8 @@ Measured facts that shaped the adapter and are *not* visible in the code:
   `commitTokenThreshold`, unless `serverAutoCommit` leaves that commit to the
   server; `PreCompact` (unless `autoCommitOnCompact` is off) and `SessionEnd`
   commit whatever is still uncommitted, including turns an earlier `Stop` sent.
+  A compaction can fire in the middle of a turn, so `PreCompact` leaves the
+  last assistant message to the next capture, which sends it whole.
 
 v1 scope, matching the other adapters (Cursor, KimiCode) rather than the
 standalone plugin:

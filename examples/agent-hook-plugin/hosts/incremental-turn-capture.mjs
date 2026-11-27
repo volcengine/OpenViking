@@ -23,9 +23,10 @@ export function turnDedupKey(turn) {
  * What to send for the turns a host decoded. A turn is `{ role, turnId, content }`
  * with its text in `content`; one that also has tool calls or results carries
  * the host message in `payload`, in a shape the shared part builder reads, and
- * `toolNameById` names the tools those results answer.
+ * `toolNameById` names the tools those results answer. The turn whose dedup
+ * key is `holdBack` stays unsent and unacknowledged, so a later capture sends it whole.
  */
-export function buildIncrementalCapturePlan(turns, state = {}, cfg = {}, { toolNameById } = {}) {
+export function buildIncrementalCapturePlan(turns, state = {}, cfg = {}, { toolNameById, holdBack } = {}) {
   const acknowledged = new Set(
     Array.isArray(state.capturedTurnIds) ? state.capturedTurnIds : [],
   );
@@ -43,6 +44,7 @@ export function buildIncrementalCapturePlan(turns, state = {}, cfg = {}, { toolN
   const seenInBatch = new Set();
   const toSend = candidates.filter((item) => {
     if (acknowledged.has(item.dedupKey)) return false;
+    if (item.dedupKey === holdBack) return false;
     const batchKey = stableHash(item.dedupKey, JSON.stringify(item.message));
     if (seenInBatch.has(batchKey)) return false;
     seenInBatch.add(batchKey);
@@ -186,8 +188,12 @@ export async function captureIncrementalTurns(ctx, state, event, transcript, {
   const commitsAtBoundary = boundary && (event !== "pre-compact" || commitsOnCompaction(ctx.cfg));
   const uncommitted = Number(state.capturedSinceCommit || 0);
 
+  // A compaction can fire in the middle of a turn, so the last assistant
+  // message may still grow and waits for the next capture.
+  const last = transcript.turns.at(-1);
   const plan = buildIncrementalCapturePlan(transcript.turns, state, ctx.cfg, {
     toolNameById: transcript.toolNameById,
+    holdBack: event === "pre-compact" && last?.role === "assistant" ? turnDedupKey(last) : undefined,
   });
   let next;
   let sent = 0;

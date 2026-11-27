@@ -308,6 +308,8 @@ test("the client names its server and identity as a short origin", () => {
   assert.equal(createOvHttp({ endpoint: "http://a:1933", account: "acme", user: "u" }).origin, origin);
   assert.notEqual(createOvHttp({ baseUrl: "http://a:1933", account: "acme", user: "v" }).origin, origin);
   assert.notEqual(createOvHttp({ baseUrl: "http://b:1933", account: "acme", user: "u" }).origin, origin);
+  const keyed = createOvHttp({ baseUrl: "http://a:1933", apiKey: "sk-one" }).origin;
+  assert.notEqual(createOvHttp({ baseUrl: "http://a:1933", apiKey: "sk-two" }).origin, keyed);
 });
 
 test("the operator's OPENVIKING_EXTRA_HEADERS reach the wire without a caller wiring them", async () => {

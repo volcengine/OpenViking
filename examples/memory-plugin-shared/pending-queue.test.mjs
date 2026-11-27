@@ -7,6 +7,7 @@ import {
   claimForReplay,
   deferCommitBehindPendingWrites,
   enqueue,
+  hasPendingWrites,
   listPending,
   replayPending,
 } from "./lib/pending-queue.mjs";
@@ -50,16 +51,31 @@ test("replay skips another server's entries and keeps its own on refused credent
   });
 });
 
-test("enqueue deduplicates identical payloads", async () => {
+test("enqueue merges identical commits but keeps every message", async () => {
   await withPendingDir(async () => {
-    const payload = { role: "user", parts: [{ type: "text", text: "same" }] };
-    const first = await enqueue("addMessage", "queue-dedup", payload);
-    const second = await enqueue("addMessage", "queue-dedup", payload);
-
+    const first = await enqueue("commitSession", "queue-dedup", {});
+    const second = await enqueue("commitSession", "queue-dedup", {});
     assert.equal(first.ok, true);
-    assert.equal(second.ok, true);
     assert.equal(second.deduped, true);
-    assert.equal((await listPending()).length, 1);
+
+    const payload = { role: "user", parts: [{ type: "text", text: "yes" }] };
+    await enqueue("addMessage", "queue-dedup", payload);
+    const again = await enqueue("addMessage", "queue-dedup", payload);
+    assert.equal(again.ok, true);
+    assert.equal(again.deduped, undefined);
+    assert.equal((await listPending()).filter(({ entry }) => entry.type === "addMessage").length, 2);
+  });
+});
+
+test("a message another process is replaying still counts as pending", async () => {
+  await withPendingDir(async () => {
+    await enqueue("addMessage", "queue-claimed", { role: "user", content: "in flight" }, { origin: "o1" });
+    const [{ filename }] = await listPending();
+    assert.ok(await claimForReplay(filename));
+
+    assert.equal(await hasPendingWrites("queue-claimed", "o1"), true);
+    assert.equal(await hasPendingWrites("queue-claimed", "o2"), false);
+    assert.equal(await hasPendingWrites("other-session", "o1"), false);
   });
 });
 

@@ -131,16 +131,29 @@ function turnHash(index, turn) {
   return stableHash(index, turn.role, turn.content);
 }
 
+const RECENT_TURN_HASHES = 100;
+
 /**
  * The index of the last turn that, with every turn before it, is settled; -1
- * for none. A transcript that no longer holds that turn as it was captured was
- * rewritten, and is read again from the start. State without the index keeps
- * the content hashes of what it captured instead.
+ * for none. The checkpoint keeps the hashes of the last settled turns, so a
+ * transcript rewritten or cut short inside them resumes after the part that is
+ * unchanged; one changed before them is read again from the start. State
+ * without the index keeps the content hashes of what it captured instead.
  */
 function capturedThrough(state, turns) {
   if (Number.isInteger(state.capturedThrough)) {
-    const index = state.capturedThrough;
-    return index >= 0 && turns[index] && turnHash(index, turns[index]) === state.capturedThroughHash ? index : -1;
+    const recent = Array.isArray(state.capturedRecentHashes)
+      ? state.capturedRecentHashes
+      : [state.capturedThroughHash];
+    const first = state.capturedThrough - recent.length + 1;
+    let through = -1;
+    for (const [offset, hash] of recent.entries()) {
+      const index = first + offset;
+      if (index < 0) continue;
+      if (!turns[index] || turnHash(index, turns[index]) !== hash) break;
+      through = index;
+    }
+    return through;
   }
   const hashes = new Set(Array.isArray(state.capturedHashes) ? state.capturedHashes : []);
   return turns.findLastIndex((turn, index) => hashes.has(turnHash(index, turn)));
@@ -189,13 +202,16 @@ async function captureTranscript(ctx, state) {
   }
   const firstUnsent = toSend.slice(settled).find((item) => !item.toolId);
   const through = firstUnsent ? firstUnsent.index - 1 : turns.length - 1;
+  const recentFrom = Math.max(0, through + 1 - RECENT_TURN_HASHES);
   return {
     complete: settled === toSend.length,
     state: {
       ...state,
       capturedHashes: undefined,
       capturedThrough: through,
-      capturedThroughHash: through >= 0 ? turnHash(through, turns[through]) : undefined,
+      capturedThroughHash: undefined,
+      capturedRecentHashes: turns.slice(recentFrom, through + 1)
+        .map((turn, offset) => turnHash(recentFrom + offset, turn)),
       capturedToolOffset,
       capturedToolIds: [...acceptedToolIds].slice(-1000),
       // Tool records do not count toward commitTurnThreshold.

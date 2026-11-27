@@ -132,6 +132,13 @@ test("a misspelled knob is caught, with the key it was probably meant to be", ()
   assert.equal(found.find((f) => f.key === "plugin.claude_code.autoRecal").suggestion, "autoRecall");
 });
 
+test("a retired knob is reported as retired, with no suggestion", () => {
+  assert.deepEqual(unknownPluginKeys({ captureMaxLength: 24000, codex: { commitKeepRecentCount: 10 } }), [
+    { key: "plugin.captureMaxLength", suggestion: "", retired: true },
+    { key: "plugin.codex.commitKeepRecentCount", suggestion: "", retired: true },
+  ]);
+});
+
 test("every harness gets a per-harness override, under either spelling", () => {
   const overrides = Object.fromEntries(
     Object.values(HARNESS_KEYS).map((key) => [key, { recallLimit: 3 }]),

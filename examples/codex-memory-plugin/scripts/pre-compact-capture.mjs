@@ -67,7 +67,7 @@ async function compact(sessionId, transcriptPath, trigger, cwd, heartbeat) {
     return "";
   }
 
-  const { newTurns, added, ovSessionId, skipped, unreadable } = await catchUpTurns({
+  const { newTurns, added, settled, ovSessionId, skipped, unreadable } = await catchUpTurns({
     state,
     transcriptPath,
     fetchJSONRes,
@@ -93,7 +93,7 @@ async function compact(sessionId, transcriptPath, trigger, cwd, heartbeat) {
     return `pre-compact transcript unreadable for ${state.ovSessionId || sessionId}; state preserved for retry`;
   }
 
-  if (newTurns.length > 0 && !skipped && added < newTurns.length) {
+  if (newTurns.length > 0 && !skipped && settled < newTurns.length) {
     logError("append_failed_keep_state", { ovSessionId, attempted: newTurns.length, added });
     await saveState(state);
     return `pre-compact catch-up append incomplete for ${ovSessionId}; state preserved for retry`;

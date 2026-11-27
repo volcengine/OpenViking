@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -181,6 +181,28 @@ test("SessionEnd commits after a Stop still posting and after turns no Stop capt
       await until(async () => events.includes("commit"));
     });
     assert.deepEqual(events, ["q1", "a1", "q2 interrupted", "commit"]);
+  } finally {
+    restore();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("SessionEnd run inline commits within the hook timeout while a capture holds the lock", async () => {
+  const restore = scrubOpenVikingEnv();
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-session-end-"));
+  const input = { session_id: "s", transcript_path: join(root, "t.jsonl"), cwd: root };
+  const events = [];
+  try {
+    await writeFile(input.transcript_path, [rec("user", "q1"), rec("assistant", "a1")].join("\n"));
+    await mkdir(join(root, ".openviking", "hook-state", "claude-code", "s.json.lock"), { recursive: true });
+    await withMockOpenViking(mockServer(events), async (baseUrl) => {
+      const env = { ...hookEnv(root, baseUrl), OPENVIKING_WRITE_PATH_ASYNC: "0", OPENVIKING_CAPTURE_TIMEOUT_MS: "8000" };
+      const started = Date.now();
+      const end = { ...input, hook_event_name: "SessionEnd", reason: "prompt_input_exit" };
+      expectExit(await runHookScript(join(SCRIPTS, "session-end.mjs"), { input: end, env }));
+      assert.ok(Date.now() - started < 25000, `took ${Date.now() - started}ms`);
+    });
+    assert.deepEqual(events, ["commit"]);
   } finally {
     restore();
     await rm(root, { recursive: true, force: true });

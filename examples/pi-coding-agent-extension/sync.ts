@@ -9,6 +9,7 @@ import {
   claimForReplay,
   commitSession,
   dequeue,
+  enqueue,
   incrementRetry,
   listPending,
   matchesOrigin,
@@ -338,11 +339,28 @@ export class SyncManager {
     queued: number;
     permanentFailures: number;
   }> {
-    if (!this.ovSessionId || payloads.length === 0) {
+    const sid = this.ovSessionId;
+    if (!sid || payloads.length === 0) {
       return { accepted: 0, delivered: 0, queued: 0, permanentFailures: 0 };
     }
-    const res = await sendSessionMessages(this.fetchJSON, this.ovSessionId, payloads, {
+    if (this.config.takeoverEnabled) {
+      // The generic replay-first step would drop this session's queued entries
+      // without counting them as a capture gap; only the tracked drainer does.
+      if (this.client.connected) await this.drainSessionBacklog();
+      if (countUndeliveredForSession(await listPending(), sid) > 0 || await hasProcessingMessage(sid)) {
+        const behind = await this.queueBehind(sid, payloads, 0);
+        if (behind.enqueueFailed > 0) this.droppedForever += behind.enqueueFailed;
+        return {
+          accepted: payloads.length,
+          delivered: 0,
+          queued: behind.queued,
+          permanentFailures: behind.enqueueFailed,
+        };
+      }
+    }
+    const res = await sendSessionMessages(this.fetchJSON, sid, payloads, {
       enqueueOnRetryable: true,
+      replayFirst: !this.config.takeoverEnabled,
     });
     if (res.failed > 0 || res.enqueueFailed > 0) {
       this.logger.log("send", {
@@ -355,10 +373,20 @@ export class SyncManager {
         error: res.lastError?.message || res.lastError?.code || "unknown",
       });
     }
+    // Credentials refused after part of the slice landed: queue the unsent
+    // tail (the queue keeps it until the credentials work) so the slice counts
+    // as accepted and the delivered part is not sent again next turn.
+    if (res.authFailed && res.retryLater > 0 && res.retryLater < payloads.length) {
+      const behind = await this.queueBehind(sid, payloads, payloads.length - res.retryLater);
+      res.failed -= res.retryLater;
+      res.retryLater = 0;
+      res.queued += behind.queued;
+      res.enqueueFailed += behind.enqueueFailed;
+    }
     // A message the server refused is not sent again. Count it as accepted so
     // the watermark advances past it; it is gone from the archive for good, so
-    // it also counts as a capture gap. Refused credentials (`retryLater`) leave
-    // the unsent tail for the next turn to send again.
+    // it also counts as a capture gap. Credentials refused before anything
+    // settled (`retryLater`) leave the whole slice for the next turn.
     const dropped = res.failed - res.retryLater + res.enqueueFailed;
     if (dropped > 0) this.droppedForever += dropped;
     return {
@@ -367,6 +395,24 @@ export class SyncManager {
       queued: res.queued,
       permanentFailures: dropped,
     };
+  }
+
+  /** Queue `payloads[start..]` after everything already queued for the session, in order. */
+  private async queueBehind(sid: string, payloads: any[], start: number): Promise<{ queued: number; enqueueFailed: number }> {
+    let after = 0;
+    for (const { entry } of await listPending()) {
+      if (entry?.sessionId === sid) after = Math.max(after, Number(entry.createdAt) || 0);
+    }
+    const base = Math.max(Date.now(), after + 1);
+    for (let i = start; i < payloads.length; i++) {
+      const queued = await enqueue("addMessage", sid, payloads[i], {
+        createdAt: base + (i - start),
+        origin: this.fetchJSON.origin,
+      });
+      // Stop at the first failure so what is queued stays a contiguous prefix.
+      if (!queued.ok) return { queued: i - start, enqueueFailed: payloads.length - i };
+    }
+    return { queued: payloads.length - start, enqueueFailed: 0 };
   }
 
   async commitIfNeeded(): Promise<void> {

@@ -72,7 +72,7 @@ async function finish(sessionId, transcriptPath, cwd, endToken, heartbeat) {
     return;
   }
 
-  const { newTurns, added, skipped, unreadable } = await catchUpTurns({
+  const { newTurns, added, settled, skipped, unreadable } = await catchUpTurns({
     state,
     transcriptPath,
     fetchJSONRes,
@@ -98,7 +98,7 @@ async function finish(sessionId, transcriptPath, cwd, endToken, heartbeat) {
   // Committing now would archive a session missing its tail turns and release
   // the live id. Keep the live id and the marker so the sweep retries; the
   // cursor already advanced past the prefix that landed.
-  if (newTurns.length > 0 && !skipped && added < newTurns.length) {
+  if (newTurns.length > 0 && !skipped && settled < newTurns.length) {
     logError("append_incomplete", {
       ovSessionId: state.ovSessionId,
       attempted: newTurns.length,

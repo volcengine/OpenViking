@@ -46,6 +46,7 @@ The default composition runs left to right, joined by ` │ `. Segments are cond
 |               | `✎ committed · 2 arch` | dim    | the turn that just finished produced an archive                                                                       |
 |               | `✎ 2 arch`             | dim    | nothing pending, but archives already exist this session                                                              |
 | Failures      | `✗ 1 dropped`          | red    | auto-capture failed N turns this batch — overwrites every Stop, so transient single-turn failures self-clear          |
+|               | `⏸ 2 held`             | yellow | the server refused the credentials (401/403) or did not find the session; the turns are kept and sent at the next Stop |
 | Session event | `🔗 resumed`           | cyan   | SessionStart hook fired with `source: resume` within the last minute (1 min TTL)                                      |
 |               | `🔗 compact`           | cyan   | same, with `source: compact`                                                                                          |
 | Daily         | `+3 today`             | dim    | archives committed across **all** sessions today (UTC date rollover)                                                  |
@@ -137,6 +138,7 @@ For an assistant adding a segment that consumes existing state. All files live u
 {
   "turns_captured": 3,
   "turns_failed": 0,
+  "turns_held": 0,                   // kept after 401/403/404; sent again at the next Stop
   "pending_tokens": 12450,           // sawtooth — resets to 0 on commit
   "commit_threshold": 100000,
   "committed": false,                // true on the turn a commit happened

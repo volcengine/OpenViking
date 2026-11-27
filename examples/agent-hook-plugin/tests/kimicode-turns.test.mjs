@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -10,7 +10,7 @@ import {
   cleanKimicodeText,
   extractUnseenKimicodeTurns,
 } from "../hosts/kimicode-turns.mjs";
-import { buildIncrementalCapturePlan } from "../hosts/incremental-turn-capture.mjs";
+import { buildIncrementalCapturePlan, captureIncrementalTurns } from "../hosts/incremental-turn-capture.mjs";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "kimicode");
 
@@ -112,7 +112,7 @@ test("a recorded session's tool calls and results are sent in host order", () =>
     turn_id,
     parts: parts.map((part) => (part.type === "text" ? `text: ${part.text.slice(0, 24)}` : `${part.tool_name} ${part.tool_status}`)),
   }));
-  const ovRead = "mcp__plugin-openviking-memory_openviking__read";
+  const ovRead = "mcp__openviking__read";
   assert.deepEqual(outline, [
     { role: "user", turn_id: "0", parts: ["text: List the files in this f"] },
     {
@@ -145,6 +145,32 @@ test("a recorded session's tool calls and results are sent in host order", () =>
   assert.equal(parts[7].tool_id, "call_00_tdjuny0gqfpmm136zw3nidd3");
   assert.equal(parts[7].tool_output, "cat: missing-file.txt: No such file or directory\nCommand failed with exit code: 1.");
   assert.equal(parts[8].tool_output, "mock content of viking://resources/demo");
+});
+
+test("a compaction in the middle of a turn leaves the rest of the turn to the next capture", async () => {
+  const lines = readFileSync(join(FIXTURES, "wire.jsonl"), "utf8").split("\n").filter(Boolean);
+  const wire = join(mkdtempSync(join(tmpdir(), "ov-kimi-wire-")), "wire.jsonl");
+  const sent = [];
+  const ctx = {
+    cfg: { enabled: true, autoCapture: true },
+    sessionId: "kc-midturn",
+    peerId: "",
+    log: () => {},
+    fetchJSON: async (path, request = {}) => {
+      if (path.endsWith("/messages/batch")) sent.push(...JSON.parse(request.body).messages);
+      return { ok: true, status: 200, result: { pending_tokens: 0 } };
+    },
+  };
+  const capture = (state, event) =>
+    captureIncrementalTurns(ctx, state, event, extractUnseenKimicodeTurns(wire, state.lastTurnId), { cleanText: cleanKimicodeText });
+  writeFileSync(wire, `${lines.slice(0, 12).join("\n")}\n`);
+  const state = await capture({}, "pre-compact");
+  assert.deepEqual(sent.map(({ role, turn_id }) => `${role}#${turn_id}`), ["user#0"]);
+  writeFileSync(wire, `${lines.join("\n")}\n`);
+  await capture(state, "stop");
+  const turn0 = sent.find(({ role, turn_id }) => role === "assistant" && turn_id === "0");
+  assert.equal(turn0.parts.at(-1).text.slice(0, 15), "Done: the folde");
+  assert.deepEqual(sent.map(({ role, turn_id }) => `${role}#${turn_id}`), ["user#0", "assistant#0", "user#1", "assistant#1"]);
 });
 
 test("turn.ended closes an interrupted user-only turn", () => {

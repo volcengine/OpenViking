@@ -39,10 +39,13 @@ runHookStage({
   loadConfig,
   input: { tolerant: true },
   // Paired with subagent-stop.mjs (a write path): when capture is off, subagent
-  // sessions are skipped or capture is in keyword mode, the stop hook will
-  // skip, so there's no point stashing start state either.
+  // sessions are skipped, capture is in keyword mode or assistant turns are
+  // off, the stop hook will skip, so there's no point stashing start state.
   gates: {
-    enabled: (cfg) => cfg.autoCapture && !cfg.skipSubagentSessions && cfg.captureMode !== "keyword",
+    enabled: (cfg) => cfg.autoCapture
+      && !cfg.skipSubagentSessions
+      && cfg.captureMode !== "keyword"
+      && cfg.captureAssistantTurns,
   },
   envelope: approve,
   onSkip: (reason) => log("skip", { reason }),

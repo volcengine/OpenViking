@@ -72,6 +72,11 @@ function toolOutputText(output) {
     .join("\n");
 }
 
+// Kimi names a plugin's MCP tool `mcp__plugin-<plugin>_<server>__<tool>`; the
+// server recognises its own tools only as `mcp__openviking__<tool>`.
+const OPENVIKING_MCP_TOOL = /^mcp__(?:plugin-[^_]+_)?openviking__(?=.)/;
+const toolName = (name) => name.replace(OPENVIKING_MCP_TOOL, "mcp__openviking__");
+
 const turnKey = (value) => (typeof value === "string" || typeof value === "number" ? String(value) : null);
 
 export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
@@ -156,11 +161,11 @@ export function extractUnseenKimicodeTurns(wirePath, lastTurnId = null) {
       if (!id || typeof event.name !== "string" || !event.name || !turn) continue;
       const turnId = attachPending(turn);
       toolTurns.set(id, turnId);
-      toolNameById[id] = event.name;
+      toolNameById[id] = toolName(event.name);
       pushBlock(turnId, {
         type: "tool_use",
         id,
-        name: event.name,
+        name: toolNameById[id],
         ...(event.args === undefined ? {} : { input: event.args }),
       });
       continue;

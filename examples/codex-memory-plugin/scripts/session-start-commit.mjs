@@ -487,7 +487,7 @@ runHookStage({
       // Turns the session's own workers never sent would be lost by an
       // archive-now commit, so catch them up first and keep the session live
       // for the next sweep if any of them failed to land.
-      const { newTurns, added, skipped, unreadable } = await catchUpTurns({
+      const { newTurns, added, settled, skipped, unreadable } = await catchUpTurns({
         state: fresh,
         transcriptPath: fresh.transcriptPath,
         fetchJSONRes: sweepFetchJSONRes,
@@ -511,7 +511,7 @@ runHookStage({
         return null;
       }
 
-      if (newTurns.length > 0 && !skipped && added < newTurns.length) {
+      if (newTurns.length > 0 && !skipped && settled < newTurns.length) {
         logError("append_incomplete", {
           codexSessionId: s.codexSessionId,
           ovSessionId: fresh.ovSessionId,

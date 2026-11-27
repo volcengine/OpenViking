@@ -181,6 +181,15 @@ function holdsAnswer(turns, answer) {
   return text.replace(/\s+/g, "") === answer.replace(/\s+/g, "");
 }
 
+// The text-only turns past the cursor, up to the next prompt, that complete
+// `answer` in the transcript.
+function lateAnswerTurns(turns, cursor, answer) {
+  const next = turns.findIndex((turn, i) => i >= cursor && turn.role === "user");
+  const end = next === -1 ? turns.length : next;
+  if (end === cursor || !holdsAnswer(turns.slice(0, end), answer)) return [];
+  return turns.slice(cursor, end).filter((turn) => turn.parts.every((part) => part.type === "text"));
+}
+
 async function main({ cfg, input, cwd }) {
   const transcriptPath = input.transcript_path;
   const sessionId = input.session_id || "unknown";
@@ -219,12 +228,19 @@ async function main({ cfg, input, cwd }) {
   const newTurns = allTurns.slice(state.capturedTurnCount);
   // Claude Code writes the transcript asynchronously, so at Stop it may not
   // hold the final answer yet. Taking it from the payload is left out of the
-  // cursor: should the transcript catch up later, the answer goes out twice
-  // rather than not at all.
+  // cursor and remembered instead, so the transcript's copy is skipped when a
+  // later capture finds it past the cursor.
+  const { payloadAnswer } = state;
+  delete state.payloadAnswer;
+  const sentAlready = new Set(payloadAnswer && newTurns.length
+    ? lateAnswerTurns(allTurns, state.capturedTurnCount, payloadAnswer)
+    : []);
   const finalAnswer = cfg.captureLastAssistantOnStop
     ? String(input.last_assistant_message || "").trim()
     : "";
-  if (finalAnswer && !holdsAnswer(allTurns, finalAnswer)) {
+  const appended = Boolean(finalAnswer) && !holdsAnswer(allTurns, finalAnswer);
+  const remembered = appended ? { payloadAnswer: finalAnswer } : {};
+  if (appended) {
     newTurns.push({
       role: "assistant",
       parts: [{ type: "text", text: finalAnswer }],
@@ -232,7 +248,7 @@ async function main({ cfg, input, cwd }) {
     });
   }
   // The cursor counts host-authored turns; only the conversation is sent.
-  const captureTurns = newTurns.filter((turn) => !turn.hostAuthored && turn.message);
+  const captureTurns = newTurns.filter((turn) => !turn.hostAuthored && turn.message && !sentAlready.has(turn));
   log("transcript_parse", {
     totalTurns: allTurns.length,
     previouslyCaptured: state.capturedTurnCount,
@@ -291,6 +307,7 @@ async function main({ cfg, input, cwd }) {
     }
     await saveState(sessionId, {
       ...state,
+      ...remembered,
       capturedTurnCount: allTurns.length,
     });
     log("state_update", { newCapturedTurnCount: allTurns.length, reason: "pending_queued" });
@@ -333,7 +350,8 @@ async function main({ cfg, input, cwd }) {
     writeJsonState("last-capture.json", {
       turns_captured: result.ok,
       turns_queued: result.queued,
-      turns_failed: result.failed + result.enqueueFailed,
+      turns_failed: result.failed - result.retryLater + result.enqueueFailed,
+      turns_held: result.retryLater,
       pending_tokens: 0,
       commit_threshold: cfg.commitTokenThreshold,
       committed: false,
@@ -350,6 +368,7 @@ async function main({ cfg, input, cwd }) {
   // the server refused is not sent again.
   await saveState(sessionId, {
     ...state,
+    ...remembered,
     capturedTurnCount: allTurns.length,
   });
   log("state_update", { newCapturedTurnCount: allTurns.length });

@@ -318,8 +318,9 @@ function checkActivity(report, cfg, connection) {
   const capture = state["last-capture.json"];
   if (capture.exists && capture.data) {
     const d = capture.data;
-    const line = `last auto-capture ${fmtAge(d.ts)} — captured ${d.turns_captured ?? 0}, queued ${d.turns_queued ?? 0}, failed ${d.turns_failed ?? 0}, pending ${d.pending_tokens ?? 0}/${d.commit_threshold ?? "?"} tokens, ${d.commit_count ?? 0} commits (session ${d.ov_session_id || "?"})`;
-    if ((d.turns_failed ?? 0) > 0) report.warn(line, "turns_failed > 0 means the server rejected writes with a non-retryable status (401/403/404) and those turns were dropped", "fix credentials, then set OPENVIKING_WRITE_PATH_ASYNC=0 temporarily to see the error on stderr");
+    const line = `last auto-capture ${fmtAge(d.ts)} — captured ${d.turns_captured ?? 0}, queued ${d.turns_queued ?? 0}, held ${d.turns_held ?? 0}, failed ${d.turns_failed ?? 0}, pending ${d.pending_tokens ?? 0}/${d.commit_threshold ?? "?"} tokens, ${d.commit_count ?? 0} commits (session ${d.ov_session_id || "?"})`;
+    if ((d.turns_failed ?? 0) > 0) report.warn(line, "turns_failed > 0 means the server rejected writes with a non-retryable status (such as 413 or 422) or they could not be queued", "set OPENVIKING_WRITE_PATH_ASYNC=0 temporarily to see the error on stderr");
+    else if ((d.turns_held ?? 0) > 0) report.warn(line, "turns_held > 0 means the server refused the credentials (401/403) or did not find the session (404); the turns are kept and sent again at the next Stop", "check the API key or account in ovcli.conf / OPENVIKING_API_KEY");
     else if ((d.turns_queued ?? 0) > 0) report.warn(line, "turns are waiting in the offline queue; they replay at the next session start once /health passes");
     else report.info(line);
   } else {

@@ -95,8 +95,12 @@ async function sendSerial(fetchJSON, sessionId, payloads, start, end, opts, resu
     }
     const stopped = await stopAt(sessionId, payloads, i, res, opts, result);
     if (stopped) return stopped;
-    // No session to append to: every later message would be refused the same way.
+    // The server creates a session on its first message, so a 404 here says
+    // nothing about the content: keep the rest for the caller's next attempt.
     if (Number(res?.status) === 404) {
+      return holdRemainder(payloads, i, result, { retryable: false, error: res?.error ?? res });
+    }
+    if (opts.isolateRejected === false) {
       await reject(payloads.length - i, res, opts, result);
       return result;
     }
@@ -125,12 +129,13 @@ async function sendSerial(fetchJSON, sessionId, payloads, start, end, opts, resu
  *   server refuses count as `failed`, and the rest land. A refused message is
  *   never sent again: the caller advances past it.
  * - A server without the batch route (404 / 405 on it) gets every message one
- *   by one.
+ *   by one. A 404 on the one-message route leaves the unsent messages
+ *   `retryLater`.
  *
  * Payloads are settled in order. All but the last `retryLater + enqueueFailed`
  * are settled (sent, queued, or refused for good); the caller keeps the rest
- * for its next attempt. `failed` counts every message neither sent nor queued,
- * `retryLater` included.
+ * for its next attempt. `failed` counts the refused messages and the
+ * `retryLater` ones; `enqueueFailed` ones are counted only there.
  *
  * Queued entries record the server and identity they were queued for, read
  * from `fetchJSON.origin` (set by `createOvHttp`).
@@ -143,7 +148,7 @@ async function sendSerial(fetchJSON, sessionId, payloads, start, end, opts, resu
  * @param {Function} opts.onSent - called with the number of messages durably sent after each success
  * @param {Function} opts.onRejected - called with the number of messages refused for good, in order with onSent
  * @param {boolean} [opts.replayFirst=true] - false for a caller that is itself sending queued entries
- * @param {boolean} [opts.isolateRejected=true] - false keeps a refused batch failed as a whole
+ * @param {boolean} [opts.isolateRejected=true] - false fails everything from the first refused message on
  * @param {Function} [opts.log] - pending-queue logger for the replay
  * @returns {Promise<{sent:number,queued:number,enqueueFailed:number,failed:number,retryLater:number,retryable:boolean,authFailed:boolean,usedBatch:boolean,lastError:any}>}
  */

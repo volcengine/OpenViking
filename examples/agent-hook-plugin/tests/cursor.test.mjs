@@ -11,6 +11,7 @@ import test from "node:test";
 import { stableHash } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { expectExit, runHookScript } from "../../memory-plugin-shared/testing/support.mjs";
 import { cursor } from "../hosts/cursor.mjs";
+import { parseCursorTranscript } from "../hosts/cursor-transcript.mjs";
 import { evaluateHostUriGuard } from "../scripts/uri-guard.mjs";
 
 const pluginRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -163,6 +164,17 @@ test("Cursor captures a busy session without replaying text or rereading uploade
   }
 });
 
+test("Cursor keeps the user's words without the timestamp and user_query wrapper", () => {
+  const raw = [
+    { role: "user", message: { content: [{ type: "text", text: "<timestamp>Friday, Nov 27, 2026, 5:00 PM (UTC+8)</timestamp>\n<user_query>\nfix the build\n</user_query>" }] } },
+    { role: "assistant", message: { content: [{ type: "text", text: "<user_query>quoted</user_query> done" }] } },
+  ].map((line) => JSON.stringify(line)).join("\n");
+  assert.deepEqual(parseCursorTranscript(raw), [
+    { role: "user", content: "fix the build" },
+    { role: "assistant", content: "<user_query>quoted</user_query> done" },
+  ]);
+});
+
 test("Cursor sends each turn of a long transcript once, also after an upgrade from content hashes", async () => {
   const root = mkdtempSync(join(tmpdir(), "openviking-cursor-long-"));
   const transcript = join(root, "transcript.jsonl");
@@ -204,6 +216,44 @@ test("Cursor sends each turn of a long transcript once, also after an upgrade fr
     assert.equal(state.capturedHashes, undefined);
     await cursor.capture(ctx, state, "stop");
     assert.deepEqual(sent, ["turn 1202"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Cursor sends only the new turns of a transcript rewritten or cut short", async () => {
+  const root = mkdtempSync(join(tmpdir(), "openviking-cursor-rewrite-"));
+  const transcript = join(root, "transcript.jsonl");
+  const sent = [];
+  const ctx = {
+    cfg: { enabled: true, autoCapture: true, commitTurnThreshold: 1_000_000 },
+    sessionId: "cu-rewrite",
+    stateFile: join(root, "state.json"),
+    input: { transcript_path: transcript },
+    peerId: "",
+    log: () => {},
+    fetchJSON: async (path, request) => {
+      if (path.endsWith("/messages/batch")) sent.push(...JSON.parse(request.body).messages.map((m) => m.parts[0].text));
+      return { ok: true };
+    },
+  };
+  const write = (texts) => writeFileSync(transcript, texts
+    .map((content, n) => JSON.stringify({ role: n % 2 ? "assistant" : "user", content })).join("\n"));
+  const base = Array.from({ length: 10 }, (_, n) => `turn ${n}`);
+  try {
+    write(base);
+    let state = await cursor.capture(ctx, {}, "stop");
+    sent.length = 0;
+    write([...base.slice(0, 6), "edited 6", "answer 7"]);
+    state = await cursor.capture(ctx, state, "stop");
+    assert.deepEqual(sent, ["edited 6", "answer 7"]);
+
+    sent.length = 0;
+    write(base.slice(0, 4));
+    state = await cursor.capture(ctx, state, "stop");
+    write([...base.slice(0, 4), "after cut 4"]);
+    await cursor.capture(ctx, state, "stop");
+    assert.deepEqual(sent, ["after cut 4"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -1,6 +1,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { createServer } from "node:http"
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -9,7 +10,8 @@ import { createMemorySessionManager } from "../lib/memory-session.mjs"
 import { contextMessageEvents } from "../lib/v2-events.mjs"
 import { createSessionInject } from "../lib/session-inject.mjs"
 import { initLogger } from "../lib/utils.mjs"
-import { listPending } from "../lib/shared/pending-queue.mjs"
+import { enqueue, listPending } from "../lib/shared/pending-queue.mjs"
+import { ovOrigin } from "../lib/shared/ov-http.mjs"
 import { withPendingDir } from "../../memory-plugin-shared/testing/support.mjs"
 
 async function withTempDir(prefix, fn) {
@@ -1021,6 +1023,35 @@ test("a closing session whose messages got queued commits behind them", async ()
           ["addMessage", "oc-oc-session-parked"],
           ["commitSession", "oc-oc-session-parked"],
         ])
+      })
+    } finally {
+      await new Promise((resolve) => server.close(resolve))
+    }
+  })
+})
+
+test("a commit that cannot be queued behind queued messages is reported as failed", async () => {
+  await withPendingDir(async (pendingDir) => {
+    const server = createServer(async (req, res) => {
+      for await (const _ of req) { /* drain */ }
+      res.statusCode = 503
+      res.setHeader("Content-Type", "application/json")
+      res.end(JSON.stringify({ status: "error", error: { code: "UNAVAILABLE" } }))
+    })
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+    try {
+      await withTempDir("ov-oc-session-", async (dir) => {
+        const config = baseConfig(`http://127.0.0.1:${server.address().port}`)
+        const origin = ovOrigin({ ...config, baseUrl: config.endpoint })
+        await enqueue("addMessage", "oc-lost", { role: "user", content: "queued" }, { origin })
+        // A directory where the commit's queue file would go makes that write fail.
+        const commitKey = createHash("sha256")
+          .update(`commitSession\noc-lost\n{"keep_recent_count":0}\n${origin}`)
+          .digest("hex")
+        await fs.promises.mkdir(join(pendingDir, `${commitKey}_0.json`))
+        const manager = createMemorySessionManager({ config, pluginRoot: dir })
+
+        await assert.rejects(manager.commitSession("oc-lost"), /Failed to commit OpenViking session oc-lost/)
       })
     } finally {
       await new Promise((resolve) => server.close(resolve))

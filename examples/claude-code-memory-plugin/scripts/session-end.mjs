@@ -34,7 +34,14 @@ if (!isPluginEnabled()) {
 
 const baseCfg = loadConfig();
 const { log, logError } = createLogger("session-end");
-const fetchJSON = makeFetchJSON(baseCfg);
+// Not detached, the hook has 30s (hooks/hooks.json) for the catch-up, the lock
+// wait and health + commit; a commit that does not make it is queued and
+// replayed later.
+const inline = process.env.OV_HOOK_WORKER !== "1";
+const INLINE_CATCH_UP_WAIT_MS = 10_000;
+const INLINE_LOCK_WAIT_MS = 5_000;
+const INLINE_REQUEST_TIMEOUT_MS = 4_000;
+const fetchJSON = makeFetchJSON(inline ? { ...baseCfg, timeoutMs: INLINE_REQUEST_TIMEOUT_MS } : baseCfg);
 
 function approve() {
   process.stdout.write(JSON.stringify({ decision: "approve" }) + "\n");
@@ -65,11 +72,17 @@ async function main() {
     }
 
     const waitMs = 2 * cfg.captureTimeoutMs;
-    if (input.transcript_path) log("catch_up", await catchUpTranscript(raw, waitMs));
+    if (input.transcript_path) {
+      log("catch_up", await catchUpTranscript(raw, inline ? Math.min(waitMs, INLINE_CATCH_UP_WAIT_MS) : waitMs));
+    }
     const ran = await withAgentHookLock("claude-code", sessionId, async () => {
       await commitAtEnd(sessionId);
       return true;
-    }, { waitMs, staleMs: 60_000, heartbeatMs: 10_000 });
+    }, {
+      waitMs: inline ? Math.min(waitMs, INLINE_LOCK_WAIT_MS) : waitMs,
+      staleMs: 60_000,
+      heartbeatMs: 10_000,
+    });
     if (!ran) {
       log("lock", { reason: "a capture of this session is still running; committing without it", sessionId });
       await commitAtEnd(sessionId);

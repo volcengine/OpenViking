@@ -308,6 +308,39 @@ test("startDrainer is idempotent, stopDrainer is safe, and an invalid env falls 
   runtime.stopDrainer();
 });
 
+test("queued writes replay under the peer of the session that queued them", async () => {
+  const pendingDir = await mkdtemp(join(tmpdir(), "dsh-drain-peer-"));
+  tempDirs.push(pendingDir);
+  process.env.OPENVIKING_PENDING_DIR = pendingDir;
+
+  let healthy = false;
+  const replayed = [];
+  const down = { ok: false, status: 503, error: { message: "down" } };
+  const runtime = new OpenVikingRuntime({
+    async addMessage() {
+      return down;
+    },
+    async fetchJSON(path, _init, options) {
+      if (healthy) replayed.push([path.split("/").pop(), options?.actorPeerId]);
+      return healthy ? { ok: true } : down;
+    },
+    async healthResult() {
+      return healthy ? { ok: true } : down;
+    },
+  }, config(), { debug() {} }, cwd => ({ effectivePeer: { peerId: `peer-${cwd.split("/").pop()}` } }));
+  const session = { id: "peer-replay", header: { cwd: "/workspace/repo" } };
+  runtime.stateFor(session).ready = true;
+
+  runtime.capture(session, userEvent("Queued under the repo peer."));
+  await runtime.dispose(session);
+  assert.equal((await listPending()).length, 2);
+
+  healthy = true;
+  await runtime.drainTick();
+
+  assert.deepEqual(replayed, [["messages", "peer-repo"], ["commit", "peer-repo"]]);
+});
+
 function config() {
   return {
     explicitPeerId: "",

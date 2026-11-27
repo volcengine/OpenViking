@@ -32,8 +32,11 @@ Verified against Kimi Code CLI 0.43.1 and, for capture and the hook events below
   `tool_name`, in wire order. In a recorded 2.8.1 session (wire protocol 1.5)
   every `tool.call` carried `turnId`, every output was a string, a cancelled
   tool's result was the error `Interrupted by user`, and the plugin's MCP tools
-  were named `mcp__plugin-openviking-memory_openviking__<tool>`. A compaction
-  appends `context.apply_compaction` and leaves earlier records in place.
+  were named `mcp__plugin-openviking-memory_openviking__<tool>`; calls and
+  results go out as `mcp__openviking__<tool>`, the name the server recognises.
+  A compaction appends `context.apply_compaction` and leaves earlier records in
+  place; it can fire in the middle of a turn, so PreCompact leaves the last
+  assistant message to the next capture, which sends it whole.
 - A Stop sends the new turns, then reads the session and commits once its
   `pending_tokens` reach `commitTokenThreshold`, unless `serverAutoCommit`
   leaves that commit to OpenViking. Interrupt, SessionEnd and PreCompact

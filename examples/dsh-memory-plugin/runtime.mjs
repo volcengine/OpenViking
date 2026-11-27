@@ -32,6 +32,8 @@ export class OpenVikingRuntime {
     this.logger = logger;
     this.resolveSessionConfig = resolveSessionConfig;
     this.states = new Map();
+    // Outlives the session state: a write queued before dispose replays later.
+    this.sessionPeers = new Map();
     this.sessionConfigs = new WeakMap();
     this.drainTimer = null;
     this.drainRunning = false;
@@ -86,6 +88,7 @@ export class OpenVikingRuntime {
       disposing: null,
     };
     this.states.set(session.id, state);
+    this.sessionPeers.set(state.ovSessionId, peer.peerId);
     return state;
   }
 
@@ -431,7 +434,10 @@ export class OpenVikingRuntime {
   async replayPendingQueue(options = {}) {
     await replayPending(
       Object.assign(
-        (path, init) => this.client.fetchJSON(path, init, { timeoutMs: this.config.captureTimeoutMs }),
+        (path, init) => this.client.fetchJSON(path, init, {
+          timeoutMs: this.config.captureTimeoutMs,
+          actorPeerId: this.sessionPeers.get(replayedSessionId(path)),
+        }),
         { origin: this.client.fetchJSON?.origin },
       ),
       (stage, data) => this.log(stage, data),
@@ -507,6 +513,13 @@ export class OpenVikingRuntime {
   log(stage, data) {
     this.logger?.debug?.(`[openviking:dsh] ${stage} ${JSON.stringify(data)}`);
   }
+}
+
+// Queued entries carry no peer; sessions this process has not seen replay under
+// the client's default peer.
+function replayedSessionId(path) {
+  const match = /^\/api\/v1\/sessions\/([^/]+)\//.exec(path);
+  return match ? decodeURIComponent(match[1]) : undefined;
 }
 
 // The history the model keeps: a compaction replaces summarized messages here

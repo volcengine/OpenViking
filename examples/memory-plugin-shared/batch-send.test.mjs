@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -238,24 +237,20 @@ test("sendSessionMessages treats missing status failures as retryable", async ()
 });
 
 test("sendSessionMessages stops queueing at the first enqueue failure to keep the queued prefix contiguous", async () => {
-  await withPendingDir(async (dir) => {
-    // Poison the second payload's pending filename: the pre-created garbage
-    // file triggers EEXIST on write and defeats the dedup-recovery read, so
-    // enqueue reports ok:false for exactly that payload. Filename layout
-    // mirrors pending-queue.mjs makeDedupKey/pendingFilename.
-    const dedupKey = createHash("sha256")
-      .update("addMessage")
-      .update("\n")
-      .update("prefix-session")
-      .update("\n")
-      .update('{"content":"message-1","role":"user"}')
-      .digest("hex");
-    await writeFile(join(dir, `${dedupKey}_0.json`), "not json", "utf-8");
+  await withPendingDir(async () => {
+    // The second payload serializes for the batch request but not for the
+    // queue file, so enqueue reports ok:false for exactly that payload.
+    let serialized = 0;
+    const messages = payloads(3);
+    messages[1] = { ...messages[1], toJSON() {
+      if (++serialized > 1) throw new Error("not serializable");
+      return { role: "user", content: "message-1" };
+    } };
 
     const res = await sendSessionMessages(
       async () => ({ ok: false, status: 503, error: { message: "unavailable" } }),
       "prefix-session",
-      payloads(3),
+      messages,
       { enqueueOnRetryable: true },
     );
 
@@ -296,5 +291,60 @@ test("sendSessionMessages queues the remaining suffix after serial fallback fail
     assert.equal(res.queued, 3);
     assert.equal(res.failed, 0);
     assert.deepEqual(onSent, [1, 1]);
+  });
+});
+
+test("a 404 on the one-message route holds the rest for the caller instead of refusing it", async () => {
+  await withPendingDir(async () => {
+    const rejected = [];
+    const sent = [];
+    const res = await sendSessionMessages(
+      async (path, init) => {
+        if (path.endsWith("/messages/batch")) return { ok: false, status: 404, error: { message: "missing" } };
+        const { content } = parseBody(init);
+        if (content === "message-0") {
+          sent.push(content);
+          return { ok: true, status: 200, result: {} };
+        }
+        return { ok: false, status: 404, error: { code: "NOT_FOUND" } };
+      },
+      "gone",
+      payloads(3),
+      { enqueueOnRetryable: true, onRejected: (n) => rejected.push(n) },
+    );
+
+    assert.deepEqual(sent, ["message-0"]);
+    assert.equal(res.sent, 1);
+    assert.equal(res.retryLater, 2);
+    assert.equal(res.queued, 0);
+    assert.deepEqual(rejected, []);
+  });
+});
+
+test("without isolateRejected the serial fallback stops at the first refused message", async () => {
+  await withPendingDir(async () => {
+    const order = [];
+    const res = await sendSessionMessages(
+      async (path, init) => {
+        if (path.endsWith("/messages/batch")) return { ok: false, status: 405, error: { message: "no batch route" } };
+        const { content } = parseBody(init);
+        order.push(content);
+        return content === "message-1"
+          ? { ok: false, status: 422, error: { message: "invalid" } }
+          : { ok: true, status: 200, result: {} };
+      },
+      "strict",
+      payloads(4),
+      {
+        isolateRejected: false,
+        onSent: (n) => order.push(["sent", n]),
+        onRejected: (n) => order.push(["rejected", n]),
+      },
+    );
+
+    assert.deepEqual(order, ["message-0", ["sent", 1], "message-1", ["rejected", 3]]);
+    assert.equal(res.sent, 1);
+    assert.equal(res.failed, 3);
+    assert.equal(res.retryLater, 0);
   });
 });

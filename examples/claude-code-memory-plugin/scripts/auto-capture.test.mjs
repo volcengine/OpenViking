@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -123,6 +123,26 @@ test("failed non-retryable capture keeps the cursor for a later retry", async ()
       await readFile(join(root, ".openviking", "state", "cc-capture-state", `${sessionId}.json`), "utf-8"),
     );
     assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("turns refused for credentials are recorded as held, not failed", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-held-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  try {
+    await writeTranscript(transcriptPath);
+    await withMockOpenViking(async (req, res) => {
+      if (req.url === "/health") return writeJson(res, { status: "ok", result: { healthy: true } });
+      if (req.method === "POST") await readRequestBody(req);
+      writeJson(res, { status: "error", error: { code: "UNAUTHENTICATED" } }, 401);
+    }, async (baseUrl) => {
+      await runAutoCapture({ session_id: "held", transcript_path: transcriptPath, cwd: root }, hookEnv(root, baseUrl));
+    });
+    const capture = JSON.parse(await readFile(join(root, ".openviking", "state", "last-capture.json"), "utf-8"));
+    assert.equal(capture.turns_held, 2);
+    assert.equal(capture.turns_failed, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -693,7 +713,7 @@ test("a subagent stopping again pushes and commits only its new turns", async ()
   }
 });
 
-test("with assistant turns off only what the user wrote is sent; keyword mode leaves subagents out", async () => {
+test("with assistant turns off only what the user wrote is sent and subagents are left out, as in keyword mode", async () => {
   const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-user-only-"));
   const transcriptPath = join(root, "transcript.jsonl");
   const sent = [];
@@ -718,14 +738,15 @@ test("with assistant turns off only what the user wrote is sent; keyword mode le
       };
       await runAutoCapture({ session_id: "user-only", transcript_path: transcriptPath, cwd: root }, env);
       const subagent = { session_id: "user-only", agent_id: "child", agent_transcript_path: transcriptPath, cwd: root };
+      await runHook("subagent-start.mjs", subagent, env);
       await runHook("subagent-stop.mjs", subagent, env);
       await runHook("subagent-stop.mjs", { ...subagent, agent_id: "child-2" }, {
         ...hookEnv(root, baseUrl),
         OPENVIKING_CAPTURE_MODE: "keyword",
       });
     });
-    const userText = ["user", [{ type: "text", text: "read the large fixture please" }]];
-    assert.deepEqual(sent, [userText, userText]);
+    assert.deepEqual(sent, [["user", [{ type: "text", text: "read the large fixture please" }]]]);
+    await assert.rejects(readdir(join(root, ".openviking", "state", "cc-subagent-state")));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -792,6 +813,19 @@ test("Stop captures the whole final answer when only part of it is in the transc
       await readFile(join(root, ".openviking", "state", "cc-capture-state", "final-answer.json"), "utf-8"),
     );
     assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a later capture skips the final answer an earlier Stop took from the payload", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ov-cc-capture-final-late-"));
+  const transcriptPath = join(root, "transcript.jsonl");
+  try {
+    await writeFile(transcriptPath, question);
+    await captureFinalAnswer(root, transcriptPath, { last_assistant_message: "The server listens on 1933." });
+    await appendFile(transcriptPath, `\n${answer}\n${JSON.stringify({ role: "user", content: "thanks" })}`);
+    assert.deepEqual(await captureFinalAnswer(root, transcriptPath, {}), [["user", "thanks"]]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

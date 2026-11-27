@@ -569,13 +569,12 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
       })
       return { status: "accepted", result: res.result, traceId }
     }
-    if (res.deferred || res.pendingQueued) {
+    if (res.pendingQueued) {
       log("WARN", "session", res.deferred
         ? "Queued OpenViking session commit behind queued messages"
         : "Queued OpenViking session commit", {
         openviking_session: ovSessionId,
         reason,
-        queued: res.pendingQueued,
         trace_id: res.traceId,
         status: res.status,
       })
@@ -589,15 +588,16 @@ export function createMemorySessionManager({ config, pluginRoot, directory }) {
       })
       return { status: "not_found" }
     }
+    const unqueued = res.deferred && "it could not be queued behind the session's queued messages"
     log("ERROR", "session", "Failed to commit OpenViking session", {
       openviking_session: ovSessionId,
       reason,
       trace_id: res.traceId,
       status: res.status,
-      error: res.error?.message || res.error?.code,
+      error: unqueued || res.error?.message || res.error?.code,
     })
     throw new Error(
-      `Failed to commit OpenViking session ${ovSessionId}: ${res.error?.message || res.status}` +
+      `Failed to commit OpenViking session ${ovSessionId}: ${unqueued || res.error?.message || res.status}` +
       (res.traceId ? ` (trace_id=${res.traceId})` : ""),
     )
   }

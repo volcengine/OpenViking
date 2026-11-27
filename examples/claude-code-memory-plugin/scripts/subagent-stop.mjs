@@ -127,11 +127,13 @@ async function pushTurns(cfg, ovSessionId, turns, { peerId = null, enqueueOnly =
 // Write-path hook: gated by autoCapture so that disabling capture also
 // suppresses the subagent transcript push + commit, and by
 // skipSubagentSessions so subagent turns can be kept out of memory entirely.
-// Keyword mode keys on what the human wrote, and a subagent's prompt comes from
-// the parent agent, so that mode leaves subagent sessions out too.
+// A subagent's "user" text is the parent agent's prompt, not the human's, so
+// keyword mode and user-only capture (assistant turns off) leave subagent
+// sessions out too.
 const capturesSubagents = (cfg) => cfg.autoCapture
   && !cfg.skipSubagentSessions
-  && cfg.captureMode !== "keyword";
+  && cfg.captureMode !== "keyword"
+  && cfg.captureAssistantTurns;
 
 async function main() {
   // Runs against the hook's own directory, before the payload names the

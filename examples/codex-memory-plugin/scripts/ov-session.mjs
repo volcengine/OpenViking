@@ -95,7 +95,9 @@ export async function readTranscriptTurns(transcriptPath, cfg, logError) {
  * `shouldSend(newTurns)` lets a caller veto the send (keyword capture mode)
  * without disturbing the cursor.
  *
- * Returns `{ newTurns, added, ovSessionId, skipped, unreadable }`. `unreadable`
+ * Returns `{ newTurns, added, settled, ovSessionId, skipped, unreadable }`.
+ * `added` counts the turns sent; `settled` also counts turns the server
+ * refused for good, which the cursor passes over. `unreadable`
  * separates "the transcript is empty" from "the transcript could not be read":
  * committing on the latter would archive a session whose tail turns were never
  * seen, so callers must keep the session live instead.
@@ -136,7 +138,7 @@ export async function catchUpTurns({
       readable: ok,
       previouslyCaptured: state.capturedTurnCount,
     });
-    return { newTurns: [], added: 0, ovSessionId: "", unreadable: Boolean(transcriptPath) && !ok };
+    return { newTurns: [], added: 0, settled: 0, ovSessionId: "", unreadable: Boolean(transcriptPath) && !ok };
   }
 
   // Post-compact transcript-shrink defense: codex's /compact may rewrite or
@@ -159,11 +161,11 @@ export async function catchUpTurns({
     previouslyCaptured: state.capturedTurnCount,
     newTurns: newTurns.length,
   });
-  if (newTurns.length === 0) return { newTurns, added: 0, ovSessionId: "" };
+  if (newTurns.length === 0) return { newTurns, added: 0, settled: 0, ovSessionId: "" };
 
   if (shouldSend && !shouldSend(newTurns)) {
     log?.("skip", { stage: "capture_mode", reason: "keyword mode without capture trigger" });
-    return { newTurns, added: 0, ovSessionId: "", skipped: "capture_mode" };
+    return { newTurns, added: 0, settled: 0, ovSessionId: "", skipped: "capture_mode" };
   }
 
   // Only revive the OV session id when there is something to send; otherwise
@@ -171,7 +173,7 @@ export async function catchUpTurns({
   const ovSessionId = resolveOvSessionId(state);
   if (!ovSessionId) {
     logError?.("resolve_ov_session", "failed to derive OV session id");
-    return { newTurns, added: 0, ovSessionId: "" };
+    return { newTurns, added: 0, settled: 0, ovSessionId: "" };
   }
 
   const payloads = newTurns.map((turn) => {
@@ -182,7 +184,9 @@ export async function catchUpTurns({
 
   // A refused message is passed over like a sent one; the unsent tail stays
   // behind the cursor.
+  let settled = 0;
   const advance = async (n) => {
+    settled += n;
     state.capturedTurnCount += n;
     await saveState(state);
     await heartbeat?.();
@@ -193,5 +197,5 @@ export async function catchUpTurns({
     onSent: advance,
     onRejected: advance,
   });
-  return { newTurns, added: r.sent, ovSessionId };
+  return { newTurns, added: r.sent, settled, ovSessionId };
 }

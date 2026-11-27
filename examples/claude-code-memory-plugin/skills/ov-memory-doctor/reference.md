@@ -134,12 +134,14 @@ Hook log (`cc-hooks.log`) stages worth grepping: `health_check`
 `server_url`, `cc_session_id`, `ts`.
 
 `last-capture.json`: `turns_captured`, `turns_queued` (retryable, will replay),
-`turns_failed` (non-retryable, dropped), `pending_tokens` / `commit_threshold`,
+`turns_held` (refused credentials or missing session, kept and sent again at the
+next Stop), `turns_failed` (non-retryable, dropped), `pending_tokens` / `commit_threshold`,
 `commit_count`, `ov_session_id` (`cc-<claude session id>`), `ts`.
 
 Statusline: `OV ✓` = `/health` 200 within 1s (says nothing about auth);
 `OV ⚠ slow` = probe timed out; `OV ✗ offline` = refused/DNS/TLS/non-2xx;
-`OV ⚡ bypass` = bypass matched; `✗ N dropped` = `turns_failed`. Segments
+`OV ⚡ bypass` = bypass matched; `⏸ N held` = `turns_held`; `✗ N dropped` =
+`turns_failed`. Segments
 disappear after 30 minutes of inactivity — a bare `OV ✓` means idle, not broken.
 
 ## Local server (loopback url only)

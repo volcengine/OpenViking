@@ -541,6 +541,38 @@ test("a partial catch-up keeps the live session and the end marker instead of co
   }
 });
 
+test("a turn the server refuses for its content does not block the commit", async () => {
+  const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-refused-"));
+  const transcriptPath = join(stateDir, "transcript.jsonl");
+  const calls = [];
+  try {
+    await writeState(stateDir, "s12", { capturedTurnCount: 0 });
+    await writeTranscript(transcriptPath, 2);
+    const refuse = (res) => writeJson(res, { status: "error", error: { code: "INVALID_ARGUMENT" } }, 422);
+    await withMockOpenViking(async (req, res) => {
+      const url = new URL(req.url, "http://127.0.0.1");
+      const call = { method: req.method, path: url.pathname, body: null };
+      calls.push(call);
+      if (url.pathname === "/health") return writeJson(res, { status: "ok", result: { ok: true } });
+      if (url.pathname.endsWith("/messages/batch")) return refuse(res);
+      if (url.pathname.endsWith("/messages")) {
+        call.body = await readRequestBody(req);
+        return call.body.parts[0].text === "turn-0" ? refuse(res) : writeJson(res, { status: "ok", result: {} });
+      }
+      writeJson(res, { status: "ok", result: { archived: true } });
+    }, async (baseUrl) => {
+      await runSessionEnd({ session_id: "s12", transcript_path: transcriptPath }, workerEnv(baseUrl, stateDir));
+    });
+
+    assert.ok(calls.some((c) => c.path === "/api/v1/sessions/cx-s12/commit"));
+    const state = await readState(stateDir, "s12");
+    assert.equal(state.ovSessionId, null);
+    assert.equal(state.capturedTurnCount, 2);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("a worker whose end token no longer matches the marker does nothing", async () => {
   const stateDir = await mkdtemp(join(tmpdir(), "ov-session-end-superseded-"));
   const transcriptPath = join(stateDir, "transcript.jsonl");

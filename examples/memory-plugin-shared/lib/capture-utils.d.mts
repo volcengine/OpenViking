@@ -12,6 +12,6 @@ export function extractCaptureTurns(rolloutEntries: any[], cfg?: Record<string, 
   text: string;
   parts: any[];
 }>;
-export function sanitizeCapturedText(text: string): string;
+export function sanitizeCapturedText(text: string, options?: { role?: string }): string;
 
 export function isCaptureEnabled(cfg?: Record<string, any>): boolean;

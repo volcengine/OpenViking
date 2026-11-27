@@ -461,7 +461,7 @@ export function filterCaptureParts(parts, role, cfg = {}) {
 /** Sanitize already-extracted message parts before applying capture rules. */
 export function shapeCaptureParts(parts, role, cfg = {}) {
   const sanitized = (parts || []).map((part) => part?.type === "text"
-    ? { ...part, text: sanitizeCapturedText(part.text) }
+    ? { ...part, text: sanitizeCapturedText(part.text, { role }) }
     : part);
   return filterCaptureParts(sanitized, role, cfg);
 }
@@ -627,10 +627,10 @@ function stripInjectedDigestBlocks(text) {
   return out.join("\n");
 }
 
-// The usage footer a harness asks the model to append to its answer opens with
-// its summary line ("OpenViking · 2 sources · 1 read"). Everything from that
-// line to the end of the message is the plugin's report, not conversation.
-const USAGE_FOOTER_RE = /(?:^|\n)(?:[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*\n+)?[ \t>*_`]*OpenViking · \d+ sources?\b[\s\S]*$/;
+// The usage footer a harness asks the model to append to its answer: a summary
+// line ("OpenViking · 2 sources · 1 read"), optionally under a rule, and the
+// detail lines that follow it up to the next blank line.
+const USAGE_FOOTER_RE = /(?:^|\n)(?:[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*\n+)?[ \t>*_`]*OpenViking · \d+ sources?\b[^\n]*(?:\n[ \t]*\S[^\n]*)*/g;
 
 /**
  * Drop everything in a turn that the conversation did not put there.
@@ -638,9 +638,10 @@ const USAGE_FOOTER_RE = /(?:^|\n)(?:[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*\n+)?[ \t>
  * Recall injects a context block into the prompt, and the host adds notes of
  * its own; captured back unchanged, this turn's injection becomes next turn's
  * memory and the loop feeds on itself. Formatting the conversation did author
- * — newlines, code fences — survives.
+ * — newlines, code fences — survives. The usage footer is stripped only from
+ * an assistant's text (`role: "assistant"`); a user may paste one.
  */
-export function sanitizeCapturedText(text) {
+export function sanitizeCapturedText(text, { role } = {}) {
   let value = String(text || "");
   value = value
     .replace(/\u0000/g, "")
@@ -657,7 +658,7 @@ export function sanitizeCapturedText(text) {
   value = stripMetadataFences(value);
   value = stripInjectedDigestBlocks(value);
   value = value.replace(/^\s*More detail: use the OpenViking MCP .*$/gim, " ");
-  value = value.replace(USAGE_FOOTER_RE, "");
+  if (role === "assistant") value = value.replace(USAGE_FOOTER_RE, "");
   return value
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")

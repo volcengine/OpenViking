@@ -197,7 +197,7 @@ Recall covers skills as well as memories: the server-assembled context block can
 |----------------------------------------|--------------|--------------------------------------------------------------------------|
 | `OPENVIKING_AUTO_CAPTURE`              | `true`       | Enable auto-capture; also gates write hooks (PreCompact / SessionEnd / SubagentStop) |
 | `OPENVIKING_CAPTURE_MODE`              | `semantic`   | `semantic` (always capture) or `keyword`: a Stop sends its turns only when what the user wrote in them carries a trigger (an ask to remember, a preference, a personal fact). Subagent sessions are not captured in `keyword` mode, since their prompt comes from the parent agent, not from you |
-| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`       | Include assistant turns (text + tool I/O). Set to `0` to send only what the user wrote: no assistant text, tool calls or tool results, in subagent sessions too |
+| `OPENVIKING_CAPTURE_ASSISTANT_TURNS`   | `true`       | Include assistant turns (text + tool I/O). Set to `0` to send only what the user wrote: no assistant text, tool calls or tool results. Subagent sessions are then not captured, since what they hold as user text is the parent agent's prompt |
 | `OPENVIKING_AUTO_COMMIT_ON_COMPACT`    | `true`       | `PreCompact` commits the session before Claude Code compacts; `0` keeps the turn-in-progress capture and skips the commit |
 | `OPENVIKING_CAPTURE_TOOL_MAX_CHARS`    | `1000000`    | Guard cap on one tool part's `tool_output`; oversized output is externalized server-side |
 | `OPENVIKING_COMMIT_TOKEN_THRESHOLD`    | `100000`     | Pending-token threshold for client-driven commit                         |

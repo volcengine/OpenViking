@@ -130,10 +130,14 @@ test("a turn that is only a system reminder never reaches the extractor", () => 
 
 test("the usage footer an answer ends with is not part of the conversation", () => {
   const footer = "OpenViking · 2 sources · 1 read\n  viking://resources/a.md"
-  assert.equal(sanitizeCapturedText(`The answer.\n\n---\n${footer}`), "The answer.")
-  assert.equal(sanitizeCapturedText(`The answer.\n\n**${footer}`), "The answer.")
-  assert.equal(sanitizeCapturedText("OpenViking · 1 source"), "")
-  assert.equal(sanitizeCapturedText("mentions OpenViking · inline"), "mentions OpenViking · inline")
+  const assistant = { role: "assistant" }
+  assert.equal(sanitizeCapturedText(`The answer.\n\n---\n${footer}`, assistant), "The answer.")
+  assert.equal(sanitizeCapturedText(`The answer.\n\n**${footer}`, assistant), "The answer.")
+  assert.equal(sanitizeCapturedText(`The answer.\n\n${footer}\n\nA last word.`, assistant), "The answer.\n\nA last word.")
+  assert.equal(sanitizeCapturedText("OpenViking · 1 source", assistant), "")
+  assert.equal(sanitizeCapturedText("mentions OpenViking · inline", assistant), "mentions OpenViking · inline")
+  const pasted = `What does this mean?\n${footer}\nand this?`
+  assert.equal(buildCaptureMessage({ role: "user", content: pasted }, "user").parts[0].text, pasted)
 })
 
 test("findLastHumanTurnIndex skips tool results mapped onto the user role", () => {

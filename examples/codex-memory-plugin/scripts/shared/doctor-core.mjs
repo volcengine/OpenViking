@@ -321,6 +321,8 @@ export function unknownOvcliKeys(data) {
  */
 export const KNOWN_PLUGIN_KEYS = pluginConfigKeys();
 
+const RETIRED_PLUGIN_KEYS = new Set(["captureMaxLength", "captureToolResults", "commitKeepRecentCount"]);
+
 /** Nested objects in `plugin` are per-harness overrides, not knobs. */
 const PLUGIN_HARNESS_KEYS = HARNESS_CONFIG_KEYS;
 
@@ -341,7 +343,8 @@ function nearestKnownKey(key) {
 
 /**
  * Misspelled knobs inside `plugin`, and inside each per-harness override.
- * Each result carries the closest real key so the fix is one glance away.
+ * Each result carries the closest real key so the fix is one glance away, or
+ * `retired` for a knob the plugins no longer read.
  */
 export function unknownPluginKeys(plugin) {
   if (!plugin || typeof plugin !== "object" || Array.isArray(plugin)) return [];
@@ -353,7 +356,8 @@ export function unknownPluginKeys(plugin) {
         continue;
       }
       if (KNOWN_PLUGIN_KEYS.has(key)) continue;
-      found.push({ key: `plugin.${prefix}${key}`, suggestion: nearestKnownKey(key) });
+      if (RETIRED_PLUGIN_KEYS.has(key)) found.push({ key: `plugin.${prefix}${key}`, suggestion: "", retired: true });
+      else found.push({ key: `plugin.${prefix}${key}`, suggestion: nearestKnownKey(key) });
     }
   };
   walk(plugin, "");
@@ -1158,8 +1162,9 @@ export function inspectConfigFiles(report, { harness = "", launcherHint = "this 
     if (unknown.length) report.warn("ovcli.conf has keys nobody reads", unknown.join(", "), "typos such as apiKey/base_url/token are silently ignored — use url, api_key, account, user");
     // `plugin` is on the ovcli allowlist, so nothing inside it is checked
     // there — a misspelled knob would just sit doing nothing.
-    for (const { key: knob, suggestion } of unknownPluginKeys(conf.data.plugin)) {
-      report.warn(`ovcli.conf ${knob} is not a knob any plugin reads`, "", suggestion ? `did you mean ${suggestion}?` : "remove it, or check the plugin README for the knob you meant");
+    for (const { key: knob, suggestion, retired } of unknownPluginKeys(conf.data.plugin)) {
+      if (retired) report.warn(`ovcli.conf ${knob} is no longer used`, "", "remove it");
+      else report.warn(`ovcli.conf ${knob} is not a knob any plugin reads`, "", suggestion ? `did you mean ${suggestion}?` : "remove it, or check the plugin README for the knob you meant");
     }
     if (conf.data.extra_headers && Object.keys(conf.data.extra_headers).some((h) => /^x-api-key$/i.test(h))) {
       report.warn("ovcli.conf extra_headers sets X-API-Key", "the server prefers X-API-Key over Authorization: Bearer, so it shadows api_key");
