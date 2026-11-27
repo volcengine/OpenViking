@@ -25,6 +25,7 @@ from openviking.storage.ovpack.operations import (
     import_ovpack,
     restore_ovpack,
 )
+from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.storage.test_transfer_merge_binding import binding_fs as binding_fs
@@ -189,6 +190,7 @@ class FakeBackupVikingFS:
     def __init__(self) -> None:
         self.binary_files = {
             "viking://resources/README.md": b"hello",
+            "viking://agent/skills/shared/SKILL.md": b"# Shared skill",
             "viking://resources/.watch_tasks.json": b"{}",
             "viking://resources/.watch_tasks.json.bak": b"{}",
             "viking://resources/.watch_tasks.json.tmp": b"{}",
@@ -261,6 +263,12 @@ class FakeBackupVikingFS:
                     "isDir": False,
                     "size": 23,
                 },
+            ]
+        if uri == "viking://agent":
+            return [
+                {"rel_path": "skills", "isDir": True, "size": 0},
+                {"rel_path": "skills/shared", "isDir": True, "size": 0},
+                {"rel_path": "skills/shared/SKILL.md", "isDir": False, "size": 14},
             ]
         return []
 
@@ -668,6 +676,7 @@ async def test_backup_restore_contract(
 
     manifest_paths = {entry["path"] for entry in manifest["entries"]}
     assert "openviking-backup/files/resources/README.md" in names
+    assert "openviking-backup/files/agent/skills/shared/SKILL.md" in names
     assert "openviking-backup/files/user/resources/sessions/sess_1/.meta.json" in names
     assert "openviking-backup/files/resources/.watch_tasks.json" not in names
     assert "openviking-backup/files/resources/.watch_tasks.json.bak" not in names
@@ -682,7 +691,7 @@ async def test_backup_restore_contract(
         "scope": "root",
         "package_type": "backup",
     }
-    assert manifest["scopes"] == ["resources", "user"]
+    assert manifest["scopes"] == ["resources", "user", "agent"]
     user_entries = {
         entry["path"]: entry
         for entry in manifest["entries"]
@@ -716,15 +725,17 @@ async def test_backup_restore_contract(
     )
     assert fake_fs.written_files == [
         "viking://resources/README.md",
+        "viking://agent/skills/shared/SKILL.md",
         "viking://user/resources/sessions/sess_1/.meta.json",
     ]
     fake_fs.rm.assert_not_awaited()
     assert all(ctx.role == Role.ROOT for ctx in fake_fs.write_contexts)
     assert [uri for uri, _ in vectorization_calls] == [
         "viking://resources",
+        "viking://agent",
         "viking://user/resources",
     ]
-    user_vector_ctx = vectorization_calls[1][1]
+    user_vector_ctx = vectorization_calls[2][1]
     assert user_vector_ctx.user.user_id == "resources"
     assert user_vector_ctx.role == Role.ROOT
     assert "viking://user" not in fake_fs.created_dirs
@@ -792,14 +803,15 @@ async def test_restore_ovpack_applies_backup_manifest_scalar_metadata(
 
     await restore_ovpack(FakeRestoreVectorVikingFS(), str(temp_ovpack_path), request_ctx)
 
-    assert len(vectorized_files) == 1
-    assert vectorized_files[0]["file_path"] == "viking://resources/README.md"
-    assert vectorized_files[0]["summary_dict"] == {
+    (readme,) = (
+        call for call in vectorized_files if call["file_path"] == "viking://resources/README.md"
+    )
+    assert readme["summary_dict"] == {
         "name": "README.md",
         "summary": "portable summary",
     }
-    assert vectorized_files[0]["scalar_override"]["tags"] == ["portable"]
-    assert vectorized_files[0]["scalar_override"]["md5"] == "portable-md5"
+    assert readme["scalar_override"]["tags"] == ["portable"]
+    assert readme["scalar_override"]["md5"] == "portable-md5"
 
 
 @pytest.mark.asyncio
@@ -856,13 +868,9 @@ async def test_ovpack_roundtrips_dot_and_escaped_looking_user_paths(
     request_ctx: RequestContext,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    async def noop_vectorization(*args, **kwargs):
-        return None
-
-    monkeypatch.setattr(
-        "openviking.storage.ovpack.operations._enqueue_direct_vectorization",
-        noop_vectorization,
-    )
+    vectorize_file = AsyncMock()
+    monkeypatch.setattr("openviking.storage.ovpack.operations.vectorize_file", vectorize_file)
+    monkeypatch.setattr("openviking.storage.ovpack.operations.vectorize_directory_meta", AsyncMock())
 
     await export_ovpack(
         ReservedPathExportVikingFS(),
@@ -882,6 +890,11 @@ async def test_ovpack_roundtrips_dot_and_escaped_looking_user_paths(
     assert {".ovpack", ".ovpack/foo.txt", ".notes.txt", "_._notes.txt"} <= manifest_paths
 
     fake_fs = FakeVikingFS()
+    fake_fs.tree = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: [
+            {"uri": uri, "isDir": False} for uri in fake_fs.written_files
+        ]
+    )
     await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources/imported", request_ctx)
 
     assert fake_fs.written_files == [
@@ -889,6 +902,10 @@ async def test_ovpack_roundtrips_dot_and_escaped_looking_user_paths(
         "viking://resources/imported/demo/.notes.txt",
         "viking://resources/imported/demo/_._notes.txt",
     ]
+    assert {call.kwargs["file_path"] for call in vectorize_file.await_args_list} == {
+        "viking://resources/imported/demo/.ovpack/foo.txt",
+        "viking://resources/imported/demo/_._notes.txt",
+    }
 
 
 @pytest.mark.asyncio
@@ -1138,37 +1155,23 @@ async def test_import_ovpack_rejects_legacy_session_scope(
 async def test_import_top_level_scope_package_requires_root_target(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
-    manifest = _manifest_for_files("resources", {"README.md": "hello"})
-    manifest["root"] = {
-        "name": "resources",
-        "uri": "viking://resources",
-        "scope": "resources",
-    }
-    _write_ovpack_with_manifest(
-        temp_ovpack_path,
-        "resources",
-        {"README.md": "hello"},
-        manifest=manifest,
-    )
-    fake_fs = FakeVikingFS()
+    files = {"README.md": "hello"}
+    for scope in ("resources", "agent"):
+        uri = f"viking://{scope}"
+        manifest = _manifest_for_files(scope, files)
+        manifest["root"] = {"name": scope, "uri": uri, "scope": scope}
+        _write_ovpack_with_manifest(temp_ovpack_path, scope, files, manifest=manifest)
+        fake_fs = FakeVikingFS()
 
-    with pytest.raises(InvalidArgumentError, match=r"must be imported to viking://"):
-        await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx)
+        with pytest.raises(InvalidArgumentError, match=r"must be imported to viking://"):
+            await import_ovpack(fake_fs, str(temp_ovpack_path), uri, request_ctx)
 
-    assert await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://", request_ctx) == (
-        "viking://resources"
-    )
+        assert await import_ovpack(fake_fs, str(temp_ovpack_path), "viking://", request_ctx) == uri
+        assert fake_fs.written_files == [f"{uri}/README.md"]
 
-    _write_ovpack_with_manifest(
-        temp_ovpack_path,
-        "renamed",
-        {"README.md": "hello"},
-        manifest=manifest,
-    )
-    with pytest.raises(InvalidArgumentError, match=r"root name does not match zip root"):
-        await import_ovpack(
-            FakeVikingFS(), str(temp_ovpack_path), "viking://resources", request_ctx
-        )
+        _write_ovpack_with_manifest(temp_ovpack_path, "renamed", files, manifest=manifest)
+        with pytest.raises(InvalidArgumentError, match=r"root name does not match zip root"):
+            await import_ovpack(FakeVikingFS(), str(temp_ovpack_path), uri, request_ctx)
 
 
 async def _restricted_pack_source(indexed_fs):
@@ -1209,33 +1212,88 @@ async def _restricted_pack_source(indexed_fs):
 
 @pytest.mark.asyncio
 async def test_account_backup_includes_restricted_originals_without_crossing_accounts(
-    indexed_fs, tmp_path
+    indexed_fs, tmp_path, monkeypatch
 ):
     fs, admin, reader, outsider, original = await _restricted_pack_source(indexed_fs)
-    peer_uri = "viking://user/reader/memories/notes.md"
-    await fs.write_file_bytes(peer_uri, b"same-account private notes", ctx=reader)
+    _, backend = indexed_fs
+    user_root = "viking://user/reader"
+    file_only = {
+        "settings/user_config.json": b"{}",
+        "privacy/example/current.json": b"{}",
+        "privacy/example/.abstract.md": b"Privacy description",
+        "GLOBAL_POLICY.md": (SYSTEM_ASSETS_DIR / "user" / "GLOBAL_POLICY.md").read_bytes(),
+        "skills/.skill-history/runbook.json": b'{"events": []}',
+        "memories/soul.md": b"Agent instructions",
+        "memories/preferences/example/.abstract.md": b"Memory summary",
+        "memories/preferences/example/.overview.md": b"Memory overview",
+    }
+    for path, content in file_only.items():
+        await fs.write_file_bytes(f"{user_root}/{path}", content, ctx=reader)
+    memory_uri = f"{user_root}/memories/preferences/example/notes.md"
+    await fs.write_file_bytes(memory_uri, b"same-account private notes", ctx=reader)
     other_admin = RequestContext(user=UserIdentifier("other", "admin"), role=Role.ADMIN)
     other_uri = "viking://resources/other-account-only.md"
     await fs.write_file_bytes(other_uri, b"other-account content", ctx=other_admin)
-    pack = PackService(fs)
+    pack = PackService(fs, vector_store=backend, vector_config_resolver=FakeVectorStore())
     archive = tmp_path / "account.ovpack"
 
     with pytest.raises(PermissionDeniedError):
-        await pack.backup_ovpack(str(archive), ctx=reader)
+        await pack.backup_ovpack(str(archive), ctx=reader, include_vectors=True)
     assert not archive.exists()
-    await pack.backup_ovpack(str(archive), ctx=admin)
+    with pytest.raises(
+        InvalidArgumentError, match="incomplete OpenViking vector index snapshot"
+    ) as exc:
+        await pack.backup_ovpack(str(archive), ctx=admin, include_vectors=True)
+    assert exc.value.details["missing_record_count"] == 1
+    assert exc.value.details["missing_records"] == [
+        "user/reader/memories/preferences/example/notes.md#level=2"
+    ]
+    await backend.upsert(
+        {"id": memory_uri, "uri": memory_uri, "level": 2, "vector": [0.1, 0.2, 0.3, 0.4]},
+        ctx=reader,
+    )
+    await pack.backup_ovpack(str(archive), ctx=admin, include_vectors=True)
 
     with zipfile.ZipFile(archive) as zf:
         prefix = "openviking-backup/files/"
         assert zf.read(prefix + "resources/repo/nested/guide.md") == await fs.read_file_bytes(
             original, ctx=admin
         )
-        assert zf.read(prefix + "user/reader/memories/notes.md") == b"same-account private notes"
+        for path, content in file_only.items():
+            assert zf.read(f"{prefix}user/reader/{path}") == content
+        memory = "user/reader/memories/preferences/example/notes.md"
+        assert zf.read(prefix + memory) == b"same-account private notes"
+        records = [
+            json.loads(line)
+            for line in zf.read("openviking-backup/_ovpack/index_records.jsonl").splitlines()
+        ]
+        assert any(record["path"] == memory and record["vector"]["dense"] for record in records)
         assert prefix + "resources/other-account-only.md" not in zf.namelist()
         assert all(zf.read(name) != b"other-account content" for name in zf.namelist())
     assert await fs.read_file_bytes(other_uri, ctx=other_admin) == b"other-account content"
     with pytest.raises(PermissionDeniedError):
         await fs.read_file_bytes(original, ctx=outsider)
+
+    vectorize_file = AsyncMock()
+    vectorize_directory = AsyncMock()
+    monkeypatch.setattr("openviking.storage.ovpack.operations.vectorize_file", vectorize_file)
+    monkeypatch.setattr(
+        "openviking.storage.ovpack.operations.vectorize_directory_meta", vectorize_directory
+    )
+    await pack.restore_ovpack(
+        str(archive), ctx=other_admin, on_conflict="overwrite", vector_mode="recompute"
+    )
+
+    target_reader = RequestContext(user=UserIdentifier("other", "reader"), role=Role.USER)
+    for path in ("settings/user_config.json", "GLOBAL_POLICY.md"):
+        assert await fs.read_file_bytes(f"{user_root}/{path}", ctx=target_reader) == file_only[path]
+    assert {call.kwargs["file_path"] for call in vectorize_file.await_args_list} == {
+        original,
+        memory_uri,
+    }
+    recomputed_directories = {call.args[0] for call in vectorize_directory.await_args_list}
+    assert f"{user_root}/memories/preferences/example" in recomputed_directories
+    assert f"{user_root}/privacy/example" not in recomputed_directories
 
 
 @pytest.mark.asyncio
@@ -1270,5 +1328,7 @@ async def test_account_restore_overwrites_original_beneath_existing_restricted_r
     assert await fs.read_file_bytes(original, ctx=reader) == b"# Current operating guide\n"
     with pytest.raises(PermissionDeniedError):
         await fs.read_file_bytes(original, ctx=outsider)
-    enqueue.assert_awaited_once()
-    assert enqueue.call_args.args[1] == "viking://resources"
+    assert {call.args[1] for call in enqueue.await_args_list} == {
+        "viking://resources",
+        "viking://agent",
+    }
