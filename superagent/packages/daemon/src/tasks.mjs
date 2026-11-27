@@ -1838,17 +1838,21 @@ export class TaskManager {
     };
   }
 
-  overview({ recent = 5 } = {}) {
-    const live = this.db.prepare(`SELECT * FROM tasks WHERE status NOT IN ${ENDED_SQL}
-      ORDER BY created_at_ms`).all();
-    const ended = this.db.prepare(`SELECT * FROM tasks WHERE status IN ${ENDED_SQL}
-      ORDER BY ended_at_ms DESC LIMIT ?`).all(recent);
+  // chatId scopes the view to the tasks asked in one conversation, as a group
+  // may only see its own; without it the view is the whole instance (owner).
+  overview({ recent = 5, chatId = null } = {}) {
+    const scope = chatId ? ' AND origin_chat = ?' : '';
+    const scopeArgs = chatId ? [chatId] : [];
+    const live = this.db.prepare(`SELECT * FROM tasks WHERE status NOT IN ${ENDED_SQL}${scope}
+      ORDER BY created_at_ms`).all(...scopeArgs);
+    const ended = this.db.prepare(`SELECT * FROM tasks WHERE status IN ${ENDED_SQL}${scope}
+      ORDER BY ended_at_ms DESC LIMIT ?`).all(...scopeArgs, recent);
     const reserved = [...this.running.values()].filter((slot) => slot.reserved).length;
     const { slots, reservedSlots } = this.limits();
     return {
       live: live.map((task) => this.facts(task)),
       ended: ended.map((task) => this.facts(task)),
-      total: Number(this.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n),
+      total: Number(this.db.prepare(`SELECT COUNT(*) AS n FROM tasks${chatId ? ' WHERE origin_chat = ?' : ''}`).get(...scopeArgs).n),
       slots: { used: this.running.size - reserved, of: slots, reserved, reservedOf: reservedSlots },
       disk: this.disk,
       dormantDays: this.dormantDays(),

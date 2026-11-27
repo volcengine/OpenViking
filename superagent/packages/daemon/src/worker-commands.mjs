@@ -33,6 +33,7 @@ const RESET = new Set(['default', '默认']);
 const SLOTS_USAGE = `用法：/workers slots <1-${MAX_WORKER_SLOTS}> [跟进预留 0-${MAX_WORKER_SLOTS}] · /workers slots default`;
 const SLOTS_EFFECT = '调高后排队中的任务立即开跑；调低不打断正在跑的轮次，它们跑完后自然降到新值。';
 const VERBS = ['runtime', 'model', 'effort', 'fallback', 'slots'];
+const GROUP_ONLY = 'worker 的 Runtime、模型和槽位设置只能在私聊里改；群里可以用 /workers 看占用情况。';
 
 // A count typed by the owner: whole digits only, so "6x" is refused.
 const count = (value) => (/^\d+$/.test(String(value ?? '')) ? Number.parseInt(value, 10) : NaN);
@@ -231,7 +232,24 @@ function fallbackCommand(settings, arg) {
   return { ok: true, text: `worker 的备用 Runtime 已设为 ${named.runtime}。` };
 }
 
-export async function executeWorkersCommand(command, { event, connectors, settings, tasks, router = null, now = Date.now() }) {
+// What a group sees: how many workers are busy, queued or waiting, never the
+// runtimes, models, fallbacks or slot configuration behind them.
+function publicWorkersOverview(tasks) {
+  const { live } = tasks.overview({ recent: 0 });
+  const count = (status) => live.filter((task) => task.status === status).length;
+  const parts = [`${count('running')} 个在忙`];
+  if (count('queued')) parts.push(`${count('queued')} 个排队`);
+  if (count('waiting')) parts.push(`${count('waiting')} 个等回复`);
+  return [`后台 worker：${parts.join('，')}`, `进行中的任务：${live.length} 个`].join('\n');
+}
+
+export async function executeWorkersCommand(command, { event, connectors, settings, tasks, router = null, now = Date.now(), publicView = false }) {
+  if (publicView) {
+    if (event?.chatType !== 'group') return { ok: false, text: GROUP_ONLY };
+    if (String(command.arg ?? '').trim()) return { ok: false, text: GROUP_ONLY };
+    if (!tasks) return { ok: true, text: '这个实例没有启用后台 worker。' };
+    return { ok: true, text: publicWorkersOverview(tasks) };
+  }
   if (event?.chatType !== 'p2p' || event.senderType !== 'user' || !connectors?.isOwner?.(event)) {
     return { ok: false, text: '仅限已绑定的 owner 在与机器人的私聊中使用 /workers。' };
   }

@@ -555,21 +555,27 @@ export class PersonalAgentDaemon {
 
   async runCommand(command, event, inbound, label) {
     let outcome;
+    // A group may ask only the read-only questions; executeCommand refuses the
+    // rest before touching the runtime. Its answers carry no runtime, model,
+    // slot or disk detail, and /tasks is scoped to the group it was asked in.
+    const publicView = event.chatType === 'group';
     try {
       outcome = await executeCommand(command, this.agentRuntime, {
+        publicView,
         primary: (parsed) => executePrimaryCommand(parsed, {
           event, config: this.config, connectors: this.connectors,
         }),
-        tasks: (parsed) => executeTasksCommand(parsed, { event, connectors: this.connectors, tasks: this.tasks }),
+        tasks: (parsed) => executeTasksCommand(parsed, { event, connectors: this.connectors, tasks: this.tasks, publicView }),
         workers: (parsed) => executeWorkersCommand(parsed, {
-          event, connectors: this.connectors, settings: this.workerSettings ?? null, tasks: this.tasks, router: this.agentRuntime,
+          event, connectors: this.connectors, settings: this.workerSettings ?? null, tasks: this.tasks, router: this.agentRuntime, publicView,
         }),
-        statusExtra: () => [workerStatusLine(this.workerSettings ?? null), taskStatusLine(this.tasks)].filter(Boolean).join('\n'),
+        statusExtra: () => (publicView ? taskStatusLine(this.tasks, { chatId: event.chatId }) : [workerStatusLine(this.workerSettings ?? null), taskStatusLine(this.tasks)].filter(Boolean).join('\n')),
         // On Lark /runtime and /status answer with a card too (settings-card.mjs).
-        // The workers' settings are the owner's to change, as with /workers.
-        runtimeCard: async (snapshot) => settingsCard({ snapshot: await settingsModels(snapshot, [snapshot.runtime, this.workerSettings?.preferred()], this.config), settings: this.connectors.isOwner(event) ? this.workerSettings ?? null : null,
+        // The workers' settings are the owner's to change, as with /workers, and
+        // neither card belongs in a group.
+        runtimeCard: publicView ? null : async (snapshot) => settingsCard({ snapshot: await settingsModels(snapshot, [snapshot.runtime, this.workerSettings?.preferred()], this.config), settings: this.connectors.isOwner(event) ? this.workerSettings ?? null : null,
           saved: (runtime) => this.routerSaved(runtime) }),
-        statusCard: (snapshot) => statusCard({ ...statusHeadline(snapshot), snapshot, settings: this.workerSettings ?? null,
+        statusCard: publicView ? null : (snapshot) => statusCard({ ...statusHeadline(snapshot), snapshot, settings: this.workerSettings ?? null,
           tasksLine: taskStatusLine(this.tasks), slots: this.tasks?.overview({ recent: 0 }).slots ?? null }),
       });
     } catch (error) {

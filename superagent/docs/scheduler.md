@@ -660,6 +660,8 @@ became of it (`command_card_refresh`). The owner stops a task with
 at work. `/workers` shows and sets what workers run on (see Runtime, model and
 effort, and Slots). The Core answers these without the model.
 
+A group gets a read-only part of the same view. A line that @mentions the bot may run `/tasks`, which lists only the tasks asked in that group (live, waiting, recently ended and dormant) with state, title, requester and whether the latest result was sent, and `/workers`, which counts workers busy, queued and waiting. The group view carries no slot or disk counts, where a task was asked, router notes, task directories, runtimes, models or delivery mechanics; it cannot open a task, stop one, or change a setting. Those, and every command that changes the session or an instance setting, stay in the owner's direct chat.
+
 Activities: `task.created` (with `parent`), `task.reopened` (round, the
 status it had, what it found of its directory and session),
 `task.turn_started`, `task.turn_completed` (with usage), `task.reported`,

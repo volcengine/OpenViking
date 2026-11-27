@@ -121,19 +121,30 @@ describe('commandCandidate', () => {
     assert.equal(commandCandidate(chatEvent({ chatType: 'p2p', content: '普通消息', mentions: [] })), '普通消息');
   });
 
-  it('never accepts slash commands in group chats, mentioned or not', () => {
-    assert.equal(commandCandidate(chatEvent({ chatType: 'group', content: '/help', mentions: [] })), null);
-    assert.equal(commandCandidate(chatEvent({ chatType: 'group', content: '/help' })), null);
-    assert.equal(commandCandidate(chatEvent({ chatType: 'group', content: '/primary' })), null);
-    const mentions = [{ key: '@_user_1', name: 'Alpha', id: 'ou_bot12345678' }];
-    assert.equal(
-      commandCandidate(chatEvent({ chatType: 'group', content: '@_user_1 /new', mentions })),
-      null,
-    );
-    assert.equal(
-      commandCandidate(chatEvent({ chatType: 'group', content: '/model gpt-5.5 @_user_1', mentions })),
-      null,
-    );
+  it('takes a group command only from a line that calls the bot itself', () => {
+    const me = { key: '@_user_1', name: 'Alpha', id: 'ou_bot12345678' };
+    const other = { key: '@_user_2', name: 'Bob', id: 'ou_bob' };
+    const group = (content, mentions, fields = {}) => chatEvent({ chatType: 'group', content, mentions, ...fields });
+    assert.equal(commandCandidate(group('@_user_1 /help', [me]), { mention: 'me' }), '/help');
+    assert.equal(commandCandidate(group('@_user_1 /tasks t3', [me]), { mention: 'me' }), '/tasks t3');
+    assert.equal(commandCandidate(group('/tasks @_user_1', [me]), { mention: 'me' }), '/tasks');
+    assert.equal(commandCandidate(group('\u200b@_user_1 /tasks', [me]), { mention: 'me' }), '/tasks', 'Lark puts a zero-width space before a mention');
+    // Someone else's line, or one that calls both, is not the bot's command.
+    assert.equal(commandCandidate(group('@_user_2 /help', [other]), { mention: 'other' }), null);
+    assert.equal(commandCandidate(group('@_user_1 @_user_2 /help', [me, other]), { mention: 'mixed' }), null);
+    // No mention, or a Connector that cannot say whether the bot was called.
+    assert.equal(commandCandidate(group('/help', []), { mention: null }), null);
+    assert.equal(commandCandidate(group('@_user_1 /help', [me])), null);
+    // Another bot's line never runs a command.
+    assert.equal(commandCandidate(group('@_user_1 /help', [me], { senderType: 'bot' }), { mention: 'me' }), null);
+    // Ordinary text that calls the bot stays a message, so it can still be an
+    // approval reply or reach the model.
+    assert.equal(commandCandidate(group('@_user_1 你好', [me]), { mention: 'me' }), null);
+    assert.equal(commandCandidate(group('@_user_1 发送 1', [me]), { mention: 'me' }), null);
+    // Writes are recognised here too; the command layer refuses them outside a
+    // direct chat before they can change anything.
+    assert.equal(commandCandidate(group('@_user_1 /new', [me]), { mention: 'me' }), '/new');
+    assert.equal(commandCandidate(group('@_user_1 /model gpt-5.5', [me]), { mention: 'me' }), '/model gpt-5.5');
   });
 });
 
@@ -158,6 +169,7 @@ describe('commandCandidate on a card', () => {
       assert.equal(commandCandidate(choice({ superagent_command: '/tasks', arg, refresh: true })), null, String(arg));
     }
     assert.equal(commandCandidate(choice({ superagent_command: '/new', arg: '', refresh: true })), null);
+    // Groups get the text view, not a card with buttons that can run commands.
     assert.equal(commandCandidate(choice({ superagent_command: '/tasks', arg: '', refresh: true }, { chatType: 'group' })), null);
   });
 });
@@ -481,5 +493,41 @@ describe('executeCommand', () => {
     assert.match(outcome.text, /未知命令：\/foo/);
     assert.match(outcome.text, /可用命令/);
     assert.equal(codex.calls.length, 0);
+  });
+});
+
+describe('executeCommand in a group', () => {
+  it('answers /help and /status without naming the runtime, model or session', async () => {
+    const codex = fakeCodex({ model: 'gpt-5.5' });
+    const help = await executeCommand(parseCommand('/help'), codex, { publicView: true });
+    assert.equal(help.ok, true);
+    assert.match(help.text, /群里可用的只读命令/);
+    assert.match(help.text, /\/tasks — 查看这个群里的后台任务/);
+    assert.doesNotMatch(help.text, /Runtime|模型：|gpt|当前会话/);
+
+    const status = await executeCommand(parseCommand('/status'), codex, {
+      publicView: true, statusExtra: () => '后台任务：运行中 1（/tasks 查看）',
+    });
+    assert.equal(status.text, '状态：空闲\n后台任务：运行中 1（/tasks 查看）');
+    assert.equal(status.card, undefined, 'no settings card in a group');
+
+    const offline = fakeCodex({
+      state: { connected: false, activeTurn: 0, queued: 0 },
+      workStatus: { working: false, startedAtMs: null, connected: false, queued: 0, switching: false },
+    });
+    const down = await executeCommand(parseCommand('/status'), offline, { publicView: true });
+    assert.equal(down.text, '状态：暂时没连上');
+  });
+
+  it('refuses every command that changes the session or a setting, before touching the runtime', async () => {
+    const codex = fakeCodex({ model: 'gpt-5.5' });
+    for (const line of ['/new', '/runtime codex', '/model gpt-5.5', '/effort high', '/primary', '/primary status']) {
+      const outcome = await executeCommand(parseCommand(line), codex, { publicView: true });
+      assert.equal(outcome.ok, false, line);
+      assert.match(outcome.text, /^群里只能用 \/help、\/status、\/tasks、\/workers/, line);
+    }
+    const unknown = await executeCommand(parseCommand('/foo'), codex, { publicView: true });
+    assert.match(unknown.text, /^未知命令：\/foo\n\n群里只能用/);
+    assert.deepEqual(codex.calls, []);
   });
 });

@@ -221,3 +221,56 @@ describe('/tasks', () => {
     assert.match(status.text, /^状态：空闲\n[\s\S]*\n后台任务：运行中 1（\/tasks 查看）$/);
   });
 });
+
+describe('/tasks in a group', () => {
+  const GROUP = { chatType: 'group', chatId: 'oc_group', senderType: 'user', senderId: 'ou_alice' };
+  const ask = (tasks, event, arg = '') => executeTasksCommand({ name: 'tasks', arg }, { event, connectors, tasks, publicView: true });
+
+  it('lists only the tasks asked in that group, without instance or delivery detail', async (t) => {
+    const { tasks, turns, row, run } = setup(t);
+    tasks.create({ rows: [row({ content: '本群任务' })], title: '本群的任务', requester: 'Alice', runtime: 'pi' });
+    tasks.create({ rows: [row({ chat_id: 'oc_other', scope_key: 'lark:oc_other:omt_1', message_id: 'om_other1', content: '别的群任务' })],
+      title: '别的群的任务', requester: 'Bob', runtime: 'pi' });
+    tasks.create({ rows: [row({ chat_id: 'oc_dm', chat_type: 'p2p', scope_key: 'lark:oc_dm', thread_id: null, message_id: 'om_dm1', content: '私聊任务' })],
+      title: '私聊的任务', requester: 'Carol', runtime: 'pi' });
+    turns.forEach((turn) => turn.finish({ text: '' }));
+    await settle();
+
+    const listed = await ask(tasks, GROUP);
+    assert.equal(listed.ok, true);
+    assert.match(listed.text, /^本群的后台任务：/);
+    assert.match(listed.text, /「本群的任务」Alice/);
+    assert.doesNotMatch(listed.text, /别的群的任务|私聊的任务/);
+    assert.match(listed.text, /共 1 个/);
+    assert.doesNotMatch(listed.text, /worker 槽位|任务目录|任务目录占用|Runtime|模型|用法：\/tasks/);
+    // The owner still sees every chat's tasks.
+    assert.match(run('').text, /别的群的任务/);
+    assert.match(run('').text, /私聊的任务/);
+  });
+
+  it('does not open a task or stop one from a group', async (t) => {
+    const { tasks, row } = setup(t);
+    tasks.create({ rows: [row({ content: '本群任务' })], title: '本群的任务', requester: 'Alice', runtime: 'pi' });
+    for (const arg of ['t1', 'stop t1', 'stop t1 不需要了']) {
+      const refused = await ask(tasks, GROUP, arg);
+      assert.equal(refused.ok, false, arg);
+      assert.match(refused.text, /^任务详情和停止任务只能在私聊里用/);
+    }
+    assert.equal(tasks.isLive(tasks.get('t1')), true);
+  });
+
+  it('says so when the instance has no worker scheduler', async (t) => {
+    assert.match((await ask(null, GROUP)).text, /^这个实例没有启用后台任务。$/);
+  });
+});
+
+describe('/status in a group', () => {
+  it('counts only this group, while the owner keeps the whole instance', async (t) => {
+    const { tasks, row } = setup(t);
+    tasks.create({ rows: [row({ content: '本群任务' })], title: '本群的任务', requester: 'Alice', runtime: 'pi' });
+    tasks.create({ rows: [row({ chat_id: 'oc_other', scope_key: 'lark:oc_other:omt_1', message_id: 'om_other1', content: '别的群任务' })],
+      title: '别的群的任务', requester: 'Bob', runtime: 'pi' });
+    assert.equal(taskStatusLine(tasks, { chatId: 'oc_group' }), '本群后台任务：运行中 1（/tasks 查看）');
+    assert.equal(taskStatusLine(tasks), '后台任务：运行中 2（/tasks 查看）');
+  });
+});
