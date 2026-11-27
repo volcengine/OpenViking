@@ -86,6 +86,9 @@ class PgvectorCollection(OpenGaussCollection):
         qualified_index = f"{_quote_identifier('public')}.{_quote_identifier(index)}"
         options = self._filtered_knn_options.model_dump()
         options["search_width"] = max(options["search_width"], budget)
+        normalized_filter = self._normalize_filter_date_times(filters)
+        # The extension accepts SQL NULL, but JSON null is not a filter AST.
+        filter_json = None if normalized_filter is None else json.dumps(normalized_filter)
         return [
             f"dense_envelope AS MATERIALIZED (SELECT {schema}.ov_filtered_knn("
             "%s::regclass, %s::vector, %s::jsonb, %s::integer, %s::jsonb) AS body)",
@@ -95,7 +98,7 @@ class PgvectorCollection(OpenGaussCollection):
         ], [
             qualified_index,
             vector_text,
-            json.dumps(self._normalize_filter_date_times(filters)),
+            filter_json,
             budget,
             json.dumps(options),
         ]

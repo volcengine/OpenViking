@@ -169,6 +169,50 @@ def assert_equal(actual, expected):
         }
 
 
+@pytest.mark.parametrize("route", ["exact", "filtered_bitmap_ann"])
+@pytest.mark.parametrize("kind", ["dense", "hybrid", "decay"])
+@pytest.mark.parametrize(
+    "filter_args",
+    [
+        pytest.param({}, id="omitted"),
+        pytest.param({"filters": None}, id="none"),
+        pytest.param({"filters": {}}, id="empty-object"),
+    ],
+)
+def test_public_collection_unfiltered_search(route, kind, filter_args, diagnostics):
+    options = (
+        {"mode": "exact"}
+        if route == "exact"
+        else {"exact_threshold": 0, "search_width": 100, "recover": True}
+    )
+    with (
+        collection(options=options) as enhanced,
+        collection(db="native", mode="off", index_type="flat") as baseline,
+    ):
+        enhanced.upsert(rows())
+        baseline.upsert(rows())
+        query = {
+            "index_name": "default",
+            "dense_vector": [1, 0.1, 0.1],
+            "limit": 4,
+            "offset": 1,
+            "output_fields": ["uri", "account_id", "content"],
+            **filter_args,
+        }
+        if kind == "hybrid":
+            query["sparse_vector"] = {"hello": 1}
+        elif kind == "decay":
+            query["advance"] = {"time_decay": {"protection": "0", "origin": "2026-11-19T00:00:00Z"}}
+        # Call the public Collection directly; adapter.query() compiles None
+        # into {}, which would hide a JSON-null serialization regression.
+        actual = enhanced.get_collection().search_by_vector(**query).data
+        expected = baseline.get_collection().search_by_vector(**query).data
+        assert len(actual) == len(expected) == 4
+        assert [(r.id, r.fields) for r in actual] == [(r.id, r.fields) for r in expected]
+        assert [r.score for r in actual] == pytest.approx([r.score for r in expected], abs=1e-6)
+        assert diagnostics[-1]["route"] == route
+
+
 @pytest.mark.parametrize("metric", ["l2", "cosine", "ip"])
 @pytest.mark.parametrize("route", ["exact", "filtered_bitmap_ann"])
 def test_dense_filters_fields_and_paging(metric, route, diagnostics):
