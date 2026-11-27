@@ -70,16 +70,19 @@ Connector event → Harness (validate, dedupe, ledger marks pending preparation)
 - **Decisions.** An input counts as consumed when it is delivered, by a wake,
   `message_check` or a held delivery, exactly as a steered input does. Inputs
   never delivered are never nudged.
-- **Durability.** The ledger records inbox-eligible inputs as pending preparation
-  in the same transaction that accepts them. The Harness prepares their context
-  in order, then atomically clears the marker and writes a ready row to
-  `inbox_pending`. Only ready rows can appear in a notice or be delivered by
-  `message_check`. The runtime's OpenViking history sync pauses at the first
-  pending preparation. On restart, the daemon loads ready rows first, then queues
-  pending preparations in their original `seq` order before subscribing to live
-  Connector events. The same event ID still deduplicates against the ledger.
-  Once `AgentRuntime.submit` returns `accepted: true`, delivery belongs to the
-  runtime and follows its usual turn recovery rules.
+- **Durability.** The inbox and workers schedulers mark ordinary model inputs
+  as pending preparation in the same transaction that accepts them. The Harness
+  prepares their context in ingress order and atomically clears the marker and
+  writes a ready row when handing off to the inbox. Only ready rows can appear
+  in a notice or be delivered by `message_check`. OpenViking history sync pauses
+  at the first pending preparation. A failed preparation gets two retries while
+  the daemon runs. After the last failure, the daemon keeps the accepted event
+  in history and clears the marker so later entries can sync. On restart, the
+  daemon loads ready rows first, then queues pending preparations by their
+  original `seq` before subscribing to live Connector events. A restart into
+  `legacy` also recovers and drains these rows. The same event ID still deduplicates
+  against the ledger. Once `AgentRuntime.submit` returns `accepted: true`,
+  delivery belongs to the runtime and follows its usual turn recovery rules.
 - **Expiry and upgrade.** The event age limit (`OV_SUPERAGENT_MAX_EVENT_AGE_MS`)
   starts at receipt for pending preparations and at ready-row creation for
   regular ready inputs. Maintenance protects pending preparations during that
@@ -89,11 +92,13 @@ Connector event → Harness (validate, dedupe, ledger marks pending preparation)
   An input in the legacy 400 ms group window can be lost when the process stops.
 - **Runtimes.** The inbox needs the Core tools (`message_check`). Ark has none,
   so a manifest with `scheduler: "inbox"` on Ark is rejected; switching to Ark
-  at run time drains ready inputs through the runtime's submit path. Pending
-  preparations use that same drain after becoming ready. Inputs accepted
-  without Core tools take the legacy route. A runtime that cannot take input
-  mid-turn (OpenCode, `activeInput: queue-next-turn`) gets no notices. Its waiting
-  inputs start its next turn.
+  at run time drains ready inputs by scope through the runtime's submit path.
+  The inbox retries rejected batches and removes rows once the runtime accepts
+  them. Pending preparations that qualified for the inbox use the same handoff.
+  An input queued behind a switch to a runtime with Core tools goes through the
+  inbox. During normal operation on Ark, new inputs follow the legacy route.
+  A runtime that cannot take input mid-turn (OpenCode, `activeInput: queue-next-turn`)
+  gets no notices. Its waiting inputs start its next turn.
 - **Slash commands, approvals, meeting notes.** The Core handles slash commands,
   approval replies and dedicated event handlers before inbox preparation.
   Daemon notes about a chat (`[mail reply sent]`) and undecided-line reminders

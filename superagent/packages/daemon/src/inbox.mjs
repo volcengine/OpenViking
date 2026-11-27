@@ -86,6 +86,11 @@ export function inboxNoticeText(entries, fresh) {
 }
 
 export class MessageInbox {
+  static hasStoredInputs(db) {
+    const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'inbox_pending'").get();
+    return Boolean(exists && db.prepare('SELECT 1 FROM inbox_pending WHERE seq IS NOT NULL LIMIT 1').get());
+  }
+
   constructor({
     db,
     runtime,
@@ -157,9 +162,12 @@ export class MessageInbox {
 
   // Inputs a previous daemon generation accepted and never delivered. Older
   // than the event age limit, they are dropped like a stale event would be.
-  restore() {
+  restore({ inboundOnly = false } = {}) {
     const cutoff = this.now() - this.maxAgeMs;
-    const rows = this.db.prepare('SELECT * FROM inbox_pending ORDER BY id').all();
+    // Legacy recovers Connector inputs. Task reports still belong to workers.
+    const rows = this.db.prepare(inboundOnly
+      ? 'SELECT * FROM inbox_pending WHERE seq IS NOT NULL ORDER BY id'
+      : 'SELECT * FROM inbox_pending ORDER BY id').all();
     for (const row of rows) {
       const meta = JSON.parse(row.meta_json);
       // A finished task's result must survive a long outage too.
@@ -181,6 +189,10 @@ export class MessageInbox {
 
   schedule() {
     if (this.stopped || this.entries.length === 0) return;
+    if (!this.usable()) {
+      if (!this.wakeTimer) this.armWake(0);
+      return;
+    }
     if (this.busy()) {
       this.clearWake();
       if (!this.noticeTimer && this.canNotify() && this.entries.some((entry) => !entry.notified)) {
@@ -315,16 +327,28 @@ export class MessageInbox {
     this.schedule();
   }
 
-  // Everything waiting, at once and in order, the legacy way: for a runtime
-  // that cannot read the inbox.
+  // Ark admits one scope per batch. A rejected batch stays durable and is
+  // retried even if the runtime does not send an availability notification.
   drain() {
     if (this.stopped || this.entries.length === 0) return 0;
-    const taken = [...this.entries];
-    const result = this.runtime.submit(taken.map((entry) => entry.item), { admission: 'enqueue' });
-    if (result?.accepted !== true) return 0;
-    this.remove(taken);
-    this.record('inbox.delivered', taken, { reason: 'drain', waiting: 0 });
-    return taken.length;
+    let delivered = 0;
+    for (const taken of Map.groupBy(this.entries, (entry) => entry.scopeKey).values()) {
+      let result;
+      try {
+        result = this.runtime.submit(taken.map((entry) => entry.item), { admission: 'enqueue' });
+      } catch (error) {
+        this.logger?.warn('inbox_drain_failed', { error: safeError(error) });
+      }
+      if (result?.accepted !== true) {
+        this.armWake(RETRY_MS);
+        return delivered;
+      }
+      this.remove(taken);
+      delivered += taken.length;
+      this.record('inbox.delivered', taken, { reason: 'drain', waiting: this.entries.length });
+    }
+    this.clearWake();
+    return delivered;
   }
 
   remove(taken) {

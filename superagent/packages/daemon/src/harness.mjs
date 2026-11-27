@@ -8,6 +8,9 @@ import { BOT_SENDERS, formatInboundLine, resolveReplyTarget, eventDeliveryItem, 
 import { opaqueRef, safeError } from './logger.mjs';
 import { parseProtocolLine } from './connectors/protocol.mjs';
 
+const PREPARE_RETRY_MS = 1_000;
+const PREPARE_ATTEMPTS = 3;
+
 // Recall (ov-recall.mjs) reads OV on the ingress path, which every later
 // line waits behind, so only where the agent is likely to answer: direct
 // chats, lines that @mention it, document comments, and events outside chats
@@ -58,6 +61,7 @@ export class Harness {
     mentionTarget = () => null,
     isStopping = () => false,
     inbox = null,
+    inboxEnabled = inbox !== null,
     taskHint = null,
   }) {
     this.config = config;
@@ -77,8 +81,10 @@ export class Harness {
     this.isOwner = isOwner;
     this.mentionTarget = mentionTarget;
     this.isStopping = isStopping;
-    // The inbox scheduler's waiting inputs (inbox.mjs); null under legacy.
+    // Legacy can have an inbox just to drain inputs left by another scheduler.
     this.inbox = inbox;
+    this.inboxEnabled = inboxEnabled;
+    this.prepareRetries = new Set();
     // Workers scheduler: a line naming the tasks an input may belong to.
     this.taskHint = taskHint;
     this.ingressBarrier = Promise.resolve();
@@ -141,9 +147,10 @@ export class Harness {
     const approval = commandText === null || command ? null : this.approvalReply(commandText, event);
     const handler = this.eventHandler(event);
     const reason = command ? 'slash_command' : approval ? 'approval_reply' : filterReason;
-    // Capture eligibility at admission, even if the runtime changes during preparation.
-    const allowInbox = !reason && !handler && (this.inbox?.usable() ?? false);
-    const prepareForInbox = allowInbox && typeof this.inbox.persist === 'function';
+    // Admission can overtake a queued /runtime command. Mark recoverable inputs
+    // here, then choose their route on the ordered ingress path.
+    const prepareForInbox = !reason && !handler && this.inboxEnabled && typeof this.inbox?.persist === 'function';
+    const preserveInbox = prepareForInbox && this.inbox.usable();
     let result;
     try {
       result = this.store.ingest(event, reason, Date.now(), { journal: !handler, prepareForInbox });
@@ -207,69 +214,104 @@ export class Harness {
       conversationRef: opaqueRef(event.conversationKey),
       chatType: event.chatType,
     });
-    this.enqueueInput(event, result.inbound, { allowInbox, prepareForInbox });
+    this.enqueueInput(event, result.inbound, { prepareForInbox, preserveInbox });
   }
 
   restorePendingInboxInputs() {
     if (!this.inbox) return;
     const pending = this.store.recoverPendingInboxInputs(Date.now() - this.config.maxEventAgeMs);
-    for (const inbound of pending) this.enqueueInput(inbound, inbound, { prepareForInbox: true });
+    for (const inbound of pending) this.enqueueInput(inbound, inbound, { prepareForInbox: true, preserveInbox: true });
   }
 
-  enqueueInput(event, inbound, { allowInbox, prepareForInbox }) {
+  enqueueInput(event, inbound, { prepareForInbox, preserveInbox, attempt = 1 }) {
     this.enqueueIngress(async () => {
-      const idleHint = event.chatId && event.replyRoute && this.liveness?.beforeInbound(event, inbound, {
-        modelBusy: this.runtime.snapshot().work.turnInProgress,
-      });
-      // Bounded roster warm-up so formatInboundLine can resolve from= to a
-      // display name. warm() never rejects and races an internal timeout, so a
-      // slow or failing lark-cli only degrades the label back to the id stub.
-      // A document has no members to list: its Connector names the commenter.
-      if (event.source === 'lark' && event.chatId && event.chatType !== 'doc_comment') await this.roster?.warm(event.chatId);
-      if (this.isStopping()) return;
-      const owner = this.isOwner(event);
-      const mention = this.mentionTarget(event);
-      // Bounded like the warm-up above, and never rejects.
-      const recall = this.recall && wantsRecall(event, mention) ? await this.recall.forEvent(event, { owner }) : '';
-      if (this.isStopping()) return;
-      await this.runtime.prepareInputContext?.();
-      if (this.isStopping()) return;
-      const line = formatInboundLine(event, null, {
-        ...(idleHint ?? {}),
-        owner,
-        mention,
-        replyTo: resolveReplyTarget(this.store, event),
-        // How long only bots have been talking here: the model's cue to stop.
-        ...(BOT_SENDERS.has(event.senderType)
-          ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, inbound.seq) } : {}),
-      });
-      const hint = event.chatId ? this.taskHint?.(event, { owner }) ?? '' : '';
-      const item = eventDeliveryItem(event, inbound.seq, { text: [line, hint, recall].filter(Boolean).join('\n') });
-      const meta = inputMeta(event, { owner, mention });
-      if (!prepareForInbox) {
-        this.route(item, meta, { allowInbox });
+      // An already inbox-eligible input keeps its durable handoff even if a
+      // switch takes away the tools. The active runtime decides how it is read.
+      preserveInbox ||= this.inbox?.usable();
+      let prepared;
+      let entry;
+      try {
+        if (attempt > PREPARE_ATTEMPTS) {
+          // Keep the accepted history, but release the cursor after preparation
+          // repeatedly failed. Retry this write too if SQLite is unavailable.
+          this.store.transaction(() => this.store.clearPendingInboxInput(inbound.seq));
+          return;
+        }
+        prepared = await this.prepareInput(event, inbound);
+        if (!prepared || this.isStopping()) return;
+        if (prepareForInbox) {
+          preserveInbox ||= this.inbox.usable();
+          entry = this.store.transaction(() => {
+            if (!this.store.clearPendingInboxInput(inbound.seq)) return null;
+            if (preserveInbox) return this.inbox.persist(prepared.item, prepared.meta);
+          });
+          if (entry === null) return;
+        }
+      } catch (error) {
+        if (!prepareForInbox) throw error;
+        this.logger.warn(attempt > PREPARE_ATTEMPTS ? 'inbox_input_settlement_failed' : 'inbox_input_preparation_failed', {
+          seq: inbound.seq, attempt, error: safeError(error),
+        });
+        if (!this.isStopping()) {
+          const timer = setTimeout(() => {
+            this.prepareRetries.delete(timer);
+            this.enqueueInput(event, inbound, { prepareForInbox, preserveInbox, attempt: attempt + 1 });
+          }, PREPARE_RETRY_MS);
+          timer.unref();
+          this.prepareRetries.add(timer);
+        }
         return;
       }
-      const entry = this.store.transaction(() => {
-        if (!this.store.clearPendingInboxInput(inbound.seq)) return null;
-        return this.inbox.persist(item, meta);
-      });
-      if (!entry) return;
-      this.inbox.publish(entry);
-      if (!this.inbox.usable()) this.inbox.drain();
+      if (entry) {
+        this.inbox.publish(entry);
+        if (!this.inbox.usable()) this.inbox.drain();
+      } else {
+        this.route(prepared.item, prepared.meta);
+      }
     });
   }
 
-  // Every input line's way to the runtime: the inbox scheduler's inbox, or
-  // the legacy group burst. A runtime that cannot read the inbox (no Core
-  // tools) gets inputs the legacy way, after anything still waiting there.
-  route(item, meta, { allowInbox = true } = {}) {
-    const usable = this.inbox?.usable();
-    if (usable && allowInbox) {
+  async prepareInput(event, inbound) {
+    const idleHint = event.chatId && event.replyRoute && this.liveness?.beforeInbound(event, inbound, {
+      modelBusy: this.runtime.snapshot().work.turnInProgress,
+    });
+    // Bounded roster warm-up so formatInboundLine can resolve from= to a
+    // display name. warm() never rejects and races an internal timeout, so a
+    // slow or failing lark-cli only degrades the label back to the id stub.
+    // A document has no members to list: its Connector names the commenter.
+    if (event.source === 'lark' && event.chatId && event.chatType !== 'doc_comment') await this.roster?.warm(event.chatId);
+    if (this.isStopping()) return;
+    const owner = this.isOwner(event);
+    const mention = this.mentionTarget(event);
+    // Bounded like the warm-up above, and never rejects.
+    const recall = this.recall && wantsRecall(event, mention) ? await this.recall.forEvent(event, { owner }) : '';
+    if (this.isStopping()) return;
+    await this.runtime.prepareInputContext?.();
+    if (this.isStopping()) return;
+    const line = formatInboundLine(event, null, {
+      ...(idleHint ?? {}),
+      owner,
+      mention,
+      replyTo: resolveReplyTarget(this.store, event),
+      // How long only bots have been talking here: the model's cue to stop.
+      ...(BOT_SENDERS.has(event.senderType)
+        ? { botsSinceHuman: this.store.botsSincePerson(event.scopeKey, inbound.seq) } : {}),
+    });
+    const hint = event.chatId ? this.taskHint?.(event, { owner }) ?? '' : '';
+    return {
+      item: eventDeliveryItem(event, inbound.seq, { text: [line, hint, recall].filter(Boolean).join('\n') }),
+      meta: inputMeta(event, { owner, mention }),
+    };
+  }
+
+  // A runtime that cannot read the inbox gets ordinary inputs through the
+  // legacy group burst, after any durable entries already waiting.
+  route(item, meta) {
+    if (this.inbox?.usable()) {
       this.inbox.add(item, meta);
       return;
     }
-    if (!usable) this.inbox?.drain();
+    this.inbox?.drain();
     this.groupBurst.route(item);
   }
 
@@ -345,6 +387,8 @@ export class Harness {
   }
 
   stop() {
+    for (const timer of this.prepareRetries) clearTimeout(timer);
+    this.prepareRetries.clear();
     this.groupBurst.stop();
     this.inbox?.stop();
   }

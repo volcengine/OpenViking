@@ -16,10 +16,216 @@ async function acceptedEvent(env, message) {
   return rows()[0];
 }
 
-// The fake codex's 'inbox' behavior: a turn whose input says LONG stays open,
-// an inbox notice makes it call message_check, and the line that follows gets
-// one reply that ends the turn.
+function useMockArk(t, runtime, deliverBatch = () => true) {
+  t.mock.method(runtime.factories, 'volc', ({ model }) => ({
+    model,
+    state: { connected: true, queued: 0 },
+    sessionDescriptor: { sessionId: 'ark-test', policyHash: 'ark-test' },
+    async start() {},
+    async stop() {},
+    deliverBatch,
+  }));
+}
+
+async function syncedHistory(env) {
+  const { agentRuntime, ovContext, store } = env.daemon;
+  await agentRuntime.whenIdle();
+  await ovContext.checkpoint(store.getCognitionState().epoch);
+  return [...ovContext.client.messages.values()].flat().map(({ content }) => content).join('\n');
+}
+
 describe('inbox scheduler end to end', () => {
+  for (const scheduler of ['inbox', 'workers']) {
+    it(`B1 resumes history sync after restarting from ${scheduler} in legacy mode`, async (t) => {
+      const first = await startMockEnv({ config: { scheduler } });
+      const roster = Promise.withResolvers();
+      const stranded = textMessage({ messageId: 'om-stranded', text: 'stranded before restart' });
+      let restarted;
+      try {
+        if (scheduler === 'workers') {
+          const committed = textMessage({ messageId: 'om-ready-before-legacy', text: 'ready before restart' });
+          const publish = t.mock.method(first.daemon.inbox, 'publish', () => {});
+          first.receive(committed);
+          const { seq: readySeq } = await acceptedEvent(first, committed);
+          await first.daemon.harness.ingressBarrier;
+          assert.deepEqual(readySeqs(first), [readySeq]);
+          publish.mock.restore();
+        }
+
+        t.mock.method(first.daemon.harness.roster, 'warm', () => roster.promise);
+        first.receive(stranded);
+        const { seq } = await acceptedEvent(first, stranded);
+        assert.deepEqual(first.daemon.store.pendingInboxInputs().map((row) => row.seq), [seq]);
+        await first.daemon.shutdown('restart', 0);
+
+        restarted = await startMockEnv({ config: { scheduler: 'legacy', databasePath: first.config.databasePath } });
+        restarted.receive(textMessage({ messageId: 'om-after-legacy-restart', text: 'new legacy history' }));
+        await restarted.waitForCodexInput(/msg=om-after-legacy-restart /);
+        const history = await syncedHistory(restarted);
+        assert.match(history, /new legacy history/);
+        assert.match(history, /stranded before restart/);
+        const inputs = restarted.codexInput().map(({ text }) => text).join('\n');
+        assert.match(inputs, /msg=om-stranded /);
+        if (scheduler === 'workers') {
+          assert.match(history, /ready before restart/);
+          assert.match(inputs, /msg=om-ready-before-legacy /);
+        }
+        assert.deepEqual(restarted.daemon.store.pendingInboxInputs(), []);
+        assert.deepEqual(readySeqs(restarted), []);
+        assert.ok(!restarted.daemon.actions.tools().some((tool) => tool.name === 'message_check'));
+      } finally {
+        roster.resolve();
+        try { await restarted?.stop(); } finally { await first.stop(); }
+      }
+    });
+  }
+
+  it('B2 drains Ark inputs by scope and retries rejected batches automatically', async (t) => {
+    const env = await startMockEnv({ config: { scheduler: 'inbox' } });
+    const { agentRuntime, harness } = env.daemon;
+    const roster = Promise.withResolvers();
+    const first = textMessage({ messageId: 'om-ark-a', text: 'first Ark input', chatId: 'oc-a' });
+    const second = textMessage({ messageId: 'om-ark-b', text: 'second Ark input', chatId: 'oc-b' });
+    const delivered = [];
+    const release = agentRuntime.holdAdmission();
+    let allowSecond = false;
+    let rejectedSecond = 0;
+    try {
+      t.mock.method(harness.roster, 'warm', () => roster.promise);
+      useMockArk(t, agentRuntime, (items) => {
+        if (!allowSecond && items.some(({ text }) => text.includes('msg=om-ark-b '))) {
+          rejectedSecond += 1;
+          return false;
+        }
+        delivered.push(items.map(({ seq }) => seq));
+        return true;
+      });
+
+      env.receive(first);
+      const { seq: firstSeq } = await acceptedEvent(env, first);
+      env.receive(second);
+      const { seq: secondSeq } = await acceptedEvent(env, second);
+      await agentRuntime.transition({ kind: 'select-runtime', runtime: 'volc', persistPreference: false });
+      roster.resolve();
+      await harness.ingressBarrier;
+      assert.deepEqual(readySeqs(env), [firstSeq, secondSeq], 'the transition hold keeps both rows');
+      assert.deepEqual(delivered, []);
+
+      release();
+      await env.waitFor(() => rejectedSecond > 0 || delivered.length > 1, 3_000);
+      assert.deepEqual(delivered, [[firstSeq]]);
+      assert.deepEqual(readySeqs(env), [secondSeq], 'only the accepted scope is removed');
+      allowSecond = true;
+      await env.waitFor(() => delivered.length === 2, 2_500);
+      assert.deepEqual(delivered, [[firstSeq], [secondSeq]]);
+      assert.deepEqual(readySeqs(env), []);
+    } finally {
+      roster.resolve();
+      release();
+      await env.stop();
+    }
+  });
+
+  it('B3 retries a rolled-back ready write and syncs following history in the same process', async (t) => {
+    const env = await startMockEnv({ config: { scheduler: 'inbox' } });
+    const { harness, inbox, store } = env.daemon;
+    const failed = textMessage({ messageId: 'om-rollback', text: 'retry after rollback' });
+    const persist = inbox.persist.bind(inbox);
+    let rolledBack = false;
+    try {
+      const writes = t.mock.method(inbox, 'persist', (item, meta) => {
+        const entry = persist(item, meta);
+        if (!rolledBack) {
+          rolledBack = true;
+          throw new Error('ready transaction rolled back');
+        }
+        return entry;
+      });
+      env.receive(failed);
+      const { seq } = await acceptedEvent(env, failed);
+      await harness.ingressBarrier;
+      assert.deepEqual(store.pendingInboxInputs().map((row) => row.seq), [seq]);
+      assert.deepEqual(readySeqs(env), []);
+
+      env.receive(textMessage({ messageId: 'om-after-rollback', text: 'history after rollback' }));
+      await env.waitForCodexInput(/msg=om-after-rollback /);
+      await env.waitFor(() => writes.mock.calls.filter(({ arguments: [item] }) => item.seq === seq).length > 1, 2_500);
+      await env.waitForCodexInput(/msg=om-rollback /);
+      const history = await syncedHistory(env);
+      assert.match(history, /retry after rollback/);
+      assert.match(history, /history after rollback/);
+      assert.deepEqual(store.pendingInboxInputs(), []);
+    } finally {
+      await env.stop();
+    }
+  });
+
+  it('settles repeated preparation failures so later history can sync', async (t) => {
+    const env = await startMockEnv({ config: { scheduler: 'inbox' } });
+    const { harness, store } = env.daemon;
+    const failed = textMessage({ messageId: 'om-bad-prep', text: 'repeated preparation failure' });
+    const prepare = harness.prepareInput.bind(harness);
+    try {
+      t.mock.method(harness, 'prepareInput', (event, inbound) => {
+        if (event.messageId === 'om-bad-prep') throw new Error('cannot prepare input');
+        return prepare(event, inbound);
+      });
+      env.receive(failed);
+      const { seq } = await acceptedEvent(env, failed);
+      await harness.ingressBarrier;
+      assert.deepEqual(store.pendingInboxInputs().map((row) => row.seq), [seq]);
+
+      env.receive(textMessage({ messageId: 'om-after-bad-prep', text: 'history after repeated failure' }));
+      await env.waitForCodexInput(/msg=om-after-bad-prep /);
+      await env.waitFor(() => store.pendingInboxInputs().length === 0);
+      assert.match(await syncedHistory(env), /history after repeated failure/);
+      assert.doesNotMatch(env.codexInput().map(({ text }) => text).join('\n'), /msg=om-bad-prep /);
+    } finally {
+      await env.stop();
+    }
+  });
+
+  it('B4 routes an input queued behind /runtime to the new Core inbox', async (t) => {
+    const env = await startMockEnv({ config: { scheduler: 'inbox' } });
+    const { agentRuntime, harness, inbox } = env.daemon;
+    let switching = false;
+    const proceed = Promise.withResolvers();
+    try {
+      useMockArk(t, agentRuntime);
+      await agentRuntime.transition({ kind: 'select-runtime', runtime: 'volc', persistPreference: false });
+      t.mock.method(agentRuntime, 'refreshPolicy', () => {
+        switching = true;
+        return proceed.promise;
+      });
+      const schedule = t.mock.method(inbox, 'schedule', () => {});
+      env.receive(textMessage({ messageId: 'om-switch-to-core', text: '/runtime codex' }));
+      await env.waitFor(() => switching);
+
+      const message = textMessage({ messageId: 'om-after-core-switch', text: 'wait for the Core inbox' });
+      env.receive(message);
+      const { seq } = await acceptedEvent(env, message);
+      assert.equal(agentRuntime.runtime, 'volc');
+      assert.deepEqual(env.daemon.store.pendingInboxInputs().map((row) => row.seq), [seq]);
+      proceed.resolve();
+      await harness.ingressBarrier;
+      assert.equal(agentRuntime.runtime, 'codex');
+      assert.deepEqual(readySeqs(env), [seq], 'the new Core runtime receives the input through the inbox');
+      assert.deepEqual(env.daemon.store.pendingInboxInputs(), []);
+      assert.deepEqual(env.codexInput(), []);
+
+      schedule.mock.restore();
+      inbox.onAvailable();
+      await env.waitForCodexInput(/msg=om-after-core-switch /);
+      assert.deepEqual(readySeqs(env), []);
+    } finally {
+      proceed.resolve();
+      await env.stop();
+    }
+  });
+
+  // The fake codex's 'inbox' behavior: a turn whose input says LONG stays open,
+  // an inbox notice makes it call message_check, and the line that follows gets
+  // one reply that ends the turn.
   it('holds an input that arrives mid-turn, notices it without its text, and delivers it on message_check', async () => {
     const env = await startMockEnv({ codex: { behavior: 'inbox' }, config: { scheduler: 'inbox' } });
     try {
@@ -133,13 +339,6 @@ describe('inbox scheduler end to end', () => {
         assert.equal(inbox.notify(), false);
         assert.deepEqual(first.codexInput(), []);
 
-        failure.mock.restore();
-        const healthy = textMessage({ messageId: 'om-healthy', text: 'continue while preparation waits' });
-        first.receive(healthy);
-        const { seq: healthySeq } = await acceptedEvent(first, healthy);
-        await first.waitForCodexInput(/msg=om-healthy /);
-        assert.ok(first.codexInput().every(({ text }) => !text.includes('om-failed-prep')));
-
         if (stage === 'context preparation') {
           await agentRuntime.transition({ kind: 'new-session' });
           const { epoch } = store.getCognitionState();
@@ -150,9 +349,10 @@ describe('inbox scheduler end to end', () => {
         }
 
         await first.daemon.shutdown('restart', 0);
+        failure.mock.restore();
         restarted = await startMockEnv({ config: { scheduler: 'inbox', databasePath: first.config.databasePath } });
         await restarted.waitForCodexInput(/msg=om-failed-prep /);
-        assert.deepEqual(restarted.activities('inbox.delivered').flatMap((row) => row.metadata.inboundSeqs), [healthySeq, seq]);
+        assert.deepEqual(restarted.activities('inbox.delivered').flatMap((row) => row.metadata.inboundSeqs), [seq]);
         assert.deepEqual(restarted.daemon.store.pendingInboxInputs(), []);
       } finally {
         try { await restarted?.stop(); } finally { await first.stop(); }
@@ -208,18 +408,11 @@ describe('inbox scheduler end to end', () => {
     let allowDelivery = false;
     try {
       t.mock.method(harness.roster, 'warm', () => roster.promise);
-      t.mock.method(agentRuntime.factories, 'volc', ({ model }) => ({
-        model,
-        state: { connected: true, queued: 0 },
-        sessionDescriptor: { sessionId: 'ark-test', policyHash: 'ark-test' },
-        async start() {},
-        async stop() {},
-        deliverBatch(items) {
-          if (!allowDelivery) return false;
-          delivered.push(...items);
-          return true;
-        },
-      }));
+      useMockArk(t, agentRuntime, (items) => {
+        if (!allowDelivery) return false;
+        delivered.push(...items);
+        return true;
+      });
 
       env.receive(message);
       const { seq } = await acceptedEvent(env, message);

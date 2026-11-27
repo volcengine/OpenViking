@@ -856,6 +856,10 @@ export class Store {
     });
   }
 
+  hasPendingInboxInputs() {
+    return Boolean(this.db.prepare('SELECT 1 FROM connector_events WHERE inbox_prepare_pending = 1 LIMIT 1').get());
+  }
+
   pendingInboxInputs() {
     return this.db.prepare(`
       SELECT * FROM connector_events WHERE inbox_prepare_pending = 1 ORDER BY seq
@@ -869,7 +873,7 @@ export class Store {
     });
   }
 
-  // The caller's transaction also writes the ready inbox row.
+  // The caller's transaction also writes the ready row for an inbox handoff.
   clearPendingInboxInput(seq) {
     const cleared = this.db.prepare(`
       UPDATE connector_events SET inbox_prepare_pending = 0 WHERE seq = ? AND inbox_prepare_pending = 1

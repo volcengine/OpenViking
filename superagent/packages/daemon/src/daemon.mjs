@@ -336,15 +336,17 @@ export class PersonalAgentDaemon {
       });
       // The inbox scheduler (agents[].scheduler): inputs that arrive while
       // the model works wait here, and the model reads them at a checkpoint.
-      this.inbox = ['inbox', 'workers'].includes(this.config.scheduler) ? new MessageInbox({
+      const inboxEnabled = ['inbox', 'workers'].includes(this.config.scheduler);
+      const recoverInbox = !inboxEnabled && (MessageInbox.hasStoredInputs(this.store.db) || this.store.hasPendingInboxInputs());
+      this.inbox = inboxEnabled || recoverInbox ? new MessageInbox({
         db: this.store.db,
         runtime: this.agentRuntime,
-        capabilities: () => getRuntimeDefinition(this.agentRuntime.runtime)?.capabilities,
+        capabilities: () => inboxEnabled ? getRuntimeDefinition(this.agentRuntime.runtime)?.capabilities : null,
         logger: this.logger.child({ component: 'inbox' }),
         recordActivity: (kind, fields) => this.recordSystemActivity(kind, fields),
         maxAgeMs: this.config.maxEventAgeMs,
       }) : null;
-      this.actions.attachInbox(this.inbox);
+      this.actions.attachInbox(inboxEnabled ? this.inbox : null);
       // Preferences are always shown; the per-line search only with ovAutoRecall.
       // One recall serves the router's lines (Harness) and the workers'
       // policies, so a changed preference reaches both.
@@ -386,6 +388,7 @@ export class PersonalAgentDaemon {
       }
       this.harness = new Harness({
         inbox: this.inbox,
+        inboxEnabled,
         taskHint: this.tasks ? (event, options) => this.tasks.hintFor(event, options) : null,
         config: this.config,
         store: this.store,
@@ -453,7 +456,7 @@ export class PersonalAgentDaemon {
       await this.agentRuntime.start();
       // Inputs the previous daemon accepted but never handed to the model,
       // and tasks whose worker it was running.
-      this.inbox?.restore();
+      this.inbox?.restore({ inboundOnly: !inboxEnabled });
       this.harness.restorePendingInboxInputs();
       this.tasks?.restore();
       this.tasks?.startSweeps();
