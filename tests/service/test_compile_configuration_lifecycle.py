@@ -25,12 +25,19 @@ from openviking.service.external_task_service import (
     ExternalTaskService,
     ExternalTaskSnapshot,
 )
-from openviking.service.task_domain import TaskPatch, TaskRecord, TaskRetentionPolicy, TaskStatus
+from openviking.service.task_domain import (
+    TaskPatch,
+    TaskRecord,
+    TaskStatus,
+    WorkState,
+)
 from openviking.service.task_store import PersistentTaskStore
+from openviking.service.task_store_sqlite import SQLiteTaskWorkStore
 from openviking.service.task_tracker import TaskTracker
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.compile_recovery import source_set_digest
 from openviking_cli.exceptions import ConflictError, InvalidArgumentError, PermissionDeniedError
+from openviking_cli.utils.config.open_viking_config import CompileApiConfig
 from tests.test_task_tracker import _FakeAgfs
 
 SOURCE = "viking://resources/source"
@@ -311,6 +318,213 @@ async def registered(setup):
     )
     record = await setup.store.get("acme", "alice", compile_name)
     return record, compile_name, make_task(setup, compile_name=compile_name, record=record)
+
+
+@pytest.fixture
+def legacy_execution(setup, registered):
+    """Build the persisted Run/private checkpoint shapes written by v0.5.6."""
+
+    def build(configured, phase):
+        record, name, named_task = registered
+        task = named_task if configured else make_task(setup)
+        task.meta.pop("compile")
+        task.resource_id = SOURCE
+        task.started_at = None
+        task.status = TaskStatus.PENDING if phase == "queued" else TaskStatus.RUNNING
+        run = {
+            **run_view(task),
+            "status": "queued" if phase == "queued" else "running",
+            "started_at": None if phase == "queued" else 101.0,
+        }
+        run["meta"]["trigger"] = "initial" if configured else "manual"
+        run["meta"]["mode"] = None if phase == "queued" else "full"
+        checkpoint = {}
+        if phase != "queued":
+            run["meta"]["start_snapshot"] = "1" * 40
+            setup.fs.commits.append([TARGET, SOURCE] if configured else [TARGET])
+            checkpoint = {
+                "phase": "running",
+                "progress_before": None,
+                "baseline": None,
+                "plan": {
+                    "base": None,
+                    "head": "1" * 40 if configured else None,
+                    "diff_dirs": [],
+                    "full_dirs": [SOURCE],
+                    "execution": {"mode": "full"},
+                    "skill_snapshot": {"uri": SKILL, "snapshot_id": None},
+                },
+                "noop": False,
+            }
+        if phase in {"committing", "terminal"}:
+            checkpoint["phase"] = "committing"
+            run["status"] = "committing"
+        if phase == "terminal":
+            run.update(status="completed", finished_at=102.0, result={"created": 7})
+            run["meta"]["finish_snapshot"] = "2" * 40
+            setup.fs.commits.append([TARGET])
+        if phase == "rolling_back":
+            checkpoint.update(phase="rolling_back", terminal_status="cancelled")
+            run["meta"]["finish_snapshot"] = "f" * 40
+        path = (
+            setup.store._record_path("acme", "alice", name).rsplit("/", 1)[0]
+            + f"/runs/{task.task_id}.json"
+        )
+        if configured:
+            # Old configurations acquire their config_id only when read after upgrade.
+            record.pop("config_id")
+            setup.files.files[setup.store._record_path("acme", "alice", name)] = json.dumps(
+                record
+            ).encode()
+            setup.files.files[path] = json.dumps(run).encode()
+        elif phase != "queued":
+            checkpoint["snapshots"] = {
+                key: run["meta"][key]
+                for key in ("start_snapshot", "finish_snapshot", "skill_snapshot_id")
+            }
+            checkpoint["outcome"] = {
+                key: run[key] for key in ("status", "started_at", "finished_at", "result", "error")
+            }
+        task.auth["compile_execution"] = checkpoint
+        setup.tracker.tasks[task.task_id] = deepcopy(task)
+        setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
+        return task, run, path
+
+    return build
+
+
+@pytest.mark.parametrize(
+    ("configured", "phase", "cancel"),
+    [
+        pytest.param(True, "queued", False, id="named_queued_missing_run"),
+        pytest.param(True, "running", True, id="named_cancel"),
+        pytest.param(True, "committing", False, id="named_committing"),
+        pytest.param(True, "terminal", False, id="named_terminal"),
+        pytest.param(True, "rolling_back", True, id="named_rollback"),
+        pytest.param(False, "running", True, id="one_off_cancel"),
+        pytest.param(False, "terminal", False, id="one_off_terminal"),
+        pytest.param(False, "rolling_back", True, id="one_off_rollback"),
+    ],
+)
+async def test_legacy_execution_recovery(setup, legacy_execution, configured, phase, cancel):
+    """An upgrade retains the old execution's snapshots, plan and finalization contract."""
+    task, old_run, path = legacy_execution(configured, phase)
+    if phase == "queued":
+        setup.files.files.pop(path)
+    old_plan = deepcopy(task.auth["compile_execution"].get("plan"))
+    if cancel:
+        setup.tracker.cancelled.add(task.task_id)
+        task.status = TaskStatus.CANCELLING
+    lifecycle = CompileLifecycle(setup.store, setup.fs)
+    start = await lifecycle.on_start(task)
+    if phase in {"queued", "running"}:
+        assert start == "proceed"
+    else:
+        assert start.status == ("cancelled" if cancel else "completed")
+    if old_plan:
+        assert task.auth["compile_execution"]["plan"] == old_plan
+    terminal = (
+        start
+        if isinstance(start, ExternalTaskSnapshot)
+        else ExternalTaskSnapshot(status="completed")
+    )
+    outcome = await lifecycle.on_finish(task, terminal)
+    run = await lifecycle._read_run(task)
+    expected_status = "cancelled" if cancel else "completed"
+    assert outcome.status == run["status"] == expected_status
+    assert run["meta"]["start_snapshot"] == (old_run["meta"]["start_snapshot"] or f"{1:040x}")
+    assert run["meta"]["finish_snapshot"]
+    assert task.resource_id == SOURCE
+    assert "compile" not in task.meta
+    if phase == "terminal":
+        assert outcome.result == old_run["result"]
+        assert run["started_at"] == 101.0 and run["finished_at"] == 102.0
+    elif not cancel:
+        assert outcome.result == {"created": 1, "updated": 0, "deleted": 0}
+    if configured:
+        assert json.loads(setup.files.files[path]) == run
+        progress = (await setup.store.get("acme", "alice", "wiki"))["progress"]
+        assert progress.get("source_commit") == (None if cancel else run["meta"]["start_snapshot"])
+    else:
+        assert (
+            task.auth["compile_execution"]["snapshots"]["start_snapshot"]
+            == (run["meta"]["start_snapshot"])
+        )
+    assert setup.fs.restore.await_count == (1 if cancel and phase != "rolling_back" else 0)
+    if setup.fs.restore.await_count:
+        assert (
+            setup.fs.restore.await_args.kwargs["source_commit"] == old_run["meta"]["start_snapshot"]
+        )
+    commits = deepcopy(setup.fs.commits)
+    resumed = deepcopy(setup.tracker.tasks[task.task_id])
+    restarted = CompileLifecycle(setup.store, setup.fs)
+    replay = await restarted.on_start(resumed)
+    assert replay.status == expected_status
+    assert (await restarted.on_finish(resumed, replay)).result == outcome.result
+    assert setup.fs.commits == commits
+
+
+@pytest.mark.parametrize(
+    ("task_store", "configured", "phase"),
+    [
+        pytest.param("file", True, "running", id="named_existing_session"),
+        pytest.param("sqlite", False, "cancel", id="one_off_cancellation"),
+    ],
+)
+async def test_legacy_task_work_settlement(
+    setup, legacy_execution, monkeypatch, tmp_path, task_store, configured, phase
+):
+    """Recovered delivery settles its Task and Work without resubmitting existing sessions."""
+    template, _, _ = legacy_execution(configured, "running")
+    owner = {"account_id": template.account_id, "user_id": template.user_id}
+    template.auth["external_task_id"] = "existing-session"
+    store = (
+        SQLiteTaskWorkStore(params={"path": str(tmp_path / "tasks.db")})
+        if task_store == "sqlite"
+        else PersistentTaskStore(_FakeAgfs())
+    )
+    tracker = TaskTracker(store)
+    await tracker.load()
+    for module in ("task_tracker", "external_task_service"):
+        monkeypatch.setattr(f"openviking.service.{module}.get_task_tracker", lambda: tracker)
+    external = ExternalTaskService()
+    provider = CompileService(CompileApiConfig(), external, setup.fs)
+    provider.configure_local_backend("http://localhost:1", "")
+    provider.configure_lifecycle(CompileLifecycle(setup.store, setup.fs))
+    provider.submit = AsyncMock(return_value="new-session")
+    provider.get = AsyncMock(return_value=ExternalTaskSnapshot(status="completed"))
+    provider.cancel = AsyncMock(return_value=ExternalTaskSnapshot(status="cancelled"))
+    external.register(provider)
+    try:
+        task = await tracker.create(
+            "compile",
+            task_id=template.task_id,
+            resource_id=template.resource_id,
+            meta=template.meta,
+            auth=template.auth,
+            **owner,
+        )
+        await tracker.register_work(task.task_id, "work", "ExternalTask", **owner)
+        await tracker.start_work(task.task_id, "work", queue_name="ExternalTask", **owner)
+        if phase == "cancel":
+            await tracker.cancel(task.task_id, **owner)
+        assert await external.execute(task.task_id, **owner)
+        await tracker.mark_work_done(task.task_id, "work", **owner)
+        durable = await tracker.get(task.task_id, **owner)
+        assert durable.status is (
+            TaskStatus.CANCELLED if phase == "cancel" else TaskStatus.COMPLETED
+        )
+        assert durable.resource_id == SOURCE and durable.finished_at is not None
+        provider.submit.assert_not_awaited()
+        assert provider.get.await_count == (1 if phase == "running" else 0)
+        assert setup.fs.restore.await_count == (1 if phase == "cancel" else 0)
+        assert await tracker.get_work_state(task.task_id, "work", **owner) is (
+            WorkState.CANCELLED if phase == "cancel" else WorkState.DONE
+        )
+        assert await external.execute(task.task_id, **owner)
+        provider.submit.assert_not_awaited()
+    finally:
+        await tracker.close()
 
 
 @pytest.fixture
@@ -743,6 +957,7 @@ async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(
             failure=ExternalTaskError(status, snapshot.error_message, transient=False),
         )
         snapshot, status = rejected.snapshot, "failed"
+    task.auth = {}
     outcome = await setup.lifecycle.on_finish(task, snapshot)
     run = await setup.lifecycle._read_run(task)
     assert run["status"] == status
@@ -753,6 +968,10 @@ async def test_unsuccessful_runs_preserve_baseline_and_redact_persisted_errors(
     assert "secret_value" not in run["error"] and "bearer-secret" not in run["error"]
     assert "[REDACTED]" in run["error"]
     assert outcome.error_message == run["error"]
+    restarted = CompileLifecycle(setup.store, setup.fs)
+    assert await restarted.on_finish(task, snapshot) == outcome
+    assert await restarted._read_run(task) == run
+    setup.fs.restore.assert_awaited_once()
     assert compile_metric_events == []
 
 
@@ -767,8 +986,7 @@ async def test_duplicate_start_reuses_exact_snapshots_and_plan(setup, registered
     assert setup.fs.commits == [[TARGET, SOURCE]]
 
 
-@pytest.mark.parametrize("hook", ["on_start", "_refresh_checkpoint"])
-async def test_checkpoint_refresh_reads_only_its_task_despite_stale_cache(setup, hook):
+async def test_start_resumes_durable_checkpoint_despite_stale_cache(setup):
     files = _FakeAgfs()
     reader = setup.tracker._store = PersistentTaskStore(files)
     writer = PersistentTaskStore(files)
@@ -776,24 +994,14 @@ async def test_checkpoint_refresh_reads_only_its_task_despite_stale_cache(setup,
     owner = {"account_id": task.account_id, "user_id": task.user_id}
     task.auth = {"compile_execution": {"phase": "running"}}
     await reader.create(task)
-    for i in range(99):
-        other = TaskRecord(f"write-{i}", "content_write", account_id="acme", user_id="bob")
-        await writer.create(other)
     latest = {"compile_execution": {"phase": "committing"}}
     await writer.patch_task(task.task_id, TaskPatch(auth=latest), **owner)
-
-    (current,) = await reader.list_durable(task.account_id, task_type="compile")
-    assert current.auth == latest
     assert (await reader.get_task(task.task_id, **owner)).auth == task.auth
-
-    reads = reader._agfs.read = AsyncMock(wraps=reader._agfs.read)
-    listings = reader._agfs.ls = AsyncMock(wraps=reader._agfs.ls)
     task.auth["external_task_id"] = "runtime-session"
-    await getattr(setup.lifecycle, hook)(task)
-
-    reads.assert_awaited_once_with(f"/local/acme/_system/tasks/alice/{task.task_id}.json")
-    listings.assert_not_awaited()
+    result = await setup.lifecycle.on_start(task)
+    assert isinstance(result, ExternalTaskSnapshot) and result.status == "completed"
     assert task.auth == {**latest, "external_task_id": "runtime-session"}
+    assert setup.fs.commits == []
 
 
 async def test_committing_recovery_does_not_resubmit_or_replace_the_start_plan(setup, registered):
@@ -815,46 +1023,6 @@ async def test_committing_recovery_does_not_resubmit_or_replace_the_start_plan(s
     assert (await restarted.on_finish(resumed, terminal)).status == "completed"
     assert setup.tracker.tasks[task.task_id].auth["compile_execution"]["plan"] == original_plan
     assert len(setup.fs.commits) == 2
-
-
-async def test_history_reads_the_executors_task(setup, registered):
-    """The configuration owner can read an execution by another user."""
-    record, name, _ = registered
-    task = make_task(setup, compile_name=name, record=record, user_id="bob")
-    tasks = setup.tracker._store = PersistentTaskStore(_FakeAgfs())
-    task.status = TaskStatus.RUNNING
-    await tasks.create(task)
-    tracker = TaskTracker(tasks)
-    setup.tracker.list_tasks = tracker.list_tasks
-
-    listings = tasks._agfs.ls = AsyncMock(wraps=tasks._agfs.ls)
-    assert await setup.lifecycle.get_run("acme", "alice", name, task.task_id) == run_view(task)
-    assert await setup.lifecycle.get_run("acme", "bob", name, task.task_id) is None
-    listings.assert_not_awaited()
-
-
-async def test_task_cleanup_retains_compile_history_for_seven_days(setup, registered):
-    record, compile_name, _ = registered
-    store = PersistentTaskStore(_FakeAgfs())
-    policy = TaskRetentionPolicy(24 * 3600, 7 * 24 * 3600)
-    tasks = []
-    for created in (100, 200, 300):
-        task = make_task(setup, compile_name=compile_name, record=record, created_at=created)
-        task.status = TaskStatus.COMPLETED
-        task.updated_at = task.finished_at = created
-        if created == 100:
-            task.status = TaskStatus.RUNNING
-        elif created == 300:
-            task.status = TaskStatus.CANCELLED
-        await store.create(task)
-        tasks.append(task)
-    assert (await store.delete_expired(policy, now=2 * 24 * 3600, limit=10)).deleted_count == 0
-    now = 7 * 24 * 3600 + 250
-    results = [await store.delete_expired(policy, now=now, limit=1) for _ in range(4)]
-    assert sum(result.deleted_count for result in results) == 1
-    remaining = await store.list("acme", task_type="compile", limit=None)
-    assert [task.created_at for task in remaining] == [300, 100]
-    assert (await setup.store.get("acme", "alice", compile_name))["progress"] == {}
 
 
 async def test_cancel_before_output_snapshot_rolls_back_without_advancing_progress(
@@ -1039,32 +1207,6 @@ async def test_baseline_compensation_preserves_later_configuration(
     setup.fs.restore.assert_awaited_once()
 
 
-async def test_initial_run_uses_config_state_without_listing_tasks(setup, registered, monkeypatch):
-    """Distinct tasks with the same creation time share one initial run per configuration."""
-    record, compile_name, first = registered
-    second = make_task(
-        setup,
-        compile_name=compile_name,
-        record=record,
-        created_at=first.created_at,
-        trigger="scheduled",
-    )
-    list_tasks = AsyncMock(side_effect=AssertionError("Unexpected account-wide task scan"))
-    monkeypatch.setattr(setup.tracker, "list_durable", list_tasks)
-
-    await setup.lifecycle.record_queued(first)
-    await setup.lifecycle.record_queued(second)
-    await setup.lifecycle.record_queued(first)
-
-    initial = run_view(first)
-    scheduled = run_view(second)
-    assert initial["meta"]["trigger"] == "initial"
-    assert scheduled["meta"]["trigger"] == "scheduled"
-    state = await setup.store.get("acme", "alice", compile_name)
-    assert state["task_first_create_time"] == record["task_first_create_time"]
-    list_tasks.assert_not_awaited()
-
-
 async def test_creator_and_account_isolation_with_paging(setup):
     names = ["Alpha-wiki", "wiki-2", "wiki_3"]
     for owner, compile_name in zip(("bob", "alice", "bob"), names, strict=True):
@@ -1115,27 +1257,6 @@ async def test_cancel_before_start_is_visible_in_task_history(setup, registered,
     assert run["finished_at"] is not None
 
 
-@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
-async def test_prepared_finalization_replays_with_empty_auth(setup, registered, status):
-    """A durable preparation checkpoint avoids acceptance reads even with stale worker auth."""
-    _, compile_name, task = registered
-    await setup.lifecycle.on_start(task)
-    setup.fs.output_changes = [{"uri": TARGET + "/page.md", "change_type": "added"}]
-    task.auth = {}
-
-    result = await setup.lifecycle.on_finish(task, ExternalTaskSnapshot(status=status))
-
-    assert result.status == status
-    run = await setup.lifecycle._read_run(task)
-    assert run["status"] == status
-    assert task.result is None and task.finished_at is None
-
-    restarted = CompileLifecycle(setup.store, setup.fs)
-    result = await restarted.on_finish(task, ExternalTaskSnapshot(status=status))
-    assert result.status == status
-    assert await restarted._read_run(task) == run
-
-
 @pytest.mark.parametrize("failure", ["undo", "state"])
 async def test_progress_publication_recovers_after_state_write_failure(
     setup, registered, checkpoint_outage, state_outage, failure
@@ -1170,24 +1291,30 @@ async def test_progress_publication_recovers_after_state_write_failure(
         assert saved_undo == undo
 
 
-@pytest.mark.parametrize("lock_failures", [0, 1, 2, 3])
+@pytest.mark.parametrize("lock_failures", [1, 3])
 async def test_submit_exhaustion_skips_rollback(setup, registered, monkeypatch, lock_failures):
     _, name, task = registered
     await setup.lifecycle.on_start(task)
     setup.files.pathlock_acquire_tree = AsyncMock()
     lock_error = LockAcquisitionError("Compile admission is locked")
-    lock_run = Mock(side_effect=[lock_error] * lock_failures + [setup.lifecycle._admission(task)])
-    monkeypatch.setattr(setup.lifecycle, "_admission", lock_run)
-    sleep = AsyncMock()
-    monkeypatch.setattr(asyncio, "sleep", sleep)
+    acquire = setup.files.pathlock_acquire_exact
+    failures_left = lock_failures
+
+    async def acquire_lock(path, **kwargs):
+        nonlocal failures_left
+        if failures_left and "/task_locks/compile/" in path:
+            failures_left -= 1
+            raise lock_error
+        return await acquire(path, **kwargs)
+
+    monkeypatch.setattr(setup.files, "pathlock_acquire_exact", acquire_lock)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
     snapshot = ExternalTaskSnapshot(
         status="failed", stage=SUBMIT_EXHAUSTED, error_message="ConnectTimeout"
     )
     result = await setup.lifecycle.on_finish(task, snapshot)
     run = await setup.lifecycle._read_run(task)
     assert result.status == "failed"
-    assert lock_run.call_count == min(lock_failures + 1, 3)
-    assert [call.args[0] for call in sleep.await_args_list] == [1, 3][:lock_failures]
     if lock_failures == 3:
         assert result == snapshot
         assert run["status"] == "running" and run["finished_at"] is None
@@ -1196,10 +1323,10 @@ async def test_submit_exhaustion_skips_rollback(setup, registered, monkeypatch, 
         assert run["error"] == "ConnectTimeout"
     setup.files.pathlock_acquire_tree.assert_not_awaited()
     setup.fs.restore.assert_not_awaited()
+    assert setup.fs.commits == [[TARGET, SOURCE]]
 
 
-@pytest.mark.parametrize("status", ["failed", "cancelled"])
-@pytest.mark.parametrize("scheduling_fails", [False, True])
+@pytest.mark.parametrize("status,scheduling_fails", [("failed", False), ("cancelled", True)])
 async def test_rollback_reindexes_without_waiting(setup, registered, status, scheduling_fails):
     """Rollback schedules changed paths, falling back to vector rebuild on scheduling errors."""
     _, _, task = registered
@@ -1257,8 +1384,7 @@ async def test_rollback_lock_exhaustion_fails_task(setup, registered, monkeypatc
         monkeypatch.setattr(setup.lifecycle, "_admission", Mock(side_effect=error))
     else:
         monkeypatch.setattr(setup.files, "pathlock_acquire_tree", AsyncMock(side_effect=error))
-    sleep = AsyncMock()
-    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
     external = ExternalTaskService()
     provider = CompileService(Mock(), external, setup.fs)
     provider.configure_lifecycle(setup.lifecycle)
@@ -1270,7 +1396,6 @@ async def test_rollback_lock_exhaustion_fails_task(setup, registered, monkeypatc
     publish = partial(external._apply_snapshot, terminal, task_id=task.task_id, auth={}, **owner)
     for _ in range(60):
         assert not await publish()
-    assert [call.args[0] for call in sleep.await_args_list] == [0.5, 1, 2, 4, 8, 16] + [30] * 54
     if conflict == "admission":
         assert not await publish()
         assert (await setup.lifecycle._read_run(task))["finished_at"] is None

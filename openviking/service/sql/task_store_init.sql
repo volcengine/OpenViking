@@ -11,8 +11,6 @@ CREATE TABLE `ov_tasks` (
     status VARCHAR(16) COLLATE ascii_bin NOT NULL,
     created_at DOUBLE NOT NULL,
     updated_at DOUBLE NOT NULL,
-    started_at DOUBLE NULL,
-    finished_at DOUBLE NULL,
     resource_id TEXT COLLATE utf8mb4_bin NULL,
     account_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,
     user_id VARCHAR(255) COLLATE utf8mb4_bin NOT NULL,

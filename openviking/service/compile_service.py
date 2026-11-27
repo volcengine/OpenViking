@@ -773,6 +773,7 @@ class CompileService:
                 update_schedule=record["update_schedule"],
                 input_signature=execution_signature(record),
             )
+        private_payload["compile_execution_format"] = "task"
 
         async def record_created(task: TaskRecord) -> None:
             await self._require_lifecycle().record_queued(task, locked_record=locked_record)
@@ -790,7 +791,9 @@ class CompileService:
             ctx=ctx,
             idempotency_key=idempotency_key,
             submission_payload=submitted if idempotency_key else None,
-            submission_private_payload={} if compile_name else None,
+            submission_private_payload=submitted_private
+            if idempotency_key or compile_name
+            else None,
             on_task_created=record_created if compile_name else None,
             metadata={
                 "compile": {

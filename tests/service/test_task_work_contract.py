@@ -56,13 +56,20 @@ def _relational_backend(provider, tmp_path=None):
         from openviking.service.task_store_postgres import PostgresTaskWorkStore
 
         store_class = PostgresTaskWorkStore
-        schema_names = ["task_store_postgres_init.sql"]
+        schema_names = [
+            "task_store_postgres_init.sql",
+            "changes/0002_task_lifecycle_times_postgres.sql",
+        ]
     else:
         pytest.importorskip("aiomysql")
         from openviking.service.task_store_mysql import MySQLTaskWorkStore
 
         store_class = MySQLTaskWorkStore
-        schema_names = ["task_store_init.sql", "changes/0001_task_store_service_name.sql"]
+        schema_names = [
+            "task_store_init.sql",
+            "changes/0001_task_store_service_name.sql",
+            "changes/0002_task_lifecycle_times.sql",
+        ]
     raw = os.environ.get(f"OV_TEST_{provider.upper()}")
     if not raw:
         pytest.skip(f"Set OV_TEST_{provider.upper()} to exercise the shared Task/Work contract")

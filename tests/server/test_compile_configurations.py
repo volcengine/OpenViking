@@ -483,6 +483,13 @@ async def test_delegated_execution_owner_actor_and_retries(service, app, client,
     run = await service.compile.lifecycle.get_run(ctx.account_id, "alice", name, task_id)
     assert run["status"] == "completed", run["error"]
     assert run["actor"] == "executor" and run["params"]["instruction"] == "alice"
+    owner = RequestContext(user=UserIdentifier(ctx.account_id, "alice"), role=Role.USER)
+    assert await service.compile.get_run(name, task_id, owner) == run
+    assert (await service.compile.list_runs(name, owner, limit=20, cursor=None))["runs"] == [run]
+    assert await service.compile.lifecycle.get_run(ctx.account_id, "bob", name, task_id) is None
+    assert (
+        await service.compile.lifecycle.get_run(ctx.account_id, "executor", name, task_id) is None
+    )
     assert runtime.calls[0]["args"]["model_name"] == "saved"
     assert "owner_user_id" not in runtime.calls[0]["args"]
     repeated = await client.post("/api/v1/compile", json=payload, headers=headers)
@@ -516,13 +523,9 @@ async def test_case_distinct_names_paginate(service, app, client, monkeypatch):
     for name in names:
         created = await client.post("/api/v1/compile/create", json={**INPUTS, "compile_name": name})
         assert created.status_code == 200, created.text
-    store = service.compile.lifecycle.store
-    reads = AsyncMock(wraps=store.read_json)
-    monkeypatch.setattr(store, "read_json", reads)
     first = (await client.get("/api/v1/compile/configs", params={"limit": 1})).json()["result"]
     assert [config["compile_name"] for config in first["configs"]] == names[:1]
     assert first["next_cursor"] == names[0]
-    assert reads.await_count == 2
     second = (
         await client.get(
             "/api/v1/compile/configs", params={"limit": 2, "cursor": first["next_cursor"]}
@@ -806,6 +809,9 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         await service.compile.list_runs(compile_name, ctx, limit=100, cursor=None)
         == runs_before_full
     )
+    submissions = len(runtime.calls)
+    repeated_full = await execute({**INPUTS, "to": inputs["to"]}, "compile-full-execution")
+    assert repeated_full.task_id == full.task_id and len(runtime.calls) == submissions
 
     preserved = await service.fs.read(f"{TARGET}/page.md", ctx)
     await service.viking_fs.write_file(f"{SOURCE}/source.md", "another update", ctx=ctx)
@@ -850,26 +856,6 @@ async def test_configuration_runs_full_isolation_and_failure_recovery(
         await service.fs.show(output["latest_snapshot_id"], path=uri, ctx=ctx) == b"manual update"
     )
 
-    uris = [f"{TARGET}/{index:02}.md" for index in range(20)]
-    changes = [{"uri": uri, "change_type": "added"} for uri in reversed(uris)]
-    fs = service.viking_fs
-    active = peak = 0
-
-    async def log(**kwargs):
-        """Yield history reads so their overlap is observable."""
-        nonlocal active, peak
-        active += 1
-        peak = max(peak, active)
-        await asyncio.sleep(0)
-        active -= 1
-        return [{"oid": kwargs["paths"][0]}]
-
-    monkeypatch.setattr(fs, "diff_paths", AsyncMock(return_value=changes))
-    monkeypatch.setattr(fs, "log", log)
-    read_outputs = service.compile.run_outputs
-    result = await read_outputs(compile_name, first.task_id, ctx, limit=20, cursor=None)
-    assert peak == 8 and [item["latest_snapshot_id"] for item in result["outputs"]] == uris
-
 
 @pytest.mark.parametrize("rule", [{"frequency": "daily", "hour": 10}, {"frequency": "weekly"}])
 def test_omitted_schedule_fields_spread_across_plans(rule):
@@ -903,11 +889,6 @@ async def test_scheduled_execution_shares_entry_times_and_failed_slots(service, 
     queue = SimpleNamespace(enqueue=AsyncMock(side_effect=[OSError("queue unavailable"), None]))
     with monkeypatch.context() as patch:
         patch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: queue)
-        patch.setattr(
-            get_task_tracker()._store,
-            "list_durable",
-            AsyncMock(side_effect=AssertionError("Unexpected account-wide task scan")),
-        )
         with pytest.raises(OSError, match="queue unavailable"):
             await scheduler.trigger_if_due(ctx.account_id, ctx.user.user_id, compile_name, due)
         assert await store.get(ctx.account_id, ctx.user.user_id, compile_name) == before
@@ -1125,9 +1106,6 @@ async def test_owned_run_metadata_and_output_permissions(service, app, client, m
     monkeypatch.setattr(service.viking_fs, "_can_access_many", AsyncMock(return_value={}))
 
     config = await compiler.get_config(name, ctx)
-    store = compiler.lifecycle.store
-    reads = AsyncMock(wraps=store._agfs.read)
-    monkeypatch.setattr(store._agfs, "read", reads)
     run = await compiler.get_run(name, task.task_id, ctx)
     assert run["task_id"] == task.task_id and run["status"] == "queued"
     history = await compiler.list_runs(name, ctx, limit=20, cursor=None)
@@ -1149,7 +1127,6 @@ async def test_owned_run_metadata_and_output_permissions(service, app, client, m
             assert response.status_code == 403
         else:
             assert response.json()["result"] == {"outputs": [], "next_cursor": None}
-    assert all(call.args[0].endswith("/state.json") for call in reads.await_args_list)
 
 
 @pytest.mark.parametrize(

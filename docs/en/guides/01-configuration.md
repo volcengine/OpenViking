@@ -1429,7 +1429,7 @@ Storage configuration for context data, including file storage (RAGFS) and vecto
 
 Task records use the local FileStore by default. To share Task/Work state across
 OpenViking processes, provision `openviking/service/sql/task_store_init.sql` in
-MySQL, apply the SQL changes under `openviking/service/sql/changes/`, configure
+MySQL, apply the MySQL SQL changes under `openviking/service/sql/changes/`, configure
 a stable top-level `service_name`, and select the relational backend:
 
 ```json
@@ -1511,11 +1511,31 @@ deduplication, and service/owner isolation as MySQL. Keep `service_name` stable
 across processes sharing tasks. Changing providers does not migrate existing
 tasks; plan the data migration before switching a deployed store.
 
+Task schema changes are maintained as separate files under
+`openviking/service/sql/changes/`; published init files remain unchanged.
+Operators select the scripts for their backend and current schema and execute
+them before upgrading. For the nullable `started_at` / `finished_at` columns, use
+`0002_task_lifecycle_times.sql` on MySQL or
+`0002_task_lifecycle_times_postgres.sql` on PostgreSQL. Fresh databases also apply
+the relevant scripts after init; skip this change if both columns already exist.
+Replace `ov_tasks` when using a custom table prefix.
+
+SQLite creates its tables and upgrades the two nullable lifecycle columns
+automatically at startup, under a write transaction. Existing timestamps remain
+null until the corresponding lifecycle transition occurs.
+
 #### Compile store
 
 Configure `storage.compile_store` in `ov.conf`. This setting controls saved
 Compile configurations. Execution history uses `storage.task_store`; all terminal
 Compile tasks are retained for seven days and cleaned up by the hourly Task cleanup.
+
+During an upgrade from file-backed Run history, keep the existing Task store and
+Compile workspace available. In-flight executions finish using their original Run
+files or private checkpoints, including snapshot rollback and baseline publication.
+New executions store history in Task. Old terminal history is not migrated or
+included in the new run listing. This compatibility does not migrate providers,
+support mixed old/new writers, or reconstruct baseline undo missing from old checkpoints.
 
 | `provider` | Setup |
 |------------|-------|

@@ -1434,7 +1434,7 @@ Glob 引擎配置，用于路径模式匹配。这些设置为服务端配置，
 Task 记录默认使用本地 FileStore。需要多个 OpenViking 进程共享
 Task/Work 状态时，先在 MySQL 中执行
 `openviking/service/sql/task_store_init.sql`，再按顺序执行
-`openviking/service/sql/changes/` 下的变更脚本，配置稳定的顶层
+`openviking/service/sql/changes/` 下适用于 MySQL 的变更脚本，配置稳定的顶层
 `service_name` 后选择关系型后端：
 
 ```json
@@ -1510,11 +1510,26 @@ Task/Work/Event 更新使用 READ COMMITTED 事务，先锁 Task 行，再修改
 共享任务的进程应使用稳定且相同的 `service_name`。切换 provider 不会自动迁移
 已有任务；生产部署切换前需安排数据迁移。
 
+Task 表结构变更通过 `openviking/service/sql/changes/` 下的独立文件维护，
+已发布的 init 文件保持不变。运维根据后端和当前表结构选择增量脚本，在升级前执行。
+新增可空的 `started_at` / `finished_at` 字段时，MySQL 使用
+`0002_task_lifecycle_times.sql`，PostgreSQL 使用
+`0002_task_lifecycle_times_postgres.sql`。新库也需在 init 后执行相应的增量脚本；
+两个字段都已存在时跳过本次变更。自定义表名前缀需替换脚本中的 `ov_tasks`。
+
+SQLite 在启动时自动建表，并在写事务内补齐这两个可空时间字段。
+已有任务的时间保持 null，直到发生相应的生命周期状态转换。
+
 #### Compile store
 
 在 `ov.conf` 中设置 `storage.compile_store`。这项配置只影响已保存的 Compile
 配置。执行历史使用 `storage.task_store`，所有终态 Compile 任务保留七天，
 由每小时运行的 Task 清理统一回收。
+
+从文件 Run 历史版本升级时，应保留原有 Task 存储和 Compile 工作目录。
+在途执行继续使用原 Run 文件或私有检查点收尾，包括快照回滚与基线推进；
+新执行的历史保存在 Task 中。旧终态历史不会迁移，也不会并入新的运行列表。
+这项兼容不包含 provider 迁移、新旧版本混合写入，或补造旧检查点缺失的基线撤销记录。
 
 | `provider` | 部署方式 |
 |------------|----------|

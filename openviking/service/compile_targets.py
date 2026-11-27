@@ -4,6 +4,7 @@
 
 Only registered configurations live in ``_system/compile/tasks``.
 Execution history and recovery checkpoints belong to the ordinary Task.
+Pre-upgrade executions retain their original Run/private checkpoints until settlement.
 The external task queue groups Compile runs by account and output target for serialization.
 """
 
@@ -101,6 +102,7 @@ GIT_RETRIES = 3
 SNAPSHOT_BUSY_SECONDS = 30.0
 _NULL_OID = "0" * 40
 _RESULT_KEYS = {"added": "created", "modified": "updated", "deleted": "deleted"}
+_TERMINAL = frozenset({"completed", "failed", "cancelled"})
 _INPUT_FIELDS = ("from", "to", "skill", "instruction", "args")
 STATE_FIELDS = frozenset(
     (
@@ -727,6 +729,45 @@ class CompileLifecycle:
         return (task.auth or {}).get("compile_execution") or {}
 
     @staticmethod
+    def _legacy_execution(task: Any) -> bool:
+        """Recognize pre-Task runs without changing their resource identity."""
+        private = (task.auth or {}).get("external_request_private") or {}
+        return private.get("compile_execution_format") != "task" and "compile" not in task.meta
+
+    def _settled_outcome(self, task: Any) -> bool:
+        checkpoint = self._checkpoint(task)
+        return (
+            checkpoint.get("phase") in {"finished", "rollback_exhausted"}
+            and (checkpoint.get("outcome") or {}).get("status") in _TERMINAL
+        )
+
+    def _terminal_legacy_run(self, task: Any, run: dict) -> bool:
+        return (
+            self._legacy_execution(task)
+            and run["status"] in _TERMINAL
+            and run.get("finished_at") is not None
+        )
+
+    def _run_outcome(self, task: Any, run: dict) -> dict:
+        keys: tuple[str, ...] = ("status", "result", "error")
+        if self._legacy_execution(task):
+            keys += ("started_at", "finished_at")
+        return {key: run[key] for key in keys}
+
+    def _legacy_run_store(self) -> CompileStateStore:
+        """Use only the old file IO helpers, independently of the configuration provider."""
+        if isinstance(self._store, CompileStateStore):
+            return self._store
+        return CompileStateStore(self._fs._async_agfs)
+
+    def _legacy_run_path(self, task: Any) -> str:
+        compile_name = self._compile_name(task)
+        assert compile_name is not None
+        directory = CompileStateStore.root(task.account_id, self._owner_user_id(task))
+        name = CompileStateStore._name_segment(compile_name)
+        return f"{directory}/{name}/runs/{validate_task_id(task.task_id)}.json"
+
+    @staticmethod
     async def _patch_task(task: Any, patch: TaskPatch) -> None:
         """Persist a Compile checkpoint or raise if the task rejects it."""
         from openviking.service.task_tracker import get_task_tracker
@@ -745,6 +786,15 @@ class CompileLifecycle:
 
     async def _read_run(self, task: Any) -> dict:
         run = run_view(task)
+        if self._legacy_execution(task):
+            if self._compile_name(task):
+                saved = await self._legacy_run_store().read_json(self._legacy_run_path(task))
+                if saved is not None:
+                    return saved
+            else:
+                run["meta"].update(self._checkpoint(task).get("snapshots") or {})
+                run["meta"]["mode"] = "full"
+            run["meta"]["trigger"] = task.meta["request"]["compile"].get("trigger", "manual")
         run.update(self._checkpoint(task).get("outcome") or {})
         return run
 
@@ -752,6 +802,26 @@ class CompileLifecycle:
         """Persist public snapshots; defer the final Task outcome until cleanup settles."""
         if run.get("error"):
             run["error"] = sanitize_error(run["error"])
+        if self._legacy_execution(task):
+            if run["status"] in _TERMINAL:
+                run["finished_at"] = run.get("finished_at") or time.time()
+            if self._compile_name(task):
+                store = self._legacy_run_store()
+                path = self._legacy_run_path(task)
+                async with store.locked(path) as lease:
+                    await store.write_json(path, run, lease)
+            else:
+                await self._save_checkpoint(
+                    task,
+                    {
+                        "snapshots": {
+                            key: run["meta"][key]
+                            for key in ("start_snapshot", "finish_snapshot", "skill_snapshot_id")
+                        },
+                        "outcome": self._run_outcome(task, run),
+                    },
+                )
+            return
         meta = deepcopy(run["meta"])
         stage = "committing" if run["status"] == "committing" else None
         await self._patch_task(task, TaskPatch(meta={"compile": meta}, stage=stage))
@@ -799,7 +869,8 @@ class CompileLifecycle:
             task.task_id, account_id=task.account_id, user_id=task.user_id
         )
         if current is not None and current.task_type == "compile":
-            task.meta["compile"] = deepcopy(current.meta.get("compile") or {})
+            if "compile" in current.meta:
+                task.meta["compile"] = deepcopy(current.meta["compile"])
             task.auth = {
                 **(task.auth or {}),
                 "compile_execution": deepcopy(self._checkpoint(current)),
@@ -834,7 +905,7 @@ class CompileLifecycle:
                     ) as record:
                         self._record_invocation(task, record)
                 run = await self._read_run(task)
-                if self._checkpoint(task).get("outcome"):
+                if self._settled_outcome(task) or self._terminal_legacy_run(task, run):
                     return self._finished_snapshot(run)
                 checkpoint = self._checkpoint(task)
                 if checkpoint.get("phase") == "committing":
@@ -882,6 +953,9 @@ class CompileLifecycle:
             )
         progress = self._checkpoint(task).get("baseline") or {}
         run["status"] = "running"
+        if self._legacy_execution(task):
+            run["started_at"] = run.get("started_at") or time.time()
+            await self._save_run(task, run)
         if (
             compile_name
             and not classify_uri(request["skill"]).is_system
@@ -1036,7 +1110,7 @@ class CompileLifecycle:
         async def save_outcome() -> ExternalTaskSnapshot:
             await self._refresh_checkpoint(task)
             run = await self._read_run(task)
-            if self._checkpoint(task).get("outcome"):
+            if self._settled_outcome(task):
                 return self._finished_snapshot(run, snapshot.error_code)
             message = f"Compile rollback incomplete after {ROLLBACK_LOCK_MAX_RETRIES} lock retries"
             if snapshot.error_message:
@@ -1047,11 +1121,12 @@ class CompileLifecycle:
             }
             run.update(status="failed", result=result, error=message)
             run["error"] = sanitize_error(message)
+            await self._save_run(task, run)
             await self._save_checkpoint(
                 task,
                 {
                     "phase": "rollback_exhausted",
-                    "outcome": {key: run[key] for key in ("status", "result", "error")},
+                    "outcome": self._run_outcome(task, run),
                 },
             )
             return ExternalTaskSnapshot(
@@ -1092,7 +1167,13 @@ class CompileLifecycle:
         from openviking.service.task_tracker import get_task_tracker
 
         run = await self._read_run(task)
-        if self._checkpoint(task).get("outcome"):
+        if self._settled_outcome(task):
+            return self._finished_snapshot(run, snapshot.error_code)
+        if self._terminal_legacy_run(task, run):
+            # Old Run publication preceded config/Task settlement. Replay those effects
+            # without recounting outputs, resubmitting Runtime, or guessing missing undo.
+            await self._finish_progress(task, run)
+            await self._save_checkpoint(task, {"outcome": self._run_outcome(task, run)})
             return self._finished_snapshot(run, snapshot.error_code)
         target = task.meta["request"]["to"]
         meta = run["meta"]
@@ -1205,7 +1286,7 @@ class CompileLifecycle:
         await self._save_checkpoint(
             task,
             {
-                "outcome": {key: run[key] for key in ("status", "result", "error")},
+                "outcome": self._run_outcome(task, run),
             },
         )
         return ExternalTaskSnapshot(
@@ -1259,9 +1340,8 @@ class CompileLifecycle:
             ):
                 return
             if (
-                str(record["config_id"]) != task.resource_id
-                or execution_signature(record) != task.meta["request"]["compile"]["input_signature"]
-            ):
+                not self._legacy_execution(task) and str(record["config_id"]) != task.resource_id
+            ) or execution_signature(record) != task.meta["request"]["compile"]["input_signature"]:
                 return
             state = self._progress_state(record)
             undo = checkpoint.get("progress_rollback")

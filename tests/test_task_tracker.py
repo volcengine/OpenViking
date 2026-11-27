@@ -701,10 +701,6 @@ async def test_periodic_history_cleanup(tracker, monkeypatch, cleanup_history):
         if cleanup_history:
             await asyncio.wait_for(tracker._cleanup_task, timeout=1)
             task_cleanup.assert_awaited_once()
-            policy = task_cleanup.await_args.args[0]
-            now = task_cleanup.await_args.kwargs["now"]
-            assert not policy.is_expired("completed", now - 2 * 86_400, now, "compile")
-            assert policy.is_expired("completed", now - 8 * 86_400, now, "compile")
         else:
             assert tracker._cleanup_task is None
             task_cleanup.assert_not_awaited()

@@ -133,6 +133,11 @@ async def test_sqlite_factory_persistence_and_query_plan(tmp_path):
                 TaskRecord(task_id=task_id, task_type="compile", created_at=100, **OWNER)
             )
         await first.close()
+        # Model the previous schema while retaining its existing Task rows.
+        with sqlite3.connect(first._url.database) as connection:
+            connection.execute("ALTER TABLE ov_tasks DROP COLUMN started_at")
+            connection.execute("ALTER TABLE ov_tasks DROP COLUMN finished_at")
+            connection.execute("PRAGMA user_version=1")
         await first.load()
         await second.load()
         assert [task.task_id for task in await first.list(limit=2, **OWNER)] == ["c", "b"]
@@ -140,6 +145,8 @@ async def test_sqlite_factory_persistence_and_query_plan(tmp_path):
             "a"
         ]
         assert await second.list(**OWNER) == []
+        legacy = await first.get_task("a", **OWNER)
+        assert legacy.started_at is None and legacy.finished_at is None
 
         async def inspect_database():
             async with first._session_factory() as session:
@@ -167,14 +174,15 @@ async def test_sqlite_factory_persistence_and_query_plan(tmp_path):
 @pytest.mark.asyncio
 async def test_sqlite_rejects_newer_schema_and_can_retry(tmp_path):
     path = tmp_path / "tasks.db"
+    newer_version = SQLiteTaskWorkStore.SCHEMA_VERSION + 1
     with sqlite3.connect(path) as connection:
-        connection.execute("PRAGMA user_version=2")
+        connection.execute(f"PRAGMA user_version={newer_version}")
     store = SQLiteTaskWorkStore(params={"path": str(path)})
     try:
         with pytest.raises(RuntimeError, match="Unsupported SQLite task schema"):
             await store.load()
         with sqlite3.connect(path) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == newer_version
             connection.execute("PRAGMA user_version=0")
         await store.load()
         assert (
