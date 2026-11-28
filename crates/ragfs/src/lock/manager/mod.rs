@@ -8,9 +8,10 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use futures::stream::{FuturesUnordered, StreamExt};
 use rand::Rng;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::core::internal_names::{EXACT_LOCK_FILE_PREFIX, PATH_LOCK_FILE};
@@ -169,58 +170,52 @@ impl PathLockManager {
         let refresh_metrics = metrics.clone();
         let refresh_interval = Duration::from_secs_f64(config.lock_expire_secs / 3.0);
         tokio::spawn(async move {
+            let validity = Self::lease_validity(&refresh_config);
+            let cleanup_window = Self::cleanup_window(&refresh_config);
+            let mut ticks = tokio::time::interval_at(
+                tokio::time::Instant::now() + refresh_interval,
+                refresh_interval,
+            );
+            ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut pending = FuturesUnordered::new();
+            let mut in_flight = HashSet::new();
+
             loop {
-                tokio::time::sleep(refresh_interval).await;
-                let leases = refresh_registry.snapshot();
-                for (lease_ref, owner) in leases {
-                    let mut owner_registry = owner.registry.lock().await;
-                    owner_registry
-                        .invalidate_expired(Instant::now(), Self::lease_validity(&refresh_config));
-                    let Some(entry) = owner_registry.entries.get(&lease_ref) else {
-                        continue;
-                    };
-                    if entry.invalidation.is_none() {
-                        Self::refresh_entry_with(
-                            &refresh_provider,
-                            &mut owner_registry,
-                            &owner.owner_id,
-                            &lease_ref,
-                            Self::lease_validity(&refresh_config),
-                        )
-                        .await;
+                tokio::select! {
+                    _ = ticks.tick() => {
+                        // Keep ticking while another lease is waiting on its owner or provider.
+                        for (lease_ref, owner) in refresh_registry.snapshot() {
+                            if in_flight.insert(lease_ref.clone()) {
+                                let provider = refresh_provider.clone();
+                                let registry = refresh_registry.clone();
+                                pending.push(async move {
+                                    let result = Self::maintain_lease_with(
+                                        &provider, &registry, owner, &lease_ref, validity, cleanup_window,
+                                    ).await;
+                                    (lease_ref, result)
+                                });
+                            }
+                        }
+                        refresh_registry.prune();
                     }
-                }
-                let stale_candidates = refresh_registry.snapshot();
-                let mut removed = 0;
-                for (lease_ref, owner) in stale_candidates {
-                    match Self::release_lease_paths_with(
-                        &refresh_provider,
-                        &refresh_registry,
-                        owner,
-                        &lease_ref,
-                        None,
-                        None,
-                        Some(Self::cleanup_window(&refresh_config)),
-                    )
-                    .await
-                    {
-                        Ok(true) => removed += 1,
-                        Ok(false) => {}
-                        Err(error) => {
-                            warn!(lease_ref = %lease_ref, error = %error, "failed to release stale pathlock lease");
+                    Some((lease_ref, result)) = pending.next() => {
+                        in_flight.remove(&lease_ref);
+                        match result {
+                            Ok(true) => {
+                                refresh_metrics.write().await.stale_leases_released += 1;
+                                debug!(
+                                    %lease_ref,
+                                    active_count = refresh_registry.active_count(),
+                                    expire_secs = refresh_config.lock_expire_secs,
+                                    "released stale pathlock lease in background refresh"
+                                );
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                warn!(%lease_ref, %error, "failed to release stale pathlock lease");
+                            }
                         }
                     }
-                }
-                refresh_registry.prune();
-                let active_count = refresh_registry.active_count();
-                refresh_metrics.write().await.stale_leases_released += removed;
-                if removed > 0 {
-                    info!(
-                        removed_count = removed,
-                        active_count = active_count,
-                        expire_secs = refresh_config.lock_expire_secs,
-                        "released stale pathlock leases in background refresh"
-                    );
                 }
             }
         });
