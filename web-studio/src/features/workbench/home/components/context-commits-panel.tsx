@@ -5,6 +5,7 @@ import { Skeleton } from '#/shared/ui/skeleton'
 import {
   EmptyState,
   Panel,
+  RequestError,
   SectionHeading,
 } from '#/features/workbench/home/components/panel'
 import { COMMIT_SERIES_DAYS } from '#/features/workbench/home/constants/dashboard'
@@ -37,6 +38,7 @@ export function ContextCommitsPanel({
   data,
   disabled: disabledProp,
   disabledMessage,
+  errorMessage,
   isError,
   isLoading,
   t,
@@ -44,6 +46,7 @@ export function ContextCommitsPanel({
   data: ConsoleSeries<ContextCommitItem> | undefined
   disabled?: boolean
   disabledMessage?: string
+  errorMessage?: string
   isError: boolean
   isLoading: boolean
   t: HomeT
@@ -88,7 +91,9 @@ export function ContextCommitsPanel({
       {isLoading ? (
         <Skeleton className="h-72 w-full" />
       ) : isError ? (
-        <EmptyState>{t('requestFailed')}</EmptyState>
+        <EmptyState>
+          <RequestError summary={t('requestFailed')} detail={errorMessage} />
+        </EmptyState>
       ) : disabled ? (
         <EmptyState>{disabledMessage ?? t('usageDisabled')}</EmptyState>
       ) : items.length === 0 ? (
