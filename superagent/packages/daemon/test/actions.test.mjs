@@ -888,6 +888,18 @@ describe('agent tool front-ends', () => {
     return { ...state, socketPath };
   }
 
+  it('shows the model the input a stale refusal quotes, and keeps it out of the log', async (t) => {
+    const { socketPath, inbound, logs } = await serve(t);
+    inbound({ messageId: 'om_quoteAsked1234', chatId: 'oc_quote12345678' });
+    inbound({ messageId: 'om_quoteNewer1234', chatId: 'oc_quote12345678', content: '改成 PNG' });
+    const handle = createMcpHandler({ socketPath, authority: TOKEN, client: 'mcp' });
+    const called = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'send_message',
+      arguments: { chat_id: 'oc_quote12345678', markdown: 'x', decision_id: 'message:om_quoteAsked1234' } } });
+    assert.equal(called.result.isError, true);
+    assert.match(called.result.content[0].text, /if the action still fits\.\nevent=message:om_quoteNewer1234 time=\S+ from=\S+: 改成 PNG$/);
+    assert.doesNotMatch(JSON.stringify(logs), /om_quoteNewer|改成 PNG/);
+  });
+
   it('relays tools/list and tools/call from the MCP adapter, with images inline', async (t) => {
     const { directory, socketPath, inbound } = await serve(t, { run: (_connector, action) => {
       if (action !== 'message.media') return { message_id: 'om_delivered123456' };
@@ -1077,8 +1089,10 @@ describe('decision references', () => {
     const stale = await reply('evt-question').catch((error) => error);
     assert.equal(stale.code, 'stale_decision');
     assert.doesNotMatch(stale.message, /msg=/);
+    // It is no longer in the inbox, so the refusal quotes it.
+    assert.match(stale.detail, /^event=evt-follow-up time=\S+Z from=\S+: hello$/);
     // Copy the tag the hint names from the newer input's line, as the model would.
-    const [, tag] = /use its (\w+)= as decision_id/.exec(stale.message);
+    const [, tag] = /use the newest (\w+)= as decision_id/.exec(stale.message);
     const line = formatInboundLine(followUp);
     const wrong = await reply(/ msg=(\S+)/.exec(line)[1]).catch((error) => error);
     assert.equal(wrong.code, 'unknown_decision');
@@ -1087,6 +1101,20 @@ describe('decision references', () => {
     // The reply still answers the question it targets.
     assert.deepEqual(outbox(store), [question.seq]);
     assert.equal(connectors.calls.length, 1);
+  });
+
+  it('quotes what was said there since a stale decision, the last five of more', async (t) => {
+    const { store, call } = setup(t);
+    store.ingest(chatEvent({ messageId: 'om_manyAsked12345', eventId: 'evt-asked', chatId: 'oc_many123456789' }));
+    for (let index = 1; index <= 7; index += 1) {
+      store.ingest(chatEvent({ messageId: `om_manyLater${index}2345`, eventId: `evt-later-${index}`, chatId: 'oc_many123456789',
+        content: `第 ${index} 条` }));
+    }
+    const stale = await call('send_message', { chat_id: 'oc_many123456789', markdown: 'x', decision_id: 'evt-asked' }).catch((error) => error);
+    assert.equal(stale.code, 'stale_decision');
+    assert.match(stale.message, /quoted below oldest first \(the last 5 of 7\), then use the newest event= as decision_id/);
+    assert.deepEqual(stale.detail.split('\n').map((line) => /^event=(\S+) time=\S+ from=\S+: (.*)$/.exec(line).slice(1)),
+      [3, 4, 5, 6, 7].map((index) => [`evt-later-${index}`, `第 ${index} 条`]));
   });
 
   it('keys a delivery by its decision event', async (t) => {
@@ -2036,8 +2064,10 @@ describe('workers scheduler', () => {
     const { turns } = attachTasks(service, store, workspace);
     const first = store.ingest(chatEvent({ messageId: 'om_taskOrigin1234', chatType: 'group', content: '帮我查下 X' })).inbound;
     const second = store.ingest(chatEvent({ messageId: 'om_taskMore123456', chatType: 'group', content: '只看上周' })).inbound;
-    const created = await call('task_create', { trigger_ids: ['message:om_taskMore123456', 'message:om_taskOrigin1234'], title: '查 X', note: 'Alice asked' });
+    const created = await call('task_create', { trigger_ids: ['message:om_taskMore123456', 'message:om_taskOrigin1234'], title: '查 X', note: 'Alice asked',
+      leads: 'viking://user/x/memories/events/x-slow.md — X 上周因缓存失效变慢' });
     assert.match(created.text, /^Created t1: a worker is on it\./);
+    assert.match(turns[0].prompt, /Leads from the agent's memory lookups\.[^\n]*\n\| viking:\/\/user\/x\/memories\/events\/x-slow\.md — X 上周因缓存失效变慢/);
     assert.match(turns[0].prompt, new RegExp(`line ${first.seq}\nline ${second.seq}`), 'oldest first; the origin answers');
     assert.equal(store.coveringDecision(first.scopeKey, first.seq), 'silent');
     assert.match((await call('task_list', {})).text, /^t1 \[running\] "查 X"/);

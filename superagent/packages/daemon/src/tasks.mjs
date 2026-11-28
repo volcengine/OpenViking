@@ -249,6 +249,8 @@ const ORIGIN = ['origin_seq', 'origin_event', 'origin_instance', 'origin_scope',
 // Columns added after the first release of this schema.
 const COLUMNS = [
   ['tasks', 'parent_id', 'TEXT'],
+  // What the router's memory lookups turned up, for the worker to start from.
+  ['tasks', 'leads', "TEXT NOT NULL DEFAULT ''"],
   ['task_inputs', 'handed_back_at_ms', 'INTEGER'],
   ['task_inputs', 'seen_at_ms', 'INTEGER'],
   ['task_report_deliveries', 'settled_at_ms', 'INTEGER'],
@@ -618,9 +620,13 @@ export class TaskManager {
   // sent for it: outbox rows attributed to the origin of one of its rounds, and
   // the message that relayed one of its reports (the delivery that settled it,
   // whatever input the router decided it on).
-  taskForMessage(messageId) {
+  // The task a message belongs to: one it was input to, or one whose request
+  // or report the agent sent as it. `ownOnly` asks only about the agent's own
+  // messages: a thread's root is every reply's parent, so a person's request
+  // that opened a thread says nothing about whom a later reply there is for.
+  taskForMessage(messageId, { ownOnly = false } = {}) {
     if (!messageId) return null;
-    const viaInput = this.db.prepare(`SELECT i.task_id FROM task_inputs i JOIN connector_events e ON e.seq = i.seq
+    const viaInput = ownOnly ? null : this.db.prepare(`SELECT i.task_id FROM task_inputs i JOIN connector_events e ON e.seq = i.seq
       WHERE e.message_id = ? ORDER BY i.id DESC LIMIT 1`).get(messageId);
     if (viaInput) return viaInput.task_id;
     const viaOrigin = this.db.prepare(`SELECT r.task_id AS id FROM task_rounds r JOIN outbox o ON o.inbound_seq = r.origin_seq
@@ -640,7 +646,11 @@ export class TaskManager {
       hit.weight += weight;
       hits.set(task.id, hit);
     };
-    const replyTask = this.taskForMessage(event.parentId);
+    // In a thread every reply's parent is the root: only a root the agent
+    // sent itself makes the reply one to its task's message.
+    const replyTask = this.taskForMessage(event.parentId, {
+      ownOnly: Boolean(event.threadRootId) && event.parentId === event.threadRootId,
+    });
     const query = bigrams(event.content);
     // The working set, and past it the tasks an exact signal names: the one
     // this line replies to and those asked in its thread, however long ago.
@@ -721,7 +731,7 @@ export class TaskManager {
 
   // rows: accepted connector_events rows (oldest first); the first one is the
   // origin the result answers.
-  create({ rows, title, note = '', requester = null, runtime = null, parent = null }) {
+  create({ rows, title, note = '', leads = '', requester = null, runtime = null, parent = null }) {
     if (!rows.length) throw new Error('a task needs at least one input');
     if (parent && !this.get(parent)) throw new Error(`no task ${parent} to follow`);
     const [origin] = rows;
@@ -732,12 +742,12 @@ export class TaskManager {
     const settings = this.settingsFor(runtime);
     this.transaction(() => {
       this.db.prepare(`INSERT INTO tasks(id, title, status, origin_seq, origin_event, origin_instance, origin_scope, origin_chat,
-        origin_thread, origin_message, origin_chat_type, origin_source, requester_id, requester_name, note, runtime, model, effort,
+        origin_thread, origin_message, origin_chat_type, origin_source, requester_id, requester_name, note, leads, runtime, model, effort,
         session_id, workdir, parent_id, created_at_ms, updated_at_ms)
-        VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         id, clip(title, 120), origin.seq, origin.event_id, origin.connector_instance, origin.scope_key, origin.chat_id ?? null,
         origin.thread_id ?? null, origin.message_id ?? null, origin.chat_type ?? null, origin.source, origin.sender_id ?? null,
-        requester, clip(note, 400), runtime, settings.model, settings.effort, randomUUID(), workdir, parent, time, time,
+        requester, clip(note, 400), clip(String(leads ?? '').trim(), 3000), runtime, settings.model, settings.effort, randomUUID(), workdir, parent, time, time,
       );
       this.insertRound(id, 1, origin, requester, { firstTurn: 1 });
       for (const row of rows) this.addInput(id, row, 'owner', 1);
@@ -1175,6 +1185,8 @@ export class TaskManager {
           : [`Requested by ${task.requester_name ?? 'unknown'}${where}. The request, as the agent received it:`, ...owner.map((row) => row.text)]),
         ...(context.length ? ['Context:', ...context.map((row) => row.text)] : []),
         ...(task.note ? [`Routing note from the agent: ${task.note}`] : []),
+        // Where the router's memory lookups led: a start, never findings.
+        ...(task.leads ? ['Leads from the agent\'s memory lookups. They may be incomplete or out of date: read their sources, search again as you need, and check what matters before you rely on it.', quoted(task.leads)] : []),
         ...this.replyBrief(round ?? this.roundOf(task)),
         ...this.parentBrief(task),
         ...this.historyBrief(task),
@@ -1456,6 +1468,8 @@ export class TaskManager {
     return [
       `[task report] task=${task.id}${round} state=${report.state} title="${oneLine(clip(task.title, 80))}" requester=${metadataTag(origin.requester_name ?? task.requester_name ?? 'unknown')}${report.structured ? '' : ' unstructured=1'}${working ? ' working=1' : ''}${again ? ' undelivered=1' : ''}`,
       `origin: ${origin.origin_chat ? `chat=${chatTag(metadataTag(origin.origin_chat), origin.origin_thread)} ` : ''}source=${origin.origin_source} msg=${metadataTag(origin.origin_message ?? '')} event=${metadataTag(origin.origin_event ?? '')}`,
+      // The router's own routing note, such as where the result goes.
+      ...(task.note ? [`note: ${oneLine(task.note)}`] : []),
       ...(working ? [`The requester kept adding to ${task.id} while its worker wrote this, and the worker is on their latest input now: relay this as the result so far with task_ids=["${task.id}"], and say the rest follows in a later [task report].`] : []),
       ...(again ? [`You were shown this report before and have not answered for ${task.id}: relay it now with task_ids=["${task.id}"], or, if a reply you already sent covers it, call stay_silent on its origin event= with task_ids=["${task.id}"].`] : []),
       ...(report.summary ? ['summary:', quoted(clip(report.summary, SUMMARY_CHARS))] : []),
@@ -1519,9 +1533,16 @@ export class TaskManager {
       WHERE settled_at_ms IS NULL AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ?)`);
     const settleRound = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
       WHERE settled_at_ms IS NULL AND inbox_id IS NOT NULL AND report_id IN (SELECT id FROM task_reports WHERE task_id = ? AND round = ?)`);
+    // A report the daemon stopped offering ('unrelayed') may still go out
+    // later. A delivery that names its task settles it then, for the round it
+    // answers only; silence or an earlier delivery stays as it was, and nothing
+    // is offered again.
+    const settleLate = this.db.prepare(`UPDATE task_report_deliveries SET settled_at_ms = ?, settled_by = ?, outbox_id = ?
+      WHERE settled_by = 'unrelayed' AND report_id IN (SELECT id FROM task_reports WHERE task_id = ? AND round = ?)`);
     for (const [id, round] of targets) {
       settled += Number((round == null ? settleTask.run(this.now(), by, outboxId ?? null, id)
         : settleRound.run(this.now(), by, outboxId ?? null, id, round)).changes);
+      if (round != null && named.has(id)) settled += Number(settleLate.run(this.now(), by, outboxId ?? null, id, round).changes);
     }
     return settled;
   }

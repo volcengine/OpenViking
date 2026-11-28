@@ -9,7 +9,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { Store } from '../src/store.mjs';
 import { cognitionHistoryPrefix } from '../src/cognition.mjs';
-import { resolveReplyTarget } from '../src/runtime-input.mjs';
+import { resolveReplyTarget, scopeContext } from '../src/runtime-input.mjs';
 import { chatEvent } from './event-fixture.mjs';
 
 const quietLogger = { debug() {}, info() {}, warn() {}, error() {}, child() { return this; } };
@@ -49,6 +49,40 @@ describe('Store', () => {
   afterEach(() => {
     try { store.close(); } catch {}
     removeTempDir(directory);
+  });
+
+  it('shows a group line the last lines before it in its chat, or its thread, from the journal', () => {
+    let at = Date.parse('2026-11-19T09:00:00Z');
+    const say = (fields) => {
+      const event = chatEvent({ chatType: 'group', chatId: 'oc_ctx', senderId: 'ou-qin', createTimeMs: at += 60_000, ...fields });
+      return { event, seq: store.ingest(event).inbound.seq };
+    };
+    const context = ({ event, seq }, options) => scopeContext(store, event, seq, { isOwner: (m) => m.senderId === 'ou-owner', ...options });
+    say({ messageId: 'om_ctx1', content: '@_user_1 你来 review 下', mentions: [{ key: '@_user_1', id: 'ou-ptr', name: 'qin-ptr' }] });
+    store.reserveOutbox({ connector: 'lark', action: 'message.send', idempotencyKey: 'k1', payload: {}, summary: '我先看下\n稍等', caller: 'router', chatId: 'oc_ctx' });
+    say({ messageId: 'om_ctx2', senderId: 'ou-ptr', senderType: 'bot', parentId: 'om_ctx1', content: '建议'.repeat(150) });
+    say({ messageId: 'om_ctx3', messageType: 'reaction', kind: 'message.reaction.created', parentId: 'om_ctx2', content: 'THUMBSUP' });
+    say({ messageId: 'om_else', chatId: 'oc_else', content: '别的群' });
+    say({ messageId: 'om_ctx4', senderId: 'ou-owner', content: '看看日志' });
+    const asked = say({ messageId: 'om_ctx5', content: '没看懂' });
+    const block = context(asked).split('\n');
+    assert.equal(block[0], '[daemon context msg=om_ctx5: the last 4 lines before it in this chat, oldest first]');
+    assert.equal(block[1], '- 2026-11-19T09:01Z from=ou-qin: @qin-ptr 你来 review 下');
+    assert.match(block[2], /^- \S+ from=me: 我先看下 ⏎ 稍等$/);
+    assert.match(block[3], /^- 2026-11-19T09:02Z from=ou-ptr sender=bot reply_to=ou-qin: (建议){100}…$/);
+    assert.equal(block[4], '- 2026-11-19T09:05Z from=ou-owner owner=1: 看看日志');
+    assert.equal(block.length, 5, 'no reaction, no other chat, not the line itself');
+    assert.equal(context(asked, { limit: 2 }).split('\n').length, 3, 'only the last ones');
+
+    // A short thread opens with its root, then its own lines; the chat's are not in it.
+    say({ messageId: 'om_tr1', threadId: 'omt_ctx', threadRootId: 'om_ctx4', parentId: 'om_ctx4', content: '日志在这' });
+    const inThread = say({ messageId: 'om_tr2', threadId: 'omt_ctx', threadRootId: 'om_ctx4', parentId: 'om_ctx4', content: '还是不行' });
+    assert.deepEqual(context(inThread).split('\n').slice(1), [
+      '- 2026-11-19T09:05Z from=ou-owner owner=1: 看看日志', '- 2026-11-19T09:07Z from=ou-qin: 日志在这']);
+    assert.match(context(inThread), /in this thread/);
+    // A direct chat is one exchange already.
+    const direct = chatEvent({ chatType: 'p2p', chatId: 'oc_ctx', messageId: 'om_dm1' });
+    assert.equal(scopeContext(store, direct, store.ingest(direct).inbound.seq), '');
   });
 
   it('records an accepted message DONE and deduplicates replay durably', () => {

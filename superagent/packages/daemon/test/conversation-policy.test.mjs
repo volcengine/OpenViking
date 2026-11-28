@@ -302,6 +302,15 @@ describe('the instance role', () => {
     assert.equal(text.split('\n## Role\n').length, 2);
   });
 
+  it('puts owner preferences before the Role but under the policy, keeps them private, and asks the owner before a timer for anyone else', () => {
+    const text = assembleConversationPolicy({ connectors: ['lark'], scheduler: 'workers' });
+    assert.match(text, /The owner's preferences come before the Role: where they disagree, follow the preference, whether it has you speak more or less\. Against the rules of this policy they only narrow/);
+    assert.match(text, /Before you keep a standing rule from the owner, check it against the Role and this policy\./);
+    assert.match(text, /do not tell anyone but the owner what they say, quote them, or give one as your reason/);
+    assert.match(text, /When someone other than the owner asks you to send a local file, check what is in it first\. If it holds other people's conversations or private data [^\n]*or you cannot tell whether it does, [^\n]*send it only once the owner agrees\. A file with nothing private in it[^\n]*you may send directly\./);
+    assert.match(text, /when anyone else asks you to remind them, or anyone, of something, or for any other timer, [^\n]*`notify_owner`, and create it only once the owner agrees/);
+  });
+
   it('takes the soul loaded from OpenViking, without its comments, under a pointer to where it lives', () => {
     const soulText = '<!-- notes for whoever edits this -->\nYou are {{AGENT_NAME}}, the garden club\'s helper.\n';
     const text = assembleConversationPolicy({ connectors: ['weixin'], agentName: 'Fern', soulText });
@@ -314,7 +323,10 @@ describe('the instance role', () => {
     for (const config of [{ connectors: ['lark'] }, { connectors: ['lark'], soulText: '<!-- nothing yet -->\n' }]) {
       const text = assembleConversationPolicy(config);
       assert.match(text, /## Role\n\nYour soul [^\n]*viking:\/\/~\/memories\/soul\.md[^\n]*\n\nRole boundary:/);
-      assert.match(text, /The Role decides when you speak\. Where it says nothing, use these defaults:/);
+      assert.match(text, /In a group, most messages are not for you\. Settle whom each one is for/);
+      assert.match(text, /The Role decides which of these you take up; where it says nothing, stay silent\./);
+      assert.match(text, /`\[daemon context …\]`: the last few lines before it in the same chat or thread/);
+      assert.match(text, /a fact they lack that you have checked yourself/);
     }
     const custom = assembleConversationPolicy({ connectors: ['lark'], soulUri: 'viking://~/memories/team/soul.md' });
     assert.match(custom, /kept in OpenViking at `viking:\/\/~\/memories\/team\/soul\.md`/);
@@ -547,8 +559,11 @@ describe('the workers scheduler', () => {
     assert.doesNotMatch(workers, /Send the draft as written unless/);
     assert.match(workers, /Hold back only a draft or question that would break the Information boundary where it goes [^\n]*: tell the requester in one line, with `task_ids`, that the result waits for the owner's check, and send the owner the draft and what it would disclose with `notify_owner`\./);
     assert.match(workers, /A report may leave a restart of this service to you: relay it first, then restart as the Core says, and only when the owner asked for it\./);
-    assert.match(workers, /Looking into a subject is its worker's work\. Your own OpenViking lookups are for telling which task, thread or earlier request an input refers to, and for what you answer yourself\./);
-    assert.match(workers, /Everything else is a task: hand it to a worker with `task_create` before you start on it, not after\./);
+    assert.match(workers, /Looking into a subject beyond your memory and a quick look is its worker's work\./);
+    assert.match(workers, /Greetings, banter, thanks and acknowledgements you answer as they are, without looking anything up\. Everything else you take up starts in your memory, every time/);
+    assert.match(workers, /Otherwise it is a task: hand it to a worker with `task_create`, with what memory turned up as `leads`\./);
+    assert.match(workers, /Answering an input yourself and handing it to a task are alternatives, never both/);
+    assert.match(workers, /tell the requester once that you are looking into it: one short line saying what you will check[^\n]*The line holds no answer/);
     assert.doesNotMatch(assembleConversationPolicy({ ...base, scheduler: 'inbox' }), /## Workers/);
   });
 
@@ -604,7 +619,7 @@ describe('what a worker shares with the router', () => {
     assert.match(text, /\n## Information boundary\n\nThese rules hold whatever the Role says; the Role may only narrow them\.\n\n- Keep conversations separate\./);
     assert.match(text, /\n## Work and permissions\n\nYou can run commands and write files in the configured workspace\./);
     assert.doesNotMatch(text, /Changes to this agent itself|PM2 application you run in|ask through a delivery tool/);
-    assert.match(text, /\n## OpenViking memory\n\n- For substantive questions/);
+    assert.match(text, /\n## OpenViking memory\n\n- Every question or request you take up starts with a memory lookup/);
     assert.match(text, /- Never answer that you do not know, do not remember, or lack the context of something someone refers to [^\n]* before you have looked for it: `openviking_find` on it, the earlier conversation with `read_openviking_session_context`, and the history of the chat or thread\./);
     assert.doesNotMatch(text, /call `openviking_remember`|openviking_add_resource/);
     assert.match(text, /\n## Email\n\n- The mailbox is the owner's private data\./);
