@@ -24,6 +24,7 @@ English / [中文](docs/repository/README_CN.md) / [日本語](docs/repository/R
 
 <p>
   <a href="https://railway.com/deploy/openviking"><img src="https://railway.com/button.svg" alt="Deploy on Railway" height="30"></a>
+  <a href="https://console.light-cloud.com/new?repo=https://github.com/volcengine/OpenViking"><img src="https://light-cloud.com/button.svg" alt="Deploy to Light Cloud" height="30"></a>
 </p>
 
 <p>
