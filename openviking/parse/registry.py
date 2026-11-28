@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.anydoc import AnyDocParser
-from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.base_parser import BaseParser, get_existing_source_path
 from openviking.parse.parsers.constants import TYPESCRIPT_MPEG_TS_EXTENSION
 from openviking.parse.parsers.directory import DirectoryParser
 
@@ -123,8 +123,8 @@ class ParserRegistry:
         is_potential_path = len(source_str) <= 1024 and "\n" not in source_str
 
         if is_potential_path:
-            path = Path(source)
-            if path.exists():
+            path = get_existing_source_path(source)
+            if path is not None:
                 # Directory → route to DirectoryParser
                 if path.is_dir():
                     dir_parser = self._parsers.get("directory")
