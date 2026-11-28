@@ -5,6 +5,7 @@ LLMProvider interface, so that bot.agents.provider / bot.agents.model
 configuration semantics are consistent with openviking server's vlm section.
 """
 
+import asyncio
 import json
 import re
 import time
@@ -506,7 +507,14 @@ class VLMProviderAdapter(LLMProvider):
             else await client.chat.completions.create(**kwargs)
         )
         async with response as stream:
+            chunks_seen = 0
             async for chunk in stream:
+                chunks_seen += 1
+                # A socket read can buffer many SDK frames without suspending.
+                # Include empty/tool-only frames so cancellation and ready work
+                # still run even when no output event is yielded below.
+                if chunks_seen % 32 == 0:
+                    await asyncio.sleep(0)
                 chunk_usage = self._parse_usage(getattr(chunk, "usage", None))
                 if chunk_usage:
                     usage = chunk_usage
