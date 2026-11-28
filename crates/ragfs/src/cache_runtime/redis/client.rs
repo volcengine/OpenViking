@@ -176,9 +176,21 @@ impl RedisClient {
             return Ok(Vec::new());
         }
         if self.deployment_mode == RedisDeploymentMode::Cluster && !keys_share_slot(keys) {
-            let mut values = Vec::with_capacity(keys.len());
-            for key in keys {
-                values.push(self.get(key).await?);
+            let mut groups: HashMap<u16, Vec<(usize, String)>> = HashMap::new();
+            for (index, key) in keys.iter().enumerate() {
+                groups
+                    .entry(fred::util::redis_keyslot(key.as_bytes()))
+                    .or_default()
+                    .push((index, key.clone()));
+            }
+            let mut values = vec![None; keys.len()];
+            for group in groups.into_values() {
+                let group_keys = group.iter().map(|(_, key)| key.clone()).collect::<Vec<_>>();
+                let found: Vec<Option<Bytes>> =
+                    self.execute("MGET", self.client.mget(group_keys)).await?;
+                for ((index, _), value) in group.into_iter().zip(found) {
+                    values[index] = value;
+                }
             }
             return Ok(values);
         }
