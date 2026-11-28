@@ -190,6 +190,7 @@ class CompileEmbeddingRequest(BaseModel):
 async def compile_embeddings(
     request: CompileEmbeddingRequest,
     _ctx: RequestContext = Depends(get_request_context),
+    allow_partial_451: bool = Query(False),
 ):
     """Embed task-local routing candidates without indexing or retaining their content.
 
@@ -199,6 +200,7 @@ async def compile_embeddings(
     """
     from openviking.core.namespace import classify_uri
     from openviking.models.embedder.base import embed_compat
+    from openviking.models.model_error import ModelError, ModelErrorKind
     from openviking.observability.reporting.token_sources import bind_dashboard_token_source_type
 
     target = validate_request_viking_uri(resolve_path_variables(request.target_uri), _ctx)
@@ -214,16 +216,30 @@ async def compile_embeddings(
     model = (await get_service().embedding_provider.get_status(_ctx.account_id)).fingerprint
     if request.expected_model and request.expected_model != model:
         raise InvalidArgumentError("Compile embedding model changed during the task")
+
+    async def embed(text: str) -> list[float] | None:
+        try:
+            result = await embed_compat(embedder, text)
+        except ModelError as exc:
+            if (
+                allow_partial_451
+                and exc.status_code == 451
+                and exc.code is None
+                and exc.kind in {ModelErrorKind.INVALID_REQUEST, ModelErrorKind.UNKNOWN}
+            ):
+                return None
+            raise
+        vector = result.dense_vector
+        if not vector or len(vector) > 8192 or not all(math.isfinite(x) for x in vector):
+            raise InvalidArgumentError("Compile requires finite dense embedding vectors")
+        return vector
+
     # Small chunks also bound providers whose embed_async implementation has no limiter.
     vectors = []
     for start in range(0, len(request.texts), 4):
         with bind_dashboard_token_source_type("compile"):
             batch = await asyncio.gather(
-                *(embed_compat(embedder, text) for text in request.texts[start : start + 4])
+                *(embed(text) for text in request.texts[start : start + 4])
             )
-        for result in batch:
-            vector = result.dense_vector
-            if not vector or len(vector) > 8192 or not all(math.isfinite(x) for x in vector):
-                raise InvalidArgumentError("Compile requires finite dense embedding vectors")
-            vectors.append(vector)
+        vectors.extend(batch)
     return Response(status="ok", result={"model": model, "vectors": vectors}).model_dump()

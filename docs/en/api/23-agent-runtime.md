@@ -254,6 +254,8 @@ Body: required `target_uri` (an existing resource or Skill namespace target with
 
 Returns `200 OK` with `status: "ok"` and `result: {"model": "...", "vectors": [...]}`. Vectors follow input order; empty `texts` returns only the model fingerprint and an empty vector array.
 
+Opt in with `?allow_partial_451=true` to retain successful sibling vectors when an individual provider request returns structured HTTP 451 without a provider error code. That position contains `null`; the Bot uses text overlap for those positions and semantic candidates for successful or cached vectors. The Bot checks the model fingerprint and positional slot count before accepting partial results. Explicit policy errors, authorization failures, cancellation and invalid vectors remain errors. HTTP 451 is terminal: the original request is not retried or sent to another credential or provider. Without the query parameter, the response remains all-or-nothing; older servers ignore the parameter.
+
 ### Find a task by submission key
 
 ```http

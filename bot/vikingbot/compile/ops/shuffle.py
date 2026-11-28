@@ -165,12 +165,12 @@ class Shuffle:
             texts, target_uri=self.r.target, expected_model=expected_model
         )
 
-    async def vectors(self, texts: list[str]) -> list[array]:
+    async def vectors(self, texts: list[str]) -> list[array | None]:
         """Return compact vectors in document order using bounded, model-scoped cached batches."""
         r = self.r
         metadata = await self.embeddings([])
         self.model_id = metadata["model"]
-        vectors = {}
+        vectors: dict[str, array | None] = {}
         missing = []
         for text in dict.fromkeys(texts):
             key = digest([self.model_id, text])
@@ -197,6 +197,9 @@ class Shuffle:
                 raise ValueError("Embedding batch/model mismatch")
             r.metrics["embedding_batches"] += 1
             for text, vector in zip(batch, result["vectors"], strict=True):
+                if vector is None:
+                    vectors[text] = None
+                    continue
                 vectors[text] = array("f", vector)
                 await r.files.put(f"embeddings/{digest([self.model_id, text])}", vector)
 
@@ -324,7 +327,22 @@ class Shuffle:
         try:
             try:
                 vectors = await self.vectors(texts)
-                neighbours = await asyncio.to_thread(top_candidates, vectors, 5, stop)
+                available = [i for i, vector in enumerate(vectors) if vector is not None]
+                ranked = await asyncio.to_thread(
+                    top_candidates, [vector for vector in vectors if vector is not None], 5, stop
+                )
+                neighbours: list[list[int]] = [[] for _ in texts]
+                for index, candidates in zip(available, ranked, strict=True):
+                    neighbours[index] = [available[i] for i in candidates]
+                if len(available) != len(texts):
+                    fallback = await asyncio.to_thread(text_candidates, texts, stop)
+                    for i, vector in enumerate(vectors):
+                        if vector is None:
+                            neighbours[i] = fallback[i]
+                    r.warnings.append(
+                        "Some routing texts use Markdown text overlap after embedding HTTP 451; "
+                        "related content may remain unmerged."
+                    )
             except Exception:
                 if asyncio.current_task().cancelling():
                     raise asyncio.CancelledError()

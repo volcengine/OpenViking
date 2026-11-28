@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
-from openviking.models.model_error import model_error_kind
+from openviking.models.model_error import model_error_from_exception, model_error_kind
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_input import (
     resolve_embedding_max_input_tokens,
@@ -881,8 +881,9 @@ class FailoverEmbedder(EmbedderBase):
                 return result
             except Exception as exc:
                 kind = model_error_kind(exc)
+                error = model_error_from_exception(exc)
 
-                if self._switcher.is_fail_fast(kind):
+                if self._switcher.is_fail_fast(kind) or (error and error.status_code == 451):
                     # Request-level failure: re-raise the original exception;
                     # trying other credentials is useless.
                     raise
@@ -931,8 +932,9 @@ class FailoverEmbedder(EmbedderBase):
                 return result
             except Exception as exc:
                 kind = model_error_kind(exc)
+                error = model_error_from_exception(exc)
 
-                if self._switcher.is_fail_fast(kind):
+                if self._switcher.is_fail_fast(kind) or (error and error.status_code == 451):
                     # Request-level failure: re-raise the original exception;
                     # trying other credentials is useless.
                     raise

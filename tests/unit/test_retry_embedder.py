@@ -333,3 +333,22 @@ def test_factory_places_retry_inside_composite(monkeypatch):
     assert isinstance(embedder, CompositeHybridEmbedder)
     assert isinstance(embedder.dense_embedder, RetryEmbedder)
     assert isinstance(embedder.sparse_embedder, RetryEmbedder)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("kind", [ModelErrorKind.UNKNOWN, ModelErrorKind.AUTHENTICATION_ERROR])
+async def test_http_451_is_terminal_before_embedding_retry_or_failover(asynchronous, kind):
+    error = ModelError(kind, "provider rejection", status_code=451)
+    primary = FakeDenseEmbedder([error, [1.0, 0.0]])
+    backup = FakeDenseEmbedder([[1.0, 0.0]])
+    embedder = FailoverEmbedder(
+        [RetryEmbedder(primary), RetryEmbedder(backup)], ["primary", "backup"]
+    )
+    with pytest.raises(ModelError) as caught:
+        if asynchronous:
+            await embedder.embed_async("text")
+        else:
+            embedder.embed("text")
+    assert caught.value is error
+    assert primary.calls == 1
+    assert backup.calls == 0
