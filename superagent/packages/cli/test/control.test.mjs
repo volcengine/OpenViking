@@ -256,3 +256,72 @@ test('status names the manifest settings this version ignores', async (t) => {
   assert.match(f.output(), /已忽略.*config\.json 删掉：env\.OV_SUPERAGENT_COGNITION_MAX_CHARS/);
 });
 
+
+// A Web log as the process writes it: one JSON line per failure.
+function webErrorLog(f, text) {
+  const file = path.join(path.dirname(f.options.releaseLink), 'superagent-web-error.log');
+  fs.writeFileSync(file, text);
+  return file;
+}
+
+test('a start whose Web is crash-looping on an occupied port says so', async (t) => {
+  const f = fixture(t);
+  const log = webErrorLog(f, `${JSON.stringify({
+    time: '2026-11-25T05:35:00.000Z', level: 'error', message: 'web_start_failed',
+    error: 'listen EADDRINUSE: address already in use 127.0.0.1:3737',
+  })}\n`);
+  const script = path.join(fs.realpathSync(f.options.releaseLink), 'packages', 'web', 'src', 'main.mjs');
+  f.options.execFileImpl = async (bin, args) => {
+    if (args[0] === 'jlist') {
+      return { stdout: JSON.stringify([{
+        name: 'superagent-web',
+        pm2_env: { status: 'waiting restart', exit_code: 1, unstable_restarts: 4, pm_err_log_path: log, pm_exec_path: script },
+      }]) };
+    }
+    return { stdout: '' };
+  };
+  const code = await startCommand('web', {
+    ...f.options,
+    fetchImpl: async () => ({ ok: false, status: 503 }),
+    readyOptions: { attempts: 1, intervalMs: 1, onlineTimeoutMs: 50 },
+  });
+  assert.equal(code, 1);
+  assert.match(f.stderr(), /superagent-web 没有起来：3737 端口被占用/);
+  assert.match(f.stderr(), /ss -ltnp 'sport = :3737'/);
+  assert.match(f.stderr(), /ov-superagent restart web/);
+});
+
+test('a restart that pm2 reports as errored names the cause and the way back', async (t) => {
+  const f = fixture(t);
+  const log = webErrorLog(f, `${JSON.stringify({
+    time: '2026-11-25T05:35:00.000Z', level: 'error', message: 'web_start_failed',
+    error: 'listen EADDRINUSE: address already in use 127.0.0.1:3737',
+  })}\n`);
+  const script = path.join(fs.realpathSync(f.options.releaseLink), 'packages', 'web', 'src', 'main.mjs');
+  f.options.execFileImpl = async (bin, args) => {
+    if (args[0] === 'jlist') {
+      return { stdout: JSON.stringify([{
+        name: 'superagent-web',
+        pm2_env: { status: 'errored', exit_code: 1, pm_err_log_path: log, pm_exec_path: script },
+      }]) };
+    }
+    return { stdout: '' };
+  };
+  await assert.rejects(restartCommand('web', f.options), (error) => {
+    assert.match(error.message, /superagent-web 没有起来：3737 端口被占用/);
+    assert.match(error.message, /ov-superagent restart web/);
+    return true;
+  });
+});
+
+test('a readiness failure of a running app keeps its own reason', async (t) => {
+  const f = fixture(t, ['superagent-alpha']);
+  const code = await startCommand('alpha', {
+    ...f.options,
+    fetchImpl: async () => ({ ok: false, status: 503 }),
+    readyOptions: { attempts: 1, intervalMs: 1 },
+  });
+  assert.equal(code, 1);
+  // The app is online, so nothing in the log is blamed for /ready.
+  assert.match(f.stderr(), /superagent-alpha: daemon did not become ready.*503/);
+});

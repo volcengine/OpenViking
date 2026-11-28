@@ -222,6 +222,8 @@ ov-superagent login lark|weixin|email|telegram [instance] # Reauthorize after ex
 ov-superagent pi                                        # Open bundled Pi, e.g. /login
 ```
 
+A start or restart that fails names the reason from the failing app's error log, not only PM2's status and exit code: an occupied port is reported with its number and the command that lists the process holding it, a rejected setting prints the setting, and a crash prints the process's own error. `ov-superagent logs <instance|web>` has the full output.
+
 `ov-superagent login` reauthorizes already connected channels. Feishu first checks scopes, message/comment events, and callbacks, then offers an owner/admin QR scan to repair missing items (`s` skips). If a version is under review, it warns that scanning withdraws it and defaults to skipping. User authorization follows. WeChat rescans; Telegram rebinds token + Start; Slack verifies tokens + passphrase; QQ verifies credentials + direct-chat code; OneBot verifies the WebSocket address/token + private-chat code; email selects an account and replaces its password. A sole instance need not be named; otherwise choose among instances using the channel. Adding a channel or changing a Feishu app uses setup instead. A newly connected Feishu bot introduces itself; WeChat requires an incoming message after every scan before proactive delivery. Bare `ov-superagent` lists instances and channels.
 
 ## Upgrade and rollback

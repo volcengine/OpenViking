@@ -165,6 +165,7 @@ execFile[promisify.custom] = (command, args, options = {}) => {
   return promisify(nodeExecFile)(invocation.command, invocation.args, { windowsHide: true, ...options, env: normalizeEnvironment(env) });
 };
 
+export const isWindows = true;
 export const spawnDetached = false;
 export const processOptions = Object.freeze({ windowsHide: true });
 export function homeDir(env = process.env) { return env.HOME || env.USERPROFILE; }

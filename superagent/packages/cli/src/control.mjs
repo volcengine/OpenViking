@@ -5,7 +5,7 @@ import { pm2Bin as platformPm2Bin } from '../../updater/src/pm2-platform.mjs';
 
 import { capabilities } from '../../daemon/src/capabilities.mjs';
 
-import { homeDir } from '../../daemon/src/platform/index.mjs';
+import { homeDir, isWindows } from '../../daemon/src/platform/index.mjs';
 
 import { execFile as execFileCallback, spawn } from '../../daemon/src/platform/index.mjs';
 import fs from 'node:fs';
@@ -17,6 +17,7 @@ import { promisify } from 'node:util';
 import {
   appControlEnv,
   cleanPm2ControlEnv,
+  diagnoseStoppedApp,
   isInside,
   pm2Processes,
   resolveRelease,
@@ -26,7 +27,7 @@ import {
 } from '../../updater/src/pm2.mjs';
 import { SHARED_WEB, defaultReleaseLink, defaultUpdaterEndpoint, loadTargets } from '../../updater/src/targets.mjs';
 import { ignoredFieldsNotice, imList, loadInstances } from './instances.mjs';
-import { manifestPath } from './manifest.mjs';
+import { manifestPath, superagentCommand } from './manifest.mjs';
 import { t } from './i18n.mjs';
 import { padEnd, spinner, styler } from './ui.mjs';
 
@@ -48,6 +49,78 @@ export function pm2StopTimeout(processInfo) {
 const UPDATER_APP = 'superagent-updater';
 // This command's own release (or source checkout); bin/pm2 runs its pinned pm2.
 const RELEASE_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
+
+// The target name `status` and the file commands take for an app.
+function appTarget(app) {
+  if (app === 'superagent-web') return 'web';
+  if (app === UPDATER_APP) return 'updater';
+  return app.replace(/^superagent-/, '');
+}
+
+// A failed start names the cause from the app's error log, not only pm2's
+// status and exit code: an occupied port says which port and how to find the
+// process holding it, a rejected setting prints the setting, and anything else
+// keeps the process's own words. `error.diagnosis` comes from the updater.
+export function failureReport(app, error, env = process.env) {
+  const diagnosis = error?.diagnosis;
+  const reason = String(error?.message ?? error);
+  if (!diagnosis) return `${app}: ${reason}`;
+  const cli = superagentCommand(env);
+  const target = appTarget(app);
+  const logs = t(`  看日志：${cli} logs ${target}`, `  Logs: ${cli} logs ${target}`);
+  const restart = t(`  修好后：${cli} restart ${target}`, `  Then: ${cli} restart ${target}`);
+  const detail = diagnosis.detail ? `  ${diagnosis.detail}` : null;
+  const port = Number.isInteger(diagnosis.port) ? diagnosis.port : null;
+  switch (diagnosis.kind) {
+    case 'port_in_use': {
+      const holder = port === null
+        ? null
+        : isWindows
+          ? `netstat -ano | findstr :${port}`
+          : t(`ss -ltnp 'sport = :${port}'（macOS 用 lsof -nP -iTCP:${port} -sTCP:LISTEN）`,
+            `ss -ltnp 'sport = :${port}' (macOS: lsof -nP -iTCP:${port} -sTCP:LISTEN)`);
+      return [
+        port === null
+          ? t(`${app} 没有起来：端口被占用`, `${app} did not start: a port it needs is in use`)
+          : t(`${app} 没有起来：${port} 端口被占用`, `${app} did not start: port ${port} is already in use`),
+        holder ? t(`  看谁占着：${holder}`, `  Held by: ${holder}`) : null,
+        restart,
+      ].filter(Boolean).join('\n');
+    }
+    case 'invalid_configuration':
+      return [
+        t(`${app} 没有起来：配置不合法`, `${app} did not start: its configuration was rejected`),
+        detail,
+        logs,
+      ].filter(Boolean).join('\n');
+    case 'incomplete_install':
+      return [
+        t(`${app} 没有起来：安装目录里缺文件`, `${app} did not start: files are missing from the installation`),
+        detail,
+        t(`  重新安装：curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/install.sh | sh`,
+          `  Reinstall: curl -fsSL https://ovrelease.tos-cn-beijing.volces.com/superagent/install.sh | sh`),
+        logs,
+      ].filter(Boolean).join('\n');
+    case 'permission':
+      return [
+        t(`${app} 没有起来：没有权限读它需要的文件`, `${app} did not start: permission denied`),
+        detail,
+        logs,
+      ].filter(Boolean).join('\n');
+    case 'crashed':
+      return [
+        t(`${app} 没有起来：进程启动时就退出了`, `${app} did not start: the process exited while starting`),
+        detail,
+        logs,
+      ].filter(Boolean).join('\n');
+    case 'start_failed': {
+      const said = diagnosis.detail || reason;
+      return [t(`${app} 没有起来：${said}`, `${app} did not start: ${said}`), logs].join('\n');
+    }
+    default:
+      return `${app}: ${reason}`;
+  }
+}
 
 export function pm2Defaults(env = process.env) {
   const releasePm2 = platformPm2Bin(RELEASE_ROOT);
@@ -171,7 +244,7 @@ export async function startCommand(target, options) {
   const running = new Map((await pm2Processes(context)).map((processInfo) => [processInfo?.name, processInfo]));
   const s = styler(context.stdout, context.env);
   const failures = [];
-  const record = (app, error) => failures.push({ app, reason: String(error?.message ?? error) });
+  const record = (app, error) => failures.push({ app, error });
 
   // 1. Register everything that is not online yet: every instance first, then
   // the shared Web, without waiting for any of them to become ready.
@@ -209,12 +282,18 @@ export async function startCommand(target, options) {
       await awaitAppReady(spec, context);
       context.stdout.write(`${s.green('●')} ${spec.app} ${t('已就绪', 'is ready')}\n`);
     } catch (error) {
+      // The readiness error says nothing when the process is not even online:
+      // ask the error log why, so an occupied port is not reported as "not
+      // ready".
+      if (error && typeof error === 'object') {
+        error.diagnosis ??= await diagnoseStoppedApp(spec.app, context).catch(() => null);
+      }
       record(spec.app, error);
     }
   }
 
   if (failures.length === 0) return 0;
-  for (const { app, reason } of failures) context.stderr.write(`${app}: ${reason}\n`);
+  for (const { app, error } of failures) context.stderr.write(`${failureReport(app, error, context.env)}\n`);
   return 1;
 }
 
@@ -224,12 +303,18 @@ export async function restartCommand(target, options) {
   Object.assign(context, await installedRelease(context.releaseLink));
   const running = new Map((await pm2Processes(context)).map((processInfo) => [processInfo?.name, processInfo]));
   for (const spec of apps) {
-    await step(context, t(`重启 ${spec.app}`, `Restarting ${spec.app}`), t(`${spec.app} 已就绪`, `${spec.app} is ready`), async () => {
-      if (running.has(spec.app)) {
-        await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: pm2StopTimeout(running.get(spec.app)), env: appControlEnv(spec.app, context.pm2Env) });
-      }
-      await startOne(spec, context);
-    });
+    try {
+      await step(context, t(`重启 ${spec.app}`, `Restarting ${spec.app}`), t(`${spec.app} 已就绪`, `${spec.app} is ready`), async () => {
+        if (running.has(spec.app)) {
+          await context.execFileImpl(context.pm2Bin, ['delete', spec.app], { timeout: pm2StopTimeout(running.get(spec.app)), env: appControlEnv(spec.app, context.pm2Env) });
+        }
+        await startOne(spec, context);
+      });
+    } catch (error) {
+      // The diagnosis is already on the error when pm2 says the app is not
+      // online; a readiness failure of an online app keeps its own message.
+      throw new Error(failureReport(spec.app, error, context.env));
+    }
   }
   await context.execFileImpl(context.pm2Bin, ['save'], { timeout: 30_000, env: context.pm2Env });
   return 0;
