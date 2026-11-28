@@ -7,6 +7,8 @@ import { CodexAgent } from '../src/codex.mjs';
 import { TraexAgent } from '../src/traex.mjs';
 import { PiAgent } from '../src/pi.mjs';
 import { ClaudeAgent } from '../src/claude.mjs';
+import { CopilotAgent } from '../src/copilot.mjs';
+import { DroidAgent } from '../src/droid.mjs';
 import { PI_MCP_STATUS } from '../src/pi-runtime.mjs';
 
 function fixture(Runtime) {
@@ -92,4 +94,59 @@ test('Claude denies unexpected permission controls and returns errors for unsupp
   assert.equal(writes.length, 2);
   assert.equal(logs.length, 3);
   assert.deepEqual(activities.map(({ metadata }) => metadata.method), ['can_use_tool', 'future_interaction', 'permission_denied']);
+});
+
+test('Copilot declines session/request_permission unattended and leaves pending RPCs untouched', () => {
+  const { agent, writes, logs, activities, feed } = fixture(CopilotAgent);
+  let resolved = false;
+  agent.runtime = 'copilot';
+  agent.pendingRpc.set('cop-1', { resolve: () => { resolved = true; } });
+  feed({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'session/request_permission',
+    params: { options: [{ optionId: 'reject-1', kind: 'reject_once' }] },
+  });
+  assert.deepEqual(writes[0], {
+    jsonrpc: '2.0',
+    id: 1,
+    result: { outcome: { outcome: 'selected', optionId: 'reject-1' } },
+  });
+  assert.equal(agent.pendingRpc.has('cop-1'), true);
+  feed({ jsonrpc: '2.0', id: 'cop-1', result: { ok: true } });
+  assert.equal(resolved, true);
+  assert.equal(logs.length, 1);
+  assert.deepEqual(activities.map(({ kind, metadata }) => [kind, metadata.method]), [
+    ['agent.interaction_declined', 'session/request_permission'],
+  ]);
+});
+
+test('Droid declines interactive server requests unattended and records no prompt secrets', () => {
+  const { agent, writes, logs, activities, feed } = fixture(DroidAgent);
+  agent.runtime = 'droid';
+  agent.protocolVersion = '1.264.0';
+  feed({
+    jsonrpc: '2.0',
+    type: 'request',
+    id: 'req-perm',
+    method: 'droid.request_permission',
+    params: { command: 'secret-prompt' },
+  });
+  feed({
+    jsonrpc: '2.0',
+    type: 'request',
+    id: 'req-ask',
+    method: 'droid.ask_user',
+    params: { question: 'secret-prompt' },
+  });
+  assert.equal(writes[0].id, 'req-perm');
+  assert.equal(writes[0].error.code, -32000);
+  assert.equal(writes[1].id, 'req-ask');
+  assert.equal(writes[1].error.code, -32000);
+  assert.equal(logs.length, 2);
+  assert.deepEqual(activities.map(({ kind, metadata }) => [kind, metadata.method]), [
+    ['agent.interaction_declined', 'droid.request_permission'],
+    ['agent.interaction_declined', 'droid.ask_user'],
+  ]);
+  assert.doesNotMatch(JSON.stringify([logs, activities]), /secret-prompt/);
 });

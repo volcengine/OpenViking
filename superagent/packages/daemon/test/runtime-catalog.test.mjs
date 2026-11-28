@@ -19,7 +19,7 @@ import {
 describe('runtime catalog', () => {
   it('owns runtime ids, aliases, static models, efforts, and capabilities', () => {
     assert.equal(DEFAULT_RUNTIME_ID, 'codex');
-    assert.deepEqual(RUNTIME_IDS, ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'dsh', 'opencode', 'agy']);
+    assert.deepEqual(RUNTIME_IDS, ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'dsh', 'opencode', 'agy', 'copilot', 'droid']);
     assert.deepEqual(RUNTIME_ALIASES, {
       codex: 'codex',
       traex: 'traex',
@@ -39,6 +39,10 @@ describe('runtime catalog', () => {
       opencode: 'opencode',
       agy: 'agy',
       antigravity: 'agy',
+      copilot: 'copilot',
+      'github-copilot': 'copilot',
+      droid: 'droid',
+      'factory-droid': 'droid',
     });
     assert.deepEqual(getRuntimeDefinition('claude').models, ['sonnet', 'opus', 'haiku', 'fable']);
     assert.deepEqual(getRuntimeDefinition('claude').efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
@@ -112,12 +116,30 @@ describe('runtime catalog', () => {
     assert.deepEqual(getRuntimeDefinition('agy').models, []);
     assert.equal(getRuntimeDefinition('agy').ovIsolation, 'config-home');
     assert.deepEqual(getRuntimeDefinition('agy').capabilities, getRuntimeDefinition('opencode').capabilities);
+    assert.deepEqual(getRuntimeDefinition('copilot').directAliases, ['copilot', 'github-copilot']);
+    assert.deepEqual(getRuntimeDefinition('copilot').efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+    assert.equal(getRuntimeDefinition('copilot').ovIsolation, 'config-home');
+    assert.deepEqual(getRuntimeDefinition('copilot').capabilities, {
+      modelCatalog: 'dynamic',
+      effortControl: 'selectable',
+      activeInput: 'queue-next-turn',
+      scopePolicy: 'any',
+      outputOwnership: 'runtime',
+      sessionAuthority: 'preserve-process',
+      agentTools: 'core',
+    });
+    assert.deepEqual(getRuntimeDefinition('droid').directAliases, ['droid', 'factory-droid']);
+    assert.deepEqual(getRuntimeDefinition('droid').efforts, ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+    assert.equal(getRuntimeDefinition('droid').ovIsolation, 'config-home');
+    assert.deepEqual(getRuntimeDefinition('droid').capabilities, getRuntimeDefinition('copilot').capabilities);
     assert.deepEqual(RUNTIME_IDS.map((id) => [id, getRuntimeDefinition(id).capabilities.agentTools]), [
       ['codex', 'core'], ['traex', 'core'], ['claude', 'core'], ['volc', 'lark-cli'], ['pi', 'core'],
       ['durable', 'core'],
       ['dsh', 'core'],
       ['opencode', 'core'],
       ['agy', 'core'],
+      ['copilot', 'core'],
+      ['droid', 'core'],
     ]);
     assert.equal(Object.isFrozen(RUNTIME_CATALOG), true);
     assert.equal(Object.isFrozen(getRuntimeDefinition('codex').capabilities), true);
@@ -289,14 +311,14 @@ describe('runtime catalog dependency direction', () => {
     const coordinator = source('agent-runtime.mjs');
     const compositionRoot = source('runtime-factory.mjs');
     assert.match(commands, /from ['"]\.\/runtime-catalog\.mjs['"]/);
-    assert.doesNotMatch(commands, /from ['"]\.\/(?:traex|claude|volc|pi|opencode|agy)\.mjs['"]/);
+    assert.doesNotMatch(commands, /from ['"]\.\/(?:traex|claude|volc|pi|opencode|agy|copilot|droid)\.mjs['"]/);
     assert.doesNotMatch(commands, /\.(?:setModel|setEffort|rotateSession|interruptTurn|deliverBatch)\s*\(/);
-    assert.doesNotMatch(coordinator, /\b(?:TRAE?X|CLAUDE|VOLC|PI|DURABLE|OPENCODE|AGY)_(?:MODELS|EFFORTS)\b/);
-    assert.doesNotMatch(coordinator, /from ['"]\.\/(?:codex|traex|claude|volc|pi|durable|opencode|agy)\.mjs['"]/);
-    for (const adapter of ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'opencode', 'agy']) {
+    assert.doesNotMatch(coordinator, /\b(?:TRAE?X|CLAUDE|VOLC|PI|DURABLE|OPENCODE|AGY|COPILOT|DROID)_(?:MODELS|EFFORTS)\b/);
+    assert.doesNotMatch(coordinator, /from ['"]\.\/(?:codex|traex|claude|volc|pi|durable|opencode|agy|copilot|droid)\.mjs['"]/);
+    for (const adapter of ['codex', 'traex', 'claude', 'volc', 'pi', 'durable', 'opencode', 'agy', 'copilot', 'droid']) {
       assert.match(compositionRoot, new RegExp(`from ['"]\\./${adapter}\\.mjs['"]`));
     }
-    for (const adapter of ['codex.mjs', 'traex.mjs', 'claude.mjs', 'volc.mjs', 'pi.mjs', 'durable.mjs', 'opencode.mjs', 'agy.mjs']) {
+    for (const adapter of ['codex.mjs', 'traex.mjs', 'claude.mjs', 'volc.mjs', 'pi.mjs', 'durable.mjs', 'opencode.mjs', 'agy.mjs', 'copilot.mjs', 'droid.mjs']) {
       assert.match(source(adapter), /from ['"]\.\/runtime-catalog\.mjs['"]/, adapter);
     }
   });

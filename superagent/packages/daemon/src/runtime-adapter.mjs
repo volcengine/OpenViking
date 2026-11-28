@@ -49,12 +49,20 @@ export class RuntimeAdapter {
   // the queue). False when the transport cannot or there is no live turn.
   cancelTurn() { return Boolean(this.#implementation.cancelTurn?.()); }
   // A daemon line for the next prompt this transport starts; taken once.
-  setTurnNotice(text) { this.#implementation.turnNotice = text || null; }
+  setTurnNotice(text) {
+    if (typeof this.#implementation.setTurnNotice === 'function') {
+      this.#implementation.setTurnNotice(text);
+      return;
+    }
+    this.#implementation.turnNotice = text || null;
+  }
   // Inputs the transport still holds for a later turn, taken out so that a
   // retiring backend's stop() cannot drop them: a hard switch hands them to
-  // the next runtime. Every transport keeps them in `queue`, as delivery items
-  // or as batches of them.
+  // the next runtime. Legacy transports expose them in `queue`.
   takeQueued() {
+    if (typeof this.#implementation.takeQueued === 'function') {
+      return this.#implementation.takeQueued();
+    }
     const queue = this.#implementation.queue;
     return Array.isArray(queue) ? queue.splice(0).flat() : [];
   }
@@ -68,11 +76,8 @@ export class RuntimeAdapter {
   // because the coordinator's /effort path uses it.
   selectEffort(effort, options) { return this.#implementation.setEffort(effort, options); }
 
-  // Desired settings are plain fields on every transport. Publish the whole
-  // validated pair synchronously, after persistence, before another turn drains.
-  // A transport that owns state behind those fields (dsh records the pair DSH
-  // refused, and the request still waiting to be applied) exposes applySettings
-  // itself; assigning the fields directly would bypass that bookkeeping.
+  // Publish validated settings synchronously, after persistence, before another
+  // turn drains. Transports exposing applySettings own their internal state.
   applySettings({ model = this.model, effort = this.effort } = {}) {
     if (typeof this.#implementation.applySettings === 'function') {
       this.#implementation.applySettings({ model, effort });
@@ -83,6 +88,10 @@ export class RuntimeAdapter {
   }
 
   async prepareInputContext() {
+    if (typeof this.#implementation.prepareInputContext === 'function') {
+      await this.#implementation.prepareInputContext();
+      return;
+    }
     const agent = this.#implementation;
     const fresh = agent.needsHistoryPrefix ?? (agent.deliveredThroughSeq === 0);
     if (fresh) await agent.store?.prepareOVContext?.(agent.cognitionEpoch);
@@ -130,8 +139,13 @@ export class RuntimeAdapter {
     return this.#implementation.cancelSessionRotation?.();
   }
 
-  // The runtimes keep these as plain fields; only this adapter sets them.
+  // Delegate cognition updates when the transport implements applyCognition;
+  // fall back to direct fields for lightweight plain-object test stubs.
   applyCognition({ epoch, authorityToken, syncedThroughSeq = 0 }) {
+    if (typeof this.#implementation.applyCognition === 'function') {
+      this.#implementation.applyCognition({ epoch, authorityToken, syncedThroughSeq });
+      return;
+    }
     this.#implementation.cognitionEpoch = epoch;
     this.#implementation.authorityToken = authorityToken;
     this.#implementation.syncedThroughSeq = syncedThroughSeq;

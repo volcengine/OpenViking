@@ -302,6 +302,44 @@ export const RUNTIME_CATALOG = Object.freeze({
       agentTools: 'core',
     },
   }),
+  copilot: runtimeDefinition({
+    id: 'copilot',
+    ovIsolation: 'config-home',
+    aliases: ['copilot', 'github-copilot'],
+    directAliases: ['copilot', 'github-copilot'],
+    canonicalDefault: 'copilot',
+    efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    // Copilot ACP exposes reasoning_effort via configOptions dynamically per
+    // active model and serializes session/prompt within one session.
+    capabilities: {
+      modelCatalog: 'dynamic',
+      effortControl: 'selectable',
+      activeInput: 'queue-next-turn',
+      scopePolicy: 'any',
+      outputOwnership: 'runtime',
+      sessionAuthority: 'preserve-process',
+      agentTools: 'core',
+    },
+  }),
+  droid: runtimeDefinition({
+    id: 'droid',
+    ovIsolation: 'config-home',
+    aliases: ['droid', 'factory-droid'],
+    directAliases: ['droid', 'factory-droid'],
+    canonicalDefault: 'droid',
+    efforts: ['off', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    // Factory Droid runs over stream-jsonrpc with per-model reasoning efforts
+    // and queued turns.
+    capabilities: {
+      modelCatalog: 'dynamic',
+      effortControl: 'selectable',
+      activeInput: 'queue-next-turn',
+      scopePolicy: 'any',
+      outputOwnership: 'runtime',
+      sessionAuthority: 'preserve-process',
+      agentTools: 'core',
+    },
+  }),
 });
 
 export const RUNTIME_IDS = frozenStrings(Object.keys(RUNTIME_CATALOG));

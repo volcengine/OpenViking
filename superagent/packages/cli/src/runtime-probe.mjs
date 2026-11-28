@@ -10,6 +10,9 @@ import { sanitizeAgentChildEnv, terminateProcessTree } from '../../daemon/src/pr
 import { captureStartupStderr } from '../../daemon/src/runtime-diagnostics.mjs';
 import { safeError } from '../../daemon/src/logger.mjs';
 import { agyHandshakeProblem } from '../../daemon/src/agy-runtime.mjs';
+import { copilotHandshakeProblem } from '../../daemon/src/copilot-runtime.mjs';
+import { DROID_API_VERSION, DROID_PROTOCOL_VERSION, droidHandshakeProblem } from '../../daemon/src/droid-runtime.mjs';
+import { prepareCopilotHome, prepareDroidHome } from '../../daemon/src/ov-isolation.mjs';
 import { writeControlPatch } from '../../daemon/src/dsh-control.mjs';
 import {
   DSH_BRIDGE_DAEMON_METHODS, DSH_BRIDGE_VERSION,
@@ -38,7 +41,7 @@ const DSH_PROBE_METHODS = Object.freeze([
 // error is reported to `onModels` as `null`, never treated as a failed probe:
 // the routes are DSH's own configuration, and this probe runs keyless.
 function probeInitialize(bin, {
-  args, label, request, onAccepted = () => {}, bridge = null, validate = () => '', env, spawnImpl, timeoutMs,
+  args, label, request, method = 'initialize', requestId = 1, onAccepted = () => {}, bridge = null, followUp = null, validate = () => '', env, spawnImpl, timeoutMs, maxBytes = 65536,
 }) {
   return new Promise((resolve) => {
     let child;
@@ -56,7 +59,7 @@ function probeInitialize(bin, {
     let buffer = '';
     let received = 0;
     const timer = setTimeout(() => finish(false, `${label} ${bridge ? 'handshake' : 'initialize'} timed out`), timeoutMs);
-    function finish(compatible, reason = '') {
+    function finish(compatible, reason = '', extra = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -65,7 +68,7 @@ function probeInitialize(bin, {
       // This is our disposable probe process group, never an installed service.
       terminateProcessTree(child, 'SIGKILL');
       child.stdin?.end();
-      resolve({ compatible, reason: compatible ? '' : [safeError(reason), detail].filter(Boolean).join(': ').slice(0, 2400) });
+      resolve({ compatible, reason: compatible ? '' : [safeError(reason), detail].filter(Boolean).join(': ').slice(0, 2400), ...extra });
     }
     child.once('error', (error) => finish(false, error.message));
     child.once('close', (code, signal) => finish(false, `${label} exited before ${bridge ? 'handshake' : 'initialize'} (code ${code}, signal ${signal})`));
@@ -74,7 +77,7 @@ function probeInitialize(bin, {
     child.stdout?.on('data', (chunk) => {
       if (settled) return;
       received += chunk.length;
-      if (received > 65536) { finish(false, `${label} initialize response exceeded 64 KiB`); return; }
+      if (received > maxBytes) { finish(false, `${label} initialize response exceeded ${Math.round(maxBytes / 1024)} KiB`); return; }
       buffer += chunk;
       let index;
       while (!settled && (index = buffer.indexOf('\n')) >= 0) {
@@ -82,6 +85,10 @@ function probeInitialize(bin, {
         buffer = buffer.slice(index + 1);
         let message;
         try { message = JSON.parse(line); } catch { continue; }
+        if (followUp && message?.id === 2) {
+          followUp.onResponse(message, finish);
+          continue;
+        }
         if (bridge && message?.id === 2) {
           if (message.error || !bridgeHelloSupports(message.result, DSH_PROBE_METHODS)) {
             finish(false, `${label} bridge handshake failed (requires v${DSH_BRIDGE_VERSION})`);
@@ -101,9 +108,13 @@ function probeInitialize(bin, {
           finish(Boolean(message.result && !message.error), `${label} shutdown failed`);
           continue;
         }
-        if (message?.id !== 1) continue;
+        if (message?.id === null && message?.error) {
+          finish(false, message.error.message || `${label} rejected ${method}`);
+          continue;
+        }
+        if (message?.id !== requestId) continue;
         const problem = message.error || !message.result || typeof message.result !== 'object' || Array.isArray(message.result)
-          ? `${label} rejected initialize`
+          ? (message.error?.message ? `${label} rejected ${method}: ${message.error.message}` : `${label} rejected ${method}`)
           : validate(message.result);
         if (problem) {
           finish(false, problem);
@@ -112,11 +123,15 @@ function probeInitialize(bin, {
           if (bridge) {
             bridge.stage = 'hello';
             child.stdin.write('{"jsonrpc":"2.0","id":2,"method":"superagent/hello","params":{}}\n');
-          } else finish(true);
+          } else if (followUp) {
+            child.stdin.write(`${JSON.stringify({ id: 2, ...followUp.request })}\n`);
+          } else {
+            finish(true);
+          }
         }
       }
     });
-    child.stdin.write(`${JSON.stringify({ id: 1, method: 'initialize', ...request })}\n`);
+    child.stdin.write(`${JSON.stringify({ id: requestId, method, ...request })}\n`);
   });
 }
 
@@ -278,4 +293,74 @@ export function probeAgyAcp(bin, { env = process.env, spawnImpl = spawn, timeout
     validate: agyHandshakeProblem,
     env, spawnImpl, timeoutMs,
   });
+}
+
+// GitHub Copilot CLI ACP. Runs initialize + session/new in an isolated
+// COPILOT_HOME (no model turn) to verify both agent identity and login state.
+export async function probeCopilotAcp(bin, { env = process.env, spawnImpl = spawn, timeoutMs = 15000 } = {}) {
+  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-copilot-probe-'));
+  try {
+    prepareCopilotHome(isolated, env);
+    return await probeInitialize(bin, {
+      args: ['--acp', '--stdio', '--disable-builtin-mcps', '--no-auto-update'],
+      label: 'Copilot ACP',
+      request: ACP_INITIALIZE,
+      validate: copilotHandshakeProblem,
+      followUp: {
+        request: { jsonrpc: '2.0', method: 'session/new', params: { cwd: isolated, mcpServers: [] } },
+        onResponse: (message, finish) => {
+          if (message.error) {
+            const msg = String(message.error.message ?? '');
+            const authProblem = /authentication required|not logged in|please log in|sign in/i.test(msg);
+            if (authProblem) {
+              finish(true, '', { loggedIn: false, authNote: msg });
+            } else {
+              finish(false, msg || 'Copilot session/new failed');
+            }
+            return;
+          }
+          finish(true, '', { loggedIn: true });
+        },
+      },
+      env: { ...env, COPILOT_HOME: isolated, COPILOT_DISABLE_LOGIN_SHELL_ENV: '1', COPILOT_AUTO_UPDATE: 'false', COPILOT_TELEMETRY_DISABLED: 'true' },
+      spawnImpl,
+      timeoutMs,
+    });
+  } finally {
+    fs.rmSync(isolated, { recursive: true, force: true });
+  }
+}
+
+// Factory Droid stream-jsonrpc handshake in an isolated FACTORY_HOME_OVERRIDE
+// (keeping HOME intact for macOS Keychain decryption).
+export async function probeDroidJsonRpc(bin, { env = process.env, spawnImpl = spawn, timeoutMs = 15000 } = {}) {
+  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'superagent-droid-probe-'));
+  try {
+    prepareDroidHome(isolated, env);
+    return await probeInitialize(bin, {
+      args: ['exec', '--input-format', 'stream-jsonrpc', '--output-format', 'stream-jsonrpc', '--cwd', isolated],
+      label: 'Droid',
+      method: 'droid.initialize_session',
+      requestId: '1',
+      request: {
+        jsonrpc: '2.0',
+        type: 'request',
+        factoryApiVersion: DROID_API_VERSION,
+        factoryProtocolVersion: DROID_PROTOCOL_VERSION,
+        params: {
+          machineId: 'superagent-setup',
+          cwd: isolated,
+          autoRejectPermissionRequests: true,
+          disableBuiltinSkills: true,
+        },
+      },
+      validate: droidHandshakeProblem,
+      maxBytes: 262_144,
+      env: { ...env, FACTORY_HOME_OVERRIDE: isolated },
+      spawnImpl,
+      timeoutMs,
+    });
+  } finally {
+    fs.rmSync(isolated, { recursive: true, force: true });
+  }
 }

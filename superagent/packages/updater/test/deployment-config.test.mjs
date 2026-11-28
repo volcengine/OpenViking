@@ -986,3 +986,33 @@ test('web.host only takes addresses that also answer on 127.0.0.1', () => {
     assert.throws(() => parseWebSettings({ host }), /web\.host must be/);
   }
 });
+
+test('supports copilot and droid runtimes, binary overrides, and model/effort manifest env fields', () => {
+  for (const runtime of ['copilot', 'droid']) {
+    const manifest = validManifest();
+    manifest.agents[0].primaryRuntime = runtime;
+    manifest.agents[0].fallbackRuntime = runtime === 'copilot' ? 'droid' : 'copilot';
+    manifest.env = {
+      ...manifest.env,
+      COPILOT_BIN: '/opt/bin/copilot',
+      DROID_BIN: '/opt/bin/droid',
+      OV_SUPERAGENT_COPILOT_MODEL: 'gpt-5',
+      OV_SUPERAGENT_COPILOT_EFFORT: 'high',
+      OV_SUPERAGENT_DROID_MODEL: 'gpt-5.4-mini',
+      OV_SUPERAGENT_DROID_EFFORT: 'low',
+    };
+    withManifest(manifest, (manifestPath) => {
+      const deployment = loadDeploymentManifest({ OV_SUPERAGENT_CONFIG: manifestPath });
+      const env = {};
+      applyDeploymentDaemonEnv(env, deployment);
+      applyDeploymentAgentEnv(env, deployment, 'alpha');
+      assert.equal(env.OV_SUPERAGENT_PRIMARY_RUNTIME, runtime);
+      assert.equal(env.COPILOT_BIN, '/opt/bin/copilot');
+      assert.equal(env.DROID_BIN, '/opt/bin/droid');
+      assert.equal(env.OV_SUPERAGENT_COPILOT_MODEL, 'gpt-5');
+      assert.equal(env.OV_SUPERAGENT_COPILOT_EFFORT, 'high');
+      assert.equal(env.OV_SUPERAGENT_DROID_MODEL, 'gpt-5.4-mini');
+      assert.equal(env.OV_SUPERAGENT_DROID_EFFORT, 'low');
+    });
+  }
+});

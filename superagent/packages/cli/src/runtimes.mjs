@@ -12,7 +12,7 @@ import { managedPiBin } from '../../daemon/src/pi-runtime.mjs';
 import { assertSupportedOpencodeVersion } from '../../daemon/src/opencode-runtime.mjs';
 import { DSH_DEFAULT_MODEL, assertSupportedDshVersion, dshVersionText } from '../../daemon/src/dsh-runtime.mjs';
 import { t } from './i18n.mjs';
-import { probeAcp, probeAgyAcp, probeAppServer, probeDsh } from './runtime-probe.mjs';
+import { probeAcp, probeAgyAcp, probeAppServer, probeCopilotAcp, probeDroidJsonRpc, probeDsh } from './runtime-probe.mjs';
 
 // Setup only checks the agent runtimes; installing and logging in to them is
 // the user's business. Pi ships with OpenViking SuperAgent and reuses the user's ~/.pi/agent.
@@ -52,6 +52,8 @@ export async function detectRuntimes({
   acpProbe = probeAcp,
   agyProbe = probeAgyAcp,
   dshProbe = probeDsh,
+  copilotProbe = probeCopilotAcp,
+  droidProbe = probeDroidJsonRpc,
 } = {}) {
   const runtimes = [];
 
@@ -93,6 +95,8 @@ export async function detectRuntimes({
   runtimes.push(await detectAgy({ env, execFileImpl, probe: agyProbe }));
   const dsh = await detectDsh({ env, execFileImpl, probe: dshProbe });
   runtimes.push(dsh);
+  runtimes.push(await detectCopilot({ env, execFileImpl, probe: copilotProbe }));
+  runtimes.push(await detectDroid({ env, execFileImpl, probe: droidProbe }));
   return runtimes;
 }
 
@@ -395,5 +399,87 @@ async function detectAgy({ env, execFileImpl, probe }) {
   const versionLabel = version.stdout.trim();
   result.note = t(`protocol 兼容（${versionLabel}），已登录`,
     `ACP compatible (${versionLabel}), logged in`);
+  return result;
+}
+
+const DROID_AUTH_FILES = [
+  'auth.v2.loginkeychain', 'auth.v2.keyring', 'auth.v2.file', 'auth.v2.key', 'auth.json',
+];
+
+function hasDroidAuth(env) {
+  if (env.FACTORY_API_KEY?.trim()) return true;
+  const factoryRoot = env.FACTORY_HOME_OVERRIDE?.trim() || env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+  const factoryDir = path.join(factoryRoot, '.factory');
+  return DROID_AUTH_FILES.some((name) => fs.existsSync(path.join(factoryDir, name)));
+}
+
+async function detectCopilot({ env, execFileImpl, probe }) {
+  const explicit = env.COPILOT_BIN?.trim();
+  const bin = explicit ? locateBinary(explicit, env) : which('copilot', env);
+  const result = {
+    id: 'copilot', label: 'GitHub Copilot', model: 'copilot', bin: bin ?? null, binEnv: 'COPILOT_BIN',
+    installed: Boolean(bin), available: false, note: '',
+  };
+  if (!bin) {
+    result.note = explicit
+      ? t(`找不到可执行文件：${explicit}（既不是绝对路径，也不在 PATH 里）`,
+        `Cannot find the executable ${explicit}: it is neither an absolute path nor on PATH`)
+      : t('未安装', 'not installed');
+    return result;
+  }
+  const version = await run(execFileImpl, bin, ['--version'], env);
+  if (!version.ok) {
+    result.note = t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
+    return result;
+  }
+  const handshake = await probe(bin, { env });
+  if (!handshake.compatible) {
+    result.note = t(`ACP 握手失败：${handshake.reason}`, `ACP handshake failed: ${handshake.reason}`);
+    return result;
+  }
+  if (handshake.loggedIn === false) {
+    result.note = t('未登录：先运行 copilot login', 'not logged in: run copilot login first');
+    return result;
+  }
+  result.available = true;
+  const versionLabel = version.stdout.trim().split(/\r?\n/)[0] || 'unknown';
+  result.note = t(`protocol 兼容（${versionLabel}），已登录`,
+    `ACP compatible (${versionLabel}), logged in`);
+  return result;
+}
+
+async function detectDroid({ env, execFileImpl, probe }) {
+  const explicit = env.DROID_BIN?.trim();
+  const bin = explicit ? locateBinary(explicit, env) : which('droid', env);
+  const result = {
+    id: 'droid', label: 'Factory Droid', model: 'droid', bin: bin ?? null, binEnv: 'DROID_BIN',
+    installed: Boolean(bin), available: false, note: '',
+  };
+  if (!bin) {
+    result.note = explicit
+      ? t(`找不到可执行文件：${explicit}（既不是绝对路径，也不在 PATH 里）`,
+        `Cannot find the executable ${explicit}: it is neither an absolute path nor on PATH`)
+      : t('未安装', 'not installed');
+    return result;
+  }
+  const version = await run(execFileImpl, bin, ['--version'], env);
+  if (!version.ok) {
+    result.note = t(`无法执行：${bin}`, `Cannot execute: ${bin}`);
+    return result;
+  }
+  const handshake = await probe(bin, { env });
+  if (!handshake.compatible) {
+    result.note = t(`stream-jsonrpc 握手失败：${handshake.reason}`, `stream-jsonrpc handshake failed: ${handshake.reason}`);
+    return result;
+  }
+  if (!hasDroidAuth(env)) {
+    result.note = t('未登录：先运行 droid 登录或设置 FACTORY_API_KEY',
+      'not logged in: run droid and sign in or set FACTORY_API_KEY');
+    return result;
+  }
+  result.available = true;
+  const versionLabel = version.stdout.trim().split(/\r?\n/)[0] || 'unknown';
+  result.note = t(`protocol 兼容（${versionLabel}），已登录`,
+    `stream-jsonrpc compatible (${versionLabel}), logged in`);
   return result;
 }

@@ -10,6 +10,8 @@ import { EventEmitter } from 'node:events';
 import { AgentRuntime } from '../src/agent-runtime.mjs';
 import { OpencodeAgent } from '../src/opencode.mjs';
 import { AgyAgent } from '../src/agy.mjs';
+import { CopilotAgent } from '../src/copilot.mjs';
+import { DroidAgent } from '../src/droid.mjs';
 import { resolveRuntimeModelTarget as parseRuntimeModelTarget } from '../src/runtime-catalog.mjs';
 import { adaptRuntime } from '../src/runtime-adapter.mjs';
 import { ActionService } from '../src/actions/service.mjs';
@@ -178,6 +180,120 @@ function opencodeSwitchRuntime(directory, store, spawns) {
     codexFactory: (options) => backend('codex', options),
     opencodeFactory: (options) => new OpencodeAgent(config, store, quietLogger, {
       ...options, spawn: autoAnsweringOpencode(spawns), startStabilityMs: 1,
+    }),
+  });
+}
+
+function autoAnsweringCopilot(spawns, { defaultModel = 'claude-sonnet-4.6' } = {}) {
+  return () => {
+    const child = new EventEmitter();
+    child.pid = 987_654_600 + spawns.length;
+    child.exitCode = null;
+    child.stdout = new EventEmitter();
+    child.stdout.setEncoding = () => {};
+    child.stderr = new EventEmitter();
+    child.stderr.setEncoding = () => {};
+    child.stdin = new EventEmitter();
+    child.stdin.writable = true;
+    child.stdin.end = () => {};
+    child.kill = (signal) => {
+      if (child.exitCode !== null) return;
+      child.exitCode = 0;
+      child.emit('exit', 0, signal);
+    };
+    child.requests = [];
+    const send = (frame) => setImmediate(() => child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', ...frame })}\n`));
+    const answer = (id, result) => send({ id, result });
+    const models = [defaultModel, 'gpt-5'];
+    child.stdin.write = (line) => {
+      const message = JSON.parse(line);
+      if (message.method) child.requests.push(message);
+      if (message.method === 'initialize') {
+        answer(message.id, { protocolVersion: 1, agentInfo: { name: 'Copilot', version: '1.0.114' } });
+      } else if (message.method === 'session/new') {
+        answer(message.id, {
+          sessionId: 'cop_switch',
+          configOptions: [
+            { id: 'model', category: 'model', currentValue: defaultModel, options: models.map((value) => ({ value, name: value })) },
+            { id: 'reasoning_effort', category: 'thought_level', currentValue: 'medium', options: [{ value: 'low' }, { value: 'medium' }, { value: 'high' }] },
+          ],
+        });
+      } else if (message.method === 'session/set_model') {
+        if (models.includes(message.params.modelId)) answer(message.id, {});
+        else send({ id: message.id, error: { code: -32602, message: `Unknown model: ${message.params.modelId}` } });
+      } else if (message.method === 'session/set_config_option') {
+        answer(message.id, {});
+      }
+      return true;
+    };
+    spawns.push(child);
+    return child;
+  };
+}
+
+function autoAnsweringDroid(spawns, { defaultModel = 'gpt-6-sol' } = {}) {
+  return () => {
+    const child = new EventEmitter();
+    child.pid = 987_654_700 + spawns.length;
+    child.exitCode = null;
+    child.stdout = new EventEmitter();
+    child.stdout.setEncoding = () => {};
+    child.stderr = new EventEmitter();
+    child.stderr.setEncoding = () => {};
+    child.stdin = new EventEmitter();
+    child.stdin.writable = true;
+    child.stdin.end = () => {};
+    child.kill = (signal) => {
+      if (child.exitCode !== null) return;
+      child.exitCode = 0;
+      child.emit('exit', 0, signal);
+    };
+    child.requests = [];
+    const send = (frame) => setImmediate(() => child.stdout.emit('data', `${JSON.stringify({ jsonrpc: '2.0', type: 'response', ...frame })}\n`));
+    const answer = (id, result) => send({ id, result });
+    const models = [defaultModel, 'gpt-5.4-mini'];
+    child.stdin.write = (line) => {
+      const message = JSON.parse(line);
+      if (message.method) child.requests.push(message);
+      if (message.method === 'droid.initialize_session') {
+        if (message.params.modelId && !models.includes(message.params.modelId)) {
+          send({ id: message.id, error: { code: -32602, message: `Unknown model: ${message.params.modelId}` } });
+        } else {
+          answer(message.id, {
+            sessionId: 'dr_switch',
+            settings: { modelId: message.params.modelId || defaultModel, reasoningEffort: message.params.reasoningEffort || 'medium' },
+            availableModels: models.map((id) => ({ id, modelId: id, supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' })),
+          });
+        }
+      } else if (message.method === 'droid.update_session_settings') {
+        answer(message.id, {});
+      } else if (message.method === 'droid.list_models') {
+        answer(message.id, {
+          models: models.map((id) => ({ id, modelId: id, supportedReasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium' })),
+        });
+      }
+      return true;
+    };
+    spawns.push(child);
+    return child;
+  };
+}
+
+function copilotAndDroidSwitchRuntime(directory, store, copSpawns, drSpawns) {
+  const config = {
+    copilotBin: 'copilot', copilotModel: '', copilotEffort: 'medium',
+    droidBin: 'droid', droidModel: '', droidEffort: 'medium',
+    workspace: directory, dataDir: directory,
+    profile: 'test-profile', connectors: ['lark'], actionSocketPath: path.join(directory, 'actions.sock'),
+    actionMcpPath: '/release/packages/daemon/src/actions/mcp.mjs', sendTimeoutMs: 5_000, maxReplyChars: 1_000,
+  };
+  return new AgentRuntime(config, store, quietLogger, {
+    codexFactory: (options) => backend('codex', options),
+    copilotFactory: (options) => new CopilotAgent(config, store, quietLogger, {
+      ...options, spawn: autoAnsweringCopilot(copSpawns), terminateProcessTree: (c, s) => c.kill(s), startStabilityMs: 1,
+    }),
+    droidFactory: (options) => new DroidAgent(config, store, quietLogger, {
+      ...options, spawn: autoAnsweringDroid(drSpawns), terminateProcessTree: (c, s) => c.kill(s), startStabilityMs: 1,
     }),
   });
 }
@@ -921,6 +1037,49 @@ describe('global Codex/Claude hard switch', () => {
       assert.equal(runtime.backend.model, '');
       assert.equal(runtime.backend.resolvedModel, 'gemini-3.8-flash-low');
       assert.equal(spawns.length, 2);
+    } finally {
+      await runtime.stop();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('switches to Copilot with no configured model and falls back when a saved model is gone', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-copilot-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    const copSpawns = [];
+    const drSpawns = [];
+    const runtime = copilotAndDroidSwitchRuntime(directory, store, copSpawns, drSpawns);
+
+    try {
+      await runtime.start();
+      store.setSetting('copilot_model', 'removed-copilot-model');
+      const toCopilot = await runtime.transition({ kind: 'select-runtime', runtime: 'copilot' });
+      assert.equal(toCopilot.runtimeChanged, true);
+      assert.equal(runtime.runtime, 'copilot');
+      assert.equal(runtime.backend.resolvedModel, 'claude-sonnet-4.6');
+      assert.equal(copSpawns.length, 2);
+    } finally {
+      await runtime.stop();
+      store.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('switches to Droid, refreshes live catalog, and selects compatible model defaults', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-runtime-droid-'));
+    const store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    const copSpawns = [];
+    const drSpawns = [];
+    const runtime = copilotAndDroidSwitchRuntime(directory, store, copSpawns, drSpawns);
+
+    try {
+      await runtime.start();
+      const toDroid = await runtime.transition({ kind: 'select-runtime', runtime: 'droid' });
+      assert.equal(toDroid.runtimeChanged, true);
+      assert.equal(runtime.runtime, 'droid');
+      assert.equal(runtime.backend.resolvedModel, 'gpt-6-sol');
+      assert.equal(drSpawns.length, 1);
     } finally {
       await runtime.stop();
       store.close();

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { probeAcp, probeAgyAcp, probeAppServer } from '../src/runtime-probe.mjs';
+import { probeAcp, probeAgyAcp, probeAppServer, probeCopilotAcp, probeDroidJsonRpc } from '../src/runtime-probe.mjs';
 
 // Windows terminates a process instead of delivering SIGKILL, so the probe's
 // timeout is observed as an exit rather than a signal there.
@@ -166,4 +166,66 @@ test('ACP probe rejects an initialize error', async (t) => {
   assert.equal(result.compatible, false);
   assert.match(result.reason, /ACP rejected initialize/);
   await Promise.all(f.closed);
+});
+
+test('Copilot ACP probe validates agent identity and session/new auth state in isolated COPILOT_HOME', async (t) => {
+  const copilotScript = (sessionError) => `
+    const readline = require('node:readline');
+    readline.createInterface({ input: process.stdin }).on('line', (line) => {
+      const req = JSON.parse(line);
+      if (req.method === 'initialize') {
+        process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { agentInfo: { name: 'Copilot', version: '1.0.114' } } }) + '\\n');
+      } else if (req.method === 'session/new') {
+        process.stdout.write(JSON.stringify(${sessionError
+    ? '{ jsonrpc: "2.0", id: req.id, error: { code: -32000, message: "Authentication required" } }'
+    : '{ jsonrpc: "2.0", id: req.id, result: { sessionId: "cop-1" } }'}) + '\\n');
+      }
+    });
+  `;
+  const loggedIn = fixture(t, copilotScript(false));
+  const ok = await probeCopilotAcp(loggedIn.bin, loggedIn.options);
+  assert.equal(ok.compatible, true);
+  assert.equal(ok.loggedIn, true);
+  await Promise.all(loggedIn.closed);
+
+  const loggedOut = fixture(t, copilotScript(true));
+  const unauth = await probeCopilotAcp(loggedOut.bin, loggedOut.options);
+  assert.equal(unauth.compatible, true);
+  assert.equal(unauth.loggedIn, false);
+  await Promise.all(loggedOut.closed);
+});
+
+test('Droid probe validates droid.initialize_session under FACTORY_HOME_OVERRIDE', async (t) => {
+  const good = fixture(t, `
+    const readline = require('node:readline');
+    if (process.argv[2] !== 'exec' || !process.env.FACTORY_HOME_OVERRIDE) process.exit(2);
+    readline.createInterface({ input: process.stdin }).on('line', (line) => {
+      const req = JSON.parse(line);
+      if (typeof req.id !== 'string') process.exit(3);
+      if (req.method === 'droid.initialize_session') {
+        process.stdout.write(JSON.stringify({
+          jsonrpc: '2.0', type: 'response', id: req.id,
+          result: { sessionId: 'dr-1', availableModels: [{ id: 'gpt-6-sol' }] },
+        }) + '\\n');
+      }
+    });
+  `);
+  const ok = await probeDroidJsonRpc(good.bin, good.options);
+  assert.equal(ok.compatible, true);
+  await Promise.all(good.closed);
+
+  const bad = fixture(t, `
+    const readline = require('node:readline');
+    readline.createInterface({ input: process.stdin }).on('line', (line) => {
+      const req = JSON.parse(line);
+      process.stdout.write(JSON.stringify({
+        jsonrpc: '2.0', type: 'response', id: req.id,
+        result: { sessionId: '' },
+      }) + '\\n');
+    });
+  `);
+  const rejected = await probeDroidJsonRpc(bad.bin, bad.options);
+  assert.equal(rejected.compatible, false);
+  assert.match(rejected.reason, /no sessionId/);
+  await Promise.all(bad.closed);
 });

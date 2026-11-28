@@ -25,6 +25,8 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'OPENCODE_BIN',
   'AGY_BIN',
   'DSH_BIN',
+  'COPILOT_BIN',
+  'DROID_BIN',
   'OV_SUPERAGENT_WEIXIN_LONG_POLL_TIMEOUT_MS',
   'OV_SUPERAGENT_LOG_LEVEL',
   'OV_SUPERAGENT_TEMP_DIR',
@@ -56,6 +58,10 @@ const DAEMON_ENV_FIELDS = Object.freeze([
   'OV_SUPERAGENT_DURABLE_MODEL',
   'OV_SUPERAGENT_OPENCODE_MODEL',
   'OV_SUPERAGENT_AGY_MODEL',
+  'OV_SUPERAGENT_COPILOT_EFFORT',
+  'OV_SUPERAGENT_COPILOT_MODEL',
+  'OV_SUPERAGENT_DROID_EFFORT',
+  'OV_SUPERAGENT_DROID_MODEL',
   'OV_SUPERAGENT_VOLC_SESSION_ID',
   'OV_SUPERAGENT_VOLC_ENVIRONMENT_ID',
   'OV_SUPERAGENT_VOLC_BASE_URL',
@@ -335,7 +341,7 @@ function parseAgent(value, index, ignored) {
     throw new Error(`${label}.port must be an integer between 1 and 65535`);
   }
   const model = manifestString(value.model, `${label}.model`);
-  const runtimeIds = ['codex', 'traex', 'claude', 'pi', 'durable', 'opencode', 'agy', 'dsh', 'volc'];
+  const runtimeIds = ['codex', 'traex', 'claude', 'pi', 'durable', 'opencode', 'agy', 'dsh', 'volc', 'copilot', 'droid'];
   for (const field of ['primaryRuntime', 'fallbackRuntime']) {
     if (value[field] !== undefined && !runtimeIds.includes(value[field])) throw new Error(`${label}.${field} must name a supported runtime`);
   }
