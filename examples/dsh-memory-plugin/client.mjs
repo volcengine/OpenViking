@@ -11,7 +11,7 @@ export class OpenVikingClient {
   }
 
   async healthResult() {
-    const response = await this.fetchJSON("/health", {}, { timeoutMs: 5000 });
+    const response = await this.fetchJSON("/health");
     this.connected = response.ok;
     return response;
   }
@@ -28,7 +28,7 @@ export class OpenVikingClient {
     const response = await this.fetchJSON(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       {},
-      { timeoutMs: 5000, actorPeerId },
+      { actorPeerId },
     );
     return response.ok ? response.result : null;
   }

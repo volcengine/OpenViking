@@ -67,6 +67,24 @@ test("per-session actor peer overrides the process default", async () => {
   assert.equal(headers["X-OpenViking-Actor-Peer"], "workspace-peer");
 });
 
+test("health and session reads use the configured request timeout", async (t) => {
+  const deadlines = [];
+  const setTimeout = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    deadlines.push(delay);
+    return setTimeout(callback, delay, ...args);
+  });
+  globalThis.fetch = async () => Response.json({ status: "ok", result: {} });
+  const client = new OpenVikingClient({
+    endpoint: "http://127.0.0.1:1933",
+    requestTimeoutMs: 12000,
+  });
+
+  assert.equal((await client.healthResult()).ok, true);
+  assert.deepEqual(await client.getSession("dsh-read", "workspace-peer"), {});
+  assert.deepEqual(deadlines, [12000, 12000]);
+});
+
 test("client normalizes non-2xx OpenViking envelopes", async () => {
   globalThis.fetch = async () => new Response(JSON.stringify({
     status: "error",
