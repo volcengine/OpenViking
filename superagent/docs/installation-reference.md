@@ -87,6 +87,8 @@ QR-based app creation or selection in `ov-superagent setup` performs the followi
 3. Add the bot to trusted chats and restrict app visibility. Receiving unmentioned group messages requires `im:message.group_msg`; messages from other bots also require `im:message.group_msg.include_bot:read`.
 4. Configure the bot profile with lark-cli. Add user OAuth only when reading personal resources as the user.
 
+lark-cli refuses to configure a profile while it believes it runs inside another agent's workspace: when `HERMES_HOME` or `OPENCLAW_HOME` is set it exits 3 with `config init is refused inside <agent> context` or `<agent> context detected but lark-cli is not bound to it`. Setup, `login` and the daemon strip both variables from every lark-cli child, so installing from a shell that another agent started still works; a manual `lark-cli config init` needs `HERMES_HOME`/`OPENCLAW_HOME` unset in that shell. `CODEX_HOME` and `CLAUDE_CONFIG_DIR` do not trigger the refusal.
+
 Uploads require `im:resource`, sends require `im:message:send_as_bot`, card reading requires `im:message:readonly`, and answered-card updates require `im:message:update`. These scopes are in the permission list. Use lark-cli with `card.action.trigger` support; this implementation was validated against 1.0.94 commands and event schemas. A working CLI does not prove callbacks are enabled in the developer console. No public callback URL is needed: the CLI ACKs promptly and the model processes the answer asynchronously.
 
 `permission.json` lists the full feature set, not minimum privileges. Restrict scopes and visibility for production use.

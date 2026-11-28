@@ -2,14 +2,19 @@
 // SPDX-License-Identifier: AGPL-3.0
 
 import { spawn } from '../../daemon/src/platform/index.mjs';
+import { AGENT_WORKSPACE_ENV } from '../../daemon/src/agent-workspace-env.mjs';
 
 // The lark-cli calls setup needs: write the bot profile, authorize the owner
 // as a user (the second QR code), read who authorized, send a greeting, list
 // which app each profile uses, and read an app's settings as its bot.
 // Profiles go into the user's own lark-cli config, where the daemon reads them.
 
+// Setup runs from the user's shell, so it inherits whatever agent workspace the
+// host was started in. lark-cli refuses to configure a profile inside one (see
+// agent-workspace-env.mjs), which is exactly the case when OpenViking
+// SuperAgent is installed from inside another agent's session.
 const SCRUBBED = ['LARKSUITE_CLI_PROFILE', 'LARKSUITE_CLI_APP_ID', 'LARKSUITE_CLI_APP_SECRET',
-  'LARKSUITE_CLI_USER_ACCESS_TOKEN', 'LARKSUITE_CLI_TENANT_ACCESS_TOKEN'];
+  'LARKSUITE_CLI_USER_ACCESS_TOKEN', 'LARKSUITE_CLI_TENANT_ACCESS_TOKEN', ...AGENT_WORKSPACE_ENV];
 
 export function larkCliEnv(env = process.env) {
   const next = { ...env, LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' };

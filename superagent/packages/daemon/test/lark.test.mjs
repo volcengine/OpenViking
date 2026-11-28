@@ -520,6 +520,20 @@ describe('non-Ark child environment', () => {
     assert.equal(environment.OV_SUPERAGENT_VOLC_SESSION_ID, undefined);
     assert.equal(environment.SESSION_ID, undefined);
   });
+
+  it('strips a host agent workspace so lark-cli can run', () => {
+    // lark-cli exits 3 whenever HERMES_HOME or OPENCLAW_HOME is set: it reads
+    // the variable as "another agent owns this workspace".
+    const environment = sanitizeNonArkChildEnv({
+      PATH: '/bin',
+      HERMES_HOME: '/home/me/.hermes',
+      OPENCLAW_HOME: '/home/me/.openclaw',
+      CODEX_HOME: '/home/me/.codex',
+    });
+    assert.equal(environment.HERMES_HOME, undefined);
+    assert.equal(environment.OPENCLAW_HOME, undefined);
+    assert.equal(environment.CODEX_HOME, '/home/me/.codex');
+  });
 });
 
 describe('Lark chat lookup', () => {

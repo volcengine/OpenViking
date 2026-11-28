@@ -144,6 +144,30 @@ test('CLI discovery preserves the agent credential boundary and leaves connector
   assert.deepEqual(inherited, before);
 });
 
+test('a host agent workspace never reaches a connector or lark-cli child', () => {
+  const inherited = {
+    PATH: '/usr/bin:/bin', HERMES_HOME: '/home/me/.hermes', OPENCLAW_HOME: '/home/me/.openclaw',
+    CODEX_HOME: '/home/me/.codex', CLAUDE_CONFIG_DIR: '/home/me/.claude', LARK_APP_ID: 'keep',
+  };
+  const before = { ...inherited };
+  const nonArk = sanitizeNonArkChildEnv(inherited);
+  assert.equal(nonArk.HERMES_HOME, undefined);
+  assert.equal(nonArk.OPENCLAW_HOME, undefined);
+  // Only the two markers lark-cli refuses on are stripped: the other agents'
+  // homes still identify the runtime that needs them.
+  assert.equal(nonArk.CODEX_HOME, '/home/me/.codex');
+  assert.equal(nonArk.CLAUDE_CONFIG_DIR, '/home/me/.claude');
+  assert.equal(nonArk.LARK_APP_ID, 'keep');
+  assert.equal(sanitizeAgentChildEnv(inherited).HERMES_HOME, undefined);
+  assert.deepEqual(inherited, before);
+});
+
+test('a lower-cased workspace variable is stripped too', () => {
+  // Windows environment names are case-insensitive and some shells lower them.
+  const env = sanitizeNonArkChildEnv({ PATH: '/bin', hermes_home: 'C:\\Users\\me\\AppData\\Local\\hermes' });
+  assert.deepEqual(Object.keys(env).sort(), ['PATH']);
+});
+
 const bundled = bundledLarkCli();
 test('the installed Lark CLI runs --version in an agent shell', {
   skip: posixShell.skip || (!path.isAbsolute(bundled) && 'run scripts/install-lark-cli.mjs to install the pinned binary'),
