@@ -22,7 +22,8 @@ function setup(t, { now = Date.now } = {}) {
   t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
   const db = new DatabaseSync(':memory:');
   db.exec(`CREATE TABLE connector_events (seq INTEGER PRIMARY KEY, message_id TEXT);
-    CREATE TABLE outbox (id INTEGER PRIMARY KEY, inbound_seq INTEGER, remote_message_id TEXT);
+    CREATE TABLE outbox (id INTEGER PRIMARY KEY, inbound_seq INTEGER, remote_message_id TEXT,
+      status TEXT DEFAULT 'SENT', sent_at_ms INTEGER);
     CREATE TABLE chat_sources (chat_id TEXT PRIMARY KEY, name TEXT);
     INSERT INTO chat_sources VALUES ('oc_group', 'OpenViking 用户群');`);
   const turns = [];

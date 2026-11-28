@@ -1449,13 +1449,32 @@ export class TaskManager {
     return true;
   }
 
+  // A reply this agent sent on the input a round was asked on, before that
+  // round's report was filed: the requester saw it already, and the report
+  // would answer the same input a second time. Settling catches the report
+  // offered first and the answer after (settleReports); this is the reverse.
+  answeredBefore(report) {
+    const origin = this.roundOf(this.get(report.task_id), report.round ?? 1);
+    if (origin.origin_seq == null) return null;
+    let answer;
+    try {
+      answer = this.db.prepare(`SELECT id, sent_at_ms FROM outbox
+        WHERE status = 'SENT' AND inbound_seq = ? AND sent_at_ms IS NOT NULL AND sent_at_ms <= ?
+        ORDER BY sent_at_ms DESC LIMIT 1`).get(origin.origin_seq, report.created_at_ms);
+    } catch { /* no outbox table (tests) */ }
+    if (!answer) return null;
+    return { id: answer.id, at: answer.sent_at_ms };
+  }
+
   reportText(task, report, { again = false, working = false } = {}) {
     // The answer goes where the report's round was asked.
     const origin = this.roundOf(task, report.round ?? 1);
     const round = (report.round ?? 1) > 1 || task.round > 1 ? ` round=${report.round ?? 1}` : '';
+    const answered = this.answeredBefore(report);
     return [
-      `[task report] task=${task.id}${round} state=${report.state} title="${oneLine(clip(task.title, 80))}" requester=${metadataTag(origin.requester_name ?? task.requester_name ?? 'unknown')}${report.structured ? '' : ' unstructured=1'}${working ? ' working=1' : ''}${again ? ' undelivered=1' : ''}`,
+      `[task report] task=${task.id}${round} state=${report.state} title="${oneLine(clip(task.title, 80))}" requester=${metadataTag(origin.requester_name ?? task.requester_name ?? 'unknown')}${report.structured ? '' : ' unstructured=1'}${working ? ' working=1' : ''}${again ? ' undelivered=1' : ''}${answered ? ` already_answered=1 outbox=${answered.id} at=${this.ago(answered.at)}` : ''}`,
       `origin: ${origin.origin_chat ? `chat=${chatTag(metadataTag(origin.origin_chat), origin.origin_thread)} ` : ''}source=${origin.origin_source} msg=${metadataTag(origin.origin_message ?? '')} event=${metadataTag(origin.origin_event ?? '')}`,
+      ...(answered ? [`You already replied on this origin ${this.ago(answered.at)} ago (outbox ${answered.id}), before this report: the requester has that answer. From the report, relay only what it adds to it or corrects in it, and answer the report itself with task_ids=["${task.id}"]. If your earlier reply covers the whole task, settle this report with stay_silent on its origin event= and task_ids=["${task.id}"]. Do not send the report's answer again.`] : []),
       ...(working ? [`The requester kept adding to ${task.id} while its worker wrote this, and the worker is on their latest input now: relay this as the result so far with task_ids=["${task.id}"], and say the rest follows in a later [task report].`] : []),
       ...(again ? [`You were shown this report before and have not answered for ${task.id}: relay it now with task_ids=["${task.id}"], or, if a reply you already sent covers it, call stay_silent on its origin event= with task_ids=["${task.id}"].`] : []),
       ...(report.summary ? ['summary:', quoted(clip(report.summary, SUMMARY_CHARS))] : []),
