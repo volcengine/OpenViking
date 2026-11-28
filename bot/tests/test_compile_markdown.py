@@ -370,6 +370,51 @@ async def test_markdown_routing_uses_content_and_checks_foreign_decisions(pipeli
     assert "Related documents must be supplied candidates" in pipeline.warnings[-1]
 
 
+@pytest.mark.parametrize("same_description", [True, False])
+async def test_routing_shares_descriptions_without_sharing_candidates(
+    pipeline, monkeypatch, same_description
+):
+    pipeline.contract = contract(True)
+    docs = [Document(f"{i}.md", f"drafts/{i}.md") for i in range(3)]
+    for i, doc in enumerate(docs):
+        await pipeline.files.sandbox.write_file(doc.workspace_path, str(i))
+    shared, other = [f"{pipeline.target}/{name}.md" for name in ("shared", "other")]
+    description = "Existing regional rules and their applicability. " * 6
+    histories = [
+        [{"uri": shared, "description": description}],
+        [{"uri": shared, "description": description if same_description else "Revised"}],
+        [{"uri": other, "description": "Another region"}],
+    ]
+    monkeypatch.setattr(
+        Shuffle, "candidates", AsyncMock(side_effect=lambda text: histories[int(text)])
+    )
+    monkeypatch.setattr(Shuffle, "vectors", AsyncMock(return_value=[[1.0, 0.0]] * 3))
+
+    async def chat(**kwargs):
+        data = json.loads(kwargs["messages"][1]["content"])
+        expected = histories
+        if same_description:
+            assert data["shared_history"] == {shared: description}
+            expected = [[{"uri": shared}], [{"uri": shared}], histories[2]]
+        else:
+            assert "shared_history" not in data
+        assert [row["history"] for row in data["assignments"]] == expected
+        decisions = [
+            {"document": row["document"], "history": [row["history"][0]["uri"]]}
+            for row in data["assignments"]
+        ]
+        if same_description and len(kwargs["messages"]) == 2:
+            decisions[-1]["history"] = [shared]
+        return LLMResponse(content=json.dumps({"decisions": decisions}))
+
+    pipeline.model.provider.chat = AsyncMock(side_effect=chat)
+    plan = MERGE.replace("by=contract.routing", "by=contract.routing, against=target")
+    groups = await Shuffle(pipeline).run(parse_plan(plan, pipeline.contract)[1], docs)
+    assert [group.target_uris for group in groups] == [[shared], [shared], [other]]
+    assert pipeline.metrics["validation_failures"] == int(same_description)
+    assert not pipeline.warnings
+
+
 @pytest.mark.parametrize("fail_all", [False, True])
 async def test_failed_routes_keep_completed_drafts_through_finalization(
     pipeline, monkeypatch, agent_loop, fail_all
