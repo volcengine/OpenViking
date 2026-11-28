@@ -948,7 +948,13 @@ class PDFParser(BaseParser):
         def clean_cell(cell):
             if cell is None:
                 return ""
-            return "<br>".join(str(cell).strip().replace("|", "\\|").splitlines())
+            # A table escape must preserve any literal backslashes before the pipe.
+            escaped = re.sub(
+                r"(?<!\\)(\\*)\|",
+                lambda match: "\\" * (2 * len(match[1]) + 1) + "|",
+                str(cell).strip(),
+            )
+            return "<br>".join(escaped.splitlines())
 
         lines = []
 
