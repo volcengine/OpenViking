@@ -225,18 +225,39 @@ class TestClassify:
     def test_garbage_returns_none(self):
         assert _classify_and_count(b"not xml at all") is None
 
-    def test_extract_feed_links(self):
+    @pytest.mark.parametrize(
+        ("encoded_query", "expected_query"),
+        [
+            ("", ""),
+            ("?topic=ml&amp;page=2", "?topic=ml&page=2"),
+            ("?topic=ml&#38;page=2", "?topic=ml&page=2"),
+            ("?topic=ml&#x26;page=2", "?topic=ml&page=2"),
+            ("?topic=ml&#X26;page=2", "?topic=ml&page=2"),
+            (
+                "?next=%2Fblog%3Fa%3D1%26b%3D2&amp;lang=en",
+                "?next=%2Fblog%3Fa%3D1%26b%3D2&lang=en",
+            ),
+            ("?next=%2Fblog%3Fa%3D1%26b%3D2", "?next=%2Fblog%3Fa%3D1%26b%3D2"),
+            ("?a=1&copy=2", "?a=1&copy=2"),
+            ("?literal=&notit;", "?literal=&notit;"),
+            ("?a=1&copy=2&amp;lang=en", "?a=1&copy=2&lang=en"),
+            ("?literal=&amp;amp;value", "?literal=&amp;value"),
+            ("?name=&copy;", "?name=\u00a9"),
+        ],
+    )
+    def test_extract_feed_links(self, encoded_query, expected_query):
         html = (
-            '<link rel="alternate" type="application/rss+xml" href="/rss.xml">'
-            '<link rel="alternate" type="application/atom+xml" href="https://h/atom.xml">'
-            '<link rel="sitemap" href="/sitemap.xml">'
-            '<link rel="stylesheet" href="/x.css">'
+            f'<link rel="alternate" type="application/rss+xml" href="/rss.xml{encoded_query}">'
+            '<link rel="alternate" type="application/atom+xml" '
+            f'href="https://h/atom.xml{encoded_query}">'
+            f'<link rel="sitemap" href="/sitemap.xml{encoded_query}">'
+            f'<link rel="stylesheet" href="/x.css{encoded_query}">'
         )
-        links = _extract_feed_links(html, "https://h/page")
-        assert "https://h/rss.xml" in links
-        assert "https://h/atom.xml" in links
-        assert "https://h/sitemap.xml" in links
-        assert all("x.css" not in link for link in links)
+        assert _extract_feed_links(html, "https://h/page") == [
+            f"https://h/rss.xml{expected_query}",
+            f"https://h/atom.xml{expected_query}",
+            f"https://h/sitemap.xml{expected_query}",
+        ]
 
 
 # --------------------------------------------------------------------------- #
@@ -381,9 +402,11 @@ class TestAutoDiscovery:
 
     async def test_html_page_discovers_feed_via_link_tag(self, patch_httpx):
         base = "https://blog.example"
+        feed_url = f"{base}/rss.xml?lang=en&page=2"
         page_html = (
             "<html><head>"
-            f'<link rel="alternate" type="application/rss+xml" href="{base}/rss.xml">'
+            '<link rel="alternate" type="application/rss+xml" '
+            f'href="{base}/rss.xml?lang=en&amp;page=2">'
             "</head><body>post</body></html>"
         ).encode()
         rss = (
@@ -393,7 +416,13 @@ class TestAutoDiscovery:
         ).encode()
         routes = {
             f"{base}/some-article": _FakeResponse(content=page_html),
-            f"{base}/rss.xml": _FakeResponse(content=rss, content_type="application/rss+xml"),
+            f"{base}/robots.txt": _FakeResponse(
+                content="User-agent: *\nAllow: /\n", content_type="text/plain"
+            ),
+            feed_url: _FakeResponse(content=rss, content_type="application/rss+xml"),
+            f"{base}/rss.xml?lang=en&amp;page=2": _FakeResponse(
+                content=rss, content_type="application/rss+xml"
+            ),
             f"{base}/a/": _FakeResponse(content=_page("A")),
         }
         patch_httpx(routes)
@@ -404,7 +433,7 @@ class TestAutoDiscovery:
         )
         try:
             assert resource.meta["url_type"] == "rss"
-            assert resource.meta["feed_url"] == f"{base}/rss.xml"
+            assert resource.meta["feed_url"] == feed_url
         finally:
             resource.cleanup()
 
@@ -517,9 +546,10 @@ class TestDiscoverHint:
 
     async def test_hint_from_html_autodiscovery(self, patch_httpx):
         base = "https://blog.example.com"
+        feed_url = f"{base}/rss.xml?lang=en&page=2"
         page_html = (
             '<html><head><link rel="alternate" type="application/rss+xml" '
-            f'href="{base}/rss.xml"></head><body>hi</body></html>'
+            f'href="{base}/rss.xml?lang=en&amp;page=2"></head><body>hi</body></html>'
         ).encode()
         rss = (
             '<?xml version="1.0"?><rss version="2.0"><channel>'
@@ -529,14 +559,20 @@ class TestDiscoverHint:
         ).encode()
         routes = {
             f"{base}/article": _FakeResponse(content=page_html),
-            f"{base}/rss.xml": _FakeResponse(content=rss, content_type="application/rss+xml"),
-            # robots.txt missing -> 404, fine
+            f"{base}/robots.txt": _FakeResponse(
+                content="User-agent: *\nAllow: /\n", content_type="text/plain"
+            ),
+            feed_url: _FakeResponse(content=rss, content_type="application/rss+xml"),
+            f"{base}/rss.xml?lang=en&amp;page=2": _FakeResponse(
+                content=rss, content_type="application/rss+xml"
+            ),
         }
         patch_httpx(routes)
 
         hint = await discover_feed_hint(f"{base}/article", timeout=5)
         assert hint is not None
         assert "RSS feed with 2 item(s)" in hint
+        assert feed_url in hint
 
     async def test_no_hint_when_nothing_found(self, patch_httpx):
         base = "https://nofeed.example.com"
