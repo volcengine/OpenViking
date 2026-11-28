@@ -69,6 +69,26 @@ _MD_FRAGMENT_RE = re.compile(r"^([^#?]*)([#?].*)?$")
 # Extensions whose targets become directories on ingest (see _rewrite_single_link).
 _MD_DIR_EXTS = {".md", ".markdown", ".mdown", ".mkd"}
 
+# GFM tables are an extension on top of CommonMark; enabled lazily on the same
+# commonmark preset the session link renderer uses. Cached because layout planning
+# may consult it for every oversized paragraph whose table has a tail.
+_MARKDOWN_TABLE_PARSER: Optional[Any] = None
+_MARKDOWN_TABLE_PARSER_READY = False
+
+
+def _get_markdown_table_parser() -> Optional[Any]:
+    """Return a cached MarkdownIt instance with GFM table support, or None."""
+    global _MARKDOWN_TABLE_PARSER, _MARKDOWN_TABLE_PARSER_READY
+    if not _MARKDOWN_TABLE_PARSER_READY:
+        _MARKDOWN_TABLE_PARSER_READY = True
+        try:
+            from markdown_it import MarkdownIt
+
+            _MARKDOWN_TABLE_PARSER = MarkdownIt("commonmark").enable("table")
+        except ImportError:
+            _MARKDOWN_TABLE_PARSER = None
+    return _MARKDOWN_TABLE_PARSER
+
 
 def _smart_stem(path_or_name: str | Path) -> str:
     """Get the stem of a filename, but only strip known valid extensions.
@@ -728,6 +748,12 @@ class MarkdownParser(BaseParser):
         the table, such as a section heading merged into the oversized paragraph,
         is kept on the first chunk only. A single row may exceed the requested
         limits because row integrity takes precedence at this source-storage stage.
+
+        Content after the table is preserved: GFM terminates a table at the first
+        following block (blockquote/list/thematic break/heading/fence) even without
+        a blank line, and body rows may omit outer pipes. The real table boundary is
+        resolved via markdown-it; following blocks are emitted after the table
+        chunks (merged into the last chunk when the budget allows).
         """
         lines = content.splitlines()
         table_start = -1
@@ -744,9 +770,19 @@ class MarkdownParser(BaseParser):
         while table_end < len(lines) and self._is_markdown_table_row(lines[table_end]):
             table_end += 1
 
+        # Anything the strict pipe-row scan leaves over can be a legitimate following
+        # block (GFM ends a table at a blockquote/list/thematic break without a blank
+        # line) or body rows without outer pipes. Resolve the table's real boundary
+        # instead of giving up on row-preserving splitting entirely.
+        tail_text = "\n".join(lines[table_end:]).strip()
+        if tail_text:
+            resolved_end = self._resolve_table_extent(content, lines, table_start)
+            if resolved_end is None:
+                return None
+            table_end = resolved_end
+            tail_text = "\n".join(lines[table_end:]).strip()
+
         if table_end - table_start < 3:
-            return None
-        if any(line.strip() for line in lines[table_end:]):
             return None
 
         prefix = "\n".join(lines[:table_start]).strip()
@@ -785,7 +821,62 @@ class MarkdownParser(BaseParser):
             current_lines.append(row)
 
         flush()
+
+        if tail_text:
+            if len(tail_text) > max_chars:
+                # Following blocks split like ordinary oversized paragraphs so the
+                # character budget still holds for content after the table.
+                tail_parts = self._split_markdown_table_by_rows(tail_text, max_chars=max_chars)
+                if tail_parts:
+                    parts.extend(tail_parts)
+                else:
+                    parts.extend(
+                        tail_text[i : i + max_chars].strip()
+                        for i in range(0, len(tail_text), max_chars)
+                    )
+            elif parts and len(parts[-1]) + 2 + len(tail_text) <= max_chars:
+                parts[-1] = f"{parts[-1]}\n\n{tail_text}"
+            else:
+                parts.append(tail_text)
         return parts or None
+
+    def _resolve_table_extent(
+        self,
+        content: str,
+        lines: List[str],
+        table_start: int,
+    ) -> Optional[int]:
+        """Resolve the top-level table's exclusive end line when the strict
+        pipe-row scan leaves a tail.
+
+        Uses the project's Markdown dependency (markdown-it-py with the GFM table
+        rule) to find where the table really ends: a following blockquote/list/
+        thematic break/heading/fence terminates it without a blank line, while body
+        rows may omit outer pipes. Returns ``None`` — the caller keeps the previous
+        raw-slicing fallback — when the parser is unavailable or its line
+        coordinates do not match the caller's ``splitlines()`` indexing (for
+        example CR or other Unicode line separators).
+        """
+        parser = _get_markdown_table_parser()
+        if parser is None:
+            return None
+        # markdown-it line numbers are \n-based; splitlines() also splits on lone CR
+        # and other Unicode line boundaries. Only proceed when the two agree.
+        if re.search(r"\r(?!\n)|[\v\f\x1c\x1d\x1e\x85\u2028\u2029]", content):
+            return None
+        if content.count("\n") + (0 if content.endswith("\n") else 1) != len(lines):
+            return None
+        try:
+            tokens = parser.parse(content)
+        except Exception:
+            return None
+        for token in tokens:
+            if token.type == "table_open" and token.map and token.map[0] == table_start:
+                table_end = token.map[1]
+                if table_start + 2 < table_end <= len(lines):
+                    return table_end
+                return None
+        return None
 
     async def _ingest_local_images(
         self,

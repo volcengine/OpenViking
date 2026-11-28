@@ -7,6 +7,12 @@ from openviking.parse.parsers.markdown import MarkdownParser
 from openviking_cli.utils.config.parser_config import ParserConfig
 
 
+def _oversized_table_rows() -> list[str]:
+    # Four data rows of ~700 characters each: any single row fits the budget,
+    # the whole table does not.
+    return ["| ROW_%02d " % i + chr(65 + i) * 690 + " |" for i in range(4)]
+
+
 @pytest.mark.parametrize("character", ["中", "a", "🙂"])
 def test_smart_split_character_budget_preserves_content(character):
     parser = MarkdownParser()
@@ -77,3 +83,93 @@ def test_oversized_header_and_row_stay_together_without_duplicate_header(header_
     row = "| " + "文" * 2500 + " | Y |"
     content = header + "\n" + row
     assert parser._smart_split_content(content, max_size=2000) == [content]
+
+
+_ADJACENT_TAILS = [
+    "\n> End note",
+    "\n- End note",
+    "\n***\nEnd note",
+    "\n\n> End note",
+]
+
+
+@pytest.mark.parametrize("tail", _ADJACENT_TAILS)
+def test_adjacent_block_keeps_table_rows_intact(tail):
+    """GFM ends a table at a following block without a blank line; row splitting
+    must keep working instead of falling back to raw character slicing."""
+    parser = MarkdownParser()
+    rows = _oversized_table_rows()
+    content = "| Column |\n| --- |\n" + "\n".join(rows) + tail
+    parts = parser._smart_split_content(content, max_size=2000)
+
+    assert all(len(part) <= 2000 for part in parts)
+    joined = "\n".join(parts)
+    assert [sum(row in part for part in parts) for row in rows] == [1, 1, 1, 1]
+    positions = [joined.index(row) for row in rows]
+    assert positions == sorted(positions)
+    assert joined.count("End note") == 1
+    assert tail.strip() in parts[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail", _ADJACENT_TAILS)
+async def test_layout_adjacent_block_keeps_table_rows_intact(tail):
+    parser = MarkdownParser()
+    rows = _oversized_table_rows()
+    content = "| Column |\n| --- |\n" + "\n".join(rows) + tail
+    layout = await parser._compute_layout(content, "viking://temp/table-tail", resource_name="s")
+    parts = [op.content for op in layout.ops if op.kind == "write"]
+
+    assert all(len(part) <= 2000 for part in parts)
+    assert [sum(row in part for part in parts) for row in rows] == [1, 1, 1, 1]
+    assert tail.strip() in parts[-1]
+
+
+def test_pipeless_body_rows_stay_intact_before_adjacent_block():
+    """GFM body rows may omit outer pipes; they belong to the table, not to the
+    following content."""
+    parser = MarkdownParser()
+    rows = ["ROW_%02d | " % i + chr(65 + i) * 690 for i in range(4)]
+    content = "| Column |\n| --- |\n" + "\n".join(rows) + "\n> End note"
+    parts = parser._smart_split_content(content, max_size=2000)
+
+    assert all(len(part) <= 2000 for part in parts)
+    assert [sum(row in part for part in parts) for row in rows] == [1, 1, 1, 1]
+    assert "End note" in parts[-1]
+
+
+def test_oversized_adjacent_block_is_split_to_budget_after_table():
+    parser = MarkdownParser()
+    rows = _oversized_table_rows()
+    note = "> " + "文" * 2500
+    content = "| Column |\n| --- |\n" + "\n".join(rows) + "\n" + note
+    parts = parser._smart_split_content(content, max_size=2000)
+
+    assert all(len(part) <= 2000 for part in parts)
+    assert [sum(row in part for part in parts) for row in rows] == [1, 1, 1, 1]
+    assert sum(part.count("文") for part in parts) == 2500
+
+
+def test_crlf_table_with_adjacent_block_keeps_rows_intact():
+    parser = MarkdownParser()
+    rows = _oversized_table_rows()
+    content = "\r\n".join(["| Column |", "| --- |", *rows, "> End note"])
+    parts = parser._smart_split_content(content, max_size=2000)
+
+    assert [sum(row in part for part in parts) for row in rows] == [1, 1, 1, 1]
+    assert "End note" in parts[-1]
+
+
+def test_table_mismatched_line_coordinates_fall_back_to_budget_split():
+    """A lone CR desynchronizes markdown-it line maps from splitlines(); the
+    helper keeps the previous raw-slicing fallback in that case."""
+    parser = MarkdownParser()
+    rows = [row.replace("ROW_02", "ROW_0\r2") for row in _oversized_table_rows()]
+    content = "| Column |\n| --- |\n" + "\n".join(rows) + "\n> End note"
+    parts = parser._smart_split_content(content, max_size=2000)
+
+    # Fallback: nothing lost, just not row-aligned anymore.
+    assert "".join(part.replace("\n", "").replace("\r", "") for part in parts).startswith(
+        "| Column || --- |"
+    )
+    assert all("ROW_0" in part for part in parts)
