@@ -392,7 +392,8 @@ class _AnyDocMarkdownRenderer:
             if len(item.blocks) > 1:
                 loose = True
             lines = body.splitlines() or [""]
-            indent = " " * len(marker)
+            # Alphabetic/Roman labels are item text after the actual "- " marker.
+            indent = " " * (len("- ") if marker.startswith("- ") else len(marker))
             rendered = f"{marker}{lines[0]}"
             for line in lines[1:]:
                 if not line:
