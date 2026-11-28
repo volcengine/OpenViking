@@ -91,22 +91,43 @@ def _resolve_windows_path(target: str, base: str) -> str:
     return target if os.path.isabs(target) else os.path.join(base, target)
 
 
+def _windows_acl_arguments(path: str, *, directory: bool) -> list[str] | None:
+    """Build the icacls arguments that approximate POSIX 0700/0600.
+
+    Returns None when no account principal can be derived from the environment.
+    """
+    suffix = ":(OI)(CI)F" if directory else ":F"
+    user = os.environ.get("USERNAME") or ""
+    domain = os.environ.get("USERDOMAIN") or ""
+    principal = f"{domain}\\{user}" if domain and user else user
+    if not principal:
+        return None
+    grants = [principal + suffix, "*S-1-5-18" + suffix, "*S-1-5-32-544" + suffix]
+    if user.endswith("$"):
+        # A LocalSystem service exposes USERNAME as the machine account
+        # `<HOSTNAME>$`, which icacls cannot map to a SID (Win32 error 1332,
+        # ERROR_NONE_MAPPED). The service already runs as SYSTEM, so the
+        # well-known SID grants below cover it; drop the unmappable
+        # account-name grant and de-duplicate the remainder. Interactive
+        # users keep their account-name grant because /inheritance:r removes
+        # inherited owner access.
+        grants = grants[1:]
+    grants = list(dict.fromkeys(grants))
+    arguments = ["icacls", path, "/inheritance:r"]
+    for grant in grants:
+        arguments += ["/grant:r", grant]
+    return arguments
+
+
 async def _restrict_windows_acl(path: str, *, directory: bool) -> str | None:
     """Approximate POSIX 0700/0600 with an owner/SYSTEM/Administrators NTFS ACL.
 
     Inherited entries are removed first (for example sandbox helper groups), then
     explicit grants are applied. Returns error text on failure, None on success.
     """
-    user = os.environ.get("USERNAME") or ""
-    domain = os.environ.get("USERDOMAIN") or ""
-    principal = f"{domain}\\{user}" if domain and user else user
-    if not principal:
+    arguments = _windows_acl_arguments(path, directory=directory)
+    if arguments is None:
         return "STDERR:\nUSERNAME is not set\nExit code: 1"
-    suffix = ":(OI)(CI)F" if directory else ":F"
-    grants = [principal + suffix, "*S-1-5-18" + suffix, "*S-1-5-32-544" + suffix]
-    arguments = ["icacls", path, "/inheritance:r"]
-    for grant in grants:
-        arguments += ["/grant:r", grant]
     process = await asyncio.create_subprocess_exec(
         *arguments,
         stdin=asyncio.subprocess.DEVNULL,

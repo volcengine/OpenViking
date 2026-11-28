@@ -3,7 +3,9 @@
 """Regression tests for the Windows POSIX shim used by Compile sandboxes."""
 
 import asyncio
+import os
 import shlex
+from pathlib import Path
 
 import pytest
 from vikingbot.compile.sandbox import _CompileSandbox
@@ -129,3 +131,121 @@ async def test_mkdir_rejects_unsupported_flags(tmp_path):
         is None
     )
     assert await direct._translate_windows_posix("echo hi", str(tmp_path)) is None
+
+
+def _grants_of(arguments: list[str]) -> list[str]:
+    """Extract the principals from an icacls argv (each /grant:r is followed by one)."""
+    return [
+        value for flag, value in zip(arguments, arguments[1:], strict=False) if flag == "/grant:r"
+    ]
+
+
+def _capture_icacls(monkeypatch, calls) -> None:
+    """Stub icacls execution and record the argv that _restrict_windows_acl builds."""
+
+    class _OkProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_create_subprocess_exec(*arguments, **kwargs):
+        calls.append(list(arguments))
+        return _OkProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+
+
+@pytest.mark.asyncio
+async def test_restrict_windows_acl_drops_machine_account_grant(tmp_path, monkeypatch):
+    """A LocalSystem service exposes USERNAME as the machine account `<HOSTNAME>$`.
+
+    icacls cannot resolve that principal to a SID (Win32 error 1332,
+    ERROR_NONE_MAPPED), so the grant list must keep only the well-known
+    SYSTEM/Administrators SIDs; the service already runs as SYSTEM (#8615).
+    """
+    calls: list[list[str]] = []
+    _capture_icacls(monkeypatch, calls)
+    monkeypatch.setenv("USERNAME", "HOST01$")
+    monkeypatch.setenv("USERDOMAIN", "WORKGROUP")
+
+    target = str(tmp_path / "credentials")
+    os.makedirs(target, exist_ok=True)
+    error = await direct._restrict_windows_acl(target, directory=True)
+
+    assert error is None
+    assert calls, "icacls should still be invoked"
+    grants = _grants_of(calls[0])
+    assert grants == ["*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]
+    assert not any(name.endswith("$") for name, _ in (grant.split(":", 1) for grant in grants))
+
+
+@pytest.mark.asyncio
+async def test_restrict_windows_acl_keeps_interactive_user_grant(tmp_path, monkeypatch):
+    """Dev-mode servers run as an interactive, non-Administrator user.
+
+    ``/inheritance:r`` strips inherited owner access, so the account-name grant
+    must be preserved in that scenario (regression guard for #8615's caveat).
+    """
+    calls: list[list[str]] = []
+    _capture_icacls(monkeypatch, calls)
+    monkeypatch.setenv("USERNAME", "alice")
+    monkeypatch.setenv("USERDOMAIN", "DESKTOP-01")
+
+    target = str(tmp_path / "ovcli.conf")
+    Path(target).write_text("{}", encoding="utf-8")
+    error = await direct._restrict_windows_acl(target, directory=False)
+
+    assert error is None
+    assert _grants_of(calls[0]) == ["DESKTOP-01\\alice:F", "*S-1-5-18:F", "*S-1-5-32-544:F"]
+
+
+@pytest.mark.asyncio
+async def test_restrict_windows_acl_principal_without_domain(tmp_path, monkeypatch):
+    calls: list[list[str]] = []
+    _capture_icacls(monkeypatch, calls)
+    monkeypatch.setenv("USERNAME", "alice")
+    monkeypatch.delenv("USERDOMAIN", raising=False)
+
+    target = str(tmp_path / "credentials")
+    os.makedirs(target, exist_ok=True)
+    error = await direct._restrict_windows_acl(target, directory=True)
+
+    assert error is None
+    assert _grants_of(calls[0]) == [
+        "alice:(OI)(CI)F",
+        "*S-1-5-18:(OI)(CI)F",
+        "*S-1-5-32-544:(OI)(CI)F",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_restrict_windows_acl_requires_username(tmp_path, monkeypatch):
+    monkeypatch.delenv("USERNAME", raising=False)
+    monkeypatch.delenv("USERDOMAIN", raising=False)
+
+    error = await direct._restrict_windows_acl(str(tmp_path), directory=True)
+
+    assert error is not None
+    assert "USERNAME is not set" in error
+
+
+@pytest.mark.asyncio
+async def test_compile_credentials_mkdir_uses_sid_only_grants_for_machine_account(
+    tmp_path, monkeypatch
+):
+    """The Compile credentials `mkdir -m 700` path must not pass a machine-account
+    principal to icacls, which surfaces as `Compile credentials directory failed`
+    with exit code 1332 on LocalSystem deployments (#8615)."""
+    calls: list[list[str]] = []
+    _capture_icacls(monkeypatch, calls)
+    monkeypatch.setenv("USERNAME", "HOST01$")
+    monkeypatch.setenv("USERDOMAIN", "WORKGROUP")
+
+    target = shlex.quote(str(tmp_path / ".compile-auth-deadbeef"))
+    result = await direct._translate_windows_posix(f"mkdir -m 700 -- {target}", str(tmp_path))
+
+    assert result == "(no output)"
+    grants = _grants_of(calls[0])
+    assert "$" not in "".join(grants)
+    assert grants == ["*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"]
