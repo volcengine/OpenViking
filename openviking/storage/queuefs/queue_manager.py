@@ -95,6 +95,7 @@ class QueueManager:
     EXTERNAL_PARSE = "ExternalParse"
     ADD_RESOURCE = "AddResource"
     REINDEX = "Reindex"
+    PACK = "Pack"
     CONTENT_WRITE = "ContentWrite"
     COMPILE_TARGET_TAG = "CompileTargetTag"
     SESSION_COMMIT = "SessionCommit"
@@ -313,7 +314,7 @@ class QueueManager:
 
     def _max_concurrent_for_queue(self, queue_name: str) -> int:
         """Return the worker concurrency limit for a named queue."""
-        if queue_name == self.DATA_CLEANUP:
+        if queue_name in {self.DATA_CLEANUP, self.PACK}:
             return 1
         if queue_name == self.COMPILE_TARGET_TAG:
             return 2

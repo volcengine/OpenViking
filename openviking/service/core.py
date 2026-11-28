@@ -621,6 +621,9 @@ class OpenVikingService:
                 manager.get_user_group_ids if manager is not None else None,
             )
         if self._server_config is not None:
+            if manager is not None and self._server_config.get_effective_auth_mode() == "api_key":
+                self._pack_service.tasks.resolve_role = manager.get_registered_user_role
+                self._pack_service.tasks.resolve_groups = manager.get_user_group_ids
             ttl_config = self._server_config.ttl_adapter
             cache_runtime = (
                 self.cache_runtime(ttl_config.cache.instance)
@@ -635,6 +638,8 @@ class OpenVikingService:
 
     def detach_runtime(self) -> None:
         """Remove host callbacks after draining, before their owners close."""
+        self._pack_service.tasks.resolve_role = None
+        self._pack_service.tasks.resolve_groups = None
         if self._compile_service.lifecycle is not None:
             self._compile_service.lifecycle.resolve_groups = None
             self._compile_service.lifecycle.creation_guard = None
@@ -803,6 +808,7 @@ class OpenVikingService:
             vector_store=self._vikingdb_manager,
             vector_config_resolver=self._vector_config_resolver,
         )
+        get_task_tracker().pack_artifact_cleanup = self._pack_service.tasks.cleanup_expired
         self._search_service.set_viking_fs(self._viking_fs)
         self._resource_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
@@ -916,6 +922,11 @@ class OpenVikingService:
             self._queue_manager.get_queue(
                 self._queue_manager.REINDEX,
                 dequeue_handler=ReindexProcessor(self._viking_fs),
+                allow_create=True,
+            )
+            self._queue_manager.get_queue(
+                self._queue_manager.PACK,
+                dequeue_handler=self._pack_service.tasks,
                 allow_create=True,
             )
             self._queue_manager.get_queue(

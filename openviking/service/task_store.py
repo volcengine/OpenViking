@@ -1468,7 +1468,7 @@ class PersistentTaskStore(TaskWorkStore):
                     except BaseException:
                         self._cleanup_scan = None
                         raise
-                    deleted.append(DeletedTask(task_id, account_id, user_id))
+                    deleted.append(DeletedTask(task_id, account_id, user_id, task.task_type))
         return DeleteExpiredResult(tuple(deleted), scanned, scan_complete)
 
     def snapshot_task_stats(self) -> TaskStatsSnapshot:

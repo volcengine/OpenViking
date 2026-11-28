@@ -5,6 +5,7 @@
 import json
 import time
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -16,6 +17,20 @@ from openviking.server.config import ServerConfig, TempUploadConfig
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 from tests.utils.watch_fixtures import local_viking_fs
+
+
+@pytest.fixture(autouse=True)
+def no_active_pack_uploads(monkeypatch):
+    @asynccontextmanager
+    async def lock_upload_dir(uri, ctx):
+        yield None
+
+    async def task_uses_shared_dir(uri, ctx):
+        return False
+
+    store = temp_upload_store.TempUploadStore
+    monkeypatch.setattr(store, "_lock_shared_upload_dir", staticmethod(lock_upload_dir))
+    monkeypatch.setattr(store, "_task_uses_shared_dir", staticmethod(task_uses_shared_dir))
 
 
 class _UploadFile:
@@ -199,7 +214,9 @@ async def test_cleanup_stops_at_first_live_upload(monkeypatch: pytest.MonkeyPatc
             list_calls.append((sort_by, sort_order))
             return [expired_a, expired_b, live]
 
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
+        async def remove_files(
+            self, uri, recursive=False, ctx=None, lease_ref=None, auto_pathlock=True
+        ):
             assert auto_pathlock is False
             removed.append(uri)
 
@@ -245,7 +262,9 @@ async def test_cleanup_full_page_expired_clears_due_at(monkeypatch: pytest.Monke
         ):
             return entries
 
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
+        async def remove_files(
+            self, uri, recursive=False, ctx=None, lease_ref=None, auto_pathlock=True
+        ):
             removed.append(uri)
 
     monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: _FakeVfs())
@@ -284,7 +303,9 @@ async def test_cleanup_remove_failure_clears_due_at_and_stops(monkeypatch: pytes
         ):
             return [first, second]
 
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
+        async def remove_files(
+            self, uri, recursive=False, ctx=None, lease_ref=None, auto_pathlock=True
+        ):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: _FakeVfs())
@@ -322,7 +343,9 @@ async def test_cleanup_skips_invalid_dirs_by_default(monkeypatch: pytest.MonkeyP
         ):
             return [invalid, expired]
 
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
+        async def remove_files(
+            self, uri, recursive=False, ctx=None, lease_ref=None, auto_pathlock=True
+        ):
             removed.append(uri)
 
     monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: _FakeVfs())
@@ -364,7 +387,9 @@ async def test_cleanup_removes_invalid_dirs_when_enabled(monkeypatch: pytest.Mon
         ):
             return [invalid, expired, live]
 
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
+        async def remove_files(
+            self, uri, recursive=False, ctx=None, lease_ref=None, auto_pathlock=True
+        ):
             assert auto_pathlock is False
             removed.append(uri)
 
@@ -410,7 +435,9 @@ async def test_cleanup_invalid_dir_remove_failure_does_not_stop_scan(
         ):
             return [invalid, expired]
 
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
+        async def remove_files(
+            self, uri, recursive=False, ctx=None, lease_ref=None, auto_pathlock=True
+        ):
             if uri == invalid["uri"]:
                 raise RuntimeError("boom")
             removed.append(uri)
@@ -456,7 +483,9 @@ async def test_cleanup_removes_expired_buckets_and_stops_at_live(monkeypatch: py
         ):
             return entries
 
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
+        async def remove_files(
+            self, uri, recursive=False, ctx=None, lease_ref=None, auto_pathlock=True
+        ):
             assert auto_pathlock is False
             assert recursive is True
             removed.append(uri)
@@ -505,7 +534,9 @@ async def test_cleanup_buckets_not_starved_by_live_legacy(monkeypatch: pytest.Mo
             # Emulate name-ascending: legacy (1...) before bucket (2...).
             return [live_legacy, expired_bucket]
 
-        async def remove_files(self, uri, recursive=False, ctx=None, auto_pathlock=True):
+        async def remove_files(
+            self, uri, recursive=False, ctx=None, lease_ref=None, auto_pathlock=True
+        ):
             removed.append(uri)
 
     monkeypatch.setattr(temp_upload_store, "get_viking_fs", lambda: _FakeVfs())

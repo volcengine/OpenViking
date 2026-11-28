@@ -3,6 +3,8 @@
 
 """Security tests for HTTP server local input handling."""
 
+import asyncio
+import io
 import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -12,9 +14,12 @@ import httpx
 import pytest
 
 from openviking.parse.accessors.http_accessor import URLTypeDetector
+from openviking.server.identity import RequestContext, Role
 from openviking.server.temp_upload_store import TempUploadStore
+from openviking.service.task_tracker import get_task_tracker
 from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.session.user_id import UserIdentifier
 from tests.server.ovpack_test_helpers import build_ovpack_bytes
 
 
@@ -153,8 +158,9 @@ def loopback_http_url():
         thread.join(timeout=3)
 
 
-async def test_import_ovpack_accepts_temp_uploaded_file(
+async def test_ovpack_http_round_trip(
     client: httpx.AsyncClient,
+    service,
     monkeypatch,
 ):
     _allow_admin_api_in_dev_mode(client)
@@ -197,6 +203,76 @@ async def test_import_ovpack_accepts_temp_uploaded_file(
     read = await client.get("/api/v1/content/read", params={"uri": f"{root}/content.md"})
     assert read.status_code == 200, read.text
     assert read.json()["result"] == "# Demo\n"
+
+    async def wait_for_task(submission):
+        assert submission.status_code == 200, submission.text
+        task_id = submission.json()["result"]["task_id"]
+        async with asyncio.timeout(10):
+            while True:
+                response = await client.get(f"/api/v1/tasks/{task_id}")
+                assert response.status_code == 200, response.text
+                task = response.json()["result"]
+                if task["status"] not in {"pending", "running"}:
+                    return task
+                await asyncio.sleep(0.05)
+
+    monkeypatch.setattr("openviking.service.pack_tasks._CHUNK_SIZE", 512)
+    exported = await wait_for_task(
+        await client.post("/api/v1/pack/export", json={"uri": root, "wait": False})
+    )
+    assert exported["status"] == "completed", exported
+    download = await client.get(exported["result"]["download_path"])
+    assert download.status_code == 200, download.text
+    assert len(download.content) == exported["result"]["size"] > 512
+    with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
+        assert archive.read("pkg/files/content.md") == b"# Demo\n"
+    foreign = await client.get(
+        exported["result"]["download_path"], headers={"X-OpenViking-Account": "another-account"}
+    )
+    assert foreign.status_code == 404, foreign.text
+
+    async_import = {"temp_file_id": upload_id, "parent": "viking://resources/async", "wait": False}
+    imported = await wait_for_task(await client.post("/api/v1/pack/import", json=async_import))
+    assert imported["status"] == "completed", imported
+    assert imported["result"]["uri"] == "viking://resources/async/pkg"
+    assert imported["result"]["files_written"] is True
+    conflict = await wait_for_task(await client.post("/api/v1/pack/import", json=async_import))
+    assert conflict["status"] == "failed", conflict
+    assert conflict["result"]["code"] == "CONFLICT"
+
+    backup = await wait_for_task(await client.post("/api/v1/pack/backup", json={"wait": False}))
+    assert backup["status"] == "completed", backup
+    backup_file = await client.get(backup["result"]["download_path"])
+    assert backup_file.status_code == 200, backup_file.text
+    uploaded_backup = await client.post(
+        "/api/v1/resources/temp_upload",
+        files={"file": ("backup.ovpack", backup_file.content, "application/octet-stream")},
+        data={"upload_mode": "shared"},
+    )
+    assert uploaded_backup.status_code == 200, uploaded_backup.text
+    restored = await wait_for_task(
+        await client.post(
+            "/api/v1/pack/restore",
+            json={
+                "temp_file_id": uploaded_backup.json()["result"]["temp_file_id"],
+                "on_conflict": "overwrite",
+                "wait": False,
+            },
+        )
+    )
+    assert restored["status"] == "completed", restored
+    assert restored["result"]["uri"] == "viking://"
+
+    tracker = get_task_tracker()
+    user = UserIdentifier.the_default_user()
+    ctx = RequestContext(user=user, role=Role.ROOT)
+    archive_uri = f"viking://temp/{user.user_space_name()}/ovpack/{exported['task_id']}"
+    assert await service.viking_fs.exists(f"{archive_uri}/0", ctx=ctx)
+    monkeypatch.setattr(tracker, "TTL_COMPLETED", 0)
+    await tracker.delete_expired()
+    expired = await client.get(exported["result"]["download_path"])
+    assert expired.status_code == 404, expired.text
+    assert not await service.viking_fs.exists(archive_uri, ctx=ctx)
 
 
 async def test_import_ovpack_conflict_returns_structured_conflict(

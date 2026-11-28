@@ -12,7 +12,7 @@ import os
 import tempfile
 import time
 import uuid
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Full, Queue
@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from openviking.server.config import ServerConfig, TempUploadConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.server.local_input_guard import _read_upload_meta
+from openviking.storage.pathlock_transfer import PathLockGuard
 from openviking.storage.viking_fs import LS_ALL_NODES, get_viking_fs
 from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
@@ -286,6 +287,34 @@ class TempUploadStore:
                 "meta": {},
             }
         )
+
+    @asynccontextmanager
+    async def hold_pack_upload(self, temp_file_id: str, ctx: RequestContext):
+        """Serialize task admission with expiration of the shared upload."""
+        upload_id = _parse_shared_temp_file_id(temp_file_id)
+        if upload_id is None:
+            raise InvalidArgumentError("Asynchronous OVPack requires upload_mode=shared.")
+        bucket = _shared_bucket_from_upload_id(upload_id)
+        if bucket is None:
+            if _shared_upload_created_at(upload_id) is None:
+                raise PermissionDeniedError("Invalid temporary upload ID.")
+            bucket = upload_id
+        uri = f"{_SHARED_UPLOAD_ROOT}/{bucket}"
+        async with self._lock_shared_upload_dir(uri, self._internal_ctx(ctx)):
+            await self.resolve_shared_reference(temp_file_id, ctx)
+            yield uri
+
+    @staticmethod
+    @asynccontextmanager
+    async def _lock_shared_upload_dir(uri: str, ctx: RequestContext):
+        vfs = get_viking_fs()
+        agfs = vfs._async_agfs
+        guard = PathLockGuard(agfs)
+        try:
+            await guard.acquire(lambda: agfs.pathlock_acquire_tree(vfs._uri_to_path(uri, ctx=ctx)))
+            yield guard.lease
+        finally:
+            await guard.close()
 
     async def _save_local(self, upload_file: Any) -> str:
         config = get_openviking_config()
@@ -739,10 +768,24 @@ class TempUploadStore:
                     expiry,
                 )
                 return scanned, removed, expiry, False
-            if not await self._remove_shared_dir(vfs, uri, internal_ctx, kind=kind):
-                return scanned, removed, None, True
+            async with self._lock_shared_upload_dir(uri, internal_ctx) as lease:
+                if await self._task_uses_shared_dir(uri, internal_ctx):
+                    return scanned, removed, now + 300, False
+                if not await self._remove_shared_dir(
+                    vfs, uri, internal_ctx, kind=kind, lease_ref=lease
+                ):
+                    return scanned, removed, None, True
             removed += 1
         return scanned, removed, None, False
+
+    @staticmethod
+    async def _task_uses_shared_dir(uri: str, ctx: RequestContext) -> bool:
+        from openviking.service.task_tracker import get_task_tracker
+
+        tasks = await get_task_tracker().list_tasks(
+            resource_id=uri, account_id=ctx.account_id, limit=None
+        )
+        return any(task.is_active() for task in tasks)
 
     @staticmethod
     async def _remove_shared_dir(
@@ -751,18 +794,18 @@ class TempUploadStore:
         internal_ctx: RequestContext,
         *,
         kind: str,
+        lease_ref: Optional[dict] = None,
     ) -> bool:
         """Recursively delete one shared-upload directory, logging elapsed time.
 
-        Returns True on success, False on failure (logged as a warning). Uses
-        ``auto_pathlock=False`` since shared uploads are never concurrently
-        mutated and cleanup is best-effort. Deletes AGFS storage only via
-        ``remove_files`` because raw temporary uploads never have vector-index
-        records, so skipping vector-store cleanup avoids pointless round-trips.
+        A lease protects valid upload directories from concurrent task admission.
+        Raw temporary uploads have no vector-index records.
         """
         started_at = time.monotonic()
         try:
-            await vfs.remove_files(uri, recursive=True, ctx=internal_ctx, auto_pathlock=False)
+            await vfs.remove_files(
+                uri, recursive=True, ctx=internal_ctx, lease_ref=lease_ref, auto_pathlock=False
+            )
         except Exception:
             logger.warning(
                 "[TempUpload] cleanup remove failed kind=%s uri=%s elapsed_ms=%.1f",

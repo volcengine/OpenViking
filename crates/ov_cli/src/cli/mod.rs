@@ -1020,20 +1020,38 @@ pub(crate) enum Commands {
         #[arg(value_name = "uri")]
         uri: String,
         /// Output .ovpack file path
-        #[arg(value_name = "output.ovpack")]
-        to: String,
+        #[arg(value_name = "output.ovpack", required_if_eq("wait", "true"))]
+        to: Option<String>,
         /// Include dense vector snapshot when compatible metadata is available
         #[arg(long, default_value_t = false, help_heading = "Common options")]
         include_vectors: bool,
+        /// Wait for OVPack processing to complete
+        #[arg(
+            long,
+            default_value_t = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Common options"
+        )]
+        wait: bool,
     },
     /// [Data] Back up public OpenViking scopes as a restore-only .ovpack
     Backup {
         /// Output .ovpack file path
-        #[arg(value_name = "output.ovpack")]
-        to: String,
+        #[arg(value_name = "output.ovpack", required_if_eq("wait", "true"))]
+        to: Option<String>,
         /// Include dense vector snapshot when compatible metadata is available
         #[arg(long, default_value_t = false, help_heading = "Common options")]
         include_vectors: bool,
+        /// Wait for OVPack processing to complete
+        #[arg(
+            long,
+            default_value_t = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Common options"
+        )]
+        wait: bool,
     },
     /// [Data] Import .ovpack into target URI
     Import {
@@ -1059,6 +1077,15 @@ pub(crate) enum Commands {
             help_heading = "Common options"
         )]
         vector_mode: Option<String>,
+        /// Wait for OVPack processing to complete
+        #[arg(
+            long,
+            default_value_t = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Common options"
+        )]
+        wait: bool,
     },
     /// [Data] Restore a backup .ovpack to original public scope roots
     Restore {
@@ -1081,6 +1108,15 @@ pub(crate) enum Commands {
             help_heading = "Common options"
         )]
         vector_mode: Option<String>,
+        /// Wait for OVPack processing to complete
+        #[arg(
+            long,
+            default_value_t = true,
+            action = ArgAction::Set,
+            value_name = "bool",
+            help_heading = "Common options"
+        )]
+        wait: bool,
     },
     // --- Interactive Tools ---
     /// [Interactive] Interactive TUI file explorer

@@ -1577,14 +1577,18 @@ impl HttpClient {
 
     // ============ Pack Methods ============
 
-    async fn download_pack(
+    async fn request_pack(
         &self,
         endpoint: &str,
-        body: serde_json::Value,
-        to: &str,
+        mut body: Value,
+        to: Option<&str>,
         default_name: &str,
         show_progress: bool,
-    ) -> Result<String> {
+    ) -> Result<Value> {
+        let Some(to) = to else {
+            body["wait"] = json!(false);
+            return self.post(endpoint, &body).await;
+        };
         let url = format!("{}{}", self.base.base_url, endpoint);
         let request = self
             .base
@@ -1636,19 +1640,24 @@ impl HttpClient {
             progress.finish("OVPack download complete");
         }
 
-        Ok(final_path.to_string_lossy().to_string())
+        Ok(json!({"file": final_path.to_string_lossy()}))
     }
 
     async fn post_pack_operation(
         &self,
         endpoint: &str,
-        body: &serde_json::Value,
+        mut body: Value,
+        wait: bool,
         show_progress: bool,
         message: &str,
     ) -> Result<serde_json::Value> {
+        if !wait {
+            body["wait"] = json!(false);
+            return self.post(endpoint, &body).await;
+        }
         let processing = show_progress
             .then(|| ProgressGuard::new(message, "OVPack processing failed"));
-        let result = self.post(endpoint, body).await?;
+        let result = self.post(endpoint, &body).await?;
         if let Some(processing) = processing {
             processing.finish("OVPack processing complete");
         }
@@ -1658,10 +1667,10 @@ impl HttpClient {
     pub async fn export_ovpack(
         &self,
         uri: &str,
-        to: &str,
+        to: Option<&str>,
         include_vectors: bool,
         show_progress: bool,
-    ) -> Result<String> {
+    ) -> Result<Value> {
         let body = serde_json::json!({
             "uri": uri,
             "include_vectors": include_vectors,
@@ -1671,17 +1680,17 @@ impl HttpClient {
             .split('/')
             .last()
             .unwrap_or("export");
-        self.download_pack("/api/v1/pack/export", body, to, base_name, show_progress)
+        self.request_pack("/api/v1/pack/export", body, to, base_name, show_progress)
             .await
     }
 
     pub async fn backup_ovpack(
         &self,
-        to: &str,
+        to: Option<&str>,
         include_vectors: bool,
         show_progress: bool,
-    ) -> Result<String> {
-        self.download_pack(
+    ) -> Result<Value> {
+        self.request_pack(
             "/api/v1/pack/backup",
             serde_json::json!({"include_vectors": include_vectors}),
             to,
@@ -1697,26 +1706,12 @@ impl HttpClient {
         parent: &str,
         on_conflict: Option<&str>,
         vector_mode: Option<&str>,
+        wait: bool,
         show_progress: bool,
     ) -> Result<serde_json::Value> {
-        let file_path_obj = Path::new(file_path);
-
-        if !file_path_obj.exists() {
-            return Err(Error::Client(format!(
-                "Local ovpack file not found: {}",
-                file_path
-            )));
-        }
-        if !file_path_obj.is_file() {
-            return Err(Error::Client(format!("Path is not a file: {}", file_path)));
-        }
-
-        let temp_file_id = if show_progress {
-            self.upload_temp_file_with_progress(file_path_obj, false)
-                .await?
-        } else {
-            self.upload_temp_file(file_path_obj).await?
-        };
+        let temp_file_id = self
+            .upload_pack_file(Path::new(file_path), wait, show_progress)
+            .await?;
         let conflict_policy = on_conflict.unwrap_or("fail");
         let body = serde_json::json!({
             "temp_file_id": temp_file_id,
@@ -1726,7 +1721,8 @@ impl HttpClient {
         });
         self.post_pack_operation(
             "/api/v1/pack/import",
-            &body,
+            body,
+            wait,
             show_progress,
             "Validating and importing OVPack on server",
         )
@@ -1738,26 +1734,12 @@ impl HttpClient {
         file_path: &str,
         on_conflict: Option<&str>,
         vector_mode: Option<&str>,
+        wait: bool,
         show_progress: bool,
     ) -> Result<serde_json::Value> {
-        let file_path_obj = Path::new(file_path);
-
-        if !file_path_obj.exists() {
-            return Err(Error::Client(format!(
-                "Local ovpack file not found: {}",
-                file_path
-            )));
-        }
-        if !file_path_obj.is_file() {
-            return Err(Error::Client(format!("Path is not a file: {}", file_path)));
-        }
-
-        let temp_file_id = if show_progress {
-            self.upload_temp_file_with_progress(file_path_obj, false)
-                .await?
-        } else {
-            self.upload_temp_file(file_path_obj).await?
-        };
+        let temp_file_id = self
+            .upload_pack_file(Path::new(file_path), wait, show_progress)
+            .await?;
         let conflict_policy = on_conflict.unwrap_or("fail");
         let body = serde_json::json!({
             "temp_file_id": temp_file_id,
@@ -1766,11 +1748,35 @@ impl HttpClient {
         });
         self.post_pack_operation(
             "/api/v1/pack/restore",
-            &body,
+            body,
+            wait,
             show_progress,
             "Validating and restoring OVPack on server",
         )
         .await
+    }
+
+    async fn upload_pack_file(&self, path: &Path, wait: bool, show_progress: bool) -> Result<String> {
+        if !path.exists() {
+            return Err(Error::Client(format!(
+                "Local ovpack file not found: {}",
+                path.display()
+            )));
+        }
+        if !path.is_file() {
+            return Err(Error::Client(format!("Path is not a file: {}", path.display())));
+        }
+
+        let uploader = if wait {
+            self.create_uploader()
+        } else {
+            self.create_uploader().with_upload_mode(Some("shared".into()))
+        };
+        if show_progress {
+            uploader.upload_temp_file_with_progress(path, false).await
+        } else {
+            uploader.upload_temp_file(path).await
+        }
     }
 
     // ============ Admin Methods ============
@@ -2716,7 +2722,7 @@ mod tests {
             let result = client
                 .export_ovpack(
                     "viking://resources",
-                    destination.to_str().unwrap(),
+                    Some(destination.to_str().unwrap()),
                     false,
                     false,
                 )
@@ -2728,7 +2734,7 @@ mod tests {
             }
             assert!(!requests[0].to_ascii_lowercase().contains("x-gateway-token"));
             if marked {
-                assert_eq!(result.unwrap(), destination.to_str().unwrap());
+                assert_eq!(result.unwrap()["file"], destination.to_str().unwrap());
                 assert_eq!(std::fs::read(&destination).unwrap(), b"exported archive");
                 assert!(requests[1].to_ascii_lowercase().contains("x-gateway-token: gateway-secret"));
             } else {
@@ -2806,7 +2812,7 @@ mod tests {
         let error = client
             .export_ovpack(
                 "viking://resources/demo",
-                destination.path().to_str().unwrap(),
+                Some(destination.path().to_str().unwrap()),
                 false,
                 true,
             )

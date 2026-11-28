@@ -936,7 +936,7 @@ class SQLTaskWorkStore(TaskWorkStore):
             for row in rows:
                 if row.task_id in open_task_ids:
                     continue
-                deleted.append(DeletedTask(row.task_id, row.account_id, row.user_id))
+                deleted.append(DeletedTask(row.task_id, row.account_id, row.user_id, row.task_type))
             await self._delete_task_records(session, [task.task_id for task in deleted])
             return DeleteExpiredResult(
                 tuple(deleted),

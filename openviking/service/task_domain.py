@@ -120,6 +120,7 @@ class DeletedTask:
     task_id: str
     account_id: str
     user_id: str
+    task_type: str = ""
 
 
 @dataclass(frozen=True)
