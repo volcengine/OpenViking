@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -327,3 +328,43 @@ async def test_new_memory_file_renders_from_replace_mode_and_explicit_new_file_s
     )
 
     assert MemoryFileUtils.read(rendered.decode("utf-8"), uri=uri).content == "new memory content"
+
+
+@pytest.mark.asyncio
+async def test_memory_write_keeps_json_body_parsable(ctx):
+    uri = "viking://user/account-1/memories/json-repro.md"
+    body = '{"ref": "viking://resources/demo"}'
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+
+    rendered = await coordinator._render_final_bytes(
+        uri,
+        body,
+        mode="create",
+        existing_raw=None,
+        ctx=ctx,
+        is_new_file=True,
+    )
+
+    memory_file = MemoryFileUtils.read(rendered.decode("utf-8"), uri=uri)
+    assert memory_file.content == body
+    assert json.loads(memory_file.content) == {"ref": "viking://resources/demo"}
+    assert memory_file.extra_fields["resource_refs"][0]["resource_uri"] == "viking://resources/demo"
+
+
+@pytest.mark.asyncio
+async def test_memory_write_still_linkifies_markdown_prose(ctx):
+    uri = "viking://user/account-1/memories/notes.md"
+    coordinator = ContentWriteCoordinator(viking_fs=_FakeVikingFS())
+
+    rendered = await coordinator._render_final_bytes(
+        uri,
+        "saved at viking://resources/demo",
+        mode="create",
+        existing_raw=None,
+        ctx=ctx,
+        is_new_file=True,
+    )
+
+    assert MemoryFileUtils.read(rendered.decode("utf-8"), uri=uri).content == (
+        "[saved at](viking://resources/demo)"
+    )
