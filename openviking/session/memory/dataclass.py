@@ -13,6 +13,7 @@ from typing import (
     Any,
     Dict,
     List,
+    Literal,
     Optional,
     Protocol,
     TypeVar,
@@ -22,7 +23,15 @@ from typing import (
     get_type_hints,
 )
 
-from pydantic import BaseModel, Field, PrivateAttr, WithJsonSchema, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    StrictStr,
+    WithJsonSchema,
+    model_validator,
+)
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
@@ -375,9 +384,31 @@ class ResolvedOperation(BaseModel):
     # operation's memories in the vector index. None means "no tags"; used by
     # event-memory auto-tagging. Not persisted in the memory file content.
     search_tags: Optional[List[str]] = None
+    directory_migration: bool = Field(default=False, exclude=True)
 
     def is_edit(self):
         return self.old_memory_file_content is not None
+
+
+class DirectoryOperation(BaseModel):
+    """A directory operation in an extraction result."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_uri: StrictStr = Field(min_length=1)
+    target_uri: StrictStr = Field(min_length=1)
+    operation: Literal["merge", "rename"] = "merge"
+
+    # Runtime state for the archive, excluded from the model output schema.
+    _status: str = PrivateAttr(default="pending")
+    _conflicts: list[str] = PrivateAttr(default_factory=list)
+    _moved_sources: set[str] = PrivateAttr(default_factory=set)
+
+    @property
+    def memory_type(self) -> str:
+        """Return the type encoded in the validated source directory URI."""
+        parent, _, _ = self.source_uri.rpartition("/")
+        return parent.rsplit("/", 1)[-1]
 
 
 class ResolvedOperations(BaseModel):
@@ -386,6 +417,7 @@ class ResolvedOperations(BaseModel):
     errors: List[str]
     resolved_links: List[StoredLink] = Field(default_factory=list)
     delete_replacements: Dict[str, str] = Field(default_factory=dict)
+    directory_merges: list[DirectoryOperation] = Field(default_factory=list)
 
     def has_errors(self) -> bool:
         return len(self.errors) > 0

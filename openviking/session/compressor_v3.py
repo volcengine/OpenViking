@@ -3,7 +3,7 @@
 """Session Compressor V3.
 
 V3 keeps the V2 extraction interface with a patch-merge flow and no directory-level
-memory locks. Ordinary memories can be batched; cases and execution memories retain
+memory locks for card writes. Ordinary memories can be batched; cases and execution memories retain
 the complete task. Cases use ExtractLoop and are submitted with the commit rollout
 to the process-global StreamingPolicyTrainer.
 """
@@ -351,7 +351,7 @@ class SessionCompressorV3:
                 op.memory_type if op else MemoryUpdater.memory_type_from_uri(uri) or "unknown"
             )
             old_file = op.old_memory_file_content if op else None
-            if old_file:
+            if old_file and (not old_file.uri or old_file.uri == uri):
                 updates.append(
                     {
                         "uri": uri,
@@ -866,6 +866,8 @@ class SessionCompressorV3:
                 ctx=ctx,
                 archive_uri=archive_uri,
             )
+            if update_result.directory_merge_results:
+                memory_diff["directory_merges"] = update_result.directory_merge_results
 
         contexts = _contexts_from_update_result(result)
         canonical_cases = await _canonical_cases_from_update_result(
@@ -2264,6 +2266,7 @@ def _merge_memory_diffs(
     updates: list[dict[str, Any]] = []
     deletes: list[dict[str, Any]] = []
     skipped_operations: list[dict[str, Any]] = []
+    directory_merges: list[dict[str, Any]] = []
     trace_id = tracer.get_trace_id() or None
     for diff in diffs:
         if not isinstance(diff, dict):
@@ -2272,6 +2275,9 @@ def _merge_memory_diffs(
             trace_id = str(diff.get("trace_id"))
         skipped_operations.extend(
             item for item in diff.get("skipped_operations", []) if isinstance(item, dict)
+        )
+        directory_merges.extend(
+            item for item in diff.get("directory_merges", []) if isinstance(item, dict)
         )
         operations = diff.get("operations")
         if not isinstance(operations, dict):
@@ -2287,6 +2293,8 @@ def _merge_memory_diffs(
         skipped_operations=skipped_operations,
     )
     merged["trace_id"] = trace_id
+    if directory_merges:
+        merged["directory_merges"] = directory_merges
     return merged
 
 

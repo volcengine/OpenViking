@@ -15,6 +15,7 @@ from pydantic.config import ConfigDict
 
 from openviking.session.memory.dataclass import (
     DeleteId,
+    DirectoryOperation,
     FaultTolerantBaseModel,
     MemoryTypeSchema,
     WikiLink,
@@ -78,6 +79,7 @@ class SchemaModelGenerator:
         template_context: Optional[Dict[str, Any]] = None,
         *,
         consolidation: bool = False,
+        allow_directory_merges: bool = False,
         # include_decision_reasoning: bool = True,
     ):
         if hasattr(schemas, "list_all"):
@@ -87,6 +89,7 @@ class SchemaModelGenerator:
             self._all_schemas = list(schemas)
         self.schemas = list(schemas)
         self.consolidation = consolidation
+        self._allow_directory_merges = allow_directory_merges
         self._template_context = dict(template_context or {})
         # self._include_decision_reasoning = include_decision_reasoning
         self._model_cache: Dict[str, Type[BaseModel]] = {}
@@ -335,6 +338,23 @@ class SchemaModelGenerator:
                 ),
             )
 
+        # Preserve an existing account schema that already uses this field name.
+        directory_merges_enabled = (
+            self._allow_directory_merges and "directory_merges" not in field_definitions
+        )
+        if directory_merges_enabled:
+            field_definitions["directory_merges"] = (
+                list[DirectoryOperation],
+                Field(
+                    default_factory=list,
+                    description=(
+                        "Use operation='merge' for equivalent siblings with an existing target, or "
+                        "operation='rename' with an unused sibling URI. Directory operations run after "
+                        "card writes. For a planned rename, write cards in the source category."
+                    ),
+                ),
+            )
+
         # Add links field for link extraction (only when enabled globally)
         from openviking_cli.utils.config import get_openviking_config
 
@@ -372,6 +392,8 @@ class SchemaModelGenerator:
                     else:
                         # Single value (not None)
                         return False
+            if directory_merges_enabled and self.directory_merges:
+                return False
             return len(getattr(self, "delete_ids", [])) == 0
 
         def to_legacy_operations(self) -> Dict[str, Any]:

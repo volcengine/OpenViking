@@ -1701,6 +1701,7 @@ class MemoryUpdater:
                     old_content.links,
                 )
             metadata.update(resolved_op.memory_fields)
+            directory_migration = is_uri_migration and resolved_op.directory_migration
             source = getattr(resolved_op, "source", None)
             source_extraction_id = getattr(source, "extraction_id", None) if source else None
             if source_extraction_id:
@@ -1712,6 +1713,26 @@ class MemoryUpdater:
             for field in schema.fields:
                 if field.name in resolved_op.memory_fields:
                     patch_value = resolved_op.memory_fields[field.name]
+                    if (
+                        directory_migration
+                        and (memory_type, field.name)
+                        in {("entities", "category"), ("preferences", "user")}
+                        and patch_value == uri.rsplit("/", 2)[1]
+                    ):
+                        # Maintenance changes only the verified directory identity field.
+                        # Ordinary updates continue to apply their configured merge policy.
+                        if memory_type == "preferences":
+                            old_user = old_content.extra_fields.get("user")
+                            if (
+                                not isinstance(old_user, str)
+                                or not old_user.isascii()
+                                or old_user.strip(" ").lower() != patch_value
+                            ):
+                                raise ConflictError(
+                                    "Stored preference owner changed before directory migration",
+                                    resource=source_content.uri,
+                                )
+                        continue
                     # Get current value for this URI
                     if old_content is None:
                         current_value = None
@@ -1763,12 +1784,14 @@ class MemoryUpdater:
             ):
                 from openviking.session.memory.merge_op.link_merge import merge_links
 
+                # Other cards in a directory may still fail to move. Rewrite their
+                # endpoints only when this batch has determined the successful moves.
+                link_remap = {source_content.uri: uri} if directory_migration else uri_remap or {}
+
                 # Merge links
                 existing_links = old_content.links if has_existing_links else []
                 if is_uri_migration:
-                    existing_links = [
-                        _remap_link_dict(link, uri_remap or {}) for link in existing_links
-                    ]
+                    existing_links = [_remap_link_dict(link, link_remap) for link in existing_links]
                 if incoming_links:
                     merged_links = merge_links(
                         existing_links,
@@ -1782,7 +1805,7 @@ class MemoryUpdater:
                 existing_backlinks = old_content.backlinks if has_existing_links else []
                 if is_uri_migration:
                     existing_backlinks = [
-                        _remap_link_dict(link, uri_remap or {}) for link in existing_backlinks
+                        _remap_link_dict(link, link_remap) for link in existing_backlinks
                     ]
                 if incoming_backlinks:
                     merged_backlinks = merge_links(
@@ -1796,7 +1819,11 @@ class MemoryUpdater:
             mf = MemoryFile.from_parsed(uri=uri, parsed=metadata)
             new_full_content = MemoryFileUtils.write(
                 mf,
-                content_template=schema.content_template,
+                content_template=(
+                    None
+                    if directory_migration and "content" not in resolved_op.memory_fields
+                    else schema.content_template
+                ),
                 account_content_template_type=(
                     schema.memory_type if schema._account_content_template else None
                 ),
@@ -2010,6 +2037,7 @@ class MemoryUpdater:
             operation.uris[0]: operation.old_memory_file_content.uri
             for operation in operations.upsert_operations
             if self._is_uri_migration(operation)
+            and not operation.directory_migration
             and len(operation.uris) == 1
             and operation.old_memory_file_content
             and operation.old_memory_file_content.uri

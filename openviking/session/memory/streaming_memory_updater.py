@@ -23,6 +23,7 @@ from openviking.config.vlm import VLMResolver
 from openviking.core.peer_id import safe_peer_id
 from openviking.message import Message
 from openviking.observability.log_safety import short_hash
+from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking.service.task_tracker_concurrency import run_to_completion
 from openviking.session.memory.dataclass import (
@@ -55,6 +56,10 @@ from openviking.session.memory.patch_merge_context_provider import (
     PatchMergePatch,
 )
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
+from openviking.session.memory.tools import (
+    discardable_memory_directory_file,
+    memory_directory_entries,
+)
 from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils, next_memory_version
 from openviking.session.memory.utils.streaming_batcher import (
     StreamingBatcher,
@@ -127,6 +132,7 @@ class StreamingMemoryUpdateResult:
     apply_result: MemoryUpdateResult
     request_count: int
     metadata: dict[str, Any] = field(default_factory=dict)
+    directory_merge_results: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -208,6 +214,10 @@ class StreamingMemoryUpdater:
         )
         self._last_result = result
         scoped_result = scope_memory_update_result_to_submitter(result, request)
+        if request.operations.directory_merges:
+            scoped_result.directory_merge_results = await run_to_completion(
+                lambda: self._finish_directory_changes(request, scoped_result.apply_result)
+            )
         tracer.info(
             "StreamingMemoryUpdater submit finished "
             f"batch_id={result.metadata.get('batch_id')} "
@@ -223,6 +233,96 @@ class StreamingMemoryUpdater:
             console=self.config.trace_console,
         )
         return scoped_result
+
+    async def _finish_directory_changes(
+        self, request: MemoryUpdateRequest, result: MemoryUpdateResult
+    ) -> list[dict[str, Any]]:
+        from openviking.storage.queuefs.semantic_ops.directory_refresh import (
+            enqueue_directory_refresh,
+        )
+
+        fs, ctx = safe_get_viking_fs(), request.ctx
+        registry = request.memory_registry or self.registry or get_default_registry()
+        reports = []
+        deleted = set(result.deleted_uris)
+        written_directories = {uri.rsplit("/", 1)[0] for uri in result.written_uris}
+        plans = request.operations.directory_merges
+        directory_groups: dict[str, str] = {}
+        for plan in plans:
+            if plan._status == "pending":
+                # A merge into B and a subsequent rename of B share the same group.
+                group = plan.source_uri if plan.operation == "rename" else plan.target_uri
+                directory_groups[plan.source_uri] = group
+                directory_groups[plan.target_uri] = group
+        group_errors: Counter[str] = Counter()
+        for uri, _ in result.errors:
+            group = directory_groups.get(uri) or directory_groups.get(uri.rpartition("/")[0])
+            if group:
+                group_errors[group] += 1
+        for plan in plans:
+            source, target = plan.source_uri, plan.target_uri
+            moved = len(plan._moved_sources & deleted)
+            rename = plan.operation == "rename"
+            errors = group_errors[source if rename else target]
+            status, pruned, remaining = plan._status, False, []
+            if status == "pending":
+                root = source.rsplit("/", 1)[0]
+                try:
+                    async with self._apply_lock:
+                        # The parent exists, so the lock cannot recreate the source.
+                        lease = await fs._async_agfs.pathlock_acquire_tree(
+                            fs._uri_to_path(root, ctx=ctx),
+                            timeout_secs=_MEMORY_APPLY_LOCK_TIMEOUT_SECONDS,
+                        )
+                        try:
+                            stat = await fs.stat(
+                                source, ctx=ctx, skip_count=True, include_vector_fields=False
+                            )
+                            schema = registry.get(plan.memory_type)
+                            entries = (
+                                await memory_directory_entries(fs, source, ctx)
+                                if stat.get("isDir")
+                                else {}
+                            )
+                            for name, is_dir in sorted(entries.items()):
+                                uri = f"{source}/{name}"
+                                if is_dir or not await discardable_memory_directory_file(
+                                    fs, uri, name, schema, ctx
+                                ):
+                                    remaining.append(uri)
+                            if not stat.get("isDir"):
+                                remaining.append(source)
+                            if not remaining and not errors and moved == len(plan._moved_sources):
+                                if rename and target not in written_directories:
+                                    await fs.mkdir(target, ctx=ctx, lease_ref=lease)
+                                await fs.rm(source, recursive=True, ctx=ctx, lease_ref=lease)
+                                pruned = True
+                        finally:
+                            await fs._async_agfs.pathlock_release(lease)
+                except Exception as exc:
+                    if not is_not_found_error(exc):
+                        logger.info(
+                            "Failed to finish memory directory operation: %s", type(exc).__name__
+                        )
+                        errors += 1
+                if pruned:
+                    await enqueue_directory_refresh(root, 1, ctx=ctx)
+                status = ("renamed" if rename else "merged") if pruned else "partial"
+            reports.append(
+                {
+                    "memory_type": plan.memory_type,
+                    "operation": plan.operation,
+                    "source_uri": source,
+                    "target_uri": target,
+                    "status": status,
+                    "moved": moved,
+                    "remaining": remaining,
+                    "conflicts": plan._conflicts,
+                    "pruned": pruned,
+                    "errors": errors,
+                }
+            )
+        return reports
 
     async def _submit_grouped_merge_request(
         self,
@@ -458,7 +558,7 @@ class StreamingMemoryUpdater:
     ) -> StreamingMemoryUpdateResult:
         # Compare only this group's schema, not unrelated types in the registry.
         # Plain value equality is sufficient for these small, transient batches.
-        by_template: list[tuple[dict | None, list[MemoryUpdateRequest]]] = []
+        by_template = []
         for request in requests:
             registry = request.memory_registry or self.registry
             schema = registry.get(group_key.memory_type) if registry is not None else None
@@ -466,12 +566,20 @@ class StreamingMemoryUpdater:
             if template is not None:
                 # Private rendering provenance is deliberately absent from model_dump.
                 template["_account_content_template"] = schema._account_content_template
+            # These destinations have already been chosen by the directory expansion.
+            # Keep the request separate from the model's cross-session patch merge.
+            key = (
+                template,
+                id(request)
+                if any(op.directory_migration for op in request.operations.upsert_operations)
+                else None,
+            )
             for existing, batch in by_template:
-                if existing == template:
+                if existing == key:
                     batch.append(request)
                     break
             else:
-                by_template.append((template, [request]))
+                by_template.append((key, [request]))
         batches = [batch for _, batch in by_template]
         _check_template_batch_conflicts(batches)
 
@@ -2058,6 +2166,11 @@ def _operation_uri_set(operations: ResolvedOperations | None) -> set[str]:
         str(file.uri)
         for file in list(getattr(operations, "delete_file_contents", []) or [])
         if getattr(file, "uri", None)
+    )
+    uris.update(
+        old.uri
+        for op in operations.upsert_operations
+        if op.directory_migration and (old := op.old_memory_file_content) and old.uri
     )
     return uris
 

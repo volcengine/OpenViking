@@ -129,7 +129,12 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         link_rules = (
             prompts.PYTHON_LINK_RULES if context.link_enabled else prompts.PYTHON_LINKS_DISABLED
         )
-        return "\n".join((*self._render_contract_preamble(context), *schema_rules, *link_rules))
+        directory_rules = (
+            prompts.PYTHON_DIRECTORY_MERGE_RULES if context.supports_directory_merges else ()
+        )
+        return "\n".join(
+            (*self._render_contract_preamble(context), *schema_rules, *directory_rules, *link_rules)
+        )
 
     @staticmethod
     def _render_contract_preamble(context: ExtractionOutputContext) -> tuple[str, ...]:
@@ -326,9 +331,8 @@ class PythonExtractionOutputProtocol(ExtractionOutputProtocol):
         if self.keep_tools_enabled_after_parse_error(error):
             tool_guidance = (
                 " The memory SDK is write-only. Call the available native "
-                f"{'/'.join(self._inspection_tools)} tool now; "
-                "after its result is returned, update the system-provided object variable. "
-                "Do not emit sdk.search(), sdk.read(), or construct a memory URI in Python."
+                f"{'/'.join(self._inspection_tools)} tool now and use its result to regenerate "
+                "the complete program. Do not emit sdk.search(), sdk.read(), or sdk.ls()."
             )
         return (
             "Your previous output was not a valid restricted Python memory SDK program."
@@ -647,6 +651,7 @@ class _PythonProgramCompiler:
         self.objects: dict[str, _MemoryObject] = {}
         self.values: dict[str, Any] = {}
         self.links: list[dict[str, Any]] = []
+        self.directory_merges: list[dict[str, str]] = []
         self._singleton_identities: set[tuple[str, tuple[tuple[str, Any], ...]]] = set()
         self._next_new_page_id = self._find_next_new_page_id(100)
         self._committed = False
@@ -967,6 +972,19 @@ class _PythonProgramCompiler:
             )
             self._next_new_page_id = self._find_next_new_page_id(self._next_new_page_id + 1)
             return obj
+        if method in {"merge_dirs", "rename_dir"}:
+            if not self.context.supports_directory_merges:
+                self._error(node, f"sdk.{method}() is unavailable in this extraction")
+            kwargs = self._eval_keywords(node)
+            if not statement or node.args or set(kwargs) != {"source_uri", "target_uri"}:
+                self._error(
+                    node,
+                    f"sdk.{method}() requires a standalone call with source_uri= and target_uri=",
+                )
+            self.directory_merges.append(
+                {**kwargs, "operation": "rename" if method == "rename_dir" else "merge"}
+            )
+            return None
         if method == "commit":
             kwargs = self._eval_keywords(node)
             if node.args or kwargs or not statement:
@@ -980,7 +998,7 @@ class _PythonProgramCompiler:
         self._error(
             node,
             f"unknown SDK method sdk.{method}()",
-            allow_tool_retry=method in ("read", "search"),
+            allow_tool_retry=method in ("read", "search", "ls"),
         )
 
     def _call_memory(
@@ -1248,6 +1266,8 @@ class _PythonProgramCompiler:
 
     def _build_operations(self) -> Any:
         payload: dict[str, Any] = {name: [] for name in self.context.operations_model.model_fields}
+        if self.directory_merges:
+            payload["directory_merges"] = self.directory_merges
         deleted_ids: set[int] = set()
         replacement_ids: dict[int, int] = {}
         for obj in self.objects.values():

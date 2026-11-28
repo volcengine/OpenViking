@@ -14,13 +14,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.vlm.base import ToolCall, VLMBase
 from openviking.observability.log_safety import safe_uri_for_log, short_hash
+from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking.session.memory.agent_file import is_static_agent_memory
 from openviking.session.memory.dataclass import (
     DeleteId,
+    DirectoryOperation,
     MemoryFile,
     MemoryOperationSkip,
     MemoryOperationSkipCode,
+    MemoryTypeSchema,
     ResolvedOperation,
     ResolvedOperations,
     StoredLink,
@@ -41,9 +44,17 @@ from openviking.session.memory.merge_op import (
 )
 from openviking.session.memory.page_id_map import ResponsePageIdAllocator
 from openviking.session.memory.schema_model_generator import SchemaModelGenerator
-from openviking.session.memory.tools import MEMORY_TOOLS_REGISTRY
+from openviking.session.memory.tools import (
+    MEMORY_TOOLS_REGISTRY,
+    discardable_memory_directory_file,
+    memory_directory_entries,
+    memory_search_tags,
+    verified_preference_directory_owner,
+)
 from openviking.session.memory.utils.json_parser import JsonUtils
+from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
 from openviking.session.memory.utils.uri import generate_uri
+from openviking.storage.acl import AclAction
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking.telemetry import bind_telemetry_stage, tracer
 from openviking_cli.utils import get_logger
@@ -225,6 +236,9 @@ class ExtractLoop:
             schemas,
             template_context={"language": output_language},
             consolidation=getattr(self.context_provider, "is_consolidation", False),
+            allow_directory_merges=(
+                getattr(self.context_provider, "supports_directory_merges", lambda: False)() is True
+            ),
             # include_decision_reasoning=(
             #     type(self.context_provider).__name__ != "PatchMergeContextProvider"
             # ),
@@ -996,6 +1010,12 @@ class ExtractLoop:
                     raise ValueError(f"Cannot create {memory_type} without original messages")
                 upsert_operations.append(resolved_op)
 
+        directory_merges = []
+        requests = getattr(operations, "directory_merges", ())
+        if requests and self._output_context and self._output_context.supports_directory_merges:
+            directory_merges = await self.context_provider.resolve_directory_merges(requests)
+            self._stage_directory_rename_writes(upsert_operations, directory_merges)
+
         delete_replacements: dict[str, str] = {}
         delete_ids = self._normalize_delete_ids(getattr(operations, "delete_ids", []) or [])
         for delete_id in delete_ids:
@@ -1086,6 +1106,7 @@ class ExtractLoop:
             delete_file_contents=delete_file_contents,
             errors=errors,
             delete_replacements=delete_replacements,
+            directory_merges=directory_merges,
         )
 
         for op in upsert_operations:
@@ -1095,7 +1116,228 @@ class ExtractLoop:
                     op.old_memory_file_content = old_content
                     break
 
+        if directory_merges:
+            await self._expand_directory_operations(
+                resolved, {schema.memory_type: schema for schema in schemas}
+            )
+
         return resolved, raw_links
+
+    async def _expand_directory_operations(
+        self, operations: ResolvedOperations, schemas: dict[str, MemoryTypeSchema]
+    ) -> None:
+        """Resolve directory declarations against the card operations in this response."""
+        fs, ctx = self.viking_fs, self.ctx
+        plans = operations.directory_merges
+        directories = {uri for plan in plans for uri in (plan.source_uri, plan.target_uri)}
+        physical: dict[str, dict[str, bool]] = {}
+        present: set[str] = set()
+        inaccessible: set[str] = set()
+        for uri in sorted(directories):
+            try:
+                stat = await fs.stat(uri, ctx=ctx, skip_count=True, include_vector_fields=False)
+                present.add(uri)
+                if stat.get("isDir"):
+                    physical[uri] = await memory_directory_entries(fs, uri, ctx)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    inaccessible.add(uri)
+                    logger.info("Failed to list memory directory: %s", type(exc).__name__)
+
+        entries = {uri: dict(physical.get(uri, {})) for uri in directories}
+        writes = {}
+        for file in operations.delete_file_contents:
+            parent, _, name = file.uri.rpartition("/")
+            if parent in entries:
+                entries[parent].pop(name, None)
+        for op in operations.upsert_operations:
+            old = op.old_memory_file_content
+            if old and old.uri and old.uri not in op.uris:
+                parent, _, name = old.uri.rpartition("/")
+                if parent in entries:
+                    entries[parent].pop(name, None)
+            for uri in op.uris:
+                parent, _, name = uri.rpartition("/")
+                if parent in entries:
+                    entries[parent][name] = False
+                    writes[uri] = op
+
+        incomplete: set[str] = set()
+        uri_changes: dict[str, str] = {}
+        preference_cards: dict[str, MemoryFile] = {}
+        for plan in plans:
+            source, target = plan.source_uri, plan.target_uri
+            rename = plan.operation == "rename"
+            if rename and source in incomplete:
+                plan._status = "skipped_incomplete_merge"
+                continue
+            if source in inaccessible or target in inaccessible:
+                plan._status = "blocked"
+                incomplete.add(target)
+                continue
+            if source not in physical or (not rename and target not in physical):
+                plan._status = "source_missing" if source not in physical else "target_missing"
+                incomplete.add(target)
+                continue
+            if rename and (target in present or entries[target]):
+                plan._status = "target_exists"
+                continue
+
+            schema = schemas[plan.memory_type]
+            occupied = {name.casefold() for name in (*physical.get(target, {}), *entries[target])}
+            owner = None
+            if plan.memory_type == "preferences":
+                owner = verified_preference_directory_owner(source, target, ctx)
+                if owner is None:
+                    plan._status = "blocked"
+                    incomplete.add(target)
+                    continue
+            identity_field = "user" if owner else "category"
+            target_identity = {identity_field: target.rsplit("/", 1)[-1]}
+            user_space = source.partition("/memories/")[0].removeprefix("viking://user/")
+            try:
+                await fs._ensure_access(source, ctx, action=AclAction.MANAGE)
+                await fs._ensure_access(target, ctx, action=AclAction.WRITE)
+                if owner:
+                    # A wrong owner in either directory invalidates the whole alias merge.
+                    for directory in (source, target):
+                        for name, is_dir in physical.get(directory, {}).items():
+                            if is_dir or name.startswith(".") or not name.endswith(".md"):
+                                continue
+                            uri = f"{directory}/{name}"
+                            card = preference_cards.get(uri)
+                            if card is None:
+                                raw = await fs.read_file(uri, ctx=ctx)
+                                card = MemoryFileUtils.read(raw, uri=uri)
+                                preference_cards[uri] = card
+                            if card.memory_type == "preferences" and not self._matches_owner(
+                                card, owner
+                            ):
+                                raise ValueError(
+                                    "Stored preference owner does not match directory owner"
+                                )
+
+                moves = []
+                remaining = False
+                for name, is_dir in sorted(entries[source].items()):
+                    uri = f"{source}/{name}"
+                    destination = f"{target}/{name}"
+                    if is_dir or name.startswith(".") or not name.endswith(".md"):
+                        if not is_dir and await discardable_memory_directory_file(
+                            fs, uri, name, schema, ctx
+                        ):
+                            continue
+                        remaining = True
+                        continue
+                    if name.casefold() in occupied:
+                        plan._conflicts.append(uri)
+                        remaining = True
+                        continue
+                    op = writes.get(uri)
+                    if op is None:
+                        card = preference_cards.get(uri)
+                        if card is None:
+                            raw = await fs.read_file(uri, ctx=ctx)
+                            card = MemoryFileUtils.read(raw, uri=uri)
+                        if card.memory_type != plan.memory_type:
+                            remaining = True
+                            continue
+                        # Noncanonical legacy files need explicit card repair before moving.
+                        fields = card.extra_fields
+                        if (
+                            not owner and generate_uri(schema, fields, user_space) != uri
+                        ) or generate_uri(
+                            schema, fields | target_identity, user_space
+                        ) != destination:
+                            remaining = True
+                            continue
+                        op = ResolvedOperation(
+                            old_memory_file_content=card,
+                            memory_type=plan.memory_type,
+                            memory_fields={},
+                            uris=[uri],
+                        )
+                    if op.memory_type != plan.memory_type or op.uris != [uri]:
+                        remaining = True
+                        continue
+                    old_uri = op.old_memory_file_content.uri if op.old_memory_file_content else None
+                    if old_uri:
+                        await fs._ensure_access(old_uri, ctx, action=AclAction.WRITE)
+                    await fs._ensure_file_changes_allowed([uri, destination], ctx)
+                    tags = op.search_tags
+                    if tags is None and old_uri:
+                        tags = (
+                            await memory_search_tags(fs._get_vector_store(), old_uri, ctx) or None
+                        )
+                    moves.append((name, uri, destination, op, old_uri, tags))
+                    occupied.add(name.casefold())
+            except Exception as exc:
+                logger.info("Failed to prepare memory directory operation: %s", type(exc).__name__)
+                plan._status = "blocked"
+                incomplete.add(target)
+                continue
+
+            if remaining:
+                if rename:
+                    plan._status = "blocked"
+                    continue
+                incomplete.add(target)
+
+            for name, uri, destination, op, old_uri, tags in moves:
+                if uri not in writes:
+                    operations.upsert_operations.append(op)
+                op.uris = [destination]
+                op.memory_fields.update(target_identity)
+                op.directory_migration = bool(old_uri and old_uri != destination)
+                op.search_tags = tags
+                entries[source].pop(name)
+                entries[target][name] = False
+                writes.pop(uri, None)
+                writes[destination] = op
+                uri_changes[uri] = destination
+                if old_uri:
+                    plan._moved_sources.add(old_uri)
+
+        for source, target in operations.delete_replacements.items():
+            while target in uri_changes:
+                target = uri_changes[target]
+            operations.delete_replacements[source] = target
+
+    @staticmethod
+    def _matches_owner(card: MemoryFile, owner: str) -> bool:
+        user = card.extra_fields.get("user")
+        return isinstance(user, str) and user.isascii() and user.strip(" ").lower() == owner
+
+    @staticmethod
+    def _stage_directory_rename_writes(
+        operations: list[ResolvedOperation], plans: list[DirectoryOperation]
+    ) -> None:
+        # Keep card writes in the source until the directory rename can move them together.
+        renames = {plan.target_uri: plan for plan in plans if plan.operation == "rename"}
+        if not renames:
+            return
+        merge_targets = {
+            plan.source_uri: plan.target_uri for plan in plans if plan.operation == "merge"
+        }
+        for operation in operations:
+            if len(operation.uris) != 1:
+                continue
+            target, _, filename = operation.uris[0].rpartition("/")
+            plan = renames.get(target)
+            if plan is None or plan.memory_type != operation.memory_type:
+                continue
+            old_card = operation.old_memory_file_content
+            source = plan.source_uri
+            if old_card:
+                source = (old_card.uri or "").rpartition("/")[0]
+                if source != plan.source_uri and merge_targets.get(source) != plan.source_uri:
+                    continue
+            field = "category" if plan.memory_type == "entities" else "user"
+            operation.uris = [f"{source}/{filename}"]
+            if old_card:
+                operation.memory_fields.pop(field, None)
+            else:
+                operation.memory_fields[field] = source.rsplit("/", 1)[1]
 
     async def _updated_uri_for_existing_operation(
         self,
@@ -1422,7 +1664,16 @@ class ExtractLoop:
     async def _check_unread_existing_files(self, operations: ResolvedOperations) -> Dict:
         refetch_uris = {}
         for operation in operations.upsert_operations:
-            for uri in operation.uris:
+            uris = operation.uris
+            if operations.directory_merges:
+                uris = list(uris)
+                for uri in operation.uris:
+                    source_uri = self.context_provider.directory_merge_source_for_target(
+                        uri, operations.directory_merges
+                    )
+                    if source_uri and source_uri not in uris:
+                        uris.append(source_uri)
+            for uri in uris:
                 if uri in self.context_provider.read_file_contents:
                     continue
                 try:

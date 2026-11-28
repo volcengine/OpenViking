@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from openviking.session.memory.dataclass import MemoryFile, MemoryTypeSchema
+from openviking.session.memory.dataclass import DirectoryOperation, MemoryFile, MemoryTypeSchema
 from openviking.session.memory.extraction_output_protocol import prompt_fragments as prompts
 from openviking.session.memory.merge_op import FieldType, MergeOp
 
@@ -62,7 +62,12 @@ class ExtractionOutputContext:
     @property
     def inspection_tools(self) -> tuple[str, ...]:
         """Native inspection tools in canonical prompt order."""
-        return tuple(name for name in ("search", "read") if name in self.available_tools)
+        return tuple(name for name in ("search", "read", "ls") if name in self.available_tools)
+
+    @property
+    def supports_directory_merges(self) -> bool:
+        field_info = self.operations_model.model_fields.get("directory_merges")
+        return field_info is not None and field_info.annotation == list[DirectoryOperation]
 
     @property
     def add_only(self) -> bool:
