@@ -414,6 +414,15 @@ class _SemanticMixin:
 
         real_ctx = self._require_request_context(ctx)
         retrieval_targets = resolve_retrieval_targets(target_uri, real_ctx)
+        real_ctx = self.authorize_read(  # type: ignore[attr-defined]
+            real_ctx, retrieval_targets.target_directories
+        )
+        if real_ctx.data_access is not None:
+            from dataclasses import replace
+
+            retrieval_targets = replace(
+                retrieval_targets, target_directories=list(real_ctx.data_access.effective_targets)
+            )
         primary_target_uri = retrieval_targets.first_explicit_directory
 
         session_summary = (
@@ -534,20 +543,30 @@ class _SemanticMixin:
 
         # Aggregate results to FindResult
         memories, resources, skills = [], [], []
+        access = (
+            await self._can_access_many(  # type: ignore[attr-defined]
+                [hit.uri for result in query_results for hit in result.matched_contexts],
+                real_ctx,
+            )
+            if real_ctx.data_access is not None
+            else None
+        )
         for result in query_results:
-            for ctx in result.matched_contexts:
+            for hit in result.matched_contexts:
+                if access is not None and not access.get(hit.uri, False):
+                    continue
                 if (
-                    ctx.level == ContextLevel.OVERVIEW
+                    hit.level == ContextLevel.OVERVIEW
                     and real_ctx.data_access is not None
-                    and not real_ctx.data_access.allows_overview(ctx.uri)
+                    and not real_ctx.data_access.allows_overview(hit.uri)
                 ):
                     continue
-                if ctx.context_type == ContextType.MEMORY:
-                    memories.append(ctx)
-                elif ctx.context_type == ContextType.RESOURCE:
-                    resources.append(ctx)
-                elif ctx.context_type == ContextType.SKILL:
-                    skills.append(ctx)
+                if hit.context_type == ContextType.MEMORY:
+                    memories.append(hit)
+                elif hit.context_type == ContextType.RESOURCE:
+                    resources.append(hit)
+                elif hit.context_type == ContextType.SKILL:
+                    skills.append(hit)
 
         find_result = FindResult(
             memories=memories,
