@@ -1086,6 +1086,16 @@ Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-
 
 Code skeleton extraction is built into the code summary pipeline and has no parser-level configuration. OpenViking first uses maintained `tags.scm` queries when one exists for the language; if no corresponding `tags.scm` exists, it uses `tree-sitter-language-pack.process()`; when the current extraction route produces no useful skeleton, it invokes `semantic.code_summary` as fallback.
 
+Set the top-level `semantic.code_summary_llm_enabled` flag to `false` to return an empty, degraded code summary when no useful skeleton is available, without calling the LLM. The default is `true`, preserving the existing fallback. Useful code skeletons, document summaries, and directory overviews remain unchanged.
+
+```json
+{
+  "semantic": {
+    "code_summary_llm_enabled": false
+  }
+}
+```
+
 The remaining `code` configuration fields are for remote code resource network guards and code-hosting allowlists. See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction) for the extraction route.
 
 #### Remote resource network guard

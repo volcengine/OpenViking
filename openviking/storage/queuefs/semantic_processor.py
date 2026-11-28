@@ -1160,6 +1160,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 if len(skeleton_text) > max_skeleton_chars:
                     skeleton_text = skeleton_text[:max_skeleton_chars]
                 return result(skeleton_text)
+            if not config.semantic.code_summary_llm_enabled:
+                return result("")
             prompt_id = "semantic.code_summary"
         elif file_type == FILE_TYPE_DOCUMENTATION:
             prompt_id = "semantic.document_summary"
