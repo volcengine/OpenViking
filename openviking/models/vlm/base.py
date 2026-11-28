@@ -381,8 +381,8 @@ class VLMBase(ABC):
                 self.update_token_usage(
                     model_name=self.model or self._default_usage_model,
                     provider=self.provider,
-                    prompt_tokens=usage.prompt_tokens,
-                    completion_tokens=usage.completion_tokens,
+                    prompt_tokens=getattr(usage, "prompt_tokens", None) or 0,
+                    completion_tokens=getattr(usage, "completion_tokens", None) or 0,
                     duration_seconds=duration_seconds,
                     prompt_cached_tokens=getattr(prompt_details, "cached_tokens", 0) or 0,
                     completion_reasoning_tokens=getattr(completion_details, "reasoning_tokens", 0)

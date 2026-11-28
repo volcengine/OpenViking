@@ -1313,10 +1313,11 @@ class ExtractLoop:
         # Log cache hit info
         if hasattr(response, "usage") and response.usage:
             usage = response.usage
-            prompt_tokens = usage.get("prompt_tokens", 0)
+            prompt_tokens = usage.get("prompt_tokens") or 0
+            prompt_details = usage.get("prompt_tokens_details")
             cached_tokens = (
-                usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
-                if isinstance(usage.get("prompt_tokens_details"), dict)
+                (prompt_details.get("cached_tokens") or 0)
+                if isinstance(prompt_details, dict)
                 else 0
             )
             try:

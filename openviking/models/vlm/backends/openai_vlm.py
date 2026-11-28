@@ -241,15 +241,16 @@ class OpenAIVLM(VLMBase):
         message = choice.message
         tracer.info(f"result={message.content}")
         if has_tools:
-            usage = {}
-            if hasattr(response, "usage") and response.usage:
+            usage: Dict[str, Any] = {}
+            raw_usage = getattr(response, "usage", None)
+            if raw_usage:
                 usage = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                    "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+                    "prompt_tokens": getattr(raw_usage, "prompt_tokens", None) or 0,
+                    "completion_tokens": getattr(raw_usage, "completion_tokens", None) or 0,
+                    "total_tokens": getattr(raw_usage, "total_tokens", None) or 0,
+                    "prompt_tokens_details": getattr(raw_usage, "prompt_tokens_details", None),
                     "completion_tokens_details": getattr(
-                        response.usage, "completion_tokens_details", None
+                        raw_usage, "completion_tokens_details", None
                     ),
                 }
 
