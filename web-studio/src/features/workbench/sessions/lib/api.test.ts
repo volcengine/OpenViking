@@ -7,6 +7,7 @@ import { OvClientError, ovClient } from '#/shared/api/ov-client/index'
 import {
   fetchBotHealth,
   fetchSessionFirstTitle,
+  fetchSessionMemoryDiffs,
   fetchSessionMessages,
   interruptChatSession,
   sendChatStream,
@@ -55,6 +56,39 @@ function message(id: string, text: string) {
     role: 'user',
   }
 }
+
+describe('fetchSessionMemoryDiffs', () => {
+  it('orders four-digit archives before earlier three-digit archives', async () => {
+    getContentReadMock.mockReset().mockImplementation(({ query }) => {
+      const archiveId = query.uri.split('/').at(-2)
+      const hasMemoryChange = [
+        'archive_998',
+        'archive_999',
+        'archive_1000',
+      ].includes(archiveId)
+      return response(
+        JSON.stringify({
+          operations: {
+            adds: hasMemoryChange
+              ? [{ uri: 'viking://user/demo/memory/example.md' }]
+              : [],
+          },
+        }),
+      )
+    })
+
+    const diffs = await fetchSessionMemoryDiffs({
+      commit_count: 1000,
+      uri: 'viking://user/demo/sessions/demo',
+    } as Parameters<typeof fetchSessionMemoryDiffs>[0])
+
+    expect(diffs.map(({ archiveId }) => archiveId)).toEqual([
+      'archive_1000',
+      'archive_999',
+      'archive_998',
+    ])
+  })
+})
 
 describe('fetchSessionMessages', () => {
   beforeEach(() => {
