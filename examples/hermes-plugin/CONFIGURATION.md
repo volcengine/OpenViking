@@ -194,9 +194,26 @@ memory:
 Existing non-empty `OPENVIKING_AGENT`, YAML `agent`, and linked OpenViking
 `actor_peer_id` or legacy `agent_id` values retain their behavior. Resolution
 order remains environment, linked OpenViking config, then Hermes YAML for Service
-and Custom connections. Quick Local uses the `hermes` peer. To use
-no peer on a Service or Custom connection, remove the peer value from each
-configured source and start a new Hermes session.
+and Custom connections. Quick Local uses the `hermes` peer.
+
+For a project peer shared with the pi Coding Agent extension, add this to the
+Hermes profile and start a session in the checkout:
+
+```yaml
+memory:
+  openviking:
+    agent_source: git
+```
+
+`agent_source` applies to Service and Custom connections. The default, `static`,
+uses the configured identity. `git` uses the same precedence, then falls back to
+the session workspace's Git `origin`. For example,
+`git@github.com:volcengine/OpenViking.git` becomes `github.com-volcengine-openviking`
+across clones and worktrees. Git must be available on the Hermes host. With no
+usable remote, Hermes uses user-level memory. `none` disables the configured
+actor peer and workspace derivation. Gateway sender attribution still applies.
+Set `recall_scope: peer` to limit automatic recall in sessions without a
+gateway sender to common memory and the project peer. `shared` includes every peer.
 
 Upgrades do not move or delete existing memories. Installations that relied
 on the old implicit `hermes` peer now use user memory for new writes. Without
@@ -213,8 +230,9 @@ changes future writes, not the location of existing memories.
 
 The external provider attaches the current gateway sender to captured user
 messages as a peer, for example `telegram.123456`. The OpenViking account and
-user stay unchanged. Assistant messages keep the configured `agent` peer.
-CLI messages without a gateway sender remain linked to the OpenViking user.
+user stay unchanged. Assistant messages use the configured or derived peer.
+User messages without a gateway sender use a derived workspace peer when
+available, or stay linked to the OpenViking user.
 Existing memories are not moved.
 
 The setup presets save the automatic recall scope. You can also set it in the
@@ -229,11 +247,12 @@ memory:
 | Value | Automatic recall |
 |-------|------------------|
 | `shared` | Common memory and all peer memories under the same OpenViking user. |
-| `peer` | Common memory and the current gateway sender's memory. With no sender, only common memory is recalled. |
+| `peer` | Common memory and the current gateway sender's memory. With no sender, recall includes the derived workspace peer when available. |
 
 With no scope set, the provider preserves the previous requests: normally
 shared recall, but an explicitly configured assistant peer can narrow list
-recall. Existing compression behavior is also retained. This is compatibility
+recall. A derived workspace peer also scopes compressed recall to that peer.
+Existing compression behavior for static peers is retained. This is compatibility
 handling for existing installations, not a third setup mode. Invalid values
 warn and preserve that behavior.
 

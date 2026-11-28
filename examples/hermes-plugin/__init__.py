@@ -157,6 +157,13 @@ _CONFIG_SCHEMA = [
     _cfg_field("account", "Advanced local identity override (leave blank for user API keys)"),
     _cfg_field("user", "Advanced local user override (leave blank for user API keys)"),
     _cfg_field("agent", "Optional peer ID for separate assistant context. Uses user memory when no peer is configured.", default=_DEFAULT_AGENT),
+    {
+        "key": "agent_source",
+        "description": "Service and Custom peer source: configured identity, Git origin fallback, or no peer.",
+        "type": "string",
+        "choices": ["static", "git", "none"],
+        "default": "static",
+    },
     _cfg_field("recall_scope", "Automatic recall: all peers (shared) or current sender (peer). Unset preserves existing behavior.",
                type="string", choices=["shared", "peer"], default=None),
     _cfg_field(
@@ -787,6 +794,78 @@ def _clean_config_value(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _session_workspace_cwd(cwd: Any, *, is_cli: bool) -> str:
+    if isinstance(cwd, str) and cwd:
+        return cwd
+    try:
+        from tools.terminal_scope import TerminalPolicyUnavailable, terminal_env
+    except ImportError:  # Older hosts only have the launch environment.
+        configured = os.environ.get("TERMINAL_CWD", "") if is_cli else ""
+    else:
+        try:
+            configured = terminal_env("TERMINAL_CWD")
+        except TerminalPolicyUnavailable:
+            return ""
+    if is_cli and not configured:
+        with suppress(OSError):
+            return os.getcwd()
+    return configured
+
+
+def _git_workspace_peer(cwd: str) -> str:
+    """Read this checkout's origin and apply the shared plugin's peer ID rules."""
+    if not cwd:
+        return ""
+    try:
+        remote = subprocess.check_output(
+            ["git", "config", "--local", "--no-includes", "--get", "remote.origin.url"],
+            cwd=Path(cwd).expanduser(),
+            env={key: value for key, value in os.environ.items() if not key.startswith("GIT_")},
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).decode().strip()
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        return ""
+    if re.match(r"^[A-Za-z]:[\\/]", remote):
+        return ""
+
+    scp = re.fullmatch(r"(?:[^@/\\]+@)?([^:/\\]+):(?!/)(.+)", remote)
+    if scp and not re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", remote):
+        host, path = scp.groups()
+    else:
+        try:
+            from httpx import URL, InvalidURL
+        except ImportError:
+            return ""
+        try:
+            url = URL(remote)
+        except InvalidURL:
+            return ""
+        if not url.scheme or url.scheme == "file" or b"%" in url.raw_host:
+            return ""
+        if url.port is not None and not 0 <= url.port <= 65535:
+            return ""
+        host = url.raw_host.decode()
+        path = url.raw_path.partition(b"?")[0].decode()
+
+    path = path.strip("/").lower().removesuffix(".git")
+    if not host or not path:
+        return ""
+    normalized = f"{host.lower().removeprefix('[').removesuffix(']')}/{path}"
+    peer = re.sub(r"[^a-zA-Z0-9_.@-]+", "-", normalized)
+    peer = re.sub(r"-{2,}", "-", peer).strip("-.")
+    first, at, rest = peer.partition("@")
+    peer = first + at + rest.replace("@", "-")
+    if peer.startswith("ext-"):
+        peer = f"x-{peer}"
+    if peer == "__self":
+        peer = "self"
+    if len(peer) > 100:
+        suffix = hashlib.sha256(normalized.encode()).hexdigest()[:12]
+        peer = f"{peer[:87].rstrip('-.')}-{suffix}"
+    return peer
+
+
 def _openviking_endpoint_label(value: Any) -> str:
     """Credential-free endpoint label for logs and UI."""
     raw = _clean_config_value(value)
@@ -1114,7 +1193,11 @@ def _resolve_connection_settings(provider_config: Optional[dict] = None, *, env:
         "api_key": api_key,
         "account": account,
         "user": user,
-        "agent": layered("agent", _DEFAULT_AGENT),
+        "agent": (
+            _DEFAULT_AGENT
+            if provider_config.get("agent_source") == "none"
+            else layered("agent", _DEFAULT_AGENT)
+        ),
         "extra_headers": _parse_extra_headers(extra_headers_raw) or ovcli_values.get("extra_headers") or {},
     }
 
@@ -1608,6 +1691,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
     def __init__(self):
         self._client: Optional[_VikingClient] = None
         self._endpoint = self._api_key = self._account = self._user = self._agent = ""
+        self._workspace_cwd = ""
+        self._workspace_peer: Optional[str] = None
         # The gateway sender is a peer within the configured OpenViking user.
         self._user_id = ""
         self._gateway_platform = self._gateway_user_id = self._gateway_user_id_alt = ""
@@ -1888,6 +1973,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
     def initialize(self, session_id: str, **kwargs) -> None:
         is_cli = kwargs.get("platform") == "cli"
+        self._workspace_cwd = _session_workspace_cwd(kwargs.get("cwd"), is_cli=is_cli)
+        self._workspace_peer = None
         warning_callback = kwargs.get("warning_callback") if is_cli else None
         status_callback = kwargs.get("status_callback") if is_cli else None
         self._runtime_status_callback = status_callback
@@ -1984,7 +2071,20 @@ class OpenVikingMemoryProvider(MemoryProvider):
     def _resolve_bound_connection_settings(self, config=None, env=None) -> dict:
         if config is None:
             config, env = self._profile_config_and_env()
-        return _resolve_connection_settings(config, env=env, hermes_home=self._hermes_home or get_hermes_home())
+        settings = _resolve_connection_settings(
+            config, env=env, hermes_home=self._hermes_home or get_hermes_home()
+        )
+        if (
+            config.get("agent_source") == "git"
+            and not settings["agent"]
+            and config.get("deployment") != quick_local.DEPLOYMENT
+        ):
+            if self._workspace_peer is None:
+                self._workspace_peer = _git_workspace_peer(self._workspace_cwd)
+            settings["agent"] = self._workspace_peer
+        else:
+            self._workspace_peer = None
+        return settings
 
     def _in_cooldown(self, failed_key) -> bool:
         failed = self._failed_refresh
@@ -2194,11 +2294,18 @@ class OpenVikingMemoryProvider(MemoryProvider):
             cfg = self._recall_config()
             deadline = time.monotonic() + cfg["timeout_seconds"]
             scope = cfg["scope"]
+            workspace_peer = (
+                self._workspace_peer
+                if self._workspace_peer and self._workspace_peer == client._conn_snapshot[4]
+                else ""
+            )
+            recall_peer = sender_peer or workspace_peer
+            actor_recall = scope == "peer" or (scope is None and bool(workspace_peer))
             target_uri = None
             if scope in ("shared", "peer"):
                 endpoint, api_key, account, user, _agent = client._conn_snapshot
                 client = _VikingClient(endpoint, api_key, account=account, user=user,
-                                       agent=sender_peer if scope == "peer" else "",
+                                       agent=recall_peer if scope == "peer" else "",
                                        extra_headers=self._extra_headers)
             if scope == "peer":
                 # Explicit roots also constrain fallback searches when there is
@@ -2211,15 +2318,15 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     return ""
                 user_root = f"viking://user/{user}"
                 target_uri = [f"{user_root}/memories"]
-                if sender_peer:
-                    target_uri.append(f"{user_root}/peers/{sender_peer}/memories")
+                if recall_peer:
+                    target_uri.append(f"{user_root}/peers/{recall_peer}/memories")
                 if cfg["resources"]:
                     target_uri += [f"{user_root}/resources", "viking://resources"]
-                    if sender_peer:
-                        target_uri.append(f"{user_root}/peers/{sender_peer}/resources")
+                    if recall_peer:
+                        target_uri.append(f"{user_root}/peers/{recall_peer}/resources")
             # Without an actor, context-mode resource defaults include peers.
             # Use scoped list recall for that case, even with compression on.
-            if cfg["compress"] in ("server", "auto") and (scope != "peer" or sender_peer):
+            if cfg["compress"] in ("server", "auto") and (scope != "peer" or recall_peer):
                 payload = {
                     "query": query_text,
                     "mode": "context",
@@ -2231,8 +2338,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 }
                 if session_id:
                     payload["session_id"] = session_id
-                if scope in ("shared", "peer"):
-                    payload["peer_scope"] = "actor" if scope == "peer" else "all"
+                if scope == "shared":
+                    payload["peer_scope"] = "all"
+                elif actor_recall:
+                    payload["peer_scope"] = "actor"
                 try:
                     assembled = self._unwrap_result(
                         client.post(
@@ -2246,9 +2355,9 @@ class OpenVikingMemoryProvider(MemoryProvider):
                     if isinstance(assembled, dict) and any(
                         k in assembled for k in ("rendered", "digest", "entries")
                     ):
-                        if scope == "peer" and (assembled.get("stats") or {}).get("peer_scope") != "actor":
+                        if actor_recall and (assembled.get("stats") or {}).get("peer_scope") != "actor":
                             # Older servers may ignore an unknown field. Never
-                            # inject a digest whose sender scope is unconfirmed.
+                            # inject a digest whose actor scope is unconfirmed.
                             raise ValueError("OpenViking did not confirm actor-scoped context")
                         if (assembled.get("stats") or {}).get("rewrite") == "no_relevant":
                             return ""
@@ -2742,6 +2851,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
             client = self._new_client()
             assistant_peer_id = self._agent
             user_peer_id = self._sender_peer(turn_author.get("id")) if isinstance(turn_author, dict) else self._current_sender_peer()
+            if not user_peer_id and assistant_peer_id == self._workspace_peer:
+                user_peer_id = assistant_peer_id
 
         turn_messages = [dict(m) for m in (self._extract_current_turn_messages(messages, user_content, assistant_content) if messages is not None else [])]
         for message in turn_messages:

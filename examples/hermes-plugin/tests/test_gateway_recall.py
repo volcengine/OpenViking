@@ -1,6 +1,7 @@
 """Mock gateway turns through the external loader, Hermes manager and HTTP client."""
 
 import json
+import subprocess
 import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -129,7 +130,14 @@ class GatewayBackend:
 
 
 def initialize(
-    external_provider, monkeypatch, *, name="gateway", scope="peer", compress="off", **identity
+    external_provider,
+    monkeypatch,
+    *,
+    name="gateway",
+    scope="peer",
+    compress="off",
+    config_overrides=None,
+    **identity,
 ):
     from agent.memory_manager import MemoryManager
 
@@ -146,6 +154,7 @@ def initialize(
         "recall_timeout_seconds": 10,
         "recall_request_timeout_seconds": 5,
     }
+    config.update(config_overrides or {})
     (home / "config.yaml").write_text(
         yaml.safe_dump({"memory": {"provider": "openviking", "openviking": config}})
     )
@@ -402,6 +411,114 @@ def test_cli_owner_is_not_a_gateway_sender(external_provider, monkeypatch):
             )
             assert provider._drain_writers("shared-group", timeout=10)
             assert "peer_id" not in backend.pending[0]
+    finally:
+        manager.shutdown_all()
+
+
+@pytest.mark.parametrize(
+    ("scope", "structured"),
+    [(None, False), ("peer", True)],
+    ids=["implicit", "peer-scope"],
+)
+@pytest.mark.parametrize(
+    ("source", "remote", "configured", "env_agent", "expected"),
+    [
+        ("git", "git@Example.COM:Team/Project.git", None, None, "example.com-team-project"),
+        (
+            "git",
+            "https://user:secret@Example.COM:8443/Team/Project.GIT/",
+            None,
+            None,
+            "example.com-team-project",
+        ),
+        ("git", "https://example.com/team/Other.git", None, None, "example.com-team-other"),
+        ("git", "file:///local/repo", None, None, None),
+        ("git", "", None, None, None),
+        ("git", None, None, None, None),
+        ("git", "git@example.com:team/project.git", "static-peer", None, "static-peer"),
+        ("git", "git@example.com:team/project.git", "static-peer", "env-peer", "env-peer"),
+        ("git", "git@example.com:team/project.git", "linked", None, "linked-peer"),
+        ("static", "git@example.com:team/project.git", None, None, None),
+        (None, "git@example.com:team/project.git", "static-peer", None, "static-peer"),
+        ("none", "git@example.com:team/project.git", "static-peer", None, None),
+    ],
+    ids=[
+        "scp",
+        "https",
+        "other-repo",
+        "local-origin",
+        "no-origin",
+        "no-repo",
+        "yaml-override",
+        "env-override",
+        "linked-override",
+        "static",
+        "default",
+        "none",
+    ],
+)
+def test_cli_git_workspace_peer(
+    external_provider, monkeypatch, tmp_path, source, remote, configured, env_agent, expected,
+    scope, structured,
+):
+    work = tmp_path / "repo"
+    cwd = work / "nested"
+    cwd.mkdir(parents=True)
+    if remote is not None:
+        subprocess.run(["git", "init", "-q", str(work)], check=True)
+        if remote:
+            subprocess.run(["git", "-C", str(work), "remote", "add", "origin", remote], check=True)
+
+    # The external fixture clears env overrides on discovery, so use the bound profile.
+    home, *_ = external_provider("workspace")
+    config = {"agent": configured}
+    if source is not None:
+        config["agent_source"] = source
+    if configured == "linked":
+        ovcli = home / "ovcli.conf"
+        ovcli.write_text(json.dumps({"actor_peer_id": "linked-peer"}), encoding="utf-8")
+        config.update(use_ovcli_config=True, ovcli_config_path=str(ovcli))
+    if env_agent:
+        (home / ".env").write_text(f"OPENVIKING_AGENT={env_agent}\n", encoding="utf-8")
+    home, provider, _, manager, backend = initialize(
+        external_provider,
+        monkeypatch,
+        name="workspace",
+        platform="cli",
+        cwd=str(cwd),
+        scope=scope,
+        compress="server",
+        config_overrides=config,
+    )
+    messages = None
+    if structured:
+        messages = [
+            {"role": "user", "content": "Remember a decision"},
+            {"role": "assistant", "content": "Saved from transcript"},
+        ]
+    try:
+        with profile_scope(home):
+            provider.prefetch("Find a project decision", session_id="shared-group")
+            manager.sync_all(
+                "Remember a decision", "Saved", session_id="shared-group", messages=messages
+            )
+            assert manager.flush_pending(timeout=10)
+            assert provider._drain_writers("shared-group", timeout=10)
+            request, payload = backend.searches[-1]
+            derived = expected if source == "git" and not (configured or env_agent) else None
+            assert request.headers.get("X-OpenViking-Actor-Peer") == (
+                derived if scope == "peer" else expected
+            )
+            if derived:
+                assert payload["peer_scope"] == "actor"
+            user, assistant = backend.pending
+            assert user.get("peer_id") == derived
+            assert assistant.get("peer_id") == expected
+            assert assistant["parts"][0]["text"] == ("Saved from transcript" if structured else "Saved")
+            capture = next(
+                req for req, _ in backend.requests if req.url.path.endswith("/messages/batch")
+            )
+            assert capture.headers.get("X-OpenViking-Actor-Peer") == expected
     finally:
         manager.shutdown_all()
 
