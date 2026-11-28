@@ -370,6 +370,42 @@ async def test_markdown_routing_uses_content_and_checks_foreign_decisions(pipeli
     assert "Related documents must be supplied candidates" in pipeline.warnings[-1]
 
 
+async def test_shuffle_shares_identical_history_queries_without_changing_assignments(pipeline):
+    pipeline.contract = contract(True)
+    docs = [Document(f"{i}.md", f"drafts/{i}.md") for i in range(3)]
+    for doc, text in zip(docs, ["same facts", "other facts", "same facts"], strict=True):
+        await pipeline.files.sandbox.write_file(doc.workspace_path, text)
+    targets = {prefix: pipeline.target + f"/{prefix}.md" for prefix in ("same", "other")}
+
+    async def find(text, **kwargs):
+        await asyncio.sleep(0)
+        return {"resources": [{"uri": targets[text.split()[0]], "abstract": text}]}
+
+    async def decide(stage, system, data, schema, validate, **kwargs):
+        response = RouteResponse(
+            decisions=[
+                {"document": row["document"], "history": [h["uri"] for h in row["history"]]}
+                for row in data["assignments"]
+            ]
+        )
+        validate(response)
+        return response
+
+    pipeline.client.find = AsyncMock(side_effect=find)
+    pipeline.client.stat = AsyncMock(return_value={"isDir": False})
+    pipeline.client.compile_embeddings = AsyncMock(
+        side_effect=lambda texts, **_: {"model": "m", "vectors": [[1.0, 0.0]] * len(texts)}
+    )
+    pipeline.model.ask = decide
+    program = MERGE.replace("by=contract.routing", "by=contract.routing, against=target")
+    groups = await Shuffle(pipeline).run(parse_plan(program, pipeline.contract)[1], docs)
+    assert [g.target_uris for g in groups] == [[targets[key]] for key in ("same", "other", "same")]
+    assert [call.args[0] for call in pipeline.client.find.await_args_list] == [
+        "same facts",
+        "other facts",
+    ]
+
+
 @pytest.mark.parametrize("fail_all", [False, True])
 async def test_failed_routes_keep_completed_drafts_through_finalization(
     pipeline, monkeypatch, agent_loop, fail_all

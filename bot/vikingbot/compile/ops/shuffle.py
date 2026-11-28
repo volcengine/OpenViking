@@ -310,13 +310,19 @@ class Shuffle:
         ]
         # shortcut: candidate ranking uses Markdown prefixes; use chunked embeddings if long drafts miss matches.
         texts = [body[:8000] for body in bodies]
-        histories = (
-            await bounded_jobs(
-                texts, self.candidates, concurrency=r.limits.shuffle_concurrency, metrics=r.metrics
+        if node.against_target:
+            # Start only one lookup for each exact query, even with concurrent workers.
+            queries = dict.fromkeys(texts)
+            results = await bounded_jobs(
+                queries,
+                self.candidates,
+                concurrency=r.limits.shuffle_concurrency,
+                metrics=r.metrics,
             )
-            if node.against_target
-            else [[] for _ in documents]
-        )
+            history_by_query = dict(zip(queries, results, strict=True))
+            histories = [history_by_query[text] for text in texts]
+        else:
+            histories = [[] for _ in documents]
         by_id = {doc.workspace_path: doc for doc in documents}
         if rule.mode == "all":
             return [Group("all", documents, sorted({h["uri"] for hits in histories for h in hits}))]
