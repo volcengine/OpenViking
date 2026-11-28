@@ -15,7 +15,7 @@
 
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
 import { OV_PREFERENCES, OWNER_DIRECTORY, directoryPerson, findPersonDirectory, topicFile } from './ov-person.mjs';
-import { materializeSkill, skillFromDefinitionUri } from './ov-skills.mjs';
+import { fetchSkillPackage, skillFromDefinitionUri, writeSkillPackage } from './ov-skills.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 
 // Where add_resource lands when the caller names no target: the instance's
@@ -101,12 +101,22 @@ function hitTypeUri(type, uri) {
 }
 
 // What the model needs to use an activated package: where it sits, which files
-// came with it, and that anything not copied stayed in OpenViking.
+// came with it, and what is missing — a file that can never come over, or one
+// the next read of the definition will try again.
 function skillLine(skill) {
-  const files = Array.isArray(skill.skipped) && skill.skipped.length
-    ? ` ${skill.skipped.length} file(s) stayed in OpenViking (too large, binary or unverified): ${skill.skipped.slice(0, 5).join(', ')}${skill.skipped.length > 5 ? ', …' : ''}.`
-    : '';
+  const skipped = Array.isArray(skill.skipped) ? skill.skipped : [];
+  const files = skipped.length === 0 ? '' : ` ${skipped.length} file(s) did not come with it`
+    + ` (${skill.complete ? 'too large, unsafe or not part of a package' : 'not fetched or not verified yet'})`
+    + `: ${skipped.slice(0, 5).join(', ')}${skipped.length > 5 ? ', …' : ''}.`
+    + (skill.complete ? '' : ' Reading this definition again fetches what is missing.');
   return `Skill ${skill.name} is on this machine at ${skill.path}: run its scripts and read its references there, with that directory as the working directory.${files}`;
+}
+
+// A whole text as its lines: a final newline ends the last line rather than
+// starting an empty one, the way reading a page at a time does.
+function snapshotLines(text) {
+  const value = String(text ?? '');
+  return (value.endsWith('\n') ? value.slice(0, -1) : value).split('\n');
 }
 
 function truncate(text, max) {
@@ -208,18 +218,23 @@ export class OVToolClient {
   // One page of a stored text: `offset` is a 0-based line, `limit` the page
   // size in lines. One extra line tells "more" from "end". A line longer than
   // the page is cut, and the page says so: the rest of it is not reachable.
-  // Reading a skill's SKILL.md also materializes that skill's package in the
-  // instance's cache (ov-skills.mjs), the way vikingbot activates a skill by
-  // reading it, and the page then names the directory its scripts run from.
+  // Reading a skill's SKILL.md takes that skill's package as one snapshot
+  // (ov-skills.mjs), the way vikingbot activates a skill by reading it: the page
+  // is that snapshot's SKILL.md, and the files written from it are the same
+  // revision, so a skill updated between two requests cannot pair old
+  // instructions with new scripts. The page then names the directory its
+  // scripts run from. A package OV does not return leaves this a plain read.
   async read({ uri, offset = 0, limit = 200 } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const size = Math.max(1, Number(limit) || 200);
-    const raw = String((await this.call(
+    const snapshot = skillFromDefinitionUri(uri) ? await this.skillSnapshot(uri) : null;
+    const raw = snapshot ? snapshot.content : String((await this.call(
       `/api/v1/content/read?uri=${encodeURIComponent(uri)}&offset=${start}&limit=${size + 1}`,
       undefined, this.readTimeoutMs)).result ?? '');
-    const lines = raw.split('\n');
-    const more = lines.length > size;
-    const page = lines.slice(0, size);
+    // A snapshot is paged here, from the text the package itself carries.
+    const lines = snapshot ? snapshotLines(raw) : raw.split('\n');
+    const more = snapshot ? lines.length > start + size : lines.length > size;
+    const page = snapshot ? lines.slice(start, start + size) : lines.slice(0, size);
     const shown = [];
     let chars = 0;
     let cut = false;
@@ -238,9 +253,12 @@ export class OVToolClient {
     const header = nextOffset === null
       ? `${uri} (whole remaining text, ${shown.length} line(s)):`
       : `${uri} (lines ${start}-${start + shown.length - 1}, continue with offset=${nextOffset}):`;
-    const skill = skillFromDefinitionUri(uri) ? await this.activateSkill(uri) : null;
+    const skill = snapshot ? await this.activateSkill(snapshot) : null;
     if (skill) {
-      data.skill_package = { name: skill.name, path: skill.path, cached: skill.cached, skipped: skill.skipped };
+      data.skill_package = {
+        name: skill.name, path: skill.path, revision: skill.revision, complete: skill.complete,
+        cached: skill.cached, skipped: skill.skipped,
+      };
     }
     return {
       text: `${header}\n${body}${skill ? `\n\n${skillLine(skill)}` : ''}`,
@@ -248,12 +266,24 @@ export class OVToolClient {
     };
   }
 
+  // The package snapshot behind a skill's definition, or null: one fetch holds
+  // the SKILL.md it shows and the files it will write, both from OV's locked
+  // view of the package.
+  async skillSnapshot(uri) {
+    try {
+      return await fetchSkillPackage(this.conn(), { uri, timeoutMs: this.timeoutMs, logger: this.logger });
+    } catch (error) {
+      this.logger?.debug?.('ov_skill_package_skipped', { status: error?.httpStatus ?? null });
+      return null;
+    }
+  }
+
   // The package of the skill whose definition was just read: files it ships
   // are written under the instance's cache, and the model is told where. A
-  // package that cannot be fetched leaves the read as it is.
-  async activateSkill(uri) {
+  // package that cannot be written leaves the read as it is.
+  async activateSkill(snapshot) {
     try {
-      return await materializeSkill(this.conn(), { uri, dataDir: this.dataDir, timeoutMs: this.timeoutMs, logger: this.logger });
+      return await writeSkillPackage(this.conn(), snapshot, { dataDir: this.dataDir, timeoutMs: this.timeoutMs, logger: this.logger });
     } catch (error) {
       this.logger?.debug?.('ov_skill_package_skipped', { status: error?.httpStatus ?? null });
       return null;

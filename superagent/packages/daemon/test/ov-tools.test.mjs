@@ -186,9 +186,45 @@ describe('OpenViking tool client', () => {
     const instance = client(ov, { dataDir });
     const page = await instance.read({ uri: `${root}/SKILL.md` });
     assert.match(page.text, /^viking:\/\/user\/owner\/skills\/charts\/SKILL\.md \(whole remaining text/);
-    assert.match(page.text, /Skill charts is on this machine at .+\/skills\/charts-dddddddddddd: run its scripts and read its references there/);
+    assert.match(page.text, /Skill charts is on this machine at .+\/skills\/charts\/dddddddddddd: run its scripts and read its references there/);
     assert.equal(page.data.skill_package.name, 'charts');
+    assert.equal(page.data.skill_package.revision, 'dddddddddddd');
     assert.equal(fs.readFileSync(path.join(page.data.skill_package.path, 'scripts', 'render.sh'), 'utf8'), script);
+    // The page is the package's own SKILL.md, from the same snapshot as the
+    // files: no separate read of the definition can pair two revisions.
+    assert.equal(fs.readFileSync(path.join(page.data.skill_package.path, 'SKILL.md'), 'utf8'), definition);
+    assert.equal(requests(ov, 'GET /api/v1/content/read').length, 1, 'only the package file is fetched');
+    assert.equal(requests(ov, /^GET \/api\/v1\/skills\/charts$/).length, 1);
+    // A skill updated under the read: the page and the files are the new
+    // revision, never the old text with new scripts.
+    const updated = `${definition}\nAlso run scripts/other.sh.\n`;
+    ov.state.files.set(`${root}/SKILL.md`, updated);
+    ov.state.skills.get('charts').content = updated;
+    ov.state.skills.get('charts').content_sha256 = sha(updated);
+    ov.state.skills.get('charts').revision = 'e'.repeat(64);
+    ov.state.skills.get('charts').files[0].sha256 = sha(updated);
+    ov.state.skills.get('charts').files[0].size = Buffer.byteLength(updated);
+    const next = await instance.read({ uri: `${root}/SKILL.md` });
+    assert.match(next.text, /Also run scripts\/other\.sh\./);
+    assert.match(next.data.skill_package.path, /e{12}$/);
+    assert.equal(fs.readFileSync(path.join(next.data.skill_package.path, 'SKILL.md'), 'utf8'), updated);
+    // A file that did not arrive is named, and the page says it will be tried again.
+    const charts = ov.state.skills.get('charts');
+    charts.files.push({ path: 'late.md', uri: `${root}/late.md`, is_dir: false, size: 3, sha256: sha('abc') });
+    charts.revision = 'f'.repeat(64);
+    const partial = await instance.read({ uri: `${root}/SKILL.md` });
+    assert.match(partial.text, /1 file\(s\) did not come with it \(not fetched or not verified yet\): late\.md\./);
+    assert.match(partial.text, /Reading this definition again fetches what is missing\./);
+    assert.equal(partial.data.skill_package.complete, false);
+    // Pages of a skill's definition come from the same snapshot.
+    const firstPage = await instance.read({ uri: `${root}/SKILL.md`, limit: 2 });
+    assert.equal(firstPage.data.lines, 2);
+    assert.equal(firstPage.data.next_offset, 2);
+    assert.match(firstPage.text, /lines 0-1, continue with offset=2/);
+    const rest = await instance.read({ uri: `${root}/SKILL.md`, offset: 6, limit: 2 });
+    assert.equal(rest.data.lines, 2);
+    assert.equal(rest.data.next_offset, null);
+    assert.match(rest.text, /whole remaining text/);
     // A package OV cannot return never turns the read into an error.
     ov.state.skills.clear();
     const plain = await instance.read({ uri: `${root}/SKILL.md` });

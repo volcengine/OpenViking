@@ -90,55 +90,115 @@ describe('OpenViking skills as frontmatter', () => {
     assert.deepEqual(await discoverSkills(connection(ov), 'anything'), []);
   });
 
-  it('materializes the package of a skill whose definition was read, verified against its manifest', async (t) => {
+  // One skill in the fake OV: its SKILL.md text, its files on disk, and what
+  // the skill route reports, all from the same `files` map.
+  function install(ov, {
+    name, root = `viking://user/u/skills/${name}`, body = `---\nname: ${name}\n---\n\nRun scripts/render.sh.\n`,
+    files = {}, revision = 'a'.repeat(64), extra = [],
+  } = {}) {
+    ov.state.files.set(`${root}/SKILL.md`, body);
+    const manifest = [{ path: 'SKILL.md', uri: `${root}/SKILL.md`, is_dir: false, size: Buffer.byteLength(body), sha256: sha(body) }];
+    for (const [relative, text] of Object.entries(files)) {
+      const uri = `${root}/${relative}`;
+      ov.state.files.set(uri, text);
+      manifest.push({ path: relative, uri, is_dir: false, size: Buffer.byteLength(text), sha256: sha(text) });
+    }
+    manifest.push(...extra);
+    ov.state.skills.set(name, {
+      name, uri: root, root_uri: root, skill_md_uri: `${root}/SKILL.md`, description: name,
+      content: body, content_sha256: sha(body), revision, files: manifest,
+    });
+    return { root, body, revision };
+  }
+
+  it('writes a whole package once per revision under the skill\'s own directory', async (t) => {
     const ov = await fakeOV(t);
     const dataDir = fs.mkdtempSync(path.join(TEMP, 'data-'));
     t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
-    const root = 'viking://user/u/skills/charts';
-    const body = '---\nname: charts\ndescription: Charts\n---\n\nRun scripts/render.sh.\n';
     const script = '#!/bin/sh\necho chart\n';
     const reference = 'How to read a chart\n';
-    ov.state.files.set(`${root}/scripts/render.sh`, script);
-    ov.state.files.set(`${root}/references/guide.md`, reference);
-    ov.state.skills.set('charts', {
-      name: 'charts', uri: root, root_uri: root, skill_md_uri: `${root}/SKILL.md`,
-      description: 'Charts', content: body, content_sha256: sha(body), revision: 'a'.repeat(64),
-      files: [
-        { path: 'SKILL.md', uri: `${root}/SKILL.md`, is_dir: false, size: Buffer.byteLength(body), sha256: sha(body) },
-        { path: '.abstract.md', uri: `${root}/.abstract.md`, is_dir: false, size: 3, sha256: sha('abs') },
-        { path: 'scripts', uri: `${root}/scripts`, is_dir: true },
-        { path: 'scripts/render.sh', uri: `${root}/scripts/render.sh`, is_dir: false, size: Buffer.byteLength(script), sha256: sha(script) },
-        { path: 'references/guide.md', uri: `${root}/references/guide.md`, is_dir: false, size: Buffer.byteLength(reference), sha256: sha(reference) },
-        { path: 'big.bin', uri: `${root}/big.bin`, is_dir: false, size: 10, sha256: sha('not what is stored') },
-        { path: '../escape.md', uri: `${root}/../escape.md`, is_dir: false, size: 1, sha256: sha('x') },
-      ],
+    const { root, body, revision } = install(ov, {
+      name: 'charts', files: { 'scripts/render.sh': script, 'references/guide.md': reference },
+      extra: [{ path: '.abstract.md', uri: 'viking://user/u/skills/charts/.abstract.md', is_dir: false, size: 3, sha256: sha('abs') },
+        { path: 'scripts', uri: 'viking://user/u/skills/charts/scripts', is_dir: true }],
     });
-    ov.state.files.set(`${root}/big.bin`, 'not what is stored');
-    const packageDir = path.join(dataDir, 'skills', `charts-${'a'.repeat(12)}`);
+    const packageDir = path.join(dataDir, 'skills', 'charts', revision.slice(0, 12));
     const first = await materializeSkill(connection(ov), { uri: `${root}/SKILL.md`, dataDir });
     assert.equal(first.path, packageDir);
     assert.equal(first.name, 'charts');
+    assert.equal(first.revision, revision.slice(0, 12));
     assert.equal(first.cached, false);
+    assert.deepEqual(first.skipped, []);
     assert.equal(fs.readFileSync(path.join(packageDir, 'SKILL.md'), 'utf8'), body);
     assert.equal(fs.readFileSync(path.join(packageDir, 'scripts', 'render.sh'), 'utf8'), script);
     assert.equal(fs.readFileSync(path.join(packageDir, 'references', 'guide.md'), 'utf8'), reference);
     assert.equal(fs.existsSync(path.join(packageDir, '.abstract.md')), false, 'OV summaries are not part of the package');
-    assert.deepEqual(first.skipped.sort(), ['../escape.md', 'big.bin']);
+    assert.equal(fs.existsSync(path.join(packageDir, 'scripts', 'SKILL.md')), false, 'manifest directories are not files');
     const show = ov.state.requests.find((entry) => entry.route === 'GET /api/v1/skills/charts');
     assert.equal(show.query.target_uri, 'viking://user/u/skills');
     assert.equal(show.query.include_integrity, 'true');
 
-    // The same read again costs the manifest, not the files.
+    // The same revision again costs the manifest, not the files.
     const reads = ov.state.requests.filter((entry) => entry.route === 'GET /api/v1/content/read').length;
     const second = await materializeSkill(connection(ov), { uri: `${root}/SKILL.md`, dataDir });
     assert.equal(second.cached, true);
+    assert.equal(second.path, packageDir);
     assert.equal(ov.state.requests.filter((entry) => entry.route === 'GET /api/v1/content/read').length, reads);
+  });
 
-    // A newer revision replaces the older directory, not adding one.
-    ov.state.skills.get('charts').revision = 'b'.repeat(64);
+  it('keeps a package with a missing file open: it is reported, refilled by the next read, and only then cached', async (t) => {
+    const ov = await fakeOV(t);
+    const dataDir = fs.mkdtempSync(path.join(TEMP, 'data-'));
+    t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+    const script = '#!/bin/sh\necho chart\n';
+    const { root } = install(ov, { name: 'charts', files: { 'scripts/render.sh': script } });
+    // One file the server does not have yet, and one that can never arrive.
+    ov.state.skills.get('charts').files.push(
+      { path: 'late.md', uri: 'viking://user/u/skills/charts/late.md', is_dir: false, size: 7, sha256: sha('arrived') },
+      { path: '../escape.md', uri: 'viking://user/u/skills/charts/../escape.md', is_dir: false, size: 1, sha256: sha('x') },
+    );
+    const first = await materializeSkill(connection(ov), { uri: `${root}/SKILL.md`, dataDir });
+    assert.deepEqual(first.skipped.sort(), ['../escape.md', 'late.md'], 'the file with no bytes yet is said to be missing');
+    assert.equal(fs.existsSync(path.join(first.path, 'late.md')), false);
+    assert.equal(fs.readFileSync(path.join(first.path, 'scripts', 'render.sh'), 'utf8'), script, 'what arrived is usable');
+
+    // Not whole, so the next read asks for the files again and fills the gap.
+    ov.state.files.set(`${root}/late.md`, 'arrived');
+    const second = await materializeSkill(connection(ov), { uri: `${root}/SKILL.md`, dataDir });
+    assert.equal(second.cached, false);
+    assert.equal(fs.readFileSync(path.join(second.path, 'late.md'), 'utf8'), 'arrived');
+    // What can never arrive stays reported, and the package is cached now.
+    assert.deepEqual(second.skipped, ['../escape.md']);
+    const reads = ov.state.requests.filter((entry) => entry.route === 'GET /api/v1/content/read').length;
     const third = await materializeSkill(connection(ov), { uri: `${root}/SKILL.md`, dataDir });
-    assert.notEqual(third.path, packageDir);
-    assert.equal(fs.readdirSync(path.join(dataDir, 'skills')).length, 1);
+    assert.equal(third.cached, true);
+    assert.deepEqual(third.skipped, ['../escape.md'], 'the missing file is still named on a cached read');
+    assert.equal(ov.state.requests.filter((entry) => entry.route === 'GET /api/v1/content/read').length, reads);
+  });
+
+  it('keeps each skill in its own directory, and an old revision while a task could still be using it', async (t) => {
+    const ov = await fakeOV(t);
+    const dataDir = fs.mkdtempSync(path.join(TEMP, 'data-'));
+    t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+    install(ov, { name: 'chart-tools', revision: 'b'.repeat(64) });
+    const chart = install(ov, { name: 'chart', revision: 'c'.repeat(64) });
+    const tools = await materializeSkill(connection(ov), { uri: 'viking://user/u/skills/chart-tools/SKILL.md', dataDir });
+    const first = await materializeSkill(connection(ov), { uri: `${chart.root}/SKILL.md`, dataDir });
+    // A name that starts with another skill's name is another skill.
+    assert.notEqual(path.dirname(first.path), path.dirname(tools.path));
+    ov.state.skills.get('chart').revision = 'd'.repeat(64);
+    const second = await materializeSkill(connection(ov), { uri: `${chart.root}/SKILL.md`, dataDir });
+    assert.notEqual(second.path, first.path);
+    assert.equal(fs.existsSync(path.join(first.path, 'SKILL.md')), true, 'a revision handed out yesterday is still there');
+    assert.equal(fs.existsSync(path.join(tools.path, 'SKILL.md')), true, 'loading chart did not touch chart-tools');
+
+    // A day later the old revision goes, and the other skill stays.
+    const old = new Date(Date.now() - 25 * 60 * 60_000);
+    fs.utimesSync(first.path, old, old);
+    await materializeSkill(connection(ov), { uri: `${chart.root}/SKILL.md`, dataDir });
+    assert.equal(fs.existsSync(first.path), false, 'the old revision is cleared');
+    assert.equal(fs.existsSync(path.join(second.path, 'SKILL.md')), true);
+    assert.equal(fs.existsSync(path.join(tools.path, 'SKILL.md')), true);
   });
 
   it('never throws for a package it cannot have: a plain read or a missing skill stays a read', async (t) => {

@@ -14,7 +14,11 @@
 // POST /api/v1/skills/find for the candidates of one line (ranked only when a
 // line becomes a worker's task), and
 // GET /api/v1/skills/{name}?include_content&include_files&include_integrity for
-// the package a read of its SKILL.md activates.
+// the package a read of its SKILL.md activates: one snapshot under OV's own
+// package lock, whose SKILL.md is the page the model reads, so the instructions
+// and the files on disk cannot be two revisions. The cache keeps one directory
+// per skill and revision (<dataDir>/skills/<name>/<revision>), marked whole only
+// when every file that could arrive is there.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -197,28 +201,70 @@ function sameBytes(bytes, item) {
   return createHash('sha256').update(bytes).digest('hex') === String(item.sha256);
 }
 
-// Removes the older revisions of one skill from the cache, keeping the
-// directory in use: a cache, never state.
-function pruneRevisions(root, name, keep) {
-  let entries;
-  try { entries = fs.readdirSync(root); } catch { return; }
-  for (const entry of entries) {
-    if (entry !== keep && entry.startsWith(`${name}-`)) {
-      try { fs.rmSync(path.join(root, entry), { recursive: true, force: true }); } catch { /* best effort */ }
-    }
+// How long a revision stays after the skill moved on: long enough that a task
+// already handed the directory is not still running when it goes.
+const REVISION_KEEP_MS = 24 * 60 * 60_000;
+// A write that died before its rename leaves a scratch directory; it is gone
+// once it is clearly not being written any more.
+const SCRATCH_MAX_AGE_MS = 60 * 60_000;
+// What was written for one revision: whether it is whole (only files that can
+// never arrive may be missing) and which were left out. Inside the package, so
+// a copied cache carries it.
+const STATE_FILE = '.materialized.json';
+
+// One skill's own directory in the cache: <dataDir>/skills/<name>, with one
+// directory per revision under it. Sharing is by skill, never by a prefix of
+// its name, so `chart` clearing its old revisions cannot touch `chart-tools`.
+function skillCacheRoot(dataDir, name) {
+  return path.join(dataDir, 'skills', name);
+}
+
+function readState(dir) {
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(dir, STATE_FILE), 'utf8'));
+    return state && typeof state === 'object' ? state : null;
+  } catch {
+    return null;
   }
 }
 
-// Downloads one activated skill into the instance's cache and returns where it
-// sits, so the scripts and references it ships can be run. `uri` is the
-// SKILL.md the model just read; `dataDir` holds the cache. The package is
-// content-addressed by the revision OV reports, so reading the same skill
-// again costs one request, not one download. Never throws: a package that
-// cannot be fetched leaves the read as it is, with the instructions in it.
-export async function materializeSkill(connection, { uri, dataDir, timeoutMs, logger = null } = {}) {
+function writeState(dir, state) {
+  try {
+    fs.writeFileSync(path.join(dir, STATE_FILE), JSON.stringify(state), { mode: 0o600 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Removes what this skill no longer needs: revisions older than the keep
+// window, and scratch directories nobody is writing. The revision in use is
+// always kept, and a directory handed to a task stays while it could still be
+// running.
+function pruneRevisions(skillRoot, keep) {
+  let entries;
+  try { entries = fs.readdirSync(skillRoot, { withFileTypes: true }); } catch { return; }
+  const now = Date.now();
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === keep) continue;
+    const full = path.join(skillRoot, entry.name);
+    let stat;
+    try { stat = fs.statSync(full); } catch { continue; }
+    const scratch = entry.name.includes('.part-');
+    if (now - stat.mtimeMs < (scratch ? SCRATCH_MAX_AGE_MS : REVISION_KEEP_MS)) continue;
+    try { fs.rmSync(full, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+// The package of one skill as one snapshot: the SKILL.md text, the revision
+// that names it, and the manifest with a digest per file, all read under OV's
+// own package lock. Reading a skill's definition takes this once, so the page
+// the model reads and the files it can run are the same revision. null when
+// the address is not a skill's, or OV does not return the package.
+export async function fetchSkillPackage(connection, { uri, timeoutMs, logger = null } = {}) {
   const info = skillFromDefinitionUri(uri);
-  if (!info || !dataDir) return null;
-  const fail = (reason, fields = {}) => {
+  if (!info) return null;
+  const skip = (reason, fields = {}) => {
     logger?.debug?.('ov_skill_package_skipped', { name: info.name, reason, ...fields });
     return null;
   };
@@ -228,18 +274,48 @@ export async function materializeSkill(connection, { uri, dataDir, timeoutMs, lo
       + `?include_content=true&include_files=true&include_integrity=true&target_uri=${encodeURIComponent(info.rootUri)}`,
     undefined, { timeoutMs })).result;
   } catch (error) {
-    return fail('unavailable', { status: error?.httpStatus ?? null });
+    return skip('unavailable', { status: error?.httpStatus ?? null });
   }
   const rootUri = String(detail?.root_uri ?? detail?.uri ?? '').replace(/\/+$/, '');
   const content = typeof detail?.content === 'string' ? detail.content : '';
-  if (rootUri !== info.packageUri || !content) return fail('not-the-same-package');
-  const revision = String(detail?.revision ?? '').slice(0, 12) || 'latest';
-  const cacheRoot = path.join(dataDir, 'skills');
-  const target = path.join(cacheRoot, `${info.name}-${revision}`);
-  fs.mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
-  pruneRevisions(cacheRoot, info.name, path.basename(target));
-  if (fs.existsSync(path.join(target, 'SKILL.md'))) {
-    return { path: target, name: info.name, rootUri, revision, files: null, skipped: [], cached: true };
+  if (rootUri !== info.packageUri || !content) return skip('not-the-same-package');
+  return {
+    info,
+    rootUri,
+    content,
+    revision: String(detail?.revision ?? '').slice(0, 12) || 'latest',
+    files: Array.isArray(detail?.files) ? detail.files : [],
+  };
+}
+
+// Writes one snapshot into this skill's cache and returns where it sits, so
+// the scripts and references it ships can be run. The directory is named by
+// the revision, so a read of the same revision costs one manifest request and
+// no download. A package with a file that failed for a reason that may pass
+// (the fetch failed, the bytes did not match) is written but not marked whole:
+// the next read fills it in and says again what is missing. Never throws: a
+// package that cannot be written leaves the read as it is.
+export async function writeSkillPackage(connection, snapshot, { dataDir, timeoutMs, logger = null } = {}) {
+  if (!connection || !snapshot?.info || !dataDir) return null;
+  const { info, rootUri, content, revision, files: manifest } = snapshot;
+  const fail = (reason, fields = {}) => {
+    logger?.debug?.('ov_skill_package_skipped', { name: info.name, reason, ...fields });
+    return null;
+  };
+  const cacheRoot = skillCacheRoot(dataDir, info.name);
+  const target = path.join(cacheRoot, revision);
+  try {
+    fs.mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
+  } catch {
+    return fail('cache-unwritable');
+  }
+  pruneRevisions(cacheRoot, revision);
+  const state = readState(target);
+  if (state?.complete && fs.existsSync(path.join(target, 'SKILL.md'))) {
+    return {
+      path: target, name: info.name, rootUri, revision, files: null, complete: true,
+      skipped: Array.isArray(state.skipped) ? state.skipped : [], cached: true,
+    };
   }
 
   // One download is bounded as a whole, not per file: a package with many
@@ -248,18 +324,16 @@ export async function materializeSkill(connection, { uri, dataDir, timeoutMs, lo
   const deadline = Date.now() + budgetMs;
   const definition = Buffer.from(content, 'utf8');
   if (definition.length > MAX_FILE_BYTES) return fail('definition-too-large');
-  const files = (Array.isArray(detail?.files) ? detail.files : [])
-    .filter((file) => file && !file.is_dir && file.path
-      && path.posix.basename(String(file.path)) !== 'SKILL.md'
-      && !NOT_PACKAGE_FILES.has(path.posix.basename(String(file.path))));
+  const files = manifest.filter((file) => file && !file.is_dir && file.path
+    && path.posix.basename(String(file.path)) !== 'SKILL.md'
+    && !NOT_PACKAGE_FILES.has(path.posix.basename(String(file.path))));
   if (files.length > MAX_FILES) return fail('too-many-files', { files: files.length });
   let total = definition.length;
   const staged = [];
   const skipped = [];
   for (const item of files) {
     const relative = safeRelativePath(item.path);
-    if (!relative) { skipped.push(String(item.path)); continue; }
-    if (Number(item.size) > MAX_FILE_BYTES) { skipped.push(relative); continue; }
+    if (!relative || Number(item.size) > MAX_FILE_BYTES) { skipped.push(String(item.path)); continue; }
     const remaining = deadline - Date.now();
     if (remaining <= 0) { skipped.push(relative); continue; }
     let text;
@@ -279,6 +353,15 @@ export async function materializeSkill(connection, { uri, dataDir, timeoutMs, lo
     staged.push({ path: relative, bytes });
   }
 
+  // Whole means every file that could arrive is here. A file that can never
+  // arrive (an unsafe path, one past the per-file bound) is remembered in the
+  // state instead, so the package is not downloaded again for it, and every
+  // read still says it is missing.
+  const complete = files.every((item) => {
+    const relative = safeRelativePath(item.path);
+    if (!relative || Number(item.size) > MAX_FILE_BYTES) return true;
+    return !skipped.includes(relative);
+  });
   const scratch = `${target}.part-${process.pid}-${randomBytes(4).toString('hex')}`;
   fs.rmSync(scratch, { recursive: true, force: true });
   try {
@@ -289,6 +372,7 @@ export async function materializeSkill(connection, { uri, dataDir, timeoutMs, lo
       fs.mkdirSync(path.dirname(full), { recursive: true, mode: 0o700 });
       fs.writeFileSync(full, file.bytes, { mode: 0o600 });
     }
+    writeState(scratch, { revision, complete, skipped, atMs: Date.now() });
     fs.rmSync(target, { recursive: true, force: true });
     fs.renameSync(scratch, target);
   } catch (error) {
@@ -296,5 +380,14 @@ export async function materializeSkill(connection, { uri, dataDir, timeoutMs, lo
     logger?.warn?.('ov_skill_package_write_failed', { name: info.name, error: String(error?.code ?? 'failed') });
     return null;
   }
-  return { path: target, name: info.name, rootUri, revision, files: staged.length, skipped, cached: false };
+  return {
+    path: target, name: info.name, rootUri, revision, files: staged.length,
+    complete, skipped, cached: false,
+  };
+}
+
+// The package behind one skill definition, fetched and written in one step.
+export async function materializeSkill(connection, { uri, dataDir, timeoutMs, logger = null } = {}) {
+  const snapshot = await fetchSkillPackage(connection, { uri, timeoutMs, logger });
+  return snapshot ? await writeSkillPackage(connection, snapshot, { dataDir, timeoutMs, logger }) : null;
 }
