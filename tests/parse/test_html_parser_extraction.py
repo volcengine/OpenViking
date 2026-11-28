@@ -50,3 +50,32 @@ def test_html_to_markdown_returns_empty_string_on_garbage_input():
     parser = HTMLParser()
     md = parser._html_to_markdown("<html><body></body></html>")
     assert md == ""
+
+
+# A bare <body> fragment carries no <html>/<head> shell. trafilatura returns
+# nothing at all for such input, so the page used to extract to an empty string
+# with no error -- measured against CHM-extracted pages, 101/101 lost their
+# entire content this way. Restoring the shell recovers 101/101.
+BODY_FRAGMENT = (
+    "<body background='bg.jpg'>"
+    "<p>题目：有1、2、3、4个数字，能组成多少个互不相同且无重复数字的三位数？都是多少？</p>"
+    "<p>程序分析：可填在百位、十位、个位的数字都是1、2、3、4。组成所有的排列后再去掉不满足条件的排列。</p>"
+    "</body>"
+)
+
+
+def test_body_fragment_without_document_shell_is_not_dropped():
+    parser = HTMLParser()
+    md = parser._html_to_markdown(BODY_FRAGMENT)
+    assert md, "a bare <body> fragment must not extract to an empty string"
+    assert "题目" in md
+    assert "程序分析" in md
+
+
+def test_title_extracted_from_fragment_without_html_element():
+    parser = HTMLParser()
+    md = parser._html_to_markdown(
+        "<head><title>经典C程序100例</title></head>"
+        "<body><p>题目：有1、2、3、4个数字，能组成多少个互不相同且无重复数字的三位数？都是多少？</p></body>"
+    )
+    assert "经典C程序100例" in md

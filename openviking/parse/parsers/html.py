@@ -119,9 +119,23 @@ class HTMLParser(BaseParser):
                 warnings=[f"Failed to read HTML: {e}"],
             )
 
+    @staticmethod
+    def _ensure_document(html: str) -> str:
+        """Restore the document shell trafilatura requires.
+
+        trafilatura returns nothing at all for markup with no ``<html>``
+        element, so a body-only fragment silently converts to an empty string.
+        Both fragment shapes this parser feeds it -- a bare ``<body>`` (CHM
+        pages) and ``<head>`` followed by ``<body>`` -- become valid documents
+        under a plain ``<html>`` wrapper.
+        """
+        if re.search(r"<html[\s>]", html, re.IGNORECASE):
+            return html
+        return f"<html>{html}</html>"
+
     def _html_to_markdown(self, html: str, base_url: str = "") -> str:
         """Convert HTML to Markdown using trafilatura."""
-        html = self._preprocess_html(html)
+        html = self._ensure_document(self._preprocess_html(html))
         content = self._extract_markdown(html, base_url or "")
         title = self._extract_title(html, base_url or "")
         content = self._clean_markdown(content)
