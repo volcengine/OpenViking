@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.concurrency import FILE_TASK_CONCURRENCY
 from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
@@ -72,7 +73,6 @@ _PARSE_ARTIFACT_INTERNAL_NAMES = frozenset(
         ".artifact_manifest.json",
     }
 )
-_MAX_FILE_VECTORIZATION_CONCURRENCY = 64
 VECTORDB_MAX_QUERY_LIMIT = 100_000
 
 
@@ -1492,6 +1492,7 @@ class ResourceProcessor:
                         created=not target_preexisting,
                         file_md5=file_refresh.md5,
                         file_abstract="",
+                        generation_trigger="resource_ingest",
                     )
                 elif build_index and context_update_plan is None:
                     if root_is_file:
@@ -1522,6 +1523,7 @@ class ResourceProcessor:
                     created=not target_preexisting,
                     file_md5=file_refresh.md5,
                     file_abstract="",
+                    generation_trigger="resource_ingest",
                 )
             except BaseException:
                 await cleanup_artifact_if_owned()
@@ -1666,7 +1668,7 @@ class ResourceProcessor:
                     if not isinstance(source, bytes):
                         raise ValueError(f"file vector source must be bytes: {action.uri}")
                     file_kwargs["file_content"] = source
-                    if getattr(self.vikingdb, "uses_content_field", False):
+                    if await self.vikingdb.account_uses_content_field(ctx.account_id):
                         file_kwargs["materialize_content"] = True
                 if await self._vectorize_resource_file(action.uri, **file_kwargs):
                     completed_actions += 1
@@ -1838,14 +1840,7 @@ class ResourceProcessor:
                     continue
                 files.append((entry_uri, str(name), parent.uri))
 
-        config = get_openviking_config().queue_workers.add_resource
-        concurrency = max(
-            1,
-            min(
-                int(config.file_vectorization_concurrency),
-                _MAX_FILE_VECTORIZATION_CONCURRENCY,
-            ),
-        )
+        concurrency = FILE_TASK_CONCURRENCY
 
         async def vectorize(entry_uri: str, name: str, parent_uri: str) -> None:
             file_content = None

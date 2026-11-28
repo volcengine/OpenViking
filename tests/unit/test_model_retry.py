@@ -229,6 +229,81 @@ async def test_retry_async_preserves_local_error_without_parsing_message():
     assert attempts["count"] == 1
 
 
+# --- rate-limit backoff ---
+
+
+def _rate_limit_error() -> RuntimeError:
+    return RuntimeError(
+        "Error code: 429 - {'error': {'code': '1302', 'message': 'Rate limit reached for requests'}}"
+    )
+
+
+def test_retry_sync_uses_rate_limit_backoff_for_rate_limit_errors(monkeypatch):
+    delays: list[float] = []
+    attempts: list[int] = []
+    monkeypatch.setattr(
+        "openviking.utils.model_retry.time.sleep", lambda delay: delays.append(delay)
+    )
+    monkeypatch.setattr(
+        "openviking.utils.model_retry.rate_limit_retry_delay",
+        lambda attempt: attempts.append(attempt) or float(attempt),
+    )
+    error = _rate_limit_error()
+
+    @model_error_boundary
+    def _call():
+        raise error
+
+    with pytest.raises(RuntimeError) as raised:
+        retry_sync(_call, max_retries=3)
+
+    assert raised.value is error
+    assert attempts == [1, 2, 3]
+    assert delays == [1.0, 2.0, 3.0]
+
+
+@pytest.mark.asyncio
+async def test_retry_async_uses_rate_limit_backoff_for_rate_limit_errors(monkeypatch):
+    delays: list[float] = []
+    attempts: list[int] = []
+
+    async def _sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr("openviking.utils.model_retry.asyncio.sleep", _sleep)
+    monkeypatch.setattr(
+        "openviking.utils.model_retry.rate_limit_retry_delay",
+        lambda attempt: attempts.append(attempt) or float(attempt),
+    )
+    error = _rate_limit_error()
+
+    @model_error_boundary
+    async def _call():
+        raise error
+
+    with pytest.raises(RuntimeError) as raised:
+        await retry_async(_call, max_retries=3)
+
+    assert raised.value is error
+    assert attempts == [1, 2, 3]
+    assert delays == [1.0, 2.0, 3.0]
+
+
+def test_retry_sync_keeps_generic_backoff_for_other_transient_errors(monkeypatch):
+    delays: list[float] = []
+    monkeypatch.setattr(
+        "openviking.utils.model_retry.time.sleep", lambda delay: delays.append(delay)
+    )
+
+    def _fail():
+        raise TimeoutError("timed out")
+
+    with pytest.raises(TimeoutError):
+        retry_sync(_fail, max_retries=3, base_delay=0.5, max_delay=8.0, jitter=False)
+
+    assert delays == [0.5, 1.0, 2.0]
+
+
 # --- quota_exceeded classification ---
 
 

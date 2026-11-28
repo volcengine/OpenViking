@@ -7,7 +7,6 @@ import struct
 import pytest
 
 from benchmark.vectordb_perf.run import (
-    RunResult,
     build_dir_vector_workload,
     directory_queries,
     extract_path,
@@ -15,9 +14,11 @@ from benchmark.vectordb_perf.run import (
     parse_args,
     recall_scope,
     record_id,
+    run_benchmark,
     upsert_records,
     wait_for_auto_derived_index,
 )
+from openviking_cli.utils.config import OpenVikingConfigSingleton
 
 
 def _write_fvecs(path, vectors):
@@ -400,27 +401,35 @@ def test_full_wiki_requires_query_metadata_for_every_vector(tmp_path):
         )
 
 
-def test_derived_scope_only_labels_filtered_phase(tmp_path):
+def test_derived_scope_only_labels_filtered_phase(tmp_path, monkeypatch):
     _write_wiki_fixture(tmp_path)
-    workload = build_dir_vector_workload(
-        _wiki_options(tmp_path, "--full", "--dir-vector-query-scope", "derived_gt_lca_v1")
+    config = tmp_path / "ov.conf"
+    config.write_text(
+        json.dumps({"storage": {"workspace": str(tmp_path / "storage")}}), encoding="utf-8"
     )
-    result = RunResult(
-        run_id="test",
-        collection_name="test",
-        output_dir=str(tmp_path),
-        events=[],
-        validation_errors=[],
-        quality={},
-        workload={
-            "workload": "dir-vector",
-            "full": True,
-            "path_diagnostics": workload.path_diagnostics,
-        },
-        environment={},
-        kept_collection=True,
+    for name in ("_instance", "_config_file", "_config_file_revision", "_config_file_content"):
+        monkeypatch.setattr(OpenVikingConfigSingleton, name, None)
+    options = _wiki_options(
+        tmp_path,
+        "--config",
+        str(config),
+        "--output-dir",
+        str(tmp_path / "report"),
+        "--full",
+        "--dir-vector-query-scope",
+        "derived_gt_lca_v1",
+        "--distance",
+        "l2",
+        "--top-k",
+        "1",
     )
 
+    result = run_benchmark(options)
+    assert result.validation_errors == []
+    assert result.quality == {
+        "vector_search": {"queries_with_ground_truth": 3, "hit_rate_at_k": 2 / 3, "hits": 2},
+        "filtered_vector_search": {"queries_with_ground_truth": 2, "hit_rate_at_k": 1.0, "hits": 2},
+    }
     assert recall_scope(result, "vector_search") == "official_full"
     assert recall_scope(result, "filtered_vector_search") == "derived_gt_lca_v1"
 

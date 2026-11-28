@@ -147,14 +147,9 @@ const settings = {
   models: [],
 }
 const request = { ...settings, user_id: 'alice' }
-const pasted = { ...settings, user_id: 'alice', openviking_key: 'ov-key' }
+const pasted = { ...request, openviking_key: 'ov-key' }
 
 describe('validateKeyRequest', () => {
-  it('accepts a complete request for a user or with a pasted key', () => {
-    expect(validateKeyRequest(request)).toEqual({})
-    expect(validateKeyRequest(pasted)).toEqual({})
-  })
-
   it('requires every field but the model list', () => {
     const empty = { name: ' ', policy_id: '', upstream_ids: [], models: [] }
     const missing = {
@@ -170,22 +165,6 @@ describe('validateKeyRequest', () => {
       ...missing,
       openviking_key: 'validation.required',
     })
-  })
-
-  it('accepts self issuance with no owner', () => {
-    expect(validateKeyRequest(settings)).toEqual({})
-  })
-
-  it('rejects a management key pasted as the user API key', () => {
-    expect(
-      validateKeyRequest({ ...settings, openviking_key: 'ovgm_abc' }),
-    ).toEqual({ openviking_key: 'keys.form.openvikingKey.managementKey' })
-  })
-
-  it('rejects a gateway key pasted as the OpenViking key', () => {
-    expect(
-      validateKeyRequest({ ...settings, openviking_key: 'ovgw_abc' }),
-    ).toEqual({ openviking_key: 'keys.form.openvikingKey.gatewayKey' })
   })
 })
 
@@ -689,16 +668,20 @@ describe('KeysIssueDialog', () => {
     expect(screen.queryByText('keys.errors.rootKey')).toBeNull()
   })
 
-  it('rejects a management key pasted into the user-key field before sending', async () => {
-    renderIssueDialog()
-    await fillRequiredFields()
-    pasteKey('ovgm_wrong_place')
-    submit()
-    expect(
-      screen.getByText('keys.form.openvikingKey.managementKey'),
-    ).toBeTruthy()
-    expect(api.issueKey).not.toHaveBeenCalled()
-  })
+  it.each([
+    ['ovgm_wrong_place', 'keys.form.openvikingKey.managementKey'],
+    ['ovgw_wrong_place', 'keys.form.openvikingKey.gatewayKey'],
+  ])(
+    'rejects %s in the user-key field before issuing',
+    async (key, message) => {
+      renderIssueDialog()
+      await fillRequiredFields()
+      pasteKey(key)
+      submit()
+      expect(screen.getByText(message)).toBeTruthy()
+      expect(api.issueKey).not.toHaveBeenCalled()
+    },
+  )
 
   it('labels blocked Coding Plan upstreams and keeps them selectable', async () => {
     api.issueKey.mockResolvedValue({})

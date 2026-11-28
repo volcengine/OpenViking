@@ -15,12 +15,11 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from openviking.observability.log_safety import safe_uri_for_log, short_hash
+from openviking.observability.log_safety import safe_uri_for_log
 
 if TYPE_CHECKING:
     from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
 
-from openviking.core.context import ContextLevel
 from openviking.core.namespace import context_type_for_uri
 from openviking.message import Message
 from openviking.message.part import TextPart
@@ -49,7 +48,6 @@ from openviking.session.memory.utils.resource_refs import (
 )
 from openviking.session.memory.utils.template_utils import TemplateUtils
 from openviking.session.memory.utils.uri import render_template
-from openviking.storage.abstract_overview import freshness_metadata, render_abstract_overview
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import tracer
 from openviking.telemetry.tracer import get_trace_id
@@ -930,34 +928,6 @@ class MemoryUpdater:
         return self._viking_fs
 
     @classmethod
-    async def refresh_schema_overview(
-        cls,
-        *,
-        viking_fs: Any,
-        directory_uri: str,
-        ctx: RequestContext,
-        strict: bool = False,
-    ) -> bool:
-        memory_type = cls.memory_type_from_uri(directory_uri)
-        if not memory_type:
-            return False
-        try:
-            from openviking.session.memory.memory_type_registry import get_default_registry
-
-            updater = cls(registry=get_default_registry())
-            updater._viking_fs = viking_fs
-            return await updater.generate_overview(memory_type, directory_uri, ctx)
-        except Exception:
-            logger.info(
-                "memory overview refresh failed; retaining existing overview uri=%s",
-                safe_uri_for_log(directory_uri),
-                extra={"degraded": True},
-            )
-            if strict:
-                raise
-            return False
-
-    @classmethod
     async def refresh_file_embedding(
         cls,
         *,
@@ -1395,31 +1365,22 @@ class MemoryUpdater:
             },
         )
 
-        # Collect directories that need overview generation
-        # uri is now a string, so extract directory using os.path
-        dirs = {}
-        for operation in operations.upsert_operations:
-            for uri_str in operation.uris:
-                dir_path = "/".join(uri_str.split("/")[:-1])
-                dirs[dir_path] = operation.memory_type
-        for file_content in operations.delete_file_contents:
-            dir_path = "/".join(file_content.uri.split("/")[:-1])
-            dirs[dir_path] = (
-                file_content.extra_fields.get("memory_type")
-                or file_content.memory_type
-                or "unknown"
-            )
-
-        for dir, memory_type in dirs.items():
-            await self.generate_overview(
-                memory_type,
-                dir,
-                ctx,
-                extract_context,
-                lease_ref=self._transaction_handle,
-            )
-
+        changed_uris = uri_memory_type_map.keys() | deleted_uris
+        if changed_uris:
+            await self._submit_directory_changes(changed_uris, ctx)
         return result
+
+    async def _submit_directory_changes(self, changed_uris: set[str], ctx: RequestContext) -> None:
+        from openviking.storage.queuefs.semantic_ops.directory_refresh import (
+            enqueue_directory_refresh,
+        )
+
+        directories = {}
+        for uri in changed_uris:
+            directory = uri.rsplit("/", 1)[0]
+            directories[directory] = directories.get(directory, 0) + 1
+        for directory, count in directories.items():
+            await enqueue_directory_refresh(directory, count, ctx=ctx)
 
     async def _invalid_replacement_sources(
         self,
@@ -1786,6 +1747,7 @@ class MemoryUpdater:
                         metadata[key] = val
 
             metadata["version"] = next_memory_version(old_content)
+            metadata["memory_type"] = memory_type
 
             # Handle links/backlinks fields: merge with existing
             incoming_links_by_uri = getattr(resolved_op, "_incoming_links_by_uri", {})
@@ -2315,208 +2277,3 @@ class MemoryUpdater:
         if len(encoded) <= _MEMORY_ABSTRACT_MAX_BYTES:
             return abstract or ""
         return encoded[:_MEMORY_ABSTRACT_MAX_BYTES].decode("utf-8", errors="ignore")
-
-    async def generate_overview(
-        self,
-        memory_type: str,
-        directory: str,
-        ctx: RequestContext,
-        extract_context: Any = None,
-        lease_ref: Any = None,
-    ) -> bool:
-        """
-        Generate .overview.md file for a directory based on overview_template.
-
-        Args:
-            memory_type: Memory type name (e.g., 'events')
-            directory: Directory path containing memory files
-            ctx: Request context
-        """
-        from openviking.session.memory.utils.memory_file_utils import MemoryFileUtils
-
-        # Get the schema for this memory type
-        registry = self._registry
-        schema = registry.get(memory_type)
-
-        if not schema or not schema.overview_template:
-            logger.debug(
-                "memory overview template missing type_hash=%s", short_hash(str(memory_type))
-            )
-            return False
-
-        viking_fs = self._get_viking_fs()
-
-        # List direct .md files in the directory (excluding .overview.md and .abstract.md)
-        try:
-            # Use ls to list direct children
-            entries = await viking_fs.ls(directory, show_all_hidden=True, ctx=ctx)
-
-            # Extract file paths from ls entries
-            md_files = []
-            base_uri = directory.rstrip("/")
-            for entry in entries:
-                name = entry.get("name", "")
-                if (
-                    name.endswith(".md")
-                    and not name.endswith(".overview.md")
-                    and not name.endswith(".abstract.md")
-                ):
-                    md_files.append(f"{base_uri}/{name}")
-
-        except (NotFoundError, FileNotFoundError):
-            logger.debug(
-                "memory overview generation skipped; directory deleted uri=%s",
-                safe_uri_for_log(directory),
-            )
-            return False
-        except Exception as e:
-            logger.info(
-                "memory overview update failed; retaining current overview stage=%s error_type=%s",
-                "generate_overview",
-                type(e).__name__,
-                extra={"degraded": True, "error_type": type(e).__name__},
-            )
-            return False
-
-        # If no memory files, delete the .overview.md and the directory if empty
-        if not md_files:
-            overview_path = f"{directory.rstrip('/')}/.overview.md"
-            can_delete_directory = all(
-                entry.get("name", "") in {"", ".overview.md"} for entry in entries
-            )
-            try:
-                await viking_fs.rm(
-                    overview_path,
-                    recursive=False,
-                    ctx=ctx,
-                    lease_ref=lease_ref,
-                )
-            except (NotFoundError, FileNotFoundError):
-                pass
-            except Exception:
-                logger.info(
-                    "empty memory overview cleanup failed uri=%s",
-                    safe_uri_for_log(overview_path),
-                    extra={"degraded": True},
-                )
-            # Try to delete empty directory
-            if can_delete_directory:
-                try:
-                    await viking_fs.rm(
-                        directory,
-                        recursive=True,
-                        ctx=ctx,
-                        lease_ref=lease_ref,
-                    )
-                except (NotFoundError, FileNotFoundError):
-                    pass
-                except Exception:
-                    logger.info(
-                        "empty memory directory cleanup failed uri=%s",
-                        safe_uri_for_log(directory),
-                        extra={"degraded": True},
-                    )
-            return True
-
-        # Parse each file and collect items
-        items = []
-        for file_path in md_files:
-            try:
-                content = await viking_fs.read_file(file_path, ctx=ctx)
-                mf = MemoryFileUtils.read(content, uri=file_path)
-
-                # Extract filename from path
-                filename = file_path.split("/")[-1]
-                metadata = mf.to_metadata()
-
-                items.append(
-                    {
-                        "file_name": filename,
-                        "file_content": metadata,
-                    }
-                )
-            except Exception as e:
-                logger.debug(
-                    "memory operation failed stage=%s error_type=%s",
-                    "generate_overview",
-                    type(e).__name__,
-                    extra={"degraded": True, "error_type": type(e).__name__},
-                )
-                continue
-
-        if len(items) < len(md_files):
-            logger.info(
-                "memory overview input partial; skipping invalid files total=%d skipped=%d",
-                len(md_files),
-                len(md_files) - len(items),
-                extra={
-                    "degraded": True,
-                    "total": len(md_files),
-                    "skipped": len(md_files) - len(items),
-                },
-            )
-        if not items:
-            logger.debug("memory overview has no valid files uri=%s", safe_uri_for_log(directory))
-            return False
-
-        overview_context = {
-            "memory_type": memory_type,
-            "directory_name": directory.rstrip("/").split("/")[-1],
-            "items": items,
-        }
-
-        # Render the template
-        try:
-            rendered = render_template(
-                schema.overview_template,
-                overview_context,
-                extract_context=extract_context,
-            )
-        except Exception as e:
-            logger.info(
-                "memory overview update failed; retaining current overview stage=%s error_type=%s",
-                "generate_overview",
-                type(e).__name__,
-                extra={"degraded": True, "error_type": type(e).__name__},
-            )
-            return False
-
-        # Write .overview.md to the directory
-        overview_path = f"{directory.rstrip('/')}/.overview.md"
-        try:
-            await viking_fs.write_file(
-                overview_path,
-                render_abstract_overview(
-                    ContextLevel.OVERVIEW,
-                    directory,
-                    rendered,
-                    {
-                        "generated_by": {
-                            "component": "MemoryUpdater",
-                            "trigger": "memory_update",
-                        },
-                        "freshness": freshness_metadata(len(md_files), len(items)),
-                    },
-                ),
-                ctx=ctx,
-                lease_ref=lease_ref,
-            )
-            from openviking.utils.embedding_utils import vectorize_directory_meta
-
-            await vectorize_directory_meta(
-                uri=directory,
-                abstract="",
-                overview=rendered,
-                context_type="memory",
-                ctx=ctx,
-                include_abstract=False,
-            )
-            return True
-        except Exception as e:
-            logger.info(
-                "memory overview update failed; retaining current overview stage=%s error_type=%s",
-                "generate_overview",
-                type(e).__name__,
-                extra={"degraded": True, "error_type": type(e).__name__},
-            )
-            return False

@@ -71,6 +71,23 @@ test("a shell command that carries a viking:// URI gets a notice, never a deny",
   assert.equal(evaluateUriNotice("Bash", { command: "cat /tmp/a.md" }), null)
 })
 
+test("a viking:// URI inside an {{ov_privacy:...}} reference is not a path", () => {
+  const ref = "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/token}}"
+  const command = `ov privacy run --env TOKEN='${ref}' -- sh -c 'gh api user'`
+  assert.equal(findVikingUri({ command }), null)
+  assert.equal(evaluateUriNotice("Bash", { command }), null)
+  assert.equal(evaluateUriNotice("shell", { command: ["ov", "privacy", "run", "--env", `TOKEN=${ref}`] }), null)
+  assert.deepEqual(preToolUseOutput({ tool_name: "Bash", tool_input: { command } }), {})
+  // A file tool sees the same sweep.
+  assert.equal(evaluateUriGuard("Read", { file_path: "/tmp/a.md", note: ref }), null)
+
+  // A bare URI next to a reference still gets the notice, for the bare one.
+  const mixed = `ov privacy run --env TOKEN='${ref}' -- sh -c 'cat viking://resources/a.md'`
+  assert.equal(evaluateUriNotice("Bash", { command: mixed })?.uri, "viking://resources/a.md")
+  assert.equal(evaluateUriNotice("Bash", { command: `cat viking://resources/a.md ${ref}` })?.uri, "viking://resources/a.md")
+  assert.equal(evaluateUriGuard("Write", { file_path: "viking://resources/a.md", note: ref })?.uri, "viking://resources/a.md")
+})
+
 test("PowerShell tools are shell tools for a host that maps them, and unguarded otherwise", () => {
   const input = { command: "Get-Content viking://resources/a.md" }
   // The shape dsh passes for its Windows `pwsh` tool.

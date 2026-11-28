@@ -8,8 +8,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT_CASES = {
-    "test_mysql_load_creates_default_account",
-    "test_distributed_authentication_state_is_shared_and_service_scoped",
+    (
+        "tests.server.test_account_services",
+        "test_distributed_authentication_state_is_shared_and_service_scoped",
+    ),
+    (
+        "tests.server.test_mysql_account_store",
+        "test_mysql_preprovisioned_low_privilege_startup_and_reload",
+    ),
 }
 GROUPS = (
     "accounts",
@@ -91,7 +97,7 @@ def prepare():
 def database_group(case):
     module = case.get("classname", "")
     name = case.get("name", "")
-    if module == "tests.server.test_account_services" and name in ACCOUNT_CASES:
+    if (module, name) in ACCOUNT_CASES:
         return "accounts"
     if module == "tests.server.test_redis_mysql_account_store":
         return "redis_mysql"
@@ -135,12 +141,12 @@ def verify(report):
             continue
         counts[group] += 1
         if group == "accounts":
-            accounts.add(name)
+            accounts.add((case.get("classname", ""), name))
     for group, count in counts.items():
         if not count:
             problems.append(f"No passing database cases in {group}")
-    for name in sorted(ACCOUNT_CASES - accounts):
-        problems.append(f"Required account contract missing: {name}")
+    for module, name in sorted(ACCOUNT_CASES - accounts):
+        problems.append(f"Required account contract missing: {module}.{name}")
     summary = "\n".join(
         f"- {group}: {count} database cases passed" for group, count in counts.items()
     )

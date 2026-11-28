@@ -16,6 +16,7 @@ profile-inject.mjs
 recall-compress-core.mjs
 recall-core.mjs
 retryable.mjs
+session-history-pointer.mjs
 session-model.mjs
 uri-guard.mjs
 workspace-config.mjs

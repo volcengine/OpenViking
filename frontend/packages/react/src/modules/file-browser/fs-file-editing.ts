@@ -6,6 +6,7 @@ import { isSystemUri } from '../../shared/resource-uri.js';
 import { isSummaryUri } from './preview-policy.js';
 import { readFileContent } from './fs-read-content.js';
 import { parseWikiFileConflicts } from './wiki-conflicts.js';
+import type { ReadDashboardHint } from './dashboard-resource.js';
 
 const EDITABLE_TEXT = /\.(?:md|json|jsonl|txt|yaml|yml)$/i;
 
@@ -20,6 +21,7 @@ export function createFileEditing(
   onSave?: () => void,
   isWiki = false,
   onWikiSaveStatus?: (status?: WikiSaveStatus) => void,
+  readHint?: ReadDashboardHint,
 ): FilePreviewEditing | undefined {
   if (
     !EDITABLE_TEXT.test(name) ||
@@ -30,7 +32,16 @@ export function createFileEditing(
     return undefined;
   let wiki = isWiki;
   const read = async () => {
-    const result = await readFileContent(client, uri, options, -1, wiki);
+    const hint = !wiki ? await readHint?.()?.catch(() => undefined) : undefined;
+    const tagged = hint?.tags.includes('compile_target=true') ?? false;
+    const result = await readFileContent(
+      client,
+      uri,
+      options,
+      -1,
+      wiki || tagged,
+      hint ? () => Promise.resolve(hint) : undefined,
+    );
     wiki = result.wiki;
     return result;
   };

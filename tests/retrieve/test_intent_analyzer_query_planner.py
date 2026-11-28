@@ -144,6 +144,7 @@ async def test_intent_analyzer_handles_compact_object_response(monkeypatch):
     [
         ("ollama/guoxuter/ov_intent_analysis_sft:v4_q8", "retrieval.ov_intent_analysis_sft_v4"),
         ("ollama/guoxuter/ov_intent_analysis_sft:v7_q8", "retrieval.ov_intent_analysis_sft_v7"),
+        ("ov_intent_analysis_rl", "retrieval.ov_intent_analysis_rl"),
         ("ollama/qwen3.5:4b", "retrieval.intent_analysis"),
     ],
 )

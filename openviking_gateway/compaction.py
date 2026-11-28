@@ -41,6 +41,12 @@ INSTRUCTION = (
     "into this one. Leave out the gateway's opening notes; the gateway adds them again. Write "
     "plain text, do not call tools, and stay under {tokens} tokens."
 )
+# With session_history the cut part stays searchable, but only by exact strings.
+LOOKUP_STRINGS = (
+    'End the summary with a short section "Strings to look up later": exact strings from the '
+    "conversation above that a later search of the saved conversation could use, such as file "
+    "paths, error messages, commands, identifiers and the user's exact wording of requirements."
+)
 # A continuation is cut while the model is still working on the latest request.
 # Models summarizing their own tool loop tend to report that work as delivered.
 UNFINISHED = (
@@ -118,15 +124,17 @@ def opening_block(records, chain):
     return ""
 
 
-def cut_hint(request, user_id, policy):
+def cut_hint(request, user_id, policy, place="summary"):
     """The history hint at a cut; the current session comes first, as it gets the cut part."""
     capture = request.capture.value
     sessions = [capture["ov_session"], *capture.get("previous", [])] if capture else []
-    return history_hint(user_id, sessions, request.root["tools"], policy.capture)
+    return history_hint(user_id, sessions, request.root["tools"], policy.capture, place)
 
 
-def summary_instruction(tokens, in_progress):
+def summary_instruction(tokens, in_progress, lookup=False):
     instruction = INSTRUCTION.format(tokens=tokens)
+    if lookup:
+        instruction += "\n" + LOOKUP_STRINGS
     return instruction + "\n" + UNFINISHED if in_progress else instruction
 
 

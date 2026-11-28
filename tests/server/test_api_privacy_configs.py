@@ -1,15 +1,25 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
+import hashlib
+import re
+from dataclasses import replace
+
 import httpx
 import yaml
 
 from openviking.privacy.reference import build_privacy_field_reference
+from openviking.server.config import UserSettingsPatch
 from openviking.server.identity import RequestContext, Role
+from openviking.server.user_config import patch_user_config
 from openviking_cli.session.user_id import UserIdentifier
 
 
 async def test_privacy_tree_lists_current_fields_without_values(client: httpx.AsyncClient, service):
+    empty = await client.get("/api/v1/privacy-configs/tree")
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["result"]["categories"] == []
+
     created = await client.post(
         "/api/v1/privacy-configs/credential/github",
         json={"values": {"pat": "historical-secret-marker", "old_field": "old-value-marker"}},
@@ -78,16 +88,6 @@ async def test_privacy_tree_lists_current_fields_without_values(client: httpx.As
     tree = (await client.get("/api/v1/privacy-configs/tree")).json()["result"]
     assert tree["categories"][0]["targets"][1]["version"] == 1
 
-
-async def test_privacy_tree_category_filter_and_route_not_shadowed(client: httpx.AsyncClient):
-    empty = await client.get("/api/v1/privacy-configs/tree")
-    assert empty.status_code == 200, empty.text
-    assert empty.json()["result"]["categories"] == []
-    for category in ["credential", "skill"]:
-        created = await client.post(
-            f"/api/v1/privacy-configs/{category}/demo", json={"values": {"token": "secret-marker"}}
-        )
-        assert created.status_code == 200, created.text
     filtered = await client.get("/api/v1/privacy-configs/tree", params={"category": "skill"})
     assert filtered.status_code == 200, filtered.text
     assert [node["category"] for node in filtered.json()["result"]["categories"]] == ["skill"]
@@ -122,19 +122,25 @@ async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
     assert current_body["result"]["current"]["values"]["api_key"] == "sample"
     assert current_body["result"]["meta"]["active_version"] == 1
 
+    second_values = {"api_key": "secret-2", "new_key": "x"}
     second = await client.post(
         "/api/v1/privacy-configs/credential/demo-skill",
         json={
-            "values": {"api_key": "secret-2"},
+            "values": second_values,
             "change_reason": "rotate",
         },
     )
     assert second.status_code == 200
     assert second.json()["result"]["version"] == 2
+    assert second.json()["result"]["values"] == second_values
 
     versions = await client.get("/api/v1/privacy-configs/credential/demo-skill/versions")
     assert versions.status_code == 200
     assert versions.json()["result"] == [1, 2]
+    missing = await client.get("/api/v1/privacy-configs/credential/demo-skill/versions/10")
+    assert missing.status_code == 404
+    assert missing.json()["status"] == "error"
+    assert missing.json()["error"]["code"] == "NOT_FOUND"
 
     activate = await client.post(
         "/api/v1/privacy-configs/credential/demo-skill/activate",
@@ -144,31 +150,7 @@ async def test_privacy_config_api_roundtrip(client: httpx.AsyncClient):
     assert activate.json()["result"]["version"] == 1
 
     final_current = await client.get("/api/v1/privacy-configs/credential/demo-skill")
-    assert final_current.json()["result"]["current"]["values"]["api_key"] == "sample"
-
-
-async def test_privacy_config_update_allows_new_keys(client: httpx.AsyncClient):
-    create = await client.post(
-        "/api/v1/privacy-configs/skill/demo-skill-unknown-key",
-        json={
-            "values": {"api_key": "secret-1"},
-            "change_reason": "seed",
-        },
-    )
-    assert create.status_code == 200
-
-    update = await client.post(
-        "/api/v1/privacy-configs/skill/demo-skill-unknown-key",
-        json={
-            "values": {"api_key": "secret-2", "new_key": "x"},
-            "change_reason": "extend-keys",
-        },
-    )
-    assert update.status_code == 200
-    body = update.json()
-    assert body["status"] == "ok"
-    assert body["result"]["values"]["api_key"] == "secret-2"
-    assert body["result"]["values"]["new_key"] == "x"
+    assert final_current.json()["result"]["current"]["values"] == {"api_key": "sample"}
 
 
 async def test_privacy_config_patch_creates_target_and_atomically_merges_fields(
@@ -188,10 +170,11 @@ async def test_privacy_config_patch_creates_target_and_atomically_merges_fields(
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["result"]["version"] == 2
-    assert updated.json()["result"]["values"] == {
-        "pat": "github_pat_mock_value",
-        "username": "alice",
-    }
+    expected = {"pat": "github_pat_mock_value", "username": "alice"}
+    assert updated.json()["result"]["values"] == expected
+    current = await client.get("/api/v1/privacy-configs/credential/github")
+    assert current.status_code == 200, current.text
+    assert current.json()["result"]["current"]["values"] == expected
 
 
 async def test_privacy_api_rejects_invalid_target_with_structured_format_error(
@@ -225,25 +208,6 @@ async def test_privacy_api_rejects_oversized_values_without_echoing_secret(
     assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
     assert response.json()["error"]["details"]["reason"] == "string value too large"
     assert secret not in response.text
-
-
-async def test_privacy_config_get_version_not_found(client: httpx.AsyncClient):
-    create = await client.post(
-        "/api/v1/privacy-configs/skill/demo-skill-version-not-found",
-        json={
-            "values": {"api_key": "secret-1"},
-            "change_reason": "seed",
-        },
-    )
-    assert create.status_code == 200
-
-    missing = await client.get(
-        "/api/v1/privacy-configs/skill/demo-skill-version-not-found/versions/10"
-    )
-    assert missing.status_code == 404
-    body = missing.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "NOT_FOUND"
 
 
 async def test_privacy_config_target_not_found(client: httpx.AsyncClient):
@@ -393,6 +357,16 @@ async def test_privacy_config_delete_is_idempotent_and_removes_history(
     deleted_again = await client.delete("/api/v1/privacy-configs/credential/delete-me")
     assert deleted_again.status_code == 200, deleted_again.text
     assert deleted_again.json()["result"]["deleted"] is False
+
+    recreated = await client.post(
+        "/api/v1/privacy-configs/credential/delete-me",
+        json={"values": {"api_key": "replacement"}},
+    )
+    assert recreated.status_code == 200, recreated.text
+    assert recreated.json()["result"]["version"] == 1
+    old_version = await client.get("/api/v1/privacy-configs/credential/delete-me/versions/2")
+    assert old_version.status_code == 404
+    assert old_version.json()["error"]["code"] == "NOT_FOUND"
 
 
 async def test_privacy_scan_is_dry_run_by_default_and_fix_rewrites_content(
@@ -635,3 +609,458 @@ async def test_privacy_delete_selector_accepts_target_uri(client: httpx.AsyncCli
     )
     assert deleted.status_code == 200, deleted.text
     assert deleted.json()["result"]["scope"] == "target"
+
+
+def _github_token(seed: str) -> str:
+    # Assembled at runtime; a synthetic GitHub-shaped token for detector tests.
+    return "ghp_" + hashlib.sha256(seed.encode()).hexdigest()[:36]
+
+
+async def _seal(client: httpx.AsyncClient, *texts) -> httpx.Response:
+    return await client.post(
+        "/api/v1/privacy-configs/seal",
+        json={"texts": [item if isinstance(item, dict) else {"text": item} for item in texts]},
+    )
+
+
+async def _owner_ctx(client: httpx.AsyncClient, service) -> RequestContext:
+    tree = await client.get("/api/v1/privacy-configs/tree")
+    owner = tree.json()["result"]["owner_user_id"]
+    return RequestContext(user=UserIdentifier(service.user.account_id, owner), role=Role.USER)
+
+
+async def _credential_targets(client: httpx.AsyncClient) -> list[str]:
+    response = await client.get("/api/v1/privacy-configs/credential")
+    assert response.status_code == 200, response.text
+    return response.json()["result"]
+
+
+async def _auto_targets(client: httpx.AsyncClient) -> list[str]:
+    response = await client.get("/api/v1/privacy-configs/auto")
+    assert response.status_code == 200, response.text
+    return response.json()["result"]
+
+
+async def test_privacy_seal_replaces_registered_values_when_mode_is_off(
+    client: httpx.AsyncClient, service
+):
+    ctx = await _owner_ctx(client, service)
+    assert (await service.privacy_configs.get_settings(ctx)).mode == "off"
+    created = await client.post(
+        "/api/v1/privacy-configs/credential/svc", json={"values": {"token": "seal-registered-1"}}
+    )
+    assert created.status_code == 200, created.text
+    reference = build_privacy_field_reference(ctx.user.user_id, "credential", "svc", "token")
+
+    response = await _seal(client, "key: seal-registered-1.", "", "nothing here")
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["texts"] == [
+        {
+            "text": f"key: {reference}.",
+            "replaced": [
+                {
+                    "start": 5,
+                    "end": 22,
+                    "reference": reference,
+                    "created": False,
+                    "temporary": False,
+                }
+            ],
+        },
+        None,
+        None,
+    ]
+    revision = result["revision"]
+    assert revision and revision.isascii() and len(revision) <= 128
+    again = (await _seal(client, "nothing here")).json()["result"]
+    assert again == {"revision": revision, "texts": [None]}
+
+
+async def test_privacy_seal_replaces_a_new_token_typed_next_to_cjk_text(client: httpx.AsyncClient):
+    token = _github_token("cjk-adjacent")
+    response = await _seal(
+        client,
+        {"text": f"密钥是{token}请保存", "enroll": True},
+        f"历史消息里的{token}也要替换",
+    )
+    assert response.status_code == 200, response.text
+    sealed, history = response.json()["result"]["texts"]
+    reference = sealed["replaced"][0]["reference"]
+    assert sealed["replaced"][0]["created"] is True
+    assert sealed["text"] == f"密钥是{reference}请保存"
+    assert history["text"] == f"历史消息里的{reference}也要替换"
+
+
+async def test_privacy_seal_enrolls_new_tokens_once(client: httpx.AsyncClient, service):
+    token = _github_token("enroll-once")
+    first = await _seal(
+        client,
+        {"text": f"my new token {token}", "enroll": True},
+        f"tool output mentions {token} too",
+    )
+    assert first.status_code == 200, first.text
+    first_result = first.json()["result"]
+    sealed, output = first_result["texts"]
+    reference = sealed["replaced"][0]["reference"]
+    assert sealed["text"] == f"my new token {reference}"
+    assert sealed["replaced"] == [
+        {
+            "start": 13,
+            "end": 13 + len(token),
+            "reference": reference,
+            "created": True,
+            "temporary": True,
+        }
+    ]
+    assert output["replaced"][0]["created"] is True
+    assert output["text"] == f"tool output mentions {reference} too"
+
+    assert await _credential_targets(client) == []
+    targets = await _auto_targets(client)
+    assert len(targets) == 1
+    target = targets[0]
+    assert re.fullmatch(r"github-[a-z0-9]+", target)
+    assert reference.endswith(f"/privacy/auto/{target}#/values/token}}}}")
+    current = (await client.get(f"/api/v1/privacy-configs/auto/{target}")).json()["result"]
+    assert current["meta"]["labels"] == {"ov.rule": "github"}
+    resolved = await client.post("/api/v1/privacy-configs/resolve", json={"selector": reference})
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["result"]["value"] == token
+
+    second = (await _seal(client, {"text": f"again {token}", "enroll": True})).json()["result"]
+    assert second["texts"][0]["replaced"][0] == {
+        "start": 6,
+        "end": 6 + len(token),
+        "reference": reference,
+        "created": False,
+        # Still an auto entry, whichever call enrolled it.
+        "temporary": True,
+    }
+    # The first call's revision already included its own enrollment.
+    assert second["revision"] == first_result["revision"]
+    third = (await _seal(client, {"text": f"again {token}", "enroll": True})).json()["result"]
+    assert third["revision"] == second["revision"]
+    assert await _auto_targets(client) == [target]
+
+    other = _github_token("not-enrolled")
+    plain = (await _seal(client, f"unflagged {other}")).json()["result"]
+    assert plain["texts"] == [None]
+    assert plain["revision"] == second["revision"]
+    assert await _auto_targets(client) == [target]
+
+
+async def test_privacy_seal_follows_never_mask_and_custom_rules(client: httpx.AsyncClient, service):
+    ctx = await _owner_ctx(client, service)
+    public = _github_token("public")
+    await client.post(
+        "/api/v1/privacy-configs/credential/registered",
+        json={"values": {"token": "registered-public-1"}},
+    )
+    before = (await _seal(client, "x")).json()["result"]["revision"]
+
+    await patch_user_config(
+        service.viking_fs,
+        ctx,
+        UserSettingsPatch.model_validate(
+            {"privacy": {"never_mask": [public, "registered-public-1"]}}
+        ),
+    )
+    masked = (
+        await _seal(client, {"text": f"{public} registered-public-1", "enroll": True})
+    ).json()["result"]
+    assert masked["texts"] == [None]
+    assert masked["revision"] != before
+    assert await _credential_targets(client) == ["registered"]
+    assert await _auto_targets(client) == []
+
+    await patch_user_config(
+        service.viking_fs,
+        ctx,
+        UserSettingsPatch.model_validate(
+            {"privacy": {"custom_rules": [{"id": "corp", "prefix": "corp_", "min_length": 12}]}}
+        ),
+    )
+    custom = (await _seal(client, {"text": "use corp_abcdef123456 now", "enroll": True})).json()[
+        "result"
+    ]
+    assert custom["revision"] != masked["revision"]
+    replaced = custom["texts"][0]["replaced"]
+    assert [(item["start"], item["end"], item["created"]) for item in replaced] == [(4, 21, True)]
+    targets = await _auto_targets(client)
+    assert len(targets) == 1 and targets[0].startswith("corp-")
+    meta = (await client.get(f"/api/v1/privacy-configs/auto/{targets[0]}")).json()
+    assert meta["result"]["meta"]["labels"] == {"ov.rule": "corp"}
+
+
+async def test_privacy_seal_rejects_invalid_requests_and_limits(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    for body in (
+        {"texts": []},
+        {"texts": [{"text": "x"}] * 1025},
+        {"texts": [{"text": 1}]},
+        {"texts": [{"text": "x", "unknown": True}]},
+        {"values": {"token": "not-an-upsert"}},
+    ):
+        response = await client.post("/api/v1/privacy-configs/seal", json=body)
+        assert 400 <= response.status_code < 500, response.text
+        assert response.json()["status"] != "ok"
+
+    oversized = await _seal(client, "a" * (8 * 1024 * 1024), "b" * (8 * 1024 * 1024 + 1))
+    assert oversized.status_code == 429, oversized.status_code
+    assert oversized.json()["error"]["code"] == "RESOURCE_EXHAUSTED"
+
+    await client.post(
+        "/api/v1/privacy-configs/credential/limit", json={"values": {"token": "limit-secret-1"}}
+    )
+    monkeypatch.setattr(service.privacy_sanitizer, "_max_replacements", 2)
+    limited = await _seal(client, "limit-secret-1 limit-secret-1", "limit-secret-1")
+    assert limited.status_code == 429, limited.text
+    assert "limit-secret-1" not in limited.text
+
+    monkeypatch.setattr(service, "_privacy_config_service", None)
+    unavailable = await _seal(client, "limit-secret-1")
+    assert unavailable.status_code >= 400, unavailable.text
+    assert unavailable.json()["status"] != "ok"
+
+
+async def test_privacy_seal_route_is_not_shadowed_and_revision_is_not_a_config(
+    client: httpx.AsyncClient,
+):
+    created = await client.post(
+        "/api/v1/privacy-configs/credential/seal", json={"values": {"token": "named-seal-1"}}
+    )
+    assert created.status_code == 200, created.text
+    assert (await client.get("/api/v1/privacy-configs/credential/seal")).status_code == 200
+    sealed = await _seal(client, "named-seal-1")
+    assert sealed.status_code == 200, sealed.text
+    assert sealed.json()["result"]["texts"][0]["replaced"][0]["reference"].endswith(
+        "/credential/seal#/values/token}}"
+    )
+
+    assert (await client.get("/api/v1/privacy-configs")).json()["result"] == ["credential"]
+    tree = (await client.get("/api/v1/privacy-configs/tree")).json()["result"]
+    assert [node["category"] for node in tree["categories"]] == ["credential"]
+    assert [node["target_key"] for node in tree["categories"][0]["targets"]] == ["seal"]
+
+
+async def test_privacy_upsert_accepts_reference_value_and_removes_enrolled_source(
+    client: httpx.AsyncClient,
+):
+    token = _github_token("rename")
+    sealed = (await _seal(client, {"text": token, "enroll": True})).json()["result"]
+    reference = sealed["texts"][0]["replaced"][0]["reference"]
+    [temporary] = await _auto_targets(client)
+
+    renamed = await client.patch(
+        "/api/v1/privacy-configs/credential/github", json={"values": {"pat": reference}}
+    )
+    assert renamed.status_code == 200, renamed.text
+    # The response never echoes the value copied from the reference.
+    owner = renamed.json()["result"]["created_by"]
+    named = build_privacy_field_reference(owner, "credential", "github", "pat")
+    assert renamed.json()["result"]["values"] == {"pat": named}
+    assert token not in renamed.text
+    assert "warnings" not in renamed.json()["result"]
+    assert await _credential_targets(client) == ["github"]
+    assert await _auto_targets(client) == []
+    missing = await client.get(f"/api/v1/privacy-configs/auto/{temporary}")
+    assert missing.status_code == 404
+
+    stale = await client.post(
+        "/api/v1/privacy-configs/credential/github", json={"values": {"pat": reference}}
+    )
+    assert stale.status_code == 400, stale.text
+    assert stale.json()["error"]["code"] == "INVALID_ARGUMENT"
+    current = (await client.get("/api/v1/privacy-configs/credential/github")).json()["result"]
+    assert current["current"]["values"] == {"pat": token}
+
+    # Once saved under a name the value is no longer temporary.
+    after = (await _seal(client, {"text": token, "enroll": True})).json()["result"]
+    [span] = after["texts"][0]["replaced"]
+    assert (span["reference"], span["created"], span["temporary"]) == (named, False, False)
+
+
+async def test_privacy_write_responses_hide_values_when_a_reference_was_given(
+    client: httpx.AsyncClient,
+):
+    first = _github_token("echo-first")
+    second = _github_token("echo-second")
+    sealed = (await _seal(client, {"text": f"{first} {second}", "enroll": True})).json()["result"]
+    refs = [item["reference"] for item in sealed["texts"][0]["replaced"]]
+
+    upserted = await client.post(
+        "/api/v1/privacy-configs/credential/github",
+        json={"values": {"pat": refs[0], "username": "octo-user"}},
+    )
+    assert upserted.status_code == 200, upserted.text
+    owner = upserted.json()["result"]["created_by"]
+
+    def ref(field: str) -> str:
+        return build_privacy_field_reference(owner, "credential", "github", field)
+
+    # Every stored value is shown as its own reference, the plain one too.
+    assert upserted.json()["result"]["values"] == {"pat": ref("pat"), "username": ref("username")}
+    assert first not in upserted.text and "octo-user" not in upserted.text
+
+    patched = await client.patch(
+        "/api/v1/privacy-configs/credential/github", json={"values": {"backup": refs[1]}}
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["result"]["values"] == {
+        "backup": ref("backup"),
+        "pat": ref("pat"),
+        "username": ref("username"),
+    }
+    assert first not in patched.text and second not in patched.text
+
+    # A request without references keeps today's response.
+    plain = await client.patch(
+        "/api/v1/privacy-configs/credential/github", json={"values": {"username": "octo-2"}}
+    )
+    assert plain.status_code == 200, plain.text
+    assert plain.json()["result"]["values"] == {
+        "backup": second,
+        "pat": first,
+        "username": "octo-2",
+    }
+
+
+async def test_privacy_seal_matches_earlier_versions_of_credentials(
+    client: httpx.AsyncClient, service
+):
+    ctx = await _owner_ctx(client, service)
+    old = _github_token("rotation-old")
+    new = _github_token("rotation-new")
+    for token in (old, new):
+        saved = await client.post(
+            "/api/v1/privacy-configs/credential/github", json={"values": {"token": token}}
+        )
+        assert saved.status_code == 200, saved.text
+    reference = build_privacy_field_reference(ctx.user.user_id, "credential", "github", "token")
+
+    result = (await _seal(client, {"text": f"old {old} new {new}", "enroll": True})).json()[
+        "result"
+    ]
+    assert result["texts"][0]["text"] == f"old {reference} new {reference}"
+    assert [(item["created"], item["temporary"]) for item in result["texts"][0]["replaced"]] == [
+        (False, False),
+        (False, False),
+    ]
+    # The earlier value is sealed, not enrolled again.
+    assert await _credential_targets(client) == ["github"]
+    resolved = await client.post("/api/v1/privacy-configs/resolve", json={"selector": reference})
+    assert resolved.json()["result"]["value"] == new
+
+    # A current value of another field decides the reference of a shared value.
+    await client.post("/api/v1/privacy-configs/credential/other", json={"values": {"key": old}})
+    other = build_privacy_field_reference(ctx.user.user_id, "credential", "other", "key")
+    shared = (await _seal(client, old)).json()["result"]
+    assert shared["texts"][0]["text"] == other
+    await client.delete("/api/v1/privacy-configs/credential/other")
+
+    # The storage-path sanitizer still matches current values only.
+    settings = replace(await service.privacy_configs.get_settings(ctx), mode="registered")
+    stored = await service.privacy_sanitizer.sanitize(f"{old} {new}", ctx=ctx, settings=settings)
+    assert stored.content == f"{old} {reference}"
+
+    await patch_user_config(
+        service.viking_fs,
+        ctx,
+        UserSettingsPatch.model_validate({"privacy": {"never_mask": [old]}}),
+    )
+    masked = (await _seal(client, f"{old} {new}")).json()["result"]
+    assert masked["texts"][0]["text"] == f"{old} {reference}"
+    await patch_user_config(
+        service.viking_fs, ctx, UserSettingsPatch.model_validate({"privacy": {"never_mask": []}})
+    )
+
+    deleted = await client.delete("/api/v1/privacy-configs/credential/github")
+    assert deleted.json()["result"]["deleted"] is True
+    gone = (await _seal(client, f"{old} {new}")).json()["result"]
+    assert gone["texts"] == [None]
+
+
+async def test_privacy_auto_reference_resolves_and_is_managed_like_any_target(
+    client: httpx.AsyncClient, service
+):
+    ctx = await _owner_ctx(client, service)
+    token = _github_token("auto-category")
+    sealed = (await _seal(client, {"text": token, "enroll": True})).json()["result"]
+    reference = sealed["texts"][0]["replaced"][0]["reference"]
+    [target] = await _auto_targets(client)
+    assert reference == build_privacy_field_reference(ctx.user.user_id, "auto", target, "token")
+
+    # The reference resolves.
+    resolved = await client.post("/api/v1/privacy-configs/resolve", json={"selector": reference})
+    assert resolved.status_code == 200, resolved.text
+    assert resolved.json()["result"]["value"] == token
+    assert resolved.json()["result"]["category"] == "auto"
+
+    # A Credential holding the same value wins, and its value is no longer temporary.
+    await client.post("/api/v1/privacy-configs/credential/named", json={"values": {"pat": token}})
+    named = build_privacy_field_reference(ctx.user.user_id, "credential", "named", "pat")
+    [span] = (await _seal(client, token)).json()["result"]["texts"][0]["replaced"]
+    assert (span["reference"], span["temporary"]) == (named, False)
+    # Saving by plain value keeps the auto entry; only a reference move removes it.
+    assert await _auto_targets(client) == [target]
+
+    # The selector delete removes an auto entry and changes the revision.
+    before = (await _seal(client, "x")).json()["result"]["revision"]
+    deleted = await client.request(
+        "DELETE",
+        "/api/v1/privacy-configs/selector",
+        json={"selector": f"viking://~/privacy/auto/{target}"},
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert await _auto_targets(client) == []
+    assert (await _seal(client, "x")).json()["result"]["revision"] != before
+    missing = await client.post("/api/v1/privacy-configs/resolve", json={"selector": reference})
+    assert missing.status_code == 404, missing.text
+
+
+async def test_privacy_seal_leaves_a_match_too_long_to_store(client: httpx.AsyncClient):
+    registered = _github_token("too-long-registered")
+    created = await client.post(
+        "/api/v1/privacy-configs/credential/github", json={"values": {"token": registered}}
+    )
+    assert created.status_code == 200, created.text
+    # Detector patterns have no upper bound; a stored value does (64 KiB).
+    huge = "ghp_" + "".join(hashlib.sha256(str(i).encode()).hexdigest() for i in range(1100))
+    response = await _seal(client, {"text": f"{registered} then {huge}", "enroll": True})
+    assert response.status_code == 200, response.text
+    [text] = response.json()["result"]["texts"]
+    # The registered value is still replaced; the over-long match stays as it is.
+    assert [span["end"] - span["start"] for span in text["replaced"]] == [len(registered)]
+    assert text["text"].endswith(f" then {huge}")
+    assert await _auto_targets(client) == []
+
+
+async def test_privacy_seal_caps_new_enrollments_per_call(client: httpx.AsyncClient):
+    from openviking.privacy.seal import SEAL_MAX_ENROLLMENTS
+
+    assert SEAL_MAX_ENROLLMENTS == 1024
+    text = " ".join(_github_token(f"cap-{index}") for index in range(SEAL_MAX_ENROLLMENTS + 1))
+    response = await _seal(client, {"text": text, "enroll": True})
+    assert response.status_code == 429, response.status_code
+    assert response.json()["error"]["code"] == "RESOURCE_EXHAUSTED"
+    assert await _auto_targets(client) == []
+
+
+async def test_privacy_seal_matches_every_enrolled_value_past_one_listing_page(
+    client: httpx.AsyncClient,
+):
+    # A directory listing returns 1000 entries unless asked for all of them.
+    tokens = [_github_token(f"page-{index}") for index in range(1001)]
+    response = await _seal(client, {"text": " ".join(tokens), "enroll": True})
+    assert response.status_code == 200, response.text
+    [text] = response.json()["result"]["texts"]
+    assert len(text["replaced"]) == len(tokens)
+    assert not any(token in text["text"] for token in tokens)
+    assert len(await _auto_targets(client)) == len(tokens)
+
+    again = await _seal(client, {"text": " ".join(tokens), "enroll": True})
+    assert again.status_code == 200, again.text
+    assert len(again.json()["result"]["texts"][0]["replaced"]) == len(tokens)
+    assert len(await _auto_targets(client)) == len(tokens)

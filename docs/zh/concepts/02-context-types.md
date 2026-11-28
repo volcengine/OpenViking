@@ -149,14 +149,12 @@ viking://agent/skills/{skill-name}/  # 通过 -p/--parent-auto-create 覆盖，�
 
 ### AgentDefinedContextType 子类型
 
-下表列出共享能力的设计分类。当前支持 Skill，默认安装到用户私有目录，也可显式安装到 `viking://agent/skills/`。其余分类是规划，不表示已提供对应接口：
+Skill 默认安装到用户私有目录，也可以在账号内共享。
 
 | 子类型 | 位置 | 说明 |
 |--------|------|------|
 | **Skill** | `agent/skills/` | 传统工作流定义，如搜索、代码生成 |
-| **Endpoint** | `agent/endpoints/` | 通信端点配置（a2a, anp 等）（规划中） |
-| **Tool** | `agent/tools/` | 工具配置（mcp 等）（规划中） |
-| **Payment** | `agent/payments/` | 支付能力配置（ap2 等）（规划中） |
+| **Tool** | `agent/tools/` | MCP Server 发布的共享工具定义 |
 
 ### 使用
 

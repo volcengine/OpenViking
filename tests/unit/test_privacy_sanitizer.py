@@ -16,6 +16,7 @@ from openviking.privacy.reference import (
     parse_privacy_target_selector,
 )
 from openviking.privacy.sanitizer import PrivacySanitizer
+from openviking.privacy.seal import SealText, seal_texts
 from openviking.server.identity import RequestContext, Role
 from openviking.server.user_config import ResolvedPrivacyConfig
 from openviking_cli.exceptions import InvalidArgumentError, ResourceExhaustedError
@@ -30,12 +31,18 @@ class _PrivacyCatalog:
         self.versions = {}
         self.build_reads = 0
         self.settings = ResolvedPrivacyConfig(mode="registered")
+        # (category, target) -> {version number: values} of earlier versions.
+        self.history = {}
+        self.labels = {}
+        self.version_reads = 0
+        self.revision_reads = 0
 
     async def get_settings(self, _ctx):
         return self.settings
 
-    def credential_revision(self, _ctx):
-        return self.credentials_revision
+    async def credential_revision(self, _ctx):
+        self.revision_reads += 1
+        return str(self.credentials_revision)
 
     async def list_targets(self, _ctx, category):
         self.build_reads += 1
@@ -52,6 +59,17 @@ class _PrivacyCatalog:
                 created_at="",
             )
         )
+
+    async def get_meta(self, _ctx, category, target_key):
+        return SimpleNamespace(labels=self.labels.get((category, target_key), {}))
+
+    async def list_versions(self, _ctx, category, target_key):
+        return sorted(self.history.get((category, target_key), {}))
+
+    async def get_version(self, _ctx, category, target_key, version):
+        self.version_reads += 1
+        values = self.history.get((category, target_key), {}).get(version)
+        return None if values is None else SimpleNamespace(values=values, version=version)
 
 
 def _ctx(user_id="alice"):
@@ -344,3 +362,116 @@ async def test_scope_precedes_ambiguity_and_never_rebinds_explicit_references(mo
     del catalog.configs[category]["current"]
     catalog.revision += 1
     assert (await sanitizer.sanitize(secret, ctx=_ctx(), uri=uri)).content == secret
+
+
+async def test_seal_reports_code_point_offsets_after_cjk_and_emoji():
+    secret = "seal-" + "offset-value-42"
+    catalog = _PrivacyCatalog({"credential": {"svc": {"token": secret}}})
+    catalog.settings = ResolvedPrivacyConfig(mode="off")
+    reference = build_privacy_field_reference("alice", "credential", "svc", "token")
+    prefix = "密钥🙂😀 是 "
+    text = f"{prefix}{secret} 和 🚀{secret}"
+
+    result = await seal_texts(
+        catalog, PrivacySanitizer(catalog), _ctx(), [SealText(text), SealText("无关 🙂")]
+    )
+
+    sealed, untouched = result["texts"]
+    assert untouched is None
+    second = text.index(secret, len(prefix) + 1)
+    assert sealed["replaced"] == [
+        {
+            "start": len(prefix),
+            "end": len(prefix) + len(secret),
+            "reference": reference,
+            "created": False,
+            "temporary": False,
+        },
+        {
+            "start": second,
+            "end": second + len(secret),
+            "reference": reference,
+            "created": False,
+            "temporary": False,
+        },
+    ]
+    assert sealed["text"] == f"{prefix}{reference} 和 🚀{reference}"
+    for item in sealed["replaced"]:
+        assert text[item["start"] : item["end"]] == secret
+
+
+async def test_seal_replaces_a_registered_value_typed_next_to_cjk_text():
+    secret = "passwd" + "-cjk-42"
+    catalog = _PrivacyCatalog({"credential": {"svc": {"token": secret}}})
+    catalog.settings = ResolvedPrivacyConfig(mode="off")
+    reference = build_privacy_field_reference("alice", "credential", "svc", "token")
+
+    result = await seal_texts(
+        catalog, PrivacySanitizer(catalog), _ctx(), [SealText(f"使用密码{secret}登录")]
+    )
+
+    assert result["texts"][0]["text"] == f"使用密码{reference}登录"
+
+
+async def test_seal_matcher_reads_earlier_versions_once_per_revision_and_marks_auto_temporary():
+    old, new, enrolled = "rotated-old-value-1", "rotated-new-value-2", "enrolled-value-3"
+    catalog = _PrivacyCatalog(
+        {"credential": {"github": {"pat": new}}, "auto": {"github-abc123": {"token": enrolled}}}
+    )
+    catalog.versions[("credential", "github")] = 2
+    catalog.history[("credential", "github")] = {1: {"pat": old}, 2: {"pat": new}}
+    sanitizer = PrivacySanitizer(catalog)
+    named = build_privacy_field_reference("alice", "credential", "github", "pat")
+    temporary = build_privacy_field_reference("alice", "auto", "github-abc123", "token")
+
+    for _ in range(3):
+        result = await seal_texts(catalog, sanitizer, _ctx(), [SealText(f"{old} {new} {enrolled}")])
+        spans = result["texts"][0]["replaced"]
+        assert [(item["reference"], item["temporary"]) for item in spans] == [
+            (named, False),
+            (named, False),
+            (temporary, True),
+        ]
+    # Only the earlier version is read, and only for the first build of this revision.
+    assert catalog.version_reads == 1
+    # A call served from the cached matcher reads the revision once and returns it.
+    catalog.revision_reads = 0
+    result = await seal_texts(catalog, sanitizer, _ctx(), [SealText(new)])
+    assert catalog.revision_reads == 1
+    assert result["revision"].startswith(f"{catalog.credentials_revision}-")
+    # Storage paths keep matching current Credential values only, never auto.
+    stored = await sanitizer.sanitize(f"{old} {new} {enrolled}", ctx=_ctx())
+    assert stored.content == f"{old} {named} {enrolled}"
+
+    # Saved under a name, the value takes the Credential reference.
+    catalog.configs["credential"]["github"] = {"pat": new, "backup": enrolled}
+    catalog.credentials_revision += 1
+    result = await seal_texts(catalog, sanitizer, _ctx(), [SealText(enrolled)])
+    [span] = result["texts"][0]["replaced"]
+    backup = build_privacy_field_reference("alice", "credential", "github", "backup")
+    assert (span["reference"], span["temporary"]) == (backup, False)
+    assert catalog.version_reads == 2
+
+
+async def test_seal_matcher_prefers_current_and_earlier_credential_values_over_auto():
+    current, earlier = "shared-current-1", "shared-earlier-2"
+    catalog = _PrivacyCatalog(
+        {
+            "credential": {"named": {"key": current}},
+            "auto": {
+                "aaa-000001": {"token": current},
+                "aaa-000002": {"token": earlier},
+            },
+        }
+    )
+    catalog.versions[("credential", "named")] = 2
+    catalog.history[("credential", "named")] = {1: {"key": earlier}, 2: {"key": current}}
+    named = build_privacy_field_reference("alice", "credential", "named", "key")
+
+    result = await seal_texts(
+        catalog, PrivacySanitizer(catalog), _ctx(), [SealText(f"{current} {earlier}")]
+    )
+
+    # A Credential value, current or earlier, wins over an auto one, without ambiguity.
+    assert result["texts"][0]["text"] == f"{named} {named}"
+    assert [item["temporary"] for item in result["texts"][0]["replaced"]] == [False, False]

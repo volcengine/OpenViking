@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   BUILTIN_SKILLS_ROOT,
-  createCompile,
+  createCompileConfig,
   fetchCompileConfig,
   fetchCompileConfigs,
   fetchCompileSkills,
+  isCompileName,
   updateCompileConfig,
   fetchCompileTask,
   fetchCompileTasks,
@@ -39,44 +40,46 @@ beforeEach(() => {
 })
 
 describe('Compile scheduling APIs', () => {
-  it('accepts a saved configuration without inventing a task ID', async () => {
-    const config = {
+  it('creates a named configuration without executing it', async () => {
+    clientMocks.post.mockResolvedValueOnce({ compile_name: '每日_wiki' })
+    const body = {
+      compile_name: '每日_wiki',
+      from: ['viking://resources/source'],
       to: 'viking://resources/wiki',
-      auto_update: true,
-      next_run_at: '2026-11-03T09:00:00+08:00',
-    }
-    clientMocks.post.mockResolvedValueOnce(config)
-    const result = await createCompile(
-      {
-        from: ['viking://resources/source'],
-        to: config.to,
-        skill: 'viking://agent/skills/wiki',
-        args: { auto_update: true },
+      skill: 'viking://agent/skills/wiki',
+      args: {
+        auto_update: true,
+        update_schedule: { frequency: 'daily' as const, hour: 9, minute: 0 },
       },
-      'schedule-save-key',
-    )
-    expect(result).toEqual(config)
-    expect(result).not.toHaveProperty('task_id')
+    }
+    await expect(createCompileConfig(body)).resolves.toEqual({
+      compile_name: '每日_wiki',
+    })
+    expect(clientMocks.post).toHaveBeenLastCalledWith({
+      url: '/api/v1/compile/create',
+      body,
+    })
   })
 
-  it('passes target cursors and URI query values without changing them', async () => {
-    const cursor = 'viking://resources/a folder?value=1'
+  it('addresses configurations by compile_name and passes cursors unchanged', async () => {
+    const cursor = 'team-wiki_2'
     await fetchCompileConfigs(cursor)
     expect(clientMocks.get).toHaveBeenLastCalledWith({
       url: '/api/v1/compile/configs',
       signal: undefined,
       query: { limit: 30, cursor },
     })
-    await fetchCompileConfig(cursor)
+    await fetchCompileConfig('团队 wiki?')
     expect(clientMocks.get).toHaveBeenLastCalledWith({
       url: '/api/v1/compile/config',
       signal: undefined,
-      query: { to: cursor },
+      query: { compile_name: '团队 wiki?' },
     })
     const body = {
-      to: cursor,
+      compile_name: 'team-wiki',
       from: ['viking://resources/source'],
       skill: 'viking://agent/skills/wiki',
+      args: { mode_hint: 'summary' },
       auto_update: false,
       update_schedule: null,
     }
@@ -85,6 +88,19 @@ describe('Compile scheduling APIs', () => {
       url: '/api/v1/compile/config/update',
       body,
     })
+  })
+
+  it.each([
+    ['team-wiki_2', true],
+    ['每日编译', true],
+    ['-leading', false],
+    ['has space', false],
+    ['a'.repeat(64), true],
+    ['a'.repeat(65), false],
+    ['汉'.repeat(32), true],
+    ['汉'.repeat(33), false],
+  ])('validates compile name %s', (name, valid) => {
+    expect(isCompileName(name)).toBe(valid)
   })
 })
 

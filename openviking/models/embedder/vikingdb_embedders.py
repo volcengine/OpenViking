@@ -32,16 +32,19 @@ class VikingDBClientMixin:
         sk: Optional[str] = None,
         region: Optional[str] = None,
         host: Optional[str] = None,
+        session_token: Optional[str] = None,
     ):
         self.ak = ak
         self.sk = sk
         self.region = region or "cn-beijing"
-        self.host = host
 
         if not self.ak or not self.sk:
             raise ValueError("AK and SK are required for VikingDB Embedder")
 
-        self.client = ClientForDataApi(self.ak, self.sk, self.region, self.host)
+        self.client = ClientForDataApi(
+            self.ak, self.sk, self.region, host, session_token=session_token
+        )
+        self.host = self.client.host
         self._async_client_cache = LoopScopedAsyncClientCache()
 
     def _call_api(
@@ -166,10 +169,11 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         config: Optional[Dict[str, Any]] = None,
         query_param: Optional[str] = None,
         document_param: Optional[str] = None,
+        session_token: Optional[str] = None,
     ):
         DenseEmbedderBase.__init__(self, model_name, config)
         self.provider = "vikingdb"
-        self._init_vikingdb_client(ak, sk, region, host)
+        self._init_vikingdb_client(ak, sk, region, host, session_token=session_token)
         self.model_version = model_version
         self.dimension = dimension
         self.embedding_type = embedding_type
@@ -196,7 +200,9 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
 
             item = results[0]
             dense_vector = []
-            if "dense_embedding" in item:
+            if "dense" in item:
+                dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
+            elif "dense_embedding" in item:
                 dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
 
             return EmbedResult(dense_vector=dense_vector)
@@ -225,7 +231,9 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
 
             item = results[0]
             dense_vector = []
-            if "dense_embedding" in item:
+            if "dense" in item:
+                dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
+            elif "dense_embedding" in item:
                 dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
             return EmbedResult(dense_vector=dense_vector)
 
@@ -260,10 +268,11 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
         region: Optional[str] = None,
         host: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        session_token: Optional[str] = None,
     ):
         SparseEmbedderBase.__init__(self, model_name, config)
         self.provider = "vikingdb"
-        self._init_vikingdb_client(ak, sk, region, host)
+        self._init_vikingdb_client(ak, sk, region, host, session_token=session_token)
         self.model_version = model_version
         self.sparse_model = {
             "name": model_name,
@@ -346,10 +355,11 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         config: Optional[Dict[str, Any]] = None,
         query_param: Optional[str] = None,
         document_param: Optional[str] = None,
+        session_token: Optional[str] = None,
     ):
         HybridEmbedderBase.__init__(self, model_name, config)
         self.provider = "vikingdb"
-        self._init_vikingdb_client(ak, sk, region, host)
+        self._init_vikingdb_client(ak, sk, region, host, session_token=session_token)
         self.model_version = model_version
         self.dimension = dimension
         self.embedding_type = embedding_type
@@ -388,6 +398,8 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
             sparse_vector = {}
             if "dense" in item:
                 dense_vector = self._truncate_and_normalize(item["dense"], self.dimension)
+            elif "dense_embedding" in item:
+                dense_vector = self._truncate_and_normalize(item["dense_embedding"], self.dimension)
             if "sparse" in item:
                 sparse_vector = item["sparse"]
 

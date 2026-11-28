@@ -86,7 +86,7 @@ test('standalone preview offers editing only on the active editable level', asyn
   }
 });
 
-test('FileBrowser saves edits before offering an optional snapshot without waiting for background work', async () => {
+test('FileBrowser saves edits without offering a manual snapshot', async () => {
   const rootUri = 'viking://user/alice/memories';
   const uri = `${rootUri}/guide.md`;
   let fullReads = 0;
@@ -137,24 +137,14 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
     await click(view, 'Edit');
     await waitForEditor(view.container);
     const toolbar = view.container.querySelector('.ov-file-preview__toolbar');
+    // 普通文本文件没有历史入口：编辑态只保留保存、取消、复制内容与复制路径。
     assert.deepEqual(
       [...toolbar.querySelectorAll('button')].map(
         (node) => node.getAttribute('aria-label') ?? node.textContent.trim(),
       ),
-      ['Cancel', 'Save', 'Version history', 'Copy content'],
+      ['Cancel', 'Save', 'Copy content'],
     );
     assert.ok(button(view, 'Copy path'));
-    await click(view, 'Version history');
-    const history = document.querySelector('.ov-file-history');
-    assert.match(history.querySelector('h2').textContent, /Version history/);
-    await act(async () =>
-      history.querySelector('[aria-label="Close dialog"]').click(),
-    );
-    assert.equal(
-      view.container.querySelector('.cm-content')?.textContent,
-      '# Initial',
-    );
-    assert.equal(fullReads, 1);
     await click(view, 'Copy content');
     const editor = view.container.querySelector('.cm-content');
     await setEditor(editor, '');
@@ -168,10 +158,7 @@ test('FileBrowser saves edits before offering an optional snapshot without waiti
     assert.equal(requests.countOf('/api/v1/content/write'), 1);
     assert.equal(requests.countOf('/api/v1/snapshot/commit'), 0);
     assert.equal(requests.countOf('/api/v1/tasks/content-write'), 0);
-    assert.match(
-      document.querySelector('[role="dialog"]')?.textContent ?? '',
-      /Keep a snapshot\?/,
-    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
     assert.equal(view.container.querySelector('.cm-content'), null);
     assert.equal(requests.countOf('/api/v1/content/read'), reads + 1);
     await view.render(render(true));

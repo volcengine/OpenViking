@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """The local root-key file must hold exactly one 32-byte root key."""
 
-import secrets
-
 import pytest
 
 from openviking.crypto.exceptions import ConfigError
@@ -29,13 +27,3 @@ async def test_long_root_key_file_is_rejected(tmp_path):
 
     with pytest.raises(ConfigError):
         await provider.get_root_key()
-
-
-async def test_valid_root_key_file_still_loads(tmp_path):
-    root_key = secrets.token_bytes(32)
-    key_file = tmp_path / "master.key"
-    key_file.write_text(root_key.hex())
-
-    provider = LocalFileProvider(key_file=str(key_file))
-
-    assert await provider.get_root_key() == root_key

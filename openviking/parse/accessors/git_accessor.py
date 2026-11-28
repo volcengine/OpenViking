@@ -35,6 +35,7 @@ from openviking.utils import (
     parse_git_repo_url,
 )
 from openviking.utils.code_hosting_utils import (
+    is_git_commit_sha,
     is_git_repo_url,
     validate_git_ssh_uri,
 )
@@ -45,12 +46,21 @@ from openviking.utils.git_auth import (
     raise_git_auth_error,
 )
 from openviking.utils.network_guard import RequestValidator
-from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.utils.logger import get_logger
 
 from .base import DataAccessor, LocalResource, SourceType
 
 logger = get_logger(__name__)
+
+
+def _normalize_commit(value: object) -> Optional[str]:
+    """Validate a Git commit pin before using it as a revision."""
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not is_git_commit_sha(value):
+        raise InvalidArgumentError("commit must be a Git SHA with 7 to 40 hexadecimal characters")
+    return value.lower()
 
 
 class GitAccessor(DataAccessor):
@@ -121,10 +131,12 @@ class GitAccessor(DataAccessor):
         """
         source_str = str(source)
         temp_local_dir = None
-        branch = kwargs.get("branch") or kwargs.get("ref")
-        commit = kwargs.get("commit")
-        if commit:
-            branch = None
+        repo_url = None
+        if source_str.startswith(("http://", "https://", "git://", "ssh://")):
+            repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
+        else:
+            commit = _normalize_commit(kwargs.get("commit"))
+            branch = None if commit else kwargs.get("branch") or kwargs.get("ref")
         auth_config = parse_git_http_auth_config(kwargs.get("auth_config"), source_str)
         git_env = None
         request_validator = kwargs.get("request_validator")
@@ -159,8 +171,7 @@ class GitAccessor(DataAccessor):
                     request_validator=request_validator,
                 )
                 used_git_clone = True
-            elif source_str.startswith(("http://", "https://", "git://", "ssh://")):
-                repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
+            elif repo_url is not None:
                 github_token = None
                 if auth_config is not None:
                     git_env = build_git_http_auth_env(auth_config, repo_url)
@@ -319,7 +330,7 @@ class GitAccessor(DataAccessor):
     def _parse_repo_source(self, source: str, **kwargs) -> Tuple[str, Optional[str], Optional[str]]:
         """Parse repository source URL to extract branch/commit info."""
         branch = kwargs.get("branch") or kwargs.get("ref")
-        commit = kwargs.get("commit")
+        commit = _normalize_commit(kwargs.get("commit"))
         parsed_source = parse_git_repo_url(source)
         if parsed_source is None:
             if source.startswith(("git@", "http://", "https://", "git://", "ssh://")):
@@ -328,7 +339,7 @@ class GitAccessor(DataAccessor):
                 branch = None
             return source, branch, commit
 
-        commit = commit or parsed_source.commit
+        commit = commit or _normalize_commit(parsed_source.commit)
         branch = None if commit else branch or parsed_source.branch
         return parsed_source.clone_url, branch, commit
 
@@ -342,7 +353,7 @@ class GitAccessor(DataAccessor):
         instead of raising, so callers can fall back to a full refresh.
         """
         branch = kwargs.get("branch") or kwargs.get("ref")
-        commit = kwargs.get("commit")
+        commit = _normalize_commit(kwargs.get("commit"))
         parsed_source = parse_git_repo_url(source)
         if parsed_source is None:
             if source.startswith(("git@", "http://", "https://", "git://", "ssh://")):
@@ -350,7 +361,7 @@ class GitAccessor(DataAccessor):
                     branch = None
                 return source, branch, commit
             return None
-        commit = commit or parsed_source.commit
+        commit = commit or _normalize_commit(parsed_source.commit)
         branch = None if commit else branch or parsed_source.branch
         return parsed_source.clone_url, branch, commit
 
@@ -503,21 +514,31 @@ class GitAccessor(DataAccessor):
                 timeout=self.CANCEL_REAP_TIMEOUT,
             )
 
-    async def _has_commit(
+    async def _resolve_commit(
         self,
         repo_dir: str,
         commit: str,
         env: Optional[dict[str, str]] = None,
-    ) -> bool:
-        """Check if a commit exists in the repository."""
+    ) -> Optional[str]:
+        """Resolve a commit pin without treating a matching ref name as an object ID."""
         try:
-            await self._run_git(
-                ["git", "-C", repo_dir, "rev-parse", "--verify", commit],
+            oid = await self._run_git(
+                [
+                    "git",
+                    "-C",
+                    repo_dir,
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    f"{commit}^{{commit}}",
+                ],
                 env=env,
             )
-            return True
         except RuntimeError:
-            return False
+            return None
+        if len(oid) == 40 and is_git_commit_sha(oid) and oid.startswith(commit):
+            return oid
+        return None
 
     @staticmethod
     def _is_github_url(url: str) -> bool:
@@ -554,7 +575,7 @@ class GitAccessor(DataAccessor):
         env: Optional[dict[str, str]] = None,
         request_validator: Optional[RequestValidator] = None,
     ) -> str:
-        """Clone a git repository into target_dir; return the repo name."""
+        """Clone a repository using a validated commit pin; return the repo name."""
         name = self._get_repo_name(url)
         logger.debug(
             "Cloning repository source=%s target=%s",
@@ -584,44 +605,42 @@ class GitAccessor(DataAccessor):
         if commit:
             try:
                 await self._run_git(
-                    ["git", "-C", target_dir, "fetch", "origin", commit],
+                    ["git", "-C", target_dir, "fetch", "--", "origin", commit],
                     env=network_env,
                 )
             except RuntimeError:
-                try:
+                with contextlib.suppress(RuntimeError):
                     await self._run_git(
                         ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"],
                         env=network_env,
                     )
-                except RuntimeError:
-                    pass
-                ok = await self._has_commit(target_dir, commit, env=env)
-                if not ok:
-                    try:
-                        await self._run_git(
-                            ["git", "-C", target_dir, "fetch", "--unshallow", "origin"],
-                            env=network_env,
-                        )
-                    except RuntimeError:
-                        pass
-                ok = await self._has_commit(target_dir, commit, env=env)
-                if not ok:
+
+            oid = await self._resolve_commit(target_dir, commit, env=env)
+            if oid is None:
+                with contextlib.suppress(RuntimeError):
                     await self._run_git(
-                        [
-                            "git",
-                            "-C",
-                            target_dir,
-                            "fetch",
-                            "origin",
-                            "+refs/heads/*:refs/remotes/origin/*",
-                        ],
+                        ["git", "-C", target_dir, "fetch", "--unshallow", "origin"],
                         env=network_env,
                     )
-                    ok = await self._has_commit(target_dir, commit, env=env)
-                    if not ok:
-                        raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
+                oid = await self._resolve_commit(target_dir, commit, env=env)
+            if oid is None:
+                await self._run_git(
+                    [
+                        "git",
+                        "-C",
+                        target_dir,
+                        "fetch",
+                        "origin",
+                        "+refs/heads/*:refs/remotes/origin/*",
+                    ],
+                    env=network_env,
+                )
+                oid = await self._resolve_commit(target_dir, commit, env=env)
+                if oid is None:
+                    raise RuntimeError(f"Failed to resolve Git commit {commit}")
+
             await self._run_git(
-                ["git", "-C", target_dir, "checkout", commit],
+                ["git", "-C", target_dir, "checkout", "--detach", oid],
                 env=env,
             )
 
@@ -874,73 +893,3 @@ class GitAccessor(DataAccessor):
 
         logger.debug("GitLab archive extracted target=%s", safe_path_for_log(str(content_dir)))
         return content_dir, repo_name
-
-    async def _extract_zip(self, zip_path: str, target_dir: str) -> str:
-        """Extract a local zip file into target_dir."""
-        if zip_path.startswith(("http://", "https://")):
-            raise NotImplementedError("Zip URL download not yet implemented in GitAccessor")
-
-        path = Path(zip_path)
-        name = path.stem
-
-        # Extract zip file (non-blocking)
-        def _extract_zip_sync():
-            with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                target = Path(target_dir).resolve()
-                for info in zip_ref.infolist():
-                    mode = info.external_attr >> 16
-                    # Skip directory entries
-                    if info.is_dir() or stat.S_ISDIR(mode):
-                        continue
-                    # Skip symlink entries
-                    if stat.S_ISLNK(mode):
-                        logger.debug(
-                            "Skipping symlink archive entry path=%s",
-                            safe_path_for_log(info.filename),
-                        )
-                        continue
-                    # Reject entries with suspicious raw path components
-                    raw = info.filename.replace("\\", "/")
-                    raw_parts = [p for p in raw.split("/") if p]
-                    if ".." in raw_parts:
-                        raise ValueError(
-                            f"Zip Slip detected: entry {info.filename!r} contains '..'"
-                        )
-                    if PurePosixPath(raw).is_absolute() or (len(raw) >= 2 and raw[1] == ":"):
-                        raise ValueError(
-                            f"Zip Slip detected: entry {info.filename!r} is an absolute path"
-                        )
-                    # Normalize and verify
-                    arcname = info.filename.replace("/", os.sep)
-                    if os.path.altsep:
-                        arcname = arcname.replace(os.path.altsep, os.sep)
-                    arcname = os.path.splitdrive(arcname)[1]
-                    arcname = os.sep.join(
-                        p for p in arcname.split(os.sep) if p not in ("", ".", "..")
-                    )
-                    if not arcname:
-                        continue
-                    member_path = (Path(target_dir) / arcname).resolve()
-                    if not member_path.is_relative_to(target):
-                        raise ValueError(
-                            f"Zip Slip detected: entry {info.filename!r} escapes target directory"
-                        )
-                    # Extract and verify
-                    extracted = Path(zip_ref.extract(info, target_dir)).resolve()
-                    if not extracted.is_relative_to(target):
-                        # Best-effort cleanup
-                        try:
-                            extracted.unlink(missing_ok=True)
-                        except OSError as cleanup_err:
-                            logger.info(
-                                "Escaped archive entry cleanup failed path=%s error_type=%s",
-                                safe_path_for_log(str(extracted)),
-                                type(cleanup_err).__name__,
-                            )
-                        raise ValueError(
-                            f"Zip Slip detected: entry {info.filename!r} escapes target directory"
-                        )
-
-        await asyncio.to_thread(_extract_zip_sync)
-
-        return name

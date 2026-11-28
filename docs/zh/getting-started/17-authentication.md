@@ -23,7 +23,7 @@ API Key 模式下，服务端从凭据解析 Account、User 和角色。Root Key
 由平台管理员先备份当前使用的 `ov.conf`。生成一个随机密钥，例如在本机终端运行：
 
 ```bash
-python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+python3 -c 'import secrets; print("ovrk_" + secrets.token_hex(32))'
 ```
 
 将生成的值保存在受控位置，并填入服务端配置的 `server` 段。保留原有的模型、存储和其他服务参数：

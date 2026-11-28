@@ -12,6 +12,7 @@ from openviking.core.namespace import (
 )
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
+from openviking.storage.abstract_overview import parse_abstract_overview
 from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.vikingdb_manager import VikingDBManager
@@ -19,6 +20,8 @@ from openviking.system_assets import SYSTEM_ASSETS_DIR
 from openviking_cli.exceptions import FailedPreconditionError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 from tests.utils.mock_agfs import MockLocalAGFS
+
+MEMORY_DIRECTORIES = ("preferences", "entities", "events", "cases", "trajectories", "experiences")
 
 
 class _FakeVikingDB:
@@ -37,6 +40,7 @@ class _FakeVikingDB:
 class _FakeVikingFS:
     def __init__(self):
         self.contexts = {}
+        self.directories = set()
         self.write_leases = []
         self.files = {}
         self._async_agfs = SimpleNamespace(
@@ -46,6 +50,15 @@ class _FakeVikingFS:
 
     def _uri_to_path(self, uri, ctx=None):
         return "/local/acme/" + uri.removeprefix("viking://")
+
+    async def stat(self, uri, ctx, *, skip_count):
+        if uri in self.contexts or uri in self.directories:
+            return {"isDir": True}
+        raise FileNotFoundError(uri)
+
+    async def mkdir(self, uri, *, exist_ok, ctx, lease_ref):
+        self.directories.add(uri)
+        self.write_leases.append(lease_ref)
 
     async def read_file(self, uri, ctx):
         if uri in self.files:
@@ -103,6 +116,9 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
     initializer = DirectoryInitializer(vikingdb, viking_fs=viking_fs)
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.ADMIN)
     memory_root = f"{canonical_user_root(ctx)}/memories"
+    existing_overview_uri = f"{memory_root}/preferences"
+    existing_overview = {"overview": "Existing preferences overview"}
+    viking_fs.contexts[existing_overview_uri] = existing_overview.copy()
     legacy_files = {f"{memory_root}/{name}.md": f"Old {name}" for name in ("soul", "identity")}
     viking_fs.files.update(legacy_files)
 
@@ -118,24 +134,25 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
     expected_agent_uris = {
         "viking://agent",
         "viking://agent/skills",
-        "viking://agent/endpoints",
         "viking://agent/tools",
-        "viking://agent/payments",
     }
-    expected_uris = {"viking://resources", *expected_agent_uris, *expected_user_uris}
-    assert account_count == 6
-    assert user_count == len(expected_user_uris)
-    assert set(viking_fs.contexts) == expected_uris
-    assert f"{user_root}/memories/preferences" not in viking_fs.contexts
+    expected_memory_uris = {f"{memory_root}/{name}" for name in MEMORY_DIRECTORIES}
+    indexed_uris = {"viking://resources", *expected_agent_uris, *expected_user_uris}
+    expected_context_uris = indexed_uris | {existing_overview_uri}
+    assert account_count == 4
+    assert user_count == len(expected_user_uris | expected_memory_uris) - 1
+    assert viking_fs.directories == expected_memory_uris - {existing_overview_uri}
+    assert set(viking_fs.contexts) == expected_context_uris
     for uri in expected_agent_uris:
         assert viking_fs.contexts[uri]["abstract"]
         assert viking_fs.contexts[uri]["overview"]
+    assert viking_fs.contexts[existing_overview_uri] == existing_overview
     assert viking_fs.contexts["viking://agent/tools"]["abstract"] == "Existing tool configuration"
     assert len(vikingdb.get_calls) == 1
 
     assert await initializer.initialize_account_directories(ctx) == 0
-    assert set(viking_fs.contexts) == expected_uris
-    vectorized_uris = {uri for uri in expected_uris if not is_session_uri(uri)}
+    assert set(viking_fs.contexts) == expected_context_uris
+    vectorized_uris = {uri for uri in indexed_uris if not is_session_uri(uri)}
     assert len(vikingdb.get_calls[0][0]) == 2 * len(vectorized_uris)
     assert len(vikingdb.embedding_messages) == 2 * len(vectorized_uris)
     for message in vikingdb.embedding_messages:
@@ -158,7 +175,7 @@ async def test_initialize_account_workspace_batches_preset_directories(monkeypat
         f"{memory_root}/soul.md": "Custom agent instructions",
     }
     assert viking_fs.contexts["viking://resources"]["abstract"] == malformed_abstract
-    assert set(viking_fs.contexts) == expected_uris
+    assert set(viking_fs.contexts) == expected_context_uris
     assert len(vikingdb.get_calls) == 1
 
     storage_error = PermissionError("storage access denied")
@@ -173,8 +190,6 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
     vikingdb = _FakeVikingDB()
     agfs = MockLocalAGFS(root_path=tmp_path)
     viking_fs = VikingFS(agfs)
-    prepare_parent = AsyncMock(wraps=viking_fs._async_agfs.ensure_parent_dirs)
-    viking_fs._async_agfs.ensure_parent_dirs = prepare_parent
     deletion_guard = AsyncMock(return_value=False)
     viking_fs.set_deletion_guard(deletion_guard)
     sanitizer = SimpleNamespace(
@@ -197,10 +212,9 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         user_root,
         *(f"{user_root}/{child.path}" for child in PRESET_DIRECTORIES["user"].children),
     }
-    assert count == len(expected_uris)
-    assert deletion_guard.await_count == len(expected_uris) + 1
-    assert prepare_parent.await_count == len(expected_uris) + 1
+    assert count == len(expected_uris) + len(MEMORY_DIRECTORIES)
     root_path = agfs._resolve(viking_fs._uri_to_path(user_root, ctx=ctx))
+    assert all((root_path / "memories" / name).is_dir() for name in MEMORY_DIRECTORIES)
     assert {str(path.relative_to(root_path)) for path in root_path.rglob("*.md")} == {
         f"{uri.removeprefix(user_root + '/')}/{filename}" if uri != user_root else filename
         for uri in expected_uris
@@ -210,6 +224,14 @@ async def test_initialize_user_directories_ignores_actor_peer_view_for_preset_st
         SYSTEM_ASSETS_DIR / "memory" / "soul.md"
     ).read_text()
     assert "Sanitized scope." in (root_path / ".abstract.md").read_text()
+    assert (
+        parse_abstract_overview((root_path / ".abstract.md").read_text()).metadata["maintenance"]
+        == "manual"
+    )
+    assert (
+        "maintenance"
+        not in parse_abstract_overview((root_path / ".overview.md").read_text()).metadata
+    )
 
     with pytest.raises(PermissionDeniedError):
         await viking_fs.write_context(user_root, abstract="blocked", ctx=ctx)
@@ -252,12 +274,14 @@ async def test_system_assets_sync_only_for_account_initialization(monkeypatch):
     agfs.pathlock_release.reset_mock()
 
     viking_fs.contexts.clear()
+    viking_fs.directories.clear()
     viking_fs.write_leases.clear()
-    user_count = 1 + len(PRESET_DIRECTORIES["user"].children)
-    assert await service.initialize_account_workspace(ctx) == (6, user_count)
+    account_count = 4
+    user_count = 1 + len(PRESET_DIRECTORIES["user"].children) + len(MEMORY_DIRECTORIES)
+    assert await service.initialize_account_workspace(ctx) == (account_count, user_count)
     agfs.pathlock_acquire_tree.assert_awaited_once_with("/local/acme", timeout_secs=10.0)
     agfs.pathlock_release.assert_awaited_once_with(lease)
-    assert viking_fs.write_leases == [lease] * (6 + user_count)
+    assert viking_fs.write_leases == [lease] * (account_count + user_count)
     await initializer.initialize_account_directories(ctx)
     await initializer.initialize_user_directories(ctx)
 
@@ -266,11 +290,15 @@ async def test_system_assets_sync_only_for_account_initialization(monkeypatch):
     agfs.pathlock_acquire_tree.reset_mock()
     agfs.pathlock_release.reset_mock()
     viking_fs.contexts.clear()
+    viking_fs.directories.clear()
     viking_fs.write_leases.clear()
-    assert await service.initialize_account_workspace(ctx, lease_ref=lease) == (6, user_count)
+    assert await service.initialize_account_workspace(ctx, lease_ref=lease) == (
+        account_count,
+        user_count,
+    )
     agfs.pathlock_acquire_tree.assert_not_awaited()
     agfs.pathlock_release.assert_not_awaited()
-    assert viking_fs.write_leases == [lease] * (6 + user_count)
+    assert viking_fs.write_leases == [lease] * (account_count + user_count)
 
     for error in (OSError("asset write failed"), asyncio.CancelledError()):
         synchronizer.sync.side_effect = error
@@ -279,6 +307,7 @@ async def test_system_assets_sync_only_for_account_initialization(monkeypatch):
     assert agfs.pathlock_release.await_args_list == [call(lease)] * 2
 
     viking_fs.contexts.clear()
+    viking_fs.directories.clear()
     viking_fs.write_leases.clear()
     agfs.pathlock_acquire_tree.reset_mock()
     agfs.pathlock_release.reset_mock()
@@ -300,7 +329,7 @@ async def test_system_assets_sync_only_for_account_initialization(monkeypatch):
     assert agfs.pathlock_release.await_count == 3
 
 
-def test_preset_directory_uris_cover_seeded_directories_only():
+def test_preset_directory_uris_cover_indexed_directories_only():
     from openviking.core.directories import preset_directory_uris
 
     ctx = RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER)

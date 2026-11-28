@@ -145,27 +145,21 @@ async def test_console_router_allows_regular_user_dashboard_metrics():
             "/api/v1/console/context-commits",
             params={"start_date": "2026-05-01", "end_date": "2026-05-12"},
         )
+        audit = await client.get("/api/v1/console/audit")
 
     assert summary.status_code == 200
     assert tokens.status_code == 200
     assert commits.status_code == 200
-    assert service.dashboard_call["ctx"].role == Role.USER
-    assert service.token_series_call["ctx"].role == Role.USER
-    assert service.context_commits_call["ctx"].role == Role.USER
-
-
-@pytest.mark.asyncio
-async def test_console_router_allows_regular_user_scoped_audit_logs():
-    service = FakeConsoleService()
-    transport = httpx.ASGITransport(
-        app=_app_with_runtime(FakeRuntime(service), request_context=_user_ctx)
-    )
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.get("/api/v1/console/audit")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
-    assert service.audit_call["ctx"].role == Role.USER
+    assert audit.status_code == 200
+    assert audit.json()["status"] == "ok"
+    for call in (
+        service.dashboard_call,
+        service.token_series_call,
+        service.context_commits_call,
+        service.audit_call,
+    ):
+        assert call["ctx"].user == UserIdentifier("acct-1", "user-1")
+        assert call["ctx"].role == Role.USER
 
 
 @pytest.mark.asyncio

@@ -19,6 +19,8 @@ _REFERENCE_RE = re.compile(
     r"(?P<category>[^/\s]+)/(?P<target>[^#\s]+)#/values/"
     r"(?P<field>[^}\s]+)[ \t]*\}\}$"
 )
+# Anything the matcher and restorer could treat as a placeholder start.
+_EMBEDDED_REFERENCE_RE = re.compile(r"\{\{[ \t]*ov_privacy:")
 _FIELD_URI_RE = re.compile(
     r"^viking://(?P<scope>~|user/(?P<owner>[^/]+))/privacy/"
     r"(?P<category>[^/]+)/(?P<target>[^#]+)#/values/(?P<field>.+)$"
@@ -86,10 +88,7 @@ def parse_privacy_field_reference(value: str) -> PrivacyFieldReference | None:
     owner = match.group("owner")
     if validate_user_id(owner):
         return None
-    decoded = {
-        name: unquote(match.group(name))
-        for name in ("category", "target", "field")
-    }
+    decoded = {name: unquote(match.group(name)) for name in ("category", "target", "field")}
     if any(not item for item in decoded.values()):
         return None
     return PrivacyFieldReference(
@@ -98,6 +97,11 @@ def parse_privacy_field_reference(value: str) -> PrivacyFieldReference | None:
         target_key=decoded["target"],
         field=decoded["field"],
     )
+
+
+def contains_privacy_reference(value: str) -> bool:
+    """Whether a string contains anything shaped like an ``{{ov_privacy:...}}`` placeholder."""
+    return _EMBEDDED_REFERENCE_RE.search(value) is not None
 
 
 def parse_privacy_field_selector(

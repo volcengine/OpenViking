@@ -18,8 +18,7 @@ from openviking.storage.ovpack.format import (
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.uri import VikingURI
 
-PUBLIC_SCOPES = ("resources", "user")
-IMPORTABLE_SCOPES = frozenset(PUBLIC_SCOPES)
+OVPACK_SCOPES = ("resources", "user", "agent")
 STRUCTURED_IMPORT_SCOPES = frozenset({"user"})
 EXCLUDED_FILENAMES = frozenset({".relations.json"})
 
@@ -51,12 +50,12 @@ def validate_public_scope(uri: str, *, operation: str, allow_root: bool = False)
         if allow_root:
             return
         raise InvalidArgumentError(f"ovpack {operation} is not supported for root URI")
-    if parsed.scope not in IMPORTABLE_SCOPES:
+    if parsed.scope not in OVPACK_SCOPES:
         raise InvalidArgumentError(f"ovpack {operation} is not supported for scope: {parsed.scope}")
 
 
 def validate_import_target_uri(uri: str) -> None:
-    """Enforce the same target-policy boundary as direct content writes."""
+    """Validate the destination URI and the package content path."""
     validate_public_scope(uri, operation="import")
     validate_ovpack_user_rel_path(_scope_relative_path(uri), operation="import")
     name = leaf_name(uri)
@@ -99,7 +98,7 @@ def is_backup_package(manifest: dict[str, Any]) -> bool:
 
 
 def is_top_level_scope_package(manifest: dict[str, Any]) -> bool:
-    return manifest_root_uri(manifest) in {f"viking://{scope}" for scope in IMPORTABLE_SCOPES}
+    return manifest_root_uri(manifest) in {f"viking://{scope}" for scope in OVPACK_SCOPES}
 
 
 def resolve_import_root_uri(parent: str, base_name: str, manifest: dict[str, Any]) -> str:
@@ -139,7 +138,7 @@ def validate_import_scope_compatibility(manifest: dict[str, Any], target_root_ur
     source = _parse_import_uri(source_root_uri, field="manifest root uri")
     target = _parse_import_uri(target_root_uri, field="target root uri")
 
-    if source.scope not in IMPORTABLE_SCOPES:
+    if source.scope not in OVPACK_SCOPES:
         raise InvalidArgumentError(
             "ovpack import is not supported for source scope",
             details={"source_scope": source.scope},
@@ -163,7 +162,7 @@ def backup_scopes_from_manifest(
     manifest: dict[str, Any], manifest_entries: dict[str, dict[str, Any]]
 ) -> tuple[str, ...]:
     roots = {rel_path.split("/", 1)[0] for rel_path in manifest_entries if rel_path}
-    unexpected = sorted(root for root in roots if root not in IMPORTABLE_SCOPES)
+    unexpected = sorted(root for root in roots if root not in OVPACK_SCOPES)
     if unexpected:
         raise InvalidArgumentError(
             "Backup ovpack contains unsupported roots",
@@ -173,7 +172,7 @@ def backup_scopes_from_manifest(
     directory_scope_roots = {
         rel_path
         for rel_path, entry in manifest_entries.items()
-        if rel_path in IMPORTABLE_SCOPES and entry.get("kind") == "directory"
+        if rel_path in OVPACK_SCOPES and entry.get("kind") == "directory"
     }
     missing_scope_directories = sorted(roots - directory_scope_roots)
     if missing_scope_directories:
@@ -182,7 +181,7 @@ def backup_scopes_from_manifest(
             details={"missing_scope_directories": missing_scope_directories},
         )
 
-    entry_scopes = tuple(scope for scope in PUBLIC_SCOPES if scope in directory_scope_roots)
+    entry_scopes = tuple(scope for scope in OVPACK_SCOPES if scope in directory_scope_roots)
     declared_scopes = manifest.get("scopes")
     if not isinstance(declared_scopes, list) or any(
         not isinstance(scope, str) for scope in declared_scopes
@@ -194,7 +193,7 @@ def backup_scopes_from_manifest(
     duplicate_scopes = sorted(
         scope for scope in set(declared_scopes) if declared_scopes.count(scope) > 1
     )
-    invalid_scopes = sorted(scope for scope in declared_scopes if scope not in IMPORTABLE_SCOPES)
+    invalid_scopes = sorted(scope for scope in declared_scopes if scope not in OVPACK_SCOPES)
     if duplicate_scopes or invalid_scopes:
         raise InvalidArgumentError(
             "Invalid backup ovpack scopes",

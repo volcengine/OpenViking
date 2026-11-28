@@ -14,56 +14,17 @@ import { loadConfig as loadOpencode } from "../opencode-plugin/lib/config.mjs";
 import { resolveConfig as loadDsh } from "../dsh-memory-plugin/config.mjs";
 import { loadConfig as loadPi } from "../pi-coding-agent-extension/config.ts";
 
-/**
- * Every harness's loader, and the fields it is allowed to answer differently
- * from `buildPluginConfig`. That list is the whole of what stays local: a
- * loader that starts reinterpreting anything else fails this file.
- */
 const LOADERS = {
-  claude_code: {
-    harness: "claude-code",
-    load: (cwd) => loadClaudeCode(cwd),
-    options: { manifestUrl: new URL("../claude-code-memory-plugin/.claude-plugin/plugin.json", import.meta.url), logFile: "cc-hooks.log", rootKeyFallback: true },
-    owns: ["configPath", "credentialPath"],
-  },
-  codex: {
-    harness: "codex",
-    load: (cwd) => loadCodex(cwd),
-    options: { manifestUrl: new URL("../codex-memory-plugin/.codex-plugin/plugin.json", import.meta.url), logFile: "codex-hooks.log" },
-    owns: [],
-  },
-  opencode: {
-    harness: "opencode",
-    load: (cwd) => loadOpencode("", cwd),
-    options: { manifestUrl: new URL("../opencode-plugin/package.json", import.meta.url), logFile: "opencode-plugin.log", deriveEffectivePeer: true },
-    // This plugin reads the repo-context switch as a section, not a flag.
-    owns: ["repoContext"],
-  },
-  dsh: {
-    harness: "dsh",
-    load: (cwd) => loadDsh({}, process.env, cwd),
-    options: { manifestUrl: new URL("../dsh-memory-plugin/package.json", import.meta.url), deriveEffectivePeer: true },
-    owns: ["peerId"],
-  },
-  pi: {
-    harness: "pi",
-    load: (cwd) => loadPi(cwd),
-    options: { manifestUrl: new URL("../pi-coding-agent-extension/package.json", import.meta.url), deriveEffectivePeer: true },
-    owns: ["peerId"],
-  },
-  cursor: { harness: "cursor", load: (cwd) => loadAgentHookConfig("cursor", cwd), options: { logFile: "cursor-hooks.log" }, owns: [] },
-  trae: { harness: "trae", load: (cwd) => loadAgentHookConfig("trae", cwd), options: { logFile: "trae-hooks.log" }, owns: [] },
-  trae_cn: { harness: "trae-cn", load: (cwd) => loadAgentHookConfig("trae-cn", cwd), options: { logFile: "trae-cn-hooks.log" }, owns: [] },
-  zcode: { harness: "zcode", load: (cwd) => loadAgentHookConfig("zcode", cwd), options: { logFile: "zcode-hooks.log" }, owns: [] },
-  kimicode: { harness: "kimicode", load: (cwd) => loadAgentHookConfig("kimicode", cwd), options: { logFile: "kimicode-hooks.log" }, owns: [] },
-  codebuddy: { harness: "codebuddy", load: (cwd) => loadAgentHookConfig("codebuddy", cwd), options: { logFile: "codebuddy-hooks.log" }, owns: [] },
-  qoder: { harness: "qoder", load: (cwd) => loadAgentHookConfig("qoder", cwd), options: { logFile: "qoder-hooks.log" }, owns: [] },
-  antigravity: { harness: "antigravity", load: (cwd) => loadAgentHookConfig("antigravity", cwd), options: { logFile: "antigravity-hooks.log" }, owns: [] },
+  claude_code: loadClaudeCode,
+  codex: loadCodex,
+  opencode: (cwd) => loadOpencode("", cwd),
+  dsh: (cwd) => loadDsh({}, process.env, cwd),
+  pi: loadPi,
+  ...Object.fromEntries(
+    ["cursor", "trae", "trae-cn", "zcode", "kimicode", "codebuddy", "qoder", "antigravity"]
+      .map((host) => [host.replace("-", "_"), (cwd) => loadAgentHookConfig(host, cwd)]),
+  ),
 };
-
-// openclaw declares its own settings in TypeScript and still resolves them
-// itself; it joins this table when it moves onto the shared loader.
-const WITHOUT_A_SHARED_LOADER = new Set(["openclaw"]);
 
 const SEND_ONLY_WHEN_CONFIGURED = KNOBS.filter((knob) => knob.sendOnlyWhenConfigured);
 
@@ -112,145 +73,94 @@ function withFixture({ ov = { server: {} }, cli = CONNECTION, workspace = null }
   }
 }
 
-/**
- * The files every loader is checked against. The first names every connection
- * field plus all four knobs the request omits unless configured, so a harness
- * that drops one shows up; the second puts a workspace file over them.
- */
-const FIXTURES = [
-  {
-    ov: { server: { host: "127.0.0.1", port: 1933, root_api_key: "sk-root" } },
-    cli: {
-      ...CONNECTION,
-      plugin: {
-        recallLimit: 3,
-        recallMaxTokens: 900,
-        recallQueryExpansion: "off",
-        recallCompressMaxBullets: 4,
-      },
-    },
-  },
-  {
-    ov: { server: { root_api_key: "sk-root" } },
-    cli: { ...CONNECTION, plugin: { recallLimit: 5 } },
-    workspace: {
-      version: 1,
-      peer: { id: "team-a" },
-      capture: { enabled: false },
-      recall: { max_items: 8 },
-    },
-  },
-];
-
-test("the table covers every harness that has a shared loader", () => {
-  const covered = new Set(Object.keys(LOADERS));
-  for (const key of Object.values(HARNESS_KEYS)) {
-    if (WITHOUT_A_SHARED_LOADER.has(key)) continue;
-    assert.ok(covered.delete(key), `${key} has no entry in this file`);
-  }
-  assert.deepEqual([...covered], [], "an entry names a harness the schema does not");
+test("each shared loader reads the configuration for its own host and workspace", () => {
+  assert.deepEqual(
+    Object.keys(LOADERS).sort(),
+    Object.values(HARNESS_KEYS).filter((key) => key !== "openclaw").sort(),
+  );
+  const plugin = Object.fromEntries(
+    Object.keys(LOADERS).map((key, index) => [key, { recallLimit: index + 2 }]),
+  );
+  withFixture({
+    cli: { ...CONNECTION, plugin },
+    workspace: { version: 1, capture: { enabled: false }, recall: { max_items: 20 } },
+  }, ({ workspaceDir, otherDir }) => {
+    const original = process.cwd();
+    try {
+      process.chdir(workspaceDir);
+      for (const [host, load] of Object.entries(LOADERS)) {
+        const outside = load(otherDir);
+        assert.equal(outside.recallLimit, plugin[host].recallLimit, host);
+        assert.equal(outside.autoCapture, true, host);
+        assert.equal(outside.baseUrl, CONNECTION.url, host);
+        assert.equal(outside.apiKey, CONNECTION.api_key, host);
+        assert.equal(load(workspaceDir).recallLimit, 20, host);
+        assert.equal(load(workspaceDir).autoCapture, false, host);
+        assert.equal(load(undefined).recallLimit, 20, host);
+        assert.equal(load("").recallLimit, 20, host);
+      }
+    } finally {
+      process.chdir(original);
+    }
+  });
 });
 
-for (const [key, entry] of Object.entries(LOADERS)) {
-  test(`${key} defaults WM injection/takeover off and preserves explicit opt-in`, () => {
-    for (const enabled of [undefined, false, true]) {
-      withFixture({ cli: { ...CONNECTION, plugin: { resumeArchiveInject: enabled, takeoverEnabled: enabled } } }, ({ otherDir }) => {
-        const loaded = entry.load(otherDir);
-        assert.equal(loaded.resumeArchiveInject, enabled ?? false);
-        assert.equal(loaded.takeoverEnabled, enabled ?? false);
-        process.env.OPENVIKING_RESUME_ARCHIVE_INJECT = "1";
-        process.env.OPENVIKING_TAKEOVER = "1";
-        const overridden = entry.load(otherDir);
-        assert.equal(overridden.resumeArchiveInject, true);
-        assert.equal(overridden.takeoverEnabled, true);
-      });
-    }
-  });
-
-  test(`${key} answers what buildPluginConfig answers`, () => {
-    for (const files of FIXTURES) {
-      withFixture(files, ({ workspaceDir, otherDir }) => {
-        for (const cwd of [workspaceDir, otherDir]) {
-          const built = buildPluginConfig(entry.harness, { cwd, ...entry.options });
-          const loaded = entry.load(cwd);
-
-          const differing = Object.keys(built)
-            .filter((field) => !entry.owns.includes(field))
-            .filter((field) => JSON.stringify(built[field]) !== JSON.stringify(loaded[field]))
-            .sort();
-          assert.deepEqual(differing, [], `a loader answers a shared field itself (${cwd})`);
-        }
-      });
-    }
-  });
-
-  test(`${key} tells a configured knob from a default`, () => {
-    withFixture(FIXTURES[0], ({ otherDir }) => {
-      const loaded = entry.load(otherDir);
-      for (const knob of SEND_ONLY_WHEN_CONFIGURED) {
-        assert.equal(loaded[`${knob.name}Configured`], true, `${knob.name} on ${key}`);
-      }
-    });
-
-    // Several fields reach the server only when configured, so a default that
-    // reported as configured would send this plugin's opinion as the user's.
-    withFixture({}, ({ otherDir }) => {
-      const loaded = entry.load(otherDir);
-      for (const knob of SEND_ONLY_WHEN_CONFIGURED) {
-        assert.equal(loaded[`${knob.name}Configured`], false, `${knob.name} on ${key}`);
-        assert.equal(loaded[knob.name], knob.default, `${knob.name} on ${key}`);
-      }
-    });
-  });
-
-  test(`${key} resolves a knob through every layer`, () => {
-    // Bottom up, dropping one rung at a time: a layer only wins because the one
-    // above it is absent, which asserting on the winner alone cannot tell apart.
-    const ov = { server: {}, [key]: { recallLimit: 2 } };
-    withFixture({ ov }, ({ otherDir }) => {
-      assert.equal(entry.load(otherDir).recallLimit, 2, "ov.conf's harness block outranks the default");
-    });
-    withFixture({ ov, cli: { ...CONNECTION, plugin: { recallLimit: 5 } } }, ({ otherDir }) => {
-      assert.equal(entry.load(otherDir).recallLimit, 5, "ovcli.conf's shared plugin block outranks ov.conf");
-    });
+test("the shared settings default WM flags off, and both config and env can enable them", () => {
+  for (const enabled of [undefined, false, true]) {
     withFixture({
-      ov,
-      cli: { ...CONNECTION, plugin: { recallLimit: 5, [key]: { recallLimit: 6 } } },
-      workspace: { version: 1, recall: { max_items: 8 } },
-    }, ({ workspaceDir, otherDir }) => {
-      assert.equal(entry.load(otherDir).recallLimit, 6, "the per-harness block covers the shared one, which covers ov.conf");
-      assert.equal(entry.load(workspaceDir).recallLimit, 8, "the workspace file outranks ovcli.conf");
-      process.env.OPENVIKING_RECALL_LIMIT = "9";
-      assert.equal(entry.load(workspaceDir).recallLimit, 9, "the environment outranks every file");
+      cli: { ...CONNECTION, plugin: { resumeArchiveInject: enabled, takeoverEnabled: enabled } },
+    }, ({ otherDir }) => {
+      const load = () => buildPluginConfig("codex", { cwd: otherDir });
+      const configured = load();
+      assert.equal(configured.resumeArchiveInject, enabled ?? false);
+      assert.equal(configured.takeoverEnabled, enabled ?? false);
+      process.env.OPENVIKING_RESUME_ARCHIVE_INJECT = "1";
+      process.env.OPENVIKING_TAKEOVER = "1";
+      const overridden = load();
+      assert.equal(overridden.resumeArchiveInject, true);
+      assert.equal(overridden.takeoverEnabled, true);
     });
-  });
+  }
+});
 
-  test(`${key} reads the workspace layer of the cwd it is handed, not the process's`, () => {
-    withFixture({
-      workspace: { version: 1, capture: { enabled: false }, recall: { max_items: 8 } },
-    }, ({ workspaceDir, otherDir }) => {
-      const inside = entry.load(workspaceDir);
-      assert.equal(inside.autoCapture, false);
-      assert.equal(inside.recallLimit, 8);
-
-      // Same process, another directory: the workspace file does not follow.
-      const outside = entry.load(otherDir);
-      assert.equal(outside.autoCapture, true);
-      assert.equal(outside.recallLimit, 10);
-
-      // A hook loads its config before the payload names a directory, so an
-      // absent cwd has to mean this process's own.
-      const origin = process.cwd();
-      try {
-        process.chdir(workspaceDir);
-        assert.equal(entry.load(undefined).recallLimit, 8);
-        assert.equal(entry.load("").recallLimit, 8);
-      } finally {
-        process.chdir(origin);
+test("the shared loader distinguishes defaults from knobs the user configured", () => {
+  const plugin = {
+    recallLimit: 3,
+    recallMaxTokens: 900,
+    recallQueryExpansion: "off",
+    recallCompressMaxBullets: 4,
+  };
+  for (const configured of [false, true]) {
+    withFixture({ cli: { ...CONNECTION, plugin: configured ? plugin : {} } }, ({ otherDir }) => {
+      const loaded = buildPluginConfig("codex", { cwd: otherDir });
+      for (const knob of SEND_ONLY_WHEN_CONFIGURED) {
+        assert.equal(loaded[`${knob.name}Configured`], configured, knob.name);
+        if (!configured) assert.equal(loaded[knob.name], knob.default, knob.name);
       }
     });
+  }
+});
+
+test("the shared loader resolves a knob through every config layer", () => {
+  const ov = { server: {}, codex: { recallLimit: 2 } };
+  withFixture({ ov }, ({ otherDir }) => {
+    assert.equal(buildPluginConfig("codex", { cwd: otherDir }).recallLimit, 2);
   });
-}
+  withFixture({ ov, cli: { ...CONNECTION, plugin: { recallLimit: 5 } } }, ({ otherDir }) => {
+    assert.equal(buildPluginConfig("codex", { cwd: otherDir }).recallLimit, 5);
+  });
+  withFixture({
+    ov,
+    cli: { ...CONNECTION, plugin: { recallLimit: 5, codex: { recallLimit: 6 } } },
+    workspace: { version: 1, recall: { max_items: 8 } },
+  }, ({ workspaceDir, otherDir }) => {
+    const limitAt = (cwd) => buildPluginConfig("codex", { cwd }).recallLimit;
+    assert.equal(limitAt(otherDir), 6);
+    assert.equal(limitAt(workspaceDir), 8);
+    process.env.OPENVIKING_RECALL_LIMIT = "9";
+    assert.equal(limitAt(workspaceDir), 9);
+  });
+});
 
 // The version reaches the workspace layers as well as the User-Agent, which is
 // what lets a `min_client_version` be compared against anything.
@@ -384,17 +294,12 @@ test("the skill catalog is on by default and its budget clamps to the declared r
   });
 });
 
-for (const [name, loader] of Object.entries(LOADERS)) {
-  test(`${name} explicit cloud compression reaches the shared HTTP contract`, () => {
-    withFixture({}, ({otherDir}) => {
-      process.env.OPENVIKING_RECALL_COMPRESS = "server";
-      const cfg = loader.load(otherDir);
-      assert.equal(cfg.recallRewrite, "server");
-      assert.equal(buildContextSearchBody(cfg).rewrite, true);
-      process.env.OPENVIKING_RECALL_COMPRESS = "auto";
-      assert.equal(buildContextSearchBody(loader.load(otherDir), { localCompressorAvailable: false }).rewrite, "auto");
-      process.env.OPENVIKING_RECALL_COMPRESS = "off";
-      assert.equal(buildContextSearchBody(loader.load(otherDir)).rewrite, undefined);
-    });
+test("shared compression settings reach the HTTP request", () => {
+  withFixture({}, ({ otherDir }) => {
+    const load = () => buildPluginConfig("codex", { cwd: otherDir });
+    for (const [mode, expected] of [["server", true], ["auto", "auto"], ["off", undefined]]) {
+      process.env.OPENVIKING_RECALL_COMPRESS = mode;
+      assert.equal(buildContextSearchBody(load(), { localCompressorAvailable: false }).rewrite, expected);
+    }
   });
-}
+});

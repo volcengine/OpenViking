@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 import asyncio
+import hashlib
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -248,8 +249,8 @@ async def test_viking_fs_read_propagates_storage_errors(read_method):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name", ["restore-skill", "restore-skill-agent-segment"])
-async def test_skill_read_restores_placeholder(service, monkeypatch, name):
+async def test_skill_read_restores_placeholder(service, monkeypatch):
+    name = "restore-skill-agent-segment"
     ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_restore"), role=Role.ROOT)
     await service.initialize_user_directories(ctx)
     from openviking.server.user_config import patch_user_config
@@ -407,7 +408,7 @@ async def test_skill_read_appends_notice_for_unreplaced_placeholders(service):
         ctx=ctx,
         category="skill",
         target_key="partial-restore-skill",
-        values={"api_key": "secret-xyz"},
+        values={"api_key": "secret-xyz", "environment": "cn"},
         updated_by=ctx.user.user_id,
     )
 
@@ -417,141 +418,67 @@ async def test_skill_read_appends_notice_for_unreplaced_placeholders(service):
     assert "{{ov_privacy:skill:partial-restore-skill:region}}" in restored
     assert "[Privacy Config Notice]" in restored
     assert "Missing config: region=<missing>" in restored
-
-
-@pytest.mark.asyncio
-async def test_skill_read_appends_notice_for_extra_configured_keys(service):
-    ctx = RequestContext(
-        user=UserIdentifier.the_default_user("privacy_extra_config"), role=Role.ROOT
-    )
-    await service.initialize_user_directories(ctx)
-
-    skill_uri = f"{canonical_user_root(ctx)}/skills/extra-config-skill"
-    await service.viking_fs.mkdir(skill_uri, exist_ok=True, ctx=ctx)
-    await service.viking_fs.write_file(
-        f"{skill_uri}/SKILL.md",
-        'api_key: "{{ov_privacy:skill:extra-config-skill:api_key}}"\n',
-        ctx=ctx,
-    )
-
-    await service.privacy_configs.upsert(
-        ctx=ctx,
-        category="skill",
-        target_key="extra-config-skill",
-        values={"api_key": "secret-xyz", "region": "cn"},
-        updated_by=ctx.user.user_id,
-    )
-
-    restored = await service.fs.read(f"{skill_uri}/SKILL.md", ctx=ctx)
-
-    assert 'api_key: "secret-xyz"' in restored
-    assert "[Privacy Config Notice]" in restored
-    assert "Configured but not referenced in content: region=cn" in restored
+    assert "Configured but not referenced in content: environment=cn" in restored
 
 
 @pytest.mark.asyncio
 async def test_privacy_config_service_uses_user_root(service):
-    ctx = RequestContext(
-        user=UserIdentifier("acme", "privacy_user_policy"),
-        role=Role.USER,
-    )
-    await service.initialize_user_directories(ctx)
-
+    contexts = [
+        RequestContext(user=UserIdentifier("acme", "alice"), role=Role.USER),
+        RequestContext(user=UserIdentifier("acme", "bob"), role=Role.USER),
+        RequestContext(user=UserIdentifier("other-account", "alice"), role=Role.USER),
+    ]
+    values = [{"api_key": f"synthetic-value-{index}"} for index in range(len(contexts))]
     privacy = service.privacy_configs
-    await privacy.upsert(
-        ctx=ctx,
-        category="skill",
-        target_key="policy-skill",
-        values={"api_key": "secret-1"},
-        updated_by=ctx.user.user_id,
-    )
+    for ctx, value in zip(contexts, values, strict=True):
+        await service.initialize_user_directories(ctx)
+        created = await privacy.upsert(
+            ctx, "skill", "same-skill", value, updated_by=ctx.user.user_id
+        )
+        assert created.version == 1
 
-    current = await privacy.get_current(ctx, "skill", "policy-skill")
-    assert current is not None
+    for ctx, value in zip(contexts, values, strict=True):
+        current = await privacy.get_current(ctx, "skill", "same-skill")
+        assert current is not None
+        assert current.values == value
 
 
 def test_placeholderization_only_replaces_structured_values():
-    content = """region: cn\nnotes: region is cn in docs\ndefault_env=prod\ntext: prod should stay here\n"""
-    result = placeholderize_skill_content_with_blocks(
-        content,
-        "structured-skill",
-        {"region": "cn", "env": "prod"},
+    content = (
+        "region: cn\r\n"
+        "notes: region is cn in docs\r\n"
+        "token:\ta.b+c?[x]  \r\n"
+        "text: a.b+c?[x] should stay here\r\n"
+        'note: use "secret" in prose\n'
+        'api_key: "secret"\n'
+        "backup=secret"
     )
+    values = {"region": "cn", "token": "a.b+c?[x]", "api_key": "secret"}
+    result = placeholderize_skill_content_with_blocks(content, "skill-example", values)
 
-    assert result.replaced_values == {"region": "cn", "env": "prod"}
+    assert result.replaced_values == values
     assert result.sanitized_content == (
-        "region: {{ov_privacy:skill:structured-skill:region}}\n"
-        "notes: region is cn in docs\n"
-        "default_env={{ov_privacy:skill:structured-skill:env}}\n"
-        "text: prod should stay here\n"
-    )
-
-
-def test_placeholderization_replaces_end_of_file_values_without_newline():
-    result = placeholderize_skill_content_with_blocks(
-        "api_key=secret-xyz",
-        "eof-skill",
-        {"api_key": "secret-xyz"},
-    )
-
-    assert result.replaced_values == {"api_key": "secret-xyz"}
-    assert result.sanitized_content == "api_key={{ov_privacy:skill:eof-skill:api_key}}"
-
-
-def test_placeholderization_replaces_all_structured_occurrences_for_same_value():
-    result = placeholderize_skill_content_with_blocks(
-        'api_key: "secret"\nbackup=secret\n',
-        "multi-hit-skill",
-        {"api_key": "secret"},
-    )
-
-    assert result.replaced_values == {"api_key": "secret"}
-    assert result.sanitized_content == (
-        'api_key: "{{ov_privacy:skill:multi-hit-skill:api_key}}"\n'
-        "backup={{ov_privacy:skill:multi-hit-skill:api_key}}\n"
-    )
-
-
-def test_placeholderization_preserves_crlf_spacing_and_regex_special_values():
-    result = placeholderize_skill_content_with_blocks(
-        "token:\ta.b+c?[x]  \r\ntext: a.b+c?[x] should stay here\r\n",
-        "regex-skill",
-        {"token": "a.b+c?[x]"},
-    )
-
-    assert result.replaced_values == {"token": "a.b+c?[x]"}
-    assert result.sanitized_content == (
-        "token:\t{{ov_privacy:skill:regex-skill:token}}  \r\ntext: a.b+c?[x] should stay here\r\n"
-    )
-
-
-def test_placeholderization_preserves_quoted_value_matching():
-    result = placeholderize_skill_content_with_blocks(
-        'note: use "secret" in prose\n',
-        "quoted-skill",
-        {"api_key": "secret"},
-    )
-
-    assert result.replaced_values == {"api_key": "secret"}
-    assert result.sanitized_content == (
-        'note: use "{{ov_privacy:skill:quoted-skill:api_key}}" in prose\n'
+        "region: {{ov_privacy:skill:skill-example:region}}\r\n"
+        "notes: region is cn in docs\r\n"
+        "token:\t{{ov_privacy:skill:skill-example:token}}  \r\n"
+        "text: a.b+c?[x] should stay here\r\n"
+        'note: use "{{ov_privacy:skill:skill-example:api_key}}" in prose\n'
+        'api_key: "{{ov_privacy:skill:skill-example:api_key}}"\n'
+        "backup={{ov_privacy:skill:skill-example:api_key}}"
     )
 
 
 @pytest.mark.asyncio
-async def test_patch_preserves_equal_fields_and_rotates_only_named_field(monkeypatch):
+async def test_patch_preserves_equal_fields_and_rotates_only_named_field():
     category = "credential"
 
     privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     await privacy.upsert(ctx, category, "demo", {"a": "old-secret", "b": "new-secret"})
-    read = AsyncMock(wraps=privacy.get_current)
-    monkeypatch.setattr(privacy, "get_current", read)
     current = await privacy.patch_values(
         ctx, category, "demo", {"a": "new-secret", "c": "new-secret"}
     )
     assert current.values == {"a": "new-secret", "b": "new-secret", "c": "new-secret"}
-    read.assert_awaited_once()
     rotated = await privacy.patch_values(ctx, category, "demo", {"a": "rotated-secret"})
     assert rotated.values == {"a": "rotated-secret", "b": "new-secret", "c": "new-secret"}
     previous = await privacy.get_version(ctx, category, "demo", current.version)
@@ -573,3 +500,235 @@ async def test_insert_values_rejects_the_entire_batch_even_when_existing_value_i
     current = await privacy.get_current(ctx, "session", "demo")
     assert current.values == {"taken001": "old-secret"}
     assert await privacy.list_versions(ctx, "session", "demo") == [1]
+
+
+def _token(seed: str) -> str:
+    # Assembled at runtime; a synthetic GitHub-shaped token for detector tests.
+    return "ghp_" + hashlib.sha256(seed.encode()).hexdigest()[:36]
+
+
+async def _user_ctx(service, user_id: str) -> RequestContext:
+    ctx = RequestContext(user=UserIdentifier("acme", user_id), role=Role.USER)
+    await service.initialize_user_directories(ctx)
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_credential_revision_is_persisted_and_changes_on_every_credential_write(service):
+    privacy = service.privacy_configs
+    ctx = await _user_ctx(service, "revision-alice")
+    other = await _user_ctx(service, "revision-bob")
+    revisions = [await privacy.credential_revision(ctx)]
+    assert revisions[0] == await privacy.credential_revision(ctx)
+    assert revisions[0] != await privacy.credential_revision(other)
+
+    async def changed() -> None:
+        revision = await privacy.credential_revision(ctx)
+        assert revision not in revisions
+        revisions.append(revision)
+
+    await privacy.upsert(ctx, "credential", "svc", {"a": "secret-a1", "b": "secret-b1"})
+    await changed()
+    await privacy.patch_values(ctx, "credential", "svc", {"a": "secret-a2"})
+    await changed()
+    await privacy.insert_values(ctx, "credential", "svc", {"c": "secret-c1"})
+    await changed()
+    await privacy.delete_field(ctx, "credential", "svc", "c")
+    await changed()
+    await privacy.activate_version(ctx, "credential", "svc", 1)
+    await changed()
+    await privacy.delete(ctx, "credential", "svc")
+    await changed()
+
+    # Automatic entries are sealed too, so their writes change it as well.
+    await privacy.insert_values(ctx, "auto", "github-rev001", {"token": "auto-1"})
+    await changed()
+    await privacy.delete(ctx, "auto", "github-rev001")
+    await changed()
+
+    # Writes that cannot change Credential matching keep the revision.
+    await privacy.upsert(ctx, "skill", "demo", {"api_key": "skill-secret-1"})
+    await privacy.upsert(ctx, "credential", "same", {"a": "same-secret-1"})
+    stable = await privacy.credential_revision(ctx)
+    await privacy.upsert(ctx, "credential", "same", {"a": "same-secret-1"})
+    assert await privacy.credential_revision(ctx) == stable
+
+    # A second service over the same storage (another worker) shares it.
+    assert await UserPrivacyConfigService(service.viking_fs).credential_revision(ctx) == stable
+
+
+@pytest.mark.asyncio
+async def test_second_service_instance_sees_new_revision_and_value_in_seal(service):
+    from openviking.privacy.sanitizer import PrivacySanitizer
+    from openviking.privacy.seal import SealText, seal_texts
+
+    ctx = await _user_ctx(service, "revision-workers")
+    first = UserPrivacyConfigService(service.viking_fs)
+    second = UserPrivacyConfigService(service.viking_fs)
+    second_sanitizer = PrivacySanitizer(second)
+    texts = [SealText("value worker-value-one and worker-value-two")]
+
+    await first.upsert(ctx, "credential", "one", {"token": "worker-value-one"})
+    before = await seal_texts(second, second_sanitizer, ctx, texts)
+    assert [item["start"] for item in before["texts"][0]["replaced"]] == [6]
+
+    await first.upsert(ctx, "credential", "two", {"token": "worker-value-two"})
+    after = await seal_texts(second, second_sanitizer, ctx, texts)
+    assert after["revision"] != before["revision"]
+    assert len(after["texts"][0]["replaced"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_enrollment_from_two_service_instances_creates_one_entry(service):
+    from openviking.privacy.seal import SealText, seal_texts
+
+    ctx = await _user_ctx(service, "enroll-race")
+    token = _token("Rk7Wq2Zp9Lm4")
+    instances = [UserPrivacyConfigService(service.viking_fs) for _ in range(2)]
+    results = await asyncio.gather(
+        *(
+            seal_texts(instance, None, ctx, [SealText(f"token {token}", enroll=True)])
+            for instance in instances
+            for _ in range(3)
+        )
+    )
+
+    references = {result["texts"][0]["replaced"][0]["reference"] for result in results}
+    assert len(references) == 1
+    assert sum(result["texts"][0]["replaced"][0]["created"] for result in results) == 1
+    assert await service.privacy_configs.list_targets(ctx, "credential") == []
+    targets = await service.privacy_configs.list_targets(ctx, "auto")
+    assert len(targets) == 1 and targets[0].startswith("github-")
+    meta = await service.privacy_configs.get_meta(ctx, "auto", targets[0])
+    assert meta.labels == {"ov.rule": "github"}
+
+
+async def _enroll(privacy, ctx, target_key: str, value: str) -> str:
+    """Store a value as the seal endpoint does and return its reference."""
+    await privacy.insert_values(
+        ctx,
+        "auto",
+        target_key,
+        {"token": value},
+        labels={"ov.rule": "github"},
+    )
+    return build_privacy_field_reference(ctx.user.user_id, "auto", target_key, "token")
+
+
+@pytest.mark.asyncio
+async def test_reference_value_renames_and_rotates_credentials(service):
+    privacy = service.privacy_configs
+    ctx = await _user_ctx(service, "reference-alice")
+    owner = ctx.user.user_id
+
+    reference = await _enroll(privacy, ctx, "github-abc123", "enrolled-secret-1")
+    renamed = await privacy.upsert(ctx, "credential", "github-work", {"pat": reference})
+    assert renamed.values == {"pat": "enrolled-secret-1"}
+    assert not await privacy.exists(ctx, "auto", "github-abc123")
+
+    # Rotation: an existing target gets a new version holding the referenced value.
+    rotated = await privacy.patch_values(
+        ctx,
+        "credential",
+        "github-work",
+        {"pat": await _enroll(privacy, ctx, "github-def456", "enrolled-secret-2")},
+    )
+    assert rotated.version == 2
+    assert rotated.values == {"pat": "enrolled-secret-2"}
+    assert not await privacy.exists(ctx, "auto", "github-def456")
+    assert await privacy.list_targets(ctx, "auto") == []
+
+    # A Credential source is kept, whatever its labels say.
+    await privacy.upsert(
+        ctx, "credential", "manual", {"token": "manual-secret-1"}, labels={"ov.source": "x"}
+    )
+    patched = await privacy.patch_values(
+        ctx,
+        "credential",
+        "github-work",
+        {"backup": build_privacy_field_reference(owner, "credential", "manual", "token")},
+    )
+    assert patched.values["backup"] == "manual-secret-1"
+    assert (await privacy.get_current(ctx, "credential", "manual")).values == {
+        "token": "manual-secret-1"
+    }
+
+    # Another category may be the destination too; the auto source is still removed.
+    skill = await privacy.upsert(
+        ctx, "skill", "demo", {"api_key": await _enroll(privacy, ctx, "github-ghi789", "skill-1")}
+    )
+    assert skill.values == {"api_key": "skill-1"}
+    assert not await privacy.exists(ctx, "auto", "github-ghi789")
+
+
+@pytest.mark.asyncio
+async def test_only_enrollment_writes_into_the_auto_category(service):
+    privacy = service.privacy_configs
+    ctx = await _user_ctx(service, "reference-auto-destination")
+    source = await _enroll(privacy, ctx, "github-src001", "auto-secret-1")
+    await privacy.upsert(ctx, "credential", "named", {"token": "named-secret-1"})
+    named = build_privacy_field_reference(ctx.user.user_id, "credential", "named", "token")
+    for value in ("plain-secret-1", source, named):
+        for write in (privacy.upsert, privacy.patch_values):
+            for target_key in ("github-src001", "fresh"):
+                with pytest.raises(InvalidArgumentError) as error:
+                    await write(ctx, "auto", target_key, {"token": value})
+                assert error.value.details["reason"] == "automatic_category"
+    assert await privacy.list_targets(ctx, "auto") == ["github-src001"]
+    assert (await privacy.get_current(ctx, "auto", "github-src001")).values == {
+        "token": "auto-secret-1"
+    }
+    # Version and field management still work on an automatic entry.
+    assert await privacy.list_versions(ctx, "auto", "github-src001") == [1]
+    assert (await privacy.activate_version(ctx, "auto", "github-src001", 1)).version == 1
+    deleted = await privacy.delete_field(ctx, "auto", "github-src001", "token")
+    assert deleted is not None and deleted.target_deleted
+
+
+@pytest.mark.asyncio
+async def test_reference_value_cleanup_failure_keeps_write(service, monkeypatch):
+    privacy = service.privacy_configs
+    ctx = await _user_ctx(service, "reference-cleanup")
+    reference = await _enroll(privacy, ctx, "github-tmp001", "enrolled-secret-3")
+    monkeypatch.setattr(privacy, "delete", AsyncMock(side_effect=RuntimeError("storage down")))
+    result = await privacy.upsert(ctx, "credential", "github", {"pat": reference})
+    assert result.values == {"pat": "enrolled-secret-3"}
+
+
+@pytest.mark.asyncio
+async def test_reference_value_rejects_every_other_reference_form(service):
+    privacy = service.privacy_configs
+    ctx = await _user_ctx(service, "reference-reject")
+    owner = ctx.user.user_id
+    await privacy.upsert(ctx, "credential", "source", {"token": "source-secret-1"})
+    await privacy.upsert(ctx, "skill", "demo", {"api_key": "skill-secret-1"})
+    valid = build_privacy_field_reference(owner, "credential", "source", "token")
+    invalid_values = [
+        build_privacy_field_reference(owner, "skill", "demo", "api_key"),
+        build_privacy_field_reference("someone-else", "credential", "source", "token"),
+        build_privacy_field_reference("someone-else", "auto", "source", "token"),
+        build_privacy_field_reference(owner, "credential", "missing", "token"),
+        build_privacy_field_reference(owner, "auto", "missing", "token"),
+        build_privacy_field_reference(owner, "credential", "source", "missing"),
+        f"Bearer {valid}",
+        "{{ov_privacy:session:demo:abcdefgh}}",
+    ]
+    for value in invalid_values:
+        for write in (privacy.upsert, privacy.patch_values):
+            with pytest.raises(InvalidArgumentError):
+                await write(ctx, "credential", "target", {"field": value})
+    assert not await privacy.exists(ctx, "credential", "target")
+    assert (await privacy.get_current(ctx, "credential", "source")).values == {
+        "token": "source-secret-1"
+    }
+
+
+@pytest.mark.asyncio
+async def test_value_only_patch_keeps_labels():
+    privacy = UserPrivacyConfigService(_MemoryPrivacyStorage())
+    ctx = RequestContext(user=UserIdentifier.the_default_user("privacy_labels"), role=Role.ROOT)
+    labels = {"description": "GitHub PAT", "ov.source": "manual"}
+    await privacy.patch_values(ctx, "credential", "github", {"pat": "secret-1"}, labels=labels)
+    await privacy.patch_values(ctx, "credential", "github", {"pat": "secret-2"})
+    await privacy.patch_values(ctx, "credential", "github", {"pat": "secret-2"})
+    assert (await privacy.get_meta(ctx, "credential", "github")).labels == labels

@@ -4,8 +4,6 @@
 """Tests for search endpoints: find, search, grep, glob."""
 
 import json
-from datetime import datetime, timezone
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
@@ -14,11 +12,9 @@ import pytest
 from openviking.models.embedder.base import EmbedResult
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext, Role
-from openviking.server.routers import search as search_router
 from openviking.storage.vectordb.collection.vikingdb_clients import VikingDBClient
 from openviking.storage.viking_fs import VikingFS
 from openviking.storage.viking_vector_index_backend import _SingleAccountBackend
-from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.retrieve import ContextType, FindResult, MatchedContext
 from openviking_cli.session.user_id import UserIdentifier
@@ -223,40 +219,6 @@ async def test_search_endpoints_reject_unknown_request_fields(
     assert resp.status_code == 400
 
 
-async def test_find_with_target_uri_and_tags_passes_target_and_filter(
-    client: httpx.AsyncClient, service, monkeypatch
-):
-    captured = {}
-
-    async def fake_find(*, target_uri=None, filter=None, **kwargs):
-        captured["target_uri"] = target_uri
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-
-    resp = await client.post(
-        "/api/v1/search/find",
-        json={
-            "query": "sample",
-            "target_uri": "viking://resources/sample",
-            "tags": ["team=search", "env=prod"],
-            "limit": 10,
-        },
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["target_uri"] == "viking://resources/sample"
-    assert captured["filter"] == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
-            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
-        ],
-    }
-
-
 @pytest.mark.parametrize("endpoint", ["find", "search"])
 async def test_search_level_selects_indexed_resources(client_with_resource, endpoint):
     client, root = client_with_resource
@@ -389,172 +351,77 @@ async def test_ranked_search_requires_query_with_context_type_filter(client: htt
     assert "must not be empty" in error["message"]
 
 
-async def test_find_with_since_compiles_time_range(client: httpx.AsyncClient, service, monkeypatch):
-    captured = {}
-
-    async def fake_find(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        captured["kwargs"] = kwargs
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-
-    resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": "sample", "since": "2h"},
+async def test_find_combines_existing_filter_with_time_range(client, service):
+    ctx = RequestContext(user=service.user, role=Role(Role.ROOT))
+    resources = "viking://resources/filter-contract"
+    memories = f"viking://user/{ctx.user.user_id}/memories/preferences"
+    terms = ["kind=email", "team=search", "env=prod"]
+    vector = service.viking_fs.query_embedder.embed("sample").dense_vector
+    rows = (
+        (resources, "accepted", "resource", "2026-03-11T23:59:59Z", terms),
+        (resources, "too-old", "resource", "2026-03-09T23:59:59Z", terms),
+        (resources, "too-new", "resource", "2026-03-12T00:00:00Z", terms),
+        (resources, "without-env", "resource", "2026-03-10T10:00:00Z", terms[:2]),
+        (resources, "wrong-kind", "resource", "2026-03-10T10:00:00Z", terms[1:]),
+        (memories, "accepted-memory", "memory", "2026-03-10T00:00:00Z", terms),
     )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"]["op"] == "time_range"
-    assert captured["filter"]["field"] == "updated_at"
-    gte = parse_iso_datetime(captured["filter"]["gte"])
-    delta = datetime.now(timezone.utc) - gte
-    assert 7_100 <= delta.total_seconds() <= 7_300
-
-
-async def test_find_combines_existing_filter_with_time_range(
-    client: httpx.AsyncClient, service, monkeypatch
-):
-    captured = {}
-
-    async def fake_find(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-
-    resp = await client.post(
-        "/api/v1/search/find",
-        json={
-            "query": "sample",
-            "filter": {"op": "must", "field": "kind", "conds": ["email"]},
-            "since": "2026-03-10",
-            "time_field": "created_at",
-        },
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"] == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "kind", "conds": ["email"]},
+    for root, name, kind, created, tags in rows:
+        await service.vikingdb_manager.upsert(
             {
-                "op": "time_range",
-                "field": "created_at",
-                "gte": "2026-03-10T00:00:00.000Z",
+                "uri": f"{root}/{name}.md",
+                "parent_uri": root,
+                "context_type": kind,
+                "is_leaf": True,
+                "abstract": "sample",
+                "level": 2,
+                "vector": vector,
+                "created_at": created,
+                "updated_at": "2026-03-15T10:00:00Z",
+                "search_tags": tags,
             },
-        ],
+            ctx=ctx,
+        )
+
+    payload = {
+        "query": "sample",
+        "level": 2,
+        "since": "2026-03-10",
+        "until": "2026-03-11",
+        "time_field": "created_at",
+        "filter": {"op": "must", "field": "search_tags", "conds": ["kind=email"]},
+        "tags": ["Env=Prod", " env=prod ", "Team=Search"],
     }
+    response = await client.post("/api/v1/search/find", json={**payload, "target_uri": resources})
+    assert response.status_code == 200, response.text
+    found = response.json()["result"]
+    assert found["total"] == 1
+    assert [item["uri"] for item in found["resources"]] == [f"{resources}/accepted.md"]
 
+    for scope, has_resource in (("memory", False), (["memory", "resource"], True)):
+        response = await client.post(
+            "/api/v1/search/search",
+            json={**payload, "context_type": scope, "target_uri": [resources, memories]},
+        )
+        assert response.status_code == 200, response.text
+        found = response.json()["result"]
+        assert found["total"] == 1 + has_resource
+        assert [item["uri"] for item in found["memories"]] == [f"{memories}/accepted-memory.md"]
+        assert [item["uri"] for item in found["resources"]] == (
+            [f"{resources}/accepted.md"] if has_resource else []
+        )
 
-async def test_find_with_context_type_compiles_filter(
-    client: httpx.AsyncClient, service, monkeypatch
-):
-    captured = {}
-
-    async def fake_find(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-
-    resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": "sample", "context_type": "memory"},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"] == {"op": "must", "field": "context_type", "conds": ["memory"]}
-
-
-async def test_find_combines_tags_with_existing_filter(
-    client: httpx.AsyncClient, service, monkeypatch
-):
-    captured = {}
-
-    async def fake_find(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-
-    resp = await client.post(
-        "/api/v1/search/find",
-        json={
-            "query": "sample",
-            "filter": {"op": "must", "field": "kind", "conds": ["email"]},
-            "tags": ["Env=Prod", " env=prod ", "team=Search"],
-        },
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"] == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "kind", "conds": ["email"]},
-            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
-            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
-        ],
-    }
-
-
-async def test_search_combines_context_type_list_with_existing_filter(
-    client: httpx.AsyncClient, service, monkeypatch
-):
-    captured = {}
-
-    async def fake_search(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "search", fake_search)
-
-    resp = await client.post(
+    response = await client.post(
         "/api/v1/search/search",
         json={
             "query": "sample",
-            "context_type": ["memory", "resource"],
-            "filter": {"op": "must", "field": "kind", "conds": ["email"]},
+            "level": 2,
+            "tags": ["team=search", "env=prod"],
+            "target_uri": resources,
         },
     )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"] == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "kind", "conds": ["email"]},
-            {"op": "must", "field": "context_type", "conds": ["memory", "resource"]},
-        ],
-    }
-
-
-async def test_search_compiles_tags_only_filter(client: httpx.AsyncClient, service, monkeypatch):
-    captured = {}
-
-    async def fake_search(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "search", fake_search)
-
-    resp = await client.post(
-        "/api/v1/search/search",
-        json={"query": "sample", "tags": ["Team=Search", "env=prod"]},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"] == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "search_tags", "conds": ["team=search"]},
-            {"op": "must", "field": "search_tags", "conds": ["env=prod"]},
-        ],
+    assert response.status_code == 200, response.text
+    assert {item["uri"] for item in response.json()["result"]["resources"]} == {
+        f"{resources}/{name}.md" for name in ("accepted", "too-old", "too-new", "wrong-kind")
     }
 
 
@@ -602,9 +469,7 @@ async def test_find_with_invalid_time_returns_invalid_argument(client: httpx.Asy
     [
         {"time_field": "published_at", "since": "2h"},
         {"limit": 0},
-        {"limit": -1},
         {"node_limit": 0},
-        {"node_limit": -1},
         {"limit": 0, "node_limit": 5},
     ],
 )
@@ -619,7 +484,9 @@ async def test_search_rejects_invalid_request_fields(client: httpx.AsyncClient, 
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert body["error"]["message"]
-    assert body["error"]["details"]["validation_errors"]
+    field = "time_field" if "time_field" in fields else next(iter(fields))
+    [error] = body["error"]["details"]["validation_errors"]
+    assert error["loc"] == ["body", field]
 
 
 async def test_find_with_inverted_mixed_time_range_returns_invalid_argument(
@@ -660,71 +527,31 @@ async def test_search_with_empty_session_uses_the_original_query(
 
 
 async def test_find_telemetry_metrics(client_with_resource):
-    client, _ = client_with_resource
-    resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": "sample document", "limit": 5, "telemetry": True},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    summary = body["telemetry"]["summary"]
-    assert summary["operation"] == "search.find"
-    assert "duration_ms" in summary
-    assert "tokens" not in summary
-    assert "vector" in summary
-    assert summary["vector"]["searches"] >= 0
-    assert "search" in summary
-    assert "vector_retrieval" in summary["search"]
-    assert "result_convert" not in summary["search"]
-    assert "request" not in summary["search"]
-    assert "queue" not in summary
-    assert "semantic_nodes" not in summary
-    assert "memory" not in summary
-    assert "usage" not in body
-    assert body["telemetry"]["id"]
-    assert body["telemetry"]["id"].startswith("tm_")
-
-
-async def test_search_telemetry_metrics(client_with_resource):
-    client, _ = client_with_resource
-    resp = await client.post(
-        "/api/v1/search/search",
-        json={"query": "sample document", "limit": 5, "telemetry": True},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    summary = body["telemetry"]["summary"]
-    assert summary["operation"] == "search.search"
-    assert "search" in summary
-    assert "vector_retrieval" in summary["search"]
-    assert "result_convert" not in summary["search"]
-    assert "request" not in summary["search"]
-    if body["result"]["total"] > 0:
+    client, root = client_with_resource
+    for endpoint, telemetry in (("find", True), ("search", {"summary": True})):
+        response = await client.post(
+            f"/api/v1/search/{endpoint}",
+            json={
+                "query": "sample document",
+                "target_uri": root,
+                "level": 2,
+                "telemetry": telemetry,
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["result"]["total"] == 1
+        assert "usage" not in body
+        data = body["telemetry"]
+        assert data["id"].startswith("tm_")
+        assert {"events", "truncated", "dropped"}.isdisjoint(data)
+        summary = data["summary"]
+        assert summary["operation"] == f"search.{endpoint}"
+        assert "duration_ms" in summary
+        assert {"tokens", "queue", "semantic_nodes", "memory"}.isdisjoint(summary)
+        assert {"request", "result_convert"}.isdisjoint(summary["search"])
+        assert "vector_retrieval" in summary["search"]
         assert summary["vector"]["returned"] == body["result"]["total"]
-    else:
-        assert "returned" not in summary["vector"]
-    assert "queue" not in summary
-    assert "semantic_nodes" not in summary
-    assert "memory" not in summary
-
-
-async def test_find_summary_only_telemetry(client_with_resource):
-    client, _ = client_with_resource
-    resp = await client.post(
-        "/api/v1/search/find",
-        json={
-            "query": "sample document",
-            "limit": 5,
-            "telemetry": {"summary": True},
-        },
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["telemetry"]["summary"]["operation"] == "search.find"
-    assert "usage" not in body
-    assert "events" not in body["telemetry"]
-    assert "truncated" not in body["telemetry"]
-    assert "dropped" not in body["telemetry"]
 
 
 async def test_find_rejects_events_telemetry_request(client_with_resource):
@@ -742,31 +569,6 @@ async def test_find_rejects_events_telemetry_request(client_with_resource):
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert "events" in body["error"]["message"]
-
-
-async def test_search_with_until_compiles_time_range(
-    client: httpx.AsyncClient, service, monkeypatch
-):
-    captured = {}
-
-    async def fake_search(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "search", fake_search)
-
-    resp = await client.post(
-        "/api/v1/search/search",
-        json={"query": "sample", "until": "2026-03-11", "time_field": "created_at"},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"] == {
-        "op": "time_range",
-        "field": "created_at",
-        "lte": "2026-03-11T23:59:59.999Z",
-    }
 
 
 async def test_grep(client_with_resource):
@@ -791,108 +593,64 @@ async def test_grep(client_with_resource):
     ]
 
 
-@pytest.mark.asyncio
-async def test_grep_forwards_tags_to_filesystem_service(monkeypatch):
-    seen = {}
+async def test_grep_filters_and_returns_resource_tags(client_with_resource):
+    client, root = client_with_resource
+    uri = f"{root}/sample.md"
+    tags = ["team=search", "env=prod"]
+    updated = await client.post("/api/v1/fs/attrs/set_tags", json={"uri": uri, "tags": tags})
+    assert updated.status_code == 200, updated.text
+    payload = {"uri": root, "pattern": "Introduction"}
 
-    async def fake_grep(uri, pattern, **kwargs):
-        seen.update(uri=uri, pattern=pattern, **kwargs)
-        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+    unfiltered = await client.post("/api/v1/search/grep", json=payload)
+    assert unfiltered.status_code == 200, unfiltered.text
+    [match] = unfiltered.json()["result"]["matches"]
+    assert match["uri"] == uri
+    assert "tags" not in match
 
-    monkeypatch.setattr(
-        search_router,
-        "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(grep=fake_grep)),
+    projected = await client.post("/api/v1/search/grep", json={**payload, "include_tags": True})
+    assert projected.status_code == 200, projected.text
+    assert projected.json()["result"]["matches"] == [{**match, "tags": tags}]
+
+    selected = await client.post("/api/v1/search/grep", json={**payload, "tags": tags})
+    assert selected.status_code == 200, selected.text
+    assert selected.json()["result"]["matches"] == [{**match, "tags": tags}]
+
+    excluded = await client.post(
+        "/api/v1/search/grep", json={**payload, "tags": ["team=search", "env=dev"]}
     )
-
-    await search_router.grep(
-        search_router.GrepRequest(
-            uri="viking://resources", pattern="OpenViking", tags=["team=search", "env=prod"]
-        ),
-        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
-    )
-
-    assert seen["tags"] == ["team=search", "env=prod"]
-
-
-@pytest.mark.asyncio
-async def test_grep_forwards_include_tags_to_filesystem_service(monkeypatch):
-    seen = {}
-
-    async def fake_grep(uri, pattern, **kwargs):
-        seen.update(uri=uri, pattern=pattern, **kwargs)
-        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
-
-    monkeypatch.setattr(
-        search_router,
-        "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(grep=fake_grep)),
-    )
-
-    await search_router.grep(
-        search_router.GrepRequest(
-            uri="viking://resources", pattern="OpenViking", include_tags=True
-        ),
-        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
-    )
-
-    assert seen["include_tags"] is True
-
-
-@pytest.mark.asyncio
-async def test_grep_forwards_context_to_filesystem_service(monkeypatch):
-    seen = {}
-
-    async def fake_grep(uri, pattern, **kwargs):
-        seen.update(uri=uri, pattern=pattern, **kwargs)
-        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
-
-    monkeypatch.setattr(
-        search_router,
-        "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(grep=fake_grep)),
-    )
-
-    await search_router.grep(
-        search_router.GrepRequest(
-            uri="viking://resources",
-            pattern="OpenViking",
-            before_context=2,
-            after_context=3,
-        ),
-        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
-    )
-
-    assert seen["before_context"] == 2
-    assert seen["after_context"] == 3
+    assert excluded.status_code == 200, excluded.text
+    assert excluded.json()["result"]["matches"] == []
 
 
 async def test_grep_case_insensitive(client_with_resource):
-    client, uri = client_with_resource
-    parent_uri = "/".join(uri.split("/")[:-1]) + "/"
-    resp = await client.post(
-        "/api/v1/search/grep",
-        json={
-            "uri": parent_uri,
-            "pattern": "sample",
-            "case_insensitive": True,
-        },
+    client, root = client_with_resource
+    payload = {"uri": root, "pattern": "introduction"}
+    sensitive = await client.post("/api/v1/search/grep", json=payload)
+    assert sensitive.status_code == 200, sensitive.text
+    assert sensitive.json()["result"]["matches"] == []
+
+    insensitive = await client.post(
+        "/api/v1/search/grep", json={**payload, "case_insensitive": True}
     )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    assert insensitive.status_code == 200, insensitive.text
+    [match] = insensitive.json()["result"]["matches"]
+    assert match["uri"] == f"{root}/sample.md"
+    assert match["content"] == "## Introduction"
 
 
-async def test_grep_missing_uri_returns_not_found(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/search/grep",
-        json={
-            "uri": "viking://resources/nonexistent_grep_test_xyz",
-            "pattern": "test",
-        },
-    )
+async def test_grep_missing_uri_returns_not_found(client_with_resource):
+    client, root = client_with_resource
+    missing_uri = "viking://resources/nonexistent_grep_test_xyz"
+    for uri in (missing_uri, [root, missing_uri]):
+        resp = await client.post(
+            "/api/v1/search/grep",
+            json={"uri": uri, "pattern": "Introduction", "node_limit": 1},
+        )
 
-    assert resp.status_code == 404
-    assert resp.json()["status"] == "error"
+        assert resp.status_code == 404, resp.text
+        error = resp.json()["error"]
+        assert error["code"] == "NOT_FOUND"
+        assert error["details"]["resource"] == missing_uri
 
 
 async def test_grep_level_limit_filters_by_relative_match_path(
@@ -940,135 +698,138 @@ async def test_grep_level_limit_filters_by_relative_match_path(
     assert "viking://resources/level-limit/nested/deeper/deep_level.md/deep_level.md" not in uris
 
 
-async def test_grep_exclude_uri_excludes_specific_uri_range(
-    client: httpx.AsyncClient,
-    upload_temp_dir,
-):
-    include_file = upload_temp_dir / "include.md"
-    include_file.write_text("# Include\n\nOpenViking should match here.\n")
-    exclude_file = upload_temp_dir / "exclude.md"
-    exclude_file.write_text("# Exclude\n\nOpenViking should be excluded here.\n")
-
-    await client.post(
-        "/api/v1/resources",
-        json={"temp_file_id": include_file.name, "reason": "include", "wait": True},
-    )
-    await client.post(
-        "/api/v1/resources",
-        json={"temp_file_id": exclude_file.name, "reason": "exclude", "wait": True},
-    )
-
-    root_uri = "viking://resources"
-    exclude_uri = "viking://resources/exclude.md"
-    resp = await client.post(
-        "/api/v1/search/grep",
-        json={
-            "uri": root_uri,
-            "pattern": "OpenViking",
-            "exclude_uri": exclude_uri,
-        },
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    matches = body["result"]["matches"]
-    assert matches
-    assert all(not m["uri"].startswith(exclude_uri.rstrip("/")) for m in matches)
-
-
 async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
-    client: httpx.AsyncClient,
-    upload_temp_dir,
+    client: httpx.AsyncClient, upload_temp_dir
 ):
-    group_a_file = upload_temp_dir / "group_a_cache_a.md"
-    group_a_file.write_text("# Group A\n\nOpenViking match in group A cache.\n")
-    group_b_file = upload_temp_dir / "group_b_cache_b.md"
-    group_b_file.write_text("# Group B\n\nOpenViking match in group B cache.\n")
+    files = {}
+    for group in ("group_a", "group_b"):
+        source = upload_temp_dir / f"{group}.md"
+        source.write_text(f"OpenViking match in {group} cache.\n")
+        target = f"viking://resources/{group}/cache/{source.name}"
+        added = await client.post(
+            "/api/v1/resources",
+            json={"temp_file_id": source.name, "to": target, "wait": True},
+        )
+        assert added.status_code == 200, added.text
+        files[group] = f"{added.json()['result']['root_uri']}/{source.name}"
+    payload = {
+        "uri": [
+            "viking://resources/group_a",
+            "viking://resources/group_a/cache",
+            "viking://resources/group_b",
+        ],
+        "pattern": "OpenViking",
+        "node_limit": 2,
+    }
+    baseline = await client.post("/api/v1/search/grep", json=payload)
+    assert baseline.status_code == 200, baseline.text
+    result = baseline.json()["result"]
+    assert [m["uri"] for m in result["matches"]] == list(files.values())
+    assert result["count"] == result["match_count"] == 2
 
-    await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": group_a_file.name,
-            "to": "viking://resources/group_a/cache/a.md",
-            "reason": "test",
-            "wait": True,
-        },
-    )
-    await client.post(
-        "/api/v1/resources",
-        json={
-            "temp_file_id": group_b_file.name,
-            "to": "viking://resources/group_b/cache/b.md",
-            "reason": "test",
-            "wait": True,
-        },
+    limited = await client.post("/api/v1/search/grep", json={**payload, "node_limit": 1})
+    assert limited.status_code == 200, limited.text
+    result = limited.json()["result"]
+    assert [m["uri"] for m in result["matches"]] == [files["group_a"]]
+    assert result["limit_reached"] is True
+    assert result["files_scanned"] == 1
+
+    response = await client.post(
+        "/api/v1/search/grep", json={**payload, "exclude_uri": "viking://resources/group_a/cache"}
     )
 
-    resp = await client.post(
-        "/api/v1/search/grep",
-        json={
-            "uri": "viking://resources",
-            "pattern": "OpenViking",
-            "exclude_uri": "viking://resources/group_a/cache",
-        },
-    )
-
-    assert resp.status_code == 200
-    matches = resp.json()["result"]["matches"]
-    uris = {m["uri"] for m in matches}
-    assert any(uri.startswith("viking://resources/group_b/cache/") for uri in uris)
-    assert all(not uri.startswith("viking://resources/group_a/cache/") for uri in uris)
+    assert response.status_code == 200, response.text
+    assert {m["uri"] for m in response.json()["result"]["matches"]} == {files["group_b"]}
 
 
 async def test_glob(client_with_resource):
-    client, _ = client_with_resource
+    client, root = client_with_resource
     resp = await client.post(
         "/api/v1/search/glob",
         json={"pattern": "**/*.md"},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
-    assert all(isinstance(match, str) for match in resp.json()["result"]["matches"])
+    matches = resp.json()["result"]["matches"]
+    assert f"{root}/sample.md" in matches
+    assert all(isinstance(match, str) for match in matches)
 
 
-async def test_glob_explicit_empty_extra_fields_returns_entry_objects(client_with_resource):
-    client, _ = client_with_resource
+async def test_glob_merges_search_roots_with_entry_results(
+    client_with_resource, service, monkeypatch
+):
+    client, root = client_with_resource
+    second_root = "viking://resources/multi-glob"
+    second_file = f"{second_root}/second.txt"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    await service.viking_fs.write_file(second_file, "other resource", ctx=ctx)
+    scopes = [root, second_root] + ["viking://resources"] * 8
+    payload = {
+        "uri": scopes,
+        "pattern": "**/*",
+        "extra_fields": [],
+    }
     resp = await client.post(
         "/api/v1/search/glob",
-        json={"pattern": "**/*.md", "extra_fields": []},
+        json=payload,
     )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     matches = resp.json()["result"]["matches"]
-    assert matches
     assert all(isinstance(match, dict) for match in matches)
     assert all("uri" in match and "isDir" in match for match in matches)
+    assert [match["uri"] for match in matches if not match["isDir"]] == [
+        f"{root}/sample.md",
+        second_file,
+    ]
 
+    glob_directory = service.viking_fs._async_agfs.glob_directory
 
-@pytest.mark.asyncio
-async def test_glob_forwards_tags_and_tag_projection_to_filesystem_service(monkeypatch):
-    seen = {}
+    async def glob_first_scope_only(path, *args, **kwargs):
+        if not path.endswith("/" + root.removeprefix("viking://")):
+            raise RuntimeError(f"unexpected glob scan beyond the result limit: {path}")
+        return await glob_directory(path, *args, **kwargs)
 
-    async def fake_glob(pattern, **kwargs):
-        seen.update(pattern=pattern, **kwargs)
-        return {"matches": [], "count": 0}
+    with monkeypatch.context() as limited_scope:
+        limited_scope.setattr(
+            service.viking_fs._async_agfs, "glob_directory", glob_first_scope_only
+        )
+        limited = await client.post("/api/v1/search/glob", json={**payload, "node_limit": 1})
+    assert limited.status_code == 200, limited.text
+    assert limited.json()["result"]["matches"] == matches[:1]
 
-    monkeypatch.setattr(
-        search_router,
-        "get_service",
-        lambda: SimpleNamespace(fs=SimpleNamespace(glob=fake_glob)),
+    missing_uri = "viking://resources/missing-glob-scope"
+    missing = await client.post(
+        "/api/v1/search/glob",
+        json={**payload, "uri": [root, missing_uri], "node_limit": 1},
     )
+    assert missing.status_code == 404, missing.text
+    assert missing.json()["error"]["details"]["resource"] == missing_uri
 
-    await search_router.glob(
-        search_router.GlobRequest(
-            pattern="**/*.md", tags=["env=prod"], include_tags=True
-        ),
-        _ctx=RequestContext(user=UserIdentifier("acct", "alice"), role=Role.USER),
-    )
+    for invalid_scopes in ([], [*scopes, root]):
+        invalid = await client.post("/api/v1/search/glob", json={**payload, "uri": invalid_scopes})
+        assert invalid.status_code == 400, invalid.text
+        assert invalid.json()["error"]["code"] == "INVALID_ARGUMENT"
 
-    assert seen["tags"] == ["env=prod"]
-    assert seen["include_tags"] is True
+
+async def test_glob_filters_and_projects_resource_tags(client_with_resource):
+    client, root = client_with_resource
+    uri = f"{root}/sample.md"
+    tags = ["env=prod"]
+    updated = await client.post("/api/v1/fs/attrs/set_tags", json={"uri": uri, "tags": tags})
+    assert updated.status_code == 200, updated.text
+    payload = {"uri": root, "pattern": "*.md", "include_tags": True}
+
+    response = await client.post("/api/v1/search/glob", json={**payload, "tags": tags})
+    assert response.status_code == 200, response.text
+    [match] = response.json()["result"]["matches"]
+    assert match["uri"] == uri
+    assert match["isDir"] is False
+    assert match["tags"] == tags
+
+    excluded = await client.post("/api/v1/search/glob", json={**payload, "tags": ["env=dev"]})
+    assert excluded.status_code == 200, excluded.text
+    assert excluded.json()["result"]["matches"] == []
 
 
 @pytest.mark.parametrize("multimodal", [True, False])

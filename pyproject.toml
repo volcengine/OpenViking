@@ -17,6 +17,7 @@ authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
 license = "AGPL-3.0"
+license-files = ["LICENSE", "crates/ragfs/src/BETTERLEAKS_LICENSE.txt"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -31,6 +32,8 @@ classifiers = [
 dependencies = [
     "aiohttp>=3.13.3",
     "async-timeout>=5.0.1",
+    "aiosqlite>=0.20,<1",
+    "SQLAlchemy[asyncio]>=2.0.54,<2.1",
     "orjson>=3.11.7",
     "packaging>=24.0",
     "openviking-sdk>=0.1.17",
@@ -97,10 +100,8 @@ dependencies = [
 
 
 [project.optional-dependencies]
-sqlite = [
-    "aiosqlite>=0.20,<1",
-    "SQLAlchemy[asyncio]>=2.0.54,<2.1",
-]
+# Keep the existing extra valid; the default TaskStore now requires SQLite.
+sqlite = []
 reporting = [
     "kafka-python>=3.0.12,<4",
 ]
@@ -120,11 +121,6 @@ mysql = [
     "PyMySQL>=1.1,<1.2",
     "SQLAlchemy[asyncio]>=2.0.54,<2.1",
 ]
-redis-mysql = [
-  "aiomysql>=0.2.0,<1",
-  "redis>=5.3.1,<7",
-  "SQLAlchemy[asyncio]>=2.0.54,<2.1",
-]
 test = [
   "aiosqlite>=0.20,<1",
   "SQLAlchemy[asyncio]>=2.0,<2.1",
@@ -142,7 +138,7 @@ test = [
   "hvac>=2.0.0",
 ]
 auth = [
-  "python-jose[cryptography]>=3.3.0",
+  "PyJWT[crypto]>=2.15.1,<3",
   "httpx>=0.25.0",
   "python-ldap>=3.4.0",
 ]
@@ -214,7 +210,7 @@ bot = [
   "fusepy>=3.0.1",
   "opencode-ai>=0.1.0a0",
   # Auth dependencies
-  "python-jose[cryptography]>=3.3.0",
+  "PyJWT[crypto]>=2.15.1,<3",
 ]
 benchmark = [
     "langchain>=1.0.0",
@@ -263,7 +259,7 @@ include = ["openviking*", "vikingbot*"]
 exclude = ["tests*", "docs*", "examples*"]
 
 [tool.setuptools.package-data]
-openviking_gateway = ["client-rules.json", "lua/*.lua"]
+openviking_gateway = ["client-rules.json", "server-features.json", "lua/*.lua"]
 "openviking.scheduling.expiry" = ["lua/*.lua"]
 "vikingbot.studio.providers.feishu" = ["icon.png"]
 "openviking.parse.parsers.code.ast" = ["assets/parsers.ghproxy.json"]
@@ -281,6 +277,7 @@ openviking = [
     "server/account_stores/sql/postgres/*.sql",
     "service/sql/*.sql",
     "service/sql/changes/*.sql",
+    "observability/usage_audit/sql/*.sql",
     "storage/vectordb/engine/*.abi3.so",
     "storage/vectordb/engine/*.pyd",
 ]

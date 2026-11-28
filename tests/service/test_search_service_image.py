@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,6 +15,8 @@ class FakeVikingFS:
     def __init__(self):
         self.image_url = None
         self.retry_values = {}
+        self.find_started = asyncio.Event()
+        self.release_find = asyncio.Event()
 
     async def read_file_bytes(self, uri, ctx=None):
         assert uri == "viking://resources/cat.png"
@@ -21,7 +24,8 @@ class FakeVikingFS:
 
     async def find(self, **kwargs):
         self.image_url = kwargs["image_url"]
-        await asyncio.sleep(0)  # Keep the search scope active during the concurrent call.
+        self.find_started.set()
+        await self.release_find.wait()
         self.retry_values["find"] = effective_max_retries(3)
         return {"ok": True}
 
@@ -36,13 +40,22 @@ async def test_image_search_resolves_uri_and_isolates_retry_scope():
     service = SearchService(fs)
     ctx = RequestContext(user=UserIdentifier("acc", "user"), role=Role.USER)
 
-    result, _ = await asyncio.gather(
+    search = asyncio.create_task(
         service.find(query="", image_url="viking://resources/cat.png", ctx=ctx),
-        fs.search(query="concurrent background work"),
     )
-
+    try:
+        await asyncio.wait_for(fs.find_started.wait(), 1)
+        await fs.search(query="concurrent background work")
+        fs.release_find.set()
+        result = await asyncio.wait_for(search, 1)
+    finally:
+        search.cancel()
+        await asyncio.gather(search, return_exceptions=True)
     assert result == {"ok": True}
-    assert fs.image_url.startswith("data:image/png;base64,")
+    assert isinstance(fs.image_url, str)
+    prefix, data = fs.image_url.split(",", 1)
+    assert prefix == "data:image/png;base64"
+    assert base64.b64decode(data) == b"\x89PNG\r\n\x1a\n"
     assert fs.retry_values == {"find": 0, "search": 3}
 
     await service.search(query="search", ctx=ctx)

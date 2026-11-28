@@ -364,3 +364,15 @@ async def test_second_recovery_supersedes_previous_recovery_task(env):
     assert env.tracker.fail.await_args.args[0] == "recovery-1"
     env.tracker.get.assert_awaited_once()
     assert env.tracker.get.await_args.args[0] == "recovery-1"
+
+
+@pytest.mark.asyncio
+async def test_list_refs_pages_past_the_listing_limit():
+    names = [{"name": f"archive_{i:04d}"} for i in range(1, 2501)] + [{"name": ".abstract.md"}]
+
+    async def ls(uri, *, node_limit, offset, ctx):
+        return names[offset : offset + node_limit]
+
+    store = ArchiveStore(SimpleNamespace(ls=ls), None, SESSION_URI)
+    refs = await store.list_refs()
+    assert [ref["index"] for ref in refs] == list(range(2500, 0, -1))

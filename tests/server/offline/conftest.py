@@ -47,6 +47,11 @@ def offline_config(temp_dir, monkeypatch):
                 "dimension": 2048,
             }
         },
+        "vlm": {
+            "provider": "openai",
+            "model": "offline-vlm",
+            "api_key": "unused-offline-key",
+        },
     }
     config_path = temp_dir / "ov.conf"
     config_path.write_text(json.dumps(config))

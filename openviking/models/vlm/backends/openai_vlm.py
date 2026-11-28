@@ -76,6 +76,8 @@ def _build_openai_client_kwargs(
 class OpenAIVLM(VLMBase):
     """OpenAI / Azure OpenAI VLM backend"""
 
+    _default_usage_model = "gpt-4o-mini"
+
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self._sync_client = None
@@ -216,32 +218,6 @@ class OpenAIVLM(VLMBase):
         if extra_body:
             kwargs["extra_body"] = extra_body
 
-    def _update_token_usage_from_response(
-        self,
-        response,
-        duration_seconds: float = 0.0,
-    ):
-        if hasattr(response, "usage") and response.usage:
-            tracer.info(f"response.usage={response.usage}")
-            prompt_tokens = response.usage.prompt_tokens
-            completion_tokens = response.usage.completion_tokens
-            prompt_tokens_details = getattr(response.usage, "prompt_tokens_details", None)
-            completion_tokens_details = getattr(response.usage, "completion_tokens_details", None)
-            prompt_cached_tokens = getattr(prompt_tokens_details, "cached_tokens", 0) or 0
-            completion_reasoning_tokens = (
-                getattr(completion_tokens_details, "reasoning_tokens", 0) or 0
-            )
-            self.update_token_usage(
-                model_name=self.model or "gpt-4o-mini",
-                provider=self.provider,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                duration_seconds=duration_seconds,
-                prompt_cached_tokens=prompt_cached_tokens,
-                completion_reasoning_tokens=completion_reasoning_tokens,
-            )
-        return
-
     def _parse_tool_calls(self, message) -> List[ToolCall]:
         """Parse tool calls from OpenAI response message."""
         tool_calls = []
@@ -347,12 +323,12 @@ class OpenAIVLM(VLMBase):
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        self._handle_chat_completion(response, duration_seconds=elapsed)
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
     async def _extract_completion_content_async(self, response, elapsed: float) -> str:
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        self._handle_chat_completion(response, duration_seconds=elapsed)
         content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
@@ -375,7 +351,7 @@ class OpenAIVLM(VLMBase):
             response = client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                self._handle_chat_completion(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
@@ -410,7 +386,7 @@ class OpenAIVLM(VLMBase):
             response = await client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                self._handle_chat_completion(response, duration_seconds=elapsed)
                 result = self._build_vlm_response(response, has_tools=True)
                 if not tools:
                     result.content = self._clean_response(result.content or "")
@@ -504,7 +480,7 @@ class OpenAIVLM(VLMBase):
             response = client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                self._handle_chat_completion(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
@@ -532,7 +508,7 @@ class OpenAIVLM(VLMBase):
             response = await client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
             if tools is not None:
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                self._handle_chat_completion(response, duration_seconds=elapsed)
                 return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 

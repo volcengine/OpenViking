@@ -18,7 +18,7 @@ from openviking.core.namespace import (
 from openviking.observability.log_safety import safe_path_for_log, safe_uri_for_log
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
-from openviking.storage.index_consistency import check_index_consistency
+from openviking.storage.index_consistency import check_index_consistency, is_index_source_uri
 from openviking.storage.ovpack.format import (
     OVPACK_BACKUP_NAME,
     OVPACK_BACKUP_TYPE,
@@ -47,7 +47,7 @@ from openviking.storage.ovpack.manifest import (
     validate_manifest_root_matches_zip,
 )
 from openviking.storage.ovpack.policy import (
-    PUBLIC_SCOPES,
+    OVPACK_SCOPES,
     backup_scopes_from_manifest,
     is_backup_package,
     is_excluded_rel_path,
@@ -189,8 +189,7 @@ async def _enqueue_direct_vectorization(
     manifest_path_root_uri: Optional[str] = None,
     entries: Optional[list[dict[str, Any]]] = None,
 ) -> None:
-    if is_session_uri(uri):
-        logger.debug("Skipped vectorization for session namespace: %s", safe_uri_for_log(str(uri)))
+    if not is_index_source_uri(uri, is_directory=True):
         return
 
     index_records = index_records or []
@@ -201,18 +200,15 @@ async def _enqueue_direct_vectorization(
     file_entries: list[tuple[str, str, str, str]] = []
     for entry in entries:
         entry_uri = entry.get("uri")
-        if not entry_uri:
-            continue
-        if is_session_uri(entry_uri):
+        is_directory = bool(entry.get("isDir"))
+        if not entry_uri or not is_index_source_uri(entry_uri, is_directory=is_directory):
             continue
         rel_path = entry.get("rel_path") or relative_uri_path(uri, entry_uri)
         manifest_rel_path = relative_uri_path(manifest_path_root_uri, entry_uri)
-        if entry.get("isDir"):
+        if is_directory:
             dir_uris.add(entry_uri)
             continue
         name = entry.get("name", "") or leaf_name(rel_path)
-        if name.startswith("."):
-            continue
         parent = VikingURI(entry_uri).parent
         if parent:
             file_entries.append((entry_uri, parent.uri, name, manifest_rel_path))
@@ -395,7 +391,7 @@ async def import_ovpack(
 
 async def _backup_entries(viking_fs, ctx: RequestContext) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
-    for scope in PUBLIC_SCOPES:
+    for scope in OVPACK_SCOPES:
         scope_uri = f"viking://{scope}"
         entries.append(
             {
@@ -604,7 +600,7 @@ async def backup_ovpack(
     vector_config_resolver=None,
     include_vectors: bool = False,
 ) -> str:
-    """Export all public OpenViking scopes as a restore-only backup package."""
+    """Export account content as a restore-only backup package."""
     base_name = OVPACK_BACKUP_NAME
     if os.path.isdir(to):
         to = os.path.join(to, f"{base_name}.ovpack")
@@ -635,7 +631,7 @@ async def backup_ovpack(
         entries,
         ctx,
         package_type=OVPACK_BACKUP_TYPE,
-        scopes=list(PUBLIC_SCOPES),
+        scopes=list(OVPACK_SCOPES),
         include_vectors=include_vectors,
     )
     await _write_ovpack_archive(
@@ -652,7 +648,7 @@ async def backup_ovpack(
         vector_config_resolver,
     )
 
-    logger.debug("Backed up OpenViking public scopes to %s", type(to).__name__)
+    logger.debug("Backed up OpenViking account content to %s", type(to).__name__)
     return to
 
 
@@ -665,7 +661,7 @@ async def restore_ovpack(
     vector_store=None,
     vector_config_resolver=None,
 ) -> str:
-    """Restore a backup package to its original public scope roots."""
+    """Restore a backup package to the current account."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
 
@@ -778,12 +774,10 @@ async def restore_ovpack(
     for entry in restored_entries:
         target_uri = entry["uri"]
         parts = target_uri.removeprefix("viking://").split("/")
-        if parts[0] == "resources":
-            group_uri = "viking://resources"
-        elif parts[0] == "user" and len(parts) >= 2:
+        if parts[0] == "user":
             group_uri = f"viking://user/{parts[1]}"
         else:
-            continue
+            group_uri = f"viking://{parts[0]}"
         vectorization_groups.setdefault(group_uri, []).append(entry)
 
     for group_uri, entries in vectorization_groups.items():

@@ -201,7 +201,7 @@ Debugging aid: `~/.qoder/logs/sessions/<cwd-slug>/<session_id>/segments/*.jsonl`
 - The server name is **not prefixed with the plugin name**, and the fully-qualified tool name is `mcp__<server>__<tool>`. A user-scope MCP server with the same name would collide; which wins is pending.
 - **Lazy loading is the effective default.** MCP tools are not in the model's tool list; the host exposes three meta tools `mcp_list` / `mcp_get` / `mcp_call` and announces the catalogue in an `mcp_lazy_tools_delta` attachment. The bundle enables lazy mode when `QODER_MCP_LAZY=1`, when `mcp.lazyLoad: true`, **or when no settings file declares `mcp.lazyLoad` at all**; the docs' "default `false`" does not hold for v1.1.88. Consequences:
   - `PreToolUse` sees `tool_name: "mcp_call"` (or `mcp_get`/`mcp_list`) with the real tool in `tool_input.toolName`, so a matcher such as `mcp__openviking__.*` does not fire in lazy mode. The documented `mcp_context` / `original_request_name` fields were not present on these calls.
-  - The uri-guard is unaffected: its file-tool matcher (`Read|Write|Edit|Glob|Grep`) never needs to see MCP calls.
+  - The uri-guard is unaffected: its matcher (`Read|Write|Edit|Glob|Grep|Bash`) never needs to see MCP calls.
 - In `-p` with `permission_mode: default`, `mcp_call` to a plugin tool was refused (`Allow MCP tool <server>/<tool>?`), and a `PreToolUse` allow did not change that. Headless memory-tool use needs a permission rule or a permissive mode; the rule syntax for MCP tools is pending. The TUI prompts the user.
 
 **Skills.** `skills/<name>/SKILL.md` from an installed plugin is listed as **`<plugin>:<name>`** (the probe's `qx-probe:qx-hello`) in `init.skills`, in the slash-command list and in the turn's `skill_listing` attachment (`isInitial: true`), for both the installed copy and `--plugin-dir`. The model invokes it as `Skill {"skill":"<plugin>:<name>"}`; the body arrives as the `isMeta` user record of §8. The skill was already listed on the first turn.
@@ -210,7 +210,7 @@ Debugging aid: `~/.qoder/logs/sessions/<cwd-slug>/<session_id>/segments/*.jsonl`
 
 1. Whether host-queued `isMeta` prompts (`peer`, `task-notification`, `bridge`) fire `UserPromptSubmit`, and whether `bridge` (remote-control) prompts carry `humanInput`.
 2. Auto-compaction (`trigger: "auto"`) and `SessionStart(clear)` / `SessionEnd(clear|resume)`; only manual `/compact` and `-c` were run.
-3. Whether `SessionStart(resume)` `additionalContext` reaches the model (it is not recorded in the transcript; `startup` and `compact` outputs are).
+3. ~~Whether `SessionStart(resume)` `additionalContext` reaches the model~~ — **verified on v1.1.91** (§12): the model quoted it after TUI `/resume` and after `-p -c`.
 4. `decision: "approve"`: undocumented here and untested; the adapter omits it.
 5. The permission-rule syntax that lets `mcp_call` to the plugin's server run headless, and the precedence between a plugin MCP server and a same-named user server.
 6. `async` / `asyncRewake` hooks: documented, unexercised; the detached writer is used instead.
@@ -235,9 +235,15 @@ Measured facts that shape the adapter and are not visible in the code:
 
 - `prompt()` returns the payload's `prompt` trimmed; there is no continuation flag to gate on (§4). Prompt dedup falls back to the prompt hash within 500 ms.
 - `envelope()` answers the `hookSpecificOutput` form on `session-start` and `user-prompt-submit`, without `decision`, and nothing on the write-path events (§5).
-- `guard()` stays deny-only on the file tools, as on CodeBuddy. Qoder would also accept an advisory `additionalContext` on `allow` (§5), but v1 does not use it.
+- `guard()` denies the file tools, as on CodeBuddy, and answers a Bash command that carries a `viking://` URI with an advisory `additionalContext` and no `permissionDecision` (§5): the command runs under the host's own permission flow and the model reads the notice (verified on v1.1.95, `-p --plugin-dir`).
 - The decoder reads only `user` and `assistant` records, skips `isSidechain`, `isMeta`, `isCompactSummary` and non-human `origin.kind`, folds a model response's per-block records (one `responseGroupId`) and the tool results answering it into one assistant turn, inlines tool calls with their input, keeps tool result bytes out, and drops `thinking`. A turn's id is the index of the record that opened it.
 - `capture` treats the auxiliary `SessionEnd` (unknown session, missing transcript) as a no-op: it logs `capture_unreadable` and touches neither the network nor the hook state (§3, run 11).
 - Commit policy as on CodeBuddy: `Stop` commits every `commitTurnThreshold` captured turns; `PreCompact` (unless `autoCommitOnCompact` is off) and `SessionEnd` commit whatever is still uncommitted, including turns an earlier `Stop` sent.
 
 v1 scope matches the CodeBuddy adapter: no subagent capture (events and per-agent transcripts exist, §3/§8), no resume/compact archive injection, no keyword capture mode, no local recall compressor default.
+
+## 12. `session_history` (v1.1.91, npm latest on 2026-11-18)
+
+- **Fill.** A `PreToolUse` hook matching `mcp_call|mcp__openviking__session_history` sees the lazy call as `tool_input: {toolName, arguments}` with the conversation's `session_id`. Answering `hookSpecificOutput.updatedInput` with `arguments.session` added changes what the stdio MCP server receives (**verified**). Without a `permissionDecision` the TUI still asks `Allow MCP tool <server>/<tool>?` and the rewrite applies after approval; the model sees `[System] Tool input parameters were modified by a hook before execution.` in the result. It is right after `/clear` and `/resume`, and inside a subagent, whose `PreToolUse` carries the parent's `session_id` plus `agent_id`.
+- **Not used for the fill.** One `qodercli` process serves several conversations in turn (`/clear`, `/resume`) while its MCP server stays up; hooks and the MCP server are both direct children of it (no pid env of its own; a `CLAUDE_PID` seen in the env was inherited). v1.1.91 adds `_meta["com.qoder/request-context-v1"].requestSetId` to `tools/call`, equal to `UserPromptSubmit.request_set_id` on main-agent calls, but a subagent's call carries one no hook sees, and v1.1.88 sends only `progressToken`.
+- **Note.** `/compact` runs `PreCompact` → `PostCompact` → `SessionStart(compact)` with the same `session_id`; `SessionStart` `additionalContext` reached the model for `startup`, `clear`, `compact` and `resume`. The adapter adds the session-history note to `SessionStart(compact|resume)`, naming the `mcp_call` form; a resumed transcript keeps the notes it already carries (**verified**, `-p -c` after `-p -c '/compact'`), so a resume adds one only when the hook state records none sent.

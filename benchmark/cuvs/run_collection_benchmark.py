@@ -596,11 +596,13 @@ def print_summary(results: Sequence[dict[str, Any]]) -> None:
     for result in results:
         for search in result["searches"]:
             latency = search["search"]["latency_ms"]
+            recall = search.get("recall_at_k")
+            recall_text = f"{recall:.4f}" if recall is not None else "N/A"
             print(
                 f"{result['backend']:<22}  {search['name']:<20}  "
                 f"{latency['p50']:>7.3f}  {latency['p95']:>7.3f}  "
                 f"{search['search']['qps']:>8.1f}  "
-                f"{search.get('recall_at_k', 1.0):>7.4f}"
+                f"{recall_text:>7}"
             )
     print("\nbackend                 mutation   write_s  next_query_ms  warm_query_ms")
     print("----------------------  ---------  -------  -------------  -------------")

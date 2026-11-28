@@ -331,6 +331,9 @@ test("no doctor wrapper redefines a name doctor-core already exports", () => {
     "../claude-code-memory-plugin/scripts/ov-memory-doctor.mjs",
     "../codex-memory-plugin/scripts/ov-memory-doctor.mjs",
     "../agent-hook-plugin/scripts/ov-memory-doctor.mjs",
+    "../opencode-plugin/scripts/ov-memory-doctor.mjs",
+    "../pi-coding-agent-extension/scripts/ov-memory-doctor.mjs",
+    "../dsh-memory-plugin/scripts/ov-memory-doctor.mjs",
   ]) {
     const declared = [...read(rel).matchAll(/^(?:export )?(?:async function|function|const) (\w+)\s*[(=]/gm)].map((m) => m[1]);
     const clashes = declared.filter((name) => exported.has(name));
@@ -358,7 +361,7 @@ test("the hook hosts' doctor reports no hook-budget overrun at any request timeo
       .map((finding) => `${finding.title} → ${finding.fix}`);
   };
   try {
-    for (const client of ["cursor", "trae", "trae-cn", "zcode"]) {
+    for (const client of ["cursor", "trae", "trae-cn", "zcode", "antigravity", "kimicode", "codebuddy", "qoder"]) {
       assert.deepEqual(budgetWarnings(client), [], client);
       assert.deepEqual(budgetWarnings(client, { OPENVIKING_TIMEOUT_MS: "35000" }), [], client);
     }

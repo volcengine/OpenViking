@@ -36,11 +36,11 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
   };
   const prompts: readonly [string, string] = zh
     ? [
-        '将选中的目录中的文件整理成 Wiki，保留来源和文档之间的关联',
+        '将选中目录中的文件整理成 Wiki。',
         '基于选中的目录生成日报，并设置定时更新',
       ]
     : [
-        'Organize files in the selected directory into a Wiki, preserving sources and relationships.',
+        'Organize the files in the selected directory into a Wiki.',
         'Create a daily report from the selected directory and schedule updates.',
       ];
   return {
@@ -107,15 +107,23 @@ export function useConsoleConversation(zh: boolean): Partial<VikingBotProps> {
     quickInputs: [
       {
         id: 'wiki',
-        label: zh ? '创建 Wiki' : 'Create Wiki',
+        label: 'Wiki',
         prompt: prompts[0],
-        icon: <VikingBotIcon name="book" viewBox="-0.833333 -2.357143 16 16" />,
+        icon: (
+          <VikingBotIcon
+            name="book"
+            width={14}
+            height={14}
+            viewBox="-0.833333 -2.357143 16 16"
+            strokeWidth={8 / 7}
+          />
+        ),
       },
       {
         id: 'report',
         label: zh ? '定时日报' : 'Scheduled report',
         prompt: prompts[1],
-        icon: <VikingBotIcon name="report" />,
+        icon: <VikingBotIcon name="report" width={14} height={14} />,
       },
     ],
     sessions: {

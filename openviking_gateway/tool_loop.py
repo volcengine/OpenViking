@@ -3,6 +3,7 @@
 """One hidden-tool lifecycle shared by native model protocol adapters."""
 
 import asyncio
+import sys
 import time
 
 import async_timeout
@@ -50,10 +51,14 @@ def public_stream_error(value):
 
 
 class HiddenToolLoop:
-    def __init__(self, prepared, executor, store, capture, saver=None):
-        """``saver`` is the kernel's capture pipeline; without one a cut is not saved early."""
+    def __init__(self, prepared, executor, store, capture, saver=None, unsealer=None):
+        """``saver`` is the kernel's capture pipeline; without one a cut is not saved early.
+
+        ``unsealer`` puts values in the client's copy of its tool calls; the loop's own
+        history and records keep the references.
+        """
         self.prepared, self.executor, self.store, self.capture = prepared, executor, store, capture
-        self.saver = saver
+        self.saver, self.unsealer = saver, unsealer
         self.protocol = prepared.protocol
         self.adapter = tool_protocol(self.protocol)(prepared.body)
         self.body = {
@@ -64,15 +69,35 @@ class HiddenToolLoop:
         # A request without gateway tools comes here only to show the recall notice: every
         # call is the client's, nothing runs, and the reply takes as long as it takes.
         self.allowed = executor.allowed if prepared.tools_active else set()
+        self.adapter.gateway_tools = self.allowed
         seconds = self.policy.get("tool_total_seconds")
         self.deadline = time.monotonic() + seconds if prepared.tools_active and seconds else None
         self.adapter.lead_with(prepared.reply_lead)
         self.transcript, self.usage, self.counted = [], {}, {}
-        self.final, self.hidden, self.window = None, False, None
+        # ``sent`` is ``final`` as the client gets it.
+        self.final = self.sent = None
+        self.hidden, self.window = False, None
         self.rounds, self.token_cost, self.refused = 0, 0, False
         self.round = ToolRound([], [], {}, False)
+        self.observe_upstream = None
+        self.failed_response = None
+        self.upstream_failed = False
 
     async def read(self, response):
+        error = None
+        try:
+            async for event in self.read_round(response):
+                yield event
+        except BaseException as failure:
+            error = failure
+            self.failed_response = response
+            self.upstream_failed = True
+            raise
+        finally:
+            if self.observe_upstream and error is None:
+                self.observe_upstream(self.adapter, response, None)
+
+    async def read_round(self, response):
         adapter = self.adapter
         adapter.begin()
         if response.status >= 300:
@@ -118,6 +143,7 @@ class HiddenToolLoop:
             if value is None:
                 continue
             if "error" in value or value.get("type") == "error":
+                self.adapter.accumulate(value)
                 raise ToolLoopError(
                     STREAM_ERROR_MESSAGE,
                     event=public_stream_error(value),
@@ -186,6 +212,13 @@ class HiddenToolLoop:
                     yield event
             if skipped:
                 result = {"role": "tool", "tool_call_id": call["id"], "content": REFUSED}
+            elif call.get("invalid_arguments"):
+                result = {
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": "Invalid tool arguments. Send a valid JSON object.",
+                    "failed": True,
+                }
             elif crowded:
                 result = {
                     "role": "tool",
@@ -196,6 +229,7 @@ class HiddenToolLoop:
             else:
                 result = await self.executor.execute(call)
             window = result.pop("cut", window)
+            skipped = result.pop("skipped", False) or skipped
             if show:
                 events = self.adapter.notice(tool_tail(result.get("failed", False), skipped))
             results.append(result)
@@ -313,16 +347,29 @@ class HiddenToolLoop:
                             )
                         async for event in self.execute(owned):
                             yield event
-                    for event in self.stream(self.adapter.publish_calls(client)):
+                    published = self.adapter.publish_calls(client)
+                    if self.unsealer and published and self.body.get("stream"):
+                        published = await self.unsealer.events(self.protocol, published)
+                    for event in self.stream(published):
                         yield event
                     if client or not owned:
                         await self.persist()
+                        self.sent = self.final
+                        if self.unsealer:
+                            self.sent = await self.unsealer.reply(self.protocol, self.final)
+                            self.prepared.metrics["secrets_unsealed"] = self.unsealer.unsealed
                         if self.body.get("stream"):
-                            for event in self.adapter.terminal(self.final):
+                            for event in self.adapter.terminal(self.sent):
                                 yield self.adapter.encode(event)
                         return
                     remaining = self.deadline and max(0.01, self.deadline - time.monotonic())
-                    response = await send(self.body, remaining)
+                    try:
+                        response = await send(self.body, remaining)
+                    except BaseException:
+                        self.upstream_failed = True
+                        self.failed_response = None
+                        self.adapter.begin()
+                        raise
         except (ValueError, TypeError, KeyError, IndexError) as error:
             raise ToolLoopError("Invalid model tool response") from error
         except asyncio.TimeoutError as error:
@@ -338,4 +385,8 @@ class HiddenToolLoop:
                 "Hidden tool request timed out", 504, code="tool_loop_timeout"
             ) from error
         finally:
+            if self.observe_upstream and self.upstream_failed:
+                self.observe_upstream(self.adapter, self.failed_response, sys.exc_info()[1])
+                self.failed_response = None
+                self.upstream_failed = False
             response.close()

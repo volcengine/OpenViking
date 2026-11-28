@@ -275,7 +275,7 @@ class ShardRunner:
             release = asyncio.create_task(self._leases.release(lease))
             try:
                 done, _ = await asyncio.wait(
-                    {release}, timeout=self._config.redis.request_budget_seconds
+                    {release}, timeout=self._config.request_budget_seconds
                 )
             except BaseException:
                 lease.lost.set()
@@ -328,7 +328,7 @@ class ShardRunner:
 
                 task.add_done_callback(pending_done)
         try:
-            done, _ = await asyncio.wait(tasks, timeout=self._config.redis.request_budget_seconds)
+            done, _ = await asyncio.wait(tasks, timeout=self._config.request_budget_seconds)
         except asyncio.CancelledError as exc:
             if any(not task.done() for task in tasks):
                 raise self._not_stopped(scope) from exc

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from types import SimpleNamespace
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -82,10 +82,11 @@ def test_agent_only_schemas_are_excluded_from_peer_user_memory_extraction():
 
 
 @pytest.mark.asyncio
-async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajectory_read():
+async def test_agent_experience_prefetch_reads_new_trajectory_without_conversation():
     provider = AgentExperienceContextProvider(
-        messages=[],
+        messages=[Message(id="raw", role="user", parts=[TextPart("RAW_CONVERSATION")])],
         trajectory_summary="album release party discussion",
+        trajectory_task_query="Help arrange the release party first.",
         trajectory_uri="viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md",
     )
     provider._ctx = RequestContext(
@@ -95,6 +96,7 @@ async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajec
     provider._viking_fs = AsyncMock()
     provider._transaction_handle = None
     provider.search_files = AsyncMock(return_value=[])
+    provider._build_conversation_message = AsyncMock(side_effect=AssertionError("No conversation"))
 
     with patch(
         "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
@@ -102,124 +104,166 @@ async def test_agent_experience_prefetch_starts_with_conversation_and_new_trajec
         messages = await provider.prefetch()
 
     assert messages[0]["role"] == "user"
-    assert "## Conversation History" in messages[0]["content"]
-    assert "After exploring, analyze the conversation" in messages[0]["content"]
+    assert all("## Conversation History" not in message["content"] for message in messages)
+    provider._build_conversation_message.assert_not_called()
     assert add_tool_call_pair.call_count == 1
     assert add_tool_call_pair.call_args_list[0].kwargs["result"]["context_role"] == "new_trajectory"
     assert add_tool_call_pair.call_args_list[0].kwargs["result"]["memory_type"] == "trajectories"
     assert add_tool_call_pair.call_args_list[0].kwargs["result"]["uri"] == provider.trajectory_uri
+    assert (
+        add_tool_call_pair.call_args_list[0].kwargs["result"]["task_query"]
+        == "Help arrange the release party first."
+    )
     assert messages[-1]["role"] == "user"
-    assert "candidate_experience" in messages[-1]["content"]
+    assert provider.get_conversation_text() == provider.trajectory_summary
+    assert "RAW_CONVERSATION" not in json.dumps(messages)
+    provider.search_files.assert_not_awaited()
+    assert provider.get_memory_schemas(provider._ctx)[0].operation_mode == "add_only"
+    assert provider._get_registry().get("experiences").operation_mode == "upsert"
+
+
+def _history_provider(records, *, case_memory_type="cases", case_signature="returns"):
+    root = "viking://user/user_1/memories"
+    case_uri = f"{root}/cases/returns.md"
+    provider = AgentExperienceContextProvider(
+        messages=[],
+        trajectory_summary="Current execution with its own evaluation.",
+        trajectory_uri=f"{root}/trajectories/current.md",
+        trajectory_case_uris=[case_uri, "viking://user/other/memories/cases/returns.md"],
+        trajectory_source_archive_uri="viking://user/user_1/sessions/current/history/archive_001",
+        trajectory_evaluation={"score": 0.0},
+    )
+    provider._ctx = RequestContext(
+        user=UserIdentifier(account_id="acc", user_id="user_1"), role=Role.USER
+    )
+    files = {}
+    links = []
+    for index, (name, outcome, content, extra) in enumerate(records):
+        uri = name if name.startswith("viking://") else f"{root}/trajectories/{name}.md"
+        links.append({"to_uri": uri, "created_at": f"2026-10-28T00:{index:02}:00Z"})
+        if content is not None:
+            files[uri] = MemoryFileUtils.write(
+                MemoryFile(
+                    uri=uri,
+                    memory_type="trajectories",
+                    content=content,
+                    extra_fields={"outcome": outcome, "case_uris": [case_uri], **extra},
+                )
+            )
+    files[case_uri] = MemoryFileUtils.write(
+        MemoryFile(
+            uri=case_uri,
+            memory_type=case_memory_type,
+            content="Case, not an extraction input.",
+            extra_fields={"case_name": "returns", "task_signature": case_signature},
+            links=links,
+        )
+    )
+
+    async def read_file(uri, ctx):
+        assert ctx is provider._ctx
+        if uri not in files:
+            raise FileNotFoundError(uri)
+        return files[uri]
+
+    provider._viking_fs = AsyncMock()
+    provider._viking_fs.read_file.side_effect = read_file
+    provider._viking_fs.ls.return_value = []
+    provider.search_files = AsyncMock(return_value=[])
+    return provider
 
 
 @pytest.mark.asyncio
-async def test_agent_experience_prefetch_includes_structured_read_results():
-    experience_uri = "viking://user/user_sample_9/memories/experiences/personal_experience_sharing_conversation_flow.md"
-    source_uri = "viking://user/user_sample_9/memories/trajectories/previous_discussion.md"
-    provider = AgentExperienceContextProvider(
-        messages=[],
-        trajectory_summary="album release party discussion",
-        trajectory_uri="viking://user/user_sample_9/memories/trajectories/album_release_party_discussion.md",
+@pytest.mark.parametrize(
+    ("case_memory_type", "case_signature", "valid_case"),
+    [
+        ("cases", "returns", True),
+        (None, "returns", True),
+        ("experiences", "returns", False),
+    ],
+)
+async def test_experience_history_keeps_outcome_diversity_without_cross_case_or_duplicate_runs(
+    case_memory_type, case_signature, valid_case
+):
+    archive = "viking://user/user_1/sessions/old/history/archive_001"
+    provider = _history_provider(
+        [
+            ("failure", "failure", "Exchange failed after return changed the state.", {}),
+            ("partial", "partial", "Only one request was completed.", {}),
+            ("success_older", "success", "Older successful execution.", {}),
+            (
+                "same_archive",
+                "success",
+                "Re-extracted version of the same execution.",
+                {"source_archive_uri": archive},
+            ),
+            (
+                "success",
+                "success",
+                "Explained the conflict before writing; return completed.",
+                {"source_archive_uri": archive, "task_query": "Return the selected item first."},
+            ),
+            ("duplicate", "failure", "Current execution with its own evaluation.", {}),
+            (
+                "current_archive",
+                "failure",
+                "Another task from the current archive.",
+                {
+                    "source_archive_uri": "viking://user/user_1/sessions/current/history/archive_001/"
+                },
+            ),
+            (
+                "unrelated",
+                "failure",
+                "Wrong Case.",
+                {"case_uris": ["viking://user/user_1/memories/cases/other.md"]},
+            ),
+            ("missing", "failure", None, {}),
+            ("viking://user/other/memories/trajectories/foreign.md", "failure", "Wrong user.", {}),
+            ("../cases/escape", "failure", "Wrong directory.", {}),
+        ],
+        case_memory_type=case_memory_type,
+        case_signature=case_signature,
     )
-    provider._ctx = RequestContext(
-        user=UserIdentifier(account_id="acc", user_id="user_1"),
-        role=Role.USER,
-    )
-    provider._viking_fs = AsyncMock()
-    provider._transaction_handle = None
 
-    provider.search_files = AsyncMock(return_value=[experience_uri])
-    source = MemoryFile(
-        uri=source_uri,
-        memory_type="trajectories",
-        content="# Previous discussion\nComplete procedure and failure evidence.",
-        backlinks=[{"from_uri": experience_uri, "link_type": "derived_from"}],
-        extra_fields={
-            "trajectory_name": "previous_discussion",
-            "outcome": "success",
-            "task_query": "Discuss the album release party.",
-            "retrieval_anchor": "Stage: final_response; Boundary: completed discussion.",
-            "case_name": "discussion_case",
-            "source_archive_uri": "viking://user/default/sessions/previous/archive/001",
-            "last_update_trace_id": "source-trace-id",
-            "version": 3,
-        },
-    )
-    stored_source = MemoryFileUtils.write(source)
-    provider._viking_fs.read_file.return_value = stored_source
+    messages = await provider.prefetch()
+    results = [json.loads(msg["content"])["result"] for msg in messages[:-1]]
+    historical = [result for result in results if result["context_role"] == "historical_trajectory"]
 
-    read_result = {
-        "experience_name": "personal_experience_sharing_conversation_flow",
-        "content": "1 | line one\n2 | line two",
-        "page_id": 1,
-        "memory_type": "experiences",
-    }
-    provider.read_file = AsyncMock(return_value=read_result)
-    provider._read_file_contents = {
-        experience_uri: SimpleNamespace(
-            extra_fields={"experience_name": "personal_experience_sharing_conversation_flow"},
-            content="line one\nline two",
-            links=[{"to_uri": source_uri, "link_type": "derived_from"}],
-        )
-    }
+    if not valid_case:
+        assert historical == []
+        assert provider.history_uris == []
+        assert provider._viking_fs.read_file.await_count == 1
+        provider._viking_fs.write_file.assert_not_awaited()
+        return
 
-    with patch(
-        "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
-    ) as add_tool_call_pair:
-        messages = await provider.prefetch()
-
-    assert any(msg.get("role") == "user" for msg in messages)
-    assert add_tool_call_pair.call_count == 3
-    assert (
-        add_tool_call_pair.call_args_list[1].kwargs["result"]["context_role"]
-        == "candidate_experience"
-    )
-    assert add_tool_call_pair.call_args_list[1].kwargs["result"]["page_id"] == 1
-    assert add_tool_call_pair.call_args_list[1].kwargs["result"] == {
-        **read_result,
-        "uri": experience_uri,
-        "context_role": "candidate_experience",
-    }
-    source_result = add_tool_call_pair.call_args_list[2].kwargs["result"]
-    assert source_result == {
-        "trajectory_name": source.extra_fields["trajectory_name"],
-        "outcome": source.extra_fields["outcome"],
-        "task_query": source.extra_fields["task_query"],
-        "retrieval_anchor": source.extra_fields["retrieval_anchor"],
-        "case_name": source.extra_fields["case_name"],
-        "memory_type": "trajectories",
-        "content": source.content,
-        "uri": source_uri,
-        "context_role": "candidate_source_trajectory",
-    }
-    assert MemoryFileUtils.read(stored_source, uri=source_uri).to_metadata() == source.to_metadata()
+    assert [result["outcome"] for result in historical] == ["success", "failure"]
+    assert historical[0]["task_query"] == "Return the selected item first."
+    assert provider.history_uris == [result["uri"] for result in historical]
+    assert provider.history_uris == [
+        "viking://user/user_1/memories/trajectories/success.md",
+        "viking://user/user_1/memories/trajectories/failure.md",
+    ]
+    assert results[0]["post_hoc_evaluation"] == {"score": 0.0}
+    assert all("post_hoc_evaluation" not in item for item in historical)
+    assert "Case, not an extraction input" not in str(messages)
+    assert provider.read_file_contents == {}  # Historical records are read-only context.
+    read_uris = [call.args[0] for call in provider._viking_fs.read_file.await_args_list]
+    assert not any("/other/" in uri or "/../" in uri for uri in read_uris)
     provider._viking_fs.write_file.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_agent_experience_prefetch_missing_experience_dir_returns_empty_candidates():
-    provider = AgentExperienceContextProvider(
-        messages=[],
-        trajectory_summary="new execution",
-        trajectory_uri="viking://user/user_1/memories/trajectories/new_execution.md",
+async def test_experience_history_falls_back_to_recent_records_and_bounds_reads():
+    count = 25
+    provider = _history_provider(
+        [(f"history_{idx}", "success", f"Distinct execution {idx}.", {}) for idx in range(count)]
     )
-    provider._ctx = RequestContext(
-        user=UserIdentifier(account_id="acc", user_id="user_1"),
-        role=Role.USER,
-    )
-    provider._viking_fs = AsyncMock()
-    provider._viking_fs.ls = AsyncMock(
-        side_effect=Exception("Directory not found: viking://user/user_1/memories/experiences")
-    )
-    provider._transaction_handle = None
-    provider.search_files = AsyncMock(return_value=[])
 
-    with (
-        patch(
-            "openviking.session.memory.agent_experience_context_provider.add_tool_call_pair_to_messages"
-        ) as add_tool_call_pair,
-    ):
-        messages = await provider.prefetch()
+    await provider.prefetch()
 
-    assert messages[-1]["role"] == "user"
-    assert add_tool_call_pair.call_count == 1
+    assert provider.history_uris == [
+        f"viking://user/user_1/memories/trajectories/history_{idx}.md"
+        for idx in range(count - 1, max(-1, count - 3), -1)
+    ]
+    assert provider._viking_fs.read_file.await_count == 1 + min(count, 20)

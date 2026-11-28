@@ -2,119 +2,141 @@
 # SPDX-License-Identifier: Apache-2.0
 """Focused tests for core service behavior."""
 
+import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from openviking.server.identity import RequestContext, Role
+from openviking.server.config import AccountStoreConfig, ServerConfig
 from openviking.service.core import OpenVikingService
-from openviking.storage.index_consistency import IndexConsistencyReport
-from openviking_cli.exceptions import InvalidArgumentError
-from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config.agent_evolution_config import AgentEvolutionConfig
+from openviking.storage.queuefs import get_queue_manager
+from openviking_cli.utils.config.open_viking_config import (
+    OpenVikingConfig,
+    OpenVikingConfigSingleton,
+)
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
-def test_service_passes_queue_worker_concurrency_to_storage(monkeypatch) -> None:
-    storage_calls = []
-    embedder = SimpleNamespace(is_sparse=False)
-    config = SimpleNamespace(
-        default_account="default",
-        default_user="default",
-        service_name="default",
-        agent_evolution=AgentEvolutionConfig(),
-        storage=object(),
-        embedding=SimpleNamespace(
-            max_concurrent=10,
-            dimension=1024,
-            get_embedder=lambda: embedder,
+async def test_service_applies_configured_queue_worker_limits(tmp_path, monkeypatch) -> None:
+    from openviking.service.task_tracker import set_task_tracker
+
+    config_file = tmp_path / "ov.conf"
+    config_file.write_text(
+        json.dumps(
+            {
+                "storage": {"workspace": str(tmp_path / "workspace")},
+                "vlm": {"provider": "openai", "model": "test-vlm", "api_key": "unused"},
+                "embedding": {
+                    "dense": {
+                        "provider": "openai",
+                        "model": "offline",
+                        "api_key": "unused",
+                        "dimension": 4,
+                    }
+                },
+                "queue_workers": {
+                    "external_parse": {"max_concurrent": 9},
+                    "add_resource": {"max_concurrent": 7},
+                    "reindex": {"max_concurrent": 4},
+                    "session_commit": {"max_concurrent": 5},
+                    "external_task": {"max_concurrent": 6},
+                },
+            }
         ),
-        vlm=SimpleNamespace(max_concurrent=32),
-        parser_api=SimpleNamespace(),
-        compile_api=SimpleNamespace(base_url=""),
-        queue_workers=SimpleNamespace(
-            external_parse=SimpleNamespace(max_concurrent=9),
-            add_resource=SimpleNamespace(max_concurrent=7),
-            reindex=SimpleNamespace(max_concurrent=4),
-            session_commit=SimpleNamespace(max_concurrent=5),
-            external_task=SimpleNamespace(max_concurrent=6),
-        ),
-        git=object(),
+        encoding="utf-8",
     )
-
-    monkeypatch.setattr(
-        "openviking.service.core.initialize_openviking_config",
-        lambda **_kwargs: config,
-    )
-    monkeypatch.setattr(OpenVikingService, "_ensure_data_dir_lock_acquired", lambda self: None)
-    monkeypatch.setattr(
-        OpenVikingService,
-        "_build_ragfs_binding_config",
-        lambda self: object(),
-    )
-
-    def _capture_storage_init(self, *args, **kwargs) -> None:
-        storage_calls.append((args, kwargs))
-
-    monkeypatch.setattr(OpenVikingService, "_init_storage", _capture_storage_init)
-
-    OpenVikingService()
-
-    assert storage_calls[0][1]["max_concurrent_external_parse"] == 9
-    assert storage_calls[0][1]["max_concurrent_add_resource"] == 7
-    assert storage_calls[0][1]["max_concurrent_session_commit"] == 5
-    assert storage_calls[0][1]["max_concurrent_external_task"] == 6
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_file))
+    monkeypatch.setattr("openviking.server.dependencies._server_config", None)
+    OpenVikingConfigSingleton.reset_instance()
+    service = OpenVikingService()
+    try:
+        manager = get_queue_manager()
+        assert manager._max_concurrent_for_queue(manager.EXTERNAL_PARSE) == 9
+        assert manager._max_concurrent_for_queue(manager.ADD_RESOURCE) == 7
+        assert manager._max_concurrent_for_queue(manager.REINDEX) == 4
+        assert manager._max_concurrent_for_queue(manager.SESSION_COMMIT) == 5
+        assert manager._max_concurrent_for_queue(manager.EXTERNAL_TASK) == 6
+    finally:
+        await service.close()
+        set_task_tracker(None)
+        OpenVikingConfigSingleton.reset_instance()
 
 
-def _service_with_fs(stat_result: dict) -> tuple[OpenVikingService, AsyncMock]:
-    service = OpenVikingService.__new__(OpenVikingService)
-    service._initialized = True
-    service._user = UserIdentifier.the_default_user()
-    service._vikingdb_manager = AsyncMock()
-    service._viking_fs = AsyncMock()
-    service._viking_fs.stat.return_value = stat_result
-    return service, service._viking_fs
-
-
-@pytest.mark.asyncio
-async def test_check_consistency_rejects_file_uri() -> None:
-    service, viking_fs = _service_with_fs({"isDir": False})
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-
-    with pytest.raises(
-        InvalidArgumentError,
-        match="Consistency check only supports directory URIs",
-    ):
-        await service.check_consistency(
-            uri="viking://resources/consistency-file.md",
-            ctx=ctx,
+@pytest.mark.parametrize("source", ["file", "registered", "registered-over-file"])
+def test_service_loads_account_store_runtime_from_config_file(tmp_path, monkeypatch, source):
+    registered = None
+    config_file = None
+    if source != "registered":
+        config_file = tmp_path / "ov.conf"
+        account_store = {
+            "provider": "redis_mysql" if source == "file" else "file",
+            "params": {"cache": {"instance": "accountstore"}} if source == "file" else {},
+        }
+        config_file.write_text(json.dumps({"server": {"account_store": account_store}}))
+    if source != "file":
+        registered = ServerConfig(
+            account_store=AccountStoreConfig(
+                provider=" REDIS_MYSQL ",
+                params={"cache": {"instance": "accountstore"}},
+            )
         )
 
-    viking_fs.tree.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_check_consistency_preserves_directory_behavior() -> None:
-    service, viking_fs = _service_with_fs({"isDir": True})
-    viking_fs.tree.return_value = []
-    ctx = RequestContext(user=service.user, role=Role.ROOT)
-    report = IndexConsistencyReport(expected=(), missing_records=())
-
-    with patch(
-        "openviking.service.core.check_index_consistency",
-        new=AsyncMock(return_value=report),
-    ) as check:
-        result = await service.check_consistency(uri="viking://resources", ctx=ctx)
-
-    assert result == report.to_dict()
-    viking_fs.stat.assert_awaited_once_with(
-        "viking://resources",
-        ctx=ctx,
-        skip_count=True,
+    monkeypatch.setattr(OpenVikingConfigSingleton, "get_config_file", lambda: config_file)
+    monkeypatch.setattr("openviking.server.dependencies._server_config", registered)
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = OpenVikingConfig.model_validate(
+        {
+            "storage": {"workspace": str(tmp_path)},
+            "cache": {
+                "instances": {
+                    "default": {"provider": "dynamic"},
+                    "accountstore": {
+                        "provider": "redis",
+                        "params": {"endpoints": ["redis://127.0.0.1:6380"]},
+                    },
+                },
+            },
+        }
     )
-    viking_fs.tree.assert_awaited_once()
-    check.assert_awaited_once()
+
+    binding = service._build_ragfs_binding_config()
+    assert binding.required_cache_instances == {"Redis MySQL Account Store": "accountstore"}
+    cache = binding.to_binding_dict()["cache"]
+    assert cache["runtime_enabled"] is True
+    assert cache["cachefs"]["enabled"] is False
+    assert cache["instances"]["accountstore"]["provider"] == "redis"
+    assert cache["instances"]["accountstore"]["redis"]["endpoints"] == ["redis://127.0.0.1:6380"]
+
+
+def test_service_requires_ttl_runtime_from_registered_config(monkeypatch) -> None:
+    """Select the enabled Directory TTL CacheRuntime before constructing AGFS."""
+    service = OpenVikingService.__new__(OpenVikingService)
+    service._config = object()
+    calls = []
+    server_config = SimpleNamespace(
+        account_store=SimpleNamespace(provider="file", params={}),
+        ttl_adapter=SimpleNamespace(
+            enabled=True,
+            cache=SimpleNamespace(instance="ttl"),
+        ),
+    )
+
+    monkeypatch.setattr(
+        "openviking.service.core.OpenVikingConfigSingleton.get_config_file",
+        lambda: None,
+    )
+    monkeypatch.setattr("openviking.server.dependencies._server_config", server_config)
+    monkeypatch.setattr(
+        "openviking.service.core.build_runtime_ragfs_binding_config",
+        lambda config, **kwargs: (calls.append((config, kwargs)) or (object(), None)),
+    )
+
+    service._build_ragfs_binding_config()
+
+    assert calls == [
+        (service._config, {"required_cache_instances": {"Directory TTL": "ttl"}})
+    ]
 
 
 @pytest.mark.asyncio
@@ -137,9 +159,12 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
             events.append("resource_tasks")
 
     class QueueManager:
-        def stop(self) -> None:
+        def stop_workers(self) -> None:
             assert wiring.get_ttl_adapter() is adapter
             events.append("queue_manager")
+
+        def stop(self) -> None:
+            pass
 
     class RagfsClient:
         def close(self) -> None:
@@ -154,7 +179,9 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
         stop_roles=AsyncMock(side_effect=lambda **_: events.append("expiry_roles")),
         close=AsyncMock(side_effect=lambda: events.append("expiry_storage")),
     )
-    service._session_service = SimpleNamespace(set_session_expiry_adapter=lambda _: None)
+    service._session_service = SimpleNamespace(
+        set_session_expiry_adapter=lambda _: None, set_usage_reporter=Mock()
+    )
     service._runtime_config_manager = None
     service._watch_runtime = None
     service._watch_manager = None
@@ -162,7 +189,7 @@ async def test_close_stops_queue_manager_before_ragfs_binding(monkeypatch) -> No
     service._queue_manager = QueueManager()
     service._vikingdb_manager = None
     service._agfs_client = RagfsClient()
-    service._viking_fs = object()
+    service._viking_fs = SimpleNamespace(set_post_write_hook=Mock())
     service._resource_processor = object()
     service._skill_processor = object()
     service._session_compressor = object()

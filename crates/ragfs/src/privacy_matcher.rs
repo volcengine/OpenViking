@@ -115,9 +115,10 @@ impl PrivacyMatcher {
             parent_prefix[index] = prefixes.last().copied().unwrap_or(patterns.len());
             for &prefix in prefixes.iter().rev() {
                 let end = patterns[prefix].len();
-                if !(value[..end].chars().next_back().is_some_and(word_char)
-                    && value[end..].chars().next().is_some_and(word_char))
-                {
+                if !joins_word(
+                    value[..end].chars().next_back(),
+                    value[end..].chars().next(),
+                ) {
                     shorter_prefixes[index] = Some(PatternID::must(prefix));
                     break;
                 }
@@ -457,8 +458,15 @@ fn next_unmarked_prefix(links: &mut [usize], mut index: usize) -> usize {
 }
 // Matches may not split adjacent word characters.
 fn is_match_boundary(content: &str, at: usize) -> bool {
-    !(content[..at].chars().next_back().is_some_and(word_char)
-        && content[at..].chars().next().is_some_and(word_char))
+    !joins_word(
+        content[..at].chars().next_back(),
+        content[at..].chars().next(),
+    )
+}
+// ASCII next to another script, such as a token typed right after Chinese text, is not one word.
+fn joins_word(left: Option<char>, right: Option<char>) -> bool {
+    matches!((left, right), (Some(l), Some(r))
+        if word_char(l) && word_char(r) && l.is_ascii() == r.is_ascii())
 }
 fn word_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
@@ -497,9 +505,9 @@ mod tests {
         ]);
         assert_eq!(
             matcher
-                .sanitize("pass123-v2x pass123-v2 中pass123 pass123_ pass123²")
+                .sanitize("pass123-v2x pass123-v2 中pass123 pass123_ pass123² 秘密值们 x秘密")
                 .content,
-            "short-v2x long 中pass123 pass123_ pass123²"
+            "short-v2x long 中short pass123_ short² 秘密值们 xshort"
         );
         let input = format!("🙂秘密值 {reference} session default");
         let (found, exceeded) = matcher.find_limited(&input, 3);

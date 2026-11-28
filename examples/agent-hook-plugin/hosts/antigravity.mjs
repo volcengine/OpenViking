@@ -12,6 +12,9 @@
  * context goes back as a `systemMessage` step, which stays in the conversation.
  * Stop carries no message text: capture reads the finished steps of
  * `transcriptPath` after the last captured step.
+ *
+ * PreToolUse hands over `toolCall.name` (`read_file`, `run_command`, …) and
+ * `toolCall.args`, whose keys are PascalCase (`Path`, `CommandLine`).
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -20,6 +23,7 @@ import { basename, dirname, join } from "node:path";
 
 import { addAgentMessages, commitAgentSession } from "../../memory-plugin-shared/lib/agent-hook-runtime.mjs";
 import { filterCaptureTurns } from "../../memory-plugin-shared/lib/capture-utils.mjs";
+import { evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 
 // The host wraps a typed request as `<USER_REQUEST>…</USER_REQUEST>` followed by
 // metadata blocks. Only that record is unwrapped, and only an envelope that
@@ -94,6 +98,23 @@ export function resolveAntigravityTurnStep(jsonl, initialNumSteps, lastUserInput
   return lastUserStep + 1;
 }
 
+/**
+ * The step index of the latest compaction. Antigravity has no compaction hook;
+ * each compaction writes a `CHECKPOINT` step, and the context before it, the
+ * session-start profile included, is gone.
+ */
+export function latestAntigravityCheckpoint(jsonl) {
+  let latest;
+  for (const line of String(jsonl || "").split("\n")) {
+    if (!line.includes('"CHECKPOINT"')) continue;
+    try {
+      const step = JSON.parse(line);
+      if (step.type === "CHECKPOINT" && step.source === "SYSTEM") latest = step.step_index;
+    } catch { /* a partial last line */ }
+  }
+  return latest;
+}
+
 /** The user requests and text replies of finished steps after `afterStep`. */
 export function buildAntigravityTurns(jsonl, afterStep = -1) {
   const turns = [];
@@ -126,6 +147,12 @@ export function buildAntigravityTurns(jsonl, afterStep = -1) {
   return { turns, lastStep };
 }
 
+// File tools name their location in an argument ending in Path, File or
+// Directory (`Path`, `AbsolutePath`, `TargetFile`, `DirectoryPath`). A file body
+// or a command line that mentions a viking:// URI is not a location.
+const LOCATION_ARG = /(?:Path|File|Directory)$/;
+const GUARD_KINDS = [[/write/, "write"], [/replace|edit/, "edit"], [/grep|search/, "grep"], [/list|find/, "glob"]];
+
 export const antigravity = {
   prefix: "ag-",
   capturesOnlyWhenEnabled: true,
@@ -139,6 +166,18 @@ export const antigravity = {
     ...input,
     session_id: input.conversationId,
   }),
+  guard(input = {}) {
+    const { name = "", args } = input.toolCall || {};
+    const location = Object.entries(args || {}).find(([key, value]) => (
+      LOCATION_ARG.test(key) && typeof value === "string" && /^\s*viking:\/\//i.test(value)
+    ))?.[1];
+    if (!location) return {};
+    const kind = GUARD_KINDS.find(([pattern]) => pattern.test(name))?.[1] || "read";
+    const denied = evaluateUriGuard(kind, { path: location.trim() });
+    // No decision at all when the call may proceed: "allow" would skip the
+    // user's own permission prompt.
+    return denied ? { decision: "deny", reason: denied.reason } : {};
+  },
   prompt(input) {
     if (Number(input.invocationNum || 0) !== 0) return "";
     const text = cleanAntigravityText(input.lastUserInput);
@@ -146,8 +185,9 @@ export const antigravity = {
     let turnStep;
     if (input.transcriptPath) {
       try {
-        turnStep = resolveAntigravityTurnStep(
-          readFileSync(antigravityTranscriptPath(input.transcriptPath), "utf8"), input.initialNumSteps, text);
+        const jsonl = readFileSync(antigravityTranscriptPath(input.transcriptPath), "utf8");
+        turnStep = resolveAntigravityTurnStep(jsonl, input.initialNumSteps, text);
+        input.latestCompaction = latestAntigravityCheckpoint(jsonl);
       } catch {
         turnStep = undefined;
       }

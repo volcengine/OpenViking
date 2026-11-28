@@ -83,8 +83,8 @@ Leaf directories → Parent directories → Root
 
 1. **Concurrent file summary generation**: Concurrency is limited by `vlm.max_concurrent`
 2. **Collect child directory abstracts**: Read generated .abstract.md
-3. **Generate .overview.md**: LLM generates L1 overview
-4. **Extract .abstract.md**: Extract L0 from overview
+3. **Generate .abstract.md**: Generate a short L0 from selected node summaries, preserving manually maintained L0
+4. **Render .overview.md**: Render L1 from L0 and entry summaries without a model call for the overview
 5. **Write files**: Store the body and protected metadata as OKF Markdown
 6. **Vectorize**: Create Context and queue to EmbeddingQueue
 

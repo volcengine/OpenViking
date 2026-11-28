@@ -46,7 +46,8 @@ An embedded and a standalone gateway share most fields; they differ in which fil
 | `response_ttl_seconds` | Both | `2592000` (30 days) | 60 or more | Seconds to remember which upstream created a Responses response |
 | `request_log_sink` | Both | `store` | `store`, `stdout`, `file` | Write request logs to storage, as one flushed JSON line per record on stdout, or as the same lines to `request_log_path` from a background thread; see [Monitoring](../guides/22-gateway-operations.md#monitoring). The `file` sink needs one worker process: `workers: 1` standalone, one server worker embedded |
 | `request_log_path` | Both | empty | File path | File for the `file` sink; required with it |
-| `request_log_max_bytes` | Both | `268435456` (256 MiB) | 1,048,576 or more | Size at which the `file` sink rotates its file; four old files are kept |
+| `request_log_rotation_interval_hours` | Both | `1` | 1 or more | Hours after which the `file` sink rotates its file, as the server's [usage log](../guides/01-configuration.md#usage-reporter) does; old files are named after the UTC hour they started, such as `requests.jsonl.2026-01-31_13`. The parent directory is created if missing |
+| `request_log_backup_count` | Both | `168` | 0 or more | Old `file` sink files kept; `0` keeps all |
 | `snapshot_interval_seconds` | Both | `0` | 0 or more | Seconds between [status lines](../guides/22-gateway-operations.md#status-line) with this process's counters. `0` writes none |
 | `trusted_host_headers` | Both | `false` | `true`, `false` | Record `X-OpenViking-Resource-Id` and `X-OpenViking-Request-Source` from a service in front of the gateway as `resource_id` and `request_source`; see [Host integration contract](../guides/22-gateway-operations.md#host-integration-contract). Turn it on only when clients cannot reach the gateway directly; see [Headers from a host](11-security-and-data.md#headers-from-a-host) |
 | `log_retention_days` | Both | `30` | 1 or more | Days to keep request logs in storage; stdout and file retention is managed by the log collector |
@@ -145,7 +146,7 @@ OPENVIKING_GATEWAY_MANAGEMENT_KEY='<management-key>'
 | `tenancy` | `key` requires `management_api: false`; it has no effect when `openviking_keys` is off |
 | `client_rules` | Every added pattern must be a valid Python regular expression; added tag names start with an ASCII letter and use only ASCII letters, digits, `_`, `.`, `:` and `-` |
 | Unknown fields | Fail validation |
-| Removed fields | Ignored, with a startup warning: `encryption_key_env`, `session_ttl_days` (replaced by `session_ttl_seconds`), `capture_concurrency`, `capture_delivery_records`, and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
+| Removed fields | Ignored, with a startup warning: `encryption_key_env`, `session_ttl_days` (replaced by `session_ttl_seconds`), `capture_concurrency`, `capture_delivery_records`, `request_log_max_bytes` (the `file` sink rotates by time), and in `ov.conf` also the v0.5 fields listed in [Migration](../guides/22-gateway-operations.md#migration) |
 
 ## Client rules {#client-rules}
 
@@ -181,7 +182,16 @@ In `gateway.conf`, `client_rules` sits at the root, without the `gateway` wrappe
 
 ## Context profile settings {#context-profile-settings}
 
-In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles). **Let clients override settings** (`client_overrides`, default `true`) lets clients change every other setting for a new conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides).
+In Studio: **Profiles** → a profile. The tables follow the editor's sections, with the Studio label first and then the name in the management API, which calls context profiles `policies`. **Name** (`name`, default `Default`) is the profile's display name; what each section does is explained in [Context profiles](08-context-profiles.md#context-profiles). **Let clients override settings** (`client_overrides`, default `true`) lets clients change every other setting for a new conversation with the `X-OpenViking-Context` header; see [Let clients override settings](08-context-profiles.md#client-overrides). The two switches below it, which that header cannot set either, are in [Secret sealing](#profile-seal-secrets).
+
+### Secret sealing {#profile-seal-secrets}
+
+Explained in [Secret sealing in the gateway](14-seal-secrets.md).
+
+| Studio label | API name | Default | Range | Meaning |
+| --- | --- | --- | --- | --- |
+| Seal secrets | `seal_secrets` | `false` | | Send registered credentials, and new tokens the user types, to the model only as references; give client tools the real values. Needs OpenViking Server 0.5.7 or later. A request that cannot be sealed is refused. `X-OpenViking-Context` cannot set it. |
+| Also store secrets found in tool output | `enroll_tool_secrets` | `false` | | Also store new tokens from tool results and attached blocks. Only with `seal_secrets`. `X-OpenViking-Context` cannot set it. |
 
 ### Recall memory {#profile-recall}
 

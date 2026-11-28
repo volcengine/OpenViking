@@ -125,9 +125,9 @@
 <text x="364" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Message 1</text>
 <rect x="416" y="738" width="96" height="44" rx="4" fill="#FFFFFF" stroke="#8F959E" stroke-width="1.5" stroke-dasharray="5 4"/>
 <text x="464" y="765" font-size="14" font-weight="400" fill="#8F959E" text-anchor="middle">none</text>
-<rect x="516" y="738" width="84" height="44" rx="4" fill="#E3F5E1" stroke="#2EA121" stroke-width="1.5"/>
+<rect x="516" y="738" width="84" height="44" rx="4" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
 <text x="558" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Reply 1</text>
-<rect x="604" y="738" width="96" height="44" rx="4" fill="#E3F5E1" stroke="#2EA121" stroke-width="1.5"/>
+<rect x="604" y="738" width="96" height="44" rx="4" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
 <text x="652" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">Message 2</text>
 <rect x="704" y="738" width="96" height="44" rx="4" fill="#FFFFFF" stroke="#F54A45" stroke-width="1.5" stroke-dasharray="5 4"/>
 <text x="752" y="765" font-size="14" font-weight="400" fill="#F54A45" text-anchor="middle">missing</text>
@@ -137,14 +137,14 @@
 <text x="955" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">New message 3</text>
 <rect x="1022" y="738" width="100" height="44" rx="4" fill="#FDECEC" stroke="#F54A45" stroke-width="1.5"/>
 <text x="1072" y="765" font-size="14" font-weight="400" fill="#1F2329" text-anchor="middle">New recall</text>
-<line x1="192" y1="728" x2="700" y2="728" stroke="#2EA121" stroke-width="1.5"/>
+<line x1="192" y1="728" x2="412" y2="728" stroke="#2EA121" stroke-width="1.5"/>
 <line x1="192" y1="728" x2="192" y2="734" stroke="#2EA121" stroke-width="1.5"/>
-<line x1="700" y1="728" x2="700" y2="734" stroke="#2EA121" stroke-width="1.5"/>
-<text x="446" y="721" font-size="14" font-weight="700" fill="#2EA121" text-anchor="middle">Same as last turn: hit</text>
-<line x1="704" y1="728" x2="1122" y2="728" stroke="#F54A45" stroke-width="1.5"/>
-<line x1="704" y1="728" x2="704" y2="734" stroke="#F54A45" stroke-width="1.5"/>
+<line x1="412" y1="728" x2="412" y2="734" stroke="#2EA121" stroke-width="1.5"/>
+<text x="302" y="721" font-size="14" font-weight="700" fill="#2EA121" text-anchor="middle">Same as last turn: hit</text>
+<line x1="416" y1="728" x2="1122" y2="728" stroke="#F54A45" stroke-width="1.5"/>
+<line x1="416" y1="728" x2="416" y2="734" stroke="#F54A45" stroke-width="1.5"/>
 <line x1="1122" y1="728" x2="1122" y2="734" stroke="#F54A45" stroke-width="1.5"/>
-<text x="913" y="721" font-size="14" font-weight="700" fill="#F54A45" text-anchor="middle">Full price from last turn's memory onward</text>
+<text x="769" y="721" font-size="14" font-weight="700" fill="#F54A45" text-anchor="middle">Full price from the missing memory onward</text>
 <rect x="1164" y="652" width="26" height="18" rx="3" fill="#EDE6FF" stroke="#2EA121" stroke-width="1.5"/>
 <text x="1200" y="667" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">Memory the gateway added</text>
 <rect x="1164" y="682" width="26" height="18" rx="3" fill="#E3F5E1" stroke="#2EA121" stroke-width="1.5"/>
@@ -154,7 +154,7 @@
 <rect x="1164" y="742" width="26" height="18" rx="3" fill="#FFFFFF" stroke="#8F959E" stroke-width="1.5"/>
 <text x="1200" y="757" font-size="14" font-weight="400" fill="#646A73" text-anchor="start">New in this turn</text>
 <text x="40" y="812" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">The client's history never contains what the gateway added, so the gateway keeps its own record and puts it back on every request.</text>
-<text x="40" y="832" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">Without replay, each turn is recomputed from where memory was added in the previous turn; the exact cost depends on the provider's cache breakpoints.</text>
+<text x="40" y="832" font-size="14.5" font-weight="400" fill="#646A73" text-anchor="start">Without replay, the prefix breaks where memory A should be, and everything after it is billed at full price; the exact cost depends on the provider's cache breakpoints.</text>
 <rect x="40" y="856" width="760" height="180" rx="12" fill="#F7F3FF" stroke="#7F3BF5" stroke-width="1.5"/>
 <text x="62" y="888" font-size="17" font-weight="700" fill="#1F2329" text-anchor="start">Across turns: save the conversation, extract memories</text>
 <rect x="62" y="904" width="159.5" height="72" rx="8" fill="#FFFFFF" stroke="#7F3BF5" stroke-width="1.5"/>

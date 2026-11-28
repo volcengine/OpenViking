@@ -836,6 +836,10 @@ const COMMAND_HELP_SPECS: &[CommandHelpSpec] = &[
                 description: "Show a reference; infer the field only when exactly one exists.",
             },
             HelpItem {
+                label: "ov privacy run --env NAME='{{ov_privacy:...}}' -- <program> [args...]",
+                description: "Run a local program with resolved {{ov_privacy:...}} references (env, --env-file, or args) and mask sensitive values in stdout/stderr.",
+            },
+            HelpItem {
                 label: "ov privacy resolve <category> <target> [field]",
                 description: "Reveal a field; infer it only when exactly one exists.",
             },

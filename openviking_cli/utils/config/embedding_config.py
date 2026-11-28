@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, model_validator
 
 from openviking_cli.utils.logger import get_logger
 
@@ -12,6 +12,16 @@ TEXT_SOURCE_CONTENT_ONLY = "content_only"
 TEXT_SOURCE_SUMMARY_FIRST = "summary_first"
 SUMMARY_TEXT_SOURCES = frozenset({TEXT_SOURCE_SUMMARY_FIRST})
 TEXT_SOURCES = SUMMARY_TEXT_SOURCES | {TEXT_SOURCE_CONTENT_ONLY}
+
+
+def resolve_vikingdb_session_token(binding: BaseModel | dict, parent: BaseModel | dict):
+    """Keep an STS token with the AK/SK pair that owns it, including explicit clears."""
+    values = binding if isinstance(binding, dict) else binding.model_dump(exclude_unset=True)
+    if "session_token" in values:
+        return values["session_token"]
+    if values.get("ak") or values.get("sk"):
+        return None
+    return parent.get("session_token") if isinstance(parent, dict) else parent.session_token
 
 
 class EmbeddingCredential(BaseModel):
@@ -36,6 +46,7 @@ class EmbeddingCredential(BaseModel):
     api_version: Optional[str] = Field(default=None, description="API version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
     sk: Optional[str] = Field(default=None, description="Access Key Secret for VikingDB API")
+    session_token: Optional[str] = Field(default=None, description="STS token for VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
     extra_headers: Optional[dict[str, str]] = Field(default=None, description="Extra HTTP headers")
@@ -85,6 +96,7 @@ class EmbeddingModelConfig(BaseModel):
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
+    session_token: Optional[str] = Field(default=None, description="STS token for VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
     extra_headers: Optional[dict[str, str]] = Field(
@@ -689,12 +701,14 @@ class EmbeddingConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def apply_default_local_dense(cls, data: Any) -> Any:
+    def apply_default_local_dense(cls, data: Any, info: ValidationInfo) -> Any:
         if data is None:
             data = {}
         if not isinstance(data, dict):
             return data
 
+        if (info.context or {}).get("enable_default_resources") is False:
+            return data
         if not data.get("dense") and not data.get("sparse") and not data.get("hybrid"):
             data = dict(data)
             data["dense"] = {
@@ -706,10 +720,6 @@ class EmbeddingConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if not self.dense and not self.sparse and not self.hybrid:
-            raise ValueError(
-                "At least one embedding configuration (dense, sparse, or hybrid) is required"
-            )
         if self.text_source == "summary_only":
             logger.info(
                 "embedding.text_source=summary_only is deprecated; use summary_first instead. Files without a summary still fall back to content for vectorization."
@@ -861,8 +871,9 @@ class EmbeddingConfig(BaseModel):
                     "sk": cfg.sk,
                     "region": cfg.region,
                     "host": cfg.host,
+                    "session_token": cfg.session_token,
                     "dimension": cfg.dimension,
-                    "input_type": cfg.input,
+                    "embedding_type": cfg.input,
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
@@ -877,6 +888,7 @@ class EmbeddingConfig(BaseModel):
                     "sk": cfg.sk,
                     "region": cfg.region,
                     "host": cfg.host,
+                    "session_token": cfg.session_token,
                     "config": dict(runtime_config),
                 },
             ),
@@ -889,8 +901,9 @@ class EmbeddingConfig(BaseModel):
                     "sk": cfg.sk,
                     "region": cfg.region,
                     "host": cfg.host,
+                    "session_token": cfg.session_token,
                     "dimension": cfg.dimension,
-                    "input_type": cfg.input,
+                    "embedding_type": cfg.input,
                     "config": dict(runtime_config),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
@@ -1096,6 +1109,7 @@ class EmbeddingConfig(BaseModel):
                 version=config.version,
                 ak=cred.ak or config.ak,
                 sk=cred.sk or config.sk,
+                session_token=resolve_vikingdb_session_token(cred, config),
                 region=cred.region or config.region,
                 host=cred.host or config.host,
                 api_key=cred.api_key or config.api_key,
@@ -1150,7 +1164,7 @@ class EmbeddingConfig(BaseModel):
             return self.dense.get_effective_dimension()
         if self.sparse:
             return self.sparse.get_effective_dimension()
-        return 2048
+        return 0
 
     @staticmethod
     def _require_provider(provider: Optional[str]) -> str:

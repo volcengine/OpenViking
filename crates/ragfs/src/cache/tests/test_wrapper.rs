@@ -1,6 +1,6 @@
 use super::super::envelope::QueryCacheEnvelope;
 use super::*;
-use crate::cache_runtime::{CacheRuntime, MemoryMockProvider};
+use crate::cache_runtime::{CacheRuntime, MemoryMockProvider, ScoredMember};
 use crate::core::{FileInfo, FileSystem, WriteFlag};
 use crate::plugins::memfs::MemFileSystem;
 use serde_json::json;
@@ -244,11 +244,23 @@ async fn query_index_gc_removes_expired_members_after_change_threshold() {
     let fresh_bucket = query_bucket_key(SERVICE_NAME, "/fresh", "read_dir");
 
     runtime
-        .zadd(&index_key, 0.0, &expired_bucket)
+        .zadd(
+            &index_key,
+            vec![ScoredMember {
+                member: expired_bucket.clone(),
+                score: 0.0,
+            }],
+        )
         .await
         .unwrap();
     runtime
-        .zadd(&index_key, u64::MAX as f64, &fresh_bucket)
+        .zadd(
+            &index_key,
+            vec![ScoredMember {
+                member: fresh_bucket.clone(),
+                score: u64::MAX as f64,
+            }],
+        )
         .await
         .unwrap();
 

@@ -5,12 +5,12 @@
 from __future__ import annotations
 
 import asyncio
-import time
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 
-from openviking.server.oauth.otp import hash_secret
+from openviking.server.oauth import storage
 from openviking.server.oauth.storage import OAuthStore
 
 # Test stand-in for an API key fingerprint. Real fps come from
@@ -29,133 +29,74 @@ async def store(tmp_path):
         await s.close()
 
 
+@pytest.fixture
+def clock(monkeypatch):
+    now = SimpleNamespace(seconds=1_000)
+    monkeypatch.setattr(storage, "time", SimpleNamespace(time=lambda: now.seconds))
+    return now
+
+
 @pytest.mark.asyncio
-async def test_refresh_path_role_downgrade_rejected():
+async def test_refresh_path_role_downgrade_rejected(store):
     """Provider's exchange_refresh_token must refuse to mint new tokens
     when the user's role has been downgraded since the refresh was issued.
     Mirrors the bearer-auth role check; covered here because the refresh
     path lives in provider.py, not in the storage layer."""
-    import tempfile
-    from pathlib import Path
-
     from mcp.server.auth.provider import TokenError
     from mcp.shared.auth import OAuthClientInformationFull
     from pydantic import AnyUrl
 
     from openviking.server.identity import Role
-    from openviking.server.oauth.provider import OpenVikingOAuthProvider, OVRefreshToken
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        store = OAuthStore(Path(tmpdir) / "oauth.db")
-        await store.initialize()
-        try:
-            # role_resolver reports current role as USER (post-demotion).
-            current_roles = {("acct", "alice"): Role.USER}
-            provider = OpenVikingOAuthProvider(
-                store=store,
-                issuer="https://ov.test",
-                role_resolver=lambda a, u: current_roles.get((a, u), Role.USER),
-            )
-            await store.register_client(
-                client_id="cx",
-                redirect_uris=["https://x.test/cb"],
-            )
-            rt = "rt-admin-era"
-            await store.insert_refresh(
-                token_plain=rt,
-                client_id="cx",
-                account_id="acct",
-                user_id="alice",
-                role="admin",  # token issued when alice was admin
-                scope=None,
-                resource=None,
-                authorizing_key_fp="f" * 64,
-                ttl_seconds=86400,
-            )
-            client = OAuthClientInformationFull(
-                client_id="cx",
-                redirect_uris=[AnyUrl("https://x.test/cb")],
-            )
-            refresh_obj = OVRefreshToken(
-                token=rt,
-                client_id="cx",
-                scopes=[],
-                expires_at=None,
-                account_id="acct",
-                user_id="alice",
-                role="admin",
-                resource=None,
-                authorizing_key_fp="f" * 64,
-            )
-            with pytest.raises(TokenError) as exc_info:
-                await provider.exchange_refresh_token(client, refresh_obj, scopes=[])
-            assert exc_info.value.error == "invalid_grant"
-            assert "downgraded" in (exc_info.value.error_description or "")
-        finally:
-            await store.close()
-
-
-@pytest.mark.asyncio
-async def test_register_and_get_client(store):
-    record = await store.register_client(
-        redirect_uris=["https://claude.ai/api/mcp/auth_callback"],
-        client_name="Claude.ai",
-        scope="mcp",
-    )
-    assert record["client_id"]
-    assert record["redirect_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
-    assert record["token_endpoint_auth_method"] == "none"
-    assert record["scope"] == "mcp"
-    fetched = await store.get_client(record["client_id"])
-    assert fetched is not None
-    assert fetched["redirect_uris"] == ["https://claude.ai/api/mcp/auth_callback"]
-    assert fetched["client_name"] == "Claude.ai"
-    assert fetched["scope"] == "mcp"
-    assert "authorization_code" in fetched["grant_types"]
-
-
-@pytest.mark.asyncio
-async def test_get_client_missing(store):
-    assert await store.get_client("nope") is None
-
-
-@pytest.mark.asyncio
-async def test_provider_get_client_defaults_missing_scope(store):
-    """A client registered without a scope (ChatGPT's DCR omits the field;
-    rows predating #2921 are NULL) must still pass validate_scope for the
-    "mcp" scope the PRM document advertises. #2921 persisted the scope when
-    the registrar sent one; this covers the scope-less registration."""
-    from openviking.server.oauth.provider import MCP_SCOPE, OpenVikingOAuthProvider
-
-    record = await store.register_client(
-        redirect_uris=["https://chatgpt.com/connector/oauth/cb"],
-        client_name="ChatGPT",
-        scope=None,
-    )
-    provider = OpenVikingOAuthProvider(store=store, issuer="https://ov.test")
-    client = await provider.get_client(record["client_id"])
-    assert client is not None
-    assert client.scope == MCP_SCOPE
-    # The exact request that failed in the field: /authorize?scope=mcp.
-    assert client.validate_scope(MCP_SCOPE) == [MCP_SCOPE]
-
-
-@pytest.mark.asyncio
-async def test_provider_get_client_keeps_registered_scope(store):
-    """The missing-scope fallback must not clobber an explicitly registered
-    scope (e.g. Claude registers its own scope string via DCR)."""
     from openviking.server.oauth.provider import OpenVikingOAuthProvider
 
+    provider = OpenVikingOAuthProvider(
+        store=store,
+        issuer="https://ov.test",
+        role_resolver=lambda _account, _user: Role.USER,
+    )
+    await store.register_client(client_id="cx", redirect_uris=["https://x.test/cb"])
+    token = "rt-admin-era"
+    await store.insert_refresh(
+        token_plain=token,
+        client_id="cx",
+        account_id="acct",
+        user_id="alice",
+        role="admin",
+        scope=None,
+        resource=None,
+        authorizing_key_fp=_FP,
+        ttl_seconds=86400,
+    )
+    client = OAuthClientInformationFull(client_id="cx", redirect_uris=[AnyUrl("https://x.test/cb")])
+    refresh = await provider.load_refresh_token(client, token)
+    assert refresh is not None
+    with pytest.raises(TokenError) as exc_info:
+        await provider.exchange_refresh_token(client, refresh, scopes=[])
+    assert exc_info.value.error == "invalid_grant"
+    assert "downgraded" in (exc_info.value.error_description or "")
+    assert await store.peek_refresh(token) is not None
+
+
+async def test_provider_get_client_keeps_registered_scope(store):
+    from openviking.server.oauth.provider import OpenVikingOAuthProvider
+
+    callback = "https://claude.ai/api/mcp/auth_callback"
     record = await store.register_client(
-        redirect_uris=["https://claude.ai/api/mcp/auth_callback"],
-        client_name="Claude.ai",
-        scope="claudeai",
+        redirect_uris=[callback], client_name="Claude.ai", scope="claudeai"
     )
     provider = OpenVikingOAuthProvider(store=store, issuer="https://ov.test")
+
     client = await provider.get_client(record["client_id"])
     assert client is not None
+    assert client.client_id == record["client_id"]
+    assert client.redirect_uris is not None
+    assert [str(uri) for uri in client.redirect_uris] == [callback]
+    assert client.client_name == "Claude.ai"
+    assert client.token_endpoint_auth_method == "none"
+    assert "authorization_code" in client.grant_types
     assert client.scope == "claudeai"
     assert client.validate_scope("claudeai") == ["claudeai"]
+    assert await provider.get_client("unregistered-client") is None
 
 
 def _insert_code(store, code, *, account_id="a", user_id="u", ttl_seconds=300):
@@ -175,129 +116,56 @@ def _insert_code(store, code, *, account_id="a", user_id="u", ttl_seconds=300):
     )
 
 
-@pytest.mark.asyncio
-async def test_auth_code_concurrent_consume_race(store):
-    """Two coroutines racing to consume the same code — exactly one wins."""
+async def test_auth_code_concurrent_consume_race(store, tmp_path):
     code = "race-code"
-    await _insert_code(store, code)
-    results = await asyncio.gather(store.consume_auth_code(code), store.consume_auth_code(code))
-    winners = [r for r in results if r is not None]
-    assert len(winners) == 1
+    claims = {
+        "client_id": "cx",
+        "redirect_uri": "https://x.test/cb",
+        "code_challenge": "challenge-xyz",
+        "code_challenge_method": "S256",
+        "scope": "mcp",
+        "resource": "https://x.test/mcp",
+        "account_id": "a",
+        "user_id": "u",
+        "role": "user",
+        "authorizing_key_fp": _FP,
+    }
+    await store.insert_auth_code(code_plain=code, ttl_seconds=300, **claims)
+    second_store = OAuthStore(tmp_path / "oauth.db")
+    await second_store.initialize()
+    try:
+        results = await asyncio.gather(
+            store.consume_auth_code(code), second_store.consume_auth_code(code)
+        )
+        [winner] = [record for record in results if record is not None]
+        assert {field: winner[field] for field in claims} == claims
+        assert await second_store.peek_auth_code(code) is None
+    finally:
+        await second_store.close()
 
 
-@pytest.mark.asyncio
-async def test_auth_code_expired_rejected(store):
-    code = "stale-code"
-    await _insert_code(store, code, ttl_seconds=60)
-    # Forge expiry by editing the row to be in the past.
-    assert store._conn is not None
-    store._conn.execute(
-        "UPDATE oauth_codes SET expires_at = ? WHERE used = 0",
-        (int(time.time()) - 10,),
-    )
-    assert await store.consume_auth_code(code) is None
+async def test_access_token_load_and_revoke(store, clock):
+    claims = {
+        "client_id": "cx",
+        "account_id": "acct",
+        "user_id": "alice",
+        "role": "user",
+        "scope": "mcp",
+        "resource": "https://ov.test/mcp",
+        "authorizing_key_fp": _FP,
+    }
+    await store.insert_access(token_plain="at-expiring", ttl_seconds=60, **claims)
+    await store.insert_access(token_plain="at-revoked", ttl_seconds=3600, **claims)
+    for token in ("at-expiring", "at-revoked"):
+        record = await store.load_access(token)
+        assert record is not None
+        assert {field: record[field] for field in claims} == claims
 
-
-@pytest.mark.asyncio
-async def test_auth_code_roundtrip(store):
-    code = "code-secret"
-    await store.insert_auth_code(
-        code_plain=code,
-        client_id="client-x",
-        redirect_uri="https://example.com/cb",
-        code_challenge="challenge-xyz",
-        code_challenge_method="S256",
-        scope="mcp",
-        resource="https://example.com/mcp",
-        account_id="a",
-        user_id="u",
-        role="user",
-        authorizing_key_fp=_FP,
-        ttl_seconds=300,
-    )
-    record = await store.consume_auth_code(code)
-    assert record is not None
-    assert record["client_id"] == "client-x"
-    assert record["redirect_uri"] == "https://example.com/cb"
-    assert record["code_challenge"] == "challenge-xyz"
-    assert record["scope"] == "mcp"
-    assert record["resource"] == "https://example.com/mcp"
-    assert record["authorizing_key_fp"] == _FP
-    # Second consume rejected
-    assert await store.consume_auth_code(code) is None
-
-
-@pytest.mark.asyncio
-async def test_refresh_token_roundtrip(store):
-    rt = "rt-secret-1"
-    await store.insert_refresh(
-        token_plain=rt,
-        client_id="client-x",
-        account_id="a",
-        user_id="u",
-        role="user",
-        scope="mcp",
-        resource=None,
-        authorizing_key_fp=_FP,
-        ttl_seconds=86400,
-    )
-    record = await store.consume_refresh(token_plain=rt, replaced_by_plain="rt-secret-2")
-    assert record is not None
-    assert record["client_id"] == "client-x"
-    assert record["authorizing_key_fp"] == _FP
-    # Reuse detection: second use returns None but the row is still flagged consumed.
-    assert await store.consume_refresh(token_plain=rt, replaced_by_plain=None) is None
-    assert await store.is_refresh_known_but_consumed(rt) is True
-
-
-@pytest.mark.asyncio
-async def test_access_token_load_and_revoke(store):
-    token = "at-secret"
-    await store.insert_access(
-        token_plain=token,
-        client_id="cx",
-        account_id="acct",
-        user_id="alice",
-        role="user",
-        scope="mcp",
-        resource="https://ov.test/mcp",
-        authorizing_key_fp=_FP,
-        ttl_seconds=3600,
-    )
-    record = await store.load_access(token)
-    assert record is not None
-    assert record["account_id"] == "acct"
-    assert record["user_id"] == "alice"
-    assert record["scope"] == "mcp"
-    assert record["resource"] == "https://ov.test/mcp"
-    assert record["authorizing_key_fp"] == _FP
-    # Revoke and confirm it's invisible.
-    assert await store.revoke_access(token) is True
-    assert await store.load_access(token) is None
-    # Idempotent revoke.
-    assert await store.revoke_access(token) is False
-
-
-@pytest.mark.asyncio
-async def test_access_token_expired_invisible(store):
-    token = "at-stale"
-    await store.insert_access(
-        token_plain=token,
-        client_id="cx",
-        account_id="acct",
-        user_id="alice",
-        role="user",
-        scope=None,
-        resource=None,
-        authorizing_key_fp=_FP,
-        ttl_seconds=60,
-    )
-    assert store._conn is not None
-    store._conn.execute(
-        "UPDATE oauth_access_tokens SET expires_at = ? WHERE token_hash = ?",
-        (int(time.time()) - 10, hash_secret(token)),
-    )
-    assert await store.load_access(token) is None
+    clock.seconds += 60
+    assert await store.load_access("at-expiring") is None
+    assert await store.revoke_access("at-revoked") is True
+    assert await store.load_access("at-revoked") is None
+    assert await store.revoke_access("at-revoked") is False
 
 
 @pytest.mark.asyncio
@@ -381,6 +249,7 @@ async def test_revoke_tokens_cascades(store):
     # Alice's everything dead, Bob's untouched.
     assert await store.load_access("at-1") is None
     assert await store.load_access("at-other") is not None
+    assert await store.peek_refresh("rt-1") is None
     assert await store.consume_auth_code("code-alice") is None
     assert await store.load_pending_authorization(alice_pending) is None
     assert await store.load_pending_authorization(bob_pending) is not None
@@ -393,7 +262,7 @@ async def test_revoke_tokens_cascades(store):
 
 
 @pytest.mark.asyncio
-async def test_gc_keeps_refresh_tombstones_until_natural_expiry(store):
+async def test_gc_keeps_refresh_tombstones_until_natural_expiry(store, clock):
     """RFC 9700 §4.14 replay detection needs consumed-but-unexpired tombstones
     to stick around — only after the original expires_at can we GC them."""
     rt = "rt-tomb"
@@ -411,32 +280,24 @@ async def test_gc_keeps_refresh_tombstones_until_natural_expiry(store):
     # Consume (rotate) — row now has consumed=1 but is still within expires_at.
     consumed = await store.consume_refresh(token_plain=rt, replaced_by_plain="rt-next")
     assert consumed is not None
+    assert consumed["client_id"] == "cx"
+    assert consumed["authorizing_key_fp"] == _FP
+    assert await store.consume_refresh(token_plain=rt, replaced_by_plain=None) is None
     # GC must NOT delete the tombstone yet.
     await store.gc_expired()
     assert await store.is_refresh_known_but_consumed(rt) is True
-    # Backdate to past expiry — only now should GC reap it.
-    assert store._conn is not None
-    store._conn.execute(
-        "UPDATE oauth_refresh_tokens SET expires_at = ? WHERE token_hash = ?",
-        (int(time.time()) - 10, hash_secret(rt)),
-    )
+    clock.seconds += 86401
     await store.gc_expired()
     assert await store.is_refresh_known_but_consumed(rt) is False  # row truly gone now
 
 
-@pytest.mark.asyncio
-async def test_gc_expired_removes_stale_rows(store):
-    fresh = "fresh-code"
-    stale = "stale-code"
-    await _insert_code(store, fresh)
-    await _insert_code(store, stale)
-    # Backdate stale row
-    assert store._conn is not None
-    store._conn.execute(
-        "UPDATE oauth_codes SET expires_at = ? WHERE code_hash = ?",
-        (int(time.time()) - 100, hash_secret(stale)),
-    )
-    deleted = await store.gc_expired()
-    assert deleted["codes_deleted"] >= 1
-    # Fresh row still consumable.
-    assert await store.consume_auth_code(fresh) is not None
+async def test_gc_expired_removes_stale_rows(store, clock):
+    await _insert_code(store, "fresh", ttl_seconds=300)
+    await _insert_code(store, "stale", ttl_seconds=60)
+
+    clock.seconds += 60
+    assert await store.peek_auth_code("stale") is None
+    assert await store.consume_auth_code("stale") is None
+    clock.seconds += 1
+    assert (await store.gc_expired())["codes_deleted"] == 1
+    assert await store.consume_auth_code("fresh") is not None

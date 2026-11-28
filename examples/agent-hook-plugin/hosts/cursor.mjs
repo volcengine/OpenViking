@@ -13,6 +13,7 @@ import {
 import { sendSessionMessages } from "../../memory-plugin-shared/lib/batch-send.mjs";
 import { denyCursorPermission, evaluateUriGuard } from "../../memory-plugin-shared/lib/uri-guard.mjs";
 import { parseCursorTranscript } from "./cursor-transcript.mjs";
+import { withoutHistorySession } from "./history-session.mjs";
 
 async function readTranscript(ctx) {
   const transcriptPath = ctx.input.transcript_path || ctx.input.transcriptPath;
@@ -166,6 +167,7 @@ export const cursor = {
   requestBudgets: {
     sessionStart: 25_000,
     beforeSubmitPrompt: 17_000,
+    preToolUse: 1_000,
     afterMCPExecution: 2_000,
     stop: 25_000,
     preCompact: 25_000,
@@ -174,6 +176,7 @@ export const cursor = {
   stages: {
     sessionStart: "start",
     beforeSubmitPrompt: "prompt",
+    preToolUse: "fill",
     afterMCPExecution: "capture",
     stop: "capture",
     preCompact: "capture",
@@ -184,7 +187,21 @@ export const cursor = {
       return block ? { continue: true, additional_context: block } : { continue: true };
     }
     if (event === "sessionStart" && block) return { additional_context: block };
+    if (event === "preToolUse" && block) return block;
     return {};
+  },
+  // preCompact is observe-only and nothing runs after a compaction, so the note
+  // waits for the next beforeSubmitPrompt.
+  historyPointer: {
+    sessionDefault: true,
+    defer: (event) => (event === "preCompact" ? "compact" : ""),
+  },
+  // preToolUse names a local MCP tool `MCP:<tool>` without its server, so the
+  // exact tool name and a missing `session` are the whole guard.
+  fillHistorySession(input, session) {
+    if (input.tool_name !== "MCP:session_history") return null;
+    const args = withoutHistorySession(input.tool_input);
+    return args ? { updated_input: { ...args, session } } : null;
   },
   guard(input = {}) {
     // beforeShellExecution is no longer installed, but a hooks.json from an

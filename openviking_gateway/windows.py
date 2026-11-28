@@ -27,6 +27,10 @@ ALONE = (
 )
 STAY = "A new context window cannot start at this point; continue in the current one."
 SEARCHABLE = " Earlier windows stay searchable with openviking_grep and openviking_read."
+HISTORY_SEARCHABLE = (
+    " Earlier windows stay searchable with openviking_session_history; put the ids of messages "
+    "a later window will need in the notes."
+)
 REMINDERS = {
     "soft": "[context-reminder] This context window is {} full. Start a new window soon: once "
     "the current step is done, call openviking_new_context with notes that record your findings "
@@ -48,14 +52,17 @@ def native_definitions(tools, policy):
     if not policy.get("agent_windows", False):
         return []
     names = {t["function"]["name"] for t in tools}
-    searchable = policy.get("capture", True) and {"openviking_grep", "openviking_read"} <= names
+    searchable = ""
+    if policy.get("capture", True) and "openviking_session_history" in names:
+        searchable = HISTORY_SEARCHABLE
+    elif policy.get("capture", True) and {"openviking_grep", "openviking_read"} <= names:
+        searchable = SEARCHABLE
     return [
         {
             "type": "function",
             "function": {
                 "name": name,
-                "description": tool.description
-                + (SEARCHABLE if name == NEW_CONTEXT and searchable else ""),
+                "description": tool.description + (searchable if name == NEW_CONTEXT else ""),
                 "parameters": copy.deepcopy(tool.parameters),
             },
         }
@@ -205,9 +212,8 @@ async def new_context(request, credential, args):
     )
     if latest:
         parts.append("The user's most recent message, verbatim:\n" + latest)
-    parts.append(
-        cut_hint(request, credential["user_id"], Policy.model_validate(request.root["policy"]))
-    )
+    policy = Policy.model_validate(request.root["policy"])
+    parts.append(cut_hint(request, credential["user_id"], policy, "window"))
     text = "\n\n".join(
         part
         for part in (

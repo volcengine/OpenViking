@@ -4,7 +4,10 @@
 
 from pathlib import Path
 
+from openviking.core.namespace_constants import SYSTEM_SEMANTIC_BUILTIN_PATH
+
 SYSTEM_ASSETS_DIR = Path(__file__).parent
+BUILTIN_SEMANTIC_TEMPLATES_DIR = SYSTEM_ASSETS_DIR / SYSTEM_SEMANTIC_BUILTIN_PATH
 
 
 def builtin_memory_templates_dir() -> Path:

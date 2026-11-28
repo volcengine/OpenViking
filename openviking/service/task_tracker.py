@@ -52,6 +52,7 @@ from openviking.service.task_events import PROCESS_EVENT_KINDS
 from openviking.service.task_store import (
     SYSTEM_TASK_ACCOUNT_ID,
     SYSTEM_TASK_USER_ID,
+    QueueWorkCounts,
     StoreOperationCode,
     StoreOperationResult,
     TaskAlreadyActive,
@@ -98,7 +99,6 @@ _WAIT_INITIAL_POLL_INTERVAL = 0.05
 _WAIT_MAX_POLL_INTERVAL = 1.0
 _PUBLIC_QUEUE_NAMES = ("Semantic", "Embedding")
 
-_sanitize_error = sanitize_error
 _sanitize_task_result = sanitize_task_result
 
 
@@ -169,6 +169,18 @@ def set_task_tracker(tracker: Optional["TaskTracker"]) -> None:
     global _instance
     with _init_lock:
         _instance = tracker
+
+
+async def wait_for_enqueued_work(
+    queue_name: str, *, stop_waiting: Optional[Callable[[], bool]] = None
+) -> None:
+    """Wait for work submitted by the current operation to the given queue."""
+    from openviking.service.task_work_index import get_enqueued_work_ids, get_task_context
+
+    context = get_task_context()
+    work_ids = get_enqueued_work_ids(queue_name)
+    if context is not None and work_ids:
+        await get_task_tracker().wait_for_work(context.task_id, work_ids, stop_waiting=stop_waiting)
 
 
 async def run_tracked_operation(
@@ -410,8 +422,9 @@ class TaskTracker:
                 restored.append(task)
         return restored
 
-    def start_cleanup_loop(self) -> None:
-        if self._cleanup_task is None or self._cleanup_task.done():
+    def start_cleanup_loop(self, *, cleanup_history: bool = True) -> None:
+        """Start cancellation polling. Set cleanup_history=False on read-only replicas."""
+        if cleanup_history and (self._cleanup_task is None or self._cleanup_task.done()):
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         if self._cancel_poll_task is None or self._cancel_poll_task.done():
             self._cancel_poll_task = asyncio.create_task(self._cancel_poll_loop())
@@ -420,6 +433,14 @@ class TaskTracker:
         for task in (self._cleanup_task, self._cancel_poll_task):
             if task is not None and not task.done():
                 task.cancel()
+
+    async def stop_background_loops(self) -> None:
+        """Wait for history cleanup and local cancellation polling to finish."""
+        self.stop_cleanup_loop()
+        tasks = [task for task in (self._cleanup_task, self._cancel_poll_task) if task is not None]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_task = self._cancel_poll_task = None
 
     async def _cleanup_loop(self) -> None:
         while True:
@@ -1449,18 +1470,25 @@ class TaskTracker:
 
     async def has_work(
         self,
-        task_id: str,
+        task_id: Optional[str] = None,
         *,
         exclude_work_id: Optional[str] = None,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        exclude_inline: bool = False,
     ) -> bool:
+        """Check open Work for a Task, or for one account when task_id is omitted."""
         return await self._store.has_open_work(
             task_id,
             exclude_work_id=exclude_work_id,
             account_id=account_id,
             user_id=user_id,
+            **({"exclude_inline": True} if exclude_inline else {}),
         )
+
+    async def get_queue_work_counts(self, *, account_id: str) -> QueueWorkCounts:
+        """Read pending/running Work counts for all queues in one account."""
+        return await self._store.get_queue_work_counts(account_id=account_id)
 
     def has_active_producer(self, task_id: str) -> bool:
         state = self._running.get()

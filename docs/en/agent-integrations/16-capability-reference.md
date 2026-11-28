@@ -36,7 +36,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | [Kimi Code](#kimi-code) | Kimi Code plugin with hooks and an MCP proxy | Server MCP tools |
 | [CodeBuddy Code](#codebuddy-code) | Plugin with hooks and an MCP proxy, installed by the unified installer | Server MCP tools |
 | [Qoder CLI](#qoder-cli) | Plugin with hooks and an MCP proxy, installed by the unified installer | Server MCP tools |
-| [Antigravity](#antigravity) | Plugin with hooks only, installed by the unified installer | None; the installer adds no MCP server |
+| [Antigravity](#antigravity) | Plugin with hooks and an MCP proxy, installed by the unified installer | Server MCP tools |
 | [OpenCode](#opencode) | npm plugin that adds an MCP entry | Server MCP tools, named `openviking_<tool>` |
 | [DSH](#dsh) | In-process Cordis plugin plus an MCP proxy | Server MCP tools, named `mcp__openviking__<tool>` |
 | [pi](#pi) | Native extension with a built-in MCP client | Server MCP tools, registered as `openviking_<tool>` after the MCP handshake succeeds |
@@ -60,7 +60,7 @@ Long-term memories are extracted from a session only after a **commit**. Capture
 | Qoder CLI | Yes, session-aware | Profile, memory index, skills | Every 8 captured messages | Yes | Commits uncommitted messages |
 | Antigravity | Yes, session-aware, at the first model call of each turn | Profile, memory index, skills | Every turn | No exit hook; turns are already committed | No pre-compaction hook |
 | OpenCode | Yes, session-aware | Profile, memory index, skills, indexed repositories | At 20,000 pending tokens, when idle | Yes, within the host's cleanup time | Commits around compaction |
-| DSH | Yes, session-aware | Profile, memory index, skills, once per session | At 20,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
+| DSH | Yes, session-aware | Profile, memory index, skills | At 20,000 pending tokens | Yes, with a 3-second budget | Commits, then the host summarizes |
 | pi | Yes, session-aware | Profile, memory index, skills, every turn | Takeover on: about 30,000 tokens; off: 20,000 | Takeover on: no; off: yes | Takeover replaces pi's summary |
 | OpenClaw | Yes, session-aware | Profile, every turn | At half the token budget (64,000 by default) | No | The plugin owns compaction |
 | Hermes (bundled) | Yes, session-aware with a fallback | Profile and memory listings | No; only at session boundaries | Yes, if pending uploads finish within 10 seconds | Commits at fork-style compaction |
@@ -122,7 +122,7 @@ applicable Rule. A failed or unavailable check is not an empty set of Rules.
 
 | Integration | Registered tool |
 |---|---|
-| Claude Code, Codex, TraeCode CLI, Cursor, TRAE/CN, ZCode, Kimi Code, CodeBuddy, Qoder CLI, Agent Plugins, other MCP clients | Server `rule_search`, with the host's MCP namespace |
+| Claude Code, Codex, TraeCode CLI, Cursor, TRAE/CN, ZCode, Kimi Code, CodeBuddy, Qoder CLI, Antigravity, Agent Plugins, other MCP clients | Server `rule_search`, with the host's MCP namespace |
 | DSH / Desktop | `mcp__openviking__rule_search` |
 | OpenCode, pi, VikingBot | `openviking_rule_search` |
 | VikingBot through MCP | `mcp_<server_name>_rule_search` |
@@ -133,8 +133,8 @@ applicable Rule. A failed or unavailable check is not an empty set of Rules.
 
 Upgrade the server to a build that advertises `rule_search`, then reconnect MCP clients.
 Native REST adapters require the updated plugin. The shared `openviking-rule-search`
-skill ships with Claude Code, Codex/TraeCode CLI, Cursor, CodeBuddy, Qoder CLI, OpenCode, DSH,
-pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool.
+skill ships with Claude Code, Codex/TraeCode CLI, Cursor, TRAE/TRAE CN, ZCode, Kimi Code, CodeBuddy,
+Qoder CLI, Antigravity, OpenCode, DSH, pi, OpenClaw, and Agent Plugins; hosts without bundled skills still discover the tool.
 Keep existing MCP opt-in and tool allowlist settings enabled. This adds a query entrypoint;
 it does not install an automatic per-turn check or enforcement hook.
 
@@ -165,7 +165,7 @@ The updated Hermes external plugin has seven tools: `viking_search`, `viking_rul
 The server applies the same checks to every delete, whichever tool or command sends it:
 
 - The caller needs manage permission on the URI, and a user whose own deletion is in progress is refused.
-- `viking://`, `viking://user`, and `viking://agent` cannot be deleted. Deleting `viking://resources` or a whole user root such as `viking://user/<id>` requires the ROOT role. Non-root callers cannot write to the `viking://temp` root.
+- `viking://` and `viking://user` cannot be deleted. Deleting `viking://resources`, `viking://agent`, or a whole user root such as `viking://user/<id>` requires the ROOT role. Non-root callers cannot write to the `viking://temp` root.
 - URIs hidden by the caller's actor-peer view are refused.
 
 These checks protect namespaces, not content types. Restrictions by type come from the client:
@@ -193,7 +193,7 @@ Skills follow their own path. Create, install, or replace them with the MCP `add
 Every integration except OpenClaw and Hermes uses the shared plugin code, which tries up to three requests:
 
 1. **Context search.** `POST /api/v1/search/search` with `mode: "context"`, `purpose: "coding"`, and the session ID. Budgets, quotas, query expansion, and digest options are sent only when you configure them; otherwise the server defaults apply, including a 1,600-token injection budget (`max_tokens`).
-2. **Legacy recall.** If the server rejects context mode as an older version, the plugin records that in `~/.openviking/state/context-face.json` for six hours and calls `/api/v1/search/recall` instead. The file is shared by every integration on the machine, so one integration's result applies to all of them.
+2. **Legacy recall.** If Context search is unavailable, the plugin can fall back to `/api/v1/search/recall`. A Context request rejected with HTTP `400` or `422` ends recall for that turn. Codex and Claude Code display the server error as a hook warning, and other callers of the shared recall pipeline write it to stderr.
 3. **Plain find.** As a last resort the plugin runs `find` on `viking://~/memories` and `viking://~/skills`, ranks the results locally, and fills its own token budget. `recallTokenBudget`, `recallMaxContentChars`, and `recallPreferAbstract` apply only at this step.
 
 The shared-plugin recall pipeline excludes resources; the model searches resource documents by calling `search` itself. Hermes can include resources when its resource-recall option is enabled.
@@ -257,13 +257,14 @@ When each integration injects it:
 | Integration | When |
 |---|---|
 | Claude Code | `SessionStart`, every source |
-| Codex | `SessionStart` on startup, clear, and resume |
-| Cursor, TRAE, TRAE CN, ZCode, Antigravity | `SessionStart` |
+| Codex | `SessionStart` on startup, clear, resume, and compact |
+| Cursor, TRAE, TRAE CN, ZCode | `SessionStart` |
+| Antigravity | `SessionStart`, and the first turn after each compaction checkpoint in the transcript |
 | Kimi Code | The first prompt; retried on later prompts until it succeeds |
-| CodeBuddy Code | `SessionStart`, every source; it can be delivered twice in one session, so the hook is idempotent |
+| CodeBuddy Code | `SessionStart`, every source; it can be delivered twice in one session, so the hook is idempotent. CodeBuddy drops `SessionStart` context at a compaction, so the next prompt sends it again |
 | Qoder CLI | `SessionStart`, every source (`startup`, `resume`, `compact`) |
-| OpenCode | The first message of each session; not retried after a failure, and skipped for subagent sessions. The list of indexed repositories also goes into the system prompt |
-| DSH | Once per session; not sent again after compaction |
+| OpenCode | The first message of each session and the first after each compaction; not retried after a failure, and skipped for subagent sessions. The list of indexed repositories also goes into the system prompt |
+| DSH | At session start, and again on the next model step when a compaction dropped it |
 | pi | In the system prompt, rebuilt every turn |
 | OpenClaw | In the system prompt, rebuilt every turn: `<user-profile>` for the user's profile and, with `peer_role`, the actor peer's profile. No memory index or skill catalog |
 | Hermes | Its own reader loads the profile and the preferences and entities listings, with a 6,000-token default budget |
@@ -411,7 +412,7 @@ What this means in practice:
 
 | Integration | What happens when a write fails |
 |---|---|
-| Claude Code, CodeBuddy Code, Qoder CLI, Antigravity, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
+| Claude Code, CodeBuddy Code, Qoder CLI, Antigravity, TRAE, TRAE CN, ZCode, Kimi Code, OpenCode, DSH, pi | Retryable failures go to an on-disk queue under `~/.openviking/pending`. It is replayed at session start: up to 50 entries per run (2 for Kimi Code) and 3 attempts per entry, kept for 7 days. Network errors, 408, 429, and 5xx are retryable; other 4xx responses, including 401 and 403, are not queued. A failed message stops the replay so order is kept |
 | Cursor | New captures are not queued. The text transcript and local tool records retain unsent content; progress advances only after server acknowledgement. Later capture in the same conversation retries it, and incomplete capture prevents a commit. `SessionStart` still replays legacy queued writes |
 | Codex, TraeCode CLI 2.0 | New captures are not queued. The transcript cursor moves only past messages the server accepted, so the next capture or start-up sweep resends the rest. `SessionStart` still replays queued entries |
 | OpenClaw | No queue. A failed turn is not sent again |
@@ -442,15 +443,15 @@ When the host shortens its context, most integrations make sure the dropped mess
 | Integration | Approach | Before compaction | After compaction |
 |---|---|---|---|
 | Claude Code | Host summarizes | `PreCompact` commits synchronously; this is the one write that never runs in the background, because the host rewrites the transcript right after | `SessionStart` with `source="compact"` injects the archive overview and up to 5 summaries |
-| Codex, TraeCode CLI 2.0 | Host summarizes | `PreCompact` catches up uncaptured turns, commits everything, and starts a new OpenViking session. If the catch-up is incomplete, it does not commit and retries later | The archive summary is injected on resume |
+| Codex, TraeCode CLI 2.0 | Host summarizes | `PreCompact` catches up uncaptured turns, commits everything, and starts a new OpenViking session. If the catch-up is incomplete, it does not commit and retries later | `SessionStart` with `source="compact"` sends the profile again; the archive summary is injected on resume |
 | Cursor | Host summarizes | `preCompact` commits | Nothing |
-| CodeBuddy Code | Host summarizes | `PreCompact` commits | Nothing |
+| CodeBuddy Code | Host summarizes | `PreCompact` commits | The next prompt sends the profile again |
 | Qoder CLI | Host summarizes | `PreCompact` commits | Nothing |
 | TRAE, TRAE CN, ZCode | Host summarizes | No pre-compaction event | Nothing |
-| Antigravity | Not verified | No pre-compaction hook | Nothing |
+| Antigravity | Host summarizes | No pre-compaction hook | The first turn after the compaction checkpoint sends the profile again |
 | Kimi Code | Host summarizes | `PreCompact` commits | Nothing |
-| OpenCode | Host summarizes | v1 flushes and commits; v2 captures the transcript | v1 commits again on `session.compacted`; v2 commits after `session.compaction.ended` |
-| DSH | Host summarizes | `compaction/start` commits regardless of the token threshold. Injected context is a user message and shrinks with the host's compaction; the profile is not sent again | Nothing |
+| OpenCode | Host summarizes | v1 flushes and commits; v2 captures the transcript | v1 commits again on `session.compacted`; v2 commits after `session.compaction.ended`. The next message sends the session-start context again |
+| DSH | Host summarizes | `compaction/start` commits regardless of the token threshold. Injected context is a user message and shrinks with the host's compaction | The next model step sends the profile again if the compaction dropped it |
 | pi | Takeover, on by default | Commits and waits for the archive overview | The overview replaces pi's summary; on failure pi compacts as usual |
 | OpenClaw | The plugin owns compaction | `compact()` commits and waits | The next context assembly rebuilds history from the server |
 | Hermes (bundled) | Host summarizes | Fork-style compaction commits the old session; in-place compaction does nothing | Nothing |
@@ -599,19 +600,20 @@ Settings that apply only to some integrations:
 |---|---|---|---|---|
 | Claude Code | Yes | `/openviking-memory:ov` shows server status, identity, and where injected context came from | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor` | Yes |
 | Codex, TraeCode CLI 2.0 | No | None | Same five as Claude Code | Yes |
-| Cursor | No | None | An always-on rule plus `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search` | Installer menu |
-| TRAE, TRAE CN, ZCode | No | None | None | Installer menu |
-| OpenCode | No | None | The same four as Cursor, only when the plugin registers its MCP server | Yes |
-| DSH | No | None | The same four as Cursor | No |
-| CodeBuddy Code | No | None | The same four as Cursor | No |
-| Qoder CLI | No | None | The same four as Cursor | No |
-| Antigravity | No | None | None | Installer menu |
-| pi | Yes | `/viking`, `/viking commit` | The same four as Cursor, unless `mcpEnabled` is `false` | Yes |
+| Cursor | No | None | An always-on rule plus the same five as Claude Code | Installer menu |
+| TRAE, TRAE CN, ZCode | No | None | Same five as Claude Code | Installer menu |
+| Kimi Code | No | None | Same five as Claude Code | No |
+| OpenCode | No | None | `openviking-memory`, `openviking-skills`, `ov-experience-memory`, `openviking-rule-search`, `ov-memory-doctor`, only when the plugin registers its MCP server | Yes |
+| DSH | No | None | The same five as OpenCode, unless `mcpEnabled` is `false` | No |
+| CodeBuddy Code | No | None | Same five as Claude Code | No |
+| Qoder CLI | No | None | Same five as Claude Code | No |
+| Antigravity | No | None | Same five as Claude Code, each also invocable as `/<name>` | Installer menu |
+| pi | Yes | `/viking`, `/viking commit` | The same five as OpenCode, unless `mcpEnabled` is `false` | Yes |
 | OpenClaw | No | `/add-resource`, `/add-skill`, `/ov-search`, `/ov-query-config`, `/ov-recall-trace` | Four plugin skills, including `openviking-rule-search` | Yes; checks the key's role and version compatibility |
 | Hermes (bundled) | No | None | None | Yes; `hermes memory status` lists environment overrides |
 | ov CLI | No | The CLI itself | None | `ov config` |
 
-Claude Code, Cursor, TRAE, ZCode, Kimi Code, CodeBuddy Code, Qoder CLI, DSH, and pi also install a **URI guard**: a file tool whose path is a `viking://` URI is denied with a hint to use the OpenViking tools; on hosts that check shell tools, a shell command that contains one runs with a notice attached. Which tools are checked differs by host and is listed in [Notes by integration](#notes-by-integration).
+Claude Code, Cursor, TRAE, ZCode, Kimi Code, CodeBuddy Code, Qoder CLI, Antigravity, OpenCode, DSH, and pi also install a **URI guard**: a file tool whose path is a `viking://` URI is denied with a hint to use the OpenViking tools; on hosts that check shell tools, a shell command that contains one runs with a notice attached. Which tools are checked differs by host and is listed in [Notes by integration](#notes-by-integration).
 
 <a id="_4-harness-profile-cards"></a>
 
@@ -621,7 +623,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Claude Code
 
-[Claude Code Memory Plugin](./02-claude-code.md). A marketplace plugin with 9 hooks, an MCP proxy, a slash command, a status line, and 4 skills.
+[Claude Code Memory Plugin](./02-claude-code.md). A marketplace plugin with 9 hooks, an MCP proxy, a slash command, a status line, and 5 skills.
 
 - It registers more hooks than any other integration: `SessionStart`, `UserPromptSubmit`, `PostToolUse:Read` (the skill-experience hook, off by default), `PreToolUse` on Read, Glob, Grep, Edit, Write, and Bash (the URI guard), `Stop`, `PreCompact`, `SessionEnd`, `SubagentStart`, and `SubagentStop`.
 - Recall digests are on by default through a local `claude -p`, with the server digest as the fallback.
@@ -633,7 +635,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Codex and TraeCode CLI 2.0
 
-[Codex Memory Plugin](./04-codex.md), [TRAE Memory Integration](./13-trae.md). A marketplace plugin with 6 hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, `PreCompact`, `PostToolUse`), an MCP proxy, and the same 4 skills as Claude Code.
+[Codex Memory Plugin](./04-codex.md), [TRAE Memory Integration](./13-trae.md). A marketplace plugin with 6 hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`, `PreCompact`, `PostToolUse`), an MCP proxy, and the same 5 skills as Claude Code.
 
 - `SessionEnd` fires only on a clean exit and only on Codex 0.145 and later. Signals, crashes, older builds, and `codex app-server` deferral fall to the start-up sweep, which uses a 30-minute idle timeout.
 - `Stop` and `SessionEnd` write in a detached worker. A per-session lock orders the `Stop` worker, `PreCompact`, the `SessionEnd` worker, and the sweep.
@@ -643,7 +645,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Cursor
 
-[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration with 7 hooks (`sessionStart`, `beforeSubmitPrompt`, `beforeReadFile`, `afterMCPExecution`, `stop`, `preCompact`, `sessionEnd`), an always-on rule, and 3 skills.
+[Cursor Memory Integration](./12-cursor.md). Hook and MCP configuration with 7 hooks (`sessionStart`, `beforeSubmitPrompt`, `beforeReadFile`, `afterMCPExecution`, `stop`, `preCompact`, `sessionEnd`), an always-on rule, and 5 skills.
 
 - The URI guard runs on `beforeReadFile` only, independent of the plugin switch. Shell commands are not checked, and an upgrade removes the `beforeShellExecution` entry older installs registered.
 - `afterMCPExecution` retains completed OpenViking tool calls, uploaded with the conversation at Stop. Successful Experience reads can link to trajectories produced by that commit; failed or unfinished calls and automatic injection do not count as successful reads.
@@ -654,17 +656,19 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### TRAE and TRAE CN
 
-[TRAE Memory Integration](./13-trae.md). Hook and MCP configuration with 4 hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `Stop`. The MCP server is named `openviking`.
+[TRAE Memory Integration](./13-trae.md). Hook and MCP configuration with 4 hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, and `Stop`, plus 5 skills. The MCP server is named `openviking`.
 
 - `PreToolUse` denies Read, Glob, and Grep on `viking://` paths and adds a notice to Bash and RunCommand commands that contain one.
 - Every `Stop` with content commits, so an exit loses at most the turn in progress.
 - TRAE and TRAE CN differ only in session prefix and install paths. The same work in both clients creates separate sessions; they share memories only after extraction.
-- No compaction handling, status line, skills, or subagent handling.
+- The skills are installed into `~/.trae/skills/<name>` or `~/.trae-cn/skills/<name>`. A skill the user edited, or an unmanaged directory of the same name, is preserved on upgrade and uninstall. TraeCode CLI also reads `~/.trae/skills`, so with both the TRAE integration and the TraeCode CLI plugin installed, the CLI lists each of these skills twice: once bare and once under the plugin namespace.
+- No compaction handling, status line, or subagent handling.
 
 ### ZCode
 
-[Community integrations: ZCode](./08-community-plugins.md#zcode-memory-integration). Hook and MCP configuration with 4 hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse` on Read, Glob, and Grep, and `Stop`.
+[Community integrations: ZCode](./08-community-plugins.md#zcode-memory-integration). Hook and MCP configuration with 4 hooks: `SessionStart`, `UserPromptSubmit`, `PreToolUse` on Read, Glob, and Grep, and `Stop`, plus 5 skills.
 
+- The skills are installed into `~/.zcode/skills/<name>`. A skill the user edited, or an unmanaged directory of the same name, is preserved on upgrade and uninstall.
 - The rollout file `~/.zcode/cli/rollout/model-io-<sid>.jsonl` is the source of captured turns; turns a missed `Stop` skipped are caught up at the next `Stop`.
 - The first capture reads the whole rollout, so installing into a long-running session produces one large upload.
 - Capture removes injected blocks but does no other text cleanup.
@@ -674,7 +678,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Kimi Code
 
-[Community integrations: Kimi Code](./08-community-plugins.md#kimi-code-memory-integration). A managed Kimi Code plugin with 7 hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse` on Read, Glob, and Grep, `Stop`, `PreCompact`, `SessionEnd`, `Interrupt`) and an MCP proxy. The installer builds one self-contained copy under `$KIMI_CODE_HOME/plugins/managed/openviking-memory`.
+[Community integrations: Kimi Code](./08-community-plugins.md#kimi-code-memory-integration). A managed Kimi Code plugin with 7 hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse` on Read, Glob, and Grep, `Stop`, `PreCompact`, `SessionEnd`, `Interrupt`), an MCP proxy, and 5 skills. The installer builds one self-contained copy under `$KIMI_CODE_HOME/plugins/managed/openviking-memory`.
 
 - Captured turns come from `wire.jsonl`. A turn moves the cursor only after it is sent or stored in the offline queue.
 - Session-start context is injected at the first prompt and retried on later prompts until it succeeds.
@@ -684,7 +688,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### CodeBuddy Code
 
-[CodeBuddy Code](./20-codebuddy.md). A plugin with 6 hooks, an MCP proxy, and 4 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like ZCode and Kimi Code.
+[CodeBuddy Code](./20-codebuddy.md). A plugin with 6 hooks, an MCP proxy, and 5 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like ZCode and Kimi Code.
 
 - `UserPromptSubmit` and `SessionEnd` fire **only in the interactive TUI**. A headless run (`-p`, `--input-format stream-json`) captures on `Stop` and never sends the final commit.
 - The URI guard denies file tools whose path is a `viking://` URI. The denial reaches the model as the failed tool result; an `allow` carries no text through, so this host has no advisory channel. Shell commands are not checked, so `ov` calls and literal `viking://` arguments still work.
@@ -694,23 +698,25 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 ### Qoder CLI
 
-[Qoder CLI](./21-qoder.md). A plugin with 6 hooks, an MCP proxy, and 4 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like CodeBuddy Code.
+[Qoder CLI](./21-qoder.md). A plugin with 6 hooks, an MCP proxy, and 5 skills, installed by the unified installer as a local marketplace, and an `agent-hook-plugin` host adapter like CodeBuddy Code.
 
 - `UserPromptSubmit` and `SessionEnd` fire in the TUI and in headless `-p` runs. Every `-p` run also ends an auxiliary session that has no transcript; its `SessionEnd` is ignored.
 - Injected context is written into the transcript as attachment records. Capture reads only the conversation records, so recalled memories are not captured back.
-- The URI guard denies file tools whose path is a `viking://` URI, and the denial reaches the model as the failed tool result, with an example `mcp_call` to the matching OpenViking tool. Shell commands are not checked, so `ov` calls and literal `viking://` arguments still work.
+- The URI guard denies file tools whose path is a `viking://` URI, and the denial reaches the model as the failed tool result, with an example `mcp_call` to the matching OpenViking tool. A Bash command that contains such a URI still runs, with a notice pointing at the same tools, so `ov` calls and literal `viking://` arguments still work.
 - A hook killed at its timeout takes its process group with it; the capture worker is detached, so a commit still finishes after the hook process returns.
 - MCP tools load lazily through `mcp_call`. In a headless run with the default permission mode, they need a permission rule or a permissive mode.
 - Subagent capture is not supported in v1: the host fires the events, but the shared dispatcher has no subagent stage yet.
 
 ### Antigravity
 
-[Community integrations: Antigravity](./08-community-plugins.md#antigravity-memory-integration). A plugin with 3 hooks (`SessionStart`, `PreInvocation`, `Stop`) and no MCP server, skills, or URI guard, installed by the unified installer, and an `agent-hook-plugin` host adapter like ZCode. The Antigravity desktop app and the `agy` CLI load the same plugin from `~/.gemini/config/plugins/openviking-memory`.
+[Community integrations: Antigravity](./08-community-plugins.md#antigravity-memory-integration). A plugin with 4 hooks (`SessionStart`, `PreInvocation`, `PreToolUse`, `Stop`), an MCP proxy, and 5 skills, installed by the unified installer, and an `agent-hook-plugin` host adapter like ZCode. The Antigravity desktop app and the `agy` CLI load the same plugin from `~/.gemini/config/plugins/openviking-memory`.
 
 - `PreInvocation` runs before every model call, including each call in a tool loop (`invocationNum` above 0) and each reactive wakeup for a background task, subagent message, or `Stop` continuation. Recall runs only when `invocationNum` is 0 and no `MODEL` step has run since the latest `USER_INPUT` step in `transcriptPath`, so a turn injects once. A `lastUserInput` that differs from that step's request is a new turn the transcript has not recorded yet, and recalls too.
 - Antigravity hooks use their own `hooks.json` format, with each top-level key naming a hook. Context goes back as a `systemMessage` step in `injectSteps`, which stays in the conversation.
 - `Stop` carries no message text. Capture reads the finished steps of `transcriptPath` after the last captured step, preferring the untruncated `transcript_full.jsonl` beside it, in a detached worker, then commits. A step still in progress is read again by the next `Stop`; when a write is lost, the cursor stays so the next `Stop` resends it.
-- To let the agent call OpenViking tools, add the OpenViking MCP server to `~/.gemini/config/mcp_config.json` yourself.
+- The plugin directory's `mcp_config.json` registers the OpenViking MCP server, the shared stdio proxy. When `~/.gemini/config/mcp_config.json` already defines a server named `openviking`, the installer keeps the user's server and does not write the plugin's `mcp_config.json`, so no tool appears twice.
+- The skills live in the plugin directory as `skills/<name>/SKILL.md`, and each is also invocable as `/<name>`.
+- `PreToolUse` (matcher `*`) runs the URI guard: a file tool whose location argument (an argument whose name ends in `Path`, `File`, or `Directory`) is a `viking://` URI is denied, and the reason reaches the model as a failed tool call pointing at the OpenViking MCP tools. Shell commands (`run_command`) are not checked and get no notice.
 - If `~/.gemini/config/plugins/openviking-memory` exists and OpenViking did not write it, the installer stops and `--uninstall` leaves it in place.
 
 ### OpenCode
@@ -719,7 +725,8 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 
 - v2 recalls once per prompt and stores the result in the user message's metadata; later model steps reuse it without new requests, which keeps the prompt cache stable. At the end of each execution, v2 reads the complete user, assistant, and tool messages for capture.
 - v2 checks the commit threshold after every execution, including failed or interrupted ones, which keep their state. It handles only sessions of its own location and stores its cursor in plugin storage. v2 has no toast API and logs notices instead.
-- MCP tools keep the `openviking_` prefix; v2 sets `codemode: false`. The 3 skills are added only when the plugin registers its MCP server, not in hook-only mode or with `mcp.openviking` disabled.
+- MCP tools keep the `openviking_` prefix; v2 sets `codemode: false`. The 5 skills are added only when the plugin registers its MCP server, not in hook-only mode or with `mcp.openviking` disabled.
+- The URI guard denies `read`, `glob`, and `grep` calls whose path is a `viking://` URI before they run, with an example call to the matching `openviking_*` tool; a `bash` command that contains one runs, and a notice is appended to its output afterwards.
 - Commit timeout is 30 seconds.
 
 <a id="dsh-deepseek-harness"></a>
@@ -734,6 +741,7 @@ Each note covers what is specific to one integration. Shared behavior is in the 
 - Tool results are captured by default (`captureToolResults: true`), so `ov-experience-memory` runs its full loop; turning capture off leaves it able only to find and apply Experience.
 - The URI guard lowercases tool names, denies file tools on `viking://` paths in `tools/pre-execute`, and adds a notice to `bash` commands, and to `pwsh` commands on Windows, in `tools/post-execute`.
 - Credentials named in the Cordis patch override every other source. For behavior settings the patch is the lowest layer.
+- `mcpEnabled: false` (in `ovcli.conf` `plugin` or `plugin.dsh`, or in the Cordis patch) mounts neither the MCP tools nor the bundled skills.
 
 <a id="pi-pi-coding-agent-extension"></a>
 

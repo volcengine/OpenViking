@@ -29,40 +29,6 @@ def _memory(uri: str, score: float = 0.9, abstract: str = "", level: int = 2):
     )
 
 
-async def test_context_mode_returns_flat_entries_within_budget(
-    client: httpx.AsyncClient,
-    service,
-    monkeypatch,
-):
-    async def fake_find(**kwargs):
-        del kwargs
-        return _FakeFindResult(
-            [
-                _memory("viking://user/test_user/memories/events/launch.md", 0.71, "Launch"),
-                _memory("viking://user/test_user/memories/entities/ov.md", 0.55, "OpenViking"),
-            ]
-        )
-
-    async def fake_read(uri, **kwargs):
-        del kwargs
-        return f"# Summary\ngist of {uri}\n\n# ChatLog:\n" + "x" * 300
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-    monkeypatch.setattr(service.fs, "read", fake_read)
-
-    response = await client.post(
-        "/api/v1/search/search",
-        json={"query": "what changed", "mode": "context", "max_tokens": 1200},
-    )
-
-    assert response.status_code == 200
-    result = response.json()["result"]
-    assert [entry["category"] for entry in result["entries"]] == ["events", "entities"]
-    assert all(entry["detail"] != "uri" for entry in result["entries"])
-    assert result["rendered"].count("<memory ") == 2
-    assert result["stats"]["used_tokens"] <= 1200
-
-
 async def test_context_mode_quotas_use_category_ownership_roots(
     client: httpx.AsyncClient,
     service,
@@ -92,8 +58,9 @@ async def test_context_mode_quotas_use_category_ownership_roots(
     )
 
     assert response.status_code == 200
-    assert any(target.endswith("/memories/events") for target in targets)
+    assert set(targets) == {"viking://user/default/memories/events"}
     assert skill_targets == [["viking://user/default/skills", "viking://agent/skills"]]
+    assert response.json()["result"]["stats"]["quotas"] == {"events": 2, "skills": 1}
 
 
 async def test_context_mode_forwards_keywords_to_every_internal_search(
@@ -261,18 +228,32 @@ async def test_context_mode_degrades_a_retrieval_failure(
     service,
     monkeypatch,
 ):
-    async def fake_find(**kwargs):
-        del kwargs
-        raise RuntimeError("embedder unreachable")
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    entity = "viking://user/default/memories/entities/release.md"
+    await service.viking_fs.write_file(entity, "Release details are still available.", ctx=ctx)
 
-    monkeypatch.setattr(service.search, "find", fake_find)
+    async def retrieve(*, target_uri, **_kwargs):
+        if target_uri.endswith("/events"):
+            raise RuntimeError("events embedder unavailable")
+        return _FakeFindResult([_memory(entity, 0.9, "Release details")])
+
+    monkeypatch.setattr(service.search, "find", retrieve)
     response = await client.post(
         "/api/v1/search/search",
-        json={"query": "still a valid request", "mode": "context"},
+        json={
+            "query": "release",
+            "mode": "context",
+            "peer_scope": "actor",
+            "detail": "full",
+            "quotas": {"events": 1, "entities": 1},
+        },
     )
 
-    assert response.status_code == 200
-    assert response.json()["result"]["stats"]["retrieval_errors"]
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert [entry["uri"] for entry in result["entries"]] == [entity]
+    assert result["entries"][0]["text"] == "Release details are still available."
+    assert result["stats"]["retrieval_errors"] == ["RuntimeError: events embedder unavailable"]
 
 
 async def test_context_mode_reads_real_agfs_content_and_sidecars(
@@ -316,7 +297,11 @@ async def test_context_mode_reads_real_agfs_content_and_sidecars(
     )
 
     assert response.status_code == 200
-    by_uri = {entry["uri"]: entry for entry in response.json()["result"]["entries"]}
+    result = response.json()["result"]
+    assert [entry["category"] for entry in result["entries"]] == ["events", "entities"]
+    assert result["stats"]["used_tokens"] <= 1200
+    assert result["rendered"].count("<memory ") == 2
+    by_uri = {entry["uri"]: entry for entry in result["entries"]}
     assert "Shipped the stdio MCP proxy." in by_uri[file_uri]["text"]
     assert "MEMORY_FIELDS" not in by_uri[file_uri]["text"]
     assert by_uri[directory_uri]["detail"] == "overview"

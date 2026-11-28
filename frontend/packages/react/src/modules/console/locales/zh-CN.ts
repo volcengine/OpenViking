@@ -33,10 +33,10 @@ const messages: typeof enUS = {
   telemetryResult: (value: string) => `遥测：${value}`,
   taskResult: '任务结果',
   memoryCommit: {
-    idle: '提交会话',
-    pending: '会话提交中',
-    submitted: '会话提交中',
-    success: '会话已提交',
+    idle: '抽取长期记忆',
+    pending: '抽取长期记忆',
+    submitted: '抽取长期记忆',
+    success: '已抽取长期记忆',
     empty: '当前会话暂无可生成的新记忆',
     skipped: '本轮未生成新记忆',
     failed: '会话提交失败',
@@ -46,8 +46,8 @@ const messages: typeof enUS = {
   },
   compileQuickInputs: {
     createWiki: {
-      label: '创建 Wiki',
-      prompt: '将选中的目录中的文件整理成 Wiki，保留来源和文档之间的关联',
+      label: 'Wiki',
+      prompt: '将选中目录中的文件整理成 Wiki。',
     },
     dailyReport: {
       label: '定时日报',

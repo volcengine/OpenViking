@@ -54,7 +54,25 @@ describe('service and permission boundaries', () => {
     ).toBe('opensource')
     expect(identifyServiceProvider('http://localhost:1933')).toBe('opensource')
   })
-  it.each(['volcengine', 'unknown'] as const)(
+  it('requires an explicit, exact HTTPS binding for BytePlus', () => {
+    const trusted = 'https://byteplus.example/openviking'
+    expect(identifyServiceProvider(trusted)).toBe('opensource')
+    expect(identifyServiceProvider(`${trusted}/`, trusted)).toBe('byteplus')
+    for (const url of [
+      'https://byteplus.example.invalid/openviking',
+      'https://byteplus.example/other',
+      'https://byteplus.example:8443/openviking',
+      'http://byteplus.example/openviking',
+      `${trusted}?query=value`,
+      `${trusted}#fragment`,
+      `${trusted}?`,
+      `${trusted}#`,
+    ]) {
+      expect(identifyServiceProvider(url, trusted)).not.toBe('byteplus')
+    }
+    expect(identifyServiceProvider(trusted, 'not a URL')).toBe('opensource')
+  })
+  it.each(['volcengine', 'byteplus', 'unknown'] as const)(
     'never maps %s admin/root data identity into native management',
     (serviceProvider) => {
       for (const role of ['admin', 'root'] as const) {
