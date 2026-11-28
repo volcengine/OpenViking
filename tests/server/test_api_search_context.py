@@ -256,56 +256,103 @@ async def test_context_mode_degrades_a_retrieval_failure(
     assert result["stats"]["retrieval_errors"] == ["RuntimeError: events embedder unavailable"]
 
 
+@pytest.mark.parametrize(
+    "filter_level",
+    [None, 0, 1],
+    ids=["semantic-sidecar", "filter-only-l0", "filter-only-l1"],
+)
 async def test_context_mode_reads_real_agfs_content_and_sidecars(
     client: httpx.AsyncClient,
     service,
     monkeypatch,
+    filter_level: int | None,
 ):
     ctx = RequestContext(user=UserIdentifier.the_default_user("default"), role=Role.ROOT)
-    root = "viking://user/default/memories"
-    file_uri = f"{root}/events/launch.md"
-    directory_uri = f"{root}/entities"
-    await service.viking_fs.write_file(
-        uri=file_uri,
-        content=(
+    if filter_level is None:
+        root = "viking://user/default/memories"
+        file_uri = f"{root}/events/launch.md"
+        directory_uri = f"{root}/entities"
+        file_content = (
             "# Summary\nShipped the stdio MCP proxy.\n\n"
             "# 2026-07-14 ChatLog:\n"
             + ("chatter " * 400)
             + '\n\n<!-- MEMORY_FIELDS\n{"memory_type": "events"}\n-->'
-        ),
-        ctx=ctx,
-    )
+        )
+
+        async def fake_find(**kwargs):
+            del kwargs
+            return _FakeFindResult(
+                [
+                    _memory(file_uri, 0.62, "launch abstract"),
+                    _memory(f"{directory_uri}/.abstract.md", 0.44, "", level=0),
+                ]
+            )
+
+        monkeypatch.setattr(service.search, "find", fake_find)
+        search = {"query": "what shipped", "max_tokens": 1200}
+    else:
+        root = "viking://resources"
+        directory_uri = f"{root}/launch"
+        file_uri = f"{directory_uri}/notes.md"
+        file_content = "# Launch notes\n\nShipped the stdio MCP proxy."
+        for uri, parent_uri, level in (
+            (directory_uri, root, filter_level),
+            (file_uri, directory_uri, 2),
+        ):
+            await service.vikingdb_manager.upsert(
+                {
+                    "uri": uri,
+                    "parent_uri": parent_uri,
+                    "context_type": "resource",
+                    "level": level,
+                    "is_leaf": level == 2,
+                    "vector": [0.1] * service.vikingdb_manager.vector_dim,
+                    "search_tags": ["team=search"],
+                },
+                ctx=ctx,
+            )
+        search = {
+            "tags": ["team=search"],
+            "quotas": {"resources": 5},
+            "detail": {"resources": "overview"},
+        }
+
+    await service.viking_fs.write_file(uri=file_uri, content=file_content, ctx=ctx)
     await service.viking_fs.write_file(
         uri=f"{directory_uri}/.overview.md",
         content="Entities directory: projects, people and software.",
         ctx=ctx,
     )
 
-    async def fake_find(**kwargs):
-        del kwargs
-        return _FakeFindResult(
-            [
-                _memory(file_uri, 0.62, "launch abstract"),
-                _memory(f"{directory_uri}/.abstract.md", 0.44, "", level=0),
-            ]
-        )
-
-    monkeypatch.setattr(service.search, "find", fake_find)
     response = await client.post(
         "/api/v1/search/search",
-        json={"query": "what shipped", "mode": "context", "max_tokens": 1200},
+        json={"mode": "context", **search},
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     result = response.json()["result"]
-    assert [entry["category"] for entry in result["entries"]] == ["events", "entities"]
-    assert result["stats"]["used_tokens"] <= 1200
+    if filter_level is None:
+        assert [entry["category"] for entry in result["entries"]] == ["events", "entities"]
+        assert result["stats"]["used_tokens"] <= 1200
     assert result["rendered"].count("<memory ") == 2
     by_uri = {entry["uri"]: entry for entry in result["entries"]}
+    assert set(by_uri) == {file_uri, directory_uri}
     assert "Shipped the stdio MCP proxy." in by_uri[file_uri]["text"]
     assert "MEMORY_FIELDS" not in by_uri[file_uri]["text"]
     assert by_uri[directory_uri]["detail"] == "overview"
     assert by_uri[directory_uri]["text"] == "Entities directory: projects, people and software."
+
+    if filter_level is not None:
+        assert by_uri[file_uri]["text"] == file_content
+        listed = await client.post(
+            "/api/v1/search/find",
+            json={"tags": ["team=search"], "target_uri": root, "read_content": True},
+        )
+        assert listed.status_code == 200, listed.text
+        hits = {hit["uri"]: hit for hit in listed.json()["result"]["resources"]}
+        assert set(hits) == {directory_uri, file_uri}
+        assert "content" not in hits[directory_uri]
+        assert hits[file_uri]["content"] == file_content
 
 
 async def test_context_mode_dedup_ledger_round_trips_through_agfs(
