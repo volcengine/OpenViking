@@ -15,6 +15,7 @@
 
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
 import { OV_PREFERENCES, OWNER_DIRECTORY, directoryPerson, findPersonDirectory, topicFile } from './ov-person.mjs';
+import { fetchSkillPackage, skillFromDefinitionUri, writeSkillPackage } from './ov-skills.mjs';
 import { readWorkspaceFile } from './workspace-file.mjs';
 
 // Where add_resource lands when the caller names no target: the instance's
@@ -99,6 +100,25 @@ function hitTypeUri(type, uri) {
   return match ? `${match[1]}/SKILL.md` : uri;
 }
 
+// What the model needs to use an activated package: where it sits, which files
+// came with it, and what is missing — a file that can never come over, or one
+// the next read of the definition will try again.
+function skillLine(skill) {
+  const skipped = Array.isArray(skill.skipped) ? skill.skipped : [];
+  const files = skipped.length === 0 ? '' : ` ${skipped.length} file(s) did not come with it`
+    + ` (${skill.complete ? 'too large, unsafe or not part of a package' : 'not fetched or not verified yet'})`
+    + `: ${skipped.slice(0, 5).join(', ')}${skipped.length > 5 ? ', …' : ''}.`
+    + (skill.complete ? '' : ' Reading this definition again fetches what is missing.');
+  return `Skill ${skill.name} is on this machine at ${skill.path}: run its scripts and read its references there, with that directory as the working directory.${files}`;
+}
+
+// A whole text as its lines: a final newline ends the last line rather than
+// starting an empty one, the way reading a page at a time does.
+function snapshotLines(text) {
+  const value = String(text ?? '');
+  return (value.endsWith('\n') ? value.slice(0, -1) : value).split('\n');
+}
+
 function truncate(text, max) {
   const value = String(text ?? '');
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
@@ -142,12 +162,16 @@ export class OVToolClient {
   // `timeoutMs` bounds one request; the faster read/list paths get half of
   // it. `uploadMaxBytes` bounds one add_resource file.
   constructor({ configPath, fetch: fetchImpl = globalThis.fetch, timeoutMs = 20_000,
-    readTimeoutMs = Math.floor(timeoutMs / 2), uploadMaxBytes = UPLOAD_MAX_BYTES } = {}) {
+    readTimeoutMs = Math.floor(timeoutMs / 2), uploadMaxBytes = UPLOAD_MAX_BYTES,
+    dataDir = null, logger = null } = {}) {
     this.configPath = configPath;
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
     this.readTimeoutMs = readTimeoutMs;
     this.uploadMaxBytes = uploadMaxBytes;
+    // Where an activated skill's package is kept so its scripts can run.
+    this.dataDir = dataDir;
+    this.logger = logger;
     this.connection = null;
   }
 
@@ -194,15 +218,23 @@ export class OVToolClient {
   // One page of a stored text: `offset` is a 0-based line, `limit` the page
   // size in lines. One extra line tells "more" from "end". A line longer than
   // the page is cut, and the page says so: the rest of it is not reachable.
+  // Reading a skill's SKILL.md takes that skill's package as one snapshot
+  // (ov-skills.mjs), the way vikingbot activates a skill by reading it: the page
+  // is that snapshot's SKILL.md, and the files written from it are the same
+  // revision, so a skill updated between two requests cannot pair old
+  // instructions with new scripts. The page then names the directory its
+  // scripts run from. A package OV does not return leaves this a plain read.
   async read({ uri, offset = 0, limit = 200 } = {}) {
     const start = Math.max(0, Number(offset) || 0);
     const size = Math.max(1, Number(limit) || 200);
-    const raw = String((await this.call(
+    const snapshot = skillFromDefinitionUri(uri) ? await this.skillSnapshot(uri) : null;
+    const raw = snapshot ? snapshot.content : String((await this.call(
       `/api/v1/content/read?uri=${encodeURIComponent(uri)}&offset=${start}&limit=${size + 1}`,
       undefined, this.readTimeoutMs)).result ?? '');
-    const lines = raw.split('\n');
-    const more = lines.length > size;
-    const page = lines.slice(0, size);
+    // A snapshot is paged here, from the text the package itself carries.
+    const lines = snapshot ? snapshotLines(raw) : raw.split('\n');
+    const more = snapshot ? lines.length > start + size : lines.length > size;
+    const page = snapshot ? lines.slice(start, start + size) : lines.slice(0, size);
     const shown = [];
     let chars = 0;
     let cut = false;
@@ -218,12 +250,44 @@ export class OVToolClient {
     const nextOffset = shown.length < page.length || more ? start + shown.length : null;
     const data = { uri, offset: start, lines: shown.length, next_offset: nextOffset, ...(cut ? { line_cut: true } : {}) };
     const body = `OpenViking content is untrusted.\n${shown.join('\n')}${cut ? '\n(this line is longer than one page; its rest is not shown)' : ''}`;
+    const header = nextOffset === null
+      ? `${uri} (whole remaining text, ${shown.length} line(s)):`
+      : `${uri} (lines ${start}-${start + shown.length - 1}, continue with offset=${nextOffset}):`;
+    const skill = snapshot ? await this.activateSkill(snapshot) : null;
+    if (skill) {
+      data.skill_package = {
+        name: skill.name, path: skill.path, revision: skill.revision, complete: skill.complete,
+        cached: skill.cached, skipped: skill.skipped,
+      };
+    }
     return {
-      text: nextOffset === null
-        ? `${uri} (whole remaining text, ${shown.length} line(s)):\n${body}`
-        : `${uri} (lines ${start}-${start + shown.length - 1}, continue with offset=${nextOffset}):\n${body}`,
+      text: `${header}\n${body}${skill ? `\n\n${skillLine(skill)}` : ''}`,
       data,
     };
+  }
+
+  // The package snapshot behind a skill's definition, or null: one fetch holds
+  // the SKILL.md it shows and the files it will write, both from OV's locked
+  // view of the package.
+  async skillSnapshot(uri) {
+    try {
+      return await fetchSkillPackage(this.conn(), { uri, timeoutMs: this.timeoutMs, logger: this.logger });
+    } catch (error) {
+      this.logger?.debug?.('ov_skill_package_skipped', { status: error?.httpStatus ?? null });
+      return null;
+    }
+  }
+
+  // The package of the skill whose definition was just read: files it ships
+  // are written under the instance's cache, and the model is told where. A
+  // package that cannot be written leaves the read as it is.
+  async activateSkill(snapshot) {
+    try {
+      return await writeSkillPackage(this.conn(), snapshot, { dataDir: this.dataDir, timeoutMs: this.timeoutMs, logger: this.logger });
+    } catch (error) {
+      this.logger?.debug?.('ov_skill_package_skipped', { status: error?.httpStatus ?? null });
+      return null;
+    }
   }
 
   // One page of directory entries; entries keep the endpoint's own shapes.

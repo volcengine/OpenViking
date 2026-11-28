@@ -3,6 +3,7 @@
 
 import { OVConnection, readOVConfig } from './ov-connection.mjs';
 import { OV_PREFERENCES, directoryPerson, findPersonDirectory, personDirectory, personId, scanPeople } from './ov-person.mjs';
+import { discoverSkills, renderSkillSummary } from './ov-skills.mjs';
 
 // What the daemon shows of OpenViking memory after a line someone sent, the
 // same for every runtime. The instance is one OV user; everything it took part
@@ -16,6 +17,14 @@ import { OV_PREFERENCES, directoryPerson, findPersonDirectory, personDirectory, 
 // - the sender's preferences, when the sender is someone else.
 // With agents[].ovAutoRecall, also one context search on the line itself.
 // Anything else the agent looks up with the openviking_* tools.
+//
+// Skills, like vikingbot shows them, belong to the work rather than to every
+// line: a line the router answers carries none, and only a worker's policy
+// names the ones OpenViking ranked for the line that asked for its task, each
+// with the frontmatter that says what it is and where its SKILL.md sits
+// (<skills>). The model reads that file with openviking_read when one fits,
+// which is also what makes its package available to run; nothing is installed,
+// updated or read on its behalf here.
 //
 // Bounded like the roster warm-up beside it: past the deadline, or on any
 // failure, the line goes on with what arrived in time. The policy (core.md)
@@ -79,15 +88,21 @@ export class OVRecall {
 
   // A worker's Standing preferences (worker-executor.mjs): the owner's, and the
   // requester's unless the requester is the owner, read like forEvent's and
-  // within the same deadline, without the search. { owner, requester }, each
-  // text or null; never rejects.
+  // within the same deadline, without the search. The task's own line is the
+  // only place skills are ranked: { owner, requester }, each text or null, and
+  // skills (the <skills> block for that line) when some fit; never rejects.
   async preferencesFor(event, { owner = false } = {}) {
     const person = owner ? null : personId(event);
-    const [ownerPreferences, requesterPreferences] = await this.bounded([
+    const request = String(event?.content ?? '').trim();
+    const [ownerPreferences, requesterPreferences, skills] = await this.bounded([
       this.preferences({ owner: true }),
       person ? this.preferences({ id: person, directory: personDirectory(event) }) : null,
+      // A worker has no per-line recall, so its policy carries the skills
+      // ranked for the line that asked for the task.
+      request.length >= MIN_QUERY_CHARS ? this.skills(request) : null,
     ]);
-    return { owner: ownerPreferences, requester: requesterPreferences };
+    const summary = renderSkillSummary(skills ?? [], { reason: 'may fit this task' });
+    return { owner: ownerPreferences, requester: requesterPreferences, ...(summary ? { skills: summary } : {}) };
   }
 
   // Reads (promises, or null for none) under one deadline: each comes back as
@@ -127,6 +142,17 @@ export class OVRecall {
   // Preferences changed (openviking_remember): read them afresh next time.
   forgetPreferences() {
     for (const key of this.cache.keys()) if (key.startsWith('preferences:')) this.cache.delete(key);
+  }
+
+  // The installed skills OpenViking ranks for a task's line. Never rejects: a
+  // discovery that fails leaves the policy without them.
+  async skills(query) {
+    try {
+      return await discoverSkills(this.connection, query, { timeoutMs: this.timeoutMs });
+    } catch (error) {
+      this.logger?.debug?.('ov_skill_discovery_skipped', { status: error?.httpStatus ?? null });
+      return [];
+    }
   }
 
   // A cached read, a missing value too; a failure is not cached.

@@ -1864,6 +1864,8 @@ export class ActionService {
   ovToolClient() {
     this.ovTools ??= new OVToolClient({
       configPath: this.config.openVikingConfigPath, timeoutMs: this.config.openVikingToolTimeoutMs ?? 20_000,
+      // Where a skill's package is kept once its SKILL.md is read.
+      dataDir: this.config.dataDir, logger: this.logger,
     });
     return this.ovTools;
   }

@@ -15,7 +15,9 @@ import path from 'node:path';
 // `errors` maps one route ("POST /api/v1/search/find") to an HTTP status to
 // answer once... or until deleted; `searchResult` is what find/search return;
 // `listings` maps a directory uri to { entries, has_more } for fs/ls;
-// `sessions` holds what the session routes did. GET /content/read pages by
+// `sessions` holds what the session routes did; `skillFind` is what
+// /skills/find ranks and `skills` (name -> detail) what one skill route
+// returns. GET /content/read pages by
 // line for a numeric limit and returns the whole text for limit=-1.
 function split(text, max = 6000) {
   const pieces = [''];
@@ -31,7 +33,7 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
   const state = {
     files: new Map(), uploads: new Map(), tasks: new Map(), requests: [], down: false, slowParse: new Set(slowParse),
     errors: new Map(), searchResult: { memories: [], resources: [], skills: [], total: 0 },
-    listings: new Map(), sessions: new Map(),
+    listings: new Map(), sessions: new Map(), skillFind: [], skills: new Map(),
   };
   let next = 0;
   const server = http.createServer(async (request, response) => {
@@ -65,6 +67,19 @@ export async function fakeOV(t, { failParse = [], slowParse = [], apiKeys = {} }
       if (body.mode === 'create' && state.files.has(target)) return reply(409, 'already exists');
       state.files.set(target, body.content);
       return reply(200, { uri: target, semantic_status: 'skipped', vector_status: 'queued' });
+    }
+    if (route === 'POST /api/v1/skills/find') {
+      return reply(200, { skills: state.skillFind, total: state.skillFind.length });
+    }
+    const skillDetail = url.pathname.match(/^\/api\/v1\/skills\/([^/]+)$/);
+    if (skillDetail && request.method === 'GET') {
+      const detail = state.skills.get(decodeURIComponent(skillDetail[1]));
+      if (!detail) return reply(404, 'not found');
+      return reply(200, {
+        ...detail,
+        ...(url.searchParams.get('include_content') === 'false' ? { content: undefined } : {}),
+        ...(url.searchParams.get('include_files') === 'false' ? { files: undefined } : {}),
+      });
     }
     if (route === 'POST /api/v1/search/find' || route === 'POST /api/v1/search/search') {
       return reply(200, state.searchResult);

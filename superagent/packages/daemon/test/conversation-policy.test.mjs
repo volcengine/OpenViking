@@ -573,6 +573,13 @@ describe('the workers scheduler', () => {
     assert.match(assembleWorkerPolicy({ ...base, scheduler: 'workers' }, { runtime: 'traex' }),
       /- A shell command is stopped after 60 minutes: a build, test run or install must finish within that/);
     assert.doesNotMatch(assembleWorkerPolicy({ ...base, scheduler: 'workers' }, { runtime: 'codex' }), /stopped after 60 minutes/);
+    // The skills ranked for the task's line, after the preferences.
+    const withSkills = assembleWorkerPolicy({ ...base, scheduler: 'workers' }, {
+      preferences: { owner: '## 信息披露\n- 不透露', skills: '<skills source="openviking" for="may fit this task">\n  <skill source="openviking_user">\n    <name>charts</name>\n    <location>viking://user/u/skills/charts/SKILL.md</location>\n    <read_tool>openviking_read</read_tool>\n  </skill>\n</skills>' },
+    });
+    assert.match(withSkills, /## Standing preferences[\s\S]*## OpenViking skills[\s\S]*Read the SKILL\.md at a <location> below with the OpenViking read tool/);
+    assert.match(withSkills, /<skills source="openviking" for="may fit this task">/);
+    assert.doesNotMatch(assembleWorkerPolicy({ ...base, scheduler: 'workers' }, { preferences: { owner: null, requester: null } }), /## OpenViking skills/);
   });
 });
 

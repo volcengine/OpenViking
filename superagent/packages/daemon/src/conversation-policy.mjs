@@ -344,10 +344,27 @@ function standingPreferencesSection(preferences) {
   ].join('\n');
 }
 
+// The skills OpenViking ranked for the line that asked for the task, in the
+// worker's policy only: the router answers and dispatches lines, so ranking
+// skills for each of them would be a lookup nothing acts on. Frontmatter to
+// read before following a skill, and the package that reading it puts on this
+// machine.
+function skillsSection(skills) {
+  const summary = String(skills ?? '').trim();
+  if (!summary) return '';
+  return [
+    '## OpenViking skills',
+    '',
+    'Skills are kept in OpenViking, not as local files. These are the ones OpenViking ranked for the request this task came from. Read the SKILL.md at a <location> below with the OpenViking read tool before following it; reading it also puts the skill package on this machine and names the directory, so its scripts and references can be used from there.',
+    '',
+    summary,
+  ].join('\n');
+}
+
 // A worker's own policy (tasks.mjs): one task, no deliveries, a report. It
 // shares the router's rules that hold for its work too, keeps the instance's
 // Role for the domain and the voice of its drafts, and gets the preferences
-// the router sees after each line (worker-executor.mjs).
+// and the skills of the line that asked for the task (worker-executor.mjs).
 export function assembleWorkerPolicy(config = {}, { runtime = null, preferences = null } = {}) {
   return joinSections([
     renderPrompt(config, 'worker.md'),
@@ -356,6 +373,7 @@ export function assembleWorkerPolicy(config = {}, { runtime = null, preferences 
     roleSection(config),
     naturalWritingSection(config),
     standingPreferencesSection(preferences),
+    skillsSection(preferences?.skills),
     runtimeCompletionSection(runtime),
   ]);
 }
