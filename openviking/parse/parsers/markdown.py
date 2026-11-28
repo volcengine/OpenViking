@@ -102,6 +102,11 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _trim_section_text(text: str) -> str:
+    """Trim section separators without treating source indentation as padding."""
+    return text.lstrip("\r\n").rstrip()
+
+
 def _gh_slug(text: str) -> str:
     """GitHub-style heading slug: lowercase, strip punctuation, spaces→'-', keep CJK."""
     s = text.strip().lower()
@@ -678,23 +683,23 @@ class MarkdownParser(BaseParser):
                     if len(current) < self.DEFAULT_MIN_SECTION_CHARS:
                         para = current + "\n\n" + para
                     else:
-                        parts.append(current.strip())
+                        parts.append(_trim_section_text(current))
                     current = ""
                 table_parts = self._split_markdown_table_by_rows(para, max_chars=max_chars)
                 if table_parts:
                     parts.extend(table_parts)
                 else:
-                    parts.extend(
-                        para[i : i + max_chars].strip() for i in range(0, len(para), max_chars)
-                    )
+                    for index in range(0, len(para), max_chars):
+                        part = para[index : index + max_chars]
+                        parts.append(_trim_section_text(part) if index == 0 else part.strip())
             elif current and len(current) + len(para) + 2 > max_chars:
-                parts.append(current.strip())
+                parts.append(_trim_section_text(current))
                 current = para
             else:
                 current = current + "\n\n" + para if current else para
 
         if current.strip():
-            tail = current.strip()
+            tail = _trim_section_text(current)
             if parts and len(parts[-1]) + 2 + len(tail) <= max_chars:
                 parts[-1] = f"{parts[-1]}\n\n{tail}"
             else:
@@ -749,7 +754,7 @@ class MarkdownParser(BaseParser):
         if any(line.strip() for line in lines[table_end:]):
             return None
 
-        prefix = "\n".join(lines[:table_start]).strip()
+        prefix = _trim_section_text("\n".join(lines[:table_start]))
         header = lines[table_start : table_start + 2]
         rows = lines[table_start + 2 : table_end]
         header_text = "\n".join(header)
@@ -1406,7 +1411,7 @@ class MarkdownParser(BaseParser):
         min_level = min(h[3] for h in headings)
         first_heading_start = next(h[0] for h in headings if h[3] == min_level)
         if first_heading_start > 0:
-            pre_content = content[:first_heading_start].strip()
+            pre_content = _trim_section_text(content[:first_heading_start])
             if pre_content:
                 pre_chars = len(pre_content)
                 sections.append(
@@ -1517,7 +1522,9 @@ class MarkdownParser(BaseParser):
                 and self._should_merge_pending_into_next(pending)
                 and (
                     not buffered_section["has_children"]
-                    or len(buffered_section["content"].strip()) + len(pending[0][1].strip()) + 2
+                    or len(_trim_section_text(buffered_section["content"]))
+                    + len(pending[0][1].strip())
+                    + 2
                     <= max_size
                 )
             ):
@@ -1546,13 +1553,13 @@ class MarkdownParser(BaseParser):
         """Attach a tiny pending section to the following section."""
         _, pending_content, _ = pending[0]
         merged = dict(section)
-        merged["content"] = f"{pending_content}\n\n{section['content']}".strip()
+        merged["content"] = _trim_section_text(f"{pending_content}\n\n{section['content']}")
         merged["chars"] = len(merged["content"])
 
         if merged.get("has_children"):
             direct_content = section.get("direct_content", "").strip()
             merged["direct_content"] = (
-                f"{pending_content}\n\n{direct_content}".strip()
+                _trim_section_text(f"{pending_content}\n\n{direct_content}")
                 if direct_content
                 else pending_content
             )
@@ -1565,13 +1572,13 @@ class MarkdownParser(BaseParser):
         """Attach a tiny trailing pending section back into the previous section."""
         _, pending_content, _ = pending[0]
         merged = dict(section)
-        merged["content"] = f"{section['content']}\n\n{pending_content}".strip()
+        merged["content"] = _trim_section_text(f"{section['content']}\n\n{pending_content}")
         merged["chars"] = len(merged["content"])
 
         if merged.get("has_children"):
-            direct_content = section.get("direct_content", "").strip()
+            direct_content = _trim_section_text(section.get("direct_content", ""))
             merged["direct_content"] = (
-                f"{direct_content}\n\n{pending_content}".strip()
+                _trim_section_text(f"{direct_content}\n\n{pending_content}")
                 if direct_content
                 else pending_content
             )
@@ -1749,12 +1756,13 @@ class MarkdownParser(BaseParser):
         # Build content
         heading_prefix = "#" * level
         section_start = end_pos  # After heading line
-        full_content = f"{heading_prefix} {title}\n\n{content[section_start:section_end].strip()}"
+        section_body = _trim_section_text(content[section_start:section_end])
+        full_content = f"{heading_prefix} {title}\n\n{section_body}"
         full_chars = len(full_content)
 
         direct_content = ""
         if has_children:
-            direct_text = content[section_start:direct_content_end].strip()
+            direct_text = _trim_section_text(content[section_start:direct_content_end])
             if direct_text:
                 direct_content = f"{heading_prefix} {title}\n\n{direct_text}"
 
