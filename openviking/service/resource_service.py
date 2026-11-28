@@ -2981,12 +2981,25 @@ class ResourceService:
         self._ensure_initialized()
         return await self._resource_processor.summarize(resource_uris, ctx, **kwargs)
 
-    async def wait_processed(self, ctx: Optional[RequestContext] = None) -> Dict[str, Any]:
+    async def wait_processed(
+        self,
+        ctx: Optional[RequestContext] = None,
+        *,
+        redact_errors: Optional[bool] = None,
+    ) -> Dict[str, Any]:
         """Wait for all queued processing to complete.
+
+        Args:
+            ctx: When given, wait only for this account's outstanding work.
+            redact_errors: Replace raw queue error messages with a generic text.
+                Defaults to ``ctx is not None``: account-scoped status is visible to
+                ordinary users, while the unscoped runtime status spans every tenant.
 
         Returns:
             Queue status
         """
+        if redact_errors is None:
+            redact_errors = ctx is not None
         qm = get_queue_manager()
         if ctx is None:
             status = await qm.wait_complete()
@@ -3008,7 +3021,7 @@ class ResourceService:
                 "requeue_count": getattr(s, "requeue_count", 0),
                 "error_count": s.error_count,
                 "errors": [
-                    {"message": e.message if ctx is None else "Queue processing error"}
+                    {"message": "Queue processing error" if redact_errors else e.message}
                     for e in s.errors
                 ],
             }
