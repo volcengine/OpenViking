@@ -799,7 +799,11 @@ class TempUploadStore:
         for file_path in temp_dir.iterdir():
             if not file_path.is_file():
                 continue
-            file_age = now - file_path.stat().st_mtime
+            try:
+                file_age = now - file_path.stat().st_mtime
+            except FileNotFoundError:
+                # Another cleanup may have removed the entry after is_file().
+                continue
             if file_age > self.temp_cfg.ttl_seconds:
                 file_path.unlink(missing_ok=True)
                 if not file_path.name.endswith(".ov_upload.meta"):
