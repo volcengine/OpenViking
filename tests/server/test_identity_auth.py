@@ -533,6 +533,101 @@ async def test_oidc_authenticates_jwks_signed_tokens(
             await plugin.resolve_identity(request)
 
 
+async def _oidc_plugin_serving_one_jwk(monkeypatch, public_jwk):
+    """Build an OIDC plugin whose discovery and JWKS endpoints serve one key."""
+    import httpx
+
+    from openviking.server.auth.oidc_config import OIDCConfig
+    from openviking.server.auth.plugins import oidc as oidc_module
+
+    plugin = oidc_module.OIDCAuthPlugin()
+    config = SimpleNamespace(oidc=OIDCConfig(issuer="https://issuer.test", client_id="openviking"))
+    plugin.validate_config(config)
+    await plugin.initialize(None, None, config)
+
+    def idp_response(request):
+        if str(request.url) == "https://issuer.test/.well-known/openid-configuration":
+            return httpx.Response(
+                200,
+                json={"issuer": "https://issuer.test", "jwks_uri": "https://issuer.test/keys"},
+            )
+        assert str(request.url) == "https://issuer.test/keys"
+        return httpx.Response(200, json={"keys": [public_jwk]})
+
+    client_class = httpx.AsyncClient
+    monkeypatch.setattr(
+        oidc_module.httpx,
+        "AsyncClient",
+        lambda **kwargs: client_class(transport=httpx.MockTransport(idp_response), **kwargs),
+    )
+    return plugin
+
+
+def _oidc_test_token(jwt, signing_key, *, kid="test"):
+    import time
+
+    return jwt.encode(
+        {
+            "iss": "https://issuer.test",
+            "aud": "openviking",
+            "sub": "user-1",
+            "exp": int(time.time()) + 60,
+        },
+        signing_key,
+        algorithm="RS256",
+        headers={"kid": kid},
+    )
+
+
+async def test_oidc_accepts_jwks_key_without_declared_alg(monkeypatch):
+    """A JWK's ``alg`` member is optional (RFC 7517 section 4.4).
+
+    Providers that omit it still publish a usable signing key: the algorithm
+    must be inferred from the key type instead of discarding the key.
+    """
+    jwt = pytest.importorskip("jwt", minversion="2.15.1")
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from openviking.server.auth.plugins import oidc as oidc_module
+
+    assert oidc_module._check_jwt_available()
+    signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
+    public_jwk["kid"] = "test"
+    assert "alg" not in public_jwk
+
+    plugin = await _oidc_plugin_serving_one_jwk(monkeypatch, public_jwk)
+    token = _oidc_test_token(jwt, signing_key)
+    request = Request({"type": "http", "headers": [(b"authorization", f"Bearer {token}".encode())]})
+    identity = await plugin.resolve_identity(request)
+    assert (identity.account_id, identity.user_id, identity.role) == (
+        "default",
+        "user-1",
+        Role.USER,
+    )
+
+
+async def test_oidc_rejects_jwks_key_with_unsupported_declared_alg(monkeypatch):
+    """A key that declares an algorithm this plugin cannot verify stays rejected."""
+    jwt = pytest.importorskip("jwt", minversion="2.15.1")
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    from openviking.server.auth.plugins import oidc as oidc_module
+
+    assert oidc_module._check_jwt_available()
+    signing_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
+    public_jwk.update(kid="test", alg="PS256")
+
+    plugin = await _oidc_plugin_serving_one_jwk(monkeypatch, public_jwk)
+    token = _oidc_test_token(jwt, signing_key)
+    request = Request({"type": "http", "headers": [(b"authorization", f"Bearer {token}".encode())]})
+    with pytest.raises(UnauthenticatedError, match="Unknown key ID"):
+        await plugin.resolve_identity(request)
+
+
 @pytest.mark.parametrize("role", ["root", "unknown"])
 async def test_snapshot_cannot_bypass_main_registered_role_validation(role):
     store = AsyncMock(spec=AccountStore)
